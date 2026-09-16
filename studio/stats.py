@@ -846,7 +846,7 @@ def phase_matrix(cids, triples_by_lap) -> PhaseReport:
     """Aggregate per-lap per-corner (entry, apex, exit) Δt-vs-best triples into the session
     phase-loss matrix: per corner the MEDIAN triple (element-wise, over laps with a fully
     finite triple; ragged rows tolerated), plus the positive-part PhaseShare (see the
-    dataclass for why positive-part). The per-lap triples come from the SAME drift-gated
+    dataclass for why positive-part). The per-lap triples come from the SAME per-lap-aligned
     coaching.corner_phase_losses decomposition the coaching reasons use."""
     rows: list[tuple[float, float, float] | None] = []
     e_sum = a_sum = x_sum = 0.0

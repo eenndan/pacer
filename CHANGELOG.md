@@ -293,6 +293,23 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
     rather than assumed: the class changes for **0 of 38 and 0 of 65** laps, and the mark round
     trip is **exact**. Both now carry the numbers instead of the claim.
 
+- **A missing corner alignment was documented as "below the drift gate" long after there was any
+  drift gate.** The per-lap warp that maps the corner windows onto a lap
+  (`CornerModel.lap_alignment`) may come back as "none"; its docstring said that meant the lap had
+  drifted too little to be worth warping. `corners.NORMALIZED_DRIFT_MAX` was deleted when every lap
+  started being warped, so that has been untrue since. Measured before changing anything: **no lap
+  on either of the owner's recordings reaches it at all** — 0 of 38 (D24 0060 pair) and 0 of 65
+  (0062), with 4-22 and 20-22 of the 24 corner boundaries carrying a directly matched interior
+  knot — and the three things that really do produce it are "there was nothing to build a warp out
+  of": no corner basis, no usable trace pair (a cross-recording reference lap has none), or no
+  spatial match surviving anywhere on the lap. **No caller acted on the old meaning**: the one
+  branch on it returns the normalized projection, which is right under either reading, so the code
+  was right and the comments were wrong — **29 lines across 12 files**, including the note the
+  provenance panel prints under a corner time, which named a gate the app no longer has. Both
+  halves are now guarded (`tests/test_corner_alignment_memo.py`): the three causes are driven
+  through the real service, and the wording is checked in both directions so a target that
+  disappears fails too.
+
 - **Every GPS-derived number drawn over the video was half a second late, and now it is not.** The
   camera's accelerometer and gyroscope are timestamped on the clock the picture plays on; its GPS
   receiver stamps a fix on its own, and that stamp lands **0.476 s (0060) / 0.459 s (0062)** after

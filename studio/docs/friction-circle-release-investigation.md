@@ -33,7 +33,7 @@ which would destroy the resolution the dip lives at):
 - a matched **NULL**: the identical detector on an equal-duration window on the preceding
   straight, ending where this corner's braking begins.
 
-Corner windows are the existing drift-gated projection (`corners.project_boundaries`, one warp per
+Corner windows are the existing spatial projection (`corners.project_boundaries`, one warp per
 lap). Discrimination is a within-corner Spearman rho against that lap's corner time, pooled
 sample-weighted over corners, with a permutation test that shuffles attempt labels **within** a
 corner — so each corner's own difficulty and geometry are held fixed and the only thing tested is

@@ -2366,7 +2366,7 @@ class Session:
         """The session-wide entry/apex/exit loss decomposition (the Stats page's
         "where the time goes" headline + the per-corner phase tooltips): for EVERY
         consistency lap except the best (its self-delta is zero), each corner's Δt-vs-best
-        split into thirds via the SAME drift-gated coaching.corner_phase_losses the coaching
+        split into thirds via the SAME per-lap-aligned coaching.corner_phase_losses the coaching
         reasons use — then the per-corner MEDIAN triple + the positive-part session share
         (stats_service.phase_matrix). Generalizes the D2 extraction that previously ran for
         the median lap only. None without corners / a best lap / any comparable lap. Not
@@ -2382,11 +2382,11 @@ class Session:
         if len(best_dist) < 2:
             return None
         # The corner windows live in the BEST lap's frame — its trace is the fixed reference
-        # half of every drift-gate pair (the same pairing coaching_opportunities builds).
+        # half of every (ref, comparison) pair (the same pairing coaching_opportunities builds).
         _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         best_total = self.best_lap_total_distance()
-        # Every lap's drift-gated warp is built from the WHOLE partition (corners.project_boundaries'
+        # Every lap's spatial warp is built from the WHOLE partition (corners.project_boundaries'
         # `frame`), so a phase window is the same window the Corners table measured. The warps come
         # from the corner service's MEMO (corner_model.lap_alignment), so this report shares them
         # with lap_corner_stats / segment_bests / the driving channels instead of re-running each
@@ -2484,7 +2484,7 @@ class Session:
         corner/straight partition, the session best/median/σ time + trap-speed stats + the
         preceding corner's exit-speed delta and leverage. Resurrects corners.segment_times'
         EVEN entries — computed since the corner model shipped, discarded until now (only
-        the odd/corner entries were read). Same drift-gated projection + trace pairing as
+        the odd/corner entries were read). Same spatial projection + trace pairing as
         lap_corner_stats. [] without corners / a best lap / clean laps. Not cached (read on
         load / re-segment only)."""
         ids = self.consistency_lap_ids()
@@ -2613,11 +2613,11 @@ class Session:
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
         best_dist, _best_speed_kmh, best_elapsed = self._lap_arrays(best)
 
-        # Drift-gate spatial traces for the phase decomposition (the same alignment lap_corner_stats
+        # Spatial traces for the phase decomposition (the same alignment lap_corner_stats
         # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
-        # reference half of each (ref, comparison) pair. The best lap projects onto its own odometer
-        # (zero drift → normalized identity); the typical lap gets the spatial fallback above the
-        # bound. A degenerate trace → None → normalized (unchanged). Same xy basis as the map.
+        # reference half of each (ref, comparison) pair. The best lap matches its own trace, so its
+        # warp is the identity (7e-15 m at worst); the typical lap is warped onto it. A degenerate
+        # trace → None → normalized (unchanged). Same xy basis as the map.
         _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         if med_id is not None:

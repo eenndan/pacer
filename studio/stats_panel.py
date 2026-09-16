@@ -1811,7 +1811,7 @@ class StatsView(QWidget):
         self._corners_section = self._section("CORNERS")
         col.addWidget(self._corners_section)
         # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
-        # from the per-lap drift-gated thirds decomposition — coach-grade, and computed, not
+        # from the per-lap aligned thirds decomposition — coach-grade, and computed, not
         # modeled. Hidden with the section / without phase data.
         phase_tip = ("Every clean lap's Δt-vs-best through each corner, split into "
                      "equal-distance entry / apex / exit thirds (the same decomposition the "
