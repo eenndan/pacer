@@ -325,8 +325,8 @@ set_tests_properties(test_corners PROPERTIES
 # in ONE stats_view.refresh on the D24 0060 pair), so it is now memoized on the corner service.
 # The risk is not the speed-up, it is a warp surviving a start-line drag and silently re-framing
 # every corner Δ. Drives drag → sector edit → undo → reference load against a from-scratch oracle,
-# with an explicit assertion that the fixture crosses NORMALIZED_DRIFT_MAX (below the gate every
-# warp is None and the file would assert nothing). Bare Session via tests/_synthetic — no Qt
+# with an explicit assertion that every fixture lap carries a real warp (a None warp would make
+# the file assert nothing). Bare Session via tests/_synthetic — no Qt
 # widgets, no telemetry file; imports pacer transitively through studio.session.
 add_test(NAME test_corner_alignment_memo
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_alignment_memo.py)
@@ -919,6 +919,15 @@ add_test(NAME test_repo_write_safety
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_repo_write_safety.py)
 set_tests_properties(test_repo_write_safety PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# ...and the other direction: a test may not write a FIXED name into the shared $TMPDIR. ctest runs
+# serially, so this never bites inside one run — but $TMPDIR is /tmp/claude-501, keyed on the uid
+# and shared by every concurrent agent lane, and test_export_compare's teardown deleted a clip
+# another lane's ffprobe was still decoding. That failure looks like a real export defect and cost
+# two separate agents a full diagnosis (#296, #298). AST-only: no Qt, no bindings, no temp files of
+# its own, milliseconds.
+add_test(NAME test_temp_isolation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_temp_isolation.py)
 
 # THE SEAM-CROSSING branch of the overlay export's source resolution. A lap window that spans a
 # GoPro chapter boundary decodes through the concat demuxer, and its first frame out has to BE the

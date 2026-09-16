@@ -63,6 +63,61 @@ def test_both_concerns_stack_media_clock_first():
     print("test_both_concerns_stack_media_clock_first OK")
 
 
+def test_a_recording_with_no_gps_trace_is_its_own_verdict_not_the_default_one():
+    """NO GPS AT ALL must not read as the validated headline path.
+
+    `load_recording` builds `TimingQuality()` before it knows whether the trace survives and
+    returns early when the gate and the trim leave nothing — so this state used to inherit the
+    DEFAULT, whose clock is GPS9_TRUECLOCK. Measured through the real load path on the bundled
+    `karma.mp4` (0 GPS fixes): the DATA TRUST card printed "Timing: GPS9 true clock · 0% of moving
+    fixes rejected". The card was vouching for the best timing the app has on a file with not one
+    satellite fix in it.
+
+    It is also NOT the media-clock fallback: that names a real axis built from the video clock,
+    and reusing its "estimated" wording here would promise lap times that do not exist."""
+    q = TimingQuality(clock=dq.NO_GPS_TRACE)
+    assert q.no_gps, "the no-GPS state must be nameable"
+    assert not q.media_clock, "no GPS is not the video-clock fallback — no axis was built at all"
+    assert q.degraded, "a recording with no GPS trace is not high-quality timing"
+
+    concerns = q.concerns()
+    assert concerns, "a state this severe must give the banner something to say"
+    assert "GPS" in concerns[0], concerns
+    # It must not borrow the media-clock sentence: there is no ~0.1% drift to warn about when
+    # there is no clock.
+    assert "0.1%" not in concerns[0], concerns[0]
+    for text in (q.summary(), q.detail()):
+        assert text, "summary/detail carry the map banner and the tooltips"
+        assert "GPS9" not in text, text
+
+    # And the default is untouched — the good case must still read as the good case.
+    assert not TimingQuality().no_gps
+    assert not TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK).no_gps
+    print("test_a_recording_with_no_gps_trace_is_its_own_verdict_not_the_default_one OK")
+
+
+def test_the_strip_does_not_blame_the_gps5_era_when_no_fix_ever_arrived():
+    """Two different absences, one sentence — until now.
+
+    `reports_quality` is False both when a GPS5-era camera writes fixes with no DOP/fix fields AND
+    when no fix arrived at all, and `summary()` printed the GPS5-era explanation for both. Measured
+    on `karma.mp4`, which carries NO GPS stream whatsoever, the card said "this camera writes no
+    per-sample GPS quality — the GPS5-era stream carries neither a fix type nor a DOP": an
+    attribution to a stream that is not there, on a camera we measured nothing about."""
+    nothing = dq.build_quality_timeline([], [], [], span_s=12.0)
+    assert len(nothing), "a span with no fixes still covers the recording"
+    assert not nothing.reports_quality
+    text = nothing.summary()
+    assert "GPS5" not in text, f"no fix arrived — the GPS5-era stream is not the reason: {text!r}"
+    assert "no gps fix" in text.lower(), text
+
+    # The genuine GPS5-era case is unchanged: fixes DID arrive, they just carry no quality fields.
+    gps5 = dq.build_quality_timeline([0.5, 1.5], [False, False], [-1.0, -1.0], span_s=12.0)
+    assert not gps5.reports_quality
+    assert "GPS5" in gps5.summary(), gps5.summary()
+    print("test_the_strip_does_not_blame_the_gps5_era_when_no_fix_ever_arrived OK")
+
+
 def test_frozen_value_object():
     """It's an immutable verdict — safe to share one default instance as a class attribute."""
     q = TimingQuality()

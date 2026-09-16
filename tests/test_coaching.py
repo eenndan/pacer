@@ -603,10 +603,10 @@ def test_brake_window_projected_onto_each_laps_own_odometer():
 
 
 def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
-    """C1: a corner's [enter, exit] lives in the REFERENCE odometer, and on a lap past
-    `corners.NORMALIZED_DRIFT_MAX` the window the BRAKE/COAST evidence is matched in must be the
-    drift-gated one — the single warp `lap_corner_stats`, `segment_times` and the phase triple
-    already read — not the bare normalized scale `d·lap_total/ref_total`.
+    """C1: a corner's [enter, exit] lives in the REFERENCE odometer, and on a drifted lap the
+    window the BRAKE/COAST evidence is matched in must be the spatially aligned one — the single
+    warp `lap_corner_stats`, `segment_times` and the phase triple already read — not the bare
+    normalized scale `d·lap_total/ref_total`.
 
     Fixture (both laps down the same straight line, so the spatial match is exact and the two
     projections are analytic): reference 1000 m, typical lap 1050 m — 5 % line-length drift, ten
@@ -621,7 +621,7 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     warp-derived phase triple with a normalized-frame reason, which is the defect."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
     ref_total, lap_total = 1000.0, 1050.0
-    assert corners_mod.line_length_drift(lap_total, ref_total) > corners_mod.NORMALIZED_DRIFT_MAX
+    assert corners_mod.line_length_drift(lap_total, ref_total) > 0.005
 
     # Straight-line traces: (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum), xs == odometer.
     ref_x = np.linspace(0.0, ref_total, 1001)

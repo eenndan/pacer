@@ -215,6 +215,26 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Changed
 
+- **Every lap's corners are now measured in the same frame — which moves the ideal lap and
+  reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not
+  by assuming the lap is a uniformly stretched copy of the best one. That spatial match used to run
+  only on laps whose total line length differed from the best lap's by more than 0.5 %; every other
+  lap kept the cheaper assumption. The cut-off was inherited, not measured, and measuring it showed
+  it does not separate well-aligned laps from badly aligned ones: a lap 0.41 % longer carried
+  **14.7 m** of boundary error while one 1.55 % longer carried 7.6 m. On the laps it skipped — 22 of
+  38 on one of the owner's recordings, 54 of 65 on the other — the corner boundaries sat a median
+  **1.96 m and 0.90 m** from where the corner actually starts, which the match cuts to **0.10 m and
+  0.01 m**. So two laps of one session were being measured by different machinery on either side of
+  an arbitrary line.
+  - **What you will see move.** The ideal lap reads **+0.316 s** on the first recording and
+    **−0.071 s** on the second, and the corner ranking in coaching reorders on both — a corner whose
+    time was measured in a window metres off the real one can be ranked too high or too low, and the
+    brake/coast evidence attached to it is matched in that same window. Corner times, corner Δ
+    columns, the ideal-lap composite and the coaching plan all shift accordingly.
+  - **What does not move: the best lap itself.** It is matched against its own trace, so every
+    boundary lands on itself — measured at 7e-15 m and 0 m on the two recordings. The reference the
+    other laps are compared against is unchanged, and so are lap times, which never went through
+    this projection at all.
 - **The g-meter overlay is a dot, a trail and one number.** Eleven text items became two, and the
   dial radius at the minimum size grew 36.5 → 51.5 px. A recording with no accelerometer gets no
   dial at all instead of a complete instrument reading 0.0.
@@ -271,6 +291,30 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   the GPS chain would have pushed the dial 0.3–0.45 s the other way, ahead of the picture; the
   lookup now crosses the same seam everything else does, so the dial and the speed beside it
   describe one frame.
+- **A recording with no GPS in it was sold as the app's most accurate timing.** The DATA TRUST
+  card's `Timing` row had a two-way label — the video-clock fallback, else "GPS9 true clock" — and
+  the loader builds its quality verdict *before* it knows whether the GPS trace survives. When the
+  quality gate and the stationary trim left nothing, it returned that verdict untouched, and its
+  default clock is the validated GPS9 path. Driven end to end over the bundled `karma.mp4`, which
+  carries **0 GPS fixes**, the card printed `Timing: GPS9 true clock · 0% of moving fixes rejected`
+  — the app vouching for its best clock on a file with not one satellite fix in it, and reporting a
+  reassuring 0 % over a population of nothing. There is now a third clock provenance for "no time
+  axis was built at all"; the row states it as a caveat, so it sorts to the top of the card with
+  the other trust-breaking facts, and it carries the only action there is (check the camera's GPS
+  setting; some models carry no receiver). The two real clocks are untouched — both D24 recordings
+  still read `GPS9 true clock`, and a GPS5-era clip still reads `video clock (estimated)`.
+  - The same absence also reached the per-second quality bar, which explained it with the wrong
+    cause: `karma.mp4`'s strip said *"this camera writes no per-sample GPS quality — the GPS5-era
+    stream carries neither a fix type nor a DOP"*, attributing the silence to a stream that is not
+    in the file. A recording where **no fix arrived at all** now says so, and the genuine GPS5-era
+    wording stays where it belongs — on the clips that do write fixes without quality fields.
+  - `load._used_gps9_trueclock`'s docstring claimed a GPS5-only camera "reports ts==0 on every
+    sample". Measured, that is false on **every one of the nine bundled GPS5-era clips**:
+    `hero6.mp4` reports a non-zero stamp on 417 of 417 fixes — but only **23 distinct values**,
+    because the GPS5 era carries one GPSU stamp per ~1 s payload, repeated onto each fix inside it.
+    The rule survives on the *spacing* (0 s inside a payload, ~1.0 s across one — both outside the
+    GPS9 step band), not on the test the docstring described, so anyone simplifying it to
+    `any(ts > 0)` would have promoted every HERO5-8, Max and Fusion recording to true-clock timing.
 - **A greyed-out menu item now says why, where macOS lets you read it.** Twenty of the items
   disabled on the welcome screen explained themselves in a Qt tooltip — and on macOS that tooltip
   is shown to nobody: measured on the real screen, this app's menu bar is the native one

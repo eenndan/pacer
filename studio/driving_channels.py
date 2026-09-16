@@ -280,10 +280,9 @@ class DrivingChannels:
         CORNER_LEAD_M upstream (braking starts before the geometric entry). None when there's no
         corner model — the brake merge then runs purely on the throttle/distance gates.
 
-        The enter/exit boundaries are mapped by the drift-gated alignment (corners.project_boundaries
-        — normalized distance within NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match
-        above it; the same gate lap_corner_stats uses), byte-identical to the old normalized
-        projection in the common well-matched case."""
+        The enter/exit boundaries are mapped by the shared alignment (corners.project_boundaries —
+        one monotone spatial warp per lap, built from the robust nearest-point match; the same
+        alignment lap_corner_stats uses)."""
         basis = self._corner_basis()
         if not basis or not basis[0] or total_lap <= 0:
             return None
@@ -366,10 +365,9 @@ class DrivingChannels:
         total_lap = float(dists[-1])
         if total_lap <= 0:
             return []
-        # Project each corner's reference-odometer window onto this lap by the drift-gated alignment
-        # (corners.project_boundaries — the SAME gate lap_corner_stats uses: normalized within
-        # NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match above it), byte-identical to
-        # the old normalized projection in the common well-matched case.
+        # Project each corner's reference-odometer window onto this lap by the shared alignment
+        # (corners.project_boundaries — the SAME one lap_corner_stats uses: one monotone spatial
+        # warp per lap, built from the robust nearest-point match).
         interior = [b for c in corner_list for b in (c.enter, c.exit)]
         proj = corners.project_boundaries(interior, total_ref, total_lap,
                                           traces=self._corner_traces(lap_id),
@@ -473,10 +471,9 @@ class DrivingChannels:
                      if driving.HILL_COMPENSATE_BRAKING and self._lap_elevation is not None
                      else None)
         events = self.lap_brake_events(lap_id)
-        # Project every corner's [enter, exit] onto THIS lap's odometer via the drift-gated alignment
-        # (corners.project_boundaries — the SAME gate lap_corner_stats / grip use: normalized within
-        # NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match above it), byte-identical to
-        # the old normalized projection in the common well-matched case.
+        # Project every corner's [enter, exit] onto THIS lap's odometer via the shared alignment
+        # (corners.project_boundaries — the SAME one lap_corner_stats / grip use: one monotone
+        # spatial warp per lap, built from the robust nearest-point match).
         interior = [b for c in corner_list for b in (c.enter, c.exit)]
         proj = corners.project_boundaries(interior, total_ref, total_lap,
                                           traces=self._corner_traces(lap_id),

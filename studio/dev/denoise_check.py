@@ -20,13 +20,15 @@ Run (headless, offscreen):
     pixi run python -m studio.dev.denoise_check -- /path/to/file.MP4 [--out DIR] [--tag NAME]
 
 Without a file it uses session.DEFAULT_SAMPLE. PNGs + a metrics line are written to --out
-(default $TMPDIR/denoise or ./denoise_out). Read the PNGs to judge smoothness/signal by eye.
+(default: a fresh temp directory per run, whose PNG paths are printed at the end). Read the PNGs
+to judge smoothness/signal by eye.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -313,7 +315,11 @@ _FLAGS_WITH_VALUE = {"--out", "--tag", "--window"}
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    out_dir = os.environ.get("TMPDIR", "/tmp").rstrip("/") + "/denoise"
+    # A FRESH directory per run, not a fixed $TMPDIR/denoise: that one path is shared by every
+    # session on this machine (uid-keyed $TMPDIR), so two probes running at once overwrite each
+    # other's PNGs — and reading the other run's picture is a silent wrong answer, not a crash.
+    # `--out DIR` still wins, and every PNG path is printed below.
+    out_dir = None
     tag = "trace"
     w = None
     if "--out" in argv:
@@ -322,6 +328,7 @@ def main(argv=None):
         tag = argv[argv.index("--tag") + 1]
     if "--window" in argv:
         w = int(argv[argv.index("--window") + 1])
+    out_dir = out_dir or tempfile.mkdtemp(prefix="pacer-denoise-")
 
     # Positional args = files: skip flags AND the value that follows a value-taking flag.
     paths = []
