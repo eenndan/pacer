@@ -798,9 +798,9 @@ class PanelHeader(QWidget):
         # DECLARED. setFixedHeight also pins the vertical size policy, so a QVBoxLayout can neither
         # stretch this row nor squeeze it.
         self.setFixedHeight(theme.PANEL_HDR_H)
-        # SPACE_XXS vertically, not SPACE_XS: the hero readout is 30 px tall in the mono stack at
-        # HERO/600 (its font, not a padding we could trim), and a SPACE_XS inset would leave 28 and
-        # clip the live number by a pixel top and bottom. SPACE_XXS leaves CONTENT_H = 32, which
+        # SPACE_XXS vertically, not SPACE_XS: the hero readout is 31 px tall in Inter at HERO/600
+        # (its font, not a padding we could trim), and a SPACE_XS inset would leave 28 and clip the
+        # live number top and bottom. SPACE_XXS leaves CONTENT_H = 32, which
         # clears the tallest thing any header carries and still centres a CTRL_H control.
         row = QHBoxLayout(self)
         row.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS)
