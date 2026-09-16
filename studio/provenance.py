@@ -703,8 +703,9 @@ def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
         notes=(
             "The corner's shape was detected once, on the best lap, and its entry/exit are "
             "reference-lap distances. The window above is that pair PROJECTED onto this lap by "
-            "the drift-gated alignment; the panel reads that projection rather than re-deriving "
-            "it, and the two metres are where a corner comparison is least certain.",
+            "one monotone spatial warp fitted to the whole corner partition; the panel reads that "
+            "projection rather than re-deriving it, and the two metres are where a corner "
+            "comparison is least certain.",
             "A best over a handful of laps is an ORDER STATISTIC, not a limit: it is the "
             "quickest of what was driven, and it gets quicker as laps are added.",
         ),

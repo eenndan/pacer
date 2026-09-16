@@ -538,10 +538,10 @@ class CornerModel:
         self._stats_cache.clear()
         self._align_cache.clear()
 
-    # ----------------------------------------------------------- drift-gate spatial traces
+    # -------------------------------------------------------- spatial traces for the per-lap warp
     def _best_trace(self) -> tuple | None:
         """The best (reference) lap's local-frame trace (xs, ys, cum) — the spatial anchor side of
-        the per-corner drift gate (corners.project_boundaries). None when there is no usable best
+        the per-lap warp (corners.project_boundaries). None when there is no usable best
         lap. The reference-odometer corner windows are expressed in this lap's frame, so it is the
         fixed half of every (ref, comparison) trace pair."""
         best = self._best_lap_id()
@@ -553,9 +553,9 @@ class CornerModel:
         return xs, ys, cum
 
     def _lap_traces(self, lap_id: int, ref_trace: tuple | None) -> tuple | None:
-        """The (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) trace pair the drift gate's
-        spatial fallback needs to map this session's corner windows onto `lap_id`. None (→ the
-        gate keeps the normalized projection) when either trace is degenerate. A reference-lap
+        """The (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) trace pair the spatial
+        alignment needs to map this session's corner windows onto `lap_id`. None (→ this lap
+        keeps the normalized projection) when either trace is degenerate. A reference-lap
         (cross-recording) projection has no local trace pair, so it stays normalized."""
         if ref_trace is None:
             return None
@@ -567,13 +567,30 @@ class CornerModel:
     def lap_alignment(self, lap_id: int, total_lap: float) -> object | None:
         """ONE lap's monotone warp onto the reference (best) lap's odometer — the thing every
         corner-window projection in the app is a read of — MEMOIZED per (lap, total_lap).
-        None is a legal value: "this lap keeps the normalized projection" (below the drift gate,
-        or no spatial match survived). Pass the result as `alignment=` to
-        `corners.project_boundaries` / `segment_times` / `lap_corner_stats`.
+        Pass the result as `alignment=` to `corners.project_boundaries` / `segment_times` /
+        `lap_corner_stats`.
+
+        NONE IS A LEGAL VALUE, and it means "no warp could be built for this lap" — never "this
+        lap drifted too little to need one". There are exactly three causes:
+          * NO CORNER BASIS — no usable best lap, or no corner detected in the session (`basis`);
+          * NO USABLE TRACE PAIR (`_lap_traces`) — this lap's or the best lap's local trace is
+            degenerate, and a cross-recording reference lap has no local pair at all;
+          * NO SPATIAL MATCH SURVIVED anywhere on the lap (`corners.lap_alignment`): every
+            boundary failed the heading / SPATIAL_MATCH_MAX_M gates, leaving the two timing-line
+            anchors, which ARE the normalized map.
+        In all three the caller keeps the normalized projection — `project_boundaries` returns it
+        verbatim — which is why None is passed through rather than raised on.
+
+        This used to say None meant a lap whose own line length drifted under
+        `corners.NORMALIZED_DRIFT_MAX`. #300 deleted that constant, so every lap with a trace pair
+        has been warped since and the sentence was false from that commit. Measured on the owner's
+        recordings, None is not reached at all: 0 of 38 laps (D24 0060 pair) and 0 of 65 (0062),
+        carrying 4-22 and 20-22 matched interior knots of 24 corner boundaries.
+        `tests/test_corner_alignment_memo.py` drives all three causes and guards the wording.
 
         WHY THIS EXISTS. The warp is built from the WHOLE corner partition, so it is the same
         object for every window of a lap — but nine independent call paths each derived it for
-        themselves. Measured on the real D24 0060 pair when a 0.5 % drift gate still kept 22 of its
+        themselves. Measured on the real D24 0060 pair when a 0.5 % drift threshold still kept 22 of its
         38 laps off the spatial path, ONE `stats_view.refresh` ran `corners._spatial_matches`
         **144 times** — 9x per lap that needed it — against the 16 the memo cost. Every lap is
         warped now, so the memo costs one match per lap: 38 on the pair and 65 on 0062, which is
@@ -688,7 +705,7 @@ class CornerModel:
             ref = ref_stats
         else:
             ref = self.lap_corner_stats(best) if lap_id != best else None
-        # Drift-gate spatial traces: the best lap (the corner-window reference frame) + this lap.
+        # Spatial traces: the best lap (the corner-window reference frame) + this lap.
         # The best lap itself projects onto its OWN odometer (zero drift → identity), so its trace
         # pair is harmless; a degenerate trace → None → normalized projection (unchanged).
         traces = self._lap_traces(lap_id, self._best_trace())
@@ -918,7 +935,7 @@ class CornerModel:
         the corner's enter point onto this lap's odometer and reads elapsed->media there. None if
         unknown/degenerate. Absolute (lap start + elapsed).
 
-        Goes through the SAME drift-gated alignment as its siblings — since the memo it now reads
+        Goes through the SAME spatial alignment as its siblings — since the memo it now reads
         (`lap_alignment`) is shared, the warp is LITERALLY the one `lap_corner_stats` used, not
         merely one built from the same frame. On
         a drifted lap the bare normalized fraction it used before landed the seek up to ~12 m from
@@ -926,7 +943,7 @@ class CornerModel:
         0.373 s.
 
         `coaching._win` — which scaled a corner window by `lap_total / corner_dist_total` with no
-        drift gate and no traces, so a coaching row could carry a warp-derived phase triple beside
+        alignment and no traces, so a coaching row could carry a warp-derived phase triple beside
         a normalized-frame reason — has since moved onto this memo too (`coaching._project_window`),
         which leaves every CORNER-WINDOW projection on one warp.
 

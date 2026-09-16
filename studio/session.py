@@ -2366,7 +2366,7 @@ class Session:
         """The session-wide entry/apex/exit loss decomposition (the Stats page's
         "where the time goes" headline + the per-corner phase tooltips): for EVERY
         consistency lap except the best (its self-delta is zero), each corner's Δt-vs-best
-        split into thirds via the SAME drift-gated coaching.corner_phase_losses the coaching
+        split into thirds via the SAME per-lap-aligned coaching.corner_phase_losses the coaching
         reasons use — then the per-corner MEDIAN triple + the positive-part session share
         (stats_service.phase_matrix). Generalizes the D2 extraction that previously ran for
         the median lap only. None without corners / a best lap / any comparable lap. Not
@@ -2382,11 +2382,11 @@ class Session:
         if len(best_dist) < 2:
             return None
         # The corner windows live in the BEST lap's frame — its trace is the fixed reference
-        # half of every drift-gate pair (the same pairing coaching_opportunities builds).
+        # half of every (ref, comparison) pair (the same pairing coaching_opportunities builds).
         _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         best_total = self.best_lap_total_distance()
-        # Every lap's drift-gated warp is built from the WHOLE partition (corners.project_boundaries'
+        # Every lap's spatial warp is built from the WHOLE partition (corners.project_boundaries'
         # `frame`), so a phase window is the same window the Corners table measured. The warps come
         # from the corner service's MEMO (corner_model.lap_alignment), so this report shares them
         # with lap_corner_stats / segment_bests / the driving channels instead of re-running each
@@ -2484,7 +2484,7 @@ class Session:
         corner/straight partition, the session best/median/σ time + trap-speed stats + the
         preceding corner's exit-speed delta and leverage. Resurrects corners.segment_times'
         EVEN entries — computed since the corner model shipped, discarded until now (only
-        the odd/corner entries were read). Same drift-gated projection + trace pairing as
+        the odd/corner entries were read). Same spatial projection + trace pairing as
         lap_corner_stats. [] without corners / a best lap / clean laps. Not cached (read on
         load / re-segment only)."""
         ids = self.consistency_lap_ids()
@@ -2613,11 +2613,11 @@ class Session:
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
         best_dist, _best_speed_kmh, best_elapsed = self._lap_arrays(best)
 
-        # Drift-gate spatial traces for the phase decomposition (the same alignment lap_corner_stats
+        # Spatial traces for the phase decomposition (the same alignment lap_corner_stats
         # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
-        # reference half of each (ref, comparison) pair. The best lap projects onto its own odometer
-        # (zero drift → normalized identity); the typical lap gets the spatial fallback above the
-        # bound. A degenerate trace → None → normalized (unchanged). Same xy basis as the map.
+        # reference half of each (ref, comparison) pair. The best lap matches its own trace, so its
+        # warp is the identity (7e-15 m at worst); the typical lap is warped onto it. A degenerate
+        # trace → None → normalized (unchanged). Same xy basis as the map.
         _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         if med_id is not None:
@@ -3184,15 +3184,35 @@ class Session:
         (ACCL+GRAV+CORI in the kart frame); LONGITUDINAL is the GPS speed derivative, because the
         IMU forward axis is vibration-inflated (see studio/gmeter.py).
 
-        THE SERIES IS NOT ON THIS FUNCTION'S OWN CLOCK, which is why the conversion is here. The
-        accelerometer never leaves the camera's media clock — `gmeter.compute` stamps the series
-        with the ACCL sample times — so indexing it with a telemetry time asked the wrong instant
-        of it. That was worth the two clocks' drift (up to 0.17 s late by the end of the owner's
-        84-minute recording) before the GPS lag was corrected, and it would be worth the lag itself
-        in the OTHER direction after (`_install_gps_lag`), which is the one way this fix could have
-        made the dial worse than it found it. `media_time` is the same map every other picture-side
-        lookup crosses, so the dial and the speed beside it describe one instant."""
-        return self._gmeter.at_time(self.media_time(float(t)))
+        THE SERIES IS NOT ON THIS FUNCTION'S OWN CLOCK, so a conversion belongs here — but it is
+        the PURE two-clock map (`without_gps_lag`), not the full one, and the difference is
+        measured rather than reasoned.
+
+        The series' LABELS are the camera's media clock: `gmeter.compute` stamps it with the ACCL
+        sample times. So the 27 ppm rate difference between the two axes is real, and it is
+        crossed here (up to 0.17 s by the end of the owner's 84-minute recording).
+
+        Its CONTENT is a separate question, and the answer is not the one #301 assumed. Measured
+        against the GYRO — the channel PR #291 settled against yaw taken from the FRAMES
+        themselves — `gm.lat_g` sits +0.399 s (0060) / +0.406 s (0062) BEHIND the picture by
+        label: the accelerometer's content arrives carrying very nearly the same delay the GPS
+        timestamps carry. #303 measured the same fact from the other side (against the path, where
+        it reads +0.011 / −0.047 by label) and refused the matching "repair" in `driving_channels`
+        because of it.
+
+        SO THE GPS LAG MUST NOT BE UNDONE HERE — the g series carries it too. Asking the series
+        for the frame's own media time (the FULL map, which is what #301 installed) left the dial
+        +0.386 / +0.393 s behind the speed painted beside it — measured per PAINTED FRAME against
+        that same gyro reference, with the trace channel reading +0.004 / −0.001 s over those very
+        frames. Crossing `without_gps_lag()` instead brings the dial to −0.078 / −0.052 s. That
+        residual is the ~0.07 s by which the ACCL content's own delay differs from the GPS
+        timestamps' own; it is not zero and is not claimed to be.
+
+        `media_clock` is the getattr-guarded property, so a bare Session (no `chapters`) still
+        converts by identity — the synthetic golden gate caught that the first time this accessor
+        grew a clock dependency, and a missing one DELETES a fingerprint leaf rather than moving
+        it."""
+        return self._gmeter.at_time(self.media_clock.without_gps_lag().to_media(float(t)))
 
     @property
     def has_gmeter(self) -> bool:

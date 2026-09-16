@@ -651,7 +651,7 @@ def corner_phase_losses(
         return _NO_PHASES
 
     # Project the reference-odometer window [c_enter, c_exit] onto this lap's own odometer via the
-    # shared drift gate — the SAME helper the best-lap subtrahend and the reason windows use.
+    # shared alignment — the SAME helper the best-lap subtrahend and the reason windows use.
     lap0, lap1 = _project_window(c_enter, c_exit, corner_dist_total, lap_total,
                                  traces=lap_traces, frame=frame, alignment=lap_align)
     # Equal-distance thirds of each lap's own projected window (same fraction → same track third).
@@ -782,8 +782,8 @@ def summarize(
     event's OVERLAP with the corner window is integrated on the lap's own clock instead of the event
     being taken or dropped whole by its onset (_window_brake_time) — absent → that degenerate rule.
     median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
-    lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the drift-gated spatial
-    boundary alignment in the phase decomposition (omitted → normalized, byte-identical pre-gate).
+    lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the spatial boundary
+    alignment in the phase decomposition (omitted → the normalized projection).
     median_align/best_align are those two laps' warps ALREADY BUILT (Session hands over the corner
     service's memoized ones); omitted → derived here from the traces, exactly as before.
     top_n caps how many ranked rows get a dominant reason attached; None (the default) analyses
@@ -822,7 +822,7 @@ def summarize(
     best_trace = ((best_dist, best_elapsed)
                   if best_dist is not None and best_elapsed is not None else (None, None))
 
-    # The WHOLE partition's reference boundaries: each lap's drift-gated warp is built from all of
+    # The WHOLE partition's reference boundaries: each lap's spatial warp is built from all of
     # them, so a per-corner phase window is the same window the Corners table measured. The two
     # warps are built ONCE here, not once per corner inside the loop below — and when the caller
     # passes them in (Session reads them off the corner service's memo) not even once.
@@ -837,7 +837,7 @@ def summarize(
                       if corner_dist_total and best_lap_total else None)
 
     # The window a lap's brake/coast events are matched in — the corner projected onto that lap's
-    # OWN odometer, through the SAME drift gate, the SAME whole-partition frame and the SAME
+    # OWN odometer, through the SAME alignment, the SAME whole-partition frame and the SAME
     # already-built warp the phase triple above is measured in (_project_window).
     #
     # This was the last un-aligned corner-window projection in the app: it scaled by

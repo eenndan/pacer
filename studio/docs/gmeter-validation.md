@@ -349,8 +349,48 @@ is too weak to settle it (r≈0.50), so GRAV/CORI are ruled out as the delay and
 join is made (0.963 / 0.971) — a misaligned join is invisible to r and shows only in the lag. Read
 the lag. The guard is `tests/test_driving.py::test_the_lap_g_join_does_not_cross_the_media_clock`.
 
-**What is still open, and is NOT this join.** `Session.g_at_time` crosses the media clock (it must:
-it answers "what was the g at this frame"). Given the measurement above, the dial's LATERAL is
-therefore ~0.45 s from the trace-derived speed painted beside it — before that conversion existed
-both were equally stale and agreed. That is the picture↔trace seam, not the analysis join, and it
-is stated here so the next reader does not confuse the two.
+## The picture↔trace seam, which the measurement above opened — and which is now closed
+
+`Session.g_at_time` answers "what was the g at this frame", so it must cross a clock. WHICH clock
+is the same question the section above settles, from the other side. #301 had it cross the FULL
+map, on the premise that the g series — stamped with the ACCL sample times — is picture-true on
+its own labels. Measured against the GYRO, the one channel PR #291 settled against yaw taken from
+the FRAMES themselves, that premise is false (`rotation.measure_lag`, positive = *the channel runs
+behind the picture*, 0060 / 0062):
+
+| what is compared, BY LABEL | lag |
+|---|---:|
+| `gm.lat_g` as an implied yaw rate, vs the gyro | **+0.399 / +0.406 s** |
+| the path yaw rate vs the gyro, through `without_gps_lag()` | +0.476 / +0.459 s (= `gps_lag_s`) |
+| the path yaw rate vs the gyro, through the FULL clock | +0.007 / +0.002 s (the harness control) |
+
+So the accelerometer's CONTENT is late by very nearly what the GPS timestamps are late by, and
+undoing the GPS lag at the dial moved it the wrong way. Per PAINTED FRAME, against that same gyro
+reference:
+
+| channel, as the app paints it | 0060 | 0062 |
+|---|---:|---:|
+| the trace side (speed / map / Δ) — what #301 fixed | +0.004 s | −0.001 s |
+| the dial's lateral, crossing the FULL map | **+0.386 s** | **+0.393 s** |
+| the dial's lateral, crossing `without_gps_lag()` | −0.078 s | −0.052 s |
+| the dial's longitudinal vs d(painted speed)/dt | +0.411 → −0.051 s | +0.282 → −0.178 s |
+
+`g_at_time` therefore crosses `without_gps_lag()`: the two axes' 27 ppm rate difference is real
+and is corrected, while the GPS lag is NOT undone, because the g series carries it too. The
+residual (~0.07 s) is the amount by which the ACCL content's own delay differs from the GPS
+timestamps' own — it is not zero and is not claimed to be. The move is worth a mean 0.286 g /
+0.282 g on the dial's lateral, p95 0.950 / 0.908 g.
+
+Note the shape of the trap, because it is the same one twice: the longitudinal row above improves
+its correlation-at-zero from 0.454 to 0.812 while the PEAK correlation does not move at all. Read
+the lag.
+
+**What the burned export could and could not settle.** A real lap was rendered through the shipped
+export path (`build_lap_spec` + `Renderer.run`, 2047 frames of D24 0060 lap 17) and decoded frame
+by frame, and it does establish one thing directly: the app's own export overlay path now paints
+the pure-map value. But taking the yaw from THOSE frames did not reproduce PR #291's own result —
+the gyro at each frame's own media time came back **+0.812 s (peak r 0.23)** where #291 measured
+−0.096…+0.073 s. One 68-second 360p clip with an overlay painted over it is simply too little
+signal; #291 used 13 one-lap windows at matched bandwidth. So that harness FAILED its own negative
+control and none of its dial numbers are quoted here. The arbitration above rests on the gyro
+channel, which is where #291 put the picture in the first place.
