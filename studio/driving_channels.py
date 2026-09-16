@@ -188,8 +188,28 @@ class DrivingChannels:
 
     # ------------------------------------------------------------------ g + thresholds
     def _lap_g_arrays(self, lap_id: int):
-        """(long_g, lat_g) for a lap, interpolated from the g meter onto the lap's media times
-        (both share the media clock). (None, None) when there's no g signal or a degenerate lap.
+        """(long_g, lat_g) for a lap, read off the g meter at the lap's OWN trace times.
+        (None, None) when there's no g signal or a degenerate lap.
+
+        THE JOIN IS BY LABEL, AND THAT IS A MEASUREMENT, NOT AN OVERSIGHT. The lap times are GPS9
+        TELEMETRY seconds and the g series is stamped on the camera's MEDIA clock — two axes
+        (studio/media_clock.py), so the obvious repair is to cross `Session.media_clock` here the
+        way `Session.g_at_time` does. Measured on both D24 recordings, that repair is BACKWARDS.
+        Residual offset of `gm.lat_g` against the path-derived lateral g (`rotation.measure_lag`,
+        the product's own estimator, 0060 / 0062):
+
+            joined BY LABEL (shipped)    +0.011 s / -0.047 s     r 0.963 / 0.971
+            joined through the clock     -0.399 s / -0.404 s     r 0.963 / 0.971
+
+        and a bias-free ENU-vector sweep of the whole IMU acceleration against the path's peaks at
+        -0.01 s / -0.06 s. The same run reproduces `RotationCheck.gps_lag_s` to four decimals off
+        the GYRO (+0.4764 / +0.4589), so it is not the harness: the camera's ACCL content arrives
+        carrying the same ~0.45 s the GPS timestamps carry, and the two series are therefore
+        already on one axis where this reads them — a corner's grip is measured against that
+        corner's own odometer window. Crossing the clock would move shipped grip numbers by up to
+        38.8 grip points on a corner. NOTE THE PEAK CORRELATION IS IDENTICAL TO THREE DECIMALS
+        EITHER WAY: read the LAG, never the r. See studio/docs/gmeter-validation.md ("The analysis
+        join"); tests/test_driving.py::test_the_lap_g_join_does_not_cross_the_media_clock guards it.
 
         LONGITUDINAL prefers the GPS speed-derivative (gm.long_g_gps) when present — the IMU forward
         axis is vibration-inflated (see gmeter/driving), so the dial, the map grip colour, the
@@ -228,8 +248,9 @@ class DrivingChannels:
         if not gm.has_data:
             self._thresholds_cache = None
             return None
-        # Speed resampled to the g clock (trace + g series share the media clock), then the clean
-        # longitudinal g = d|v|/dt — the validated brake signal.
+        # Speed resampled onto the g grid BY LABEL — the same join `_lap_g_arrays` documents and
+        # measures (the two axes are not one clock, but they carry one delay) — then the clean
+        # longitudinal g = d|v|/dt, the validated brake signal.
         speed_kmh = np.interp(gm.times, self._trace_times(), self._trace_speed_kmh())
         long_clean = speed_long_g(speed_kmh, gm.times)
         self._thresholds_cache = driving.derive_thresholds(long_clean, speed_kmh)
@@ -400,7 +421,13 @@ class DrivingChannels:
         AXIS: the friction circle is built from the SAME trusted axes the per-corner / per-sample
         grip numerator uses — the CLEAN speed-derived longitudinal g (long_g_gps when present; see
         _lap_g_arrays) and the IMU lateral. Using the raw IMU long_g here (vibration-inflated, ~2x
-        RMS) would inflate the divisor and bias every grip reading systematically LOW."""
+        RMS) would inflate the divisor and bias every grip reading systematically LOW.
+
+        CLOCK: the three series are paired at ONE INDEX on the g grid — GPS-derived longitudinal,
+        IMU lateral, trace speed — i.e. by label, exactly as `_lap_g_arrays` does and for the
+        reason measured there. Crossing `Session.media_clock` for the lateral moves this divisor
+        1.424 -> 1.406 g (-1.21 %) and 1.370 -> 1.349 g (-1.49 %) on the two D24 recordings, away
+        from the path reference it is checked against."""
         if self._grip_env_cache is not _UNSET:
             return self._grip_env_cache
         gm = self._gmeter()
