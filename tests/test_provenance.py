@@ -437,6 +437,68 @@ def test_a_lap_too_short_to_explain_declines_rather_than_guesses():
     print("test_a_lap_too_short_to_explain_declines_rather_than_guesses OK")
 
 
+def test_a_crossing_this_transcription_cannot_find_is_not_re_derivable_rather_than_nan():
+    """`crossing_fraction` returns None when a chord does not straddle the line — the branch that
+    exists for the day the core and this transcription disagree about a crossing (a fused
+    multiply-add on a chord that grazes the line). `Provenance` already has the words for that
+    case, "not re-derivable from these rows alone", behind `reconstructed is None`.
+
+    The lap-time builder spelled the same absence as NaN instead, so that guard could never fire:
+    the panel said the re-derived lap "DISAGREES ON SCREEN" by "+nan s, nan ulp", the arithmetic
+    step read "nan - 12.3 = nan s", and Copy-as-CSV wrote `nan` into the re-derived cell. Forced
+    here with a line nowhere near either chord, which is exactly what the builder sees when a
+    chord fails the straddle test."""
+    import re
+
+    from studio._signal import fmt_time
+
+    s = _session()
+    lap = s.best_lap_id()
+    fixes = s._lap_fixes(lap, bracket=True)
+    rows = len(fixes.times)
+    nowhere = ((10.0, 10.0), (10.0, 10.001))           # (lon, lat), a continent from the stadium
+    assert provenance.crossing_fraction(
+        nowhere, (fixes.lons[0], fixes.lats[0]), (fixes.lons[2], fixes.lats[2])) is None
+    p = provenance.lap_time(lap_id=lap, value=float(s.lap_time(lap)), fmt=fmt_time, fixes=fixes,
+                            start_chord=(0, 2), finish_chord=(rows - 3, rows - 1), line=nowhere,
+                            clock=s.timing_quality.clock)
+    note = p.residual_note()
+    nan = re.compile(r"\bnan\b", re.IGNORECASE)
+    assert not nan.search(note), f"the panel printed NaN as a measurement: {note!r}"
+    for step in p.steps:
+        assert not nan.search(step.text), f"an arithmetic step printed NaN: {step.text!r}"
+    assert not nan.search(p.to_csv()), "Copy-as-CSV wrote NaN into the inspection"
+    assert p.reconstructed is None and p.reconstructed_formatted == ""
+    assert note == "not re-derivable from these rows alone", note
+    assert not p.exact and not p.matches_display and p.residual is None
+    print("test_a_crossing_this_transcription_cannot_find_is_not_re_derivable_rather_than_nan OK")
+
+
+def test_every_cell_a_builder_emits_formats_with_its_own_column_format():
+    """`_fmt` renders a cell by its column's format string with no fallback, so the pairing of a
+    value with its format is a contract of the builders rather than something the renderer papers
+    over. Swept across every table of every inspectable number on a sectored session: an absent
+    cell (None / NaN) is the only kind that may skip its format."""
+    s = _with_sectors(_session())
+    provs = [s.lap_time_provenance(lap) for lap in s.valid_lap_ids()]
+    provs += [s.sector_split_provenance(lap, k) for lap in s.valid_lap_ids()
+              for k in range(len(s.lap_sector_splits(lap)))]
+    provs += [s.corner_best_provenance(c.cid) for c in s.corner_report()]
+    provs = [p for p in provs if p is not None]
+    assert len(provs) > 20, len(provs)
+    cells = 0
+    for p in provs:
+        for table in p.tables:
+            assert len(table.formats) == len(table.columns), table.caption
+            for r, row in enumerate(table.rows):
+                for c, v in enumerate(row):
+                    if not provenance._absent(v):
+                        table.formats[c].format(v)       # raises on a mis-paired cell
+                    table.cell(r, c)
+                    cells += 1
+    print(f"test_every_cell_a_builder_emits_formats_with_its_own_column_format OK ({cells} cells)")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -1520,6 +1520,28 @@ def test_an_unreplicated_target_and_a_thin_corner_both_abstain():
     print("ok abstain: one-off / too-few-laps gate; an unmeasured row is untouched")
 
 
+def test_a_ranked_row_has_always_been_reached_so_never_is_only_ever_an_abstain():
+    """The invariant the ranked sentence is written against. "Reached" means a clean lap matched
+    the target, ranking needs MIN_REACH_LAPS of them, so a ranked row is REPEAT, RARE or (unmeasured)
+    UNKNOWN — never NEVER. `reach_clause` and `theme_actions` only ever see ranked rows, which is why
+    neither carries a "no lap has matched this" wording: that sentence belongs to the abstain.
+    Swept over random corners, including targets no lap reaches and corners with too few laps."""
+    rng = np.random.default_rng(20260915)
+    nevers = 0
+    for _ in range(4000):
+        n = int(rng.integers(0, 12))
+        times = rng.normal(5.0, 0.3, n).tolist()
+        target = float(rng.normal(5.0, 0.6))
+        ev = K.corner_evidence(times, target, float(abs(rng.normal(0.2, 0.3))))
+        if ev.ranked:
+            assert ev.reach_laps >= K.MIN_REACH_LAPS and ev.reach != K.REACH_NEVER, ev
+        if ev.reach == K.REACH_NEVER:
+            nevers += 1
+            assert not ev.ranked and ev.abstain in (K.ABSTAIN_FEW_LAPS, K.ABSTAIN_ONE_OFF), ev
+    assert nevers > 100, nevers
+    print(f"ok invariant: {nevers} NEVER corners, every one abstained")
+
+
 def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
     """Order + arithmetic. An abstained corner is SHOWN (never silently dropped — a row that says
     why it is not ranked is worth more than a missing row), but it sits below every row that
