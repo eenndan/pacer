@@ -459,6 +459,44 @@ def test_the_focus_block_yields_its_height_to_the_ranking():
     print(f"ok panel budget: hidden at the minimum, 3 lines at 800 px, two blocks {both} px")
 
 
+def test_a_stored_date_that_is_not_a_calendar_day_is_not_printed_as_one():
+    """The verdict names the day a baseline was set ("no session record for 23 May"), read off the
+    item's stored date — a string the store only checks IS a string, so a hand-edited or damaged
+    focus.json can carry anything. The fallback for an unreadable one is "last time".
+
+    It caught a month of 13 (an IndexError) but not a month of 00: `_MONTHS[0 - 1]` is December,
+    so "2026-00-15" was stated as a baseline set on "15 Dec", and a day of 00 as "0 May"."""
+    assert F._when("2026-05-23") == "23 May"
+    assert F._when("2026-12-01") == "1 Dec"
+    for bad in ("2026-00-15", "2026-13-01", "2026-05-00", "2026-02-30", "2026-05-2x", "yesterday!"):
+        assert F._when(bad) == "last time", (bad, F._when(bad))
+    o = F.verdict([_item(date="2026-00-15")], _now(), [None], _records()).outcomes[0]
+    assert o.blocker == F.BLOCK_NO_RECORD, o
+    assert o.detail == "last time and today", o.detail
+    print("ok dates: a stored date that is not a calendar day reads 'last time', never '15 Dec'")
+
+
+def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
+    """The window IS the item's identity, so an item whose window cannot be measured is not
+    repairable. `test_one_malformed_item_is_dropped_not_the_whole_list` names a backwards window but
+    that item also lacks its median, so it is rejected before the window is ever looked at; these
+    items are complete in every other field, so only the window check can refuse them."""
+    good = F.item_to_dict(_item(cid=2))
+    backwards = {**F.item_to_dict(_item(cid=1)), "enter_frac": 0.9, "exit_frac": 0.2}
+    empty = {**F.item_to_dict(_item(cid=3)), "enter_frac": 0.4, "exit_frac": 0.4}
+    off_lap = {**F.item_to_dict(_item(cid=5)), "enter_frac": 0.8, "exit_frac": 1.2}
+    before = {**F.item_to_dict(_item(cid=6)), "enter_frac": -0.1, "exit_frac": 0.2}
+    assert F._valid_item(good)
+    for bad in (backwards, empty, off_lap, before):
+        assert not F._valid_item(bad), bad
+    path = os.path.join(_TMP.name, "windows.json")
+    with open(path, "w") as fh:
+        json.dump({"version": F.VERSION, "lists": [
+            {"track": "T", "items": [backwards, empty, off_lap, before, good]}]}, fh)
+    assert [i.cid for i in F.for_track(F.load(path), "T")] == [2]
+    print("ok store: a backwards, empty or off-lap window is dropped on its own account")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
