@@ -153,7 +153,7 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`) |
 | `pixi run test` | CTest: the C++ Catch2 suites **and** the registered Python studio tests (the pre-PR gate) |
-| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **112 tests, ~313 s** (one run, 312.6 s, 2026-09-16; the full suite is 114 tests in 553 s). Both ctest tasks run under `caffeinate -si`: a Mac that idle-sleeps mid-suite freezes the in-flight test, and ctest then reports it as a `Timeout` lasting as long as the sleep, far past `--timeout`, on a different test every run. If you see that signature, check `pmset -g log` before hunting a hang — rationale in `pyproject.toml` |
+| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **112 tests, ~307 s** (one run, 307.0 s, 2026-09-16; the full suite registers 114 and runs in 528 s — the two numbers differ by exactly the two suites this task excludes). Both ctest tasks run under `caffeinate -si`: a Mac that idle-sleeps mid-suite freezes the in-flight test, and ctest then reports it as a `Timeout` lasting as long as the sleep, far past `--timeout`, on a different test every run. If you see that signature, check `pmset -g log` before hunting a hang — rationale in `pyproject.toml` |
 | `pixi run golden` | run **only** the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample (`_smoke --no-video`) |
 | `pixi run studio [-- files]` | the studio app (PySide6) — depends on `build` |
@@ -212,7 +212,7 @@ pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   
 **Run one test:** `pixi run ctest --test-dir build/Release -R test_<name>` — CTest injects the
 `PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` env each suite needs (a bare
 `pixi run python tests/test_<name>.py` can miss it on a fresh checkout / for the offscreen-Qt
-suites). For the whole suite minus its two slowest members, use `pixi run test-fast` — measured 2026-09-16 that is 553 s down to 313 s, **about 44 % off**, not a different order of magnitude, and `pixi run test` is still the pre-PR gate.
+suites). For the whole suite minus its two slowest members, use `pixi run test-fast` — measured 2026-09-16 that is 528 s down to 307 s, **about 42 % off**, not a different order of magnitude, and `pixi run test` is still the pre-PR gate.
 
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 

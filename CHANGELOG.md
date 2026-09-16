@@ -6,7 +6,7 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
-Everything merged since v0.2.0 — 81 pull requests (#222–#304), 288 commits — beginning with the
+Everything merged since v0.2.0 — 82 pull requests (#222–#305), 292 commits — beginning with the
 2026-09-07 CTO × CPO critical review and continuing through the market-research and QA waves after
 it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, and the range stopped
 40 PRs short of what the section already described.)
