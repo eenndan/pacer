@@ -325,8 +325,8 @@ set_tests_properties(test_corners PROPERTIES
 # in ONE stats_view.refresh on the D24 0060 pair), so it is now memoized on the corner service.
 # The risk is not the speed-up, it is a warp surviving a start-line drag and silently re-framing
 # every corner Δ. Drives drag → sector edit → undo → reference load against a from-scratch oracle,
-# with an explicit assertion that the fixture crosses NORMALIZED_DRIFT_MAX (below the gate every
-# warp is None and the file would assert nothing). Bare Session via tests/_synthetic — no Qt
+# with an explicit assertion that every fixture lap carries a real warp (a None warp would make
+# the file assert nothing). Bare Session via tests/_synthetic — no Qt
 # widgets, no telemetry file; imports pacer transitively through studio.session.
 add_test(NAME test_corner_alignment_memo
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_alignment_memo.py)
