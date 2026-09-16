@@ -28,6 +28,7 @@ import inspect
 import os
 import subprocess
 import sys
+import tempfile
 import types
 
 import numpy as np
@@ -47,7 +48,15 @@ from studio import export_compare as ec  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 from studio import media_clock as mc  # noqa: E402
 
-TMP = os.environ.get("TMPDIR", "/tmp")
+# A temp directory PRIVATE TO THIS PROCESS. The fixed names below (`pacer_cmp_a.mp4` and its
+# siblings) used to sit straight in the SHARED $TMPDIR — `/tmp/claude-501`, keyed on the uid, one
+# directory for every session on the machine — so two concurrent runs did not merely overwrite each
+# other's bytes: the `finally` in the real-render test DELETED a clip the other run's `ffprobe` was
+# still decoding, and that run died inside `probe_video_size` looking exactly like an export defect.
+# Held at module scope so its finalizer removes the directory at exit (the pattern test_prefs.py
+# and test_library.py already use for their prefs jail). Pinned by tests/test_temp_isolation.py.
+_TMP = tempfile.TemporaryDirectory(prefix="pacer-test-compare-")
+TMP = _TMP.name
 
 
 def _in_pixi_env() -> bool:
