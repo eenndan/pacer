@@ -257,6 +257,65 @@ _DM_LAPS = (
     dict(offset=0.0, vc=11.8, straights=((21.0, 3.5), (21.0, 3.5)), run_wide_m=0.0, seed=24),
 )
 
+# ------------------------------------------- the SUB-GATE DRIFT BAND variant, as a drift LADDER
+# NEITHER FIXTURE ABOVE HAS A LAP IN THE BAND THE REMOVED DRIFT GATE GOVERNED, and this one is a
+# ladder across it. `corners.NORMALIZED_DRIFT_MAX = 0.005` kept every lap at or below 0.5 %
+# line-length drift on the normalized projection and warped only the rest; #300 removed it after
+# measuring the longitudinal boundary residual on the laps it had skipped (D24 0060 pair: median
+# 1.96 → 0.10 m; 0062: 0.90 → 0.01 m). That removal moved 0 of the golden's 24,859 leaves — not
+# because it is inert, but because every lap of the two fixtures above is either exactly 0.0000 %
+# drift (where the warp is the identity) or 0.995 %, already past the gate. Nothing sat in
+# (0 %, 0.5 %], so a regression there passed CI in silence.
+#
+# A LADDER, NOT ONE RUNG. This is the third blind spot found in this fixture family — noise-free
+# signals (#275), then slowest-lap-only drift (#298, whose median lap measured exactly 0.0000 %) —
+# and each time the fixture was one point short of the defect. ONE in-band lap would only see a
+# gate reintroduced above its own drift; three rungs at 0.118 %, 0.289 % and 0.460 % mean any
+# threshold at or above the lowest moves at least one lap of this phase. They cost ONE phase, not
+# three: #298 added a phase rather than laps because more laps change the pooled median curvature
+# `CornerModel.basis` detects from, which would move an existing phase's leaves — that reasoning
+# binds the two fixtures above, not a new session that has no baseline to preserve.
+#
+# HOW A LAP DRIFTS ONLY A LITTLE AND IS STILL MISALIGNED, which is the whole point: #300 measured
+# line-length drift to be a WEAK predictor of odometer misalignment (r = +0.38; a lap at 0.41 %
+# drift carried 14.7 m of it). Each rung runs WIDE round turn 1 by `a1` m and TIGHT round turn 2
+# by `a2`, as a raised-cosine displacement along the reference line's own outward normal spanning
+# exactly that turn — zero at both ends, so the straights are untouched and no heading kink is
+# introduced for corner detection to trip over. A normal offset only changes length where the line
+# is curved (∫n·kappa ds), so turn 1 adds ≈1.57·a1 m and turn 2 gives ≈1.57·|a2| back: the two
+# nearly cancel in the TOTAL while the lap's odometer runs metres ahead of the normalized
+# projection in between. Measured on the built fixture, max |warp − normalized| over the detected
+# partition: 4.24 m at 0.118 % drift, 2.37 m at 0.289 %, 2.86 m at 0.460 %.
+#
+# Amplitudes stay under `corners.SPATIAL_MATCH_MAX_M`, so EVERY interior boundary matches
+# spatially on every lap and the warp here is built from measurement end to end — deliberately the
+# opposite of the two fixtures above, whose one unmatched boundary makes the warp interpolate a
+# knot. The speeds keep lap 0, the undrifted reference line, the fastest, so the rungs are measured
+# against a lap that is not one of them.
+# `test_golden_synthetic.test_drift_band_fixture_covers_the_sub_gate_band` pins every property
+# above. Negative control, measured: restoring the 0.5 % gate moves 68 of this phase's 15,451
+# leaves and 0 of the 24,859 in the five phases before it.
+_DB_ARC = np.pi * _DN_RADIUS_M                              # these laps run the reference line
+_DB_TURN1 = _DN_STRAIGHT_M + _DB_ARC / 2.0                  # turn-1 midpoint, in arc length
+_DB_TURN2 = 2 * _DN_STRAIGHT_M + _DB_ARC + _DB_ARC / 2.0    # turn-2 midpoint
+
+
+def _db_rung(a1: float, a2: float) -> tuple:
+    """One ladder rung as a `bumps` list: `a1` metres of outward displacement over turn 1 and `a2`
+    over turn 2 (negative = the tighter line), each a raised cosine spanning exactly its own turn."""
+    return ((_DB_TURN1, _DB_ARC / 2.0, a1), (_DB_TURN2, _DB_ARC / 2.0, a2))
+
+
+_DB_LAPS = (
+    dict(offset=0.0, vc=12.5, straights=((22.0, 2.0), (22.0, 2.0)), run_wide_m=0.0, seed=31),
+    dict(offset=0.0, vc=12.2, straights=((21.6, 2.6), (21.6, 2.6)), run_wide_m=0.0, seed=32,
+         bumps=_db_rung(2.8, -2.6)),   # 0.118 % drift, 4.24 m of odometer offset — the low rung
+    dict(offset=0.0, vc=12.0, straights=((21.3, 3.0), (21.3, 3.0)), run_wide_m=0.0, seed=33,
+         bumps=_db_rung(2.0, -1.0)),   # 0.289 %, 2.37 m — the middle of the band
+    dict(offset=0.0, vc=11.8, straights=((21.0, 3.4), (21.0, 3.4)), run_wide_m=0.0, seed=34,
+         bumps=_db_rung(2.6, -1.0)),   # 0.460 %, 2.86 m — just under the old 0.5 % gate
+)
+
 
 def _dn_loop_xy(u, offset):
     """(xs, ys) at arc length `u` round a 200 m x 30 m-radius stadium run `offset` metres OUTSIDE
@@ -307,21 +366,30 @@ def drift_noise_laps(t0: float = 100.0, specs=_DN_LAPS) -> list[dict]:
     `Session._lap_columns` serves it — and `clean_speed`, the same speed before the noise, which is
     what lets a test measure the noise it was given. See the block above for every choice.
 
-    `specs` is the per-lap recipe list; `_DM_LAPS` builds the median-drift variant off the SAME
-    geometry and the same builder (see its block below)."""
+    `specs` is the per-lap recipe list; `_DM_LAPS` builds the median-drift variant and `_DB_LAPS`
+    the sub-gate drift ladder off the SAME builder (see their blocks above)."""
     laps = []
     for spec in specs:
         offset = spec["offset"]
         arc = np.pi * (_DN_RADIUS_M + offset)
         u = np.linspace(0.0, 2 * _DN_STRAIGHT_M + 2 * arc, _DN_FINE_N)
         xs, ys = _dn_loop_xy(u, offset)
+        # Every lateral departure from this lap's line is a raised-cosine displacement along the
+        # outward normal: `run_wide_m` is the one centred on C1's geometric exit, and `bumps` —
+        # (centre, half-length, amplitude) triples — is the general form `_DB_LAPS` builds its
+        # drift-band rungs out of. Summing them leaves the single-bump case arithmetically
+        # untouched (0.0 + x is exact), which is what keeps _DN_LAPS / _DM_LAPS byte-identical.
+        bumps = list(spec.get("bumps", ()))
         if spec["run_wide_m"]:
+            bumps.append((_DN_STRAIGHT_M + arc, DN_RUN_WIDE_HALF_M, spec["run_wide_m"]))
+        if bumps:
             tx, ty = np.gradient(xs), np.gradient(ys)
             norm = np.hypot(tx, ty)
-            from_exit = u - (_DN_STRAIGHT_M + arc)  # centred on C1's geometric exit
-            push = np.where(np.abs(from_exit) < DN_RUN_WIDE_HALF_M,
-                            spec["run_wide_m"] * 0.5
-                            * (1.0 + np.cos(np.pi * from_exit / DN_RUN_WIDE_HALF_M)), 0.0)
+            push = np.zeros_like(u)
+            for centre, half, amp in bumps:
+                rel = u - centre
+                push = push + np.where(np.abs(rel) < half,
+                                       amp * 0.5 * (1.0 + np.cos(np.pi * rel / half)), 0.0)
             xs, ys = xs + push * ty / norm, ys - push * tx / norm  # outward normal of a CCW loop
         odo = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))))
         v = np.full_like(u, spec["vc"])
@@ -348,10 +416,18 @@ def drift_median_laps(t0: float = 100.0) -> list[dict]:
     return drift_noise_laps(t0, specs=_DM_LAPS)
 
 
+def drift_band_laps(t0: float = 100.0) -> list[dict]:
+    """The SUB-GATE BAND ladder: the same builder and the same reference line, with each comparison
+    lap displaced over the two turns (`_DB_LAPS`) so its line-length drift lands INSIDE the
+    (0 %, 0.5 %] band the removed gate governed. See that block."""
+    return drift_noise_laps(t0, specs=_DB_LAPS)
+
+
 def _drift_session(laps: list[dict]):
-    """A bare Session over one of the drift lap sets above: three valid laps, lap 0 the best (and
-    genuinely the fastest), one lap drifted 1.0 % with one unmatched corner boundary, GPS speed
-    noise on all.
+    """A bare Session over one of the drift lap sets above: three or four valid laps, lap 0 the
+    best (and genuinely the fastest), GPS speed noise on all. `_DN_LAPS` / `_DM_LAPS` drift ONE lap
+    by 1.0 % with one unmatched corner boundary; `_DB_LAPS` puts three laps inside the sub-gate
+    band with every boundary matched.
 
     Beyond `_synthetic_session`'s seeding it carries a minimal pacer `laps` stand-in —
     `laps_count` / `lap_time` / `start_timestamp`, each read straight off the seeded columns, the
@@ -395,3 +471,10 @@ def drift_median_session():
     """The same session with the drift on the MEDIAN-time lap (`_DM_LAPS`) — the lap the whole
     coaching model reads, and the one `drift_noise_session` leaves undrifted."""
     return _drift_session(drift_median_laps())
+
+
+def drift_band_session():
+    """The drift-LADDER session (`_DB_LAPS`): four laps, lap 0 on the reference line and the
+    fastest, the other three at 0.118 / 0.289 / 0.460 % line-length drift — the sub-gate band the
+    two sessions above have no lap in, with every corner boundary spatially matched."""
+    return _drift_session(drift_band_laps())
