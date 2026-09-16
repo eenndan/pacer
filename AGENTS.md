@@ -39,7 +39,9 @@ pacer/                         # repo root
 ├── studio/                    # ── THE STUDIO APP (PySide6 + pyqtgraph; pure Python on the core) ──
 │   │                          #   see studio/README.md (modules)
 │   ├── dev/                   #   developer / validation scripts (diagnose, _validate_wallclock, …)
-│   └── docs/                  #   GPS-accuracy / start-line / g-meter investigation write-ups
+│   └── docs/                  #   GPS-accuracy / start-line / g-meter write-ups, and
+│                           #   refused-2026-09.md: features MEASURED AND REFUSED (read
+│                           #   before re-proposing one)
 │
 ├── bindings/                  # ── PYTHON BINDINGS (litgen-generated, nanobind runtime) ──
 │   └── pacer/                 #   the `pacer` Python package (binds the core; used by studio)
@@ -151,7 +153,7 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`) |
 | `pixi run test` | CTest: the C++ Catch2 suites **and** the registered Python studio tests (the pre-PR gate) |
-| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **111 tests, ~276 s** (one run, 276.5 s, 2026-09-15). Both ctest tasks run under `caffeinate -si`: a Mac that idle-sleeps mid-suite freezes the in-flight test, and ctest then reports it as a `Timeout` lasting as long as the sleep, far past `--timeout`, on a different test every run. If you see that signature, check `pmset -g log` before hunting a hang — rationale in `pyproject.toml` |
+| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **112 tests, ~313 s** (one run, 312.6 s, 2026-09-16; the full suite is 114 tests in 553 s). Both ctest tasks run under `caffeinate -si`: a Mac that idle-sleeps mid-suite freezes the in-flight test, and ctest then reports it as a `Timeout` lasting as long as the sleep, far past `--timeout`, on a different test every run. If you see that signature, check `pmset -g log` before hunting a hang — rationale in `pyproject.toml` |
 | `pixi run golden` | run **only** the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample (`_smoke --no-video`) |
 | `pixi run studio [-- files]` | the studio app (PySide6) — depends on `build` |
@@ -177,7 +179,7 @@ decomposition, E2, the #50 delta-engine dedup) is held to WHOLE-public-API numer
 via [studio/dev/golden_session_dump.py](studio/dev/golden_session_dump.py) (a dense fingerprint of
 a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/dev/golden_compare.py)
 (leaf-by-leaf compare):
-- **MANUAL, full-coverage half** — the canonical dump loads the real ~11.8 GB `~/Desktop/D24`
+- **MANUAL, full-coverage half** — the canonical dump loads the real ~11.9 GB `~/Desktop/D24`
   recording (120k+ leaves, eps 0) and is a dev-Desktop-only gate; it does NOT run in CI.
 - **CI half** — `test_golden_synthetic` automates the SAME machinery
   (`fingerprint(strict=False)` + `golden_compare.walk`, eps 1e-9) over the deterministic SYNTHETIC
@@ -210,7 +212,7 @@ pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   
 **Run one test:** `pixi run ctest --test-dir build/Release -R test_<name>` — CTest injects the
 `PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` env each suite needs (a bare
 `pixi run python tests/test_<name>.py` can miss it on a fresh checkout / for the offscreen-Qt
-suites). For the whole suite minus its two slowest members, use `pixi run test-fast` — it is a third off, not a different order of magnitude, and `pixi run test` is still the pre-PR gate.
+suites). For the whole suite minus its two slowest members, use `pixi run test-fast` — measured 2026-09-16 that is 553 s down to 313 s, **about 44 % off**, not a different order of magnitude, and `pixi run test` is still the pre-PR gate.
 
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 
@@ -252,6 +254,12 @@ change (pure logic → a Qt-free module with a synthetic-data test in
 [tests/_synthetic.py](tests/_synthetic.py); real-widget paths → an offscreen-Qt test); and
 **core-math changes (timing / geometry / delta) must preserve the validated numbers** — pin them with
 the golden gate above.
+
+**Before proposing a feature, check it was not already measured and refused.**
+[studio/docs/refused-2026-09.md](studio/docs/refused-2026-09.md) records the ones whose evidence
+would otherwise live only in a closed pull request — the mistake-hangover detector and the
+ideal-lap recombination dotplot, each with the numbers that killed it. They stay refused unless you
+bring NEW evidence; "it would be nice to have" is not new evidence.
 
 **Changelog:** a user-visible change (feature, fix, behaviour tweak) gets a line under
 `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR — grouped Added/Changed/Fixed, one

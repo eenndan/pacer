@@ -65,23 +65,29 @@ test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failur
 # Fast inner loop for agents: the full suite minus the two slow tests. Run this while iterating,
 # `test` before a PR.
 #
-# THE EXCLUSION LIST HAS TO BE RE-MEASURED, NOT ASSUMED. It named test_export_video alone and
-# described it as "~110 s ffmpeg encode, ~18 s for the other 45" — both stale. Measured 2026-09-07:
+# THE EXCLUSION LIST HAS TO BE RE-MEASURED, NOT ASSUMED — AND IT HAS NOW ROTTED TWICE. It first
+# named test_export_video alone and described it as "~110 s ffmpeg encode, ~18 s for the other 45".
+# The 2026-09-07 re-measure replaced that with a table which has itself gone stale in every row:
+# it recorded test_export_video at 10.3 s and concluded the exclusion had "become the SIXTH slowest
+# test, while the actual outlier was not excluded at all". Measured 2026-09-16, that conclusion is
+# now backwards — the two excluded suites are the two slowest, in that order:
 #
-#   test_compare_lifecycle  96.0 s      test_export_pill_budget  16.2 s
-#   test_stats              20.7 s      test_central_view_realqt 15.8 s
-#   test_pb_toast           19.9 s      test_export_video        10.3 s
-#   ...then a long tail; whole suite 281 s over 86 tests
+#   test_export_video       109.4 s     test_export_pill_budget   18.6 s
+#   test_compare_lifecycle  104.6 s     test_load_lifecycle       15.3 s
+#   test_stats               48.4 s     test_charts_header_budget 14.0 s
+#   test_pb_toast            26.3 s     test_first_run_path       13.6 s
+#   test_central_view_realqt 22.8 s
+#   ...then a long tail; whole suite 553 s over 114 tests
 #
-# So the named exclusion had become the SIXTH slowest test (its real-ffmpeg cases were trimmed and
-# most now run on a 1.5 s synthetic lavfi clip), while the actual outlier was not excluded at all.
+# test_export_video went 10.3 -> 109.4 s because its real-media cases came back; the `--timeout 480`
+# note above already says ~110 s and is the row that stayed true. Read every number here as a
+# measurement with a DATE on it, not as a standing fact.
 #
-# Be honest about what this buys: excluding both leaves 94 tests in ~223 s (re-measured
-# 2026-09-09 — the suite has grown by ten tests since the table above was taken, and the
-# saving has stayed proportionally the same). That is a third off, not
-# the ~18 s the old comment promised — the remaining time is spread thin across offscreen-Qt suites
-# that each build a real StudioWindow, and there is no single test left worth cutting. Do not add
-# exclusions to chase a number; re-measure and update this table instead.
+# Be honest about what this buys: excluding both leaves 112 tests in ~313 s (one run, 312.6 s,
+# 2026-09-16). That is about 44 % off, not the ~18 s the original comment promised — the remaining
+# time is spread thin across offscreen-Qt suites that each build a real StudioWindow, and there is
+# no single test left worth cutting. Do not add exclusions to chase a number; re-measure and update
+# this table instead.
 #
 # test_compare_lifecycle is expensive on purpose and must NOT be trimmed to fit here: it is the
 # regression guard for a SIGSEGV (a live widget half-moved between layouts), and a crash cannot be

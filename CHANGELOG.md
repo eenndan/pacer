@@ -6,7 +6,10 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
-Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO critical review.
+Everything merged since v0.2.0 — 81 pull requests (#222–#304), 288 commits — beginning with the
+2026-09-07 CTO × CPO critical review and continuing through the market-research and QA waves after
+it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, and the range stopped
+40 PRs short of what the section already described.)
 
 ### Added
 
@@ -212,6 +215,10 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 - **⌘L opens the Session Library.** The front door to every recording you have analysed was the one
   top-level surface with no key at all. It is documented on the ? card and reachable from ⌘K,
   because all three read the same registry.
+- **Saved tracks can be renamed and deleted.** A track you named once was permanent: a typo, or a
+  track you never wanted, stayed in the list forever. Both operations carry every store a track
+  NAME keys — the focus list, the session records and the personal-best history move with the
+  rename rather than being orphaned by it.
 
 ### Changed
 
@@ -476,6 +483,18 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   status bar, for as long as it is true.
 - **The ⌘⇧S stats dashboard composes at width**, and chart axis titles are legible (they painted at
   1.19:1 against 5.7:1 for the tick labels beside them).
+- **The g-meter reads the camera's own axis declaration instead of assuming one.** Pacer had one
+  hard-coded idea of which way a GoPro's accelerometer points. Cameras declare their orientation in
+  the stream, and they do not all agree — so on a non-canonical camera every g the app drew was on
+  the wrong axis. It now reads the declaration. And a recording whose gravity vector disagrees with
+  its own accelerometer is **refused out loud** rather than silently mis-oriented: a meter that is
+  confidently sideways is worse than no meter.
+- **The Stats page named an accelerometer it did not have, and a braking window that did not
+  exist.** The DRIVING copy stated the IMU contrast and the brake-approach window unconditionally,
+  including on recordings whose g-meter is GPS-derived and on pages with no g-meter at all. Each
+  sentence now appears only where the thing it describes does.
+- **The map key painted one of the two timing lines it names**, and a highlighted corner's ring
+  wore the colour of the lap it rings rather than the accent that means "this one".
 
 ### Engineering
 
@@ -505,7 +524,7 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ## [0.2.0] — 2026-09-06
 
-Everything merged since v0.1.0 — 195 pull requests, 458 commits — grouped by theme.
+Everything merged since v0.1.0 — 203 pull requests, 477 commits — grouped by theme.
 
 ### Added
 

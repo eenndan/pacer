@@ -152,10 +152,13 @@ def test_no_module_constant_freezes_a_palette_hue():
         # map_view.MARKER_COLOR = C.behind — the video-position marker. The U10-01 audit flagged it
         # as a third frozen constant, but MEASUREMENT says pointing it at behind_colour() would
         # make it strictly WORSE, not better: it would then equal rainbow bucket 0 exactly, in
-        # BOTH palettes (CIE76 dE 0.0 to the nearest bucket). Frozen, it is already dE 0.0 in the
-        # default palette and 3.5 deuteranopic in the colour-blind one (JND ~2.3) — so the marker
-        # needs its OWN token, distinct from every ramp anchor, which is a map_view design change.
+        # BOTH palettes (CIE76 dE 0.0 to the nearest bucket). Frozen, the collision is in the
+        # DEFAULT palette only — dE 0.0 against bucket 0 there, against a minimum of 36.45 plain
+        # and 16.40 deuteranopic (JND 2.3) across all 16 colour-blind buckets. So the marker needs
+        # its OWN token, distinct from every ramp anchor, which is a map_view design change.
         # Exempted here rather than half-fixed; handed to the map_view owner (QA batch B03/B04).
+        # (This block used to say "3.5 deuteranopic in the colour-blind one", contradicting the
+        # 16.40 the WIDE guard below states for the same colour. 16.40 is the measured one.)
         ("map_view.py", "MARKER_COLOR"),
     }
     offenders = []
