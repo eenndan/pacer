@@ -231,6 +231,18 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   22–26 %. The tooltip named only the longitudinal window, which read as though the whole picture
   were on it. The windows themselves are unchanged: matching them moves the grip-envelope ring by
   about 1 % and costs 12–20 % of the peak lateral g the app measures best.
+- **The DATA TRUST rotation row says the two channels are on different clocks, and by how much.**
+  The gyroscope is timestamped on the camera's media clock — the one the picture plays on — and the
+  GPS trace on its receiver's own. On the owner's two recordings an event's GPS timestamp lands
+  **0.48 s / 0.46 s** after its gyro timestamp. The row printed a correlation measured with that
+  offset left in and said nothing about it; it now states the offset, and the tooltip gives the
+  correlation both ways (+0.92 against +0.85, and +0.88 against +0.83). **Nothing is shifted to
+  match** — this is a disclosure, not a correction — and lap times, which are differences taken on
+  one clock, are untouched either way. It is measured per recording, so a camera whose two streams
+  agree says so instead, and a channel that never tracks the path reports no offset rather than
+  0.00 s. Earlier figures of ~0.35–0.40 s in this repo were measured against raw telemetry time,
+  which slides by 0.10–0.17 s across a session because the two clocks also differ by ~27 ppm;
+  which stream is late was settled against the picture itself.
 
 ### Fixed
 
