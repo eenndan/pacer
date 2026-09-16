@@ -323,6 +323,9 @@ class Session:
             # AFTER the g-meter, because the cross-check needs the SEGMENTED laps this Session
             # already has — and it is the reason the channel exists, not a by-product of it.
             session._build_rotation(gyro, grav, device)
+            # …and the rotation channel is what MEASURES the GPS timestamps' own latency, so the
+            # correction can only be installed once it exists.
+            session._install_gps_lag()
         return session
 
     def _build_gmeter(self, accl, grav, cori) -> None:
@@ -378,8 +381,14 @@ class Session:
             # and this is the object that knows the conversion. IDENTITY when the recording never
             # left the media clock (a GPS5 camera), which is exactly right: then the two axes ARE
             # one axis and there is no rate difference to take out.
+            #
+            # `without_gps_lag` is load-bearing, not defensive: `_install_gps_lag` below folds the
+            # lag this very call measures INTO that map, so handing over the live one would have
+            # the measurement running against its own correction — it would read ~0 on a second
+            # build and the correction would justify itself. The measurement is always taken on
+            # the pure two-clock fit, whatever has been installed since.
             self._rotation = rotation.compute(gyro, grav, traces or None, device=device,
-                                              to_media=self.media_clock.to_media)
+                                              to_media=self.media_clock.without_gps_lag().to_media)
         except Exception as e:  # noqa: BLE001 — the rotation channel is additive; never break a load
             print(f"studio: rotation channel build failed ({e!r}); rotation disabled.", flush=True)
             return
@@ -397,6 +406,49 @@ class Session:
             print(f"studio: no measured rotation channel for this recording "
                   f"({device or 'unknown camera'}): it carries no GYRO stream, or no usable "
                   "GRAV direction to project one on.", flush=True)
+
+    def _install_gps_lag(self) -> None:
+        """Fold the MEASURED GPS-timestamp latency into this recording's picture<->trace map.
+
+        WHAT IT FIXES. The GPS trace's timestamps land ~0.46-0.48 s after the instant the picture
+        shows (`rotation` measures it per recording; the gyroscope rides the picture's own clock).
+        Everything GPS-derived that is drawn over the video — the speed, the Δ, the map dot, the
+        dial's longitudinal axis, the lap clock's origin — was therefore painted against a frame
+        about 14 of them late at 30 fps. Installing the lag on the `MediaClock` moves the ONE seam
+        the whole app crosses to reach the picture (`media_time` / `telemetry_time`, and the
+        player's own `clock_of`), so the live view and a burned export are corrected by the same
+        number or neither is.
+
+        WHAT IT DOES NOT TOUCH. Lap times are differences taken on one clock: a constant cannot
+        move them. No per-sample series is rewritten and no stored analysis number changes — this
+        is a mapping between the picture and the trace, and only consumers that cross it see it.
+
+        REFUSALS ARE SILENT-BUT-STATED. A camera with no GYRO, a gyro that never tracks the path,
+        or a peak at the edge of the search window all leave `gps_lag_s` None, and `with_gps_lag`
+        refuses anything past `media_clock.MAX_GPS_LAG_S` — each case keeps the pure two-clock map,
+        i.e. exactly the behaviour before this existed. The log says which happened."""
+        cmap = self.chapters
+        if cmap is None:
+            return
+        # `getattr`, not `self._rotation`: the attribute is set INSIDE `_build_rotation`'s try, so
+        # a camera whose channel build raised has no attribute at all — and an additive channel
+        # failing must not take the load down on its way out.
+        rot = getattr(self, "_rotation", None)
+        cross = getattr(rot, "cross", None) if rot is not None else None
+        lag = None if cross is None else cross.gps_lag_s
+        if lag is None:
+            return
+        clock = media_clock.clock_of(cmap)
+        installed = clock.with_gps_lag(lag)
+        if installed.gps_lag == 0.0:
+            print(f"studio: the measured GPS lag ({lag:+.3f} s) is past "
+                  f"{media_clock.MAX_GPS_LAG_S:.1f} s and was NOT applied — the overlay keeps the "
+                  f"uncorrected mapping.", flush=True)
+            return
+        cmap.media_clock = installed
+        print(f"studio: the GPS trace's {lag:+.3f} s timestamp lag is corrected where the picture "
+              f"meets the telemetry, so the overlay and the export draw each frame's own values "
+              f"(lap times are differences on one clock and are unchanged).", flush=True)
 
     # ----------------------------------------- cross-recording reference lap (F7)
     # A lap from another recording that replaces the local best as the Δ baseline everywhere a
@@ -3057,8 +3109,25 @@ class Session:
         """This recording's telemetry->media conversion (studio/media_clock.py), IDENTITY when the
         session has no chapter map or the fit was refused. It lives on the ChapterMap, which is the
         object the video layer receives; this is the read-through for everything that has a Session
-        instead."""
-        return media_clock.clock_of(self.chapters)
+        instead.
+
+        `getattr`, because a BARE Session — `Session.__new__` with no load behind it, which is what
+        the synthetic fixtures and half the test suites build — has no `chapters` attribute at all.
+        This property is now on the path of `g_at_time`, and the synthetic golden gate caught it
+        the moment it was: an accessor that raises there records the `__unsupported__` sentinel
+        instead of a number, which deletes a leaf from the fingerprint rather than moving it. A
+        session with no map converts by identity, exactly as it always did."""
+        return media_clock.clock_of(getattr(self, "chapters", None))
+
+    @property
+    def gps_lag_applied_s(self) -> float | None:
+        """The GPS-timestamp lag this recording's picture<->trace map is CORRECTED by, or None.
+
+        Deliberately separate from `rotation_cross().gps_lag_s`, which is what was MEASURED: a
+        measurement past `media_clock.MAX_GPS_LAG_S` is refused, and a recording with no gyro has
+        no measurement at all. A surface that says the overlay is corrected must read this one."""
+        lag = self.media_clock.gps_lag
+        return float(lag) if lag else None
 
     def media_time(self, t: float) -> float:
         """The MEDIA time of telemetry (true-clock) instant `t` — what to seek the picture to.
@@ -3069,6 +3138,11 @@ class Session:
         consumer that hands a time to ffmpeg or to the media player converts here first, and
         converts back with `telemetry_time` before asking this Session anything about the frame it
         got.
+
+        IT ALSO CARRIES THE GPS TIMESTAMPS' OWN LATENCY when this recording's was measured (see
+        `_install_gps_lag`): the trace's clock is ~0.46 s behind the picture's, so the media time
+        of a telemetry instant is that much EARLIER than the rate fit alone would say. One seam,
+        so the live view and a burned export cannot disagree about which frame a value belongs to.
 
         A NAMING HAZARD, STATED SO IT CANNOT BITE TWICE: the older accessors that say "media time"
         in their names — `media_time_at_plot_x`, `plot_x_at_media_time`, `corner_entry_media_time`
@@ -3098,8 +3172,17 @@ class Session:
         accelerating (−longitudinal = braking). O(log n) lookup into the precomputed series —
         cheap enough for the 30 Hz overlay tick. LATERAL is from the GoPro accelerometer
         (ACCL+GRAV+CORI in the kart frame); LONGITUDINAL is the GPS speed derivative, because the
-        IMU forward axis is vibration-inflated (see studio/gmeter.py)."""
-        return self._gmeter.at_time(t)
+        IMU forward axis is vibration-inflated (see studio/gmeter.py).
+
+        THE SERIES IS NOT ON THIS FUNCTION'S OWN CLOCK, which is why the conversion is here. The
+        accelerometer never leaves the camera's media clock — `gmeter.compute` stamps the series
+        with the ACCL sample times — so indexing it with a telemetry time asked the wrong instant
+        of it. That was worth the two clocks' drift (up to 0.17 s late by the end of the owner's
+        84-minute recording) before the GPS lag was corrected, and it would be worth the lag itself
+        in the OTHER direction after (`_install_gps_lag`), which is the one way this fix could have
+        made the dial worse than it found it. `media_time` is the same map every other picture-side
+        lookup crosses, so the dial and the speed beside it describe one instant."""
+        return self._gmeter.at_time(self.media_time(float(t)))
 
     @property
     def has_gmeter(self) -> bool:

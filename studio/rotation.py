@@ -86,10 +86,14 @@ was written down as a property of the sensor.
 
 THE TWO CHANNELS ARE ON DIFFERENT CLOCKS, AND THE GPS ONE IS LATE
 ----------------------------------------------------------------
-MEASURED AND STATED, NOT CORRECTED. `measure_lag` reports it per recording, `RotationCheck.
-gps_lag_s` carries it and the Stats page's DATA TRUST rotation row prints it. Nothing in Pacer
-shifts either channel onto the other, so every statistic above is computed with the offset left
-in — which is most of why the corner correlation is 0.95 and not higher.
+MEASURED HERE, AND CORRECTED WHERE THE PICTURE MEETS THE TELEMETRY — NOT IN THESE CHANNELS.
+`measure_lag` reports it per recording, `RotationCheck.gps_lag_s` carries it and the Stats page's
+DATA TRUST rotation row prints it. `Session._install_gps_lag` then folds that number into the
+recording's `MediaClock`, so everything drawn over the video reads the trace at the instant the
+frame shows. Nothing shifts either CHANNEL onto the other, so every statistic in this module is
+still computed with the offset left in — which is most of why the corner correlation is 0.95 and
+not higher — and the measurement itself always runs on `MediaClock.without_gps_lag()`, or it would
+be measuring the correction it produced.
 
 WHAT IT IS. On the media clock the GPS trace's timestamps run 0.483 s (0060) and 0.459 s (0062)
 BEHIND the gyro's for the same event; per chapter 0.491/0.471 and 0.467/0.469/0.445. It is a
@@ -126,10 +130,11 @@ measures. So the gyro rides the picture's clock and the GPS trace is the one arr
 
 WHAT IS STILL OPEN. Whether the GPS timestamps are late because of the receiver's own fix latency
 or because of where the camera files a fix inside a GPMF payload is NOT separable from these
-streams, and the two are indistinguishable to everything downstream. Note the consequence beyond
-this module: every GPS-derived overlay (speed, the map dot, Δ) is drawn from a trace that trails
-the picture by about half a second. Lap TIMES are differences taken on one clock and are
-untouched by any of this.
+streams, and the two are indistinguishable to everything downstream — and to the correction, which
+only needs to know how far the trace is from the picture. What this measurement is used FOR lives
+in `media_clock.MediaClock.gps_lag`: without it every GPS-derived overlay (speed, the map dot, Δ)
+was drawn from a trace that trailed the picture by about half a second. Lap TIMES are differences
+taken on one clock and are untouched by any of this.
 """
 
 from __future__ import annotations
@@ -250,8 +255,13 @@ class RotationCheck:
             # measured. Say what was actually established: the two clocks agree.
             return "the GPS trace and the gyroscope agree on the clock to within 0.01 s"
         side = "behind" if self.gps_lag_s >= 0 else "ahead of"
+        # What this clause is about is the CHANNELS on this card. Neither is resampled onto the
+        # other, so every figure beside it — r, gain, the closed-loop ratios — carries the offset.
+        # It deliberately says nothing about the VIDEO overlay, which IS corrected by this number
+        # (`Session._install_gps_lag`): that is a property of the recording's picture<->trace map,
+        # not of this measurement, and the surface that knows whether it was installed states it.
         return (f"the GPS trace runs {abs(self.gps_lag_s):.2f} s {side} the gyroscope, "
-                f"and neither channel is shifted to match")
+                f"and these figures are measured with that offset left in")
 
     def summary(self) -> str:
         verdict = "AGREE" if self.ok else "DISAGREE"

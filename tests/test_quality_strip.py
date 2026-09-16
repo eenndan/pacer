@@ -316,7 +316,8 @@ class _Check:
         return abs(self.loop_ratio_gyro - 1.0) * 100.0
 
 
-def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None):
+def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None,
+                applied_lag=None):
     from studio.stats_panel import StatsView
 
     class _S:
@@ -346,6 +347,10 @@ def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quali
 
         def rotation_device(self):
             return device
+
+        # What the session did with the measured clock offset — None = nothing (no gyro, or a
+        # value the clock refused). The card states the measurement and the ACTION separately.
+        gps_lag_applied_s = applied_lag
 
     view = StatsView.__new__(StatsView)
     view.trust_card = QWidget()   # only set_rows / setToolTip are called on it
@@ -451,16 +456,27 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
         straight_n=8000, straight_rms_gyro=0.24, straight_rms_path=0.05, straight_mean_gyro=0.026,
         loop_n=38, loop_ratio_gyro=0.983, loop_ratio_path=1.001, ok=True,
         gps_lag_s=0.483, lag_corr=0.917, lag_corr_at_zero=0.854)
-    rows, tip = _trust_rows(real)
+    rows, tip = _trust_rows(real, applied_lag=0.483)
     value = next(r[1] for r in rows if r[0] == "Rotation cross-check")
     assert "0.48 s" in value, value
     assert "behind" in value, value
-    # It must say the app does NOT correct it — a stated offset that looks applied is worse than
-    # no offset at all.
-    assert "shifted" in value, value
+    # It must say what the figures BESIDE it are measured with — an offset stated next to a
+    # correlation that silently carries it reads as agreement the channels never had.
+    assert "left in" in value, value
     # The tooltip carries what the row cannot: the correlation with and without the offset.
     assert "+0.92" in tip and "+0.85" in tip, tip
     assert "media clock" in tip and "lap times" in tip.lower(), tip
+
+    # …and it must say what the APP does with the offset, which is a different fact from the
+    # measurement and comes from a different place (Session._install_gps_lag). The overlay IS
+    # corrected by it, so a tooltip still claiming nothing is shifted would be false.
+    assert "overlay IS corrected" in tip, tip
+    assert "0.48 s" in tip, tip
+    # A recording whose offset was measured but NOT applied says so instead — the two must not be
+    # collapsed into one sentence that assumes the correction landed.
+    _rows3, tip3 = _trust_rows(real, applied_lag=None)
+    assert "Nothing is shifted to match" in tip3, tip3
+    assert "overlay IS corrected" not in tip3, tip3
 
     # NOT MEASURED IS NOT ZERO. A recording whose offset could not be measured says nothing about
     # one — it must not print "0.00 s behind", which is a claim nobody made.
