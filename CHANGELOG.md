@@ -246,6 +246,28 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **Every GPS-derived number drawn over the video was half a second late, and now it is not.** The
+  camera's accelerometer and gyroscope are timestamped on the clock the picture plays on; its GPS
+  receiver stamps a fix on its own, and that stamp lands **0.476 s (0060) / 0.459 s (0062)** after
+  the instant the frame shows — measured per recording, per chapter and per lap, with no step at a
+  chapter seam and a per-lap IQR of about 0.03 s. So the speed, the Δ, the map dot, the dial's
+  longitudinal axis and the lap clock's zero were all painted against a frame roughly **14 of them
+  late at 30 fps**, in the app and in every exported clip. Pacer now folds the measured lag into
+  the one mapping that crosses between the picture and the telemetry, so the live view and a burned
+  export are corrected by the same number or neither is. **Lap times cannot move** — they are
+  differences taken on one clock — and no stored analysis number changes: this shifts what a frame
+  is matched with, not what anything is measured to be. The correction is refused, out loud, on a
+  recording whose gyroscope cannot measure it (a camera with no GYRO, a helmet cam whose gyro never
+  tracks the racing line) or whose measurement lands past a second, and those recordings keep the
+  behaviour they had. The DATA TRUST rotation row now states both facts separately: what was
+  measured, and what was done with it.
+- **The g-meter dial was asking the accelerometer for the wrong instant too, by a different
+  amount.** The g series never leaves the camera's media clock, but it was indexed with a telemetry
+  time — so the dial trailed the picture by the two clocks' own drift (up to 0.169 s at the end of
+  the 84-minute recording, growing through the session) rather than by the GPS lag. Correcting only
+  the GPS chain would have pushed the dial 0.3–0.45 s the other way, ahead of the picture; the
+  lookup now crosses the same seam everything else does, so the dial and the speed beside it
+  describe one frame.
 - **The ★ that means "session best" was decided three different ways, so two pages marked
   different cells of the same grid.** The Stats page's SPLITS grid compares what it *prints* —
   an interior sector split is the difference of two GPS sample times on a 0.1 s grid, so a
