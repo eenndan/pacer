@@ -306,3 +306,51 @@ leaves the p98 width untouched (1.375 / 1.334 g) and grows the p98 braking exten
 
 So the windows stay as they are and the asymmetry is **stated where it is read**: `stats_panel`'s
 `GG_TOOLTIP` composes BOTH constants and says the cloud is smoothed more in height than in width.
+
+## The analysis join: the g series and the trace are one axis, BY LABEL (measured, refused a fix)
+
+`driving_channels._lap_g_arrays` reads the g meter at the lap's own **GPS9 telemetry** times while
+the series is stamped on the camera's **media** clock. Since `studio/media_clock.py` established
+that those are two axes — ~27 ppm apart, plus a measured GPS-timestamp lag of +0.476 s (0060) /
++0.459 s (0062) — the join reads like a ~0.4 s bug, and it was filed as one. **Measured on both
+recordings, crossing the clock here is backwards.** Everything below is
+`rotation.measure_lag` — the product's own estimator — against the path-derived reference
+(`rotation._path_reference` + `corners.lap_yaw_rate`), positive = *the trace runs behind*.
+
+| what is compared | joined BY LABEL (shipped) | joined through `media_clock` |
+|---|---:|---:|
+| `gm.lat_g` vs path lateral g | **+0.011 / −0.047 s** (r 0.963 / 0.971) | −0.399 / −0.404 s (r 0.963 / 0.971) |
+| `gm.long_g_gps` vs path longitudinal | −0.058 / +0.073 s | −0.401 / −0.320 s |
+| \|horizontal ACCL\| vs \|path a\| (rotation-free) | +0.076 / −0.024 s | −0.339 / −0.375 s |
+| IMU **ENU acceleration vector** vs the path's (bias-free sweep) | **−0.01 / −0.06 s** (r 0.937 / 0.949) | — |
+
+**The harness is not in question**, because the same runs reproduce the app's own published figure
+from the GYRO: mapped through `MediaClock.without_gps_lag()`, gyro-vs-path reads **+0.4764 /
++0.4589 s**, equal to `RotationCheck.gps_lag_s` to four decimals; with the full clock it reads
++0.007 / +0.002 s. A null control (the GPS-derived lateral against the same path) reads +0.043 s on
+both. So within one recording the GYRO is ~0.46 s ahead of the GPS timestamps while the ACCL
+content sits **with** them — the accelerometer's content arrives carrying the same delay, on a
+sample grid identical to the gyro's (586,300 samples, 0→2924.98 s, 200.4 Hz on 0060; the streams
+are stamped together and disagree about *when* regardless). The camera-side cause is not resolved
+here: CORI's own yaw rate agrees with the gyro (+0.024 s, r 0.72, 0060) and the raw-magnitude probe
+is too weak to settle it (r≈0.50), so GRAV/CORI are ruled out as the delay and ACCL itself is not.
+
+**The cost of the "fix", had it shipped** — the product's own `driving.grip_envelope` /
+`corner_grip` / `grip_utilization` re-run with the lateral crossed through the clock:
+
+| surface | 0060 | 0062 |
+|---|---:|---:|
+| grip envelope (the divisor under every grip number) | 1.4237 → 1.4064 g (−1.21 %) | 1.3697 → 1.3493 g (−1.49 %) |
+| per-corner grip, mean \|Δ\| over 456 / 780 corner-laps | **3.22 points** | 2.35 points |
+| per-corner grip, worst corner | **38.8 points** | 18.7 points |
+| per-sample grip utilisation, mean Δ / worst \|Δ\| | +0.008 / 0.011 | +0.009 / 0.012 |
+
+**The trap this documents.** The peak correlation is the SAME to three decimals whichever way the
+join is made (0.963 / 0.971) — a misaligned join is invisible to r and shows only in the lag. Read
+the lag. The guard is `tests/test_driving.py::test_the_lap_g_join_does_not_cross_the_media_clock`.
+
+**What is still open, and is NOT this join.** `Session.g_at_time` crosses the media clock (it must:
+it answers "what was the g at this frame"). Given the measurement above, the dial's LATERAL is
+therefore ~0.45 s from the trace-derived speed painted beside it — before that conversion existed
+both were equally stale and agreed. That is the picture↔trace seam, not the analysis join, and it
+is stated here so the next reader does not confuse the two.

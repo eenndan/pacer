@@ -115,7 +115,9 @@ class CardData:
     other fields may be placeholders (the card is never built)."""
 
     track: str            # the track name, or "Unknown track"
-    date: str             # "YYYY-MM-DD" or "" (GPS5 stream / empty session)
+    date: str             # "YYYY-MM-DD", or "" when the session has no wall clock at all (empty,
+    #                       or a recording with no GPS). A GPS5-era clip DOES print a date here —
+    #                       it stamps every fix from GPSU (see Session.session_date)
     best_time: str        # the best lap, m:ss.mmm (or "—")
     best_lap_id: int | None
     delta_to_ideal_s: float | None  # best_time − ideal_total > 0, or None (no ideal / one donor)

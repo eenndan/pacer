@@ -19,7 +19,8 @@ from studio.load import _used_gps9_trueclock  # noqa: E402
 
 def _samples(ts_ms):
     """GPS samples carrying only the timestamp_ms the clock-provenance decision reads (0 = the
-    GPS5-era sentinel)."""
+    no-wall-clock sentinel — NOT the GPS5 era, whose fixes ARE stamped from GPSU; see
+    tests/test_load_pipeline.py for that measurement)."""
     return [SimpleNamespace(timestamp_ms=t) for t in ts_ms]
 
 
@@ -33,17 +34,20 @@ def test_used_gps9_trueclock_decision():
     assert _used_gps9_trueclock(_samples([1000, 1100, 1200, 1300])) is True
     # a run that appears LATE among sentinels is still found
     assert _used_gps9_trueclock(_samples([0, 0, 1000, 1100, 0])) is True
-    # all-sentinel GPS5 stream -> no run -> False (stays on the media clock)
+    # an all-sentinel stream (no wall clock at all) -> no run -> False (stays on the media clock)
     assert _used_gps9_trueclock(_samples([0, 0, 0, 0])) is False
     # a LONE timed fix among sentinels is not a run (needs two consecutive) -> False
     assert _used_gps9_trueclock(_samples([0, 1100, 0, 0])) is False
-    # every pair out of band (dt = 1.0 s > GPS9_MAX_DT_S) -> not a single GPS9 step -> False
+    # every pair out of band (dt = 1.0 s > GPS9_MAX_DT_S) -> not a single GPS9 step -> False.
+    # THIS PAIR OF CASES IS THE REAL GPS5-ERA ARM, not the all-sentinel one above: GPS5 carries one
+    # GPSU stamp per ~1 s payload, so consecutive payloads sit ~1.0 s apart (here) and the fixes
+    # inside one payload sit 0 s apart (the sub-minimum case below).
     assert _used_gps9_trueclock(_samples([1000, 2000, 3000])) is False
     # deltas below the minimum (10 ms duplicate/garbage fixes < GPS9_MIN_DT_S) -> False
     assert _used_gps9_trueclock(_samples([1000, 1010, 1020])) is False
     # trivially short input -> False (no pair to inspect)
     assert _used_gps9_trueclock(_samples([1000])) is False
-    print("ok _used_gps9_trueclock: GPS9 run -> True; GPS5 / lone / out-of-band / sub-min -> False")
+    print("ok _used_gps9_trueclock: GPS9 run -> True; sentinel / lone / out-of-band / sub-min -> False")
 
 
 # ------------------------------------- no-average-across-gap smoothing (studio._signal)

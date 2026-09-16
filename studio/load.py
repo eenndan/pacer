@@ -63,8 +63,10 @@ GPS9_MAX_DT_S = 0.40    # …above this, the run is broken (dropout / rollover)
 
 def _gps9_times(samples, naive, rate_factor: float = 1.0):
     """Per-sample times = GPS9 spacing re-anchored per contiguous run to the naive media clock.
-    Falls back to the naive time for a sentinel (ts==0) or run-break sample, so a GPS5-only
-    stream degrades gracefully. Returns a list aligned to `samples`, monotonic non-decreasing.
+    Falls back to the naive time for a sentinel (ts==0) or run-break sample. A GPS5-era stream
+    degrades gracefully through the RUN-BREAK arm, not the sentinel one: its fixes ARE stamped,
+    from the ~1 s GPSU (see `_used_gps9_trueclock`). Returns a list aligned to `samples`,
+    monotonic non-decreasing.
 
     `rate_factor` (default 1.0) scales only the within-run spacing (each run stays anchored at
     its media start); the load path leaves it at 1.0 — it exists only for the validator."""
