@@ -182,7 +182,10 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
 - **CI half** — `test_golden_synthetic` automates the SAME machinery
   (`fingerprint(strict=False)` + `golden_compare.walk`, eps 1e-9) over the deterministic SYNTHETIC
   session (`test_session_services._synthetic_session`: stadium loop + seeded g-meter, REAL
-  corner/driving/delta/bests/consistency, no media file), across base/ref/ref_cleared phases, vs a
+  corner/driving/delta/bests/consistency, no media file), across base/ref/ref_cleared phases, plus a
+  `drift_noise` phase over `tests/_synthetic.drift_noise_session` (GPS speed noise at the measured
+  sigma, one lap drifted 1 % with an unmatched corner boundary — the stadium laps have neither, so
+  a drift-gated or noise-driven change could not move them), vs a
   committed baseline (`tests/golden_synthetic_baseline.json`). It runs with no big file, so it
   gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
   reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.

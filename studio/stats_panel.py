@@ -112,6 +112,34 @@ NO_LAPS_PROSE = data_quality.no_laps_body()
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
                   "are unavailable.")
+
+
+def gps_lateral_clause(session) -> str | None:
+    """WHY this recording's lateral g is not the accelerometer's, or None when it is.
+
+    FOUR texts on this page named the accelerometer as the lateral channel on EVERY recording, and
+    on a GPS-derived meter that is simply false. #283 made the state both reachable and visible —
+    `gmeter.axis_check` refuses an accelerometer whose own GRAV disagrees with its own ACCL — but
+    it only taught the g-meter toggle and the DATA TRUST card to say so. Measured over the real
+    `Session.load`: SEVEN of the ten bundled samples run a GPS-derived lateral axis (six carry no
+    GRAV/CORI to orient an IMU with; hero8's GRAV is all zeros and is REFUSED), while both D24
+    recordings measure ALIGNED at 6.1 deg and 5.9 deg and keep the accelerometer — so the wording
+    had to change on the first group and could not move on the second.
+
+    The REASON is `AxisCheck.refusal()` — the same clause the toggle and the trust card finish
+    their sentences with, never a second wording for one refusal — or "no usable accelerometer",
+    the words the toggle already uses for a camera that never had one (`gmeter_overlay`).
+
+    A recording with NO g-meter at all returns None: its lateral g does not come from the GPS
+    trajectory either, and the page already explains those em-dashes in NO_GMETER_NOTE."""
+    if not getattr(session, "has_gmeter", False):
+        return None
+    if getattr(session, "gmeter_source", lambda: "accl")() != "gps":
+        return None
+    axis = getattr(session, "gmeter_axis", lambda: None)()
+    refusal = axis.refusal() if axis is not None else None
+    return (f"this recording's accelerometer was not used: {refusal}" if refusal
+            else "no usable accelerometer")
 # (The local TILE_VALUE_PT alias is gone: the step it named is theme.EMPHASIS, the tile that used
 # it is widgets.Tile, and the two call sites left in this file read the token directly.)
 TILES_PER_ROW = 4         # tile-grid max columns in a normal (quadrant-width) pane
@@ -298,6 +326,22 @@ BAND_NOTE_LAT = (
     f"{gmeter.LAT_SMOOTH_S:g} s and resamples to {gmeter.OUTPUT_HZ:g} Hz before anything reads it "
     f"— five times the GPS rate, which is why the distribution is worth drawing at all, but a "
     f"filtered series and not the sensor's raw 200 Hz.")
+
+
+def band_note_lat_gps(why: str) -> str:
+    """BAND_NOTE_LAT for a recording whose lateral axis is derived from the GPS trajectory.
+
+    Every claim above is false here, not just the sensor's name: `_resample_gps_only` takes speed
+    x yaw-rate off the 10 Hz trace, so LAT_SMOOTH_S never runs, the 200 Hz the copy disowns was
+    never read, and "five times the GPS rate" describes an interpolation rather than five times
+    the measurement. The output grid is still OUTPUT_HZ, read from the constant like its sibling."""
+    return (f"Lateral g is derived from the GPS trajectory on this recording ({why}): speed x yaw "
+            f"rate off the same 10 Hz trace as the speed chart, resampled to "
+            f"{gmeter.OUTPUT_HZ:g} Hz. It is not an accelerometer reading and carries none of the "
+            f"accelerometer's filter chain, so these bands resolve what 10 Hz of GPS can see — "
+            f"the shape of the distribution rather than its fine structure.")
+
+
 # ...and the second half, filled per refresh because it names the sample (see _refresh_bands).
 BAND_SPLIT_NOTE = ("Outlines: your fastest {n} clean laps (median {fast}) against your slowest {n} "
                    "(median {slow}) — solid is faster, dashed is slower.")
@@ -481,6 +525,24 @@ GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — l
               "width untouched and grows the braking extent 9-13 % and the acceleration extent "
               "22-26 %. Read the circle for WHERE you load the tyre, not for an exact aspect "
               "ratio.")
+
+
+def gg_tooltip_gps(why: str) -> str:
+    """GG_TOOLTIP for a GPS-derived meter, where BOTH axes change provenance rather than one.
+
+    The constant above is built on the shipped IMU meter: an accelerometer lateral against the
+    `long_g_gps` display series. On this path `gmeter.compute` returns `_resample_gps_only`, which
+    leaves `long_g_gps` None — so the ONE MAGNITUDE, TWO WINDOWS paragraph describes a filter pair
+    this cloud never went through, and repeating it here would trade one false sentence for two."""
+    return ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
+            "longitudinal g up (accelerating) / down (braking). A driver using the tyre fills the "
+            "rim of the circle; rings every 0.5 g.\n\n"
+            f"BOTH AXES ARE DERIVED FROM THE GPS TRAJECTORY on this recording ({why}), so neither "
+            f"is an accelerometer reading: lateral is speed x yaw rate, longitudinal the speed "
+            f"derivative, both taken off the same 10 Hz trace and resampled to "
+            f"{gmeter.OUTPUT_HZ:g} Hz. The two different windows an IMU-driven meter mixes are "
+            f"absent here — and so is that meter's resolution, because 10 Hz cannot see a spike. "
+            f"Read the circle for WHERE you load the tyre, not for an exact extent.")
 # The plot ships two kinds of ring and no way to tell them apart from the picture: the solid ones
 # are a fixed 0.5 g rule, the dashed one is a MEASURED result. Both axes now carry a name and a
 # unit too (they read "-2.0 / +0.0 / +2.0" and nothing else before).
@@ -570,6 +632,44 @@ LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the 
                      "event's own peak deceleration normally runs ABOVE the Brk g printed beside "
                      "it — measured on both reference recordings, on almost every lap. They are a "
                      "sustained maximum and a detector, not two readings of one number.")
+
+
+def lap_table_tooltip_gps(why: str) -> str:
+    """LAP_TABLE_TOOLTIP for a GPS-derived meter. TWO of its columns change provenance.
+
+    `Lat g` is not the accelerometer here, and `Brk g` does not carry LONG_SMOOTH_S either: the
+    display series that window belongs to (`gmeter.long_g_gps`) is built only on the IMU path, so
+    `stats.lap_stats` falls back to the meter's own `long_g`. The brake/coast sentences are
+    unchanged and stay true — `driving_channels` rebuilds both detectors from the resampled speed
+    when there is no `long_g_gps`, so Coast s still carries its own window."""
+    return ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
+            "speed. ★ marks the session-best lap.\n\n"
+            f"LAT G AND BRK G ARE BOTH DERIVED FROM THE GPS TRAJECTORY on this recording ({why}): "
+            f"Lat g is speed x yaw rate, Brk g the speed derivative, both off this lap's own "
+            f"~10 Hz fixes. Neither is an accelerometer reading, and Brk g does not carry the "
+            f"{gmeter.LONG_SMOOTH_S:g} s window an IMU-driven meter's braking axis is smoothed "
+            f"on, so it is the derivative as 10 Hz gives it rather than a SUSTAINED peak. "
+            f"Brake s and Coast s count events detected on that same derivative (the same events "
+            f"the map glyphs and coaching read). A brake onset is a step, so Brake s is detected "
+            f"with no window at all. A coast is sustained membership of a band narrower than that "
+            f"derivative's own noise, so Coast s alone carries a "
+            f"{driving.COAST_SMOOTH_S:g} s window.")
+
+
+#: The `peak lateral g` tile's legend, hoisted out of _build so the GPS-derived page and the
+#: IMU page read one string each instead of one string and an inline literal.
+PEAK_LAT_TOOLTIP = ("Peak |lateral g| over the valid laps — IMU lateral, the GPS-cross-checked "
+                    "axis (see DATA TRUST).")
+
+
+def peak_lat_tooltip_gps(why: str) -> str:
+    """PEAK_LAT_TOOLTIP where the axis is GPS-derived: there is no IMU lateral to cross-check,
+    and `gmeter_cross` is None on this path, so pointing at DATA TRUST for a cross-check row that
+    is not there was the second half of the same error."""
+    return (f"Peak |lateral g| over the valid laps — derived from the GPS trajectory ({why}), "
+            f"not an accelerometer reading (see DATA TRUST).")
+
+
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
                 "set every σ statistic uses). Spread = median − best: what the typical lap "
                 "gives away to your demonstrated pace.")
@@ -1429,9 +1529,8 @@ class StatsView(QWidget):
             "The slowest on-lap speed across the valid laps — typically the tightest "
             "corner (a traffic or off-line lap can dip lower).")
         self.t_peak_lat = Tile("peak lateral g")
-        self.t_peak_lat.setToolTip(
-            "Peak |lateral g| over the valid laps — IMU lateral, the GPS-cross-checked axis "
-            "(see DATA TRUST).")
+        # Provenance-dependent, and re-set per refresh — see _refresh_g_provenance.
+        self.t_peak_lat.setToolTip(PEAK_LAT_TOOLTIP)
         self.t_peak_brake = Tile("peak braking g")
         # §4.3: "smoothed" was in this string and the WINDOW was not, and a window is the whole
         # story for a MAXIMUM. Measured on the D24 0060 pair (38 valid laps): the per-lap peak
@@ -2318,6 +2417,7 @@ class StatsView(QWidget):
         self._refresh_braking(session)
         self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
+        self._refresh_g_provenance(session)
         self._refresh_lap_table(session, rows, unit, u_label)
         # RE-PACK, because the packer's inputs are what this method just changed. A composition is
         # legal only while every column can still be given its widest table's width, and a refresh
@@ -2696,6 +2796,23 @@ class StatsView(QWidget):
                   self.t_vmax, self.t_vmin, self.t_peak_lat, self.t_peak_brake):
             t.setVisible(has_laps)
 
+    def _refresh_g_provenance(self, session):
+        """The three FIXED texts that name the lateral channel's sensor, re-stated per refresh.
+
+        Per refresh and not at construction for the reason the trust card is: `session` is swapped
+        under a live page (`view.session = …; view.refresh()`), and a tooltip set once in _build
+        would keep describing the recording before it. The bands note is composed in
+        `_refresh_bands`, which already runs per refresh.
+
+        `gps_lateral_clause` returns None for an IMU-lateral recording — both D24 recordings — so
+        their wording is the constant it always was, byte for byte."""
+        why = gps_lateral_clause(session)
+        self.gg.setToolTip(GG_TOOLTIP if why is None else gg_tooltip_gps(why))
+        self.lap_table.setToolTip(
+            LAP_TABLE_TOOLTIP if why is None else lap_table_tooltip_gps(why))
+        self.t_peak_lat.setToolTip(
+            PEAK_LAT_TOOLTIP if why is None else peak_lat_tooltip_gps(why))
+
     def _refresh_bands(self, st, unit, u_label):
         """The DISTRIBUTIONS group: the two time-weighted profiles + the disclosure under them.
 
@@ -2737,7 +2854,8 @@ class StatsView(QWidget):
             parts.append(BAND_NOTE_SPEED)
         if lat is not None:
             self.lat_bands.set_bands(lat)
-            parts.append(BAND_NOTE_LAT)
+            why = gps_lateral_clause(self.session)
+            parts.append(BAND_NOTE_LAT if why is None else band_note_lat_gps(why))
         shown = speed if speed is not None else lat
         if shown.has_split:
             parts.append(BAND_SPLIT_NOTE.format(
