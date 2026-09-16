@@ -27,6 +27,16 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       noise-sensitive detector were dead code to this gate: reverting #228's
                       one-frame warp or #275's coast window left it green. This phase goes red
                       on both (see that fixture's block for why each ingredient is needed).
+  * ``drift_median``— the SAME three geometries with the drift on the MEDIAN-time lap
+                      (tests/_synthetic.drift_median_session). ``drift_noise`` drifts the SLOWEST
+                      lap and the whole coaching model reads the MEDIAN one, so every coaching
+                      corner-window projection was the identity in that phase and a coaching-path
+                      defect could not move a leaf of it: #289 moved 15 of 168,664 leaves on the
+                      D24 0060 pair and 0 synthetic ones. Measured negative control — reverting
+                      #289's `_project_window` wiring moves 2 of this phase's 12,101 leaves (a
+                      coaching row's `reason.brake_extra_s` by 10.6 ms, 3.909945 -> 3.899391 s,
+                      and the `contribution` it feeds) and 0 of `drift_noise`'s 12,115, or of any
+                      leaf in the three phases above it.
 
 It then compares the whole fingerprint against a COMMITTED baseline
 (tests/golden_synthetic_baseline.json, generated on main in the pixi env) via golden_compare.walk
@@ -58,14 +68,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ — for the sibling fixture
 
-from _synthetic import (  # noqa: E402  (the drift + noise fixture)
+from _synthetic import (  # noqa: E402  (the drift + noise fixtures)
     DN_SPEED_SIGMA_MPS,
+    drift_median_laps,
+    drift_median_session,
     drift_noise_laps,
     drift_noise_session,
 )
 from test_session_services import _synthetic_session  # noqa: E402  (the shared stadium fixture)
 
-from studio import corners  # noqa: E402
+from studio import coaching, corners  # noqa: E402
 from studio.dev.golden_compare import EPS, walk  # noqa: E402
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
 
@@ -84,6 +96,13 @@ def _build():
 def _build_drift_noise():
     """The drift + noise session, named like `_build` so its fingerprint is stable too."""
     s = drift_noise_session()
+    s.track_name = "Stadium"
+    return s
+
+
+def _build_drift_median():
+    """The median-drift session (same geometry, the drift on the lap coaching reads)."""
+    s = drift_median_session()
     s.track_name = "Stadium"
     return s
 
@@ -108,6 +127,9 @@ def synthetic_fingerprint() -> dict:
 
     # The drift + noise session: the paths the stadium laps cannot reach (see the module docstring).
     result["drift_noise"] = fingerprint(_build_drift_noise(), strict=False)
+    # The same geometry with the drift on the MEDIAN lap: the coaching path, which reads that lap
+    # and only that lap, and which drift_noise therefore exercises in its identity projection.
+    result["drift_median"] = fingerprint(_build_drift_median(), strict=False)
     return result
 
 
@@ -194,6 +216,78 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
           f"{unmatched[0]:.1f} m, segment donors {donors}")
 
 
+def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
+    """The median-drift phase exists because `drift_noise` drifts the SLOWEST lap while the whole
+    coaching model reads the MEDIAN one, so pin the properties that make this fixture able to fail
+    where that one cannot — each is one a plausible speed tweak would quietly remove:
+
+      1. the lap coaching reads (`coaching.median_lap_id` over the consistency laps) is the
+         DRIFTING one, and is not the best lap (whose window projection is the identity by
+         definition — projecting the corner basis onto the lap it was built from);
+      2. it is the ONLY lap past corners.NORMALIZED_DRIFT_MAX, at 0.9-1.1 %, and it therefore has a
+         real warp (`lap_alignment` is not None) rather than the normalized projection;
+      3. exactly one interior corner boundary on it has no spatial match, so its warp INTERPOLATES
+         a knot — the case a bare normalized scale cannot reproduce;
+      4. the two projections actually SEPARATE: the gated window and the un-gated
+         `lap_total/corner_dist_total` scale sit >= 1 m apart at some corner edge. This is the
+         magnitude of the defect #289 fixed (6.5 m on the D24 0060 pair) and the reason a coaching
+         window defect can move a leaf here;
+      5. coaching runs (`enough`) on the median lap and its rows carry the window-sensitive
+         evidence (brake/coast extra seconds) that the moved window feeds."""
+    s = _build_drift_median()
+    ids = s.valid_lap_ids()
+    best = s.best_lap_id()
+    best_total = s.best_lap_total_distance()
+    totals = {i: float(s._dist_cache[i][1][-1]) for i in ids}
+    cons = s.consistency_lap_ids()
+    med = coaching.median_lap_id(cons, [s.lap_time(i) for i in cons])
+    assert med is not None and med != best, (
+        f"median lap {med} is the best lap {best} — its window projection is the identity")
+
+    drift = {i: corners.line_length_drift(totals[i], best_total) for i in ids}
+    over = [i for i in ids if drift[i] > corners.NORMALIZED_DRIFT_MAX]
+    assert over == [med], f"drift per lap {drift} — exactly the median lap {med} must be past the gate"
+    assert 0.009 <= drift[med] <= 0.011, f"median lap drift {drift[med]:.4%}"
+
+    align = s.corners.lap_alignment(med, totals[med])
+    assert align is not None, "the median lap kept the normalized projection — nothing to see"
+
+    corner_list, corner_total = s.corners.basis()
+    interior = [b for c in corner_list for b in (c.enter, c.exit) if 0 < b < best_total]
+    ref_cols, med_cols = s._cols_cache[best], s._cols_cache[med]
+    matched = corners._spatial_matches(np.asarray(interior), best_total,
+                                       ref_cols[1], ref_cols[2], ref_cols[4],
+                                       med_cols[1], med_cols[2], med_cols[4])
+    unmatched = [b for b, m in zip(interior, matched, strict=True) if not np.isfinite(m)]
+    assert len(unmatched) == 1, (
+        f"{len(unmatched)} unmatched interior boundaries on the median lap (want exactly 1): "
+        f"boundaries {interior}, matches {matched.tolist()}")
+
+    # The gated window vs the bare normalized scale the un-gated projection used, on the SAME lap.
+    traces = (ref_cols[1], ref_cols[2], ref_cols[4], med_cols[1], med_cols[2], med_cols[4])
+    frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+    scale = totals[med] / corner_total
+    gaps = []
+    for c in corner_list:
+        w0, w1 = coaching._project_window(float(c.enter), float(c.exit), corner_total, totals[med],
+                                          traces=traces, frame=frame, alignment=align)
+        gaps += [abs(w0 - float(c.enter) * scale), abs(w1 - float(c.exit) * scale)]
+    assert max(gaps) >= 1.0, (
+        f"gated and normalized coaching windows are only {max(gaps):.3f} m apart — a window "
+        f"defect of the size #289 fixed would not move a leaf of this phase")
+
+    opp = s.coaching_opportunities()
+    assert opp.enough and opp.median_lap_id == med, (opp.enough, opp.median_lap_id, med)
+    assert any(r.reason.brake_extra_s > 0 or r.reason.coast_extra_s > 0 for r in opp.rows), (
+        "no coaching row carries brake/coast evidence — the window feeds nothing measurable")
+
+    for i, lap in enumerate(drift_median_laps()):
+        sd = float(np.std(lap["cols"][3] - lap["clean_speed"]))
+        assert abs(sd - DN_SPEED_SIGMA_MPS) <= 0.15 * DN_SPEED_SIGMA_MPS, f"lap {i} speed sd {sd}"
+    print(f"ok median-drift fixture: coaching reads lap {med} at {drift[med]:.3%} drift, unmatched "
+          f"boundary {unmatched[0]:.1f} m, window gap {max(gaps):.2f} m")
+
+
 def test_synthetic_fingerprint_matches_baseline():
     """The equivalence gate: the synthetic Session-math fingerprint must match the committed
     baseline within eps 1e-9. Any drift in a corner / driving / delta / consistency / bests leaf
@@ -231,6 +325,7 @@ if __name__ == "__main__":
         test_synthetic_fingerprint_is_deterministic,
         test_reference_clear_reverts_to_base,
         test_drift_noise_fixture_reaches_the_paths_it_exists_for,
+        test_drift_median_fixture_puts_the_drift_where_coaching_reads,
         test_synthetic_fingerprint_matches_baseline,
     ]
     for t in tests:
