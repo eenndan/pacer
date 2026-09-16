@@ -43,52 +43,41 @@ THE THREE CHECKS
      the glyph those controls actually paint (read out of `central_view` / `video_view` by AST, so
      the card cannot drift from either); and the PB moment has no colour emoji.
 
-SCOPE. The walk covers the five modules the icon-vocabulary PR owns. The rest of `studio/` has two
-known hits that are hand-offs to other lanes, both filed and both in files this PR must not touch:
-`overlays.py`'s ✕ toast-dismiss (Menlo, 7x7 — `ph.x`, and the button is already 24x24) and the
-`▲`/`▼` delta arrows in `theme.py`, which are Inter but land on a `MONO_STACK` QSS surface where
-Menlo draws them 4 px shorter than the digits beside them. Widening `_GUARDED` is what closes them.
+SCOPE. The walk covers the modules the icon-vocabulary PR owns, plus `overlays`, whose ✕ toast
+dismiss is closed (`overlays.DISMISS_ICON` = `ph.x`, check 3e). It resolves every character
+through `theme.ui_font()` — and that is exactly why it could never have closed the other hand-off
+this paragraph used to name. `▲`/`▼` resolve to Inter perfectly well (check 2 asserts it); their
+defect was one level down, in the SURFACE they were painted on.
 
-UPDATE — the ✕ is closed: `overlays` is in `_GUARDED` below, the button carries
-`overlays.DISMISS_ICON` = `ph.x`, and check 3e pins it. **The Δ arrows are NOT, and widening
-`_GUARDED` would never have closed them — the paragraph above is wrong about the mechanism, which
-is why this note corrects it rather than deleting it.** Check 1 resolves every character through
-`theme.ui_font()`, and `▲`/`▼` resolve there to Inter perfectly well; check 2 asserts exactly that.
-The defect is one level down: `QLabel#DiffBox` and `QLabel#PaneBadge` declare
+THE Δ ARROWS — CLOSED BY U1, and how. `QLabel#DiffBox` and `QLabel#PaneBadge` declared
 `font-family: {MONO_STACK}` in the QSS, which out-ranks the `setFont` their views give them, and
-nothing in this file measures a mark in any face but the app's UI one. Measured on the real view at
+the first family in that stack that exists on macOS is Menlo. Measured on the real view at
 1440x900, read from the WINDOW composite:
 
     #DiffBox 391x30, asks "SF Mono", paints **Menlo**
       digits "0.34"   51x18  cy  0.0     <- the numerals the arrow sits beside
-      Δ               13x17  cy -0.5
-      s               11x14  cy +2.0
       ▼ / ▲           14x14  cy +2.0     <- 4 px shorter than the digits, down on the x-height
-    the SAME codepoint in the app's UI face: 21x18, cy 0.0 — the digits' own height and centre.
 
-Changing the CODEPOINT is refuted, measured over eight candidates in four Unicode blocks: every
-mark Menlo carries sits at cy +2.0 (it centres its geometric shapes on the x-height band, not on
-the digits), and the three that DO centre — ⬆⬇ ▴▾ ▵▿ — are not in Menlo at all and arrive from
-`.AppleJapaneseFont`, `.AppleSystemUIFont` or `.AppleKoreanFont`: they buy the exact defect this
-file exists to prevent.
+Changing the CODEPOINT was refuted over eight candidates in four Unicode blocks: every mark Menlo
+carries sits at cy +2.0 (it centres its geometric shapes on the x-height band), and the three that
+DO centre — ⬆⬇ ▴▾ ▵▿ — are not in Menlo at all and arrive from `.AppleJapaneseFont`,
+`.AppleSystemUIFont` or `.AppleKoreanFont`: the exact defect this file exists to prevent.
 
-So the fix is the surface's FACE, and it is a two-step hand-off to whoever owns theme.py's font and
-QSS blocks, in this order, because step 2 on its own is a regression:
+So the fix was the surface's FACE, in two steps, because step 2 alone is a regression:
 
-  1. `theme.mono_font()` does not do what it says. `f.setFeature("tnum", 1)` RAISES `ValueError` on
-     the shipped PySide6 6.11.1 (the signature wants a `QFont.Tag`) and the bare
-     `except Exception: pass` swallows it — `QFont.featureTags()` comes back **empty** and
-     `QTextLayout` widths for "000"/"111"/"888" are 43.5 / 27.89 / 42.23 px. The app's "tabular
-     figures" face is plain proportional Inter. With `QFont.Tag("tnum")` all three measure 42.66.
-     Fix that first.
-  2. THEN drop `font-family: {MONO_STACK}` from `QLabel#DiffBox` (and `#PaneBadge`) so the label
-     keeps the `mono_font` its view already sets. Verified counterfactually: with that line deleted
-     TODAY the label paints Inter and its digits go 000=44 / 111=28 px — a 16 px reflow on a readout
-     that re-renders ~30 times a second. **Menlo being the third choice in MONO_FAMILIES is the only
-     reason the app's largest number does not currently jitter**, which narrows D1-09 from "a defect"
-     to "true, and load-bearing". `central_view._hero_min_width()` moves 391 -> 308 px with it,
-     because it measures the MONO stack on purpose, so the charts column's honest minimum moves too
-     and that belongs in the same PR.
+  1. `theme.mono_font()` had to deliver tabular figures. `setFeature("tnum", 1)` raised on PySide6
+     6.11.1 inside a bare except, so the "tabular" face was proportional Inter, and Menlo being
+     monospaced was the only reason the hero did not jitter. #196/#197 fixed it with `QFont.Tag`.
+     Re-measured for U1 at the two sizes these surfaces use: every digit AND `+`, `-`, `−` advance
+     14.219 px at HERO and 7.109 px at CAPTION.
+  2. THEN the QSS family came off both rules, so each label keeps the `mono_font` its view sets.
+     The feature survives the stylesheet's font merge (the polished label's `featureTags()` still
+     carries tnum). From a live QScreen.grabWindow at DPR 2 the ▼ now stands 17.5 px at cy 15.8
+     beside 17.0 px digits at cy 15.5. `central_view._hero_min_width()` moved in the same change and
+     is the label's own sizeHint now rather than an advance over the mono stack.
+
+The hero half is pinned by tests/test_charts_header_budget.py (the face, the arrow's ink against the
+digits' from the window composite, and a no-reflow sweep); the badge half by check 3f below.
 
 Run: QT_QPA_PLATFORM=offscreen python tests/test_glyph_vocabulary.py
 """
@@ -483,6 +472,50 @@ def test_the_toast_dismiss_is_a_pixmap_and_keeps_both_of_its_state_cues():
     assert _digest(btn.icon(), px, QIcon.Normal) == rest, "leaving left the hover tint behind"
     toast.deleteLater()
     print("test_the_toast_dismiss_is_a_pixmap_and_keeps_both_of_its_state_cues OK")
+
+
+def test_the_compare_badge_paints_its_delta_in_one_tabular_face():
+    """Check 3f (U1). The per-pane Δ badge had the hero's defect at CAPTION size: its QSS rule
+    declared `font-family: MONO_STACK`, so its ▲/▼, Δ and digits were Menlo while every other word
+    in the strip was Inter. The badge now takes `theme.mono_font` from its view, like the hero.
+
+    Two things are asserted on the REAL `_PaneCell` through its real `set_badge`: every character
+    of every Δ the badge can show is drawn by the app's face, and two Δs of one shape (digits,
+    sign and arrow direction normalised) lay out every caret at the same x in a box of the same
+    width. The second half is what the face swap could have cost: Inter WITHOUT tnum puts "1.11"
+    and "8.88" at different widths, and the badge re-fits the picker beside it on every change."""
+    from PySide6.QtWidgets import QWidget
+
+    from studio import video_view
+
+    cell = video_view._PaneCell(QWidget(), video_view.PRIMARY)
+    cell.resize(600, 400)
+    cell.show()
+    _APP.processEvents()
+    badge = cell.badge
+    layouts = {}
+    for d in (None, 0.0, 0.19, -0.19, 1.11, -1.11, 8.88, -8.88, 10.0, -10.0, 88.88, -88.88):
+        text = theme.format_delta_run(d)
+        cell.set_badge(text, theme.delta_colour(d))
+        _APP.processEvents()
+        drawn = {ch: _family(badge.font(), ch) for ch in text if not ch.isspace()}
+        foreign = {ch: face for ch, face in drawn.items() if face != _UI_FACE}
+        assert not foreign, (
+            f"the badge {text!r} is drawn in {foreign}, the strip around it in {_UI_FACE!r} — a "
+            "QSS font-family is out-ranking the badge's own mono_font")
+        layout = QTextLayout(text, badge.font())
+        layout.beginLayout()
+        line = layout.createLine()
+        line.setLineWidth(9999)
+        layout.endLayout()
+        carets = tuple(round(line.cursorToX(i)[0], 3) for i in range(len(text) + 1))
+        shape = text.translate(str.maketrans("0123456789-▲", "0000000000+▼"))
+        layouts.setdefault(shape, set()).add((badge.width(), carets))
+    moved = {s: sorted(w for w, _c in v) for s, v in layouts.items() if len(v) > 1}
+    assert not moved, f"the badge reflows as its digits change (shape: widths): {moved}"
+    cell.deleteLater()
+    print(f"test_the_compare_badge_paints_its_delta_in_one_tabular_face OK ({len(layouts)} shapes, "
+          f"all {_UI_FACE})")
 
 
 if __name__ == "__main__":
