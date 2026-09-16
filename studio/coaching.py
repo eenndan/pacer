@@ -478,10 +478,10 @@ def _project_window(c_enter: float, c_exit: float, corner_dist_total: float | No
                     total: float | None, *, traces: tuple | None = None, frame=None,
                     alignment=corners_mod.DERIVE_ALIGNMENT) -> tuple[float, float]:
     """ONE corner window [c_enter, c_exit] — in the REFERENCE (corner basis) odometer — projected
-    onto one lap's own odometer through the shared drift gate (`corners.project_boundaries`:
-    normalized distance within `NORMALIZED_DRIFT_MAX`, ONE monotone spatial warp for the whole lap
-    above it). Identity when a total is missing or equals the corner basis' total (the best lap's
-    own frame), and byte-identical to the bare normalized scale whenever the gate keeps it.
+    onto one lap's own odometer through the shared alignment (`corners.project_boundaries`: ONE
+    monotone spatial warp for the whole lap, or the normalized scale where there are no traces to
+    match against). Identity when a total is missing or equals the corner basis' total (the best
+    lap's own frame).
 
     THE THREE CALLERS IN THIS MODULE MUST AGREE. A coaching row's phase triple, the best-lap
     subtrahend it is measured against and its brake/coast evidence are three reads of ONE window,
@@ -623,9 +623,9 @@ def corner_phase_losses(
     """Decompose ONE corner's Δt-vs-best into entry / apex(mid) / exit thirds (seconds).
 
     The corner window [c_enter, c_exit] is in the reference (best-lap) odometer; it is projected
-    onto EACH lap's own odometer by the drift-gated alignment (project_boundaries — normalized
-    distance d·lap_total/corner_dist_total within NORMALIZED_DRIFT_MAX, one monotone spatial warp
-    for the whole lap above it, the SAME alignment lap_corner_stats uses), so the third boundaries
+    onto EACH lap's own odometer by the shared alignment (project_boundaries — one monotone spatial
+    warp for the whole lap, the SAME alignment lap_corner_stats uses; the normalized scale
+    d·lap_total/corner_dist_total only where there are no traces), so the third boundaries
     land on the same TRACK positions on both laps. Each lap's window is split into three
     equal-distance thirds; per third Δt = (this lap's clock over the third) − (best's), read off
     each lap's own elapsed array by the same edge interpolation `segment_times` uses (see
@@ -840,11 +840,11 @@ def summarize(
     # OWN odometer, through the SAME drift gate, the SAME whole-partition frame and the SAME
     # already-built warp the phase triple above is measured in (_project_window).
     #
-    # This was the last un-gated corner-window projection in the app: it scaled by
-    # lap_total/corner_dist_total with no gate and no traces, so on a lap past
-    # NORMALIZED_DRIFT_MAX the window feeding Reason.brake_extra_s / coast_extra_s sat up to 6.5 m
-    # (D24 0060 pair, typical lap 18 at 1.27 % drift) from the window the same row's phase triple
-    # came from. It is defined HERE, after the two warps, because it reads them.
+    # This was the last un-aligned corner-window projection in the app: it scaled by
+    # lap_total/corner_dist_total with no traces, so on a drifted lap the window feeding
+    # Reason.brake_extra_s / coast_extra_s sat up to 6.5 m (D24 0060 pair, typical lap 18 at 1.27 %
+    # drift) from the window the same row's phase triple came from. It is defined HERE, after the
+    # two warps, because it reads them.
     def _win(c, lap_total: float | None, traces: tuple | None, align) -> tuple[float, float]:
         return _project_window(float(c.enter), float(c.exit), corner_dist_total, lap_total,
                                traces=traces, frame=phase_frame, alignment=align)

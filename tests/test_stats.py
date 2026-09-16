@@ -3752,6 +3752,116 @@ def test_the_stats_page_names_the_lateral_axis_this_recording_actually_has():
           "IMU-lateral session is untouched")
 
 
+def test_the_stats_page_quotes_the_braking_window_only_where_that_window_exists():
+    """#288 moved FOUR lateral-axis texts onto the recording's real g source and left three behind.
+
+    All three are the same defect class, and all three are measured over the real `Session.load`
+    (probe in the PR body; the same 10 bundled samples + both D24 recordings #288 used):
+
+      1. THE NO-G-METER STATE. `gps_lateral_clause` returns None without a g-meter — correctly, its
+         lateral g is not GPS-derived either — so karma.mp4 kept the IMU wording: the PER LAP grid
+         said "Lat g is the accelerometer" and the peak-lateral tile said "IMU lateral" while the
+         note directly above them said "no accelerometer in this recording".
+      2. THE PEAK-BRAKING TILE stated the LONG_SMOOTH_S window unconditionally.
+      3. `DRIVING_TOOLTIP` did the same, contrasting its own unwindowed detector with "the 0.35 s
+         one the peak-braking tile and the friction circle above are drawn on".
+
+    2 and 3 are false on a GPS-derived recording for one reason: `long_g_gps` — the series that
+    window belongs to — is built ONLY on the IMU path (`gmeter.compute`), so `_resample_gps_only`
+    leaves it None and `stats.lap_stats` falls back to the meter's own `long_g`. Measured on the
+    four GPS-derived samples with real motion, the shipped peak |long_g| runs 1.18-1.36x what the
+    same series would read had it carried that window (Fusion 1.364x, hero5 1.178x, hero6 1.178x,
+    hero6a 1.186x): the window is genuinely absent, not merely unnamed.
+
+    The wording is #283's and #288's, never a second vocabulary for one fact — that consistency is
+    the whole point of the package."""
+    _app()
+    from studio import gmeter
+    from studio.gmeter import AxisCheck
+    from studio.stats_panel import (
+        DRIVING_TOOLTIP,
+        LAP_TABLE_TOOLTIP,
+        NO_GMETER_CLAUSE,
+        PEAK_BRAKE_TOOLTIP,
+        PEAK_LAT_TOOLTIP,
+        StatsView,
+    )
+
+    window = f"{gmeter.LONG_SMOOTH_S:g} s"
+    refused = AxisCheck(n=0, tilt_deg=float("nan"), measurable=True, ok=False,
+                        has_direction=False)
+
+    # --- 2 and 3: a GPS-derived meter, reached both ways (hero8's REFUSED accelerometer, and the
+    # six samples that never had one). The window may be named only to say it is ABSENT.
+    for label, axis in (("refused IMU", refused), ("no IMU at all", None)):
+        sess = _fake_view_session()
+        sess.gmeter_source = lambda: "gps"
+        sess.gmeter_long_source = lambda: "gps"
+        sess.gmeter_cross = lambda: None
+        sess.gmeter_axis = lambda axis=axis: axis
+        v = StatsView(sess)
+        brake_tip = v.t_peak_brake.toolTip()
+        driving_tip = v._driving_section.toolTip()
+        assert "Peak SUSTAINED deceleration" not in brake_tip, (
+            f"[{label}] the peak-braking tile still calls a number that never met the {window} "
+            f"window a SUSTAINED peak: {brake_tip!r}")
+        assert "gps trajectory" in brake_tip.lower(), (
+            f"[{label}] the peak-braking tile never says where this number comes from: "
+            f"{brake_tip!r}")
+        for name, tip in (("peak-braking tile", brake_tip), ("DRIVING tooltip", driving_tip)):
+            assert "absent" in tip, (
+                f"[{label}] the {name} does not say the {window} window is absent on this "
+                f"recording — it is built only on the IMU path: {tip!r}")
+            assert tip.count(window) == 1, (
+                f"[{label}] the {name} quotes the {window} window {tip.count(window)}x on a "
+                f"recording that never applied it: {tip!r}")
+        assert "the opposite choice from the" not in driving_tip, (
+            f"[{label}] DRIVING still contrasts its unwindowed detector with a window the tiles "
+            f"above do not carry either: {driving_tip!r}")
+        # Every DRIVING tile carries the SAME sentence as its heading — the #276 rule.
+        for tile in (v.t_brake, v.t_brake_n, v.t_coast, v.t_longest_coast):
+            assert tile.toolTip() == driving_tip, tile.caption.text()
+        # ...and one recording gets ONE reason, on every surface that states one.
+        axis_why = axis.refusal() if axis is not None else "no usable accelerometer"
+        for name, tip in (("peak-braking tile", brake_tip), ("DRIVING tooltip", driving_tip)):
+            assert axis_why in tip, (
+                f"[{label}] the {name} gives a different reason than the trust card and the "
+                f"toggle: {tip!r}")
+        v.hide()
+
+    # --- 1: no g-meter at all (karma.mp4). The three surfaces that stay VISIBLE here are the PER
+    # LAP grid and the two peak tiles; DRIVING and the friction circle hide themselves.
+    nog = StatsView(_fake_view_session(has_g=False, sectors=False))
+    lap_tip = nog.lap_table.toolTip()
+    lat_tip = nog.t_peak_lat.toolTip()
+    brake_tip = nog.t_peak_brake.toolTip()
+    assert "Lat g is the accelerometer" not in lap_tip, (
+        f"the PER LAP grid still names an accelerometer beside a note saying there is none: "
+        f"{lap_tip!r}")
+    assert "IMU lateral" not in lat_tip, lat_tip
+    for name, tip in (("PER LAP grid", lap_tip), ("peak lateral g tile", lat_tip),
+                      ("peak braking g tile", brake_tip)):
+        assert window not in tip, (
+            f"the {name} quotes the {window} window on a recording with no g-meter at all: "
+            f"{tip!r}")
+        assert NO_GMETER_CLAUSE in tip, (
+            f"the {name} explains its em-dashes in different words from the note above it "
+            f"(NO_GMETER_NOTE): {tip!r}")
+    nog.hide()
+
+    # --- THE CONTROL: an accelerometer-derived recording (both D24 recordings, and the two max
+    # samples) reads exactly as it shipped, byte for byte.
+    imu = StatsView(_fake_view_session())
+    assert imu.lap_table.toolTip() == LAP_TABLE_TOOLTIP
+    assert imu.t_peak_lat.toolTip() == PEAK_LAT_TOOLTIP
+    assert imu.t_peak_brake.toolTip() == PEAK_BRAKE_TOOLTIP
+    assert imu._driving_section.toolTip() == DRIVING_TOOLTIP
+    assert window in imu.t_peak_brake.toolTip() and "SUSTAINED" in imu.t_peak_brake.toolTip()
+    imu.hide()
+    print("ok braking window: quoted where it exists, said to be absent where it is not, and the "
+          "no-g-meter page stops naming an accelerometer it just said it does not have")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
