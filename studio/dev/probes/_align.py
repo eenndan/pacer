@@ -10,12 +10,13 @@ two independent facts stack up between them:
      fast, which is up to 0.22 s of divergence over one D24 recording, and it is a RAMP, not an
      offset.
 
-     Two in-repo docstrings say otherwise and both are stale: `pacer/laps/laps.hpp:43`
-     ("times  media-clock seconds") and `Session._lap_columns` ("media-clock seconds"). The code
-     that gives them away is `Session._build_rotation`, which passes
+     Two in-repo docstrings used to say otherwise — `pacer/laps/laps.hpp` ("times  media-clock
+     seconds") and `Session._lap_columns` ("media-clock seconds") — and both were CORRECTED once
+     this was measured; the whole family of lap-axis comments now names the telemetry clock. The
+     code that gave them away is `Session._build_rotation`, which passes
      `to_media=self.media_clock.to_media` into `rotation.compute` precisely because the lap traces
-     it hands over are NOT on the gyro's clock. Anything that reads those two docstrings and skips
-     the conversion inherits the ramp.
+     it hands over are NOT on the gyro's clock. Anything that skips the conversion inherits the
+     ramp.
 
   2. AND THERE IS STILL A CONSTANT OFFSET UNDERNEATH. Once (1) is taken out, PR #291 measured the
      GPS trace's timestamps landing +0.483 s (0060) and +0.459 s (0062) AFTER the gyro's for the

@@ -29,11 +29,17 @@ TWO KINDS, AND ONLY ONE OF THEM IS EVER WRITTEN TO DISK.
 
 WHICH CLOCK A MARK ANCHORS TO — and it is NOT a bare media time.
 
-A mark is authored at the PLAYHEAD, which is a global media-clock second: the whole of this app's
-time axis is the media clock (`QualityTimeline` is "on the media clock the scrubber runs on",
-`lap_window` returns media-clock seconds, the scrub slider is global ms). Telemetry time is not a
-separate axis in this build — there is one clock, and the playhead is in it. So the AUTHORING
-clock is settled.
+A mark is authored at the PLAYHEAD, which is a global TELEMETRY (GPS9 true-clock) second — the
+clock `lap_window`, `lap_at_time` and every other Session time speak. `PlayerPane._on_position`
+converts the media position back through `MediaClock` before it leaves the video layer, so by the
+time a mark is authored the number is already on the telemetry axis. So the AUTHORING clock is
+settled — but NOT, as this file used to claim, because there is only one clock. There are two:
+
+  * the TELEMETRY axis (the playhead, lap windows, every per-sample series), and
+  * the MEDIA clock (the chapter offset table below, the quality strip, the IMU streams),
+
+running ~27 ppm apart — up to 0.097 s (0060) and 0.167 s (0062) over the owner's two recordings.
+`anchor_from_global` is where the one meets the other, and what that costs is measured there.
 
 The STORAGE clock is not the same question, and storing the global media second would have been
 wrong twice over:
@@ -665,8 +671,27 @@ def chapter_stem(path: str) -> str:
 
 
 def anchor_from_global(chapter_map, t: float) -> tuple[str, float] | None:
-    """(chapter stem, seconds into that chapter) for a GLOBAL media-clock time — the conversion a
+    """(chapter stem, seconds into that chapter) for a GLOBAL playhead time — the conversion a
     mark is AUTHORED through. None when there is no chapter map to convert against.
+
+    THIS IS THE ONE PLACE THE TWO CLOCKS MEET, and it crosses them by label: `t` arrives on the
+    TELEMETRY axis (see the module doc) and `chapter_map.to_local` subtracts offsets that are
+    cumulative VIDEO durations, i.e. media seconds. Measured on both D24 recordings, that costs
+    nothing where it is read and one thing where it is not:
+
+      * the authoring -> storage -> resolve ROUND TRIP is EXACT (0.0e+00 s over nine playheads on
+        each recording): `global_from_anchor` adds back the same offset this subtracted, so a
+        mark reopens on the instant it was typed at, in every open of the same chapter set;
+      * within 0.405 s (0060) and 0.374 / 0.327 s (0062) of a chapter SEAM — the gap between the
+        playhead's number and the chapter table's at that seam, which is the two clocks'
+        divergence (0.072 / 0.085 / 0.132 s) against the measured GPS lag `MediaClock` now carries
+        the other way — a playhead is anchored to the neighbouring chapter. Harmless
+        while that chapter is open (the round trip still lands on the same global instant), and
+        only visible if the OTHER chapter is later opened alone, where the mark then reads as
+        placed just past that chapter's own end.
+
+    Converting here would trade an exact round trip for an approximate one, so it is deliberately
+    not done; the cost is written down instead.
 
     Duck-typed on `chapters.ChapterMap` (`.to_local`, `.chapters`), like `chapters.desync_notice`,
     so a test can hand in a stand-in without building one."""
@@ -677,7 +702,8 @@ def anchor_from_global(chapter_map, t: float) -> tuple[str, float] | None:
 
 
 def global_from_anchor(chapter_map, chapter: str, t: float) -> float | None:
-    """The GLOBAL media-clock time of an anchor, or None when that chapter is not part of THIS open.
+    """The GLOBAL time of an anchor — the exact inverse of `anchor_from_global`, so it lands back
+    on the playhead's TELEMETRY axis — or None when that chapter is not part of THIS open.
 
     None is the honest answer and the callers treat it as one: a mark typed against chapter 3 while
     only chapter 1 is loaded is still the driver's note, so it is listed (greyed, naming its
@@ -721,8 +747,16 @@ def _auto(mark_id: str, type: str, t: float, t_end: float | None, note: str,
 def auto_marks(dropouts=(), excluded=(), timeline=None,
                min_degraded_s: float = MIN_DEGRADED_S) -> tuple[list[dict], int]:
     """Derive this recording's auto marks from what the app has ALREADY detected. Returns
-    ``(marks, suppressed)`` — the marks on the global media clock, and how many degraded stretches
-    were held back as too short to mark (see `MIN_DEGRADED_S`).
+    ``(marks, suppressed)`` — the marks on the global clock, and how many degraded stretches were
+    held back as too short to mark (see `MIN_DEGRADED_S`).
+
+    THE THREE SOURCES ARE NOT ALL ON ONE AXIS, and the honest statement is worth more than a tidy
+    one: `dropouts` and `excluded` are lap-derived, so they carry the TELEMETRY (GPS9 true-clock)
+    axis, while the `timeline` runs the MEDIA seconds the strip was built on. The two differ by at
+    most 0.097 s (0060) / 0.167 s (0062) against a 1.00 s cell, which cannot move a degraded run's
+    cell boundary by a whole cell — and measured on both recordings the question is moot in
+    practice: there are ZERO dropout and ZERO excluded marks, and the single degraded mark (0062's
+    49 s lock acquisition) has no lap-derived neighbour to disagree with.
 
       * `dropouts` — ``(lap_id, t0, t1)`` per interior GPS gap, straight from the very
         `gapfill.find_gaps` call behind `Session.lap_has_dropout`. Passed IN rather than re-derived
