@@ -1047,6 +1047,7 @@ def _run_all():
     test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it()
     test_hero8s_refused_imu_is_disclosed_on_the_real_view()
     test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page()
+    test_karmas_absent_g_meter_is_not_described_as_an_accelerometer_page()
     test_u2_lap_table_cap_notice_reaches_the_window_status_bar()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
@@ -1094,6 +1095,7 @@ def test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page():
     pins the WIRING, on the real page, for the same reason the test above it exists — the tooltips
     are set in `StatsView._refresh_g_provenance`, and a test that rebuilt the copy would be testing
     its own string."""
+    from studio import gmeter
     from studio.session import Session
     from studio.stats_panel import GG_TOOLTIP, LAP_TABLE_TOOLTIP, PEAK_LAT_TOOLTIP
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1118,10 +1120,62 @@ def test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page():
         # wording for one refusal.
         for tip in (stats.gg.toolTip(), stats.lap_table.toolTip(), stats.t_peak_lat.toolTip()):
             assert refusal in tip, tip
+        # ...and the two surfaces whose claim is a WINDOW rather than a sensor (S2). `long_g_gps`
+        # — the series LONG_SMOOTH_S belongs to — is built only on the IMU path, so on hero8 the
+        # peak-braking tile printed a number that never met the window it named, and DRIVING
+        # contrasted its own bare derivative with "the 0.35 s one the peak-braking tile and the
+        # friction circle above are drawn on". Neither is true here.
+        window = f"{gmeter.LONG_SMOOTH_S:g} s"
+        brake_tip = stats.t_peak_brake.toolTip()
+        driving_tip = stats._driving_section.toolTip()
+        assert "Peak SUSTAINED deceleration" not in brake_tip, brake_tip
+        assert "the opposite choice from the" not in driving_tip, driving_tip
+        for tip in (brake_tip, driving_tip):
+            assert "absent" in tip and tip.count(window) == 1, tip
+            assert refusal in tip, tip
     finally:
         view.deleteLater()
         _APP.processEvents()
     print("ok hero8's GPS-derived lateral axis is named on the real Stats page, in #283's words")
+
+
+def test_karmas_absent_g_meter_is_not_described_as_an_accelerometer_page():
+    """karma.mp4 is the one recording pacer can open that ends up with NO g-meter at all, and #288
+    left its Stats page reading like an IMU one.
+
+    `gps_lateral_clause` returns None here — correctly, this lateral g is not GPS-derived either —
+    so every provenance text fell through to the accelerometer wording: the PER LAP grid said
+    "Lat g is the accelerometer" and the peak-lateral tile said "IMU lateral", directly under the
+    page's own note saying "no accelerometer in this recording". Three states, not two.
+
+    Real load + real page, for the reason the two tests above it are: the tooltips are set in
+    `StatsView._refresh_g_provenance`, and a test that rebuilt the copy would test its own string.
+    """
+    from studio import gmeter
+    from studio.session import Session
+    from studio.stats_panel import LAP_TABLE_TOOLTIP, NO_GMETER_CLAUSE, PEAK_LAT_TOOLTIP
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "3rdparty", "gpmf-parser", "samples", "karma.mp4")
+    s = Session.load([path])
+    assert not s.has_gmeter, "karma.mp4 is the no-g-meter fixture; it grew a g-meter"
+    view = CentralView(s, [path], sidecar_path=None)
+    try:
+        view.stats_view.refresh()
+        stats = view.stats_view
+        window = f"{gmeter.LONG_SMOOTH_S:g} s"
+        lap_tip = stats.lap_table.toolTip()
+        lat_tip = stats.t_peak_lat.toolTip()
+        brake_tip = stats.t_peak_brake.toolTip()
+        assert lap_tip != LAP_TABLE_TOOLTIP and lat_tip != PEAK_LAT_TOOLTIP, (lap_tip, lat_tip)
+        assert "Lat g is the accelerometer" not in lap_tip, lap_tip
+        assert "IMU lateral" not in lat_tip, lat_tip
+        for tip in (lap_tip, lat_tip, brake_tip):
+            assert window not in tip, tip
+            assert NO_GMETER_CLAUSE in tip, tip
+    finally:
+        view.deleteLater()
+        _APP.processEvents()
+    print("ok karma's absent g-meter is explained in the page's own words on all three surfaces")
 
 
 def test_tab_bar_switches_pages_and_names_the_corners_lap():

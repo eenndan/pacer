@@ -75,12 +75,17 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     arithmetic and the derived marks) and is deliberately absent from this set, while this module
 #     renders a list and emits intents — it owns no store and writes no file. A view that reached
 #     into ~/Library/Application Support would be a view that can lose a driver's notes.
+#   * track_dialog — the saved-tracks manager (rename / delete a circuit). The SAME split once more,
+#     and for the highest stakes in the app: `track_db` is the Qt-free store that owns the refusals,
+#     the .bak copy and the atomic write, and is absent from this set, while this module renders a
+#     list, asks for a name and shows the store's refusal. It deletes the user's own durable
+#     history, so the code that decides whether a delete is allowed must not live in a widget.
 ALLOWED_QT = {
     "app", "central_view", "coaching_panel", "command_palette", "export_compare",
     "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_dialog", "map_view",
     "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel",
-    "session_record_dialog", "share_card", "stats_panel", "theme", "video_view",
+    "session_record_dialog", "share_card", "stats_panel", "theme", "track_dialog", "video_view",
     "widgets", "workers",
 }
 

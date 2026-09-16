@@ -621,6 +621,534 @@ def test_save_track_guard(monkeypatch):
     assert studio_app.StudioWindow._can_save_track(win) is False
 
 
+# ===================================== F2 — renaming and deleting saved tracks
+# A track NAME is an identity key in three OTHER stores, measured on this tree:
+#   * library.py   — every entry carries {"track": <name>} and prior_best / best_entry / pb_series /
+#                    track_summary all match on `e.get("track") == track`, so a rename that does not
+#                    carry them SPLITS a circuit's personal-best history in two;
+#   * focus.py     — the per-track focus list is keyed {"track": <name>} (for_track / set_for_track);
+#   * session_record.py — each record carries an auto-stamped `track` (provenance).
+# The per-video `.pacer.json` sidecar also stores a track name, but `Session.restore_saved_timing_
+# lines` reads only start/sectors/confirmed — it has NO consumer — so a rename deliberately does not
+# rewrite files that live beside the user's footage.
+
+_FOCUS_ITEM_KW = dict(
+    cid=3, direction=1, enter_frac=0.10, exit_frac=0.20, median_s=4.5, iqr_s=0.12, n_laps=9,
+    time_lost=0.31, reason="entry", reach="execution", fingerprint="GX0002", date="2024-06-01",
+    lap_total=1059.0, verified=True, degraded=False)
+
+
+def _seed_library(track, path):
+    """A library index of three sessions on `track` (two of them a real PB progression)."""
+    from studio import library
+    idx = library.empty_index()
+    for i, (stem, date, best) in enumerate((("GX010001", "2024-05-01", 70.0),
+                                            ("GX010002", "2024-06-01", 68.0),
+                                            ("GX010003", "2024-07-01", 69.0))):
+        library.upsert(idx, {
+            "fingerprint": library.fingerprint(stem), "stem": stem, "track": track, "date": date,
+            "lap_count": 10 + i, "best": best, "theoretical": None,
+            "verified": True, "degraded": False, "dropout": False,
+            "paths": [f"/media/{stem}.MP4"]})
+    library.save(idx, path)
+    return idx
+
+
+def _seed_focus(track, path):
+    """A focus store holding one per-track list for `track`."""
+    from studio import focus
+    store = focus.empty_store()
+    focus.set_for_track(store, track, [focus.FocusItem(**_FOCUS_ITEM_KW)])
+    focus.save(store, path)
+    return store
+
+
+def _seed_records(track, path):
+    """A session-record store with one record auto-stamped with `track`."""
+    from studio import session_record
+    store = session_record.empty_store()
+    rec = session_record.blank_record()
+    rec["conditions"] = "dry"
+    rec["track"] = track
+    session_record.put(store, "GX0002", rec)
+    session_record.save(store, path)
+    return store
+
+
+def test_remove_track_deletes_only_that_circuit():
+    """Deleting one saved circuit leaves every other one exactly as it was — same start line, same
+    anchor, still detectable — and the deleted one stops detecting."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        keep_start = [[51.376, -0.361], [51.3761, -0.3608]]
+        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361),
+                                   start=keep_start), p)
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55)), p)
+        track_db.remove_track("Croft", p)
+        names = {e["name"] for e in track_db.load(p)["tracks"]}
+        assert names == {"Sandown Park"}, names
+        kept = track_db.load(p)["tracks"][0]
+        assert kept["start"] == keep_start, "deleting one circuit moved another's start line"
+        assert track_db.detect(51.376, -0.361, p)["name"] == "Sandown Park"
+        assert track_db.detect(54.45, -1.55, p) is None, "the deleted circuit still detects"
+
+
+def test_remove_track_keeps_a_backup_of_the_db_it_deleted_from():
+    """A delete destroys a start/finish line the user placed by hand, so the store it deleted from
+    is copied to tracks.json.bak FIRST — the same rule library.clear and
+    session_record.remove_and_save already follow for their own destructive acts."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        gone_start = [[54.45, -1.55], [54.451, -1.549]]
+        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361)), p)
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55), start=gone_start), p)
+        track_db.remove_track("Croft", p)
+        bak = p + ".bak"
+        assert os.path.exists(bak), "a deleted circuit left no backup at all"
+        rescued = {e["name"]: e for e in track_db.load(bak)["tracks"]}
+        assert "Croft" in rescued, f"the backup does not hold the deleted circuit ({sorted(rescued)})"
+        assert rescued["Croft"]["start"] == gone_start, "the backup lost the deleted start line"
+
+
+def test_a_deleted_track_can_be_restored():
+    """Recoverable, not merely backed up: restore puts the deleted circuit back, and — because the
+    restore is a SWAP — it is itself reversible (library.restore / session_record.restore's rule)."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361)), p)
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55)), p)
+        track_db.remove_track("Croft", p)
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"Sandown Park"}
+        info = track_db.backup_summary(p)
+        assert info is not None and info["tracks"] == 2, info
+        track_db.restore(p)
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"Sandown Park", "Croft"}
+        # …and back again: what the restore replaced became the new backup.
+        track_db.restore(p)
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"Sandown Park"}
+
+
+def test_removing_the_last_track_leaves_a_usable_store():
+    """Deleting the ONLY saved circuit must leave a clean empty DB, not a broken one: the built-in
+    seed is still there, nothing detects at the deleted anchor, and the next save still works."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55)), p)
+        track_db.remove_track("Croft", p)
+        assert track_db.load(p) == track_db.empty_db()
+        assert track_db.unreadable(p) is False, "an emptied DB must not read as a damaged one"
+        names = [e["name"] for e in track_db.all_tracks(p)]
+        assert names == ["Daytona Milton Keynes"], names
+        assert track_db.detect(54.45, -1.55, p) is None
+        track_db.save_track(_entry("Whilton Mill", centroid=(52.28, -1.10)), p)
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"Whilton Mill"}
+
+
+def test_deleting_a_track_does_not_touch_the_recordings_that_reference_it():
+    """THE dangling-reference case. The library keys its PB history by track NAME, so deleting the
+    circuit must not delete, re-key or drop a single analysed session: the rows are the record of
+    what was driven, and they stay readable under the name they were driven as. Same for the focus
+    list and the session record. Deleting a circuit removes future auto-detection, nothing else."""
+    from studio import focus, library, session_record
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        lib_p = os.path.join(d, "library.json")
+        focus_p = os.path.join(d, "focus.json")
+        rec_p = os.path.join(d, "session_records.json")
+        track_db.save_track(_entry("Sonoma", centroid=(38.16, -122.45)), p)
+        _seed_library("Sonoma", lib_p)
+        _seed_focus("Sonoma", focus_p)
+        _seed_records("Sonoma", rec_p)
+
+        track_db.remove_track("Sonoma", p)
+
+        idx = library.load(lib_p)
+        assert len(idx["entries"]) == 3, "deleting a circuit dropped analysed sessions"
+        assert all(e["track"] == "Sonoma" for e in idx["entries"])
+        assert library.prior_best(idx, "Sonoma") == 68.0, "the personal best was lost with the track"
+        assert library.pb_series(idx, "Sonoma") == [
+            ("2024-05-01", 70.0), ("2024-06-01", 68.0), ("2024-07-01", 69.0)]
+        assert library.track_summary(idx, "Sonoma")["sessions"] == 3
+        assert len(focus.for_track(focus.load(focus_p), "Sonoma")) == 1, "the focus list was lost"
+        assert session_record.get(session_record.load(rec_p), "GX0002")["track"] == "Sonoma"
+
+
+def test_deleting_a_built_in_track_is_refused_rather_than_silently_coming_back():
+    """The built-in Daytona MK seed is NOT in the user's file — `all_tracks` layers it under it — so
+    a delete that just drops a user row reports success and the circuit is back on the next launch.
+    That silent resurrection is refused with a ValueError the callers already guard."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        raised = None
+        try:
+            track_db.remove_track("Daytona Milton Keynes", p)
+        except ValueError as exc:
+            raised = exc
+        assert raised is not None, "deleting a built-in reported success and it will just come back"
+        assert isinstance(raised, track_db.BuiltInTrack)
+        assert "Daytona Milton Keynes" in str(raised)
+        assert track_db.detect(52.0403, -0.7847, p) is not None
+
+
+def test_deleting_a_refined_built_in_says_the_built_in_comes_back():
+    """Deleting a user entry that SHADOWS a built-in does not remove the circuit — it reverts to the
+    shipped line. That is a different outcome from "it is gone", so the store can be asked which one
+    is about to happen (the `replaces` / `backup_pending` ask-before idiom this module already uses)."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        refined = [[52.05, -0.79], [52.051, -0.788]]
+        track_db.save_track(_entry("Daytona Milton Keynes", centroid=tuple(_MK_CENTROID),
+                                   start=refined), p)
+        reverts = track_db.reverts_to_builtin("Daytona Milton Keynes", p)
+        assert reverts is not None, "nothing said the built-in would come back"
+        assert reverts["start"] == _MK_START
+        assert track_db.reverts_to_builtin("Croft", p) is None
+        track_db.remove_track("Daytona Milton Keynes", p)
+        mk = next(e for e in track_db.all_tracks(p) if e["name"] == "Daytona Milton Keynes")
+        assert mk["start"] == _MK_START, "the shipped Daytona MK line did not come back"
+
+
+def test_rename_to_a_name_already_taken_is_refused():
+    """Renaming onto an existing circuit's name would put two entries under one key — and
+    `all_tracks` is name-keyed, so one would silently swallow the other. Refused; both survive."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        a_start = [[51.376, -0.361], [51.3761, -0.3608]]
+        b_start = [[54.45, -1.55], [54.451, -1.549]]
+        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361), start=a_start), p)
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55), start=b_start), p)
+        raised = None
+        try:
+            track_db.rename_track("Sandown Park", "Croft", p)
+        except ValueError as exc:
+            raised = exc
+        assert raised is not None, "a rename onto a taken name was written silently"
+        assert isinstance(raised, track_db.TrackNameInUse)
+        assert "Croft" in str(raised)
+        stored = {e["name"]: e["start"] for e in track_db.load(p)["tracks"]}
+        assert stored == {"Sandown Park": a_start, "Croft": b_start}, stored
+
+
+def test_rename_to_an_empty_name_is_refused():
+    """An empty (or all-blank) name is not a name: `_valid_entry` rejects it, so writing one makes
+    the circuit VANISH on the next load. Refused before it reaches disk; the track is untouched."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        start = [[51.376, -0.361], [51.3761, -0.3608]]
+        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361), start=start), p)
+        for bad in ("", "   ", "\t\n"):
+            raised = None
+            try:
+                track_db.rename_track("Sandown Park", bad, p)
+            except ValueError as exc:
+                raised = exc
+            assert raised is not None, f"a rename to {bad!r} was accepted"
+            db = track_db.load(p)
+            assert len(db["tracks"]) == 1, f"the circuit vanished renaming to {bad!r}"
+            assert db["tracks"][0]["name"] == "Sandown Park"
+            assert db["tracks"][0]["start"] == start
+
+
+def test_rename_keeps_the_line_the_anchor_and_the_detection():
+    """A rename is a NAME change and nothing else: same start line (bit-exact), same sectors, same
+    anchor, and the circuit still detects — under the new name."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        start = [[37.123456789, -122.987654321], [37.123456790, -122.987654320]]
+        sectors = [[[37.1, -122.9], [37.11, -122.89]]]
+        track_db.save_track(_entry("Sonom", centroid=(37.12, -122.98), start=start,
+                                   sectors=sectors, bbox=[37.1, -123.0, 37.2, -122.9]), p)
+        track_db.rename_track("Sonom", "Sonoma Raceway", p)
+        db = track_db.load(p)
+        assert [e["name"] for e in db["tracks"]] == ["Sonoma Raceway"]
+        assert db["tracks"][0]["start"] == start          # exact float equality
+        assert db["tracks"][0]["sectors"] == sectors
+        assert db["tracks"][0]["bbox"] == [37.1, -123.0, 37.2, -122.9]
+        hit = track_db.detect(37.12, -122.98, p)
+        assert hit is not None and hit["name"] == "Sonoma Raceway"
+
+
+def test_renaming_a_built_in_is_refused():
+    """The seed is not in the user's file, so "renaming" it writes a SECOND circuit at the same
+    anchor under the new name while the built-in stays under the old one — two entries for one
+    place, detection picking between them by distance. Refused."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        raised = None
+        try:
+            track_db.rename_track("Daytona Milton Keynes", "MK", p)
+        except ValueError as exc:
+            raised = exc
+        assert raised is not None, "renaming a built-in silently forked it into two circuits"
+        assert isinstance(raised, track_db.BuiltInTrack)
+        names = [e["name"] for e in track_db.all_tracks(p)]
+        assert names == ["Daytona Milton Keynes"], names
+
+
+def test_rename_keeps_a_backup_first():
+    """A rename rewrites durable history, so it takes the same .bak copy a delete does."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        track_db.save_track(_entry("Sandown Par", centroid=(51.376, -0.361)), p)
+        track_db.rename_track("Sandown Par", "Sandown Park", p)
+        assert os.path.exists(p + ".bak"), "a rename left no backup"
+        old = {e["name"] for e in track_db.load(p + ".bak")["tracks"]}
+        assert old == {"Sandown Par"}, old
+
+
+def test_renaming_a_track_that_is_not_there_is_refused():
+    """Renaming a circuit the store does not hold must say so rather than write a new one."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55)), p)
+        raised = None
+        try:
+            track_db.rename_track("Nowhere", "Somewhere", p)
+        except ValueError as exc:
+            raised = exc
+        assert raised is not None, "renaming an absent circuit invented one"
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"Croft"}
+
+
+# ---------------------------------------- the satellite stores a rename must carry with it
+def test_library_rename_track_carries_the_whole_pb_history():
+    """library.rename_track re-keys every entry of one circuit — the PB history, the progression
+    series and the session count follow the new name, and nothing else in the index moves."""
+    from studio import library
+    with tempfile.TemporaryDirectory() as d:
+        lib_p = os.path.join(d, "library.json")
+        _seed_library("Sonoma", lib_p)
+        idx = library.load(lib_p)
+        library.upsert(idx, {
+            "fingerprint": "GX0009", "stem": "GX010009", "track": "Croft", "date": "2024-08-01",
+            "lap_count": 5, "best": 60.0, "theoretical": None,
+            "verified": True, "degraded": False, "dropout": False, "paths": []})
+        moved = library.rename_track(idx, "Sonoma", "Sonoma Raceway")
+        assert moved == 3, moved
+        assert library.prior_best(idx, "Sonoma") is None, "the old name still holds a PB"
+        assert library.prior_best(idx, "Sonoma Raceway") == 68.0
+        assert library.pb_series(idx, "Sonoma Raceway") == [
+            ("2024-05-01", 70.0), ("2024-06-01", 68.0), ("2024-07-01", 69.0)]
+        assert library.track_summary(idx, "Sonoma Raceway")["sessions"] == 3
+        assert library.prior_best(idx, "Croft") == 60.0, "an unrelated circuit was re-keyed"
+        assert len(idx["entries"]) == 4
+
+
+def test_focus_rename_track_carries_the_focus_list():
+    """focus.rename_track moves the per-track list, so the corners the driver is working on are
+    still found after the circuit is renamed."""
+    from studio import focus
+    with tempfile.TemporaryDirectory() as d:
+        focus_p = os.path.join(d, "focus.json")
+        _seed_focus("Sonoma", focus_p)
+        store = focus.load(focus_p)
+        assert focus.rename_track(store, "Sonoma", "Sonoma Raceway") is True
+        assert focus.for_track(store, "Sonoma") == [], "the old name kept the list"
+        moved = focus.for_track(store, "Sonoma Raceway")
+        assert len(moved) == 1 and moved[0].cid == 3
+        assert focus.rename_track(store, "Nowhere", "Anywhere") is False
+
+
+def test_session_record_rename_track_carries_the_stamp():
+    """The record's `track` is provenance, and the library entry beside it is about to say the new
+    name — two surfaces showing one quantity must agree, so the stamp moves too."""
+    from studio import session_record
+    with tempfile.TemporaryDirectory() as d:
+        rec_p = os.path.join(d, "session_records.json")
+        _seed_records("Sonoma", rec_p)
+        store = session_record.load(rec_p)
+        assert session_record.rename_track(store, "Sonoma", "Sonoma Raceway") == 1
+        assert session_record.get(store, "GX0002")["track"] == "Sonoma Raceway"
+        assert session_record.rename_track(store, "Nowhere", "Anywhere") == 0
+
+
+# ===================================== the manager dialog + the app's four-store gesture
+# Offscreen Qt, driving the REAL widget (a dialog test that re-implements the rule carries a copy
+# of the defect). The app half builds a bare StudioWindow the way test_save_track_guard does.
+
+def _dialog_rows():
+    """The row model the app hands the dialog: a built-in, a refined built-in and a user track."""
+    return [
+        {"name": "Daytona Milton Keynes", "builtin": True, "editable": False, "sectors": 0},
+        {"name": "Sandown Park", "builtin": False, "editable": True, "sectors": 2},
+    ]
+
+
+def _track_dialog(**kw):
+    """A real TrackManagerDialog over `_dialog_rows()`, with any callback overridden."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from studio.track_dialog import TrackManagerDialog
+    return TrackManagerDialog(_dialog_rows(), **kw)
+
+
+def test_dialog_never_offers_to_edit_a_built_in():
+    """A built-in cannot be renamed or deleted, so its row is not selectable and the two buttons
+    stay off — the refusal is not left to a modal the user reaches by trying."""
+    from PySide6.QtCore import Qt
+
+    from studio.track_dialog import NAME_ROLE
+    dlg = _track_dialog(rename_track=lambda *a: _dialog_rows(),
+                        delete_track=lambda *a: _dialog_rows())
+    builtin_row = next(i for i in range(dlg.list.count())
+                       if dlg.list.item(i).data(NAME_ROLE) == "Daytona Milton Keynes")
+    item = dlg.list.item(builtin_row)
+    assert not (item.flags() & Qt.ItemIsSelectable), "a built-in row is selectable"
+    assert not (item.flags() & Qt.ItemIsEnabled), "a built-in row is enabled"
+    # The selection landed on the editable row instead, so the buttons ARE armed for that one.
+    assert dlg._selected()["name"] == "Sandown Park"
+    assert dlg.rename_btn.isEnabled() and dlg.delete_btn.isEnabled()
+    dlg.deleteLater()
+
+
+def test_dialog_rename_routes_the_typed_name_through_the_callback(monkeypatch):
+    """The real rename path: the dialog asks for a name and hands (old, new) to the injected
+    callback, then re-renders from the rows it returns."""
+    from studio import track_dialog
+    calls = []
+
+    def _renamed(old, new):
+        calls.append((old, new))
+        return [{"name": "Sandown Park Karting", "builtin": False, "editable": True, "sectors": 2}]
+
+    monkeypatch.setattr(track_dialog.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("  Sandown Park Karting  ", True)))
+    dlg = _track_dialog(rename_track=_renamed)
+    dlg._rename_selected()
+    assert calls == [("Sandown Park", "Sandown Park Karting")], calls
+    assert dlg.list.count() == 1
+    assert "Sandown Park Karting" in dlg.list.item(0).text()
+    dlg.deleteLater()
+
+
+def test_dialog_shows_the_stores_refusal_and_keeps_the_list(monkeypatch):
+    """A refusal reaches the user in the STORE's own words, and nothing in the list moves."""
+    from studio import track_dialog
+    warned = []
+
+    def _refuse(old, new):
+        raise track_db.TrackNameInUse(new)
+
+    monkeypatch.setattr(track_dialog.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("Croft", True)))
+    monkeypatch.setattr(track_dialog.QMessageBox, "warning",
+                        staticmethod(lambda parent, title, text: warned.append((title, text))))
+    dlg = _track_dialog(rename_track=_refuse)
+    dlg._rename_selected()
+    assert len(warned) == 1, warned
+    assert "already saved" in warned[0][1], warned
+    assert dlg.list.count() == 2, "a refused rename changed the list"
+    dlg.deleteLater()
+
+
+def test_dialog_delete_asks_first_and_a_declined_confirm_deletes_nothing(monkeypatch):
+    """Destructive and confirmed: No means the callback is never called; Yes means it is. The
+    confirm names what survives (the analysed sessions) and where the copy went."""
+    from studio import track_dialog
+    calls = []
+    asked = []
+
+    def _answer(value):
+        def _q(parent, title, text, buttons=None, default=None):
+            asked.append(text)
+            return value
+        return staticmethod(_q)
+
+    monkeypatch.setattr(track_dialog.QMessageBox, "question",
+                        _answer(track_dialog.QMessageBox.No))
+    dlg = _track_dialog(delete_track=lambda name: calls.append(name) or [])
+    dlg._delete_selected()
+    assert calls == [], "a declined confirm still deleted the circuit"
+    assert asked and "personal-best history" in asked[0], asked
+    assert "tracks.json.bak" in asked[0], asked
+    monkeypatch.setattr(track_dialog.QMessageBox, "question",
+                        _answer(track_dialog.QMessageBox.Yes))
+    dlg._delete_selected()
+    assert calls == ["Sandown Park"], calls
+    dlg.deleteLater()
+
+
+def test_dialog_delete_of_a_refined_built_in_says_the_built_in_comes_back(monkeypatch):
+    """Two different outcomes must not read as one sentence: deleting a refined built-in restores
+    pacer's own line rather than removing the circuit, and the confirm says so."""
+    from studio import track_dialog
+    asked = []
+    monkeypatch.setattr(track_dialog.QMessageBox, "question", staticmethod(
+        lambda parent, title, text, buttons=None, default=None:
+        asked.append(text) or track_dialog.QMessageBox.No))
+    dlg = _track_dialog(delete_track=lambda name: [],
+                        reverts_to_builtin=lambda name: {"name": name, "start": _MK_START})
+    dlg._delete_selected()
+    assert asked, "no confirm was shown"
+    assert "built-in" in asked[0] and "comes back" in asked[0], asked[0]
+    dlg.deleteLater()
+
+
+def test_app_rename_carries_every_store_the_name_keys(monkeypatch):
+    """THE COMPOSITION. StudioWindow._rename_track moves the circuit in the track DB and re-keys
+    the three stores that file things under its NAME, so one circuit keeps one history."""
+    if not _pacer_available():
+        print("skip test_app_rename_carries_every_store_the_name_keys (no pacer)")
+        return
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from studio import app as studio_app
+    from studio import focus, library, session_record
+    with tempfile.TemporaryDirectory() as d:
+        for mod in (track_db, library, focus, session_record):
+            monkeypatch.setattr(mod, "_app_support_dir", lambda _d=d: _d)
+        track_db.save_track(_entry("Sonom", centroid=(37.12, -122.98)))
+        _seed_library("Sonom", library.library_path())
+        _seed_focus("Sonom", focus.focus_path())
+        _seed_records("Sonom", session_record.records_path())
+
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        rows = studio_app.StudioWindow._rename_track(win, "Sonom", "Sonoma Raceway")
+
+        assert {e["name"] for e in track_db.load()["tracks"]} == {"Sonoma Raceway"}
+        idx = library.load()
+        assert library.prior_best(idx, "Sonoma Raceway") == 68.0, "the PB history did not follow"
+        assert library.prior_best(idx, "Sonom") is None, "the old name kept a PB history"
+        assert len(idx["entries"]) == 3, "the re-key dropped a session"
+        assert len(focus.for_track(focus.load(), "Sonoma Raceway")) == 1, "the focus list stayed"
+        assert session_record.get(session_record.load(), "GX0002")["track"] == "Sonoma Raceway"
+        assert [r["name"] for r in rows if r["editable"]] == ["Sonoma Raceway"], rows
+
+
+def test_app_delete_leaves_every_analysed_session_alone(monkeypatch):
+    """The dangling-reference guard at the APP level: the gesture a user actually fires deletes the
+    circuit and touches none of the three stores that reference it by name."""
+    if not _pacer_available():
+        print("skip test_app_delete_leaves_every_analysed_session_alone (no pacer)")
+        return
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from studio import app as studio_app
+    from studio import focus, library, session_record
+    with tempfile.TemporaryDirectory() as d:
+        for mod in (track_db, library, focus, session_record):
+            monkeypatch.setattr(mod, "_app_support_dir", lambda _d=d: _d)
+        track_db.save_track(_entry("Sonoma", centroid=(37.12, -122.98)))
+        _seed_library("Sonoma", library.library_path())
+        _seed_focus("Sonoma", focus.focus_path())
+        _seed_records("Sonoma", session_record.records_path())
+
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        rows = studio_app.StudioWindow._delete_track(win, "Sonoma")
+
+        assert [r["name"] for r in rows] == ["Daytona Milton Keynes"], rows
+        assert track_db.load()["tracks"] == []
+        idx = library.load()
+        assert len(idx["entries"]) == 3, "deleting a circuit dropped analysed sessions"
+        assert library.prior_best(idx, "Sonoma") == 68.0, "deleting a circuit lost its PB history"
+        assert len(focus.for_track(focus.load(), "Sonoma")) == 1
+        assert session_record.get(session_record.load(), "GX0002")["track"] == "Sonoma"
+        assert os.path.exists(track_db.backup_path()), "the app's delete left no backup"
+
+
 # ------------------------------------------------------------------ runner
 def _run_all():
     import inspect

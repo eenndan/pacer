@@ -209,6 +209,9 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   same numbers on the clipboard.
 - **A themed report for a crash that happens twice.** The unhandled-exception dialog is shown once
   per distinct failure; repeats, and anything raised off the GUI thread, are logged instead.
+- **⌘L opens the Session Library.** The front door to every recording you have analysed was the one
+  top-level surface with no key at all. It is documented on the ? card and reachable from ⌘K,
+  because all three read the same registry.
 
 ### Changed
 
@@ -246,6 +249,46 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **A recording with no GPS in it was sold as the app's most accurate timing.** The DATA TRUST
+  card's `Timing` row had a two-way label — the video-clock fallback, else "GPS9 true clock" — and
+  the loader builds its quality verdict *before* it knows whether the GPS trace survives. When the
+  quality gate and the stationary trim left nothing, it returned that verdict untouched, and its
+  default clock is the validated GPS9 path. Driven end to end over the bundled `karma.mp4`, which
+  carries **0 GPS fixes**, the card printed `Timing: GPS9 true clock · 0% of moving fixes rejected`
+  — the app vouching for its best clock on a file with not one satellite fix in it, and reporting a
+  reassuring 0 % over a population of nothing. There is now a third clock provenance for "no time
+  axis was built at all"; the row states it as a caveat, so it sorts to the top of the card with
+  the other trust-breaking facts, and it carries the only action there is (check the camera's GPS
+  setting; some models carry no receiver). The two real clocks are untouched — both D24 recordings
+  still read `GPS9 true clock`, and a GPS5-era clip still reads `video clock (estimated)`.
+  - The same absence also reached the per-second quality bar, which explained it with the wrong
+    cause: `karma.mp4`'s strip said *"this camera writes no per-sample GPS quality — the GPS5-era
+    stream carries neither a fix type nor a DOP"*, attributing the silence to a stream that is not
+    in the file. A recording where **no fix arrived at all** now says so, and the genuine GPS5-era
+    wording stays where it belongs — on the clips that do write fixes without quality fields.
+  - `load._used_gps9_trueclock`'s docstring claimed a GPS5-only camera "reports ts==0 on every
+    sample". Measured, that is false on **every one of the nine bundled GPS5-era clips**:
+    `hero6.mp4` reports a non-zero stamp on 417 of 417 fixes — but only **23 distinct values**,
+    because the GPS5 era carries one GPSU stamp per ~1 s payload, repeated onto each fix inside it.
+    The rule survives on the *spacing* (0 s inside a payload, ~1.0 s across one — both outside the
+    GPS9 step band), not on the test the docstring described, so anyone simplifying it to
+    `any(ts > 0)` would have promoted every HERO5-8, Max and Fusion recording to true-clock timing.
+- **A greyed-out menu item now says why, where macOS lets you read it.** Twenty of the items
+  disabled on the welcome screen explained themselves in a Qt tooltip — and on macOS that tooltip
+  is shown to nobody: measured on the real screen, this app's menu bar is the native one
+  (`isNativeMenuBar()` is true, its in-window height is 0 px), so its rows are NSMenuItems, and
+  Qt's own menu-tooltip path is switched off on all eight menus anyway (a live tooltip event
+  produced nothing at `toolTipsVisible=False` and the full sentence at `True`). Eleven of those
+  items had a real reason nobody could read; the other nine had no reason written at all, only a
+  description of a feature you cannot have. Every gated item now carries the reason's condition on
+  its own label — "Library… — no recordings analysed yet", "Save as track… — needs a complete lap
+  and a GPS position" — and the whole sentence, remedy included, on its ⌘K palette row, which is a
+  real Qt view and does answer a hover even on a greyed row. The clause comes off again the moment
+  the gate opens.
+- **One ellipsis fixed, and the copy that points at it.** Coaching ▸ "Opportunities…" asks the user
+  for nothing, so under the app's own rule (a trailing "…" means the command needs more
+  information) it should never have carried one. The item and the in-app sentence that names it
+  were renamed together, and the test now reads that sentence against the action's own text.
 - **The ★ that means "session best" was decided three different ways, so two pages marked
   different cells of the same grid.** The Stats page's SPLITS grid compares what it *prints* —
   an interior sector split is the difference of two GPS sample times on a 0.1 s grid, so a
