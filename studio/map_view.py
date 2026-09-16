@@ -94,7 +94,20 @@ CORNER_START_NUDGE_PX = 12.0
 CORNER_MARKER_CLEAR_PX = 12.0   # marker half-extent (a size-15 TargetItem) plus a little air
 CORNER_MARKER_PAD_PX = 2.0      # extra px so a nudged label clears the marker rather than kissing it
 CORNER_MARKER_EPS_PX = 0.5      # sub-px moves aren't worth a setPos/repaint
-# Click-to-locate cue: a hollow accent ring slightly larger than the apex dot.
+# Click-to-locate cue: a hollow ring slightly larger than the apex dot, drawn in the corner
+# LABEL's own near-primary text colour — deliberately NOT the UI accent.
+#
+# THE ACCENT WAS ALREADY SPENT TWICE ON THIS CANVAS: START_COLOR (the start/finish crosshair) and
+# CURRENT_COLOR (the current lap's own racing line) are both C.accent. A corner apex sits ON that
+# line by construction, so with the rainbow off — a supported mode — the cue was #f5a623 drawn on
+# #f5a623. Measured by sampling the ring's own stroke on the shipped canvas: the ring's ink and the
+# line just outside it were the same hex, contrast 1.00:1. The one cue whose whole job is to say
+# "this corner, here" was invisible against the one thing it points at.
+#
+# CORNER_LABEL_COLOR ties the ring to the C# label it belongs to, and collides with nothing else
+# the map draws (apex dots cyan/coral, video marker coral, best-lap reference grey). It is not one
+# of the palette-swappable hues, so it cannot freeze a palette (tests/test_contrast.py).
+CORNER_HIGHLIGHT_COLOR = CORNER_LABEL_COLOR
 CORNER_HIGHLIGHT_PEN_W = 2
 CORNER_HIGHLIGHT_SIZE = 18
 # Brake glyphs (F5): a ▼ at each braking-zone onset; size ramps peak decel (g) via
@@ -524,10 +537,20 @@ class _MapLegend(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QBrush(qc))
             p.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
-        elif kind == "start":  # amber crosshair — the draggable start/sector handle
-            p.setPen(QPen(QColor(START_COLOR), 1.5))
-            p.drawLine(QPointF(cx - 5, cy), QPointF(cx + 5, cy))
-            p.drawLine(QPointF(cx, cy - 5), QPointF(cx, cy + 5))
+        elif kind == "start":  # the draggable timing-line handles — BOTH of them
+            # This row names two things ("Drag = start / sector line") and used to paint one: a
+            # single START_COLOR crosshair, while the map draws start lines in START_COLOR (amber)
+            # and every SECTOR line in SECTOR_COLOR (grey). Measured on the shipped plate, the grey
+            # the map paints each sector line in was 125 RGB units from the nearest pixel this cell
+            # contained — i.e. nowhere in it. That is W11-01's defect one row along (the brake row
+            # promised a glyph in a colour no brake glyph is ever drawn in), so it takes W11-01's
+            # answer: mirror what is on the canvas. Two crosshairs, side by side in the one cell,
+            # the same way the brake row already draws compare's two lap glyphs.
+            arm, gap = 3.5, 1.5
+            for dx, colour in ((-(arm + gap), START_COLOR), (arm + gap, SECTOR_COLOR)):
+                p.setPen(QPen(QColor(colour), 1.5))
+                p.drawLine(QPointF(cx + dx - arm, cy), QPointF(cx + dx + arm, cy))
+                p.drawLine(QPointF(cx + dx, cy - arm), QPointF(cx + dx, cy + arm))
 
 
 class _LapOverlay:
@@ -919,7 +942,8 @@ class _CornerMarkers:
                 ring = pg.ScatterPlotItem(
                     pos=[(float(x), float(y))], size=CORNER_HIGHLIGHT_SIZE,
                     brush=pg.mkBrush(None),
-                    pen=pg.mkPen(C.accent, width=theme.line_width(CORNER_HIGHLIGHT_PEN_W)),
+                    pen=pg.mkPen(CORNER_HIGHLIGHT_COLOR,
+                                 width=theme.line_width(CORNER_HIGHLIGHT_PEN_W)),
                     pxMode=True)
                 ring.setZValue(7)  # above corner dots/labels, below the marker
                 self.plot.addItem(ring)

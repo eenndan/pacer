@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import math
 import os
+import time
+import traceback
 from typing import NamedTuple
 
 from PySide6.QtCore import QBuffer, QIODevice, Qt
@@ -42,7 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
-from ._signal import lap_label
+from ._signal import fmt_hms, lap_label
 from .session import fmt_time
 from .workers import VideoExportWorker
 
@@ -73,14 +75,21 @@ class ExportController:
     # File ▸ Export Qt side (the writers are Qt-free in export_data.py).
 
     # WHY a gated export action is off. A disabled row that describes its feature tells you nothing
-    # about how to reach it, and all of the gated ones did exactly that; Qt keeps showing a disabled
-    # action's tooltip, so this is the only surface a greyed row has. Each string names the
-    # CONDITION and the way out of it.
+    # about how to reach it, and all of the gated ones did exactly that. These strings were written
+    # for the action's TOOLTIP, on the belief that "Qt keeps showing a disabled action's tooltip,
+    # so this is the only surface a greyed row has" — measured on the real screen, that is false on
+    # macOS: this app's menu bar is native, so its items are NSMenuItems and never show a Qt
+    # tooltip (see MENU_REASON_SEP in app.py). `StudioWindow._gate_action` now puts each string's
+    # CONDITION clause on the menu item ITSELF and keeps the whole sentence on the tooltip, which
+    # is reachable on the ⌘K palette's row. So each string still names the CONDITION and the way
+    # out of it — in that order, separated by an em dash, because the first half is what the menu
+    # shows.
     _NO_LAPS_REASON = ("No complete laps in this recording — drag the start/finish line on the map "
                        "to set where a lap begins, then export.")
-    _PROVISIONAL_REASON = ("This recording's timing is provisional: the start line was auto-fitted, "
-                           "not confirmed by you. Save it as a track (File ▸ Save as track…) to "
-                           "confirm it.")
+    _PROVISIONAL_REASON = ("This recording's timing is provisional — the start line was "
+                           "auto-fitted, not confirmed by you. Save it as a track "
+                           "(File ▸ Save as track…) to confirm it.")
+    _NO_SESSION_REASON = ("Open a recording first — there is nothing to export yet.")
     _NO_TRACK_REASON = ("Needs a complete lap and a GPS position — there are no usable timing lines "
                         "to promote into a reusable track.")
     _NO_LIBRARY_REASON = ("No recordings analysed yet — open a GoPro recording and it is remembered "
@@ -111,6 +120,11 @@ class ExportController:
         would be an item that can only fail."""
         has = hasattr(self.win, "session")
         self.win._export_menu.setEnabled(has)
+        # The SUBMENU'S OWN ROW, which greys with it. With no session the six items below are not
+        # on screen at all, so the six reasons they carry are not either — the opener has to say
+        # why by itself. Gated AFTER setEnabled, which is what syncs a QMenu's enabled state onto
+        # its menuAction (QMenu::changeEvent), so the gate has the last word on both.
+        self.win._gate_action(self.win._export_menu.menuAction(), has, self._NO_SESSION_REASON)
         has_laps = has and self.win._has_valid_laps()
         for action in (self.win._export_laps_action, self.win._export_channels_action,
                        self.win._export_report_action, self.win._copy_stats_action,
@@ -265,19 +279,52 @@ class ExportController:
         if "no such file or directory" in low and "ffmpeg" not in low:
             return ("The folder you chose isn't there any more — it may have been moved, renamed "
                     "or unmounted. Choose another one and export again.")
+        if export_video.is_truncated_footage(message or ""):
+            return ("The footage stops partway through this clip, so only part of it could be "
+                    "rendered. Nothing was written. The recording may still be copying from the "
+                    "camera, or be damaged — try a lap further from the end of it.")
         if "cancelled" in low or "canceled" in low:
             return "The export stopped before it finished."
         return ("The encoder stopped partway through. The details below are what it reported — "
                 "Help ▸ Report a problem… if it keeps happening.")
     def _run_export(self, write, path: str) -> bool:
-        """Run a writer (`write()`) under an OSError guard; on failure show a warning dialog +
-        statusbar note. Returns True on success."""
+        """Run a writer (`write()`) under a failure guard; on failure show a warning dialog +
+        statusbar note. Returns True on success.
+
+        IT GUARDS `Exception`, NOT `OSError`, BECAUSE THESE WRITERS STOPPED BEING WRITERS. When
+        this was written, every `write()` here did little more than format strings into a file, so
+        the only thing that could go wrong was the file. It is now the front door to real
+        computation: `write_report_html` runs the whole `SessionStats` reduction and the ideal-lap
+        machinery INSIDE this try, over whatever a recording turned out to contain. Anything those
+        raise — a ValueError out of a degenerate reduction, an IndexError on an empty channel — is
+        not an OSError, so it went straight past this guard to the crash reporter: a Python
+        traceback and a "Pacer stopped unexpectedly" dialog for a report the user simply cannot
+        have, while the app's own plain-language failure dialog sat here unused.
+
+        The two cases stay TOLD APART in the text. An OSError is about the FILE and names it, which
+        is a thing the user can act on (wrong folder, full disk, unplugged drive); anything else is
+        about the DATA, and promising a next action we cannot name would be a wrong specific
+        sentence — the trap `_export_failure_message` exists to avoid. Either way the exception is
+        printed with its traceback, so a bug report can still reach what went wrong."""
         try:
             write()
         except OSError as exc:
             QMessageBox.warning(self.win, "Export failed",
                                 f"Could not write {os.path.basename(path)}:\n{exc}")
             self.win.statusBar().showMessage(f"export failed: {exc}", self._status_ms)
+            return False
+        except Exception as exc:  # noqa: BLE001 — see the docstring: the alternative is a crash dialog
+            traceback.print_exc()
+            print(f"studio: export of {os.path.basename(path)} failed ({exc!r}).", flush=True)
+            box = QMessageBox(QMessageBox.Warning, "Export failed",
+                              f"{APP_NAME} couldn't build {os.path.basename(path)} from this "
+                              f"recording, so nothing was written.\n\nHelp ▸ Report a problem… if "
+                              f"it keeps happening.", parent=self.win)
+            box.setDetailedText(f"{type(exc).__name__}: {exc}")
+            box.addButton(QMessageBox.Close)
+            box.exec()
+            self.win.statusBar().showMessage(
+                f"export failed: {type(exc).__name__}", self._status_ms)
             return False
         return True
     @staticmethod
@@ -900,6 +947,35 @@ class ExportController:
         if lap_id is not None and lap_b is not None:
             return f"lap {lap_label(lap_id)} against lap {lap_label(lap_b)}"
         return f"lap {lap_label(lap_id)}" if lap_id is not None else "an overlay video"
+    # An ETA needs EVIDENCE, and the start of a render is the worst possible sample of it: the
+    # first chunk carries the ffmpeg spawn, the VideoToolbox session probe and the painter's pill
+    # budget, so a rate measured over it reads far slower than the render settles at. These two
+    # are the minimum sample a number gets published from — below them the line simply counts
+    # frames, which is true, instead of a figure that would visibly halve a few seconds later.
+    _ETA_MIN_SECONDS = 4.0
+    _ETA_MIN_FRAMES = 48          # one chunk of the render pump
+    @staticmethod
+    def _render_progress_detail(done: int, total: int, rendered: int, elapsed: float) -> str:
+        """The modal's second line: how much of THIS file is done, and how long is left.
+
+        The app's longest modal used to say `Rendering lap 4 overlay video…` and nothing else for
+        up to several minutes. A bar without a number answers "is it moving"; it does not answer
+        the question a user actually leaves the machine on: how long.
+
+        `rendered` / `elapsed` are frames and seconds since the FIRST frame of this file, which is
+        the only rate that means anything — measuring from the dialog opening would fold the
+        ffmpeg spawn and the encoder probe into the average. Nothing is claimed until that sample
+        is big enough (see the two constants); until then the line is just the count.
+
+        Returns a line, never a sentence with a full stop: it sits under the title as a caption."""
+        head = f"frame {done} of {total}"
+        if rendered < ExportController._ETA_MIN_FRAMES or elapsed < ExportController._ETA_MIN_SECONDS:
+            return head
+        left = total - done
+        if left <= 0:
+            return head
+        seconds = left * elapsed / rendered
+        return f"{head} · about {fmt_hms(seconds)} left"
     def _run_video_export(self, specs, lap: int | None = None, make_renderer=None):
         """Run `specs` on a worker QThread behind ONE cancellable modal dialog, in order. Starts
         indeterminate ("Preparing…"), flips to a determinate bar on the first frame's progress, and
@@ -969,6 +1045,10 @@ class ExportController:
         def _start(i: int):
             spec = specs[i]
             started = {"first": False}
+            # When this FILE's first frame landed, and at what count — the only two numbers an
+            # honest ETA can be built from (see _render_progress_detail). Per file, not per batch:
+            # the bar restarts per file and so does the estimate.
+            clock = {"t0": 0.0, "done0": 0}
             worker = VideoExportWorker(self.win.session, spec, make_renderer)
             state["worker"] = worker
             self.win._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
@@ -987,11 +1067,16 @@ class ExportController:
                 if count > 0:
                     if not started["first"]:
                         # First real frame: switch from the busy "Preparing…" bar to a determinate
-                        # one.
+                        # one, and start the clock the estimate is measured against.
                         started["first"] = True
-                        dlg.setLabelText(f"Rendering {_title(i)}…")
+                        clock["t0"], clock["done0"] = time.monotonic(), done
                     dlg.setMaximum(count)
                     dlg.setValue(done)
+                    # The label is rewritten per PROGRESS CALLBACK, which is once per chunk of 48
+                    # frames (~40 times for a lap), not once per frame — setLabelText resizes the
+                    # dialog, and per-frame relayout at 30 fps would be a cost for nothing.
+                    dlg.setLabelText(f"Rendering {_title(i)}…\n" + self._render_progress_detail(
+                        done, count, done - clock["done0"], time.monotonic() - clock["t0"]))
 
             def on_done(ok: bool, message: str):
                 # The render is over, so the button can no longer mean "cancel" for THIS worker:
