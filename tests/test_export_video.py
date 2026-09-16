@@ -251,15 +251,26 @@ def _spec(**kw):
 
 
 def test_decode_cmd_shape():
-    """Decode argv: pre-input -ss t0, -i src, -t duration, scale=WxH + fps filter, rgb24 rawvideo
-    to pipe:1, audio/subs/data dropped."""
+    """Decode argv: pre-input -ss t0, -i src, -t (the PLAN's length), scale=WxH + fps filter, rgb24
+    rawvideo to pipe:1, audio/subs/data dropped.
+
+    THE `-t` IS THE PLAN, NOT THE WINDOW, and that is the "one frame short" fix: ffmpeg trims the
+    output in the frame's own timebase and ROUNDS, so a window of 70.000000 s at 59.94 fps (4195.8
+    frames) delivered 4195 against a plan of 4196 and the render hit a short read. Asked for
+    4196/59.94 s it lands on the frame boundary. Asserted as the RELATIONSHIP — the ask covers
+    exactly the planned frames and `-frames:v` pins the same count — rather than as a literal,
+    which would just be this arithmetic typed twice."""
     cmd = ev.build_decode_cmd(_spec(), 1920, 1080, 59.94)
     assert cmd[0] == ev.FFMPEG
     # pre-input seek (fast) is BEFORE -i
     assert cmd.index("-ss") < cmd.index("-i")
     assert "/in/src.MP4" in cmd
     assert any(a == "scale=1920:1080,fps=59.940000" for a in cmd)
-    assert cmd[cmd.index("-t") + 1] == "70.000000"       # duration = t1 - t0
+    planned = len(ev.frame_times(100.0, 170.0, 59.94))
+    asked = float(cmd[cmd.index("-t") + 1])
+    assert abs(asked * 59.94 - planned) < 1e-3, (
+        f"the decode asks for {asked * 59.94:.3f} frames against a plan of {planned}")
+    assert cmd[cmd.index("-frames:v") + 1] == str(planned)
     assert "-an" in cmd and "rawvideo" in cmd and "rgb24" in cmd
     assert cmd[-1] == "pipe:1"
 
@@ -282,15 +293,25 @@ def test_encode_cmd_shape_and_mux():
 
 def test_encode_window_matches_decode_window():
     """A/V sync hinge: the encode's source-audio -ss/-t window equals the decode's video window
-    (same t0 + duration), so audio and the composited video cover the identical lap span."""
+    (same t0, same length), so audio and the composited video cover the identical lap span.
+
+    And the audio's `-t` is an INPUT option — it must sit before the `-i` it belongs to. After the
+    `-i` it is an output cap, which is what let `-shortest` drop the last video frame of every
+    fractional window (see build_encode_cmd); the two placements are one argument apart and mean
+    entirely different things, so the POSITION is pinned here and not just the value."""
     spec = _spec(t0=12.5, t1=80.0)
     dec = ev.build_decode_cmd(spec, 640, 360, 30.0)
     enc = ev.build_encode_cmd(spec, 640, 360, 30.0)
-    # the LAST -ss in each is the source seek; both -t are the duration
+    # the LAST -ss in each is the source seek; both -t cover the same planned clip
     assert dec[dec.index("-ss") + 1] == f"{12.5:.6f}"
     assert enc[enc.index("-ss") + 1] == f"{12.5:.6f}"
-    assert dec[dec.index("-t") + 1] == f"{67.5:.6f}"
-    assert enc[enc.index("-t") + 1] == f"{67.5:.6f}"
+    assert dec[dec.index("-t") + 1] == enc[enc.index("-t") + 1]
+    assert float(enc[enc.index("-t") + 1]) >= 67.5, "the clip may be rounded UP to a frame, never down"
+    t_at = enc.index("-t")
+    assert enc[t_at - 2] == "-ss", "the audio -t belongs with the seek, in front of its input"
+    assert "-i" in enc[t_at:], "the audio -t must precede the -i it bounds (an input option)"
+    assert "-t" not in enc[enc.index("/in/src.MP4"):], (
+        "a -t after the input is an OUTPUT cap — that is the frame-dropping bug, not the fix")
 
 
 # --------------------------------------------------------- chaptered source resolution (the F9 bug)
@@ -2090,6 +2111,160 @@ def test_a_full_range_source_can_never_reach_the_encoder():
             w, h = ev.output_size(*src, cfg)
             assert w % 2 == 0 and h % 2 == 0, (cfg.aspect, cfg.frame_fit, src, w, h)
     print("ok pipeline: a full-range source converts at the rgb24 boundary, never at the encoder")
+
+
+def test_a_fractional_window_muxes_every_frame_it_planned_if_ffmpeg(monkeypatch_restore):
+    """X2(a), END TO END ON REAL FFMPEG: the file must hold the frames the export planned.
+
+    A lap window is a real-valued span, so `duration*fps` is almost never whole — and the two ends
+    of the pipeline rounded the leftover differently, in opposite directions:
+
+      * BELOW half a frame the DECODER came up short. Its `-t` was the raw window, trimmed in the
+        output frame's own timebase, which ROUNDS: the render hit a short read, `produced > 0`
+        counted as a clean finish, and the bar stopped one below its own total. Measured on main
+        across 96 D24 windows (both recordings, interior and seam-crossing, 25/30/59.94 fps): 18
+        came up one frame short, every one of them with a fractional frame under ~0.5.
+      * ABOVE it the MUXER dropped the last frame instead, because that frame ENDED past a
+        duration-capped audio track: 0060 lap 17 planned 2047, wrote 2047, filed 2046 (video
+        68.200 s vs audio 68.229 s) — the case review §4.5 read as a decoder short read. Six of six
+        real D24 exports lost exactly one frame this way, on VideoToolbox AND libx264, at 30 AND
+        59.94 fps, interior AND across a chapter seam.
+
+    Both windows below are checked THROUGH THE FILE (`ffprobe -count_frames`), not through the
+    renderer's own count, because the renderer's count was RIGHT in the mux case and the file was
+    still short. Synthetic clip, so this runs wherever ffmpeg does — no 11 GB media."""
+    if not _require_ffmpeg("a_fractional_window_muxes_every_frame_it_planned"):
+        return
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src = os.path.join(tmp, "f9_frac_src.mp4")
+    _make_syn_clip(src, dur=3.0)
+    s = StubSession(lap_id=1, t0=0.0, dur=3.0, n=180)
+    try:
+        # 45.25 frames at 30 fps (the decoder's rounding case) and 45.75 (the muxer's).
+        for label, t1 in (("rounds down", 45.25 / 30.0), ("rounds up", 45.75 / 30.0)):
+            out = os.path.join(tmp, "f9_frac_out.mp4")
+            if os.path.exists(out):
+                os.remove(out)
+            spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=t1,
+                                 config=ev.OverlayConfig(out_height=360, fps_cap=30.0,
+                                                         encoder="libx264",
+                                                         hwaccel_decode=False))
+            planned = len(ev.frame_times(0.0, t1, 30.0))
+            assert planned == 46, f"{label}: the fixture must be a fractional window, got {planned}"
+            res = ev.Renderer(s, spec).run()
+            assert res.frames == planned, (
+                f"{label}: the decoder ran dry at {res.frames} of {planned} planned frames")
+            muxed = int(subprocess.run(
+                [ev.FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
+                 "-show_entries", "stream=nb_read_frames", "-of",
+                 "default=noprint_wrappers=1:nokey=1", out],
+                check=True, capture_output=True, text=True).stdout.strip())
+            assert muxed == planned, (
+                f"{label}: rendered {res.frames} frames and the file holds {muxed} of {planned}")
+            os.remove(out)
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    print("ok fractional window: every planned frame reaches the file")
+
+
+def test_footage_that_runs_out_mid_clip_is_refused_rather_than_called_finished(monkeypatch_restore):
+    """X2(a), the other half: a decode that runs dry with frames still to render is a FAILURE.
+
+    `produced > 0` used to be the whole test, and ffmpeg gives nothing better to go on: a source
+    truncated to half its bytes decodes what it has, prints `partial file` on stderr and STILL
+    EXITS 0 (measured: 117 of 240 frames, rc=0). So on main this exported half a lap, said "export
+    finished", and the only sign was a bar stopped at 117 of 240 — a clip the user would publish
+    believing it whole. Now it raises, names how far it got, and the worker drops the partial file.
+
+    The comparison is against the SAME window on the intact clip, so the fixture proves the
+    refusal is about the truncation and not about the window."""
+    if not _require_ffmpeg("footage_that_runs_out_mid_clip_is_refused"):
+        return
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src, cut = os.path.join(tmp, "f9_trunc_src.mp4"), os.path.join(tmp, "f9_trunc_cut.mp4")
+    out = os.path.join(tmp, "f9_trunc_out.mp4")
+    # `+faststart` (the moov atom UP FRONT) is what makes this fixture the failure it is meant to
+    # be, and it is what production writes. Without it the index sits at the END of the file, so a
+    # truncated copy is not half a recording at all — it is an unreadable one, ffprobe refuses it
+    # before the render starts, and the test would be exercising a broken FILE instead of footage
+    # that runs out. A part-copied recording off a camera has its moov and its first frames.
+    subprocess.run(
+        [ev.FFMPEG, "-nostdin", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=8.0",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=8.0",
+         "-c:v", "libx264", "-g", "30", "-pix_fmt", "yuv420p", "-c:a", "aac",
+         "-movflags", "+faststart", "-shortest", src],
+        check=True, capture_output=True)
+    assert os.path.getsize(src) > 0
+    with open(src, "rb") as f:
+        whole = f.read()
+    with open(cut, "wb") as f:                      # half the bytes; the moov is up front already
+        f.write(whole[: len(whole) // 2])
+    s = StubSession(lap_id=1, t0=0.0, dur=8.0, n=480)
+
+    def _spec_for(path):
+        return ev.ExportSpec(src_path=path, out_path=out, lap_id=1, t0=0.0, t1=7.0,
+                             config=ev.OverlayConfig(out_height=240, fps_cap=30.0,
+                                                     encoder="libx264", hwaccel_decode=False))
+    try:
+        planned = len(ev.frame_times(0.0, 7.0, 30.0))
+        # INVERSE CONTROL FIRST: the intact clip renders the whole window and is not refused.
+        assert ev.Renderer(s, _spec_for(src)).run().frames == planned
+        try:
+            res = ev.Renderer(s, _spec_for(cut)).run()
+            raise AssertionError(
+                f"a truncated recording exported as a finished clip: {res.frames} of {planned} "
+                "frames, reported as success")
+        except ev.TruncatedRenderError as exc:
+            assert ev.is_truncated_footage(str(exc)), str(exc)
+            assert f"of {planned} frames" in str(exc), str(exc)
+    finally:
+        for p in (src, cut, out):
+            if os.path.exists(p):
+                os.remove(p)
+    print("ok truncated footage: refused, not reported as finished")
+
+
+def test_a_decoder_a_single_frame_short_finishes_the_bar_at_what_it_wrote(monkeypatch_restore):
+    """The one-frame boundary slack, and what the progress bar says about it (mocked, no ffmpeg).
+
+    A frame is the resolution of the plan's own arithmetic, so a render that ends one frame early
+    is finished, not failed — but it must not leave the bar parked at 59 of 60 with nothing more
+    coming. The FINAL progress report counts what was written; the mid-render reports still carry
+    the plan, because that is what a bar is for."""
+    s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
+    cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", workers=1)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
+    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=1.0,
+                         config=cfg)
+    _patch_pipeline(None, out_w * out_h * 3, nframes=59)      # one short of the 60 planned
+    r = ev.Renderer(s, spec)
+    assert r.total_frames == 60
+    seen = []
+    res = r.run(progress=lambda d, t: seen.append((d, t)), chunk=8)
+    assert res.frames == 59
+    assert seen[-1] == (59, 59), f"the bar must finish at the count it wrote: {seen[-1]}"
+    assert any(t == 60 for _d, t in seen[:-1]), (
+        f"mid-render the denominator is the PLAN, not a moving target: {seen}")
+    print("ok tail slack: one frame short still finishes the bar")
+
+
+def test_a_decode_that_stops_well_short_raises_instead_of_returning(monkeypatch_restore):
+    """The same path as the truncated-file test, without ffmpeg: 40 of 60 frames is not a rounding
+    tail, it is a clip that ends 0.33 s early, and it must not return a RenderResult."""
+    s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
+    cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", workers=1)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
+    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=1.0,
+                         config=cfg)
+    _patch_pipeline(None, out_w * out_h * 3, nframes=40)
+    try:
+        res = ev.Renderer(s, spec).run(chunk=8)
+        raise AssertionError(f"a 40-of-60-frame decode returned a result: {res}")
+    except ev.TruncatedRenderError as exc:
+        assert "40 of 60 frames" in str(exc), str(exc)
+    print("ok short decode: refused with the counts named")
 
 
 if __name__ == "__main__":
