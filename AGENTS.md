@@ -187,7 +187,7 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   corner/driving/delta/bests/consistency, no media file), across base/ref/ref_cleared phases, plus a
   `drift_noise` phase over `tests/_synthetic.drift_noise_session` (GPS speed noise at the measured
   sigma, one lap drifted 1 % with an unmatched corner boundary — the stadium laps have neither, so
-  a drift-gated or noise-driven change could not move them) and a `drift_median` phase over
+  an alignment-driven or noise-driven change could not move them) and a `drift_median` phase over
   `tests/_synthetic.drift_median_session` (the same three geometries with the drift on the
   MEDIAN-time lap — coaching reads the median lap, so with the drift on the slowest one every
   coaching corner-window projection was the identity and #289's coaching-alignment fix moved 15

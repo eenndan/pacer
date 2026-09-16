@@ -293,7 +293,7 @@ def test_corner_stats_deltas_and_window_speeds():
     print("ok stats: apex == np.min over window (exact), deltas telescoped")
 
 
-# ----------------------------------------------------- drift-gated per-corner alignment
+# ------------------------------------------------------ per-corner spatial alignment
 def _scaled_odometer(cum, *, region_end: float, region_scale: float):
     """A NON-UNIFORM odometer for the SAME geometry: the per-sample step lengths in [0, region_end)
     are scaled by `region_scale` (the driver weaved through that stretch), so the total line length
@@ -332,7 +332,7 @@ def test_uniform_drift_is_where_normalized_is_already_the_truth():
 
 
 def test_a_lap_inside_the_old_drift_gate_is_warped_too():
-    """THE C2 REGRESSION (the drift-gate residual). A lap can carry METRES of odometer misalignment
+    """THE C2 REGRESSION (the old drift gate's residual). A lap can carry METRES of odometer misalignment
     while its LINE-LENGTH drift — the scalar the old `NORMALIZED_DRIFT_MAX = 0.005` gate switched
     on — stays far inside that gate, because distance taken in one stretch is given back in another
     and the two nearly cancel.
