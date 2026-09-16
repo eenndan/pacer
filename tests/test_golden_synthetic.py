@@ -37,6 +37,18 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       coaching row's `reason.brake_extra_s` by 10.6 ms, 3.909945 -> 3.899391 s,
                       and the `contribution` it feeds) and 0 of `drift_noise`'s 12,115, or of any
                       leaf in the three phases above it.
+  * ``drift_band``  — a LADDER across the SUB-GATE DRIFT BAND
+                      (tests/_synthetic.drift_band_session). Every lap of the two phases above is
+                      either 0.0000 % line-length drift or 0.995 %, so NONE sits in (0 %, 0.5 %] —
+                      the band `corners.NORMALIZED_DRIFT_MAX` governed until #300 removed it. That
+                      is why removing it moved 0 of all 24,859 leaves while the real boundary
+                      residual fell from a median 1.96 m to 0.10 m on D24. Four laps: lap 0 on the
+                      reference line, then rungs at 0.118 / 0.289 / 0.460 % drift, each running
+                      wide round turn 1 and tight round turn 2 so 2.4-4.2 m of odometer offset
+                      survives the near-cancelling length change. Measured negative control —
+                      restoring the 0.5 % gate moves 68 of this phase's 15,451 leaves (coaching
+                      rows, per-lap corner stats and segment times; max |Δ| 5.84 on an entry
+                      speed) and 0 of the five phases above it.
 
 It then compares the whole fingerprint against a COMMITTED baseline
 (tests/golden_synthetic_baseline.json, generated on main in the pixi env) via golden_compare.walk
@@ -70,6 +82,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ — for
 
 from _synthetic import (  # noqa: E402  (the drift + noise fixtures)
     DN_SPEED_SIGMA_MPS,
+    drift_band_laps,
+    drift_band_session,
     drift_median_laps,
     drift_median_session,
     drift_noise_laps,
@@ -107,6 +121,13 @@ def _build_drift_median():
     return s
 
 
+def _build_drift_band():
+    """The drift-ladder session (the same reference line, three laps inside the sub-gate band)."""
+    s = drift_band_session()
+    s.track_name = "Stadium"
+    return s
+
+
 def synthetic_fingerprint() -> dict:
     """The three-phase synthetic fingerprint (base / ref / ref_cleared) — the CI-runnable analogue
     of golden_session_dump.main()'s multi-phase dump, minus the D24 load and the ``reseg`` phase
@@ -130,6 +151,10 @@ def synthetic_fingerprint() -> dict:
     # The same geometry with the drift on the MEDIAN lap: the coaching path, which reads that lap
     # and only that lap, and which drift_noise therefore exercises in its identity projection.
     result["drift_median"] = fingerprint(_build_drift_median(), strict=False)
+    # The sub-gate drift BAND, as a ladder: the two phases above jump from 0 % drift to 0.995 %,
+    # so every lap the removed 0.5 % gate would have kept on the normalized projection is missing
+    # from this fingerprint entirely, and a regression in that band moves no leaf of it.
+    result["drift_band"] = fingerprint(_build_drift_band(), strict=False)
     return result
 
 
@@ -288,6 +313,72 @@ def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
           f"boundary {unmatched[0]:.1f} m, window gap {max(gaps):.2f} m")
 
 
+def test_drift_band_fixture_covers_the_sub_gate_band():
+    """The band phase exists because the two phases above jump straight from 0.0000 % drift to
+    0.995 %, leaving the (0 %, 0.5 %] band `corners.NORMALIZED_DRIFT_MAX` governed empty — so pin
+    the properties that make a LADDER across it able to fail, each one a plausible tweak would
+    quietly remove:
+
+      1. the seeded best lap IS the fastest, and it is the UNDRIFTED reference line — the rungs are
+         measured against a lap that is not one of them;
+      2. every comparison lap sits strictly inside the band (0 < drift <= 0.005) and the rungs are
+         SPREAD across it (lowest under 0.15 %, highest over 0.4 %), so a gate reintroduced anywhere
+         at or above the lowest rung moves at least one lap of this phase — which a single rung
+         could not promise;
+      3. every comparison lap has a REAL warp (`lap_alignment` is not None): precisely what the old
+         gate switched off for laps like these;
+      4. every interior corner boundary MATCHES spatially on every lap, so this phase's warp is
+         measured end to end — deliberately unlike `drift_noise` / `drift_median`, whose one
+         unmatched boundary makes the warp interpolate a knot;
+      5. warp and normalized projection SEPARATE by >= 1 m on every comparison lap. That is what
+         makes the gate visible at all: line-length drift is a weak predictor of odometer
+         misalignment (r = +0.38 on D24), so a lap that drifts in band but projects identically
+         would pin nothing;
+      6. the GPS speed column carries the family's measured noise."""
+    s = _build_drift_band()
+    ids = s.valid_lap_ids()
+    times = [s.lap_time(i) for i in ids]
+    assert ids[int(np.argmin(times))] == s.best_lap_id() == 0, (times, s.best_lap_id())
+
+    best_total = s.best_lap_total_distance()
+    totals = {i: float(s._dist_cache[i][1][-1]) for i in ids}
+    drift = {i: corners.line_length_drift(totals[i], best_total) for i in ids}
+    assert drift[0] == 0.0, f"the reference lap drifts {drift[0]:.4%} from itself"
+    rungs = [drift[i] for i in ids if i != 0]
+    assert all(0.0 < d <= 0.005 for d in rungs), (
+        f"drift per lap {drift} — every rung must sit inside the (0, 0.5 %] band")
+    assert min(rungs) < 0.0015 and max(rungs) > 0.004, (
+        f"rungs {[f'{d:.4%}' for d in rungs]} do not span the band — a gate between them would be "
+        f"invisible to this phase")
+
+    corner_list, total_ref = s.corners.basis()
+    frame = np.array([b for c in corner_list for b in (float(c.enter), float(c.exit))])
+    interior = frame[(frame > 0) & (frame < total_ref)]
+    ref_cols = s._cols_cache[s.best_lap_id()]
+    seps = {}
+    for i in (i for i in ids if i != 0):
+        align = s.corners.lap_alignment(i, totals[i])
+        assert align is not None, f"lap {i} kept the normalized projection — the gate's own case"
+        lap_cols = s._cols_cache[i]
+        matched = corners._spatial_matches(interior, total_ref, ref_cols[1], ref_cols[2],
+                                           ref_cols[4], lap_cols[1], lap_cols[2], lap_cols[4])
+        assert np.all(np.isfinite(matched)), (
+            f"lap {i} has an unmatched interior boundary ({matched.tolist()}) — this phase's warp "
+            f"is meant to be measured at every knot")
+        warped = corners.project_boundaries(frame, total_ref, totals[i], frame=frame,
+                                            alignment=align)
+        seps[i] = float(np.max(np.abs(warped - frame * (totals[i] / total_ref))))
+        assert seps[i] >= 1.0, (
+            f"lap {i} projects only {seps[i]:.3f} m from the normalized frame — putting it back on "
+            f"the normalized projection would barely move a leaf")
+
+    for i, lap in enumerate(drift_band_laps()):
+        sd = float(np.std(lap["cols"][3] - lap["clean_speed"]))
+        assert abs(sd - DN_SPEED_SIGMA_MPS) <= 0.15 * DN_SPEED_SIGMA_MPS, f"lap {i} speed sd {sd}"
+    print("ok drift-band ladder: " + ", ".join(
+        f"lap {i} {drift[i]:.3%} drift ({seps[i]:.2f} m off normalized)" for i in seps))
+
+
 def test_synthetic_fingerprint_matches_baseline():
     """The equivalence gate: the synthetic Session-math fingerprint must match the committed
     baseline within eps 1e-9. Any drift in a corner / driving / delta / consistency / bests leaf
@@ -326,6 +417,7 @@ if __name__ == "__main__":
         test_reference_clear_reverts_to_base,
         test_drift_noise_fixture_reaches_the_paths_it_exists_for,
         test_drift_median_fixture_puts_the_drift_where_coaching_reads,
+        test_drift_band_fixture_covers_the_sub_gate_band,
         test_synthetic_fingerprint_matches_baseline,
     ]
     for t in tests:
