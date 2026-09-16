@@ -28,6 +28,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 
 import numpy as np
 
@@ -44,6 +45,13 @@ from PySide6.QtGui import QImage, QPainter  # noqa: E402
 
 from studio import chapters, theme  # noqa: E402
 from studio import export_video as ev  # noqa: E402
+
+# A temp directory PRIVATE TO THIS PROCESS — `pad_src.mp4` in the shared $TMPDIR is the same path
+# in every run on the machine, and a concurrent lane's teardown removing it mid-render fails here
+# as an ffmpeg error. Module-scope, so the finalizer removes it at exit. Pinned by
+# tests/test_temp_isolation.py.
+_TMP = tempfile.TemporaryDirectory(prefix="pacer-test-padding-")
+TMP = _TMP.name
 
 
 # --------------------------------------------------------------------------- a padded session
@@ -199,7 +207,7 @@ def test_a_negative_t0_is_refused_on_the_global_clock_whatever_the_source_says()
     real seek into the span and the LOCAL test sees a negative t0 too — also asserted, because that
     is the property the seam fix bought and a regression would be silent."""
     cm = chapters.ChapterMap(["/v/A.MP4", "/v/B.MP4"], [100.0, 100.0])
-    src = ev.resolve_video_source(cm, -4.0, 120.0, tmp_dir=os.environ.get("TMPDIR", "/tmp"))
+    src = ev.resolve_video_source(cm, -4.0, 120.0, tmp_dir=TMP)
     try:
         assert src.concat_list_path is not None, "expected the seam-spanning concat branch"
         assert src.time_offset == 0.0, "the span's clock starts at the first spanned chapter"
@@ -507,7 +515,7 @@ def test_a_real_padded_render_is_as_long_as_it_asked_for():
             "ffmpeg is a locked pixi dep: this must run in CI, not skip"
         print("skip real_padded_render (no ffmpeg; not in the pixi env)")
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, out = os.path.join(tmp, "pad_src.mp4"), os.path.join(tmp, "pad_out.mp4")
     subprocess.run(
         [ev.FFMPEG, "-nostdin", "-loglevel", "error", "-y",

@@ -4,7 +4,7 @@ other studio/dev/ scripts).
 
 Run (the PYTHONPATH note is load-bearing):
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.ui_capture <recording.mp4> --out /tmp/uxshots
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.ui_capture <recording.mp4> [--out DIR]
 
 Why the PYTHONPATH prefix: a bare run can resolve a STALE site-packages `pacer` that lacks
 `read_accl_columns` and then hangs at load. Pointing PYTHONPATH at the freshly built `bindings/pacer`
@@ -36,6 +36,7 @@ import argparse
 import os
 import shutil
 import sys
+import tempfile
 import time
 
 # Offscreen Qt + inert media BEFORE any Qt import (the PlayerPane reads PACER_NO_MEDIA at
@@ -138,13 +139,18 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("recording", nargs="?", default=_DEFAULT_RECORDING,
                         help=f"GPMF recording to load (default: {_DEFAULT_RECORDING})")
-    parser.add_argument("--out", default="/tmp/uxshots", help="directory for the PNGs")
+    parser.add_argument("--out", default=None, metavar="DIR",
+                        help="directory for the PNGs (default: a fresh temp directory, printed "
+                             "when the capture finishes). A FIXED default is shared by every run "
+                             "on the machine, so two concurrent captures overwrite each other's "
+                             "shots and you review the other run's picture believing it is yours.")
     parser.add_argument("--prefs", default=None, metavar="PREFS.JSON",
                         help="capture with this prefs file instead of the shipped defaults "
                              "(e.g. mph or the colour-blind palette). Copied into the jail; the "
                              "user's real prefs are never read.")
     args = parser.parse_args(argv)
-    capture(args.recording, args.out, prefs_file=args.prefs)
+    out = args.out or tempfile.mkdtemp(prefix="pacer-uxshots-")
+    capture(args.recording, out, prefs_file=args.prefs)
 
 
 if __name__ == "__main__":

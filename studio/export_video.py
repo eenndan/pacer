@@ -621,11 +621,14 @@ class ExportSpec:
 # --------------------------------------------------------------------------- clock conversion
 # EVERY TIME IN THIS MODULE IS A MEDIA TIME — ffmpeg seeks with it, `ChapterMap` resolves the source
 # file from it, and `frame_times` stamps the frames with it. Everything a Session states is a
-# TELEMETRY (GPS9 true-clock) time. The two drift apart by up to 0.22 s over a long recording (see
-# studio/media_clock.py), so the module converts at exactly two places: `lap_window_for_export`
-# takes the lap window INTO media time, and the per-frame lookups take a frame's time BACK before
-# they index the session. Both go through these two helpers, which duck-type the conversion so the
-# dozens of stand-in sessions in the tests (and any session with no clock) mean "no conversion".
+# TELEMETRY (GPS9 true-clock) time. The two drift apart by up to 0.22 s over a long recording, and
+# the trace's timestamps are a further ~0.46 s behind the picture (see studio/media_clock.py), so
+# the module converts at exactly two places: `lap_window_for_export` takes the lap window INTO
+# media time, and the per-frame lookups take a frame's time BACK before they index the session.
+# Both go through these two helpers, which duck-type the conversion so the dozens of stand-in
+# sessions in the tests (and any session with no clock) mean "no conversion". The helpers carry
+# BOTH corrections because the session's own map does — the burned clip and the live view are the
+# same conversion, so a frame grab can still be checked against the app.
 def _media_time(session, t: float) -> float:
     """A Session telemetry time -> the media time to seek the picture to."""
     fn = getattr(session, "media_time", None)

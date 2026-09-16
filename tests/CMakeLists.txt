@@ -920,6 +920,15 @@ add_test(NAME test_repo_write_safety
 set_tests_properties(test_repo_write_safety PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# ...and the other direction: a test may not write a FIXED name into the shared $TMPDIR. ctest runs
+# serially, so this never bites inside one run — but $TMPDIR is /tmp/claude-501, keyed on the uid
+# and shared by every concurrent agent lane, and test_export_compare's teardown deleted a clip
+# another lane's ffprobe was still decoding. That failure looks like a real export defect and cost
+# two separate agents a full diagnosis (#296, #298). AST-only: no Qt, no bindings, no temp files of
+# its own, milliseconds.
+add_test(NAME test_temp_isolation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_temp_isolation.py)
+
 # THE SEAM-CROSSING branch of the overlay export's source resolution. A lap window that spans a
 # GoPro chapter boundary decodes through the concat demuxer, and its first frame out has to BE the
 # frame at t0 — frame_times stamps every burned-in overlay from t0, so a miss desyncs the numbers
