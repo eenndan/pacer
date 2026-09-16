@@ -532,6 +532,127 @@ def test_the_map_key_draws_the_brake_glyphs_that_are_on_the_map():
     print("test_the_map_key_draws_the_brake_glyphs_that_are_on_the_map OK")
 
 
+# ------------------------------------------- L1: the key describes BOTH timing lines, not one
+def _glyph_cell_pixels(key, kind):
+    """Every colour the key actually PAINTS inside one row's glyph cell, as hex -> count.
+
+    Asked of the rendered plate rather than of the painter's source, because the row's whole job
+    is to be a picture of what is on the canvas — see test_the_map_key_draws_the_brake_glyphs."""
+    import studio.map_view as MV
+
+    pix = key.grab()
+    img = pix.toImage()
+    dpr = pix.devicePixelRatio()
+    row = [k for k, _label in key._ROWS].index(kind)
+    top = MV._LEGEND_PAD + MV._LEGEND_ROW_H * (1 + row)
+    seen: dict[str, int] = {}
+    for py in range(top, top + MV._LEGEND_ROW_H):
+        for px in range(MV._LEGEND_PAD, MV._LEGEND_PAD + MV._LEGEND_GLYPH_W):
+            c = QColor(img.pixel(int(px * dpr), int(py * dpr))).name().lower()
+            seen[c] = seen.get(c, 0) + 1
+    return seen
+
+
+def _nearest(seen, target):
+    """The smallest RGB distance from any painted pixel to `target`. Distance, not an exact hex
+    match: the glyphs are antialiased, so the pure token colour need never appear as a pixel."""
+    t = QColor(target)
+    best = 1e9
+    for hexc in seen:
+        q = QColor(hexc)
+        d = ((q.red() - t.red()) ** 2 + (q.green() - t.green()) ** 2
+             + (q.blue() - t.blue()) ** 2) ** 0.5
+        best = min(best, d)
+    return best
+
+
+def test_the_map_key_paints_both_timing_line_colours_not_only_the_start_lines():
+    """The key's one row reads "Drag = start / sector line" and painted a single START_COLOR
+    crosshair — while the map draws start lines in START_COLOR (amber) and SECTOR lines in
+    SECTOR_COLOR (grey). So the row named two things and was a picture of one of them.
+
+    This is W11-01's defect, one row along: that row promised a brake glyph in a colour no brake
+    glyph is ever drawn in. Measured on the shipped plate, the grey the map paints every sector
+    line in was nowhere in the key's glyph cell (nearest painted pixel 145 units away in RGB),
+    while the amber was 13 away. Asserted against the pens the plot is REALLY carrying, so the key
+    cannot drift from the canvas however the colours are plumbed."""
+    mv = _sized_map(_session())
+    mv.add_sector_btn.click()
+    mv.add_sector_btn.click()
+    _APP.processEvents()
+    assert len(mv._sectors) == 2, "this test needs sector lines on the canvas"
+
+    # This file does NOT jail studio.prefs (tests/test_map_key.py does), so the plate's collapse
+    # is whatever the developer last chose. Pin the expanded form: a collapsed plate paints no key
+    # rows at all, and the cell sampling below would then read past the plate's own height and
+    # "fail" on garbage instead of on the defect.
+    key = mv._map_key
+    key._collapsed = False
+    key._fits = True
+    key._relayout()
+    _APP.processEvents()
+    assert not key.painted_collapsed() and key.height() == key.expanded_height(), (
+        f"the key plate is not painting its rows (h={key.height()}, "
+        f"collapsed={key.painted_collapsed()}) — the sampling below would be meaningless")
+
+    painted = {QColor(mv._start.line.opts["pen"].color()).name().lower(): "start line"}
+    for tl in mv._sectors:
+        painted[QColor(tl.line.opts["pen"].color()).name().lower()] = "sector line"
+    assert len(painted) == 2, (
+        f"the map no longer draws start and sector lines in two different colours: {painted} — "
+        "if that is deliberate, this row's premise is gone and the test should go with it")
+
+    seen = _glyph_cell_pixels(key, "start")
+    missing = {colour: round(_nearest(seen, colour), 1)
+               for colour, what in painted.items() if _nearest(seen, colour) > 60.0}
+    assert not missing, (
+        f"the map key's 'Drag = start / sector line' row names both lines but paints only some of "
+        f"them: {missing} (colour -> RGB distance to the nearest pixel the key actually paints). "
+        f"The map draws {painted}; the key's glyph cell holds "
+        f"{sorted(seen, key=seen.get, reverse=True)[:4]}")
+    mv.hide()
+    mv.deleteLater()
+    print("test_the_map_key_paints_both_timing_line_colours_not_only_the_start_lines OK "
+          f"— key paints both {sorted(painted)}")
+
+
+def test_the_corner_locate_ring_is_not_the_colour_of_the_lap_line_it_rings():
+    """The consistency/coaching panels' click-to-locate cue rings one corner's apex. It was drawn
+    in C.accent — which is ALSO CURRENT_COLOR, the current lap's own line, and START_COLOR, the
+    start/finish crosshair.
+
+    A corner apex sits ON the current lap, so with the rainbow off (a supported mode) the cue was
+    amber drawn on amber. Measured on the shipped canvas by sampling the ring's own stroke:
+    #f5a623 ring over a #f5a623 line, contrast 1.00:1 — the locate cue was invisible against the
+    one thing it is pointing at. Read off the live items, not the tokens."""
+    mv = _sized_map(_session())
+    mv.set_current_lap(0)
+    mv.set_rainbow_mode("off")      # the mode in which the lap line IS the accent
+    mv.set_corners([("C1", -150.0, 10.0, 1), ("C2", 150.0, -10.0, -1)])
+    mv.highlight_corner(2)
+    _APP.processEvents()
+
+    ring = mv._corner_markers._highlight_item
+    assert ring is not None, "highlight_corner drew no ring at all"
+    ring_hex = QColor(ring.opts["pen"].color()).name().lower()
+    lap_items = mv._current_overlay._items
+    assert lap_items, "this test needs the current lap actually drawn"
+    lap_hex = QColor(lap_items[0].opts["pen"].color()).name().lower()
+
+    assert ring_hex != lap_hex, (
+        f"the corner locate ring is drawn in {ring_hex}, the same colour as the current lap line "
+        f"it rings ({lap_hex}) — contrast 1.00:1, so the cue vanishes into its own subject")
+    from studio.map_view import START_COLOR
+
+    assert ring_hex != QColor(START_COLOR).name().lower(), (
+        f"the locate ring shares the start/finish crosshair's colour ({ring_hex}): two different "
+        "marks on one map in one hue")
+    mv.hide()
+    mv.deleteLater()
+    print("test_the_corner_locate_ring_is_not_the_colour_of_the_lap_line_it_rings OK "
+          f"— ring {ring_hex} vs lap line {lap_hex}")
+
+
 def _run_all():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
