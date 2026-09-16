@@ -562,7 +562,8 @@ _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
 
 def _when(date: str | None) -> str:
     """"23 May" from an ISO date — the short form a verdict line says a baseline was set on.
-    "last time" when the recording carried no date (a GPS5-era file has none)."""
+    "last time" when the recording carried no date — no wall clock on its fixes at all, which is
+    NOT the GPS5 era (that stamps every fix from GPSU; see Session.session_date)."""
     if not date or len(date) < 10:
         return "last time"
     # A CALENDAR day, not two in-range-looking integers: the stored date is a string the store only

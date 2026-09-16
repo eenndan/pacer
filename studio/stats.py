@@ -227,7 +227,9 @@ class SessionTotals:
     distance_m: float | None   # speed-gated path length of the smoothed trace (sum of chords);
     #                            None when too little of it survived the gate to mean anything
     distance_kept_frac: float  # share of the raw chord length the gate kept (1.0 = a clean trace)
-    start_clock: str | None    # local wall-clock "HH:MM" of the first kept fix (GPS9); None GPS5
+    start_clock: str | None    # local wall-clock "HH:MM" of the first kept fix; None ONLY when no
+    #                            fix carries a wall clock at all (see clock_hhmm) — NOT the GPS5
+    #                            era, which stamps every fix from GPSU and renders a real time
     end_clock: str | None      # …and of the last kept fix
 
 
@@ -659,9 +661,14 @@ def path_distance_m(xs, ys, times=None, speed_ms=None) -> float:
 
 
 def clock_hhmm(epoch_ms) -> str | None:
-    """LOCAL wall-clock "HH:MM" for a GPS9 epoch-ms timestamp, or None when the stream has
-    no wall clock (GPS5 reports 0 — the same sentinel session_date() checks). Local for the
-    same reason as session_date: the time of day the driver actually experienced."""
+    """LOCAL wall-clock "HH:MM" for an epoch-ms timestamp, or None for the no-wall-clock
+    sentinel (<= 0 — the same one session_date() checks). Local for the same reason as
+    session_date: the time of day the driver actually experienced.
+
+    THE SENTINEL IS NOT THE GPS5 ERA. This used to say "GPS5 reports 0"; measured over the ten
+    bundled clips, all nine GPS5-era ones stamp every fix from the payload's GPSU and render a
+    real time here (hero6 reads 19:28). Only a recording with no wall clock on its fixes at all
+    (`karma.mp4`, no GPS stream) reaches the sentinel."""
     ms = int(epoch_ms)
     if ms <= 0:
         return None
