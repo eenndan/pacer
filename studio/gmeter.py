@@ -403,7 +403,8 @@ class CrossCheck:
 class GMeter:
     """Precomputed vehicle-frame g time series on the MEDIA clock, plus the GPS cross-check.
 
-    `times` is strictly increasing (seconds, global media clock). `lat_g`/`long_g` are the
+    `times` is strictly increasing (seconds, global media clock — the ACCL sample stamps, NOT
+    the telemetry axis the lap columns and every lap time are on). `lat_g`/`long_g` are the
     kart-frame lateral / longitudinal acceleration in g. `at_time` is the cheap per-tick lookup
     the overlay uses. `source` records which sensor produced the live signal ("accl" by default;
     "gps" if the GPS fallback was selected)."""
@@ -429,7 +430,9 @@ class GMeter:
         return "gps" if self.long_g_gps is not None else self.source
 
     def at_time(self, t: float) -> tuple[float, float, float] | None:
-        """(lateral_g, longitudinal_g, total_g) at media time `t`, or None if no g series.
+        """(lateral_g, longitudinal_g, total_g) at media time `t` — this series' own clock, which
+        is not the telemetry axis Session states its times on; `Session.g_at_time` is the seam
+        where the two meet. Returns None if no g series.
         Lateral is from the IMU (which it gets right); LONGITUDINAL is the GPS-derived signal
         (long_g_gps) when present — the IMU forward axis is vibration-inflated. O(log n)
         searchsorted + nearest pick; called at the 30 Hz tick."""
@@ -496,11 +499,20 @@ def _gps_derived_g(gt, gx, gy, gspeed):
 def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=None):
     """Build the vehicle-frame g series from the raw IMU + GPS trajectory.
 
-    Inputs (all numpy arrays on the MEDIA clock):
-      accl: (Na,4) [t, x, y, z]  accelerometer m/s^2 (native ACCL element order)
-      grav: (Ng,4) [t, x, y, z]  gravity unit vector (native GRAV element order)
-      cori: (Nc,5) [t, w, x, y, z] camera-orientation quaternion
-      gps_t, gps_x, gps_y: GPS trajectory time + local-metre east/north (the smoothed track)
+    THE TWO INPUT FAMILIES ARE NOT ON ONE CLOCK, and this function joins them BY LABEL. The IMU
+    arrays carry the camera's media stamps; `gps_t` is the GPS9 TRUE-clock (telemetry) axis
+    `studio/load.py` builds, which runs ~27 ppm slower (`studio/media_clock.py`) — up to 0.097 s
+    (0060) / 0.167 s (0062) apart at the end of the two D24 recordings. The join is deliberate and
+    MEASURED, not an oversight: #303 put the g series against the product's own path reference and
+    read +0.011 / −0.047 s joined by label against −0.399 / −0.404 s joined through the clock, so
+    crossing the clock here would misalign what is currently aligned (it would have moved a CORNERS
+    grip cell by up to 38.8 points). The ACCL content arrives late WITH the GPS; the stamps do not.
+
+    Inputs:
+      accl: (Na,4) [t, x, y, z]  accelerometer m/s^2 (native ACCL element order), MEDIA clock
+      grav: (Ng,4) [t, x, y, z]  gravity unit vector (native GRAV element order), MEDIA clock
+      cori: (Nc,5) [t, w, x, y, z] camera-orientation quaternion, MEDIA clock
+      gps_t, gps_x, gps_y: GPS trajectory time (TELEMETRY axis) + local-metre east/north
       gps_speed: GPS speed (m/s) aligned to gps_t
       segment_bounds: optional list of (t_start, t_end) spans, one per chapter. CORI's world yaw
         resets each chapter, so the CORI-plane->ENU alignment MUST be fit independently per

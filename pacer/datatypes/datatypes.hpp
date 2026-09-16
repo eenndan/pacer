@@ -48,7 +48,10 @@ struct IMUSample {
 };
 
 // One orientation quaternion — CORI (camera orientation), components w,x,y,z.
-// `time` is media-clock seconds, matching IMUSample / GPS.
+// `time` is media-clock seconds, the same basis as IMUSample and as the raw
+// GPS payload SPANS. It is NOT the basis the studio's GPS trace ends up on:
+// studio/load.py re-times every fix on the GPS9 true clock, which runs ~27 ppm
+// slower than this one (studio/media_clock.py is the map between them).
 struct QuatSample {
   double w = 1, x = 0, y = 0, z = 0;
   double time = 0;

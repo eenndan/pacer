@@ -198,7 +198,8 @@ class ProvenancePanel(QDialog):
 
         # 3. THE WINDOW AND N — the two facts a number is meaningless without.
         column.addWidget(_section("MEASURED OVER"))
-        axis = "media-clock seconds" if p.window.kind == "time" else "lap odometer metres"
+        axis = ("telemetry seconds (GPS9 true clock)" if p.window.kind == "time"
+                else "lap odometer metres")
         column.addWidget(_mono(f"{axis}   {p.window.label()}"))
         column.addWidget(_mono(f"N = {p.n} raw GPS fixes in that window"))
         if p.source:

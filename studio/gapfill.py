@@ -7,8 +7,9 @@ across the hole instead of following the track. The track is the SAME on every l
 real corner shape is recoverable from the OTHER laps that drove that section cleanly.
 
 This module is PURE PYTHON + numpy. It knows nothing about `pacer`: it operates on the
-per-lap (xs, ys, times) arrays that `session.py` already caches (local metres + media-clock
-seconds). It NEVER touches the analysis pipeline — `session.delta`, `lap_sector_splits`,
+per-lap (xs, ys, times) arrays that `session.py` already caches (local metres + telemetry
+(GPS9 true-clock) seconds — NOT the media clock; see `Session.media_time`). It NEVER touches
+the analysis pipeline — `session.delta`, `lap_sector_splits`,
 `cum_distances`, `valid_lap_ids` are all derived from the unchanged kept-point arrays. The
 output here is used ONLY to draw measured-vs-inferred segments on the map.
 
@@ -171,7 +172,8 @@ def reconstruct_lap(xs, ys, times, donors,
 
     Parameters
     ----------
-    xs, ys, times : arrays of the lap's KEPT points (local metres + media-clock seconds).
+    xs, ys, times : arrays of the lap's KEPT points (local metres + telemetry (GPS9
+        true-clock) seconds — the axis every lap time is on, not the media clock).
     donors : ordered list of candidate fill sources, each a dict
         {"xy": (M,2) array, "name": str, "is_reference": bool}. Cross-lap donors come first;
         the georeferenced reference centerline (if any) comes LAST so borrow is always
