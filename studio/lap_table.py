@@ -825,8 +825,21 @@ class _ExcludedStrip(QWidget):
         super().mousePressEvent(event)
 
 
+def cap_notice(kept: list[int], requested: int, *, fastest: bool = True) -> str:
+    """The one sentence that says a selection was trimmed to MAX_COMPARE_LAPS: the cap, how many
+    were asked for, and WHICH laps stayed, by their displayed (1-based) numbers. `fastest` is False
+    only for a session with no lap_time, where the trim is a head slice."""
+    which = "fastest" if fastest else "first"
+    return (f"The charts overlay at most {MAX_COMPARE_LAPS} laps — showing the {len(kept)} "
+            f"{which} of {requested} selected: laps {', '.join(lap_label(i) for i in kept)}")
+
+
 class LapTable(QWidget):
     laps_selected = Signal(object)  # list[int]
+    # U2: emitted with `cap_notice` when a selection was TRIMMED. Deselecting the excess rows was
+    # the only sign, and measured on both D24 recordings a Select All over 38 / 65 laps kept 6 with
+    # nothing said anywhere; CentralView forwards it to the window's status bar.
+    selection_capped = Signal(str)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1734,6 +1747,8 @@ class LapTable(QWidget):
             # Re-apply the trimmed selection so the deselected rows visibly clear (no silent
             # chart-side drop). select() blocks signals, so re-emit the capped set ourselves.
             self.select(capped)
+            self.selection_capped.emit(cap_notice(
+                capped, len(ids), fastest=callable(getattr(self.session, "lap_time", None))))
         self.laps_selected.emit(capped)
 
 
