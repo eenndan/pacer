@@ -127,6 +127,10 @@ class Command(NamedTuple):
 
 COMMANDS: list[Command] = [
     Command("File", QKeySequence.StandardKey.Open, "Open a recording"),
+    # ⌘L — File ▸ Library…, the front door to everything analysed before today. `run` stays None
+    # for the same reason the row above it does: the palette harvests the menu action itself, with
+    # the accelerator Qt paints for it, so a `run` here would list the Library twice.
+    Command("File", QKeySequence("Ctrl+L"), "Open the session library"),
     Command("Playback", "Space", "Play / pause the video", run="toggle_playback"),
     Command("Playback", "M", "Mute / unmute", run="toggle_mute"),
     # Slow motion, the most-asked-for thing this transport did not do: inputs happen faster than

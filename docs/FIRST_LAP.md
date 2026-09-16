@@ -71,7 +71,7 @@ divider between them drags.
 ## 4 · See where the time goes (the coaching)
 
 The **Coaching** tab (press **4**; the same rows in a resizable window under **Coaching ▸
-Opportunities…**) ranks your corners by **time lost vs your best**, taken as the *median* over
+Opportunities**) ranks your corners by **time lost vs your best**, taken as the *median* over
 your clean laps, each with a **reason** (apex speed, braking, coasting, or line) and a **±σ**
 consistency badge — one row telling you *how much* time and *how repeatable* it is. It does not
 follow your lap selection; the **Corners** tab is the per-lap view. Braking-point hints
@@ -91,7 +91,7 @@ same track — yours from last month, or a friend's GoPro file.
 
 ## 6 · Come back faster
 
-Every session lands in the **Session Library** (**File ▸ Library…**), which charts your **personal-
+Every session lands in the **Session Library** (**File ▸ Library…**, or **⌘L**), which charts your **personal-
 best progression per track** over time. Beat your previous best on a track and Pacer says so.
 
 ---

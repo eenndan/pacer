@@ -19,6 +19,26 @@ one ordinary ``Save as track…`` over a half-written file emptied a three-circu
     copied to ``tracks.json.bak`` (``_backup_unsafe``), so nothing is ever silently lost. Ask
     ``backup_pending()`` BEFORE the write to also TELL the user it happened.
 
+The two DELIBERATE destructive acts — ``rename_track`` and ``remove_track``, the editing half of
+``Save as track…`` — are held to the same rule and then some: each copies the file to that same
+``tracks.json.bak`` FIRST (``_copy_to_backup``), and ``restore`` puts it back as a reversible swap,
+exactly as ``library.clear``/``restore`` and ``session_record.remove_and_save``/``restore`` do for
+their own stores. Both REFUSE rather than write a silently wrong answer: a blank name (which would
+make the circuit vanish on the next read), a name already in use (the merged view is name-keyed, so
+one entry would swallow another), and a BUILT-IN the user's file does not hold — the seed is layered
+under that file, so "deleting" it would drop nothing and report success while the circuit came back
+on the next launch, and "renaming" it would fork one place into two circuits.
+
+WHAT A DELETE DOES NOT TOUCH: the recordings. A track NAME is an identity key in three other stores
+— the library index files a circuit's personal-best history under it, the focus list is keyed by it,
+and a session record stamps it as provenance — but all three match on the string they already hold
+rather than looking a circuit up here, so a deleted name is a dangling NAME and never a dangling
+pointer. Every analysed session keeps the name it was driven under; a delete removes future
+auto-detection and nothing else. A RENAME is the opposite case and the dangerous one: it must be
+carried into all three, or the next recording auto-detects the new name and one circuit ends up with
+two half-histories. Each of those stores has its own ``rename_track``, and the app composes the four
+(``StudioWindow._rename_track``).
+
 A track entry is location-anchored: its timing lines are stored in lat/lon so they map onto ANY
 recording of that circuit (via the recording's own CoordinateSystem), and it carries a detection
 centroid + bbox so a fresh recording auto-detects the track on load.
@@ -100,6 +120,42 @@ class TrackNameTaken(ValueError):
         super().__init__(
             f"a different circuit is already saved as {existing['name']!r} "
             f"({distance_m / 1000:.1f} km away) — save this one under another name")
+
+
+class TrackNameInUse(ValueError):
+    """Raised by ``rename_track`` when the NEW name already names a saved circuit.
+
+    DIFFERENT RULE FROM ``TrackNameTaken``, on purpose. That one is about re-saving a recording's
+    lines under a name anchored somewhere else, and it deliberately allows the same-place case (that
+    is the documented refine flow). A RENAME onto an existing name is refused at ANY distance: the
+    merged view (``all_tracks``) is keyed by name, so two entries sharing one means the second
+    silently swallows the first, and renaming is never the gesture that should merge two circuits.
+
+    A ValueError subclass for the same reason ``TrackNameTaken`` is: every caller of this module
+    already guards ValueError, so an unaware one refuses the write and reports instead."""
+
+    def __init__(self, name: str):
+        self.name = str(name)
+        super().__init__(f"a track called {self.name!r} is already saved — pick another name")
+
+
+class BuiltInTrack(ValueError):
+    """Raised when a rename or delete targets a BUILT-IN (``SEED``) circuit the user's own file does
+    not hold a copy of. The seed is layered UNDER the user DB by ``all_tracks``, so editing the user
+    file cannot reach it, and doing it anyway gives a silently wrong answer either way:
+
+      * a DELETE would drop nothing, report success, and the circuit would be back on next launch;
+      * a RENAME would write a SECOND entry at the same anchor under the new name while the built-in
+        kept the old one — two circuits for one place, detection choosing between them by distance.
+
+    So the act is refused and named instead. Refining a built-in (``Save as track…`` at that
+    location) creates a user entry that CAN be renamed or deleted; deleting THAT one reverts to the
+    shipped line rather than removing the circuit — see ``reverts_to_builtin``."""
+
+    def __init__(self, name: str):
+        self.name = str(name)
+        super().__init__(
+            f"{self.name!r} is one of pacer's built-in tracks, so it cannot be renamed or deleted")
 
 
 def _app_support_dir() -> str:
@@ -347,6 +403,34 @@ def backup_pending(path: str | None = None) -> str | None:
     return path + ".bak" if os.path.exists(path) and _lossy_to_overwrite(path) else None
 
 
+def backup_path(path: str | None = None) -> str:
+    """Absolute path of the DB's backup sidecar (``tracks.json.bak``) — the ONE slot every backup
+    here writes and ``restore`` reads, so "where the copy went" is stated in one place. `path`
+    defaults to ``db_path()``. Same shape as ``library.backup_path`` /
+    ``session_record.backup_path``."""
+    if path is None:
+        path = db_path()
+    return path + ".bak"
+
+
+def _copy_to_backup(path: str, what: str) -> bool:
+    """Copy `path` to its ``.bak`` sidecar, best-effort; True on success.
+
+    Shared by all three reasons a backup is taken here — an un-round-trippable file about to be
+    overwritten (``_backup_unsafe``), a DELETE and a RENAME — so all three land in the same slot
+    with the same guarantees: ``shutil.copy2`` (mtime preserved), one slot overwritten rather than
+    accumulating, and ANY failure logged instead of raised (a backup must never be the reason a
+    write the user asked for doesn't happen). Mirrors ``library._copy_to_backup`` /
+    ``session_record._copy_to_backup``."""
+    try:
+        shutil.copy2(path, backup_path(path))
+    except OSError as exc:
+        _log.warning("track_db: could not back up %s before overwrite (%r)", path, exc)
+        return False
+    _log.warning("track_db: backed up %s to %s", what, os.path.basename(backup_path(path)))
+    return True
+
+
 def _backup_unsafe(path: str) -> str | None:
     """Before ``save`` OVERWRITES an on-disk DB this build could not round-trip in full, copy it to
     a ``<path>.bak`` sidecar so the user's original circuits are never silently lost; returns the
@@ -355,21 +439,15 @@ def _backup_unsafe(path: str) -> str | None:
     half-written file destroyed three circuits' start/finish lines with no copy and no warning.
 
     Best-effort, and it MUST NOT block the write: a failed copy only logs (a save that keeps the
-    app usable beats refusing to save because the backup slot is unwritable). ``shutil.copy2``
-    preserves mtime; the ``.bak`` is overwritten each time, so it mirrors the last replaced-yet-
-    unreadable file rather than accumulating — and a healthy file never touches it, so the copy
-    of a bad file survives every later save."""
+    app usable beats refusing to save because the backup slot is unwritable). The ``.bak`` is
+    overwritten each time, so it mirrors the last replaced-yet-unreadable file rather than
+    accumulating — and a healthy file never touches it, so the copy of a bad file survives every
+    later save."""
     if not os.path.exists(path) or not _lossy_to_overwrite(path):
         return None
-    dest = path + ".bak"
-    try:
-        shutil.copy2(path, dest)
-    except OSError as exc:
-        _log.warning("track_db: could not back up %s before overwrite (%r)", path, exc)
+    if not _copy_to_backup(path, f"{os.path.basename(path)} (could not be read in full)"):
         return None
-    _log.warning("track_db: %s could not be read in full — copied it to %s before overwriting",
-                 os.path.basename(path), os.path.basename(dest))
-    return dest
+    return backup_path(path)
 
 
 def save(db: dict, path: str | None = None) -> None:
@@ -406,6 +484,182 @@ def upsert(db: dict, entry: dict) -> dict:
             return db
     tracks.append(norm)
     return db
+
+
+def is_builtin(name: str) -> bool:
+    """True when `name` is one of the built-in ``SEED`` circuits — the ones that ship with the app
+    and are layered UNDER the user's own file by ``all_tracks``."""
+    return any(e["name"] == name for e in SEED)
+
+
+def user_names(path: str | None = None) -> list[str]:
+    """The circuit names the USER's own file holds, in stored order. Deliberately NOT the merged
+    view: the seed is not in that file, so this is what a rename or a delete can actually reach."""
+    return [e["name"] for e in load(path).get("tracks", [])]
+
+
+def reverts_to_builtin(name: str, path: str | None = None) -> dict | None:
+    """The SEED entry that would come BACK if the user's `name` entry were deleted, or None when a
+    delete simply removes the circuit.
+
+    The ask-before question a confirm uses — the same idiom as ``replaces`` and ``backup_pending`` —
+    so "the circuit is gone" and "your refinements are gone and the shipped line is back" are not
+    reported to the user as the same act."""
+    if not is_builtin(name) or name not in user_names(path):
+        return None
+    return next(_norm_entry(e) for e in SEED if e["name"] == name)
+
+
+def remove(db: dict, name: str) -> bool:
+    """Drop the track called `name` from `db` (mutates the tracks list); True if one was removed.
+    The pure half — ``remove_track`` owns the guards, the backup and the write. Mirrors
+    ``library.remove``."""
+    tracks = db.setdefault("tracks", [])
+    for i, e in enumerate(tracks):
+        if e.get("name") == name:
+            del tracks[i]
+            return True
+    return False
+
+
+def remove_track(name: str, path: str | None = None) -> dict:
+    """Delete the saved circuit `name`, KEEPING A COPY, and return the new DB.
+
+    A saved circuit is DURABLE HISTORY — a start/finish line the user placed by hand that every
+    future recording at that location inherits — so this is the most destructive act this store
+    offers, and it takes the precaution its two peer stores take for theirs (``library.clear``,
+    ``session_record.remove_and_save``): the file is copied to ``tracks.json.bak`` FIRST, and
+    ``restore`` puts it back as a reversible swap.
+
+    REFUSES (``BuiltInTrack``) to "delete" a built-in the user file does not hold — that would drop
+    nothing, report success, and the circuit would be back on the next launch.
+
+    WHAT IT DOES NOT TOUCH, DELIBERATELY: the recordings. The library index keys a circuit's
+    personal-best history by track NAME, and every analysed session keeps the name it was driven
+    under, so deleting a circuit removes future AUTO-DETECTION and nothing else. No library row, no
+    focus list, no session record and no file beside the user's footage is read or written here — a
+    dangling name is not a dangling pointer, because every one of those stores matches on the string
+    it already holds rather than looking the circuit up here. A no-op delete (no such track) writes
+    nothing and takes no backup, so browsing cannot churn the one backup slot out from under a copy
+    that matters. Raises OSError on an unwritable destination."""
+    if path is None:
+        path = db_path()
+    if is_builtin(name) and name not in user_names(path):
+        raise BuiltInTrack(name)
+    db = load(path)
+    if not remove(db, name):
+        return db
+    if os.path.exists(path):
+        _copy_to_backup(path, "the track database before deleting a circuit")
+    save(db, path)
+    return db
+
+
+def rename(db: dict, old: str, new: str) -> bool:
+    """Rename the track `old` to `new` in `db`, keeping its POSITION, its lines and its anchor
+    (mutates); True if one was renamed. The pure half — ``rename_track`` owns the guards, the backup
+    and the write."""
+    for e in db.setdefault("tracks", []):
+        if e.get("name") == old:
+            e["name"] = str(new)
+            return True
+    return False
+
+
+def rename_track(old: str, new: str, path: str | None = None) -> dict:
+    """Rename the saved circuit `old` to `new`, KEEPING A COPY, and return the new DB. The start
+    line, the sector lines and the detection anchor are untouched — only the name moves.
+
+    REFUSES, with a ValueError every caller already guards, rather than writing a wrong answer:
+
+      * a BLANK name — ``_valid_entry`` rejects an empty name, so writing one would make the circuit
+        VANISH the next time the file is read;
+      * a name ALREADY IN USE (``TrackNameInUse``) — the merged view is name-keyed, so the renamed
+        entry would silently swallow the circuit already standing there;
+      * a BUILT-IN the user file does not hold (``BuiltInTrack``) — the seed would keep the old name
+        while this write added a second circuit at the same anchor;
+      * a circuit that is NOT THERE — renaming an absent track would invent one.
+
+    THE NAME IS AN IDENTITY KEY ELSEWHERE, AND THIS FUNCTION DOES NOT OWN THOSE STORES. The library
+    index (personal-best history), the per-track focus list and the session record's provenance
+    stamp all match a circuit by NAME, so a rename that moved only this file would split a circuit's
+    history in two the moment the next recording auto-detected the new name — past sessions under
+    the old name, future ones under the new, neither complete. Each of those stores has its own
+    ``rename_track``; the app composes the four into one gesture (``StudioWindow._rename_track``),
+    the same way it composes "forget this recording" across the index, the sidecar, the record and
+    the marks."""
+    if path is None:
+        path = db_path()
+    new = (new or "").strip()
+    if not new:
+        raise ValueError("a track name cannot be blank")
+    old = str(old)
+    if new == old:
+        return load(path)
+    if is_builtin(old) and old not in user_names(path):
+        raise BuiltInTrack(old)
+    if any(e["name"] == new for e in all_tracks(path)):
+        raise TrackNameInUse(new)
+    db = load(path)
+    if not rename(db, old, new):
+        raise ValueError(f"no saved track called {old!r}")
+    if os.path.exists(path):
+        _copy_to_backup(path, "the track database before renaming a circuit")
+    save(db, path)
+    return db
+
+
+def backup_summary(path: str | None = None) -> dict | None:
+    """What the ``.bak`` sidecar holds, or None when there is nothing worth restoring (no backup, an
+    unreadable one, or one with zero circuits)::
+
+        {"path": <the .bak path>, "tracks": <int >= 1>, "mtime": <float POSIX seconds | None>}
+
+    The read half of the backup slot: a caller shows this in its confirm so the user sees BOTH sides
+    of a restore before it happens. Kept format-free (a raw mtime, not a date string) so this module
+    stays display-agnostic — the same shape ``library.backup_summary`` returns."""
+    bak = backup_path(path)
+    if not os.path.exists(bak):
+        return None
+    tracks = load(bak).get("tracks", [])
+    if not tracks:
+        return None
+    try:
+        mtime = os.path.getmtime(bak)
+    except OSError:
+        mtime = None
+    return {"path": bak, "tracks": len(tracks), "mtime": mtime}
+
+
+def restore(path: str | None = None) -> dict:
+    """Put the ``.bak`` backup back as the live track DB, and return the result.
+
+    A restore is a SWAP: the DB it replaces becomes the new ``.bak``, so restoring is itself
+    reversible and a restore fired at the wrong moment can be taken back exactly the way it was
+    made. REFUSES to act — returns the current DB unchanged — when the backup is missing, unreadable
+    or holds no circuits: replacing a live DB with nothing would be the very data loss this exists
+    to undo. `path` defaults to ``db_path()``; raises OSError on an unwritable destination (the swap
+    half is best-effort and only logs). Mirrors ``library.restore`` / ``session_record.restore``."""
+    if path is None:
+        path = db_path()
+    db = load(backup_path(path))
+    if not db["tracks"]:
+        return load(path)
+    swap = path + ".swap"
+    kept = False
+    if os.path.exists(path):
+        try:
+            shutil.copy2(path, swap)
+            kept = True
+        except OSError as exc:
+            _log.warning("track_db: could not keep the replaced DB before restoring (%r)", exc)
+    save(db, path)
+    if kept:
+        try:
+            os.replace(swap, backup_path(path))
+        except OSError as exc:
+            _log.warning("track_db: restored the DB but could not swap the backup (%r)", exc)
+    return load(path)
 
 
 def make_entry(name: str, centroid, start, sectors, bbox=None) -> dict:

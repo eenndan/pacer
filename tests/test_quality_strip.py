@@ -316,7 +316,7 @@ class _Check:
         return abs(self.loop_ratio_gyro - 1.0) * 100.0
 
 
-def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None):
+def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None):
     from studio.stats_panel import StatsView
 
     class _S:
@@ -331,7 +331,7 @@ def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None):
 
         timing_verified = True
         track_name = "Test Circuit"
-        timing_quality = data_quality.TimingQuality()
+        timing_quality = quality if quality is not None else data_quality.TimingQuality()
         has_gmeter = False
         quality_timeline = timeline if timeline is not None else data_quality.empty_timeline()
 
@@ -353,6 +353,39 @@ def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None):
     view.trust_card.set_rows = lambda rows: captured.setdefault("rows", list(rows))
     StatsView._refresh_trust(view, _S())
     return captured["rows"], view.trust_card.toolTip()
+
+
+def test_a_recording_with_no_gps_is_not_sold_as_the_true_clock():
+    """The card's Timing row, on a recording that carries no GPS at all.
+
+    Driven through the REAL `_refresh_trust`, because the defect was in the row it builds: the
+    clock label was a two-way choice — media-clock fallback, else "GPS9 true clock" — so a verdict
+    that was NEITHER fell through to the flattering branch. Measured end to end on the bundled
+    `karma.mp4` (0 GPS fixes) before the fix, the card printed:
+
+        Timing: GPS9 true clock · 0% of moving fixes rejected
+
+    Both halves are wrong in the same direction, which is why this asserts the row is a CAVEAT as
+    well as re-worded: it floats to the top of the card with the other trust-breaking facts."""
+    no_gps = data_quality.TimingQuality(clock=data_quality.NO_GPS_TRACE)
+    rows, _tip = _trust_rows(None, quality=no_gps)
+    row = next((r for r in rows if r[0] == "Timing"), None)
+    assert row is not None, [r[0] for r in rows]
+    term, value, caveat = row
+    assert "GPS9" not in value, f"no fix arrived; the true clock cannot be claimed: {value!r}"
+    assert "no gps" in value.lower(), value
+    assert caveat is True, "a recording that cannot be timed is a trust-breaking fact"
+    # The rejected-fix percentage is meaningless with no fixes to reject — it must not be printed
+    # as a reassuring 0 %.
+    assert "0% of moving fixes rejected" not in value, value
+
+    # THE TWO REAL CLOCKS ARE UNTOUCHED — this must not become a blanket re-word.
+    good = next(r for r in _trust_rows(None)[0] if r[0] == "Timing")
+    assert "GPS9 true clock" in good[1] and good[2] is False, good
+    media = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    est = next(r for r in _trust_rows(None, quality=media)[0] if r[0] == "Timing")
+    assert "video clock (estimated)" in est[1], est
+    print("test_a_recording_with_no_gps_is_not_sold_as_the_true_clock OK")
 
 
 def test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors():
@@ -493,6 +526,7 @@ def _main():
     test_a_camera_that_reports_no_quality_is_never_painted_green()
     test_every_strip_colour_clears_wcag_and_the_deuteranopia_ramp_in_both_palettes()
     test_the_strip_follows_the_colourblind_palette()
+    test_a_recording_with_no_gps_is_not_sold_as_the_true_clock()
     test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors()
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()
     test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with()

@@ -396,6 +396,37 @@ def set_for_track(store: dict, track: str, items: list[FocusItem]) -> dict:
     return store
 
 
+def rename_track(store: dict, old: str, new: str) -> bool:
+    """Move the focus list stored for `old` onto `new` (mutates). True when a list moved.
+
+    The list is keyed by track NAME (``for_track`` / ``set_for_track``), so a circuit renamed in the
+    track database without this leaves the corners the driver is working on UNREACHABLE: the next
+    session at that circuit detects the new name and finds no list, and the training loop silently
+    restarts. The items themselves are untouched — each still carries the baseline it was promoted
+    against, and the whole point of that baseline is that it survives.
+
+    If a list already stands under `new` — only reachable when that name belonged to a circuit since
+    deleted — the MOVED list wins, because it is the one belonging to a circuit that still exists,
+    and the stranded one is dropped rather than silently merged into it."""
+    lists = store.setdefault("lists", [])
+    moving = next((e for e in lists if e.get("track") == old), None)
+    if moving is None:
+        return False
+    lists[:] = [e for e in lists if e.get("track") != new or e is moving]
+    moving["track"] = str(new)
+    return True
+
+
+def rename_track_and_save(old: str, new: str, path: str | None = None) -> bool:
+    """Load, move `old`'s focus list onto `new`, write back atomically. True when one moved — and
+    only then is anything written, so renaming a circuit with no focus list cannot churn the file."""
+    store = load(path)
+    moved = rename_track(store, old, new)
+    if moved:
+        save(store, path)
+    return moved
+
+
 def save_for_track(track: str, items: list[FocusItem], path: str | None = None) -> dict:
     """Load, replace `track`'s list, write back atomically, return the new store — the one call the
     app makes when the driver promotes or drops a corner."""
