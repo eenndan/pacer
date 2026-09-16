@@ -26,6 +26,7 @@ Run: python tests/test_export_video.py
 import os
 import subprocess
 import sys
+import time
 import types
 
 import numpy as np
@@ -581,12 +582,21 @@ class _FakeProc:
     """A stand-in subprocess.Popen: the decoder serves `nframes` of zeroed rgb24 bytes then EOF;
     the encoder swallows everything written to its stdin. communicate() returns ("", "")."""
 
-    def __init__(self, frame_bytes=0, nframes=0, is_decoder=False):
+    def __init__(self, frame_bytes=0, nframes=0, is_decoder=False,
+                 frame_delay=0.0, slow_at=None, slow_delay=0.0):
         self.returncode = 0
         self.stdout = None
         self.stdin = None
         self.killed = False
         self._is_decoder = is_decoder
+        # A decoder that takes REAL TIME to hand over a frame, so a test can exercise the stall
+        # watchdog against a render that is slow rather than wedged. `slow_at` makes exactly one
+        # frame take `slow_delay` — the shape of a real hiccup (the worst single gap measured on
+        # D24 was 0.783 s against a 0.018-0.064 s median).
+        self._nframes = nframes
+        self._frame_delay = frame_delay
+        self._slow_at = slow_at
+        self._slow_delay = slow_delay
         if is_decoder:
             self.stdout = types.SimpleNamespace(
                 _left=nframes, _fb=frame_bytes,
@@ -599,9 +609,18 @@ class _FakeProc:
 
     def _read(self, n):
         so = self.stdout
-        if so._left <= 0:
+        # A KILLED DECODER STOPS PRODUCING, and without this a mocked render cannot observe an
+        # abort at all: the supervisor's `kill()` only set a flag here, the fake went on serving
+        # frames, the loop never took the short-read branch, and `_raise_if_aborted` — the one
+        # place a stall becomes a typed error — was never reached. The render simply finished.
+        # Real ffmpeg dies and its pipe reads EOF, which is what this reproduces.
+        if self.killed or so._left <= 0:
             return b""
+        index = self._nframes - so._left
         so._left -= 1
+        delay = self._slow_delay if index == self._slow_at else self._frame_delay
+        if delay:
+            time.sleep(delay)
         return bytes(so._fb)
 
     def communicate(self, *a, **k):
@@ -614,15 +633,22 @@ class _FakeProc:
         self.killed = True
 
 
-def _patch_pipeline(monkeypatch_targets, frame_bytes, nframes):
+def _patch_pipeline(monkeypatch_targets, frame_bytes, nframes,
+                    frame_delay=0.0, slow_at=None, slow_delay=0.0):
     """Install fake decode/encode Popen + a fake probe so a Renderer runs with no real ffmpeg.
-    Returns the dict so the caller can inspect the encoder's captured bytes."""
+    Returns the dict so the caller can inspect the encoder's captured bytes.
+
+    `frame_delay` / `slow_at` / `slow_delay` make the fake DECODER take real time per frame (see
+    `_FakeProc`), which is what lets the stall-watchdog tests drive a slow-but-healthy render."""
     state = {}
 
     def fake_popen(cmd, **kw):
         # the decode cmd ends with pipe:1, the encode cmd starts reading pipe:0
         is_decoder = cmd[-1] == "pipe:1"
-        proc = _FakeProc(frame_bytes=frame_bytes, nframes=nframes, is_decoder=is_decoder)
+        proc = _FakeProc(frame_bytes=frame_bytes, nframes=nframes, is_decoder=is_decoder,
+                         frame_delay=frame_delay if is_decoder else 0.0,
+                         slow_at=slow_at if is_decoder else None,
+                         slow_delay=slow_delay)
         state["decoder" if is_decoder else "encoder"] = proc
         return proc
 
@@ -2265,6 +2291,183 @@ def test_a_decode_that_stops_well_short_raises_instead_of_returning(monkeypatch_
     except ev.TruncatedRenderError as exc:
         assert "40 of 60 frames" in str(exc), str(exc)
     print("ok short decode: refused with the counts named")
+
+
+# ----------------------------------- X1: what the bar means, and a watchdog that scales
+def _mini_spec(**cfg_kw):
+    """The spec every X1 mocked render below uses: a 1.0 s window which, at the fake probe's 60 fps
+    source with `fps_cap` off, plans exactly 60 frames.
+
+    The frame COUNT is deliberately not a parameter. A spec that plans more frames than the fake
+    decoder serves raises `TruncatedRenderError` — correctly, because that IS a clip that ends
+    early — and that is a different failure from the one each test below is about."""
+    s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
+    cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", workers=1, **cfg_kw)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
+    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=1.0,
+                         config=cfg)
+    return s, spec, out_w * out_h * 3
+
+
+def test_the_stall_limit_is_a_floor_that_scales_with_the_renders_own_pace(monkeypatch_restore):
+    """The watchdog's limit is `max(floor, multiple x this render's own mean cost per frame)`.
+
+    A CONSTANT IS WRONG AT BOTH ENDS, which is the whole point: large enough never to kill a
+    legitimately slow export, it is far too slack to catch a wedge in a fast one. Measured over 11
+    real D24 exports (1080p/2160p x VideoToolbox/libx264 x interior/seam laps) the worst gap
+    between consecutive frames was 0.783 s and the per-frame median ran 0.018-0.064 s — so the
+    shipped 30 s was ~38x the worst real stall, and at every one of those configurations the 10 s
+    floor governs while the multiple only takes over past ~0.167 s per frame.
+
+    Asserted on the pure rule, at the boundaries a real render cannot be steered to."""
+    s, spec, fb = _mini_spec(watchdog_timeout=10.0, watchdog_frame_multiple=60.0)
+    _patch_pipeline(None, fb, nframes=60)
+    r = ev.Renderer(s, spec)
+
+    # Before the first frame there is no rate to measure, so the floor stands — and it is the floor
+    # that has to cover the ffmpeg spawn and the seek (worst measured: 0.674 s).
+    r._render_t0, r._last_progress_t, r._i = 100.0, 100.0, 0
+    assert r._stall_limit() == 10.0, r._stall_limit()
+
+    # A fast render (0.02 s/frame, the 1080p VideoToolbox median): 60 x 0.02 = 1.2 s < the floor.
+    r._render_t0, r._last_progress_t, r._i = 100.0, 102.0, 100
+    assert r._stall_limit() == 10.0, r._stall_limit()
+
+    # A slow one (0.5 s/frame — 7.8x the slowest configuration measured): the render's own pace
+    # raises its own limit, which is what stops a long export being killed for being long.
+    r._render_t0, r._last_progress_t, r._i = 100.0, 150.0, 100
+    assert abs(r._stall_limit() - 30.0) < 1e-9, r._stall_limit()
+
+    # Either knob at zero is the documented off switch (cancel still works).
+    r._watchdog_multiple = 0.0
+    assert r._stall_limit() == 10.0, r._stall_limit()
+    r._watchdog_timeout = 0.0
+    assert r._stall_limit() == 0.0, r._stall_limit()
+    print("ok stall limit: a floor that scales with the render's own pace")
+
+
+def test_a_slow_but_healthy_render_survives_a_stall_guard_a_constant_would_trip(monkeypatch_restore):
+    """REGRESSION — a render that is merely SLOW must not be aborted, and the INVERSE CONTROL runs
+    first so the guard cannot be vacuous.
+
+    The fake decoder hands over a frame every 0.05 s and takes 1.5 s for one of them — a hiccup of
+    the shape measured on real media (worst single gap on D24: 0.783 s against a 0.018 s median),
+    enlarged so the control is DETERMINISTIC: the supervisor polls every 0.5 s, so a stall only
+    reliably trips a limit L when it lasts longer than the poll interval plus L. At 0.6 s and
+    L=0.25 s the poll could straddle the hiccup and miss it, which it did.
+
+    With a CONSTANT 0.25 s limit the hiccup is indistinguishable from a wedge and the export dies;
+    with the limit scaled to the render's own pace (60 x ~0.05 s = ~3.0 s, twice the hiccup) it is
+    plainly just a slow frame. Neither run can false-trip on the ordinary frames, which are only
+    0.05 s apart.
+
+    It asserts the failure DIRECTLY in both directions rather than relying on a timeout, so a
+    broken subject fails fast and says what broke instead of hanging."""
+    slow = dict(nframes=60, frame_delay=0.05, slow_at=40, slow_delay=1.5)
+
+    # --- INVERSE CONTROL: the old fixed-limit behaviour, reproduced by pinning the limit ---
+    s, spec, fb = _mini_spec(watchdog_timeout=0.25, watchdog_frame_multiple=60.0)
+    _patch_pipeline(None, fb, **slow)
+    fixed = ev.Renderer(s, spec)
+    fixed._stall_limit = lambda: 0.25         # what a constant watchdog does
+    raised = None
+    try:
+        fixed.run(chunk=1)
+    except BaseException as exc:  # noqa: BLE001
+        raised = exc
+    assert raised is not None, (
+        "the inverse control did not trip: a 1.5 s hiccup under a constant 0.25 s limit must be "
+        "killed, or this test proves nothing about the scaled limit below")
+    assert "stalled" in str(raised).lower(), str(raised)
+
+    # --- the shipped behaviour: the same render, the same hiccup, the same floor ---
+    s2, spec2, fb2 = _mini_spec(watchdog_timeout=0.25, watchdog_frame_multiple=60.0)
+    _patch_pipeline(None, fb2, **slow)
+    res = ev.Renderer(s2, spec2).run(chunk=1)
+    assert res.frames == 60, f"a slow but healthy render was cut short at {res.frames} of 60"
+    print("ok slow render: survives a hiccup a constant limit would have called a wedge")
+
+
+def test_the_bar_reaches_its_total_before_the_encoder_is_finalized(monkeypatch_restore):
+    """REGRESSION — every frame is written, and the file is not finished. The renderer must report
+    the completed count BEFORE it closes the encoder's stdin and waits for the trailer.
+
+    Measured on D24, that wait is 1.6-5.7 s — 12.1 % of one 2160p export's whole wall clock — and
+    nothing was reported across it. Worse, the last report before it was whatever the final CHUNK
+    boundary happened to be: 60 frames pumped 48 at a time reports 48 and then goes quiet, so a
+    real 2047-frame lap froze at 2016 (98.5 %) for the entire mux while the caption claimed about a
+    second was left. The bar must reach its own maximum when the last frame is written."""
+    s, spec, fb = _mini_spec()
+    _patch_pipeline(None, fb, nframes=60)
+    r = ev.Renderer(s, spec)
+    assert r.total_frames == 60
+    assert 60 % 48, "the point of this test is a total that is NOT a whole number of chunks"
+
+    seen = []
+    real_finish = r._finish
+    marks = {}
+
+    def spy_finish():
+        marks.setdefault("reports_before_finish", len(seen))
+        return real_finish()
+    r._finish = spy_finish
+    r.run(progress=lambda d, t: seen.append((d, t)), chunk=48)
+
+    before = seen[: marks["reports_before_finish"]]
+    assert before, "nothing at all was reported before the encoder was finalized"
+    assert (60, 60) in before, (
+        f"the bar never reached its total before the mux began: reports before finalize were "
+        f"{before} — a dialog frozen short of the end for the whole write")
+    assert before[-1] == (60, 60), (
+        f"the last thing said before the mux was {before[-1]}, not the completed count")
+    print(f"ok finalize: bar reaches 60 of 60 before the mux (reports before finalize: {before})")
+
+
+def test_the_single_lap_progress_fill_is_a_time_fraction(monkeypatch_restore):
+    """The burned single-lap fill means ELAPSED TIME, and this pins it so it cannot be swapped.
+
+    It is deliberately NOT the compare export's bar, which is a normalized DISTANCE (see
+    `export_compare.ComparePainter._paint_progress`): this fill sits under the lap CLOCK in the
+    same pill, so it has to agree with the number printed on top of it, while a compare frame has
+    two clocks and only the track position is shared. Over all 103 valid laps of both D24
+    recordings the two fractions differ by a median 3.47 % / 3.13 % of the bar and by up to 8.93 %
+    (0060 lap 20), and NEITHER ever steps backwards — two honest answers to two questions.
+
+    The lap below is built so the distinction is unmissable: the kart covers a quarter of the lap
+    in the first half of the LAP TIME and three quarters in the second, so at half time the time
+    fraction is 0.50 and the distance fraction is 0.25."""
+    class _Lap:
+        """Only what `_strip_runs` reads: the lap's window on the telemetry clock."""
+
+        @staticmethod
+        def lap_window(_lap_id):
+            return (100.0, 200.0)
+
+    def frac_at(t, started=True):
+        vals = ev.OverlayValues(t=t, lap_id=1, speed_kmh=None, delta_s=None, g=None,
+                                marker_index=None, lap_started=started, lap_finished=False)
+        runs = ev._strip_runs(_Lap(), vals, 100.0, False, "standard")
+        assert runs is not None
+        return runs[3]
+
+    assert frac_at(100.0) == 0.0
+    assert abs(frac_at(150.0) - 0.50) < 1e-9, frac_at(150.0)
+    assert abs(frac_at(175.0) - 0.75) < 1e-9, frac_at(175.0)
+    assert frac_at(200.0) == 1.0, "the fill must be full at the flag"
+
+    # Clamped at BOTH ends: a lead-in cannot drive it negative and a lead-out cannot overrun it.
+    assert frac_at(80.0, started=False) == 0.0, "the fill ran before the start line"
+    assert frac_at(260.0) == 1.0, "the fill overran the flag through the lead-out"
+
+    # Monotonic, which is the honesty claim that survives whatever it MEANS.
+    steps = [frac_at(t) for t in [100.0 + i * (100.0 / 120.0) for i in range(121)]]
+    assert all(b >= a for a, b in zip(steps, steps[1:], strict=False)), "the fill moved backwards"
+
+    # ...and it is emphatically not the distance fraction on this lap: a quarter of the distance is
+    # covered in the first half of the time, so the two differ by 25 points of the bar at half time.
+    assert abs(frac_at(150.0) - 0.25) > 0.2, (
+        "the fill tracks distance, not the clock printed on top of it")
+    print("ok single-lap fill: a clamped, monotonic TIME fraction")
 
 
 if __name__ == "__main__":
