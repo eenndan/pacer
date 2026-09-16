@@ -97,7 +97,8 @@ LapSeries = dict[int, tuple[np.ndarray, np.ndarray]]
 class LapCurve:
     """One lap's arc-length-aligned curves — the Δ baseline value object (F2). `dist` = per-lap
     odometer (m, monotonic), `elapsed` = seconds-from-lap-start, `speed` km/h, all index-aligned;
-    `times` = media-clock axis (for a cross-recording reference, which lives on no shared clock,
+    `times` = the TELEMETRY (GPS9 true-clock) axis (for a cross-recording reference, which lives
+    on no shared clock,
     `times` IS its 0-anchored `elapsed`). A baseline is just a `LapCurve`, so the local best lap
     and the cross-recording reference are the SAME type with no reference-vs-best branch. `total`
     = `float(dist[-1])`; callers guard `total <= 0` for a degenerate lap."""
@@ -330,7 +331,9 @@ class Session:
 
     def _build_gmeter(self, accl, grav, cori) -> None:
         """Precompute vehicle-frame g(t) from the already-read GoPro IMU (accl/grav/cori), aligned
-        to the session's smoothed GPS trace + media clock. Reports the ACCL-vs-GPS cross-check +
+        to the session's smoothed GPS trace. The trace is on the TELEMETRY axis and the IMU on the
+        media clock, and `gmeter.compute` joins them BY LABEL — measured right (#303), not an
+        oversight; its docstring carries the numbers. Reports the ACCL-vs-GPS cross-check +
         driving thresholds at load; degrades to an empty meter if the transform fails (additive)."""
         try:
             # Per-chapter alignment spans: CORI is referenced to each chapter's own capture start,
@@ -1004,7 +1007,7 @@ class Session:
         return ref.lap_id if ref is not None else None
 
     def _reference_progress_at(self, t_ref: float) -> tuple[float, float] | None:
-        """The reference lap's progress at the reference recording's GLOBAL media-clock time
+        """The reference lap's progress at the reference recording's GLOBAL TELEMETRY time
         `t_ref`, returned as `(s, elapsed_into_lap)`:
           * `s` ∈ [0, 1] — the reference lap's NORMALIZED track fraction, clamped to the window;
           * `elapsed_into_lap` — the reference's own time-into-lap (s), clamped to [0, total_time].
@@ -1037,7 +1040,7 @@ class Session:
 
     def reference_overlay_index_at_progress(self, t_ref: float) -> int | None:
         """The index into `reference_overlay_xy()` of the reference kart's position at the reference
-        recording's GLOBAL media-clock time `t_ref` — for the F4 map ghost in cross-recording
+        recording's GLOBAL TELEMETRY time `t_ref` — for the F4 map ghost in cross-recording
         compare. The overlay ring is the reference racing line ALREADY fit into THIS session's local
         frame (cross_reference), sampled along its own arc length; the reference lap's normalized
         progress at `t_ref` (distance-fraction, via `_reference_progress_at`) maps onto it directly.
@@ -1084,7 +1087,7 @@ class Session:
 
     def _lap_curve(self, lap_id: int) -> LapCurve | None:
         """The `LapCurve` for `lap_id` (None if degenerate, <2 points). Built from the cached
-        `_lap_time_dist_elapsed` triple — `times` is the media-clock axis, `dist`/`elapsed` the
+        `_lap_time_dist_elapsed` triple — `times` is the TELEMETRY axis, `dist`/`elapsed` the
         per-lap odometer + seconds-from-start. `speed` is left empty: the per-tick Δ family aligns
         only on dist/elapsed/times (the speed series is `delta()`'s own grid build)."""
         td = self._lap_time_dist_elapsed(lap_id)
@@ -1565,10 +1568,17 @@ class Session:
     # ------------------------------------------------------------- lap access
     def _lap_columns(self, lap_id: int) -> LapColumns:
         """Cached per-lap (times, xs, ys, full_speed_mps, cum_distances) numpy arrays, fetched in
-        a SINGLE pacer.Laps.lap_columns crossing: local metres + media-clock seconds + raw 3D
-        speed (m/s) + the lap's gap-aware odometer, all index-aligned and the SAME length (the
-        materialized lap: interpolated start crossing + interior points + interpolated finish).
-        Cleared on re-segment."""
+        a SINGLE pacer.Laps.lap_columns crossing: local metres + TELEMETRY (GPS9 true-clock)
+        seconds + raw 3D speed (m/s) + the lap's gap-aware odometer, all index-aligned and the
+        SAME length (the materialized lap: interpolated start crossing + interior points +
+        interpolated finish). Cleared on re-segment.
+
+        THE TIMES ARE NOT MEDIA SECONDS, though this docstring and `pacer/laps/laps.hpp` both
+        said so until they were measured. They are `studio/load.py`'s GPS9 true-clock axis,
+        handed to the C++ core verbatim and handed back unchanged — verified bit-exact against
+        `Session.tt` for all 26,486 (0060) and 45,313 (0062) interior lap-column samples. The
+        media clock runs +26.7 / +27.1 ppm faster, so the same instant is numbered up to 0.097 s
+        and 0.167 s apart on the two axes; `Session.media_time` is the only crossing."""
         cols = self._cols_cache.get(lap_id)
         if cols is None:
             c = self.laps.lap_columns(lap_id)
@@ -1681,7 +1691,7 @@ class Session:
         return [self._lap_row(i) for i in self.excluded_lap_ids()]
 
     def _lap_point_times(self, lap_id: int) -> np.ndarray:
-        """The media-clock times of a lap's KEPT GPS points, in order. Quality-gated / cleaned
+        """The TELEMETRY (GPS9 true-clock) times of a lap's KEPT GPS points, in order. Cleaned
         samples are already gone, so a large delta between consecutive entries is a real interior
         GPS dropout (not jitter)."""
         return self._lap_columns(lap_id)[0]
@@ -1715,7 +1725,7 @@ class Session:
 
     # ------------------------------------------------- map gap-fill (rendering only)
     def _lap_trace_xyt(self, lap_id: int):
-        """Cached per-lap (xs, ys, times) — local metres + media-clock seconds, cleared on
+        """Cached per-lap (xs, ys, times) — local metres + telemetry seconds, cleared on
         re-segment. The single source the map highlight, gap-fill draw, and marker-drag
         nearest-point lookup all slice from."""
         got = self._xyt_cache.get(lap_id)
@@ -1963,7 +1973,7 @@ class Session:
     # Nothing here is on a hot path: every one of them runs on a right-click, once.
 
     def _track_times(self) -> np.ndarray:
-        """The whole trace's media-clock times, in ONE bulk crossing — the index the provenance
+        """The whole trace's TELEMETRY times, in ONE bulk crossing — the index the provenance
         rows are numbered by. Memoized beside the other per-segmentation caches because a raw
         track row number does not change when the timing lines move."""
         if self._track_times_cache is None:
@@ -2793,7 +2803,7 @@ class Session:
         }
 
     def _lap_time_dist(self, lap_id: int):
-        """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),
+        """Cached (times, dists) for a lap: telemetry seconds + per-lap odometer (metres),
         both monotonic and aligned. The single source the cursor↔video conversions interpolate
         on — built once per lap, cleared on re-segment. Returns None if the lap is degenerate."""
         td = self._lap_time_dist_elapsed(lap_id)
@@ -3265,16 +3275,27 @@ class Session:
         return bool(rot is not None and rot.has_data)
 
     def yaw_rate_at_time(self, t: float) -> float | None:
-        """Measured body yaw rate (rad/s, + = turning LEFT) at media-clock time `t`, or None with
-        no channel. O(log n), the same shape as `g_at_time`."""
+        """Measured body yaw rate (rad/s, + = turning LEFT) at MEDIA time `t`, or None with no
+        channel. O(log n), the same shape as `g_at_time`.
+
+        THE ODD ONE OUT ON THIS OBJECT, said plainly so it cannot bite: the gyro series carries
+        the camera's media stamps, while every other public time on Session is telemetry. Nothing
+        in the app calls this today — it is an accessor with no caller — so nothing acts on the
+        mismatch; a future caller holding a Session time must cross `media_time` first."""
         rot = getattr(self, "_rotation", None)
         return None if rot is None else rot.at_time(t)
 
     # ------------------------------------------------- the per-second GPS quality strip
     @property
     def quality_timeline(self):
-        """`data_quality.QualityTimeline` — GPS quality per SECOND of recording, on the media clock
-        the scrubber runs on. Empty (never None) on a Session built without a load."""
+        """`data_quality.QualityTimeline` — GPS quality per SECOND of recording, on the MEDIA
+        clock it was built on (`load` takes it on the raw, pre-trim naive times). Empty (never
+        None) on a Session built without a load.
+
+        The scrubber and every lap window are on the TELEMETRY axis, so `lap_quality` below
+        indexes these cells with a time from the other clock. Measured, that is a note and not a
+        defect: the two axes differ by at most 0.095 s (0060) / 0.166 s (0062) against a 1.00 s
+        cell."""
         return getattr(self, "_quality_timeline", None) or data_quality.empty_timeline()
 
     def lap_quality(self, lap_id: int) -> int | None:
@@ -3284,7 +3305,15 @@ class Session:
         Worst, not average — a lap with one second of rejected fixes in it is a lap with a hole in
         it, and averaging that against the sixty good seconds around it is how a surface ends up
         vouching for a lap it should be flagging. The same rule the strip's own pixel columns
-        use."""
+        use.
+
+        IT CROSSES TWO CLOCKS BY LABEL, and the size of that is measured rather than assumed: the
+        window is TELEMETRY seconds and the strip's cells are MEDIA seconds. Putting each lap's
+        window on the strip's own axis first changes the class it inherits for 0 of 38 laps (0060)
+        and 0 of 65 (0062); the first cell index moves for 0 and 4 of them, never far enough to
+        reach a different verdict, because the worst shift is 0.095 / 0.166 s against a 1.00 s
+        cell. Converting here would therefore buy nothing and would put this accessor on a clock
+        none of its neighbours use."""
         tl = self.quality_timeline
         if not len(tl):
             return None
@@ -3321,7 +3350,7 @@ class Session:
         return marks_model.auto_marks(dropouts, excluded, self.quality_timeline)
 
     def delta_at_time(self, t: float) -> float | None:
-        """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap
+        """Δ-to-best (seconds) at TELEMETRY time `t`: how far ahead (−) / behind (+) the lap
         being driven at `t` is versus the GLOBAL best lap, AT THE SAME TRACK POSITION. None if
         `t` isn't inside a valid lap (lead-in / between laps) or there's no best lap.
 
@@ -3341,7 +3370,7 @@ class Session:
         return self.delta_at_lap(lap_id, t)
 
     def delta_at_lap(self, lap_id: int, t: float) -> float | None:
-        """Δ-to-baseline (seconds) at media-clock time `t`, given the already-resolved `lap_id`
+        """Δ-to-baseline (seconds) at TELEMETRY time `t`, given the already-resolved `lap_id`
         containing `t`. Splits the lap resolution out of `delta_at_time` so the tick can resolve
         `lap_at_time(t)` ONCE per frame and reuse it for both the readout and the delta (the lap
         lookup is no longer done twice). Same math/result as `delta_at_time`.
@@ -3386,7 +3415,7 @@ class Session:
             del self._ideal_cache
 
     def delta_to_ideal_at(self, lap_id: int, t: float) -> float | None:
-        """Δ-to-IDEAL (seconds) at media-clock time `t` for the already-resolved `lap_id` — the
+        """Δ-to-IDEAL (seconds) at TELEMETRY time `t` for the already-resolved `lap_id` — the
         per-tick scalar analogue of `delta_to_ideal`'s 400-grid curve, and the moat number the
         live readout leads with ("you're 0.42 s off your achievable lap, here").
 

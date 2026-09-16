@@ -25,7 +25,7 @@ class Timeline:
         self._lap_trace_xyt = lap_trace_xyt      # (lap_id) -> (xs, ys, times) local metres
         self._valid_lap_ids = valid_lap_ids      # () -> list[int] (memoized on Session)
         self._lap_window = lap_window            # (lap_id) -> (start_ts, start_ts + lap_time)
-        self._trace_times = trace_times          # () -> tt (full-trace media-clock times)
+        self._trace_times = trace_times          # () -> tt (full-trace TELEMETRY times)
         self._trace_xs = trace_xs                # () -> tx (full-trace local-metre xs)
         self._trace_ys = trace_ys                # () -> ty
         # [start, end) windows on the GLOBAL clock for the O(log n) lap_at_time binary search;
@@ -45,7 +45,12 @@ class Timeline:
     # 'distance' and 'delta' are the same shared-distance mode; all clamp to the lap window.
     def media_time_at_plot_x(self, lap_id: int, x: float, mode: str,
                              best_distance: float | None = None) -> float | None:
-        """Absolute media-clock time (s) for a plot x-value within `lap_id`.
+        """Absolute TELEMETRY (GPS9 true-clock) time (s) for a plot x-value within `lap_id`.
+
+        THE NAME SAYS "media" AND THE CLOCK IS NOT: this function is named for the day the app
+        believed there was one clock, and it is not renamed because the golden fingerprint keys
+        off the name (`Session.media_time` states the same hazard). It reads the lap's own
+        column times, which are telemetry seconds; `Session.media_time` is the only crossing.
 
         `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
         axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For
@@ -72,7 +77,7 @@ class Timeline:
 
     def plot_x_at_media_time(self, lap_id: int, t: float, mode: str,
                              best_distance: float | None = None) -> float | None:
-        """Inverse of `media_time_at_plot_x`: the plot x-value for media-clock time `t` within
+        """Inverse of `media_time_at_plot_x`: the plot x-value for TELEMETRY time `t` within
         `lap_id`, in the given `mode` ('time', or the shared-distance 'distance'/'delta'). Used
         to re-place a cursor from the shared media time. Returns None if the lap is degenerate
         (or distance/delta with no best distance)."""
@@ -115,8 +120,9 @@ class Timeline:
         return self._lap_windows
 
     def lap_at_time(self, t: float) -> int | None:
-        """The valid lap whose [start_timestamp, start+lap_time) window contains `t` (media-clock
-        seconds), else None — for the readout + current-lap highlight.
+        """The valid lap whose [start_timestamp, start+lap_time) window contains `t` (TELEMETRY
+        (GPS9 true-clock) seconds, like every window on this object), else None — for the readout
+        + current-lap highlight.
 
         The upper bound is HALF-OPEN (`t < end`) on purpose: consecutive laps are contiguous, so
         an inclusive bound would resolve a `t` exactly on a lap's START — the time select→seek
@@ -147,7 +153,7 @@ class Timeline:
     # constrain the search to the CURRENT lap's own trace — the same lap-scoped behaviour as the
     # scrub cursor. Pure numpy on the lap's local-metre points; no pacer.
     def _lap_xy_t(self, lap_id: int):
-        """(xs, ys, times) for one lap in local metres + media-clock seconds. Reads the shared
+        """(xs, ys, times) for one lap in local metres + telemetry seconds. Reads the shared
         per-lap cache (built once, cleared on re-segment), so a marker drag's nearest-point lookup
         no longer rebuilds the arrays on every mouse-move. Returns None if the lap is degenerate."""
         td = self._lap_time_dist(lap_id)  # ensures the lap is segmented/usable

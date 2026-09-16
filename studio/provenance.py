@@ -16,7 +16,7 @@ THE SHAPE. One `Provenance` per displayed number:
 
     value / formatted   the number, and the exact string the surface painted
     method_id, method   a stable id + ONE plain sentence (single-sourced in METHODS below)
-    window              [t0, t1] media seconds, or [d0, d1] lap odometer metres
+    window              [t0, t1] telemetry (GPS9 true-clock) seconds, or [d0, d1] odometer metres
     n                   how many raw fixes are inside that window
     quality             the fix-quality distribution over the window
     tables              the raw rows (tables[0]) and, where a number is a min/median over a
@@ -149,7 +149,7 @@ def _csv_cell(v) -> str:
 class Window:
     """The exact interval a number was measured over, and which axis it is stated on."""
 
-    kind: str          # TIME (media-clock seconds) or DISTANCE (lap odometer metres)
+    kind: str          # TIME (telemetry, GPS9 true-clock, seconds) or DISTANCE (odometer metres)
     lo: float
     hi: float
 
@@ -365,7 +365,8 @@ def quality_over(fix, dop, times, clock: str = data_quality.GPS9_TRUECLOCK) -> Q
     """The fix-quality distribution over one window's raw fixes.
 
     `fix`/`dop` are the per-sample GPS9 quality fields as they arrived from the camera, `times`
-    their media-clock seconds. All three are already sliced to the window."""
+    their telemetry (GPS9 true-clock) seconds — the axis the lap columns they came from are on,
+    not the media clock. All three are already sliced to the window."""
     fix = np.asarray(fix)
     dop = np.asarray(dop, float)
     times = np.asarray(times, float)
@@ -490,7 +491,7 @@ class LapFixes:
     A plain carrier, mutable and un-frozen on purpose: `session.py` fills it in one pass."""
 
     index: np.ndarray      # whole-track row number of each fix
-    times: np.ndarray      # media-clock seconds
+    times: np.ndarray      # telemetry (GPS9 true-clock) seconds
     dists: np.ndarray      # lap odometer metres, aligned to `times`
     lats: np.ndarray
     lons: np.ndarray

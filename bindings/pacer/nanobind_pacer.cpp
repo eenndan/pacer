@@ -236,7 +236,7 @@ void py_init_module_pacer(nb::module_ &m) {
 
   auto pyClassQuatSample =
       nb::class_<pacer::QuatSample>
-          (m, "QuatSample", " One orientation quaternion — CORI (camera orientation), components w,x,y,z.\n `time` is media-clock seconds, matching IMUSample / GPS.")
+          (m, "QuatSample", " One orientation quaternion — CORI (camera orientation), components w,x,y,z.\n `time` is media-clock seconds, the same basis as IMUSample and as the raw\n GPS payload SPANS. It is NOT the basis the studio's GPS trace ends up on:\n studio/load.py re-times every fix on the GPS9 True clock, which runs ~27 ppm\n slower than this one (studio/media_clock.py is the map between them).")
       .def("__init__", [](pacer::QuatSample * self, double w = 1, double x = 0, double y = 0, double z = 0, double time = 0)
       {
           new (self) pacer::QuatSample();  // placement new
@@ -384,7 +384,7 @@ void py_init_module_pacer(nb::module_ &m) {
 
   auto pyClassLapArrays =
       nb::class_<pacer::LapArrays>
-          (m, "LapArrays", " A lap's per-point data as parallel columns, so the studio layer crosses the\n binding ONCE per lap instead of once per point (it used to call cs.local /\n read full_speed / time / cum_distances in loops over hundreds of points).\n Every column has the same length as the materialised lap (Lap::Count(): start\n crossing + interior points + finish crossing) and they are mutually index-\n aligned:\n   times          media-clock seconds (== Lap::points[i].time)\n   xs, ys         LOCAL metres — CoordinateSystem::Local(point).x|y in the\n   laps'\n                  own coordinate system (the one set via SetCoordinateSystem)\n   full_speed     raw 3D GPS speed m/s (the studio scales to km/h)\n   cum_distances  the lap's gap-aware per-point odometer (==\n   Lap::cum_distances)")
+          (m, "LapArrays", " A lap's per-point data as parallel columns, so the studio layer crosses the\n binding ONCE per lap instead of once per point (it used to call cs.local /\n read full_speed / time / cum_distances in loops over hundreds of points).\n Every column has the same length as the materialised lap (Lap::Count(): start\n crossing + interior points + finish crossing) and they are mutually index-\n aligned:\n   times          the clock the CALLER fed AddPoint, echoed back unchanged —\n                  this core converts nothing (== Lap::points[i].time). The\n                  studio feeds the GPS9 TRUE-clock (telemetry) axis built by\n                  studio/load.py, which is NOT the media clock the video\n                  plays on: measured on both D24 recordings the media clock\n                  runs +26.7 / +27.1 ppm fast, so one instant is numbered up\n                  to 0.097 / 0.167 s apart on the two axes. The map between\n                  them is studio/media_clock.py, and nothing here crosses it.\n   xs, ys         LOCAL metres — CoordinateSystem::Local(point).x|y in the\n   laps'\n                  own coordinate system (the one set via SetCoordinateSystem)\n   full_speed     raw 3D GPS speed m/s (the studio scales to km/h)\n   cum_distances  the lap's gap-aware per-point odometer (==\n   Lap::cum_distances)")
       .def("__init__", [](pacer::LapArrays * self, std::vector<double> times = std::vector<double>(), std::vector<double> xs = std::vector<double>(), std::vector<double> ys = std::vector<double>(), std::vector<double> full_speed = std::vector<double>(), std::vector<double> cum_distances = std::vector<double>())
       {
           new (self) pacer::LapArrays();  // placement new

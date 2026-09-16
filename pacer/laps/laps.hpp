@@ -40,7 +40,14 @@ struct Sectors {
 // Every column has the same length as the materialised lap (Lap::Count(): start
 // crossing + interior points + finish crossing) and they are mutually index-
 // aligned:
-//   times          media-clock seconds (== Lap::points[i].time)
+//   times          the clock the CALLER fed AddPoint, echoed back unchanged —
+//                  this core converts nothing (== Lap::points[i].time). The
+//                  studio feeds the GPS9 TRUE-clock (telemetry) axis built by
+//                  studio/load.py, which is NOT the media clock the video
+//                  plays on: measured on both D24 recordings the media clock
+//                  runs +26.7 / +27.1 ppm fast, so one instant is numbered up
+//                  to 0.097 / 0.167 s apart on the two axes. The map between
+//                  them is studio/media_clock.py, and nothing here crosses it.
 //   xs, ys         LOCAL metres — CoordinateSystem::Local(point).x|y in the
 //   laps'
 //                  own coordinate system (the one set via SetCoordinateSystem)

@@ -25,6 +25,11 @@ add_test(NAME test_scrub_conversion
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_scrub_conversion.py)
 add_test(NAME test_lap_timing
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_timing.py)
+# The lap-time AXIS (docs/t6-lap-time-axis): lap times are GPS9 true-clock (telemetry) seconds,
+# not the media seconds sixteen comments claimed. Guards the fact (the core echoes the studio's
+# clock; the load axis measurably leaves the media one) and the comment family itself.
+add_test(NAME test_lap_time_axis
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_time_axis.py)
 add_test(NAME test_chapters
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapters.py)
 # The telemetry->media clock conversion (fix/telemetry-media-clock): the affine fit + its guards,
@@ -785,7 +790,8 @@ set_tests_properties(test_glyph_vocabulary PROPERTIES
 # package (the tests sys.path.insert the repo root to reach `studio`), failing with
 # AttributeError. PYTHONPATH makes the deployed package win deterministically in every
 # install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
-foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_media_clock
+foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_lap_time_axis
+                        test_chapters test_media_clock
                         test_gapfill
                         test_import_ergonomics test_reference test_gps_source_bindings
                         test_imu_orientation
