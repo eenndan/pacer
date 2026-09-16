@@ -779,7 +779,7 @@ def _high_drift_two_lap_session():
     cum0 = np.concatenate(([0.0], np.cumsum(seg)))          # lap 0's true odometer
     total_ref = float(cum0[-1])
     # Lap 1: SAME xy, but the first third's step lengths scaled 1.15x (the driver weaved there) →
-    # the total line length drifts ~5% > NORMALIZED_DRIFT_MAX, so the normalized fraction biases the
+    # the total line length drifts ~5%, so the normalized fraction biases the
     # corner boundaries by metres while the spatial match recovers the true position.
     diffs = seg.astype(float).copy()
     diffs[cum0[:-1] < total_ref / 3.0] *= 1.15
@@ -807,10 +807,10 @@ def _high_drift_two_lap_session():
 
 def test_grip_and_brake_windows_engage_spatial_drift_fallback():
     """CORRECTNESS FIX (#43 leftover): the grip-window and brake-point-window corner projections in
-    DrivingChannels must go through the SAME drift-gated alignment (corners.project_boundaries) that
-    lap_corner_stats already uses — normalized within NORMALIZED_DRIFT_MAX, the robust spatial
-    nearest-point match above it. On a HIGH-DRIFT lap the spatial fallback must ENGAGE and yield a
-    window that DIFFERS from the biased raw normalized projection, mirroring test_corners'
+    DrivingChannels must go through the SAME alignment (corners.project_boundaries) that
+    lap_corner_stats already uses — one monotone spatial warp per lap, built from the robust
+    nearest-point match. On a HIGH-DRIFT lap that warp must yield a window that DIFFERS from the
+    biased raw normalized projection, mirroring test_corners'
     test_high_drift_engages_spatial_and_recovers_true_position."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from _synthetic import reset_corner_caches
@@ -825,11 +825,12 @@ def test_grip_and_brake_windows_engage_spatial_drift_fallback():
     reset_corner_caches(s, basis=([corner], total_ref))
     dc = s.driving
 
-    # The drift is genuinely above the bound and the spatial traces are usable (so the gate fires).
+    # The drift is genuinely large and the spatial traces are usable (so the warp has something
+    # to match against).
     traces = dc._corner_traces(1)
     assert traces is not None
     drift = C.line_length_drift(total_lap, total_ref)
-    assert drift > C.NORMALIZED_DRIFT_MAX, drift
+    assert drift > 0.005, drift
 
     interior = [corner.enter, corner.exit]
     normalized = np.asarray(interior) * (total_lap / total_ref)
@@ -850,7 +851,7 @@ def test_grip_and_brake_windows_engage_spatial_drift_fallback():
     assert len(grip) == 1 and 0.0 <= grip[0]
     _bps = dc.lap_brake_points(1)  # may be [] if no brake matches, but must not raise / mis-project
     assert isinstance(_bps, list)
-    print(f"ok drift fallback: drift {drift:.3f} > {C.NORMALIZED_DRIFT_MAX}; grip/brake windows use "
+    print(f"ok drift fallback: drift {drift:.3f}; grip/brake windows use "
           f"spatial (max|gated-normalized|={float(np.max(np.abs(gated - normalized))):.1f} m)")
 
 

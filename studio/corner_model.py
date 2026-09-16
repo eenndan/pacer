@@ -68,11 +68,13 @@ POINT_SPAN_M = 0.5
 #   0060 ch 1              42                     0   (0 %)          28 / 286   (10 %)
 #   0062                   25                     0   (0 %)          10 / 1462  ( 1 %)
 #
-# Recall is 0 % STRUCTURALLY: every convictable cell sits on a lap below
-# corners.NORMALIZED_DRIFT_MAX, whose projection IS `ref_span × total_lap/total_ref`, so its
-# deviation from that is zero by construction and this test can never reject it however misaligned
-# the window is. And those laps are not clean: they carry a median 1.16 % / p90 9.02 % true span
-# error on the pair (1.03 / 9.42 on ch 1, 0.48 / 2.92 on 0062), 5 cells worse than −10 %.
+# Recall was 0 % STRUCTURALLY when this was measured: every convictable cell sat on a lap below the
+# then-current `corners.NORMALIZED_DRIFT_MAX`, whose projection IS `ref_span × total_lap/total_ref`,
+# so its deviation from that was zero by construction and this test could never reject it however
+# misaligned the window was. And those laps were not clean: they carried a median 1.16 % / p90
+# 9.02 % true span error on the pair (1.03 / 9.42 on ch 1, 0.48 / 2.92 on 0062), 5 cells worse than
+# −10 %. THAT GATE IS GONE (every lap is warped now), so those cells are live here — which is what
+# the DEFERRED note below was asking for and what drops admitted cells 880 → 780 on the pair.
 # Conversely, of the cells it DOES refuse, every one that can be scored at all was refused on
 # directly measured track: pair 39 scorable of 70 refusals, all 39 with both edges on matched
 # knots; ch 1 28 of 50, all 28; 0062 10 of 10. (The rest — 31 and 22 — have at least one
@@ -106,20 +108,30 @@ POINT_SPAN_M = 0.5
 # is what stops one lap carrying two frames — but crediting the headline move to the projection
 # alone is wrong.
 #
-# ── DEFERRED ─────────────────────────────────────────────────────────────────────────────────
-# Because corners.NORMALIZED_DRIFT_MAX keeps below-drift laps on the normalized projection, this
-# test is inert on 22 of the pair's 38 laps. What the gate costs, measured LIKE FOR LIKE — gated
-# vs warp-every-lap at the SAME admission tolerance, so the two changes are not conflated:
+# ── THE DEFERRED HALF, NOW DONE ──────────────────────────────────────────────────────────────
+# This block used to record that `corners.NORMALIZED_DRIFT_MAX` kept below-drift laps on the
+# normalized projection, leaving this test inert on 22 of the pair's 38 laps, and what that cost
+# measured LIKE FOR LIKE — gated vs warp-every-lap at the SAME admission tolerance, so the two
+# changes were not conflated:
 #
 #              pair      ch 1      0062
 #   at ±5 %   +0.316 s  +0.347 s  −0.071 s
 #   at ±3 %   +0.501 s  +0.670 s  +0.060 s
 #
-# (The ±5 % row is also the move against the SHIPPED number, since that is the shipped tolerance.
-# An earlier draft quoted +0.644/+0.712/+0.110 for the ±3 % row by differencing against the ±5 %
-# shipped value, which folds the tolerance change into the gate's residual — hence this note about
-# which two things are being differenced.) That residual is the price of the byte-identity the
-# drift gate buys, and it is the same follow-up corners.NORMALIZED_DRIFT_MAX's note names.
+# (The ±5 % row is also the move against the then-shipped number, since that is the shipped
+# tolerance. An earlier draft quoted +0.644/+0.712/+0.110 for the ±3 % row by differencing against
+# the ±5 % shipped value, which folds the tolerance change into the gate's residual.) THE GATE IS
+# NOW GONE and the ±5 % row is realised: the pair's ideal reads 65.464 s and 0062's 66.709 s.
+#
+# CALIBRATION NOTE, because removing the gate moved the arbiter too. The table above is fitted on
+# the BELOW-gate laps, which under the gate every candidate projected identically — that is what
+# made it a neutral yardstick. Warping every lap moves those very laps, so the arbiter has to be
+# REFITTED per candidate before the two ideals can be compared. Refitted, it does NOT discriminate:
+# the gated ideal sits −0.046 s from its own arbiter on the pair and −0.182 s on 0062, the
+# warp-every-lap ideal +0.068 s and +0.176 s from its own — same order, opposite signs, all inside
+# the ±0.25 s cross-fixture spread above. Comparing warp-every-lap against the GATED arbiter reads
+# a spurious +0.236 s on the pair, which is a moved yardstick, not a bias. The case for warping
+# every lap rests on the boundary residual in corners.py, not on the ideal.
 MAX_DONOR_SPAN_DEV = 0.05
 # ── SUB-RESOLUTION SEGMENTS: A KNOWN LIMITATION, DELIBERATELY NOT "FIXED" ─────────────────────
 # On a 2.3 m sliver the ±5 % band is ±0.11 m, an order of magnitude under the
@@ -561,9 +573,11 @@ class CornerModel:
 
         WHY THIS EXISTS. The warp is built from the WHOLE corner partition, so it is the same
         object for every window of a lap — but nine independent call paths each derived it for
-        themselves. Measured on the real D24 0060 pair (38 laps, exactly 16 of them past
-        `corners.NORMALIZED_DRIFT_MAX`), ONE `stats_view.refresh` ran `corners._spatial_matches`
-        **144 times** — 9x per lap that needs it — against the 16 the memo now costs. (Call counts
+        themselves. Measured on the real D24 0060 pair when a 0.5 % drift gate still kept 22 of its
+        38 laps off the spatial path, ONE `stats_view.refresh` ran `corners._spatial_matches`
+        **144 times** — 9x per lap that needed it — against the 16 the memo cost. Every lap is
+        warped now, so the memo costs one match per lap: 38 on the pair and 65 on 0062, which is
+        what makes that refresh 30.4 → 40.0 ms and 42.5 → 65.7 ms of CPU. (Call counts
         are deterministic and are the honest evidence here; the wall/CPU figures in the PR were
         taken as min-of-9 CPU time because this box runs at load average 40-90 and one cProfile
         pass attributed the same work 97.7 ms in one run and 220.4 ms in another.)

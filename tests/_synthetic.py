@@ -177,8 +177,9 @@ def bare_session(laps=None, *, best=None, valid=None, excluded=None):
 # ---------------------------------------------------------------- the drift + noise fixture
 # THE STADIUM FIXTURE CANNOT SEE TWO DEFECT CLASSES THIS REPO HAS ALREADY SHIPPED, and this one
 # exists to see both. `test_session_services._synthetic_session` drives both of its laps round ONE
-# polyline (0 % line-length drift, so every path behind `corners.NORMALIZED_DRIFT_MAX` is dead) at a
-# noise-free speed. #228's one-frame-per-lap repair and #275's coast window both moved real D24
+# polyline (0 % line-length drift, so the spatial warp is the identity there and every projection
+# defect is invisible) at a noise-free speed. #228's one-frame-per-lap repair and #275's coast
+# window both moved real D24
 # numbers while re-cutting that baseline came back byte-identical.
 #
 # What each ingredient is for, and why it is the size it is (each one was measured to be NEEDED —
@@ -227,6 +228,32 @@ _DN_LAPS = (
     dict(offset=0.0, vc=12.2, straights=((21.8, 2.5), (21.8, 2.5)), run_wide_m=0.0, seed=14),
 )
 
+# -------------------------------------------------- the MEDIAN-drift variant of the same fixture
+# THE FIXTURE ABOVE CANNOT SEE A COACHING-PATH DEFECT, and this one exists because of it. In
+# `_DN_LAPS` the drifting lap is the SLOWEST (37.06 s vs 35.91 / 36.60), while the whole coaching
+# model — `Session.coaching_opportunities` -> `coaching.summarize` — reads the MEDIAN-time lap
+# (`coaching.median_lap_id`). Measured on main: `_DN_LAPS`' median lap 2 sits at 0.0000 % drift with
+# `corners.lap_alignment` None, so every corner-window projection on the coaching path is the
+# IDENTITY there and no change to it can move a leaf. That is exactly what happened: #289 moved
+# `coaching._win` onto the gated, warped projection and moved 15 of 168,664 leaves on the D24 0060
+# pair and ZERO synthetic ones, drift_noise included.
+#
+# THE ONLY THING THAT CHANGES HERE IS WHICH LAP IS THE MEDIAN. The three geometries are the two
+# fixtures' own: same reference line, the same DN_WIDE_LINE_OFFSET_M parallel curve and the same
+# DN_RUN_WIDE_M excursion out of C1, so the 1.0 % drift, the detected partition and the ONE
+# unmatched boundary are the same properties `_DN_LAPS` already pins — only the speed profiles move,
+# putting the drifting lap's time (36.39 s) BETWEEN the two clean laps (35.91 / 37.93 s). The wide
+# lap is therefore the median while lap 0 stays the best, so the coaching median window is drifted,
+# warped and interpolated at its unmatched boundary, and a defect in it moves leaves.
+# `test_golden_synthetic.test_drift_median_fixture_puts_the_drift_where_coaching_reads` pins that
+# ordering, so a later speed tweak cannot silently hand the median back to a clean lap.
+_DM_LAPS = (
+    dict(offset=0.0, vc=12.5, straights=((22.0, 2.0), (22.0, 2.0)), run_wide_m=0.0, seed=21),
+    dict(offset=DN_WIDE_LINE_OFFSET_M, vc=12.3, straights=((22.0, 1.5), (23.5, 1.0)),
+         run_wide_m=DN_RUN_WIDE_M, seed=22),
+    dict(offset=0.0, vc=11.8, straights=((21.0, 3.5), (21.0, 3.5)), run_wide_m=0.0, seed=24),
+)
+
 
 def _dn_loop_xy(u, offset):
     """(xs, ys) at arc length `u` round a 200 m x 30 m-radius stadium run `offset` metres OUTSIDE
@@ -271,13 +298,16 @@ def _dn_straight_speed(along, vc, vt, coast_s):
     return v
 
 
-def drift_noise_laps(t0: float = 100.0) -> list[dict]:
+def drift_noise_laps(t0: float = 100.0, specs=_DN_LAPS) -> list[dict]:
     """The drift + noise fixture's laps, contiguous on one media clock from `t0`. Each dict holds
     `cols` — the `_cols_cache` 5-tuple (times, xs, ys, full_speed m/s WITH noise, cum) exactly as
     `Session._lap_columns` serves it — and `clean_speed`, the same speed before the noise, which is
-    what lets a test measure the noise it was given. See the block above for every choice."""
+    what lets a test measure the noise it was given. See the block above for every choice.
+
+    `specs` is the per-lap recipe list; `_DM_LAPS` builds the median-drift variant off the SAME
+    geometry and the same builder (see its block below)."""
     laps = []
-    for spec in _DN_LAPS:
+    for spec in specs:
         offset = spec["offset"]
         arc = np.pi * (_DN_RADIUS_M + offset)
         u = np.linspace(0.0, 2 * _DN_STRAIGHT_M + 2 * arc, _DN_FINE_N)
@@ -309,9 +339,16 @@ def drift_noise_laps(t0: float = 100.0) -> list[dict]:
     return laps
 
 
-def drift_noise_session():
-    """A bare Session over `drift_noise_laps()`: three valid laps, lap 0 the best (and genuinely
-    the fastest), lap 1 drifted 1.0 % with one unmatched corner boundary, GPS speed noise on all.
+def drift_median_laps(t0: float = 100.0) -> list[dict]:
+    """The MEDIAN-drift lap set: `drift_noise_laps`' geometry and builder, `_DM_LAPS`' speeds, so
+    the drifting lap is the median-time one instead of the slowest. See that block."""
+    return drift_noise_laps(t0, specs=_DM_LAPS)
+
+
+def _drift_session(laps: list[dict]):
+    """A bare Session over one of the drift lap sets above: three valid laps, lap 0 the best (and
+    genuinely the fastest), one lap drifted 1.0 % with one unmatched corner boundary, GPS speed
+    noise on all.
 
     Beyond `_synthetic_session`'s seeding it carries a minimal pacer `laps` stand-in —
     `laps_count` / `lap_time` / `start_timestamp`, each read straight off the seeded columns, the
@@ -319,7 +356,6 @@ def drift_noise_session():
     the fingerprint's coaching, trend, rolling-lap and time-grid Δ leaves are REAL here instead of
     the `__unsupported__` sentinel the stadium fixture records for them. The whole-recording trace
     and a kinematic g-meter (lateral v^2*kappa, longitudinal dv/dt, 50 Hz) span all three laps."""
-    laps = drift_noise_laps()
     s = bare_session({i: (lap["cols"][0], lap["cols"][4]) for i, lap in enumerate(laps)},
                      best=0, valid=range(len(laps)))
     s._cols_cache = {i: lap["cols"] for i, lap in enumerate(laps)}
@@ -345,3 +381,14 @@ def drift_noise_session():
     reset_corner_caches(s)
     reset_driving_caches(s)
     return s
+
+
+def drift_noise_session():
+    """The drift + noise session: the drifting, run-wide lap is the SLOWEST one (`_DN_LAPS`)."""
+    return _drift_session(drift_noise_laps())
+
+
+def drift_median_session():
+    """The same session with the drift on the MEDIAN-time lap (`_DM_LAPS`) — the lap the whole
+    coaching model reads, and the one `drift_noise_session` leaves undrifted."""
+    return _drift_session(drift_median_laps())
