@@ -3620,11 +3620,21 @@ class StatsView(QWidget):
         rot = session.rotation_cross() if hasattr(session, "rotation_cross") else None
         if rot is not None:
             verdict = "agrees" if rot.ok else "DISAGREES"
+            # The CLOCK OFFSET belongs in this row and not in a footnote, because the correlation
+            # printed beside it is measured with that offset LEFT IN: the gyroscope is timed on the
+            # camera's media clock and the GPS trace on its receiver's, and on the owner's own
+            # recordings an event's GPS timestamp lands ~0.46 s after its gyro timestamp. Stating
+            # the r without the offset would read as how well the two channels agree, when a good
+            # part of the gap between them is just the two clocks. `lag_clause` is RotationCheck's
+            # own sentence, so this row and the load-time log say it in the same words — and it is
+            # EMPTY when the offset could not be measured, which is why the clause is appended
+            # rather than formatted in: a row that has no measurement says nothing instead of 0.00.
+            lag = f" · {rot.lag_clause}" if rot.lag_clause else ""
             rows.append(("Rotation cross-check",
                          f"{verdict} · over {rot.loop_n} closed laps the gyroscope's measured yaw "
                          f"integrates to {rot.loop_ratio_gyro:.3f}×2π and the path-derived rate to "
                          f"{rot.loop_ratio_path:.3f}×2π, against an exact 1.000 · "
-                         f"r={rot.corner_corr:+.2f} between them through the corners",
+                         f"r={rot.corner_corr:+.2f} between them through the corners{lag}",
                          not rot.ok))
             tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
                         "the only quantity on this card with a ground truth rather than a second "
@@ -3632,6 +3642,15 @@ class StatsView(QWidget):
                         "ratio and not the correlation: halving the channel leaves r bit-identical "
                         "and moves this ratio to 0.5, and a gyroscope read through the wrong "
                         "gravity axis lands negative.")
+            if rot.lag_clause:
+                tips.append(
+                    f"The two channels are not on the same clock. The gyroscope is timestamped on "
+                    f"the camera's media clock — the one the picture plays on — and the GPS trace "
+                    f"on its receiver's own. Measured on this recording, {rot.lag_clause}: the "
+                    f"correlation above is what they score with that offset still in "
+                    f"(r={rot.lag_corr:+.2f} at the offset, {rot.lag_corr_at_zero:+.2f} without "
+                    f"it). Lap times are differences taken on one clock, so none of this moves "
+                    f"them.")
             tips.append(f"The measured channel is the {session.rotation_device() or 'camera'}'s "
                         f"gyroscope (GPMF GYRO, ~200 Hz), projected onto gravity so it reads a "
                         f"road-plane yaw rate however the camera is tilted on its mount. The "

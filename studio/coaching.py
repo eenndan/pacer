@@ -474,6 +474,33 @@ def _saturate(evidence: float, half: float) -> float:
     return e / (e + half) if e > 0 else 0.0
 
 
+def _project_window(c_enter: float, c_exit: float, corner_dist_total: float | None,
+                    total: float | None, *, traces: tuple | None = None, frame=None,
+                    alignment=corners_mod.DERIVE_ALIGNMENT) -> tuple[float, float]:
+    """ONE corner window [c_enter, c_exit] — in the REFERENCE (corner basis) odometer — projected
+    onto one lap's own odometer through the shared drift gate (`corners.project_boundaries`:
+    normalized distance within `NORMALIZED_DRIFT_MAX`, ONE monotone spatial warp for the whole lap
+    above it). Identity when a total is missing or equals the corner basis' total (the best lap's
+    own frame), and byte-identical to the bare normalized scale whenever the gate keeps it.
+
+    THE THREE CALLERS IN THIS MODULE MUST AGREE. A coaching row's phase triple, the best-lap
+    subtrahend it is measured against and its brake/coast evidence are three reads of ONE window,
+    and they were not: `_win` scaled by `lap_total/corner_dist_total` with no gate and no traces
+    while the phases went through the warp, so on a lap past the gate a row could pair a
+    warp-derived phase triple with a normalized-frame reason — up to 6.5 m apart on the D24 0060
+    pair, enough to count a brake application that happened past the corner exit. One helper, so a
+    future edit cannot move one of the three and leave the others behind.
+
+    `alignment` is that lap's warp ALREADY BUILT (`corners.lap_alignment`) — pass it when
+    projecting many windows of the SAME lap so the spatial match runs once per lap, not per corner.
+    None is the legal value meaning "this lap keeps the normalized projection"."""
+    if corner_dist_total and total and corner_dist_total > 0 and total != corner_dist_total:
+        proj = project_boundaries([c_enter, c_exit], corner_dist_total, total,
+                                  traces=traces, frame=frame, alignment=alignment)
+        return float(proj[0]), float(proj[1])
+    return float(c_enter), float(c_exit)
+
+
 def _window_brake_time(events, d_enter: float, d_exit: float,
                        dist: np.ndarray | None = None,
                        elapsed: np.ndarray | None = None) -> float:
@@ -623,18 +650,10 @@ def corner_phase_losses(
     if len(lap_dist) < 2 or len(best_dist) < 2 or not (c_exit > c_enter):
         return _NO_PHASES
 
-    def _proj(total: float | None, traces: tuple | None, align) -> tuple[float, float]:
-        # Project the reference-odometer window [c_enter, c_exit] onto a lap's own odometer via the
-        # shared drift gate (identity if a total is missing or equals the corner basis' total — the
-        # best lap's own frame; traces enable the spatial alignment above the drift bound).
-        if (corner_dist_total and total and corner_dist_total > 0
-                and total != corner_dist_total):
-            proj = project_boundaries([c_enter, c_exit], corner_dist_total, total,
-                                      traces=traces, frame=frame, alignment=align)
-            return float(proj[0]), float(proj[1])
-        return c_enter, c_exit
-
-    lap0, lap1 = _proj(lap_total, lap_traces, lap_align)
+    # Project the reference-odometer window [c_enter, c_exit] onto this lap's own odometer via the
+    # shared drift gate — the SAME helper the best-lap subtrahend and the reason windows use.
+    lap0, lap1 = _project_window(c_enter, c_exit, corner_dist_total, lap_total,
+                                 traces=lap_traces, frame=frame, alignment=lap_align)
     # Equal-distance thirds of each lap's own projected window (same fraction → same track third).
     lap_edges = np.linspace(lap0, lap1, 4)
     if best_thirds is None:
@@ -669,12 +688,8 @@ def corner_best_thirds(
     Hoist it per corner and pass it as `best_thirds=`.
 
     Same arithmetic in the same order, so the result is bit-identical to deriving it inline."""
-    best0, best1 = c_enter, c_exit
-    if (corner_dist_total and best_total and corner_dist_total > 0
-            and best_total != corner_dist_total):
-        proj = project_boundaries([c_enter, c_exit], corner_dist_total, best_total,
-                                  traces=best_traces, frame=frame, alignment=best_align)
-        best0, best1 = float(proj[0]), float(proj[1])
+    best0, best1 = _project_window(c_enter, c_exit, corner_dist_total, best_total,
+                                   traces=best_traces, frame=frame, alignment=best_align)
     best_edges = np.linspace(best0, best1, 4)
     return tuple(_span_clock(best_dist, best_elapsed, best_edges[k], best_edges[k + 1])
                  for k in range(3))
@@ -793,21 +808,6 @@ def summarize(
         return Opportunities(enough=False, n_laps=n_laps, median_lap_id=med_id, rows=[])
     losses = np.median(times - best[None, :], axis=0)  # (n_corners,)
 
-    # Project [enter,exit] onto one lap's own odometer (scale lap_total/corner_dist_total); identity
-    # if a total is missing. A lap's brake/coast events live in its own odometer, so this matches frames.
-    #
-    # STILL UN-GATED, and knowingly: this is the one corner-window projection that has not moved
-    # onto corners.lap_alignment, so on a >NORMALIZED_DRIFT_MAX lap the window feeding
-    # Reason.brake_extra_s / coast_extra_s is up to ~12 m from the window the row's own phase
-    # triple was measured in. Migrating it needs the (ref, lap) traces plumbed to this call site —
-    # the follow-up corner_model.corner_entry_media_time's note names.
-    def _win(c, lap_total: float | None) -> tuple[float, float]:
-        if (corner_dist_total and lap_total and corner_dist_total > 0
-                and lap_total != corner_dist_total):
-            scale = lap_total / corner_dist_total
-            return float(c.enter) * scale, float(c.exit) * scale
-        return float(c.enter), float(c.exit)
-
     # D2: the typical lap's (odometer, elapsed) trace + best lap's, for the entry/apex/exit Δt
     # decomposition — the CLOCK, not the speed channel (`_span_clock`). Both must be present (and
     # usable) to attach phases; otherwise zero phases.
@@ -836,6 +836,19 @@ def summarize(
                                                 traces=best_traces)
                       if corner_dist_total and best_lap_total else None)
 
+    # The window a lap's brake/coast events are matched in — the corner projected onto that lap's
+    # OWN odometer, through the SAME drift gate, the SAME whole-partition frame and the SAME
+    # already-built warp the phase triple above is measured in (_project_window).
+    #
+    # This was the last un-gated corner-window projection in the app: it scaled by
+    # lap_total/corner_dist_total with no gate and no traces, so on a lap past
+    # NORMALIZED_DRIFT_MAX the window feeding Reason.brake_extra_s / coast_extra_s sat up to 6.5 m
+    # (D24 0060 pair, typical lap 18 at 1.27 % drift) from the window the same row's phase triple
+    # came from. It is defined HERE, after the two warps, because it reads them.
+    def _win(c, lap_total: float | None, traces: tuple | None, align) -> tuple[float, float]:
+        return _project_window(float(c.enter), float(c.exit), corner_dist_total, lap_total,
+                               traces=traces, frame=phase_frame, alignment=align)
+
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
 
@@ -860,7 +873,8 @@ def summarize(
                 sigma=float(sigmas_by_cid.get(c.cid, 0.0)),
                 med_events=median_brake_events, best_events=best_brake_events,
                 med_spans=median_coast_spans, best_spans=best_coast_spans,
-                med_win=_win(c, median_lap_total), best_win=_win(c, best_lap_total),
+                med_win=_win(c, median_lap_total, median_traces, median_align),
+                best_win=_win(c, best_lap_total, best_traces, best_align),
                 med_trace=med_trace, best_trace=best_trace,
             )
         else:

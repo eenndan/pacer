@@ -663,9 +663,10 @@ def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
         failed export; the clamp is what makes the first lap of a recording simply export with less
         run-up than was asked for.
       * there is no upper bound anywhere else. A `t1` past the end of the footage makes
-        `frame_times` size the render for frames that do not exist; the decoder's short read is
-        treated by `run_chunk` as a clean finish (`produced > 0`), so the export "succeeds" with a
-        clip shorter than asked for and a progress bar that stops before 100 %.
+        `frame_times` size the render for frames that do not exist. `run_chunk` now REFUSES a
+        decode that runs dry more than a frame short of the plan (see `TruncatedRenderError`) —
+        before that it took any short read with `produced > 0` as a clean finish, so such an export
+        "succeeded" with a clip shorter than asked for and a bar that stopped before 100 %.
 
     Neither clamp can shrink the LAP: they only take back padding that ran off the end of the
     recording, so the first and last laps of a session export with as much run-up/run-off as
@@ -685,16 +686,46 @@ def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
     return t0, t1
 
 
-def frame_times(t0: float, t1: float, fps: float) -> np.ndarray:
-    """The media-clock timestamp of each output frame for a [t0, t1) window at `fps`. ffmpeg's
-    rawvideo output emits ceil(duration*fps) frames starting at t0 spaced 1/fps apart; we mirror
-    that so the i-th frame we composite is stamped with the time ffmpeg decoded it from. Used to
-    drive the per-frame overlay lookups and to size the progress bar."""
+def frame_count(t0: float, t1: float, fps: float) -> int:
+    """How many output frames a [t0, t1) window holds at `fps`: the number of frame STARTS inside
+    the half-open window, i.e. ceil(duration*fps). The plan every other number here is derived
+    from — `frame_times`, the progress bar's denominator, and the clip length both ffmpeg commands
+    are asked for."""
     if fps <= 0:
         raise ValueError("fps must be positive")
-    n = int(np.ceil((t1 - t0) * fps - 1e-9))
-    n = max(n, 0)
-    return t0 + np.arange(n) / fps
+    return max(int(np.ceil((t1 - t0) * fps - 1e-9)), 0)
+
+
+def clip_seconds(t0: float, t1: float, fps: float) -> float:
+    """The clip length ffmpeg is ASKED for: exactly `frame_count` frames, never the raw window.
+
+    THIS IS THE FIX FOR "ONE FRAME SHORT", AND IT IS THE SAME NUMBER ON BOTH SIDES OF THE PIPE.
+    A lap window is a real-valued span, so `duration*fps` is almost never a whole number — and the
+    two ends of the pipeline rounded the leftover differently:
+
+      * the DECODER trims to the requested duration in the OUTPUT frame's own timebase, which
+        ROUNDS: a 2046.07-frame window delivered 2046 frames against a plan of 2047, so the render
+        hit a short read and the bar stopped one frame below its own total. Measured across 96
+        windows on both D24 recordings (interior and seam-crossing, 25 / 30 / 59.94 fps): every
+        window whose fractional frame was below ~0.5 came up one frame short, 18 of 96;
+      * the MUXER dropped the last frame whenever it ENDED past the audio, which a duration-trimmed
+        audio input guaranteed for any fractional window: 0060 lap 17 planned 2047, wrote 2047,
+        and the file held 2046 (video 68.200 s vs audio 68.229 s) on VideoToolbox AND libx264, at
+        30 fps AND 59.94 — the case review §4.5 reported and read as a decoder short read.
+
+    Asking both ends for `n/fps` instead makes the request land exactly on a frame boundary: the
+    decoder's rounding has nothing to round, and the last frame no longer ends past the audio. No
+    frame is invented to get there — frame n-1 starts at `t0 + (n-1)/fps`, which is inside the lap
+    window by construction, so it is picture the window always contained."""
+    return frame_count(t0, t1, fps) / float(fps)
+
+
+def frame_times(t0: float, t1: float, fps: float) -> np.ndarray:
+    """The media-clock timestamp of each output frame for a [t0, t1) window at `fps`: ceil(dur*fps)
+    frames starting at t0, spaced 1/fps apart, so the i-th frame we composite is stamped with the
+    time ffmpeg decoded it from. Used to drive the per-frame overlay lookups and to size the
+    progress bar. `clip_seconds` asks ffmpeg for exactly these frames and no others."""
+    return t0 + np.arange(frame_count(t0, t1, fps)) / fps
 
 
 def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
@@ -929,11 +960,18 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     overlay is then composited against, to protect a boundary that no longer exists."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     scale = scale_filter or f"scale={out_w}:{out_h}"
+    n = frame_count(spec.t0, spec.t1, fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
         *hw,
-        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(), "-t", f"{spec.duration:.6f}",
+        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(),
+        # THE PLAN'S OWN LENGTH, not the raw window — see `clip_seconds`. Asking for the window's
+        # 68.2286 s made ffmpeg's output trim round 2046.86 frames to 2046 and the render ran dry
+        # one frame early; asking for 2047/30 s lands on the frame boundary. `-frames:v` then pins
+        # the count from the other side, so the decode can never overrun the plan either.
+        "-t", f"{clip_seconds(spec.t0, spec.t1, fps):.6f}",
         "-vf", f"{scale},fps={fps:.6f}",
+        "-frames:v", str(n),
         "-an", "-sn", "-dn",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
@@ -1087,6 +1125,19 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     24.000000 s) and a source with NO audio stream is unaffected (the `-map 1:a:0?` is optional and
     the filter has nothing to run on).
 
+    AND `apad` ONLY PADS WHAT IT IS STILL ALLOWED TO PAD, WHICH IS WHY `-t` MOVED IN FRONT OF THE
+    `-i`. Written AFTER the input it is an OUTPUT option: it caps the whole output file, so the
+    padded audio was cut back to the raw window's length and `-shortest` went on dropping the last
+    video frame whenever that frame ENDED past it — which a fractional window guarantees. That is
+    the interior-window case #205 said it had fixed, and the fix held only where `dur*fps` was
+    near-integral (its own 720/720 check). Measured on main, 360p, both D24 recordings, on
+    VideoToolbox and libx264 at 30 and 59.94 fps: six of six exports wrote every planned frame and
+    landed one frame short in the file — 0060 lap 17 planned 2047, muxed 2046 (video 68.200 s,
+    audio 68.229 s); 0060 lap 24 across a chapter seam 2098 -> 2097; at 59.94, 4090 -> 4089.
+    In front of the `-i` it bounds the audio INPUT instead, at the plan's own `clip_seconds`, and
+    nothing bounds the output but the video we wrote. Same six exports after: the file holds every
+    planned frame.
+
     An OVERLAY-ONLY spec hands straight over to `build_overlay_only_encode_cmd`, which has neither
     a source input nor an audio map — the dispatch lives here so the renderer asks one question."""
     if spec.config.overlay_only:
@@ -1096,8 +1147,11 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
         # input 0: raw composited video from our pipe
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out_w}x{out_h}", "-r", f"{fps:.6f}",
         "-i", "pipe:0",
-        # input 1: source audio, same source-LOCAL window (mirrors the decode's input + seek)
-        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(), "-t", f"{spec.duration:.6f}",
+        # input 1: source audio, same source-LOCAL window (mirrors the decode's input + seek).
+        # `-t` is an INPUT option here — before the `-i` it belongs to — and that placement is the
+        # whole of the "one frame short" mux fix (see below).
+        "-ss", f"{spec.local_t0:.6f}", "-t", f"{clip_seconds(spec.t0, spec.t1, fps):.6f}",
+        *spec.source.input_args(),
         "-map", "0:v:0", "-map", "1:a:0?",
         *_video_codec_args(encoder, out_w, out_h, fps, spec.config.quality),
         "-c:a", "aac", "-b:a", "192k",
@@ -2129,6 +2183,34 @@ class NoFramesError(RuntimeError):
     source whose duration ffprobe couldn't read."""
 
 
+# A decode that stops EARLY used to be a success as long as it had emitted at least one frame, and
+# ffmpeg gives no other signal: a source truncated to half its bytes decoded 117 of 240 planned
+# frames and STILL EXITED 0 (measured, synthetic clip, `[mov,mp4...] partial file` on stderr and
+# rc=0). So the exit code cannot be the test and the COUNT has to be. One frame of slack is kept
+# because a frame is the resolution of the plan's own arithmetic — with `clip_seconds` asking on a
+# frame boundary the measured shortfall is 0 on every D24 window, and a stray boundary frame on
+# footage this has not seen is not worth failing an export over. Anything larger is a clip that
+# quietly ends before it should, which is the thing the user cannot see and would publish.
+_TAIL_FRAME_SLACK = 1
+# What `is_truncated_footage` matches on, so the plain-language dialog and the error text cannot
+# drift apart (the same idiom as `_NO_SPACE_MARKERS`).
+_TRUNCATED_MARKER = "the footage ran out"
+
+
+class TruncatedRenderError(RuntimeError):
+    """The decoder ran dry with frames still to render — the footage stopped before the window did.
+
+    Distinct from `NoFramesError` (which is zero frames, a window that maps onto no footage at all):
+    here a real clip was rendered and it is SHORTER than what was asked for, which is exactly the
+    failure a "clean finish" hid."""
+
+
+def is_truncated_footage(message: str) -> bool:
+    """True when a render failure is the footage ending early rather than an encoder problem — the
+    hook the export dialog's plain-language sentence hangs on."""
+    return _TRUNCATED_MARKER in (message or "").casefold()
+
+
 # ffmpeg reports a full disk through its own writer, so what arrives here is a stderr tail, not an
 # errno. These are the spellings that mean "there is no room", and they are matched case-folded
 # because the encoder, the muxer and the OS each phrase it differently.
@@ -2241,6 +2323,10 @@ class Renderer:
         self._frame_bytes = self._out_w * self._out_h * 3
         self._started = False
         self._done = False
+        # Frames the decoder never delivered, inside the one-frame boundary slack. The progress
+        # bar's DENOMINATOR at the end, so a render that finished honestly one frame short reads as
+        # finished rather than stalling at 2046 of 2047 with nothing more coming.
+        self._ran_short = 0
         # --- watchdog / abort plumbing (a supervisor thread can break a wedged blocking I/O) ---
         self._watchdog_timeout = float(getattr(spec.config, "watchdog_timeout", 30.0) or 0.0)
         self._last_progress_t = 0.0            # monotonic time of the last frame written
@@ -2355,23 +2441,35 @@ class Renderer:
                 return True
             raw = self._read_source_frame()
             if raw is None:
-                # A short read means ONE of three things:
+                # A short read means ONE of four things:
                 #   * the supervisor killed the decoder on a stall/cancel -> abort loudly;
-                #   * the decoder reached the ceil-estimate tail AFTER emitting frames -> finish
-                #     cleanly (the normal end of a render);
                 #   * the decoder emitted ZERO frames (an empty/past-EOF seek) -> that's not a
                 #     success, it's the chaptered-export failure: surface NoFramesError so the user
-                #     gets a clear message instead of an empty clip + a dialog that never moved.
+                #     gets a clear message instead of an empty clip + a dialog that never moved;
+                #   * it stopped a FRAME short of the plan -> the boundary slack (see
+                #     _TAIL_FRAME_SLACK); finish, and let the bar finish at the count that was
+                #     really written rather than sitting one frame below its own total;
+                #   * it stopped further short than that -> the footage ran out mid-clip. THAT USED
+                #     TO BE A SUCCESS. `produced > 0` was the whole test, so a source truncated to
+                #     half its bytes exported half a lap, reported "export finished", and left a
+                #     bar stopped at 117 of 240 as the only sign.
                 #
                 # An overlay-only render has no decoder and therefore no short read: its frame
                 # count is `frame_times` and nothing else, so the loop simply runs to it.
                 self._raise_if_aborted()
                 produced = self._i
+                planned = len(self._times)
                 self._finish()
                 if produced == 0:
                     raise NoFramesError(
                         "the video export produced no frames — the source/lap window may be "
                         "invalid (it does not map onto any footage). Nothing was written.")
+                if planned - produced > _TAIL_FRAME_SLACK:
+                    raise TruncatedRenderError(
+                        f"{_TRUNCATED_MARKER} {produced / self._fps:.3f} s into a "
+                        f"{planned / self._fps:.3f} s clip ({produced} of {planned} frames) — the "
+                        "recording may be damaged, or still being copied from the camera.")
+                self._ran_short = planned - produced
                 return True
             try:
                 stdin.write(self._compose_frame(raw))
@@ -2494,7 +2592,10 @@ class Renderer:
                 if progress is not None:
                     progress(self._i, len(self._times))
             if progress is not None:
-                progress(self._i, len(self._times))
+                # The FINAL report counts what was written. Mid-render the denominator is the plan
+                # (that is what a bar is for); at the end, a render that stopped inside the
+                # one-frame slack would otherwise leave the bar parked below its own total forever.
+                progress(self._i, len(self._times) - self._ran_short)
         except (CancelledError, _EncodeError, RenderTimeoutError):
             self.cancel()
             raise

@@ -1091,7 +1091,7 @@ _SCOPE_TOOLTIP = (
     "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
     "lap you select; the Corners tab is the per-lap view. The total is your top "
     f"{PANEL_TOP_N} corners that cleared the evidence gate; corners that did not are listed "
-    "below with the reason. Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
+    "below with the reason. Open Coaching ▸ Opportunities for the full ranking + jump-to.")
 
 
 class OpportunitiesPanel(QWidget):
