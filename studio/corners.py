@@ -11,10 +11,11 @@ sign changes, merged across jitter, filtered by arc length + turn angle → ente
 (|kappa|-weighted centroid, stable on flat-topped sweepers) + direction, in best-lap odometer.
 
 Projection (lap_corner_stats / segment_times): corner windows are fractions of the best lap's
-odometer, projected onto every lap by normalized distance (same as lap_sector_splits) — or, on a
-lap whose line length drifts past NORMALIZED_DRIFT_MAX, by ONE monotone spatial warp for that whole
-lap (project_boundaries). Never a mix of the two within a lap: that is what shrank segments by up
-to 27 % and made the ideal lap's headline 44 % artifact. Corners + straights partition each lap, so
+odometer, projected onto EVERY lap by ONE monotone spatial warp for that whole lap
+(project_boundaries). Never a mix of frames within a lap: that is what shrank segments by up
+to 27 % and made the ideal lap's headline 44 % artifact. The normalized projection (same fraction =
+same track position, as lap_sector_splits) is what remains where there is nothing to match against
+— no spatial traces, or no match anywhere on the lap. Corners + straights partition each lap, so
 the telescoping sum of segment times equals the lap time exactly (asserted).
 
 That warp is ONE object per lap and every projection here is a read of it, so it is built once and
@@ -31,32 +32,38 @@ import numpy as np
 
 from ._signal import _smooth
 
-# --- per-corner alignment drift gate ---------------------------------------------------
+# --- per-corner alignment ---------------------------------------------------------------
 # The corner-window projection (lap_corner_stats / segment_times / coaching.corner_phase_losses)
-# aligns a comparison lap to the reference (best) lap by NORMALIZED distance (d·total_lap/total_ref
-# — same fraction = same track position). Within this bound the normalized projection is kept
-# verbatim, so the common, well-matched case stays NUMERICALLY IDENTICAL to the pre-gate output.
-# Above it the alignment switches to the heading-gated spatial nearest-point match, assembled into
-# ONE warp for the whole lap (project_boundaries).
+# aligns EVERY comparison lap to the reference (best) lap by the heading-gated spatial
+# nearest-point match, assembled into ONE warp for the whole lap (project_boundaries). The
+# NORMALIZED projection (d·total_lap/total_ref — same fraction = same track position) is what
+# remains where there is nothing to match against: no spatial `traces` (the pure-numpy callers, and
+# a cross-recording reference lap, which has no local trace pair), or no match anywhere on the lap.
 #
-# WHAT THIS GATE IS AND IS NOT, measured on the D24 0060 pair (38 clean laps, 24 boundaries each,
-# error = the LONGITUDINAL component of |P_ref(d) − P_lap(proj(d))|, so a wider racing line does not
-# count as misalignment):
+# THERE WAS A DRIFT GATE HERE — `NORMALIZED_DRIFT_MAX = 0.005` — which kept a lap whose line length
+# drifted under 0.5 % on the normalized projection verbatim. It was kept for byte-identity with the
+# pre-gate output, NOT because it separated aligned laps from misaligned ones, and its own note
+# called lowering it a live follow-up. Measured on the laps it SKIPPED (error = the LONGITUDINAL
+# component of |P_ref(d) − P_lap(proj(d))|, so a wider racing line does not count as misalignment):
 #
-#   normalized projection, laps BELOW the gate: median 1.96 m, p90 6.46 m, max 14.66 m
-#   normalized projection, laps ABOVE the gate: median 2.93 m, p90 7.35 m, max 14.18 m
-#   r(line-length drift, per-lap median error) = +0.38
+#                       0060 pair (22 of 38 laps)     0062 (54 of 65 laps)
+#   normalized (gated)  median 1.96 m, p90 6.46 m     median 0.90 m, p90 2.83 m
+#   spatial warp        median 0.10 m, p90 4.44 m     median 0.01 m, p90 0.08 m
 #
-# So line-length drift is only a WEAK predictor of odometer misalignment, and the previous note
-# here ("within that bound the normalized projection lands the boundaries within sub-sample
-# tolerance") is true of the median and false of the tail — a lap at 0.41 % drift carries 14.7 m of
-# misalignment while one at 1.55 % carries 7.6 m. The gate is kept at 0.005 because it is what
-# preserves byte-identity for the well-matched case (and the golden fingerprint with it), NOT
-# because it separates the aligned laps from the misaligned ones. Lowering it is a live follow-up:
-# the spatial alignment cuts the median error to 0.10 m on the below-gate laps too.
-NORMALIZED_DRIFT_MAX = 0.005
-
-# Spatial nearest-point gates for the drift fallback — the SAME constants best_rolling_lap trusts
+# Line-length drift is only a WEAK predictor of odometer misalignment (r = +0.38 on the pair): a lap
+# at 0.41 % drift carried 14.7 m of it while one at 1.55 % carried 7.6 m. So the gate split one
+# session's laps into TWO measurement frames on a scalar that does not measure what it was gating —
+# a lap at 0.499 % and a lap at 0.501 % were projected by different machinery. Removing it moves the
+# ideal +0.316 s on the 0060 pair and −0.071 s on 0062 and reorders the coaching ranking on both;
+# the warp is not uniformly better per boundary (it is worse on 17.4 % of the pair's below-gate
+# boundaries, by a median 1.4 m, where a match fails the 3 m gate and the knot is interpolated) but
+# every order statistic of the residual improves on both recordings.
+#
+# THE REFERENCE LAP IS UNTOUCHED, by construction and in measurement: it matches its own trace, so
+# every knot lands on itself — max boundary move 7e-15 m on 0060 and exactly 0 m on 0062. The
+# yardstick the other laps are measured against does not move.
+#
+# Spatial nearest-point gates — the SAME constants best_rolling_lap trusts
 # (session._ROLLING_*): search a ±SEARCH_FRAC arc of the comparison lap around the reference
 # fraction, keep only same-direction samples (heading cos ≥ MIN_COS), accept the sub-sample-refined
 # closest approach only when it is within MATCH_MAX_M of the reference point. A boundary whose match
@@ -72,8 +79,12 @@ SPATIAL_MATCH_MAX_M = 3.0        # refined closest approach must be ≤ 3 m to c
 def line_length_drift(total_lap: float, total_ref: float) -> float:
     """The cheap line-length drift between a comparison lap and the reference (best) lap:
     |total_lap − total_ref| / total_ref, where each total is that lap's full odometer (cum[-1]).
-    0 (no drift) for a non-positive reference total. This is the single scalar the per-corner
-    alignment gates on (≤ NORMALIZED_DRIFT_MAX → keep normalized; above → spatial fallback)."""
+    0 (no drift) for a non-positive reference total.
+
+    DESCRIPTIVE ONLY — nothing gates on it. It used to be the scalar the per-corner alignment
+    switched on (`NORMALIZED_DRIFT_MAX`), until it was measured to be a weak predictor of the
+    odometer misalignment it was standing in for (see the block above). It stays because it is a
+    real, cheap property of a lap and the fixtures use it to say how far a lap's line has drifted."""
     total_ref = float(total_ref)
     if total_ref <= 0:
         return 0.0
@@ -172,7 +183,7 @@ def lap_alignment(frame, total_ref: float, total_lap: float, *,
                   traces: tuple | None = None) -> tuple | None:
     """ONE comparison lap's odometer alignment to the reference lap, as the (knot_ref, knot_lap)
     pair of a monotone piecewise-linear warp — or None when the normalized projection applies
-    verbatim (no traces, drift inside NORMALIZED_DRIFT_MAX, or no spatial match survived).
+    verbatim (no traces, or no spatial match survived anywhere on the lap).
 
     `frame` is the reference-odometer boundary set the warp is fitted to; the two timing-line
     anchors are added here. See project_boundaries for what the warp is and why it exists.
@@ -183,7 +194,7 @@ def lap_alignment(frame, total_ref: float, total_lap: float, *,
     Hoisting it to once per lap took that to 43.9 ms."""
     total_ref = float(total_ref)
     total_lap = float(total_lap)
-    if traces is None or line_length_drift(total_lap, total_ref) <= NORMALIZED_DRIFT_MAX:
+    if traces is None:
         return None
     ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum = traces
     knots = np.asarray(frame, float)
@@ -215,12 +226,11 @@ def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
                        alignment=DERIVE_ALIGNMENT) -> np.ndarray:
     """Project reference-odometer corner-window boundaries `d_ref` onto a comparison lap's odometer.
 
-    The DRIFT-GATED alignment shared by lap_corner_stats / segment_times / driving / coaching: when
-    the laps' line-length drift is within NORMALIZED_DRIFT_MAX (the common, well-matched case) OR no
-    spatial `traces` are supplied, this is exactly the legacy normalized projection
-    `d_ref · total_lap / total_ref` — byte-identical to the pre-gate output.
+    The alignment shared by lap_corner_stats / segment_times / driving / coaching. With no spatial
+    `traces` (the pure-numpy callers, a cross-recording reference lap) this is exactly the legacy
+    normalized projection `d_ref · total_lap / total_ref`.
 
-    Above the bound the lap is aligned by ONE WARP, not boundary by boundary. The spatial matches
+    Otherwise the lap is aligned by ONE WARP, not boundary by boundary. The spatial matches
     that pass the gates become the interior KNOTS of a monotone piecewise-linear map, anchored at
     the timing line at both ends (0 → 0 and total_ref → total_lap are the same physical point on
     both laps by definition), and every boundary is read off that map. A boundary whose own match
@@ -512,8 +522,8 @@ def _window_edges(corner_list: list[Corner], total_ref: float, total_lap: float,
                   traces: tuple | None = None,
                   alignment=DERIVE_ALIGNMENT) -> np.ndarray:
     """All partition edges (lap odometer metres) for one lap: lap start, each corner's
-    enter/exit projected onto the lap's odometer (the drift-gated alignment — normalized within
-    NORMALIZED_DRIFT_MAX, one monotone spatial warp above; see project_boundaries), and the lap
+    enter/exit projected onto the lap's odometer (one monotone spatial warp for the whole lap; see
+    project_boundaries), and the lap
     end. The lap start/end stay the literal 0 / total_lap — the timing line is the shared S/F point
     on both laps, which is exactly why it is also the warp's two anchors. `traces` (Session-fed)
     enables the spatial alignment; `alignment` passes that lap's warp in already built
@@ -534,7 +544,7 @@ def segment_times(corner_list: list[Corner], total_ref: float, dists, elapsed,
                   alignment=DERIVE_ALIGNMENT) -> np.ndarray:
     """Per-segment times of the corner/straight partition: 2N+1 entries [straight0, corner1, ...].
     One np.interp at the shared edges, so segments sum to the lap time exactly (asserted). `traces`
-    (Session-fed) enables the drift-gated spatial alignment; omitted → the normalized projection.
+    (Session-fed) enables the spatial alignment; omitted → the normalized projection.
     `alignment` is that lap's warp already built — pass it (see project_boundaries) rather than
     paying for the spatial match again.
 
@@ -561,10 +571,9 @@ def lap_corner_stats(corner_list: list[Corner], total_ref: float, dists, speed_k
     odometer position), entry/exit speeds at the window edges, and deltas vs `ref` (the
     reference — best — lap's own stats; None for the reference lap itself -> deltas 0).
 
-    The window-boundary projection is the drift-gated alignment (project_boundaries): normalized
-    distance within NORMALIZED_DRIFT_MAX, one monotone spatial warp for the whole lap above it.
-    `traces` (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum)) enables the spatial
-    alignment; omitted (pure-numpy callers) → normalized, byte-identical to the pre-gate output.
+    The window-boundary projection is one monotone spatial warp for the whole lap
+    (project_boundaries). `traces` (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum))
+    enables that alignment; omitted (pure-numpy callers) → the normalized projection.
     `alignment` is this lap's warp already built — WITHOUT it this function derives the same warp
     TWICE (once for the partition, once for the window edges below)."""
     dists = np.asarray(dists, float)

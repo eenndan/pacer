@@ -172,8 +172,8 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
     able to fail — each is one a plausible edit to the fixture would quietly remove:
 
       1. the seeded best lap IS the fastest (the memo is not lying to every best-derived leaf);
-      2. exactly one lap drifts past corners.NORMALIZED_DRIFT_MAX, at 0.9-1.1 % — below the gate
-         the whole spatial projection is skipped;
+      2. exactly one lap drifts past 0.5 % of line length, at 0.9-1.1 % — the drift that made this
+         fixture's projection non-trivial back when a 0.5 % gate decided whether to warp at all;
       3. on that lap exactly one interior corner boundary has no spatial match, so its warp
          INTERPOLATES a knot — the case #228 repaired; with every boundary matched, the old
          per-boundary projection and the warp agree and reverting #228 moves nothing;
@@ -188,8 +188,8 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
     best_total = s.best_lap_total_distance()
     totals = {i: float(s._dist_cache[i][1][-1]) for i in ids}
     drift = {i: corners.line_length_drift(totals[i], best_total) for i in ids}
-    over = [i for i in ids if drift[i] > corners.NORMALIZED_DRIFT_MAX]
-    assert over == [1], f"drift per lap {drift} — exactly lap 1 must be past the gate"
+    over = [i for i in ids if drift[i] > 0.005]
+    assert over == [1], f"drift per lap {drift} — exactly lap 1 must be the drifted one"
     assert 0.009 <= drift[1] <= 0.011, f"lap 1 drift {drift[1]:.4%}"
 
     # Asked of the spatial MATCHER, not of the warp built from it: this pins a property of the
@@ -224,8 +224,8 @@ def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
       1. the lap coaching reads (`coaching.median_lap_id` over the consistency laps) is the
          DRIFTING one, and is not the best lap (whose window projection is the identity by
          definition — projecting the corner basis onto the lap it was built from);
-      2. it is the ONLY lap past corners.NORMALIZED_DRIFT_MAX, at 0.9-1.1 %, and it therefore has a
-         real warp (`lap_alignment` is not None) rather than the normalized projection;
+      2. it is the ONLY lap past 0.5 % of line-length drift, at 0.9-1.1 %, and it has a real warp
+         (`lap_alignment` is not None) rather than the normalized projection;
       3. exactly one interior corner boundary on it has no spatial match, so its warp INTERPOLATES
          a knot — the case a bare normalized scale cannot reproduce;
       4. the two projections actually SEPARATE: the gated window and the un-gated
@@ -245,8 +245,8 @@ def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
         f"median lap {med} is the best lap {best} — its window projection is the identity")
 
     drift = {i: corners.line_length_drift(totals[i], best_total) for i in ids}
-    over = [i for i in ids if drift[i] > corners.NORMALIZED_DRIFT_MAX]
-    assert over == [med], f"drift per lap {drift} — exactly the median lap {med} must be past the gate"
+    over = [i for i in ids if drift[i] > 0.005]
+    assert over == [med], f"drift per lap {drift} — exactly the median lap {med} must be drifted"
     assert 0.009 <= drift[med] <= 0.011, f"median lap drift {drift[med]:.4%}"
 
     align = s.corners.lap_alignment(med, totals[med])

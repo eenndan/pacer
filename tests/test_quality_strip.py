@@ -316,8 +316,8 @@ class _Check:
         return abs(self.loop_ratio_gyro - 1.0) * 100.0
 
 
-def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, applied_lag=None,
-                quality=None):
+def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None,
+                applied_lag=None):
     from studio.stats_panel import StatsView
 
     class _S:
