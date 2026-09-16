@@ -229,11 +229,10 @@ def quality_key(headers, rows) -> list[tuple[str, str]]:
     can never omit one it does) — the two halves of a legend that would otherwise drift.
 
     The column is located BY NAME rather than as `cells[-1]`: `laps_table` appends it last today,
-    and a future column appended after it would silently make this read corner apex speeds."""
-    try:
-        col = list(headers).index("quality")
-    except ValueError:
-        return []
+    and a future column appended after it would silently make this read corner apex speeds.
+    `headers` is `laps_table`'s, which always carries the column (both callers pass it), so a
+    missing one is a caller bug and raises rather than quietly emitting a file with no key."""
+    col = list(headers).index("quality")
     present = {m for _lap_id, cells in rows if len(cells) > col for m in cells[col].split()}
     return data_quality.mark_key(present)
 

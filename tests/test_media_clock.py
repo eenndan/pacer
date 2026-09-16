@@ -89,6 +89,14 @@ def test_fit_refuses_an_impossible_rate():
     must not move a user's video by 20 s on the strength of it."""
     tel, _ = _axes()
     assert media_clock.fit(tel, tel * 1.005).is_identity
+    # ...and it is the RATE gate that refuses it, not the correction cap standing in for it. Over the
+    # 84-minute axis above the same 0.5 % is ~24 s of correction, so `MAX_CORRECTION_S` alone
+    # rejects it and a rate gate loosened tenfold still passed. Ten minutes of the same broken
+    # stream moves the video by under 4 s, inside the correction cap — only the rate can say no.
+    short, _ = _axes(span=600.0)
+    assert float(np.abs(short * 0.005).max()) < media_clock.MAX_CORRECTION_S
+    assert media_clock.fit(short, short * 1.005).is_identity, (
+        "a 0.5 % clock over ten minutes was accepted: the rate gate is not refusing it")
 
 
 def test_fit_refuses_a_relation_that_is_not_affine():
