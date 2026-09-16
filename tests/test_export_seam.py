@@ -33,6 +33,7 @@ Run: python tests/test_export_seam.py
 import os
 import subprocess
 import sys
+import tempfile
 
 import numpy as np
 
@@ -48,6 +49,13 @@ W, H, FPS = 96, 64, 30.0
 GOP = 30                       # frames between keyframes -> a 1.000 s GOP, like the GoPro footage
 FRAME_BYTES = W * H * 3
 SR = 48000
+
+# The synthetic chapters go in a directory PRIVATE TO THIS PROCESS, not in the shared $TMPDIR:
+# `pacer_seam_a.mp4` is the same path in every run on the machine, and a concurrent lane deleting
+# one mid-decode fails here as an ffmpeg error that reads like a real seam defect. Module-scope, so
+# the finalizer removes the directory at exit. Pinned by tests/test_temp_isolation.py.
+_TMP = tempfile.TemporaryDirectory(prefix="pacer-test-seam-")
+TMP = _TMP.name
 
 
 def _in_pixi_env() -> bool:
@@ -214,7 +222,7 @@ def test_a_seam_crossing_window_decodes_the_frame_it_asked_for():
     """
     if not _require_ffmpeg("seam_decodes_the_frame_it_asked_for"):
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     ch_a = os.path.join(tmp, "pacer_seam_a.mp4")
     ch_b = os.path.join(tmp, "pacer_seam_b.mp4")
     _make_chapter(ch_a, 4.0, seed=42, hue=0)
@@ -301,7 +309,7 @@ def test_the_span_audio_starts_at_the_same_instant_as_the_picture():
     is printed so a regression reads as a number rather than as a pass."""
     if not _require_ffmpeg("seam_audio_starts_where_the_picture_does"):
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     ch_a = os.path.join(tmp, "pacer_seam_aud_a.mp4")
     ch_b = os.path.join(tmp, "pacer_seam_aud_b.mp4")
     _make_chapter(ch_a, 4.0, seed=7, hue=0)
