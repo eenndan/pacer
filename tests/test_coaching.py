@@ -1639,8 +1639,12 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     Measured, the cause axis does NOT generalize: braking holds 61 % of 0060's ranked time (a
     theme) and 44 % of 0062's (not one), so the "no single cause" branch is the common case on
     real recordings and is asserted here as a first-class output, not as a fallback."""
-    one_cause = K.session_theme(_themed([K.REACH_REPEAT] * 4))
-    acts = K.theme_actions(one_cause, _themed([K.REACH_REPEAT] * 4))
+    # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
+    # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
+    # This test is about the CAUSE axis and the two-action cap, so it keeps a clear lead.
+    spread = [1.0, 0.5, 0.4, 0.3]
+    one_cause = K.session_theme(_themed([K.REACH_REPEAT] * 4, losses=spread))
+    acts = K.theme_actions(one_cause, _themed([K.REACH_REPEAT] * 4, losses=spread))
     assert len(acts) == 2, acts
     assert acts[0].startswith("Braking is the common thread"), acts[0]
     assert acts[1].startswith("Start with C1:"), acts[1]
@@ -1653,6 +1657,56 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     assert len(mixed_acts) == 2 and mixed_acts[0].startswith("No single cause dominates"), \
         mixed_acts
     print(f"ok theme actions: {acts}")
+
+
+def _ranked_row(cid: int, loss: float, iqr: float, reach=K.REACH_REPEAT,
+                kind=K.REASON_BRAKING) -> K.Opportunity:
+    """One RANKED row with a chosen loss and lap-to-lap spread (the two numbers the tie test
+    reads), everything else fixed."""
+    return K.Opportunity(
+        cid=cid, direction=1, time_lost=loss, entry_dist=0.0,
+        reason=K.Reason(kind, 0.1, 3.0, 0.3, 0.0, 0.1),
+        evidence=K.Evidence(n_laps=65, reach_laps=12, reach=reach, iqr=iqr,
+                            abstain=K.ABSTAIN_NONE))
+
+
+def test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone():
+    """T4: "Start with C<n>" must not name ONE corner when the corner behind it is the same
+    number.
+
+    MEASURED on both real recordings (current `main`, after #289 and #300 moved these numbers),
+    with a paired within-lap permutation test on the corner labels, 20,000 permutations:
+
+        0060  top C12 +0.330 s vs C4 +0.244 s — gap 0.086 s, p = 0.125  -> a TIE
+        0062  top C3  +0.148 s vs C12 +0.143 s — gap 0.005 s, p = 0.837 -> a TIE
+
+    and a paired lap bootstrap crowns a DIFFERENT corner in 13.8 % (0060) / 46.0 % (0062) of
+    20,000 resamples. Split the same session in half (odd vs even laps) and the crown changes on
+    BOTH recordings. Yet 17 of the 30 ranked pairs ARE separable, so the ranking itself stands —
+    it is only the top-of-the-list crown that the data does not support.
+
+    The numbers here are 0062's real ones. C1 is the third row, which the same permutation test
+    DOES separate from the lead (p = 0.0042), so it must not be dragged into the sentence."""
+    rows = [_ranked_row(3, 0.148, 0.158), _ranked_row(12, 0.143, 0.206),
+            _ranked_row(1, 0.085, 0.109)]
+    acts = K.theme_actions(K.session_theme(rows), rows)
+    start = acts[-1]
+    assert start.split(":")[0] == "Start with C3 or C12", start
+    assert "+0.15 s and +0.14 s" in start, start
+    assert "lap-to-lap spread" in start, start
+    print(f"ok T4 tie: {start!r}")
+
+
+def test_t4_a_lead_that_clears_the_spread_still_reads_exactly_as_before():
+    """The other half of the same rule: a lead the measurement DOES separate keeps the sentence it
+    has always had, word for word. 0060's C12 (+0.330 s, IQR 0.331) against its C2 (+0.204 s, IQR
+    0.220) — the permutation test separates them at p = 0.0046 and the rule agrees."""
+    rows = [_ranked_row(12, 0.330, 0.331), _ranked_row(2, 0.204, 0.220),
+            _ranked_row(9, 0.153, 0.193)]
+    acts = K.theme_actions(K.session_theme(rows), rows)
+    assert acts[-1] == ("Start with C12: +0.33 s, and you have matched it on 12 of 65 laps."), \
+        acts[-1]
+    print(f"ok T4 clear lead: {acts[-1]!r}")
 
 
 def test_both_coaching_surfaces_lead_with_the_same_theme():
