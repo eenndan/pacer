@@ -209,6 +209,9 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   same numbers on the clipboard.
 - **A themed report for a crash that happens twice.** The unhandled-exception dialog is shown once
   per distinct failure; repeats, and anything raised off the GUI thread, are logged instead.
+- **⌘L opens the Session Library.** The front door to every recording you have analysed was the one
+  top-level surface with no key at all. It is documented on the ? card and reachable from ⌘K,
+  because all three read the same registry.
 
 ### Changed
 
@@ -268,6 +271,22 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   the GPS chain would have pushed the dial 0.3–0.45 s the other way, ahead of the picture; the
   lookup now crosses the same seam everything else does, so the dial and the speed beside it
   describe one frame.
+- **A greyed-out menu item now says why, where macOS lets you read it.** Twenty of the items
+  disabled on the welcome screen explained themselves in a Qt tooltip — and on macOS that tooltip
+  is shown to nobody: measured on the real screen, this app's menu bar is the native one
+  (`isNativeMenuBar()` is true, its in-window height is 0 px), so its rows are NSMenuItems, and
+  Qt's own menu-tooltip path is switched off on all eight menus anyway (a live tooltip event
+  produced nothing at `toolTipsVisible=False` and the full sentence at `True`). Eleven of those
+  items had a real reason nobody could read; the other nine had no reason written at all, only a
+  description of a feature you cannot have. Every gated item now carries the reason's condition on
+  its own label — "Library… — no recordings analysed yet", "Save as track… — needs a complete lap
+  and a GPS position" — and the whole sentence, remedy included, on its ⌘K palette row, which is a
+  real Qt view and does answer a hover even on a greyed row. The clause comes off again the moment
+  the gate opens.
+- **One ellipsis fixed, and the copy that points at it.** Coaching ▸ "Opportunities…" asks the user
+  for nothing, so under the app's own rule (a trailing "…" means the command needs more
+  information) it should never have carried one. The item and the in-app sentence that names it
+  were renamed together, and the test now reads that sentence against the action's own text.
 - **The ★ that means "session best" was decided three different ways, so two pages marked
   different cells of the same grid.** The Stats page's SPLITS grid compares what it *prints* —
   an interior sector split is the difference of two GPS sample times on a 0.1 s grid, so a
