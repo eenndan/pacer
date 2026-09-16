@@ -177,8 +177,9 @@ def bare_session(laps=None, *, best=None, valid=None, excluded=None):
 # ---------------------------------------------------------------- the drift + noise fixture
 # THE STADIUM FIXTURE CANNOT SEE TWO DEFECT CLASSES THIS REPO HAS ALREADY SHIPPED, and this one
 # exists to see both. `test_session_services._synthetic_session` drives both of its laps round ONE
-# polyline (0 % line-length drift, so every path behind `corners.NORMALIZED_DRIFT_MAX` is dead) at a
-# noise-free speed. #228's one-frame-per-lap repair and #275's coast window both moved real D24
+# polyline (0 % line-length drift, so the spatial warp is the identity there and every projection
+# defect is invisible) at a noise-free speed. #228's one-frame-per-lap repair and #275's coast
+# window both moved real D24
 # numbers while re-cutting that baseline came back byte-identical.
 #
 # What each ingredient is for, and why it is the size it is (each one was measured to be NEEDED —

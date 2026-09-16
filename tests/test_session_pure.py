@@ -1200,10 +1200,10 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
 
 
 def _distinct_total_ideal_session():
-    """The crossing-pace fixture with DISTINCT lap totals (1000 / 1002 / 1004 m — 0.2 % drift,
-    inside corners.NORMALIZED_DRIFT_MAX = 0.5 %, so the projection stays on its deterministic
-    normalized branch). The distinct totals are what let the collapse test below identify ONE
-    lap inside `project_boundaries`, which only ever sees the totals."""
+    """The crossing-pace fixture with DISTINCT lap totals (1000 / 1002 / 1004 m — 0.2 % drift).
+    These laps carry no xy traces, so `project_boundaries` has nothing to match against and stays
+    on its deterministic normalized branch. The distinct totals are what let the collapse test
+    below identify ONE lap inside `project_boundaries`, which only ever sees the totals."""
     t0, d0 = odometer(122, 0.1, 100.0, 1000.0, lambda u: 0.8 + 1.4 * np.sin(u / 2))
     t1, d1 = odometer(120, 0.1, float(t0[-1]), 1004.0, lambda u: 2.2 - 1.4 * np.sin(u / 2))
     t2, d2 = odometer(118, 0.1, float(t1[-1]), 1002.0)

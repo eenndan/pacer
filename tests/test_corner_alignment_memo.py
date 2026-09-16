@@ -18,9 +18,10 @@ So the tests here are all the same shape, and it is a shape with TEETH:
      step 4 passes on a fixture where nothing moved and proves nothing.
 
 The fixture is a bare Session (tests/_synthetic idiom) whose comparison lap is 1.2 % longer than
-the reference — past `corners.NORMALIZED_DRIFT_MAX` — so the spatial path genuinely runs. That is
-asserted explicitly (`test_fixture_actually_crosses_the_drift_gate`): a fixture that quietly stayed
-below the gate would make every warp None and every assertion below vacuous.
+the reference, and whose laps carry real xy traces — so the spatial path genuinely runs and
+produces real interior knots. That is asserted explicitly
+(`test_fixture_actually_crosses_the_drift_gate`): a fixture whose laps produced no warp would make
+every warp None and every assertion below vacuous.
 
 Run:  python tests/test_corner_alignment_memo.py
 """
@@ -122,23 +123,27 @@ def same(a, b) -> bool:
 
 
 def test_fixture_actually_crosses_the_drift_gate():
-    """TEETH FOR EVERY OTHER TEST HERE. If the drifted laps sat inside NORMALIZED_DRIFT_MAX their
-    warp would be None, `same(None, None)` would hold trivially after any mutation, and this file
-    would assert nothing. Lap 3 is the control: it is deliberately BELOW the gate."""
+    """TEETH FOR EVERY OTHER TEST HERE. If a lap produced no warp, `same(None, None)` would hold
+    trivially after any mutation and this file would assert nothing. EVERY lap must therefore carry
+    a real warp with real interior knots.
+
+    Lap 3 used to be the control for the opposite property: it sits under 0.5 % drift, and the old
+    `corners.NORMALIZED_DRIFT_MAX` gate kept such a lap on the normalized projection (warp None).
+    That gate is gone — every lap is spatially aligned now — so lap 3 is held to the same standard
+    as the others, and the spread of drifts below is kept only because it is what makes the laps
+    distinct from one another."""
     s = fixture()
     total_ref = s.corners.basis()[1]
-    assert C.line_length_drift(total_of(s, 1), total_ref) > C.NORMALIZED_DRIFT_MAX
-    assert C.line_length_drift(total_of(s, 2), total_ref) > C.NORMALIZED_DRIFT_MAX
-    assert C.line_length_drift(total_of(s, 3), total_ref) <= C.NORMALIZED_DRIFT_MAX
-    for lap in (1, 2):
+    assert C.line_length_drift(total_of(s, 1), total_ref) > 0.005
+    assert C.line_length_drift(total_of(s, 2), total_ref) > 0.005
+    assert C.line_length_drift(total_of(s, 3), total_ref) <= 0.005
+    for lap in (1, 2, 3):
         al = s.corners.lap_alignment(lap, total_of(s, lap))
         assert al is not None, f"lap {lap} produced no spatial warp — fixture is degenerate"
         # Real interior knots, not just the two timing-line anchors (which would BE the
         # normalized map and make the spatial path a no-op).
         assert len(al[0]) > 2, f"lap {lap}: no boundary survived the gates ({len(al[0])} knots)"
-    assert s.corners.lap_alignment(3, total_of(s, 3)) is None, \
-        "a lap inside the drift gate must keep the normalized projection (None)"
-    print("ok fixture crosses the drift gate (laps 1,2 spatial; lap 3 normalized)")
+    print("ok fixture laps 1-3 all carry a real warp (drifts spanning the old 0.5 % gate)")
 
 
 def test_memo_returns_the_same_answer_as_a_fresh_derivation():
@@ -169,9 +174,9 @@ def test_memo_is_actually_hit():
                 s.corners.lap_alignment(lap, total_of(s, lap))
     finally:
         C._spatial_matches = real
-    assert calls["n"] == 2, \
-        f"expected ONE spatial match for each of the 2 drifted laps, got {calls['n']}"
-    print("ok 20 alignment reads over 4 laps cost 2 spatial matches")
+    assert calls["n"] == len(_SCALES), \
+        f"expected ONE spatial match for each of the {len(_SCALES)} laps, got {calls['n']}"
+    print(f"ok 20 alignment reads over {len(_SCALES)} laps cost {len(_SCALES)} spatial matches")
 
 
 def test_key_separates_laps_and_totals():
