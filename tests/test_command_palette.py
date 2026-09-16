@@ -372,6 +372,11 @@ def test_a_disabled_row_says_why_and_how_to_get_it_back():
         f"the row carries the condition but not the way out: {entry.reason!r}")
     assert dialog.table.item(0, command_palette._COL_TITLE).toolTip() == entry.reason, (
         dialog.table.item(0, command_palette._COL_TITLE).toolTip())
+    # ...and the "where it lives" column still names the MENU, not the clause that menu is wearing:
+    # File ▸ Export greys out as "Export — open a recording first", and QMenu.title() IS that
+    # action's text, so the group would otherwise repeat the whole gate sentence on six rows.
+    assert entry.group == "Export", (
+        f"the group column carries the submenu's gate clause: {entry.group!r}")
     # ...and a live command has nothing to explain, so it carries no tooltip at all.
     dialog.search.setText("Keyboard shortcuts")
     for _ in range(4):

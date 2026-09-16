@@ -154,7 +154,13 @@ def _menu_entries(window) -> list[Entry]:
             menu.aboutToShow.emit()
         except Exception:  # noqa: BLE001 — a stale menu must not cost the user the whole palette
             pass
-        group = _clean(menu.title())
+        # THE MENU'S OWN NAME, not the one its gate is currently wearing. A disabled submenu row
+        # carries its reason in its text now (File ▸ Export greys out as "Export — open a recording
+        # first"), and QMenu.title() IS that action's text — so without this the palette's "where
+        # it lives" column would read the whole gate clause for six export rows, and `rank` would
+        # match them on words from it.
+        opener = menu.menuAction()
+        group = _clean(opener.property("featureText") or menu.title())
         for action in menu.actions():
             if action.isSeparator() or id(action) in opener_ids:
                 continue
