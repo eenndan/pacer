@@ -191,7 +191,11 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   `tests/_synthetic.drift_median_session` (the same three geometries with the drift on the
   MEDIAN-time lap — coaching reads the median lap, so with the drift on the slowest one every
   coaching corner-window projection was the identity and #289's coaching-alignment fix moved 15
-  real leaves and 0 synthetic ones), vs a
+  real leaves and 0 synthetic ones), and a `drift_band` phase over
+  `tests/_synthetic.drift_band_session` (a LADDER of three laps at 0.118 / 0.289 / 0.460 %
+  line-length drift — the band the removed 0.5 % drift gate governed, which no lap of any other
+  fixture sits in, so #300's removal of that gate moved 0 of all 24,859 leaves; restoring it moves
+  68 of this phase's 15,451), vs a
   committed baseline (`tests/golden_synthetic_baseline.json`). It runs with no big file, so it
   gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
   reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.

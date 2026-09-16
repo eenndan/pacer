@@ -2860,8 +2860,11 @@ class StudioWindow(QMainWindow):
             _log.exception("marks not refreshed")
 
     def _playhead_time(self) -> float | None:
-        """Where the playhead is, in GLOBAL media-clock seconds — the one clock a mark is AUTHORED
-        in. None before a load."""
+        """Where the playhead is, in GLOBAL TELEMETRY (GPS9 true-clock) seconds — the clock a mark
+        is AUTHORED in, and the one every other Session time is on. `PlayerPane._on_position`
+        converts the media position back through `MediaClock` before it reaches here, so this is
+        not a media second; `marks.anchor_from_global` is where it meets the chapter table's media
+        offsets. None before a load."""
         view = getattr(self, "view", None)
         if view is None:
             return None

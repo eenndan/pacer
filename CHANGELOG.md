@@ -276,6 +276,23 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **The provenance panel named the wrong clock for every lap time it explained.** Right-clicking a
+  lap time opens a panel that states the window the number was measured over; its axis line read
+  `media-clock seconds`, and the window is not on the media clock — it is the GPS9 true-clock
+  (telemetry) axis the lap was timed on, which is what `docs/ACCURACY.md`'s transponder validation
+  covers. The two run ~27 ppm apart, so the stated window was off by up to 0.095 s (recording
+  0060) and 0.166 s (0062), growing through a session: 5 frames at 30 fps, at the end of the
+  84-minute recording. The line now reads `telemetry seconds (GPS9 true clock)`. Nothing moved but
+  the label — the window's numbers were always right, only their name was wrong.
+  - The same false claim was repeated in **sixteen comments and docstrings** across the C++ core
+    and the studio (`pacer/laps/laps.hpp`, `Session._lap_columns` and its whole family), and every
+    one is corrected. Measured before changing anything: the lap columns' interior times are
+    bit-exact members of the telemetry axis on **all 26,486 (0060) and 45,313 (0062)** samples, so
+    the code was right and only the comments were wrong. The two places that cross the two clocks
+    by label — a lap's inherited GPS-quality class, and a mark's chapter anchor — were measured
+    rather than assumed: the class changes for **0 of 38 and 0 of 65** laps, and the mark round
+    trip is **exact**. Both now carry the numbers instead of the claim.
+
 - **Every GPS-derived number drawn over the video was half a second late, and now it is not.** The
   camera's accelerometer and gyroscope are timestamped on the clock the picture plays on; its GPS
   receiver stamps a fix on its own, and that stamp lands **0.476 s (0060) / 0.459 s (0062)** after

@@ -36,7 +36,8 @@ import numpy as np
 
 from . import gapfill
 
-# (xs, ys, times) for one lap: local metres + media-clock seconds (Session._lap_trace_xyt).
+# (xs, ys, times) for one lap: local metres + telemetry (GPS9 true-clock) seconds, NOT media
+# seconds (Session._lap_trace_xyt).
 LapXYT = Callable[[int], tuple[np.ndarray, np.ndarray, np.ndarray]]
 
 
@@ -45,7 +46,8 @@ class LapRenderCache:
 
     `lap_xyt` / `valid_lap_ids` / `lap_has_dropout` / `lap_time` are Session-bound
     callables (Session owns the pacer side and its own per-lap caches); `trace_times`
-    is the full-trace media-clock time array (Session.tt), used only to size gaps.
+    is the full-trace TELEMETRY (GPS9 true-clock) time array (Session.tt), used only to
+    size gaps — a duration, so the clock it is stated on does not reach the drawing.
     """
 
     def __init__(self, *, lap_xyt: LapXYT,

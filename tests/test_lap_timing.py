@@ -3,10 +3,12 @@
 The lap timer compares two start/finish-line crossing instants. The C++ core already
 INTERPOLATES each crossing time along the chord (pacer::Split), so the accuracy of a lap time
 is set by the per-sample TIME AXIS. The old `naive` axis spread each payload's media span over
-i/n samples; the GoPro media clock for the GPS track runs ~0.1% fast, which systematically
-compressed every lap. `_gps9_times` instead uses the GPS9 fix timestamps' true 10 Hz spacing,
-re-anchored per contiguous run to the media (naive) clock — so the axis stays on the media clock
-the video layer maps against, but inter-sample spacing is the real wall-clock spacing.
+i/n samples; the GoPro media clock for the GPS track runs fast (measured +26.7 / +27.1 ppm on the
+two D24 recordings), which systematically compressed every lap. `_gps9_times` instead uses the
+GPS9 fix timestamps' true 10 Hz spacing, re-anchored per contiguous run to the media (naive)
+clock — so the axis is ANCHORED on the media clock and then follows the GPS clock, which makes it
+a SEPARATE axis from the video's, not the same one. The two drift up to 0.097 / 0.167 s apart over
+a recording, and `studio/media_clock.py` is the affine map the seek converts through.
 
 These tests run on synthetic samples (no telemetry file). Run: python tests/test_lap_timing.py
 """
@@ -41,7 +43,7 @@ def test_gps9_uses_true_spacing_reanchored_to_media():
     # studio/docs/gps-accuracy-research.md). The explicit 1.0 here pins that behaviour.
     out = np.asarray(_gps9_times(samples, naive, rate_factor=1.0))
     assert len(out) == n
-    # Anchored at the first naive time (so the axis stays on the media clock for video sync).
+    # Anchored at the first naive time (the axis STARTS on the media clock and then leaves it).
     assert abs(out[0] - naive[0]) < 1e-9
     # Spacing is the clean GPS9 100 ms, NOT the wobbly naive spacing.
     d = np.diff(out)
