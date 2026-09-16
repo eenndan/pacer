@@ -304,44 +304,99 @@ def _scaled_odometer(cum, *, region_end: float, region_scale: float):
     return np.concatenate(([0.0], np.cumsum(diffs)))
 
 
-def test_drift_within_bound_is_identical_to_normalized():
-    """The common, well-matched case: when the line-length drift is within NORMALIZED_DRIFT_MAX,
-    the gated projection is BYTE-IDENTICAL to the legacy normalized projection even when spatial
-    traces are supplied (the gate is a no-op) — the validated coaching math is not destabilised."""
+def test_uniform_drift_is_where_normalized_is_already_the_truth():
+    """A lap whose odometer is a UNIFORM scaling of the reference's — same xy, every step stretched
+    by the same factor — is the one case where the normalized projection IS the true position, so
+    the spatial warp must agree with it rather than perturb it.
+
+    This used to assert that a 0.3 % drift stayed on the normalized branch VERBATIM because it sat
+    inside the old `NORMALIZED_DRIFT_MAX` gate. That gate is gone, and what is pinned now is the
+    property that made it look safe — which is a property of UNIFORM drift, not of small drift.
+    `test_a_lap_inside_the_old_drift_gate_is_warped_too` is the same fixture with the drift made
+    non-uniform, where the two answers are metres apart."""
     xs, ys, cum_a = stadium()
     d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
     cs = C.detect_corners(d, k)
     total_ref = float(cum_a[-1])
     interior = [v for c in cs for v in (c.enter, c.exit)]
-    # 0.3% uniform drift — inside the 0.5% bound.
-    cum_b = cum_a * 1.003
-    assert C.line_length_drift(float(cum_b[-1]), total_ref) <= C.NORMALIZED_DRIFT_MAX
+    cum_b = cum_a * 1.003  # 0.3 % UNIFORM drift: the normalized projection is the truth here
     normalized = np.asarray(interior) * (cum_b[-1] / total_ref)
     traces = (xs, ys, cum_a, xs, ys, cum_b)
-    gated = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)
-    assert np.array_equal(gated, normalized), (gated, normalized)
+    warped = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)
+    assert np.max(np.abs(warped - normalized)) < 1e-9, (warped, normalized)
     # …and with NO traces it is always the normalized projection (the pure-numpy callers' path).
     assert np.array_equal(
         C.project_boundaries(interior, total_ref, float(cum_b[-1])), normalized)
-    print(f"ok drift gate no-op: drift "
-          f"{C.line_length_drift(float(cum_b[-1]), total_ref):.4f} <= {C.NORMALIZED_DRIFT_MAX} "
-          f"→ gated == normalized (max|Δ|={float(np.max(np.abs(gated - normalized))):.0e})")
+    print(f"ok uniform drift: the warp agrees with normalized to "
+          f"{float(np.max(np.abs(warped - normalized))):.1e} m")
+
+
+def test_a_lap_inside_the_old_drift_gate_is_warped_too():
+    """THE C2 REGRESSION (the drift-gate residual). A lap can carry METRES of odometer misalignment
+    while its LINE-LENGTH drift — the scalar the old `NORMALIZED_DRIFT_MAX = 0.005` gate switched
+    on — stays far inside that gate, because distance taken in one stretch is given back in another
+    and the two nearly cancel.
+
+    Here the bottom straight is run 5 % long and the top straight 4 % short over the SAME xy: the
+    totals differ by only ~0.3 %, well inside the old gate, while the local odometer offset between
+    the two stretches reaches metres. Under the gate this lap kept the normalized projection
+    verbatim, so every corner boundary on it was wrong by that offset.
+
+    Not a corner case. On the laps the gate actually skipped, the longitudinal boundary residual ran
+    a median 1.96 m (D24 0060 pair, 22 of its 38 laps) and 0.90 m (0062, 54 of 65); warping every
+    lap cuts those to 0.10 m and 0.01 m.
+
+    ON THE UNFIXED TREE this fails at the `max|warp-true|` assertion: `got` IS `normalized` there,
+    which the line above it measures as metres from the truth."""
+    xs, ys, cum_a = stadium()
+    d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
+    cs = C.detect_corners(d, k)
+    total_ref = float(cum_a[-1])
+    interior = np.asarray([v for c in cs for v in (c.enter, c.exit)], float)
+    # Distance TAKEN on the bottom straight (+5 %) and GIVEN BACK along the top (−4 %), over the
+    # same xy: the two nearly cancel in the total while the local offset between them is metres.
+    diffs = np.diff(cum_a).astype(float)
+    diffs[cum_a[:-1] < STRAIGHT] *= 1.05
+    diffs[(cum_a[:-1] >= STRAIGHT + ARC) & (cum_a[:-1] < 2 * STRAIGHT + ARC)] *= 0.96
+    cum_b = np.concatenate(([0.0], np.cumsum(diffs)))
+    total_lap = float(cum_b[-1])
+    drift = C.line_length_drift(total_lap, total_ref)
+    assert drift < 0.005, f"fixture must sit INSIDE the old 0.5 % gate, got {drift:.4%}"
+
+    # TRUTH: xy index i on the reference is xy index i on lap B, whose odometer is cum_b[i].
+    idx = np.interp(interior, cum_a, np.arange(len(cum_a)))
+    true = np.interp(idx, np.arange(len(cum_b)), cum_b)
+    normalized = interior * (total_lap / total_ref)
+    # The fixture must really separate the two frames, or everything below is vacuous.
+    swing = float(np.max(np.abs(true - normalized)))
+    assert swing > 3.0, f"fixture does not separate the frames ({swing:.2f} m)"
+
+    traces = (xs, ys, cum_a, xs, ys, cum_b)
+    got = C.project_boundaries(interior, total_ref, total_lap, traces=traces)
+    assert np.max(np.abs(got - true)) < 1e-6, (
+        f"a lap inside the old gate was not aligned spatially: max|warp-true|="
+        f"{float(np.max(np.abs(got - true))):.3f} m, where the normalized projection this lap "
+        f"used to keep is {swing:.2f} m from the truth")
+    assert np.max(np.abs(got - normalized)) > 3.0, (got, normalized)
+    print(f"ok below-gate lap warped: drift {drift:.4%} < 0.5 %, frame swing {swing:.1f} m, "
+          f"max|warp-true|={float(np.max(np.abs(got - true))):.1e} m")
 
 
 def test_high_drift_engages_spatial_and_recovers_true_position():
-    """Above the bound, the spatial fallback ENGAGES and is the more-correct number: with the drift
-    packed into the bottom straight (a non-uniform odometer over the SAME xy), the normalized
-    fraction biases the corner boundaries by metres while the spatial match recovers the true
-    physical odometer to machine precision."""
+    """The spatial alignment is the more-correct number: with the drift packed into the bottom
+    straight (a non-uniform odometer over the SAME xy), the normalized fraction biases the corner
+    boundaries by metres while the spatial match recovers the true physical odometer to machine
+    precision. This is the LARGE-drift case; the sibling test above does the same at a drift that
+    used to sit inside the gate."""
     xs, ys, cum_a = stadium()
     d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
     cs = C.detect_corners(d, k)
     total_ref = float(cum_a[-1])
     interior = [v for c in cs for v in (c.enter, c.exit)]
-    # 6% longer line over the bottom straight only → ~2% total drift, ABOVE the bound.
+    # 6% longer line over the bottom straight only → ~2% total drift.
     cum_b = _scaled_odometer(cum_a, region_end=STRAIGHT, region_scale=1.06)
     drift = C.line_length_drift(float(cum_b[-1]), total_ref)
-    assert drift > C.NORMALIZED_DRIFT_MAX, drift
+    assert drift > 0.005, drift
     normalized = np.asarray(interior) * (cum_b[-1] / total_ref)
     traces = (xs, ys, cum_a, xs, ys, cum_b)
     gated = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)
@@ -350,7 +405,7 @@ def test_high_drift_engages_spatial_and_recovers_true_position():
     true = np.interp(idx, np.arange(len(cum_b)), cum_b)
     assert np.max(np.abs(gated - true)) < 1e-6, (gated, true)         # spatial == truth
     assert np.max(np.abs(gated - normalized)) > 1.0, (gated, normalized)  # ≠ the biased normalized
-    print(f"ok spatial engages: drift {drift:.4f} > {C.NORMALIZED_DRIFT_MAX}; "
+    print(f"ok spatial engages: drift {drift:.4f}; "
           f"max|gated-normalized|={float(np.max(np.abs(gated - normalized))):.2f} m, "
           f"max|gated-true|={float(np.max(np.abs(gated - true))):.1e} m")
 
@@ -400,7 +455,7 @@ def test_projection_never_mixes_two_frames_within_one_lap():
     cum_b = np.concatenate(([0.0], np.cumsum(diffs)))
     total_lap = float(cum_b[-1])
     drift = C.line_length_drift(total_lap, total_ref)
-    assert C.NORMALIZED_DRIFT_MAX < drift < 0.01, drift
+    assert 0.005 < drift < 0.01, drift
     # C1's EXIT sits between the two stretches, where the offset is largest. Its neighbourhood ran
     # a different line (6 m wide); the other boundaries share the reference's.
     bxs, bys = _laterally_displaced(xs, ys, cum_a, center=float(interior[1]),

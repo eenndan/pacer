@@ -215,6 +215,26 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Changed
 
+- **Every lap's corners are now measured in the same frame — which moves the ideal lap and
+  reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not
+  by assuming the lap is a uniformly stretched copy of the best one. That spatial match used to run
+  only on laps whose total line length differed from the best lap's by more than 0.5 %; every other
+  lap kept the cheaper assumption. The cut-off was inherited, not measured, and measuring it showed
+  it does not separate well-aligned laps from badly aligned ones: a lap 0.41 % longer carried
+  **14.7 m** of boundary error while one 1.55 % longer carried 7.6 m. On the laps it skipped — 22 of
+  38 on one of the owner's recordings, 54 of 65 on the other — the corner boundaries sat a median
+  **1.96 m and 0.90 m** from where the corner actually starts, which the match cuts to **0.10 m and
+  0.01 m**. So two laps of one session were being measured by different machinery on either side of
+  an arbitrary line.
+  - **What you will see move.** The ideal lap reads **+0.316 s** on the first recording and
+    **−0.071 s** on the second, and the corner ranking in coaching reorders on both — a corner whose
+    time was measured in a window metres off the real one can be ranked too high or too low, and the
+    brake/coast evidence attached to it is matched in that same window. Corner times, corner Δ
+    columns, the ideal-lap composite and the coaching plan all shift accordingly.
+  - **What does not move: the best lap itself.** It is matched against its own trace, so every
+    boundary lands on itself — measured at 7e-15 m and 0 m on the two recordings. The reference the
+    other laps are compared against is unchanged, and so are lap times, which never went through
+    this projection at all.
 - **The g-meter overlay is a dot, a trail and one number.** Eleven text items became two, and the
   dial radius at the minimum size grew 36.5 → 51.5 px. A recording with no accelerometer gets no
   dial at all instead of a complete instrument reading 0.0.
