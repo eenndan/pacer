@@ -654,12 +654,13 @@ def test_hero_readout_keeps_every_character_at_every_column_width():
     The three splitter positions below are pinned, and the third one (460 px) is the point: it is
     BELOW what the charts panel needs. It used to be reachable, and the header survived it by
     stripping its identity label and both control labels — the degradation ladder. There is no
-    ladder now; the hero's 391 px floor is part of the column's own minimum, so a drag to 460 px is
+    ladder now; the hero's own floor is part of the column's own minimum, so a drag to 460 px is
     REFUSED. The assertion is the same either way — the number is never clipped — but what makes it
     true is the layout declining the drag rather than the header dismantling itself.
 
-    Measured against the PAINTED font (the QSS styles #DiffBox in the mono stack, not in the font
-    the widget was constructed with), so the theme is applied for the duration and restored after."""
+    Measured against the PAINTED font — the label's font once the theme has polished it, which is
+    what a QSS font rule would change — so the theme is applied for the duration and restored
+    after."""
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QFontMetrics
 

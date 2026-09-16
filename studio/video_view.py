@@ -855,6 +855,7 @@ class _PaneCell(QWidget):
         # app-driven Δ; Fixed, yields width first (can't push the lap text out)
         self.badge = QLabel("Δ —")
         self.badge.setObjectName("PaneBadge")
+        self.badge.setFont(theme.mono_font(theme.CAPTION, theme.W_SEMIBOLD))
         self.badge.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self.badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.badge.setToolTip("This lap against the other pane at the same point")

@@ -302,9 +302,14 @@ def test_the_strip_follows_the_colourblind_palette():
 class _Check:
     """A stand-in with `rotation.RotationCheck`'s read surface (the card only reads accessors)."""
 
-    def __init__(self, ok=True, gyro=0.983, path=1.0007, corner=0.946, n=346713, laps=38):
+    def __init__(self, ok=True, gyro=0.983, path=1.0007, corner=0.946, n=346713, laps=38,
+                 lag_clause="", lag_corr=0.0, lag_corr_at_zero=0.0):
         self.ok, self.loop_ratio_gyro, self.loop_ratio_path = ok, gyro, path
         self.corner_corr, self.n, self.loop_n = corner, n, laps
+        # The clock-offset sentence is EMPTY by default: a recording whose offset could not be
+        # measured must produce a row that simply does not mention one (see the offset test).
+        self.lag_clause, self.lag_corr = lag_clause, lag_corr
+        self.lag_corr_at_zero = lag_corr_at_zero
 
     @property
     def loop_error_pct(self):
@@ -396,6 +401,44 @@ def test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_
     print("test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so OK")
 
 
+def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with():
+    """The two channels are timed on different clocks — the gyroscope on the camera's media clock,
+    the GPS trace on its receiver's — and on the owner's recordings the GPS timestamps land ~0.46 s
+    later. The row prints the correlation between the two channels WITH that offset left in, so it
+    has to print the offset too, or the r reads as how well they agree.
+
+    Built on a REAL `RotationCheck` rather than the stand-in above, because the sentence is that
+    dataclass's own property: a test that retyped it here could not catch it going stale."""
+    from dataclasses import replace
+
+    from studio import rotation
+
+    real = rotation.RotationCheck(
+        n=26562, corr=0.87, gain=0.89, corner_n=9000, corner_corr=0.946, corner_gain=0.87,
+        straight_n=8000, straight_rms_gyro=0.24, straight_rms_path=0.05, straight_mean_gyro=0.026,
+        loop_n=38, loop_ratio_gyro=0.983, loop_ratio_path=1.001, ok=True,
+        gps_lag_s=0.483, lag_corr=0.917, lag_corr_at_zero=0.854)
+    rows, tip = _trust_rows(real)
+    value = next(r[1] for r in rows if r[0] == "Rotation cross-check")
+    assert "0.48 s" in value, value
+    assert "behind" in value, value
+    # It must say the app does NOT correct it — a stated offset that looks applied is worse than
+    # no offset at all.
+    assert "shifted" in value, value
+    # The tooltip carries what the row cannot: the correlation with and without the offset.
+    assert "+0.92" in tip and "+0.85" in tip, tip
+    assert "media clock" in tip and "lap times" in tip.lower(), tip
+
+    # NOT MEASURED IS NOT ZERO. A recording whose offset could not be measured says nothing about
+    # one — it must not print "0.00 s behind", which is a claim nobody made.
+    rows2, tip2 = _trust_rows(replace(real, gps_lag_s=None))
+    v2 = next(r[1] for r in rows2 if r[0] == "Rotation cross-check")
+    assert "behind" not in v2 and "0.00 s" not in v2, v2
+    assert "0.983" in v2, "the rest of the row is unchanged"
+    assert "not on the same clock" not in tip2, tip2
+    print("test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with OK")
+
+
 def test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps():
     """The strip row exists because the percentage row above it comes out INVERTED on the owner's
     own two recordings, and both were measured through this code:
@@ -452,6 +495,7 @@ def _main():
     test_the_strip_follows_the_colourblind_palette()
     test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors()
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()
+    test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with()
     test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps()
     print("ALL OK")
 
