@@ -50,8 +50,9 @@ shows. Measured (studio/rotation.py, which cross-correlates the camera's own gyr
 path-derived rate): an event's GPS timestamp lands **+0.476 s (0060) / +0.459 s (0062)** after the
 same event's gyro timestamp, with no step at a chapter seam and a per-lap IQR of ~0.03 s. The gyro
 rides the picture (settled against yaw taken from the frames themselves), so the trace is the late
-one, and every GPS-derived overlay — speed, Δ, the map dot, the dial's longitudinal axis — was
-painted against a frame ~14 of them past the one it belongs to at 30 fps.
+one, and every GPS-derived overlay — speed, Δ, the map dot — was painted against a frame ~14 of
+them past the one it belongs to at 30 fps. (The g DIAL is a separate case, and not the one it
+looks like; see WHOSE LAG THIS IS below.)
 
 That offset is `gps_lag` here. It is NOT part of the fit and cannot be: `fit` sees only the two
 time axes, and both carry it equally. It is measured per recording at load and installed onto this
@@ -62,6 +63,18 @@ whose measurement is refused — keeps the pure two-clock map and the app's olde
 `to_telemetry` asks the trace for the sample that belongs to the frame. Lap TIMES are differences
 taken on one clock and cannot move by a constant. The measurement itself must be taken on the PURE
 map (`without_gps_lag`) or it would be measuring the correction it produced.
+
+WHOSE LAG THIS IS, AND WHICH CHANNELS IT IS NOT. `gps_lag` describes the GPS TIMESTAMPS. It is
+tempting to read it as "the trace is late and the camera is not", and for the GPS-derived channels
+that is exactly right. It is NOT right for the g series. Measured against the gyro — the one
+channel settled against the frames themselves — `gmeter`'s lateral sits +0.399 s (0060) /
++0.406 s (0062) behind the picture ON ITS OWN LABELS: the accelerometer's CONTENT arrives carrying
+very nearly the same delay the GPS timestamps carry, even though the two streams are stamped
+together. So the g series must not have this lag taken back out of it. `Session.g_at_time` crosses
+`without_gps_lag()` — the rate fit alone — and `driving_channels` joins by label for the same
+reason (#303). Undoing the lag there put the dial ~0.39 s behind the speed painted beside it.
+What this lag DOES correct is the GPS-derived half: the speed, the Δ, the map dot, the lap clock's
+zero, and the seek itself.
 
 Qt-free and pacer-free (numpy only), so the conversion is shared by the pipeline, the exporter and
 the player without dragging either dependency anywhere.

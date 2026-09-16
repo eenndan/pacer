@@ -3,7 +3,7 @@
 The byte-identity gate that guards every Session refactor (F1 god-object decomposition, E2, the
 #50 delta-engine dedup, ...) is the pair studio.dev.golden_session_dump.fingerprint (a dense
 whole-public-API fingerprint of a Session's state) + studio.dev.golden_compare.walk (leaf-by-leaf
-compare at eps 1e-9). But the canonical dump loads the real ~11.8 GB ``~/Desktop/D24`` recording,
+compare at eps 1e-9). But the canonical dump loads the real ~11.9 GB ``~/Desktop/D24`` recording,
 so that FULL gate is MANUAL and dev-Desktop-only — it never runs in CI.
 
 This test automates the SAME machinery over the deterministic SYNTHETIC session the studio test

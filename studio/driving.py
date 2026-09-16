@@ -382,10 +382,10 @@ def coast_instrument(theta_b: float) -> str:
     answer by more than 6x on one recording, so a bare "2.8 s" discloses none of what produced
     it; same house pattern as `Thresholds.describe()` for the brake threshold.
 
-    It reaches the user through the load-time threshold line (`describe`, which appends it) and
-    the exported session report's DRIVING note. The Stats page's two coasting TILES still carry no
-    tooltip of their own — `DrivingChannels.coast_instrument` is the accessor that wiring reads,
-    left for the owner of that file rather than reached into from here."""
+    It reaches the user through the load-time threshold line (`describe`, which appends it), the
+    exported session report's DRIVING note, and — since #279 — the Stats page's two coasting TILES,
+    which carry the window in `stats_panel.DRIVING_TOOLTIP` like the brake tiles beside them.
+    `DrivingChannels.coast_instrument` is the accessor that wiring reads."""
     return (f"Coasting: off-power spans of at least {MIN_COAST_S:.2f} s where the GPS "
             f"longitudinal g — smoothed over {COAST_SMOOTH_S:.2f} s — decelerates between "
             f"{COAST_DRAG_MIN:.2f} g and this session's own brake threshold {theta_b:.3f} g. "
