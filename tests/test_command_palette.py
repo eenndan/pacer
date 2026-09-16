@@ -351,6 +351,40 @@ def test_a_disabled_command_is_listed_but_cannot_be_run():
     print("test_a_disabled_command_is_listed_but_cannot_be_run OK")
 
 
+def test_a_disabled_row_says_why_and_how_to_get_it_back():
+    """U3. Seeing a greyed command teaches you it exists; it does not teach you how to reach it,
+    and the menu it was harvested from cannot help — a native macOS menu item never shows a Qt
+    tooltip (measured on the real screen; see `app.MENU_REASON_SEP`). So the palette carries BOTH
+    halves of the gate: the CONDITION rides in on the item's own text, and the REMEDY is the row's
+    tooltip, which a Qt view answers even over an unselectable NoItemFlags row."""
+    win = _window()          # no session: every export is gated
+    dialog = CommandPalette(win)
+    dialog.search.setText("Lap times")
+    for _ in range(4):
+        _APP.processEvents()
+    entry = dialog._shown[0]
+    assert not entry.enabled, entry
+    assert "no complete laps" in entry.title.lower(), (
+        f"the row names the command but not the gate: {entry.title!r}")
+    assert entry.reason.startswith("No complete laps"), (
+        f"the row carries no reason at all: {entry.reason!r}")
+    assert "drag the start/finish line" in entry.reason, (
+        f"the row carries the condition but not the way out: {entry.reason!r}")
+    assert dialog.table.item(0, command_palette._COL_TITLE).toolTip() == entry.reason, (
+        dialog.table.item(0, command_palette._COL_TITLE).toolTip())
+    # ...and a live command has nothing to explain, so it carries no tooltip at all.
+    dialog.search.setText("Keyboard shortcuts")
+    for _ in range(4):
+        _APP.processEvents()
+    live = dialog._shown[0]
+    assert live.enabled and live.reason == "", live
+    assert dialog.table.item(0, command_palette._COL_TITLE).toolTip() == "", (
+        dialog.table.item(0, command_palette._COL_TITLE).toolTip())
+    dialog.close()
+    win.deleteLater()
+    print("test_a_disabled_row_says_why_and_how_to_get_it_back OK")
+
+
 def test_a_palette_row_triggers_the_menu_action_it_names():
     """The other end of check 1: reachable has to mean it RUNS."""
     win = _window()

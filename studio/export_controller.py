@@ -73,14 +73,21 @@ class ExportController:
     # File ▸ Export Qt side (the writers are Qt-free in export_data.py).
 
     # WHY a gated export action is off. A disabled row that describes its feature tells you nothing
-    # about how to reach it, and all of the gated ones did exactly that; Qt keeps showing a disabled
-    # action's tooltip, so this is the only surface a greyed row has. Each string names the
-    # CONDITION and the way out of it.
+    # about how to reach it, and all of the gated ones did exactly that. These strings were written
+    # for the action's TOOLTIP, on the belief that "Qt keeps showing a disabled action's tooltip,
+    # so this is the only surface a greyed row has" — measured on the real screen, that is false on
+    # macOS: this app's menu bar is native, so its items are NSMenuItems and never show a Qt
+    # tooltip (see MENU_REASON_SEP in app.py). `StudioWindow._gate_action` now puts each string's
+    # CONDITION clause on the menu item ITSELF and keeps the whole sentence on the tooltip, which
+    # is reachable on the ⌘K palette's row. So each string still names the CONDITION and the way
+    # out of it — in that order, separated by an em dash, because the first half is what the menu
+    # shows.
     _NO_LAPS_REASON = ("No complete laps in this recording — drag the start/finish line on the map "
                        "to set where a lap begins, then export.")
-    _PROVISIONAL_REASON = ("This recording's timing is provisional: the start line was auto-fitted, "
-                           "not confirmed by you. Save it as a track (File ▸ Save as track…) to "
-                           "confirm it.")
+    _PROVISIONAL_REASON = ("This recording's timing is provisional — the start line was "
+                           "auto-fitted, not confirmed by you. Save it as a track "
+                           "(File ▸ Save as track…) to confirm it.")
+    _NO_SESSION_REASON = ("Open a recording first — there is nothing to export yet.")
     _NO_TRACK_REASON = ("Needs a complete lap and a GPS position — there are no usable timing lines "
                         "to promote into a reusable track.")
     _NO_LIBRARY_REASON = ("No recordings analysed yet — open a GoPro recording and it is remembered "
@@ -111,6 +118,11 @@ class ExportController:
         would be an item that can only fail."""
         has = hasattr(self.win, "session")
         self.win._export_menu.setEnabled(has)
+        # The SUBMENU'S OWN ROW, which greys with it. With no session the six items below are not
+        # on screen at all, so the six reasons they carry are not either — the opener has to say
+        # why by itself. Gated AFTER setEnabled, which is what syncs a QMenu's enabled state onto
+        # its menuAction (QMenu::changeEvent), so the gate has the last word on both.
+        self.win._gate_action(self.win._export_menu.menuAction(), has, self._NO_SESSION_REASON)
         has_laps = has and self.win._has_valid_laps()
         for action in (self.win._export_laps_action, self.win._export_channels_action,
                        self.win._export_report_action, self.win._copy_stats_action,

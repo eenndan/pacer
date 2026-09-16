@@ -79,6 +79,10 @@ class Entry(NamedTuple):
     enabled: bool
     action: QAction | None = None
     call: Callable[[], None] | None = None
+    #: Why a disabled row is disabled, as the whole sentence — condition, then the way out. The
+    #: menu item it came from can only afford the condition (`app.reason_head`), so this view is
+    #: where the remedy is readable: a QTableWidget answers a hover even over an unselectable row.
+    reason: str = ""
 
     def run(self) -> None:
         """Do the thing. A menu row goes through the QAction, so every consumer of that action's
@@ -165,6 +169,10 @@ def _menu_entries(window) -> list[Entry]:
                 key=action.shortcut().toString(QKeySequence.NativeText),
                 enabled=action.isEnabled(),
                 action=action,
+                # A GATED action's tooltip IS its reason (StudioWindow._gate_action swaps it for
+                # the feature description while the gate is shut), and this is the one surface in
+                # the app where a user can actually read one.
+                reason="" if action.isEnabled() else action.toolTip(),
             ))
     return out
 
@@ -311,6 +319,12 @@ class CommandPalette(QDialog):
                     # reserved for chrome you cannot act on) AND unselectable, so a command that
                     # needs a loaded session cannot be run from here by accident.
                     item.setFlags(Qt.NoItemFlags)
+                    # ...and the REMEDY the menu item has no room for. Measured on the real screen:
+                    # a Qt view answers a ToolTip event over a NoItemFlags row exactly as it does
+                    # over a live one, which is what makes this a real surface and the native menu
+                    # bar's tooltip not one.
+                    if entry.reason:
+                        item.setToolTip(entry.reason)
                 self.table.setItem(row, col, item)
         self._select_first_runnable()
         self.hint.setText(_HINT if self._shown else f"No command matches “{text}”")

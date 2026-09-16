@@ -358,6 +358,36 @@ def install_excepthook():
     qInstallMessageHandler(_qt_message_handler)
 
 
+# WHAT SEPARATES A GREYED MENU ITEM FROM THE REASON IT IS GREYED — and why the reason is in the
+# item's TEXT at all rather than in the `setToolTip` it used to live in.
+#
+# This window's menu bar is the NATIVE macOS one. Measured on the real screen (cocoa, Built-in
+# Retina Display 1512x982 @2x, a live QScreen.grabWindow): `menuBar().isNativeMenuBar()` is True
+# and the bar's in-window height is 0 px — the rows the user pulls down are NSMenuItems outside
+# the window, so QMenu's own tooltip handler never runs for them. That handler is switched off
+# anyway: all eight of this app's menus report `toolTipsVisible() == False`, and a live ToolTip
+# event on a real popup showed nothing at False and the full sentence at True. So an explanation
+# on a menu action's tooltip is read by NOBODY, and 20 of the items disabled on the welcome screen
+# were explaining themselves exactly there. The item text is the only surface they have.
+MENU_REASON_SEP = " — "
+
+
+def reason_head(reason: str) -> str:
+    """The CONDITION half of a gate reason: everything before the em dash that introduces the way
+    out, lower-cased at the first letter so it reads as a continuation of the item it is appended
+    to — "Save as track… — needs a complete lap and a GPS position".
+
+    ONE STRING, TWO LENGTHS. A menu item can only afford the condition (the longest of these
+    measures 372 px in the menu font, well inside a normal pull-down); the whole sentence, remedy
+    included, stays on the tooltip, which IS reachable on the ⌘K palette's row. Deriving one from
+    the other is what stops a short label and a long sentence disagreeing about the same gate.
+    An acronym keeps its case ("GPS quality…"), which tests/test_app_chrome.py pins."""
+    head = reason.split(MENU_REASON_SEP)[0].strip().rstrip(".:")
+    if not head or head[:2].isupper():
+        return head
+    return head[0].lower() + head[1:]
+
+
 class StudioWindow(QMainWindow):
     # Emitted after every load settles (on the UI thread, after _on_session_loaded /
     # _on_load_failed have run) — a clean way for tests/smoke to wait for the now-async load.
@@ -368,6 +398,34 @@ class StudioWindow(QMainWindow):
     # registered line when it knows the circuit, and "auto-fitted" would misname that one.
     _REVERT_FITTED_LABEL = "Revert start/finish line to auto-fitted"
     _REVERT_TRACK_LABEL = "Revert start/finish line to the track's line"
+
+    # WHY each of the window's own gated items is off. Same shape as the export cluster's reasons
+    # (export_controller): the CONDITION first — that clause is what the menu item shows, see
+    # `reason_head` — then the way out. These seven were the items that said NOTHING at all when
+    # greyed: they carried their FEATURE description in a tooltip nobody can read, which on a
+    # disabled row is worse than silence (it describes something you cannot have and never says
+    # why). A silent refusal is the defect class this app exists to refuse.
+    _NO_SESSION_STATS_REASON = ("Open a recording first — the statistics dashboard is this "
+                                "session's own: pace, peaks, grip and the per-lap table.")
+    _NO_SESSION_EXCLUDED_REASON = ("Open a recording first — the ⊘ excluded strip sits under a "
+                                   "loaded session's lap table.")
+    _NO_SESSION_REFERENCE_REASON = ("Open a recording first — a reference is something the "
+                                    "session you are analysing gets compared against.")
+    _NO_SESSION_COACHING_REASON = ("Open a recording first — the ranking is over your own laps.")
+    _NO_REFERENCE_REASON = ("No reference recording is loaded — use Coaching ▸ Load reference "
+                            "recording… to pick one, and this clears it again.")
+    _REFERENCE_WITHOUT_VIDEO_REASON = ("The loaded reference has no footage to play — it came in "
+                                       "as data only, so there is no second video to put beside "
+                                       "this one.")
+    _NOTHING_TO_UNDO_REASON = ("Nothing to undo — no start/finish or sector line has been dragged "
+                               "in this session yet.")
+    _NO_SESSION_TIMING_REASON = ("Open a recording first — there are no timing lines to edit yet.")
+    _NOTHING_TO_REVERT_REASON = ("The line is already where this recording opened it — nothing "
+                                 "has moved it since.")
+    _WHOLE_RECORDING_LOADED_REASON = ("This recording is already loaded in full — there are no "
+                                      "further chapters to chain onto it.")
+    _NO_SESSION_CHAPTERS_REASON = ("Open a recording first — this chains the sibling chapters of "
+                                   "a recording you already have open.")
 
     def __init__(self, paths: list[str], full: bool = False, demo_unavailable: bool = False):
         super().__init__()
@@ -636,7 +694,9 @@ class StudioWindow(QMainWindow):
         self.setCentralWidget(WelcomeView(self._open_file, on_demo, error,
                                           error_path=error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
-            self._full_action.setEnabled(False)
+            # Through the gate, not a bare setEnabled: a welcome screen reached by a FAILED reload
+            # would otherwise keep the clause the previous session left on this item.
+            self._gate_action(self._full_action, False, self._NO_SESSION_CHAPTERS_REASON)
         self._sync_coaching_menu()
         self._sync_view_menu()
 
@@ -1910,6 +1970,12 @@ class StudioWindow(QMainWindow):
         # File ▸ Library: the full browse + per-track PB chart over the session-library index.
         menu.addSeparator()
         self._library_action = menu.addAction("Library…")
+        # ⌘L. The Library is the front door to every recording analysed before today — and it was
+        # the one top-level surface with no key at all, three levels of pointer travel from
+        # anywhere. L for Library; ⌘L was unbound here and carries no macOS-standard meaning in an
+        # app with no location bar and no aliases. Documented through help_dialog.COMMANDS, which
+        # is the one registry the ? card and the ⌘K palette are both generated from.
+        self._library_action.setShortcut(QKeySequence("Ctrl+L"))  # ⌘L on macOS
         # The columns, NAMED AS THE DIALOG NAMES THEM. #211 renamed the fourth from "Theoretical"
         # to "Ideal lap" (library_dialog._HEADERS) and left this description of it behind, so the
         # menu item promised a column the dialog does not have; `laps` joins it here because the
@@ -1932,7 +1998,11 @@ class StudioWindow(QMainWindow):
             "only comparable if these were — and pacer never looks the weather up, so nothing "
             "leaves this Mac")
         self._record_action.triggered.connect(self._edit_current_record)
-        self._record_action.setEnabled(False)  # no session yet at construction time
+        # No session yet at construction time — seeded through the gate so the item is honest
+        # before its menu is ever pulled down. (Not seeded via _sync_record_action: that one asks
+        # the library whether it would ACCEPT this recording, which is a real question only once a
+        # session exists; the File menu's aboutToShow asks it from then on.)
+        self._gate_action(self._record_action, False, self._NO_RECORD_REASON)
         # Gated as the menu opens, beside the export cluster's own sync. It is NOT part of that
         # cluster (nothing here leaves the app), so it gets its own one-line sync rather than a
         # clause inside ExportController.sync_menu.
@@ -2002,7 +2072,10 @@ class StudioWindow(QMainWindow):
         self._clear_ref_action.setToolTip("Revert the Δ / map / table reference to this "
                                           "session's own best lap")
         self._clear_ref_action.triggered.connect(self._clear_reference)
-        self._clear_ref_action.setEnabled(False)
+        # Seeded through the gate, not a bare setEnabled: these two are owned by
+        # _apply_reference_change, which does not run until a session exists — so on the welcome
+        # screen this seed is the ONLY thing that ever speaks for them.
+        self._gate_action(self._clear_ref_action, False, self._NO_REFERENCE_REASON)
         # Cross-recording video compare (pane A = this lap, pane B = the reference's lap); distinct
         # from the same-recording "Compare videos" toggle. Enabled only when a reference is loaded.
         self._cross_compare_action = coaching_menu.addAction("Compare vs reference recording")
@@ -2010,11 +2083,11 @@ class StudioWindow(QMainWindow):
             "Side-by-side: this recording's lap (left) vs the loaded reference recording's lap "
             "(right), each playing its own footage. Load a reference recording first.")
         self._cross_compare_action.triggered.connect(self._enter_cross_compare)
-        self._cross_compare_action.setEnabled(False)
+        self._gate_action(self._cross_compare_action, False, self._NO_REFERENCE_REASON)
         # F10 Opportunities: every corner ranked by time lost vs your own best lap (recomputed
         # per open; the Coaching TAB carries the top-3 shortlist).
         coaching_menu.addSeparator()
-        self._opportunities_action = coaching_menu.addAction("Opportunities…")
+        self._opportunities_action = coaching_menu.addAction("Opportunities")
         self._opportunities_action.setToolTip(
             "Where to find time vs your own best lap: every corner ranked by realistic time lost "
             "(median of your clean laps), each with the measured reason and a jump-to.")
@@ -2107,9 +2180,11 @@ class StudioWindow(QMainWindow):
         # "Your data && privacy" and "About {APP_NAME}" correctly do not: they open a card that
         # asks the user for nothing. "Enter/Exit Full Screen" and "About …" keep macOS's own
         # Title-case wording for the two items every Mac app shares; the sentence case elsewhere
-        # is the house style. The one real outlier is Coaching ▸ "Opportunities…", an informational
-        # ranking that needs no input — left alone here only because coaching_panel.py's in-app
-        # pointer copy names it with the ellipsis; fixing the pair is a one-line follow-up.
+        # is the house style. The one real outlier WAS Coaching ▸ "Opportunities…" — an
+        # informational ranking that asks the user for nothing — and it is fixed: the item is
+        # "Opportunities" and coaching_panel.py's in-app pointer copy lost the ellipsis in the same
+        # change. tests/test_app_chrome.py asserts that copy against the ACTION's own text rather
+        # than against a second literal, which is how the pair drifted apart in the first place.
         help_menu = self.menuBar().addMenu("&Help")
         self._shortcuts_action = help_menu.addAction("Keyboard shortcuts")
         self._shortcuts_action.setShortcut(QKeySequence(Qt.Key_F1))
@@ -2131,9 +2206,19 @@ class StudioWindow(QMainWindow):
 
         # Seed the session-dependent enablement once, so the welcome screen opens with the
         # session-only items already greyed (and their shortcuts inert) rather than waiting for
-        # the user to pull the menu down. _build_ui re-runs both after every load.
+        # the user to pull the menu down. _build_ui re-runs them after every load.
+        #
+        # FOUR SYNCS, not just the two that L1-06 needed. A gated item now carries its reason in
+        # its LABEL, so "greyed" and "says why" are one fact and both have to be true from the
+        # first paint: seeding only some of them left the File and Edit items renaming themselves
+        # the first time anything asked — which is what `test_opening_the_palette_does_not_destroy
+        # _the_menu_bar` saw, reading the bar before the palette primed it and again after. The
+        # gate is idempotent, so a seed costs one pass over ~20 actions and makes every later sync
+        # a no-op until the state actually changes.
         self._sync_coaching_menu()
         self._sync_view_menu()
+        self._sync_edit_menu()
+        self.exports.sync_menu()
 
     def _sync_coaching_menu(self):
         """Grey Coaching's session-only items out until a session is loaded (the Coaching menu's
@@ -2143,10 +2228,11 @@ class StudioWindow(QMainWindow):
         reference stay owned by _apply_reference_change — a reference cannot exist without a
         session, so they are already off here."""
         has = hasattr(self, "session")
-        for name in ("_ref_action", "_opportunities_action"):
+        for name, reason in (("_ref_action", self._NO_SESSION_REFERENCE_REASON),
+                             ("_opportunities_action", self._NO_SESSION_COACHING_REASON)):
             action = getattr(self, name, None)
             if action is not None:
-                action.setEnabled(has)
+                self._gate_action(action, has, reason)
 
     def _sync_view_menu(self):
         """Grey View's session-only items out until a view exists (the View menu's aboutToShow).
@@ -2155,10 +2241,11 @@ class StudioWindow(QMainWindow):
         a disabled QAction's shortcut is inert too — which is what makes ⌘⇧S stop being a silent
         no-op before the first load (QA L1-06)."""
         has_view = getattr(self, "view", None) is not None
-        for name in ("_stats_action", "_excluded_action"):
+        for name, reason in (("_stats_action", self._NO_SESSION_STATS_REASON),
+                             ("_excluded_action", self._NO_SESSION_EXCLUDED_REASON)):
             action = getattr(self, name, None)
             if action is not None:
-                action.setEnabled(has_view)
+                self._gate_action(action, has_view, reason)
 
     def _show_shortcuts(self):
         """Help ▸ Keyboard shortcuts (also F1 / ?): the read-only shortcut reference."""
@@ -2191,15 +2278,21 @@ class StudioWindow(QMainWindow):
         session = getattr(self, "session", None)
         action = getattr(self, "_undo_action", None)
         if action is not None:
-            action.setEnabled(bool(session is not None and session.can_undo_timing()))
+            self._gate_action(action, bool(session is not None and session.can_undo_timing()),
+                              self._NO_SESSION_TIMING_REASON if session is None
+                              else self._NOTHING_TO_UNDO_REASON)
         revert = getattr(self, "_revert_action", None)
         if revert is not None:
             # Named for the line it would actually restore: "auto-fitted" is a lie on a detected
-            # track, where the loader placed the TRACK's registered line.
-            revert.setText(self._REVERT_TRACK_LABEL
-                           if getattr(session, "track_name", None) is not None
-                           else self._REVERT_FITTED_LABEL)
-            revert.setEnabled(bool(session is not None and session.can_revert_timing()))
+            # track, where the loader placed the TRACK's registered line. It goes through the gate
+            # as `text=` rather than setText, so the per-session rename and the greyed-out reason
+            # clause cannot both try to own this item's label.
+            self._gate_action(revert, bool(session is not None and session.can_revert_timing()),
+                              self._NO_SESSION_TIMING_REASON if session is None
+                              else self._NOTHING_TO_REVERT_REASON,
+                              text=(self._REVERT_TRACK_LABEL
+                                    if getattr(session, "track_name", None) is not None
+                                    else self._REVERT_FITTED_LABEL))
 
     def _undo_timing(self):
         """Edit ▸ Undo (Cmd+Z): revert the last timing-line edit via the current view. No-op when
@@ -2517,7 +2610,9 @@ class StudioWindow(QMainWindow):
         Reads `_chapter_subset`, the same predicate `_session_notice` uses to SAY the session is
         partial — so the sentence that names this control and the control itself can never disagree
         about whether there is anything left to chain."""
-        self._full_action.setEnabled(self._chapter_subset() is not None)
+        self._gate_action(self._full_action, self._chapter_subset() is not None,
+                          self._NO_SESSION_CHAPTERS_REASON if not getattr(self, "_paths", None)
+                          else self._WHOLE_RECORDING_LOADED_REASON)
 
     def _load_full_recording(self):
         """Opt-in: chain the opened chapter's siblings into one full recording and reload."""
@@ -3564,15 +3659,31 @@ class StudioWindow(QMainWindow):
 
 
     @staticmethod
-    def _gate_action(action, ok: bool, reason: str) -> None:
-        """Enable/disable `action` and swap its tooltip between the FEATURE description (enabled)
-        and `reason` (disabled). The feature text is stashed on the action the first time through,
-        so the single setToolTip at construction stays the one place a feature is described and the
-        two can't drift apart."""
+    def _gate_action(action, ok: bool, reason: str, text: str | None = None) -> None:
+        """Enable/disable `action` and, when it is off, SAY WHY on the item itself.
+
+        THE REASON GOES IN THE ITEM TEXT, not only in the tooltip, because on macOS the tooltip is
+        read by nobody — see MENU_REASON_SEP above. The item takes the reason's CONDITION clause
+        ("Library… — no recordings analysed yet"); the whole sentence, remedy included, stays on
+        the tooltip, which IS reachable on the ⌘K palette's row (an ordinary Qt view: measured on
+        the real screen, even a disabled row answers a hover with its tooltip).
+
+        The feature NAME and the feature TOOLTIP are both stashed on the action the first time
+        through, so the single `addAction` / `setToolTip` at construction stays the one place a
+        feature is described, re-syncing on every `aboutToShow` cannot append the clause twice, and
+        opening the gate restores the command's own name exactly. `text` REPLACES the stashed name
+        for the one item that legitimately renames itself per session (Edit ▸ Revert)."""
+        if text is not None:
+            action.setProperty("featureText", text)
+        elif action.property("featureText") is None:
+            action.setProperty("featureText", action.text())
         if action.property("featureTip") is None:
             action.setProperty("featureTip", action.toolTip())
+        base = action.property("featureText")
+        head = reason_head(reason)
         action.setEnabled(ok)
         action.setToolTip(action.property("featureTip") if ok else reason)
+        action.setText(base if ok or not head else f"{base}{MENU_REASON_SEP}{head}")
 
 
     @staticmethod
@@ -4133,13 +4244,15 @@ class StudioWindow(QMainWindow):
         statusbar is exactly as before."""
         active = hasattr(self, "session") and self.session.has_reference()
         if hasattr(self, "_clear_ref_action"):
-            self._clear_ref_action.setEnabled(active)
+            self._gate_action(self._clear_ref_action, active, self._NO_REFERENCE_REASON)
         # F7 Phase B: the cross-recording video compare needs both a reference AND its retained live
         # Session (Phase A could load a data-only reference; the compare needs the footage). Enable
         # only when both are present.
         if hasattr(self, "_cross_compare_action"):
             can_cross = active and self.session.reference_session() is not None
-            self._cross_compare_action.setEnabled(can_cross)
+            self._gate_action(self._cross_compare_action, can_cross,
+                              self._NO_REFERENCE_REASON if not active
+                              else self._REFERENCE_WITHOUT_VIDEO_REASON)
         ref_chip = getattr(self, "_ref_chip", None)
         if ref_chip is None:
             return
