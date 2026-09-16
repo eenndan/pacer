@@ -969,6 +969,14 @@ class ExportController:
 
         Returns a line, never a sentence with a full stop: it sits under the title as a caption."""
         head = f"frame {done} of {total}"
+        # THE FRAMES BEING DONE IS NOT THE EXPORT BEING DONE. Once the last frame is written the
+        # renderer closes the encoder's stdin and waits for ffmpeg to write the trailer: measured on
+        # D24, 1.6-5.7 s, and 12.1 % of one 2160p export's whole wall clock. The old line said
+        # "frame 2047 of 2047" — or, worse, sat at the last chunk boundary claiming "about 0:01
+        # left" — and then nothing moved for six seconds. Naming the write is the difference between
+        # a dialog that looks wedged and one that says what it is doing.
+        if total > 0 and done >= total:
+            return f"all {total} frames rendered · writing the file"
         if rendered < ExportController._ETA_MIN_FRAMES or elapsed < ExportController._ETA_MIN_SECONDS:
             return head
         left = total - done
