@@ -54,6 +54,7 @@ discipline.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import math
@@ -533,11 +534,14 @@ def _when(date: str | None) -> str:
     "last time" when the recording carried no date (a GPS5-era file has none)."""
     if not date or len(date) < 10:
         return "last time"
+    # A CALENDAR day, not two in-range-looking integers: the stored date is a string the store only
+    # checks IS a string, and indexing `_MONTHS[int("00") - 1]` does not raise — it is December, so
+    # "2026-00-15" used to be stated as a baseline set on "15 Dec" (and a day of 00 as "0 May").
     try:
-        month = _MONTHS[int(date[5:7]) - 1]
-        return f"{int(date[8:10])} {month}"
-    except (ValueError, IndexError):
+        day = datetime.date(int(date[0:4]), int(date[5:7]), int(date[8:10]))
+    except ValueError:
         return "last time"
+    return f"{day.day} {_MONTHS[day.month - 1]}"
 
 
 _BLOCK_SENTENCE = {

@@ -5,8 +5,10 @@ all on the media clock) plus an independent GPS-derived cross-check. Axis conven
 empirically (see studio/docs/gmeter-validation.md).
 
 The camera->kart transform:
-  0. Axis-check: GRAV_PERM'd GRAV must point the same way as the recording's own unloaded ACCL,
-     or the IMU path is REFUSED and the meter falls back to GPS (`axis_check`). This is the one
+  0. Axis-check: GRAV must carry a direction at all (`MIN_GRAV_NORM`), and GRAV_PERM'd GRAV must
+     point the same way as the recording's own unloaded ACCL, or the IMU path is REFUSED and the
+     meter falls back to GPS (`axis_check`; the reason is shown on the g-meter toggle and the DATA
+     TRUST card via `AxisCheck.refusal`). This is the one
      assumption nothing downstream can absorb: the yaw and handedness are fitted per chapter, but
      a wrong element frame leaves up to 2 g of un-removed gravity that the correlation cannot see.
   1. Gravity-remove: GRAV permuted onto ACCL's axes via GRAV_PERM=(1,0,2); linear = ACCL - 9.81*ĝ.
@@ -233,6 +235,18 @@ def _verdict(lat_corr: float, lat_rms_accl: float, lat_rms_gps: float) -> bool:
 # it leaves ~0.17 g of residual rather than 1-2 g. Gating on it would be gating on noise, and the
 # mount that makes it possible is the same mount that makes it harmless.
 AXIS_MAX_TILT_DEG = 20.0
+# ...but an angle needs a DIRECTION to be measured from. GRAV is a UNIT vector on every camera that
+# writes one — |GRAV| measures 1.0000 at the 5th, 50th and 95th percentile on both GoPro Max sample
+# clips and on both D24 recordings — so a stream carrying no direction is unmistakable, and 0.5 sits
+# halfway between the only two values that occur. The bundled `hero8.mp4` is that stream: 378 rows,
+# all zeros. Read as an angle it came out at EXACTLY 90 deg, because a zero vector's dot with
+# anything is 0 and arccos(0) is 90 whatever the camera did — a tilt nobody measured. And on a
+# recording too loaded to measure any angle it was not refused at all: "not measurable" let the IMU
+# path run on `gdir / norm(gdir)` = 0/0, and `compute` shipped a full-length all-NaN meter with
+# `has_data` True. Whether a direction EXISTS does not depend on how loaded the kart is, so
+# `axis_check` decides it first and reports it as what it is. `rotation.py` projects its gyro on
+# the same direction and reads this same floor.
+MIN_GRAV_NORM = 0.5
 _AXIS_SMOOTH_S = 1.0     # low-pass applied to ACCL before it is read as a gravity direction
 _AXIS_QUIET_TOL = 0.02   # |low-passed ACCL| must sit within this fraction of g to count as unloaded
 _AXIS_MIN_QUIET = 200    # below this many unloaded samples the angle is not a measurement
@@ -249,8 +263,31 @@ class AxisCheck:
     tilt_deg: float    # median angle between GRAV_PERM(GRAV) and the low-passed ACCL direction
     measurable: bool   # False when the recording held too few unloaded samples to judge
     ok: bool           # verdict: False means the IMU path is refused (see AXIS_MAX_TILT_DEG)
+    # False when GRAV carries no direction at all (MIN_GRAV_NORM): refused, and no angle exists.
+    has_direction: bool = True
+
+    def refusal(self) -> str | None:
+        """WHY the IMU path was refused, as a clause a surface finishes its own sentence with; None
+        when it was not refused. ONE wording for every surface that states it — the g-meter
+        toggle's tooltip and the DATA TRUST card — so the two can never give different reasons.
+
+        It never quotes the angle of a directionless stream, because that angle was not measured
+        (see MIN_GRAV_NORM)."""
+        if self.ok:
+            return None
+        if not self.has_direction:
+            return ("its gravity stream carries no direction, so gravity could not be taken out of "
+                    "the accelerometer")
+        # One decimal on the tilt, none on the limit: at .0f a refused 20.4 deg would print as
+        # "20° away (the limit is 20°)" and read as a recording refused for meeting its limit.
+        return (f"its gravity reading points {self.tilt_deg:.1f}° away from its own accelerometer "
+                f"(the limit is {AXIS_MAX_TILT_DEG:.0f}°), so its axes cannot be trusted")
 
     def summary(self) -> str:
+        if not self.has_direction:
+            return (f"g-meter axis check [NO DIRECTION]: this recording's GRAV stream has no "
+                    f"direction (|GRAV| below {MIN_GRAV_NORM:g}, where a camera that writes GRAV "
+                    f"writes a unit vector), so there is no gravity to remove from its ACCL.")
         if not self.measurable:
             return (f"g-meter axis check: not measurable ({self.n} unloaded samples, "
                     f"need {_AXIS_MIN_QUIET}) — the ACCL/GRAV frame is assumed, not verified.")
@@ -279,6 +316,12 @@ def axis_check(accl, grav) -> AxisCheck | None:
     a_lp = np.column_stack([boxcar(accl[:, 1 + i], w) for i in range(3)])
     g_p = np.column_stack(
         [np.interp(ta, grav[:, 0], grav[:, 1 + GRAV_PERM[i]]) for i in range(3)])
+    # FIRST, before any unloaded sample is counted: is there a direction to measure from at all?
+    # (MIN_GRAV_NORM.) Asked after the count, a directionless stream on a loaded kart came back
+    # "not measurable, do not gate" and the IMU path ran on a 0/0 gravity direction.
+    if float(np.median(np.linalg.norm(g_p, axis=1))) < MIN_GRAV_NORM:
+        return AxisCheck(n=0, tilt_deg=float("nan"), measurable=True, ok=False,
+                         has_direction=False)
     mag = np.linalg.norm(a_lp, axis=1)
     quiet = np.abs(mag - G) < _AXIS_QUIET_TOL * G
     n = int(np.count_nonzero(quiet))

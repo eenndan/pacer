@@ -346,7 +346,7 @@ def test_an_all_zero_grav_stream_is_no_channel_not_a_channel_of_zeros():
     so every projection is EXACTLY 0.0 rad/s and the app reports a full-length, `has_data=True`
     rotation channel saying "not turning" for a recording that plainly is — hero8's own gyro has a
     median |omega| of 0.269 rad/s over the same samples. `gmeter.axis_check` refuses this
-    recording on the G-METER path (it reads the zero direction as a 90 deg tilt), but nothing
+    recording on the G-METER path (a GRAV with no direction, `gmeter.MIN_GRAV_NORM`), but nothing
     stood in front of THIS path, even though rotation.py's module doc says that guard does."""
     gyro, grav, traces = _build(grav_elements=[0.0, 0.0, 0.0])
     assert np.all(grav[:, 1:] == 0.0)

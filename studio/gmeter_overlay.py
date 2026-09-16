@@ -250,13 +250,22 @@ _PROVENANCE = {
 }
 
 
-def source_sentence(lat_source: str, long_source: str | None = None) -> str:
+def source_sentence(lat_source: str, long_source: str | None = None,
+                    refusal: str | None = None) -> str:
     """The g-meter toggle's tooltip body: the felt-force convention, then where the numbers come
     from. The dial's face carries neither any more (see the module docstring) — this is where they
-    went, and it is the only place the app states the dial's provenance now."""
+    went, and it is the only place the app states the dial's provenance now.
+
+    `refusal` is `gmeter.AxisCheck.refusal()`: why this recording's accelerometer was REFUSED, or
+    None. It replaces the GPS sentence's "No usable accelerometer", which is true of a camera that
+    cannot orient its IMU at all and false of one whose IMU was read and then set aside — on hero8
+    that sentence was the one reason that was not the reason."""
     label = source_label(lat_source, long_source)
     tail = _PROVENANCE.get(label)
-    if tail is None:                      # an unrecognised pairing still names itself honestly
+    if refusal and label == "GPS":
+        tail = (f"This recording's accelerometer was not used: {refusal}. Both axes are derived "
+                "from the GPS trajectory instead.")
+    elif tail is None:                    # an unrecognised pairing still names itself honestly
         tail = f"Axis sources: {label}."
     return f"{_CONVENTION_SENTENCE}\n{tail}"
 
@@ -347,15 +356,20 @@ class DialFilter:
         undefined coordinates Qt draws the dot and hull at ("QPainterPath::arcTo: Adding arc where
         a parameter is NaN").
 
-        It is real, not defensive programming: the bundled `hero8.mp4` loads with `has_gmeter`
-        True and all 634 of its g samples are `(nan, 0.0, nan)`, because a degenerate GRAV makes
-        `gmeter.py`'s `gdir / norm(gdir)` divide by zero. The four cardinal peaks this dial used to
-        paint happened to hide it — `max(0.0, nan)` returns 0.0, so the old face printed four
-        zeroes — which is exactly why promoting one filtered value to the hero number needs the
-        gate the peaks accidentally provided. (The upstream all-NaN series is a `gmeter.py` bug in
-        its own right: `has_data` is True for a series with no usable sample, so the toggle stays
-        enabled. That is core-math territory and not this PR's; the dial's job is to not lie about
-        it, which is `seen` staying False and the no-signal state taking over.)"""
+        It was real, not defensive programming: the bundled `hero8.mp4`, whose GRAV stream is all
+        zeros, USED to load with `has_gmeter` True and all 634 of its g samples `(nan, 0.0, nan)`,
+        because the zero direction made `gmeter.py`'s `gdir / norm(gdir)` divide by zero. The four
+        cardinal peaks this dial used to paint happened to hide it — `max(0.0, nan)` returns 0.0,
+        so the old face printed four zeroes — which is exactly why promoting one filtered value to
+        the hero number needs the gate the peaks accidentally provided.
+
+        The upstream all-NaN series is closed at its source now. `gmeter.axis_check` refuses a
+        GRAV with no direction before the transform runs, and decides that before it counts
+        unloaded samples — the order that had still let a directionless stream on a LOADED kart
+        through as "not measurable" and out as an all-NaN meter with `has_data` True. hero8 loads
+        632 finite GPS-derived samples (all 0.0: the clip never moves), and its toggle and DATA
+        TRUST row say why the accelerometer was not used. This gate stays, because one NaN from
+        any future source would still poison the EMA for the rest of the lap."""
         if g is None or not _finite(g[0], g[1]):
             if not self.have:
                 return False
