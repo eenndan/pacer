@@ -711,7 +711,7 @@ set_tests_properties(test_pb_toast PROPERTIES
 # recording" announced the same outing beating itself, 0.57 s, under a Share button — and the card
 # must fire more than once per window (dismiss() ends in deleteLater(), the stale wrapper raised
 # inside the blanket except and every later celebration was swallowed). Drives the real
-# _update_library over real chapter files on disk and the real _show_pb_moment on a real
+# update_library over real chapter files on disk and the real show_pb_moment on a real
 # StudioWindow, so run offscreen; the library index is redirected to a temp dir inside the test.
 add_test(NAME test_pb_moment_lifecycle
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_pb_moment_lifecycle.py)

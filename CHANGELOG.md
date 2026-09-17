@@ -659,6 +659,12 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 - Qt's own C++ warnings go through `logging` instead of a stderr a frozen `.app` cannot print to.
 - `StudioWindow`'s export cluster moved to its own `ExportController` (app.py 4,166 → 3,557 lines,
   142 → 121 methods) — the same one-object-one-cluster shape as the scrub and compare controllers.
+- …and its library cluster to `LibraryController` (app.py 4,563 → 3,807 lines, 169 → 136
+  methods): the library index and its PB moment, Library… and its privacy controls, Open Recent,
+  session records, the focus list and the saved-track manager. The boundary was measured with an
+  AST call graph — those pieces call each other in a cycle, so the library/PB methods alone could
+  not move without splitting it — and a before/after drive of the real window over both D24
+  recordings dumps byte-identical stores, status lines, menus, dialogs and PB cards.
 
 ## [0.2.0] — 2026-09-06
 
