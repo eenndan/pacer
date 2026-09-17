@@ -79,7 +79,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import session_record
+from . import app_support, session_record
 from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
 
 _log = logging.getLogger(__name__)
@@ -87,7 +87,6 @@ _log = logging.getLogger(__name__)
 VERSION = 1
 
 _FILENAME = "focus.json"
-_APP_DIR_NAME = "pacer"
 
 # At most three corners. The device this loop is borrowed from lets a driver stack a coaching list
 # until it is a to-do list, which is the failure mode `coaching.session_theme` already refused for
@@ -276,9 +275,9 @@ def _norm_list(e: dict) -> dict:
 # ------------------------------------------------------------------------------------ persistence
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer. The single seam tests + ``studio/dev/_jail.py`` redirect,
-    so neither a test nor a harness can reach the user's own focus list."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    so neither a test nor a harness can reach the user's own focus list; it resolves through
+    ``app_support.resolve``, which jails a test that redirects nothing."""
+    return app_support.resolve()
 
 
 def focus_path(path: str | None = None) -> str:

@@ -73,12 +73,13 @@ import math
 import os
 import shutil
 
+from . import app_support
+
 _log = logging.getLogger(__name__)
 
 VERSION = 1
 
 _FILENAME = "tracks.json"
-_APP_DIR_NAME = "pacer"
 
 # Match a trace to a track when its centroid is within this many metres of the entry's detection
 # centroid (generous — GPS centroids drift with how much of an out-lap is kept). Shared with the
@@ -160,9 +161,9 @@ class BuiltInTrack(ValueError):
 
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (the single seam tests monkeypatch so the suite never
-    touches the real DB). Same location/idiom as ``library._app_support_dir``."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    touches the real DB). Same location/idiom as ``library._app_support_dir``, resolved through
+    ``app_support.resolve``."""
+    return app_support.resolve()
 
 
 def db_path() -> str:
