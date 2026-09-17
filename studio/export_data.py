@@ -43,7 +43,7 @@ from typing import NamedTuple
 
 from . import APP_NAME, data_quality, units
 from . import stats as stats_service
-from ._signal import DASH, fmt_hms, fmt_time, lap_label
+from ._signal import DASH, exclusion_summary, fmt_hms, fmt_time, lap_label
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
 # dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
@@ -486,7 +486,10 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
     lap_bits = [f"{len(valid)} valid"]
     if excluded:
-        lap_bits.append(f"{len(excluded)} excluded (distance off the session median)")
+        # The reason per lap, counted — "distance off the session median" was printed for every
+        # excluded lap, including one with a stop and one that does not end where it started.
+        why = exclusion_summary(getattr(session, "excluded_lap_reasons", dict)() or {})
+        lap_bits.append(f"{len(excluded)} excluded ({why})" if why else f"{len(excluded)} excluded")
     if dropouts:
         lap_bits.append(f"{len(dropouts)} with a GPS dropout")
     rows = [("laps", " · ".join(lap_bits) if valid else "")]

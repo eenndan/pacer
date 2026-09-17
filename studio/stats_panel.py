@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 
 from . import data_quality, driving, gmeter, media_clock, provenance_panel, theme, units
 from . import stats as stats_service
-from ._signal import fmt_hms, fmt_time, plural
+from ._signal import exclusion_summary, fmt_hms, fmt_time, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
 # and the coaching headline can never state different totals for the same three corners — L5-02.
@@ -3713,10 +3713,14 @@ class StatsView(QWidget):
             # arithmetic invented to make the two numbers meet. State both true counts instead.
             count = getattr(session, "lap_count", None)
             total = count() if callable(count) else len(valid) + len(excluded)
+            # WHY, per reason — it used to say "their distance off the session median" for every
+            # excluded lap, which was already false for a lap with a stop and is false again for a
+            # piece that does not end where it started. getattr-guarded for the lighter doubles.
+            why = exclusion_summary(getattr(session, "excluded_lap_reasons", dict)() or {})
             rows.append(("Statistics use",
                          f"{len(valid)} of the {total} laps found — "
-                         f"{len(excluded)} {EXCLUDED_MARK} excluded, their distance off the "
-                         "session median (see the Laps tab).", True))
+                         f"{len(excluded)} {EXCLUDED_MARK} excluded"
+                         + (f": {why}" if why else "") + " (see the Laps tab).", True))
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
         # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
         # the other three caveats: it is one, and it was the only one printed among the provenance.
