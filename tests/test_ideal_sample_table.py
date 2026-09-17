@@ -34,13 +34,18 @@ WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
      recording to the row by its clean-lap count, asserts the `all` cell IS
      `Session.ideal_total()` to the millisecond, and then RE-RUNS THE TABLE'S STATED METHOD
      (20,000 random subsets per rung, partition held) over the app's own per-lap segment matrix.
-     Every rung cell must come out within Monte-Carlo error. So must the D24 prose figures the
-     docstring publishes beside the row: the gap at both ends, the per-doubling decrements and
-     the top-rung rates. When it fails it prints the re-measured row in the table's own syntax.
+     Every rung cell must come out within Monte-Carlo error. So must the prose figures the
+     docstring publishes beside the row: the best lap's own rate, and on D24 and SD_30_08 the
+     gap at both ends, the per-doubling decrements and the top-rung rates. The recording is loaded
+     AS THE APP OPENS IT — `Session.load`, then the start line saved beside it — because that is
+     the number the app prints. When it fails it prints the re-measured row in the table's own
+     syntax.
 
-‡ ROWS. Only the two D24 rows have been re-measured since #300; the Sandown and SD_30_08 footage
-was not on that machine, so those rows carry a ‡ and the docstring says what it means. Check 5 is
-the only way to drop one, and it has to be run where that footage is.
+‡ ROWS. A row not re-measured against the current app carries a ‡ and the docstring must say
+what it means. #319 marked the Sandown and SD_30_08 rows because their footage was believed to be
+elsewhere; it was on the same machine, and T13 re-measured all three. The SD_30_08 row turned out
+not to measure laps at all: 12.862 s over 25 "laps" was 25 pieces of 13 s cut from a 46 s lap by
+the loader's start line, which `load._fit_start_line` no longer chooses.
 
 Run:  python tests/test_ideal_sample_table.py
       PACER_IDEAL_TABLE_MP4=~/Desktop/D24/GX010062.MP4,…/GX020062.MP4,…/GX030062.MP4 \\
@@ -237,13 +242,36 @@ def _gap_pair() -> set[str]:
     return {g.at5_3ch, g.all_3ch}
 
 
+def _control_pair() -> tuple[list[float], list[float]]:
+    """The best-lap control rates and the ideal rates they are set against, row for row, from the
+    same docstring paragraph. Parsed rather than pinned so the two halves of one measurement cannot
+    drift apart."""
+    m = re.search(r"row for row, it falls\s+((?:[\d.]+\s*/\s*)+[\d.]+) s per doubling on those "
+                  r"five, against the ideal's\s+((?:[\d.]+\s*/\s*)+[\d.]+)", _docstring_flat())
+    assert m, "IdealSample no longer states the best-lap control rates row for row"
+    return ([float(v) for v in m.group(1).split("/")], [float(v) for v in m.group(2).split("/")])
+
+
 def _control_rates() -> list[float]:
-    """The best-lap control rates, from the same docstring paragraph. Parsed rather than pinned so
-    the two halves of one measurement cannot drift apart."""
-    m = re.search(r"it falls\s+((?:[\d.]+\s*/\s*)+[\d.]+) s per doubling on those five",
-                  _docstring_flat())
-    assert m, "IdealSample no longer states the best-lap control rates"
-    return [float(v) for v in m.group(1).split("/")]
+    return _control_pair()[0]
+
+
+def test_the_best_lap_control_is_set_against_the_table_s_own_rates():
+    """"LESS than the ideal on all five", derived. The paragraph pairs each recording's best-lap
+    rate with the ideal's; the ideal's half must BE the table's rate column in the table's order,
+    and each best-lap rate must sit below its own row's, or the sentence's verdict is false. The
+    lists used to be two independently sorted rows of numbers, so no reader could tell which
+    recording a best-lap rate belonged to."""
+    best, ideal = _control_pair()
+    rows = _rows()
+    assert ideal == [r.rate for r in rows], (
+        f"the paragraph sets the best lap against {ideal}; the table's rate column is "
+        f"{[r.rate for r in rows]} — the table is the source")
+    assert len(best) == len(rows), (best, rows)
+    over = [(r.name, b, r.rate) for r, b in zip(rows, best, strict=True) if b >= r.rate]
+    assert "LESS than the ideal on all five" in _docstring_flat() and not over, (
+        f"the best lap falls at least as fast as the ideal on {over}: the verdict has to change")
+    print(f"test_the_best_lap_control_is_set_against_the_table_s_own_rates OK ({best} vs {ideal})")
 
 
 def _decrements() -> list[tuple[int, int, str]]:
@@ -267,12 +295,19 @@ def _top_rung() -> tuple[str, str]:
     return m.group(1), m.group(2)
 
 
-def _sd_last_doubling() -> tuple[str, str]:
-    """SD_30_08's last-doubling best-lap and ideal moves (a ‡ row: stated, not re-measured)."""
-    m = re.search(r"the best lap moved MORE than the ideal did, (\d\.\d{3}) s against (\d\.\d{3})",
-                  _docstring_flat())
-    assert m, "IdealSample no longer states SD_30_08's last-doubling comparison"
-    return m.group(1), m.group(2)
+def _sd_last_doubling() -> tuple[str, str, str, str]:
+    """SD_30_08's last doubling, as the docstring states it twice: on the 25 pieces it was once
+    measured on (best, ideal — history, T13) and on its real laps' top rung (ideal, best), which
+    the real-media half re-measures."""
+    text = _docstring_flat()
+    m = re.search(r"the best lap moved more than the ideal \((\d\.\d{3}) s against (\d\.\d{3}) over "
+                  r"20 → 25 laps\)", text)
+    assert m, "IdealSample no longer records what SD_30_08's pieces measured"
+    now = re.search(r"on its (\d+) real laps the top rung \(20 → \1 laps\) reads (\d\.\d{3}) ideal "
+                    r"against (\d\.\d{3}) best", text)
+    assert now, "IdealSample no longer states SD_30_08's top-rung rates"
+    assert int(now.group(1)) == _row("SD_30_08").all_n, "the top-rung sentence names another lap count"
+    return m.group(1), m.group(2), now.group(2), now.group(3)
 
 
 def test_every_surface_quotes_this_table():
@@ -302,7 +337,7 @@ def test_every_surface_quotes_this_table():
     # real-media half is what checks them against the app.
     ok.update(r for _a, _b, r in _decrements())
     ok.update(_top_rung())
-    ok.update(_sd_last_doubling())
+    ok.update(_sd_last_doubling()[2:])
     # The HEADLINE GAP at both ends of the same experiment — several of these sentences carry the
     # rate and the gap in one breath ("falls X per doubling ... reads −G s at 5 laps"), and the
     # gap is published by the same docstring, so it is read from there rather than waved through.
@@ -497,14 +532,22 @@ def test_the_table_still_matches_the_app():
     from studio.session import Session
 
     s = Session.load([os.path.expanduser(p) for p in paths])
+    # AS THE APP OPENS IT: `StudioWindow._on_session_loaded` applies the start line the owner saved
+    # beside the recording before anything is drawn, through this same seam. Without it, SD_30_08
+    # was measured on a line the owner never sees (T13). A recording with no saved line (D24 0062)
+    # is unchanged by the call.
+    s.restore_saved_timing_lines()
     sb = s.ideal_segment_bests()
     assert sb is not None, "no corner partition, so there is no ideal to check the table against"
     laps = s.ideal_sample().laps
     rows = [r for r in _rows() if r.all_n == laps]
     assert rows, (f"{laps} clean laps is not a row of the table "
                   f"({[(r.name, r.all_n) for r in _rows()]}) — point the variable at one of them")
-    row = rows[0]
     got = s.ideal_total()
+    # Two recordings can share a lap count (Sandown chapter 1 and SD_30_08 both count 23 on the
+    # loader's own lines), and taking the first would report one recording's row as the other's
+    # stale figures. The row whose `all` cell is nearest is the recording's own.
+    row = min(rows, key=lambda r: abs(r.all_s - got))
     times, admitted = np.asarray(sb.times, float), np.asarray(sb.admitted, bool)
     lap_times = np.array([s.lap_time(i) for i in sb.lap_ids], float)
     # The stand-in has to BE the app before anything is varied, or every cell below measures a
@@ -565,6 +608,17 @@ def test_the_table_still_matches_the_app():
             if abs(float(pub) - dec(20, laps, col)) > 0.01:
                 problems.append(f"top-rung {label} rate: published {pub}, re-measured "
                                 f"{dec(20, laps, col):.3f}")
+    if row.name.startswith("SD_30_08"):
+        _pieces_best, _pieces_ideal, ideal_top, best_top = _sd_last_doubling()
+        for label, pub, col in (("ideal", ideal_top, 0), ("best", best_top, 1)):
+            if abs(float(pub) - dec(20, laps, col)) > 0.01:
+                problems.append(f"top-rung {label} rate: published {pub}, re-measured "
+                                f"{dec(20, laps, col):.3f}")
+    # The best lap's own rate over the whole range, which the paragraph sets against this row's.
+    best_pub = _control_rates()[[r.name for r in _rows()].index(row.name)]
+    if abs(best_pub - dec(5, laps, 1)) > 0.005:
+        problems.append(f"best-lap rate 5 → {laps}: published {best_pub:.3f}, re-measured "
+                        f"{dec(5, laps, 1):.3f}")
     assert not problems, (
         f"{row.name}{'' if row.verified else ' ' + _UNVERIFIED}: the published figures are not "
         f"what the app computes. The app is right; the table and every surface quoting it move.\n  "
