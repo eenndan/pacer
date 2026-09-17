@@ -387,7 +387,7 @@ class Stint:
 
     index: int                   # 1-based, session order
     lap_ids: list[int]           # the clean laps in it, ascending
-    start_s: float               # media time the first lap started
+    start_s: float               # telemetry time the first lap started
     end_s: float                 # ...and the last one finished
     gap_before_s: float | None   # unanalysed seconds since the previous stint; None on the first
     best: float                  # quickest lap in the stint (s)

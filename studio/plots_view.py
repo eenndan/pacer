@@ -1396,7 +1396,7 @@ class PlotsView(QWidget):
                 + (" · best" if is_baseline else ""))
 
     def set_playhead_time(self, t: float, *, force: bool = False):
-        """Place both cursors from media time t. No-op mid-drag unless force=True (used during a
+        """Place both cursors from TELEMETRY time t. No-op mid-drag unless force=True (used during a
         scrub to snap the dragged line to the clamped time)."""
         if self._user_dragging and not force:
             return
@@ -1419,7 +1419,7 @@ class PlotsView(QWidget):
         return None
 
     def _place(self, t: float):
-        """Place both cursors at media time t on the shared x-axis. Caches t for refresh()
+        """Place both cursors at TELEMETRY time t on the shared x-axis. Caches t for refresh()
         re-placement; _suppress prevents a re-emit."""
         self._cursor_t = t
         x = None

@@ -701,7 +701,9 @@ def test_the_lap_g_join_does_not_cross_the_media_clock():
     `_lap_g_arrays` reads the g meter at the lap's own TELEMETRY times while the series is stamped
     on the MEDIA clock, which reads like a bug and was filed as one. Measured on both D24
     recordings it is not: `gm.lat_g` sits +0.011 s / -0.047 s from the path-derived lateral joined
-    BY LABEL and -0.399 s / -0.404 s joined through `Session.media_clock`, and the same probe run
+    BY LABEL and -0.399 s / -0.404 s joined through `Session.media_clock`'s PICTURE map (the one
+    carrying the GPS lag; the stamp map, `without_gps_lag()`, reads +0.072 / +0.040 s), and the
+    same probe run
     reproduces the product's own `RotationCheck.gps_lag_s` off the gyro to four decimals. So this
     test asserts the join stays label-based even when the session carries a real, non-identity
     clock — and then shows the assertion has TEETH by crossing that clock itself and measuring how

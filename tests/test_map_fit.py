@@ -61,7 +61,7 @@ def _session(n=240, lap_span=None, valid=(0,), best=0, gap_at=None):
     s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
     a, b = lap_span or (0, n)
     s.lap_trace_segments = lambda lid: [SimpleNamespace(xs=xs[a:b], ys=ys[a:b], measured=True)]
-    s.lap_channels = lambda lid: {"t_media_s": t[a:b], "x_m": xs[a:b], "y_m": ys[a:b],
+    s.lap_channels = lambda lid: {"t_telemetry_s": t[a:b], "x_m": xs[a:b], "y_m": ys[a:b],
                                   "speed_kmh": speed[a:b],
                                   "dist_m": np.linspace(0.0, 500.0, b - a)}
     s.delta = lambda ids, x_mode="distance": (0, {}, {})
