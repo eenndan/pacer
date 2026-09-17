@@ -139,7 +139,7 @@ _IDEAL_CHIP_TIP = (
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
-    "(0.07–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
+    "(0.15–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
     "line changes which corners pacer finds. The Stats page prints both counts under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the
@@ -184,14 +184,18 @@ _IDEAL_HOVER_REASONS = {
 # app's largest text for a tenth of a second to report something that is not true at any
 # granularity the ideal is defined on. But the clamp was stated ONLY in that source comment, and
 # the Δ chart 130 px below draws the same quantity UNCLAMPED (deliberately — there a sub-zero
-# excursion has a track position to belong to). On the DEFAULT screen those two surfaces visibly
-# disagree: with the best lap selected the chart is baselined to the ideal, and on SD_30_08 the
-# best lap's raw value is negative on 297 of 1 308 frames, drawing the curve 8.9 px below its own
-# y = 0 line (-0.0195 s in a [-0.037, +0.235] view over a 124.7 px box) while the hero above it
-# prints `+0.00`. One clause on the hover closes that, and it appears exactly when the clamp is
-# doing visible work: |raw| > theme.DELTA_EVEN_EPS_S, the same dead band every other Δ surface
-# snaps to zero, so it stays silent on the float noise that makes 40.7 % of a one-donor
-# recording's samples "negative" at -0.0004 s.
+# excursion has a track position to belong to). On the DEFAULT screen those two surfaces can
+# disagree: with the best lap selected the chart is baselined to the ideal, and on D24 one chapter
+# (GX010062) the best lap's raw value is negative on 258 of 6 878 frames at 10 ms, 190 of them past
+# the dead band, drawing the curve 1.4 px below its own y = 0 line (-0.0199 s in a [-0.127, +1.494]
+# view over a 114.7 px box) while the hero above it prints `+0.00`. Select any other lap and it is
+# the floor table's -0.280 s. (This note first measured it on SD_30_08: 297 of 1 308 frames and
+# 8.9 px, which still reproduces on the tree before T13 — but those 1 308 frames were a 13.07 s
+# PIECE of a 46 s lap. On its real laps the best lap never goes below zero.) One clause on the hover
+# closes that, and it appears exactly when the clamp is doing visible work:
+# |raw| > theme.DELTA_EVEN_EPS_S, the same dead band every other Δ surface snaps to zero, so it
+# stays silent on the float noise that makes 40.7 % of a one-donor recording's samples "negative" at
+# -0.0004 s.
 _IDEAL_CLAMPED_NOTE = (
     "\nRight here you are {raw:.2f} s up on the lap that donated this segment — not up on the "
     "ideal, which you cannot be over a whole segment. The readout floors at +0.00; the Δ chart "

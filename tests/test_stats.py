@@ -1043,7 +1043,7 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
 
     `SegmentBests.total` is a sum of per-segment minima, so it falls as a session accumulates laps
     and moves again when the corner partition is re-cut. Measured over random subsets of the
-    owner's five recordings it falls 0.074–0.377 s per DOUBLING of lap count with no plateau, and
+    owner's five recordings it falls 0.153–0.377 s per DOUBLING of lap count with no plateau, and
     on D24's three chapters the gap tile reads `-0.95 s` over 5 clean laps and `-1.49 s` over 65 —
     the same driving, the same recording. Before this, the tile,
     the caption and the hero all printed the number with nothing beside it and the counts lived

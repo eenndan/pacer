@@ -310,14 +310,32 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A recording on an unknown track no longer opens as quarter-laps when a wider start line would
+  have cut every lap in two.** With no saved start/finish line, SD_30_08 opened as **25 laps of
+  13.3 s / 203 m** — best 13.073 s, ideal 12.886 s, written to the library that way — when the
+  circuit is a 46 s, 740 m Sandown Park lap. The loader had found the real laps and thrown them
+  away: its line at the fastest point counted 23 laps of 47.6 s, and its ×1.5 widening reached a
+  second stretch of track, cut each lap into a 13 s and a 34 s piece, and won on count (25 > 23).
+  The ±10 % lap-length band (#68) could not see it, because it bands against the median piece and
+  here the median piece was the fragment. A wider line is now taken only when it counts more laps
+  **and** more driving: recovering a pass the short line stepped over does both, cutting counted
+  laps into pieces cannot. SD_30_08 opens as 23 laps (best 46.922 s, ideal 46.420 s, against
+  46.912 / 46.430 on the owner's own saved line), and so do both of its chapters together (37);
+  no other recording on the owner's machine chooses a different line. The figures that had been
+  measured on those pieces are re-measured: the ideal lap's sample table (all three rows #319
+  marked unverifiable — the footage was on the same machine — now re-measured as the app opens
+  each recording), the best-lap control beside it (one claim did not survive: no recording has
+  the best lap moving more than the ideal), the tooltips' range of 0.15–0.38 s per doubling of
+  lap count (was 0.07–0.38), the Δ-to-ideal floor (−0.280 s on SD_30_08's loader line), and the
+  notes that used SD_30_08's pieces as a real-lap example.
 - **Three more published measurements predated #300, and every cell of each had moved.** The
   coaching THEME shares now read 70 % execution on 0060 and 73 % pace on 0062 (was 73 % / 65 %),
   and braking holds the majority of ranked time on both recordings (was 61 % / 44 %, "not a
   theme" on 0062). The evidence figures behind them moved too: σ exceeds the claimed loss on 16 of
   19 shown rows (was 17 of 20), and 7 abstain (was 6). The pointwise Δ-to-ideal floor table is
   re-measured on all five recordings. Sandown chapter 1's floor is −0.164 s on 4.52 % of samples
-  (was −0.159 s on 2.09 %). On the start line the owner saved beside SD_30_08 the floor is −0.246 s,
-  the deepest measured: without that line the loader cuts its 46 s lap into 12.9 s pieces. The
+  (was −0.159 s on 2.09 %). On the start line the owner saved beside SD_30_08 the floor is −0.246 s;
+  without that line the loader cut its 46 s lap into 12.9 s pieces (fixed above). The
   #272 dotplot record keeps its verdict on the new numbers (0 of 20 dots at or left of the best
   lap, spread 0.60× the laps driven, on both recordings), and #272's own table stays beside it.
   Each table is now written as a table. `tests/test_measured_figures.py` derives every figure
