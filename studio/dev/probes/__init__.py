@@ -27,4 +27,12 @@ than one: the strip's naive-second cells indexed by telemetry windows, each join
 against the stamps the strip binned. Its rule is written in `Session.quality_timeline`.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p5_clock_crossing_scale
+
+`p8_corner_anchor` is the only one here that measures a SHIPPED change rather than a channel the
+app does not have: it drives `corners.session_geometry` and the real `_spatial_matches` on both D24
+recordings, prints the fitted receiver drift, plants a translation and a wider racing line on the
+same lap to show the fit separates them, and scores the result against a CURVATURE witness that a
+rigid translation cannot move. Its numbers are the evidence for M7.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor
 """

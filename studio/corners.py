@@ -125,20 +125,34 @@ class SessionGeometry:
     measure a lap that was not in the consensus set — a GPS-dropout lap is excluded from every
     "best" in the app but its corner windows are still drawn, and it must be projected in the same
     frame as the rest rather than left on the uncorrected one.
+
+    `self_offset` is what `perpendicular_offsets` reports for the REFERENCE LAP AGAINST ITSELF,
+    which is not identically zero: the offset is taken to the nearest fix rather than to the line
+    between fixes, so on a curve it carries a bias of order kappa·ds²/2 (a few millimetres at 1 m
+    spacing on a 40 m radius). Every lap is measured by the same rule and so carries the same bias,
+    and subtracting this cancels it — which is what makes a session whose laps sit on ONE line come
+    out at exactly zero consensus and exactly zero shift, and therefore matched bit for bit as
+    before rather than three millimetres off it.
     """
 
     stations: np.ndarray
     total_ref: float
     frame: tuple
+    self_offset: np.ndarray
     consensus: np.ndarray
     shift: dict[int, np.ndarray]
     residual_rms: dict[int, float]
 
+    def offsets(self, lap_xs, lap_ys, lap_cum) -> np.ndarray:
+        """One lap's signed perpendicular offset from the reference lap at each station, with the
+        estimator's own bias (`self_offset`) taken out."""
+        return perpendicular_offsets(self.stations, self.total_ref, self.frame,
+                                     lap_xs, lap_ys, lap_cum) - self.self_offset
+
     def fit(self, lap_xs, lap_ys, lap_cum) -> tuple[np.ndarray, float]:
         """(rigid translation, residual RMS) of one lap against this session's consensus line."""
-        off = perpendicular_offsets(self.stations, self.total_ref, self.frame,
-                                    lap_xs, lap_ys, lap_cum)
-        return _rigid_shift(off - self.consensus, self.frame[4], self.frame[5])
+        return _rigid_shift(self.offsets(lap_xs, lap_ys, lap_cum) - self.consensus,
+                            self.frame[4], self.frame[5])
 
     def relative_shift(self, lap_shift, ref_id: int) -> tuple[float, float]:
         """The translation to remove from a lap before matching it against lap `ref_id`'s trace:
@@ -236,8 +250,10 @@ def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
     step = total_ref / DRIFT_STATIONS
     stations = np.arange(DRIFT_STATIONS) * step + step / 2.0
     frame = _station_frame(stations, ref_xs, ref_ys, ref_cum)
+    self_offset = perpendicular_offsets(stations, total_ref, frame, ref_xs, ref_ys, ref_cum)
     ids = sorted(lap_traces)
-    offs = {lid: perpendicular_offsets(stations, total_ref, frame, *lap_traces[lid]) for lid in ids}
+    offs = {lid: perpendicular_offsets(stations, total_ref, frame, *lap_traces[lid]) - self_offset
+            for lid in ids}
     stack = np.array([offs[lid] for lid in ids])
     if not np.isfinite(stack).any():
         return None
@@ -250,7 +266,7 @@ def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
     for lid in ids:
         t, rms = _rigid_shift(offs[lid] - consensus, nx, ny)
         shift[lid], residual[lid] = t, rms
-    return SessionGeometry(stations, total_ref, frame, consensus, shift, residual)
+    return SessionGeometry(stations, total_ref, frame, self_offset, consensus, shift, residual)
 
 
 def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,

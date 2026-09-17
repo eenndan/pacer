@@ -697,8 +697,15 @@ class CornerModel:
         `corners.NORMALIZED_DRIFT_MAX`. #300 deleted that constant, so every lap with a trace pair
         has been warped since and the sentence was false from that commit. Measured on the owner's
         recordings, None is not reached at all: 0 of 38 laps (D24 0060 pair) and 0 of 65 (0062),
-        carrying 4-22 and 20-22 matched interior knots of 24 corner boundaries.
+        carrying 12-22 and 21-22 matched interior knots of 24 corner boundaries (4-22 and 20-22
+        before the session geometry below de-drifted them).
         `tests/test_corner_alignment_memo.py` drives all three causes and guards the wording.
+
+        THE MATCH RUNS THROUGH THE SESSION'S GEOMETRY (M7). The comparison lap's trace is moved by
+        `lap_shift` and the anchor sideways by `corners.anchor_offsets`, so the 3 m gate is spent on
+        the two lines rather than on the receiver's own bias. On the D24 0060 pair that takes the
+        interior boundaries matched from 61.8 % to 95.5 % and `lap_corner_resolved` from 220 to 425
+        of 456 cells; on 0062, from 99.7 % to 100 % and 776 to 780 of 780.
 
         WHY THIS EXISTS. The warp is built from the WHOLE corner partition, so it is the same
         object for every window of a lap — but nine independent call paths each derived it for
