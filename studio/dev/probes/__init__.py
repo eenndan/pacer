@@ -16,7 +16,7 @@ through `_align` — read that module before changing any of them.
 `p4_corner_gps_quality` is the odd one out and needs neither the cache nor `_align`: it asks whether
 the GPS-quality signal can support a PER-CORNER coaching abstain, which is a question about one
 channel rather than two, so it loads each recording itself and reads the strip the loader already
-built. Its verdict is `studio/docs/refused-2026-09.md` §3.
+built. Its verdict is `studio/docs/refused-2026-09.md` §4.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p4_corner_gps_quality
 """

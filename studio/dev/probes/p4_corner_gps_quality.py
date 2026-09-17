@@ -17,7 +17,7 @@ Per cell it reports
     clock — the crossing `Session.lap_quality` documents as harmless at LAP scale, asked again at
     corner scale, where the window is ~3-6 s rather than ~70 s.
 
-The verdict is written up in `studio/docs/refused-2026-09.md` §3. Every number there comes from
+The verdict is written up in `studio/docs/refused-2026-09.md` §4. Every number there comes from
 here.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p4_corner_gps_quality
