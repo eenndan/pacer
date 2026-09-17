@@ -73,7 +73,13 @@ _SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other
 # PUBLIC because it is the projection's stated per-boundary resolution and is cited as such from
 # corner_model (see MAX_DONOR_SPAN_DEV's sub-resolution paragraph: a segment whose admission band
 # is far under this cannot be judged by a projection built out of matches only accurate to it).
-SPATIAL_MATCH_MAX_M = 3.0        # refined closest approach must be ≤ 3 m to count as the same point
+# WHY D24 0060 USED TO MATCH ONLY 61.8 % OF ITS INTERIOR BOUNDARIES (0062: 99.7 %) is measured in
+# studio/docs/corner-match-0060-2026-09.md. Every failure was this gate. The cause is that
+# recording's GNSS scatter plus a reference (fastest) lap that is itself displaced — NOT a threshold
+# 0060 sits just outside: its cells reached 98.4 % only at 8 m, where 0062's are 99.3 % at 3. So the
+# threshold is unchanged and the SESSION GEOMETRY below takes the receiver's own bias out of the two
+# lines before this gate judges them, which is what brings 0060 to 95.5 % at the same 3 m.
+SPATIAL_MATCH_MAX_M = 3.0       # refined closest approach must be ≤ 3 m to count as the same point
 
 # --- the session's own geometry: a consensus line + each lap's rigid receiver shift ----------
 # WHAT THIS IS FOR. The gate above judges the distance between the reference lap's trace point and
