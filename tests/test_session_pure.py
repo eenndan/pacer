@@ -1422,7 +1422,7 @@ def test_beat_counts_are_not_a_fixed_tolerance_hit_rate():
     # the counts are unchanged. `hit_counts(0.1)` could not survive this — a 0.1 s window over
     # 3x-longer segments admits a strictly different set.
     scaled = SegmentBests(labels=sb.labels, cids=sb.cids, lap_ids=sb.lap_ids,
-                          times=sb.times * 3.0, admitted=sb.admitted,
+                          times=sb.times * 3.0, admitted=sb.admitted, resolved=sb.resolved,
                           bests=[b * 3.0 for b in sb.bests], donors=sb.donors,
                           s_edges=sb.s_edges, donor_span=sb.donor_span)
     assert scaled.beat_counts(best) == counts
@@ -1434,10 +1434,12 @@ def test_beat_counts_are_not_a_fixed_tolerance_hit_rate():
     # the slowest, and all three are at least as fast as it, at either scale.
     col = np.array([[1.00], [1.05], [1.20]])
     one = SegmentBests(labels=["a"], cids=[], lap_ids=[0, 1, 2], times=col,
-                       admitted=np.ones((3, 1), bool), bests=[1.00], donors=[0],
+                       admitted=np.ones((3, 1), bool), resolved=np.ones((3, 1), bool),
+                       bests=[1.00], donors=[0],
                        s_edges=[0.0, 1.0], donor_span=[(0.0, 0.0)])
     three = SegmentBests(labels=["a"], cids=[], lap_ids=[0, 1, 2], times=col * 3.0,
-                         admitted=np.ones((3, 1), bool), bests=[3.00], donors=[0],
+                         admitted=np.ones((3, 1), bool), resolved=np.ones((3, 1), bool),
+                         bests=[3.00], donors=[0],
                          s_edges=[0.0, 1.0], donor_span=[(0.0, 0.0)])
     assert one.beat_counts(2) == three.beat_counts(2) == [(3, 3)]
     fixed_1x = int((col[:, 0] <= 1.00 + 0.1).sum())
@@ -1476,6 +1478,7 @@ def test_decomposition_ranks_a_repeatable_gain_above_a_lucky_one():
     times[9, 1] = 5.40
     sb = SegmentBests(labels=["a", "b"], cids=[1], lap_ids=list(range(n_laps)), times=times,
                       admitted=np.ones((n_laps, n_seg), bool),
+                      resolved=np.ones((n_laps, n_seg), bool),
                       bests=[float(times[:, 0].min()), float(times[:, 1].min())],
                       donors=[1, 1], s_edges=[0.0, 0.5, 1.0], donor_span=[(0.0, 0.0)] * n_seg)
     rows = sb.decomposition(0)
@@ -1500,7 +1503,7 @@ def test_decomposition_drops_a_segment_the_subject_never_drove():
     admitted = np.ones((3, 3), bool)
     admitted[0, 1] = False                       # the subject's collapsed cell
     sb = SegmentBests(labels=["a", "b", "c"], cids=[1], lap_ids=[0, 1, 2], times=times,
-                      admitted=admitted,
+                      admitted=admitted, resolved=np.ones((3, 3), bool),
                       bests=[9.0, 1.8, 4.0], donors=[1, 2, 2],
                       s_edges=[0.0, 0.3, 0.6, 1.0], donor_span=[(0.0, 0.0)] * 3)
     rows = sb.decomposition(0)

@@ -186,11 +186,11 @@ def make_session(*, with_sectors=True, with_corners=True, with_g=True):
 def test_laps_table_schema_and_values():
     s = make_session()
     headers, rows = export_data.laps_table(s)
-    # `quality` is APPENDED last (data_quality's Analysis Function codes); every column before
-    # it is unchanged, which is the point of appending rather than inserting beside `flag`.
+    # `quality` and, after it, C5's `corners_interpolated` are APPENDED last; every column before
+    # them is unchanged, which is the point of appending rather than inserting beside `flag`.
     assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag", "S1_s", "S2_s",
                        "C1_time_s", "C1_apex_kmh", "C2_time_s", "C2_apex_kmh",
-                       "quality"], headers
+                       "quality", "corners_interpolated"], headers
     assert [lap_id for lap_id, _ in rows] == [0, 1, 2]  # internal 0-based lap ids (row keys)
     by_id = dict(rows)
     for r in s.lap_rows():
@@ -218,11 +218,15 @@ def test_laps_table_degenerate_schema():
     """No sectors + no corners -> just the base columns (mirrors the app's table)."""
     s = make_session(with_sectors=False, with_corners=False)
     headers, rows = export_data.laps_table(s)
-    assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag", "quality"]
-    assert len(rows) == 3 and all(len(cells) == 6 for _i, cells in rows)
+    assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag", "quality",
+                       "corners_interpolated"]
+    assert len(rows) == 3 and all(len(cells) == 7 for _i, cells in rows)
     # …and the appended column still reports the fixture's one dropout lap ([u]), because the
     # marks follow the SESSION's verdicts and not the presence of sector/corner columns.
     assert dict(rows)[2][5] == "[u]" and dict(rows)[0][5] == "" and dict(rows)[1][5] == ""
+    # With no corner partition there is nothing that COULD be interpolated, so the C5 column is
+    # present (the schema is not conditional) and empty on every row.
+    assert all(cells[6] == "" for _i, cells in rows)
 
 
 def test_write_laps_csv_matches_table():
@@ -269,6 +273,80 @@ def test_write_laps_csv_matches_table():
     best = s.lap_time(s.best_lap_id())
     assert th is not None and ro is not None
     assert th <= ro + 1e-9 and ro <= best + 1e-9
+
+
+def test_the_csv_discloses_an_interpolated_corner_cell_and_keeps_every_row():
+    """C5 — laps.csv is an EXTERNAL FORMAT, so the rule arrives as a column, not as a deletion.
+
+    Since C4 the app's own corner surfaces count only cells matched on track at both edges; the
+    exported `C*_time_s` / `C*_apex_*` columns counted every one. Dropping or blanking them would
+    break a reader diffing this week's file against last week's, so every value is still written
+    and a `corners_interpolated` column names the corners whose window was a guess — with a
+    trailer row (and a note on the HTML report) saying what that means, derived from the ROWS so
+    it can never appear on a file with nothing to explain.
+
+    Measured on the owner's D24 recordings: 34 of the 0060 pair's 456 exported corner cells are
+    interpolated, over 16 of its 38 laps; 0 of 0062's 780."""
+    s = make_session()
+    n_corners = len(s.corners.corner_list())
+    real = s.corners.lap_corner_resolved
+
+    def with_flips(flips):
+        """`flips` = {(lap_id, corner index)} planted as interpolated."""
+        s.corners.lap_corner_resolved = lambda lap: [
+            False if (lap, k) in flips else ok for k, ok in enumerate(real(lap))]
+
+    try:
+        # 1. Nothing to disclose: the column is there, empty, and neither legend appears.
+        headers, rows = export_data.laps_table(s)
+        col = headers.index(export_data.INTERPOLATED_COLUMN)
+        assert col == len(headers) - 1, "the disclosure must be the LAST column"
+        assert all(cells[col] == "" for _i, cells in rows), rows
+        assert not export_data.any_interpolated(headers, rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "clean.csv")
+            export_data.write_laps_csv(path, s)
+            body = open(path, encoding="utf-8").read()
+        assert export_data.INTERPOLATED_COLUMN in body.splitlines()[0]
+        assert f"{export_data.SUMMARY_MARKER}: {export_data.INTERPOLATED_COLUMN}" not in body, (
+            "a file with no interpolated cell carries a legend for one")
+
+        # 2. Plant lap 0's C2 and lap 2's C1 + C2. Every numeric cell is UNCHANGED — that is the
+        # whole promise of a disclosure column — and the new cell names exactly the right corners.
+        before = {lap_id: list(cells[:col]) for lap_id, cells in rows}
+        with_flips({(0, 1), (2, 0), (2, 1)})
+        headers, rows = export_data.laps_table(s)
+        by_id = dict(rows)
+        assert {lap_id: list(cells[:col]) for lap_id, cells in rows} == before, (
+            "a value moved when only the disclosure should have")
+        assert by_id[0][col] == "C2", by_id[0][col]
+        assert by_id[1][col] == "", by_id[1][col]
+        assert by_id[2][col] == "C1 C2", by_id[2][col]
+        assert export_data.any_interpolated(headers, rows)
+        # The C2 time and apex cells are still written on the planted laps, not blanked.
+        c2_time = headers.index("C2_time_s")
+        assert by_id[0][c2_time] and by_id[2][c2_time], (by_id[0][c2_time], by_id[2][c2_time])
+        assert n_corners == 2
+
+        # 3. …and both writers explain it: a trailer row in the CSV, a note under the HTML table.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "laps.csv")
+            export_data.write_laps_csv(path, s)
+            got = list(csv.reader(open(path, newline="", encoding="utf-8")))
+            html_path = os.path.join(tmp, "report.html")
+            export_data.write_report_html(html_path, s)
+            page = open(html_path, encoding="utf-8").read()
+        legend = [r for r in got
+                  if r and r[0] == f"{export_data.SUMMARY_MARKER}: {export_data.INTERPOLATED_COLUMN}"]
+        assert len(legend) == 1 and legend[0][3] == export_data.INTERPOLATED_NOTE, legend
+        assert len(legend[0]) == 4, "the trailer stopped being rectangular"
+        assert export_data.INTERPOLATED_COLUMN in page and "interpolated between" in page
+        assert "<td>C1 C2</td>" in page, "the report's table lost the disclosure cell"
+    finally:
+        s.corners.lap_corner_resolved = real
+    print("ok laps.csv: every corner value kept, the interpolated ones named, and a legend only "
+          "where there is something to explain")
 
 
 def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
@@ -651,6 +729,7 @@ if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()
+    test_the_csv_discloses_an_interpolated_corner_cell_and_keeps_every_row()
     test_laps_summary_gate_is_the_ideal_not_the_sector_count()
     test_channels_csv_roundtrip_exact()
     test_the_channels_csv_names_the_clock_each_time_column_is_on()
