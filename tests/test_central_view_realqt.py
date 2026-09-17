@@ -60,6 +60,40 @@ from studio.central_view import CentralView  # noqa: E402
 
 
 # --------------------------------------------------------------------- fixture
+# The synthetic session's first fix, on the wall clock: 2025-08-30 12:00 UTC. Noon, so the LOCAL
+# calendar day `Session.session_date` derives is the same date in every timezone from UTC-11 to +11.
+_WALL_CLOCK_MS = 1_756_555_200_000
+
+
+def _jail_every_live_app_support_seam():
+    """Point every `studio` app-support seam that STILL resolves to the developer's real
+    `~/Library/Application Support/pacer` at a throwaway dir, and leave alone any seam the calling
+    test file already diverted (test_load_affordances keeps a demo clip in its own demo dir).
+
+    WHY THE FIXTURE OWNS THIS. Until H6 the `_Laps` double below had no point API, so building a
+    library entry for this session always raised, and every write downstream of it was dead code.
+    With the entry resolving, `refresh_library_entry` really upserts. test_load_failure diverts no
+    seam and fires `timingEdited`, and the first run with the fixed double wrote a `stadium` row
+    into the owner's real library.json. Seventeen files use this fixture and ten of them divert
+    nothing, so the guarantee belongs here, not in each caller.
+
+    Not `_jail.divert_app_support`: that decides on `library` alone and then repoints all seven,
+    which would move a seam a caller had already diverted elsewhere."""
+    import importlib
+    import tempfile
+
+    from test_golden_hermetic import seams_in_studio
+
+    from studio.dev import _jail
+    real = os.path.abspath(_jail._REAL_DIR)
+    target = None
+    for name in sorted(seams_in_studio()):
+        mod = importlib.import_module(f"studio.{name}")
+        if os.path.abspath(mod._app_support_dir()) == real:
+            target = target or tempfile.mkdtemp(prefix="pacer-test-realqt-")
+            mod._app_support_dir = lambda t=target: t
+
+
 def _real_central_view():
     """A REAL CentralView (its production __init__: real panels + real ScrubController /
     CompareController / PlaybackState / signal wiring) over the two-lap stadium synthetic session.
@@ -70,9 +104,11 @@ def _real_central_view():
       * a real LapRenderCache (MapView's best-overlay draw segments);
       * lap_window / lap_at_time / lap_time (the global-clock windows the tick + scrub resolve);
       * lap_rows / dropout / sector splits / consistency stubs (the LapTable + the Stats page);
-      * a tiny pacer Sectors (real start_line Segment) so the Session.start_line property resolves.
+      * a tiny pacer Sectors (real start_line Segment) so the Session.start_line property resolves;
+      * the raw point stream (point_count / get_point) the window's library entry reads its date from.
     Returns (central_view, session, t0, t1) where t0/t1 are the two laps' media-clock time arrays.
     """
+    _jail_every_live_app_support_seam()   # BEFORE any widget reads prefs or any store is written
     s = _synthetic_session()
     t0, x0, y0, _sp0, _c0 = s._cols_cache[0]
     t1, x1, y1, _sp1, _c1 = s._cols_cache[1]
@@ -144,6 +180,22 @@ def _real_central_view():
 
         def get_lap(self, lid):
             return SimpleNamespace(points=lap_pts[lid])
+
+        # The RAW point stream the real pacer.Laps serves. `Session.session_date` reads it inside
+        # `library_entry`, which the record chip and the focus list build on every `_build_ui`.
+        # Without it, EVERY window built on this fixture raised AttributeError inside
+        # `LibraryController._current_library_entry`'s guard, which logged a traceback and returned
+        # None: 142 swallowed tracebacks across ten test files, all passing (H6). The fixes are the
+        # full trace above, stamped with a FIXED wall clock so the entry's date is deterministic.
+        def point_count(self):
+            return len(s.tt)
+
+        def get_point(self, row):
+            if not 0 <= row < len(s.tt):  # the binding's std::out_of_range, as Python sees it
+                raise IndexError(row)
+            return SimpleNamespace(time=float(s.tt[row]), point=SimpleNamespace(
+                lat=float(s.tx[row]), lon=float(s.ty[row]),
+                timestamp_ms=_WALL_CLOCK_MS + round((s.tt[row] - s.tt[0]) * 1000.0)))
     s.laps = _Laps()
     s.track_name = "StadiumLoop"
     # A single-chapter ChapterMap spanning the two laps so VideoView's slider/inert pane build.
@@ -1058,6 +1110,7 @@ def _run_all():
     test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page()
     test_karmas_absent_g_meter_is_not_described_as_an_accelerometer_page()
     test_u2_lap_table_cap_notice_reaches_the_window_status_bar()
+    test_the_fixture_window_writes_its_library_entry_into_a_jail_never_the_real_library()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -1520,6 +1573,42 @@ def test_u2_lap_table_cap_notice_reaches_the_window_status_bar():
         win._tick_timer.stop()
         win.deleteLater()
     print("test_u2_lap_table_cap_notice_reaches_the_window_status_bar OK")
+
+
+def test_the_fixture_window_writes_its_library_entry_into_a_jail_never_the_real_library():
+    """H6. The fixture's session now builds a real library entry, so the window's library writes are
+    live, and this file diverts no app-support seam of its own. The seams are checked BEFORE the
+    write is driven, so a fixture that lost its jail fails on the assertion and never reaches the
+    developer's library.
+
+    The write is then driven for real and read back from the jail. A jail the refresh never reached
+    would prove nothing, and neither would a refresh that still raised the way it did before the
+    double had a point API."""
+    import importlib
+
+    from test_golden_hermetic import seams_in_studio
+
+    from studio import library
+    from studio.dev import _jail
+    win, view = _studiowindow_with_view()
+    try:
+        seams = seams_in_studio()
+        assert {"demo", "focus", "library", "marks", "prefs", "session_record",
+                "track_db"} <= seams, f"the seam scan lost a known store: {sorted(seams)}"
+        real = os.path.abspath(_jail._REAL_DIR)
+        live = sorted(n for n in seams if os.path.abspath(
+            importlib.import_module(f"studio.{n}")._app_support_dir()) == real)
+        assert not live, f"the fixture window can reach the real app-support dir through {live}"
+
+        win.library_ctl.refresh_library_entry()
+        rows = [e for e in library.load()["entries"] if e.get("fingerprint") == "stadium"]
+        assert len(rows) == 1 and rows[0]["lap_count"] == 2, (
+            f"the refresh did not land the fixture's entry in the jailed index: {rows}")
+    finally:
+        win._tick_timer.stop()
+        view.dispose()
+        win.deleteLater()
+    print("test_the_fixture_window_writes_its_library_entry_into_a_jail_never_the_real_library OK")
 
 
 if __name__ == "__main__":

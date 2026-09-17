@@ -28,8 +28,14 @@
     title (asserted below, so nobody "fixes" it with setWindowTitle), so the body is the only
     naming there is.
 
+  * H6 — every window this file built on the synthetic session PASSED while printing two
+    tracebacks: a guard in `LibraryController._current_library_entry` swallowed an AttributeError
+    from the fixture's `_Laps` double. `_run_all` now fails any test during which a `studio.*`
+    guard logs an error, so the next swallowed failure here is a red test, not scrollback.
+
 Run: QT_QPA_PLATFORM=offscreen python tests/test_app_chrome.py
 """
+import logging
 import os
 import sys
 import tempfile
@@ -40,14 +46,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# The four persistence seams, diverted into one temp tree BEFORE any window exists. A real
+# The persistence seams, diverted into one temp tree BEFORE any window exists. A real
 # StudioWindow reads AND WRITES prefs (the jump test drives a tab change, which persists), so
 # without this the suite would rewrite the user's own lap-panel tab / grid layout — the same
 # _app_support_dir idiom test_library / test_track_db / test_data_safety already use.
-from studio import library, prefs, sidecar, track_db  # noqa: E402
+# ALL of them, the rule studio/dev/_jail.py states: every window built on the synthetic session
+# reads the session-record store and, now that its library entry resolves (H6), this track's focus
+# list — both of which were live against the developer's own app-support dir.
+from studio import demo, focus, library, marks, prefs, session_record, sidecar, track_db  # noqa: E402
 
 _SEAMS = tempfile.mkdtemp(prefix="pacer-test-app-chrome-")
-for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db")):
+for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db"),
+                    (demo, "demo"), (focus, "focus"), (marks, "marks"),
+                    (session_record, "session_record")):
     _dir = os.path.join(_SEAMS, _name)
     os.makedirs(_dir, exist_ok=True)
     _mod._app_support_dir = (lambda d=_dir: d)
@@ -280,6 +291,40 @@ def test_a_loaded_session_re_enables_them_without_opening_a_menu():
     view.dispose()
     win.hide()
     print("test_a_loaded_session_re_enables_them_without_opening_a_menu OK")
+
+
+# ============================================================ H6 — the guard behind the tracebacks
+def test_the_synthetic_window_resolves_its_own_library_entry_through_the_guard():
+    """The record chip, the focus list, File ▸ Session record… and the focus buttons all start from
+    `LibraryController._current_library_entry`, and that returns None for two different reasons:
+    there is honestly no entry, or building one RAISED and the guard logged it. On main it was the
+    second, on every window built here: `Session.session_date` asked the fixture's `_Laps` double
+    for `point_count()`, which the real `pacer.Laps` serves and the double did not, so those
+    surfaces were only ever exercised on "no library entry".
+
+    Measured before changing anything, so this is a stand-in gap and not a product defect: over a
+    real `Session.load` on all ten bundled samples, both D24 recordings, Sandown and SD, the guard
+    logged nothing and `library_entry` completed every time.
+
+    The UNGUARDED call comes first, so a double missing an accessor again fails here with that
+    accessor's own AttributeError instead of a None. Then the GUARDED call must hand back the same
+    entry: the tripwire in `_run_all` catches a guard that logs, and this catches one that returns
+    None."""
+    win, view = _studiowindow_with_view(build_menu=True)
+    try:
+        _settle()
+        direct = win.session.library_entry(win._paths)
+        guarded = win.library_ctl._current_library_entry()
+        assert guarded == direct, f"the guard did not pass the entry through: {guarded!r}"
+        assert direct["fingerprint"] == library.fingerprint("stadium"), direct
+        assert (direct["track"], direct["lap_count"]) == ("StadiumLoop", 2), direct
+        assert direct["date"], f"the double's fixes carry no wall clock, so no date: {direct}"
+    finally:
+        if win._tick_timer is not None:
+            win._tick_timer.stop()
+        view.dispose()
+        win.hide()
+    print("test_the_synthetic_window_resolves_its_own_library_entry_through_the_guard OK")
 
 
 # ============================================================ L5-07 — where Jump lands
@@ -696,25 +741,62 @@ def test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close
     print("test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close_event OK")
 
 
+class _GuardedErrors(logging.Handler):
+    """Every ERROR a `studio.*` logger records while one test runs.
+
+    An `except Exception: _log.exception(...)` guard is right for the app, because a menu item or a
+    decorative chip must never raise into the UI. In a test it is wrong: the test passes, the
+    traceback scrolls past, and everyone learns to ignore it. That is how a missing accessor on a
+    test double printed 142 tracebacks across ten files and failed nothing (H6)."""
+
+    def __init__(self):
+        super().__init__(logging.ERROR)
+        self.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(self.format(record))
+
+
+def _run_failing_on_guarded_errors(test):
+    """Run one test with a recorder on the `studio` logger, the ancestor of every studio module's
+    logger, and fail THAT test by name if anything was logged at ERROR. A handler also stops
+    logging's last-resort stderr print, so the traceback is carried in the failure instead."""
+    recorder = _GuardedErrors()
+    studio_log = logging.getLogger("studio")
+    studio_log.addHandler(recorder)
+    try:
+        test()
+    finally:
+        studio_log.removeHandler(recorder)
+    assert not recorder.records, (
+        f"{test.__name__} passed while a guard swallowed {len(recorder.records)} error(s):\n"
+        + "\n".join(recorder.records))
+
+
 def _run_all():
-    test_escape_restores_a_maximized_panel_at_three_window_sizes()
-    test_escape_still_leaves_video_focus_and_window_fullscreen()
-    test_session_only_menu_items_are_disabled_before_the_first_load()
-    test_library_menu_item_comes_back_the_moment_there_is_a_library()
-    test_the_library_menu_item_names_the_columns_the_dialog_actually_has()
-    test_a_loaded_session_re_enables_them_without_opening_a_menu()
-    test_every_disabled_menu_item_says_why_in_the_words_the_menu_shows()
-    test_the_reason_comes_back_off_the_item_when_the_gate_opens()
-    test_the_library_has_a_key_and_the_card_and_the_palette_agree_on_it()
-    test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way()
-    test_jump_marks_and_reveals_the_corner_row_it_landed_on()
-    test_jump_does_not_overwrite_the_persisted_lap_panel_tab()
-    test_the_crash_dialog_names_the_product()
-    test_fit_window_to_screens_never_opens_a_window_you_cannot_see()
-    test_the_window_reopens_at_the_size_it_was_left_and_only_the_app_arms_that()
-    test_quitting_from_full_screen_remembers_the_window_not_the_whole_display()
-    test_a_window_stored_on_a_display_that_is_gone_opens_where_it_can_be_seen()
-    test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close_event()
+    for test in (
+        test_escape_restores_a_maximized_panel_at_three_window_sizes,
+        test_escape_still_leaves_video_focus_and_window_fullscreen,
+        test_session_only_menu_items_are_disabled_before_the_first_load,
+        test_library_menu_item_comes_back_the_moment_there_is_a_library,
+        test_the_library_menu_item_names_the_columns_the_dialog_actually_has,
+        test_a_loaded_session_re_enables_them_without_opening_a_menu,
+        test_the_synthetic_window_resolves_its_own_library_entry_through_the_guard,
+        test_every_disabled_menu_item_says_why_in_the_words_the_menu_shows,
+        test_the_reason_comes_back_off_the_item_when_the_gate_opens,
+        test_the_library_has_a_key_and_the_card_and_the_palette_agree_on_it,
+        test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way,
+        test_jump_marks_and_reveals_the_corner_row_it_landed_on,
+        test_jump_does_not_overwrite_the_persisted_lap_panel_tab,
+        test_the_crash_dialog_names_the_product,
+        test_fit_window_to_screens_never_opens_a_window_you_cannot_see,
+        test_the_window_reopens_at_the_size_it_was_left_and_only_the_app_arms_that,
+        test_quitting_from_full_screen_remembers_the_window_not_the_whole_display,
+        test_a_window_stored_on_a_display_that_is_gone_opens_where_it_can_be_seen,
+        test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close_event,
+    ):
+        _run_failing_on_guarded_errors(test)
     print("ALL OK")
 
 
