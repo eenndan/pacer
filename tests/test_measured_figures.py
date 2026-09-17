@@ -53,6 +53,7 @@ _PANEL = os.path.join(_REPO, "studio", "coaching_panel.py")
 _THEME = os.path.join(_REPO, "studio", "theme.py")
 _REFUSED = os.path.join(_REPO, "studio", "docs", "refused-2026-09.md")
 _FOCUS = os.path.join(_REPO, "studio", "focus.py")
+_CORNER_MODEL = os.path.join(_REPO, "studio", "corner_model.py")
 _SESSION = os.path.join(_REPO, "studio", "session.py")
 _STUB = "GX010060.MP4"
 
@@ -570,6 +571,61 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
         "\n  ".join(problems)
     print(f"test_every_quote_of_the_brake_habit_figures_is_the_table_s OK "
           f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
+
+
+# ─── corner_model.py: the beat-rate correlation table ────────────────────────────────────────────
+class BeatRow:
+    def __init__(self, name, saved, n, r, rho, p):
+        self.name, self.saved, self.n, self.r, self.rho, self.p = name, saved, n, r, rho, p
+
+    def __repr__(self):
+        return f"<{self.name}{' †' if self.saved else ''} n {self.n} r {self.r:+} ρ {self.rho:+} p {self.p}>"
+
+
+_BEAT_LINE = re.compile(r"^\s+\| (D24 1 ch|D24 3 ch|Sandown ch 1|Sandown 3 ch|SD_30_08)( †)?\s*\| (\d+)\s*\| "
+                        r"([−+-]\d\.\d{3}) \| ([−+-]\d\.\d{3})\s*\| (\d\.\d{3}) \|\s*$")
+# The beat-rate table's names for the lap sets the floor table names in full.
+_BEAT_SETS = {"D24 1 ch": "D24 1 chapter", "D24 3 ch": "D24 3 chapters", "Sandown ch 1": "Sandown chapter 1",
+              "Sandown 3 ch": "Sandown 3 chapters", "SD_30_08": "SD_30_08"}
+
+
+def _beat_rows() -> list[BeatRow]:
+    rows = []
+    for line in _read(_CORNER_MODEL).splitlines():
+        m = _BEAT_LINE.match(line)
+        if m:
+            rows.append(BeatRow(m.group(1), bool(m.group(2)), int(m.group(3)), _signed(m.group(4)),
+                                _signed(m.group(5)), float(m.group(6))))
+    assert sorted(r.name for r in rows) == sorted(_BEAT_SETS), f"the beat-rate table parsed to {rows!r}"
+    return rows
+
+
+def test_the_beat_rate_verdict_is_derived_from_its_table():
+    """`SegmentBests.beat_counts`' correlation table and the sentence under it: how many rows are
+    distinguishable from chance, which r is strongest, what share of variance it explains and how
+    many r are negative — all recomputed from the cells."""
+    rows = _beat_rows()
+    text = _flatten(_read(_CORNER_MODEL))
+    words = {0: "None", 1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five"}
+    _constant(_CORNER_MODEL, "POINT_SPAN_M")   # the method names it; it must still exist
+    m = _need(r"Re-measured on the owner's (\w+) recordings as the app opens them", text, "the method sentence")
+    assert m.group(1).lower() == words[len(rows)].lower(), (m.group(1), len(rows))
+    m = _need(r"(\w+) of the (\w+) is distinguishable from chance at p < (0\.\d+), and the strongest r "
+              r"\(([^)]+)\) explains (\d+) % of the variance in beat rate", text, "the verdict sentence")
+    alpha = float(m.group(3))
+    assert m.group(1) == words[sum(r.p < alpha for r in rows)] and m.group(2) == words[len(rows)].lower(), (
+        m.groups(), rows)
+    strongest = max(rows, key=lambda r: abs(r.r))
+    assert m.group(4) == strongest.name, (m.group(4), strongest)
+    # A 3-decimal r pins r² to about ±0.1 point; the prose rounds it to a whole percent.
+    lo, hi = (abs(strongest.r) - 0.0005) ** 2 * 100, (abs(strongest.r) + 0.0005) ** 2 * 100
+    assert math.floor(lo + 0.5) <= int(m.group(5)) <= math.floor(hi + 0.5), (m.group(5), strongest)
+    m = _need(r"(\w+) of the (\w+) r are negative", text, "the sign sentence")
+    assert (m.group(1), m.group(2)) == (words[sum(r.r < 0 for r in rows)], words[len(rows)].lower()), (m.groups(), rows)
+    # D24 carries no saved line (floor table's rule): a † D24 row would claim a restore that cannot happen.
+    assert not [r for r in rows if r.saved and r.name.startswith("D24")], rows
+    print(f"test_the_beat_rate_verdict_is_derived_from_its_table OK ({len(rows)} rows, "
+          f"strongest r {strongest.r:+.3f} on {strongest.name})")
 
 
 # ─── focus.py: the cross-session tables ──────────────────────────────────────────────────────────
@@ -1309,6 +1365,64 @@ def test_the_brake_habit_table_matches_the_footage():
     print(f"test_the_brake_habit_table_matches_the_footage OK\n{report}")
 
 
+def _avg_ranks(x):
+    """Ranks 0..n-1 with tied values given the mean of the ranks they span."""
+    import numpy as np
+
+    x = np.asarray(x, float)
+    order = np.argsort(x, kind="mergesort")
+    ranks = np.empty(len(x))
+    ranks[order] = np.arange(len(x), dtype=float)
+    for v in np.unique(x):
+        tied = x == v
+        ranks[tied] = ranks[tied].mean()
+    return ranks
+
+
+def _beat_measure(s, n_perm: int = 20000):
+    """corner_model's beat-rate table by its stated method, off one real session."""
+    import numpy as np
+
+    sb = s.ideal_segment_bests()
+    best = s.best_lap_id()
+    total_ref = float(s.corners.basis()[1])
+    wide = np.diff(np.asarray(sb.s_edges, float)) * total_ref > _constant(_CORNER_MODEL, "POINT_SPAN_M")
+    rate = np.asarray([b / n for b, n in sb.beat_counts(best)], float)[wide]
+    dur = np.asarray(sb.times, float).mean(axis=0)[wide]
+    r = float(np.corrcoef(rate, dur)[0, 1])
+    ra, rd = _avg_ranks(rate), _avg_ranks(dur)
+    rho = float(np.corrcoef(ra, rd)[0, 1])
+    rng = np.random.default_rng(0)
+    # Shuffling the rates shuffles their tied-averaged ranks with them.
+    hits = sum(abs(float(np.corrcoef(ra[rng.permutation(len(ra))], rd)[0, 1])) >= abs(rho) - 1e-12
+               for _ in range(n_perm))
+    return int(wide.sum()), r, rho, hits / n_perm
+
+
+def test_the_beat_rate_table_matches_the_footage():
+    root = _footage_root()
+    if not root:
+        print("skip test_the_beat_rate_table_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
+        return
+    rows = _beat_rows()
+    problems, lines = [], []
+    with _Footage(root) as fx:
+        for row in rows:
+            s = fx.load(_BEAT_SETS[row.name], saved_line=row.saved)
+            if s is None:
+                problems.append(f"{row.name}: footage missing under {root}")
+                continue
+            n, r, rho, p = _beat_measure(s)
+            label = row.name + (" †" if row.saved else "")
+            lines.append(f"        | {label:<14s} | {n:<2d} | {r:+.3f} | {rho:+.3f}   | {p:.3f} |".replace("-", "−"))
+            if (n, f"{r:+.3f}", f"{rho:+.3f}", f"{p:.3f}") != (row.n, f"{row.r:+.3f}", f"{row.rho:+.3f}", f"{row.p:.3f}"):
+                problems.append(f"{row!r}: measured n {n}, r {r:+.4f}, ρ {rho:+.4f}, p {p:.4f}")
+    report = "\n".join(["  re-measured beat-rate table:"] + lines)
+    assert not problems, "corner_model's beat-rate table is not what the app computes:\n  " + \
+        "\n  ".join(problems) + "\n" + report
+    print(f"test_the_beat_rate_table_matches_the_footage OK\n{report}")
+
+
 def _focus_measure(s60, p60, s62, p62):
     """focus.py's tables by their stated method: promote 0060's top three through
     `Session.focus_items`, re-measure them on 0062 through `Session.focus_report` — once against
@@ -1430,6 +1544,7 @@ def _run_all():
     test_every_quote_of_the_coaching_figures_is_coaching_py_s()
     test_the_brake_habit_prose_is_its_table_s_arithmetic()
     test_every_quote_of_the_brake_habit_figures_is_the_table_s()
+    test_the_beat_rate_verdict_is_derived_from_its_table()
     test_the_focus_prose_is_its_tables_arithmetic()
     test_every_quote_of_the_focus_figures_is_focus_py_s()
     test_the_floor_table_is_consistent_with_its_own_definitions()
@@ -1437,6 +1552,7 @@ def _run_all():
     test_the_refusal_record_s_verdict_is_derived_from_its_table()
     test_the_coaching_tables_match_the_footage()
     test_the_brake_habit_table_matches_the_footage()
+    test_the_beat_rate_table_matches_the_footage()
     test_the_focus_tables_match_the_footage()
     test_the_floor_table_matches_the_footage()
     test_the_refusal_record_matches_the_footage()
