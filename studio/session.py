@@ -2600,6 +2600,26 @@ class Session:
             [c.cid for c in corner_list], [c.direction for c in corner_list],
             times_by_lap, apex_by_lap, grip_by_lap)
 
+    def corner_matrix(self) -> stats_service.CornerMatrix | None:
+        """The laps × corners grid (the Stats page's CORNERS BY LAP): every consistency lap's
+        time-in-corner — the SAME `lap_corner_stats` times the Corners page and the CORNERS table
+        read — plus, per cell, whether that lap's corner window was matched on track at both
+        edges (`CornerModel.lap_corner_resolved`), which decides whether the cell may be marked.
+        None without corners or below `stats.MATRIX_MIN_LAPS` laps. Rows are `consistency_lap_ids`, so a
+        ⊘ excluded or ⚠ dropout lap is never a row — the page says how many were left out. Not
+        cached (read on load / re-segment only, never per-tick)."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners.corner_list()
+        if not corner_list or not ids:
+            return None
+        times_by_lap = []
+        resolved_by_lap = []
+        for i in ids:
+            times_by_lap.append([s.time for s in self.corners.lap_corner_stats(i)])
+            resolved_by_lap.append(self.corners.lap_corner_resolved(i))
+        return stats_service.corner_matrix(ids, [c.cid for c in corner_list], times_by_lap,
+                                           resolved_by_lap)
+
     def phase_report(self) -> stats_service.PhaseReport | None:
         """The session-wide entry/apex/exit loss decomposition (the Stats page's
         "where the time goes" headline + the per-corner phase tooltips): for EVERY
