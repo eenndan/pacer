@@ -691,17 +691,24 @@ def test_estimated_quality_badge_is_a_real_chip():
     app has ONE chip vocabulary now — a [role="Chip"] pill worn by this badge, by the status bar's
     reference chip and by the charts toolbar's "vs ideal" — so the assertion moved onto that role
     and onto the amber `tone` this badge takes, and it is made against the LIVE widget rather than
-    against a name only this test knew about."""
-    from studio.widgets import chip
+    against a name only this test knew about.
+
+    Built through the factory central_view really uses, which is `ActionChip` since the badge began
+    opening the DATA TRUST row that explains it (N15) — the warn tone has to reach a QPushButton
+    now, and a `QLabel[…]` selector does not. tests/test_quality_chip_trust.py holds the rest of
+    that chip's contract on the real view."""
+    from studio.widgets import ActionChip, chip
     qss = theme._build_qss()
     assert 'QLabel[role="Chip"]' in qss, "no QSS chip rule"
     block = qss.split('QLabel[role="Chip"], QPushButton[role="Chip"]', 1)[1].split("}", 1)[0]
     assert "border-radius" in block and "padding" in block, block
     warn = qss.split('QLabel[role="Chip"][tone="warn"]', 1)[1].split("}", 1)[0]
     assert theme.C.accent_tint in warn or theme.C.accent in warn, warn
-    # the live badge really wears them (built by the same factory central_view uses)
-    badge = chip("ESTIMATED", tone="warn")
-    assert badge.property("role") == "Chip" and badge.property("tone") == "warn"
+    warn_btn = qss.split('QPushButton[role="Chip"][tone="warn"]', 1)[1].split("}", 1)[0]
+    assert theme.C.accent_tint in warn_btn or theme.C.accent in warn_btn, warn_btn
+    # the live chips really wear them: the static pill and the lap panel's actionable one
+    for badge in (chip("ESTIMATED", tone="warn"), ActionChip("ESTIMATED", tone="warn")):
+        assert badge.property("role") == "Chip" and badge.property("tone") == "warn"
     print("test_estimated_quality_badge_is_a_real_chip OK")
 
 

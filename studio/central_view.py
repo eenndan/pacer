@@ -45,9 +45,17 @@ from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .scrub_controller import ScrubController
 from .session import fmt_time
-from .stats_panel import StatsView
+from .stats_panel import TIMING_TERM, StatsView
 from .video_view import VideoView
-from .widgets import PanelHeader, PanelToolbar, ToggleButton, chip, icon_button, set_tone
+from .widgets import (
+    ActionChip,
+    PanelHeader,
+    PanelToolbar,
+    ToggleButton,
+    chip,
+    icon_button,
+    set_tone,
+)
 
 # The maximize-button glyphs. DELIBERATELY DISTINCT from the video transport's fullscreen ⤢ button
 # (ph.arrows-out / ph.arrows-in — "fill the SCREEN"): the corners glyphs read as "fill this WINDOW
@@ -711,12 +719,18 @@ class CentralView(QWidget):
         # timing_quality copy (clock-aware: "ESTIMATED" only on the media-clock fallback, "GPS LOW"
         # on a true-clock recording whose only concern is rejected fixes — the old static
         # "ESTIMATED" overclaimed on true-clock footage, M3). Hidden on a clean GPS9 recording.
-        # A STATIC chip: it reports, it is never clicked. Same pill as the interactive "vs ideal"
-        # chip in the charts toolbar, built as a QLabel so it adds no tab stop and announces itself
-        # to assistive tech as text rather than as a button that does nothing (see widgets.chip).
-        # It shed its #QualityBadge objectName with the one-off rule that name existed to carry.
-        self.quality_badge = chip("ESTIMATED", tone="warn")
+        #
+        # IT OPENS THE ROW THAT EXPLAINS IT (N15). It was a static QLabel "so it adds no tab stop
+        # and announces itself to assistive tech as text rather than as a button that does
+        # nothing" — which rules out a button with no action, and this one has one: Stats ▸ DATA
+        # TRUST, scrolled to and marking the Timing row, whose value now says what the chip's word
+        # costs (show_data_trust). So it is a button, and still only a tab stop while it is SHOWN
+        # — a hidden widget is not in the Tab ring, so a clean recording's keyboard path is what
+        # it always was. An ActionChip rather than a bare QPushButton because the window's Space
+        # shortcut would otherwise swallow the key that presses it (see widgets.ActionChip).
+        self.quality_badge = ActionChip("ESTIMATED", tone="warn")
         self.quality_badge.setVisible(False)
+        self.quality_badge.clicked.connect(self.show_data_trust)
         # …and beside it, the SESSION RECORD chip: the conditions and tyre age the driver wrote
         # down for this recording (studio/session_record.py). Same argument as the quality badge,
         # one step further out — that chip says how far to trust these lap times, this one says
@@ -754,8 +768,9 @@ class CentralView(QWidget):
         self._table_max_btn = self._maximize_button()
         # The TABS are this panel's identity — they name the page you are on — and the quality badge
         # is a STATUS chip about the data under them, not a control, so it rides in the header's
-        # status slot beside the tabs rather than in a toolbar. Putting it in a toolbar would have
-        # given this panel a 32 px control row to hold one non-interactive chip that is hidden on
+        # status slot beside the tabs rather than in a toolbar. (It is clickable now, but its one
+        # action is to explain its own status, which does not make it a verb.) Putting it in a
+        # toolbar would have given this panel a 32 px control row to hold one chip that is hidden on
         # every clean GPS9 recording; keeping it beside the tabs also keeps the warning adjacent to
         # the lap times it qualifies. This PANEL gets no toolbar at all — though one of its PAGES
         # does: the Marks list carries its own (add · edit · extend · delete, plus a filter and a
@@ -1476,6 +1491,18 @@ class CentralView(QWidget):
             self._restore_splitter_sizes()
         self.map.highlight_corner(cid)
 
+    def show_data_trust(self):
+        """The data-quality chip's action: open the Stats page on its DATA TRUST card, with the
+        Timing row — the one that says what ESTIMATED / GPS LOW / NO GPS costs — scrolled into view,
+        marked, and holding keyboard focus (StatsView.reveal_trust).
+
+        The page is switched through the TAB BAR, exactly as a click on "Stats" or the 3 key does,
+        so the stack, the persisted tab choice and the page's own show-time reflow all follow from
+        the one path they always have. It does NOT maximize: the chip lives in this panel's header,
+        and the reader asked why the lap times beside it are qualified, not for the dashboard."""
+        self.tab_bar.setCurrentIndex(2)
+        self.stats_view.reveal_trust(TIMING_TERM)
+
     def show_stats_maximized(self):
         """One action to the full-window statistics dashboard (View ▸ Session statistics):
         select the Stats tab and maximize the lap panel. Invoked again while already showing
@@ -1958,8 +1985,17 @@ class CentralView(QWidget):
         badge.setVisible(quality.degraded)
         if not quality.degraded:
             return
-        badge.setText("ESTIMATED" if quality.media_clock else "GPS LOW")
-        badge.setToolTip(quality.detail())
+        # THREE words for three states, not two. The no-GPS verdict (karma.mp4: not one fix) used
+        # to fall through to "GPS LOW" — a chip saying the GPS was poor on a recording that has
+        # none, opening a DATA TRUST row that says "no GPS fixes survived".
+        if getattr(quality, "no_gps", False):
+            word = "NO GPS"
+        else:
+            word = "ESTIMATED" if quality.media_clock else "GPS LOW"
+        badge.setText(word)
+        # The hover says where a click goes as well as what the chip means — it is the only place a
+        # pointer user learns that the pill is not just a label.
+        badge.setToolTip(f"{quality.detail()}\n\nClick to see this in DATA TRUST on the Stats page.")
 
     def set_marks(self, marks: list[dict] | None, suppressed: int = 0) -> None:
         """Push the merged mark list (`marks.merge`) to BOTH of its surfaces at once — the scrub
