@@ -28,10 +28,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -151,6 +152,11 @@ def gps_lateral_clause(session) -> str | None:
 #: The DATA TRUST term for the picture↔telemetry fact. Named once so the row, its test and the
 #: docs cannot drift into three spellings of one thing.
 VIDEO_SYNC_TERM = "Video sync"
+
+#: The DATA TRUST term for the timing-quality fact — the row the lap panel's data-quality chip
+#: (ESTIMATED / GPS LOW / NO GPS) opens. Named once so the row, the chip's destination and their
+#: test cannot disagree about which row that is.
+TIMING_TERM = "Timing"
 
 #: WHAT NO CORRECTION REMOVES, stated once beside the row that states what the corrections did.
 #: `studio/media_clock.py` measures it: a GPMF payload spans 1.001 s and carries 9, 10 or 11 fixes
@@ -1182,6 +1188,17 @@ def _repen(item, logical_px: float = 1.0):
     item.setPen(pg.mkPen(pen.color(), width=theme.line_width(logical_px), style=pen.style()))
 
 
+def _set_highlight(label: QLabel, value: str) -> None:
+    """Set a label's `highlight` property and re-polish it, only when it actually changes — a
+    property in a QSS selector is re-read on a polish alone (see widgets.set_tone), and this runs
+    for every row on every refresh."""
+    if (label.property("highlight") or "") == value:
+        return
+    label.setProperty("highlight", value)
+    label.style().unpolish(label)
+    label.style().polish(label)
+
+
 class _TrustCard(QWidget):
     """DATA TRUST as a list of FACTS — one labelled row each — instead of a paragraph.
 
@@ -1228,7 +1245,11 @@ class _TrustCard(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # The one name a screen reader gives the card when the data-quality chip moves focus here.
+        self.setAccessibleName("DATA TRUST")
         self._rows: list[tuple[str, str, bool]] = []
+        # The term of the row a reader was SENT to (see `set_highlight`); None when nobody was.
+        self._highlight: str | None = None
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(theme.SPACE_M)
@@ -1281,7 +1302,42 @@ class _TrustCard(QWidget):
             value_w.setText(value)
             term_w.setVisible(True)
             value_w.setVisible(True)
+        self._apply_highlight()
         self.setAccessibleDescription(self.text())
+
+    # ------------------------------------------------------------ the row a reader was sent to
+    def row_widgets(self, term: str):
+        """The (term label, value label) pair currently showing `term`'s fact; None if no row does."""
+        for i, (t, _v, _c) in enumerate(self._rows):
+            if t == term:
+                return self._widgets[i]
+        return None
+
+    def highlighted(self) -> str | None:
+        """The term of the row marked by `set_highlight`, if that row is on the card right now."""
+        return self._highlight if self.row_widgets(self._highlight or "") is not None else None
+
+    def set_highlight(self, term: str | None) -> None:
+        """Mark `term`'s row as the one the reader was sent here to read — or clear the mark (None).
+
+        WHY A MARK AT ALL. The lap panel's data-quality chip opens this card, and the card is a list
+        of up to ten facts; landing on it without saying which one answers "why is that chip lit"
+        leaves the reader to work out that "Timing" is the row about an ESTIMATED clock. The mark is
+        that answer and nothing more, so the Stats page clears it as soon as it is left.
+
+        TYPE, NOT A BOX. The term takes the amber the chip is drawn in and the value steps up from
+        the dim Note ink to the primary text, both through QSS (`[highlight=…]`), so nothing is
+        resized and nothing moves: a tinted band would either touch the text at its left edge or
+        need padding the other nine rows do not have. Held by TERM rather than by row index, so a
+        refresh that reorders the caveats keeps it on the same fact."""
+        self._highlight = term
+        self._apply_highlight()
+
+    def _apply_highlight(self) -> None:
+        for i, (term_w, value_w) in enumerate(self._widgets):
+            on = i < len(self._rows) and self._rows[i][0] == self._highlight
+            _set_highlight(term_w, "term" if on else "")
+            _set_highlight(value_w, "value" if on else "")
 
 
 class _BandChart(pg.PlotWidget):
@@ -1682,7 +1738,8 @@ class StatsView(QWidget):
         # totals: at the foot of the page it was ~1200px down — below the fold of even a
         # 1728x1117 maximized dashboard — so the caveats that say how much every number below is
         # worth were only reachable by scrolling past all of them.
-        col.addWidget(self._section("DATA TRUST"))
+        self._trust_section = self._section("DATA TRUST")
+        col.addWidget(self._trust_section)
         self.trust_card = _TrustCard()
         col.addWidget(self.trust_card)
 
@@ -2505,6 +2562,43 @@ class StatsView(QWidget):
         width) is only settled then. Idempotent: the reflow early-returns when nothing changed."""
         super().showEvent(event)
         self._reflow_tiles()
+
+    def hideEvent(self, event):
+        """Leaving the page takes `reveal_trust`'s row mark with it: the mark answers "why was I
+        sent here", and a later visit through the tab bar was not sent by anything. A SPONTANEOUS
+        hide (the window minimised) is not leaving the page, so it keeps the mark."""
+        super().hideEvent(event)
+        if not event.spontaneous():
+            self.trust_card.set_highlight(None)
+
+    def reveal_trust(self, term: str) -> None:
+        """Bring the DATA TRUST card into view with `term`'s row marked, and put keyboard focus on
+        the card — the landing half of the lap panel's data-quality chip (CentralView.show_data_trust).
+
+        SCROLLED, NOT ASSUMED. The card sits second on the page, but "second" is below the fold as
+        soon as the page carries its no-laps banner and prose (every GPS5-era sample opens that
+        way), and anywhere at all once the reader has scrolled the page before. So the heading is
+        put at the top of the viewport, and then the marked row is made visible too, for a card
+        taller than the viewport whose row is further down.
+
+        FOCUS MOVES TO THE CARD, the in-page-link rule: activating a control that takes you
+        somewhere takes the keyboard with you, so the next Tab continues from the card rather than
+        from the header chip three panels away, and assistive tech announces the card's name and
+        its facts (`_TrustCard` sets both). The card stays out of the Tab ring — setFocus reaches a
+        NoFocus widget, the Tab key does not — so no stop is added to the page."""
+        self.trust_card.set_highlight(term)
+        scroll = self._scroll
+        if scroll is not None:
+            # The page may have been shown by the same call that brought us here, and a layout
+            # request is a POSTED event: without flushing it the heading still reports where it sat
+            # before the page's first layout pass, and the scroll lands on a stale position.
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+            heading_y = self._trust_section.mapTo(scroll.widget(), QPoint(0, 0)).y()
+            scroll.verticalScrollBar().setValue(max(0, heading_y - theme.SPACE_S))
+            row = self.trust_card.row_widgets(term)
+            if row is not None:
+                scroll.ensureWidgetVisible(row[1], 0, theme.SPACE_S)
+        self.trust_card.setFocus(Qt.OtherFocusReason)
 
     def event(self, ev):
         """Re-pen when the window moves to a screen with a different device-pixel ratio.
@@ -4153,7 +4247,7 @@ class StatsView(QWidget):
             # sorts up with the other trust-breaking facts, and it carries the action: the
             # cause is a camera setting or a camera without a receiver, and the strip row
             # beside it says which of the two this recording was.
-            rows.append(("Timing",
+            rows.append((TIMING_TERM,
                          "no GPS fixes survived in this recording — nothing here can be "
                          "lap-timed, and no time axis was built from satellite fixes. Check "
                          "that the camera's GPS was switched on; some models carry no "
@@ -4167,12 +4261,25 @@ class StatsView(QWidget):
             # GPS-acquisition lead-in the pipeline trims, which flagged clean footage as
             # degraded purely on how many chapters were opened). Naming the population is the
             # fix; the number itself is the shipped one.
-            rows.append(("Timing",
-                         f"{clock} · {quality.dropped_pct()}% of moving fixes rejected", False))
+            #
+            # ON A DEGRADED CLOCK THE ROW SAYS WHAT IT COSTS, AND IS A CAVEAT. It is the row the
+            # lap panel's amber ESTIMATED / GPS LOW chip opens, and it used to read exactly like a
+            # clean recording's — "video clock (estimated) · 0% of moving fixes rejected" names the
+            # clock and never says what estimated means; "GPS9 true clock · 12% of moving fixes
+            # rejected" is the clean row with a bigger number in it. A reader sent here to find out
+            # why the chip was lit found nothing that said so, and an amber chip landing on an
+            # unmarked row is two surfaces disagreeing about one fact. The clause is
+            # TimingQuality's own (`cost`), so it says what the banner and the chip's hover say.
+            value = f"{clock} · {quality.dropped_pct()}% of moving fixes rejected"
+            cost = quality.cost()
+            rows.append((TIMING_TERM, f"{value} — {cost}" if cost else value,
+                         bool(quality.degraded)))
             tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING. "
                         "The stationary lead-in before you drive off is trimmed by the loader "
                         "and left out of the verdict, so opening one chapter or all of them "
                         "gives the same answer.")
+            if quality.degraded:
+                tips.append(quality.detail())
         # …and what that clock is worth AGAINST THE PICTURE, which is the other half of the same
         # question and the half a viewer can check for themselves. The row above names the axis the
         # times are measured on; this one says whether the numbers painted beside a frame belong to
