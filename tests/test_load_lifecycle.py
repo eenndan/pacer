@@ -748,17 +748,21 @@ def test_forget_recording_executes_the_real_remove_save_disable_delete_ordering(
         win._sidecar_path = side
         win.view._sidecar_path = side
         seen = {}
-        real_disable = win._disable_sidecar_if_open
+        # The spy goes on the LIBRARY CONTROLLER, which is what _forget_recording calls through
+        # (§7.1). Left on the window it would patch nothing — and fail below, loudly, because the
+        # spy is what records the ordering.
+        ctl = win.library_ctl
+        real_disable = ctl._disable_sidecar_if_open
 
         def _spy_disable(path):
             # Snapshot the world AT the disable, which is the point the ordering claim is about.
             seen["sidecar_still_on_disk"] = os.path.exists(path)
             seen["index_on_disk"] = [e["fingerprint"] for e in library.load()["entries"]]
             real_disable(path)
-        win._disable_sidecar_if_open = _spy_disable
+        ctl._disable_sidecar_if_open = _spy_disable
 
         try:
-            index = win._forget_recording({"fingerprint": fp, "paths": [media]})
+            index = ctl._forget_recording({"fingerprint": fp, "paths": [media]})
 
             assert seen.get("sidecar_still_on_disk") is True, \
                 "the sidecar was unlinked BEFORE the live session was de-linked from it"
@@ -770,7 +774,7 @@ def test_forget_recording_executes_the_real_remove_save_disable_delete_ordering(
             assert win._sidecar_path is None and win.view._sidecar_path is None, \
                 "the open session still points at the deleted sidecar"
             # Idempotent: forgetting it again (sidecar already gone) must not raise.
-            win._forget_recording({"fingerprint": fp, "paths": [media]})
+            ctl._forget_recording({"fingerprint": fp, "paths": [media]})
         finally:
             _teardown(win)
     print("test_forget_recording_executes_the_real_remove_save_disable_delete_ordering OK")

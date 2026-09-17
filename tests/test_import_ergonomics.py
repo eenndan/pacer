@@ -205,7 +205,12 @@ def test_extracted_worker_and_overlay_modules_import_without_cycle():
         export_ctl.VideoExportWorker.__module__)
     assert not hasattr(app_mod, "VideoExportWorker"), (
         "app.py should no longer name the video worker — the export flow owns it now")
-    assert app_mod.PBToast is PBToast
+    # PBToast moved to `library_controller` with the PB moment it shows (§7.1, the library half).
+    # Same point, same by-module check, for the same sys.modules-purge reason as the worker above.
+    import studio.library_controller as library_ctl
+    assert library_ctl.PBToast.__module__ == "studio.overlays", library_ctl.PBToast.__module__
+    assert not hasattr(app_mod, "PBToast"), (
+        "app.py should no longer name the PB card — the library controller shows it now")
     assert app_mod.WelcomeView is WelcomeView
     print("test_extracted_worker_and_overlay_modules_import_without_cycle OK")
 

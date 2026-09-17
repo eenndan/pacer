@@ -1204,7 +1204,7 @@ def test_reveal_in_finder_reports_both_outcomes():
         for answer, expected in ((True, "revealed"), (False, "could not open")):
             QDesktopServices.openUrl = staticmethod(lambda _url, a=answer: a)
             win.statusBar().clearMessage()
-            win._reveal_library()
+            win.library_ctl.reveal_library()
             message = win.statusBar().currentMessage()
             assert expected in message, f"openUrl -> {answer}: {message!r}"
             assert os.path.dirname(library.library_path()) in message, message
