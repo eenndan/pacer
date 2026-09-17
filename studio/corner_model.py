@@ -133,18 +133,23 @@ POINT_SPAN_M = 0.5
 # a spurious +0.236 s on the pair, which is a moved yardstick, not a bias. The case for warping
 # every lap rests on the boundary residual in corners.py, not on the ideal.
 MAX_DONOR_SPAN_DEV = 0.05
-# ── SUB-RESOLUTION SEGMENTS: A KNOWN LIMITATION, DELIBERATELY NOT "FIXED" ─────────────────────
-# On a 2.3 m sliver the ±5 % band is ±0.11 m, an order of magnitude under the
-# ±corners.SPATIAL_MATCH_MAX_M the boundary matches are guaranteed to — so admission there is
-# decided by noise, and segment 4 of the 0060 pair refuses 4 of its 38 laps arbitrarily. 16 of the
-# pair's 23 real segments have a band under that tolerance at all.
+# ── SUB-RESOLUTION SEGMENTS: RE-MEASURED AFTER #300, AND STILL NOT "FIXED" ────────────────────
+# On a 2.3 m sliver the ±5 % band is ±0.11 m, far under the ±corners.SPATIAL_MATCH_MAX_M a
+# boundary match is GUARANTEED to, and 16 of the 0060 pair's 23 real segments have a band under
+# that tolerance at all. But that gate is the WORST CASE a match may pass, not the error it
+# carries. #300 warps every lap, and the measured per-boundary longitudinal residual is now a
+# median 0.099 m on the pair, 0.077 m on ch 1 and 0.010 m on 0062 — so scored against the
+# projection's OWN error the count is 7, 4 and 0 of 23. On the 65-lap recording the app
+# headlines, the class this paragraph is about no longer exists at all; the pair's segment 4
+# (C2-C3, 2.25 m) refuses 6 of its 38 laps, 5 of them within one cell-residual of the threshold.
 #
-# Exempting them (as POINT segments are exempt) was implemented and MEASURED, then reverted:
+# Exempting them (as POINT segments are exempt) was implemented and MEASURED, then reverted. The
+# rows below are that measurement RE-RUN on today's tree; the ones they replace predate #300:
 #
-#   exempt ref_span ≤ 3.0 m   pair 65.145 (−0.004)  ch1 66.102 (0.000)  0062 66.781 (0.000)
-#     …but the pair's WINNER span-fraction floor falls 0.944 → 0.850, because a 2.3 m segment is
+#   exempt ref_span ≤ 3.0 m   pair 65.461 (−0.004)  ch1 66.450 (0.000)  0062 66.709 (0.000)
+#     …but the pair's WINNER span-fraction floor falls 0.950 → 0.841, because a 2.3 m segment is
 #     then won on a window 0.35 m off — noise, admitted into a MINIMUM.
-#   exempt band < 3.0 m       pair 64.164 (−0.984)  ch1 65.037 (−1.066)  0062 66.563 (−0.217)
+#   exempt band < 3.0 m       pair 64.265 (−1.200)  ch1 65.370 (−1.080)  0062 66.525 (−0.184)
 #     …which exempts the 42.8 m straight this whole repair is about (band ±2.14 m) and reverts
 #     most of the fix.
 #
@@ -152,9 +157,22 @@ MAX_DONOR_SPAN_DEV = 0.05
 # the repair. AN ADMISSION RULE FEEDING A MINIMUM MUST FAIL CLOSED: rejecting a lap arbitrarily
 # only removes a candidate (bounded here by one 0.15 s segment), while admitting one arbitrarily
 # lets noise win the segment — the same failure direction as the defect this constant exists for.
-# So the noise is real, its cost is bounded and upward, and it stays. Resolving it properly means
-# not cutting sub-sample segments in the first place (a partition-design change: it moves
-# `IdealSample.corners`/`segments`, which every ideal-lap disclosure prints).
+#
+# AND THE PARTITION-DESIGN CHANGE THIS BLOCK USED TO ASK FOR WAS BUILT AND REFUSED. "Stop cutting
+# sub-sample segments" = absorb every straight under 5 m into the corner before it, so the sliver
+# is never a segment; corner and segment counts are unchanged, because merging the corner PAIR
+# instead is a re-cut, and a coarser partition raises the ideal +0.2 … +1.5 s for the reason
+# IdealSample's last paragraph gives. It moves the ideal +0.036 / +0.030 / +0.026 s on the three
+# fixtures and DOES NOT REMOVE THE NOISE IT WAS PROPOSED FOR: bootstrapping the admission over
+# each boundary's OWN measured residual, the ideal's spread goes sd 0.294 → 0.289 s on the pair,
+# 0.324 → 0.325 on ch 1 and 0.005 → 0.006 on 0062. The noise is not a property of SHORT segments —
+# holding the sub-resolution ones at their shipped decision takes the pair's sd to 0.183, and its
+# worst-flipping segments include a 17.3 m and a 61.6 m one, because the pair's badly matched
+# boundaries sit around C7-C9 (median residual 2-3 m) and not on its slivers. The price is paid on
+# screen: the best lap's time-in-corner moves up to +0.29 s on 5 of 12 corners, and every
+# corner-derived leaf moves with it. Nothing is missing from the reader's surface either way — on
+# all three fixtures the best lap is admitted on all 25 segments, so its decomposition drops no
+# row. Measured 2026-09-17; the full refusal is in studio/docs/refused-2026-09.md.
 
 
 class IdealSample(NamedTuple):
