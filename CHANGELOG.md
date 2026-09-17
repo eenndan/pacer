@@ -13,6 +13,24 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
+  seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
+  ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed
+  is a **per-recording verdict** — a camera with no gyroscope, a gyro that never tracks the racing
+  line, or a measurement past a second all leave it uninstalled — and the only place that was ever
+  stated was the rotation row's tooltip, which exists only where there IS a gyro. Driven over D24's
+  0060 pair with the lag estimator forced to its own refusing branch, every GPS-derived overlay sat
+  **~0.46 s (14 frames at 30 fps) behind the picture** while the DATA TRUST card read
+  `Timing: GPS9 true clock · 0% of moving fixes rejected` and nothing on the window said otherwise.
+  The card now carries a **Video sync** row: *corrected*, with the rate difference, the drift it
+  removes across this recording (0.08 s on 0060, 0.14 s on 0062) and the lag that was taken out
+  (0.48 s / 0.46 s); or a ⚠ caveat when the lag could not be measured or the map could not be
+  fitted at all. A GPS5-era camera — **eight of the ten bundled samples** — says instead that its
+  telemetry and its picture are already on one clock and nothing is converted, and a recording with
+  no GPS in it gets **no row**, because the Timing row above already says nothing in it can be
+  lap-timed. The **±0.05 s floor** no correction can remove (where a fix sat inside its 1.001 s
+  GPMF payload is recorded nowhere) is stated once, in the card's tooltip, and the rotation tooltip
+  now points at the row instead of restating it.
 - **Export the two-lap comparison — locked to the same point on TRACK, not the same time on the
   clock.** Compare mode has always been on screen only; **File ▸ Export comparison video…** now
   renders the pair you are comparing into one MP4, stacked or side by side. Both panes are held at

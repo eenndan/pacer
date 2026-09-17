@@ -317,7 +317,7 @@ class _Check:
 
 
 def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None,
-                applied_lag=None):
+                applied_lag=None, clock=None):
     from studio.stats_panel import StatsView
 
     class _S:
@@ -351,6 +351,11 @@ def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quali
         # What the session did with the measured clock offset — None = nothing (no gyro, or a
         # value the clock refused). The card states the measurement and the ACTION separately.
         gps_lag_applied_s = applied_lag
+        # …and the picture<->telemetry map itself, which is what the ACTION is a property of. A
+        # stand-in that models no map at all gets no Video sync row (see that row's own test):
+        # "this object knows nothing about a clock" must never render as "this recording's clock
+        # could not be fitted".
+        media_clock = clock
 
     view = StatsView.__new__(StatsView)
     view.trust_card = QWidget()   # only set_rows / setToolTip are called on it
@@ -467,15 +472,29 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
     assert "+0.92" in tip and "+0.85" in tip, tip
     assert "media clock" in tip and "lap times" in tip.lower(), tip
 
-    # …and it must say what the APP does with the offset, which is a different fact from the
-    # measurement and comes from a different place (Session._install_gps_lag). The overlay IS
-    # corrected by it, so a tooltip still claiming nothing is shifted would be false.
-    assert "overlay IS corrected" in tip, tip
-    assert "0.48 s" in tip, tip
+    # …and what the APP DID with the offset is a different fact, from a different place
+    # (Session._install_gps_lag). It used to be a clause in THIS tooltip, which meant it was
+    # stated only where there is a gyro to measure an offset with — never on the ten bundled
+    # samples, and never on a recording whose measurement was refused, which is exactly the
+    # recording whose overlay is uncorrected. It is now the Video sync ROW, and this tooltip
+    # points at it rather than restating it (one fact, one wording).
+    from studio.media_clock import MediaClock
+    from studio.stats_panel import VIDEO_SYNC_TERM
+
+    assert "Video sync row" in tip, tip
+    assert "overlay IS corrected" not in tip, tip
+    assert "0.48 s" in tip, tip                       # the MEASUREMENT stays here
+    fit = MediaClock(rate=1.0 + 26.73e-6, offset=0.0256)
+    rows_on, _ = _trust_rows(real, applied_lag=0.483, clock=fit.with_gps_lag(0.483))
+    sync = next(r for r in rows_on if r[0] == VIDEO_SYNC_TERM)
+    assert sync[1].startswith("corrected") and "0.48 s" in sync[1], sync
+    assert sync[2] is False, sync
     # A recording whose offset was measured but NOT applied says so instead — the two must not be
     # collapsed into one sentence that assumes the correction landed.
-    _rows3, tip3 = _trust_rows(real, applied_lag=None)
-    assert "Nothing is shifted to match" in tip3, tip3
+    rows_off, tip3 = _trust_rows(real, applied_lag=None, clock=fit)
+    sync_off = next(r for r in rows_off if r[0] == VIDEO_SYNC_TERM)
+    assert sync_off[2] is True and "could not be measured" in sync_off[1], sync_off
+    assert "corrected" not in sync_off[1], sync_off
     assert "overlay IS corrected" not in tip3, tip3
 
     # NOT MEASURED IS NOT ZERO. A recording whose offset could not be measured says nothing about
@@ -532,6 +551,117 @@ def test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps():
     print("test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps OK")
 
 
+# ===================================================== 6. the DATA TRUST video-sync row
+def _sync_session(clock, quality, applied, total_duration=None):
+    """The read surface `video_sync_row` touches, and nothing else — accessors only."""
+    from types import SimpleNamespace
+    sess = SimpleNamespace(media_clock=clock, timing_quality=quality, gps_lag_applied_s=applied)
+    if total_duration is not None:
+        sess.chapters = SimpleNamespace(total_duration=total_duration)
+    return sess
+
+
+def test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own():
+    """THE ONE SYNC FACT A USER CAN ACT ON, and the card could not state it.
+
+    The app crosses ONE seam between the picture and the telemetry (`Session.media_time`), and two
+    corrections ride on it: the two clocks' ~27 ppm rate difference (#266) and the GPS timestamps'
+    own measured lag (#301). Whether the second one LANDED is a per-recording verdict —
+    `Session.gps_lag_applied_s` is None for a camera with no gyro, for a gyro that never tracks
+    the path, and for a measurement past `media_clock.MAX_GPS_LAG_S`.
+
+    Measured before this row existed, on the REAL StudioWindow over `~/Desktop/D24/GX020060.MP4`
+    + `GX030060.MP4` with `rotation.measure_lag` forced to its own refusing branch (the #283
+    idiom: the real gate, driven to the branch the owner's files never reach):
+
+        [session] quality=gps9_trueclock rate=+26.73 ppm gps_lag=+0.0000 applied=None
+        Timing: GPS9 true clock · 0% of moving fixes rejected
+        Rotation cross-check: agrees · … · r=+0.95 between them through the corners
+        (tooltip: no clock-offset paragraph at all)
+
+    Every GPS-derived overlay on that recording trails the picture by the receiver's fix latency —
+    ~0.46 s, 14 frames at 30 fps — and the whole window said nothing: the Timing row reads as the
+    app's best clock, and the rotation row simply drops its clause because `lag_clause` is empty
+    when nothing was measured. The disclosure that DID exist lived in that same gyro-dependent
+    tooltip, so it was absent on all ten bundled samples (none of which has a measurable gyro
+    offset) and on exactly the recordings where the correction had failed.
+
+    So the row states the ACTION, on the surface, for every recording that has a picture to be
+    out of sync with — and it is a CAVEAT when the correction did not land."""
+    from studio import data_quality as dq
+    from studio.media_clock import MediaClock
+    from studio.stats_panel import VIDEO_SYNC_TERM, video_sync_row
+
+    gps9 = dq.TimingQuality()
+    gps5 = dq.TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK)
+    no_gps = dq.TimingQuality(clock=dq.NO_GPS_TRACE)
+    # D24 0060's own numbers, measured through the real load path.
+    fitted = MediaClock(rate=1.0 + 26.73e-6, offset=0.0256)
+    corrected = fitted.with_gps_lag(0.47637)
+
+    # 1. BOTH D24 RECORDINGS: the map is fitted and the measured lag is installed.
+    term, value, caveat = video_sync_row(
+        _sync_session(corrected, gps9, 0.47637, total_duration=2823.6))
+    assert term == VIDEO_SYNC_TERM
+    assert caveat is False, value
+    assert "0.48 s" in value, value                      # the lag, as the rotation row prints it
+    assert "26.7 ppm" in value, value                    # …and the rate difference beside it
+    assert "0.08 s" in value, value                      # 26.73 ppm across 2823.6 s of recording
+    assert "in the app and in an exported clip alike" in value, value
+
+    # The seconds clause is the only part that needs a duration: a recording that cannot say how
+    # long it is still gets the row, minus that figure — never a fabricated one.
+    _t, short, _c = video_sync_row(_sync_session(corrected, gps9, 0.47637))
+    assert "26.7 ppm" in short and "0.08 s" not in short, short
+
+    # 2. THE MEASUREMENT REFUSED (the forced case above): fitted map, no lag installed.
+    term, value, caveat = video_sync_row(_sync_session(fitted, gps9, None, total_duration=2823.6))
+    assert caveat is True, value
+    assert "could not be measured" in value, value
+    assert "trail the picture" in value, value
+    # It must not claim the correction the session did not make …
+    assert "0.48 s" not in value and "corrected" not in value.split("—")[0], value
+    # … and it must not frighten anyone about the lap times, which are differences on one clock.
+    assert "Lap times" in value, value
+
+    # 3. NO CONVERSION AT ALL — every bundled GPS5 sample (measured: 8 of the 10 load like this).
+    term, value, caveat = video_sync_row(_sync_session(MediaClock(), gps5, None))
+    assert caveat is False, value
+    assert "one clock" in value, value
+    assert "ppm" not in value, "there is no rate difference to state on a one-clock recording"
+
+    # 4. A GPS9 RECORDING WHOSE MAP WAS REFUSED (too little trace, or a guard trip in
+    #    `media_clock.fit`): identity, but NOT because the two clocks are the same one.
+    term, value, caveat = video_sync_row(_sync_session(MediaClock(), gps9, None))
+    assert caveat is True, value
+    assert "could not be fitted" in value, value
+
+    # 5. NO GPS AT ALL (the bundled `karma.mp4`): there is no trace to place on the picture, and
+    #    the Timing row above already says nothing here can be lap-timed. No row.
+    assert video_sync_row(_sync_session(MediaClock(), no_gps, None)) is None
+
+    # 6. A STAND-IN THAT MODELS NO CLOCK is not a recording whose clock failed — it is a test
+    #    double, and every other suite in this repo builds one. No row, and the real card agrees.
+    from types import SimpleNamespace
+    assert video_sync_row(SimpleNamespace()) is None
+    assert video_sync_row(SimpleNamespace(media_clock=None, timing_quality=gps9)) is None
+    rows, _tip = _trust_rows(None)
+    assert not [r for r in rows if r[0] == VIDEO_SYNC_TERM], rows
+
+    # …and it DOES reach the real card when the session carries a map (driven through the real
+    # `_refresh_trust`, which is where the row has to appear).
+    rows, tip = _trust_rows(None, quality=gps9, clock=corrected, applied_lag=0.47637)
+    row = next((r for r in rows if r[0] == VIDEO_SYNC_TERM), None)
+    assert row is not None, [r[0] for r in rows]
+    assert "0.48 s" in row[1], row
+    # The row sits with the clock fact it belongs beside, not at the foot of the card.
+    terms = [r[0] for r in rows]
+    assert terms.index(VIDEO_SYNC_TERM) == terms.index("Timing") + 1, terms
+    # The floor that remains after both corrections is stated once, in the tooltip.
+    assert "±0.05 s" in tip, tip
+    print("test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own OK")
+
+
 def _main():
     test_a_cell_is_poor_exactly_when_the_loader_would_throw_its_fixes_away()
     test_a_second_with_some_fixes_rejected_is_not_reported_as_clean()
@@ -547,6 +677,7 @@ def _main():
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()
     test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with()
     test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps()
+    test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own()
     print("ALL OK")
 
 
