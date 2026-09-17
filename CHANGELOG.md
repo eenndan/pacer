@@ -13,6 +13,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Where you coast, by place — and whether the order means anything.** The coast number has been
+  real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
+  Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
+  corner/straight partition the STRAIGHTS table is cut from, ranks the places by seconds per lap
+  and rings the selected place on the map. A table sorted by a column always has a first row, so
+  each row says **top**, **tied** or **less** against it — a paired sign-flip test over the laps —
+  and a line under the table says what that order is worth. On both D24 recordings the laps cannot
+  separate the leader from 10 and 7 other places (and the two recordings crown different corners);
+  on all three Sandown recordings C1 holds about twice the next place's coasting and separates.
+  Zones grown from where the laps coast were built first and refused: their leader changed with
+  the coverage threshold and merge gap chosen.
 - **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
   one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
   grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
@@ -317,6 +328,24 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A piece of a lap is no longer counted as a lap, and every excluded lap now says why.** A
+  start/finish line long enough to reach a second stretch of track cuts each pass it reaches in
+  two, and when the pieces outnumber the laps the median bands count the pieces: Sandown chapter 3
+  opened on its own counted a **23.2 s / 320 m piece of the 740 m circuit** as its one lap. A lap
+  now has to end where it started, going the same way — its two start-line crossings no more than
+  15 m apart, and its direction of travel turned by no more than 120° — and this is checked before
+  the median is taken. Neither number alone is enough: measured over all four recordings on this
+  machine, every chapter alone and chained, on every line the app places and 60 lines a user could
+  drag per recording (18,899 real laps, 23,631 pieces), real laps end up to 8.45 m from where they
+  started while a D24 hairpin piece ends 6.48 m from its start — but that piece has turned round,
+  and no real lap turns by more than 97°. Together they count none of the pieces, and call only
+  three real laps open — laps of 86-200 s, which the time band excludes anyway. On the lines the app
+  places by itself only Sandown chapter 3 changes: it now has no laps, which is also what the
+  owner's own saved line finds in that chapter. The ⊘ strip lists the reason
+  beside each excluded lap ("ends 21 m from its start, heading the other way", "off the session
+  median", "the kart stopped during it"), and the DATA TRUST card, the exported summary and the
+  auto marks, which said every excluded lap's distance was off the median, count the reasons
+  instead.
 - **A recording on an unknown track no longer opens as quarter-laps when a wider start line would
   have cut every lap in two.** With no saved start/finish line, SD_30_08 opened as **25 laps of
   13.3 s / 203 m** — best 13.073 s, ideal 12.886 s, written to the library that way — when the
@@ -687,6 +716,14 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   AST call graph — those pieces call each other in a cycle, so the library/PB methods alone could
   not move without splitting it — and a before/after drive of the real window over both D24
   recordings dumps byte-identical stores, status lines, menus, dialogs and PB cards.
+- **No test can reach the owner's app-support directory any more, in-process or in a child.** A
+  `ctest` run wrote a `stadium` row from the synthetic fixture into a real `library.json`:
+  `test_load_failure` patched no seam, and its library write had been dead only while a test double
+  raised first. Every jail was an in-process attribute patch, opt-in per file and invisible to a
+  child process. The seven store seams now resolve through `studio/app_support.py`, which jails any
+  process CTest starts (a flag on every registration), any test file run by hand, and every child of
+  either, and `studio/dev/_jail.py` exports its jail too. The app itself resolves exactly as before.
+  `tests/test_app_support_jail.py` checks each form a test process takes, plus that control.
 
 ## [0.2.0] — 2026-09-06
 

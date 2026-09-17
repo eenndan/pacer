@@ -115,14 +115,13 @@ import os
 import shutil
 import uuid
 
-from . import data_quality
+from . import app_support, data_quality
 
 _log = logging.getLogger(__name__)
 
 VERSION = 1
 
 _FILENAME = "marks.json"
-_APP_DIR_NAME = "pacer"
 
 # ---------------------------------------------------------------- the vocabulary
 #: The two kinds. `KIND_AUTO` never reaches the file — see the module docstring.
@@ -223,9 +222,9 @@ MIN_DEGRADED_S = 5.0
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). The single seam the
     tests monkeypatch, so the suite never touches the user's real marks (mirrors
-    ``session_record._app_support_dir`` / ``library._app_support_dir``)."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    ``session_record._app_support_dir`` / ``library._app_support_dir``, resolved through
+    ``app_support.resolve``)."""
+    return app_support.resolve()
 
 
 def marks_path() -> str:
@@ -769,9 +768,9 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
         `gapfill.find_gaps` call behind `Session.lap_has_dropout`. Passed IN rather than re-derived
         here so the mark set and the lap table's dropout flag cannot be two different answers: a
         lap carries a dropout mark exactly when `lap_has_dropout` is True for it.
-      * `excluded` — ``(lap_id, t0, t1)`` per lap in `Session.excluded_lap_ids`, over that lap's
-        own window. Same rule: the strip that says a lap was left out and the mark that says so are
-        the same list.
+      * `excluded` — ``(lap_id, t0, t1[, why])`` per lap in `Session.excluded_lap_ids`, over that
+        lap's own window, with the reason in words when known. Same rule: the strip that says a lap
+        was left out and the mark that says so are the same list, and give the same reason.
       * `timeline` — the `data_quality.QualityTimeline` the quality strip paints, folded into its
         maximal runs of not-GOOD cells with the same `CONCERN_CLASSES` the strip uses.
 
@@ -782,10 +781,13 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
     for lap_id, t0, t1 in dropouts:
         out.append(_auto(f"auto:dropout:{lap_id}:{t0:.3f}", TYPE_DROPOUT, t0, t1,
                          f"GPS dropout — {t1 - t0:.1f} s with no fix", lap=lap_id))
-    for lap_id, t0, t1 in excluded:
-        out.append(_auto(f"auto:excluded:{lap_id}", TYPE_EXCLUDED, t0, t1,
-                         "lap left out of the times — its length is off the session median",
-                         lap=lap_id))
+    for lap_id, t0, t1, *why in excluded:
+        # The reason travels with the lap (`Session.excluded_lap_rows`' `why`). It used to be one
+        # fixed sentence — "its length is off the session median" — on every excluded lap,
+        # including a lap with a stop and a piece that does not end where it started.
+        note = f"lap left out of the times — {why[0]}" if why and why[0] else \
+            "lap left out of the times"
+        out.append(_auto(f"auto:excluded:{lap_id}", TYPE_EXCLUDED, t0, t1, note, lap=lap_id))
     suppressed = 0
     for t0, t1, cls in _concern_runs(timeline):
         if t1 - t0 < float(min_degraded_s):

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import os
 
+from . import app_support
+
 # Pinned demo asset on the v0.1.0 release. A small (single-chapter) real lapping recording uploaded
 # to the GitHub release / attached via the release page — kept OUT of the git tree on purpose (see
 # docs/PACKAGING.md "Demo data"). Override with PACER_DEMO_URL for a local mirror.
@@ -32,7 +34,6 @@ _DEMO_URL = (
     "https://github.com/eenndan/pacer/releases/download/v0.1.0/pacer-demo-lap.mp4"
 )
 _DEMO_FILENAME = "pacer-demo-lap.mp4"
-_APP_DIR_NAME = "pacer"
 # Bound every socket op of the demo fetch so a stalled/half-open TCP connection can't hang the UI
 # thread forever (urlretrieve took no timeout; urlopen does). Applies per connect/read, not total.
 _DEMO_TIMEOUT_S = 15.0
@@ -40,9 +41,9 @@ _DEMO_TIMEOUT_S = 15.0
 
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). A separate seam from
-    library._app_support_dir so a test can divert the demo cache without touching the library."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    library._app_support_dir so a test can divert the demo cache without touching the library.
+    Resolves through ``app_support.resolve`` like every store."""
+    return app_support.resolve()
 
 
 def demo_cache_path() -> str:

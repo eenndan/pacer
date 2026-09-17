@@ -174,6 +174,9 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     # surface through here. A user-facing number with no fingerprint is a number that can move in
     # silence, so this one is fingerprinted too.
     put("phase_report", lambda: _round(s.phase_report()))
+    # The Stats page's COASTING table (F5): per place, the coast seconds per lap and whether the
+    # laps separate it from the leader — a user-facing ranking, so it is fingerprinted from birth.
+    put("coast_report", lambda: _round(s.coast_report()))
     # The Stats page's CORNERS BY LAP grid. Its cells are `lap_corner_stats` times (fingerprinted
     # per lap below), but the typical, the scale and the marks are decided over the RESOLVED cells
     # only, and that resolution is a read of the lap warps' knots that no other leaf exposes.
@@ -427,9 +430,10 @@ def main():
     # cheap to redirect and the next one added would silently reintroduce this. tests/
     # test_golden_hermetic.py enforces that this list stays complete.
     tmp = tempfile.mkdtemp(prefix="pacer-golden-")
-    from studio import demo, focus, library, marks, prefs, session_record, track_db
+    from studio import app_support, demo, focus, library, marks, prefs, session_record, track_db
     for _mod in (demo, focus, library, marks, prefs, session_record, track_db):
         _mod._app_support_dir = lambda: tmp  # type: ignore[attr-defined]
+    os.environ[app_support.DIR_ENV] = tmp  # a patch stops at the process boundary; this does not
 
     from studio.session import Session
     s = Session.load([REAL])
