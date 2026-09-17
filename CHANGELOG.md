@@ -27,13 +27,6 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   fixed vector shows up as a perpendicular offset that changes sign twice around a closed lap, and
   driving wider does not. A 3 m parallel curve planted on a real D24 lap is read as 0.02 m of drift.
 
-- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
-  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
-  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
-  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
-  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
-  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
-  marked or counted in the typical.
 - **Where you coast, by place — and whether the order means anything.** The coast number has been
   real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
   Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
