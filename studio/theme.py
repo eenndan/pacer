@@ -1406,12 +1406,15 @@ QPushButton[role="IconButton"] {{
    toolbar's "vs ideal", which names which baseline the hero readout is measuring against.
 
    ONE LOOK, TWO WIDGET CLASSES, ON PURPOSE. A chip is a STYLE, not a widget: what it is made of
-   has to follow what it DOES. The quality badge and the reference chip are not interactive — as
-   QPushButtons they would each add a tab stop that does nothing, announce themselves to assistive
-   tech as buttons, and need a focus ring for an action they do not have — so they are QLabels.
-   "vs ideal" is a genuine two-state control with a keyboard path and a hit target, so it stays a
-   checkable QPushButton. Giving both the same padding, radius, type and tint is what makes them
-   one vocabulary; giving them the same CLASS would have broken one of them either way.
+   has to follow what it DOES. The reference chip and the video panel's COMPARING chip are not
+   interactive — as QPushButtons they would each add a tab stop that does nothing, announce
+   themselves to assistive tech as buttons, and need a focus ring for an action they do not have —
+   so they are QLabels. "vs ideal" is a genuine two-state control with a keyboard path and a hit
+   target, so it stays a checkable QPushButton. The lap panel's data-quality chip was a QLabel for
+   the first reason until it had somewhere to take you: it now opens the DATA TRUST row that
+   explains it (widgets.ActionChip), so it is a button with that one action. Giving all of them the
+   same padding, radius, type and tint is what makes them one vocabulary; giving them the same
+   CLASS would have broken one of them either way.
 
    Shipped, neither was really a chip: "vs ideal" was a plain QPushButton borrowing the generic
    `:checked` amber, and the reference chip padded itself with LITERAL SPACES inside its own text
@@ -1426,10 +1429,14 @@ QLabel[role="Chip"], QPushButton[role="Chip"] {{
     font-size: {TABLE_HEADER}px;
     font-weight: 700;
 }}
-/* ON: the amber trust tint the rest of the app warns/affirms in. Both classes reach it, one by a
-   static tone (a badge that is only ever shown while the thing it warns about is true) and one by
-   its checked state. */
-QLabel[role="Chip"][tone="warn"], QPushButton[role="Chip"]:checked {{
+/* ON: the amber trust tint the rest of the app warns/affirms in. Every chip reaches it, by a static
+   tone (a chip that is only ever shown while the thing it warns about is true) or by a checked
+   state. The THIRD selector is the tone on a BUTTON — the lap panel's data-quality chip, which
+   warns exactly as the static badge did and now also opens the DATA TRUST row explaining it. A
+   `QLabel[…]` selector does not reach a QPushButton, so without its own entry here that chip
+   would have silently dropped to the resting grey pill. */
+QLabel[role="Chip"][tone="warn"], QPushButton[role="Chip"]:checked,
+QPushButton[role="Chip"][tone="warn"] {{
     background-color: {C.accent_tint};
     color: {C.accent};
     border: {BORDER_PX}px solid {C.accent};
@@ -1448,7 +1455,7 @@ QPushButton[role="Chip"]:hover {{
     background-color: {C.surface_hover};
     border-color: {C.border_strong};
 }}
-QPushButton[role="Chip"]:checked:hover {{
+QPushButton[role="Chip"]:checked:hover, QPushButton[role="Chip"][tone="warn"]:hover {{
     background-color: {C.accent_tint};
     border-color: {C.accent_hover};
 }}
@@ -1519,7 +1526,8 @@ QPushButton[role="IconButton"]:focus, QPushButton[role="IconButton"]:checked:foc
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
     padding: {focus_pad(SPACE_XXS)}px;
 }}
-QPushButton[role="Chip"]:focus, QPushButton[role="Chip"]:checked:focus {{
+QPushButton[role="Chip"]:focus, QPushButton[role="Chip"]:checked:focus,
+QPushButton[role="Chip"][tone="warn"]:focus {{
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
     padding: {focus_pad(SPACE_XXS)}px {focus_pad(SPACE_S)}px;
 }}
@@ -1786,6 +1794,16 @@ QLabel[role="Hint"] {{
     background: transparent;
     color: {C.text_dim};
     font-size: {CAPTION}px;
+}}
+/* The DATA TRUST row a reader was SENT to (stats_panel._TrustCard.set_highlight — the lap panel's
+   data-quality chip opens it). Type only, no box: the term takes the chip's own amber so the row
+   visibly answers the chip that was clicked, and the value steps up from the Note's dim ink to the
+   primary text. Nothing here changes a size, so marking a row cannot move the card. */
+QLabel[role="Note"][highlight="term"] {{
+    color: {C.accent};
+}}
+QLabel[role="Note"][highlight="value"] {{
+    color: {C.text};
 }}
 /* A TITLE is the largest line on a surface that has no live number: the welcome wordmark, the
    About card's app name, the privacy card's heading. Those three shipped as HERO/700 via a role,

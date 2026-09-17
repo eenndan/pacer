@@ -1233,6 +1233,23 @@ add_test(NAME test_marks
 set_tests_properties(test_marks PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# The lap panel's data-quality chip OPENS the DATA TRUST row that explains it (N15). Measured over
+# the real Session.load of every bundled sample and all five of the owner's recordings, the chip has
+# three states and the card explained none of them well: the media-clock and low-GPS Timing rows
+# were the clean row's own shape ("video clock (estimated) · 0% of moving fixes rejected"), and the
+# no-GPS recording wore a chip reading "GPS LOW" over a row saying no fix survived. Drives REAL
+# CentralViews — hero6.mp4 (media clock) and karma.mp4 (no GPS) through the real loader, plus the
+# stadium synthetic forced to 12 % rejected fixes, which no real recording reaches — inside a real
+# StudioWindow shell with the app's own shortcuts, because Space is play/pause there and a
+# QShortcut outranks a focused button. Asserts the chip's word against the row it opens, the tab
+# ring with the chip hidden and shown, its amber pill and focus ring as painted, pointer AND
+# keyboard activation landing on the scrolled-to, marked row with focus on the card, and the mark
+# clearing when the page is left. Offscreen Qt + PACER_NO_MEDIA; the two real samples are bundled.
+add_test(NAME test_quality_chip_trust
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_quality_chip_trust.py)
+set_tests_properties(test_quality_chip_trust PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # NO TEST MAY REACH THE OWNER'S REAL APP-SUPPORT DIRECTORY (H8). On 2026-09-17 a ctest run wrote a
 # `stadium` row from the synthetic fixture into the owner's real library.json: test_load_failure
 # patched no seam, and its library write had been dead only while a test double raised first.
