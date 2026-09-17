@@ -115,7 +115,7 @@ class CornerSample:
     """One window's time over one session's clean laps — the only statistic this feature compares.
 
     ``iqr`` is the SAME measure ``coaching.Evidence.iqr`` is: the interquartile range of the
-    per-lap times, robust where σ is not (on 0062's C1 σ reads 0.226 s against a 0.115 s IQR)."""
+    per-lap times, robust where σ is not (on 0062's C1 σ reads 0.227 s against a 0.109 s IQR)."""
 
     median: float     # median time through the window (s)
     iqr: float        # interquartile range of the per-lap times (s)

@@ -911,15 +911,17 @@ class CornerModel:
         segment's best, so replaying its profile lands on the right value at both edges with no
         rescaling — the curve is exact at the edges and honest in between.
 
-        WHY IT MATTERS, measured: drawing each segment as a straight line in (distance, time)
-        instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the Sandown
-        recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is nowhere
-        near anything anybody drove. Following the donor cuts the worst excursion to **−0.159 s**
-        (2.09 % of samples on Sandown chapter 1, 6.42 % on SD_30_08 — the per-recording table is
-        in `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
-        here" rather than an artefact of the drawing.
+        WHY IT MATTERS, measured in #211: drawing each segment as a straight line in (distance,
+        time) instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the
+        Sandown recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is
+        nowhere near anything anybody drove — and following the donor cut that to −0.159 s. After
+        #300 warped every lap the worst excursion is **−0.246 s**, on SD_30_08 with the owner's
+        saved start line (4.52 % of samples on Sandown chapter 1 and 6.42 % on SD_30_08 are
+        negative on the loader's lines — the per-recording table is in `theme.format_ideal_run`'s
+        note), which is then a real "you were up on the ideal through here" rather than an
+        artefact of the drawing.
 
-        Those two figures read −0.052 s / "under 1 %" until this sweep was redone: the original was
+        Those figures read −0.052 s / "under 1 %" until #211 redid this sweep: the original was
         measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the
         excursion is identically zero — for chapter 1, which is where the real floor is. See
         `Session.delta_to_ideal` for the full note; the lesson is that the sweep passed because its

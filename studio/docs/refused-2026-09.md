@@ -66,6 +66,18 @@ Two premises from the brief were refuted on the way:
 segments, plot them, and mark where the ideal and your best lap fall.
 
 **What was measured.** The actual 20-dot layout was built, rather than argued about from moments.
+Re-measured after #300 warped every lap, which moved every cell below except the best lap:
+
+| | 0060 (38 laps) | 0062 (65 laps) |
+|---|---|---|
+| ideal / best lap | 65.464 / 68.228 | 66.709 / 68.201 |
+| recombination support | [65.464 … 84.930] = **19.5 s** | [66.709 … 79.418] = **12.7 s** |
+| recombination sd | 1.122 (**0.60×** the real lap-time sd) | 0.559 (**0.60×**) |
+| best lap's percentile in it | **1.08th** | **0.008th** |
+| the 20 dots span | 68.398 … 72.971 | 68.764 … 71.009 |
+| **dots at or left of the best lap** | **0 of 20** | **0 of 20** |
+
+As #272 published it, before #300:
 
 | | 0060 (38 laps) | 0062 (65 laps) |
 |---|---|---|
@@ -76,6 +88,24 @@ segments, plot them, and mark where the ideal and your best lap fall.
 | the 20 dots span | 68.377 … 73.039 | 68.832 … 71.057 |
 | **dots at or left of the best lap** | **0 of 20** | **0 of 20** |
 
+**The verdict holds on the new numbers.** Both reasons below are still true of every cell: no dot
+sits at or left of the best lap on either recording, and the spread is narrower than the laps
+driven on both. The support shrank (23.0 → 19.5 s, 13.2 → 12.7 s) mostly at its slow end, where
+fewer of the slowest cells are admitted as donors after #300. The 20 dots, which are what a plot
+would draw, moved by at most 0.07 s.
+
+**How it is measured**, since #272 did not write it down. 0060 is `GX020060` + `GX030060`; 0062 is
+`GX010062` + `GX020062` + `GX030062`. A recombination draws each of the 25 corner/straight segments
+independently and uniformly from the clean laps whose cell is admitted as a donor
+(`corner_model.MAX_DONOR_SPAN_DEV`). Support is the sum of the per-segment minima and maxima, so its
+left end is the ideal. The sd is the square root of the summed per-segment variances, divided by
+the sample sd of the clean laps' times. The percentile comes from the exact distribution of the sum
+on a 1 ms grid. The 20 dots sit at its (i + ½)/20 quantiles. On #272's own tree this reproduces
+every published cell: support and sd exactly, dots within 6 ms, jackknife exactly. The exception is
+the percentile, which #272 estimated by Monte Carlo; the exact figures there are 1.173 and 0.002.
+`tests/test_measured_figures.py` re-measures the table against the footage and derives the verdict
+row from the rest of it.
+
 **Two reasons to refuse it:**
 
 1. **The mark lands off the plot.** On both recordings the cloud centres on the **median** lap, with
@@ -83,18 +113,19 @@ segments, plot them, and mark where the ideal and your best lap fall.
    carry is outside the plotted body.
 2. **The premise is wrong at the root.** A uniform recombination is the **average** stitching, not an
    achievable one, and the central limit theorem over 25 independent picks makes its spread
-   *narrower than the laps actually driven* (0.59–0.63× the real sd). The plot would claim to show
-   what you can do while **understating real lap-to-lap variation**. That is the exact overclaim the
-   ideal-lap disclosure exists to prevent.
+   *narrower than the laps actually driven* (0.60× the real sd on both recordings). The plot would
+   claim to show what you can do while **understating real lap-to-lap variation**. That is the
+   exact overclaim the ideal-lap disclosure exists to prevent.
 
 The brief expected the plot might be "too tight to say anything". The measurement found the
 opposite, and worse.
 
 **Two alternatives were measured and also not shipped:**
 
-- **Jackknife** (drop one lap, recompute): moves the ideal by at most **0.231 s** and **0.135 s**,
-  with only **15/38** and **18/65** laps moving it at all. So "is this fragile to one lap?" is
-  already answered — **no** — and a plot to answer it would be decoration.
+- **Jackknife** (drop one lap, recompute, partition held): moves the ideal by at most **0.200 s**
+  and **0.073 s**, with only **13/38** and **20/65** laps moving it at all (#272: 0.231 s and
+  0.135 s, 15/38 and 18/65). So "is this fragile to one lap?" is already answered — **no** — and a
+  plot to answer it would be decoration.
 - **Ideal over any N of these laps** does work as a dotplot, but it is a **different statistic**: it
   needs a stochastic accessor with golden-gate care, and the repo has already ruled against baking
   per-recording empirical constants into shipping copy.
