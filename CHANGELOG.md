@@ -13,6 +13,27 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Corner windows are placed after the receiver's own drift is taken out.** A consumer GNSS
+  receiver's position error is nearly constant over one 90-second lap, so each lap's whole trace sits
+  displaced by one vector — measured on the owner's D24 0060 recording at a median 1.34 m and up to
+  3.66 m, persisting from lap to lap, with an altitude witness no racing line can move scattering
+  3.9x as far as on 0062. The 3 m gate that decides whether a corner edge was matched on track was
+  being spent on that instead of on the driving, and 38 % of 0060's interior boundaries failed it.
+  The session now fits that rigid shift per lap and removes it before the match, and moves the match
+  anchor sideways onto the line the session actually drove where the fastest lap is the displaced one
+  (0060's is, ranking 33rd of 38 from it). **0060 goes from 220 to 422 of 456 corner cells carrying a
+  real measurement instead of an explained dash**, 0062 from 776 to 780 of 780 — at the same 3 m
+  threshold, which is unchanged. The separation from a racing line is geometric, not statistical: a
+  fixed vector shows up as a perpendicular offset that changes sign twice around a closed lap, and
+  driving wider does not. A 3 m parallel curve planted on a real D24 lap is read as 0.02 m of drift.
+
+- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
+  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
+  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
+  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
+  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
+  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
+  marked or counted in the typical.
 - **Where you coast, by place — and whether the order means anything.** The coast number has been
   real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
   Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
