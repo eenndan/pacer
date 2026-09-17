@@ -129,6 +129,10 @@ def _live_bindings():
     from studio.app import STATUS_MS
     from studio.export_controller import ExportController
     win.exports = ExportController(win, STATUS_MS)
+    # ...and the library controller, which _build_menu wires File ▸ Library… / Open Recent /
+    # Session record… to — and whose Open Recent seed is the library read diverted just below.
+    from studio.library_controller import LibraryController
+    win.library_ctl = LibraryController(win, STATUS_MS)
     with tempfile.TemporaryDirectory() as tmp:                      # never read the real library
         library._app_support_dir, real = (lambda: tmp), library._app_support_dir
         try:

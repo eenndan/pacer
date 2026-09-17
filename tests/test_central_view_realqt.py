@@ -195,6 +195,10 @@ def _studiowindow_with_view(*, build_menu: bool = False):
     # BEFORE _build_menu, which wires the File ▸ Export actions straight to this controller's
     # methods — the same ordering the real __init__ documents (§7.1).
     win.exports = ExportController(win, STATUS_MS)
+    # …and the library controller, for the same reason and one more: _build_ui itself wires the
+    # record chip, the focus list and the post-drag library refresh straight to it.
+    from studio.library_controller import LibraryController
+    win.library_ctl = LibraryController(win, STATUS_MS)
     if build_menu:
         win._build_menu()             # the persistent menu bar (incl. View ▸ Enter Full Screen)
     win._build_ui()                   # fresh real CentralView + the production tick timer + wiring
@@ -228,6 +232,11 @@ def test_real_qtimer_fires_view_tick_through_studiowindow():
     # Persistent-chrome hooks _build_ui calls (window-level, unrelated to the controller fan-out).
     win._sync_full_recording_action = lambda: None
     win._update_reference_status = lambda: None
+    # _build_ui wires the record chip / focus list / library refresh to the library controller,
+    # which the real __init__ builds and this __new__ fixture therefore has to (§7.1).
+    from studio.app import STATUS_MS
+    from studio.library_controller import LibraryController
+    win.library_ctl = LibraryController(win, STATUS_MS)
     win._build_ui()  # builds a FRESH real CentralView + creates/starts the real ~30 Hz QTimer
 
     assert win._tick_timer is not None and win._tick_timer.isActive()

@@ -527,10 +527,12 @@ def test_the_app_wires_the_way_back_from_clear_library():
     the app did not. A backup the app can write and never read is the half-feature that module's
     own docstring names, so this asserts the wiring, not the module.
 
-    Driven through the real `_open_library` with the dialog constructor captured, because the two
+    Driven through the real `open_library` with the dialog constructor captured, because the two
     injections are the entire fix and a test of `_restore_library` alone would pass with them
-    still missing."""
-    from studio import app as studio_app
+    still missing. The constructor is captured on `studio.library_controller`, the module that
+    builds the dialog since §7.1 — patching `studio.app` would patch nothing and exec the real
+    dialog modally."""
+    from studio import library_controller
     win = _stub_window()
     captured = {}
 
@@ -541,12 +543,12 @@ def test_the_app_wires_the_way_back_from_clear_library():
         def exec(self):
             return 0
 
-    real = studio_app.LibraryDialog
-    studio_app.LibraryDialog = _Dlg
+    real = library_controller.LibraryDialog
+    library_controller.LibraryDialog = _Dlg
     try:
-        studio_app.StudioWindow._open_library(win)
+        _stub_ctl(win).open_library()
     finally:
-        studio_app.LibraryDialog = real
+        library_controller.LibraryDialog = real
 
     assert callable(captured.get("restore_library")), \
         "the library dialog is built with no restore_library, so it renders no Restore… at all " \
@@ -559,12 +561,11 @@ def test_the_app_wires_the_way_back_from_clear_library():
 def test_restore_is_guarded_and_always_returns_an_index():
     """`_restore_library` mirrors `_clear_library`: an OSError must never reach the dialog, and the
     caller must always get an index to re-render."""
-    from studio import app as studio_app
     win = _stub_window()
     real = library.restore
     library.restore = lambda *a, **k: (_ for _ in ()).throw(OSError("read-only volume"))
     try:
-        got = studio_app.StudioWindow._restore_library(win)
+        got = _stub_ctl(win)._restore_library()
     finally:
         library.restore = real
     assert isinstance(got, dict) and "entries" in got, got
@@ -587,9 +588,18 @@ def test_the_privacy_note_names_the_file_holding_your_circuits():
 # =============================================== C. forget-the-OPEN-recording sidecar seam (app)
 def _stub_window():
     """A bare StudioWindow (no __init__) for exercising the pure forget/sidecar seam methods with a
-    fabricated view — the same idiom test_library uses for _update_library."""
+    fabricated view — the same idiom test_library uses for update_library."""
     from studio import app as studio_app
     return studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+
+
+def _stub_ctl(win):
+    """The library controller over a stub window, as the real `__init__` attaches it (§7.1): the
+    forget / restore / back-up methods live there now and reach the window through `.win`."""
+    from studio import app as studio_app
+    from studio.library_controller import LibraryController
+    win.library_ctl = LibraryController(win, studio_app.STATUS_MS)
+    return win.library_ctl
 
 
 def test_forget_open_recording_clears_live_sidecar_and_blocks_renudge():
@@ -597,7 +607,6 @@ def test_forget_open_recording_clears_live_sidecar_and_blocks_renudge():
     so a subsequent passive timing nudge can't RE-CREATE the just-deleted .pacer.json. Drives the
     app's _disable_sidecar_if_open against a real temp sidecar, then replays CentralView._save_sidecar's
     guard to prove a nudge no-ops on the cleared path."""
-    from studio import app as studio_app
     from studio import sidecar as sc
     with tempfile.TemporaryDirectory() as d:
         media = os.path.join(d, "GX010042.MP4")
@@ -611,7 +620,7 @@ def test_forget_open_recording_clears_live_sidecar_and_blocks_renudge():
         win.view._sidecar_path = side
 
         # Forget THIS open recording: clear the live link, then the app deletes the file.
-        studio_app.StudioWindow._disable_sidecar_if_open(win, side)
+        _stub_ctl(win)._disable_sidecar_if_open(side)
         assert win._sidecar_path is None
         assert win.view._sidecar_path is None
         os.remove(side)                          # the app's guarded deletion (already tested elsewhere)
@@ -634,7 +643,6 @@ def test_forget_open_recording_clears_live_sidecar_and_blocks_renudge():
 def test_forget_a_different_recording_leaves_open_sidecar_intact():
     """Forgetting a DIFFERENT recording must NOT clear the open session's sidecar path (only a
     path match clears it) — the live session keeps persisting its own edits."""
-    from studio import app as studio_app
     with tempfile.TemporaryDirectory() as d:
         open_side = os.path.join(d, "GX010042.pacer.json")
         other_side = os.path.join(d, "GX010099.pacer.json")
@@ -642,7 +650,7 @@ def test_forget_a_different_recording_leaves_open_sidecar_intact():
         win._sidecar_path = open_side
         win.view = type("V", (), {})()
         win.view._sidecar_path = open_side
-        studio_app.StudioWindow._disable_sidecar_if_open(win, other_side)
+        _stub_ctl(win)._disable_sidecar_if_open(other_side)
         assert win._sidecar_path == open_side        # untouched — different recording
         assert win.view._sidecar_path == open_side
 
@@ -673,7 +681,7 @@ def test_dialog_without_portability_callbacks_hides_those_buttons():
 
 
 def test_app_backup_library_copies_index_to_chosen_path(monkeypatch):
-    """The app's _backup_library copies library.json to the QFileDialog-chosen path via shutil.copy2.
+    """The app's backup_library copies library.json to the QFileDialog-chosen path via shutil.copy2.
     Drives the method on a stub window with the save dialog + library path stubbed."""
     from studio import app as studio_app
     with tempfile.TemporaryDirectory() as d:
@@ -687,14 +695,14 @@ def test_app_backup_library_copies_index_to_chosen_path(monkeypatch):
                             staticmethod(lambda *a, **k: (dest, "")))
         win = _stub_window()
         win.statusBar = lambda: type("SB", (), {"showMessage": staticmethod(lambda *a: None)})()
-        studio_app.StudioWindow._backup_library(win)
+        _stub_ctl(win).backup_library()
         assert os.path.exists(dest)
         with open(dest) as f, open(src) as g:
             assert f.read() == g.read()          # a faithful copy of the index
 
 
 def test_app_backup_library_noop_when_no_library(monkeypatch):
-    """_backup_library is a gentle no-op (no dialog, a status note) when there's no library yet —
+    """backup_library is a gentle no-op (no dialog, a status note) when there's no library yet —
     it must never raise on a fresh install with nothing analyzed."""
     from studio import app as studio_app
     with tempfile.TemporaryDirectory() as d:
@@ -707,7 +715,7 @@ def test_app_backup_library_noop_when_no_library(monkeypatch):
         win.statusBar = lambda: type(
             # (the app passes a STATUS_MS timeout — swallow it: this asserts the TEXT)
             "SB", (), {"showMessage": staticmethod(lambda m, *_a: messages.append(m))})()
-        studio_app.StudioWindow._backup_library(win)
+        _stub_ctl(win).backup_library()
         assert opened == []                       # the save dialog was never opened
         assert messages and "no library" in messages[0]
 

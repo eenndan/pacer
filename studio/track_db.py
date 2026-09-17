@@ -37,7 +37,7 @@ pointer. Every analysed session keeps the name it was driven under; a delete rem
 auto-detection and nothing else. A RENAME is the opposite case and the dangerous one: it must be
 carried into all three, or the next recording auto-detects the new name and one circuit ends up with
 two half-histories. Each of those stores has its own ``rename_track``, and the app composes the four
-(``StudioWindow._rename_track``).
+(``LibraryController._rename_track``).
 
 A track entry is location-anchored: its timing lines are stored in lat/lon so they map onto ANY
 recording of that circuit (via the recording's own CoordinateSystem), and it carries a detection
@@ -585,8 +585,8 @@ def rename_track(old: str, new: str, path: str | None = None) -> dict:
     stamp all match a circuit by NAME, so a rename that moved only this file would split a circuit's
     history in two the moment the next recording auto-detected the new name — past sessions under
     the old name, future ones under the new, neither complete. Each of those stores has its own
-    ``rename_track``; the app composes the four into one gesture (``StudioWindow._rename_track``),
-    the same way it composes "forget this recording" across the index, the sidecar, the record and
+    ``rename_track``; the app composes the four into one gesture
+    (``LibraryController._rename_track``), the same way it composes "forget this recording" across the index, the sidecar, the record and
     the marks."""
     if path is None:
         path = db_path()

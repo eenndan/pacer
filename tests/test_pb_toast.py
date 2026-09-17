@@ -342,10 +342,11 @@ def test_the_toast_does_not_cover_the_row_it_is_announcing():
         body = QRect(win.view.table_stack.mapTo(win, QPoint(0, 0)), win.view.table_stack.size())
 
         toast = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None, parent=win)
-        toast.show_for(win, keepout=win._pb_card_keepout)
+        toast.show_for(win, keepout=win.library_ctl._pb_card_keepout)
         _spin(0.4)
         card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
-        assert win._pb_card_keepout() == band, (win._pb_card_keepout(), band)
+        keepout = win.library_ctl._pb_card_keepout
+        assert keepout() == band, (keepout(), band)
         assert not card.intersects(band), (
             f"{size} scroll=max: the card at {card} covers the selected row {band} by "
             f"{card.intersected(band).width()}x{card.intersected(band).height()}")
@@ -360,10 +361,10 @@ def test_the_toast_does_not_cover_the_row_it_is_announcing():
         grid.clearSelection()
         for _ in range(6):
             _APP.processEvents()
-        assert win._pb_card_keepout() is None, win._pb_card_keepout()
+        assert win.library_ctl._pb_card_keepout() is None, win.library_ctl._pb_card_keepout()
         with_keepout = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None,
                                parent=win)
-        with_keepout.show_for(win, keepout=win._pb_card_keepout)
+        with_keepout.show_for(win, keepout=win.library_ctl._pb_card_keepout)
         _spin(0.4)
         unguarded = QRect(with_keepout.mapTo(win, QPoint(0, 0)), with_keepout.size())
         plain = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None, parent=win)
@@ -432,7 +433,7 @@ def test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path():
 
     Every other test in this file raises the card over a window that is already shown and laid
     out. `StudioWindow._load` does not: it runs `_build_ui()` — which constructs a NEW CentralView
-    and setCentralWidget()s it — and then calls `_show_pb_moment()` in the SAME synchronous block.
+    and setCentralWidget()s it — and then calls `show_pb_moment()` in the SAME synchronous block.
     At that instant the new view has not been shown, so `overlay_anchor()` hands back a widget that
     is still `isHidden()`, `anchor_region` takes its fallback to the whole window, and the card
     lands bottom-CENTRE over the Δ chart. Measured on the shipped app: (571, 792) against a lap
@@ -461,11 +462,11 @@ def test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path():
         _APP.processEvents()
     # ---- the app's own end-of-load block, in the app's own order
     win._build_ui()
-    win._show_pb_moment({"kind": "beat", "track": "Stadium", "best": 62.418,
+    win.library_ctl.show_pb_moment({"kind": "beat", "track": "Stadium", "best": 62.418,
                          "prior": 62.735, "improvement": 0.317})
     toast = win._pb_toast
     assert toast is not None, (
-        "_show_pb_moment swallowed something — see the studio: line it prints")
+        "show_pb_moment swallowed something — see the studio: line it prints")
     # Installed the instant the block returns, which is still before Qt has run a single paint:
     # nothing here spins the event loop, and show() only schedules one.
     log = _PaintLog(toast)

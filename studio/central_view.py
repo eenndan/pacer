@@ -727,8 +727,8 @@ class CentralView(QWidget):
         # SHOWN ONLY WHEN THERE IS A RECORD. The empty state of this chip is its absence: a
         # permanent "no session record" pill over every lap grid would nag on every surface, on
         # every load, about a form the File menu already offers. Fed by the app
-        # (StudioWindow._update_record_chip) rather than read here, so this view keeps its one job
-        # — the app owns the app-support stores.
+        # (LibraryController.update_record_chip) rather than read here, so this view keeps its
+        # one job — the app owns the app-support stores.
         self.record_chip = chip("")
         self.record_chip.setVisible(False)
         # The coaching page: the top opportunities (corner · time lost · reason), full height —

@@ -1086,8 +1086,9 @@ def test_dialog_delete_of_a_refined_built_in_says_the_built_in_comes_back(monkey
 
 
 def test_app_rename_carries_every_store_the_name_keys(monkeypatch):
-    """THE COMPOSITION. StudioWindow._rename_track moves the circuit in the track DB and re-keys
-    the three stores that file things under its NAME, so one circuit keeps one history."""
+    """THE COMPOSITION. LibraryController._rename_track moves the circuit in the track DB and
+    re-keys the three stores that file things under its NAME, so one circuit keeps one
+    history."""
     if not _pacer_available():
         print("skip test_app_rename_carries_every_store_the_name_keys (no pacer)")
         return
@@ -1096,6 +1097,7 @@ def test_app_rename_carries_every_store_the_name_keys(monkeypatch):
     QApplication.instance() or QApplication([])
     from studio import app as studio_app
     from studio import focus, library, session_record
+    from studio.library_controller import LibraryController
     with tempfile.TemporaryDirectory() as d:
         for mod in (track_db, library, focus, session_record):
             monkeypatch.setattr(mod, "_app_support_dir", lambda _d=d: _d)
@@ -1105,7 +1107,8 @@ def test_app_rename_carries_every_store_the_name_keys(monkeypatch):
         _seed_records("Sonom", session_record.records_path())
 
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
-        rows = studio_app.StudioWindow._rename_track(win, "Sonom", "Sonoma Raceway")
+        ctl = LibraryController(win, studio_app.STATUS_MS)
+        rows = ctl._rename_track("Sonom", "Sonoma Raceway")
 
         assert {e["name"] for e in track_db.load()["tracks"]} == {"Sonoma Raceway"}
         idx = library.load()
@@ -1128,6 +1131,7 @@ def test_app_delete_leaves_every_analysed_session_alone(monkeypatch):
     QApplication.instance() or QApplication([])
     from studio import app as studio_app
     from studio import focus, library, session_record
+    from studio.library_controller import LibraryController
     with tempfile.TemporaryDirectory() as d:
         for mod in (track_db, library, focus, session_record):
             monkeypatch.setattr(mod, "_app_support_dir", lambda _d=d: _d)
@@ -1137,7 +1141,8 @@ def test_app_delete_leaves_every_analysed_session_alone(monkeypatch):
         _seed_records("Sonoma", session_record.records_path())
 
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
-        rows = studio_app.StudioWindow._delete_track(win, "Sonoma")
+        ctl = LibraryController(win, studio_app.STATUS_MS)
+        rows = ctl._delete_track("Sonoma")
 
         assert [r["name"] for r in rows] == ["Daytona Milton Keynes"], rows
         assert track_db.load()["tracks"] == []
