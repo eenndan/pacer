@@ -503,6 +503,14 @@ HOSTS = {
     # fill, so it composites onto the bar behind it, not onto the resting pill.
     'QLabel[role="Chip"][tone="warn"]': (C.canvas, C.surface),
     'QPushButton[role="Chip"]': (C.canvas, C.surface),
+    # ...and the same tint on a chip that is a BUTTON: the lap panel's data-quality chip, which
+    # opens the DATA TRUST row explaining it (N15). It rides in that panel's header, on C.surface.
+    'QPushButton[role="Chip"][tone="warn"]': (C.canvas, C.surface),
+    # The DATA TRUST row a reader was sent to by that chip. Type only — the term takes the chip's
+    # amber, the value the primary ink — on the Stats page, which is the window canvas in the
+    # maximized dashboard and a panel surface in the quadrant.
+    'QLabel[role="Note"][highlight="term"]': (C.canvas, C.surface),
+    'QLabel[role="Note"][highlight="value"]': (C.canvas, C.surface),
     # A checked ToggleButton's amber tint, likewise: buttons sit in panel toolbars (C.surface) and
     # on the welcome overlay (C.canvas).
     "QPushButton": (C.canvas, C.surface),

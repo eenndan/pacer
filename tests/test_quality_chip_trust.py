@@ -71,14 +71,20 @@ def _settle(n=6):
 def _host(view):
     """A StudioWindow shell around `view` with the app's REAL window-level shortcuts (Space is
     play/pause there) — `__new__` + `_build_shortcuts`, the seam test_command_palette uses, so no
-    recording loads and no menu is built. Sized so the Stats page has to scroll."""
+    recording loads and no menu is built.
+
+    1280x520 is not arbitrary: measured on all three states, it is the size at which the Stats
+    page's viewport (~250 px) is shorter than the run-up to the DATA TRUST card on EVERY one of
+    them, so `_scroll_page_away` really can put the card out of reach. At 640 the two real samples'
+    pages are short enough that the card stays on screen at the bottom of the scroll, and the
+    navigation assertions would pass without anything having moved."""
     from studio.app import StudioWindow
     win = StudioWindow.__new__(StudioWindow)
     QMainWindow.__init__(win)
     win.view = view
     win._build_shortcuts()
     win.setCentralWidget(view)
-    win.resize(1280, 640)
+    win.resize(1280, 520)
     win.show()
     win.activateWindow()
     _settle()
@@ -131,9 +137,11 @@ def _trust_heading(stats):
 
 
 def _scroll_page_away(view):
-    """Open Stats, scroll it to the BOTTOM so DATA TRUST is out of view, and go back to Laps — the
-    state a reader who has used the page before is in. Asserted, so the navigation test cannot
-    pass by the card merely happening to be on screen already."""
+    """Open Stats, scroll it to the BOTTOM, and go back to Laps — the state a reader who has used
+    the page before is in. Returns (where the page was left, whether that really put DATA TRUST out
+    of view), because on a lapless recording the whole page is barely two viewports tall and the
+    card can be on screen at every scroll position there is; the caller asserts the scroll MOVED
+    only in the runs where it had somewhere to move to."""
     view.select_lap_tab(_STATS_TAB)
     _settle()
     stats = view.stats_view
@@ -141,10 +149,10 @@ def _scroll_page_away(view):
     assert bar.maximum() > 0, "the Stats page does not scroll at this size — the test is vacuous"
     bar.setValue(bar.maximum())
     _settle()
-    assert not _in_viewport(stats._scroll, _trust_heading(stats)), (
-        "DATA TRUST is still in view at the bottom of the page — the test is vacuous")
+    hidden = not _in_viewport(stats._scroll, _trust_heading(stats))
     view.select_lap_tab(0)
     _settle()
+    return bar.value(), hidden
 
 
 # ======================================================================= what the chip says
@@ -246,6 +254,13 @@ def _rgb(w):
     return bgra[..., [2, 1, 0]]
 
 
+def _has_accent(widget) -> bool:
+    """Does `widget` paint any pixel of the app's amber accent? The live read of a QSS colour rule."""
+    accent = np.array([QColor(theme.C.accent).red(), QColor(theme.C.accent).green(),
+                       QColor(theme.C.accent).blue()])
+    return bool((np.abs(_rgb(widget).astype(int) - accent).sum(-1) <= 30).any())
+
+
 def test_the_shown_chip_keeps_its_amber_pill_and_rings_on_focus_without_moving():
     """The design contracts a new tab stop inherits. The amber tint must still REACH it (a QSS
     rule that silently stops reaching a widget has happened here four times), its focus ring must
@@ -255,11 +270,7 @@ def test_the_shown_chip_keeps_its_amber_pill_and_rings_on_focus_without_moving()
     try:
         chip = view.quality_badge
         assert isinstance(chip, QAbstractButton), f"the chip is a {type(chip).__name__}, not a stop"
-        img = _rgb(chip)
-        accent = np.array([QColor(theme.C.accent).red(), QColor(theme.C.accent).green(),
-                           QColor(theme.C.accent).blue()])
-        near = (np.abs(img.astype(int) - accent).sum(-1) <= 30).sum()
-        assert near > 0, "the chip lost the amber warn tint — the tone rule does not reach it"
+        assert _has_accent(chip), "the chip lost the amber warn tint — the tone rule does not reach it"
         view.table.table.setFocus(Qt.TabFocusReason)
         _settle()
         before, box = _rgb(chip), (chip.geometry(), chip.sizeHint())
@@ -274,7 +285,7 @@ def test_the_shown_chip_keeps_its_amber_pill_and_rings_on_focus_without_moving()
 
 
 # ======================================================================= what the chip DOES
-def _assert_landed(name, view, word):
+def _assert_landed(name, view, word, was, hidden):
     from studio.stats_panel import TIMING_TERM
     stats = view.stats_view
     assert view.tab_bar.currentIndex() == _STATS_TAB, f"{name}: {word} did not open the Stats page"
@@ -283,15 +294,25 @@ def _assert_landed(name, view, word):
     assert _in_viewport(scroll, _trust_heading(stats)), (
         f"{name}: the DATA TRUST heading is not in view after {word} "
         f"(scroll {scroll.verticalScrollBar().value()}/{scroll.verticalScrollBar().maximum()})")
+    if hidden:
+        bar = scroll.verticalScrollBar()
+        assert bar.value() != was, (
+            f"{name}: the card was off screen and the page never scrolled (left at {was})")
+        assert _trust_heading(stats).mapTo(scroll.viewport(), QPoint(0, 0)).y() <= theme.SPACE_S, (
+            f"{name}: the card was scrolled to, but not to the top of the page view")
     card = stats.trust_card
     assert card.highlighted() == TIMING_TERM, (
         f"{name}: the row that explains {word} is not the one marked: {card.highlighted()!r}")
     term_w, value_w = card.row_widgets(TIMING_TERM)
     assert _in_viewport(scroll, term_w) and _in_viewport(scroll, value_w), (
         f"{name}: the Timing row is not in view")
-    lit = [w for pair in card._widgets for w in pair if w.property("highlight") == "true"]
-    assert set(map(id, lit)) == {id(term_w), id(value_w)}, (
-        f"{name}: exactly the Timing row's two labels carry the highlight, got {len(lit)}")
+    lit = [t for t, _v, _c in card.rows()
+           if any(w.property("highlight") for w in card.row_widgets(t))]
+    assert lit == [TIMING_TERM], f"{name}: exactly one row carries the mark, got {lit}"
+    assert (term_w.property("highlight"), value_w.property("highlight")) == ("term", "value")
+    # …and the mark is not just a property: the term really paints in the chip's amber, which is
+    # the half a QSS rule can silently fail to deliver (it has, four times, in this app).
+    assert _has_accent(term_w), f"{name}: the marked term does not paint the chip's amber"
     assert _APP.focusWidget() is card, (
         f"{name}: keyboard focus stayed on {type(_APP.focusWidget()).__name__}, not the card the "
         f"reader was sent to")
@@ -302,6 +323,7 @@ def test_activating_the_chip_opens_data_trust_at_the_row_it_is_about():
     bottom (DATA TRUST out of view) with the Laps tab showing; activating the chip must switch to
     Stats, bring the heading and the Timing row into view, mark that row, and move keyboard focus
     onto the card. The keyboard run presses Space in a window whose Space is play/pause."""
+    scrolled_to = 0
     for name, build, word, _must in _states():
         for how in ("click", "Space", "Return"):
             win, view, _session = build()
@@ -310,7 +332,8 @@ def test_activating_the_chip_opens_data_trust_at_the_row_it_is_about():
                 assert isinstance(chip, QAbstractButton), (
                     f"{name}: the chip is a static {type(chip).__name__} — there is nothing to "
                     f"activate")
-                _scroll_page_away(view)
+                was, hidden = _scroll_page_away(view)
+                scrolled_to += int(hidden)
                 if how == "click":
                     QTest.mouseClick(chip, Qt.LeftButton)
                 else:
@@ -319,10 +342,14 @@ def test_activating_the_chip_opens_data_trust_at_the_row_it_is_about():
                     assert _APP.focusWidget() is chip, f"{name}: the chip cannot take focus"
                     QTest.keyClick(chip, Qt.Key_Space if how == "Space" else Qt.Key_Return)
                 _settle()
-                _assert_landed(f"{name} via {how}", view, word)
+                _assert_landed(f"{name} via {how}", view, word, was, hidden)
             finally:
                 _close(win)
-    print("test_activating_the_chip_opens_data_trust_at_the_row_it_is_about OK")
+    assert scrolled_to >= 4, (
+        f"only {scrolled_to} of the 9 runs started with DATA TRUST genuinely off screen — the "
+        f"scrolling half of this test has stopped being exercised")
+    print(f"test_activating_the_chip_opens_data_trust_at_the_row_it_is_about OK "
+          f"({scrolled_to}/9 runs scrolled the card back into view)")
 
 
 def test_leaving_the_stats_page_clears_the_mark():
@@ -337,7 +364,9 @@ def test_leaving_the_stats_page_clears_the_mark():
         view.select_lap_tab(0)
         _settle()
         assert card.highlighted() is None, card.highlighted()
-        assert not [w for pair in card._widgets for w in pair if w.property("highlight") == "true"]
+        assert not [t for t, _v, _c in card.rows()
+                    if any(w.property("highlight") for w in card.row_widgets(t))]
+        assert not _has_accent(card.row_widgets("Timing")[0]), "the row still paints marked"
         view.select_lap_tab(_STATS_TAB)
         _settle()
         assert card.highlighted() is None, "a tab-bar visit re-lit the chip's mark"
