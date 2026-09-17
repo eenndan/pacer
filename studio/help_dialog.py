@@ -230,8 +230,8 @@ PRIVACY_PARAGRAPHS = [
     "\"~/Library/Application Support/pacer/library.json\": the file path(s), track name, GPS date "
     "and lap times. This is what powers the Library list and per-track PB progression.",
     "•  Preferences — \"~/Library/Application Support/pacer/prefs.json\" remembers your speed "
-    "unit, palette and panel layout, plus the last folder you opened a recording from (a path "
-    "into your filesystem).",
+    "unit, palette, window size and panel layout, plus the last folder you opened a recording "
+    "from (a path into your filesystem).",
     # ONE BULLET, AND A SHORT ONE. This card's opening line frames the list as exhaustive, so a new
     # store has to appear here — but the card is capped at 85% of the screen and had exactly 73 px
     # of slack (607 px of copy in a 680 px viewport on the 800 px display the test harness runs on,
