@@ -716,7 +716,7 @@ def test_the_focus_prose_is_its_tables_arithmetic():
               r"detector drawing a longer window; over the stored window it is \+(\d\.\d{3}) s", text,
               "the C8 sentence under the window table")
     assert (float(m.group(1)), float(m.group(2))) == (c8[4], c8[6]) and c8[1] > c8[0], (m.groups(), c8)
-    for cid, (w60, w62, own60, own62, own_d, at60, stored_d) in windows.items():
+    for cid, (_w60, _w62, own60, own62, own_d, at60, stored_d) in windows.items():
         assert abs(own_d - (own62 - own60)) <= 0.001 + 1e-9, f"C{cid}: own change is not {own62} − {own60}"
         assert abs(stored_d - (at60 - own60)) <= 0.001 + 1e-9, f"C{cid}: stored change is not {at60} − {own60}"
         assert abs(stored_d) < abs(own_d), f"C{cid}: the stored window does not remove the window's growth"
@@ -1483,7 +1483,7 @@ def test_the_focus_tables_match_the_footage():
         if s60 is None or s62 is None:
             raise AssertionError(f"D24 footage missing under {root}")
         got = _focus_measure(s60, fx.paths("0060"), s62, fx.paths("0062"))
-    for cid, lost, m0, q0, m1, q1, d, bar, kind, n0, n1 in got["rows"]:
+    for cid, lost, m0, q0, m1, q1, d, bar, kind, _n0, _n1 in got["rows"]:
         lines.append(f"  C{cid:<6d}+{lost:.3f} s      {m0:.3f} s      {q0:.3f}  {m1:.3f} s      {q1:.3f}  "
                      f"{d:+.3f}  {bar:.3f}  {kind}")
     measured = [(c, f"{lo:.3f}", f"{m0:.3f}", f"{q0:.3f}", f"{m1:.3f}", f"{q1:.3f}", f"{d:+.3f}", f"{b:.3f}", k)
