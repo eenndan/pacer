@@ -18,7 +18,8 @@ causes, and they compound:
 
 Every number below is printed by
 [`studio/dev/probes/p6_corner_match_cause.py`](../dev/probes/p6_corner_match_cause.py), measured
-through the real `Session.load` on `origin/main` 3f2220a, with every app-support seam jailed. The
+through the real `Session.load` on `origin/main` 9a3d8b4 (and identically on 3f2220a, before #329
+merged), with every app-support seam jailed. The
 exception is the history table, whose method is given with it.
 
 ---
@@ -45,8 +46,9 @@ C12's exit sit on the timing line on both recordings, where the warp is anchored
 | dropped as non-monotonic | 0 | 0 |
 | closest approach the gate judges, median / p90 | **2.44 / 4.98 m** | 0.56 / 1.42 m |
 
-The probe's knot rule reproduces #329's figures exactly: **220 / 456** cells resolved on 0060 and
-**776 / 780** on 0062.
+The shipped `CornerModel.lap_corner_resolved` (#329) gives **220 / 456** cells resolved on 0060
+and **776 / 780** on 0062. The probe's per-boundary knot rule agrees with it cell for cell, and the
+probe refuses to report if it does not.
 
 **The failure is entirely the distance gate.** 0060's laps simply lie farther from the reference
 lap's trace. The question is why.

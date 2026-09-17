@@ -70,6 +70,7 @@ class Rec:
     resolved: np.ndarray  # (clean, boundaries) — a knot of the app's own warp, or on the line
     seam_laps: list[int]
     dropped_fraction: float
+    cells_shipped: np.ndarray  # (clean, corners) — `CornerModel.lap_corner_resolved`, as shipped
 
     def interior(self) -> np.ndarray:
         """Boundaries strictly inside the lap. C1's enter and C12's exit sit ON the timing line on
@@ -119,7 +120,8 @@ def load(key: str) -> Rec:
         resolved.append(knot | on_line)
     return Rec(key, cols, clean, int(s.best_lap_id()), frame, float(total_ref),
                np.asarray(resolved), _seam_laps(s, range(s.lap_count())),
-               float(s.timing_quality.dropped_fraction))
+               float(s.timing_quality.dropped_fraction),
+               np.asarray([s.corners.lap_corner_resolved(lid) for lid in clean], bool))
 
 
 @contextmanager
@@ -229,7 +231,11 @@ def probe(rec: Rec) -> None:
           f"{len(rec.frame)} boundaries ({int(inner.sum())} interior), total_ref "
           f"{rec.total_ref:.2f} m\n{'=' * 78}")
     cells = rec.resolved[:, 0::2] & rec.resolved[:, 1::2]
-    print(f"cells resolved by the app's own warp: {int(cells.sum())} / {cells.size}")
+    if not np.array_equal(cells, rec.cells_shipped):
+        raise SystemExit("this probe's per-boundary knot rule disagrees with "
+                         "CornerModel.lap_corner_resolved — fix the probe before reading it")
+    print(f"cells resolved (CornerModel.lap_corner_resolved): {int(rec.cells_shipped.sum())} / "
+          f"{rec.cells_shipped.size}; the per-boundary knot rule below agrees cell for cell")
 
     # ---- 1. which gate fails (the real function, one gate relaxed at a time)
     counts = dict.fromkeys(("matched", "search arc", "heading", "distance", "monotonic"), 0)
