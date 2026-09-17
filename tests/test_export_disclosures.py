@@ -478,12 +478,14 @@ def test_csv_gained_a_quality_column_and_flag_is_byte_identical():
     """`quality` is APPENDED; `flag` keeps its old vocabulary exactly.
 
     A consumer testing `flag == DROPOUT_FLAG` is the reader this ordering protects, and the column
-    goes last because everything past index 4 is already variable in number (splits, corner pairs)
-    — so anything reading that far reads by header name and appending breaks nothing."""
+    goes at the END because everything past index 4 is already variable in number (splits, corner
+    pairs) — so anything reading that far reads by header name and appending breaks nothing. C5's
+    `corners_interpolated` was appended after it on exactly that reasoning, which is why this
+    asserts `quality`'s POSITION relative to the base columns rather than that it is last."""
     s = make_session()
     header, laps, _trail = _csv_rows(s)
     assert header[:5] == ["lap", "time_s", "dist_m", "entry_kmh", "flag"], header[:5]
-    assert header[-1] == "quality", header
+    assert header[-2:] == ["quality", export_data.INTERPOLATED_COLUMN], header
     flag_i, qual_i = header.index("flag"), header.index("quality")
     flags = {r[flag_i] for r in laps}
     assert flags <= {"", export_data.DROPOUT_FLAG}, f"flag's vocabulary changed: {flags}"
