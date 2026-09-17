@@ -272,40 +272,51 @@ def probe(rec: Rec) -> None:
     both = np.isfinite(shipped_rows) & np.isfinite(new_rows)
 
     # ---- 5. the translation-invariant witness: did the boundaries move TOWARDS the track?
-    old_err, new_err = [], []
-    for r, lid in enumerate(others):
-        keep = both[r] & inner
-        if not keep.any():
-            continue
-        old_err.append(np.abs(_kappa_shift(rec, lid, np.where(keep, shipped_rows[r], np.nan)))[keep])
-        new_err.append(np.abs(_kappa_shift(rec, lid, np.where(keep, new_rows[r], np.nan)))[keep])
-    old_err = np.concatenate(old_err)
-    new_err = np.concatenate(new_err)
-    better = int(np.sum(new_err < old_err - 1e-9))
-    worse = int(np.sum(new_err > old_err + 1e-9))
-    print(f"5. curvature witness on the {len(old_err)} boundaries matched both ways — |longitudinal "
-          f"disagreement with the track's own shape|: shipped median {np.median(old_err):.2f} m / "
-          f"mean {old_err.mean():.2f}; de-drifted median {np.median(new_err):.2f} m / mean "
-          f"{new_err.mean():.2f}; better on {better}, worse on {worse}, unchanged on "
-          f"{len(old_err) - better - worse}")
+    candidates = {"de-drift only": _variant_rows(rec, drift=True),
+                  "both": _variant_rows(rec, drift=True, anchor=True)}
+    keep_all = np.isfinite(shipped_rows) & inner
+    for rows in candidates.values():
+        keep_all &= np.isfinite(rows)
+    scored = {"as shipped": shipped_rows, **candidates}
+    err = {}
+    for name, rows in scored.items():
+        err[name] = np.concatenate([
+            np.abs(_kappa_shift(rec, lid, np.where(keep_all[r], rows[r], np.nan)))[keep_all[r]]
+            for r, lid in enumerate(others) if keep_all[r].any()])
+    base = err["as shipped"]
+    print(f"5. curvature witness on the {len(base)} interior boundaries every variant matched — "
+          f"|longitudinal disagreement with the track's own shape|:")
+    for name in scored:
+        e = err[name]
+        better = int(np.sum(e < base - 1e-9))
+        worse = int(np.sum(e > base + 1e-9))
+        print(f"   {name:<16} median {np.median(e):.2f} m, mean {e.mean():.2f}, p90 "
+              f"{np.percentile(e, 90):.2f}" + ("" if name == "as shipped" else
+              f"; better on {better}, worse on {worse}, unchanged on {len(e) - better - worse}"))
 
     # ---- 6. THROUGH THE REAL APP: how many of #331's dashed cells become measurements
+    from studio import corners as corners_mod
+
     cm = rec.session.corners
     new_cells, new_edges = rec.resolved()
-    real_geometry, cm.geometry = cm.geometry, lambda: None
+    real_geometry, real_anchor = cm.geometry, corners_mod.anchor_offsets
+    corners_mod.anchor_offsets = lambda *a, **k: None
+    cm.invalidate_stats()
+    drift_cells, drift_edges = rec.resolved()
+    cm.geometry = lambda: None
     cm.invalidate_stats()
     old_cells, old_edges = rec.resolved()
-    cm.geometry = real_geometry
+    cm.geometry, corners_mod.anchor_offsets = real_geometry, real_anchor
     cm.invalidate_stats()
-    again_cells, _again_edges = rec.resolved()
-    if not np.array_equal(again_cells, new_cells):
+    if not np.array_equal(rec.resolved()[0], new_cells):
         raise SystemExit("the geometry memo did not restore — fix the probe before reading it")
-    print(f"6. CornerModel.lap_corner_resolved over {len(rec.clean)} clean laps: "
-          f"{int(old_cells.sum())}/{old_cells.size} cells -> {int(new_cells.sum())}/"
-          f"{new_cells.size} ({int((new_cells & ~old_cells).sum())} dashed cells become "
-          f"measurements, {int((old_cells & ~new_cells).sum())} go the other way); "
-          f"lap_edge_resolved {int(old_edges.sum())}/{old_edges.size} -> "
-          f"{int(new_edges.sum())}/{new_edges.size}")
+    for name, cells, edges in (("de-drift only", drift_cells, drift_edges),
+                               ("both", new_cells, new_edges)):
+        print(f"6. {name:<14} CornerModel.lap_corner_resolved over {len(rec.clean)} clean laps: "
+              f"{int(old_cells.sum())}/{old_cells.size} cells -> {int(cells.sum())} "
+              f"({int((cells & ~old_cells).sum())} dashed cells become measurements, "
+              f"{int((old_cells & ~cells).sum())} go the other way); lap_edge_resolved "
+              f"{int(old_edges.sum())}/{old_edges.size} -> {int(edges.sum())}")
     best_row = rec.clean.index(rec.best)
     print(f"   the reference lap {rec.best} still resolves every cell: "
           f"{bool(new_cells[best_row].all())} (edges {bool(new_edges[best_row].all())})")

@@ -102,15 +102,15 @@ def session(traces: dict, best: int = 0):
     return s
 
 
-def planted_session(best: int = 0):
-    """Five laps on one line, except lap 1 which the RECEIVER moved (a rigid translation) and
-    lap 2 which the DRIVER moved (4 m wide all the way round). Laps 0, 3 and 4 are the consensus."""
+def planted_session(best: int = 0, n: int = 10):
+    """`n` laps on one line, except lap 1 which the RECEIVER moved (a rigid translation) and lap 2
+    which the DRIVER moved (4 m wide all the way round). The rest are the consensus, and there are
+    at least `corners.ANCHOR_MIN_LAPS` of them so BOTH halves of the correction are live."""
     xs, ys = stadium()
-    return session({0: (xs, ys),
-                    1: (xs + PLANTED_M * 0.6, ys + PLANTED_M * 0.8),
-                    2: wider(xs, ys, PLANTED_M),
-                    3: (xs, ys),
-                    4: (xs, ys)}, best=best)
+    traces = {i: (xs, ys) for i in range(n)}
+    traces[1] = (xs + PLANTED_M * 0.6, ys + PLANTED_M * 0.8)
+    traces[2] = wider(xs, ys, PLANTED_M)
+    return session(traces, best=best)
 
 
 def total_of(s, lap_id):
@@ -189,6 +189,25 @@ def test_a_lap_the_receiver_moved_resolves_its_corners_again():
         assert all(s.corners.lap_corner_resolved(lap)), f"lap {lap} (on the line) regressed"
     print("ok a lap the receiver moved 4 m resolves every corner and every edge again "
           "(and resolved none of them without the fix)")
+
+
+def test_the_anchor_moves_only_where_a_consensus_could_be_fitted():
+    """The two halves need different amounts of evidence. De-drifting is DIFFERENTIAL — the
+    consensus cancels in T_lap − T_ref — so it runs from `corners.DRIFT_MIN_LAPS` laps. Moving the
+    anchor uses the consensus ABSOLUTELY, and a median over three laps is one lap's racing line, so
+    it waits for `corners.ANCHOR_MIN_LAPS`. Below that the anchor stays on the reference lap."""
+    small = planted_session(n=C.ANCHOR_MIN_LAPS - 1)
+    frame = [b for c in small.corners.corner_list() for b in (float(c.enter), float(c.exit))]
+    _t, rx, ry, _v, rc = small._lap_columns(0)
+    assert small.corners.geometry() is not None, "no geometry fitted above DRIFT_MIN_LAPS"
+    assert C.anchor_offsets(frame, small.corners.geometry(), 0, rx, ry, rc) is None, (
+        "the anchor moved on a session with too few laps to have a consensus")
+    assert all(small.corners.lap_corner_resolved(1)), "de-drifting stopped working without it"
+
+    big = planted_session(n=C.ANCHOR_MIN_LAPS + 2)
+    assert C.anchor_offsets(frame, big.corners.geometry(), 0, rx, ry, rc) is not None
+    print(f"ok the anchor waits for {C.ANCHOR_MIN_LAPS} laps; de-drifting runs from "
+          f"{C.DRIFT_MIN_LAPS}")
 
 
 def test_a_lap_the_driver_moved_is_not_rescued():
@@ -270,9 +289,38 @@ def test_a_lap_outside_the_clean_set_is_still_measured_against_the_consensus():
     print(f"ok a lap outside the consensus set is fitted on demand ({t[0]:+.2f}, {t[1]:+.2f})")
 
 
+def test_a_lap_wide_at_one_turn_and_tight_at_the_opposite_one_is_read_as_drift():
+    """THE HONEST LIMIT, pinned so nobody later reads it as a bug. A normal displacement that runs
+    one full cycle round the loop — WIDE at one turn, TIGHT at the turn facing the other way — IS a
+    rigid translation, not merely similar to one: a translation T shows up as n̂(s)·T, and n̂ turns
+    once per lap, so the two are the same function. NOTHING measured from position alone can
+    separate them, and this fit reads essentially the whole amplitude as drift.
+
+    It is the shape `tests/_synthetic.py`'s drift LADDER has (a raised cosine wide at turn 1 and
+    tight at turn 2), which is why that golden phase moves. It is also the ONE shape that gets
+    through: the parallel curve above — the same offset all the way round, which is what driving
+    wider actually looks like — has no such cycle and the fit refuses it outright."""
+    xs, ys = stadium()
+    s_arc = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))))
+    amp = 2.0
+    bump = amp * np.cos(2 * np.pi * s_arc / s_arc[-1])   # + at turn 1, − at turn 2
+    tx, ty = C._unit_tangents(xs, ys)
+    traces = {i: (xs, ys) for i in range(10)}
+    traces[1] = (xs - bump * ty, ys + bump * tx)
+    s = session(traces)
+    t = float(np.hypot(*s.corners.geometry().shift[1]))
+    assert 0.8 * amp <= t <= 1.2 * amp, (
+        f"a wide-here/tight-there lap of amplitude {amp} m fitted {t:.2f} m of shift — the "
+        f"degeneracy this test documents has changed shape")
+    print(f"ok wide at one turn and tight at the other ({amp:g} m) reads as {t:.2f} m of drift — "
+          f"the one displacement that IS a translation, documented rather than hidden")
+
+
 TESTS = [
     test_a_planted_translation_is_recovered_and_a_planted_wide_line_is_not,
+    test_a_lap_wide_at_one_turn_and_tight_at_the_opposite_one_is_read_as_drift,
     test_a_lap_the_receiver_moved_resolves_its_corners_again,
+    test_the_anchor_moves_only_where_a_consensus_could_be_fitted,
     test_a_lap_the_driver_moved_is_not_rescued,
     test_the_reference_lap_keeps_the_exact_identity_warp,
     test_a_session_with_no_drift_matches_bit_for_bit,

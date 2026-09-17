@@ -101,10 +101,19 @@ SPATIAL_MATCH_MAX_M = 3.0        # refined closest approach must be ≤ 3 m to c
 # same match as de-drifting each comparison lap by T_lap − T_ref with the anchor left alone — and
 # the reference lap still matches itself exactly, so its own windows are untouched.
 DRIFT_STATIONS = 256             # stations spread over the reference lap; 2 unknowns, so ample
-DRIFT_MIN_LAPS = 3               # fewer clean laps than this and a median is not a consensus
+DRIFT_MIN_LAPS = 3               # fewer clean laps than this and there is nothing to fit against
 DRIFT_MIN_STATIONS = 32          # fewer answering stations than this and the fit is not grounded
+# THE TWO HALVES NEED DIFFERENT AMOUNTS OF EVIDENCE, because only one of them uses the consensus
+# ABSOLUTELY. De-drifting is DIFFERENTIAL: the shift actually applied is T_lap − T_ref, and since
+# both are least-squares fits of (offset − consensus) against the same stations, the consensus
+# cancels exactly — `relative_shift` is the fit of the lap's offset from the reference lap and
+# nothing else. Moving the ANCHOR does use it absolutely, and a median over a handful of laps is
+# one or two laps' racing lines rather than the session's. The median of n laps carries a standard
+# error of about 1.25·sigma/sqrt(n); at n = 8 and the 1.16 m residual sigma measured on D24 0060
+# that is ±0.51 m, well inside the 3 m gate the correction is spent on, and both of the owner's
+# recordings have 38 and 65 clean laps. Below it the anchor stays on the reference lap.
+ANCHOR_MIN_LAPS = 8
 _DRIFT_ARC_FRAC = 0.05           # ±5 % of the lap searched for the nearest same-direction sample
-_DRIFT_TRIM_MAD = 3.0            # stations past this many MADs are refit-excluded (see _rigid_shift)
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,7 @@ class SessionGeometry:
     consensus: np.ndarray
     shift: dict[int, np.ndarray]
     residual_rms: dict[int, float]
+    n_laps: int
 
     def offsets(self, lap_xs, lap_ys, lap_cum) -> np.ndarray:
         """One lap's signed perpendicular offset from the reference lap at each station, with the
@@ -164,25 +174,30 @@ class SessionGeometry:
 
 def _rigid_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray) -> tuple[np.ndarray, float]:
     """The least-squares rigid 2D translation T with `off_i ≈ n̂_i · T`, and the RMS residual.
+    ((0, 0), 0.0) when too few stations answered to ground it.
 
-    TRIMMED ONCE, because this feeds a geometric correction and a single 5 m excursion must not
-    tilt it: stations whose first-pass residual exceeds `_DRIFT_TRIM_MAD` median-absolute-deviations
-    are dropped and T is refitted on the rest (the refit is skipped when it would leave too few).
-    Returns ((0, 0), 0.0) when there is nothing to fit."""
+    PLAIN LEAST SQUARES, AND DELIBERATELY SO. Two properties come from its LINEARITY and are worth
+    more here than robustness:
+      * the shift actually applied is T_lap − T_ref, and because both are fits of
+        (offset − consensus) over the same stations, the consensus cancels EXACTLY — de-drifting is
+        a fit of the lap's offset from the reference lap and nothing else, so a consensus estimated
+        from few or lopsided laps cannot bias it. Only the ANCHOR half uses the consensus itself,
+        and that one waits for `ANCHOR_MIN_LAPS`;
+      * one excursion cannot run away with it. The stations are spread over the whole lap, so a
+        5 m excursion spanning 12 of 256 of them can tilt T by at most about 5 × 12/256 = 0.23 m.
+    A one-pass MAD TRIM was tried here and REMOVED: on a near-noise-free lap the MAD collapses to
+    millimetres, the trim then keeps only the stations nearest the median residual — which on a
+    stadium loop are its two STRAIGHTS, where n̂ has no x component at all — and the refit on that
+    rank-deficient subset returned |T| = 53.9 m for a lap whose largest offset was 0.12 m. A
+    robust weighting that cannot become singular would need a conditioning guard as well, and the
+    bound above says there is nothing for it to buy."""
     ok = np.isfinite(off)
     if int(ok.sum()) < DRIFT_MIN_STATIONS:
         return np.zeros(2), 0.0
     a = np.column_stack([nx[ok], ny[ok]])
     y = off[ok]
     t, *_ = np.linalg.lstsq(a, y, rcond=None)
-    r = y - a @ t
-    mad = float(np.median(np.abs(r - np.median(r))))
-    if mad > 0:
-        keep = np.abs(r - np.median(r)) <= _DRIFT_TRIM_MAD * mad
-        if int(keep.sum()) >= DRIFT_MIN_STATIONS:
-            t, *_ = np.linalg.lstsq(a[keep], y[keep], rcond=None)
-            r = y - a @ t
-    return t, float(np.sqrt(np.mean(r ** 2)))
+    return t, float(np.sqrt(np.mean((y - a @ t) ** 2)))
 
 
 def _station_frame(stations, ref_xs, ref_ys, ref_cum):
@@ -266,7 +281,8 @@ def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
     for lid in ids:
         t, rms = _rigid_shift(offs[lid] - consensus, nx, ny)
         shift[lid], residual[lid] = t, rms
-    return SessionGeometry(stations, total_ref, frame, self_offset, consensus, shift, residual)
+    return SessionGeometry(stations, total_ref, frame, self_offset, consensus, shift, residual,
+                           len(ids))
 
 
 def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,
@@ -289,8 +305,15 @@ def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,
     and put the two in different frames. Sideways it cannot: the anchor keeps the reference lap's
     longitudinal position, while the distance the gate judges — a closest approach, i.e. a
     PERPENDICULAR distance to the comparison lap's line — is measured from the line the session
-    actually drove rather than from the one lap that happens to be fastest."""
-    if geometry is None:
+    actually drove rather than from the one lap that happens to be fastest. Measured on the two D24
+    recordings with a CURVATURE witness (heading-derived, so a translation cannot move it), this
+    half leaves the longitudinal placement of a boundary alone — mean disagreement with the track's
+    own shape 2.01 m de-drifted against 2.00 m with this as well on 0060, 0.81 against 0.81 on
+    0062 — while taking the interior boundaries matched there from 85.0 % to 95.5 %. It changes
+    WHETHER the gate accepts, not where the match lands, which is what perpendicular-only means.
+
+    Below `ANCHOR_MIN_LAPS` the consensus is not one, and the anchor stays on the reference lap."""
+    if geometry is None or geometry.n_laps < ANCHOR_MIN_LAPS:
         return None
     d_ref = np.asarray(d_ref, float)
     ref_xs = np.asarray(ref_xs, float)
