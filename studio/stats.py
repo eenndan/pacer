@@ -29,7 +29,10 @@ analysed over. The STINTS block below sets out why that is the only thing this a
 pit stop, why the threshold is in the track's own units, and why the absolute GPS epoch is not
 consulted. SPLITS (`split_matrix()` -> `SplitMatrix`) is pure presentation over
 `Session.lap_sector_splits`, and its constants exist to keep a heat grid from tinting the 10 Hz
-sample grid its interior columns are quantized to."""
+sample grid its interior columns are quantized to. CORNERS BY LAP (`corner_matrix()` ->
+`CornerMatrix`) is the same grid over the detected corners with one measured difference: a cell
+whose corner window was not matched on track at both edges is never marked and never sets the
+typical (CornerMatrix says why)."""
 
 from __future__ import annotations
 
@@ -501,8 +504,7 @@ class SplitMatrix:
         med = self.medians[col]
         if val is None or med is None:
             return False
-        return round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS) >= round(
-            self.scales[col], MATRIX_DECIMALS)
+        return _behind_at_print(val, med, self.scales[col])
 
     def is_best(self, row: int, col: int) -> bool:
         """Is this cell the sector's best — or timed level with it? `best_lap[col]` stays the one
@@ -513,6 +515,77 @@ class SplitMatrix:
         this same ★ and used to decide it on the raw doubles (see that helper for what the two
         rules cost on the owner's own recordings)."""
         return is_best_at_print(self.cells[row][col], self.bests[col], MATRIX_DECIMALS)
+
+
+@dataclass(frozen=True)
+class CornerMatrix:
+    """The laps × corners grid behind the Stats page's CORNERS BY LAP table: every clean lap's
+    time through every corner, with the corners where a lap lost notably more than usual marked.
+
+    WHY IT EXISTS. None of the owner's recordings carries a sector line (see stats_panel's
+    SECTORS_EMPTY), so SPLITS has never been visible on any of them, and every other per-corner surface is either ONE lap (the Corners page)
+    or a summary over all of them (CORNERS, BRAKING, Coaching). "Which laps lost time at C4?" had
+    no answer short of clicking through 38 or 65 laps.
+
+    THE MARK IS THE SPLIT GRID'S RULE, NOT A NEW ONE: the column's MEDIAN is the anchor and a
+    cell is ▼ at `_typical_and_scale`'s threshold, floored at MATRIX_SCALE_MIN_S. The floor's
+    reason there is the 10 Hz sample grid; corner times are interpolated and have no such grid, so
+    it was re-measured here as what it does to the marks. The check is independent of the time
+    itself: a lap that really lost time in a corner should usually carry a lower minimum speed
+    through it, and the minimum speed is read off the Doppler channel, not off the window edges.
+    Resolved cells only, both D24 recordings, floor → marks · share with a below-typical minimum:
+
+        floor           0.10    0.15    0.20    0.25    0.30    0.40
+        0060 (38 laps)  30·77%  30·77%  26·73%  23·74%  18·83%  11·82%
+        0062 (65 laps)  92·88%  78·88%  62·89%  46·91%  35·91%  21·90%
+
+    Shuffling the minimum speeds within each corner gives 51 % and 49 % for the 0.30 row (p95 12 of
+    18, 22 of 35). Every floor beats that; 0.30 is kept because it is the highest-agreement row on
+    both recordings AND the one that makes a ▼ read the same on both grids of the page.
+
+    WHY `resolved`. A lap's corner window is projected by ONE warp per lap
+    (`corners.project_boundaries`) whose knots are the boundaries that matched the reference lap
+    on track; a boundary that did not match is INTERPOLATED between its neighbours. Scored against
+    an independent time — the moment the lap crosses a gate drawn across the track at each
+    boundary — the two classes are different instruments:
+
+        cells with both edges matched    0060: 220 of 456   |Δ| median 0.004 s, p90 0.014, max 0.024
+                                         0062: 776 of 780   |Δ| median 0.001 s, p90 0.006, max 0.021
+        cells with an interpolated edge  0060: 236 of 456   |Δ| median 0.219 s, p90 0.579, max 0.886
+                                         0062:   4 of 780   |Δ| max 0.082 s (3 scorable)
+
+    On 0060 the interpolated cells' error is as large as the ▼ itself: of the 10 marks the plain
+    rule put on them that the gate could score, it agreed with 3; of the 20 it put on resolved
+    cells, with all 20. They also moved the median the ▼ is measured against, by up to 0.354 s
+    (C7). So an unresolved cell is SHOWN — it is the same number the Corners page prints for that
+    lap — but it is muted, never marked, and left out of the typical and the scale. On 0062 this
+    changes nothing (35 marks either way, all 27 the gate can score confirmed).
+
+    NO ★. The quickest time through a corner is the CORNERS table's Best, and on 0060 it sits on
+    an unresolved cell in C2, C6 and C8, where the gate time is 0.53, 0.41 and 0.29 s slower. A
+    grid whose purpose is "which lap lost time here" does not need a third rule for "quickest".
+
+    `cells[r][c]` is lap `lap_ids[r]`'s time through corner `cids[c]`, or None where the lap
+    projected no row. `medians` / `scales` are per column over the RESOLVED cells, None where
+    fewer than MATRIX_MIN_LAPS of them exist; `n_resolved[c]` is that count."""
+
+    lap_ids: list[int]
+    cids: list[int]
+    cells: list[list[float | None]]
+    resolved: list[list[bool]]
+    medians: list[float | None]
+    scales: list[float | None]
+    n_resolved: list[int]
+
+    def is_behind(self, row: int, col: int) -> bool:
+        """Is this RESOLVED cell notably slower than its corner's typical lap? Compared at print
+        resolution, exactly as SplitMatrix.is_behind."""
+        val = self.cells[row][col]
+        med = self.medians[col]
+        scale = self.scales[col]
+        if val is None or med is None or scale is None or not self.resolved[row][col]:
+            return False
+        return _behind_at_print(val, med, scale)
 
 
 @dataclass(frozen=True)
@@ -1210,14 +1283,68 @@ def split_matrix(lap_ids, splits_by_lap, columns: int | None = None) -> SplitMat
             scales.append(MATRIX_SCALE_MIN_S)
             continue
         k_best = min(col, key=lambda kv: kv[1])[0]
-        med = float(np.median([v for _, v in col]))
+        med, scale = _typical_and_scale([v for _, v in col])
         bests.append(cells[k_best][c])
         medians.append(med)
         best_lap.append(ids[k_best])
-        scales.append(max(MATRIX_SCALE_MIN_S,
-                          float(np.percentile([v - med for _, v in col], MATRIX_SCALE_PCT))))
+        scales.append(scale)
     return SplitMatrix(lap_ids=ids, columns=n_cols, cells=cells, bests=bests,
                        medians=medians, best_lap=best_lap, scales=scales)
+
+
+def _typical_and_scale(values) -> tuple[float, float]:
+    """One heat-grid column's two anchors: its MEDIAN, and how far above it a cell has to be to
+    read as behind — the MATRIX_SCALE_PCT percentile of the column's own deviations, floored at
+    MATRIX_SCALE_MIN_S. Shared by the sector and the corner grid so a ▼ means one thing on the
+    page (see MATRIX_SCALE_MIN_S for why the anchor is the median and why there is a floor)."""
+    med = float(np.median(values))
+    return med, max(MATRIX_SCALE_MIN_S,
+                    float(np.percentile([v - med for v in values], MATRIX_SCALE_PCT)))
+
+
+def _behind_at_print(val: float, med: float, scale: float) -> bool:
+    """The ▼ comparison, made on the values the reader is SHOWN (see SplitMatrix.is_behind)."""
+    return round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS) >= round(scale,
+                                                                              MATRIX_DECIMALS)
+
+
+def corner_matrix(lap_ids, cids, times_by_lap, resolved_by_lap) -> CornerMatrix | None:
+    """The laps × corners grid (see CornerMatrix). `times_by_lap[k]` is lap `lap_ids[k]`'s
+    time-in-corner list and `resolved_by_lap[k]` whether each of those windows had both edges
+    matched on track (`CornerModel.lap_corner_resolved`). A row whose length disagrees with the
+    corner count is kept but blanked, as in split_matrix.
+
+    None below MATRIX_MIN_LAPS laps or with no corner. A COLUMN with fewer than MATRIX_MIN_LAPS
+    resolved cells keeps its cells and gets no typical and no scale, so nothing in it is marked."""
+    ids = list(lap_ids)
+    cids = [int(c) for c in cids]
+    n_cols = len(cids)
+    if len(ids) < MATRIX_MIN_LAPS or n_cols == 0:
+        return None
+    cells: list[list[float | None]] = []
+    resolved: list[list[bool]] = []
+    for times, res in zip(times_by_lap, resolved_by_lap, strict=True):
+        times, res = list(times), list(res)
+        ok = (len(times) == n_cols and len(res) == n_cols
+              and all(np.isfinite(x) and x > 0 for x in times))
+        cells.append([float(x) for x in times] if ok else [None] * n_cols)
+        resolved.append([bool(x) for x in res] if ok else [False] * n_cols)
+    medians: list[float | None] = []
+    scales: list[float | None] = []
+    n_resolved: list[int] = []
+    for c in range(n_cols):
+        col = [row[c] for row, res in zip(cells, resolved, strict=True)
+               if row[c] is not None and res[c]]
+        n_resolved.append(len(col))
+        if len(col) < MATRIX_MIN_LAPS:
+            medians.append(None)
+            scales.append(None)
+            continue
+        med, scale = _typical_and_scale(col)
+        medians.append(med)
+        scales.append(scale)
+    return CornerMatrix(lap_ids=ids, cids=cids, cells=cells, resolved=resolved,
+                        medians=medians, scales=scales, n_resolved=n_resolved)
 
 
 def within_pct_of_best(values, pct: float) -> int | None:

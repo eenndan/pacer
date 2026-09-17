@@ -24,6 +24,13 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   on all three Sandown recordings C1 holds about twice the next place's coasting and separates.
   Zones grown from where the laps coast were built first and refused: their leader changed with
   the coverage threshold and merge gap chosen.
+- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
+  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
+  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
+  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
+  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
+  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
+  marked or counted in the typical.
 - **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
   seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
   ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed

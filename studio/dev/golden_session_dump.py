@@ -177,6 +177,10 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     # The Stats page's COASTING table (F5): per place, the coast seconds per lap and whether the
     # laps separate it from the leader — a user-facing ranking, so it is fingerprinted from birth.
     put("coast_report", lambda: _round(s.coast_report()))
+    # The Stats page's CORNERS BY LAP grid. Its cells are `lap_corner_stats` times (fingerprinted
+    # per lap below), but the typical, the scale and the marks are decided over the RESOLVED cells
+    # only, and that resolution is a read of the lap warps' knots that no other leaf exposes.
+    put("corner_matrix", lambda: _round(s.corner_matrix()))
 
     # Per-lap sweeps. Use a representative subset of valid laps (all of them — there are ~18).
     cids = [c.cid for c in guard(lambda: s.corners.corner_list(), default=[])]
@@ -192,6 +196,8 @@ def fingerprint(s, *, strict: bool = True) -> dict:
             lambda lid=lid: _round(s.sector_boundary_distances(lid)))
         row["lap_has_dropout"] = guard(lambda lid=lid: bool(s.lap_has_dropout(lid)))
         row["lap_corner_stats"] = guard(lambda lid=lid: _round(s.corners.lap_corner_stats(lid)))
+        row["lap_corner_resolved"] = guard(
+            lambda lid=lid: _round(s.corners.lap_corner_resolved(lid)))
         row["lap_corner_grip"] = guard(lambda lid=lid: _round(s.driving.lap_corner_grip(lid)))
         row["lap_brake_events"] = guard(lambda lid=lid: _round(s.driving.lap_brake_events(lid)))
         row["lap_coasting_spans"] = guard(lambda lid=lid: _round(s.driving.lap_coasting_spans(lid)))

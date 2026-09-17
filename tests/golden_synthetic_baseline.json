@@ -82,6 +82,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -224,6 +225,10 @@
      0.865764713631566,
      0.9073111246762499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 228.0,
@@ -310,6 +315,10 @@
     "lap_corner_grip": [
      0.970060740266392,
      1.0460889118119072
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -523,6 +532,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    8.416565202289595,
    7.55112853295304
@@ -15788,6 +15798,10 @@
      0.7602455567074966,
      0.7602455567055494
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 216.1059159801467,
@@ -15965,6 +15979,10 @@
      0.6897855561221172,
      0.7424588055298684
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 298.2516486922753,
@@ -16135,6 +16153,10 @@
      0.6754956155601488,
      0.703593787267423
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 265.07198243234785,
@@ -16304,6 +16326,10 @@
     "lap_corner_grip": [
      0.647741053034477,
      0.6807758891917984
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -16938,6 +16964,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    8.141853715014477,
    7.793777280334599
@@ -28930,6 +28957,10 @@
      0.7173604335268619,
      0.71736043352499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 201.10267824425773,
@@ -29093,6 +29124,10 @@
     "lap_corner_grip": [
      0.6858326967003374,
      0.685832800053749
+    ],
+    "lap_corner_resolved": [
+     false,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -29263,6 +29298,10 @@
     "lap_corner_grip": [
      0.6392656774593561,
      0.6392656920280506
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -29896,6 +29935,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    8.196308787334369,
    7.847556710984062
@@ -41888,6 +41928,10 @@
      0.7412286504159837,
      0.7412286504140226
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 232.3594235273592,
@@ -42084,6 +42128,10 @@
      0.6745050515450843,
      0.6745051071364738
     ],
+    "lap_corner_resolved": [
+     false,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 282.5590402226825,
@@ -42247,6 +42295,10 @@
     "lap_corner_grip": [
      0.7060766221761466,
      0.7060766252312987
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -42809,6 +42861,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -42951,6 +43004,10 @@
      0.865764713631566,
      0.9073111246762499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 228.0,
@@ -43037,6 +43094,10 @@
     "lap_corner_grip": [
      0.970060740266392,
      1.0460889118119072
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -43187,6 +43248,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -43329,6 +43391,10 @@
      0.865764713631566,
      0.9073111246762499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 228.0,
@@ -43415,6 +43481,10 @@
     "lap_corner_grip": [
      0.970060740266392,
      1.0460889118119072
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
