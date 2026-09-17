@@ -711,7 +711,7 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 #   D24 3 chapters           65   181288  -0.008 s     0.11 %        0.03 %
 #   Sandown chapter 1        23    47081  -0.164 s     4.52 %        3.75 %
 #   Sandown 3 chapters       59   118831  -0.052 s     0.47 %        0.38 %
-#   SD_30_08                 25    13621  -0.039 s     6.42 %        4.02 %
+#   SD_30_08                 23    44389  -0.280 s    12.01 %       10.96 %
 #   and on the start line the owner saved beside the recording (its .pacer.json), as the app opens it:
 #   Sandown chapter 1 †      24    49130  -0.013 s     0.10 %        0.05 %
 #   Sandown 3 chapters †     59   118823  -0.030 s     0.80 %        0.42 %
@@ -719,13 +719,15 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 #
 # The first five rows are the loader's own start line, which is how this table was first measured
 # (#211); D24 has no saved line, so its rows are also what the app shows. † rows restore the saved
-# one, and on SD_30_08 that is not a detail: the loader's line cuts its 46 s Sandown Park lap into
-# 12.9 s pieces, so the unmarked SD_30_08 row describes a segmentation rather than a lap. Recordings:
-# D24 is GX010062 alone and with GX020062 + GX030062; Sandown is GX010059 alone and with GX020059 +
-# GX030059; SD_30_08 is GX010065. tests/test_measured_figures.py re-measures every row from them.
+# one. On SD_30_08 the two lines now count the same 23 laps and cut them in different places, which
+# is all that separates the two rows. Until T13 they did not: the loader's line cut each 46 s
+# Sandown Park lap into a 13.3 s and a 34 s piece and counted 25 of the short ones, and the
+# unmarked row read -0.039 s over those. Recordings: D24 is GX010062 alone and with GX020062 +
+# GX030062; Sandown is GX010059 alone and with GX020059 + GX030059; SD_30_08 is GX010065.
+# tests/test_measured_figures.py re-measures every row from them.
 #
-# against end-of-lap values of +0.19 … +9.70 s. So it is a wobble of at most 0.25 s (0.16 s on the
-# loader's lines) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
+# against end-of-lap values of +0.48 … +11.81 s. So it is a wobble of at most 0.28 s (0.25 s on the
+# owner's saved lines) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
 # takes it back: over a segment, and over the lap, you cannot be ahead of the ideal. A two-way ramp
 # would flash the "ahead" hue on the app's LARGEST text for a tenth of a second to report something
 # that is not true at any granularity the ideal is defined on — so the DISPLAYED value is clamped

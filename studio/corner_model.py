@@ -198,21 +198,25 @@ class IdealSample(NamedTuple):
     |------------------|--------|----|----|----|-----|-------------------|
     | D24 1 chapter    | 68.184 | 67.776 | 67.424 | — | 67.403 (21) | 0.377 s |
     | D24 3 chapters   | 67.917 | 67.516 | 67.179 | 66.883 | 66.709 (65) | 0.326 s |
-    | Sandown ch 1 ‡   | 48.654 | 48.272 | 47.992 | — | 47.941 (23) | 0.324 s |
-    | Sandown 3 ch ‡   | 48.330 | 48.011 | 47.741 | 47.494 | 47.375 (59) | 0.268 s |
-    | SD_30_08 ‡       | 13.033 | 12.949 | 12.881 | — | 12.862 (25) | 0.074 s |
+    | Sandown ch 1     | 48.867 | 48.408 | 48.151 | — | 48.097 (24) | 0.340 s |
+    | Sandown 3 ch     | 48.290 | 47.933 | 47.633 | 47.382 | 47.265 (59) | 0.288 s |
+    | SD_30_08         | 46.768 | 46.594 | 46.455 | — | 46.430 (23) | 0.153 s |
 
-    WHICH ROWS ARE TRUE OF THE APP TODAY. The two D24 rows were re-measured after #300 warped
-    every lap (it removed the drift gate), through `Session.load` on `GX010062.MP4` alone (1
-    chapter) and on `GX010062` + `GX020062` + `GX030062` (3 chapters). Their `all` cells had moved
-    from 67.831 to 67.403 and from 66.781 to 66.709 — on 3 chapters the −0.071 s #300 measured for
-    its own change (MAX_DONOR_SPAN_DEV's block), to rounding. The D24 cells, gaps, decrements and
-    top-rung rates here are what tests/test_ideal_sample_table.py prints from its fixed seed when
-    pointed at that footage, so re-running it reproduces them rather than approximating them.
-    ‡ ROWS ARE NOT RE-MEASURED. They date from the #228 projection, before #300, and the Sandown
-    and SD_30_08 footage was not on the machine that re-measured the D24 rows. They are probably
-    stale by an amount of the same order. Do not quote a ‡ row as current. Re-measure it by
-    pointing the same check at that footage, then drop the mark.
+    WHICH ROWS ARE TRUE OF THE APP TODAY. All five, re-measured after #300 warped every lap (it
+    removed the drift gate), AS THE APP OPENS EACH RECORDING: `Session.load`, then the start line
+    the owner saved beside it, which `StudioWindow` applies before anything is drawn. D24 is
+    `GX010062.MP4` alone (1 chapter) and with `GX020062` + `GX030062` (3 chapters), and has no
+    saved line. Sandown is `GX010059` alone and with `GX020059` + `GX030059`, SD_30_08 is
+    `GX010065`, and both have one. The D24 `all` cells had moved from 67.831 to 67.403 and from
+    66.781 to 66.709 — on 3 chapters the −0.071 s #300 measured for its own change
+    (MAX_DONOR_SPAN_DEV's block), to rounding. The Sandown rows were measured before #300 on the
+    loader's line and moved by +0.156 s (chapter 1, which counts 24 laps on the saved line and 23
+    on the loader's) and −0.110 s. THE SD_30_08 ROW WAS NOT A LAP. It read 12.862 s over 25 "laps",
+    because until T13 the loader's line cut each 46 s Sandown Park lap into a 13.3 s and a 34 s
+    piece and counted the short ones (`load._fit_start_line`). Every cell, gap, decrement and
+    top-rung rate here is what tests/test_ideal_sample_table.py prints from its fixed seed when
+    pointed at that footage, so re-running it reproduces them rather than approximating them. A
+    row that has not been re-measured against the current app carries a ‡; none does today.
 
     THE RATE COLUMN IS THE WHOLE MEASURED RANGE — (5-lap cell − `all` cell) ÷ log2(laps ÷ 5) — so
     it is recomputable from the row's own two ends, and tests/test_ideal_sample_table.py recomputes
@@ -229,19 +233,21 @@ class IdealSample(NamedTuple):
     recording, and on D24 1 chapter the gap at the fitted line is 1.37 s over its 21 laps.
 
     THE BEST LAP HAS THE SAME PROPERTY, WHICH IS WHY THE DISCLOSURE IS PER RECORDING AND NOT PER
-    COLUMN. The best lap is also a minimum over the session's laps: measured the same way it falls
-    0.047 / 0.113 / 0.170 / 0.173 / 0.178 s per doubling on those five, against the ideal's
-    0.074 / 0.268 / 0.324 / 0.326 / 0.377 — LESS than the ideal on all five over the whole range.
-    (A best lap is a lap time, which #300 did not move. Re-run on the two D24 rows it gives
-    0.178 … 0.179 and 0.170 … 0.172 across seeds.) This docstring once claimed the best lap was
+    COLUMN. The best lap is also a minimum over the session's laps: measured the same way, row for
+    row, it falls 0.171 / 0.179 / 0.167 / 0.105 / 0.119 s per doubling on those five, against the
+    ideal's 0.377 / 0.326 / 0.340 / 0.288 / 0.153 — LESS than the ideal on all five over the whole
+    range. (A best lap is a lap time, which #300 did not move. Re-run on the two D24 rows it gives
+    0.170 … 0.172 and 0.178 … 0.179 across seeds.) This docstring once claimed the best lap was
     the more sample-dependent of the two on two of them. That was the old last-rung rate on the
     old projection, and it survives neither: at the top rung (20 → 21 laps) D24 1 chapter reads
-    0.299 ideal against 0.189 best. The best lap is still not a column a ranking can trust —
-    0.05 … 0.18 s per doubling is the same order of magnitude as the ideal's, and on SD_30_08's
-    own last doubling (20 → 25 laps) the best lap moved MORE than the ideal did, 0.070 s against
-    0.060 (‡, not re-measured). Suppressing the ideal's ranking while leaving the best lap's alone
-    would advertise a distinction the numbers do not support; naming the sample fixes both. See
-    studio/library_dialog.py's Laps column.
+    0.299 ideal against 0.189 best. It also cited SD_30_08's last doubling, where the best lap
+    moved more than the ideal (0.070 s against 0.060 over 20 → 25 laps); those 25 laps were the
+    13 s pieces, and on its 23 real laps the top rung (20 → 23 laps) reads 0.124 ideal against
+    0.070 best. So no recording here has the best lap moving more, and the argument never needed
+    one: the best lap is still not a column a ranking can trust, because 0.10 … 0.18 s per
+    doubling is the same order of magnitude as the ideal's. Suppressing the ideal's ranking while
+    leaving the best lap's alone would advertise a distinction the numbers do not support; naming
+    the sample fixes both. See studio/library_dialog.py's Laps column.
 
     `corners` / `segments` are the partition's size, and they move when the corner detector re-runs
     — which it does on every start/finish-line drag. Measured over six start-line positions per
@@ -464,8 +470,13 @@ class SegmentBests:
         | Sandown 3 ch   | 15 | −0.602 | −0.596   | **0.019** |
         | SD_30_08       |  5 | −0.905 | −0.900   | 0.067 (exact, 120 permutations) |
 
-        One of five is distinguishable from chance, and the strongest r sits on the recording with
-        FIVE segments, where n makes p ≥ 0.017 unreachable at any effect size. A residual negative
+        THIS TABLE IS FROM BEFORE #300 AND IS NOT RE-MEASURED, and its SD_30_08 row is not of laps:
+        its five segments are two corners of the 13 s pieces the loader's start line cut from a
+        46 s lap until T13, where a whole lap has 15. The table's method does not reproduce on
+        today's D24 either (one chapter gives n 23, r +0.058), so the row is marked here rather
+        than replaced beside four rows from another tree. One of five is distinguishable from
+        chance, and the strongest r sits on the recording with FIVE segments, where n makes
+        p ≥ 0.017 unreachable at any effect size. A residual negative
         correlation is also what a real track produces — a short piece of road has less room to
         differ, so more laps land level with the subject — and because the statistic is provably
         invariant to scale, that correlation is a fact about the driving, not about the units. The
@@ -915,11 +926,11 @@ class CornerModel:
         time) instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the
         Sandown recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is
         nowhere near anything anybody drove — and following the donor cut that to −0.159 s. After
-        #300 warped every lap the worst excursion is **−0.246 s**, on SD_30_08 with the owner's
-        saved start line (4.52 % of samples on Sandown chapter 1 and 6.42 % on SD_30_08 are
-        negative on the loader's lines — the per-recording table is in `theme.format_ideal_run`'s
-        note), which is then a real "you were up on the ideal through here" rather than an
-        artefact of the drawing.
+        #300 warped every lap the worst excursion is **−0.280 s**, on SD_30_08 on the loader's own
+        start line (−0.246 s on the owner's saved one; 4.52 % of samples on Sandown chapter 1 and
+        12.01 % on SD_30_08 are negative on the loader's lines — the per-recording table is in
+        `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
+        here" rather than an artefact of the drawing.
 
         Those figures read −0.052 s / "under 1 %" until #211 redid this sweep: the original was
         measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the

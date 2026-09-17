@@ -434,7 +434,7 @@ def test_the_hero_never_prints_a_minus_sign_against_the_ideal():
     At every partition EDGE the ideal took the minimum over the clean laps, so Δideal >= 0 there
     and at the flag. INSIDE a segment it replays its donor's pace, and a lap that carries more
     speed through the same corner is transiently ahead of it: this fixture's lap 1 reaches
-    -0.077 s, and on the owner's recordings the floor is -0.246 s (SD_30_08 on its saved start line;
+    -0.077 s, and on the owner's recordings the floor is -0.280 s (SD_30_08 on the loader's line;
     theme.py tabulates every recording above format_ideal_run). Negative is
     real information about a donor's pace, and it is NOT "you beat your ideal" — over any segment,
     and over the lap, that cannot happen. So the app's largest text clamps it at zero rather than
@@ -550,8 +550,10 @@ def test_the_hero_says_on_screen_that_its_ideal_readout_is_floored():
     """F3. `theme.format_ideal_run` clamps the DISPLAYED Δideal at 0 and the Δ chart 130 px below
     draws the same quantity UNCLAMPED — deliberately, both of them. But the clamp was stated only
     in a source comment, so on the default screen (best lap selected → the chart is baselined to
-    the ideal) the two surfaces visibly disagree: on SD_30_08 the curve sits 8.9 px below its own
-    y = 0 line on 297 of 1 308 frames while the hero above it prints `+0.00`.
+    the ideal) the two surfaces can disagree: on D24 one chapter the curve sits up to 1.4 px below
+    its own y = 0 line on 190 of 6 878 frames while the hero above it prints `+0.00`, and with any
+    other lap selected the dip reaches the floor table's -0.280 s. (It was first measured on
+    SD_30_08 at 8.9 px over 297 of 1 308 frames — on a 13 s piece of a 46 s lap, T13.)
 
     The clause appears exactly where the clamp is doing visible work, in BOTH toggle states, and
     is silent otherwise — a note on every frame would be noise about a number that is usually

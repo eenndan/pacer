@@ -483,10 +483,16 @@ def test_the_floor_table_is_consistent_with_its_own_definitions():
         assert (r.floor > -eps) <= (r.minus == 0.0), f"{r!r}: floor above -{eps} yet a minus sign printed"
         assert r.minus == 0.0 or r.floor < -eps, r
     text = _flatten(_read(_THEME))
-    m = _need(r"a wobble of at most (\d\.\d\d) s \((\d\.\d\d) s on the loader's lines\)", text,
+    m = _need(r"a wobble of at most (\d\.\d\d) s \((\d\.\d\d) s on the owner's saved lines\)", text,
               "the wobble sentence under the floor table")
     assert float(m.group(1)) == round(max(-r.floor for r in rows), 2), (m.group(1), rows)
-    assert float(m.group(2)) == round(max(-r.floor for r in rows if not r.saved), 2), (m.group(2), rows)
+    assert float(m.group(2)) == round(max(-r.floor for r in rows if r.saved), 2), (m.group(2), rows)
+    # T13: "the two lines now count the same N laps" on SD_30_08 is a claim about two rows' cells.
+    # When it was false, the loader's row counted 25 pieces of a lap against the saved line's 23.
+    m = _need(r"On SD_30_08 the two lines now count the same (\d+) laps", text, "the SD_30_08 line sentence")
+    sd = {r.saved: r.laps for r in rows if r.name == "SD_30_08"}
+    assert sd == {False: int(m.group(1)), True: int(m.group(1))}, (
+        f"theme.py says both SD_30_08 lines count {m.group(1)} laps; its rows count {sd}")
     # D24 carries no saved line: a † D24 row would claim a restore that cannot happen.
     assert not [r for r in rows if r.saved and r.name.startswith("D24")], rows
     print(f"test_the_floor_table_is_consistent_with_its_own_definitions OK ({len(rows)} rows)")
@@ -502,14 +508,14 @@ def test_every_quote_of_the_floor_is_a_row_of_the_table():
     rows = _floor_rows()
     deepest = f"{min(r.floor for r in rows):.3f}"
     cells = {c for r in rows for c in (r.neg, r.minus)}
-    ends = _need(r"against end-of-lap values of \+(\d\.\d\d) … \+(\d\.\d\d) s", _flatten(_read(_THEME)),
+    ends = _need(r"against end-of-lap values of \+(\d+\.\d\d) … \+(\d+\.\d\d) s", _flatten(_read(_THEME)),
                  "theme.py's end-of-lap range").groups()
     found, problems = [], []
     for rel, text in _scanned():
         for sentence in re.split(r"(?<=[.!?])\s+", text):
             if "#211" in sentence or "before #300" in sentence:
                 continue
-            for m in re.finditer(r"end-of-lap values of \+(\d\.\d\d) … \+(\d\.\d\d) s", sentence):
+            for m in re.finditer(r"end-of-lap values of \+(\d+\.\d\d) … \+(\d+\.\d\d) s", sentence):
                 found.append(rel)
                 if m.groups() != ends:
                     problems.append(f"{rel}: end-of-lap values +{m.group(1)} … +{m.group(2)} s, theme.py "
@@ -826,7 +832,7 @@ def test_the_floor_table_matches_the_footage():
                          f"{got[3]:>9.2f} %{got[4]:>12.2f} %")
             if got != (r.laps, r.samples, r.floor, r.neg, r.minus):
                 problems.append(f"{r!r}: measured {got}")
-    m = _need(r"against end-of-lap values of \+(\d\.\d\d) … \+(\d\.\d\d) s", text, "the end-of-lap range")
+    m = _need(r"against end-of-lap values of \+(\d+\.\d\d) … \+(\d+\.\d\d) s", text, "the end-of-lap range")
     if ends and (float(m.group(1)), float(m.group(2))) != (round(min(ends), 2), round(max(ends), 2)):
         problems.append(f"end-of-lap values {min(ends):.3f} … {max(ends):.3f}, prose {m.groups()}")
     m = _need(r"whose job is to read 0 … \+(\d\.\d) s", text, "the readout's range")

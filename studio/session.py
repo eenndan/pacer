@@ -3158,7 +3158,7 @@ class Session:
 
         IT IS A FUNCTION OF HOW MANY LAPS YOU RECORDED, and a surface that prints it without
         `ideal_sample()` is inviting the reader to compare two numbers that are not comparable.
-        Measured over random subsets of the clean laps it falls 0.07 … 0.38 s per DOUBLING of lap
+        Measured over random subsets of the clean laps it falls 0.15 … 0.38 s per DOUBLING of lap
         count on the owner's five recordings, with no plateau; the full table, the best-lap
         control and the partition sensitivity are in `corner_model.IdealSample`."""
         sb = self.ideal_segment_bests()
@@ -3235,9 +3235,9 @@ class Session:
 
         The excursions are SMALL, and the measured numbers are the ones in `theme.py`'s
         `format_ideal_run` note (the single place this sweep is tabulated per recording): the
-        floor is **−0.246 s**, on SD_30_08 with the owner's saved start line, and 4.52 % of samples
-        on Sandown chapter 1 / 6.42 % on SD_30_08 are negative at all on the loader's own lines,
-        against end-of-lap values of +0.19 … +9.70 s. Drawing the ideal's interior as a straight
+        floor is **−0.280 s**, on SD_30_08 on the loader's own start line (−0.246 s on the one the
+        owner saved), and 4.52 % of samples on Sandown chapter 1 / 12.01 % on SD_30_08 are
+        negative at all on the loader's own lines, against end-of-lap values of +0.48 … +11.81 s. Drawing the ideal's interior as a straight
         line instead — which is what a partition composite does if it does not consult its donors
         — put that at −0.87 s on 18.4 % of samples when #211 measured it; see
         `CornerModel.ideal_elapsed`.

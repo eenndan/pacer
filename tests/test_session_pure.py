@@ -975,9 +975,9 @@ def test_delta_to_ideal_is_non_negative_at_the_partition_edges():
     information, and the reason nothing here clamps or asserts pointwise ≥ 0.
 
     Measured on the real recordings at 25 ms of media clock (the table above
-    theme.format_ideal_run): the most negative value is −0.246 s, on SD_30_08 with its saved start
-    line, and at most 6.42 % of samples are negative on any recording, against end-of-lap values of
-    +0.19 … +9.70 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
+    theme.format_ideal_run): the most negative value is −0.280 s, on SD_30_08 on the loader's own
+    start line, and at most 12.01 % of samples are negative on any recording, against end-of-lap
+    values of +0.48 … +11.81 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
     small in between — so a future change that makes the interior wander gets caught."""
     s, ids = make_ideal_session()
     sb = s.ideal_segment_bests()
@@ -1162,7 +1162,7 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
     the session was, and the number on its own is not comparable between sessions.
 
     Measured on the owner's five recordings over random subsets of the clean laps (20,000 draws
-    per N), `ideal_total` falls 0.074 / 0.268 / 0.324 / 0.326 / 0.377 s per DOUBLING of lap count
+    per N), `ideal_total` falls 0.153 / 0.288 / 0.326 / 0.340 / 0.377 s per DOUBLING of lap count
     with no plateau — on D24's three chapters the same driving reads a 0.95 s gap over 5 laps and
     a 1.49 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
     on, in a form that fails if the composite ever stops being a minimum.
