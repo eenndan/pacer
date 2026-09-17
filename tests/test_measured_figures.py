@@ -1315,15 +1315,25 @@ def _recombination(s) -> dict[str, float]:
     import numpy as np
 
     sb = s.ideal_segment_bests()
-    times, admitted = np.asarray(sb.times, float), np.asarray(sb.admitted, bool)
+    times = np.asarray(sb.times, float)
+    # C5: a cell may donate only when it is BOTH admitted (MAX_DONOR_SPAN_DEV) and resolved (its two
+    # boundaries matched on track). This stand-in re-runs the composite over subsets, so it has to
+    # mask exactly as `CornerModel.segment_bests` does — including the two-stage fallback, a column
+    # with nothing resolved dropping back to its admitted cells rather than to every cell.
+    span = np.asarray(sb.admitted, bool)
+    admitted = span & np.asarray(sb.resolved, bool)
     lap_times = np.asarray([s.lap_time(i) for i in sb.lap_ids], float)
     ideal, best = float(s.ideal_total()), float(s.lap_time(s.best_lap_id()))
 
-    def ideal_of(t, a):
+    def ideal_of(t, a, sp=None):
+        sp = a if sp is None else sp
+        empty = ~a.any(axis=0)
+        a = np.where(empty[None, :], sp, a)
         m = np.where(a, t, np.inf).min(axis=0)
         return float(np.where(np.isinf(m), t.min(axis=0), m).sum())
 
-    assert abs(ideal_of(times, admitted) - ideal) < 1e-9, "the stand-in no longer reproduces the ideal"
+    assert abs(ideal_of(times, admitted, span) - ideal) < 1e-9, (
+        "the stand-in no longer reproduces the ideal")
     cols = [times[admitted[:, j], j] if admitted[:, j].any() else times[:, j] for j in range(times.shape[1])]
     grid, pmf = 0.001, np.array([1.0])
     for c in cols:
@@ -1335,7 +1345,7 @@ def _recombination(s) -> dict[str, float]:
     moves = []
     for k in range(times.shape[0]):
         keep = np.arange(times.shape[0]) != k
-        moves.append(abs(ideal_of(times[keep], admitted[keep]) - ideal))
+        moves.append(abs(ideal_of(times[keep], admitted[keep], span[keep]) - ideal))
     sd = math.sqrt(sum(float(np.var(c)) for c in cols))
     return {"laps": len(sb.lap_ids), "ideal": round(ideal, 3), "best": round(best, 3),
             "lo": round(sum(float(c.min()) for c in cols), 3), "hi": round(sum(float(c.max()) for c in cols), 3),
