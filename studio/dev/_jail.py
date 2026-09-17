@@ -17,6 +17,11 @@ whose pixels change with who ran it is not a regression tool.
 
 `tests/test_golden_hermetic.py` pins the seam list here against an AST scan of `studio/`, so a
 module that grows a fifth `_app_support_dir` turns the suite red instead of quietly escaping.
+
+**A patch stops at the process boundary.** Patching the seams moves THIS interpreter; a child
+process the harness spawns imports the stores fresh and resolved the user's real directory. So the
+jail is also exported as `PACER_APP_SUPPORT_DIR`, which every seam honours through
+`studio.app_support.resolve` (H8; pinned by `tests/test_app_support_jail.py`).
 """
 from __future__ import annotations
 
@@ -24,9 +29,11 @@ import os
 import tempfile
 from typing import NamedTuple
 
+from studio import app_support
+
 # The user's real app-support dir, spelled exactly as the store modules spell it. Used only to
 # recognise an un-diverted seam — nothing here ever writes to it.
-_REAL_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "pacer")
+_REAL_DIR = app_support.real_dir()
 
 
 class Jail(NamedTuple):
@@ -60,4 +67,5 @@ def divert_app_support(prefix: str) -> Jail:
     target = current if already_diverted else tempfile.mkdtemp(prefix=prefix)
     for _mod in (demo, focus, library, marks, prefs, session_record, track_db):
         _mod._app_support_dir = lambda t=target: t  # type: ignore[attr-defined]
+    os.environ[app_support.DIR_ENV] = target      # ...and every process this one starts
     return Jail(target, not already_diverted)

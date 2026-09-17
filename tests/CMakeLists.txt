@@ -1212,3 +1212,25 @@ add_test(NAME test_marks
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_marks.py)
 set_tests_properties(test_marks PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# NO TEST MAY REACH THE OWNER'S REAL APP-SUPPORT DIRECTORY (H8). On 2026-09-17 a ctest run wrote a
+# `stadium` row from the synthetic fixture into the owner's real library.json: test_load_failure
+# patched no seam, and its library write had been dead only while a test double raised first.
+# Every jail was an in-process patch, opt-in per file and invisible to child processes. This file
+# pins the environmental rule in studio/app_support.py in every form a test process takes — this
+# process, a `python -c` child, a test file run by hand, a jailed harness's child — plus the
+# negative control that the app itself still resolves the real directory, and that EVERY
+# registration below carries the jail flag. Children get a throwaway HOME. No Qt, no telemetry.
+add_test(NAME test_app_support_jail
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_app_support_jail.py)
+set_tests_properties(test_app_support_jail PROPERTIES
+                     ENVIRONMENT "PACER_CTEST_COMMAND=${CMAKE_CTEST_COMMAND};PACER_CTEST_DIR=${CMAKE_BINARY_DIR}")
+
+# KEEP THIS LAST. Every registration above runs with PACER_APP_SUPPORT_JAIL=1: the first store path
+# any process in the test's tree resolves is a fresh temp dir (exported to its children, removed at
+# exit), never ~/Library/Application Support/pacer — whether or not the test patched a seam. A test
+# registered BELOW this loop misses it, and test_app_support_jail fails the build naming it.
+get_property(_pacer_registered_tests DIRECTORY PROPERTY TESTS)
+foreach(_pacer_test IN LISTS _pacer_registered_tests)
+    set_property(TEST ${_pacer_test} APPEND PROPERTY ENVIRONMENT "PACER_APP_SUPPORT_JAIL=1")
+endforeach()

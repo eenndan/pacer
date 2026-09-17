@@ -93,12 +93,13 @@ import math
 import os
 import shutil
 
+from . import app_support
+
 _log = logging.getLogger(__name__)
 
 VERSION = 1
 
 _FILENAME = "session_records.json"
-_APP_DIR_NAME = "pacer"
 
 # The conditions TAG — the one field the Library filters on, so it is a closed vocabulary rather
 # than free text ("wet", "Wet", "very wet" and "damp/wet" are four buckets nobody wants). Four
@@ -138,9 +139,9 @@ STICKY_FIELDS = ("tyre_set", "pressure_unit", "chassis", "sprocket_front", "spro
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). The single seam the
     tests monkeypatch, so the suite never touches the user's real records (mirrors
-    ``library._app_support_dir`` / ``prefs._app_support_dir``)."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    ``library._app_support_dir`` / ``prefs._app_support_dir``, resolved through
+    ``app_support.resolve``)."""
+    return app_support.resolve()
 
 
 def records_path() -> str:
