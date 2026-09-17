@@ -63,12 +63,33 @@ def my_litgen_options() -> litgen.LitgenOptions:
     # surface: ApproxEqual (the single epsilon-equality used by Segment::operator==),
     # Interpolate (the crossing interpolation Split uses) and the ToPoint local-space
     # coordinate shims. ToLonLat stays bound (the deliberately-named degrees->Point API).
-    options.fn_exclude_by_name__regex = "^ApproxEqual$|^Interpolate$|^ToPoint$"
+    #
+    # Segment::Intersects is excluded for a different reason: it answers through a
+    # `double *ratio` OUT-PARAMETER, and litgen binds that as a by-value `float` argument.
+    # The call then type-checks, returns the right bool, writes the crossing fraction into a
+    # temporary and drops it — `seg.intersects(a, b, 0.0)` returned True with the caller's
+    # 0.0 untouched where the answer was 0.25. A binding that looks like it works and
+    # silently loses its output is worse than none. `Segment::IntersectionRatio` (same
+    # arithmetic — Intersects is an adapter over it) returns std::optional<double> and binds
+    # as `intersection_ratio(fst, snd) -> float | None`, which is the Python entry point.
+    options.fn_exclude_by_name__regex = "^ApproxEqual$|^Interpolate$|^ToPoint$|^Intersects$"
 
     # GPMFSource(size_t mp4handle) adopts an already-opened gpmf-parser MP4 handle — from
     # Python a junk integer would be dereferenced as a raw pointer and segfault the process.
     # Keep it C++-only; the GPMFSource(filename) constructor remains the Python entry point.
     options.fn_exclude_by_name_and_signature = {"GPMFSource": "size_t"}
+
+    # ////////////////////////////////////////////////////////////////////
+    # Stub spelling for std::optional
+    # ////////////////////////////////////////////////////////////////////
+    # litgen's stock replacement renders `std::optional<T>` as `Optional[T]`, but the stub's
+    # `from typing import ...` preamble lives OUTSIDE the <litgen_stub> markers (litgen
+    # preserves it verbatim) and does not import `Optional` — so the first optional-returning
+    # binding would leave an undefined name in the shipped stub. `T | None` is the py311+
+    # spelling and needs no import at all, which removes the coupling to that preamble
+    # permanently. Registered FIRST so it wins over the stock rule; the element type is still
+    # mapped afterwards (`std::optional<double>` -> `double | None` -> `float | None`).
+    options.type_replacements.add_first_replacement(r"\bstd::optional<(.*?)>", r"\1 | None")
 
     # ////////////////////////////////////////////////////////////////////
     # Format the python stubs with black

@@ -66,15 +66,28 @@ bool ApproxEqual(const Point &a, const Point &b, double eps = 1e-6);
 struct Segment {
   Point first, second;
 
-  // True iff this segment and fst->snd cross PROPERLY. Both straddle tests use
-  // strict signs, so a touch — an endpoint of either segment lying exactly on
-  // the other's supporting line — is NOT a crossing (pinned by
-  // tests/test_geometry, including that a trace vertex sitting exactly on a
-  // timing line produces no crossing from either adjacent segment). On a true
-  // return, if `ratio` is non-null it gets the crossing's fraction along
-  // fst->snd, so fst*(1-ratio) + snd*ratio is the intersection point (Split
-  // uses it to interpolate the crossing sample/time). `ratio` is untouched on
-  // false.
+  // The fraction along fst->snd at which it PROPERLY crosses this segment.
+  // There is no value when it does not cross (nullopt in C++, None in Python).
+  // On a crossing, fst*(1-ratio) + snd*ratio is the intersection point — that
+  // is how Split interpolates the crossing sample and its time.
+  //
+  // Both straddle tests use strict signs, so a touch — an endpoint of either
+  // segment lying exactly on the other's supporting line — is NOT a crossing
+  // (pinned by tests/test_geometry, including that a trace vertex sitting
+  // exactly on a timing line produces no crossing from either adjacent
+  // segment). That strictness is what stops one pass being counted twice.
+  //
+  // This is the ONE implementation of the crossing test; the out-parameter
+  // form (Intersects) is a thin adapter over it, so the two cannot disagree.
+  // It is also the form Python is given, because an out-parameter cannot be
+  // read from Python — see the note in bindings/pacer/generate-bindings.py.
+  std::optional<double> IntersectionRatio(Point fst, Point snd) const;
+
+  // C++-only out-parameter spelling of `IntersectionRatio`, kept because that
+  // is what Split and the crossing tests read: true iff the segments cross,
+  // and on a true return `ratio`, when non-null, gets the fraction. `ratio` is
+  // untouched on false. NOT bound into Python (litgen would hand Python a
+  // `double` by value and silently drop the answer).
   bool Intersects(Point fst, Point snd, double *ratio) const;
 
   bool operator==(const Segment &other) const;
