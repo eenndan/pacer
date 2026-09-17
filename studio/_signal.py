@@ -598,11 +598,18 @@ def _banded_out_lap_ids(laps) -> list[int]:
     Returned so the UI can SHOW that a real-looking lap was left out of the times / bests instead
     of silently dropping it (the `_band_lap_ids` filter removes such a lap so it can't be crowned
     'best' and poison the analysis — but the driver still ran it and may wonder where it went).
-    Reuses `_band_lap_ids` unchanged (so `valid_lap_ids` stays byte-identical), touching only the
-    same read accessors — it imports no pacer and stays pure. The single source for
-    Session.excluded_lap_ids."""
+    Reuses the `_band_lap_ids` classification unchanged (so `valid_lap_ids` stays byte-identical),
+    touching only the same read accessors — it imports no pacer and stays pure."""
+    return _excluded_laps(laps)[0]
+
+
+def _excluded_laps(laps) -> tuple[list[int], dict[int, str]]:
+    """``(_banded_out_lap_ids, _excluded_lap_reasons)`` from ONE classification pass — the single
+    source for Session.excluded_lap_ids and Session.excluded_lap_reasons, which fill their two
+    memos together so the list and its reasons can never come from different segmentations."""
     substantial = [i for i in range(laps.laps_count())
                    if laps.sample_count(i) >= MIN_LAP_SAMPLES
                    and laps.lap_time(i) >= MIN_LAP_TIME]
-    valid = set(_band_lap_ids(laps))
-    return [i for i in substantial if i not in valid]
+    valid_ids, reasons = _classify_laps(laps)
+    valid = set(valid_ids)
+    return [i for i in substantial if i not in valid], reasons

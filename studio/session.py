@@ -59,8 +59,7 @@ from ._signal import (
     LAP_DIST_BAND_LO,
     SMOOTH_WINDOW,
     _band_lap_ids,
-    _banded_out_lap_ids,
-    _excluded_lap_reasons,
+    _excluded_laps,
     _lap_closure,
     exclusion_detail,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
@@ -1853,16 +1852,17 @@ class Session:
         }
 
     def excluded_lap_ids(self) -> list[int]:
-        """Substantial laps LEFT OUT of `valid_lap_ids` — a mis-segmented short/long lap, an
-        out-lap, an in-lap, or a lap the kart STOPPED on. They cleared the coarse sample/time gate
-        (so they look like laps the driver ran, not a brief sliver) but their time/distance is off
-        the session median, or they carry a stationary stretch of `_signal.MAX_STOPPED_S` or more,
-        so they feed NO time / best / coaching / map value. Surfaced by the lap panel so a dropped
-        lap isn't invisible. Memoized like `valid_lap_ids`, cleared on re-segmentation;
-        single-sourced in `_signal._banded_out_lap_ids`."""
+        """Substantial laps LEFT OUT of `valid_lap_ids` — a piece of a lap that does not end where
+        it started, a mis-segmented short/long lap, an out-lap, an in-lap, or a lap the kart STOPPED
+        on. They cleared the coarse sample/time gate (so they look like laps the driver ran, not a
+        brief sliver) but fail the closure test, sit off the session median, or carry a stationary
+        stretch of `_signal.MAX_STOPPED_S` or more, so they feed NO time / best / coaching / map
+        value. Surfaced by the lap panel so a dropped lap isn't invisible. Memoized like
+        `valid_lap_ids`, cleared on re-segmentation, and filled TOGETHER with
+        `excluded_lap_reasons` from one pass; single-sourced in `_signal._excluded_laps`."""
         if self._excluded_cache is not None:
             return self._excluded_cache
-        self._excluded_cache = _banded_out_lap_ids(self.laps)
+        self._excluded_cache, self._excluded_reasons_cache = _excluded_laps(self.laps)
         return self._excluded_cache
 
     def excluded_lap_reasons(self) -> dict[int, str]:
@@ -1870,20 +1870,19 @@ class Session:
         `_signal.EXCLUDED_OPEN` (it does not end where it started — a piece cut by a start line
         that reaches a second stretch of track), `EXCLUDED_BAND` (its time or distance is off the
         session median) or `EXCLUDED_STOPPED` (it contains a stop). The ⊘ surfaces name it, so an
-        excluded lap is shown WITH its reason. Memoized with the other lap sets and cleared on
-        re-segmentation; single-sourced in `_signal._excluded_lap_reasons`.
+        excluded lap is shown WITH its reason.
 
-        getattr-guarded for the bare `Session.__new__` doubles, which seed `_excluded_cache` only:
-        with no memo and no `laps` there is nothing to explain, so it answers {} rather than
-        reaching for state the double never had."""
+        The two memos are filled together by `excluded_lap_ids`. A list that is ALREADY there with
+        no reasons beside it was seeded by a test double (`tests/_synthetic.bare_session`, the
+        real-Qt stand-ins), whose `laps`, if it has one, is not a segmentation to classify — so it
+        answers {} rather than reaching for state the double never had."""
         cache = getattr(self, "_excluded_reasons_cache", None)
         if cache is not None:
             return cache
-        laps = getattr(self, "laps", None)
-        if laps is None:
+        if getattr(self, "_excluded_cache", None) is not None or getattr(self, "laps", None) is None:
             return {}
-        self._excluded_reasons_cache = _excluded_lap_reasons(laps)
-        return self._excluded_reasons_cache
+        self.excluded_lap_ids()
+        return self._excluded_reasons_cache or {}
 
     def lap_closure(self, lap_id: int) -> tuple[float, float]:
         """``(gap_m, turn_deg)`` for a lap: how far its finish crossing lies from its start crossing,
