@@ -1469,7 +1469,7 @@ def test_a_claim_inside_the_corners_own_spread_abstains():
     aimed at with a 0.05 s median claim, however real that 0.05 s is — and the row says so instead
     of printing a lever.
 
-    Measured on the two D24 pairs: sigma >= time_lost on 17 of the 20 shown rows (worst 10.8x), and
+    Measured on the two D24 pairs: sigma >= time_lost on 16 of the 19 shown rows (worst 12.0x), and
     this test's shape is the smallest reproduction of it."""
     target = 5.0
     times = [target, target, target, target + 0.4, target + 0.4, target + 0.4]
@@ -1496,11 +1496,12 @@ def test_an_unreplicated_target_and_a_thin_corner_both_abstain():
     """The other two evidence tests, and the honest note about one of them.
 
     ONE_OFF — nothing but the baseline itself ever reached the target — is the test the brief was
-    built around, and it fired on 0 of 20 rows across both real D24 pairs: the ranking's baseline is
-    the BEST LAP's time through the corner, and on both recordings at least two OTHER laps beat it
-    at every single corner (2..21 of them). It is kept because a short session can trivially produce
-    it, not because it is common. FEW_LAPS guards the ragged case the session-level MIN_LAPS gate
-    cannot see (a corner only some laps project onto)."""
+    built around, and it fired on 0 of the 19 rows across both real D24 pairs: the ranking's
+    baseline is the BEST LAP's time through the corner, and on both recordings at least one OTHER
+    lap beats it on every shown row — at least two OTHER laps on all but 0060's C12 (1..24 of
+    them). It does fire on four of the five single chapters, and a short session can trivially
+    produce it. FEW_LAPS guards the ragged case the session-level MIN_LAPS gate cannot see (a corner
+    only some laps project onto)."""
     one_off = K.corner_evidence([5.0, 5.4, 5.5, 5.6, 5.7], 5.0, 0.5)
     assert one_off.abstain == K.ABSTAIN_ONE_OFF and one_off.reach_laps == 1, one_off
     assert "no second lap" in K.abstain_sentence(
@@ -1608,8 +1609,8 @@ def test_the_session_theme_is_one_line_and_refuses_to_invent_one():
     """Part 3: cluster to ONE theme, on SHARE OF RANKED TIME (the ranking's own unit), and say
     "no single theme" rather than crowning a plurality.
 
-    Measured on the real recordings the two D24 pairs come out OPPOSITE — 0060 is 73 % execution and
-    0062 is 65 % pace — which is what makes the axis worth stating at all."""
+    Measured on the real recordings the two D24 pairs come out OPPOSITE — 0060 is 70 % execution and
+    0062 is 73 % pace — which is what makes the axis worth stating at all."""
     execution = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE]))
     assert execution.kind == K.THEME_EXECUTION and execution.share == 0.75, execution
     assert "execution, not pace" in K.theme_sentence(execution)
@@ -1636,9 +1637,10 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does NOT generalize: braking holds 61 % of 0060's ranked time (a
-    theme) and 44 % of 0062's (not one), so the "no single cause" branch is the common case on
-    real recordings and is asserted here as a first-class output, not as a fallback."""
+    Measured, the cause axis does NOT generalize: braking holds 62 % of 0060's ranked time and 76 %
+    of 0062's (a theme on each), but three of the five single chapters name no single cause, so the
+    "no single cause" branch is a common case on real recordings and is asserted here as a
+    first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
     # This test is about the CAUSE axis and the two-action cap, so it keeps a clear lead.

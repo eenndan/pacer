@@ -974,9 +974,10 @@ def test_delta_to_ideal_is_non_negative_at_the_partition_edges():
     ideal follows its donor's line, so a lap that brakes later can be transiently AHEAD — real
     information, and the reason nothing here clamps or asserts pointwise ≥ 0.
 
-    Measured on the real recordings (372 k samples at 25 ms of media clock): the most negative
-    value is −0.052 s and under 1 % of samples are negative, against end-of-lap values of
-    +0.22 … +9.24 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
+    Measured on the real recordings at 25 ms of media clock (the table above
+    theme.format_ideal_run): the most negative value is −0.246 s, on SD_30_08 with its saved start
+    line, and at most 6.42 % of samples are negative on any recording, against end-of-lap values of
+    +0.19 … +9.70 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
     small in between — so a future change that makes the interior wander gets caught."""
     s, ids = make_ideal_session()
     sb = s.ideal_segment_bests()
