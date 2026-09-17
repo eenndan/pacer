@@ -157,6 +157,14 @@ set_tests_properties(test_unreadable_chapter PROPERTIES
 # refuse-the-pieces are pinned on synthetic circle and hairpin Laps. Imports pacer (no Qt).
 add_test(NAME test_fit_start_line
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fit_start_line.py)
+# A lap ends where it started, going the same way (L3): a start line that reaches a second stretch
+# of track cuts passes into pieces, and when the pieces outnumber the laps the median bands count
+# them (Sandown chapter 3 alone counted a 23 s / 320 m piece of a 740 m lap). Real pacer.Laps on a
+# synthetic hairpin through the real Session, the thresholds against the owner's measured
+# populations, and the reason on all four ⊘ surfaces (strip, DATA TRUST, export, auto mark).
+add_test(NAME test_lap_closure
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_closure.py)
+set_tests_properties(test_lap_closure PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # F1 god-object decomposition (studio.corner_model.CornerModel + studio.driving_channels.
 # DrivingChannels): Session composes + DELEGATES to the per-domain services, and the cache
 # invalidation (set_timing_lines drives both invalidate()s; the reference set/clear drives the
@@ -799,7 +807,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_lap_time_axis
                         test_imu_orientation
                         test_laps_bindings test_ingest_equivalence test_sidecar test_track_db
                         test_session_pure test_sector_integrity test_load_internals
-                        test_load_pipeline test_fit_start_line test_session_services
+                        test_load_pipeline test_fit_start_line test_lap_closure
+                        test_session_services
                         test_golden_synthetic test_studio_features test_rainbow_map test_map_render
                         test_map_chrome test_compare test_map_ghost test_cross_reference
                         test_delta_engine test_controllers test_central_view_realqt

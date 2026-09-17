@@ -54,11 +54,15 @@ from . import (
     stats as stats_service,
 )
 from ._signal import (
+    EXCLUDED_OPEN,
     LAP_DIST_BAND_HI,
     LAP_DIST_BAND_LO,
     SMOOTH_WINDOW,
     _band_lap_ids,
     _banded_out_lap_ids,
+    _excluded_lap_reasons,
+    _lap_closure,
+    exclusion_detail,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
 )
 from .load import load_recording
@@ -142,6 +146,13 @@ class LapRow(TypedDict):
     entry: float  # entry speed (km/h)
 
 
+class ExcludedLapRow(LapRow, total=False):
+    """An `excluded_lap_rows()` row: a `LapRow` plus WHY the lap was left out, in words
+    (`_signal.exclusion_detail`) — the ⊘ strip prints it after the lap's time and distance."""
+
+    why: str
+
+
 @dataclass
 class Seg:
     """A timing line in LOCAL meters: two endpoints (x1,y1)-(x2,y2)."""
@@ -181,6 +192,7 @@ class Session:
         self._track_times_cache: np.ndarray | None = None
         self._valid_cache: list[int] | None = None  # memoized "real lap" set
         self._excluded_cache: list[int] | None = None  # memoized banded-out substantial laps
+        self._excluded_reasons_cache: dict[int, str] | None = None  # why each of those was left out
         self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
         # Memoized SESSION-WIDE collapsed-sector-line set (see _collapsed_sector_lines); keyed by
         # the valid-lap tuple + line count so a hand-seeded test memo can never go stale.
@@ -1377,6 +1389,7 @@ class Session:
         # access.
         self._valid_cache = None
         self._excluded_cache = None
+        self._excluded_reasons_cache = None
         self._best_cache = _UNSET
         # The session-wide collapsed-line set is a function of the lines AND the valid-lap set —
         # both just changed.
@@ -1852,10 +1865,56 @@ class Session:
         self._excluded_cache = _banded_out_lap_ids(self.laps)
         return self._excluded_cache
 
-    def excluded_lap_rows(self) -> list[LapRow]:
+    def excluded_lap_reasons(self) -> dict[int, str]:
+        """WHY each lap in `excluded_lap_ids` was left out: ``{lap_id: reason}`` with one of
+        `_signal.EXCLUDED_OPEN` (it does not end where it started — a piece cut by a start line
+        that reaches a second stretch of track), `EXCLUDED_BAND` (its time or distance is off the
+        session median) or `EXCLUDED_STOPPED` (it contains a stop). The ⊘ surfaces name it, so an
+        excluded lap is shown WITH its reason. Memoized with the other lap sets and cleared on
+        re-segmentation; single-sourced in `_signal._excluded_lap_reasons`.
+
+        getattr-guarded for the bare `Session.__new__` doubles, which seed `_excluded_cache` only:
+        with no memo and no `laps` there is nothing to explain, so it answers {} rather than
+        reaching for state the double never had."""
+        cache = getattr(self, "_excluded_reasons_cache", None)
+        if cache is not None:
+            return cache
+        laps = getattr(self, "laps", None)
+        if laps is None:
+            return {}
+        self._excluded_reasons_cache = _excluded_lap_reasons(laps)
+        return self._excluded_reasons_cache
+
+    def lap_closure(self, lap_id: int) -> tuple[float, float]:
+        """``(gap_m, turn_deg)`` for a lap: how far its finish crossing lies from its start crossing,
+        and how far its direction of travel turned between them — the two numbers the closure test
+        (`_signal.MAX_LAP_GAP_M` / `MAX_LAP_TURN_DEG`) reads, off the same cached columns."""
+        _t, xs, ys, _v, _c = self._lap_columns(lap_id)
+        return _lap_closure(xs, ys)
+
+    def excluded_lap_rows(self) -> list[ExcludedLapRow]:
         """`LapRow` dicts (idx/time/dist/entry) for `excluded_lap_ids` — same shape as `lap_rows`
-        so the lap panel formats an excluded lap with the same helper, just demoted + flagged."""
-        return [self._lap_row(i) for i in self.excluded_lap_ids()]
+        so the lap panel formats an excluded lap with the same helper, just demoted + flagged —
+        plus ``why``: the reason in words (`_signal.exclusion_detail`), with the measured gap for a
+        lap that does not end where it started."""
+        reasons = self.excluded_lap_reasons()
+        rows: list[ExcludedLapRow] = []
+        for i in self.excluded_lap_ids():
+            row: ExcludedLapRow = {**self._lap_row(i)}
+            why = self._exclusion_why(i, reasons.get(i))
+            if why is not None:
+                row["why"] = why
+            rows.append(row)
+        return rows
+
+    def _exclusion_why(self, lap_id: int, reason: str | None) -> str | None:
+        """One excluded lap's reason in words — the ONE phrasing the ⊘ strip and the auto mark both
+        print. The gap is measured only for an open lap, the one reason that quotes it."""
+        if reason is None:
+            return None
+        if reason == EXCLUDED_OPEN:
+            return exclusion_detail(reason, *self.lap_closure(lap_id))
+        return exclusion_detail(reason)
 
     def _lap_point_times(self, lap_id: int) -> np.ndarray:
         """The TELEMETRY (GPS9 true-clock) times of a lap's KEPT GPS points, in order. Cleaned
@@ -3567,10 +3626,12 @@ class Session:
             for gap in gapfill.find_gaps(times):
                 dropouts.append((lap_id, float(times[gap["i"]]), float(times[gap["j"]])))
         excluded = []
+        reasons = self.excluded_lap_reasons()
         for lap_id in self.excluded_lap_ids():
             window = self.lap_window(lap_id)
             if window is not None:
-                excluded.append((lap_id, float(window[0]), float(window[1])))
+                excluded.append((lap_id, float(window[0]), float(window[1]),
+                                 self._exclusion_why(lap_id, reasons.get(lap_id))))
         return marks_model.auto_marks(dropouts, excluded, self.quality_timeline)
 
     def delta_at_time(self, t: float) -> float | None:

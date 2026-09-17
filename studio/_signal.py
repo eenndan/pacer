@@ -71,6 +71,63 @@ LAP_DIST_BAND_LO, LAP_DIST_BAND_HI = 0.90, 1.10
 STOPPED_KMH = 10.0    # km/h; below this the kart is not running the lap, it is stopped/crawling
 MAX_STOPPED_S = 3.0   # s; a contiguous stretch this long inside a lap means the lap contains a STOP
 
+# --- A LAP ENDS WHERE IT STARTED, GOING THE SAME WAY ------------------------------------------------
+# A start/finish line long enough to reach a SECOND stretch of track (a hairpin's return, a parallel
+# straight) cuts every pass in two: each "lap" runs from one stretch to the other. Both bands above
+# centre on the MEDIAN piece, so when the pieces are the majority they are what gets counted — which
+# is how Sandown chapter 3 opened alone counts a 23.2 s / 320 m piece of a 740 m circuit as its one
+# lap (T13 / #322 found it; its closing report handed this check off). A real lap is a closed loop:
+# its finish crossing is on the same stretch as its start crossing, and it is travelling the same
+# way through it. A piece is not.
+#
+# ONE SIGNAL IS NOT ENOUGH, AND THE OWNER'S FOOTAGE SAYS SO. #322 measured the gap between a lap's
+# first and last point at 0.0-4.2 m on real laps and 15.0-21.5 m on pieces, on the lines the loader
+# places. L3 measured it again on all four recordings on this machine (D24 0060 + 0062, Sandown 0059,
+# SD_30_08 0065, Sandown 3h 0064), every chapter alone and chained, on the loader's line, the owner's
+# track-DB line, the saved sidecar line and a forced unknown-track heuristic, PLUS 60 perpendicular
+# lines per configuration (20 places round the lap x 30/45/60 m: the lines a user can drag). That is
+# 18,899 substantial real laps and 23,631 substantial pieces, each labelled by where its two ends fall
+# along the lap (an odometer phase taken off the owner's own line, which uses neither quantity below):
+#
+#   * the GAP alone overlaps. On D24 a 30 m line in a corner leaves counted real laps ending 8.45 m
+#     from where they started, while a 30 m line near a hairpin cuts 935 m pieces whose ends are
+#     6.48 m apart. No gap threshold keeps every real lap and drops every piece.
+#   * the TURN separates what the gap cannot. A piece between the two sides of a hairpin crosses the
+#     line the other way at its finish: every piece whose ends are under 15 m apart turns by 139 deg
+#     or more, and no real lap whose ends are under 15 m apart turns by more than 97.4 deg.
+#   * the gap catches what the turn cannot: a piece that does NOT turn round (a third stretch crossed
+#     the same way) has its ends at least 21.6 m apart.
+#
+# So a lap is OPEN when its ends are more than MAX_LAP_GAP_M apart OR its direction of travel turns by
+# more than MAX_LAP_TURN_DEG between them; each threshold sits between the populations it splits
+# (8.45 | 15 | 21.6 m; 97.4 | 120 | 139 deg). Over the whole sweep it counts none of the 23,631 pieces
+# and calls three real laps open — 86.6-200.3 s laps, 1.8-4.3x the median, which the time band
+# excludes anyway. On the lines the loader places by itself, real laps
+# stay within 7.17 m and 9.1 deg. It runs BEFORE the median bands, because a piece is not a lap and
+# must not set the centre they band against: on the same lines that recovers 466 real laps the old
+# rule lost behind a median piece. An open lap is excluded and SHOWN (⊘, with its reason).
+#
+# WHAT IT CANNOT TELL APART: a kart that crosses the line more than MAX_LAP_GAP_M wide of where it
+# crossed a lap earlier, travelling the same way, looks exactly like a piece between two stretches
+# that far apart — so both laps either side of such a pass read open. No counted lap on the owner's
+# footage comes within 6.5 m of that. And a piece between two stretches run the SAME way less than
+# 15 m apart would still be counted; the closest pair on the owner's layouts is 21.6 m.
+MAX_LAP_GAP_M = 15.0      # m between a lap's start crossing and its finish crossing
+MAX_LAP_TURN_DEG = 120.0  # deg between the direction of travel through those two crossings
+
+# Why a substantial lap was left out — the reason each ⊘ surface names. Checked in this order, so a
+# lap carries the first one it fails.
+EXCLUDED_OPEN = "open"        # it does not end where it started (MAX_LAP_GAP_M / MAX_LAP_TURN_DEG)
+EXCLUDED_BAND = "band"        # its time or distance is off the session median
+EXCLUDED_STOPPED = "stopped"  # the kart stood still inside it (MAX_STOPPED_S)
+#: The phrase a COUNT of each reason takes, as (one, several): "1 doesn't end where it started",
+#: "2 don't end where they started", "3 off the session median".
+EXCLUSION_PHRASE = {
+    EXCLUDED_OPEN: ("doesn't end where it started", "don't end where they started"),
+    EXCLUDED_BAND: ("off the session median", "off the session median"),
+    EXCLUDED_STOPPED: ("with a stop", "with a stop"),
+}
+
 # --- longitudinal g from the speed trace (shared by driving channels + the g-meter dial) ---
 G = 9.80665  # m/s^2 (standard gravity)
 MAX_LONG_G = 2.0  # clip d|v|/dt spikes: a GPS glitch can't manufacture a real brake
@@ -355,28 +412,90 @@ def _longest_stopped_s(times, speed_mps, stopped_kmh: float = STOPPED_KMH) -> fl
     return float(np.max(t[ends] - t[starts]))
 
 
-def _band_lap_ids(laps) -> list[int]:
-    """The ids of laps that qualify as 'real laps': enough samples (>= MIN_LAP_SAMPLES) and a
-    long-enough time (>= MIN_LAP_TIME), a lap time within [LAP_BAND_LO, LAP_BAND_HI] x the
-    MEDIAN lap time, a lap distance within [LAP_DIST_BAND_LO, LAP_DIST_BAND_HI] x the
-    median lap distance, AND no stationary stretch of MAX_STOPPED_S or more inside it. A fixed
-    threshold is too crude (short double-crossings of the start line pass it and pollute the
-    'best' lap); the time band adapts to any track length, the tighter distance band catches a
+def _lap_closure(xs, ys) -> tuple[float, float]:
+    """``(gap_m, turn_deg)`` for one lap's point columns: how far its finish crossing is from its
+    start crossing, and how far its direction of travel has turned between the two.
+
+    The first and last points of a lap ARE its two start-line crossings (interpolated onto the
+    trace chord that crossed the line — see `pacer/laps/laps.hpp`), so the direction through each
+    is exactly that chord's: `points[1] - points[0]` and `points[-1] - points[-2]`, whatever their
+    length. Fewer than three points, or a zero-length chord, carries no direction: that part reads
+    0, so a lap is never called open on no evidence."""
+    n = min(len(xs), len(ys))
+    if n < 3:
+        return 0.0, 0.0
+    gap = math.hypot(float(xs[n - 1]) - float(xs[0]), float(ys[n - 1]) - float(ys[0]))
+    ax, ay = float(xs[1]) - float(xs[0]), float(ys[1]) - float(ys[0])
+    bx, by = float(xs[n - 1]) - float(xs[n - 2]), float(ys[n - 1]) - float(ys[n - 2])
+    na, nb = math.hypot(ax, ay), math.hypot(bx, by)
+    if na == 0.0 or nb == 0.0:
+        return gap, 0.0
+    cos = max(-1.0, min(1.0, (ax * bx + ay * by) / (na * nb)))
+    return gap, math.degrees(math.acos(cos))
+
+
+def _is_open_lap(cols) -> bool:
+    """Does this lap fail to end where it started, going the same way? (MAX_LAP_GAP_M /
+    MAX_LAP_TURN_DEG.) A columns object without positions — the lighter test doubles — is never
+    open."""
+    xs, ys = getattr(cols, "xs", None), getattr(cols, "ys", None)
+    if xs is None or ys is None:
+        return False
+    gap, turn = _lap_closure(xs, ys)
+    return gap > MAX_LAP_GAP_M or turn > MAX_LAP_TURN_DEG
+
+
+def _classify_laps(laps) -> tuple[list[int], dict[int, str]]:
+    """``(valid_ids, reasons)``: the 'real laps', and why each OTHER substantial lap was left out.
+
+    A lap is valid with enough samples (>= MIN_LAP_SAMPLES) and a long-enough time
+    (>= MIN_LAP_TIME) — the laps that clear this are the SUBSTANTIAL ones — AND:
+      1. it is a closed loop: it ends where it started, going the same way (`EXCLUDED_OPEN`; see
+         MAX_LAP_GAP_M). First, so a piece of a lap never sets the median the bands centre on;
+      2. its time is within [LAP_BAND_LO, LAP_BAND_HI] x the MEDIAN lap time and its distance
+         within [LAP_DIST_BAND_LO, LAP_DIST_BAND_HI] x the median distance (`EXCLUDED_BAND`);
+      3. it has no stationary stretch of MAX_STOPPED_S or more inside it (`EXCLUDED_STOPPED`).
+
+    A fixed threshold is too crude (short double-crossings of the start line pass it and pollute
+    the 'best' lap); the time band adapts to any track length, the tighter distance band catches a
     mis-segmented short/long lap that defeats the time band — on a fixed circuit lap distance
-    clusters far tighter than lap time — and the stop test catches the one thing NEITHER band can
-    see: a lap driven normally that happens to contain a stop (see the band consts; a stop adds
-    time without adding distance, so it passes the ±10 % distance band by construction).
+    clusters far tighter than lap time — and the stop test catches what NEITHER band can see: a
+    lap driven normally that happens to contain a stop (a stop adds time without adding distance,
+    so it passes the ±10 % distance band by construction). The closure test catches what the
+    bands cannot see when the pieces outnumber the laps: then the median IS a piece.
+
+    `reasons` maps every substantial lap that is NOT valid to the first test it failed, so its
+    keys are exactly `_banded_out_lap_ids`.
 
     `laps` is the bound `pacer.Laps` object, but this function only calls its read accessors
     (laps_count / lap_time / sample_count / get_lap_distance / lap_columns) — it imports no pacer
-    itself, so it stays pure. The distance and speed accessors are both guarded with getattr so
+    itself, so it stays pure. The distance and columns accessors are both guarded with getattr so
     the FAKE `laps` doubles in the tests (which expose only the time surface) fall back to the
-    unchanged earlier result. The single source for Session.valid_lap_ids and
-    session._band_lap_count."""
+    unchanged earlier result."""
+    reasons: dict[int, str] = {}
     basic = [(i, laps.lap_time(i)) for i in range(laps.laps_count())
              if laps.sample_count(i) >= MIN_LAP_SAMPLES and laps.lap_time(i) >= MIN_LAP_TIME]
     if not basic:
-        return []
+        return [], reasons
+
+    # Closure test, BEFORE the median (see MAX_LAP_GAP_M). One `lap_columns` crossing per
+    # substantial lap, kept for the stop test below so no lap is fetched twice. `load._fit_start_line`
+    # calls this up to five times per load; all 66 laps of the 0062 recording cost a few ms. Same
+    # getattr discipline as the distance band — a `laps` double without the columns surface skips it.
+    get_cols = getattr(laps, "lap_columns", None)
+    cols: dict[int, object] = {}
+    if get_cols is not None:
+        closed = []
+        for i, t in basic:
+            cols[i] = get_cols(i)
+            if _is_open_lap(cols[i]):
+                reasons[i] = EXCLUDED_OPEN
+            else:
+                closed.append((i, t))
+        basic = closed
+        if not basic:
+            return [], reasons
+
     med = float(np.median([t for _, t in basic]))
     lo, hi = LAP_BAND_LO * med, LAP_BAND_HI * med
     timed = [i for i, t in basic if lo <= t <= hi]
@@ -398,30 +517,83 @@ def _band_lap_ids(laps) -> list[int]:
             lo_d, hi_d = LAP_DIST_BAND_LO * med_d, LAP_DIST_BAND_HI * med_d
             banded = [i for i in timed
                       if math.isfinite(dists[i]) and dists[i] > 0 and lo_d <= dists[i] <= hi_d]
+    kept_band = set(banded)
+    for i, _ in basic:
+        if i not in kept_band:
+            reasons[i] = EXCLUDED_BAND
 
     # Stop test: a lap that STOOD STILL is not a slow lap (see MAX_STOPPED_S). Runs last, over the
-    # already-banded laps only, so it costs one `lap_columns` crossing per surviving lap and never
-    # touches a lap the bands have settled — 3.8 ms for all 66 laps of the 0062 recording, against
-    # a load that takes seconds, and `load._fit_start_line` calls this filter up to five times per
-    # load. Same getattr discipline as the distance band — a `laps` double without the speed
-    # surface falls back to the banded result unchanged.
-    get_cols = getattr(laps, "lap_columns", None)
+    # already-banded laps only, reusing the columns the closure test fetched.
     if get_cols is None or not banded:
-        return banded
+        return banded, reasons
     kept = []
     for i in banded:
-        cols = get_cols(i)
-        if _longest_stopped_s(cols.times, cols.full_speed) < MAX_STOPPED_S:
+        c = cols[i]
+        if _longest_stopped_s(c.times, c.full_speed) < MAX_STOPPED_S:
             kept.append(i)
-    return kept
+        else:
+            reasons[i] = EXCLUDED_STOPPED
+    return kept, reasons
+
+
+def _band_lap_ids(laps) -> list[int]:
+    """The ids of laps that qualify as 'real laps' — see `_classify_laps` for the rule. The
+    single source for Session.valid_lap_ids and load._band_lap_count."""
+    return _classify_laps(laps)[0]
+
+
+def _excluded_lap_reasons(laps) -> dict[int, str]:
+    """``{lap_id: reason}`` for every substantial lap left out (`EXCLUDED_OPEN` /
+    `EXCLUDED_BAND` / `EXCLUDED_STOPPED`) — the WHY behind `_banded_out_lap_ids`, the same keys.
+    The single source for Session.excluded_lap_reasons."""
+    return _classify_laps(laps)[1]
+
+
+def exclusion_detail(reason: str, gap_m: float | None = None, turn_deg: float | None = None) -> str:
+    """The per-lap WHY the ⊘ strip prints after an excluded lap ("Lap 2 — 0:23.231 · 320 m · ends
+    22 m from its start, heading the other way"). An open lap names the measurement that failed —
+    the gap, and the reversal when the turn is what gave it away — because that is what tells the
+    reader the start/finish line reaches a second stretch of track. Unknown reasons print as their
+    code rather than nothing."""
+    if reason == EXCLUDED_OPEN:
+        parts = []
+        if gap_m is not None and math.isfinite(gap_m):
+            parts.append(f"ends {gap_m:.0f} m from its start")
+        if turn_deg is not None and math.isfinite(turn_deg) and turn_deg > MAX_LAP_TURN_DEG:
+            parts.append("heading the other way")
+        return ", ".join(parts) if parts else "does not end where it started"
+    if reason == EXCLUDED_BAND:
+        return "off the session median"
+    if reason == EXCLUDED_STOPPED:
+        return "the kart stopped during it"
+    return str(reason)
+
+
+def exclusion_summary(reasons) -> str:
+    """"2 don't end where they started, 1 off the session median" — the per-reason counts of a
+    ``{lap_id: reason}`` map, in the order the tests run, for the surfaces that state WHY laps
+    were left out in one line (the Stats page's DATA TRUST card, the exported report). Empty for
+    no reasons; an unknown reason is counted under its own code rather than dropped."""
+    counts: dict[str, int] = {}
+    for why in reasons.values():
+        counts[why] = counts.get(why, 0) + 1
+    order = [EXCLUDED_OPEN, EXCLUDED_BAND, EXCLUDED_STOPPED]
+    order += sorted(k for k in counts if k not in order)
+
+    def phrase(code: str, n: int) -> str:
+        one, several = EXCLUSION_PHRASE.get(code, (code, code))
+        return one if n == 1 else several
+
+    return ", ".join(f"{counts[k]} {phrase(k, counts[k])}" for k in order if k in counts)
 
 
 def _banded_out_lap_ids(laps) -> list[int]:
     """The ids of SUBSTANTIAL laps the band filter REJECTED: laps that clear the coarse gate
     (>= MIN_LAP_SAMPLES samples and >= MIN_LAP_TIME seconds — so they look like a lap the driver
-    actually ran, not a brief start/end sliver) but fell outside the median TIME or DISTANCE band
+    actually ran, not a brief start/end sliver) but did not end where they started (a piece cut by
+    a line that reaches a second stretch of track), fell outside the median TIME or DISTANCE band
     in `_band_lap_ids`, or carried a stop of MAX_STOPPED_S or more — a mis-segmented short/long
-    lap, an out-lap, an in-lap, or a lap the driver stopped on.
+    lap, an out-lap, an in-lap, or a lap the driver stopped on. `_excluded_lap_reasons` says which.
 
     Returned so the UI can SHOW that a real-looking lap was left out of the times / bests instead
     of silently dropping it (the `_band_lap_ids` filter removes such a lap so it can't be crowned
