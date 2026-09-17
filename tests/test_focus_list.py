@@ -11,14 +11,14 @@ What is asserted here, on inputs whose answer is known by construction:
   * the MEASUREMENT: a window is a FRACTION of the lap odometer, so the same stretch of track is
     compared across two sessions whose corner partitions differ — the failure this design exists
     to prevent, sized on real data in studio/focus.py (C8's window grew 45.0 m → 56.3 m between the
-    two D24 recordings, worth +0.550 s of "you got slower" that the driver did not do);
+    two D24 recordings, worth +0.549 s of "you got slower" that the driver did not do);
   * the GATE: no session record on either side, records that disagree, a provisional start line,
     ESTIMATED timing, mismatched lap lengths and too few clean laps each REFUSE a verdict — and a
     refused verdict carries `delta is None`, so no surface can print a number the evidence does not
     support. This is PR #258's rule ("silent when either side has no record") said out loud;
-  * the SPREAD test: a change smaller than half the corner's own interquartile spread is
-    "no change you can act on", using coaching.SPREAD_MARGIN and coaching's own IQR statistic
-    rather than a second notion of significance;
+  * the SPREAD test: a change smaller than half the wider of the two sessions' interquartile
+    spreads is "no change you can act on", using coaching.SPREAD_MARGIN and coaching's own IQR
+    statistic rather than a second notion of significance;
   * the PANEL: the block is dormant until the app hands it a report, it names the corner its Add
     button would promote, the two gestures are signals (the window owns the store), and it yields
     its height to the ranked list exactly as the theme block does.

@@ -1,9 +1,10 @@
-"""THREE TABLES MEASURED ON REAL FOOTAGE, AND EVERY SENTENCE THAT QUOTES THEM.
+"""THE TABLES MEASURED ON REAL FOOTAGE, AND EVERY SENTENCE THAT QUOTES THEM.
 
-WHY THIS FILE EXISTS. #300 warped every lap. Three published figures were measured before it and
-nobody re-measured them: `coaching.py`'s evidence and THEME blocks, `theme.py`'s pointwise-Δ floor
+WHY THIS FILE EXISTS. #300 warped every lap. Published figures were measured before it and nobody
+re-measured them: `coaching.py`'s evidence and THEME blocks, `theme.py`'s pointwise-Δ floor
 table above `format_ideal_run`, and the #272 recombination record in
-`studio/docs/refused-2026-09.md`. When they were re-measured, every block had moved, and prose
+`studio/docs/refused-2026-09.md` (#321); then `coaching.py`'s brake-habit table and `focus.py`'s
+cross-session tables (T14). When they were re-measured, every block had moved, and prose
 beside each table still quoted the old cells — in the same file and in five others. The tables
 are now written as tables, so the prose around them can be DERIVED from them rather than typed
 twice, and the derivation is what this file checks.
@@ -51,6 +52,8 @@ _COACHING = os.path.join(_REPO, "studio", "coaching.py")
 _PANEL = os.path.join(_REPO, "studio", "coaching_panel.py")
 _THEME = os.path.join(_REPO, "studio", "theme.py")
 _REFUSED = os.path.join(_REPO, "studio", "docs", "refused-2026-09.md")
+_FOCUS = os.path.join(_REPO, "studio", "focus.py")
+_SESSION = os.path.join(_REPO, "studio", "session.py")
 _STUB = "GX010060.MP4"
 
 
@@ -442,6 +445,311 @@ def test_every_quote_of_the_coaching_figures_is_coaching_py_s():
     assert not problems, "quotes of coaching.py's measured figures that are not its tables':\n  " + \
         "\n  ".join(problems)
     print(f"test_every_quote_of_the_coaching_figures_is_coaching_py_s OK "
+          f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
+
+
+# ─── coaching.py: the brake-habit table ──────────────────────────────────────────────────────────
+class BrakeRow:
+    def __init__(self, rec, cid, rank, best, habit, laps, clean):
+        self.rec, self.cid, self.rank, self.best, self.habit = rec, cid, rank, best, habit
+        self.laps, self.clean = laps, clean
+
+    @property
+    def gap(self) -> float:
+        return abs(self.best - self.habit)
+
+    def __repr__(self):
+        return f"<{self.rec} C{self.cid} #{self.rank} best {self.best} habit {self.habit} {self.laps}/{self.clean}>"
+
+
+_BRAKE_LINE = re.compile(r"^#\s+(00\d\d)\s+C(\d+)\s+(\d+)\s+(-?\d+\.\d)\s+(-?\d+\.\d)\s+(\d+)/(\d+)\s*$")
+
+
+def _brake_rows() -> list[BrakeRow]:
+    rows = []
+    for line in _read(_COACHING).splitlines():
+        m = _BRAKE_LINE.match(line)
+        if m:
+            rows.append(BrakeRow(m.group(1), int(m.group(2)), int(m.group(3)), float(m.group(4)),
+                                 float(m.group(5)), int(m.group(6)), int(m.group(7))))
+    assert {r.rec for r in rows} == {"0060", "0062"}, f"coaching.py's brake-habit table parsed to {rows!r}"
+    return rows
+
+
+def _median(xs: list[float]) -> float:
+    xs = sorted(xs)
+    mid = len(xs) // 2
+    return xs[mid] if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2
+
+
+def test_the_brake_habit_prose_is_its_table_s_arithmetic():
+    """coaching.py's brake-habit table against the evidence table beside it, the panel's hint
+    constants, and the prose under it."""
+    rows, ev = _brake_rows(), _evidence_rows()
+    text = _flatten(_read(_COACHING))
+    hint_min = _constant(_PANEL, "BRAKE_HINT_MIN_M")
+    for r in rows:
+        # A row is a RANKED coaching row, and its rank is the evidence table's for that corner.
+        match = [e for e in ev if (e.rec, e.cid) == (r.rec, r.cid)]
+        assert match and match[0].gate == "ranked" and match[0].rank == r.rank, (
+            f"{r!r} is not a ranked row of the evidence table: {match}")
+        assert r.clean == match[0].laps and r.laps <= r.clean, (r, match[0])
+        # A best-lap value under the panel's noise floor would not have been a hint at all.
+        assert abs(r.best) >= hint_min, f"{r!r}: under BRAKE_HINT_MIN_M ({hint_min} m), never shown"
+    for rec in ("0060", "0062"):
+        ranks = [r.rank for r in rows if r.rec == rec]
+        assert ranks == sorted(ranks), f"{rec}'s rows are not in rank order: {ranks}"
+
+    m = _need(r"sit (\d+\.\d) m apart at the median on 0060 \(worst (\d+\.\d) m, C(\d+)\) and (\d+\.\d) m "
+              r"apart on 0062 \(worst (\d+\.\d) m, C(\d+)\)", text, "the gap sentence under the table")
+    for i, rec in enumerate(("0060", "0062")):
+        mine = [r for r in rows if r.rec == rec]
+        med, worst, cid = float(m.group(1 + 3 * i)), float(m.group(2 + 3 * i)), int(m.group(3 + 3 * i))
+        top = max(mine, key=lambda r: r.gap)
+        # One-decimal cells pin each gap to ±0.1 m; the prose is rounded from the unrounded pair.
+        assert abs(med - _median([r.gap for r in mine])) <= 0.1 + 1e-9, (rec, med, [r.gap for r in mine])
+        assert abs(worst - top.gap) <= 0.1 + 1e-9 and cid == top.cid, (rec, worst, cid, top)
+
+    c1 = next(r for r in rows if (r.rec, r.cid) == ("0062", 1))
+    m = _need(r"brake within (\d) m of its own optimum, so coaching printed \"~(\d) m later\" — barely over the "
+              r"BRAKE_HINT_MIN_M noise floor, i\.e\. a shrug — while the driver's HABIT over (\d+) laps was "
+              r"(\d+\.\d) m early\. Both say \"later\"", text, "0062 C1's paragraph")
+    assert c1.best <= int(m.group(1)) and f"{c1.best:.0f}" == m.group(2), (m.groups(), c1)
+    assert hint_min <= c1.best < 2 * hint_min, f"{c1!r} is not 'barely over' {hint_min} m"
+    assert (int(m.group(3)), float(m.group(4))) == (c1.laps, c1.habit), (m.groups(), c1)
+    assert c1.best > 0 and c1.habit > 0, f"{c1!r}: the two do not both say 'later'"
+
+    m = _need(r"every corner on the two D24 recordings matched on at least (\d+) of its clean laps", text,
+              "MIN_BRAKE_LAPS's measured note")
+    assert min(r.laps for r in rows) >= int(m.group(1)) > _constant(_COACHING, "MIN_BRAKE_LAPS"), (
+        m.group(1), rows)
+    print(f"test_the_brake_habit_prose_is_its_table_s_arithmetic OK ({len(rows)} rows)")
+
+
+def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
+    """session.py, test_coaching.py and README's module map quote how far apart the two brake
+    answers were and what 0062's C1 said. Each quote must be coaching.py's."""
+    rows = _brake_rows()
+    text = _flatten(_read(_COACHING))
+    worst = max(float(x) for x in _need(r"\(worst (\d+\.\d) m, C\d+\) and \d+\.\d m apart on 0062 \(worst "
+                                        r"(\d+\.\d) m", text, "the gap sentence").groups())
+    c1 = next(r for r in rows if (r.rec, r.cid) == ("0062", 1))
+    found: dict[str, list[str]] = {"upto": [], "habit": [], "within": []}
+    problems = []
+    for rel, flat in _scanned():
+        # These two phrasings are specific enough to read off the whole file: a sentence split would
+        # cut coaching.py's own at "i.e.".
+        for m in re.finditer(r"(?i:habit) over (\d+) laps was (\d+\.\d) m|(\d+)-lap habit was (\d+\.\d) m", flat):
+            found["habit"].append(rel)
+            laps, habit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+            if (int(laps), float(habit)) != (c1.laps, c1.habit):
+                problems.append(f"{rel}: 0062 C1's habit over {laps} laps was {habit} m; the table "
+                                f"says {c1.laps} laps, {c1.habit} m")
+        for m in re.finditer(r"within (\d) m of its own optimum", flat):
+            found["within"].append(rel)
+            if not c1.best <= int(m.group(1)) < c1.best + 1:
+                problems.append(f"{rel}: 0062 C1's best lap 'within {m.group(1)} m'; the table "
+                                f"says {c1.best} m")
+        for sentence in re.split(r"(?<=[.!?])\s+", flat):
+            if not re.search(r"best lap", sentence, re.I):
+                continue
+            if re.search(r"habit|median|table", sentence):
+                for m in re.finditer(r"up to (\d+\.\d) m\b", sentence):
+                    found["upto"].append(rel)
+                    if float(m.group(1)) != worst:
+                        problems.append(f"{rel}: the two brake answers 'up to {m.group(1)} m' apart; "
+                                        f"coaching.py's table says {worst}")
+            # "Opposite advice" is a claim about SIGNS: the two answers must point different ways.
+            if "C1" in sentence and re.search(r"opposite|invert", sentence) and (c1.best > 0) == (c1.habit > 0):
+                problems.append(f"{rel}: calls 0062 C1's two answers opposite; the table has "
+                                f"{c1.best:+} m and {c1.habit:+} m, both 'later'")
+    for family, least in (("upto", 3), ("habit", 3), ("within", 3)):
+        assert len(found[family]) >= least, (f"the {family} scan found {found[family]} — fewer quotes "
+                                             f"than the tree is known to carry; a phrasing changed")
+    assert not problems, "quotes of the brake-habit table that are not coaching.py's:\n  " + \
+        "\n  ".join(problems)
+    print(f"test_every_quote_of_the_brake_habit_figures_is_the_table_s OK "
+          f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
+
+
+# ─── focus.py: the cross-session tables ──────────────────────────────────────────────────────────
+class FocusRow:
+    def __init__(self, cid, promoted, then_med, then_iqr, now_med, now_iqr, change, bar, verdict):
+        self.cid, self.promoted, self.then_med, self.then_iqr = cid, promoted, then_med, then_iqr
+        self.now_med, self.now_iqr, self.change, self.bar, self.verdict = now_med, now_iqr, change, bar, verdict
+
+    def __repr__(self):
+        return (f"<C{self.cid} +{self.promoted} {self.then_med}/{self.then_iqr} → {self.now_med}/"
+                f"{self.now_iqr} Δ{self.change:+} bar {self.bar} {self.verdict}>")
+
+
+def _signed(s: str) -> float:
+    return float(s.replace("−", "-"))
+
+
+_FOCUS_LINE = re.compile(r"^\s+C(\d+)\s+\+(\d\.\d{3}) s\s+(\d+\.\d{3}) s\s+(\d\.\d{3})\s+(\d+\.\d{3}) s\s+"
+                         r"(\d\.\d{3})\s+([−+-]\d\.\d{3})\s+(\d\.\d{3})\s+(\w+)\s*$")
+_WINDOW_LINE = re.compile(r"^\s+C(\d+)\s+(\d+\.\d) m\s+(\d+\.\d) m\s+(\d+\.\d{3}) s\s+(\d+\.\d{3}) s\s+"
+                          r"([−+-]\d\.\d{3}) s\s+(\d+\.\d{3}) s\s+([−+-]\d\.\d{3}) s\s*$")
+
+
+def _focus_tables() -> tuple[list[FocusRow], dict[int, tuple]]:
+    """focus.py's two docstring tables: the promoted three, and {cid: (window 0060 m, window 0062 m,
+    own 0060 s, own 0062 s, own change, 0062 over 0060's window s, stored change)}."""
+    rows, windows = [], {}
+    for line in _read(_FOCUS).splitlines():
+        m = _FOCUS_LINE.match(line)
+        if m:
+            g = m.groups()
+            rows.append(FocusRow(int(g[0]), float(g[1]), float(g[2]), float(g[3]), float(g[4]),
+                                 float(g[5]), _signed(g[6]), float(g[7]), g[8]))
+        m = _WINDOW_LINE.match(line)
+        if m:
+            g = m.groups()
+            windows[int(g[0])] = (float(g[1]), float(g[2]), float(g[3]), float(g[4]), _signed(g[5]),
+                                  float(g[6]), _signed(g[7]))
+    assert len(rows) == 3 and 8 in windows, f"focus.py's tables parsed to {rows!r} / {windows!r}"
+    return rows, windows
+
+
+def _se_median(iqr: float, n: int) -> float:
+    """The normal-approximation standard error of a median focus.py states: 1.2533 σ / √n with
+    σ = IQR / 1.349."""
+    return 1.2533 * iqr / 1.349 / math.sqrt(n)
+
+
+def test_the_focus_prose_is_its_tables_arithmetic():
+    """focus.py's promoted-three table and window table: every change, bar and verdict recomputed
+    from the cells and the code's own rule, the promoted three recomputed from coaching.py's
+    evidence table, and every figure in the prose around them."""
+    rows, windows = _focus_tables()
+    ev = _evidence_rows()
+    text = _flatten(_read(_FOCUS))
+    margin = _constant(_COACHING, "SPREAD_MARGIN")
+    # The bar is the WIDER of the two spreads — read that off the code rather than assume it.
+    assert re.search(r"spread = max\(item\.iqr_s, now\.iqr\)\s+if abs\(delta\) < SPREAD_MARGIN \* spread:",
+                     _read(_FOCUS)), "focus.verdict's spread test changed; update this check and the table"
+    words = {k: _constant(_FOCUS, k) for k in ("OUTCOME_UNCHANGED", "OUTCOME_IMPROVED", "OUTCOME_SLOWER")}
+    for r in rows:
+        assert abs(r.change - (r.now_med - r.then_med)) <= 0.001 + 1e-9, f"{r!r}: change is not now − then"
+        assert abs(r.bar - margin * max(r.then_iqr, r.now_iqr)) <= 0.001 + 1e-9, (
+            f"{r!r}: bar is not SPREAD_MARGIN ({margin}) × the wider IQR")
+        if abs(abs(r.change) - r.bar) > 0.002:
+            want = (words["OUTCOME_UNCHANGED"] if abs(r.change) < r.bar else
+                    words["OUTCOME_IMPROVED"] if r.change < 0 else words["OUTCOME_SLOWER"])
+            assert r.verdict == want, f"{r!r}: verdict.py's rule gives {want}"
+    # "Promote 0060's top three ranked corners": the evidence table's first three ranked rows.
+    ranked = sorted((e for e in ev if e.rec == "0060" and e.gate == "ranked"), key=lambda e: e.rank)[:3]
+    assert [(r.cid, r.promoted) for r in rows] == [(e.cid, e.lost) for e in ranked], (
+        f"focus.py promotes {[(r.cid, r.promoted) for r in rows]}; coaching.py's evidence table ranks "
+        f"{[(e.cid, e.lost) for e in ranked]}")
+    m = _need(r"\(0060: \d{4}-\d\d-\d\d, (\d+) laps; 0062: \d{4}-\d\d-\d\d, (\d+) laps\)", text,
+              "the recordings' dates and lap counts")
+    laps = {e.rec: e.laps for e in ev}
+    assert (int(m.group(1)), int(m.group(2))) == (laps["0060"], laps["0062"]), (m.groups(), laps)
+    numbers = {1: "one", 2: "two", 3: "three"}
+    unchanged = sum(r.verdict == words["OUTCOME_UNCHANGED"] for r in rows)
+    m = _need(r"every one of the (\w+) changes is inside its bar\. The honest verdict on the only real "
+              r"cross-session pair this repo has is \"no change you can act on\", (\w+) times out of (\w+)",
+              text, "the verdict sentence")
+    assert unchanged == len(rows) and m.groups() == (numbers[len(rows)], numbers[unchanged],
+                                                     numbers[len(rows)]), (m.groups(), rows)
+
+    c8 = windows[8]
+    m = _need(r"C8's own-window \+(\d\.\d{3}) s is \"you got slower\" and every millisecond of it is the "
+              r"detector drawing a longer window; over the stored window it is \+(\d\.\d{3}) s", text,
+              "the C8 sentence under the window table")
+    assert (float(m.group(1)), float(m.group(2))) == (c8[4], c8[6]) and c8[1] > c8[0], (m.groups(), c8)
+    for cid, (w60, w62, own60, own62, own_d, at60, stored_d) in windows.items():
+        assert abs(own_d - (own62 - own60)) <= 0.001 + 1e-9, f"C{cid}: own change is not {own62} − {own60}"
+        assert abs(stored_d - (at60 - own60)) <= 0.001 + 1e-9, f"C{cid}: stored change is not {at60} − {own60}"
+        assert abs(stored_d) < abs(own_d), f"C{cid}: the stored window does not remove the window's growth"
+
+    m = _need(r"the lap totals to (\d\.\d\d) % \((\d+\.\d) vs (\d+\.\d) m\)", text, "the lap-total sentence")
+    pct, t60, t62 = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    lo, hi = 100 * ((t62 - 0.1) / (t60 + 0.1) - 1), 100 * ((t62 + 0.1) / (t60 - 0.1) - 1)
+    assert lo - 0.005 <= pct <= hi + 0.005, (pct, lo, hi)
+    m = _need(r"lap totals differ by (\d+\.\d\d) m on (\d+) m — (\d\.\d\d) % — which displaces a corner boundary "
+              r"by at most ~(\d\.\d) m inside a (\d+) m window\. (\d+) % is (\w+) times that", text,
+              "MAX_LAP_TOTAL_DRIFT's measured note")
+    diff, on, pct2, shift, window, drift, times = m.groups()
+    drift_const = _constant(_FOCUS, "MAX_LAP_TOTAL_DRIFT")
+    assert abs(float(diff) - (t62 - t60)) <= 0.1 + 1e-9 and int(on) == int(t60) and float(pct2) == pct, m.groups()
+    assert float(shift) == round(int(window) * pct / 100, 1), (shift, window, pct)
+    assert int(drift) == round(100 * drift_const) and times == {3: "three", 2: "twice", 4: "four"}[
+        round(drift_const / (pct / 100))], (drift, times, drift_const, pct)
+    m = _need(r"the standard error of either median is ~(\d\.\d\d)-(\d\.\d\d) s", text, "the standard-error note")
+    ses = [_se_median(r.then_iqr, laps["0060"]) for r in rows] + [_se_median(r.now_iqr, laps["0062"]) for r in rows]
+    assert (float(m.group(1)), float(m.group(2))) == (_pct(min(ses)) / 100, _pct(max(ses)) / 100), (m.groups(), ses)
+    print(f"test_the_focus_prose_is_its_tables_arithmetic OK ({len(rows)} promoted, {len(windows)} windows)")
+
+
+def test_every_quote_of_the_focus_figures_is_focus_py_s():
+    """README's module map, session.py, app.py, tests/CMakeLists.txt and test_focus_list.py quote
+    the focus figures. Each quote must be focus.py's, and none may call the spread test the
+    corner's OWN spread when `verdict` takes the wider of two."""
+    rows, windows = _focus_tables()
+    w60, w62, _own60, _own62, own_d, _at60, stored_d = windows[8]
+    pct = _need(r"the lap totals to (\d\.\d\d) %", _flatten(_read(_FOCUS)), "the lap-total sentence").group(1)
+    drift = round(100 * _constant(_FOCUS, "MAX_LAP_TOTAL_DRIFT"))
+    found: dict[str, list[str]] = {k: [] for k in ("promoted", "moves", "grew", "grew_by", "own", "stored", "pct")}
+    problems = []
+    for rel, flat in _scanned():
+        for sentence in re.split(r"(?<=[.!?])\s+", flat):
+            for m in re.finditer(r"top three \(C(\d+) \+(\d\.\d{3}) s, C(\d+) \+(\d\.\d{3}) s, C(\d+) \+(\d\.\d{3}) s\)",
+                                 sentence):
+                found["promoted"].append(rel)
+                got = [(int(m.group(1 + 2 * i)), float(m.group(2 + 2 * i))) for i in range(3)]
+                if got != [(r.cid, r.promoted) for r in rows]:
+                    problems.append(f"{rel}: promotes {got}; focus.py's table says "
+                                    f"{[(r.cid, r.promoted) for r in rows]}")
+            for m in re.finditer(r"moves them ([−+-]\d\.\d{3}) / ([−+-]\d\.\d{3}) / ([−+-]\d\.\d{3}) s(.{0,60})",
+                                 sentence):
+                found["moves"].append(rel)
+                if [_signed(x) for x in m.groups()[:3]] != [r.change for r in rows]:
+                    problems.append(f"{rel}: moves them {m.groups()[:3]}; the table's changes are "
+                                    f"{[r.change for r in rows]}")
+                if "own spread" in m.group(4):
+                    problems.append(f"{rel}: 'inside half its own spread' — the bar is the wider of the "
+                                    f"two sessions' spreads")
+            for m in re.finditer(r"C8's (?:own )?window grew (\d+\.\d) m → (\d+\.\d) m", sentence):
+                found["grew"].append(rel)
+                if (float(m.group(1)), float(m.group(2))) != (w60, w62):
+                    problems.append(f"{rel}: C8 grew {m.group(1)} → {m.group(2)} m; focus.py says {w60} → {w62}")
+            for m in re.finditer(r"C8(?:'s)? window grew (\d+\.\d) m (?:between|and)", sentence):
+                found["grew_by"].append(rel)
+                if abs(float(m.group(1)) - (w62 - w60)) > 0.1 + 1e-9:
+                    problems.append(f"{rel}: C8 grew {m.group(1)} m; focus.py says {w60} → {w62}")
+            if "C8" in sentence:
+                for m in re.finditer(r"(?:median time (?:by )?|worth |with it )\+?(\d\.\d{3}) s", sentence):
+                    found["own"].append(rel)
+                    if float(m.group(1)) != own_d:
+                        problems.append(f"{rel}: C8's own-window change {m.group(1)} s; focus.py says {own_d}")
+                    if "whole second" in sentence and own_d < 1.0:
+                        problems.append(f"{rel}: calls C8's {own_d} s 'a whole second'")
+            if "stored window" in sentence:
+                for m in re.finditer(r"(?:the same corner is|C8 is[^.]{0,12}?) \+(\d\.\d{3}) s", sentence):
+                    found["stored"].append(rel)
+                    if float(m.group(1)) != stored_d:
+                        problems.append(f"{rel}: C8 over the stored window {m.group(1)} s; focus.py says {stored_d}")
+            for m in re.finditer(r"(\d\.\d\d) ?% (?:apart|of real lap-total drift)", sentence):
+                found["pct"].append(rel)
+                if m.group(1) != pct:
+                    problems.append(f"{rel}: the D24 lap totals {m.group(1)} % apart; focus.py says {pct}")
+            for m in re.finditer(r"MAX_LAP_TOTAL_DRIFT` \((\d+) %", sentence):
+                if int(m.group(1)) != drift:
+                    problems.append(f"{rel}: MAX_LAP_TOTAL_DRIFT quoted as {m.group(1)} %, it is {drift} %")
+            if re.search(r"change smaller than", sentence) and re.search(r"(?:the corner's|its) own (?:IQR|interquartile|spread)",
+                                                                         sentence):
+                problems.append(f"{rel}: the spread test described with the corner's OWN spread — "
+                                f"`verdict` takes the wider of the two sessions'")
+    for family, least in (("promoted", 1), ("moves", 1), ("grew", 3), ("grew_by", 2), ("own", 5),
+                          ("stored", 2), ("pct", 3)):
+        assert len(found[family]) >= least, (f"the {family} scan found {found[family]} — fewer quotes "
+                                             f"than the tree is known to carry; a phrasing changed")
+    assert not problems, "quotes of focus.py's measured figures that are not its tables':\n  " + \
+        "\n  ".join(problems)
+    print(f"test_every_quote_of_the_focus_figures_is_focus_py_s OK "
           f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
 
 
@@ -909,16 +1217,221 @@ def test_the_refusal_record_matches_the_footage():
     print("test_the_refusal_record_matches_the_footage OK\n" + "\n".join(lines))
 
 
+def _brake_measure(s):
+    """coaching.py's brake-habit table by its stated method, off one real session: the rows the
+    coaching panel shows, RANKED, whose best lap has a matched application that the panel's own
+    `_brake_point_hint` would still print if it were handed that single application instead of the
+    habit. Also everything the prose names that is not a cell."""
+    from types import SimpleNamespace
+
+    from studio import coaching
+    from studio import coaching_panel as panel
+
+    opps = s.coaching_opportunities()
+    order = sorted(opps.rows, key=lambda r: -r.time_lost)   # the evidence table's rank
+    best = s.best_lap_id()
+    bps = {bp.cid: bp for bp in s.driving.lap_brake_points(best)}
+    braking = {b.cid: b for b in s.brake_report()}
+    habits = s.coaching_brake_points()
+    clean = len(s.consistency_lap_ids())
+    rows = []
+    for r in panel._shown_rows(opps):
+        bp = bps.get(r.cid)
+        if not r.evidence.ranked or bp is None:
+            continue
+        # The best lap's application in the habit's shape. n_laps is the one field a single lap
+        # cannot have; it is set to the minimum so the habit-only gate is neutral.
+        one_lap = SimpleNamespace(cid=bp.cid, n_laps=coaching.MIN_BRAKE_LAPS, metres_later=bp.metres_later,
+                                  optimal_brake_dist=bp.optimal_brake_dist, actual_brake_dist=bp.actual_brake_dist)
+        if panel._brake_point_hint(one_lap, r.entry_dist) is None:
+            continue
+        b = braking[r.cid]
+        # The table's "habit" is BRAKING's column, which the fix made the coaching hint's by construction.
+        assert habits[r.cid].metres_later == b.metres_later_med, (r.cid, habits[r.cid], b)
+        rows.append((r.cid, order.index(r) + 1, bp.metres_later, b.metres_later_med, b.n, clean))
+    unbraked = {r.cid: (order.index(r) + 1, braking[r.cid].n) for r in opps.rows
+                if r.evidence.ranked and r.cid not in bps and r.cid in braking}
+    return sorted(rows, key=lambda x: x[1]), unbraked, min(b.n for b in braking.values())
+
+
+def test_the_brake_habit_table_matches_the_footage():
+    root = _footage_root()
+    if not root:
+        print("skip test_the_brake_habit_table_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
+        return
+    pub = _brake_rows()
+    text = _flatten(_read(_COACHING))
+    problems, lines, gaps, unbraked, fewest = [], [], {}, {}, []
+    with _Footage(root) as fx:
+        for rec in ("0060", "0062"):
+            s = fx.load(rec)
+            if s is None:
+                problems.append(f"{rec}: footage missing under {root}")
+                continue
+            rows, unbraked[rec], least = _brake_measure(s)
+            fewest.append(least)
+            gaps[rec] = rows
+            for cid, rank, best, habit, n, clean in rows:
+                lines.append(f"#   {rec}  C{cid:<6d}{rank:>4d}{best:>12.1f}{habit:>9.1f}  {n:>2d}/{clean}")
+            got = [(c, k, round(b, 1), round(h, 1), n, cl) for c, k, b, h, n, cl in rows]
+            want = [(r.cid, r.rank, r.best, r.habit, r.laps, r.clean) for r in pub if r.rec == rec]
+            if got != want:
+                problems.append(f"brake habits {rec}: published {want}, measured {got}")
+    m = _need(r"sit (\d+\.\d) m apart at the median on 0060 \(worst (\d+\.\d) m, C(\d+)\) and (\d+\.\d) m "
+              r"apart on 0062 \(worst (\d+\.\d) m, C(\d+)\)", text, "the gap sentence under the table")
+    for i, rec in enumerate(("0060", "0062")):
+        g = [abs(b - h) for _c, _k, b, h, _n, _cl in gaps.get(rec, [])]
+        if not g:
+            continue
+        worst = max(gaps[rec], key=lambda x: abs(x[2] - x[3]))
+        got = (f"{_median(g):.1f}", f"{max(g):.1f}", str(worst[0]))
+        if got != (m.group(1 + 3 * i), m.group(2 + 3 * i), m.group(3 + 3 * i)):
+            problems.append(f"{rec}: median / worst gap measured {got}, prose {m.groups()[3 * i:3 + 3 * i]}")
+    m = _need(r"0062's best lap had no matched brake event at all into C(\d+), so the (top|second|third)-ranked "
+              r"row said nothing about a corner (\d+) laps DID brake into", text, "the unbraked-corner sentence")
+    rank = {"top": 1, "second": 2, "third": 3}[m.group(2)]
+    if unbraked.get("0062", {}).get(int(m.group(1))) != (rank, int(m.group(3))):
+        problems.append(f"0062's ranked corners the best lap never braked into: {unbraked.get('0062')}; "
+                        f"prose names C{m.group(1)}, rank {rank}, {m.group(3)} laps")
+    m = _need(r"every corner on the two D24 recordings matched on at least (\d+) of its clean laps", text,
+              "MIN_BRAKE_LAPS's measured note")
+    if fewest and min(fewest) != int(m.group(1)):
+        problems.append(f"the fewest laps any corner matched is {min(fewest)}; prose says {m.group(1)}")
+    report = "\n".join(["  re-measured brake-habit table:"] + lines)
+    assert not problems, "coaching.py's brake-habit table is not what the app computes:\n  " + \
+        "\n  ".join(problems) + "\n" + report
+    print(f"test_the_brake_habit_table_matches_the_footage OK\n{report}")
+
+
+def _focus_measure(s60, p60, s62, p62):
+    """focus.py's tables by their stated method: promote 0060's top three through
+    `Session.focus_items`, re-measure them on 0062 through `Session.focus_report` — once against
+    the real (empty) session-record store, and once with an identical record forced onto both
+    sides so the spread test is reached — plus the window figures and the apex/lap-total prose."""
+    import numpy as np
+
+    from studio import coaching, session_record
+    from studio import focus as F
+
+    e60, e62 = s60.library_entry(p60), s62.library_entry(p62)
+    top = s60.coaching_opportunities().ranked_rows()[:3]
+    items = s60.focus_items([r.cid for r in top], e60)
+    real = s62.focus_report(items, e62, session_record.empty_store(), e60["track"])
+    store = session_record.empty_store()
+    for fp in (e60["fingerprint"], e62["fingerprint"]):
+        rec = session_record.blank_record()
+        rec["conditions"] = "dry"
+        session_record.put(store, fp, rec)
+    alike = s62.focus_report(items, e62, store, e60["track"])
+    rows = []
+    for r, o in zip(top, alike.outcomes, strict=True):
+        it, now = o.item, o.now
+        rows.append((it.cid, r.time_lost, it.median_s, it.iqr_s, now.median, now.iqr, o.delta,
+                     coaching.SPREAD_MARGIN * max(it.iqr_s, now.iqr), o.kind, it.n_laps, now.n_laps))
+    t60, t62 = float(s60.corners.basis()[1]), float(s62.corners.basis()[1])
+    c60 = {c.cid: c for c in s60.corners.corner_list()}
+    c62 = {c.cid: c for c in s62.corners.corner_list()}
+    cids = sorted(set(c60) & set(c62))
+    own60 = dict(zip(cids, s60.focus_samples([(c60[c].enter / t60, c60[c].exit / t60) for c in cids]), strict=True))
+    own62 = dict(zip(cids, s62.focus_samples([(c62[c].enter / t62, c62[c].exit / t62) for c in cids]), strict=True))
+    at60 = dict(zip(cids, s62.focus_samples([(c60[c].enter / t60, c60[c].exit / t60) for c in cids]), strict=True))
+    windows = {c: (c60[c].exit - c60[c].enter, c62[c].exit - c62[c].enter, own60[c].median, own62[c].median,
+                   own62[c].median - own60[c].median, at60[c].median, at60[c].median - own60[c].median)
+               for c in cids}
+    apex = [c62[c].apex - c60[c].apex * t62 / t60 for c in cids]
+    # session.py's focus_items note: the stored (window) median against the corner service's own.
+    service = {}
+    for name, s, own in (("0060", s60, own60), ("0062", s62, own62)):
+        mat = np.asarray([[st.time for st in s.corners.lap_corner_stats(i)] for i in s.consistency_lap_ids()
+                          if len(s.corners.lap_corner_stats(i)) == len(cids)], float)
+        service[name] = [abs(float(np.median(mat[:, k])) - own[c].median) for k, c in enumerate(cids)]
+    return {"rows": rows, "blockers": [o.blocker for o in real.outcomes], "no_record": F.BLOCK_NO_RECORD,
+            "dates": (e60["date"], e62["date"]), "totals": (t60, t62), "windows": windows, "apex": apex,
+            "n_corners": len(cids), "service": service}
+
+
+def test_the_focus_tables_match_the_footage():
+    root = _footage_root()
+    if not root:
+        print("skip test_the_focus_tables_match_the_footage (set PACER_MEASURED_FIGURES_DIR)")
+        return
+    rows, windows = _focus_tables()
+    text = _flatten(_read(_FOCUS))
+    problems, lines = [], []
+    with _Footage(root) as fx:
+        s60, s62 = fx.load("0060"), fx.load("0062")
+        if s60 is None or s62 is None:
+            raise AssertionError(f"D24 footage missing under {root}")
+        got = _focus_measure(s60, fx.paths("0060"), s62, fx.paths("0062"))
+    for cid, lost, m0, q0, m1, q1, d, bar, kind, n0, n1 in got["rows"]:
+        lines.append(f"  C{cid:<6d}+{lost:.3f} s      {m0:.3f} s      {q0:.3f}  {m1:.3f} s      {q1:.3f}  "
+                     f"{d:+.3f}  {bar:.3f}  {kind}")
+    measured = [(c, f"{lo:.3f}", f"{m0:.3f}", f"{q0:.3f}", f"{m1:.3f}", f"{q1:.3f}", f"{d:+.3f}", f"{b:.3f}", k)
+                for c, lo, m0, q0, m1, q1, d, b, k, _n0, _n1 in got["rows"]]
+    published = [(r.cid, f"{r.promoted:.3f}", f"{r.then_med:.3f}", f"{r.then_iqr:.3f}", f"{r.now_med:.3f}",
+                  f"{r.now_iqr:.3f}", f"{r.change:+.3f}", f"{r.bar:.3f}", r.verdict) for r in rows]
+    if measured != published:
+        problems.append(f"promoted three: published {published}, measured {measured}")
+    if got["blockers"] != [got["no_record"]] * len(rows):
+        problems.append(f"with no session records the verdicts are blocked by {got['blockers']}, not no_record")
+    m = _need(r"\(0060: (\d{4}-\d\d-\d\d), (\d+) laps; 0062: (\d{4}-\d\d-\d\d), (\d+) laps\)", text, "the dates")
+    laps = {(r[9], r[10]) for r in got["rows"]}
+    if (m.group(1), m.group(3)) != got["dates"] or laps != {(int(m.group(2)), int(m.group(4)))}:
+        problems.append(f"dates {got['dates']} and laps {laps}; prose {m.groups()}")
+    for cid, pub in windows.items():
+        w = got["windows"][cid]
+        lines.append(f"  C{cid:<6d}{w[0]:.1f} m       {w[1]:.1f} m       {w[2]:.3f} s   {w[3]:.3f} s   "
+                     f"{w[4]:+.3f} s    {w[5]:.3f} s           {w[6]:+.3f} s")
+        fmt = ("{:.1f}", "{:.1f}", "{:.3f}", "{:.3f}", "{:+.3f}", "{:.3f}", "{:+.3f}")
+        if [f.format(x) for f, x in zip(fmt, w, strict=True)] != [f.format(x) for f, x in zip(fmt, pub, strict=True)]:
+            problems.append(f"window C{cid}: published {pub}, measured {tuple(round(x, 4) for x in w)}")
+    m = _need(r"across the (\w+) corners the two sessions' apexes agree to ([−-]\d\.\d)\.\.\+(\d\.\d) m", text,
+              "the apex sentence")
+    apex = got["apex"]
+    words = {12: "twelve", 11: "eleven", 13: "thirteen"}
+    if (m.group(1), _signed(m.group(2)), float(m.group(3))) != (words.get(got["n_corners"]), round(min(apex), 1),
+                                                               round(max(apex), 1)):
+        problems.append(f"apexes agree to {min(apex):.2f}..{max(apex):.2f} m over {got['n_corners']} corners; "
+                        f"prose {m.groups()}")
+    t60, t62 = got["totals"]
+    m = _need(r"the lap totals to (\d\.\d\d) % \((\d+\.\d) vs (\d+\.\d) m\)", text, "the lap-total sentence")
+    if (m.group(1), m.group(2), m.group(3)) != (f"{100 * (t62 / t60 - 1):.2f}", f"{t60:.1f}", f"{t62:.1f}"):
+        problems.append(f"lap totals {t60:.3f} vs {t62:.3f}; prose {m.groups()}")
+    m = _need(r"lap totals differ by (\d+\.\d\d) m on (\d+) m", text, "MAX_LAP_TOTAL_DRIFT's note")
+    if m.group(1) != f"{t62 - t60:.2f}":
+        problems.append(f"lap totals differ by {t62 - t60:.4f} m; MAX_LAP_TOTAL_DRIFT's note says {m.group(1)}")
+    sm = _need(r"per-corner medians run (\d\.\d\d)–(\d\.\d\d) s apart on 0060 and (\d\.\d\d)–(\d\.\d\d) s apart on "
+               r"0062", _flatten(_read(_SESSION)), "Session.focus_items' note")
+    for i, rec in enumerate(("0060", "0062")):
+        g = got["service"][rec]
+        if (float(sm.group(1 + 2 * i)), float(sm.group(2 + 2 * i))) != (_pct(min(g)) / 100, _pct(max(g)) / 100):
+            problems.append(f"{rec}: window vs corner-service medians {min(g):.3f}..{max(g):.3f} s; "
+                            f"session.py says {sm.group(1 + 2 * i)}–{sm.group(2 + 2 * i)}")
+    report = "\n".join(["  re-measured focus tables:"] + lines +
+                       [f"  apexes {min(apex):+.2f}..{max(apex):+.2f} m; totals {t60:.3f} / {t62:.3f} m; "
+                        f"window vs service 0060 {min(got['service']['0060']):.3f}..{max(got['service']['0060']):.3f}"
+                        f", 0062 {min(got['service']['0062']):.3f}..{max(got['service']['0062']):.3f} s"])
+    assert not problems, "focus.py's measured figures are not what the app computes:\n  " + \
+        "\n  ".join(problems) + "\n" + report
+    print(f"test_the_focus_tables_match_the_footage OK\n{report}")
+
+
 def _run_all():
     test_the_evidence_prose_is_its_table_s_arithmetic()
     test_the_reach_line_and_the_spread_gate_are_the_table_s()
     test_the_theme_table_is_the_evidence_table_s_arithmetic()
     test_the_theme_prose_follows_the_table_and_THEME_SHARE()
     test_every_quote_of_the_coaching_figures_is_coaching_py_s()
+    test_the_brake_habit_prose_is_its_table_s_arithmetic()
+    test_every_quote_of_the_brake_habit_figures_is_the_table_s()
+    test_the_focus_prose_is_its_tables_arithmetic()
+    test_every_quote_of_the_focus_figures_is_focus_py_s()
     test_the_floor_table_is_consistent_with_its_own_definitions()
     test_every_quote_of_the_floor_is_a_row_of_the_table()
     test_the_refusal_record_s_verdict_is_derived_from_its_table()
     test_the_coaching_tables_match_the_footage()
+    test_the_brake_habit_table_matches_the_footage()
+    test_the_focus_tables_match_the_footage()
     test_the_floor_table_matches_the_footage()
     test_the_refusal_record_matches_the_footage()
     print("\nmeasured-figures checks passed")

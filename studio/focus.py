@@ -21,14 +21,23 @@ is None whenever ``kind`` is ``OUTCOME_NO_VERDICT`` — the refusal is enforced 
 the copy, so no surface can print a delta the evidence does not support).
 
 MEASURED, on the two real D24 recordings — the same driver at the same track on CONSECUTIVE DAYS
-(0060: 2026-05-23, 38 laps; 0062: 2026-05-24, 65 laps), which is the input this feature takes:
+(0060: 2026-05-23, 38 laps; 0062: 2026-05-24, 65 laps), which is the input this feature takes.
+Promote 0060's top three ranked corners and measure them again on 0062 over the SAME windows.
+"promoted for" is the coaching row's time lost; the medians and interquartile ranges are the
+window's seconds over each session's clean laps; "bar" is ``SPREAD_MARGIN`` × the wider of the two
+IQRs, the test ``verdict`` applies. Re-measured after #300; tests/test_measured_figures.py derives
+the prose from these cells and, given the footage, re-measures every one:
 
-  * promote 0060's top three ranked corners (C12 +0.259 s, C4 +0.221 s, C2 +0.110 s) and measure
-    them again on 0062 over the SAME windows: C12 −0.026 s, C4 +0.061 s, C2 +0.039 s. Every one of
-    the three is inside half the corner's own interquartile spread (0.107 / 0.067 / 0.064 s). The
-    honest verdict on the only real cross-session pair this repo has is "no change you can act on",
-    three times out of three — which is why ``OUTCOME_UNCHANGED`` is a first-class answer here and
-    not an error path;
+  corner  promoted for  0060 median  IQR    0062 median  IQR    change  bar    verdict
+  C12     +0.330 s      6.774 s      0.213  6.747 s      0.167  −0.026  0.107  unchanged
+  C4      +0.244 s      4.537 s      0.129  4.597 s      0.134  +0.061  0.067  unchanged
+  C2      +0.204 s      2.364 s      0.128  2.403 s      0.073  +0.039  0.064  unchanged
+
+  * every one of the three changes is inside its bar. The honest verdict on the only real
+    cross-session pair this repo has is "no change you can act on", three times out of three —
+    which is why ``OUTCOME_UNCHANGED`` is a first-class answer here and not an error path. Only
+    the "promoted for" column moved when #300 warped the corner service; every window cell came
+    back identical, because ``window_times`` reads each lap's own clock, not that warp;
   * neither recording has a session record (the owner's app-support dir has no
     ``session_records.json`` at all), so the like-for-like gate blocks all three verdicts before the
     spread test is even reached. What the feature says today, on real data, is "I can't tell you
@@ -36,14 +45,20 @@ MEASURED, on the two real D24 recordings — the same driver at the same track o
 
 AND THE WINDOW PROBLEM, which is the one this module exists to solve and the reason a focus item
 stores a WINDOW rather than a corner id. The corner partition is re-derived per session from that
-session's own trace, so "C8" is not the same measurement twice: between the two recordings C8's
-window grew 45.0 m → 56.3 m and its own-window median time went 2.110 s → 2.660 s. Reported as a
-cross-session change that is +0.550 s of "you got slower" and every millisecond of it is the
-detector drawing a longer window (C10 likewise: 75.1 m → 81.0 m, +0.268 s). Measured over 0060's
-own stored window instead, 0062's C8 is 2.153 s — +0.042 s, and C10 +0.063 s. So a focus item
-stores its window as a FRACTION of the lap odometer and both sides are measured by the same
-function over that fraction; the corner id is a label on it, never the identity. The partitions do line up that way: across the twelve corners
-the two sessions' apexes agree to −4.2..+0.2 m, and the lap totals to 0.65 % (1059.2 vs 1066.2 m).
+session's own trace, so "C8" is not the same measurement twice. Each recording's own window for the
+corner, the median time over it, and 0062's median over 0060's STORED window instead:
+
+  corner  0060 window  0062 window  0060 own  0062 own  own change  0062 over 0060's  stored change
+  C8      45.0 m       56.3 m       2.110 s   2.660 s   +0.549 s    2.153 s           +0.042 s
+  C10     75.1 m       81.0 m       3.951 s   4.220 s   +0.268 s    4.014 s           +0.063 s
+
+Reported as a cross-session change, C8's own-window +0.549 s is "you got slower" and every
+millisecond of it is the detector drawing a longer window; over the stored window it is +0.042 s. So
+a focus item stores its window as a FRACTION of the lap odometer and both sides are measured by the
+same function over that fraction; the corner id is a label on it, never the identity. The
+partitions do line up that way: across the twelve corners the two sessions' apexes agree to
+−4.2..+0.2 m (0062's apex against 0060's scaled by the two lap totals), and the lap totals to
+0.65 % (1059.2 vs 1066.2 m).
 
 Persistence follows ``library.py`` / ``session_record.py`` — schema version read + forward
 migration, a ``.bak`` before any un-round-trippable overwrite, atomic write, one bad list dropped
@@ -93,7 +108,7 @@ MAX_LAP_TOTAL_DRIFT = 0.02
 # SLOWER / UNCHANGED; NO_VERDICT is the refusal, and it never carries a delta.
 OUTCOME_IMPROVED = "improved"
 OUTCOME_SLOWER = "slower"
-OUTCOME_UNCHANGED = "unchanged"      # the change is inside the corner's own lap-to-lap spread
+OUTCOME_UNCHANGED = "unchanged"      # the change is inside the wider side's lap-to-lap spread
 OUTCOME_NO_VERDICT = "no_verdict"    # something the evidence cannot support — see `blocker`
 OUTCOME_SET_HERE = "set_here"        # promoted from THIS session: there is nothing to compare yet
 
@@ -543,9 +558,10 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # same statistic (`coaching.SPREAD_MARGIN` × the interquartile spread) rather than a second
         # notion of significance invented here. The wider of the two sessions' spreads is the bar,
         # because a change is only as aimable as the noisier side of the comparison. With 38 and 65
-        # laps the standard error of either median is ~0.02-0.03 s and a significance test would
-        # pass almost anything: this asks whether a driver could aim at the difference, not whether
-        # it is real.
+        # laps the standard error of either median is ~0.01-0.03 s (the normal approximation,
+        # 1.2533 × IQR / 1.349 / √laps, over the six samples in the table at the top of this module)
+        # and a significance test would pass almost anything: this asks whether a driver could aim
+        # at the difference, not whether it is real.
         spread = max(item.iqr_s, now.iqr)
         if abs(delta) < SPREAD_MARGIN * spread:
             kind = OUTCOME_UNCHANGED

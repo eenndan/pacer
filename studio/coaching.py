@@ -277,18 +277,34 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # `best_lap_id()`); Stats ▸ BRAKING's "m later" column read the MEDIAN of that same quantity over
 # the clean laps. Nothing cross-referenced them, so the disagreement was invisible and unresolvable.
 #
-# MEASURED, on the two real D24 recordings, over the corners whose hint the coaching panel actually
-# showed (best-lap value vs BRAKING's median, metres):
+# MEASURED, on the two real D24 recordings, over the rows whose hint the coaching panel would show
+# if it still read the best lap: a RANKED row whose best lap has a matched brake application, at
+# least BRAKE_HINT_MIN_M of metres, and an optimum no more than BRAKE_HINT_MAX_PAST_TURN_IN_M past
+# the turn-in. "best lap" is that lap's single `metres_later`, "habit" is the median the BRAKING
+# table's "m later" column prints (+ = could brake later), "laps" is how many clean laps matched an
+# application, and "rank" is the row's place in the evidence table above. Re-measured after #300;
+# tests/test_measured_figures.py derives the prose below from these cells and, given the footage,
+# re-measures every one:
 #
-#   0060 (38 laps)  C2 29.0 / 22.9   C5 24.1 / 16.6   C9 22.7 / 17.3   C12 9.6 / 14.9
-#                   C7 13.7 / 14.6   C4 16.5 / 16.6            — median gap 5.3 m, worst 7.5 m
-#   0062 (65 laps)  C1  2.9 / 12.2   C5 13.4 / 15.9   C7 10.7 / 13.1  — median gap 2.5 m, worst 9.3
+#   rec   corner  rank  best lap m  habit m   laps
+#   0060  C12        1         9.7     14.2  38/38
+#   0060  C4         2        16.5     16.7  38/38
+#   0060  C2         3        29.0     23.2  38/38
+#   0060  C9         4        22.7     18.4  31/38
+#   0062  C12        2         7.0     10.8  65/65
+#   0062  C1         3         2.9     12.2  62/65
+#   0062  C6         4        14.5     27.1  65/65
+#   0062  C5         5        13.4     15.9  65/65
+#
+# The two answers sit 4.4 m apart at the median on 0060 (worst 5.9 m, C2) and 6.6 m apart on 0062
+# (worst 12.6 m, C6).
 #
 # 0062's C1 is the one that shows what the split cost: the best lap happened to brake within 3 m of
 # its own optimum, so coaching printed "~3 m later" — barely over the BRAKE_HINT_MIN_M noise floor,
-# i.e. a shrug — while the driver's HABIT over 62 laps was 12.2 m early. Opposite advice from one
-# lap of sampling noise. The reverse case is just as bad: on 0062 the best lap had no matched brake
-# event at all into C3 or C9, so coaching said nothing about corners 44 and 39 laps DID brake into.
+# i.e. a shrug — while the driver's HABIT over 62 laps was 12.2 m early. Both say "later"; one of
+# them says it is not worth doing, from one lap of sampling noise. The reverse case is just as bad:
+# 0062's best lap had no matched brake event at all into C3, so the top-ranked row said nothing about
+# a corner 44 laps DID brake into.
 #
 # THE RULE, therefore: a coaching instruction is about the driver's HABIT, so it is a cross-lap
 # statistic over the same clean laps every other number on the row already uses (`time_lost` is a
@@ -297,8 +313,8 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # because that scatter is large — and it was the only number on the row that was not.
 
 # A braking habit needs at least this many matched applications before it is a habit. (Measured, a
-# real recording is nowhere near it: the corners above matched on 32..38 of 38 and 39..65 of 65
-# laps. This guards a 3-lap session, not a normal one.)
+# real recording is nowhere near it: every corner on the two D24 recordings matched on at least 31
+# of its clean laps. This guards a 3-lap session, not a normal one.)
 MIN_BRAKE_LAPS = 3
 
 
