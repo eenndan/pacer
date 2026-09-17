@@ -586,7 +586,7 @@ def lap_corner_stats(corner_list: list[Corner], total_ref: float, dists, speed_k
         frame = [b for c in corner_list for b in (c.enter, c.exit)]
         alignment = lap_alignment(frame, total_ref, total_lap, traces=traces) if frame else None
     seg = segment_times(corner_list, total_ref, dists, elapsed, traces, alignment)
-    # The same gated enter/exit boundaries segment_times partitions on, so the in-window apex/edge
+    # The same projected enter/exit boundaries segment_times partitions on, so the in-window apex/edge
     # speeds read off the identical window (interleaved [enter1, exit1, enter2, exit2, …]).
     interior = []
     for c in corner_list:

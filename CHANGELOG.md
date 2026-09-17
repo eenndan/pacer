@@ -240,6 +240,22 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **Coaching stops crowning one corner when two of them are the same number.** The plan's second
+  line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
+  of the owner's recordings, that crown is not something the data supports: the top two corners are
+  0.086 s and **0.005 s** apart, a paired permutation test over the lap-by-lap corner times cannot
+  tell them apart (p = 0.125 and p = 0.837), and resampling the laps hands the crown to the
+  runner-up in 14 % and **46 %** of draws. Split one session into its odd and its even laps and the
+  crown changes on both recordings. The line now reads "Start with C3 or C12: +0.15 s and +0.14 s
+  sit closer together than your own lap-to-lap spread, so either is the same call." A lead the
+  measurement *does* separate is unchanged, word for word — and the ranking underneath is unchanged
+  too: 17 of its 30 ranked corner pairs do separate.
+  - **What was refused on the way, and why:** a seconds interval beside each recommendation. The
+    three things such an interval could mean — the corner's lap-to-lap spread, the uncertainty on
+    its median, and the benefit measured on the laps that already did the recommended thing —
+    disagree by 4× on the same corner, and the third one's **sign flips** between recordings and is
+    confounded by lap pace. The numbers are in `studio/docs/refused-2026-09.md` §3.
+
 - **Every lap's corners are now measured in the same frame — which moves the ideal lap and
   reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not
   by assuming the lap is a uniformly stretched copy of the best one. That spatial match used to run
@@ -310,6 +326,23 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
     by label — a lap's inherited GPS-quality class, and a mark's chapter anchor — were measured
     rather than assumed: the class changes for **0 of 38 and 0 of 65** laps, and the mark round
     trip is **exact**. Both now carry the numbers instead of the claim.
+
+- **A missing corner alignment was documented as "below the drift gate" long after there was any
+  drift gate.** The per-lap warp that maps the corner windows onto a lap
+  (`CornerModel.lap_alignment`) may come back as "none"; its docstring said that meant the lap had
+  drifted too little to be worth warping. `corners.NORMALIZED_DRIFT_MAX` was deleted when every lap
+  started being warped, so that has been untrue since. Measured before changing anything: **no lap
+  on either of the owner's recordings reaches it at all** — 0 of 38 (D24 0060 pair) and 0 of 65
+  (0062), with 4-22 and 20-22 of the 24 corner boundaries carrying a directly matched interior
+  knot — and the three things that really do produce it are "there was nothing to build a warp out
+  of": no corner basis, no usable trace pair (a cross-recording reference lap has none), or no
+  spatial match surviving anywhere on the lap. **No caller acted on the old meaning**: the one
+  branch on it returns the normalized projection, which is right under either reading, so the code
+  was right and the comments were wrong — **29 lines across 12 files**, including the note the
+  provenance panel prints under a corner time, which named a gate the app no longer has. Both
+  halves are now guarded (`tests/test_corner_alignment_memo.py`): the three causes are driven
+  through the real service, and the wording is checked in both directions so a target that
+  disappears fails too.
 
 - **Every GPS-derived number drawn over the video was half a second late, and now it is not.** The
   camera's accelerometer and gyroscope are timestamped on the clock the picture plays on; its GPS

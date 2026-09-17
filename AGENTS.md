@@ -187,7 +187,7 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   corner/driving/delta/bests/consistency, no media file), across base/ref/ref_cleared phases, plus a
   `drift_noise` phase over `tests/_synthetic.drift_noise_session` (GPS speed noise at the measured
   sigma, one lap drifted 1 % with an unmatched corner boundary — the stadium laps have neither, so
-  a drift-gated or noise-driven change could not move them) and a `drift_median` phase over
+  an alignment-driven or noise-driven change could not move them) and a `drift_median` phase over
   `tests/_synthetic.drift_median_session` (the same three geometries with the drift on the
   MEDIAN-time lap — coaching reads the median lap, so with the drift on the slowest one every
   coaching corner-window projection was the identity and #289's coaching-alignment fix moved 15
@@ -261,9 +261,10 @@ the golden gate above.
 
 **Before proposing a feature, check it was not already measured and refused.**
 [studio/docs/refused-2026-09.md](studio/docs/refused-2026-09.md) records the ones whose evidence
-would otherwise live only in a closed pull request — the mistake-hangover detector and the
-ideal-lap recombination dotplot, each with the numbers that killed it. They stay refused unless you
-bring NEW evidence; "it would be nice to have" is not new evidence.
+would otherwise live only in a closed pull request — the mistake-hangover detector, the ideal-lap
+recombination dotplot and a seconds interval on coaching recommendations, each with the numbers
+that killed it. They stay refused unless you bring NEW evidence; "it would be nice to have" is not
+new evidence.
 
 **Changelog:** a user-visible change (feature, fix, behaviour tweak) gets a line under
 `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR — grouped Added/Changed/Fixed, one

@@ -106,6 +106,116 @@ and what the Stats page's sample disclosure states.
 
 ---
 
+## 3. A seconds interval on coaching recommendations — refused (#311)
+
+**The idea.** A coaching row claims a median time lost for a corner. Put an interval in seconds
+beside it — "worth 0.10–0.18 s" — so the driver knows how much the recommendation is worth.
+
+**Measured on current `main`**, not from any earlier wave's figures: #289 moved the coaching brake
+window onto the shared alignment and #300 then removed the drift gate, which reordered the corner
+ranking on both recordings. 38 clean laps × 12 corners (0060) and 65 × 12 (0062), through the real
+`Session.load` path.
+
+### Three different quantities all get called "the interval", and they disagree by 4×
+
+For the top ranked corner of each recording:
+
+| | 0060 · C12 | 0062 · C3 |
+|---|---|---|
+| median loss — what the row publishes | **+0.330 s** | **+0.148 s** |
+| SPREAD: that corner's own lap-to-lap IQR | 0.331 s | 0.158 s |
+| UNCERTAINTY: bootstrap 95 % CI of the median | [+0.250, +0.395] (0.146 wide) | [+0.099, +0.183] (0.084 wide) |
+| jackknife, drop one lap | [+0.327, +0.333] (0.006 wide) | [+0.148, +0.149] (0.001 wide) |
+
+The lap-to-lap spread is 2× the CI and 50× the jackknife range. An app that prints one of these
+beside a number called "time lost" has to say which, and only the first is already shipped
+(`Evidence.iqr`, which the abstain gate reads and the abstain sentence spells out).
+
+### The question an interval has to earn: is the top recommendation separable from the second?
+
+**No — on both recordings, and it fails before any correction is applied.**
+
+| | 0060 | 0062 |
+|---|---|---|
+| top / second | C12 +0.330 s / C4 +0.244 s | C3 +0.148 s / C12 +0.143 s |
+| gap | 0.086 s | **0.005 s** |
+| paired within-lap permutation, 20,000, uncorrected | **p = 0.125** | **p = 0.837** |
+| the same, max-statistic FWER over 11 comparisons | 0.837 | 0.998 |
+| bootstrap (20,000 lap resamples): top keeps the crown | 85.9 % | **53.8 %** (C12 takes 46.0 %) |
+| split-half of the SAME session (odd vs even laps) | crowns C4 vs C12 — **disagree** | crowns C3 vs C12 — **disagree** |
+| jackknife: does dropping one lap change the crown? | 0 of 38 | 0 of 65 |
+
+The jackknife row is the trap: "is this fragile to one lap?" answers **no** on both recordings, and
+it is the wrong question — the crown is decided by many laps at once, which is what the bootstrap
+and the split-half see.
+
+**The ranking itself survives; only its top is unsupported.** 17 of the 30 ranked pairs separate at
+p < 0.05, and the top corner is separable from 8 of 11 (0060) and 7 of 11 (0062) other corners at
+FWER 0.05. And the ranking does not replicate ACROSS recordings at all: loss-vs-loss r = **−0.122**,
+rank ρ = **−0.196**, top corner C12 vs C3 — same driver, same track.
+
+### T4's own proposal — the observed-benefit partition — is refuted
+
+"On the laps that already did the recommended thing, the corner's time vs the laps that did not",
+measured per ranked row (laps split at that corner's own median brake point / coast / apex speed;
+5,000-permutation label null; `pace-adj` removes each lap's own pace by regression):
+
+| recording · corner | reason | n did / not | benefit | perm p | pace-adj | lap-time gap |
+|---|---|---|---|---|---|---|
+| 0060 C12 | braking | 19 / 19 | **+0.122 s** | 0.066 | +0.104 | **−0.295 s** |
+| 0060 C4 | braking | 19 / 19 | **−0.085 s** | 0.794 | −0.076 | +0.154 s |
+| 0060 C9 | apex | 19 / 19 | +0.023 s | 0.750 | +0.026 | −0.121 s |
+| 0060 C6 | braking | 19 / 19 | +0.043 s | 0.549 | +0.046 | −0.024 s |
+| 0062 C3 | braking | 22 / 22 | +0.008 s | 0.823 | +0.026 | **−0.382 s** |
+| 0062 C12 | braking | 33 / 32 | **−0.032 s** | 0.488 | −0.046 | +0.211 s |
+| 0062 C6 | braking | 33 / 32 | −0.018 s | 0.539 | −0.055 | −0.037 s |
+| 0062 C5 | braking | 33 / 32 | +0.040 s | 0.088 | +0.047 | +0.117 s |
+| 0062 C8 | apex | 33 / 32 | +0.054 s | **0.0002** | +0.059 | +0.141 s |
+
+The sign flips: on each recording one of the two top rows says the laps that DID the recommended
+thing were **slower** through that corner. On the top row of each recording the group's lap-time gap
+(−0.295 s, −0.382 s) is larger than the benefit itself — those laps were simply faster laps, which
+is the confound #265 already named. One partition of the nine is significant, and it is a 6th-ranked
+apex row, not a braking one. A range built on this would print a number whose **sign** is not stable.
+
+Two rows carry `REASON_LINE`, which has no behavioural lever at all, so the partition cannot even be
+formed for them — a "range" feature that abstains on the reason the app falls back to is not a
+feature.
+
+### Controls
+
+- **Negative control** (corner labels shuffled *within* each lap — every lap keeps its own pace and
+  spread exactly, only corner identity dies; 300 replicates): "the top corner is separable from
+  *some* other corner" fires **19.3 % / 20.7 %** of the time, not 5 %. The max-statistic correction
+  covers the 11 comparisons but **not the selection of which corner is top**. The top-vs-second
+  comparison fires **0 %** under the same null, and that is the comparison the verdict above rests
+  on — so the verdict is on the conservative side of its own control.
+- **Positive control**: +0.25 s planted on the second-ranked corner is recovered exactly (+0.250 s)
+  and the bootstrap CI covers the planted size, but it reaches only p_fwer 0.645 (0060) / 0.096
+  (0062) against the old top. The family-wise test is **too blunt for adjacent ranks**, which is the
+  second reason the verdict above is quoted on the *uncorrected* p — where it already fails.
+
+### Why the modelled form is the wrong answer here even where it is tight
+
+The coaching surfaces already publish an **observed** middle half and say so in as many words
+("your observed spread, not a modelled margin", the brake-point tooltip). A bootstrap CI would be
+the only modelled margin on the page, and it would sit next to a row whose claim is already gated
+by the observed spread (`SPREAD_MARGIN`). Two spread numbers, one observed and one modelled, on one
+row, is the disagreement this app keeps paying to remove.
+
+### What shipped instead
+
+The measurement found a live overclaim rather than a missing feature: the theme's second action
+crowned **one** corner ("Start with C3: +0.15 s") on a recording where the runner-up is 0.005 s
+behind and takes the crown in 46 % of resamples. That sentence now names both corners when their
+gap is inside the pair's own lap-to-lap spread — `gap < SPREAD_MARGIN × min(IQR)`, the same
+actionability margin the per-row gate already applies, on numbers the row already carries (no
+modelled interval, no new field, no golden leaf). Validated against the permutation ground truth on
+all 30 ranked pairs of both recordings: **0 misses** (it never stays silent on a pair the
+permutation calls a tie) and 2 over-calls, both marginal (p = 0.039 and p = 0.066).
+
+---
+
 ## Related refusals that already live in the tree
 
 These were also refused on measurement and already have their reasoning in code, so they are not

@@ -124,7 +124,7 @@ def seed_corner_basis(session, spans=((200.0, 300.0), (600.0, 750.0)), total=100
     detection finds nothing — which means the whole ideal-lap family (Session.ideal_total /
     ideal_lap_elapsed / delta_to_ideal / theoretical_best, all of which are the corner/straight
     partition composite) returns None on an unseeded synthetic session. Everything downstream of
-    the basis is still REAL: the per-lap projection, the drift gate, and the
+    the basis is still REAL: the per-lap projection, the spatial alignment, and the
     `corners.segment_times` sum assertion all run against it.
 
     `spans` is [(enter, exit), …] in reference-odometer metres, giving a 2N+1 partition."""
@@ -232,10 +232,13 @@ _DN_LAPS = (
 # THE FIXTURE ABOVE CANNOT SEE A COACHING-PATH DEFECT, and this one exists because of it. In
 # `_DN_LAPS` the drifting lap is the SLOWEST (37.06 s vs 35.91 / 36.60), while the whole coaching
 # model — `Session.coaching_opportunities` -> `coaching.summarize` — reads the MEDIAN-time lap
-# (`coaching.median_lap_id`). Measured on main: `_DN_LAPS`' median lap 2 sits at 0.0000 % drift with
-# `corners.lap_alignment` None, so every corner-window projection on the coaching path is the
-# IDENTITY there and no change to it can move a leaf. That is exactly what happened: #289 moved
-# `coaching._win` onto the gated, warped projection and moved 15 of 168,664 leaves on the D24 0060
+# (`coaching.median_lap_id`). Measured on main: `_DN_LAPS`' median lap 2 sits at 0.0000 % drift and
+# drives the reference line itself, so its warp is the IDENTITY (max |warp − normalized| over the
+# partition is 0.000 m) and every corner-window projection on the coaching path is a no-op there —
+# no change to it can move a leaf. (Before #300 that lap produced no warp at all, `lap_alignment`
+# None, which is the same identity by a different route: deleting that threshold changed which
+# branch this fixture takes, not what it measures.) That is exactly what happened: #289 moved
+# `coaching._win` onto the warped projection and moved 15 of 168,664 leaves on the D24 0060
 # pair and ZERO synthetic ones, drift_noise included.
 #
 # THE ONLY THING THAT CHANGES HERE IS WHICH LAP IS THE MEDIAN. The three geometries are the two

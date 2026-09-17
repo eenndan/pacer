@@ -651,7 +651,7 @@ def corner_phase_losses(
         return _NO_PHASES
 
     # Project the reference-odometer window [c_enter, c_exit] onto this lap's own odometer via the
-    # shared drift gate — the SAME helper the best-lap subtrahend and the reason windows use.
+    # shared alignment — the SAME helper the best-lap subtrahend and the reason windows use.
     lap0, lap1 = _project_window(c_enter, c_exit, corner_dist_total, lap_total,
                                  traces=lap_traces, frame=frame, alignment=lap_align)
     # Equal-distance thirds of each lap's own projected window (same fraction → same track third).
@@ -782,8 +782,8 @@ def summarize(
     event's OVERLAP with the corner window is integrated on the lap's own clock instead of the event
     being taken or dropped whole by its onset (_window_brake_time) — absent → that degenerate rule.
     median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
-    lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the drift-gated spatial
-    boundary alignment in the phase decomposition (omitted → normalized, byte-identical pre-gate).
+    lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the spatial boundary
+    alignment in the phase decomposition (omitted → the normalized projection).
     median_align/best_align are those two laps' warps ALREADY BUILT (Session hands over the corner
     service's memoized ones); omitted → derived here from the traces, exactly as before.
     top_n caps how many ranked rows get a dominant reason attached; None (the default) analyses
@@ -822,7 +822,7 @@ def summarize(
     best_trace = ((best_dist, best_elapsed)
                   if best_dist is not None and best_elapsed is not None else (None, None))
 
-    # The WHOLE partition's reference boundaries: each lap's drift-gated warp is built from all of
+    # The WHOLE partition's reference boundaries: each lap's spatial warp is built from all of
     # them, so a per-corner phase window is the same window the Corners table measured. The two
     # warps are built ONCE here, not once per corner inside the loop below — and when the caller
     # passes them in (Session reads them off the corner service's memo) not even once.
@@ -837,7 +837,7 @@ def summarize(
                       if corner_dist_total and best_lap_total else None)
 
     # The window a lap's brake/coast events are matched in — the corner projected onto that lap's
-    # OWN odometer, through the SAME drift gate, the SAME whole-partition frame and the SAME
+    # OWN odometer, through the SAME alignment, the SAME whole-partition frame and the SAME
     # already-built warp the phase triple above is measured in (_project_window).
     #
     # This was the last un-aligned corner-window projection in the app: it scaled by
@@ -1064,13 +1064,84 @@ def theme_sentence(theme: Theme) -> str:
             f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached.")
 
 
+# ------------------------------------------------------- when the lead corner is not a lead
+#
+# WHY THIS EXISTS. "Start with C3" is the one sentence in the app that tells a driver which corner
+# to work on FIRST, and it names one corner. Measured on both real recordings on current `main`
+# (after #289 put the coaching window on the shared alignment and #300 removed the drift threshold —
+# both moved these numbers), with a paired within-lap permutation test over 20,000 corner-label
+# swaps, the top ranked corner is not distinguishable from the second on EITHER recording:
+#
+#     0060   C12 +0.330 s  vs  C4  +0.244 s    gap 0.086 s    p = 0.125
+#     0062   C3  +0.148 s  vs  C12 +0.143 s    gap 0.005 s    p = 0.837
+#
+# — and a paired lap bootstrap hands the crown to the runner-up in 13.8 % / 46.0 % of 20,000
+# resamples. Split the SAME session into its odd and its even laps and the crown changes on both.
+# (The jackknife says the opposite: dropping any ONE lap never moves it, 0 of 38 and 0 of 65 — the
+# crown is decided by many laps at once, so the one-lap question answers "stable" and is the wrong
+# question.) The RANKING is not what is broken: 17 of the 30 ranked pairs separate at p < 0.05, and
+# the top corner is separable from 8 of 11 (0060) / 7 of 11 (0062) others under a max-statistic
+# family-wise correction. It is the crown alone. `studio/docs/refused-2026-09.md` §3 carries the
+# whole measurement, including why a seconds INTERVAL was refused on the same data.
+#
+# THE TEST, and why this one: two rows are indistinguishable when the gap between their losses is
+# smaller than half the smaller of their two interquartile spreads — SPREAD_MARGIN, the same
+# actionability margin the per-row gate already applies to ONE row's claim, applied to the gap
+# between two of them. It reads only numbers the rows already carry (no modelled interval, no new
+# field, no golden leaf), and it was validated against the permutation ground truth on all 30
+# ranked pairs of both recordings: 0 misses — it never stays silent on a pair the permutation calls
+# a tie — and 2 over-calls, both marginal (p = 0.039, p = 0.066). The alternatives measured on the
+# same 30 pairs: 0.25x min(IQR) MISSES 6 of the ties (unsafe), and 1.0x min(IQR), 0.5x max(IQR) and
+# 0.5x the pair-difference IQR each over-call 13 of 30 (blunt).
+#
+# A row built without per-lap times carries iqr 0.0 (_NO_EVIDENCE), so the margin is 0 and it can
+# never tie: an unmeasured summary prints exactly what it printed before.
+def lead_ties(rows: list[Opportunity], lead_cid: int | None) -> list[Opportunity]:
+    """The ranked rows whose loss the measurement cannot separate from the lead's, biggest first
+    and the lead itself in front. [] when no ranked row carries `lead_cid`; a ONE-element result
+    means the lead stands alone and can be named on its own."""
+    ranked = sorted((r for r in rows if r.evidence.ranked), key=lambda r: -r.time_lost)
+    lead = next((r for r in ranked if r.cid == lead_cid), None)
+    if lead is None:
+        return []
+    return [lead] + [r for r in ranked if r is not lead
+                     and abs(lead.time_lost - r.time_lost)
+                     < SPREAD_MARGIN * min(lead.evidence.iqr, r.evidence.iqr)]
+
+
+# Name at most three corners before the line costs more than it says; any others are counted. The
+# tied sentence also drops the single-lead "you have matched it on N of M laps" clause: that clause
+# is per corner, and repeating it per tied corner would make the page's longest line longer than
+# the theme sentence above it (the count stays on every row's own "Done it?" column).
+_TIE_NAME_CAP = 3
+
+
+def _tied_lead_sentence(tied: list[Opportunity]) -> str:
+    """"Start with C3 or C12: …" — the honest form of the start-here action when the corners at the
+    top of the list are the same number. Called only with 2+ rows."""
+    named = tied[:_TIE_NAME_CAP]
+    extra = len(tied) - len(named)
+    if extra:
+        names = f"{', '.join(f'C{r.cid}' for r in named)} or {extra} more"
+    else:
+        names = ", ".join(f"C{r.cid}" for r in named[:-1]) + f" or C{named[-1].cid}"
+    nums = (f"+{tied[0].time_lost:.2f} s and +{tied[1].time_lost:.2f} s" if len(tied) == 2
+            else f"+{tied[0].time_lost:.2f} s down to +{tied[-1].time_lost:.2f} s")
+    tail = "so either is the same call." if len(tied) == 2 else "so this cannot rank them."
+    return (f"Start with {names}: {nums} sit closer together than your own lap-to-lap spread, "
+            f"{tail}")
+
+
 def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     """AT MOST TWO actions under the theme — the compression that makes a summary coaching.
 
     One is the common cause across the ranked corners (or an explicit "no single cause", because
     manufacturing one is precisely the failure this feature exists to avoid); the other names the
-    single corner to start with and how often the driver has already been there. Never more than
-    two, whatever the session looks like."""
+    corner to start with and how often the driver has already been there. Never more than two,
+    whatever the session looks like.
+
+    The start-here line names MORE THAN ONE corner when the measurement cannot tell them apart
+    (`lead_ties`) — on the real recordings the top two are a tie on both, by 0.086 s and 0.005 s."""
     if theme.kind == THEME_NONE:
         return []
     out: list[str] = []
@@ -1082,12 +1153,18 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
         out.append("No single cause dominates these corners — work them one at a time.")
     lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
     if lead is not None:
-        ev = lead.evidence
-        # `lead` is ranked, so it is never REACH_NEVER (see `reach_clause`).
-        had = (f"you have matched it on {ev.reach_laps} of {ev.n_laps} laps"
-               if ev.reach == REACH_REPEAT else
-               f"only {ev.reach_laps} of {ev.n_laps} laps have matched it"
-               if ev.reach == REACH_RARE else "")
-        out.append(f"Start with C{lead.cid}: +{lead.time_lost:.2f} s"
-                   + (f", and {had}." if had else "."))
+        tied = lead_ties(rows, theme.lead_cid)
+        if len(tied) > 1:
+            # The corners at the top of the list are the same number (measured: the top two are a
+            # tie on BOTH real recordings). Name them rather than crown one — see `lead_ties`.
+            out.append(_tied_lead_sentence(tied))
+        else:
+            ev = lead.evidence
+            # `lead` is ranked, so it is never REACH_NEVER (see `reach_clause`).
+            had = (f"you have matched it on {ev.reach_laps} of {ev.n_laps} laps"
+                   if ev.reach == REACH_REPEAT else
+                   f"only {ev.reach_laps} of {ev.n_laps} laps have matched it"
+                   if ev.reach == REACH_RARE else "")
+            out.append(f"Start with C{lead.cid}: +{lead.time_lost:.2f} s"
+                       + (f", and {had}." if had else "."))
     return out[:2]

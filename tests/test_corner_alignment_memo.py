@@ -25,6 +25,7 @@ every warp None and every assertion below vacuous.
 
 Run:  python tests/test_corner_alignment_memo.py
 """
+import ast
 import os
 import sys
 
@@ -329,6 +330,181 @@ def test_stats_surfaces_match_a_from_scratch_recompute_after_each_invalidation()
     assert seen[0] == seen[2], "undo did not return to the pre-edit state"
     assert seen[2] != seen[3], "the reference/baseline change did not move any surface"
     print("ok corner surfaces survive drag → edit → undo → reference load (warm == fresh)")
+
+
+# ----------------------------------------------- what a None alignment MEANS, and what it is called
+# `lap_alignment` returns None for three reasons, and "this lap drifted too little to be worth
+# warping" is no longer one of them: no corner basis, no usable trace pair, or no spatial match
+# surviving anywhere on the lap. Its docstring said None meant "below the drift gate" until #300
+# deleted `corners.NORMALIZED_DRIFT_MAX`; every lap with a trace pair has been warped since, and on
+# the owner's recordings NOT ONE lap reaches None at all — 0 of 38 (D24 0060 pair) and 0 of 65
+# (0062), with 4-22 and 20-22 of the 24 corner boundaries carrying a matched interior knot.
+#
+# Both halves are guarded, because either alone is weak: the behaviour can go wrong with every
+# comment still reading true, and a comment can go false with no behaviour changing at all — which
+# is exactly what happened here.
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Narrow on purpose. "gate" is a real word all over this repo (the GPS quality gate, the heading and
+# 3 m match gates this very warp still uses); only the phrasings that name the REMOVED per-lap drift
+# gate are banned.
+BANNED_GATE_WORDING = ("drift gate", "drift-gate", "drift gated", "drift-gated")
+
+# Docstrings that describe the alignment, or a surface built out of it. Checked in BOTH directions,
+# like tests/test_layering.py: a target that no longer exists fails too, so this list cannot rot
+# into a silent no-op.
+ALIGNMENT_DOCS = [
+    ("studio/corner_model.py", "lap_alignment"),
+    ("studio/corner_model.py", "_best_trace"),
+    ("studio/corner_model.py", "_lap_traces"),
+    ("studio/corner_model.py", "corner_entry_media_time"),
+    ("studio/corners.py", "lap_alignment"),
+    ("studio/corners.py", "project_boundaries"),
+    ("studio/corners.py", "segment_times"),
+    ("studio/corners.py", "lap_corner_stats"),
+    ("studio/driving_channels.py", "_best_trace"),
+    ("studio/driving_channels.py", "_corner_traces"),
+    ("studio/driving_channels.py", "_corner_align"),
+    ("studio/session.py", "phase_report"),
+    ("studio/session.py", "straights_report"),
+    ("studio/coaching.py", "_project_window"),
+    ("studio/coaching.py", "corner_phase_losses"),
+    ("studio/coaching.py", "summarize"),
+    ("studio/stats.py", "phase_matrix"),
+]
+
+# Files whose comments (and, for provenance, an on-screen note) carried the wording where no
+# docstring walk can see it. The gate is gone from every one of them.
+#
+# `AGENTS.md` is deliberately NOT here even though it names the gate: it spells two UNRELATED
+# gates the same way (the bindings regen-drift gate, the clang-format CI gate), so a text ban on
+# that file would be noise rather than a guard. Its one stale sentence is corrected in the same
+# commit as these.
+ALIGNMENT_TEXT = [
+    "studio/session.py",
+    "studio/coaching.py",
+    "studio/stats.py",
+    "studio/stats_panel.py",
+    "studio/provenance.py",
+    "studio/driving_channels.py",
+    "tests/test_studio_features.py",
+    "studio/docs/friction-circle-release-investigation.md",
+]
+
+# Files that OWN the removed gate's history: the measurement blocks that justify removing it, the
+# unit tests named after it, and the golden fixtures whose drift bands are defined AGAINST it
+# (`tests/_synthetic.py` grew a sub-gate band phase alongside this work). They may name it — but
+# only as history, so every occurrence has to sit beside a past-tense marker.
+GATE_HISTORY = ["studio/corners.py", "studio/corner_model.py", "tests/test_corners.py",
+                "tests/_synthetic.py", "tests/test_golden_synthetic.py"]
+PAST_MARKERS = ("old", "used to", "was", "were", "gone", "removed", "no longer", "then-current",
+                "pre-gate", "until it", "there was")
+
+
+def _read(path):
+    with open(os.path.join(_REPO, path), encoding="utf-8") as f:
+        return f.read()
+
+
+def _docstrings(path):
+    """{function name: docstring} for every def in a module, nested ones included."""
+    out = {}
+    for node in ast.walk(ast.parse(_read(path))):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.setdefault(node.name, ast.get_docstring(node) or "")
+    return out
+
+
+def test_a_none_alignment_means_no_warp_could_be_built():
+    """THE FACT. None is "nothing to build a warp out of", and it has exactly three causes. The
+    negative control for the claim this package corrects is the FIRST one: a lap far inside the old
+    0.5 % gate is warped like any other, so re-introducing a drift gate turns this red."""
+    s = fixture()
+    total_ref = s.corners.basis()[1]
+
+    # 1. Small drift is NOT a cause. Lap 3 sits at 0.06 %, an order of magnitude inside the gate.
+    drift = C.line_length_drift(total_of(s, 3), total_ref)
+    assert drift < 0.005, f"fixture lap 3 must sit inside the old 0.5 % gate, got {drift:.4%}"
+    al = s.corners.lap_alignment(3, total_of(s, 3))
+    assert al is not None and len(al[0]) > 2, (
+        f"a lap at {drift:.4%} drift kept the normalized projection — a drift gate is back")
+
+    # 2. No corner basis (no corners detected / no usable best lap).
+    no_basis = fixture()
+    seed_corner_basis(no_basis, spans=(), total=float(TOTAL))
+    assert no_basis.corners.basis()[0] == []
+    assert no_basis.corners.lap_alignment(1, total_of(no_basis, 1)) is None
+
+    # 3. No usable trace pair: this lap's own trace is degenerate (a cross-recording reference lap
+    #    has no local pair at all, which is the same branch).
+    degenerate = fixture()
+    total_1 = total_of(degenerate, 1)
+    degenerate._cols_cache[1] = tuple(col[:1] for col in degenerate._cols_cache[1])
+    seed_corner_basis(degenerate, spans=_SPANS, total=float(TOTAL))
+    assert degenerate.corners.lap_alignment(1, total_1) is None
+
+    # 4. No spatial match survives anywhere: the same lap driven 10 m off the reference line, past
+    #    corners.SPATIAL_MATCH_MAX_M (3 m) at every boundary.
+    off_line = fixture()
+    times, xs, ys, speed, cum = off_line._cols_cache[2]
+    off_line._cols_cache[2] = (times, xs, ys + 10.0, speed, cum)
+    seed_corner_basis(off_line, spans=_SPANS, total=float(TOTAL))
+    assert off_line.corners.lap_alignment(2, total_of(off_line, 2)) is None
+    # …and the control: the same lap ON the line has a warp, so (4) is the displacement talking.
+    assert s.corners.lap_alignment(2, total_of(s, 2)) is not None
+    print("ok None = no basis / no trace pair / no surviving match — never a small drift "
+          f"(lap 3 at {drift:.4%} is warped)")
+
+
+def test_no_comment_says_a_none_alignment_is_a_lap_below_the_drift_gate():
+    """THE CLAIM — the half a fact test cannot cover, because a comment goes false on its own. #300
+    removed the gate and left the wording behind in twenty-odd places, one of them a note printed in
+    the provenance panel."""
+    missing, banned, silent = [], [], []
+    for path, name in ALIGNMENT_DOCS:
+        docs = _docstrings(path)
+        if name not in docs:
+            missing.append(f"{path}::{name}")          # the both-directions half
+            continue
+        text = docs[name].lower()
+        banned += [f"{path}::{name} says {p!r}" for p in BANNED_GATE_WORDING if p in text]
+        if not any(word in text for word in ("spatial", "warp", "align")):
+            silent.append(f"{path}::{name}")
+    assert not missing, f"guarded symbols that no longer exist (stale targets): {missing}"
+    assert not banned, f"the removed drift gate is described as live: {banned}"
+    assert not silent, f"these carry the alignment but name nothing about it: {silent}"
+
+    for path in ALIGNMENT_TEXT:
+        text = _read(path).lower()
+        for phrase in BANNED_GATE_WORDING:
+            assert phrase not in text, f"{path} says {phrase!r} — the gate is gone"
+
+    for path in GATE_HISTORY:
+        text = _read(path).lower()
+        for phrase in BANNED_GATE_WORDING:
+            at = text.find(phrase)
+            while at >= 0:
+                context = text[max(0, at - 200):at + 200]
+                assert any(m in context for m in PAST_MARKERS), (
+                    f"{path}: {phrase!r} at offset {at} reads as a live gate, not as history")
+                at = text.find(phrase, at + 1)
+
+    # …and the memo's own docstring must say what None IS, not merely stop saying what it was.
+    memo = _docstrings("studio/corner_model.py")["lap_alignment"].lower()
+    for token in ("basis", "trace", "match"):
+        assert token in memo, f"CornerModel.lap_alignment does not name the {token} cause of None"
+    print(f"ok claim: {len(ALIGNMENT_DOCS)} docstrings + {len(ALIGNMENT_TEXT)} files clean, "
+          f"{len(GATE_HISTORY)} history files checked")
+
+
+def test_the_provenance_note_names_the_projection_it_used():
+    """The one user-facing surface in this family: the CORNERS table's provenance note explains the
+    window a corner time was measured over, and it named the gate that no longer exists."""
+    src = _read("studio/provenance.py")
+    assert "one monotone spatial warp" in src, (
+        "the corner provenance note no longer says what the window was projected through")
+    for phrase in BANNED_GATE_WORDING:
+        assert phrase not in src.lower()
 
 
 if __name__ == "__main__":

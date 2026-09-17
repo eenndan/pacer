@@ -147,10 +147,10 @@ class DrivingChannels:
         self._brake_points_cache.clear()
         self._a_max_cache = _UNSET  # depends on the per-lap brake events, which re-project
 
-    # ----------------------------------------------------------- drift-gate spatial traces
+    # -------------------------------------------------------- spatial traces for the per-lap warp
     def _best_trace(self) -> tuple | None:
         """The best (reference) lap's local-frame trace (xs, ys, cum) — the spatial anchor side of
-        the per-corner drift gate (corners.project_boundaries), mirroring CornerModel._best_trace.
+        the per-lap warp (corners.project_boundaries), mirroring CornerModel._best_trace.
         The reference-odometer corner windows are expressed in this lap's frame, so it is the fixed
         half of every (ref, comparison) trace pair. None when there is no usable best lap."""
         best = self._best_lap_id()
@@ -162,10 +162,10 @@ class DrivingChannels:
         return xs, ys, cum
 
     def _corner_traces(self, lap_id: int) -> tuple | None:
-        """The (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) trace pair the drift gate's
-        spatial fallback needs to map this session's corner windows onto `lap_id` (mirrors
-        CornerModel._lap_traces). None (→ the gate keeps the normalized projection, byte-identical
-        to the pre-gate output) when either trace is degenerate."""
+        """The (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) trace pair the spatial
+        alignment needs to map this session's corner windows onto `lap_id` (mirrors
+        CornerModel._lap_traces). None (→ this lap keeps the normalized projection) when either
+        trace is degenerate."""
         ref_trace = self._best_trace()
         if ref_trace is None:
             return None
@@ -175,12 +175,12 @@ class DrivingChannels:
         return (*ref_trace, xs, ys, cum)
 
     def _corner_align(self, lap_id: int, total_lap: float):
-        """This lap's drift-gated warp from the corner service's MEMO, or the DERIVE sentinel when
+        """This lap's spatial warp from the corner service's MEMO, or the DERIVE sentinel when
         no accessor was injected (then `project_boundaries` builds it itself, as before).
 
         The three sites below all project the same whole-partition frame onto the same lap, so they
-        must read the same warp — sharing the corner service's memo is what makes "the SAME gate
-        lap_corner_stats uses", which each of their docstrings claims, true by construction instead
+        must read the same warp — sharing the corner service's memo is what makes "the SAME
+        alignment lap_corner_stats uses", which each of their docstrings claims, true by construction instead
         of by two parallel implementations agreeing (`_corner_traces` mirrors `_lap_traces`)."""
         if self._corner_alignment is None:
             return corners.DERIVE_ALIGNMENT

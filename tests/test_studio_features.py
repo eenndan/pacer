@@ -686,8 +686,8 @@ def _ideal_chart_session():
     )
     # The ideal lap is the CORNER/STRAIGHT partition composite, so a session with no detected
     # corner has no ideal at all. seed_cols lays every lap out straight (ys = 0), so seed the
-    # basis explicitly — everything downstream of it (projection, drift gate, the segment-sum
-    # assertion) is the real code.
+    # basis explicitly — everything downstream of it (projection, the spatial alignment, the
+    # segment-sum assertion) is the real code.
     seed_corner_basis(s)
     return s
 
