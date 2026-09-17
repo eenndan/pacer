@@ -767,6 +767,38 @@ class CornerModel:
         self._stats_cache[lap_id] = stats
         return stats
 
+    def lap_corner_resolved(self, lap_id: int) -> list[bool]:
+        """Per corner (track order, aligned to `lap_corner_stats`): were BOTH edges of this lap's
+        window read off a direct spatial match, rather than interpolated between neighbouring ones?
+        [] exactly where `lap_corner_stats` is [] (no basis / degenerate lap); all False when the
+        lap has no warp at all (`lap_alignment` is None, so every edge is the normalized fraction).
+
+        It is a read of the SAME memoized warp `lap_corner_stats` used: a boundary is resolved iff
+        it is one of that warp's knots (the two timing-line anchors count — they are the same
+        physical point on every lap by definition). A match that was dropped for crossing its
+        neighbour is not a knot and is therefore not resolved, which is the fail-closed direction.
+
+        WHAT IT SEPARATES, measured against an independent gate-crossing time per cell on the two
+        D24 recordings (full table in `stats.CornerMatrix`): resolved cells agree with it to a
+        median 0.004 s (max 0.024 s); cells with an interpolated edge disagree by a median 0.219 s
+        (max 0.886 s) on the 0060 pair, where 236 of its 456 cells are unresolved (4 of 780 on 0062).
+        Descriptive only for every surface except the CORNERS BY LAP grid, which is the one that
+        compares one lap's cell against the others."""
+        basis = self.basis()
+        if basis is None or not basis[0] or self._best_lap_id() is None:
+            return []
+        corner_list, _total_ref = basis
+        dist, _speed_kmh, _elapsed = self._lap_arrays(lap_id)
+        if len(dist) < 2 or float(dist[-1]) <= 0:
+            return []
+        align = self.lap_alignment(lap_id, float(dist[-1]))
+        if align is None:
+            return [False] * len(corner_list)
+        knots = align[0]
+        edges = np.asarray([b for c in corner_list for b in (float(c.enter), float(c.exit))], float)
+        on_knot = np.isin(edges, knots)
+        return [bool(on_knot[2 * i] and on_knot[2 * i + 1]) for i in range(len(corner_list))]
+
     def corner_session_bests(self) -> list[float]:
         """Per-corner session-best time-in-corner over the CLEAN laps (`_clean_lap_ids`) — the
         purple-cell convention, and now actually matching the per-sector session bests its own
