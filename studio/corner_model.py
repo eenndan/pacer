@@ -171,17 +171,30 @@ class IdealSample(NamedTuple):
     so the table isolates the sample-size effect from the re-cut effect the last paragraph
     measures. The Monte-Carlo standard error is ≤ 0.003 s on every cell; the `all` column is the
     whole recording, i.e. the number the app itself prints on it. (Re-detecting the corners from
-    each subset as well — what the app would do if that subset were the whole recording — moves
-    the cells by −0.02 … +0.11 s and changes nothing about the shape. Holding the partition is
-    what makes the fall a theorem rather than a trend: same pieces, more candidates.)
+    each subset as well — what the app would do if that subset were the whole recording — moved
+    the cells by −0.02 … +0.11 s when it was measured, before #300, and changed nothing about the
+    shape. Holding the partition is what makes the fall a theorem rather than a trend: same
+    pieces, more candidates.)
 
     | recording        | 5 laps | 10 | 20 | 40 | all | per doubling of N |
     |------------------|--------|----|----|----|-----|-------------------|
-    | D24 1 chapter    | 68.345 | 68.059 | 67.845 | — | 67.831 (21) | 0.248 s |
-    | D24 3 chapters   | 68.016 | 67.646 | 67.312 | 66.993 | 66.781 (65) | 0.334 s |
-    | Sandown ch 1     | 48.654 | 48.272 | 47.992 | — | 47.941 (23) | 0.324 s |
-    | Sandown 3 ch     | 48.330 | 48.011 | 47.741 | 47.494 | 47.375 (59) | 0.268 s |
-    | SD_30_08         | 13.033 | 12.949 | 12.881 | — | 12.862 (25) | 0.074 s |
+    | D24 1 chapter    | 68.184 | 67.776 | 67.424 | — | 67.403 (21) | 0.377 s |
+    | D24 3 chapters   | 67.917 | 67.516 | 67.179 | 66.883 | 66.709 (65) | 0.326 s |
+    | Sandown ch 1 ‡   | 48.654 | 48.272 | 47.992 | — | 47.941 (23) | 0.324 s |
+    | Sandown 3 ch ‡   | 48.330 | 48.011 | 47.741 | 47.494 | 47.375 (59) | 0.268 s |
+    | SD_30_08 ‡       | 13.033 | 12.949 | 12.881 | — | 12.862 (25) | 0.074 s |
+
+    WHICH ROWS ARE TRUE OF THE APP TODAY. The two D24 rows were re-measured after #300 warped
+    every lap (it removed the drift gate), through `Session.load` on `GX010062.MP4` alone (1
+    chapter) and on `GX010062` + `GX020062` + `GX030062` (3 chapters). Their `all` cells had moved
+    from 67.831 to 67.403 and from 66.781 to 66.709 — on 3 chapters the −0.071 s #300 measured for
+    its own change (MAX_DONOR_SPAN_DEV's block), to rounding. The D24 cells, gaps, decrements and
+    top-rung rates here are what tests/test_ideal_sample_table.py prints from its fixed seed when
+    pointed at that footage, so re-running it reproduces them rather than approximating them.
+    ‡ ROWS ARE NOT RE-MEASURED. They date from the #228 projection, before #300, and the Sandown
+    and SD_30_08 footage was not on the machine that re-measured the D24 rows. They are probably
+    stale by an amount of the same order. Do not quote a ‡ row as current. Re-measure it by
+    pointing the same check at that footage, then drop the mark.
 
     THE RATE COLUMN IS THE WHOLE MEASURED RANGE — (5-lap cell − `all` cell) ÷ log2(laps ÷ 5) — so
     it is recomputable from the row's own two ends, and tests/test_ideal_sample_table.py recomputes
@@ -190,33 +203,40 @@ class IdealSample(NamedTuple):
     headline.
 
     There is no plateau, and the decrement does NOT grow with N — this docstring said it did, off
-    the boundary projection #228 replaced. Re-measured it shrinks slowly and stays large: on D24
-    3 chapters, 0.380 s per doubling over 5 → 8 laps, 0.343 over 8 → 15, 0.322 over 20 → 30, and
-    still 0.301 over 50 → 65. A thirteenfold range of N buys a fifth off the decrement, not a
-    floor. So the gap the app headlines ("on the table") keeps growing with lap count on all five —
-    D24 3 chapters reads −0.84 s at 5 laps and −1.42 s at 65, same driving, same recording.
+    the boundary projection #228 replaced. Re-measured it shrinks and stays large: on D24
+    3 chapters, 0.413 s per doubling over 5 → 8 laps, 0.357 over 8 → 15, 0.304 over 20 → 30, and
+    still 0.233 over 50 → 65. A thirteenfold range of N takes nearly half off the decrement but
+    does not reach a floor. So the gap the app headlines ("on the table") keeps growing with lap
+    count — D24 3 chapters reads −0.95 s at 5 laps and −1.49 s at 65, same driving, same
+    recording, and on D24 1 chapter the gap at the fitted line is 1.37 s over its 21 laps.
 
     THE BEST LAP HAS THE SAME PROPERTY, WHICH IS WHY THE DISCLOSURE IS PER RECORDING AND NOT PER
     COLUMN. The best lap is also a minimum over the session's laps: measured the same way it falls
     0.047 / 0.113 / 0.170 / 0.173 / 0.178 s per doubling on those five, against the ideal's
-    0.074 / 0.248 / 0.268 / 0.324 / 0.334 — LESS than the ideal on all five over the whole range.
-    (This docstring used to claim the best lap was the more sample-dependent of the two on two of
-    them. That was the old last-rung rate on the old projection, and it survives neither: at the
-    top rung D24 1 chapter is now 0.193 ideal against 0.189 best, a tie inside the error.) It is
-    still not a column a ranking can trust — 0.05 … 0.18 s per doubling is the same order of
-    magnitude as the ideal's, and on SD_30_08's own last doubling (20 → 25 laps) the best lap moves
-    MORE than the ideal does, 0.070 s against 0.060. Suppressing the ideal's ranking while leaving
-    the best lap's alone would advertise a distinction the numbers do not support; naming the
-    sample fixes both. See studio/library_dialog.py's Laps column.
+    0.074 / 0.268 / 0.324 / 0.326 / 0.377 — LESS than the ideal on all five over the whole range.
+    (A best lap is a lap time, which #300 did not move. Re-run on the two D24 rows it gives
+    0.178 … 0.179 and 0.170 … 0.172 across seeds.) This docstring once claimed the best lap was
+    the more sample-dependent of the two on two of them. That was the old last-rung rate on the
+    old projection, and it survives neither: at the top rung (20 → 21 laps) D24 1 chapter reads
+    0.299 ideal against 0.189 best. The best lap is still not a column a ranking can trust —
+    0.05 … 0.18 s per doubling is the same order of magnitude as the ideal's, and on SD_30_08's
+    own last doubling (20 → 25 laps) the best lap moved MORE than the ideal did, 0.070 s against
+    0.060 (‡, not re-measured). Suppressing the ideal's ranking while leaving the best lap's alone
+    would advertise a distinction the numbers do not support; naming the sample fixes both. See
+    studio/library_dialog.py's Laps column.
 
     `corners` / `segments` are the partition's size, and they move when the corner detector re-runs
     — which it does on every start/finish-line drag. Measured over six start-line positions per
-    recording the detected corner count moves 11↔12 on D24 and 7↔8 on Sandown, and the headline gap
-    with it: D24 1 chapter 0.94 s at the fitted line, 1.08 … 1.48 s over those six positions
-    (+58 %); Sandown 3 chapters 1.14 s, 1.16 … 1.93 s (+69 %). A mechanical midpoint refinement
-    (every segment split in two, no new information) buys another 0.30 … 1.67 s. So a user who
-    drags the line and sees the gap move is looking at a re-cut partition, not at their driving —
-    and `corners`/`segments` on screen is what lets them see that."""
+    recording, the detected corner count moved 11↔12 on D24 and 7↔8 on Sandown, and the headline
+    gap moved with it. On D24 1 chapter it was 0.94 s at the fitted line and 1.08 … 1.48 s over
+    those six positions (+58 %). On Sandown 3 chapters it was 1.14 s at the fitted line and
+    1.16 … 1.93 s over the six (+69 %). A mechanical midpoint refinement (every segment split in
+    two, no new information) bought another 0.30 … 1.67 s. NONE OF THIS PARAGRAPH'S NUMBERS IS
+    RE-MEASURED. They predate #228 and #300, and the six positions were never recorded, so they
+    cannot be repeated as they were taken. That 0.94 s fitted-line gap is 1.37 s today. Read them
+    as the size of the effect, not as today's values. So a user who drags the line and sees the
+    gap move is looking at a re-cut partition, not at their driving — and `corners`/`segments` on
+    screen is what lets them see that."""
 
     donors: int    # distinct laps that won at least one segment (SegmentBests.donor_ids)
     laps: int      # clean laps the minimum ran over (SegmentBests.lap_ids)

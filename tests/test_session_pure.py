@@ -754,7 +754,7 @@ def test_ideal_is_strictly_faster_than_the_best_lap():
     for lid, laptime in times.items():
         assert ideal < laptime - 1e-9, (lid, ideal, laptime)
     # And it is not a rounding-level difference: the crossing-pace fixture leaves real time on
-    # the table, exactly as the real recordings do (0.21 s … 1.42 s there).
+    # the table, exactly as the real recordings do (1.37 s on D24 one chapter and 1.49 s on three).
     assert min(times.values()) - ideal > 1e-3, (ideal, times)
     print("test_ideal_is_strictly_faster_than_the_best_lap OK")
 
@@ -1161,9 +1161,9 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
     the session was, and the number on its own is not comparable between sessions.
 
     Measured on the owner's five recordings over random subsets of the clean laps (20,000 draws
-    per N), `ideal_total` falls 0.074 / 0.248 / 0.268 / 0.324 / 0.334 s per DOUBLING of lap count
-    with no plateau — on D24's three chapters the same driving reads a 0.84 s gap over 5 laps and
-    a 1.42 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
+    per N), `ideal_total` falls 0.074 / 0.268 / 0.324 / 0.326 / 0.377 s per DOUBLING of lap count
+    with no plateau — on D24's three chapters the same driving reads a 0.95 s gap over 5 laps and
+    a 1.49 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
     on, in a form that fails if the composite ever stops being a minimum.
 
     Every proper subset here is checked, not one sample: with three crossing-pace laps that is all

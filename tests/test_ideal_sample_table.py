@@ -6,26 +6,42 @@ README, both Stats tooltips, the hero chip, two Library header hovers, `Session.
 laps.csv writer, the landing page and its screenshot. #228 moved the app's ideal on D24's three
 chapters by +0.218 s and every one of those numbers became false in the same instant. Nothing went
 red. The D24 golden gate SAW the value move — it fingerprints `theoretical_best` — and had no way
-to know that eighteen files quoted it.
+to know that eighteen files quoted it. After #300 warped every lap it happened again: both D24
+`all` cells moved (66.781 → 66.709, 67.831 → 67.403). Check 5 below catches that, but only when
+someone runs it against the footage, and the text checks had no way to see the move.
 
-THREE CHECKS, AND ONLY THE THIRD NEEDS FOOTAGE:
+WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
 
   1. THE TABLE IS INTERNALLY CONSISTENT. Every row falls monotonically across its rungs, which is
      the claim the shipping tooltips make in prose ("it keeps falling — there is no floor it
      settles on"); and the rate column is RECOMPUTED from the row's own two endpoint cells, so a
      reader can check it with a calculator and nobody can quietly change what it means.
-  2. EVERY SURFACE QUOTES THIS TABLE. The family is enumerated BY SEARCH, not by a list a later
-     edit can fall off: every tracked file whose prose says "per doubling of lap count" is
-     scanned, and every rate in that sentence must be one this table publishes. The standing
-     lesson in this repo is that sweeps miss whole surface families — a guard with the family
-     hard-coded would miss the twelfth surface exactly the way the sweep did.
-  3. THE TABLE IS STILL TRUE OF THE APP. Opt-in, because it needs a recording CI does not have:
-     set `PACER_IDEAL_TABLE_MP4` to a comma-separated chapter list, and the check matches the
-     recording to the row with its clean-lap count and asserts the row's `all` cell equals
-     `Session.ideal_total()` to the millisecond. That is the check that would have caught #228 the
-     day it landed. Without the footage it prints SKIP and says what to point it at.
+  2. EVERY RATE QUOTED IN THE TREE IS ONE THE TABLE PUBLISHES. The family is enumerated BY
+     SEARCH, not by a list a later edit can fall off: every tracked file whose prose says "per
+     doubling of lap count" is scanned. The standing lesson in this repo is that sweeps miss
+     whole surface families — a guard with the family hard-coded would miss the twelfth surface
+     exactly the way the sweep did.
+  3. EVERY "X s OVER 5 LAPS, Y s OVER N" PAIR IS A ROW'S OWN TWO CELLS, found by search.
+  4. EVERY D24 GAP QUOTED IN THE TREE IS THE ONE THE DOCSTRING PUBLISHES — "−G s at 5 laps",
+     "G s gap over 65", "G s on D24 one chapter and G s on three", the screenshot alt text's
+     "1:SS.mmm theoretical best over N laps, −G s on the table" — found by search.
+     Checks 1-4 read text — no Qt, no pacer, no numpy — and run in CI. They prove that every
+     surface agrees with the TABLE. They cannot prove that the table agrees with the APP, and
+     they cannot see a screenshot's pixels: an alt text that matches the table beside a PNG
+     that does not is invisible to them (regenerate with studio/dev/media_capture.py).
+  5. THE TABLE IS STILL TRUE OF THE APP. Opt-in, because it needs a recording CI does not have:
+     set `PACER_IDEAL_TABLE_MP4` to a comma-separated chapter list. The check matches the
+     recording to the row by its clean-lap count, asserts the `all` cell IS
+     `Session.ideal_total()` to the millisecond, and then RE-RUNS THE TABLE'S STATED METHOD
+     (20,000 random subsets per rung, partition held) over the app's own per-lap segment matrix.
+     Every rung cell must come out within Monte-Carlo error. So must the D24 prose figures the
+     docstring publishes beside the row: the gap at both ends, the per-doubling decrements and
+     the top-rung rates. When it fails it prints the re-measured row in the table's own syntax.
 
-Checks 1 and 2 read text — no Qt, no pacer, no numpy. Check 3 imports the app.
+‡ ROWS. Only the two D24 rows have been re-measured since #300; the Sandown and SD_30_08 footage
+was not on that machine, so those rows carry a ‡ and the docstring says what it means. Check 5 is
+the only way to drop one, and it has to be run where that footage is.
+
 Run:  python tests/test_ideal_sample_table.py
       PACER_IDEAL_TABLE_MP4=~/Desktop/D24/GX010062.MP4,…/GX020062.MP4,…/GX030062.MP4 \\
           python tests/test_ideal_sample_table.py
@@ -46,13 +62,19 @@ _SOURCE = os.path.join(_REPO, "studio", "corner_model.py")
 # FROM; "all" is the whole recording and carries its own lap count.
 _RUNGS = (5, 10, 20, 40)
 
+# The mark a row carries while it has NOT been re-measured against the current app.
+_UNVERIFIED = "‡"
+
 
 class Row:
     """One parsed table row: the rung cells (None where the recording is too short), the `all`
-    cell with its lap count, and the rate the table publishes for it."""
+    cell with its lap count, the rate the table publishes for it, and whether it carries the ‡
+    that says it was not re-measured against the current app."""
 
-    def __init__(self, name: str, cells: list[float | None], all_s: float, all_n: int, rate: float):
+    def __init__(self, name: str, cells: list[float | None], all_s: float, all_n: int, rate: float,
+                 verified: bool = True):
         self.name, self.cells, self.all_s, self.all_n, self.rate = name, cells, all_s, all_n, rate
+        self.verified = verified
 
     @property
     def measured_rate(self) -> float:
@@ -60,13 +82,24 @@ class Row:
         return (self.cells[0] - self.all_s) / math.log2(self.all_n / _RUNGS[0])
 
     def __repr__(self) -> str:
-        return f"<{self.name} {self.cells} all={self.all_s} ({self.all_n}) rate={self.rate}>"
+        mark = "" if self.verified else f" {_UNVERIFIED}"
+        return f"<{self.name}{mark} {self.cells} all={self.all_s} ({self.all_n}) rate={self.rate}>"
+
+
+def _source_text() -> str:
+    return open(_SOURCE, encoding="utf-8").read()
+
+
+def _docstring_flat() -> str:
+    """corner_model.py with every newline-and-indent collapsed to one space, so a published figure
+    wrapped across two docstring lines is still one phrase to the regexes below."""
+    return re.sub(r"\n\s*", " ", _source_text())
 
 
 def _rows() -> list[Row]:
     """Parse the markdown table out of IdealSample's docstring. Reads the FILE, not the imported
     docstring, so this check costs no numpy/Qt import and sees exactly what a reader sees."""
-    text = open(_SOURCE, encoding="utf-8").read()
+    text = _source_text()
     start = text.index("class IdealSample")
     body = text[start:text.index("| SD_30_08", start) + 400]
     out: list[Row] = []
@@ -77,21 +110,30 @@ def _rows() -> list[Row]:
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) != len(_RUNGS) + 3:          # name + rungs + all + rate
             continue
-        name = cells[0]
+        verified = _UNVERIFIED not in cells[0]
+        name = cells[0].replace(_UNVERIFIED, "").strip()
         rungs: list[float | None] = [None if c == "—" else float(c) for c in cells[1:1 + len(_RUNGS)]]
         m = re.fullmatch(r"([\d.]+) \((\d+)\)", cells[-2])
         assert m, f"the `all` cell must read `<seconds> (<laps>)`, got {cells[-2]!r}"
         rate = re.fullmatch(r"([\d.]+) s", cells[-1])
         assert rate, f"the rate cell must read `<seconds> s`, got {cells[-1]!r}"
-        out.append(Row(name, rungs, float(m.group(1)), int(m.group(2)), float(rate.group(1))))
+        out.append(Row(name, rungs, float(m.group(1)), int(m.group(2)), float(rate.group(1)),
+                       verified))
     assert len(out) == 5, f"expected the five measured recordings, parsed {out!r}"
+    if not all(r.verified for r in out):
+        # A mark nobody explains is a mark nobody reads.
+        assert f"{_UNVERIFIED} ROWS ARE NOT RE-MEASURED" in _docstring_flat(), (
+            f"the table marks rows {_UNVERIFIED} but IdealSample no longer says what that means")
     return out
+
+
+def _row(prefix: str) -> Row:
+    return next(r for r in _rows() if r.name.startswith(prefix))
 
 
 def test_the_table_only_ever_falls():
     """THE CLAIM EVERY IDEAL-LAP TOOLTIP MAKES, checked against the table it is drawn from: the
-    ideal falls with every rung and keeps falling to the end of the sample. "There is no floor it
-    settles on" is shipping copy on two tiles, the hero chip and a Library header; if a future
+    ideal falls with every rung and keeps falling to the whole recording. If a future
     re-measurement ever shows a plateau, the copy has to change, and this fails first.
 
     Also the sample itself: the `all` column must hold MORE laps than the last quoted rung, or the
@@ -133,6 +175,17 @@ def _tracked_files() -> list[str]:
     return [f for f in out.stdout.split() if f.endswith(keep)]
 
 
+def _scanned_texts():
+    """(path, flattened text) for every tracked file a quotation could live in. Skips this file
+    (it prints the numbers it is checking) and CHANGELOG.md, whose released sections record what
+    was measured AT that release — history, not a live claim. A changelog that is edited when a
+    later measurement moves is not a changelog."""
+    for rel in _tracked_files():
+        if rel.endswith(os.path.basename(__file__)) or rel == "CHANGELOG.md":
+            continue
+        yield rel, _flatten(open(os.path.join(_REPO, rel), encoding="utf-8", errors="ignore").read())
+
+
 # The phrase every quotation of this table uses, in either of the two casings the tree has. A rate
 # "per doubling" of something ELSE is not a quotation of it — `MAX_DONOR_SPAN_DEV`'s arbiter reads
 # 0.623 s per doubling on a recording this table does not carry, and must not be swept in here.
@@ -157,24 +210,69 @@ def _sentences(text: str) -> list[str]:
     return re.split(r"(?<=[.!?])\s+", _flatten(text))
 
 
+class Gaps:
+    """The D24 ideal-to-best gaps the docstring publishes, parsed rather than pinned: the gap on
+    three chapters at 5 laps and over the whole recording (`n3` laps), and the gap on one chapter
+    at the fitted line. Every surface that quotes a D24 gap has to quote one of these."""
+
+    def __init__(self) -> None:
+        text = _docstring_flat()
+        m = re.search(r"D24 3 chapters reads −(\d\.\d\d) s at 5 laps and −(\d\.\d\d) s at (\d+)",
+                      text)
+        assert m, "IdealSample no longer states the D24 3-chapter gap at both ends of its range"
+        self.at5_3ch, self.all_3ch, self.n3 = m.group(1), m.group(2), int(m.group(3))
+        m = re.search(r"on D24 1 chapter the gap at the fitted line is (\d\.\d\d) s over its (\d+) "
+                      r"laps", text)
+        assert m, "IdealSample no longer states the D24 1-chapter gap at the fitted line"
+        self.all_1ch, self.n1 = m.group(1), int(m.group(2))
+        assert self.n3 == _row("D24 3").all_n and self.n1 == _row("D24 1").all_n, (
+            "the gap sentences name lap counts the table's D24 rows do not carry")
+
+
 def _gap_pair() -> set[str]:
-    """The gap the app headlines at both ends of the table's own range ("−0.84 s at 5 laps and
-    −1.42 s at 65"), parsed from the same docstring. It is the same measurement stated as the
-    subtraction a reader actually sees on the tile."""
-    text = re.sub(r"\n\s*", " ", open(_SOURCE, encoding="utf-8").read())
-    m = re.search(r"reads −([\d.]+) s at 5 laps and −([\d.]+) s at (\d+)", text)
-    assert m, "IdealSample no longer states the headline gap at both ends of its range"
-    return {m.group(1), m.group(2)}
+    """The gap the app headlines at both ends of the table's own range ("−G s at 5 laps and −G s
+    at 65"), parsed from the same docstring. It is the same measurement stated as the subtraction
+    a reader actually sees on the tile."""
+    g = Gaps()
+    return {g.at5_3ch, g.all_3ch}
 
 
 def _control_rates() -> list[float]:
     """The best-lap control rates, from the same docstring paragraph. Parsed rather than pinned so
     the two halves of one measurement cannot drift apart."""
-    text = open(_SOURCE, encoding="utf-8").read()
     m = re.search(r"it falls\s+((?:[\d.]+\s*/\s*)+[\d.]+) s per doubling on those five",
-                  re.sub(r"\n\s*", " ", text))
+                  _docstring_flat())
     assert m, "IdealSample no longer states the best-lap control rates"
     return [float(v) for v in m.group(1).split("/")]
+
+
+def _decrements() -> list[tuple[int, int, str]]:
+    """The shape sentence's per-rung decrements on D24 3 chapters — `(from N, to N, rate)` — parsed
+    from the docstring. They are measurements of the same experiment at intermediate N, so no text
+    check can derive them from the five cells; the real-media half re-measures them."""
+    text = _docstring_flat()
+    start = text.index("Re-measured it shrinks")
+    span = text[start:text.index("A thirteenfold", start)]
+    found = [(int(a), int(b), r)
+             for r, a, b in re.findall(r"(\d\.\d{3})(?: s per doubling)? over (\d+) → (\d+)", span)]
+    assert len(found) >= 3, f"IdealSample's shape sentence parsed to {found!r}"
+    return found
+
+
+def _top_rung() -> tuple[str, str]:
+    """D24 1 chapter's 20 → 21-lap rate, ideal and best, as the docstring states them."""
+    m = re.search(r"at the top rung \(20 → 21 laps\) D24 1 chapter reads (\d\.\d{3}) ideal against "
+                  r"(\d\.\d{3}) best", _docstring_flat())
+    assert m, "IdealSample no longer states D24 1 chapter's top-rung rates"
+    return m.group(1), m.group(2)
+
+
+def _sd_last_doubling() -> tuple[str, str]:
+    """SD_30_08's last-doubling best-lap and ideal moves (a ‡ row: stated, not re-measured)."""
+    m = re.search(r"the best lap moved MORE than the ideal did, (\d\.\d{3}) s against (\d\.\d{3})",
+                  _docstring_flat())
+    assert m, "IdealSample no longer states SD_30_08's last-doubling comparison"
+    return m.group(1), m.group(2)
 
 
 def test_every_surface_quotes_this_table():
@@ -191,27 +289,27 @@ def test_every_surface_quotes_this_table():
     ideal = [r.rate for r in rows]
     control = _control_rates()
     ok = set()
+    ranges = set()
     for v in list(ideal) + list(control):
         ok.add(f"{v:.3f}")
         ok.add(f"{v:.2f}")
     for lo, hi in ((min(ideal), max(ideal)), (min(control), max(control))):
         ok.update({f"{lo:.2f}", f"{hi:.2f}", f"{lo:.3f}", f"{hi:.3f}"})
+        ranges.update({(f"{lo:.2f}", f"{hi:.2f}"), (f"{lo:.3f}", f"{hi:.3f}")})
     # The per-rung rates the shape sentence quotes are measurements of the same experiment at
-    # intermediate N; they are checked by the real-media half, not derivable from the five cells.
-    ok.update({"0.380", "0.343", "0.322", "0.301", "0.193", "0.189", "0.070", "0.060"})
+    # intermediate N. They used to be a hand-typed set here, which is a second copy of the
+    # docstring that goes stale with it; they are parsed from the docstring now, and the
+    # real-media half is what checks them against the app.
+    ok.update(r for _a, _b, r in _decrements())
+    ok.update(_top_rung())
+    ok.update(_sd_last_doubling())
     # The HEADLINE GAP at both ends of the same experiment — several of these sentences carry the
-    # rate and the gap in one breath ("falls X per doubling ... reads −0.84 s at 5 laps"), and the
+    # rate and the gap in one breath ("falls X per doubling ... reads −G s at 5 laps"), and the
     # gap is published by the same docstring, so it is read from there rather than waved through.
     ok.update(_gap_pair())
 
     seen = 0
-    for rel in _tracked_files():
-        # This file (it prints the numbers it is checking) and CHANGELOG.md, whose released
-        # sections record what was measured AT that release — history, not a live claim. A
-        # changelog that is edited when a later measurement moves is not a changelog.
-        if rel.endswith(os.path.basename(__file__)) or rel == "CHANGELOG.md":
-            continue
-        text = _flatten(open(os.path.join(_REPO, rel), encoding="utf-8", errors="ignore").read())
+    for rel, text in _scanned_texts():
         if not _QUOTES.search(text):
             continue
         for sentence in _sentences(text):
@@ -223,36 +321,159 @@ def test_every_surface_quotes_this_table():
                 assert num in ok, (
                     f"{rel} quotes {num} s per doubling of lap count; corner_model.IdealSample "
                     f"publishes {sorted(ok)}. One of the two is stale — the table is the source.")
+            # A RANGE has to be a range the table publishes, end to end. Each end checked alone is
+            # not enough: when the D24 rows moved, the shipping tooltips' "0.07–0.33 s" went stale
+            # (the table's top is 0.377 now) and still passed the per-number test above, because
+            # 0.326 — a different row's rate — also rounds to 0.33.
+            for lo, hi in re.findall(r"(?<![\d.])(\d\.\d{2,3})\s*(?:–|-|…|to)\s*(\d\.\d{2,3})"
+                                     r"(?![\d])", sentence):
+                assert (lo, hi) in ranges, (
+                    f"{rel} quotes the range {lo}–{hi} s per doubling of lap count; the table's "
+                    f"ranges are {sorted(ranges)} — the table is the source.")
     assert seen >= 8, f"the scan found only {seen} sentences; it has gone vacuous"
     print(f"test_every_surface_quotes_this_table OK ({seen} sentences)")
 
 
-def test_the_headline_pair_reaches_the_readme():
-    """THE TWO CELLS THE PUBLIC PAGES QUOTE. The README and the laps.csv writer both print the
-    D24 three-chapter row's first and last cells as one sentence — "X s over 5 laps, Y s over 65"
-    — because that pair IS the disclosure's argument. It is the sentence that went stale, so it is
-    read straight off the table here."""
-    row = next(r for r in _rows() if r.name.startswith("D24 3"))
-    want = (f"{row.cells[0]:.3f}", f"{row.all_s:.3f}", str(row.all_n))
-    for rel in ("README.md", os.path.join("studio", "export_data.py")):
-        text = open(os.path.join(_REPO, rel), encoding="utf-8").read()
+# "68.016 s over 5 laps, 66.781 s over 65" and "68.016 -> 66.781 s between 5 and 65 laps": a row's
+# first and last cells stated as one sentence, because that pair IS the disclosure's argument.
+_PAIR_FORMS = (
+    re.compile(r"(?<![\d.])(\d{2}\.\d{3}) s over 5 laps(?:,| and) (\d{2}\.\d{3}) s over (\d+)"),
+    re.compile(r"(?<![\d.])(\d{2}\.\d{3}) -> (\d{2}\.\d{3}) s between 5 and (\d+) laps"),
+)
+
+
+def test_every_five_lap_pair_is_the_table_s():
+    """THE TWO CELLS THE PUBLIC PAGES QUOTE, wherever they are quoted. The README and the laps.csv
+    writer print the D24 three-chapter row's first and last cells as one sentence, and so do a
+    test docstring and a CMake comment. #300 left all four stale, and the check that stood here
+    looked at only the first two. So the family is FOUND BY SEARCH now, and each hit is read
+    against the row with its lap count."""
+    by_n = {r.all_n: r for r in _rows()}
+    hits: dict[str, int] = {}
+    for rel, text in _scanned_texts():
         flat = re.sub(r"\s+", " ", text)
-        m = re.search(r"([\d.]+) s over 5 laps(?:,| and) ([\d.]+) s over (\d+)", flat)
-        assert m, f"{rel} no longer states the ideal over 5 laps against the whole recording"
-        assert m.groups() == want, (
-            f"{rel} says {m.groups()}, the table says {want} — the table is the source")
-    print("test_the_headline_pair_reaches_the_readme OK")
+        for form in _PAIR_FORMS:
+            for five, whole, n in form.findall(flat):
+                row = by_n.get(int(n))
+                assert row, f"{rel} quotes the ideal over {n} laps; no table row has {n}"
+                want = (f"{row.cells[0]:.3f}", f"{row.all_s:.3f}")
+                assert (five, whole) == want, (
+                    f"{rel} says {five} s over 5 laps and {whole} s over {n}; the table's "
+                    f"{row.name} row says {want} — the table is the source")
+                hits[rel] = hits.get(rel, 0) + 1
+        # "… chapter 1 (21 laps) and … chapters 1–3 (65 laps) are 0.69 s apart": two rows' `all`
+        # cells, subtracted — the Library's Ideal-lap header hover makes its whole case with it.
+        for n_a, n_b, apart in re.findall(r"\((\d+) laps\) and [^()]{1,40}\((\d+) laps\) are "
+                                          r"(\d\.\d\d) s apart", flat):
+            a, b = by_n.get(int(n_a)), by_n.get(int(n_b))
+            assert a and b, f"{rel} compares {n_a} laps with {n_b}; the table lacks one of them"
+            assert a.verified and b.verified, (
+                f"{rel} quotes {a.name} against {b.name} as current, and one of them is "
+                f"{_UNVERIFIED} — not re-measured")
+            assert apart == f"{abs(a.all_s - b.all_s):.2f}", (
+                f"{rel} says {n_a} and {n_b} laps are {apart} s apart; the table's `all` cells are "
+                f"{abs(a.all_s - b.all_s):.2f} s apart")
+            hits[rel] = hits.get(rel, 0) + 1
+    for rel in ("README.md", os.path.join("studio", "export_data.py")):
+        assert rel in hits, (
+            f"{rel} no longer states the ideal over 5 laps against the whole recording")
+    assert len(hits) >= 4, f"the pair scan found only {sorted(hits)}; it has gone vacuous"
+    print(f"test_every_five_lap_pair_is_the_table_s OK ({sum(hits.values())} pairs in "
+          f"{len(hits)} files)")
+
+
+def test_every_d24_gap_is_the_docstring_s():
+    """THE GAP A READER SEES ON THE TILE, wherever the tree quotes it. After #300 the D24 gaps
+    had moved from 1.42 to 1.49 s (three chapters) and from 0.94 to 1.37 s (one chapter). The
+    sentences quoting them mostly do not say "per doubling of lap count", so the rate scan passed
+    over them. Each form here is anchored on its own phrase, and every number is read
+    against the docstring's published gaps, not against a copy typed into this file."""
+    g = Gaps()
+    all_3ch = _row("D24 3")
+    at_n = re.compile(r"(?<![\d.])(\d\.\d\d) s`?\s*(?:gap\s+)?(?:at|over|from)\s+"
+                      rf"(5\s+(?:clean\s+)?laps|{g.n3}(?![\d.]))")
+    one_three = re.compile(r"(?<![\d.])(\d\.\d\d) s on D24 one chapter(?:,| and) [+−-]?"
+                           r"(\d\.\d\d) s on three")
+    alt = re.compile(r"(?:1:(\d\d\.\d{3}) theoretical best over (\d+) laps|theoretical best "
+                     r"1:(\d\d\.\d{3}) over (\d+) laps), [−-](\d\.\d\d) s on the table")
+    seen = 0
+    for rel, text in _scanned_texts():
+        flat = re.sub(r"\s+", " ", text)
+        for value, where in at_n.findall(flat):
+            want = g.at5_3ch if where.startswith("5") else g.all_3ch
+            assert value == want, (
+                f"{rel} quotes a {value} s gap at {where}; IdealSample publishes {want} "
+                f"(D24 3 chapters) — the docstring is the source")
+            seen += 1
+        for one, three in one_three.findall(flat):
+            assert (one, three) == (g.all_1ch, g.all_3ch), (
+                f"{rel} quotes {one} s on D24 one chapter and {three} s on three; IdealSample "
+                f"publishes {g.all_1ch} and {g.all_3ch}")
+            seen += 1
+        for a_s, a_n, b_s, b_n, gap in alt.findall(flat):
+            secs, n = (a_s, a_n) if a_s else (b_s, b_n)
+            assert int(n) == all_3ch.all_n, f"{rel}: a screenshot of {n} laps is not a D24 row"
+            assert (f"{60 + float(secs):.3f}", gap) == (f"{all_3ch.all_s:.3f}", g.all_3ch), (
+                f"{rel} describes a screenshot reading 1:{secs} and −{gap} s; the table reads "
+                f"{all_3ch.all_s:.3f} s and IdealSample −{g.all_3ch} s. Regenerate the image "
+                "(studio/dev/media_capture.py) and its alt text together.")
+            seen += 1
+    assert seen >= 12, f"the gap scan found only {seen} quotations; it has gone vacuous"
+    print(f"test_every_d24_gap_is_the_docstring_s OK ({seen} quotations)")
+
+
+# ─── the real-media half ─────────────────────────────────────────────────────────────────────────
+_DRAWS = 20_000
+_SEED = 20260917
+
+
+def _subset_means(times, admitted, lap_times, n: int) -> tuple[float, float]:
+    """The table's stated method at one rung: the mean IDEAL and the mean BEST LAP over `_DRAWS`
+    random `n`-lap subsets of the clean laps, the partition and every cell's admission held (the
+    admission is per cell — a lap's own projected span against its own expected span — so holding
+    the partition holds it). The one subset-dependent rule, a segment no subset lap is admitted
+    on falling back to the whole column, is `CornerModel.segment_bests`' own; the caller proves
+    this reproduces the app over the full set before it varies anything. Seeded per rung, so a
+    cell does not depend on which other rungs were drawn first."""
+    import numpy as np
+
+    rng = np.random.default_rng((_SEED, n))
+    laps = times.shape[0]
+    ideal_sum = best_sum = 0.0
+    left = _DRAWS
+    while left:
+        k = min(2_000, left)
+        idx = np.argsort(rng.random((k, laps)), axis=1)[:, :n]
+        t, a = times[idx], admitted[idx]
+        m = np.where(a, t, np.inf).min(axis=1)
+        ideal_sum += float(np.where(np.isinf(m), t.min(axis=1), m).sum(axis=1).sum())
+        best_sum += float(lap_times[idx].min(axis=1).sum())
+        left -= k
+    return ideal_sum / _DRAWS, best_sum / _DRAWS
+
+
+def _full_set_ideal(times, admitted) -> float:
+    import numpy as np
+
+    m = np.where(admitted, times, np.inf).min(axis=0)
+    return float(np.where(np.isinf(m), times.min(axis=0), m).sum())
 
 
 def test_the_table_still_matches_the_app():
     """THE CHECK THAT WOULD HAVE CAUGHT IT, on real footage: load a recording, find the row with
-    its clean-lap count, and assert the row's `all` cell IS `Session.ideal_total()`.
+    its clean-lap count, assert the row's `all` cell IS `Session.ideal_total()`, and re-measure
+    everything else the docstring publishes about that recording by its own stated method.
 
     Opt-in via `PACER_IDEAL_TABLE_MP4` (comma-separated chapters, e.g. the three that make D24's
     65-lap recording). It cannot run in CI — the recordings are 11 GB each and are not committed —
     so it prints SKIP instead, exactly like the real-media checks in test_chapter_timeline.py. The
     dev-Desktop gate to run it with is the same one AGENTS.md already names for a core-math
-    change: if the golden dump moved, this moved too."""
+    change: if the golden dump moved, this moved too.
+
+    WHY THE RUNGS AND NOT ONLY `all`: when the D24 `all` cells went stale, their 5-lap cells had
+    moved too, by −0.10 and −0.16 s. The version of this check that compared only `all` would have
+    been satisfied by a hand-edit of that one cell, leaving the rest of the row, and the rate
+    computed from it, false."""
     paths = [p.strip() for p in os.environ.get("PACER_IDEAL_TABLE_MP4", "").split(",") if p.strip()]
     if not paths:
         print("skip test_the_table_still_matches_the_app (set PACER_IDEAL_TABLE_MP4 to a "
@@ -267,6 +488,8 @@ def test_the_table_still_matches_the_app():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     import tempfile
 
+    import numpy as np
+
     from studio import demo, focus, library, marks, prefs, session_record, track_db
     tmp = tempfile.mkdtemp(prefix="pacer-ideal-table-")
     for mod in (demo, focus, library, marks, prefs, session_record, track_db):
@@ -274,16 +497,82 @@ def test_the_table_still_matches_the_app():
     from studio.session import Session
 
     s = Session.load([os.path.expanduser(p) for p in paths])
-    laps = len(s.consistency_lap_ids())
+    sb = s.ideal_segment_bests()
+    assert sb is not None, "no corner partition, so there is no ideal to check the table against"
+    laps = s.ideal_sample().laps
     rows = [r for r in _rows() if r.all_n == laps]
     assert rows, (f"{laps} clean laps is not a row of the table "
                   f"({[(r.name, r.all_n) for r in _rows()]}) — point the variable at one of them")
+    row = rows[0]
     got = s.ideal_total()
-    assert got is not None, "no corner partition, so there is no ideal to check the table against"
-    assert abs(got - rows[0].all_s) < 0.001, (
-        f"{rows[0].name}: the table publishes {rows[0].all_s:.3f} s over {laps} laps, the app "
-        f"computes {got:.3f}. The app is right; every surface quoting the table has to move.")
-    print(f"test_the_table_still_matches_the_app OK ({rows[0].name}, {got:.3f} s over {laps} laps)")
+    times, admitted = np.asarray(sb.times, float), np.asarray(sb.admitted, bool)
+    lap_times = np.array([s.lap_time(i) for i in sb.lap_ids], float)
+    # The stand-in has to BE the app before anything is varied, or every cell below measures a
+    # copy of the rule rather than the rule.
+    assert abs(_full_set_ideal(times, admitted) - got) < 1e-9, (
+        "the subset minimum no longer reproduces Session.ideal_total() over every lap — "
+        "CornerModel.segment_bests changed its rule and this check has to follow it")
+
+    means = {n: _subset_means(times, admitted, lap_times, n) for n in _RUNGS if n < laps}
+    for n in (8, 15, 30, 50):              # the shape sentence's intermediate rungs
+        if n < laps and n not in means:
+            means[n] = _subset_means(times, admitted, lap_times, n)
+    means[laps] = (got, float(lap_times.min()))
+    cells = [means[n][0] if n < laps else None for n in _RUNGS]
+    rate = (means[5][0] - got) / math.log2(laps / 5)
+
+    def dec(a: int, b: int, col: int = 0) -> float:
+        return (means[a][col] - means[b][col]) / math.log2(b / a)
+
+    measured = (f"| {row.name} | " + " | ".join("—" if c is None else f"{c:.3f}" for c in cells)
+                + f" | {got:.3f} ({laps}) | {rate:.3f} s |")
+    # The figures the docstring's prose quotes beside the row, from the same draws — printed on a
+    # pass as well as a failure, so re-publishing them never needs a second, hand-rolled probe.
+    prose = (f"best-lap rate 5 → {laps}: {dec(5, laps, 1):.3f} · gap at 5 laps "
+             f"−{means[5][1] - means[5][0]:.3f} s, at {laps} −{means[laps][1] - got:.3f} s")
+    if laps > 20:
+        prose += f" · top rung 20 → {laps}: ideal {dec(20, laps):.3f}, best {dec(20, laps, 1):.3f}"
+    prose += "".join(f" · {a} → {b}: {dec(a, b):.3f}" for a, b in ((5, 8), (8, 15), (20, 30), (50, laps))
+                     if a < b and a in means and b in means)
+    problems = []
+    if abs(got - row.all_s) >= 0.001:
+        problems.append(f"`all`: the table publishes {row.all_s:.3f} s, the app computes {got:.3f}")
+    # 20,000 draws put the Monte-Carlo standard error at ≤ 0.0015 s on every D24 cell; 0.005 is
+    # three of those plus the table's own rounding. When #300 left this table stale, the smallest
+    # move on any D24 cell was 0.072 s.
+    for n, pub, now in zip(_RUNGS, row.cells, cells, strict=True):
+        if (pub is None) != (now is None):
+            problems.append(f"{n} laps: the table has {pub}, the recording gives {now}")
+        elif pub is not None and abs(pub - now) > 0.005:
+            problems.append(f"{n} laps: the table publishes {pub:.3f} s, re-measured {now:.3f}")
+    if row.name.startswith("D24 3"):
+        g = Gaps()
+        for label, pub, now in (("gap at 5 laps", g.at5_3ch, means[5][1] - means[5][0]),
+                                (f"gap at {laps}", g.all_3ch, means[laps][1] - got)):
+            if abs(float(pub) - now) > 0.01:
+                problems.append(f"{label}: IdealSample publishes −{pub} s, re-measured −{now:.3f}")
+        for a, b, pub in _decrements():
+            if abs(float(pub) - dec(a, b)) > 0.01:
+                problems.append(f"decrement {a} → {b}: published {pub}, re-measured "
+                                f"{dec(a, b):.3f}")
+    if row.name.startswith("D24 1"):
+        g = Gaps()
+        if abs(float(g.all_1ch) - (means[laps][1] - got)) > 0.005:
+            problems.append(f"gap at the fitted line: IdealSample publishes {g.all_1ch} s, "
+                            f"re-measured {means[laps][1] - got:.3f}")
+        ideal_top, best_top = _top_rung()
+        for label, pub, col in (("ideal", ideal_top, 0), ("best", best_top, 1)):
+            if abs(float(pub) - dec(20, laps, col)) > 0.01:
+                problems.append(f"top-rung {label} rate: published {pub}, re-measured "
+                                f"{dec(20, laps, col):.3f}")
+    assert not problems, (
+        f"{row.name}{'' if row.verified else ' ' + _UNVERIFIED}: the published figures are not "
+        f"what the app computes. The app is right; the table and every surface quoting it move.\n  "
+        + "\n  ".join(problems) + f"\n  re-measured row:  {measured}\n  and its prose:    {prose}")
+    note = "" if row.verified else f" — this row can drop its {_UNVERIFIED}"
+    print(f"test_the_table_still_matches_the_app OK ({row.name}, {got:.3f} s over {laps} laps, "
+          f"every rung within Monte-Carlo error){note}\n    re-measured row:  {measured}"
+          f"\n    and its prose:    {prose}")
 
 
 def _run_all():
