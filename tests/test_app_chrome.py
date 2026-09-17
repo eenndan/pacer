@@ -53,7 +53,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # ALL of them, the rule studio/dev/_jail.py states: every window built on the synthetic session
 # reads the session-record store and, now that its library entry resolves (H6), this track's focus
 # list — both of which were live against the developer's own app-support dir.
-from studio import demo, focus, library, marks, prefs, session_record, sidecar, track_db  # noqa: E402
+from studio import (  # noqa: E402
+    demo,
+    focus,
+    library,
+    marks,
+    prefs,
+    session_record,
+    sidecar,
+    track_db,
+)
 
 _SEAMS = tempfile.mkdtemp(prefix="pacer-test-app-chrome-")
 for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db"),

@@ -58,7 +58,6 @@ from studio import chapters, data_quality, render_cache, theme, tracks  # noqa: 
 from studio._signal import fmt_time  # noqa: E402
 from studio.central_view import CentralView  # noqa: E402
 
-
 # --------------------------------------------------------------------- fixture
 # The synthetic session's first fix, on the wall clock: 2025-08-30 12:00 UTC. Noon, so the LOCAL
 # calendar day `Session.session_date` derives is the same date in every timezone from UTC-11 to +11.
