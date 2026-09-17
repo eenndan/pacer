@@ -36,12 +36,11 @@ import logging
 import os
 import shutil
 
-from . import units
+from . import app_support, units
 
 _log = logging.getLogger(__name__)
 
 _FILENAME = "prefs.json"
-_APP_DIR_NAME = "pacer"
 
 VERSION = 1
 
@@ -93,9 +92,9 @@ WINDOW_GEOMETRY = "window_geometry"
 
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). The single seam
-    tests monkeypatch so the suite never touches the real prefs (mirrors library._app_support_dir)."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    tests monkeypatch so the suite never touches the real prefs (mirrors library._app_support_dir,
+    and like it resolves through ``app_support.resolve``, which jails a test that forgets to)."""
+    return app_support.resolve()
 
 
 def prefs_path() -> str:

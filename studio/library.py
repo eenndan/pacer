@@ -90,6 +90,8 @@ import os
 import re
 import shutil
 
+from . import app_support
+
 _log = logging.getLogger(__name__)
 
 VERSION = 3
@@ -106,14 +108,13 @@ _TRUST_UNKNOWN = {"verified": True, "degraded": False, "dropout": False}
 _GOPRO_STEM_RE = re.compile(r"^(G[XHPL])\d{2}(\d{4})$", re.IGNORECASE)
 
 _FILENAME = "library.json"
-_APP_DIR_NAME = "pacer"
 
 
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). The single seam
-    tests monkeypatch so the suite never touches the real library."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    tests monkeypatch so the suite never touches the real library — and a test that forgets to is
+    still jailed, because the seam resolves through ``app_support.resolve`` (see that module)."""
+    return app_support.resolve()
 
 
 def library_path() -> str:
