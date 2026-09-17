@@ -4392,15 +4392,18 @@ class StatsView(QWidget):
             rows.append(("Rotation cross-check",
                          f"{verdict} · over {rot.loop_n} closed laps the gyroscope's measured yaw "
                          f"integrates to {rot.loop_ratio_gyro:.3f}×2π and the path-derived rate to "
-                         f"{rot.loop_ratio_path:.3f}×2π, against an exact 1.000 · "
+                         f"{rot.loop_ratio_path:.3f}×2π, against an exact "
+                         f"{rot.loop_exact:+.3f} · "
                          f"r={rot.corner_corr:+.2f} between them through the corners{lag}",
                          not rot.ok))
             tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
                         "the only quantity on this card with a ground truth rather than a second "
                         "estimate to agree with. That is why the headline here is the closed-lap "
                         "ratio and not the correlation: halving the channel leaves r bit-identical "
-                        "and moves this ratio to 0.5, and a gyroscope read through the wrong "
-                        "gravity axis lands negative.")
+                        "and moves this ratio to 0.5. The exact target beside it carries this "
+                        "circuit's own direction — a clockwise lap closes at −1.000×2π, which is "
+                        "just as exact — and a gyroscope read through the wrong gravity axis lands "
+                        "on the opposite side of zero from the path.")
             if rot.lag_clause:
                 # WHAT WAS MEASURED AND WHAT WAS DONE WITH IT ARE TWO SENTENCES, from two sources
                 # — and since the Video sync row they are two SURFACES, which is the fix for the
