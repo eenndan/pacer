@@ -20,6 +20,11 @@ BOTH halves, because either one alone is weak:
      both directions like `tests/test_layering.py`: every target must MATCH SOMETHING (a stale
      entry that matches nothing is a silent no-op), must not use the banned wording, and must
      positively name the telemetry clock. A docstring that simply drops the question fails too.
+  3. THE CROSSING'S SCOPE (T10) — the lap window meeting the naive-second GPS-quality strip is
+     harmless at LAP length and not below ~10 s. Guarded as a fact (the strip's axis is the rate
+     fit, not the GPS-lag-corrected picture map), as the call shape that published a wrong corner
+     figure (a strip index through `media_time`), and as a claim (every place the lap verdict is
+     written names where it stops holding).
 
 Run: python tests/test_lap_time_axis.py
 """
@@ -56,16 +61,20 @@ def _sample(ts_ms):
                            ground_speed=20.0, timestamp_ms=int(ts_ms))
 
 
-def _synthetic_axes():
+def _synthetic_axes(phase_s: float = 0.0):
     """(samples, naive, telemetry_times) for a D24-shaped recording on two clocks.
 
     The GPS9 stamps are an exact 10.000 Hz wall clock; `naive` is the media axis the GPMF payload
     layout gives, running D24_MEDIA_PPM fast against it. `_gps9_times` is the REAL load-path
     function, not a re-implementation — a probe that re-derives the rule under test carries a copy
-    of the defect."""
+    of the defect.
+
+    `phase_s` starts the fixes off the whole second. At 0 every fix sits on a tenth of a second,
+    so a ramp under 0.1 s can never carry one across a one-second cell edge — true of the synthetic
+    and of no real recording, whose fixes land at whatever phase the receiver locked on."""
     n = int(SPAN_S * HZ)
     true_t = np.arange(n) / HZ
-    naive = 1000.0 + true_t * (1.0 + D24_MEDIA_PPM * 1e-6)
+    naive = 1000.0 + phase_s + true_t * (1.0 + D24_MEDIA_PPM * 1e-6)
     samples = [_sample(500_000 + i * 100) for i in range(n)]
     times = np.asarray(_gps9_times(samples, list(naive)), float)
     return samples, naive, times
@@ -249,6 +258,169 @@ def test_no_lap_axis_comment_calls_a_lap_time_a_media_clock_second():
         assert REQUIRED in text or "true-clock" in text, (
             f"{path} carries the lap axis but names no clock")
     print(f"ok claim: {len(LAP_AXIS_FUNCTIONS)} docstrings + {len(LAP_AXIS_TEXT)} files")
+
+
+# ------------------------------------------------ 3. THE CROSSING'S SCOPE (T10, after #306 / #314)
+# #306 measured the lap window meeting the MEDIA-second quality strip and recorded it as harmless:
+# right at lap length, and read by #314 as wrong for a corner. Measured per kept fix on both D24
+# recordings (studio/dev/probes/p5_clock_crossing_scale.py) both halves needed a correction: the
+# corner figure had crossed `Session.media_time`, which carries the GPS lag, and how often a window
+# flips does not depend on its length at all — what the length decides is how much of a consumer's
+# answer the flips are. These guard the fact that settles which map is the strip's, the one call
+# shape that got it wrong, and the places the lap-scale verdict is written.
+
+# The GPS lag `_install_gps_lag` measured on the owner's recordings (+0.476 s / +0.459 s).
+D24_GPS_LAG_S = 0.47
+
+
+def test_the_quality_strip_sits_on_the_rate_fit_not_on_the_picture_map():
+    """THE FACT. The strip bins every fix by its NAIVE stamp, and `media_clock.fit` is the map from
+    a fix's telemetry label to that stamp. The GPS lag is a correction for the PICTURE: a fix's
+    telemetry and naive stamps carry it equally, so it is not part of the strip's axis.
+
+    Driven through the real `_gps9_times`, `media_clock.fit` and `build_quality_timeline` on the
+    D24-shaped recording above, with one MODERATE second deep in it (where the two labels are
+    furthest apart) and every fix asked for the class of its own cell:
+
+      * `without_gps_lag().to_media` — the rate fit alone — places EVERY fix in its own cell;
+      * the telemetry label as-is misplaces the fix at each edge (the 27 ppm ramp, ~0.08 s here);
+      * `to_media` with the lag — `Session.media_time` — misplaces ~0.47 s of fixes at each edge,
+        worse than not converting at all. That is the join #314's corner figure used.
+
+    NEGATIVE CONTROL: make `without_gps_lag` keep the lag (return `self`) and the first assertion
+    goes red with ten misplaced fixes."""
+    from studio import data_quality
+
+    _samples, naive, times = _synthetic_axes(phase_s=0.05)
+    clock = media_clock.fit(times, naive).with_gps_lag(D24_GPS_LAG_S)
+    assert clock.gps_lag == D24_GPS_LAG_S, "the lag was refused; this test would measure nothing"
+    cell = int(naive[-1]) - 100
+    own = np.floor(naive).astype(int)
+    dop = np.where(own == cell, 7.0, 1.5)             # 7.0 is MODERATE: past good, inside the gate
+    strip = data_quality.build_quality_timeline(naive, [False] * len(naive), dop,
+                                                span_s=float(naive[-1]) + 1.0)
+    assert strip.cls[cell] == data_quality.MODERATE and strip.cls[cell - 1] == data_quality.GOOD
+
+    near = np.flatnonzero(np.abs(own - cell) <= 2)
+    truth = [int(strip.cls[own[i]]) for i in near]
+
+    def misplaced(to_strip):
+        return sum(strip.worst_between(float(to_strip(times[i])), float(to_strip(times[i]))) != c
+                   for i, c in zip(near, truth, strict=True))
+
+    rate_fit = misplaced(clock.without_gps_lag().to_media)
+    label = misplaced(lambda t: t)
+    picture = misplaced(clock.to_media)
+    assert rate_fit == 0, f"the rate fit misplaced {rate_fit} fixes — it is not the strip's axis"
+    assert label >= 1, "the telemetry label is the strip's axis — then there is no crossing to scope"
+    assert picture > label, (
+        f"the lag-corrected map misplaced {picture} fixes against the label's {label}: if it is "
+        f"not worse, the GPS lag has become part of the strip's axis and the rule is wrong")
+    print(f"ok strip axis: misplaced — rate fit {rate_fit}, label {label}, with GPS lag {picture}")
+
+
+def _strip_index_calls(tree):
+    """Every `.worst_between(...)` / `.stats_between(...)` call — the two ways into the strip."""
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("worst_between", "stats_between")]
+
+
+def _crosses_the_picture_map(call):
+    """Does a strip-index call reach its window through the lag-carrying map? `x.media_time(...)`
+    and `x.media_clock.to_media(...)` do; `x.media_clock.without_gps_lag().to_media(...)`, or a
+    map bound from it first, does not."""
+    for arg in [*call.args, *(k.value for k in call.keywords)]:
+        for node in ast.walk(arg):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr == "media_time":
+                return True
+            owner = node.func.value
+            if (node.func.attr == "to_media" and isinstance(owner, ast.Attribute)
+                    and owner.attr == "media_clock"):
+                return True
+    return False
+
+
+def test_nothing_indexes_the_quality_strip_through_the_picture_map():
+    """THE CALL SHAPE THAT GOT IT WRONG. `studio/dev/probes/p4_corner_gps_quality.py` asked whether
+    a corner cell's class survives the other clock by indexing the strip with `session.media_time`,
+    and published the answer — 9 of 456 — in `studio/docs/refused-2026-09.md` §4. Measured against
+    the fixes' own stamps the crossing moves 1 of them; the other eight were the GPS lag.
+
+    Scans every module under `studio/`, dev probes included, because a probe's printed number is
+    what gets written down. Both directions: the scan must find the strip's real consumers, so a
+    renamed accessor cannot turn this into a guard over nothing.
+
+    NEGATIVE CONTROL, watched: on the tree before T10, p4's `worst_between(session.media_time(t0),
+    session.media_time(t1))` fails this."""
+    found, bad = 0, []
+    for root, _dirs, files in os.walk(os.path.join(_REPO, "studio")):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            for call in _strip_index_calls(tree):
+                found += 1
+                if _crosses_the_picture_map(call):
+                    bad.append(f"{os.path.relpath(path, _REPO)}:{call.lineno}")
+    # Session.lap_quality, the strip's hover, and p4's class + stats + clock comparison.
+    assert found >= 5, f"only {found} strip-index calls found — the scan has lost its subject"
+    assert not bad, (
+        f"these index the GPS-quality strip through the GPS-lag-corrected picture map; the strip's "
+        f"axis is `media_clock.without_gps_lag()`: {bad}")
+    print(f"ok strip index: {found} calls, none through the picture map")
+
+
+# Where #306's lap-scale verdict is written. Each must also carry its SCOPE: the measurement that
+# says where it stops holding, and the map a shorter window crosses with. Both directions: a target
+# that matches nothing fails too.
+SCOPE_DOCSTRINGS = [
+    ("studio/session.py", "quality_timeline"),
+    ("studio/session.py", "lap_quality"),
+    ("studio/marks.py", "auto_marks"),
+]
+SCOPE_CLASSES = [
+    ("studio/video_view.py", "_QualityStrip"),     # the one short-window consumer in the app
+]
+SCOPE_TEXT = [
+    "studio/docs/refused-2026-09.md",               # §4, where #314 wrote the corner-scale reading
+    "studio/dev/probes/p4_corner_gps_quality.py",
+    "CHANGELOG.md",
+]
+SCOPE_REQUIRED = ("p5_clock_crossing_scale", "without_gps_lag")
+
+
+def _class_docstrings(path):
+    with open(os.path.join(_REPO, path), encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    return {n.name: ast.get_docstring(n) or "" for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+
+
+def test_the_lap_scale_verdict_states_where_it_stops_holding():
+    """THE CLAIM. "Harmless — converting would buy nothing" is true of a lap and was already being
+    read as true, or as false, of windows it was never measured on. So every place that states it
+    must name the measurement that scopes it and the map a shorter window has to cross with."""
+    missing, silent = [], []
+    targets = []
+    for path, name in SCOPE_DOCSTRINGS:
+        targets.append((f"{path}::{name}", _docstrings(path).get(name)))
+    for path, name in SCOPE_CLASSES:
+        targets.append((f"{path}::{name}", _class_docstrings(path).get(name)))
+    for path in SCOPE_TEXT:
+        with open(os.path.join(_REPO, path), encoding="utf-8") as f:
+            targets.append((path, f.read()))
+    for where, text in targets:
+        if text is None:
+            missing.append(where)
+            continue
+        silent += [f"{where} lacks {req!r}" for req in SCOPE_REQUIRED if req not in text]
+    assert not missing, f"guarded symbols that no longer exist (stale targets): {missing}"
+    assert not silent, f"the lap-scale verdict is stated without its scope: {silent}"
+    print(f"ok scope: {len(targets)} places carry the window-length rule")
 
 
 def test_the_panel_states_the_axis_it_measures_on():

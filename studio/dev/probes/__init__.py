@@ -21,4 +21,10 @@ channel rather than two, so it loads each recording itself and reads the strip t
 built. Its verdict is `studio/docs/refused-2026-09.md` §4.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p4_corner_gps_quality
+
+`p5_clock_crossing_scale` measures the clock crossing p4 asks about at every window length rather
+than one: the strip's naive-second cells indexed by telemetry windows, each join checked per kept fix
+against the stamps the strip binned. Its rule is written in `Session.quality_timeline`.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p5_clock_crossing_scale
 """

@@ -334,7 +334,10 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
     the code was right and only the comments were wrong. The two places that cross the two clocks
     by label — a lap's inherited GPS-quality class, and a mark's chapter anchor — were measured
     rather than assumed: the class changes for **0 of 38 and 0 of 65** laps, and the mark round
-    trip is **exact**. Both now carry the numbers instead of the claim.
+    trip is **exact**. Both now carry the numbers instead of the claim. That "harmless" is a
+    LAP'S: over a window under ~10 s the same crossing decides over 1 % of below-good verdicts, and
+    such a consumer crosses `media_clock.without_gps_lag()`, never `media_time` — measured in
+    `studio/dev/probes/p5_clock_crossing_scale.py`.
 
 - **A missing corner alignment was documented as "below the drift gate" long after there was any
   drift gate.** The per-lap warp that maps the corner windows onto a lap
