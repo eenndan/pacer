@@ -819,7 +819,7 @@ def _reach_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
 
     THIS REPLACED THE ±σ COLUMN, deliberately. σ was the raw dispersion printed for the reader to
     interpret, and on the real recordings interpreting it was the whole job: σ ≥ the row's own
-    "Time lost" on 17 of the 20 ranked rows across the two D24 pairs (worst 10.8x), so the column
+    "Time lost" on 16 of the 19 shown rows across the two D24 pairs (worst 12.0x), so the column
     that mattered most was the one asking for arithmetic. This states the conclusion instead —
     and states it as a COUNT OVER ITS DENOMINATOR, so it stays checkable. σ itself is not lost: the
     REASON_LINE sentence spells it, the Stats ▸ CORNERS table has a σ column, and the Consistency

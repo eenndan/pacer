@@ -245,7 +245,7 @@ def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
     windows: the pair's ideal read 62.869 s where the order statistic extrapolated from the 22
     undistorted laps of the same recording predicts 65.226 s — 2.36 s of the 5.36 s headline was
     measurement artifact, not driving. With one frame per lap and the symmetric span admission in
-    `corner_model.MAX_DONOR_SPAN_DEV` it reads 65.149 s.
+    `corner_model.MAX_DONOR_SPAN_DEV` it read 65.149 s, and 65.464 s since #300 warped every lap.
 
     The warp is strictly increasing by construction (a match that would cross its neighbour is
     dropped, not clamped), so the partition can no longer fold — which is why the old

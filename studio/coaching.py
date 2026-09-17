@@ -111,25 +111,55 @@ _NO_PHASES = PhaseLoss(entry=0.0, apex=0.0, exit=0.0)
 # opportunity at all, it is sampling noise wearing a number.
 #
 # MEASURED, on the two real D24 recordings (0060: 38 clean laps, 12 corners, 9 rows above the
-# panel's display resolution; 0062: 65 clean laps, 12 corners, 11 rows) —
+# panel's display resolution; 0062: 65 clean laps, 12 corners, 10 rows). 0060 is GX020060 +
+# GX030060 and 0062 is GX010062 + GX020062 + GX030062. Every row, re-measured after #300 warped
+# every lap (rank is by time lost, before the gate sinks the abstained rows; reached is how many
+# clean laps matched the best lap's own time through the corner):
 #
-#   * σ ≥ time_lost on 17 of those 20 rows. The worst: 0060 C1 lost 0.034 s against σ 0.372 s
-#     (10.8x), 0060 C10 lost 0.071 s against σ 0.592 s (8.4x). Those rows shipped a live Jump
-#     button beside a number smaller than a tenth of the corner's own scatter.
-#   * σ is NOT the right spread statistic: on 0062 C1 it reads 0.226 s while the interquartile
-#     range is 0.115 s — 4x apart, because a handful of slow laps drag the second moment and a
+#   rec   corner  rank  lost s  sigma s  IQR s  reached  gate
+#   0060  C12        1   0.330    0.227  0.331     2/38  ranked
+#   0060  C4         2   0.244    0.240  0.322     6/38  ranked
+#   0060  C2         3   0.204    0.449  0.220     7/38  ranked
+#   0060  C9         4   0.153    0.144  0.193     7/38  ranked
+#   0060  C6         5   0.105    0.164  0.186     8/38  ranked
+#   0060  C8         7   0.057    0.073  0.101     6/38  ranked
+#   0060  C1         6   0.058    0.409  0.200    13/38  spread
+#   0060  C10        8   0.055    0.593  0.174    14/38  spread
+#   0060  C7         9   0.022    0.264  0.331    17/38  spread
+#   0062  C3         1   0.148    0.174  0.158     6/65  ranked
+#   0062  C12        2   0.143    0.150  0.206     4/65  ranked
+#   0062  C1         3   0.085    0.227  0.109     5/65  ranked
+#   0062  C6         4   0.084    0.096  0.103    13/65  ranked
+#   0062  C5         5   0.076    0.127  0.113    13/65  ranked
+#   0062  C8         7   0.056    0.064  0.060     6/65  ranked
+#   0062  C11        6   0.063    0.192  0.175    18/65  spread
+#   0062  C10        8   0.045    0.253  0.135    20/65  spread
+#   0062  C4         9   0.037    0.214  0.202    22/65  spread
+#   0062  C9        10   0.018    0.079  0.103    25/65  spread
+#
+# (tests/test_measured_figures.py derives every figure below from this table, and re-measures the
+# table itself when pointed at the footage — which CI does not have.)
+#
+#   * σ ≥ time_lost on 16 of those 19 rows. The worst: 0060 C7 lost 0.022 s against σ 0.264 s
+#     (12.0x), 0060 C10 lost 0.055 s against σ 0.593 s (10.9x). Without the gate below, those rows
+#     would carry a live Jump button beside a number smaller than a tenth of the corner's own
+#     scatter.
+#   * σ is NOT the right spread statistic: on 0062 C1 it reads 0.227 s while the interquartile
+#     range is 0.109 s — twice the width of the whole middle half, where normal scatter would put σ
+#     at three quarters of it — because a handful of slow laps drag the second moment and a
 #     quartile does not. The gate below reads the IQR.
-#   * the reach rate (how many clean laps already matched the corner's target) runs 3 %..34 % and
-#     splits cleanly at 1 lap in 10 — 15 of the 20 rows are corners the driver reaches routinely,
+#   * the reach rate (how many clean laps already matched the corner's target) runs 5 %..45 % and
+#     splits cleanly at 1 lap in 10 — 14 of the 19 rows are corners the driver reaches routinely,
 #     5 are corners reached about once a session.
 #
 # WHAT THE BRIEFED PREMISE GOT WRONG, and it is worth writing down: the target the ranking uses is
-# the BEST LAP's time through the corner, and that is never a lone outlier. `z > 1.5` against the
-# rest of the distribution fired on 0 of 20 rows, and every one of the 20 had at least two OTHER
-# laps strictly beating it (2..21 of them). Nor is it "your optimal line": on both recordings the
-# best lap's corner time was slower than that corner's own best instance at all 12 of 12 corners
-# (by 0.07..0.55 s). So ABSTAIN_ONE_OFF below is a real guard that has never fired on real data —
-# it is kept because a 3-lap session can trivially produce it, not because it is common.
+# the BEST LAP's time through the corner, and that is almost never a lone outlier. `z > 1.5` (the
+# other laps' mean minus the target, over their σ) fires on one of the 19 rows, 0060 C12 at z 1.59,
+# and every row but that one has at least two OTHER laps strictly beating it (1..24 of them). Nor is
+# it "your optimal line": on both recordings the best lap's corner time was slower than that
+# corner's own best instance at all 12 of 12 corners (by 0.04..0.68 s on 0060, 0.01..0.21 s on
+# 0062). So ABSTAIN_ONE_OFF below has not fired on either full recording — it fires on four of the
+# five single chapters, and a 3-lap session can trivially produce it.
 
 # A corner needs at least this many clean instances before ANY per-corner claim is made about it.
 # (The session-level MIN_LAPS gate above is a different question — it asks whether the median is
@@ -142,16 +172,19 @@ MIN_CORNER_LAPS = 3
 MIN_REACH_LAPS = 2
 
 # ...and it needs to be more than a rounding-level rate: fewer than 1 lap in 10 at the target is a
-# corner you have visited, not a pace you have established. Measured, the 20 real rows' reach rates
-# sort as 4.6 4.6 4.6 7.7 7.9 | 13.2 13.8 16.9 18.4 18.4 18.5 23.7 24.6 26.3 26.3 28.9 29.2 30.8
-# 31.6 33.8 % — the widest gap in the whole set sits exactly on 10 %.
+# corner you have visited, not a pace you have established. Measured, the 19 real rows' reach rates
+# sort as 5.3 6.2 7.7 9.2 9.2 | 15.8 15.8 18.4 18.4 20.0 20.0 21.1 27.7 30.8 33.8 34.2 36.8 38.5
+# 44.7 % — no row sits between 9.2 and 15.8 %, and that gap across 10 % is the second-widest in the
+# set (6.56 points, against 6.64 for 21.1 → 27.7 %). When this was first measured, before #300, it
+# was the widest.
 REACH_REPEAT_FRAC = 0.10
 
 # A claim must clear half the corner's own INTERQUARTILE spread to be aimable. Not a significance
 # test — with 38-65 laps the standard error of a median is ~0.03 s and almost nothing would abstain
 # — but an ACTIONABILITY test: a driver cannot aim at 0.03 s inside a band whose middle half is
-# 0.20 s wide, however real the 0.03 s is. Measured: 6 of the 20 real rows abstain here, including
-# 0062's THIRD-ranked corner (C12, 0.078 s on offer against a 0.236 s interquartile band).
+# 0.20 s wide, however real the 0.03 s is. Measured: 7 of the 19 real rows abstain here, and the
+# highest-ranked is sixth on both recordings (0060 C1, 0.058 s on offer against a 0.200 s
+# interquartile band; 0062 C11, 0.063 s against 0.175 s).
 SPREAD_MARGIN = 0.5
 
 # How a corner's target relates to what the driver has actually produced — the "can't vs didn't"
@@ -340,25 +373,42 @@ class Opportunity:
 # RANKED TIME rather than a row count, because the ranking's own unit is seconds and a count lets
 # six trivial corners outvote the one that matters.
 #
-# MEASURED, on the two real recordings, over the ranked (non-abstained) rows: 0060 splits 73 %
-# execution / 27 % pace and 0062 splits 35 % / 65 % — SAME driver, SAME track, weeks apart, and
-# the theme comes out opposite. That is the finding that justifies the feature. The cause axis is
-# weaker: braking holds 61 % of 0060's ranked time (a theme) but only 44 % of 0062's (not one), so
-# the cause line is conditional and will often read "no single cause dominates".
+# MEASURED, on the two real recordings and on each of their chapters loaded alone, over the ranked
+# (non-abstained) rows, after #300 warped every lap. "top cause" is the reason holding the most
+# ranked time, whether or not it clears THEME_SHARE:
+#
+#   lap set           laps  ranked  ranked s  abstained s  execution   pace  top cause
+#   0060                38       6     1.094        0.135       70 %   30 %  braking 62 %
+#   0062                65       6     0.593        0.162       27 %   73 %  braking 76 %
+#   0060 chapter 2      24       5     0.932        0.424       45 %   55 %  line 45 %
+#   0060 chapter 3      13       2     0.442        0.888      100 %    0 %  line 51 %
+#   0062 chapter 1      21       6     0.521        0.164       82 %   18 %  braking 79 %
+#   0062 chapter 2      24       4     0.344        0.210       71 %   29 %  braking 53 %
+#   0062 chapter 3      18       5     0.548        0.454      100 %    0 %  line 74 %
+#
+# 0060 splits 70 % execution / 30 % pace and 0062 splits 27 % / 73 % — SAME driver, SAME track, a
+# day apart, and the theme comes out opposite. That is the finding that justifies the feature. The
+# cause axis agrees on the two full recordings — braking holds 62 % of 0060's ranked time and 76 %
+# of 0062's, a theme on each — but it does not survive a smaller lap set: of the five single
+# chapters, three name no single cause, so the cause line is conditional and will often read "no
+# single cause dominates".
 #
 # AND THE HONEST CAVEAT, also measured: the theme is a property of the LAP SET, and it moves with
-# it. Loading only chapter 2 of each recording (24 laps instead of 38 and 65) flips BOTH verdicts —
-# 0060 reads 86 % pace and 0062 reads 72 % execution. Corners cluster near the 1-in-10 reach line,
-# so a different lap set moves several of them across it at once. The sentence therefore always
-# states its own share, and THEME_SPLIT exists so a balanced session is not forced to pick a side.
+# it. Loading only chapter 2 of each recording (24 laps instead of 38 and 65) moves BOTH verdicts —
+# 0060 falls to a SPLIT and 0062 flips to execution — and across the five single chapters the
+# verdict is execution on four and a split on one, where the two full recordings disagree. Corners
+# cluster near the 1-in-10 reach line, so a different lap set moves several of them across it at
+# once. The sentence therefore always states its own share, and THEME_SPLIT exists so a balanced
+# session is not forced to pick a side.
 THEME_EXECUTION = "execution"  # most of the ranked time is in corners already driven at this pace
 THEME_PACE = "pace"            # most of it is in corners the driver has rarely reached
 THEME_SPLIT = "split"          # neither side holds a clear majority — say so, don't invent one
 THEME_NONE = "none"            # nothing ranked (every row abstained, or there are no rows)
 
 # The share one side must hold before it is called the session's theme. 0.60 is a clear majority
-# with room to spare; measured, 0060 lands at 0.73 and 0062 at 0.65, and 0060 would fall to a SPLIT
-# if its C4 (reached on 5 of 38 laps, just over the 1-in-10 line) tipped the other way.
+# with room to spare; measured, 0060 lands at 0.70 and 0062 at 0.73, and one corner tips either:
+# 0060 would fall to a SPLIT if its C4 (reached on 6 of 38 laps; the line is 4) tipped the other
+# way, and 0062 would if its C3 (reached on 6 of 65 laps; the line is 7) did.
 THEME_SHARE = 0.60
 
 
@@ -1047,8 +1097,8 @@ def theme_sentence(theme: Theme) -> str:
     if theme.kind == THEME_NONE:
         return ""
     # "the time on offer", not "your time": the shares are over the RANKED rows only, and on a
-    # short session most of the measured loss can sit in abstained corners (0062's single chapter:
-    # 0.135 s ranked against 0.198 s abstained). The same words the abstain sentence uses for the
+    # short session most of the measured loss can sit in abstained corners (0060's chapter 3 alone:
+    # 0.442 s ranked against 0.888 s abstained). The same words the abstain sentence uses for the
     # same quantity, so the page has one name for it.
     if theme.kind == THEME_EXECUTION:
         return (f"Most of the time on offer is execution, not pace — {theme.share:.0%} of it is "
@@ -1057,7 +1107,7 @@ def theme_sentence(theme: Theme) -> str:
         return (f"Most of the time on offer is pace, not execution — {theme.share:.0%} of it is "
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
-    # when no side clears THEME_SHARE, and it is a real state (0060 lands here if one corner tips).
+    # when no side clears THEME_SHARE, and it is a real state (0060's chapter 2 alone lands here).
     total = theme.execution_s + theme.pace_s
     exec_pct = theme.execution_s / total if total > 0 else 0.0
     return (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have already "

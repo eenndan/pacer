@@ -703,24 +703,37 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # every partition EDGE and at the flag — the minimum was taken over the clean laps there — but NOT
 # pointwise. Inside a segment the ideal replays its DONOR lap's pace, and a lap that carries more
 # speed into the same corner is transiently ahead of that donor. Swept at 25 ms of media clock over
-# every valid lap of the owner's five real recordings (420 088 samples):
+# every valid lap of the owner's five real recordings, after #300 warped every lap; "prints a minus
+# sign" is what the readout printed before the clamp below existed, a raw Δ under -DELTA_EVEN_EPS_S:
 #
-#   recording            floor      raw Δ < 0     prints a minus sign
-#   D24 1 chapter       -0.016 s      0.94 %          0.30 %
-#   D24 3 chapters      -0.003 s      0.08 %          0.00 %
-#   Sandown chapter 1   -0.159 s      2.09 %          1.26 %
-#   Sandown 3 chapters  -0.051 s      0.47 %          0.37 %
-#   SD_30_08            -0.039 s      6.42 %          4.02 %
+#   recording              laps  samples     floor   raw Δ < 0   prints a minus sign
+#   D24 1 chapter            21    58567  -0.020 s     1.18 %        0.58 %
+#   D24 3 chapters           65   181288  -0.008 s     0.11 %        0.03 %
+#   Sandown chapter 1        23    47081  -0.164 s     4.52 %        3.75 %
+#   Sandown 3 chapters       59   118831  -0.052 s     0.47 %        0.38 %
+#   SD_30_08                 25    13621  -0.039 s     6.42 %        4.02 %
+#   and on the start line the owner saved beside the recording (its .pacer.json), as the app opens it:
+#   Sandown chapter 1 †      24    49130  -0.013 s     0.10 %        0.05 %
+#   Sandown 3 chapters †     59   118823  -0.030 s     0.80 %        0.42 %
+#   SD_30_08 †               23    44408  -0.246 s     6.28 %        5.46 %
 #
-# against end-of-lap values of +0.22 … +9.24 s. So it is a ±0.16 s wobble on a number whose job is
-# to read 0 … +1.6 s, and the next partition edge always takes it back: over a segment, and over
-# the lap, you cannot be ahead of the ideal. A two-way ramp would flash the "ahead" hue on the
-# app's LARGEST text for a tenth of a second to report something that is not true at any
-# granularity the ideal is defined on — so the DISPLAYED value is clamped at 0 (`format_ideal_run`)
-# and the ramp stays one-way. Same shape as the DELTA_EVEN_EPS_S dead band above: a clamp that
-# exists, is stated, and is applied at the display boundary only. `Session.delta_to_ideal_at` keeps
-# returning the raw signed number, and the Δ chart draws it unclamped — there a sub-zero excursion
-# has a track position to belong to, which is the whole point of the overlay.
+# The first five rows are the loader's own start line, which is how this table was first measured
+# (#211); D24 has no saved line, so its rows are also what the app shows. † rows restore the saved
+# one, and on SD_30_08 that is not a detail: the loader's line cuts its 46 s Sandown Park lap into
+# 12.9 s pieces, so the unmarked SD_30_08 row describes a segmentation rather than a lap. Recordings:
+# D24 is GX010062 alone and with GX020062 + GX030062; Sandown is GX010059 alone and with GX020059 +
+# GX030059; SD_30_08 is GX010065. tests/test_measured_figures.py re-measures every row from them.
+#
+# against end-of-lap values of +0.19 … +9.70 s. So it is a wobble of at most 0.25 s (0.16 s on the
+# loader's lines) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
+# takes it back: over a segment, and over the lap, you cannot be ahead of the ideal. A two-way ramp
+# would flash the "ahead" hue on the app's LARGEST text for a tenth of a second to report something
+# that is not true at any granularity the ideal is defined on — so the DISPLAYED value is clamped
+# at 0 (`format_ideal_run`) and the ramp stays one-way. Same shape as the DELTA_EVEN_EPS_S dead
+# band above: a clamp that exists, is stated, and is applied at the display boundary only.
+# `Session.delta_to_ideal_at` keeps returning the raw signed number, and the Δ chart draws it
+# unclamped — there a sub-zero excursion has a track position to belong to, which is the whole
+# point of the overlay.
 def format_ideal_run(d_ideal: float | None) -> str:
     """'Δideal <v> s' (em dash and no unit when there is no value) — the ONE rendering of the
     Δ-to-ideal scalar, so the hero readout and the tooltip that carries it on the other reference

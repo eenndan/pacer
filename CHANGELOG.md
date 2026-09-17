@@ -310,6 +310,20 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **Three more published measurements predated #300, and every cell of each had moved.** The
+  coaching THEME shares now read 70 % execution on 0060 and 73 % pace on 0062 (was 73 % / 65 %),
+  and braking holds the majority of ranked time on both recordings (was 61 % / 44 %, "not a
+  theme" on 0062). The evidence figures behind them moved too: σ exceeds the claimed loss on 16 of
+  19 shown rows (was 17 of 20), and 7 abstain (was 6). The pointwise Δ-to-ideal floor table is
+  re-measured on all five recordings. Sandown chapter 1's floor is −0.164 s on 4.52 % of samples
+  (was −0.159 s on 2.09 %). On the start line the owner saved beside SD_30_08 the floor is −0.246 s,
+  the deepest measured: without that line the loader cuts its 46 s lap into 12.9 s pieces. The
+  #272 dotplot record keeps its verdict on the new numbers (0 of 20 dots at or left of the best
+  lap, spread 0.60× the laps driven, on both recordings), and #272's own table stays beside it.
+  Each table is now written as a table. `tests/test_measured_figures.py` derives every figure
+  quoted beside it from its cells and from the constants the code applies, finds every other quote
+  by search (25 stale figures in 9 other files), and re-measures every cell from the footage when pointed
+  at it.
 - **The channels CSV's time column said "media" and was a third of a second off the footage.**
   The per-lap channels export headed its time column `t_media_s`, and the values were the GPS9
   true-clock (telemetry) seconds the lap was timed on. Lined up against the video by that name,

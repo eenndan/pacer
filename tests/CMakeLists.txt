@@ -1103,6 +1103,18 @@ add_test(NAME test_ideal_sample_table
 set_tests_properties(test_ideal_sample_table PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# THREE MORE TABLES MEASURED ON FOOTAGE (T8/T12): coaching.py's evidence + THEME tables,
+# theme.py's pointwise-Δ floor table and the #272 recombination record in
+# studio/docs/refused-2026-09.md — all measured before #300 warped every lap, all stale after it.
+# The text checks derive every figure quoted beside each table from its cells and from the
+# constants the code applies (read with ast), and search the tree for every other quote of them.
+# An opt-in half re-measures every cell from the owner's footage (PACER_MEASURED_FIGURES_DIR, the
+# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/); it prints SKIP without it.
+add_test(NAME test_measured_figures
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measured_figures.py)
+set_tests_properties(test_measured_figures PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
 # its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two
 # halves: Qt-free `studio/chart_stats.py` over hand-built arrays — including the SLOPE FLOOR

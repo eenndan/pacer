@@ -259,7 +259,7 @@ def test_hero_ideal_readout_follows_the_palette():
         assert cb == theme.delta_colour(0.94)
         # The ramp is ONE-WAY, and since the ideal became a segment composite that is a decision
         # rather than an impossibility: `delta_to_ideal_at` CAN come back negative inside a
-        # segment (floor -0.159 s, 1.3 % of samples on the owner's worst recording) because the
+        # segment (floor -0.246 s on the owner's worst recording, SD_30_08) because the
         # ideal replays its donor's pace there. It cannot at a partition edge or at the flag, so
         # "ahead of the ideal" is not a thing a lap can be, and the display clamps at 0 instead of
         # growing an ahead side. See the note above theme.format_ideal_run.
