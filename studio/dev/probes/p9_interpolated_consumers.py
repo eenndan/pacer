@@ -309,9 +309,18 @@ def report_hint_gate(s) -> None:
           f"{len(suppressed)} of them {[f'C{c}' for c, _ in suppressed]}, "
           f"{len(shown)} keep the hint, {len(no_habit)} have no hint to gate "
           f"{[f'C{c}' for c in no_habit]}")
-    for cid, past in sorted(suppressed + shown):
-        print(f"   C{cid:<4} optimum {past:+.1f} m past the turn-in "
-              f"(gate {coaching_panel.BRAKE_HINT_MAX_PAST_TURN_IN_M:.0f} m)")
+    print("   corner  turn-in m   apex m  optimum m   past turn-in  habit m   hint")
+    corner_of = {int(c.cid): c for c in s.corners.corner_list()}
+    for r in sorted(ranked, key=lambda r: r.cid):
+        bp = habits.get(r.cid)
+        if bp is None:
+            continue
+        c = corner_of[int(r.cid)]
+        past = float(bp.optimal_brake_dist) - float(r.entry_dist)
+        gate = past > coaching_panel.BRAKE_HINT_MAX_PAST_TURN_IN_M
+        print(f"   C{r.cid:<4}  {float(r.entry_dist):>9.1f}  {float(c.apex):>7.1f}  "
+              f"{float(bp.optimal_brake_dist):>9.1f}  {past:>+12.1f}  "
+              f"{float(bp.metres_later):>+7.1f}   {'suppressed' if gate else 'shown'}")
 
 
 def probe_recording(name: str) -> None:
