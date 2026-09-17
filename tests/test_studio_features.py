@@ -1506,6 +1506,12 @@ def test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes():
     # bar, irrelevant to the swap mechanics).
     w._sync_full_recording_action = lambda: None
     w._update_reference_status = lambda: None
+    # The library controller the real __init__ builds: _build_ui wires the post-drag library
+    # refresh, the record chip and the focus list to it (§7.1). _FakeView has no chip or focus
+    # panel, so both of those are its own guarded no-ops, exactly as they were on the window.
+    from studio.app import STATUS_MS
+    from studio.library_controller import LibraryController
+    w.library_ctl = LibraryController(w, STATUS_MS)
     # Record setCentralWidget so we can assert the NEW view is what gets installed each build.
     installed = []
     w.setCentralWidget = lambda widget: installed.append(widget)
@@ -1552,6 +1558,15 @@ def test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes():
         assert seen["v"] is v2.video, "_video_do still resolves to the disposed view's video"
     finally:
         appmod.CentralView, appmod.QTimer = orig_view_cls, orig_timer_cls
+        # STOP THE REAL ~30 Hz TIMER THIS TEST STARTED. It ticks `_FakeView`, which has no tick(),
+        # and the AttributeError reaches the crash reporter's modal — hanging whichever later test
+        # next spins the event loop (measured:
+        # test_loading_placeholder_shows_indeterminate_busy_bar, 300 s timeout). It used to stop by accident: this window was freed by refcount on return,
+        # taking its child timer with it. The library controller attached above holds `win` back
+        # (w -> library_ctl -> w, the same cycle `exports` makes on every real window), so it now
+        # lives until a cyclic GC pass, and the timer is stopped explicitly instead.
+        if w._tick_timer is not None:
+            w._tick_timer.stop()
     print("test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes OK")
 
 
@@ -2014,7 +2029,7 @@ def test_install_excepthook_sets_handler_and_is_defensive_without_qapplication()
 
 
 def test_a_library_write_failure_reaches_the_status_bar():
-    """§7.5: `_update_library` is best-effort by design — the index is additive and a write must
+    """§7.5: `update_library` is best-effort by design — the index is additive and a write must
     never break a load — but "best-effort" was implemented as a `print`, which is not a surface.
 
     Measured on a real recording with the app-support dir chmod'd read-only: `PermissionError(13)`,
@@ -2038,7 +2053,7 @@ def test_a_library_write_failure_reaches_the_status_bar():
         w._library_unwritable = False
         assert LIBRARY_UNWRITABLE_NOTICE not in (w._session_notice() or ""), w._session_notice()
 
-        # ...and the write path actually sets it. `_update_library` swallows by design; what it
+        # ...and the write path actually sets it. `update_library` swallows by design; what it
         # must not do is swallow SILENTLY.
         class _Sess:
             def library_entry(self, paths):
@@ -2053,7 +2068,7 @@ def test_a_library_write_failure_reaches_the_status_bar():
         orig = studio_app.library.upsert_and_save
         studio_app.library.upsert_and_save = _raise_permission
         try:
-            w._update_library(["/nowhere/GX010001.MP4"])
+            w.library_ctl.update_library(["/nowhere/GX010001.MP4"])
         finally:
             studio_app.library.upsert_and_save = orig
             w.session = real_session

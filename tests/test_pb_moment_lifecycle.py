@@ -24,7 +24,7 @@ spent the single slot, so the genuine PB was the one that got eaten.
 Pinned here:
   * the identity gate on the decision itself (`library.pb_moment` / `pb_moment_for`), including
     that a DIFFERENT recording still sets a PB and a first-ever one still gets its "first" moment;
-  * both §3.2 repro paths through the REAL `StudioWindow._update_library` + the REAL
+  * both §3.2 repro paths through the REAL `LibraryController.update_library` + the REAL
     `Session.library_entry` (real chapter files on disk, so the fingerprint derivation is real),
     asserting NO moment fires;
   * THE FALSIFIER FOR THE FIX ITSELF, on the same gesture: with a previous day's recording holding
@@ -71,7 +71,8 @@ from studio import library, prefs  # noqa: E402
 from studio.overlays import PBToast  # noqa: E402
 
 # BOTH persistence seams are redirected MODULE-WIDE, before any window exists — the library index
-# (which `_update_library` writes) and prefs (which the window and its dialogs read and write).
+# (which `LibraryController.update_library` writes) and prefs (which the window and its
+# dialogs read and write).
 # The per-test `_temp_library` below gives each test a fresh index on top of this; the module-wide
 # redirect is what makes "this file never touches ~/Library/Application Support/pacer" true for
 # every line of it, not just the ones that ask.
@@ -256,9 +257,11 @@ def _chapter_files(folder, count=3, number="0062"):
 
 def _window(best, laps, track=_TRACK):
     """A bare StudioWindow (no __init__ — the same idiom tests/test_library.py uses for
-    _update_library) whose session reports `best`/`laps` on verified, undegraded timing and builds
-    its entry through the REAL Session.library_entry, so the fingerprint is the shipped one."""
+    update_library), with the library controller the real __init__ attaches, whose session
+    reports `best`/`laps` on verified, undegraded timing and builds its entry through the REAL
+    Session.library_entry, so the fingerprint is the shipped one."""
     from studio import app as studio_app
+    from studio.library_controller import LibraryController
     from studio.session import Session
 
     s = Session.__new__(Session)          # bare; seed only what library_entry reads
@@ -277,6 +280,7 @@ def _window(best, laps, track=_TRACK):
         timing_quality=SimpleNamespace(degraded=False),
         library_entry=lambda paths: Session.library_entry(s, paths),
     )
+    win.library_ctl = LibraryController(win, studio_app.STATUS_MS)
     return studio_app, win
 
 
@@ -290,11 +294,11 @@ def test_load_full_recording_does_not_celebrate_against_its_own_chapter():
     with _temp_library(), tempfile.TemporaryDirectory(prefix="pacer-test-media-") as media:
         ch = _chapter_files(media)
         studio_app, win = _window(68.771, 22)
-        first = studio_app.StudioWindow._update_library(win, [ch[0]])
+        first = win.library_ctl.update_library([ch[0]])
         assert first is not None and first["kind"] == "first", first
 
         studio_app, win = _window(68.201, 66)
-        moment = studio_app.StudioWindow._update_library(win, ch)
+        moment = win.library_ctl.update_library(ch)
         assert moment is None, f"the full recording celebrated against its own chapter: {moment}"
         # The library still learned the better number — only the celebration was wrong.
         entries = library.load()["entries"]
@@ -312,10 +316,10 @@ def test_a_second_chapter_of_one_outing_does_not_celebrate():
     with _temp_library(), tempfile.TemporaryDirectory(prefix="pacer-test-media-") as media:
         ch = _chapter_files(media, number="0060")
         studio_app, win = _window(68.771, 21)
-        assert studio_app.StudioWindow._update_library(win, [ch[2]]) is not None   # first logged
+        assert win.library_ctl.update_library([ch[2]]) is not None   # first logged
 
         studio_app, win = _window(68.201, 22)
-        moment = studio_app.StudioWindow._update_library(win, [ch[1]])
+        moment = win.library_ctl.update_library([ch[1]])
         assert moment is None, f"chapter 2 celebrated a PB over chapter 3 of the same outing: {moment}"
     print("test_a_second_chapter_of_one_outing_does_not_celebrate OK")
 
@@ -330,10 +334,10 @@ def test_a_genuinely_new_recording_still_celebrates_through_the_app_path():
         ch = _chapter_files(media, count=1)
         other = _chapter_files(media, count=1, number="0063")
         studio_app, win = _window(68.771, 22)
-        studio_app.StudioWindow._update_library(win, ch)
+        win.library_ctl.update_library(ch)
 
         studio_app, win = _window(67.900, 20)
-        moment = studio_app.StudioWindow._update_library(win, other)
+        moment = win.library_ctl.update_library(other)
         assert moment is not None and moment["kind"] == "beat", moment
         assert moment["prior"] == 68.771 and abs(moment["improvement"] - 0.871) < 1e-9, moment
         assert len(library.load()["entries"]) == 2
@@ -353,13 +357,13 @@ def test_load_full_recording_still_beats_a_previous_days_recording():
         day1 = _chapter_files(media, count=1, number="0059")
         ch = _chapter_files(media)
         studio_app, win = _window(68.500, 30)
-        studio_app.StudioWindow._update_library(win, day1)          # day 1 sets the track best
+        win.library_ctl.update_library(day1)          # day 1 sets the track best
 
         studio_app, win = _window(68.771, 22)
-        assert studio_app.StudioWindow._update_library(win, [ch[0]]) is None, "the chapter is slower"
+        assert win.library_ctl.update_library([ch[0]]) is None, "the chapter is slower"
 
         studio_app, win = _window(68.201, 66)
-        moment = studio_app.StudioWindow._update_library(win, ch)
+        moment = win.library_ctl.update_library(ch)
         assert moment is not None and moment["kind"] == "beat", \
             f"the full recording's genuine PB over another recording was swallowed: {moment}"
         assert moment["prior"] == 68.500 and abs(moment["improvement"] - 0.299) < 1e-9, moment
@@ -377,13 +381,13 @@ def test_two_chapters_opened_separately_still_beat_a_previous_days_recording():
         day1 = _chapter_files(media, count=1, number="0059")
         ch = _chapter_files(media, number="0060")
         studio_app, win = _window(68.500, 30)
-        studio_app.StudioWindow._update_library(win, day1)
+        win.library_ctl.update_library(day1)
 
         studio_app, win = _window(68.771, 21)
-        assert studio_app.StudioWindow._update_library(win, [ch[2]]) is None, "chapter 3 is slower"
+        assert win.library_ctl.update_library([ch[2]]) is None, "chapter 3 is slower"
 
         studio_app, win = _window(68.201, 22)
-        moment = studio_app.StudioWindow._update_library(win, [ch[1]])
+        moment = win.library_ctl.update_library([ch[1]])
         assert moment is not None and moment["kind"] == "beat", moment
         assert moment["prior"] == 68.500 and abs(moment["improvement"] - 0.299) < 1e-9, moment
     print("test_two_chapters_opened_separately_still_beat_a_previous_days_recording OK")
@@ -425,7 +429,8 @@ def _real_window():
     """A REAL, SHOWN StudioWindow with no central view — `StudioWindow.__new__` +
     `QMainWindow.__init__`, the idiom tests/test_studio_features.py uses to drive real window
     methods without a real `Session.load`. The methods under test are the shipped ones
-    (`_show_pb_moment` / `_clear_pb_toast` / `_forget_pb_toast`), and every collaborator they reach
+    (`LibraryController.show_pb_moment` / `_clear_pb_toast` / `_forget_pb_toast`, on the controller
+    the real `__init__` attaches), and every collaborator they reach
     behaves as it does with no view yet: `_share_card_blocked` says "not shareable" (no session),
     `_pb_card_keepout` returns None, and `PBToast.anchor_region` takes its documented
     whole-window fallback.
@@ -439,11 +444,14 @@ def _real_window():
     on the way out."""
     from PySide6.QtWidgets import QMainWindow
 
-    from studio.app import StudioWindow  # pacer-backed; imported here, not at module scope
+    # pacer-backed; imported here, not at module scope
+    from studio.app import STATUS_MS, StudioWindow
+    from studio.library_controller import LibraryController
 
     with _temp_library():
         win = StudioWindow.__new__(StudioWindow)
         QMainWindow.__init__(win)
+        win.library_ctl = LibraryController(win, STATUS_MS)
         win.resize(1000, 700)
         win.show()
         _pump(lambda: win.isVisible())
@@ -465,7 +473,7 @@ def test_a_second_personal_best_still_shows_after_the_first_card_is_gone():
         print("skip test_a_second_personal_best_still_shows_after_the_first_card_is_gone (no pacer)")
         return
     with _real_window() as win:
-        win._show_pb_moment(_M_FIRST)
+        win.library_ctl.show_pb_moment(_M_FIRST)
         assert _pump(lambda: len(_live_toasts(win)) == 1), "the first celebration never appeared"
         first = win._pb_toast
 
@@ -477,7 +485,7 @@ def test_a_second_personal_best_still_shows_after_the_first_card_is_gone():
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            win._show_pb_moment(_M_BEAT)
+            win.library_ctl.show_pb_moment(_M_BEAT)
         assert "not shown" not in out.getvalue(), out.getvalue()
         assert _pump(lambda: len(_live_toasts(win)) == 1), \
             "the genuine PB after a dismissed card was swallowed"
@@ -495,7 +503,7 @@ def test_a_stale_wrapper_cannot_swallow_the_next_celebration():
         print("skip test_a_stale_wrapper_cannot_swallow_the_next_celebration (no pacer)")
         return
     with _real_window() as win:
-        win._show_pb_moment(_M_FIRST)
+        win.library_ctl.show_pb_moment(_M_FIRST)
         assert _pump(lambda: len(_live_toasts(win)) == 1)
         corpse = win._pb_toast
         shiboken6.delete(corpse)                 # the C++ half goes, the Python wrapper stays
@@ -503,7 +511,7 @@ def test_a_stale_wrapper_cannot_swallow_the_next_celebration():
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            win._show_pb_moment(_M_BEAT)
+            win.library_ctl.show_pb_moment(_M_BEAT)
         assert "not shown" not in out.getvalue(), out.getvalue()
         assert _pump(lambda: len(_live_toasts(win)) == 1), "a dead wrapper swallowed the next PB"
         assert win._pb_toast is not corpse and shiboken6.isValid(win._pb_toast)
@@ -511,8 +519,8 @@ def test_a_stale_wrapper_cannot_swallow_the_next_celebration():
 
 
 def test_a_failing_dismiss_cannot_strand_the_load():
-    """CONTAINMENT. `_clear_pb_toast` runs OUTSIDE `_show_pb_moment`'s try (that is what stopped a
-    stale card eating the next celebration), and `_show_pb_moment` is called unguarded from
+    """CONTAINMENT. `_clear_pb_toast` runs OUTSIDE `show_pb_moment`'s try (that is what stopped a
+    stale card eating the next celebration), and `show_pb_moment` is called unguarded from
     `_on_session_loaded` immediately before `loadFinished.emit()` — so anything escaping the
     cleanup strands a completed load with the loading card still up (the review's §3.4 shape).
     `dismiss()` runs Python of its own (`hide()` reaches the host's event filter), so the guard is
@@ -522,14 +530,14 @@ def test_a_failing_dismiss_cannot_strand_the_load():
         print("skip test_a_failing_dismiss_cannot_strand_the_load (no pacer)")
         return
     with _real_window() as win:
-        win._show_pb_moment(_M_FIRST)
+        win.library_ctl.show_pb_moment(_M_FIRST)
         assert _pump(lambda: len(_live_toasts(win)) == 1)
         first = win._pb_toast
         first.dismiss = lambda: (_ for _ in ()).throw(ValueError("dismiss blew up"))
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            win._show_pb_moment(_M_BEAT)          # must not raise
+            win.library_ctl.show_pb_moment(_M_BEAT)          # must not raise
         assert "not dismissed" in out.getvalue(), out.getvalue()
         assert _pump(lambda: len(_live_toasts(win)) >= 1), "the new card was never built"
         assert win._pb_toast is not first and shiboken6.isValid(win._pb_toast)
@@ -543,10 +551,10 @@ def test_a_rapid_reload_still_replaces_the_card_rather_than_stacking_them():
         print("skip test_a_rapid_reload_still_replaces_the_card_rather_than_stacking_them (no pacer)")
         return
     with _real_window() as win:
-        win._show_pb_moment(_M_FIRST)
+        win.library_ctl.show_pb_moment(_M_FIRST)
         assert _pump(lambda: len(_live_toasts(win)) == 1)
         first = win._pb_toast
-        win._show_pb_moment(_M_BEAT)             # no event-loop pass between the two
+        win.library_ctl.show_pb_moment(_M_BEAT)             # no event-loop pass between the two
         assert _pump(lambda: len(_live_toasts(win)) == 1), "the replacement card never appeared"
         assert not first.isVisible(), "the replaced card is still on screen"
         assert win._pb_toast is not first

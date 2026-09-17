@@ -113,11 +113,11 @@ assert w._sidecar_path, "the window resolved no sidecar path for the sample"
 assert not os.path.exists(w._sidecar_path), \
     "a zero-valid-lap edit wrote a sidecar that the load-time revert guard will always reject"
 
-# F8: _update_library deliberately does NOT index the bundled DEFAULT_SAMPLE, nor any open with
-# no valid laps — that guard is what stops a junk row (0 laps, null track) from being persisted
-# and then surfaced by the library dialog forever. This smoke run opens exactly that sample (0
-# valid laps), so assert the (temp-diverted) index stayed empty, then drop the temp dir so the
-# run leaves no artifacts.
+# F8: LibraryController.update_library deliberately does NOT index the bundled DEFAULT_SAMPLE,
+# nor any open with no valid laps — that guard is what stops a junk row (0 laps, null track) from
+# being persisted and then surfaced by the library dialog forever. This smoke run opens exactly
+# that sample (0 valid laps), so assert the (temp-diverted) index stayed empty, then drop the temp
+# dir so the run leaves no artifacts.
 _lib = library.load()
 assert len(s.valid_lap_ids()) == 0, "smoke fixture changed: DEFAULT_SAMPLE now has valid laps"
 assert len(_lib["entries"]) == 0, f"library: sample/0-lap open must be skipped, got {len(_lib['entries'])}"

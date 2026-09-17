@@ -1658,22 +1658,24 @@ def test_library_entry_dropout_flag_describes_the_BEST_lap_only():
 
 
 def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
-    """The app's _update_library does NOT index a 0-lap open or the bundled DEFAULT_SAMPLE — so a
+    """The app's update_library does NOT index a 0-lap open or the bundled DEFAULT_SAMPLE — so a
     no-file launch (or an unsegmented recording) can't leave a permanent junk row in the library."""
     if not _pacer_available():
         print("skip test_update_library_skips_zero_lap_and_bundled_sample (no pacer)")
         return
     from studio import app as studio_app
+    from studio import library_controller
     with tempfile.TemporaryDirectory() as d:
         monkeypatch.setattr(library, "_app_support_dir", lambda: d)
         upserts = []
         monkeypatch.setattr(library, "upsert_and_save",
                             lambda entry, *a, **k: upserts.append(entry))
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        ctl = library_controller.LibraryController(win, studio_app.STATUS_MS)
 
         # A 0-lap session → skipped (no valid laps).
         win.session = type("S", (), {"valid_lap_ids": staticmethod(lambda: [])})()
-        studio_app.StudioWindow._update_library(win, ["/m/GX010060.MP4"])
+        ctl.update_library(["/m/GX010060.MP4"])
         assert upserts == []
 
         # The bundled sample → skipped even with laps (it's not a real analysis recording).
@@ -1681,10 +1683,10 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
             "valid_lap_ids": staticmethod(lambda: [0, 1]),
             "library_entry": staticmethod(lambda paths: _entry("hero6", track=None, laps=0)),
         })()
-        studio_app.StudioWindow._update_library(win, [studio_app.DEFAULT_SAMPLE])
+        ctl.update_library([library_controller.DEFAULT_SAMPLE])
         assert upserts == []
 
-        # A real recording WITH laps → indexed. Both timing axes are read by _update_library for the
+        # A real recording WITH laps → indexed. Both timing axes are read by update_library for the
         # PB-moment gate (a provisional/unverified start line OR a data-quality-degraded clock never
         # celebrates); Verified + not-degraded here so the index path runs normally.
         win.session = type("S", (), {
@@ -1694,7 +1696,7 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
             "library_entry": staticmethod(
                 lambda paths: _entry("GX010060", track="MK", laps=2)),
         })()
-        studio_app.StudioWindow._update_library(win, ["/m/GX010060.MP4"])
+        ctl.update_library(["/m/GX010060.MP4"])
         assert len(upserts) == 1 and upserts[0]["fingerprint"] == "GX0060"
 
 
@@ -1738,9 +1740,12 @@ class _TrustSession:
 
 def _save_track_window(monkeypatch, upserts):
     """A fabricated StudioWindow wired for _save_as_track — the same __new__ idiom the
-    _update_library test above uses, plus the three collaborators that gesture touches: a stubbed
-    track_db (no DB write), a spy library.upsert_and_save, and a status bar / view double."""
+    update_library test above uses, plus the three collaborators that gesture touches: a stubbed
+    track_db (no DB write), a spy library.upsert_and_save, and a status bar / view double. The
+    library controller is attached as the real __init__ attaches it: the save ENDS by asking it to
+    refresh this recording's row (§7.1)."""
     from studio import app as studio_app
+    from studio.library_controller import LibraryController
     monkeypatch.setattr(library, "upsert_and_save", lambda entry, *a, **k: upserts.append(entry))
     monkeypatch.setattr(studio_app.track_db, "make_entry",
                         lambda name, *a, **k: {"name": name})
@@ -1750,6 +1755,7 @@ def _save_track_window(monkeypatch, upserts):
                         staticmethod(lambda *a, **k: ("Sandown Park", True)))
 
     win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+    win.library_ctl = LibraryController(win, studio_app.STATUS_MS)
     win.session = _TrustSession()
     win._paths = ["/media/GX030059.MP4"]
     win.view = SimpleNamespace(refreshed=0)
@@ -1840,34 +1846,36 @@ def test_refresh_library_entry_keeps_the_load_path_exclusions(monkeypatch):
         print("skip test_refresh_library_entry_keeps_the_load_path_exclusions (no pacer)")
         return
     from studio import app as studio_app
+    from studio import library_controller
     with tempfile.TemporaryDirectory() as d:
         monkeypatch.setattr(library, "_app_support_dir", lambda: d)
         upserts = []
         monkeypatch.setattr(library, "upsert_and_save", lambda e, *a, **k: upserts.append(e))
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        ctl = library_controller.LibraryController(win, studio_app.STATUS_MS)
 
         # No loaded recording at all → nothing to refresh.
         win.session = _TrustSession()
         win._paths = []
-        studio_app.StudioWindow._refresh_library_entry(win)
+        ctl.refresh_library_entry()
         assert upserts == []
 
         # 0 valid laps → skipped, same as the load path.
         win._paths = ["/media/GX030059.MP4"]
         win.session.valid_lap_ids = lambda: []
-        studio_app.StudioWindow._refresh_library_entry(win)
+        ctl.refresh_library_entry()
         assert upserts == []
 
         # The bundled sample → skipped even with laps.
         win.session = _TrustSession()
-        win._paths = [studio_app.DEFAULT_SAMPLE]
-        studio_app.StudioWindow._refresh_library_entry(win)
+        win._paths = [library_controller.DEFAULT_SAMPLE]
+        ctl.refresh_library_entry()
         assert upserts == []
 
         # A real recording with laps → indexed, carrying the session's CURRENT trust state.
         win._paths = ["/media/GX030059.MP4"]
         win.session.confirmed = True          # what a start/finish drag does
-        studio_app.StudioWindow._refresh_library_entry(win)
+        ctl.refresh_library_entry()
         assert len(upserts) == 1 and upserts[0]["verified"] is True
 
 
@@ -1879,6 +1887,7 @@ def test_recent_entries_include_an_unknown_track_recording(monkeypatch):
         print("skip test_recent_entries_include_an_unknown_track_recording (no pacer)")
         return
     from studio import app as studio_app
+    from studio.library_controller import LibraryController
     with tempfile.TemporaryDirectory() as d, tempfile.NamedTemporaryFile(suffix=".MP4") as real:
         monkeypatch.setattr(library, "_app_support_dir", lambda: d)
         idx = library.empty_index()
@@ -1893,9 +1902,10 @@ def test_recent_entries_include_an_unknown_track_recording(monkeypatch):
                                    laps=4, paths=["/definitely/missing/GX010099.MP4"]))
         library.save(idx)
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
-        got = studio_app.StudioWindow._recent_entries(win)
+        ctl = LibraryController(win, studio_app.STATUS_MS)
+        got = ctl._recent_entries()
         assert [e["fingerprint"] for e in got] == ["GX0065", "GX0062"]   # newest first
-        assert studio_app.StudioWindow._recent_label(win, got[0]).startswith("unknown track")
+        assert ctl._recent_label(got[0]).startswith("unknown track")
 
 
 # ------------------------------------------------ v2 dialog: size / density (QA W7-06) + restore
@@ -2010,8 +2020,8 @@ def test_dialog_remembers_a_size_the_user_changed_but_never_pins_its_own_default
 
 
 def _wired_dialog(index):
-    """The dialog exactly as ``StudioWindow._open_library`` builds it — all six file-op callbacks
-    injected. Not decoration: the button row those callbacks build is what sets the dialog's
+    """The dialog exactly as ``LibraryController.open_library`` builds it — all six file-op
+    callbacks injected. Not decoration: the button row those callbacks build is what sets the dialog's
     minimum WIDTH (581 px wired, 184 px bare), and the width is what decides how tall the privacy
     paragraph wraps. A size measured on an unwired dialog is a measurement of a dialog that never
     ships."""
@@ -2136,8 +2146,8 @@ def test_the_browsable_height_floor_still_gets_the_width_it_assumes():
     corner drag leaves a 234-px-wide dialog showing 0.63 of one row for ever.
 
     234 px is the minimum of a dialog built with only `open_recording` — two buttons. The app never
-    builds that one: ``StudioWindow._open_library`` wires all six file-op callbacks, and that button
-    row's minimum is 581 px. Measured on the shipping wiring, the finding's own gesture gives
+    builds that one: ``LibraryController.open_library`` wires all six file-op callbacks, and that
+    button row's minimum is 581 px. Measured on the shipping wiring, the finding's own gesture gives
     581x522 stored -> 581x680 re-opened -> 6.23 rows, i.e. the floor doing exactly what #172 said.
     (The unwired dialog reaches 234x662 -> 234x680 -> 1.23 rows, which is the number the finding
     reports.) So there is no width floor here: at every size the app can actually reach, the height

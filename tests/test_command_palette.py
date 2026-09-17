@@ -61,12 +61,14 @@ def _window():
     and no recording loads)."""
     from studio.app import STATUS_MS, StudioWindow
     from studio.export_controller import ExportController
+    from studio.library_controller import LibraryController
     win = StudioWindow.__new__(StudioWindow)
     QMainWindow.__init__(win)
     win._excluded_visible = True
     win._colorblind = False
     win._speed_unit = units.KMH
     win.exports = ExportController(win, STATUS_MS)
+    win.library_ctl = LibraryController(win, STATUS_MS)   # _build_menu wires File ▸ Library… to it
     win._build_menu()
     win._build_shortcuts()
     return win
