@@ -429,7 +429,7 @@ class StudioWindow(QMainWindow):
 
     def __init__(self, paths: list[str], full: bool = False, demo_unavailable: bool = False):
         super().__init__()
-        self.resize(1440, 900)
+        self.resize(1440, 900)  # the built-in default; main() restores the user's own before show
         # "Drop a GoPro, get your laps": files dropped on the window load through the guarded path.
         self.setAcceptDrops(True)
         # The one session-scoped central view, swapped in fresh per load; None until first load.
@@ -956,10 +956,69 @@ class StudioWindow(QMainWindow):
             if time.monotonic() - start > deadline_s:
                 break
 
+    # --------------------------------------------------- the window's own size and place
+    def restore_window_geometry(self) -> None:
+        """Open at the size and place the user left the window, and arm the save that puts it back
+        there next time. ``main`` calls this on the real app's one window, BEFORE ``show`` — so the
+        first frame is the user's own window, not the built-in default resized a beat later.
+
+        DELIBERATELY NOT IN ``__init__``, AND NOT IN A ``showEvent``. Every harness in this repo
+        builds a StudioWindow directly — the test suites, ``studio/dev/ui_capture.py``, ``_smoke``,
+        the probes — and several of them do not divert the prefs seam, so a restore in the
+        constructor would resize windows those suites measure at fixed sizes, and a save on their
+        close would rewrite the developer's own prefs.json (the defect #521a0c4 fixed for the QA
+        harness). Persistence belongs to the app's session, not to the class, so it is armed here
+        and only here.
+
+        (The first-showEvent rule the grid splitters follow is about CHILD splitters, whose restore
+        is warped by min-size clamping before the widget has geometry. A top-level window takes
+        setGeometry before show and keeps it — measured: constructed 1440x900, shown 1440x900.)"""
+        self._persist_geometry = True
+        try:
+            stored = prefs.window_geometry()
+            if stored is None:
+                return
+            screens = [(s.availableGeometry().x(), s.availableGeometry().y(),
+                        s.availableGeometry().width(), s.availableGeometry().height())
+                       for s in QApplication.screens()]
+            fitted = _fit_window_to_screens(stored, screens)
+            if fitted is not None:
+                self.setGeometry(*fitted)
+        except Exception as exc:  # noqa: BLE001 — a stored size must never stop the app opening
+            print(f"studio: window geometry not restored ({exc!r}).", flush=True)
+
+    def persist_window_geometry(self) -> None:
+        """Remember where the window is, for the next launch. Stores ``normalGeometry`` — the frame
+        the window has when it is neither full screen nor zoomed — so quitting from full screen
+        (⌘⌃F, or the ⤢ video focus that puts the WINDOW into full screen) does not persist a
+        screen-filling rect the user can never shrink back: measured, ``geometry()`` in full screen
+        was the whole 800x800 display while ``normalGeometry()`` still read 1200x800.
+
+        Called from ``closeEvent`` AND from ``QApplication.aboutToQuit`` (wired in ``main``), because
+        those are different paths: measured on this Qt, ``QApplication.quit()`` delivered ZERO close
+        events to a shown window where an explicit ``close()`` delivered one, so a save that lived
+        only in ``closeEvent`` would keep nothing on a quit that ends that way. Writing the same
+        rect twice is harmless. No-op unless ``restore_window_geometry`` armed it, and guarded end
+        to end — remembering a window size must never be the reason quitting fails, and at
+        ``aboutToQuit`` the C++ window may already be gone (RuntimeError, not OSError)."""
+        if not getattr(self, "_persist_geometry", False):
+            return
+        try:
+            rect = self.normalGeometry()
+            if rect.width() <= 0 or rect.height() <= 0:
+                return  # never shown, or already torn down — no real frame to remember
+            prefs.set_window_geometry(rect.x(), rect.y(), rect.width(), rect.height())
+        except Exception as exc:  # noqa: BLE001 — incl. a deleted C++ object at aboutToQuit
+            print(f"studio: could not persist the window geometry ({exc!r}).", flush=True)
+
     def closeEvent(self, event):
         """Drain every in-flight worker so a QThread isn't destroyed mid-run on window close (Qt
         would warn/crash). Uses the bounded drain so close can never hang on a stuck worker. Both
         tokens are bumped past any in-flight worker, so its result is ignored regardless."""
+        # FIRST, while the window still has its real frame: the teardown below pumps the event loop
+        # for as long as a worker takes to stop, and a rect read after that is a rect read from a
+        # window that may already be on its way out.
+        self.persist_window_geometry()
         self._pending_load = None  # don't start a queued load during teardown
         self._pending_reference_load = None  # nor a queued reference load
         self._cancel_placeholder_timer()  # no loading card can appear mid-teardown
@@ -4405,6 +4464,53 @@ class StudioWindow(QMainWindow):
         self._ref_chip_mounted = bool(on)
 
 
+# ------------------------------------------------------------------ the window's place on a desk
+# macOS draws the title bar ABOVE the client rect that geometry()/setGeometry() describe, so a
+# restored y equal to the top of the available area would tuck the bar under the menu bar — a window
+# the user cannot drag, move or close. The restore keeps at least this much of the available area
+# above the window, and takes it off the height a full-height window can claim.
+_TITLE_BAR_PX = 28
+
+
+def _fit_window_to_screens(rect, screens):
+    """Where a stored window rect can actually be opened on the screens that exist NOW. Pure — the
+    caller passes each screen's available geometry as a plain tuple — so the policy is testable
+    without a display, the same shape as ``library_dialog._fit_to_screen``.
+
+    `rect` is the stored ``(x, y, w, h)``; `screens` are ``(x, y, w, h)`` available geometries, the
+    primary first. Returns the rect to open at, or None when there is no screen at all — nothing can
+    be decided, so the caller keeps the built-in default.
+
+    A WINDOW RESTORED OFF-SCREEN IS WORSE THAN NOT RESTORING AT ALL: it is a running app with no
+    visible window and no way to reach it. So the POSITION is honoured only while the window's
+    centre still lands on a live screen; when the display it was stored on is gone (an unplugged
+    monitor, a rearranged desk, a corrupt-but-well-shaped rect) the SIZE is kept and the position
+    dropped, centring the window on the primary screen. The size is then clamped to that screen and
+    the rect nudged fully inside it — nudged, not shrunk, because a window that merely hangs off the
+    edge is one the user can still grab.
+
+    No minimum is imposed: the window's own children pin it at a measured 421x341 (``resize(400,
+    300)`` on the real window comes back 421x341), which IS the floor, and prefs keeps what the user
+    asked for rather than a number this build chose — the contract ``library_dialog._apply_geometry``
+    already documents in the other direction."""
+    if not screens:
+        return None
+    x, y, w, h = (int(v) for v in rect)
+    cx, cy = x + w // 2, y + h // 2
+    home = next((s for s in screens
+                 if s[0] <= cx < s[0] + s[2] and s[1] <= cy < s[1] + s[3]), None)
+    on_a_live_screen = home is not None
+    sx, sy, sw, sh = (int(v) for v in (home if on_a_live_screen else screens[0]))
+    w = min(w, sw)
+    h = min(h, max(1, sh - _TITLE_BAR_PX))
+    if on_a_live_screen:
+        x = min(max(x, sx), sx + sw - w)
+        y = min(max(y, sy + _TITLE_BAR_PX), sy + sh - h)
+    else:
+        x = sx + (sw - w) // 2
+        y = sy + _TITLE_BAR_PX + (sh - _TITLE_BAR_PX - h) // 2
+    return (x, y, w, h)
+
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
@@ -4445,5 +4551,13 @@ def main(argv: list[str] | None = None) -> int:
     theme.register_fonts()
     theme.apply_theme(app)
     window = StudioWindow(paths, full=full, demo_unavailable=demo_startup)
+    # The user's own window size and place, BEFORE the first frame — and armed to be saved again on
+    # the way out. Both endings are wired because they are different code paths: closeEvent (⌘W, the
+    # red button, the Quit that closes every window) and aboutToQuit, since QApplication.quit()
+    # delivers no close event at all (measured: 0 for quit(), 1 for close()). This is the one place
+    # geometry persistence is turned on — a harness that builds its own StudioWindow neither moves
+    # its window nor writes to the user's prefs.
+    window.restore_window_geometry()
+    app.aboutToQuit.connect(window.persist_window_geometry)
     window.show()
     return app.exec()

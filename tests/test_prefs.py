@@ -42,8 +42,8 @@ prefs._app_support_dir = (lambda d=_SEAM.name: d)
 
 # --------------------------------------------------------------------------------- fixtures
 def _write_every_preference(path):
-    """Write all ten preferences through the PUBLIC setters and return what each accessor should
-    read back. Ten choices in one file is the point: the wipe this module now survives cost the user
+    """Write every preference through the PUBLIC setters and return what each accessor should read
+    back. A whole file of choices is the point: the wipe this module now survives cost the user
     every one of them, not the single value they were changing."""
     prefs.set_speed_unit(units.MPH, path)
     prefs.set_colorblind_palette(True, path)
@@ -53,6 +53,7 @@ def _write_every_preference(path):
     prefs.set_grid_sizes([[500, 900], [400, 450], [300, 550]], path)
     prefs.set_map_key_collapsed(True, path)
     prefs.set_library_size(900, 780, path)
+    prefs.set_window_geometry(120, 90, 1180, 742, path)
     return {
         "speed_unit": units.MPH,
         "colorblind_palette": True,
@@ -62,6 +63,7 @@ def _write_every_preference(path):
         "grid_sizes": [[500, 900], [400, 450], [300, 550]],
         "map_key_collapsed": True,
         "library_size": (900, 780),
+        "window_geometry": (120, 90, 1180, 742),
     }
 
 
@@ -76,6 +78,7 @@ def _read_every_preference(path):
         "grid_sizes": prefs.grid_sizes(path),
         "map_key_collapsed": prefs.map_key_collapsed(path),
         "library_size": prefs.library_size(path),
+        "window_geometry": prefs.window_geometry(path),
     }
 
 
@@ -89,6 +92,7 @@ _DEFAULTS = {
     "grid_sizes": None,
     "map_key_collapsed": False,
     "library_size": None,
+    "window_geometry": None,
 }
 
 
@@ -326,7 +330,7 @@ def test_unwritable_store_is_swallowed_by_the_guarded_setters_only():
 
 def test_set_keeps_its_sibling_preferences():
     """Load-modify-save on a HEALTHY file is additive — the property the corruption path broke.
-    Ten writes leave ten values, plus the version stamp, and nothing else."""
+    Every write leaves its value, plus the version stamp, and nothing else."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "prefs.json")
         expected = _write_every_preference(p)
@@ -336,8 +340,38 @@ def test_set_keeps_its_sibling_preferences():
         assert set(stored) == {
             "version", prefs.SPEED_UNIT, prefs.COLORBLIND_PALETTE, prefs.LAST_DIR,
             prefs.EXCLUDED_VISIBLE, prefs.LAP_PANEL_TAB, prefs.GRID_SIZES,
-            prefs.MAP_KEY_COLLAPSED, prefs.LIBRARY_SIZE}, sorted(stored)
+            prefs.MAP_KEY_COLLAPSED, prefs.LIBRARY_SIZE, prefs.WINDOW_GEOMETRY}, sorted(stored)
         print("test_set_keeps_its_sibling_preferences OK")
+
+
+def test_window_geometry_round_trips_and_refuses_a_rect_it_cannot_use():
+    """The main window's frame (U4). x/y are deliberately UNCONSTRAINED — a display to the left of
+    or above the primary one has negative coordinates, and a window really does live there — so the
+    guard is on the SIZE and the SHAPE only. Whether that place still exists is a question about
+    today's screens, answered at restore time (app._fit_window_to_screens), not by discarding the
+    preference here.
+
+    Both halves are asserted: a malformed stored value reads as None (the window opens at its
+    default rather than at a garbage rect), and the SETTER refuses an unusable size outright, so a
+    zero-area window — what a never-shown or already-destroyed window reports — never reaches the
+    file to be restored from."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "prefs.json")
+        prefs.set_window_geometry(-1720, -300, 1180, 760, p)
+        assert prefs.window_geometry(p) == (-1720, -300, 1180, 760), prefs.window_geometry(p)
+
+        for bad in ([1, 2, 3], [1, 2, 3, 4, 5], [0, 0, 1180.5, 760], [0, 0, True, 760],
+                    [0, 0, 0, 760], [0, 0, 1180, -760], [0, 0, 1180, 0], "1180x760", 3, None, {},
+                    {"w": 1180, "h": 760}):
+            prefs.set(prefs.WINDOW_GEOMETRY, bad, p)
+            assert prefs.window_geometry(p) is None, bad
+
+        prefs.set_window_geometry(10, 12, 1180, 760, p)
+        for refused in ((10, 12, 0, 760), (10, 12, 1180, 0), (10, 12, -1180, 760),
+                        ("x", 12, 1180, 760), (10, 12, None, 760)):
+            prefs.set_window_geometry(*refused, p)
+            assert prefs.window_geometry(p) == (10, 12, 1180, 760), refused
+        print("test_window_geometry_round_trips_and_refuses_a_rect_it_cannot_use OK")
 
 
 if __name__ == "__main__":
