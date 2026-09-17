@@ -78,7 +78,7 @@ _SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other
 # recording's GNSS scatter plus a reference (fastest) lap that is itself displaced — NOT a threshold
 # 0060 sits just outside: its cells reached 98.4 % only at 8 m, where 0062's are 99.3 % at 3. So the
 # threshold is unchanged and the SESSION GEOMETRY below takes the receiver's own bias out of the two
-# lines before this gate judges them, which is what brings 0060 to 95.5 % at the same 3 m.
+# lines before this gate judges them, which is what brings 0060 to 95.1 % at the same 3 m.
 SPATIAL_MATCH_MAX_M = 3.0       # refined closest approach must be ≤ 3 m to count as the same point
 
 # --- the session's own geometry: a consensus line + each lap's rigid receiver shift ----------
@@ -314,8 +314,8 @@ def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,
     actually drove rather than from the one lap that happens to be fastest. Measured on the two D24
     recordings with a CURVATURE witness (heading-derived, so a translation cannot move it), this
     half leaves the longitudinal placement of a boundary alone — mean disagreement with the track's
-    own shape 2.01 m de-drifted against 2.00 m with this as well on 0060, 0.81 against 0.81 on
-    0062 — while taking the interior boundaries matched there from 85.0 % to 95.5 %. It changes
+    own shape 2.00 m de-drifted against 2.00 m with this as well on 0060, 0.84 against 0.84 on
+    0062 — while taking the interior boundaries matched there from 84.9 % to 95.1 %. It changes
     WHETHER the gate accepts, not where the match lands, which is what perpendicular-only means.
 
     Below `ANCHOR_MIN_LAPS` the consensus is not one, and the anchor stays on the reference lap."""
