@@ -395,18 +395,20 @@ def test_session_coast_report_cuts_the_straights_tables_pieces_and_keeps_every_c
 
 
 def test_a_tie_is_decided_place_by_place_not_by_rank():
-    """"Tied" is a question about ONE place against the leader, so it does not have to be a prefix
-    of the order. On D24 0060 the rare-but-long coast on C9 → C10 (3 of 38 laps, 0.099 s a lap)
-    is tied while the steadier C1 → C2 just below it (5 of 38, 0.097 s) is not. A rule that cut the
-    order at the first separated row would call both the same."""
+    """"Tied" is a question about ONE place against the leader, so the tied rows need not be the
+    top of the order: a tie turns on the place's lap-to-lap spread, not on its rank. On D24 0060
+    the rare-but-long coast on C9 → C10 (3 of 38 laps, 0.099 s a lap) is tied while C1 → C2 (5 of
+    38, 0.097 s) is not. Here a place coasting on 4 laps of 40 stays tied BELOW a steadier place
+    that separates; a rule that cut the order at the first separated row would untie it — which is
+    why the vs top column is read per row, not as a cut."""
     n = 40
     lead = np.full(n, 0.6)                          # 0.6 s on every lap
-    steady = np.full(n, 0.3)                        # 0.3 s on every lap: clearly less
+    steady = np.full(n, 0.5)                        # 0.5 s on every lap: separates, 2nd by rank
     rare = np.zeros(n)
-    rare[:5] = 4.0                                  # 0.5 s a lap, all of it on 5 laps
+    rare[:4] = 4.5                                  # 0.45 s a lap, all of it on 4 laps: 3rd
     rep = coast_report([1, 2], np.column_stack([np.zeros(n), lead, rare, steady, np.zeros(n)]))
-    assert [p.label for p in rep.places] == ["C1", "C1 → C2", "C2"]
-    assert [p.tied for p in rep.places] == [True, True, False], [(p.label, p.tied)
+    assert [p.label for p in rep.places] == ["C1", "C2", "C1 → C2"]
+    assert [p.tied for p in rep.places] == [True, False, True], [(p.label, p.tied)
                                                                  for p in rep.places]
     assert not rep.lead_separable
     print("test_a_tie_is_decided_place_by_place_not_by_rank OK")
@@ -1641,7 +1643,9 @@ def test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map():
     assert [t.item(r, 0).text() for r in range(3)] == ["C1", "C9 → C10", "C1 → C2"]
     assert [t.item(r, 1).text() for r in range(3)] == ["0.31", "0.10", "0.10"]
     assert t.item(0, 2).text() == "17/38" and t.item(0, 3).text() == "28"
-    assert [t.item(r, 4).text() for r in range(3)] == [COAST_TIED, COAST_TIED, COAST_LESS]
+    words = [t.item(r, 4).text() for r in range(3)]
+    assert words == [COAST_TIED, COAST_TIED, COAST_LESS], (
+        f"the vs top column crowns a leader the laps did not separate: {words}")
     note = v.coasting_note.text()
     assert note.startswith("No one place leads: C1 and C9 → C10 are tied"), note
     assert "38 clean laps cannot put them in order" in note, note
