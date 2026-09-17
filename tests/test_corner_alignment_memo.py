@@ -94,21 +94,65 @@ def fixture(spans=_SPANS):
     return s
 
 
+def drive_wide(session, lap_id: int, offset_m: float):
+    """Put one lap `offset_m` metres off the reference line THE WAY A DRIVER DOES — along its own
+    normal, all the way round (a parallel curve), with its odometer re-measured from the result.
+
+    NOT a rigid translation, and the distinction is now load-bearing. The M7 session geometry fits
+    each lap's rigid receiver shift and removes it before the match, so a lap simply translated by
+    10 m is de-drifted straight back onto the line and matches — which is the whole point of that
+    change, and which would quietly empty every "no match survives anywhere" case below. A parallel
+    curve is not in the span of {n̂·T} on a closed loop, so the fit refuses it
+    (`tests/test_corner_drift.py` asserts that separation) and the lap really is 10 m away at every
+    boundary, which is what these cases mean."""
+    times, xs, ys, speed, _cum = session._cols_cache[lap_id]
+    tx, ty = C._unit_tangents(xs, ys)
+    wx, wy = xs - offset_m * ty, ys + offset_m * tx
+    wcum = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(wx), np.diff(wy)))))
+    session._cols_cache[lap_id] = (times, wx, wy, speed, wcum)
+    session._dist_cache[lap_id] = (times, wcum, times - times[0])
+    seed_corner_basis(session, spans=_SPANS, total=float(TOTAL))
+    return session
+
+
 def frame_of(session):
     corner_list, _total = session.corners.basis()
     return [b for c in corner_list for b in (float(c.enter), float(c.exit))]
 
 
+def fresh_corrections(session, lap_id):
+    """The (lap_shift, anchor_offset) the match runs through, RE-FITTED FROM SCRATCH — a new
+    `corners.session_geometry` over the session's current clean laps, never the service's memo.
+    The reference lap is exempt from both (its odometer is the frame), as in CornerModel."""
+    best = session.best_lap_id()
+    _t, ref_xs, ref_ys, _v, ref_cum = session._lap_columns(best)
+    traces = {}
+    for lid in session.corners._clean_lap_ids():
+        _t2, xs, ys, _v2, cum = session._lap_columns(lid)
+        traces[int(lid)] = (xs, ys, cum)
+    g = C.session_geometry((ref_xs, ref_ys, ref_cum), traces)
+    if g is None or lap_id == best:
+        return (0.0, 0.0), None
+    t = g.shift.get(int(lap_id))
+    if t is None:
+        _t3, xs, ys, _v3, cum = session._lap_columns(lap_id)
+        t = g.fit(xs, ys, cum)[0]
+    return (g.relative_shift(t, best),
+            C.anchor_offsets(frame_of(session), g, best, ref_xs, ref_ys, ref_cum))
+
+
 def fresh_alignment(session, lap_id):
     """The warp computed from scratch against the session's CURRENT state — the oracle every
-    assertion below compares the memo against. Deliberately re-derives everything (basis, traces)
-    rather than reusing anything the service may be holding."""
+    assertion below compares the memo against. Deliberately re-derives everything (basis, traces,
+    and the session geometry) rather than reusing anything the service may be holding."""
     corner_list, total_ref = session.corners.basis()
     frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
     _t, ref_xs, ref_ys, _v, ref_cum = session._lap_columns(session.best_lap_id())
     _t2, xs, ys, _v2, cum = session._lap_columns(lap_id)
+    shift, anchor = fresh_corrections(session, lap_id)
     return C.lap_alignment(frame, total_ref, float(cum[-1]),
-                           traces=(ref_xs, ref_ys, ref_cum, xs, ys, cum))
+                           traces=(ref_xs, ref_ys, ref_cum, xs, ys, cum),
+                           lap_shift=shift, anchor_offset=anchor)
 
 
 def total_of(session, lap_id):
@@ -268,14 +312,19 @@ def test_downstream_reads_are_unchanged_by_the_memo():
         traces = (ref_xs, ref_ys, ref_cum, xs, ys, cum)
         dist, speed_kmh, elapsed = s._lap_arrays(lap)
         al = s.corners.lap_alignment(lap, total)
+        # The inline derivation has to run through the SAME session geometry the memo did —
+        # `project_boundaries`' own DERIVE_ALIGNMENT path has no session to fit one from, so it is
+        # the uncorrected match by design (that is what the pure-numpy callers get).
+        inline = fresh_alignment(s, lap)
 
         assert np.array_equal(
-            C.project_boundaries(frame, total_ref, total, traces=traces),
+            C.project_boundaries(frame, total_ref, total, alignment=inline),
             C.project_boundaries(frame, total_ref, total, alignment=al))
         assert np.array_equal(
-            C.segment_times(corner_list, total_ref, dist, elapsed, traces),
+            C.segment_times(corner_list, total_ref, dist, elapsed, traces, inline),
             C.segment_times(corner_list, total_ref, dist, elapsed, traces, al))
-        a = C.lap_corner_stats(corner_list, total_ref, dist, speed_kmh, elapsed, traces=traces)
+        a = C.lap_corner_stats(corner_list, total_ref, dist, speed_kmh, elapsed, traces=traces,
+                               alignment=inline)
         b = C.lap_corner_stats(corner_list, total_ref, dist, speed_kmh, elapsed, traces=traces,
                                alignment=al)
         assert a == b, f"lap {lap}: per-corner stats moved when the warp was passed in"
@@ -445,10 +494,7 @@ def test_a_none_alignment_means_no_warp_could_be_built():
 
     # 4. No spatial match survives anywhere: the same lap driven 10 m off the reference line, past
     #    corners.SPATIAL_MATCH_MAX_M (3 m) at every boundary.
-    off_line = fixture()
-    times, xs, ys, speed, cum = off_line._cols_cache[2]
-    off_line._cols_cache[2] = (times, xs, ys + 10.0, speed, cum)
-    seed_corner_basis(off_line, spans=_SPANS, total=float(TOTAL))
+    off_line = drive_wide(fixture(), 2, 10.0)
     assert off_line.corners.lap_alignment(2, total_of(off_line, 2)) is None
     # …and the control: the same lap ON the line has a warp, so (4) is the displacement talking.
     assert s.corners.lap_alignment(2, total_of(s, 2)) is not None
@@ -483,10 +529,8 @@ def test_a_corner_is_resolved_only_where_both_its_edges_are_knots_of_the_lap_war
 
     # No warp at all (every edge is the normalized fraction) -> nothing is resolved; no corner
     # basis -> [] exactly where lap_corner_stats is [].
-    off_line = fixture()
-    times, xs, ys, speed, cum = off_line._cols_cache[2]
-    off_line._cols_cache[2] = (times, xs, ys + 10.0, speed, cum)
-    seed_corner_basis(off_line, spans=_SPANS, total=float(TOTAL))
+    # A lap driven 10 m wide (`drive_wide`), which is 10 m from every boundary and stays there.
+    off_line = drive_wide(fixture(), 2, 10.0)
     assert off_line.corners.lap_alignment(2, total_of(off_line, 2)) is None
     assert off_line.corners.lap_corner_resolved(2) == [False] * len(_SPANS)
     no_basis = fixture()

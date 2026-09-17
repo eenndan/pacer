@@ -73,11 +73,267 @@ _SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other
 # PUBLIC because it is the projection's stated per-boundary resolution and is cited as such from
 # corner_model (see MAX_DONOR_SPAN_DEV's sub-resolution paragraph: a segment whose admission band
 # is far under this cannot be judged by a projection built out of matches only accurate to it).
-# WHY D24 0060 MATCHES ONLY 61.8 % OF ITS INTERIOR BOUNDARIES (0062: 99.7 %) is measured in
-# studio/docs/corner-match-0060-2026-09.md. Every failure is this gate. The cause is that
-# recording's GNSS scatter plus a reference (fastest) lap that is itself displaced. It is not a
-# threshold 0060 sits just outside: its cells reach 98.4 % only at 8 m, where 0062's are 99.3 % at 3.
+# WHY D24 0060 USED TO MATCH ONLY 61.8 % OF ITS INTERIOR BOUNDARIES (0062: 99.7 %) is measured in
+# studio/docs/corner-match-0060-2026-09.md. Every failure was this gate. The cause is that
+# recording's GNSS scatter plus a reference (fastest) lap that is itself displaced — NOT a threshold
+# 0060 sits just outside: its cells reached 98.4 % only at 8 m, where 0062's are 99.3 % at 3. So the
+# threshold is unchanged and the SESSION GEOMETRY below takes the receiver's own bias out of the two
+# lines before this gate judges them, which is what brings 0060 to 95.1 % at the same 3 m.
 SPATIAL_MATCH_MAX_M = 3.0       # refined closest approach must be ≤ 3 m to count as the same point
+
+# --- the session's own geometry: a consensus line + each lap's rigid receiver shift ----------
+# WHAT THIS IS FOR. The gate above judges the distance between the reference lap's trace point and
+# the comparison lap's trace. That distance is not only the two drivers' lines: a consumer GNSS
+# receiver's position error is dominated by a slowly-varying bias that is very nearly CONSTANT over
+# one 90-second lap, so each lap's whole trace sits displaced by one 2D vector. Measured on the
+# owner's two D24 recordings (M6, `studio/docs/corner-match-0060-2026-09.md`): |T| a median 1.34 m
+# and up to 3.65 m on 0060 against 0.61 / 1.23 m on 0062, persisting from one lap to the next
+# (lag-1 +0.41, shuffle p < 0.001), with an ALTITUDE witness — which no racing line can move —
+# scattering 3.9x as far on 0060 (sd 3.23 m vs 0.82). On 0060 that alone failed 38 % of the
+# interior boundaries, all of them on this distance gate.
+#
+# WHY A RIGID TRANSLATION IS SEPARABLE FROM A RACING LINE, which is the whole risk here. Around a
+# CLOSED circuit the heading sweeps a full turn, so a fixed vector T shows up as a signed
+# perpendicular offset n̂(s)·T that changes SIGN twice a lap — outside here, inside there. A
+# different line does not do that: running wider is an offset along the local normal with a
+# CONSISTENT sign wherever the track curves the same way, and it is not in the span of {n̂·T}. So
+# fitting one T per lap by least squares over stations spread around the whole lap removes the
+# receiver's bias and leaves the line alone, and the fit's own residual says how much was left.
+# `tests/test_corner_drift.py` plants both on a real trace and asserts exactly that separation.
+#
+# ARC LENGTH IS TRANSLATION-INVARIANT, which is why de-drifting cannot move the reference frame:
+# the corner windows are odometer positions along the reference lap, and translating a polyline
+# does not change its arc length. De-drifting every lap (the reference included) is therefore the
+# same match as de-drifting each comparison lap by T_lap − T_ref with the anchor left alone — and
+# the reference lap still matches itself exactly, so its own windows are untouched.
+DRIFT_STATIONS = 256             # stations spread over the reference lap; 2 unknowns, so ample
+DRIFT_MIN_LAPS = 3               # fewer clean laps than this and there is nothing to fit against
+DRIFT_MIN_STATIONS = 32          # fewer answering stations than this and the fit is not grounded
+# THE TWO HALVES NEED DIFFERENT AMOUNTS OF EVIDENCE, because only one of them uses the consensus
+# ABSOLUTELY. De-drifting is DIFFERENTIAL: the shift actually applied is T_lap − T_ref, and since
+# both are least-squares fits of (offset − consensus) against the same stations, the consensus
+# cancels exactly — `relative_shift` is the fit of the lap's offset from the reference lap and
+# nothing else. Moving the ANCHOR does use it absolutely, and a median over a handful of laps is
+# one or two laps' racing lines rather than the session's. The median of n laps carries a standard
+# error of about 1.25·sigma/sqrt(n); at n = 8 and the 1.16 m residual sigma measured on D24 0060
+# that is ±0.51 m, well inside the 3 m gate the correction is spent on, and both of the owner's
+# recordings have 38 and 65 clean laps. Below it the anchor stays on the reference lap.
+ANCHOR_MIN_LAPS = 8
+_DRIFT_ARC_FRAC = 0.05           # ±5 % of the lap searched for the nearest same-direction sample
+
+
+@dataclass(frozen=True)
+class SessionGeometry:
+    """One session's spatial geometry model, fitted once per segmentation over the clean laps.
+
+    * `stations` — reference-lap odometer (m) of each measurement station, ascending.
+    * `consensus` — the CONSENSUS LINE as a signed perpendicular offset (m) from the reference lap
+      at each station: the median over the clean laps of their own offset there. Positive is to
+      the left of the reference lap's direction of travel. NaN where no lap answered.
+    * `shift` — per lap id, the rigid 2D translation (metres, local frame) that best explains that
+      lap's offset from the CONSENSUS. The reference lap has one too: its row of offsets is zero by
+      construction, so its shift is fitted to −consensus.
+    * `residual_rms` — per lap id, the RMS perpendicular offset left after its own shift is
+      removed. This is the part a translation does not explain — line, local noise, everything else.
+
+    `total_ref` and `frame` (`_station_frame` on the reference lap) are kept so that `fit` can
+    measure a lap that was not in the consensus set — a GPS-dropout lap is excluded from every
+    "best" in the app but its corner windows are still drawn, and it must be projected in the same
+    frame as the rest rather than left on the uncorrected one.
+
+    `self_offset` is what `perpendicular_offsets` reports for the REFERENCE LAP AGAINST ITSELF,
+    which is not identically zero: the offset is taken to the nearest fix rather than to the line
+    between fixes, so on a curve it carries a bias of order kappa·ds²/2 (a few millimetres at 1 m
+    spacing on a 40 m radius). Every lap is measured by the same rule and so carries the same bias,
+    and subtracting this cancels it — which is what makes a session whose laps sit on ONE line come
+    out at exactly zero consensus and exactly zero shift, and therefore matched bit for bit as
+    before rather than three millimetres off it.
+    """
+
+    stations: np.ndarray
+    total_ref: float
+    frame: tuple
+    self_offset: np.ndarray
+    consensus: np.ndarray
+    shift: dict[int, np.ndarray]
+    residual_rms: dict[int, float]
+    n_laps: int
+
+    def offsets(self, lap_xs, lap_ys, lap_cum) -> np.ndarray:
+        """One lap's signed perpendicular offset from the reference lap at each station, with the
+        estimator's own bias (`self_offset`) taken out."""
+        return perpendicular_offsets(self.stations, self.total_ref, self.frame,
+                                     lap_xs, lap_ys, lap_cum) - self.self_offset
+
+    def fit(self, lap_xs, lap_ys, lap_cum) -> tuple[np.ndarray, float]:
+        """(rigid translation, residual RMS) of one lap against this session's consensus line."""
+        return _rigid_shift(self.offsets(lap_xs, lap_ys, lap_cum) - self.consensus,
+                            self.frame[4], self.frame[5])
+
+    def relative_shift(self, lap_shift, ref_id: int) -> tuple[float, float]:
+        """The translation to remove from a lap before matching it against lap `ref_id`'s trace:
+        T_lap − T_ref, so a session-wide common bias cancels and the reference lap gets exactly
+        (0, 0) against itself. `lap_shift` is that lap's own fitted translation."""
+        t = np.asarray(lap_shift, float) - self.shift.get(int(ref_id), np.zeros(2))
+        return float(t[0]), float(t[1])
+
+
+def _rigid_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray) -> tuple[np.ndarray, float]:
+    """The least-squares rigid 2D translation T with `off_i ≈ n̂_i · T`, and the RMS residual.
+    ((0, 0), 0.0) when too few stations answered to ground it.
+
+    PLAIN LEAST SQUARES, AND DELIBERATELY SO. Two properties come from its LINEARITY and are worth
+    more here than robustness:
+      * the shift actually applied is T_lap − T_ref, and because both are fits of
+        (offset − consensus) over the same stations, the consensus cancels EXACTLY — de-drifting is
+        a fit of the lap's offset from the reference lap and nothing else, so a consensus estimated
+        from few or lopsided laps cannot bias it. Only the ANCHOR half uses the consensus itself,
+        and that one waits for `ANCHOR_MIN_LAPS`;
+      * one excursion cannot run away with it. The stations are spread over the whole lap, so a
+        5 m excursion spanning 12 of 256 of them can tilt T by at most about 5 × 12/256 = 0.23 m.
+    A one-pass MAD TRIM was tried here and REMOVED: on a near-noise-free lap the MAD collapses to
+    millimetres, the trim then keeps only the stations nearest the median residual — which on a
+    stadium loop are its two STRAIGHTS, where n̂ has no x component at all — and the refit on that
+    rank-deficient subset returned |T| = 53.9 m for a lap whose largest offset was 0.12 m. A
+    robust weighting that cannot become singular would need a conditioning guard as well, and the
+    bound above says there is nothing for it to buy."""
+    ok = np.isfinite(off)
+    if int(ok.sum()) < DRIFT_MIN_STATIONS:
+        return np.zeros(2), 0.0
+    a = np.column_stack([nx[ok], ny[ok]])
+    y = off[ok]
+    t, *_ = np.linalg.lstsq(a, y, rcond=None)
+    return t, float(np.sqrt(np.mean((y - a @ t) ** 2)))
+
+
+def _station_frame(stations, ref_xs, ref_ys, ref_cum):
+    """The reference lap's point, unit tangent and unit left normal at each station odometer."""
+    ax = np.interp(stations, ref_cum, ref_xs)
+    ay = np.interp(stations, ref_cum, ref_ys)
+    rtx, rty = _unit_tangents(ref_xs, ref_ys)
+    atx = np.interp(stations, ref_cum, rtx)
+    aty = np.interp(stations, ref_cum, rty)
+    norm = np.hypot(atx, aty)
+    norm[norm == 0] = 1.0
+    atx, aty = atx / norm, aty / norm
+    return ax, ay, atx, aty, -aty, atx
+
+
+def perpendicular_offsets(stations, total_ref: float, ref_frame, lap_xs, lap_ys, lap_cum):
+    """Signed perpendicular offset (m) of one lap from the reference lap at each station: positive
+    to the LEFT of the reference lap's direction of travel, NaN where no same-direction sample of
+    that lap lies in the searched arc.
+
+    `ref_frame` is `_station_frame`'s tuple. The nearest SAMPLE is used rather than the
+    sub-sample-refined nearest point: the quantity taken from it is the PERPENDICULAR component,
+    which an along-track sampling error of half a fix interval perturbs only to second order in the
+    local curvature (≤ 0.03 m at 3 m spacing on a 30 m radius), while refining every one of
+    DRIFT_STATIONS × laps candidates would cost what the whole fit is worth."""
+    ax, ay, atx, aty, nx, ny = ref_frame
+    lap_xs = np.asarray(lap_xs, float)
+    lap_ys = np.asarray(lap_ys, float)
+    lap_cum = np.asarray(lap_cum, float)
+    n = len(lap_cum)
+    out = np.full(len(stations), np.nan)
+    if n < 2 or float(lap_cum[-1]) <= 0 or total_ref <= 0:
+        return out
+    k = min(max(5, int(_DRIFT_ARC_FRAC * n)), n)
+    centers = np.clip(np.searchsorted(lap_cum, stations / total_ref * float(lap_cum[-1])), 0, n - 1)
+    idx = np.clip(centers[:, None] + np.arange(-k, k + 1)[None, :], 0, n - 1)
+    dx = lap_xs[idx] - ax[:, None]
+    dy = lap_ys[idx] - ay[:, None]
+    ltx, lty = _unit_tangents(lap_xs, lap_ys)
+    same = atx[:, None] * ltx[idx] + aty[:, None] * lty[idx] >= _SPATIAL_HEADING_MIN_COS
+    d2 = np.where(same, dx * dx + dy * dy, np.inf)
+    j = np.argmin(d2, axis=1)
+    rows = np.arange(len(stations))
+    hit = np.isfinite(d2[rows, j])
+    out[hit] = (nx[hit] * dx[rows, j][hit]) + (ny[hit] * dy[rows, j][hit])
+    return out
+
+
+def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
+    """Fit the session's consensus line + each clean lap's rigid receiver shift (SessionGeometry),
+    or None when there is not enough to fit one (< DRIFT_MIN_LAPS laps, a degenerate reference,
+    or too few stations answered).
+
+    `ref_trace` is the reference lap's (xs, ys, cum); `lap_traces` maps lap id -> the same triple
+    for every CLEAN lap, the reference lap included (its own offsets are then zero and its shift is
+    fitted against the consensus like any other lap's)."""
+    if ref_trace is None or len(lap_traces) < DRIFT_MIN_LAPS:
+        return None
+    ref_xs, ref_ys, ref_cum = (np.asarray(v, float) for v in ref_trace)
+    if len(ref_cum) < 2:
+        return None
+    total_ref = float(ref_cum[-1])
+    if total_ref <= 0:
+        return None
+    step = total_ref / DRIFT_STATIONS
+    stations = np.arange(DRIFT_STATIONS) * step + step / 2.0
+    frame = _station_frame(stations, ref_xs, ref_ys, ref_cum)
+    self_offset = perpendicular_offsets(stations, total_ref, frame, ref_xs, ref_ys, ref_cum)
+    ids = sorted(lap_traces)
+    offs = {lid: perpendicular_offsets(stations, total_ref, frame, *lap_traces[lid]) - self_offset
+            for lid in ids}
+    stack = np.array([offs[lid] for lid in ids])
+    if not np.isfinite(stack).any():
+        return None
+    with np.errstate(invalid="ignore"):
+        consensus = np.nanmedian(stack, axis=0)
+    if int(np.isfinite(consensus).sum()) < DRIFT_MIN_STATIONS:
+        return None
+    nx, ny = frame[4], frame[5]
+    shift, residual = {}, {}
+    for lid in ids:
+        t, rms = _rigid_shift(offs[lid] - consensus, nx, ny)
+        shift[lid], residual[lid] = t, rms
+    return SessionGeometry(stations, total_ref, frame, self_offset, consensus, shift, residual,
+                           len(ids))
+
+
+def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,
+                   ref_xs, ref_ys, ref_cum):
+    """Per-boundary (dx, dy) that cancels the REFERENCE lap's own NON-RIGID deviation from the
+    session's consensus line, purely PERPENDICULAR to its direction of travel. None when there is
+    no geometry to measure it with, and all-zero when the reference lap sits on the consensus.
+
+    WHAT IS LEFT FOR THIS TO DO. De-drifting a comparison lap by `SessionGeometry.relative_shift`
+    already removes both laps' RIGID shifts — the lap's own and the reference's — so what remains
+    between the anchor and the consensus is the reference lap's fit RESIDUAL: the part of its
+    displacement one translation does not explain. On D24 0060 that is what the reference lap
+    (17, rank 34/38 from the consensus) carries at the C8 exit and the C9 entry, the two worst
+    boundaries in the session; a rigid correction cannot reach it, and it is measured on the same
+    stations as everything else here: `consensus + n̂ · T_ref`.
+
+    PERPENDICULAR ONLY, and that is what keeps ONE frame. The corner windows are arc-length
+    positions along the reference lap, so moving the anchor ALONG the track would redefine where
+    the corner is on every lap except the reference (which keeps its own odometer by definition)
+    and put the two in different frames. Sideways it cannot: the anchor keeps the reference lap's
+    longitudinal position, while the distance the gate judges — a closest approach, i.e. a
+    PERPENDICULAR distance to the comparison lap's line — is measured from the line the session
+    actually drove rather than from the one lap that happens to be fastest. Measured on the two D24
+    recordings with a CURVATURE witness (heading-derived, so a translation cannot move it), this
+    half leaves the longitudinal placement of a boundary alone — mean disagreement with the track's
+    own shape 2.00 m de-drifted against 2.00 m with this as well on 0060, 0.84 against 0.84 on
+    0062 — while taking the interior boundaries matched there from 84.9 % to 95.1 %. It changes
+    WHETHER the gate accepts, not where the match lands, which is what perpendicular-only means.
+
+    Below `ANCHOR_MIN_LAPS` the consensus is not one, and the anchor stays on the reference lap."""
+    if geometry is None or geometry.n_laps < ANCHOR_MIN_LAPS:
+        return None
+    d_ref = np.asarray(d_ref, float)
+    ref_xs = np.asarray(ref_xs, float)
+    ref_ys = np.asarray(ref_ys, float)
+    ref_cum = np.asarray(ref_cum, float)
+    _sx, _sy, _stx, _sty, snx, sny = _station_frame(geometry.stations, ref_xs, ref_ys, ref_cum)
+    t_ref = geometry.shift.get(int(ref_id), np.zeros(2))
+    c = geometry.consensus + snx * t_ref[0] + sny * t_ref[1]
+    ok = np.isfinite(c)
+    if not ok.any():
+        return None
+    off = np.interp(d_ref, geometry.stations[ok], c[ok])
+    _ax, _ay, _atx, _aty, nx, ny = _station_frame(d_ref, ref_xs, ref_ys, ref_cum)
+    return np.column_stack([off * nx, off * ny])
 
 
 def line_length_drift(total_lap: float, total_ref: float) -> float:
@@ -108,7 +364,8 @@ def _unit_tangents(xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarr
 
 def _spatial_matches(d_ref, total_ref: float,
                      ref_xs, ref_ys, ref_cum,
-                     lap_xs, lap_ys, lap_cum) -> np.ndarray:
+                     lap_xs, lap_ys, lap_cum,
+                     lap_shift=(0.0, 0.0), anchor_offset=None) -> np.ndarray:
     """Map reference-odometer boundaries `d_ref` onto a comparison lap's odometer by the robust
     heading-gated, sub-sample-refined nearest-point search (the best_rolling_lap machinery, on
     anchors instead of every sample). Per boundary: the reference (x,y) at `d_ref` is the anchor;
@@ -120,21 +377,31 @@ def _spatial_matches(d_ref, total_ref: float,
     Takes the WHOLE boundary set in one call because the per-lap unit-tangent fields are O(n) and
     identical for every anchor — computing them once per lap instead of once per boundary is what
     lets the alignment be built from the full partition without paying for it (the previous
-    one-anchor-per-call shape recomputed both tangent fields 24 times a lap)."""
+    one-anchor-per-call shape recomputed both tangent fields 24 times a lap).
+
+    `lap_shift` is subtracted from the comparison lap's trace and `anchor_offset` (one (dx, dy) per
+    boundary) added to the anchor point, so the gate judges the two lines with the receiver's rigid
+    bias taken out — see SessionGeometry. Both default to no-ops, and a no-op is EXACT: `x - 0.0`
+    and `x + 0.0` are the same double, so a session with no fitted geometry matches bit for bit."""
     d_ref = np.asarray(d_ref, float)
     ref_xs = np.asarray(ref_xs, float)
     ref_ys = np.asarray(ref_ys, float)
     ref_cum = np.asarray(ref_cum, float)
-    lap_xs = np.asarray(lap_xs, float)
-    lap_ys = np.asarray(lap_ys, float)
+    lap_xs = np.asarray(lap_xs, float) - float(lap_shift[0])
+    lap_ys = np.asarray(lap_ys, float) - float(lap_shift[1])
     lap_cum = np.asarray(lap_cum, float)
     out = np.full(len(d_ref), np.nan)
     n_lap = len(lap_cum)
     if n_lap < 2 or len(ref_cum) < 2 or total_ref <= 0 or not len(d_ref):
         return out
-    # Anchors: the reference trace point + direction at each boundary odometer.
+    # Anchors: the reference trace point + direction at each boundary odometer, moved sideways onto
+    # the session's consensus line when one was fitted (anchor_offset).
     ax = np.interp(d_ref, ref_cum, ref_xs)
     ay = np.interp(d_ref, ref_cum, ref_ys)
+    if anchor_offset is not None:
+        anchor_offset = np.asarray(anchor_offset, float)
+        ax = ax + anchor_offset[:, 0]
+        ay = ay + anchor_offset[:, 1]
     rtx, rty = _unit_tangents(ref_xs, ref_ys)
     atx = np.interp(d_ref, ref_cum, rtx)
     aty = np.interp(d_ref, ref_cum, rty)
@@ -184,13 +451,17 @@ DERIVE_ALIGNMENT = object()
 
 
 def lap_alignment(frame, total_ref: float, total_lap: float, *,
-                  traces: tuple | None = None) -> tuple | None:
+                  traces: tuple | None = None,
+                  lap_shift=(0.0, 0.0), anchor_offset=None) -> tuple | None:
     """ONE comparison lap's odometer alignment to the reference lap, as the (knot_ref, knot_lap)
     pair of a monotone piecewise-linear warp — or None when the normalized projection applies
     verbatim (no traces, or no spatial match survived anywhere on the lap).
 
     `frame` is the reference-odometer boundary set the warp is fitted to; the two timing-line
     anchors are added here. See project_boundaries for what the warp is and why it exists.
+
+    `lap_shift` / `anchor_offset` are the session geometry's corrections (`SessionGeometry`,
+    `anchor_offsets`), passed straight through to the match. Both default to no-ops.
 
     BUILD IT ONCE PER LAP when you are projecting many windows of the same lap.
     `coaching.corner_phase_losses` is called per (lap, corner) — deriving the lap's warp inside
@@ -203,7 +474,8 @@ def lap_alignment(frame, total_ref: float, total_lap: float, *,
     ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum = traces
     knots = np.asarray(frame, float)
     matched = _spatial_matches(knots, total_ref, ref_xs, ref_ys, ref_cum,
-                               lap_xs, lap_ys, lap_cum)
+                               lap_xs, lap_ys, lap_cum,
+                               lap_shift=lap_shift, anchor_offset=anchor_offset)
     # The two exact timing-line anchors plus every surviving match, in track order, kept strictly
     # increasing on both axes (a match that crosses its accepted neighbour is a mis-match, and
     # dropping it costs only interpolation).
