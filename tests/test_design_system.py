@@ -980,6 +980,9 @@ def test_no_table_header_floats_off_its_data():
               "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
               "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
               "STATS/PER LAP": stats.lap_table,
+              # F5's COASTING table: a sixth report grid, its "vs top" column a WORD, right-aligned
+              # like the numbers it sits beside.
+              "STATS/COASTING": stats.coasting_table,
               # The two grids the STINTS / SPLITS PR added. SPLITS is here for completeness and
               # is empty on this fixture (it needs sector lines AND stats.MATRIX_MIN_LAPS laps);
               # STINTS fills whenever the synthetic session's laps do not tile the clock, and a
@@ -1103,6 +1106,7 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
     named = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
              "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
              "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
+             "STATS/COASTING": stats.coasting_table,
              "STATS/PER LAP": stats.lap_table, "COACHING": coach.table, "LIBRARY": dlg.table,
              "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table,
              "STATS/CORNERS BY LAP": stats.corner_grid_table}

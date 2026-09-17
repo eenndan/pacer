@@ -162,28 +162,46 @@ def test_fit_start_line_refuses_a_wider_line_that_cuts_every_lap_into_pieces():
 
     The trace starts 80 m before the return straight's crossing and ends 80 m past the start line,
     so neither end is a substantial piece and the short pieces outnumber the long ones 6 to 5 —
-    the arrangement SD_30_08 happened to have (25 short pieces, 24 long, 23 laps)."""
+    the arrangement SD_30_08 happened to have (25 short pieces, 24 long, 23 laps).
+
+    Since L3 the band itself refuses these pieces (none of them ends where it started), which
+    would leave this rule untested: ×1.5 would count nothing and lose on count alone. So the rule
+    is pinned with the closure test switched OFF, as the one line of defence it was — and the
+    closure test is then checked to be a second one, on its own."""
     long_piece = 2 * _EAST_RUN + math.pi * _HAIRPIN_GAP / 2
     lap_m = long_piece + 2 * _WEST_RUN + math.pi * _HAIRPIN_GAP / 2
     laps, cs = _hairpin_laps(long_piece - 80.0, 6 * lap_m + 80.0)
     a, b = cs.local(_local_gps(0.0, -15.0)), cs.local(_local_gps(0.0, 15.0))
     base = tracks.make_segment(a[0], a[1], b[0], b[1])
 
-    # Non-vacuous: on the base line the laps are laps, and the ×1.5 line really does win on count.
-    laps.sectors = pacer.Sectors(start_line=base, sector_lines=[])
-    laps.update()
-    base_ids, base_d, base_s = _band_laps(laps)
+    from studio import _signal
+    closure_test = _signal._is_open_lap
+    _signal._is_open_lap = lambda cols: False
+    try:
+        # Non-vacuous: on the base line the laps are laps, and the ×1.5 line really does win on count.
+        laps.sectors = pacer.Sectors(start_line=base, sector_lines=[])
+        laps.update()
+        base_ids, base_d, base_s = _band_laps(laps)
+        laps.sectors = pacer.Sectors(start_line=load._widen(base, 1.5), sector_lines=[])
+        laps.update()
+        wide_ids, wide_d, wide_s = _band_laps(laps)
+        assert len(base_ids) == 5 and all(abs(d - lap_m) < 5 for d in base_d), (base_ids, base_d)
+        assert len(wide_ids) > len(base_ids), (
+            f"the fixture no longer reproduces the defect: ×1.5 counts {len(wide_ids)} pieces "
+            f"against {len(base_ids)} laps")
+        assert max(wide_d) < 0.5 * lap_m, f"×1.5 should count pieces of a lap, got {wide_d}"
+
+        result = load._fit_start_line(laps, base)
+        ids, dists, secs = _band_laps(laps)
+    finally:
+        _signal._is_open_lap = closure_test
+
+    # The second line of defence, live: on the ×1.5 line not one of those pieces is counted.
     laps.sectors = pacer.Sectors(start_line=load._widen(base, 1.5), sector_lines=[])
     laps.update()
-    wide_ids, wide_d, wide_s = _band_laps(laps)
-    assert len(base_ids) == 5 and all(abs(d - lap_m) < 5 for d in base_d), (base_ids, base_d)
-    assert len(wide_ids) > len(base_ids), (
-        f"the fixture no longer reproduces the defect: ×1.5 counts {len(wide_ids)} pieces "
-        f"against {len(base_ids)} laps")
-    assert max(wide_d) < 0.5 * lap_m, f"×1.5 should count pieces of a lap, got {wide_d}"
-
-    result = load._fit_start_line(laps, base)
-    ids, dists, secs = _band_laps(laps)
+    assert _band_laps(laps)[0] == [], "the closure test should refuse every ×1.5 piece on its own"
+    laps.sectors = pacer.Sectors(start_line=result, sector_lines=[])
+    laps.update()
     assert _ends(result) == _ends(base), (
         f"_fit_start_line took a widened line that cuts every {lap_m:.0f} m lap into pieces: it now "
         f"counts {len(ids)} 'laps' of {sorted(round(d) for d in dists)} m ({secs:.1f} s of driving) "
@@ -197,10 +215,17 @@ def test_fit_start_line_refuses_a_wider_line_that_cuts_every_lap_into_pieces():
 def test_fit_start_line_still_widens_when_the_base_line_counted_laps_and_missed_one_pass():
     """The other half of T13's rule. The widen test above starts from a line that counts NOTHING,
     where any driving beats zero; this one starts from a line that counts laps and steps over one
-    pass. The kart runs 18 m wide of the racing line through the start line on its fourth lap, so
-    the 30 m line misses that crossing and the two laps either side become one excluded piece
-    twice as long. The ×1.3 line (±19.5 m) catches it: two more laps, and their driving is
-    counted, so the widening has to be taken exactly as before."""
+    pass. The 30 m line sits off-centre, reaching only 5 m outside the racing line, and the kart
+    runs 8 m wide through it on its fourth lap, so the line misses that crossing and the two laps
+    either side become one excluded piece twice as long. The ×1.3 line (reaching 9.5 m out)
+    catches it: two more laps, and their driving is counted, so the widening has to be taken
+    exactly as before.
+
+    Off-centre since L3, and not for convenience: the original pass ran 18 m wide of a CENTRED
+    line, and a lap whose two crossings are 18 m apart is one the closure test calls open
+    (`_signal.MAX_LAP_GAP_M`) — on any line, widened or not. No counted real lap on the owner's
+    footage crosses more than 8.45 m from where it started; a line that misses the kart by less
+    than that is an off-centre line, which is the case widening exists for."""
     wide_lap = 3
 
     def gps(i):
@@ -209,7 +234,7 @@ def test_fit_start_line_still_widens_when_the_base_line_counted_laps_and_missed_
         # A smooth radial excursion centred on the start line's angle during `wide_lap` only.
         centre = wide_lap + _THETA / (2.0 * math.pi)
         bump = math.exp(-((lap_pos - centre) / 0.03) ** 2)
-        return _gps(theta, _RADIUS + 18.0 * bump)
+        return _gps(theta, _RADIUS + 8.0 * bump)
 
     laps = pacer.Laps()
     for i in range(7 * _PER_LAP + 1):
@@ -218,7 +243,7 @@ def test_fit_start_line_still_widens_when_the_base_line_counted_laps_and_missed_
     cs = pacer.CoordinateSystem(
         pacer.GPSSample(lat=(mn.y + mx.y) / 2, lon=(mn.x + mx.x) / 2, altitude=0.0))
     laps.set_coordinate_system(cs)
-    base = _radial(cs, _RADIUS - 15.0, _RADIUS + 15.0)
+    base = _radial(cs, _RADIUS - 25.0, _RADIUS + 5.0)
     laps.sectors = pacer.Sectors(start_line=base, sector_lines=[])
     laps.update()
     base_ids, _d, base_s = _band_laps(laps)

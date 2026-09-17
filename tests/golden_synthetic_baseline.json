@@ -5,6 +5,49 @@
   "best_lap_total_distance": 588.0,
   "best_rolling_lap": "__unsupported__",
   "coaching_opportunities": "__unsupported__",
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 2,
+   "per_lap_s": 15.821726206820657,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 6.112188941938498,
+     "share": 0.3863161871239794,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 5.960348273931656,
+     "share": 0.37671921483271426,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 1.9360067616239638,
+     "share": 0.12236381393007308,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 1.8131822293265394,
+     "share": 0.11460078411323328,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1
@@ -510,6 +553,40 @@
     "pace_s": 0.0,
     "share": 0.0
    }
+  },
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 4,
+   "per_lap_s": 4.701348274465104,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 4,
+     "ring_cid": 2,
+     "s_per_lap": 2.500656240621602,
+     "share": 0.5319019342182459,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 4,
+     "ring_cid": 1,
+     "s_per_lap": 2.0508381129532296,
+     "share": 0.4362233966141476,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 1,
+     "ring_cid": 2,
+     "s_per_lap": 0.14985392089027272,
+     "share": 0.031874669167606465,
+     "tied": true
+    }
+   ]
   },
   "consistency_lap_ids": [
    0,
@@ -17005,6 +17082,49 @@
     "share": 0.0
    }
   },
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 3,
+   "per_lap_s": 4.734922650231984,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 3,
+     "ring_cid": 2,
+     "s_per_lap": 2.1340852137033104,
+     "share": 0.4507117373076311,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 3,
+     "ring_cid": 1,
+     "s_per_lap": 2.1008266721454163,
+     "share": 0.443687643354108,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 0.2666422396717536,
+     "share": 0.05631395893208301,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 0.23336852471150374,
+     "share": 0.04928666040617792,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1,
@@ -30031,6 +30151,49 @@
     "share": 0.0
    }
   },
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 3,
+   "per_lap_s": 4.298777851755204,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 3,
+     "ring_cid": 2,
+     "s_per_lap": 2.398920855668692,
+     "share": 0.558047179546439,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 3,
+     "ring_cid": 1,
+     "s_per_lap": 1.4667065532527015,
+     "share": 0.3411915209002579,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 0.23325471753379645,
+     "share": 0.054260705153339764,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 0.19989572530001473,
+     "share": 0.046500594399963395,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1,
@@ -43013,6 +43176,49 @@
   "best_lap_total_distance": 588.0,
   "best_rolling_lap": "__unsupported__",
   "coaching_opportunities": "__unsupported__",
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 2,
+   "per_lap_s": 15.821726206820657,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 6.112188941938498,
+     "share": 0.3863161871239794,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 5.960348273931656,
+     "share": 0.37671921483271426,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 1.9360067616239638,
+     "share": 0.12236381393007308,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 1.8131822293265394,
+     "share": 0.11460078411323328,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1
@@ -43449,6 +43655,49 @@
   "best_lap_total_distance": 588.0,
   "best_rolling_lap": "__unsupported__",
   "coaching_opportunities": "__unsupported__",
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 2,
+   "per_lap_s": 15.821726206820657,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 6.112188941938498,
+     "share": 0.3863161871239794,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 5.960348273931656,
+     "share": 0.37671921483271426,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 1.9360067616239638,
+     "share": 0.12236381393007308,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 1.8131822293265394,
+     "share": 0.11460078411323328,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1

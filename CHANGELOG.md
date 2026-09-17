@@ -20,6 +20,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
   matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
   marked or counted in the typical.
+- **Where you coast, by place — and whether the order means anything.** The coast number has been
+  real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
+  Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
+  corner/straight partition the STRAIGHTS table is cut from, ranks the places by seconds per lap
+  and rings the selected place on the map. A table sorted by a column always has a first row, so
+  each row says **top**, **tied** or **less** against it — a paired sign-flip test over the laps —
+  and a line under the table says what that order is worth. On both D24 recordings the laps cannot
+  separate the leader from 10 and 7 other places (and the two recordings crown different corners);
+  on all three Sandown recordings C1 holds about twice the next place's coasting and separates.
+  Zones grown from where the laps coast were built first and refused: their leader changed with
+  the coverage threshold and merge gap chosen.
 - **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
   seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
   ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed
@@ -328,6 +339,24 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   where-the-time-goes phase split count only matched cells, say how many laps they counted, and show
   a dash where no lap matched. The Corners page still shows each lap's reading, muted with the reason.
   Coaching and the ideal lap still count every cell and are the next step.
+- **A piece of a lap is no longer counted as a lap, and every excluded lap now says why.** A
+  start/finish line long enough to reach a second stretch of track cuts each pass it reaches in
+  two, and when the pieces outnumber the laps the median bands count the pieces: Sandown chapter 3
+  opened on its own counted a **23.2 s / 320 m piece of the 740 m circuit** as its one lap. A lap
+  now has to end where it started, going the same way — its two start-line crossings no more than
+  15 m apart, and its direction of travel turned by no more than 120° — and this is checked before
+  the median is taken. Neither number alone is enough: measured over all four recordings on this
+  machine, every chapter alone and chained, on every line the app places and 60 lines a user could
+  drag per recording (18,899 real laps, 23,631 pieces), real laps end up to 8.45 m from where they
+  started while a D24 hairpin piece ends 6.48 m from its start — but that piece has turned round,
+  and no real lap turns by more than 97°. Together they count none of the pieces, and call only
+  three real laps open — laps of 86-200 s, which the time band excludes anyway. On the lines the app
+  places by itself only Sandown chapter 3 changes: it now has no laps, which is also what the
+  owner's own saved line finds in that chapter. The ⊘ strip lists the reason
+  beside each excluded lap ("ends 21 m from its start, heading the other way", "off the session
+  median", "the kart stopped during it"), and the DATA TRUST card, the exported summary and the
+  auto marks, which said every excluded lap's distance was off the median, count the reasons
+  instead.
 - **A recording on an unknown track no longer opens as quarter-laps when a wider start line would
   have cut every lap in two.** With no saved start/finish line, SD_30_08 opened as **25 laps of
   13.3 s / 203 m** — best 13.073 s, ideal 12.886 s, written to the library that way — when the

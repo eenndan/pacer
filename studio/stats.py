@@ -219,6 +219,34 @@ MATRIX_SCALE_PCT = 90.0
 # retyped) so this module's own name for it can never drift from theirs.
 MATRIX_DECIMALS = PRINT_DECIMALS
 
+# --------------------------------------------------------------------- coasting, by place
+# WHERE THE COASTING IS: every clean lap's coast seconds split over the corner/straight partition —
+# the same pieces the STRAIGHTS and IDEAL LAP tables are cut from — and ranked by seconds per lap.
+#
+# THE PIECES ARE THE PARTITION, NOT ZONES GROWN FROM THE COAST DATA, and that is measured (F5).
+# Zones grown from where the laps coast — a coverage threshold plus a merge gap — crowned a
+# different leader as either knob moved: across 5-25 % coverage and 5-20 m gaps, D24 0060's leader
+# was a C3 zone, then C1 and C3 fused into one, then C5, and Sandown 09-05's swung between C1 and C4.
+# The ranking was a property of the knobs. The partition has no knob the coasting can move.
+#
+# THE ORDER IS CLAIMED ONLY WHERE THE LAPS SEPARATE IT. Every place is TIED with the leader unless a
+# paired sign-flip test over the clean laps (each lap's coast seconds in the leader minus the same
+# lap's in that place) puts the difference at p < COAST_LEAD_ALPHA. That is the question #311
+# found a ranking can pass while its top position fails, and it does fail here: the leader ties
+# with 10 other places on D24 0060 and 7 on 0062, and the two recordings crown different corners
+# (C1, C10), while all three Sandown recordings crown C1 clear of every other place.
+# studio/dev/probes/p6_coast_places.py prints the tables, the controls and the half-session splits.
+#
+# SELECTING THE LEADER DOES NOT LOOSEN THE TEST HERE. With each lap's places shuffled among
+# themselves, so that no place leads by construction, "the leader separates" fired on 0 of 1,000
+# shuffles on every one of the five recordings. That is the opposite of the selection trap #311
+# found for "the top is separable from SOME other place", which is not a question asked here: the
+# leader has to separate from EVERY other place, the runner-up included.
+COAST_LEAD_ALPHA = 0.05
+# Sign-flip draws per test. Seeded, so a session renders the same verdict every time it opens; at
+# 10,000 draws the p of a borderline place is resolved to about +-0.002.
+COAST_SIGNFLIP_DRAWS = 10_000
+
 
 # --------------------------------------------------------------------- value objects
 @dataclass(frozen=True)
@@ -339,6 +367,32 @@ class StraightStat:
     n_laps: int | None = None       # laps with a row (None only from a caller that never counted)
     n_trap: int | None = None       # laps whose trap speed counted (the straight's END matched)
     n_exit: int | None = None       # laps whose preceding exit speed counted (None for k=0)
+
+
+@dataclass(frozen=True)
+class CoastPlace:
+    """One piece of the corner/straight partition in the COASTING table: how much of the session's
+    coasting happens there. Seconds are read off each lap's own clock inside the piece's projected
+    edges, so a span that runs from one piece into the next is split between them, not counted
+    twice."""
+
+    index: int          # 0-based position in the partition: 0 = S/F → C1, 1 = C1, 2 = C1 → C2 …
+    label: str          # "C3" for a corner; a straight takes the STRAIGHTS table's own label
+    ring_cid: int       # the corner the map rings for this row (a straight: the corner feeding it)
+    s_per_lap: float    # coasting seconds inside the piece over all clean laps, / the lap count
+    laps: int           # clean laps that coasted inside the piece at all
+    share: float        # s_per_lap as a fraction of all the coasting per lap (0..1)
+    tied: bool          # the leader's own row, and every row the laps cannot separate from it
+
+
+@dataclass(frozen=True)
+class CoastReport:
+    """The session's coasting by place (see COAST_LEAD_ALPHA for what `tied` claims)."""
+
+    n_laps: int                 # clean laps the report reads
+    per_lap_s: float            # all coasting per clean lap — the MEAN, which s_per_lap sums to
+    places: list[CoastPlace]    # most coasting first; a piece no clean lap coasted in is left out
+    lead_separable: bool        # True when the leader separates from every other place
 
 
 @dataclass(frozen=True)
@@ -913,6 +967,99 @@ def brake_consistency(cids, rows_by_lap) -> list[BrakeConsistency]:
     return out
 
 
+def straight_label(cids, k: int) -> tuple[str, int]:
+    """(label, ring_cid) of straight `k` of the corner/straight partition (N corners → N+1
+    straights, k=0 from the timing line into C1). The ring is the corner FEEDING the straight, and
+    straight 0's is C_N across the timing line — one physical straight split by the line. One
+    definition, so the STRAIGHTS and COASTING tables name and ring a straight the same way."""
+    n_corners = len(cids)
+    if k == 0:
+        return (f"S/F → C{cids[0]}" if n_corners else "S/F",
+                int(cids[-1]) if n_corners else 0)  # the wrap: C_N feeds the S/F straight
+    if k == n_corners:
+        return f"C{cids[-1]} → S/F", int(cids[-1])
+    return f"C{cids[k - 1]} → C{cids[k]}", int(cids[k - 1])
+
+
+def coast_seconds_by_piece(spans, edges, dist, elapsed) -> np.ndarray:
+    """Seconds of ONE lap's coasting inside each piece [edges[j], edges[j+1]] of the partition.
+
+    `spans` are that lap's `driving.CoastSpan`s; `edges` the partition edges on the SAME lap's
+    odometer (timing line, each corner's projected enter/exit, lap end — what
+    `corners.segment_times` cuts at); `dist`/`elapsed` the lap's own arrays the spans were detected
+    on. Each span is clipped to each piece and the clipped stretch is read off the lap's own clock,
+    so a coast running across a corner's edge is split at the edge rather than counted in full on
+    both sides, and a lap's pieces add up to its coasting exactly."""
+    dist = np.asarray(dist, float)
+    elapsed = np.asarray(elapsed, float)
+    edges = np.asarray(edges, float)
+    out = np.zeros(max(len(edges) - 1, 0))
+    if out.size == 0 or len(dist) < 2:
+        return out
+    lo, hi = edges[:-1], edges[1:]
+    for sp in spans:
+        a = np.maximum(lo, float(sp.start_dist))
+        b = np.minimum(hi, float(sp.end_dist))
+        inside = b > a
+        if np.any(inside):
+            out[inside] += (np.interp(b[inside], dist, elapsed)
+                            - np.interp(a[inside], dist, elapsed))
+    return out
+
+
+def paired_signflip_p(diffs, *, draws: int = COAST_SIGNFLIP_DRAWS, seed: int = 0) -> np.ndarray:
+    """Two-sided paired sign-flip permutation p for each column of `diffs` (laps x k): under the
+    null each lap's difference is as likely to have the other sign, so the observed |mean| is ranked
+    against `draws` random sign patterns (seeded — the same session renders the same verdict). A
+    column of zeros reads p = 1."""
+    d = np.asarray(diffs, float)
+    if d.ndim == 1:
+        d = d[:, None]
+    n, k = d.shape
+    if n == 0 or k == 0:
+        return np.ones(k)
+    obs = np.abs(d.mean(axis=0))
+    signs = np.random.default_rng(seed).integers(0, 2, size=(draws, n)) * 2.0 - 1.0
+    null = np.abs(signs @ d) / n
+    # A hair of tolerance so a sign pattern reproducing the observed mean counts as reaching it
+    # rather than falling a last-bit float short.
+    hits = np.count_nonzero(null >= obs - 1e-12 * np.maximum(obs, 1.0), axis=0)
+    return (1.0 + hits) / (draws + 1.0)
+
+
+def coast_report(cids, seconds_by_lap) -> CoastReport | None:
+    """The session's coasting by place: `seconds_by_lap` holds one row per clean lap of the 2N+1
+    piece seconds `coast_seconds_by_piece` returns, pieces in partition order (S/F → C1, C1,
+    C1 → C2, …). None without a lap. See COAST_LEAD_ALPHA for the tie rule."""
+    n_pieces = 2 * len(cids) + 1
+    m = np.asarray(seconds_by_lap, float)
+    if m.size == 0:
+        return None
+    m = m.reshape(-1, n_pieces)
+    n = m.shape[0]
+    mean = m.mean(axis=0)
+    per_lap = float(mean.sum())
+    order = [int(j) for j in np.argsort(-mean, kind="stable") if mean[j] > 0.0]
+    if not order:
+        return CoastReport(n_laps=n, per_lap_s=0.0, places=[], lead_separable=False)
+    lead, rest = order[0], order[1:]
+    tied = {lead}
+    if rest:
+        p = paired_signflip_p(m[:, [lead]] - m[:, rest])
+        tied |= {j for j, pj in zip(rest, p, strict=True) if pj >= COAST_LEAD_ALPHA}
+
+    def name(j: int) -> tuple[str, int]:
+        return (f"C{cids[(j - 1) // 2]}", int(cids[(j - 1) // 2])) if j % 2 else \
+            straight_label(cids, j // 2)
+
+    places = [CoastPlace(index=j, label=name(j)[0], ring_cid=name(j)[1],
+                         s_per_lap=float(mean[j]), laps=int(np.count_nonzero(m[:, j] > 0.0)),
+                         share=float(mean[j]) / per_lap, tied=j in tied)
+              for j in order]
+    return CoastReport(n_laps=n, per_lap_s=per_lap, places=places,
+                       lead_separable=len(tied) == 1)
+
+
 def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
                      best_exits, edges_by_lap=None, best_edges=None) -> list[StraightStat]:
     """The straight-line report: per straight (N corners → N+1 straights) the session's
@@ -973,15 +1120,7 @@ def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
         spread = (med - best) if n else None
         leverage = (max(0.0, -delta) * max(0.0, spread)
                     if delta is not None and spread is not None else 0.0)
-        if k == 0:
-            label = f"S/F → C{cids[0]}" if n_corners else "S/F"
-            ring = int(cids[-1]) if n_corners else 0  # the wrap: C_N feeds the S/F straight
-        elif k == n_corners:
-            label = f"C{cids[-1]} → S/F"
-            ring = int(cids[-1])
-        else:
-            label = f"C{cids[k - 1]} → C{cids[k]}"
-            ring = int(cids[k - 1])
+        label, ring = straight_label(cids, k)
         out.append(StraightStat(
             index=k, label=label, ring_cid=ring, n=n,
             best_s=best, median_s=med, sigma_s=sigma(times),
