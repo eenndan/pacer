@@ -7,14 +7,14 @@ Kept separate from the library index (that file is a data catalogue; this is UI 
 
 A generic get/set dict of persisted UI choices: the speed display unit (``studio/units.py``),
 the colour-blind palette, the last-opened folder, the excluded-strip toggle, the lap panel's
-active tab, the grid-splitter sizes, the map key's collapse and the Library dialog's size. Every
-read is guarded and defaults to the safe value, so a missing / corrupt file is never fatal (each
-choice just starts at its default).
+active tab, the grid-splitter sizes, the map key's collapse, the Library dialog's size and the
+main window's own frame. Every read is guarded and defaults to the safe value, so a missing /
+corrupt file is never fatal (each choice just starts at its default).
 
 CORRUPTION + VERSION discipline — the same rules as ``library.py``, for the same reason. ``set`` is
 load-modify-save, so an unparseable file read as ``{}`` plus ANY later write (a unit toggle, a
 splitter drag) would silently PERSIST the wipe of every stored choice — one bad byte costing the
-user all ten:
+user every one of them:
 
   * the ``version`` field is READ, not just written. An OLDER file — or an unversioned one, which
     only a hand-edit can produce (every build has stamped it since this store shipped) — is
@@ -80,6 +80,15 @@ MAP_KEY_COLLAPSED = "map_key_collapsed"
 # touched it). Shape-guarded on read; the dialog additionally clamps whatever comes back to the
 # screen it is opening on, so a size saved on an external monitor can't open off-screen.
 LIBRARY_SIZE = "library_size"
+# The main window's own frame as [x, y, width, height] in logical px, or absent until the window
+# has been opened once by the app (studio/app.py: restore_window_geometry / persist_window_geometry).
+# Stored from ``normalGeometry``, NOT ``geometry``: in full screen — ⌘⌃F, and the ⤢ video focus that
+# puts the WINDOW into full screen — geometry() IS the whole display (measured 800x800 on the
+# harness screen while normalGeometry still read 1200x800), so storing geometry() would reopen every
+# future launch screen-filling. x/y may be NEGATIVE: a display left of or above the primary one is a
+# real place to keep a window. Shape-guarded on read; app.py then fits whatever comes back to the
+# screens that exist NOW, because the display it was stored on may be gone.
+WINDOW_GEOMETRY = "window_geometry"
 
 
 def _app_support_dir() -> str:
@@ -340,6 +349,40 @@ def set_library_size(width: int, height: int, path: str | None = None) -> None:
         return
     try:
         set(LIBRARY_SIZE, [w, h], path)
+    except OSError:
+        pass
+
+
+def window_geometry(path: str | None = None) -> tuple[int, int, int, int] | None:
+    """The main window's persisted frame as ``(x, y, width, height)``, or None when unset /
+    malformed — the window then opens at its built-in default size. Shape-guarded here (four real
+    ints, bool rejected, a positive width and height; x/y are unconstrained, since a screen to the
+    left of the primary one has negative coordinates). WHERE that rect can actually be opened is a
+    question about the screens attached right now, so it is answered at restore time by
+    ``app._fit_window_to_screens`` rather than by discarding the preference here."""
+    val = get(WINDOW_GEOMETRY, None, path)
+    if (isinstance(val, list) and len(val) == 4
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in val)
+            and val[2] > 0 and val[3] > 0):
+        return (val[0], val[1], val[2], val[3])
+    return None
+
+
+def set_window_geometry(x: int, y: int, width: int, height: int,
+                        path: str | None = None) -> None:
+    """Persist the main window's frame. Fully guarded — remembering where a window was must never
+    be the reason quitting the app fails — so a non-numeric/non-positive size or an unwritable
+    prefs file is swallowed (mirrors ``set_library_size``). A zero-area rect is refused rather than
+    stored: it is what a never-shown or already-torn-down window reports, and it would reopen the
+    app as a window with nothing in it."""
+    try:
+        x, y, w, h = int(x), int(y), int(width), int(height)
+    except (TypeError, ValueError):
+        return
+    if w <= 0 or h <= 0:
+        return
+    try:
+        set(WINDOW_GEOMETRY, [x, y, w, h], path)
     except OSError:
         pass
 

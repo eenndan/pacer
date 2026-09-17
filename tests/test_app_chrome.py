@@ -523,6 +523,179 @@ def test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way():
     print("test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way OK")
 
 
+# ================================================== U4 — the window's own size and place persist
+# Measured on the real app before this shipped (jailed prefs, offscreen): a window resized to
+# 1100x720 at (240,160) and closed left prefs.json holding `{}`, and the next window opened at
+# 1440x900, (0,0). Nothing about the window itself was remembered, while the Shortcuts card's
+# "the layout is remembered" row told the user their layout was.
+#
+# NOTE ON POSITIONS: the offscreen platform reports a 2 px frame inset (a window moved to (240,160)
+# reports normalGeometry (242,162)), so positions are asserted within a few px while SIZES — which
+# round-trip exactly — are asserted exactly.
+_FRAME_SLACK_PX = 4
+
+
+def _armed_window():
+    """A real StudioWindow with geometry persistence armed the way `main` arms it (and only `main`:
+    a bare StudioWindow must never write the developer's prefs — asserted below)."""
+    win = StudioWindow([])
+    win.restore_window_geometry()
+    win.show()
+    _settle(8)
+    return win
+
+
+def test_fit_window_to_screens_never_opens_a_window_you_cannot_see():
+    """The restore policy, on INJECTED screens so nothing depends on the machine running the suite
+    (the library dialog's `_fit_to_screen` is pinned the same way). A window restored off-screen is
+    a running app with no visible window and no way to reach it, so the position is honoured only
+    while the window's centre is still on a live screen."""
+    fit = studio_app._fit_window_to_screens
+    bar = studio_app._TITLE_BAR_PX
+    laptop = (0, 38, 1470, 893)         # a 13" Air's available area, menu bar excluded
+    external = (-1920, 0, 1920, 1080)   # a monitor to the LEFT of it — negative coordinates
+
+    # It already fits where it is: left exactly alone.
+    assert fit((120, 100, 1180, 760), [laptop]) == (120, 100, 1180, 760)
+    # With that monitor attached, a window living on it stays on it.
+    assert fit((-1700, 120, 1180, 760), [laptop, external]) == (-1700, 120, 1180, 760)
+    # THE ONE THAT MATTERS: the monitor is gone. The SIZE survives; the position is dropped and the
+    # window is centred on the primary, instead of opening 1920 px to the left of everything.
+    x, y, w, h = fit((-1700, 120, 1180, 760), [laptop])
+    assert (w, h) == (1180, 760), (w, h)
+    assert laptop[0] <= x and x + w <= laptop[0] + laptop[2], (x, w)
+    assert laptop[1] + bar <= y and y + h <= laptop[1] + laptop[3], (y, h)
+    # Bigger than the screen it lands on: clamped, and the title bar stays below the menu bar —
+    # geometry() excludes the frame, so a y at the very top of the available area hides the bar.
+    assert fit((0, 0, 3000, 2000), [laptop]) == (0, laptop[1] + bar, 1470, 893 - bar)
+    # Hanging off the bottom-right, centre still on the screen: nudged fully inside, NOT shrunk.
+    assert fit((600, 400, 1180, 760), [laptop]) == (1470 - 1180, 38 + 893 - 760, 1180, 760)
+    # Hanging off so far that the CENTRE has left the screen (a rearranged desk, a screen that
+    # shrank): that is not a position worth keeping, so it is re-centred like a vanished display
+    # rather than nudged back by a whole window's width.
+    x, y, w, h = fit((1400, 800, 1180, 760), [laptop])
+    assert (w, h) == (1180, 760) and 0 <= x and y >= laptop[1] + bar, (x, y, w, h)
+    # No screen at all — nothing can be decided, so the caller keeps its built-in default.
+    assert fit((0, 0, 1180, 760), []) is None
+    print("test_fit_window_to_screens_never_opens_a_window_you_cannot_see OK")
+
+
+def test_the_window_reopens_at_the_size_it_was_left_and_only_the_app_arms_that():
+    """The feature, end to end on a real window: resize, close, reopen the same size. And the other
+    half of the contract — a StudioWindow built by a harness (every test file here, ui_capture,
+    _smoke, the probes) neither moves itself nor writes to prefs, because the persistence is armed
+    by `main` alone."""
+    prefs.save({})
+    first = _armed_window()
+    assert (first.width(), first.height()) == (1440, 900), "nothing stored yet: the default stands"
+    first.setGeometry(60, 80, 640, 560)
+    _settle()
+    first.close()
+    _settle()
+    stored = prefs.window_geometry()
+    assert stored is not None, "closing an armed window stored nothing"
+    assert stored[2:] == (640, 560), stored
+    assert abs(stored[0] - 60) <= _FRAME_SLACK_PX and abs(stored[1] - 80) <= _FRAME_SLACK_PX, stored
+
+    again = _armed_window()
+    assert (again.width(), again.height()) == (640, 560), (again.width(), again.height())
+    assert abs(again.x() - stored[0]) <= _FRAME_SLACK_PX, (again.x(), stored)
+    assert abs(again.y() - stored[1]) <= _FRAME_SLACK_PX, (again.y(), stored)
+    again.close()
+    _settle()
+
+    # A harness window: never restored (it keeps the built-in default) and never persisted.
+    bare = StudioWindow([])
+    bare.show()
+    _settle(8)
+    assert (bare.width(), bare.height()) == (1440, 900), (bare.width(), bare.height())
+    bare.setGeometry(70, 70, 700, 600)
+    _settle()
+    bare.close()
+    _settle()
+    assert prefs.window_geometry() == stored, (
+        "an un-armed StudioWindow wrote its own size into the user's prefs")
+    print("test_the_window_reopens_at_the_size_it_was_left_and_only_the_app_arms_that OK")
+
+
+def test_quitting_from_full_screen_remembers_the_window_not_the_whole_display():
+    """⌘⌃F — and the ⤢ video focus, which puts the WINDOW into full screen — make geometry() the
+    entire display. Persisting THAT would reopen the app screen-filling on every future launch, and
+    grow the stored size to every screen it is ever full-screened on. normalGeometry keeps the
+    window's own frame through both full screen and zoom."""
+    prefs.save({})
+    win = _armed_window()
+    win.setGeometry(70, 90, 660, 520)
+    _settle()
+    win.showFullScreen()
+    _settle(8)
+    assert win.isFullScreen()
+    screen = _APP.primaryScreen().geometry()
+    assert (win.width(), win.height()) == (screen.width(), screen.height()), (
+        "the harness did not actually go full screen, so this proves nothing")
+    win.close()
+    _settle()
+    stored = prefs.window_geometry()
+    assert stored is not None and stored[2:] == (660, 520), (
+        f"quitting from full screen persisted {stored}, not the window's own 660x520 frame")
+
+    back = _armed_window()
+    assert (back.width(), back.height()) == (660, 520), (back.width(), back.height())
+    back.close()
+    _settle()
+    print("test_quitting_from_full_screen_remembers_the_window_not_the_whole_display OK")
+
+
+def test_a_window_stored_on_a_display_that_is_gone_opens_where_it_can_be_seen():
+    """The unplugged-monitor case, driven through the REAL window rather than the pure helper: a
+    rect from a screen that no longer exists must not reach setGeometry as it stands. The size is
+    kept; the window comes back on a screen that is actually there."""
+    prefs.save({})
+    prefs.set_window_geometry(-3400, -1200, 700, 560)
+    win = _armed_window()
+    avail = _APP.primaryScreen().availableGeometry()
+    rect = win.geometry()
+    assert (rect.width(), rect.height()) == (700, 560), (rect.width(), rect.height())
+    assert rect.x() >= avail.x() - _FRAME_SLACK_PX, (rect, avail)
+    assert rect.y() >= avail.y() - _FRAME_SLACK_PX, (rect, avail)
+    assert rect.x() + rect.width() <= avail.x() + avail.width() + _FRAME_SLACK_PX, (rect, avail)
+    assert rect.y() + rect.height() <= avail.y() + avail.height() + _FRAME_SLACK_PX, (rect, avail)
+    win.close()
+    _settle()
+    print("test_a_window_stored_on_a_display_that_is_gone_opens_where_it_can_be_seen OK")
+
+
+def test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close_event():
+    """`main` is the only place persistence is armed, so main's BODY is the contract — and two
+    measured facts pin its shape. (a) The restore runs BEFORE `show`: a top-level window takes
+    setGeometry before it is shown and keeps it, so the first frame is the user's own window rather
+    than the default resized a beat later (what the grid-splitter restore had to fix for the panels
+    inside it). (b) `QApplication.quit()` delivered ZERO close events to a shown window where an
+    explicit `close()` delivered one — so closeEvent alone is not a quit path, and aboutToQuit is
+    wired too."""
+    import ast
+    import inspect
+    import textwrap
+
+    fn = ast.parse(textwrap.dedent(inspect.getsource(studio_app.main))).body[0]
+    order = [node.func.attr for stmt in fn.body for node in ast.walk(stmt)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+    assert "restore_window_geometry" in order, "main never restores the window's geometry"
+    assert "show" in order
+    assert order.index("restore_window_geometry") < order.index("show"), (
+        "main shows the window before restoring its geometry — the user watches the default paint "
+        "first and then jump")
+    connects = [n for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "connect" and isinstance(n.func.value, ast.Attribute)
+                and n.func.value.attr == "aboutToQuit"]
+    assert len(connects) == 1, f"aboutToQuit is wired {len(connects)} times in main"
+    handler = connects[0].args[0]
+    assert isinstance(handler, ast.Attribute) and handler.attr == "persist_window_geometry", (
+        ast.dump(handler))
+    print("test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close_event OK")
+
+
 def _run_all():
     test_escape_restores_a_maximized_panel_at_three_window_sizes()
     test_escape_still_leaves_video_focus_and_window_fullscreen()
@@ -537,6 +710,11 @@ def _run_all():
     test_jump_marks_and_reveals_the_corner_row_it_landed_on()
     test_jump_does_not_overwrite_the_persisted_lap_panel_tab()
     test_the_crash_dialog_names_the_product()
+    test_fit_window_to_screens_never_opens_a_window_you_cannot_see()
+    test_the_window_reopens_at_the_size_it_was_left_and_only_the_app_arms_that()
+    test_quitting_from_full_screen_remembers_the_window_not_the_whole_display()
+    test_a_window_stored_on_a_display_that_is_gone_opens_where_it_can_be_seen()
+    test_main_restores_before_it_shows_and_saves_on_the_quit_that_sends_no_close_event()
     print("ALL OK")
 
 
