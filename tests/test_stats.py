@@ -70,6 +70,7 @@ from studio.stats import (  # noqa: E402
     best_consecutive_mean,
     brake_consistency,
     clock_hhmm,
+    corner_matrix,
     corner_report,
     cov_pct,
     envelope_g,
@@ -3532,6 +3533,170 @@ def test_stats_view_split_matrix_hides_under_the_decorative_floor():
     assert v.splits_note.isHidden()
     assert not v._sector_section.isHidden()
     print("test_stats_view_split_matrix_hides_under_the_decorative_floor OK")
+
+
+# ------------------------------------------------------------ F7: the laps × corners grid
+def _corner_grid_fixture():
+    """Eight laps × two corners, every cell's resolution chosen on purpose.
+
+    C1: laps 0-5 resolved at 4.00-4.05 s; lap 6 RESOLVED and a whole second off (5.00); lap 7 the
+        SAME 5.00 but UNRESOLVED — its window edge was interpolated, so it must be neither marked nor
+        counted. Resolved median 4.03, scale 0.40 (the p90 of the resolved deviations).
+    C2: laps 0-5 resolved at 3.00-3.25 in 0.05 steps; laps 6 and 7 UNRESOLVED and a whole second
+        FAST (2.00) — counted, they would drag the typical from 3.125 to 3.075."""
+    ids = list(range(8))
+    c1 = [4.00, 4.01, 4.02, 4.03, 4.04, 4.05, 5.00, 5.00]
+    c2 = [3.00, 3.05, 3.10, 3.15, 3.20, 3.25, 2.00, 2.00]
+    times = [[a, b] for a, b in zip(c1, c2, strict=True)]
+    resolved = [[True, True]] * 6 + [[True, False], [False, False]]
+    return ids, times, resolved
+
+
+def test_corner_matrix_never_marks_or_counts_a_cell_whose_window_edge_was_interpolated():
+    """F7. Measured on the D24 0060 pair against an independent gate-crossing time, a corner cell
+    with an interpolated window edge is off by a median 0.219 s (max 0.886 s) and a matched one by
+    0.004 s (max 0.024 s); 7 of the 10 marks the plain rule put on interpolated cells were not
+    confirmed. So the grid shows those cells and refuses them twice: no ▼, and no vote in the
+    typical the other laps are measured against (stats.CornerMatrix has the numbers)."""
+    ids, times, resolved = _corner_grid_fixture()
+    m = corner_matrix(ids, [1, 2], times, resolved)
+    assert m is not None and m.cids == [1, 2]
+    assert m.n_resolved == [7, 6], f"resolved cells miscounted: {m.n_resolved}"
+    assert abs(m.medians[0] - 4.03) < 1e-9, m.medians
+    assert abs(m.medians[1] - 3.125) < 1e-9, (
+        f"two interpolated, fast cells moved C2's typical: {m.medians[1]}")
+    assert abs(m.scales[0] - 0.40) < 1e-9, m.scales
+    # The same +0.97 s: marked where the window was matched, not where it was interpolated.
+    assert m.is_behind(6, 0), "a resolved cell a second off its typical carries no ▼"
+    assert not m.is_behind(7, 0), "an interpolated cell was marked"
+    assert m.cells[7][0] == 5.00 and m.resolved[7][0] is False  # shown, never hidden
+    assert sum(m.is_behind(r, c) for r in range(8) for c in range(2)) == 1
+    print("test_corner_matrix_never_marks_or_counts_a_cell_whose_window_edge_was_interpolated OK")
+
+
+def test_corner_matrix_refuses_a_column_it_cannot_take_a_typical_of():
+    """A percentile needs values to be a percentile OF (MATRIX_MIN_LAPS) — and in this grid the
+    values are the RESOLVED cells, so a corner matched on too few laps gets no typical and no mark
+    however far a lap is off. The whole grid still refuses under MATRIX_MIN_LAPS laps, like SPLITS,
+    and a lap that projected no row is kept as a blank row rather than dropped."""
+    ids = list(range(MATRIX_MIN_LAPS + 2))
+    times = [[3.0 + 0.01 * i] for i in ids]
+    times[0] = [9.0]
+    few = [[i < MATRIX_MIN_LAPS - 1] for i in ids]
+    m = corner_matrix(ids, [4], times, few)
+    assert m.n_resolved == [MATRIX_MIN_LAPS - 1], f"resolved cells miscounted: {m.n_resolved}"
+    assert m.medians == [None] and m.scales == [None], (m.medians, m.scales)
+    assert not any(m.is_behind(r, 0) for r in range(len(ids)))
+    # ...one more resolved lap and the same +6 s is marked.
+    enough = [[i < MATRIX_MIN_LAPS] for i in ids]
+    assert corner_matrix(ids, [4], times, enough).is_behind(0, 0)
+    assert corner_matrix(ids[:MATRIX_MIN_LAPS - 1], [4], times[:MATRIX_MIN_LAPS - 1],
+                         enough[:MATRIX_MIN_LAPS - 1]) is None
+    assert corner_matrix(ids, [], [[] for _ in ids], [[] for _ in ids]) is None
+    degenerate = corner_matrix(ids, [4, 5], [[3.0, 2.0]] * (len(ids) - 1) + [[]],
+                               [[True, True]] * (len(ids) - 1) + [[]])
+    assert degenerate.lap_ids == ids and degenerate.cells[-1] == [None, None]
+    assert degenerate.resolved[-1] == [False, False]
+    print("test_corner_matrix_refuses_a_column_it_cannot_take_a_typical_of OK")
+
+
+def test_corner_and_split_grids_mark_by_one_rule():
+    """A ▼ on the Stats page means one thing: ≥ the column's own p90-above-median, floored at
+    MATRIX_SCALE_MIN_S, compared at print resolution. With every cell resolved the corner grid must
+    decide exactly what the split grid decides on the same numbers."""
+    rng = np.random.default_rng(2026)
+    rows = (rng.normal(0.0, 0.18, size=(40, 5)) + np.array([2.7, 2.5, 4.6, 6.2, 6.9])).round(3)
+    rows[3, 1] += 0.9
+    rows[17, 4] += 0.45
+    rows = [list(map(float, r)) for r in rows]
+    ids = list(range(40))
+    sm = split_matrix(ids, rows, columns=5)
+    cm = corner_matrix(ids, [1, 2, 3, 4, 5], rows, [[True] * 5] * 40)
+    assert cm.medians == sm.medians and cm.scales == sm.scales
+    marks = [(r, c) for r in range(40) for c in range(5) if sm.is_behind(r, c)]
+    assert marks and marks == [(r, c) for r in range(40) for c in range(5) if cm.is_behind(r, c)]
+    print("test_corner_and_split_grids_mark_by_one_rule OK")
+
+
+def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
+    """The page half of F7 on a stub session: the header is the session's own corners, a resolved
+    cell past its scale wears the behind hue AND the ▼ that survives greyscale, an interpolated cell
+    is muted italic (the trust tier's PROVISIONAL treatment) with no ▼ however far off it is, and
+    the note says what the grid is over — including the ⊘ / ⚠ laps that are not rows at all."""
+    _app()
+    from PySide6.QtGui import QColor
+
+    from studio import theme
+    from studio.lap_table import BEST_SECTOR_MARK, DROPOUT_MARK, EXCLUDED_MARK, PROVISIONAL_COLOR
+    from studio.stats_panel import StatsView
+    ids, times, resolved = _corner_grid_fixture()
+    sess = _fake_view_session()                    # excluded (5,), dropout {1}
+    sess.corner_matrix = lambda: corner_matrix(ids, [3, 7], times, resolved)
+    sess.lap_time = lambda i: 69.0 + i
+    v = StatsView(sess)
+    t = v.corner_grid_table
+    assert not v._corner_grid_band.isHidden() and not t.isHidden()
+    header = [t.horizontalHeaderItem(c).text() for c in range(t.columnCount())]
+    assert header == ["Lap", "C3", "C7", "Lap time"], header
+    assert t.rowCount() == 8 and t.item(0, 0).text() == "1"          # 1-based, app-wide
+    assert t.item(6, 3).text() == "1:15.000", t.item(6, 3).text()
+    slow = t.item(6, 1)
+    assert slow.text() == f"{theme.DELTA_BEHIND_ARROW} 5.00", slow.text()
+    assert slow.foreground().color() == QColor(theme.behind_colour())
+    assert "+0.97 s against your typical C3 (4.03 s" in slow.toolTip(), slow.toolTip()
+    assert "7 laps matched on track" in slow.toolTip(), slow.toolTip()
+    same = t.item(7, 1)
+    assert same.text() == "5.00", f"an interpolated cell carries a mark: {same.text()!r}"
+    assert same.font().italic() and same.foreground().color() == PROVISIONAL_COLOR, (
+        "an interpolated cell is not muted in the trust tier's provisional style")
+    assert same.toolTip().startswith("Not marked: on lap 8, C3"), same.toolTip()
+    plain = t.item(0, 1)
+    assert not plain.font().italic() and not plain.text().startswith(theme.DELTA_BEHIND_ARROW)
+    note = v.corner_grid_note.text()
+    assert "8 clean laps × 2 corners." in note, note
+    assert "▼ is 0.30–0.40 s or more slower" in note, note
+    assert "3 of 16 cells are muted" in note, note
+    assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded and 1 {DROPOUT_MARK} GPS-dropout laps "
+            "(see the Laps tab).") in note, note
+    # No ★ anywhere in it: "quickest" is the CORNERS table's question (stats.CornerMatrix).
+    assert not any(BEST_SECTOR_MARK in t.item(r, c).text()
+                   for r in range(t.rowCount()) for c in range(t.columnCount()))
+    v.hide()
+    # No corner matrix (no corners, or under the floor): the whole band hides.
+    bare = StatsView(_fake_view_session())
+    assert bare._corner_grid_band.isHidden() and bare.corner_grid_table.isHidden()
+    assert bare.corner_grid_note.isHidden()
+    bare.hide()
+    print("test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out OK")
+
+
+def test_the_corner_grid_takes_the_page_width_and_never_the_column_packing():
+    """Measured on both D24 recordings through the real StatsView: the grid wants 913 / 924 px, and
+    registered in a section column it became that column's minimum and dropped the page a whole
+    composition at EVERY dashboard width (0062 at the default 1440x900 window: two columns → one).
+    It lives full width under the columns instead, so it must never reach the packer."""
+    _app()
+    from studio.stats_panel import StatsView
+    cids = list(range(1, 13))
+    ids = list(range(10))
+    times = [[2.5 + 0.1 * c + 0.01 * i for c in range(12)] for i in ids]
+    sess = _fake_view_session()
+    sess.corner_matrix = lambda: corner_matrix(ids, cids, times, [[True] * 12] * 10)
+    wide = StatsView(sess)
+    narrow = StatsView(_fake_view_session())
+    for v in (wide, narrow):
+        v.resize(1420, 900)
+        v.show()
+    _settle()
+    assert wide.corner_grid_table.content_width() > 700, wide.corner_grid_table.content_width()
+    got = [wide._group_min_width(g) for g in range(3)]
+    want = [narrow._group_min_width(g) for g in range(3)]
+    assert got == want, f"the corner grid widened a section column: {got} vs {want}"
+    assert wide._layout == narrow._layout, (wide._layout, narrow._layout)
+    assert not any(wide.corner_grid_table in tables for tables in wide._column_tables)
+    for v in (wide, narrow):
+        v.hide()
+    print("test_the_corner_grid_takes_the_page_width_and_never_the_column_packing OK")
 
 
 def test_every_longitudinal_surface_names_which_filter_it_read():
