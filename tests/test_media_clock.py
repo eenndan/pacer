@@ -602,6 +602,10 @@ CROSSINGS = {
         (_S, "the 'pure' join, which the per-fix residual shows is the strip's axis"),
     ("studio/dev/probes/p5_clock_crossing_scale.py", "_joins", "to_media"):
         (("stamp", "picture"), "compares both maps against the fixes' own stamps, on purpose"),
+    ("studio/dev/probes/p6_corner_match_cause.py", "_seam_laps", "without_gps_lag"):
+        (_S, "a chapter offset is a footage stamp, not an event in the picture"),
+    ("studio/dev/probes/p6_corner_match_cause.py", "_seam_laps", "to_telemetry"):
+        (_S, "the call on that map; it only names which lap spans a seam"),
 }
 # Callees whose NAME fixes the map, checked against the declaration so the table cannot drift
 # from the code it describes.
