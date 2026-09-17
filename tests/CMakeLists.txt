@@ -93,6 +93,16 @@ add_test(NAME test_imu_orientation
 # empty-return trio is unchanged. Imports pacer only (no Qt, no telemetry file).
 add_test(NAME test_laps_bindings
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_laps_bindings.py)
+# The CROSSING test as Python sees it (H4). `Segment::Intersects` answers through a
+# `double *ratio` out-parameter, which litgen bound as a by-value float: the call type-checked,
+# returned the right bool, and dropped the fraction into a temporary. Python now gets
+# `intersection_ratio(fst, snd) -> float | None` and `intersects` is excluded — both pinned here,
+# because the binding is GENERATED and a regen that lost either half would restore the lossy call
+# silently. Also checks `studio.provenance.crossing_fraction` — the Qt-free, pacer-free Python
+# transcription the provenance panel re-derives with — against the core value for value, which
+# was not possible from Python before. Imports pacer + studio.provenance (no Qt, no telemetry).
+add_test(NAME test_geometry_bindings
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_geometry_bindings.py)
 # Single-pass ingest (PR #40): read_recording's shared chain == the pre-#40 two-fresh-chains
 # reads (bundled GoPro samples), + IMU-after-GPS-drain invariance on a Python stub source.
 # Imports pacer + studio.ingest only (no Qt).
@@ -805,7 +815,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_lap_time_axis
                         test_gapfill
                         test_import_ergonomics test_reference test_gps_source_bindings
                         test_imu_orientation
-                        test_laps_bindings test_ingest_equivalence test_sidecar test_track_db
+                        test_laps_bindings test_geometry_bindings
+                        test_ingest_equivalence test_sidecar test_track_db
                         test_session_pure test_sector_integrity test_load_internals
                         test_load_pipeline test_fit_start_line test_lap_closure
                         test_session_services
