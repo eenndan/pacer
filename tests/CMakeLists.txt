@@ -150,9 +150,11 @@ add_test(NAME test_unreadable_chapter
 set_tests_properties(test_unreadable_chapter PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Start-line widen decision (test/fit-start-line-widen): load._fit_start_line keeps a sufficient
-# registry line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line
-# missed — it sets known-track lap segmentation. Both branches pinned on a synthetic circle Laps.
-# Imports pacer (no Qt).
+# line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line missed —
+# it sets lap segmentation on known AND unknown tracks. A wider line must count more laps AND more
+# driving (T13): on SD_30_08 the x1.5 line reached a second stretch of track and counted 25 13 s
+# pieces over 23 real 46 s laps. Keep, widen-from-nothing, widen-to-recover-one-pass and
+# refuse-the-pieces are pinned on synthetic circle and hairpin Laps. Imports pacer (no Qt).
 add_test(NAME test_fit_start_line
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fit_start_line.py)
 # F1 god-object decomposition (studio.corner_model.CornerModel + studio.driving_channels.
