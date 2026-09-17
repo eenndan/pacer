@@ -238,7 +238,7 @@ window, over both recordings and all ten bundled samples, via `studio/dev/probes
 | whole-recording verdict | `gps9_trueclock`, 0 % rejected, **not degraded** | `gps9_trueclock`, 0 % rejected, **not degraded** |
 | per-LAP, the DATA TRUST card's row | 17 of 38 below good | 0 of 65 |
 
-**Four measured reasons to refuse it:**
+**Three measured reasons to refuse it** (a fourth this section used to give is corrected below):
 
 1. **The proposed key is identically zero.** Keyed on *degraded fixes inside the corner window* —
    the form the backlog specified — it fires on **0 of 1,236 cells across both recordings**. Not one
@@ -258,13 +258,28 @@ window, over both recordings and all ten bundled samples, via `studio/dev/probes
    same track, one day apart. So the corner a per-corner reason would name is a property of one
    afternoon's sky, not of the corner — and a driver who was told "C8 is unreliable" on Saturday
    would be told nothing at all about it on Sunday.
-4. **A third of the firing is a clock-labelling artifact.** The strip's cells are MEDIA seconds and
-   a corner window is TELEMETRY seconds. `Session.lap_quality` measures that crossing and documents
-   it as harmless — it changes the class of **0 of 38** and **0 of 65** whole laps. At corner scale
-   it stops being harmless: indexing the same 456 cells on the media clock instead moves **9 of
-   them** across a class boundary. A lap window is ~70 s against a 1.00 s cell; a corner window is
-   ~3-6 s, so the same ≤0.166 s of labelling error that rounds away over a lap decides the verdict
-   for about a third of the 26 cells that fire.
+**Corrected (T10): the clock crossing decides one cell, not a third of them.** This section first
+gave a fourth reason: that indexing the 456 cells on the media clock moved **9** of them across a
+class boundary, "about a third of the 26 cells that fire", because a corner window (~3-6 s) is so
+much shorter than a lap (~70 s). **That comparison crossed the wrong map.** It used
+`Session.media_time`, which since #301 also carries the GPS lag (+0.476 s on 0060) — a correction
+for the *picture*, not part of the strip's axis, since a fix's telemetry and naive stamps carry it
+equally. Measured per kept fix against the naive stamps the strip actually binned
+(`studio/dev/probes/p5_clock_crossing_scale.py`):
+
+|  | 0060 (456 cells) | 0062 (780 cells) |
+|---|---|---|
+| telemetry label, as `p4` grades them | **1** wrong | 0 |
+| rate fit alone, `media_clock.without_gps_lag()` | **0** wrong | 0 |
+| rate fit + GPS lag, `Session.media_time` (the old figure) | **10** wrong | 0 |
+| cells below `GOOD` against the fixes' own stamps | **27** (the label says 26) | 0 |
+
+The one cell is lap 31's C8, which the label grades Good and the fixes' own stamps grade Moderate —
+the misaligned join looked *cleaner*, not dirtier. Nor is window length what separates the corner
+figure from the lap one: how often a window flips is ~0.1 % at every length from 0.1 s to 20 s on
+0060; what length changes is the share of below-good verdicts that are wrong (0.07 % at 70 s, 1.1 %
+at 10 s, 2.6 % at 3 s). The full rule is in `Session.quality_timeline`. **The refusal stands on the
+three reasons above**, none of which rests on the clock.
 
 **No fixture outside D24 can reach it either.** All ten bundled samples come back with **0 corners
 and 0 clean laps** — most are a few seconds long, and `karma.mp4` carries no GPS at all

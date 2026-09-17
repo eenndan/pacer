@@ -13,9 +13,13 @@ Per cell it reports
   * the worst DOP among the fixes it KEPT;
   * the window's interior sample gap and sample count, re-measuring #255's own two numbers rather
     than inheriting them;
-  * whether the cell's verdict survives being indexed on the media clock instead of the telemetry
-    clock — the crossing `Session.lap_quality` documents as harmless at LAP scale, asked again at
-    corner scale, where the window is ~3-6 s rather than ~70 s.
+  * whether the cell's verdict survives being indexed on the strip's own axis instead of the
+    telemetry label — the crossing `Session.lap_quality` documents as harmless at LAP scale, asked
+    again at corner scale, where the window is 2-7.5 s rather than ~70 s. The strip's axis is the
+    rate fit alone, `media_clock.without_gps_lag()`. This probe first crossed `Session.media_time`,
+    which since #301 also carries the ~0.47 s GPS lag — a correction for the picture, not part of
+    the strip's axis — and printed 9 of 456; through the right map it is 1. The window-length rule
+    for this crossing, measured per fix, is `p5_clock_crossing_scale`.
 
 The verdict is written up in `studio/docs/refused-2026-09.md` §4. Every number there comes from
 here.
@@ -97,6 +101,7 @@ def probe_recording(key: str, paths: list[str]) -> None:
 
     quality = session.timing_quality
     strip = session.quality_timeline
+    to_strip = session.media_clock.without_gps_lag()   # telemetry label -> the strip's naive axis
     clean = session.consistency_lap_ids()
     corner_list = session.corners.corner_list()
     basis = session.corners.basis()
@@ -149,9 +154,10 @@ def probe_recording(key: str, paths: list[str]) -> None:
                     total_dropped += int(stats["dropped"])
                 if np.isfinite(stats["dop"]):
                     dops.append(float(stats["dop"]))
-            # Does the verdict survive the OTHER clock? `lap_quality` measures this crossing as
-            # harmless over a whole lap; a corner window is an order of magnitude shorter.
-            if strip.worst_between(session.media_time(t0), session.media_time(t1)) != cls:
+            # Does the verdict survive the strip's OWN axis? `lap_quality` measures this crossing
+            # as harmless over a whole lap; a corner window is an order of magnitude shorter. The
+            # rate fit alone — `media_time` would add the GPS lag, which the strip does not carry.
+            if strip.worst_between(to_strip.to_media(t0), to_strip.to_media(t1)) != cls:
                 clock_flips += 1
             if np.isfinite(gap):
                 worst_gap = max(worst_gap, gap)
@@ -170,7 +176,7 @@ def probe_recording(key: str, paths: list[str]) -> None:
               f"of {len(a)} cells)")
     print(f"  worst interior sample gap in any corner window: {worst_gap:.4f}s")
     print(f"  thinnest corner window: {thinnest} samples")
-    print(f"  cells whose class changes if indexed on the MEDIA clock instead: "
+    print(f"  cells whose class changes if indexed on the strip's own axis (rate fit) instead: "
           f"{clock_flips} of {n_cells}")
     print("  per-corner cells below GOOD (the separability question):")
     for i, c in enumerate(corner_list):

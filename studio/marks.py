@@ -758,6 +758,13 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
     practice: there are ZERO dropout and ZERO excluded marks, and the single degraded mark (0062's
     49 s lock acquisition) has no lap-derived neighbour to disagree with.
 
+    That verdict is about THIS use, not the crossing. A degraded run is graded on the strip's own
+    axis in whole cells, at least `MIN_DEGRADED_S` of them, and only PLACED on the telemetry bar
+    — 0062's mark sits 0.038 s off. Grading a SHORT telemetry window by the strip is a different
+    case, measured in `studio/dev/probes/p5_clock_crossing_scale.py` and stated in
+    `Session.quality_timeline`: under ~10 s it should cross `media_clock.without_gps_lag()` first,
+    never `media_time`.
+
       * `dropouts` — ``(lap_id, t0, t1)`` per interior GPS gap, straight from the very
         `gapfill.find_gaps` call behind `Session.lap_has_dropout`. Passed IN rather than re-derived
         here so the mark set and the lap table's dropout flag cannot be two different answers: a

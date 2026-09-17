@@ -666,7 +666,9 @@ def _cross_compare(*, own_recording: bool):
     c._session_b = c.session
     c.session.reference_is_own_recording = lambda: own_recording
     c.session.delta_at_lap = lambda lid, t: 0.4
-    c.session.reference_delta_vs_lap = lambda lid, t: -0.4
+    # F1 gave this a third parameter (WHICH reference lap pane B shows); these stubs answer the
+    # same fixed Δ for any of them, so a badge is still only ever the branch that produced it.
+    c.session.reference_delta_vs_lap = lambda lid, t, ref_lap_id=None: -0.4
     c.session.g_at_time = lambda t: None
     return c, video, plots, ids
 

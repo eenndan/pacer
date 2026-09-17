@@ -213,6 +213,15 @@ pixi run python -m studio.dev.golden_session_dump /tmp/after.json    # AFTER
 pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   # expect max|Δ| = 0
 ```
 
+No `PYTHONPATH` is needed above — the dump puts the built `bindings/pacer` on `sys.path` itself.
+It used to be needed and was not documented, so the command as written **exited 2 on intact
+footage**: from the repo root `import pacer` resolved to the C++ `pacer/` source directory (a
+namespace package with no `GPMFSource`), and the tool reported that AttributeError as
+"not readable as GPMF … a partial copy, or a file some tool overwrote". A refusal now names only
+what it measured — missing, unreadable, not an MP4 container, not parseable as GPMF, or bindings
+that are not importable in this run — and never guesses at a cause
+(`studio.dev.golden_session_dump.preflight`, held by `tests/test_golden_hermetic.py`).
+
 **Run one test:** `pixi run ctest --test-dir build/Release -R test_<name>` — CTest injects the
 `PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` env each suite needs (a bare
 `pixi run python tests/test_<name>.py` can miss it on a fresh checkout / for the offscreen-Qt
