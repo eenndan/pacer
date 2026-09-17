@@ -167,6 +167,14 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     put("lap_time_trend", lambda: _round(s.lap_time_trend()))
     put("sector_sigmas", lambda: _round(s.sector_sigmas()))
     put("corner_consistency", lambda: _round(s.corner_consistency()))
+    # The Stats page's CORNERS table (Best / Median / σ / Med loss / apex / grip per corner). It had
+    # no leaf of its own: its Best agreed with `corner_session_bests` only by construction, and its
+    # Median, σ, apex and grip columns reached no leaf at all — so C4, which changes which lap ×
+    # corner cells those columns count, would have moved them in silence.
+    put("corner_report", lambda: _round(s.corner_report()))
+    # ...and the STRAIGHTS table, for the same reason: its times, trap speeds and exit Δ are read at
+    # the same corner edges, and nothing fingerprinted them either.
+    put("straights_report", lambda: _round(s.straights_report()))
     put("coaching_opportunities", lambda: _round(s.coaching_opportunities()))
     # The Stats page's phase matrix had NO golden coverage until the decomposition it reads moved
     # from ∫ds/v to the lap's own clock and nothing in this dump noticed: the change showed up only
@@ -198,6 +206,9 @@ def fingerprint(s, *, strict: bool = True) -> dict:
         row["lap_corner_stats"] = guard(lambda lid=lid: _round(s.corners.lap_corner_stats(lid)))
         row["lap_corner_resolved"] = guard(
             lambda lid=lid: _round(s.corners.lap_corner_resolved(lid)))
+        # C4: the same read one level finer — which EDGES matched. The STRAIGHTS table's trap
+        # speed and exit Δ count by it, and no other leaf exposes it.
+        row["lap_edge_resolved"] = guard(lambda lid=lid: _round(s.corners.lap_edge_resolved(lid)))
         row["lap_corner_grip"] = guard(lambda lid=lid: _round(s.driving.lap_corner_grip(lid)))
         row["lap_brake_events"] = guard(lambda lid=lid: _round(s.driving.lap_brake_events(lid)))
         row["lap_coasting_spans"] = guard(lambda lid=lid: _round(s.driving.lap_coasting_spans(lid)))

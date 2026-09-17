@@ -190,6 +190,43 @@ def test_a_corner_best_redderives_and_names_the_lap_that_set_it():
           f"all exact, each minimum shown alongside the laps it beat")
 
 
+def test_a_corner_best_explains_only_the_laps_matched_on_track():
+    """C4: the CORNERS Best counts only laps whose corner was matched on track at both edges, so
+    the panel explaining it must list exactly those laps — an interpolated lap listed under the
+    heading "quickest first" can be quicker than the best it explains. The stadium's laps all match,
+    so the planted state is the one D24 0060 measured: each corner's quickest lap interpolated
+    there (and, separately, a corner no lap matched, whose Best is a dash with nothing to inspect)."""
+    from studio._signal import lap_label
+
+    s = _session()
+    clean = {c.cid: s.corner_best_provenance(c.cid) for c in s.corners.corner_list()}
+    assert all(p is not None for p in clean.values())
+    real = s.corners.lap_corner_resolved
+    ids = s.consistency_lap_ids()
+    corners = s.corners.corner_list()
+    quickest = {k: min(ids, key=lambda i, k=k: s.corners.lap_corner_stats(i)[k].time)
+                for k in range(len(corners))}
+    s.corners.lap_corner_resolved = lambda lap: [
+        ok and quickest[k] != lap for k, ok in enumerate(real(lap))]
+    report = {r.cid: r for r in s.corner_report()}
+    for k, c in enumerate(corners):
+        p = s.corner_best_provenance(c.cid)
+        assert p is not None and p.value == report[c.cid].best_s, (c.cid, p, report[c.cid])
+        assert p.value > clean[c.cid].value, "the planted lap was not this corner's quickest"
+        listed = [row[0] for row in p.tables[1].rows]
+        assert lap_label(quickest[k]) not in listed, (c.cid, listed)
+        assert len(listed) == len(ids) - 1, (c.cid, listed)
+        assert "matched on track" in p.tables[1].caption, p.tables[1].caption
+        assert "1 more clean lap left out" in p.tables[1].note, p.tables[1].note
+        assert any(st.label == "laps compared" and "1 interpolated, left out" in st.text
+                   for st in p.steps), p.steps
+    s.corners.lap_corner_resolved = lambda lap: [False] * len(corners)
+    assert all(s.corner_best_provenance(c.cid) is None for c in corners)
+    assert all(r.best_s is None for r in s.corner_report())
+    print(f"test_a_corner_best_explains_only_the_laps_matched_on_track OK — {len(corners)} corners, "
+          f"each quickest lap planted as interpolated and left out of its population")
+
+
 # -------------------------------------------------------------- the crossing transcription
 def test_the_crossing_transcription_agrees_with_the_core():
     """`provenance.crossing_fraction` is a transcription of `pacer::Segment::Intersects`, and

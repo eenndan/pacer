@@ -83,6 +83,36 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 63.421978154182185,
+    "apex_median_kmh": 53.311386804505744,
+    "best_s": 5.355549612626405,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.9179127269489791,
+    "median_loss_s": 1.2978184306448588,
+    "median_s": 6.653368043271263,
+    "n": 2,
+    "n_laps": 2,
+    "score": 2.3820061180789707,
+    "sigma_s": 1.8353924261157253
+   },
+   {
+    "apex_best_kmh": 64.65975582730609,
+    "apex_median_kmh": 53.930275641067695,
+    "best_s": 5.101721166438146,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.9767000182440786,
+    "median_loss_s": 1.2820819992290495,
+    "median_s": 6.383803165667196,
+    "n": 2,
+    "n_laps": 2,
+    "score": 2.3245912731722336,
+    "sigma_s": 1.8131377513841338
+   }
+  ],
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -251,6 +281,12 @@
       "time": 7.665885164896245
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": "__unsupported__",
@@ -342,6 +378,12 @@
       "time": 5.101721166438146
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": "__unsupported__",
@@ -379,6 +421,56 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 11.340586862768772,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 12.61857917120113,
+    "n": 2,
+    "n_exit": null,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 2,
+    "sigma_s": 1.8073540551935416,
+    "trap_best_kmh": 64.93850646153334,
+    "trap_median_kmh": 55.737108405111215
+   },
+   {
+    "best_s": 10.997253282330089,
+    "exit_delta_kmh": 3.3352103514306677,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.0,
+    "median_s": 12.299161403771652,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 1,
+    "sigma_s": 1.8411761223063376,
+    "trap_best_kmh": 64.83877973451699,
+    "trap_median_kmh": 55.72445245650559
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 4.753641342534777,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 64.65975582730609,
+    "trap_median_kmh": 59.90611448477131
+   }
+  ],
   "theoretical_best": 32.79511092416341,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -533,6 +625,36 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 43.91508011407284,
+    "apex_median_kmh": 42.105413437798745,
+    "best_s": 8.416565202289595,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.6826405858411331,
+    "median_loss_s": 0.5987908901035137,
+    "median_s": 9.015356092393109,
+    "n": 4,
+    "n_laps": 4,
+    "score": 0.21717569571618317,
+    "sigma_s": 0.3626903804074904
+   },
+   {
+    "apex_best_kmh": 43.39838139457583,
+    "apex_median_kmh": 42.35891690941767,
+    "best_s": 7.55112853295304,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.7230262963986458,
+    "median_loss_s": 0.22653473532949597,
+    "median_s": 7.777663268282536,
+    "n": 4,
+    "n_laps": 4,
+    "score": 0.04569836061846668,
+    "sigma_s": 0.2017278301802069
+   }
+  ],
   "corner_session_bests": [
    8.416565202289595,
    7.55112853295304
@@ -15824,6 +15946,12 @@
       "time": 7.6821882349174615
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 35.90774898123084,
@@ -16005,6 +16133,12 @@
       "time": 7.55112853295304
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 36.764161925078724,
@@ -16179,6 +16313,12 @@
       "time": 7.873138301647611
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 37.431352860842225,
@@ -16352,6 +16492,12 @@
       "exit_speed": 43.027534143397084,
       "time": 8.006868821053768
      }
+    ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
     ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
@@ -16801,6 +16947,56 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 10.105946433279124,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 10.39279135923811,
+    "n": 4,
+    "n_exit": null,
+    "n_laps": 4,
+    "n_trap": 4,
+    "ring_cid": 2,
+    "sigma_s": 0.2277341449816082,
+    "trap_best_kmh": 50.32550065915696,
+    "trap_median_kmh": 48.958131829963285
+   },
+   {
+    "best_s": 9.703049110744658,
+    "exit_delta_kmh": -0.07512184719343651,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.020615494206431256,
+    "median_s": 9.977476524028932,
+    "n": 4,
+    "n_exit": 4,
+    "n_laps": 4,
+    "n_trap": 4,
+    "ring_cid": 1,
+    "sigma_s": 0.21810773431758346,
+    "trap_best_kmh": 48.073353079805514,
+    "trap_median_kmh": 46.214452430499776
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": -2.449032407092652,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 4,
+    "n_exit": 4,
+    "n_laps": 4,
+    "n_trap": 4,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 45.604266435856154,
+    "trap_median_kmh": 43.1552340287635
+   }
+  ],
   "theoretical_best": 35.77668927926642,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -16965,6 +17161,36 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 43.30631120514848,
+    "apex_median_kmh": 42.085018921274425,
+    "best_s": 8.141853715014477,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.6783130554931089,
+    "median_loss_s": 0.24020091668014842,
+    "median_s": 8.382054631694626,
+    "n": 2,
+    "n_laps": 3,
+    "score": 0.08159514504608072,
+    "sigma_s": 0.3396953940635157
+   },
+   {
+    "apex_best_kmh": 43.81505544727177,
+    "apex_median_kmh": 42.49377798821298,
+    "best_s": 7.793777280334599,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.685832800053749,
+    "median_loss_s": 0.224011886578797,
+    "median_s": 8.017789166913396,
+    "n": 3,
+    "n_laps": 3,
+    "score": 0.05158933310240622,
+    "sigma_s": 0.23029730203294135
+   }
+  ],
   "corner_session_bests": [
    8.141853715014477,
    7.793777280334599
@@ -28983,6 +29209,12 @@
       "time": 7.793777280334599
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 35.90774898123084,
@@ -29150,6 +29382,12 @@
       "exit_speed": 43.697875772813234,
       "time": 8.017789166913396
      }
+    ],
+    "lap_edge_resolved": [
+     true,
+     false,
+     true,
+     true
     ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
@@ -29325,6 +29563,12 @@
       "time": 8.254315213510882
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 37.927288340663665,
@@ -29342,9 +29586,9 @@
    ],
    "rows": [
     [
-     0.12362413341770129,
-     0.12473775077198379,
-     0.1283228714891207
+     0.1596782920053439,
+     0.161491920781609,
+     0.15923162057334395
     ],
     [
      0.11298772112680311,
@@ -29353,9 +29597,9 @@
     ]
    ],
    "share": {
-    "apex_s": 0.23938134514717024,
-    "entry_s": 0.2366118545445044,
-    "exit_s": 0.2429664658646713
+    "apex_s": 0.27613551515679546,
+    "entry_s": 0.272666013132147,
+    "exit_s": 0.27387521494889455
    }
   },
   "plot_x_at_media_time_distance": [
@@ -29773,6 +30017,56 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 10.160401505599015,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 10.17983188793761,
+    "n": 3,
+    "n_exit": null,
+    "n_laps": 3,
+    "n_trap": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.3112085396083723,
+    "trap_best_kmh": 49.33979963374403,
+    "trap_median_kmh": 48.811862282574744
+   },
+   {
+    "best_s": 9.811716480282747,
+    "exit_delta_kmh": -1.1174834425082238,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.29619910864271537,
+    "median_s": 10.076775538319337,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 3,
+    "n_trap": 3,
+    "ring_cid": 1,
+    "sigma_s": 0.3748501147051824,
+    "trap_best_kmh": 49.07312636965417,
+    "trap_median_kmh": 48.91620061843389
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": -1.0143385486304197,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 3,
+    "n_exit": 3,
+    "n_laps": 3,
+    "n_trap": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 44.71221432144365,
+    "trap_median_kmh": 43.697875772813234
+   }
+  ],
   "theoretical_best": 35.87354105393993,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -29936,6 +30230,36 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 43.7683820604404,
+    "apex_median_kmh": 43.30592274903801,
+    "best_s": 8.196308787334369,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.7236526362960651,
+    "median_loss_s": 0.0997808868989356,
+    "median_s": 8.296089674233304,
+    "n": 2,
+    "n_laps": 3,
+    "score": 0.014080228977059739,
+    "sigma_s": 0.14111148351809186
+   },
+   {
+    "apex_best_kmh": 43.39160227598176,
+    "apex_median_kmh": 42.74733461758497,
+    "best_s": 7.847556710984062,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.7060766252312987,
+    "median_loss_s": 0.19214839979390064,
+    "median_s": 8.039705110777962,
+    "n": 3,
+    "n_laps": 3,
+    "score": 0.0409911858418332,
+    "sigma_s": 0.21333087283474936
+   }
+  ],
   "corner_session_bests": [
    8.196308787334369,
    7.847556710984062
@@ -41954,6 +42278,12 @@
       "time": 7.847556710984062
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 35.90774898123084,
@@ -42154,6 +42484,12 @@
       "time": 8.273539122745753
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     false,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 37.060156204900466,
@@ -42322,6 +42658,12 @@
       "time": 8.039705110777962
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": 36.601142276538496,
@@ -42339,9 +42681,9 @@
    ],
    "rows": [
     [
-     0.11144079251296723,
-     0.11341892316583024,
-     0.11742034374099486
+     0.06576930588437158,
+     0.06743383363736655,
+     0.06635863427613486
     ],
     [
      0.10190315263714034,
@@ -42350,9 +42692,9 @@
     ]
    ],
    "share": {
-    "apex_s": 0.21700004973580445,
-    "entry_s": 0.21334394515010757,
-    "exit_s": 0.22100147031167605
+    "apex_s": 0.17101496020734075,
+    "entry_s": 0.1676724585215119,
+    "exit_s": 0.16993976084681606
    }
   },
   "plot_x_at_media_time_distance": [
@@ -42770,6 +43112,56 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 10.105946433279124,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 10.26086602750059,
+    "n": 3,
+    "n_exit": null,
+    "n_laps": 3,
+    "n_trap": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.1888063972960927,
+    "trap_best_kmh": 50.66187079131482,
+    "trap_median_kmh": 49.70076000820705
+   },
+   {
+    "best_s": 9.757937049633284,
+    "exit_delta_kmh": -1.0402368283072576,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.07633441317598914,
+    "median_s": 9.831318813380493,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 3,
+    "n_trap": 3,
+    "ring_cid": 1,
+    "sigma_s": 0.1037774855221612,
+    "trap_best_kmh": 50.79124270236929,
+    "trap_median_kmh": 49.9494709165858
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 0.0,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 3,
+    "n_exit": 3,
+    "n_laps": 3,
+    "n_trap": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 44.388024016965346,
+    "trap_median_kmh": 44.33091291731549
+   }
+  ],
   "theoretical_best": 35.77348167157673,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -42862,6 +43254,36 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 63.421978154182185,
+    "apex_median_kmh": 53.311386804505744,
+    "best_s": 5.355549612626405,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.9179127269489791,
+    "median_loss_s": 1.2978184306448588,
+    "median_s": 6.653368043271263,
+    "n": 2,
+    "n_laps": 2,
+    "score": 2.3820061180789707,
+    "sigma_s": 1.8353924261157253
+   },
+   {
+    "apex_best_kmh": 64.65975582730609,
+    "apex_median_kmh": 53.930275641067695,
+    "best_s": 5.101721166438146,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.9767000182440786,
+    "median_loss_s": 1.2820819992290495,
+    "median_s": 6.383803165667196,
+    "n": 2,
+    "n_laps": 2,
+    "score": 2.3245912731722336,
+    "sigma_s": 1.8131377513841338
+   }
+  ],
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -43030,6 +43452,12 @@
       "time": 7.665885164896245
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": "__unsupported__",
@@ -43121,6 +43549,12 @@
       "time": 5.101721166438146
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": "__unsupported__",
@@ -43158,6 +43592,56 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 11.340586862768772,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 12.61857917120113,
+    "n": 2,
+    "n_exit": null,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 2,
+    "sigma_s": 1.8073540551935416,
+    "trap_best_kmh": 64.93850646153334,
+    "trap_median_kmh": 55.737108405111215
+   },
+   {
+    "best_s": 10.997253282330089,
+    "exit_delta_kmh": 3.3352103514306677,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.0,
+    "median_s": 12.299161403771652,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 1,
+    "sigma_s": 1.8411761223063376,
+    "trap_best_kmh": 64.83877973451699,
+    "trap_median_kmh": 55.72445245650559
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 4.753641342534777,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 64.65975582730609,
+    "trap_median_kmh": 59.90611448477131
+   }
+  ],
   "theoretical_best": 32.79511092416341,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -43249,6 +43733,36 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 63.421978154182185,
+    "apex_median_kmh": 53.311386804505744,
+    "best_s": 5.355549612626405,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.9179127269489791,
+    "median_loss_s": 1.2978184306448588,
+    "median_s": 6.653368043271263,
+    "n": 2,
+    "n_laps": 2,
+    "score": 2.3820061180789707,
+    "sigma_s": 1.8353924261157253
+   },
+   {
+    "apex_best_kmh": 64.65975582730609,
+    "apex_median_kmh": 53.930275641067695,
+    "best_s": 5.101721166438146,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.9767000182440786,
+    "median_loss_s": 1.2820819992290495,
+    "median_s": 6.383803165667196,
+    "n": 2,
+    "n_laps": 2,
+    "score": 2.3245912731722336,
+    "sigma_s": 1.8131377513841338
+   }
+  ],
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -43417,6 +43931,12 @@
       "time": 7.665885164896245
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": "__unsupported__",
@@ -43508,6 +44028,12 @@
       "time": 5.101721166438146
      }
     ],
+    "lap_edge_resolved": [
+     true,
+     true,
+     true,
+     true
+    ],
     "lap_has_dropout": false,
     "lap_sector_splits": "__unsupported__",
     "lap_time": "__unsupported__",
@@ -43545,6 +44071,56 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 11.340586862768772,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 12.61857917120113,
+    "n": 2,
+    "n_exit": null,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 2,
+    "sigma_s": 1.8073540551935416,
+    "trap_best_kmh": 64.93850646153334,
+    "trap_median_kmh": 55.737108405111215
+   },
+   {
+    "best_s": 10.997253282330089,
+    "exit_delta_kmh": 3.3352103514306677,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.0,
+    "median_s": 12.299161403771652,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 1,
+    "sigma_s": 1.8411761223063376,
+    "trap_best_kmh": 64.83877973451699,
+    "trap_median_kmh": 55.72445245650559
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 4.753641342534777,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 2,
+    "n_exit": 2,
+    "n_laps": 2,
+    "n_trap": 2,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 64.65975582730609,
+    "trap_median_kmh": 59.90611448477131
+   }
+  ],
   "theoretical_best": 32.79511092416341,
   "track_name": "Stadium",
   "valid_lap_ids": [

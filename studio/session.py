@@ -2306,7 +2306,12 @@ class Session:
         cached on the corner model) to find which lap actually set the best, then reads that
         lap's corner window out of the memoized alignment. The minimum is not recomputed as a
         number — `np.min` of a float column IS one of its inputs, so the winning lap's own time
-        is the displayed value, bit for bit."""
+        is the displayed value, bit for bit.
+
+        The population is the cells that Best counts: laps whose corner was matched on track at
+        both edges (`corner_report`). A lap left out for an interpolated edge is counted and said,
+        not listed — listing it would put a faster time than the best under the best. None when no
+        lap matched the corner, which is exactly when the Best cell is a dash."""
         corner_list = self.corners.corner_list()
         basis = self.corners.basis()
         index = next((k for k, c in enumerate(corner_list) if c.cid == cid), None)
@@ -2314,9 +2319,13 @@ class Session:
             return None
         n = len(corner_list)
         per_lap: list[tuple[int, float]] = []
+        left_out = 0
         for i in self.consistency_lap_ids():
             st = self.corners.lap_corner_stats(i)
             if len(st) == n and math.isfinite(st[index].time):  # the corner_report row filter
+                if not self.corners.lap_corner_resolved(i)[index]:
+                    left_out += 1
+                    continue
                 per_lap.append((i, float(st[index].time)))
         if not per_lap:
             return None
@@ -2338,7 +2347,7 @@ class Session:
             fmt="{:.2f}".format,                       # the CORNERS table's Best cell, 2 dp
             donor_lap=donor, fixes=fixes,
             d0=float(proj[2 * index]), d1=float(proj[2 * index + 1]),
-            per_lap=tuple(per_lap), clock=self.timing_quality.clock)
+            per_lap=tuple(per_lap), clock=self.timing_quality.clock, left_out=left_out)
 
     # ------------------------------------- session summaries: theoretical + rolling best (F1)
     # The "best" cluster (candidate set / headline best / session-best splits / theoretical /
@@ -2578,7 +2587,11 @@ class Session:
         best/median, and the median grip utilization. Composes the corner model + driving
         channels WITHOUT recomputing them (the coaching.py discipline); the math lives in
         stats_service.corner_report. [] without corners or clean laps. Not cached (read on
-        load / re-segment only, never per-tick)."""
+        load / re-segment only, never per-tick).
+
+        Only cells matched on track at both edges count (`CornerModel.lap_corner_resolved`, the
+        rule the CORNERS BY LAP grid marks by — stats_service.corner_report has the measurement),
+        so this table's Best is `corner_session_bests` and its Median is the grid's typical."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
         if not corner_list or not ids:
@@ -2587,18 +2600,21 @@ class Session:
         times_by_lap: list[list[float]] = []
         apex_by_lap: list[list[float]] = []
         grip_by_lap: list[list[float]] = []
+        resolved_by_lap: list[list[bool]] = []
         for i in ids:
             st = self.corners.lap_corner_stats(i)
             if len(st) != n:  # degenerate laps project to [] — same skip as corner_consistency
                 continue
             times_by_lap.append([s.time for s in st])
             apex_by_lap.append([s.apex_speed for s in st])
+            resolved_by_lap.append(self.corners.lap_corner_resolved(i))
             grip = self.driving.lap_corner_grip(i)
-            if len(grip) == n:  # [] without a g signal — the report's grip column reads None
-                grip_by_lap.append(grip)
+            # [] without a g signal — a row of NaN keeps the four inputs aligned lap for lap (the
+            # resolution mask needs that), and the report's grip column still reads None.
+            grip_by_lap.append(grip if len(grip) == n else [math.nan] * n)
         return stats_service.corner_report(
             [c.cid for c in corner_list], [c.direction for c in corner_list],
-            times_by_lap, apex_by_lap, grip_by_lap)
+            times_by_lap, apex_by_lap, grip_by_lap, resolved_by_lap)
 
     def corner_matrix(self) -> stats_service.CornerMatrix | None:
         """The laps × corners grid (the Stats page's CORNERS BY LAP): every consistency lap's
@@ -2628,7 +2644,12 @@ class Session:
         reasons use — then the per-corner MEDIAN triple + the positive-part session share
         (stats_service.phase_matrix). Generalizes the D2 extraction that previously ran for
         the median lap only. None without corners / a best lap / any comparable lap. Not
-        cached (read on load / re-segment only, never per-tick)."""
+        cached (read on load / re-segment only, never per-tick).
+
+        C4: a lap's triple for a corner counts only where that corner was matched on track at both
+        edges on the lap AND on the best lap it is subtracted from — the cells the CORNERS table's
+        Med loss beside this tooltip counts (`corner_report`). A third of an interpolated window is
+        a third of a window that can be tenths of a second out."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
         best = self.best_lap_id()
@@ -2656,6 +2677,7 @@ class Session:
         # below, and identical for all of them. Hoisted out of the lap loop: it was being
         # re-integrated once per (lap, corner), which is half of this report's integration work
         # done 37 times over on the D24 0060 pair (coaching.corner_best_thirds).
+        best_resolved = self.corners.lap_corner_resolved(best)
         best_thirds = [coaching.corner_best_thirds(
             best_dist, best_elapsed, float(c.enter), float(c.exit),
             corner_dist_total=corner_dist_total, best_total=best_total,
@@ -2673,8 +2695,13 @@ class Session:
             lap_total = float(dist[-1])
             lap_align = (self.corners.lap_alignment(i, lap_total)
                          if corner_dist_total else None)
+            lap_resolved = self.corners.lap_corner_resolved(i)
             row: list[tuple[float, float, float]] = []
-            for c, thirds in zip(corner_list, best_thirds, strict=True):
+            for k, (c, thirds) in enumerate(zip(corner_list, best_thirds, strict=True)):
+                if not (k < len(lap_resolved) and lap_resolved[k]
+                        and k < len(best_resolved) and best_resolved[k]):
+                    row.append((math.nan, math.nan, math.nan))   # not counted (see docstring)
+                    continue
                 ph = coaching.corner_phase_losses(
                     dist, lap_elapsed, best_dist, best_elapsed,
                     float(c.enter), float(c.exit),
@@ -2797,11 +2824,15 @@ class Session:
         times_by_lap: list[list[float]] = []
         traps_by_lap: list[list[float]] = []
         exits_by_lap: list[list[float]] = []
+        edges_by_lap: list[list[bool]] = []
         for i in ids:
             dist, speed_kmh, elapsed = self._lap_arrays(i)
             st = self.corners.lap_corner_stats(i)
             if len(dist) < 2 or len(st) != n:
                 continue
+            # Which corner edges this lap matched on track: a straight's time, trap speed and
+            # exit Δ each count only where the edges they read were (C4, stats.straights_report).
+            edges_by_lap.append(self.corners.lap_edge_resolved(i))
             _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
             traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
             # The corner service's memoized warp — the same one lap_corner_stats just used two
@@ -2820,7 +2851,7 @@ class Session:
             return []
         return stats_service.straights_report(
             [c.cid for c in corner_list], times_by_lap, traps_by_lap,
-            exits_by_lap, best_exits)
+            exits_by_lap, best_exits, edges_by_lap, self.corners.lap_edge_resolved(best))
 
     # ------------------------------------------------------ auto coaching summary (F10)
     # Composes the corner model, driving channels and consistency stats into the ranked
