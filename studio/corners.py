@@ -73,7 +73,11 @@ _SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other
 # PUBLIC because it is the projection's stated per-boundary resolution and is cited as such from
 # corner_model (see MAX_DONOR_SPAN_DEV's sub-resolution paragraph: a segment whose admission band
 # is far under this cannot be judged by a projection built out of matches only accurate to it).
-SPATIAL_MATCH_MAX_M = 3.0        # refined closest approach must be ≤ 3 m to count as the same point
+# WHY D24 0060 MATCHES ONLY 61.8 % OF ITS INTERIOR BOUNDARIES (0062: 99.7 %) is measured in
+# studio/docs/corner-match-0060-2026-09.md. Every failure is this gate. The cause is that
+# recording's GNSS scatter plus a reference (fastest) lap that is itself displaced. It is not a
+# threshold 0060 sits just outside: its cells reach 98.4 % only at 8 m, where 0062's are 99.3 % at 3.
+SPATIAL_MATCH_MAX_M = 3.0       # refined closest approach must be ≤ 3 m to count as the same point
 
 
 def line_length_drift(total_lap: float, total_ref: float) -> float:
