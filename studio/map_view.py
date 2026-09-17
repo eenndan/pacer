@@ -1756,7 +1756,7 @@ class MapView(QWidget):
         the pure-numpy map_render.rainbow_channel function (it paints nothing)."""
         ch = self.session.lap_channels(lap_id)
         times, xs, ys, speed_kmh, cum = (
-            ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
+            ch["t_telemetry_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
         grip_util = self.session.driving.lap_grip_utilization(lap_id) if mode == "grip" else None
         elevation = self.session.lap_elevation_channel(lap_id) if mode == "elevation" else None
         # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent. BOTH

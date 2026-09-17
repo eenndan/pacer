@@ -262,8 +262,8 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     """Compute the per-segment bucket ids + legend texts for one rainbow channel. Pure numpy.
 
     Inputs are the lap's already-fetched per-sample arrays (the map fetches them from Session):
-      * `times`, `xs`, `ys`, `speed_kmh`, `cum` — the lap_channels arrays (media s / local m / km/h /
-        gap-aware odometer), all index-aligned;
+      * `times`, `xs`, `ys`, `speed_kmh`, `cum` — the lap_channels arrays (telemetry s / local m /
+        km/h / gap-aware odometer), all index-aligned;
       * `grip_util` — the per-sample grip utilization (lap_grip_channel), or None (no g signal);
       * `delta_grid` — the lap's Δ-vs-best curve ON THE 400-POINT GRID (delta()'s y-series), or
         None (no best lap for Δ).

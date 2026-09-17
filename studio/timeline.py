@@ -7,11 +7,15 @@ the valid-lap set + lap windows) into the callables here. Session keeps thin del
 that monkey-patch `s.lap_at_time` keep working unchanged.
 
 Coordinate spaces:
-  * plot-x <-> media time (lap-scoped, mode-aware: 'time' = t-into-lap seconds; 'distance'/'delta'
-    = the shared normalized-distance × baseline_total axis delta() draws on, so the cursors
-    coincide). best_distance is caller-supplied (the active baseline total stays on Session).
-  * media time -> trace index / lap (full-trace searchsorted + the O(log n) lap-window search).
+  * plot-x <-> TELEMETRY time (lap-scoped, mode-aware: 'time' = t-into-lap seconds;
+    'distance'/'delta' = the shared normalized-distance × baseline_total axis delta() draws on, so
+    the cursors coincide). best_distance is caller-supplied (the active baseline total stays on
+    Session). Two of these are NAMED "media time" and are not; see `media_time_at_plot_x`.
+  * telemetry time -> trace index / lap (full-trace searchsorted + the O(log n) lap-window search).
   * map (x, y) -> trace (whole-trace argmin + the lap-scoped variant for the draggable marker).
+
+Every time in and out of this module is on the GPS9 TELEMETRY clock. Nothing here crosses to the
+media axis; the player does that at its own boundary (`player_pane.seek` / `_on_position`).
 """
 from __future__ import annotations
 
@@ -36,7 +40,7 @@ class Timeline:
         """Drop the cached lap-window table (a re-segment shifted the lap ids/times)."""
         self._lap_windows = None
 
-    # --------------------------------------------- cursor scrub: plot-x <-> media time
+    # ----------------------------------------- cursor scrub: plot-x <-> telemetry time
     # Speed + delta share one x-linked axis:
     #   * TIME mode:     x = t − lap_start
     #   * DISTANCE mode: x = s × baseline_total, s = dist_in_lap(t)/lap_total — the same axis
@@ -48,9 +52,13 @@ class Timeline:
         """Absolute TELEMETRY (GPS9 true-clock) time (s) for a plot x-value within `lap_id`.
 
         THE NAME SAYS "media" AND THE CLOCK IS NOT: this function is named for the day the app
-        believed there was one clock, and it is not renamed because the golden fingerprint keys
-        off the name (`Session.media_time` states the same hazard). It reads the lap's own
-        column times, which are telemetry seconds; `Session.media_time` is the only crossing.
+        believed there was one clock. It reads the lap's own column times, which are telemetry
+        seconds, and every caller hands the result to the player, which crosses to the media axis
+        itself. NOT RENAMED, AND THE REASON IS NOT THE FINGERPRINT: the golden dump's key is a
+        string literal it would keep. It is the 67 call sites and definitions across 20 files a rename
+        touches while nothing reads the name wrongly — every caller passes and receives telemetry (T9
+        checked each). The hazard that DID bite is the other way round: `Session.media_time`,
+        which does cross, is the PICTURE map, not a camera stamp's own number on that axis.
 
         `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
         axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For
@@ -79,7 +87,8 @@ class Timeline:
                              best_distance: float | None = None) -> float | None:
         """Inverse of `media_time_at_plot_x`: the plot x-value for TELEMETRY time `t` within
         `lap_id`, in the given `mode` ('time', or the shared-distance 'distance'/'delta'). Used
-        to re-place a cursor from the shared media time. Returns None if the lap is degenerate
+        to re-place a cursor from the shared playhead time — telemetry, whatever the name says
+        (see `media_time_at_plot_x`). Returns None if the lap is degenerate
         (or distance/delta with no best distance)."""
         td = self._lap_time_dist(lap_id)
         if td is None:
@@ -96,7 +105,7 @@ class Timeline:
         s = d / float(dists[-1])               # normalized fraction [0,1]
         return s * float(best_distance)
 
-    # ------------------------------------------------------ media time -> trace index / lap
+    # -------------------------------------------------- telemetry time -> trace index / lap
     def index_at_time(self, t: float) -> int | None:
         tt = self._trace_times()
         n = len(tt)

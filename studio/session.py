@@ -114,11 +114,11 @@ class LapCurve:
         return float(self.dist[-1])
 
     def fraction_at_time(self, t: float) -> float:
-        """Track fraction s in [0,1] at media time `t` (np.interp clamps `t` to the lap)."""
+        """Track fraction s in [0,1] at TELEMETRY time `t` (np.interp clamps `t` to the lap)."""
         return float(np.interp(t, self.times, self.dist)) / float(self.dist[-1])
 
     def elapsed_at_time(self, t: float) -> float:
-        """Elapsed-into-lap (s) at media time `t`, clamped to the lap (= t − lap_start)."""
+        """Elapsed-into-lap (s) at TELEMETRY time `t`, clamped to the lap (= t − lap_start)."""
         return float(np.interp(t, self.times, self.elapsed))
 
     def elapsed_at_fraction(self, s: float) -> float:
@@ -174,8 +174,8 @@ class Session:
         # (times, dists, elapsed); elapsed precomputed once so per-tick delta math doesn't re-subtract.
         self._dist_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         self._xyt_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}  # (xs, ys, times) local m
-        # The RAW track's media times (see _track_times), for numbering provenance rows by their
-        # position in the recording. Deliberately NOT in the re-segment clear below: moving a
+        # The RAW track's telemetry times (see _track_times), for numbering provenance rows by
+        # their position in the recording. Deliberately NOT in the re-segment clear below: moving a
         # timing line re-cuts the laps, it does not move a fix, so a raw row number is stable for
         # the life of the Session.
         self._track_times_cache: np.ndarray | None = None
@@ -257,7 +257,7 @@ class Session:
         # whenever the reference changes, so a view can never outlive the recording it describes.
         self._reference_views: dict[int, cross_reference.ReferenceLap | None] = {}
 
-        # Full-trace local-metre xs/ys + media time + km/h speed, in one track_columns crossing
+        # Full-trace local-metre xs/ys + TELEMETRY time + km/h speed, in one track_columns crossing
         # (bulk, like _lap_columns).
         cols = laps.track_columns()
         self.tx = np.asarray(cols.xs)
@@ -1744,7 +1744,8 @@ class Session:
         handed to the C++ core verbatim and handed back unchanged — verified bit-exact against
         `Session.tt` for all 26,486 (0060) and 45,313 (0062) interior lap-column samples. The
         media clock runs +26.7 / +27.1 ppm faster, so the same instant is numbered up to 0.097 s
-        and 0.167 s apart on the two axes; `Session.media_time` is the only crossing."""
+        and 0.167 s apart on the two axes. Crossing to the media axis takes one of TWO maps, and
+        which one depends on what the time is for (`media_clock.py`, "WHICH MAP")."""
         cols = self._cols_cache.get(lap_id)
         if cols is None:
             c = self.laps.lap_columns(lap_id)
@@ -2369,10 +2370,22 @@ class Session:
     def lap_channels(self, lap_id: int) -> dict[str, np.ndarray]:
         """Index-aligned per-sample channel arrays for ONE lap — the single pacer-free view over
         the cached `_lap_columns` fetch, shared by the channels-CSV export and the map rainbow
-        (F3). Keys, in CSV column order: t_media_s, elapsed_s, lat_deg, lon_deg, x_m (cs.local),
-        y_m, dist_m (the gap-aware odometer), speed_mps, speed_kmh; g_long / g_lat present only
-        with a g signal (interpolated onto the lap's sample times; +long = accelerating, +lat =
-        turning left). Read-only; nothing cached.
+        (F3). Keys, in CSV column order: t_telemetry_s, t_video_s, elapsed_s, lat_deg, lon_deg,
+        x_m (cs.local), y_m, dist_m (the gap-aware odometer), speed_mps, speed_kmh; g_long / g_lat
+        present only with a g signal (interpolated onto the lap's sample times; +long =
+        accelerating, +lat = turning left). Read-only; nothing cached.
+
+        TWO TIME COLUMNS, AND NEITHER SAYS "media". The first was headed `t_media_s` and carried
+        the lap columns' TELEMETRY seconds: measured on both D24 recordings it sat +0.415 s (0060)
+        / +0.353 s (0062) median — 12.4 / 10.6 frames at 30 fps — after the footage position that
+        shows each row, and "media" could not have said which of the two media maps it meant
+        (`media_time` is the picture's; `media_clock.without_gps_lag()` is the camera's stamps).
+        `t_telemetry_s` is the GPS9 true clock the lap was timed on, unchanged. `t_video_s` is
+        `media_time` of each sample — where in the footage its frame is, through the same map the
+        player seeks and the burned export draws with, so the rate fit and (when this recording's
+        was measured) the GPS lag are both in it. With no fitted clock it equals the telemetry
+        column, which is exactly true for a GPS5 camera; the DATA TRUST Video sync row states the
+        case where it is not.
 
         g_long is the CLEAN GPS speed-derivative longitudinal (gm.long_g_gps) when present — the same
         validated axis the dial, the map grip colour and DrivingChannels read; the raw IMU forward
@@ -2385,7 +2398,8 @@ class Session:
         m = min(len(times), len(lat))
         times, xs, ys, speed_mps, cum = (a[:m] for a in (times, xs, ys, speed_mps, cum))
         out: dict[str, np.ndarray] = {
-            "t_media_s": times,
+            "t_telemetry_s": times,
+            "t_video_s": np.asarray(self.media_clock.to_media(times), dtype=float),
             "elapsed_s": times - times[0] if m else times.copy(),
             "lat_deg": lat[:m],
             "lon_deg": lon[:m],
@@ -2999,7 +3013,7 @@ class Session:
         return td
 
     # ----------------------- cursor scrub / video sync / map nearest: the Timeline conversions
-    # The cursor/plot-x <-> media-time, media-time -> trace-index/lap, and map (x,y) -> trace
+    # The cursor/plot-x <-> telemetry-time, telemetry-time -> trace-index/lap, and map (x,y) -> trace
     # conversions live in the `session.timeline` sub-object (studio/timeline.py); these stay as thin
     # delegators so the call sites + the tests that monkey-patch s.lap_at_time keep working. Pass
     # active_baseline_total_distance() as best_distance for the shared-distance axis.
@@ -3318,15 +3332,25 @@ class Session:
         got.
 
         IT ALSO CARRIES THE GPS TIMESTAMPS' OWN LATENCY when this recording's was measured (see
-        `_install_gps_lag`): the trace's clock is ~0.46 s behind the picture's, so the media time
-        of a telemetry instant is that much EARLIER than the rate fit alone would say. One seam,
-        so the live view and a burned export cannot disagree about which frame a value belongs to.
+        `_install_gps_lag`): the trace's clock is +0.4764 / +0.4589 s behind the picture's on the
+        two D24 recordings, so the media time of a telemetry instant is that much EARLIER than the
+        rate fit alone would say. One seam, so the live view and a burned export cannot disagree
+        about which frame a value belongs to.
 
-        A NAMING HAZARD, STATED SO IT CANNOT BITE TWICE: the older accessors that say "media time"
-        in their names — `media_time_at_plot_x`, `plot_x_at_media_time`, `corner_entry_media_time`
-        — all speak the TELEMETRY clock. They were named when the app believed there was only one
-        clock, and they are not renamed here because the golden fingerprint keys off those names.
-        `media_time` / `telemetry_time` are the only two functions in the app that cross over."""
+        THIS IS THE PICTURE MAP, NOT "THE MEDIA-CLOCK TIME" OF A CAMERA STAMP — the hazard that
+        has bitten. The accelerometer's g series and the GPS-quality strip are stamped on the
+        media clock too, and their content carries the GPS delay, so indexing either through THIS
+        function lands the whole lag away: #314 did it to the quality strip and published 9 of 456
+        corner cells flipping where the truth was 1 (#318), and the dial sat 0.39 s behind the
+        speed until #309. Those consumers cross `self.media_clock.without_gps_lag().to_media`.
+        The gyro is the stream whose content DOES ride the picture. `media_clock.py` ("WHICH MAP")
+        tables each stream, and `tests/test_media_clock.py::CROSSINGS` lists every crossing.
+
+        AND THE OPPOSITE HAZARD: the older accessors that say "media time" in their names —
+        `media_time_at_plot_x`, `plot_x_at_media_time`, `corner_entry_media_time` — do not cross at
+        all; they speak the TELEMETRY clock and every caller hands them to the player, which
+        crosses itself. Named when the app believed there was one clock; see
+        `timeline.media_time_at_plot_x` for why they keep the name."""
         return float(self.media_clock.to_media(float(t)))
 
     def telemetry_time(self, t: float) -> float:
@@ -3449,7 +3473,14 @@ class Session:
         THE ODD ONE OUT ON THIS OBJECT, said plainly so it cannot bite: the gyro series carries
         the camera's media stamps, while every other public time on Session is telemetry. Nothing
         in the app calls this today — it is an accessor with no caller — so nothing acts on the
-        mismatch; a future caller holding a Session time must cross `media_time` first."""
+        mismatch; a future caller holding a Session time must cross `media_time` first.
+
+        `media_time`, THE PICTURE MAP — and that is measured, not inherited from `g_at_time`, which
+        crosses the OTHER map. The gyro's content rides the picture: against the path-derived yaw
+        rate it reads +0.007 / +0.002 s through `media_time` and +0.476 / +0.459 s through
+        `media_clock.without_gps_lag()` on the two D24 recordings, while the accelerometer — same
+        stamps, same sample grid — reads the other way round. Copying `g_at_time`'s crossing here
+        would put the gyro half a second from its event."""
         rot = getattr(self, "_rotation", None)
         return None if rot is None else rot.at_time(t)
 

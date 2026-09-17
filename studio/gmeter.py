@@ -504,8 +504,9 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
     `studio/load.py` builds, which runs ~27 ppm slower (`studio/media_clock.py`) — up to 0.097 s
     (0060) / 0.167 s (0062) apart at the end of the two D24 recordings. The join is deliberate and
     MEASURED, not an oversight: #303 put the g series against the product's own path reference and
-    read +0.011 / −0.047 s joined by label against −0.399 / −0.404 s joined through the clock, so
-    crossing the clock here would misalign what is currently aligned (it would have moved a CORNERS
+    read +0.011 / −0.047 s joined by label against −0.399 / −0.404 s joined through the PICTURE map
+    (`Session.media_clock`, which carries the GPS lag), so crossing that map here would misalign
+    what is currently aligned (it would have moved a CORNERS
     grip cell by up to 38.8 points). The ACCL content arrives late WITH the GPS; the stamps do not.
 
     Inputs:

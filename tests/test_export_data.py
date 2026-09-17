@@ -61,7 +61,7 @@ class FakeLaps:
         return self._laps[i]["time"]
 
     def start_timestamp(self, i):
-        """The lap's media-clock start — `Session.lap_window`'s first half, which
+        """The lap's TELEMETRY-clock start — `Session.lap_window`'s first half, which
         `SessionStats.lap_stats` slices the g-meter by. Needed since the HTML report grew the
         Stats groups (N13): the report now reaches the same per-lap g/brake reductions the
         Stats page does, and those go through lap_window."""
@@ -322,8 +322,8 @@ def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
 def test_channels_csv_roundtrip_exact():
     s = make_session()
     cols = s.lap_channels(0)
-    assert list(cols) == ["t_media_s", "elapsed_s", "lat_deg", "lon_deg", "x_m", "y_m",
-                          "dist_m", "speed_mps", "speed_kmh", "g_long", "g_lat"]
+    assert list(cols) == ["t_telemetry_s", "t_video_s", "elapsed_s", "lat_deg", "lon_deg", "x_m",
+                          "y_m", "dist_m", "speed_mps", "speed_kmh", "g_long", "g_lat"]
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "channels.csv")
         export_data.write_channels_csv(path, s, 0)
@@ -333,9 +333,46 @@ def test_channels_csv_roundtrip_exact():
             data = [[float(v) for v in row] for row in r]
     assert header == list(cols)
     parsed = np.asarray(data, dtype=float)
-    assert parsed.shape == (len(cols["t_media_s"]), len(header))
+    assert parsed.shape == (len(cols["t_telemetry_s"]), len(header))
     for j, name in enumerate(header):  # float-repr round-trip: EXACT, not approximate
         assert np.array_equal(parsed[:, j], cols[name]), f"column {name} not exact"
+
+
+def test_the_channels_csv_names_the_clock_each_time_column_is_on():
+    """The channels CSV's time column was headed `t_media_s` and carried TELEMETRY seconds.
+
+    Measured on both D24 recordings through the real `Session.load`, that column sat **+0.415 s
+    (0060) / +0.353 s (0062)** — median, range +0.379…+0.450 / +0.291…+0.414 — after the video
+    position that shows each row: 12.4 / 10.6 frames at 30 fps. Anyone lining the file up against
+    the footage by the column's own name was a third of a second out, and "media" could not have
+    said which media map anyway: since #301 the picture map and the camera's stamp map differ by
+    the whole GPS lag. So the file names both clocks — `t_telemetry_s` (the GPS9 true clock the lap
+    was timed on) and `t_video_s` (`Session.media_time`: the position in the footage whose frame
+    shows that sample, the same map the player and the burned export use) — and neither says
+    "media"."""
+    from studio import chapters, media_clock
+
+    s = make_session()
+    clock = media_clock.MediaClock(rate=1.0 + 26.73e-6, offset=0.0256, gps_lag=0.4764)
+    s.chapters = chapters.ChapterMap(["GX020060.MP4"], [3000.0], media_clock=clock)
+    cols = s.lap_channels(0)
+    assert not [k for k in cols if "media" in k], (
+        f"a channels-CSV column still says 'media', which names no single clock: {list(cols)}")
+    assert "t_telemetry_s" in cols and "t_video_s" in cols, list(cols)
+    times = s._lap_columns(0)[0]
+    assert np.array_equal(cols["t_telemetry_s"], times[:len(cols["t_telemetry_s"])])
+    video = np.asarray([s.media_time(float(t)) for t in cols["t_telemetry_s"]])
+    assert np.array_equal(cols["t_video_s"], video), "t_video_s must be Session.media_time"
+    # The two columns really are different clocks here: the lag (and the ramp) separate them.
+    gap = cols["t_telemetry_s"] - cols["t_video_s"]
+    assert np.all(np.abs(gap - (clock.gps_lag - clock.offset)) < 0.01), gap[:3]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "channels.csv")
+        export_data.write_channels_csv(path, s, 0)
+        with open(path, newline="", encoding="utf-8") as f:
+            header = next(csv.reader(f))
+    assert header[:3] == ["t_telemetry_s", "t_video_s", "elapsed_s"], header
+    print("ok channels CSV names the telemetry and the video clock, never 'media'")
 
 
 def test_channels_csv_without_g_signal():
@@ -616,6 +653,7 @@ if __name__ == "__main__":
     test_write_laps_csv_matches_table()
     test_laps_summary_gate_is_the_ideal_not_the_sector_count()
     test_channels_csv_roundtrip_exact()
+    test_the_channels_csv_names_the_clock_each_time_column_is_on()
     test_channels_csv_without_g_signal()
     test_channels_csv_g_long_is_clean_gps_not_raw_imu()
     test_session_date_uses_local_calendar_day_not_utc()

@@ -194,8 +194,9 @@ class Rec:
 
         `t` is the lap columns' own TELEMETRY (GPS9 true-clock) axis, exactly as
         `Session._lap_columns` returns it — deliberately not pre-converted, so that every probe's
-        conversion is visible at the point of use. Put it on the IMU's clock with
-        `_align.to_inertial`."""
+        conversion is visible at the point of use. Put it on the GYRO's clock with
+        `_align.to_gyro_clock` and on the ACCL's with `_align.to_accl_clock` — two maps, because
+        the two streams' content does not ride the same clock (see `_align`)."""
         sl = slice(int(self._starts[i]), int(self._starts[i + 1]))
         return (self.z["lap_t"][sl], self.z["lap_x"][sl], self.z["lap_y"][sl],
                 self.z["lap_v"][sl], self.z["lap_d"][sl])

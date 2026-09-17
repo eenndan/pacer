@@ -195,9 +195,9 @@ def _stub_session(n=60):
     s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
     s.lap_trace_segments = lambda lid: [SimpleNamespace(xs=xs, ys=ys, measured=True)]
     # lap_channels is the unified per-sample dict (one accessor for the rainbow map AND the
-    # CSV export); the map reads t_media_s / x_m / y_m / speed_kmh / dist_m.
+    # CSV export); the map reads t_telemetry_s / x_m / y_m / speed_kmh / dist_m.
     s.lap_channels = lambda lid: {
-        "t_media_s": t, "x_m": xs, "y_m": ys, "speed_kmh": speed, "dist_m": cum}
+        "t_telemetry_s": t, "x_m": xs, "y_m": ys, "speed_kmh": speed, "dist_m": cum}
     s.delta = lambda ids, x_mode="distance": (
         0, {}, {lid: (np.linspace(0, 500.0, 400), dvals) for lid in ids})
     # D5 grip channel: a utilization ramp 0.1 (unused) → 1.1 (over the p98 limit), aligned to xy.

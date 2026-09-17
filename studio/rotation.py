@@ -95,14 +95,28 @@ still computed with the offset left in — which is most of why the corner corre
 not higher — and the measurement itself always runs on `MediaClock.without_gps_lag()`, or it would
 be measuring the correction it produced.
 
-WHAT IT IS. On the media clock the GPS trace's timestamps run 0.483 s (0060) and 0.459 s (0062)
-BEHIND the gyro's for the same event; per chapter 0.491/0.471 and 0.467/0.469/0.445. It is a
-CONSTANT, not a drift, and it does not step across a chapter seam (5 laps either side of 0062's
-two seams: 0.469 vs 0.491, and 0.443 vs 0.452). The per-lap spread is tight: median 0.485/0.458,
-IQR [0.453, 0.509] and [0.439, 0.475] over 38 and 65 laps. Through `measure_lag` itself, on the
-whole recording, the two read +0.476 s and +0.459 s — its uniform-grid lookup lands 8.6 ms and
-1.1 ms from a plain per-sample np.interp sweep over the same samples, against a per-lap spread of
-30-40 ms, and both print as 0.48 s and 0.46 s in the row that states them.
+WHAT IT IS — ONE FIGURE, AND WHICH STATISTIC EVERY OTHER ONE IS. The figure is what `measure_lag`
+returns over the WHOLE recording, because that is the number `Session._install_gps_lag` installs
+and the DATA TRUST row prints: on the media clock the GPS trace's timestamps run **+0.4764 s
+(0060) and +0.4589 s (0062)** BEHIND the gyro's for the same event (printed 0.48 s / 0.46 s).
+Every other lag figure in this repo is one of these statistics of the same quantity, and says so:
+
+    all through `measure_lag`, on the stamp map   0060                0062
+    WHOLE RECORDING  <- THE figure                +0.4764             +0.4589
+    per chapter                                   +0.499 / +0.470     +0.466 / +0.472 / +0.444
+    per lap: median                               +0.4827             +0.4512
+    per lap: IQR                                  [0.450, 0.509]      [0.439, 0.478]
+    5 laps either side of a seam (medians)        +0.501 | +0.450     +0.463 | +0.493, +0.448 | +0.465
+
+It is a CONSTANT, not a drift: no seam step is larger than the per-lap spread.
+
+"0.483" IS TWO DIFFERENT STATISTICS, which is why a three-digit spelling cannot say which one it
+is. PR #291 published it as the WHOLE-RECORDING figure from its research harness — a plain
+per-sample np.interp sweep, which reads +0.4834 / +0.4593 over the same samples, 7.1 ms and 0.4 ms
+from `measure_lag`'s uniform-grid lookup — and on the shipped estimator the PER-LAP MEDIAN
+happens to read +0.4827. Neither is the installed figure. Quote +0.4764 / +0.4589, or name the
+statistic beside the number. (That harness's per-chapter and per-lap figures were 0.491/0.471,
+0.467/0.469/0.445 and a median 0.485/0.458; the table re-measures them on `measure_lag`.)
 
 WHY THIS REPO USED TO READ ~0.35-0.40 s. That figure was measured against RAW TELEMETRY time, and
 the two axes run at different rates — the media clock is ~27 ppm fast — so the lag slid by 0.100 s
@@ -114,7 +128,8 @@ telemetry-axis figure trends +38.9 / +37.4 ppm, i.e. the rate itself; mapped thr
 IT IS NOT AN ARTIFACT OF THE FILTERS, and the filters are the first thing to suspect: two signals
 put through different windows can manufacture a lag. Every window here is centred, so none of them
 can move a peak, and switching them off says so. Whole-recording, media-mapped, in seconds of GPS
-lag: app filters 0.483/0.459; the gyro low-pass off 0.529/0.479; the curvature boxcar off
+lag, through #291's per-sample harness (which is why the first pair reads 0.483 where `measure_lag`
+reads 0.476): app filters 0.483/0.459; the gyro low-pass off 0.529/0.479; the curvature boxcar off
 0.475/0.454; both off 0.433/0.479; the 13-sample load-time POSITION boxcar off (`smooth_window=1`,
 a second full load) 0.471/0.465. The estimator itself was checked by delaying the real gyro
 stream 0.400 s: it recovered 0.400 s on both recordings, to the millisecond.
@@ -355,17 +370,20 @@ def _erode(mask: np.ndarray, t: np.ndarray, guard: float) -> np.ndarray:
 # MEASURE IT ON ONE CLOCK OR THE ANSWER DRIFTS. The two axes also run at different RATES — the media
 # clock is ~27 ppm fast (`media_clock.py`) — so a lag measured against raw telemetry time slides
 # through a recording and reads as a drift that is really the rate. Measured per lap on the D24
-# recordings, telemetry axis vs the same laps mapped through `media_clock`:
+# recordings through this function, telemetry axis vs the same laps on the stamp map
+# (`MediaClock.without_gps_lag()`), sign as `measure_lag` returns it (+ = the GPS trace is late):
 #
-#     0060 (38 laps)   telemetry -0.422 s median, trend +38.9 ppm   <- slides 0.100 s per session
-#                      media     -0.485 s median, trend +12.2 ppm
-#     0062 (65 laps)   telemetry -0.362 s median, trend +37.4 ppm   <- slides 0.167 s per session
-#                      media     -0.458 s median, trend +10.2 ppm
+#     0060 (38 laps)   telemetry +0.420 s per-lap median, trend -41.5 ppm   <- the rate, as a drift
+#                      stamp map +0.483 s per-lap median, trend -12.9 ppm
+#     0062 (65 laps)   telemetry +0.361 s per-lap median, trend -36.8 ppm
+#                      stamp map +0.451 s per-lap median, trend  -9.6 ppm
 #
-# On the media clock it is a CONSTANT, not a drift: per chapter it reads -0.491/-0.471 (0060) and
-# -0.467/-0.469/-0.445 (0062), and it does not step across a chapter seam (5 laps either side of
-# 0062's two seams: -0.469 vs -0.491 and -0.443 vs -0.452). The earlier ~0.35-0.40 s figure in this
-# repo was measured on the telemetry axis, so it averaged the 27 ppm ramp and understated it.
+# On the media clock it is a CONSTANT, not a drift. THE figure is the whole-recording one,
+# +0.4764 / +0.4589 s; the per-chapter and seam readings are tabled in the module doc beside it,
+# each named as the statistic it is. (This block used to spell these with the opposite sign — the
+# sweep's raw peak, before `measure_lag` flips it — and with #291's per-sample harness, whose
+# per-lap medians were 0.485 / 0.458.) The earlier ~0.35-0.40 s figure in this repo was measured
+# on the telemetry axis, so it averaged the 27 ppm ramp and understated it.
 #
 # THE SEARCH IS COARSE-TO-FINE because the load path pays for it: one pass at LAG_COARSE_S over
 # +-LAG_SEARCH_S, then LAG_FINE_S around the winner and a parabolic vertex. The peak is broad
@@ -381,9 +399,11 @@ LAG_MIN_CORR = 0.5
 # SUB-SAMPLING THE PATH WAS TRIED AND REFUSED, and it is worth writing down because it looks free.
 # This sweep is a LOAD-PATH cost — 504 ms (0060) and 652 ms (0062) written the obvious way, 13.6 %
 # and 17.6 % of the whole load — and the obvious economy is to correlate every Nth path sample.
-# MEASURED, that moves the answer: a bound of 8,000 samples is every 4th fix on 0060 (+0.483 ->
-# +0.493, 9 ms) and every 6th on 0062, where it reads +0.633 against the true +0.459 — a 174 ms
-# error, a third of the quantity being measured. Every 6th fix is one sample per 0.6 s, which sits
+# MEASURED (with #291's per-sample harness, whose whole-recording 0060 reading is +0.483 where this
+# function's is +0.4764 — module doc), that moves the answer: a bound of 8,000 samples is every 4th
+# fix on 0060 (+0.483 -> +0.493, 9 ms) and every 6th on 0062, where it reads +0.633 against the
+# true +0.459 — a 174 ms error, a third of the quantity being measured. Every 6th fix is one sample
+# per 0.6 s, which sits
 # right at the bandwidth of the 1.3 s-smoothed path rate and well inside the 0.3 s-smoothed gyro's,
 # so the decimation ALIASES both channels and the aliases move the peak. The comparison therefore
 # keeps every sample, and the speed comes from the gyro side instead: one uniform copy of the gyro
@@ -409,10 +429,14 @@ def _uniform(t, y):
 def measure_lag(t_gyro, yaw, path_t, path_w):
     """How far the GPS trace's clock runs BEHIND the gyro's → (gps_lag_s, corr_at_lag, corr_at_0).
 
-    `+0.46` means an event's GPS timestamp is 0.46 s LATER than the same event's gyro timestamp —
-    the D24 reading. `path_t` must already be on the gyro's clock (map it through
-    `media_clock.to_media` first, or the answer carries the two clocks' 27 ppm rate difference as
-    a fake drift — see the block above).
+    `+0.4764` means an event's GPS timestamp is 0.4764 s LATER than the same event's gyro
+    timestamp — the whole-recording D24 0060 reading, and the figure the app installs (+0.4589 on
+    0062; the module doc tables every other statistic of it). `path_t` must already be on the
+    gyro's STAMP clock: map it through `media_clock.without_gps_lag().to_media` first. Not the
+    raw telemetry axis — the answer then carries the two clocks' 27 ppm rate difference as a fake
+    drift (the block above) — and NOT `Session.media_clock.to_media` / `Session.media_time`, which
+    since #301 carry this very lag and would read ~0 (+0.007 / +0.002 s), the correction measuring
+    itself.
 
     Returns None when the peak is not a measurement: at the edge of the search window, or below
     `LAG_MIN_CORR`. None means "not measured", never "zero"."""
