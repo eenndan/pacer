@@ -239,14 +239,13 @@ def probe(rec: Rec) -> None:
     # M6's counterfactual for comparison: the nearest-consensus lap as the reference.
     dev = {i: float(np.hypot(*g.shift[i])) for i in rec.clean}
     alt = min(dev, key=dev.get)
-    for name, kw in (("M6 reference = lap %d" % alt, dict(ref=alt)),
+    for name, kw in ((f"M6 reference = lap {alt}", dict(ref=alt)),
                      ("M6 both", dict(ref=alt, drift=True))):
         rows = _variant_rows(rec, **kw)
         print(f"   {name:<24} interior boundaries matched {_pct(np.isfinite(rows[:, inner]))}")
 
     # ---- 4. what moves that already matched
     others = [i for i in rec.clean if i != rec.best]
-    new_rows = None
     for name, kw in (("de-drift only", dict(drift=True)),
                      ("both", dict(drift=True, anchor=True))):
         rows = _variant_rows(rec, **kw)
@@ -268,8 +267,7 @@ def probe(rec: Rec) -> None:
               f"|Δ odometer| median {np.median(move):.3f} m, p90 {np.percentile(move, 90):.3f} m, "
               f"max {move.max():.3f} m; those cells' corner TIMES ({len(dt)}) |Δ| median "
               f"{np.median(dt):.4f} s, p90 {np.percentile(dt, 90):.4f} s, max {dt.max():.4f} s")
-        new_rows = rows
-    both = np.isfinite(shipped_rows) & np.isfinite(new_rows)
+
 
     # ---- 5. the translation-invariant witness: did the boundaries move TOWARDS the track?
     candidates = {"de-drift only": _variant_rows(rec, drift=True),
