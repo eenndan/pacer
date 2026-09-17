@@ -49,7 +49,10 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMainWindow
 
 _APP = QApplication.instance() or QApplication([])
 
-from test_central_view_realqt import _jail_every_live_app_support_seam, _real_central_view  # noqa: E402
+from test_central_view_realqt import (  # noqa: E402
+    _jail_every_live_app_support_seam,
+    _real_central_view,
+)
 
 from studio import data_quality, theme  # noqa: E402
 

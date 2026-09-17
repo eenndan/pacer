@@ -622,7 +622,8 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 #                 ⚠ stays where a reader can see which lap it belongs to.
 #
 # THE WORDS ARE THE APP'S OWN. "ESTIMATED" and "GPS LOW" are literally the lap panel's data-quality
-# chip (central_view._refresh_quality_badge), and "provisional" is what the map banner, the export
+# chip (central_view._refresh_quality_badge — whose third word, "NO GPS", has no stamp here because
+# a recording with no fix has no lap time to qualify), and "provisional" is what the map banner, the export
 # dialog and `[p]`'s own meaning already call it — so a driver who has seen the app reads the same
 # vocabulary on the clip, and a viewer who has not gets a whole word. These strings are NOT
 # ASCII-bound the way `MARK_MEANING` is (nothing here reaches laps.csv); the em dash is the app's
