@@ -345,6 +345,19 @@ class _QualityStrip(QWidget):
     dropout is a strip that vouches for one. `Session.lap_quality` folds a lap's cells the same
     way, so "a lap inherits its worst cell" is one rule with one implementation.
 
+    ITS PIXELS CROSS TWO CLOCKS BY LABEL, and it is the app's one SHORT-window consumer of the
+    strip. The slider's ms are telemetry seconds (`PlayerPane` emits `to_telemetry`); the cells
+    are the naive media seconds the loader binned. Measured through this widget
+    (`studio/dev/probes/p5_clock_crossing_scale.py`), putting the slider's seconds on the strip's
+    axis first — `media_clock.without_gps_lag()`, never `media_time`, which adds the GPS lag —
+    changes 0-2 columns of a 484-1384 px whole-session bar (0060; none on 0062). In compare mode a
+    column is 0.05-0.14 s, and it moves 18-55 columns over 12-16 of 38 laps on 0060 (none on 0062),
+    no class edge by more than 2 px, with 11-21 % of hover pixels naming the neighbouring second
+    rather than a different class. It is deliberately
+    NOT converted: this band paints a class and gates nothing, and ±0.05 s of that offset is
+    payload packing that no map removes, a pixel at these scales. A consumer that ACTS on a short
+    window's class is the other case — see `Session.quality_timeline`.
+
     THE HONEST DEGRADED STATE. A GPS5-era camera writes no per-sample fix type and no DOP at all
     (`data_quality.UNREPORTED`), and the one thing this surface must never do is paint a confident
     green over a stream that carries nothing to be confident about. Such a recording gets a
