@@ -259,7 +259,7 @@ def _settle_ui(app: QApplication, w: StudioWindow) -> None:
 
 
 def seek(app: QApplication, w: StudioWindow, t: float) -> None:
-    """Put the whole window at global media time `t` — the pair the live tick drives: the player
+    """Put the whole window at global TELEMETRY time `t` — the pair the live tick drives: the player
     pane resolves (chapter, local) and the view repaints readout, map marker and chart playhead."""
     view = w.view
     view.video.pane.seek(t)
@@ -268,7 +268,7 @@ def seek(app: QApplication, w: StudioWindow, t: float) -> None:
 
 
 def lap_time_at(session, lap_id: int, fraction: float) -> float:
-    """Global media time `fraction` of the way through `lap_id`."""
+    """Global TELEMETRY time `fraction` of the way through `lap_id` (the pane crosses to media)."""
     t0, t1 = session.lap_window(lap_id)
     return t0 + fraction * (t1 - t0)
 

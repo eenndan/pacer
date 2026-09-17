@@ -18,10 +18,11 @@ rotation rates on two different clocks, so an offset delta between them forges i
 omega(t) - omega(t+delta) ~= -delta * d(omega)/dt, which peaks at turn-in and reverses at exit —
 the shape a scrub index is supposed to have. An earlier version of this probe FITTED that offset
 by maximising the correlation, which quietly absorbs the 27 ppm media-vs-telemetry rate difference
-into one constant and leaves the ramp in. This version takes the alignment from `_align` (the
-affine clock map + PR #291's measured `gps_lag_s`), then sweeps the RESIDUAL offset as a check
-that it lands on zero, and finally reports how much beta_dot a residual offset of the sweep's own
-plateau width would forge. None of the numbers below come from a fitted lag.
+into one constant and leaves the ramp in. This version takes the alignment from
+`_align.to_gyro_clock` (the affine clock map + PR #291's measured `gps_lag_s` — right for the GYRO,
+whose content rides the picture; the ACCL has its own map), then sweeps the RESIDUAL offset as a
+check that it lands on zero, and finally reports how much beta_dot a residual offset of the sweep's
+own plateau width would forge. None of the numbers below come from a fitted lag.
 
     pixi run python -m studio.dev.probes.p1_sideslip
 
@@ -106,7 +107,7 @@ def _residual_lag_sweep(rec, gt, gyaw, lags, which: str = "kappa"):
     Precomputes the path channel once and only re-interpolates the gyro per lag — recomputing a
     curvature profile inside a 201-offset x 100-lap loop is what made an earlier version of this
     probe take minutes instead of seconds."""
-    ref = [(_align.to_inertial(rec, t), path_rate(t, x, y, d, which))
+    ref = [(_align.to_gyro_clock(rec, t), path_rate(t, x, y, d, which))
            for _i, (t, x, y, _v, d) in _clean_laps(rec)]
     b = np.concatenate([w for _t, w in ref])
     out = []
@@ -120,7 +121,7 @@ def _loop_ratios(rec, gt, gyaw):
     """Closed-lap rotation of the gyro and of BOTH path references, as multiples of 2*pi."""
     g, pk, ph = [], [], []
     for _i, (t, x, y, _v, d) in _clean_laps(rec):
-        ti = _align.to_inertial(rec, t)
+        ti = _align.to_gyro_clock(rec, t)
         m = (gt >= ti[0]) & (gt <= ti[-1])
         if int(m.sum()) < 32:
             continue
@@ -168,7 +169,7 @@ def analyse(key: str, extra_lag: float = 0.0, match_bw_s: float = 1.3,
         dt = float(np.median(np.diff(t)))
         w = max(int(round(match_bw_s / max(dt, 1e-9))), 1)
         wp = boxcar(path_rate(t, x, y, d, which), w)
-        wg = boxcar(np.interp(_align.to_inertial(rec, t) + extra_lag, gt, gyaw), w)
+        wg = boxcar(np.interp(_align.to_gyro_clock(rec, t) + extra_lag, gt, gyaw), w)
         rows.append(dict(i=i, t=t, frac=d / d[-1], v=v, wp=wp, wg=wg, beta=wp - wg,
                          dwp=np.gradient(wp, t)))
     return rec, rows

@@ -48,10 +48,11 @@ AND THE GPS TIMESTAMPS THEMSELVES ARE LATE. The rate fit above puts a telemetry 
 media clock; it does NOT say whether the timestamp on a GPS fix names the instant the picture
 shows. Measured (studio/rotation.py, which cross-correlates the camera's own gyroscope against the
 path-derived rate): an event's GPS timestamp lands **+0.476 s (0060) / +0.459 s (0062)** after the
-same event's gyro timestamp, with no step at a chapter seam and a per-lap IQR of ~0.03 s. The gyro
-rides the picture (settled against yaw taken from the frames themselves), so the trace is the late
-one, and every GPS-derived overlay — speed, Δ, the map dot — was painted against a frame ~14 of
-them past the one it belongs to at 30 fps. (The g DIAL is a separate case, and not the one it
+same event's gyro timestamp — `rotation.measure_lag`'s WHOLE-RECORDING figure, the one installed
+here; `rotation`'s module doc tables it per chapter and per lap (IQR 0.06 s / 0.04 s wide), with no
+seam step larger than that spread. The gyro rides the picture (settled against yaw taken from the
+frames themselves), so the trace is the late one, and every GPS-derived overlay — speed, Δ, the map
+dot — was painted against a frame ~14 of them past the one it belongs to at 30 fps. (The g DIAL is a separate case, and not the one it
 looks like; see WHOSE LAG THIS IS below.)
 
 That offset is `gps_lag` here. It is NOT part of the fit and cannot be: `fit` sees only the two
@@ -75,6 +76,35 @@ together. So the g series must not have this lag taken back out of it. `Session.
 reason (#303). Undoing the lag there put the dial ~0.39 s behind the speed painted beside it.
 What this lag DOES correct is the GPS-derived half: the speed, the Δ, the map dot, the lap clock's
 zero, and the seek itself.
+
+WHICH MAP — THE NAMES CANNOT SAY, SO THIS DOES. Both maps land on the same media axis, so a name
+that only names the axis ("media time", `to_media`) cannot tell them apart, and it has not: #314
+crossed `Session.media_time` to index the GPS-quality strip and published 9 of 456 corner cells
+flipping where the truth was 1 (#318). The difference is WHAT is being located:
+
+  * the PICTURE map — `to_media` on the installed clock, `Session.media_time`: the footage position
+    whose frame shows the event a telemetry sample describes. Seek the video with it, and read any
+    series whose CONTENT rides the picture with it.
+  * the STAMP map — `without_gps_lag().to_media`: the camera's own media stamp for that telemetry
+    instant. Index anything whose content arrives carrying the GPS delay with it.
+
+Which series is which is a MEASURED property of each stream's content, not of how it is stamped.
+Through `rotation.measure_lag` against the path-derived reference (+ = the path runs behind the
+channel), 0060 / 0062:
+
+    series (stamped on)                  STAMP map            PICTURE map          so it takes
+    GYRO yaw rate (media stamps)         +0.476 / +0.459 s    +0.007 / +0.002 s    the PICTURE map
+    g series `lat_g` (ACCL stamps)       +0.072 / +0.040 s    -0.409 / -0.418 s    the STAMP map
+    raw |ACCL horizontal| (ACCL stamps)  +0.095 / +0.053 s    -0.382 / -0.406 s    the STAMP map
+    GPS-quality strip (naive stamps)     -0.000 / -0.000      +0.476 / +0.459      the STAMP map
+                                         (#318's per-fix residual against the stamps the strip binned)
+
+GYRO and ACCL are stamped together on one sample grid and still take different maps, so no name
+of a STREAM ("IMU", "inertial", "media-stamped") can choose the map either — the dev probes'
+single "inertial" conversion placed every accelerometer sample through the gyro's map until T9.
+Correlation cannot arbitrate this: r is identical to three decimals under either map on every row.
+Every executable crossing in `studio/` is listed, with the map it takes and why, in
+`tests/test_media_clock.py::CROSSINGS`, and a new one fails that test until it is added there.
 
 Qt-free and pacer-free (numpy only), so the conversion is shared by the pipeline, the exporter and
 the player without dragging either dependency anywhere.

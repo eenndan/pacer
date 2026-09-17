@@ -90,7 +90,7 @@ STAT_LABELS = {
 # TIME, not x-span: in distance mode the interval is metres, and 30 m is 2.4 s in a hairpin and
 # 0.9 s on the straight. The floor is applied to the interval's own elapsed time, which the view
 # gets from the same `session.media_time_at_plot_x` conversion the scrub cursor uses — the true
-# GPS clock, never a ∫ds/v reconstruction of it.
+# GPS (telemetry) clock whatever that name says, never a ∫ds/v reconstruction of it.
 SLOPE_MIN_INTERVAL_S = 1.0
 # ...and the sentence the UI says instead of a number, so the reason travels with the refusal.
 SLOPE_FLOOR_NOTE = (
@@ -143,8 +143,8 @@ def interval_stats(xs, ys, xa: float, xb: float, *, dt: float | None = None,
     printed one column to its left.
 
     `dt`/`dd` are the interval's true elapsed time and distance, which only the view can supply
-    (they come from the session's own plot-x↔media-time conversions — the same ones the scrub
-    cursor uses, i.e. the true GPS clock, never ∫ds/v). `dt` also gates the slope.
+    (they come from the session's own plot-x↔time conversions — the same ones the scrub cursor
+    uses, i.e. the true GPS clock, never ∫ds/v). `dt` also gates the slope.
 
     Returns None for an empty channel or a zero-width interval."""
     xs = np.asarray(xs, float)

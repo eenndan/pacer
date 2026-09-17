@@ -314,9 +314,9 @@ class PlayerPane(QWidget):
         than of anything done here: the map marker / chart cursor / readout are driven off
         `positionChanged` — the decoder's OWN reported media position — through PlaybackState, not
         off a wall clock the app integrates. A rate change moves the same positions past the same
-        30 Hz tick more slowly; every consumer downstream still reads a media time and looks the
-        telemetry up at it. Nothing here converts between wall time and media time, so there is no
-        conversion to get wrong."""
+        30 Hz tick more slowly; every consumer downstream still reads the decoder's media position,
+        crossed once to telemetry in `_on_position`, and looks the telemetry up at it. Nothing here
+        converts between wall time and media time, so there is no conversion to get wrong."""
         rate = float(rate)
         if rate <= 0:
             return

@@ -46,7 +46,7 @@ class ScrubController:
 
         # --- scrub state (owned here) ---
         self._scrub_lap: int | None = None       # the lap captured at grab; the drag is scoped to it
-        self._scrub_target: float | None = None   # latest requested media time (coalesced)
+        self._scrub_target: float | None = None   # latest requested telemetry time (coalesced)
         self._scrub_pending = False               # a new target awaits the next tick's seek
         self._scrub_view_t: float | None = None    # latest dragged time for the view refresh (coalesced)
         self._scrub_view_pending = False           # a view refresh (cursor/marker/readout) awaits the tick
@@ -124,7 +124,7 @@ class ScrubController:
         self._scrub_pending_b = False
 
     def on_moved(self, x: float, mode: str) -> None:
-        """Drag: convert plot-x (in mode axis) to a media time in the captured lap, clamped; stash
+        """Drag: convert plot-x (in mode axis) to a telemetry time in the captured lap, clamped; stash
         as latest target + dirty flag (seek + view refresh coalesced to the next tick)."""
         lap = self._scrub_lap
         if lap is None:  # not inside a valid lap (lead-in / between laps) — no-op
@@ -142,7 +142,7 @@ class ScrubController:
         self._scrub_view_pending = True
         compare_b = self._compare_b
         if self._is_comparing and compare_b is not None:
-            # distance-lock: convert the same plot-x to the secondary lap's global media time.
+            # distance-lock: convert the same plot-x to the secondary lap's global telemetry time.
             t_b = self.session.media_time_at_plot_x(compare_b, x, mode, best_distance=best_d)
             if t_b is not None:
                 self._scrub_target_b = t_b

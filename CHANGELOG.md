@@ -310,6 +310,15 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **The channels CSV's time column said "media" and was a third of a second off the footage.**
+  The per-lap channels export headed its time column `t_media_s`, and the values were the GPS9
+  true-clock (telemetry) seconds the lap was timed on. Lined up against the video by that name,
+  every row sat **0.415 s (0060) / 0.353 s (0062)** after the frame that shows it — 12 and 11
+  frames at 30 fps — because the footage runs on its own clock and the GPS timestamps are late
+  against it. The file now carries both, named for what they are: `t_telemetry_s` (the same values
+  as before) and `t_video_s`, the position in the footage whose frame shows that sample, through
+  the same map the player and the burned-in export use. `elapsed_s` and every other column are
+  unchanged.
 - **The ideal lap's published sample table was stale on both D24 rows, and the figures derived
   from it were stale in seventeen other files.** Since #300 warped every lap, the app's ideal on D24's
   three chapters is 66.709 s, not 66.781, and on chapter 1 alone it is 67.403 s, not 67.831. Every
@@ -364,8 +373,9 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 - **Every GPS-derived number drawn over the video was half a second late, and now it is not.** The
   camera's accelerometer and gyroscope are timestamped on the clock the picture plays on; its GPS
   receiver stamps a fix on its own, and that stamp lands **0.476 s (0060) / 0.459 s (0062)** after
-  the instant the frame shows — measured per recording, per chapter and per lap, with no step at a
-  chapter seam and a per-lap IQR of about 0.03 s. So the speed, the Δ, the map dot, the dial's
+  the instant the frame shows — the whole-recording figure, which is the one applied; per chapter
+  and per lap it sits within an IQR 0.04–0.06 s wide, with no step at a chapter seam larger than
+  that. So the speed, the Δ, the map dot, the dial's
   longitudinal axis and the lap clock's zero were all painted against a frame roughly **14 of them
   late at 30 fps**, in the app and in every exported clip. Pacer now folds the measured lag into
   the one mapping that crosses between the picture and the telemetry, so the live view and a burned

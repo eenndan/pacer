@@ -19,7 +19,10 @@ REPEATABILITY tests below separate a resonance from that buzz, which is why each
 beside it rather than a threshold.
 
 THE CLOCK. Questions (1) and (2) are single-channel and need no alignment. Question (3) is
-cross-clock — it asks where on track an inertial sample was — and goes through `_align`.
+cross-clock — it asks where on track an accelerometer sample was — and goes through
+`_align.to_accl_clock` (via `_accel.to_track_fraction`), which is NOT the gyro's map: the ACCL's
+content carries the GPS timestamps' delay, so the lag is not taken out for it. `_align.check_accl`
+measures that placement on every run.
 
     pixi run python -m studio.dev.probes.p2_chatter
 """
@@ -89,6 +92,7 @@ def report(key: str):
     print("  " + _align.describe(rec))
     gt, gyaw = yaw_rate_series(rec.gyro, rec.grav)
     _align.check(rec, gt, gyaw)
+    _align.check_accl(rec)          # the stream this probe actually places on the track
     pipeline_check(rec)
 
     tq, freqs, pv, ph, fs = spectra(rec)
