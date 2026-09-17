@@ -317,6 +317,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A corner time or speed pacer had to interpolate is no longer published as a measurement.** A
+  corner edge a lap does not match to the best lap's line on track is interpolated, and on the 38-lap
+  D24 recording that put 236 of 456 corner times a median 0.22 s (up to 0.96 s) and the speeds read at
+  those edges a median 1.1-1.6 km/h (up to 11.5 km/h) off an independent line-crossing reading —
+  against 0.004 s and 0.015 km/h for matched ones. The CORNERS table's Best sat on such a cell in C2,
+  C6 and C8, and its Median moved by up to 0.35 s. Now one rule decides what counts, at the
+  granularity each value is read at (a window needs both edges, a speed its own): the CORNERS table,
+  the Corners page ★, a Best's provenance panel, the STRAIGHTS times, trap speeds and exit Δ, and the
+  where-the-time-goes phase split count only matched cells, say how many laps they counted, and show
+  a dash where no lap matched. The Corners page still shows each lap's reading, muted with the reason.
+  Coaching and the ideal lap still count every cell and are the next step.
 - **A recording on an unknown track no longer opens as quarter-laps when a wider start line would
   have cut every lap in two.** With no saved start/finish line, SD_30_08 opened as **25 laps of
   13.3 s / 203 m** — best 13.073 s, ideal 12.886 s, written to the library that way — when the

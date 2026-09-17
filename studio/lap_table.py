@@ -70,7 +70,25 @@ BEST_SECTOR_MARK = " ★"  # suffixes a session-best split cell's value
 # note the cell already carries (dropout / provisional / estimated) rather than replacing it.
 BEST_LAP_TIP = "★ Session best — the fastest complete lap in this recording."
 BEST_SPLIT_TIP = "★ Session best — no lap crossed this sector quicker."
-BEST_CORNER_TIP = "★ Session best — no lap took this corner quicker."
+BEST_CORNER_TIP = ("★ Session best — no lap matched on track at this corner's entry and exit took it "
+                   "quicker.")
+# A corner edge this lap did NOT match on track (CornerModel.lap_edge_resolved): it is interpolated
+# between neighbouring matched points. On the D24 0060 pair that put a corner's TIME a median 0.22 s
+# (up to 0.96 s) off an independent line-crossing time, against 0.004 s matched, and the SPEED read
+# at the edge a median 1.1-1.6 km/h (up to 11.5 km/h) off, against 0.015 km/h. Such a cell is shown
+# in the PROVISIONAL tier — the treatment the Stats page's CORNERS BY LAP grid gives the same cell —
+# and is never starred, at the granularity the value is read at: Time, Δbest, Apex, Δapex and Grip
+# are measured over the window and need both edges; Entry and Exit are read at one edge each.
+UNMATCHED_CORNER_TIP = ("Not counted: on this lap, {label}'s entry or exit could not be matched to "
+                        "your best lap's line on track, so its window is interpolated between the "
+                        "neighbouring corners and can be tenths of a second out. Shown, but never "
+                        "starred, and left out of the Stats page's CORNERS table.")
+UNMATCHED_EDGE_TIP = ("Not counted: on this lap, {label}'s {edge} could not be matched to your best "
+                      "lap's line on track, so it is interpolated between the neighbouring corners "
+                      "and the speed read there can be several {unit} out. Shown, but left out of "
+                      "the Stats page's STRAIGHTS speeds.")
+# The two columns read at ONE edge, and which edge (column index -> (edge offset, word)).
+_CORNER_EDGE_COLS = {5: (0, "entry"), 6: (1, "exit")}
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 # EXCLUDED laps: substantial laps the validity rule left OUT of the times / bests (a mis-segmented
 # short/long lap, an out-lap, an in-lap, or a lap the kart STOPPED on — the median band cannot see
@@ -1805,7 +1823,8 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
     return [
         "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
         "left-hander, clockwise a right. Click a row to ring that corner on the map.",
-        f"Time spent in the corner (seconds). {BEST_CORNER_TIP}",
+        f"Time spent in the corner (seconds). {BEST_CORNER_TIP} Muted italic, in any column: that "
+        "value was read off a corner edge not matched on track, so it is interpolated (hover it).",
         delta_tip,
         f"Apex (minimum) speed through the corner ({u})",
         apex_tip,
@@ -2168,6 +2187,17 @@ class CornerTable(QWidget):
         ref_lap_id = getattr(self.session, "reference_lap_id", None)
         return callable(ref_lap_id) and ref_lap_id() == self._lap_id
 
+    def _unmatched_tip(self, col: int, label: str, counted: bool, edges: list) -> str:
+        """Why this cell is not counted, or "" when it is. An Entry/Exit cell answers for its own
+        edge (falling back to the corner's verdict when the session reports no edges); every other
+        numeric cell is measured over the window and answers for the corner."""
+        if col in _CORNER_EDGE_COLS:
+            offset, word = _CORNER_EDGE_COLS[col]
+            ok = bool(edges[offset]) if len(edges) == 2 else counted
+            return "" if ok else UNMATCHED_EDGE_TIP.format(
+                label=label, edge=word, unit=units.speed_label(self._speed_unit))
+        return "" if counted else UNMATCHED_CORNER_TIP.format(label=label)
+
     def refresh(self):
         """Rebuild the rows from the session's corner model (e.g. after a timing-line edit
         re-segmented the laps and the corner set/stats were recomputed)."""
@@ -2217,6 +2247,13 @@ class CornerTable(QWidget):
                  "Corner analysis needs a few clean laps of track shape for this session.")))
         corner_list = self.session.corners.corner_list() if stats else []
         bests = self.session.corners.corner_session_bests() if stats else []
+        # Which of this lap's corners, and corner edges, were matched on track
+        # (UNMATCHED_CORNER_TIP / UNMATCHED_EDGE_TIP). getattr-guarded for the lighter test
+        # doubles: without them every corner counts, as before.
+        resolved_fn = getattr(self.session.corners, "lap_corner_resolved", None)
+        resolved = resolved_fn(self._lap_id) if (stats and callable(resolved_fn)) else []
+        edges_fn = getattr(self.session.corners, "lap_edge_resolved", None)
+        edges = edges_fn(self._lap_id) if (stats and callable(edges_fn)) else []
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.
         grip = self.session.driving.lap_corner_grip(self._lap_id) if stats else []
         self.table.setRowCount(len(stats))
@@ -2251,7 +2288,13 @@ class CornerTable(QWidget):
             # mark. It used to compare the raw doubles — on D24 0062, C1's best is 2.7478 and laps
             # 34, 42 and 51 all print 2.75, and only lap 34 was starred. The Corners page shows one
             # lap at a time, so that contradiction was served to the reader lap by lap.
-            is_best = bool(bests) and r < len(bests) and is_best_at_print(st.time, bests[r])
+            #
+            # C4: and only a corner MATCHED on track can wear it. `bests` already counts matched
+            # cells only, so without this an interpolated time quicker than that best would read
+            # as the best at print — the error a minimum over interpolated windows selects for.
+            counted = r >= len(resolved) or bool(resolved[r])
+            is_best = (counted and bool(bests) and r < len(bests)
+                       and is_best_at_print(st.time, bests[r]))
             for col, (text, colour) in enumerate(cells):
                 # session-best corner time also carries the ★ non-colour mark (matches the lap
                 # table's session-best split cells) so "this is the best" reads without the hue.
@@ -2263,9 +2306,11 @@ class CornerTable(QWidget):
                 # cell's icon slot rather than appended to the text (see set_corner_direction).
                 if col == 0:
                     set_corner_direction(item, c.direction)
+                unmatched = ""
                 if col >= NUMERIC_COL_START:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     item.setFont(self._num_font)
+                    unmatched = self._unmatched_tip(col, c.label, counted, edges[2 * r:2 * r + 2])
                 # session-best corner time: palette best-sector colour + bold, outranks the Δ colour
                 if col == 1 and is_best:
                     item.setForeground(QColor(theme.best_sector_colour()))
@@ -2273,6 +2318,11 @@ class CornerTable(QWidget):
                     font.setBold(True)
                     item.setFont(font)
                     item.setToolTip(BEST_CORNER_TIP)   # the ★'s legend, on the ★ (IA-07)
+                elif unmatched:
+                    # Read off an interpolated window or edge: the Δ hues go with it.
+                    item.setForeground(PROVISIONAL_COLOR)
+                    theme.apply_provisional_style(item)
+                    item.setToolTip(unmatched)
                 elif colour:
                     item.setForeground(QColor(colour))
                 else:

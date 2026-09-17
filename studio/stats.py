@@ -268,11 +268,16 @@ class LapStat:
 class CornerReport:
     """One corner's whole-session statistics row (the Stats page's CORNERS table): the
     session's demonstrated best/typical/spread through the corner, the apex speeds, and
-    the median grip utilization. None = not derivable (no g signal / <2 laps), never 0."""
+    the median grip utilization. None = not derivable (no g signal / <2 laps), never 0.
+
+    Every column counts the SAME cells: the laps whose window through this corner was matched on
+    track at both edges (see `corner_report`). `n` is how many that is and `n_laps` how many laps
+    had a row at all, so `n < n_laps` says some laps' corner was interpolated and left out, and
+    `n == 0` is a corner no lap resolved — every value None, never a guess."""
 
     cid: int                        # Corner.cid (1-based, track order)
     direction: int                  # +1 left / -1 right (Corner.direction)
-    n: int                          # included laps with a finite time in this corner
+    n: int                          # counted laps: matched on track here, with a finite time
     best_s: float | None            # session-best time-in-corner
     median_s: float | None          # the typical lap's time-in-corner
     sigma_s: float | None           # sample σ (ddof=1; None with <2 laps)
@@ -282,6 +287,8 @@ class CornerReport:
     grip_median: float | None       # median per-lap grip utilization (0..~1.1); None w/o g
     score: float                    # σ × median_loss — the inconsistency weight (0.0 when
     #                                 either input is missing), same product as consistency.py
+    n_laps: int | None = None       # laps with a corner row at all (the denominator of `n`);
+    #                                 None only from a caller that never counted them
 
 
 @dataclass(frozen=True)
@@ -311,7 +318,12 @@ class StraightStat:
     exit_delta_kmh is the PRECEDING corner's median exit speed vs the best lap's (+ = the
     field exits faster than best); leverage = how much a slow exit costs down THIS straight
     (positive deficit × positive time spread) — 'fix the corner before the long straight
-    first', measured not modeled."""
+    first', measured not modeled.
+
+    C4: each column counts the laps whose edges IT reads were matched on track — the time both of
+    the straight's ends, the trap speed its end, the exit Δ the preceding corner's exit (see
+    `straights_report`). So the three counts can differ; `n_laps` is the denominator of all three,
+    and the timing line itself is always a matched end."""
 
     index: int                      # 0-based straight index (0 = start line → C1)
     label: str                      # "S/F → C1", "C3 → C4", "C12 → S/F"
@@ -324,6 +336,9 @@ class StraightStat:
     trap_median_kmh: float | None
     exit_delta_kmh: float | None    # preceding corner: median exit − best lap's exit (None k=0)
     leverage: float                 # max(0, −exit_delta) × max(0, median − best); 0 when N/A
+    n_laps: int | None = None       # laps with a row (None only from a caller that never counted)
+    n_trap: int | None = None       # laps whose trap speed counted (the straight's END matched)
+    n_exit: int | None = None       # laps whose preceding exit speed counted (None for k=0)
 
 
 @dataclass(frozen=True)
@@ -507,9 +522,13 @@ class CornerMatrix:
     lap — but it is muted, never marked, and left out of the typical and the scale. On 0062 this
     changes nothing (35 marks either way, all 27 the gate can score confirmed).
 
-    NO ★. The quickest time through a corner is the CORNERS table's Best, and on 0060 it sits on
-    an unresolved cell in C2, C6 and C8, where the gate time is 0.53, 0.41 and 0.29 s slower. A
-    grid whose purpose is "which lap lost time here" does not need a third rule for "quickest".
+    NO ★. The quickest time through a corner is the CORNERS table's Best. When this grid shipped
+    that Best counted every cell and sat on an unresolved one on 0060 in C2, C6 and C8, where the
+    gate time is 0.53, 0.41 and 0.29 s slower; since C4 it counts exactly the resolved cells this
+    grid's typical does (`corner_report`), so its Median is `medians[c]` wherever that exists (the
+    one exception: a lap with a non-finite corner time is a blank row here and keeps its other
+    cells there — no recording has produced one). A
+    grid whose purpose is "which lap lost time here" does not need a second rule for "quickest".
 
     `cells[r][c]` is lap `lap_ids[r]`'s time through corner `cids[c]`, or None where the lap
     projected no row. `medians` / `scales` are per column over the RESOLVED cells, None where
@@ -801,19 +820,48 @@ def sector_medians(splits_by_lap: list[list[float]]) -> list[float | None]:
 
 
 def corner_report(cids, directions, times_by_lap, apex_by_lap,
-                  grip_by_lap) -> list[CornerReport]:
+                  grip_by_lap, resolved_by_lap=None) -> list[CornerReport]:
     """The corner-by-corner session report: one CornerReport per corner (track order).
 
     Each *_by_lap input is one row per included lap, aligned to `cids` (ragged rows are
     tolerated — column k reads only rows long enough). σ via consistency.sigma (ddof=1);
     score = σ × median_loss, the same both-erratic-AND-slow product the consistency
     ranking uses (rationale in studio/consistency.py) — 0.0 when either input is missing
-    so an under-sampled corner never outranks a measured one."""
+    so an under-sampled corner never outranks a measured one.
+
+    WHICH CELLS COUNT. `resolved_by_lap` is `CornerModel.lap_corner_resolved` for each row (the
+    rows of all four inputs are then the same laps, in the same order): a lap's corner whose
+    window was not matched on track at both edges counts towards NOTHING in that corner's row —
+    not its time, not its apex speed, not its grip. It is the rule the CORNERS BY LAP grid
+    (`corner_matrix`) marks by, re-measured for this table on the owner's D24 recordings against an
+    independent time, the moment each lap crosses a line drawn across the track at each edge:
+
+        0060 pair (38 laps)   matched 220 of 456 cells   |Δt| median 0.004 s, max 0.022 s
+                              interpolated 236           |Δt| median 0.221 s, max 0.960 s
+                                                         apex |Δ| p90 0.53 km/h, max 8.3 km/h
+        0062 (65 laps)        matched 776 of 780         |Δt| median 0.001 s, max 0.021 s
+                              (a matched cell's apex speed: 0.0 km/h off on both recordings)
+
+    Counting every cell, this table's Best on 0060 sat on an interpolated cell in C2, C6 and C8,
+    whose crossing times were 0.53, 0.41 and 0.29 s slower than the time printed; the Best moves by
+    up to 0.25 s (C6) and the Median by up to 0.35 s (C7) when only matched cells count. 0062 moves
+    by at most 0.004 s. A corner with NO matched cell keeps its row with every value None: a guess
+    between neighbours is not a measurement, and dropping the row would hide the corner instead of
+    saying it could not be timed. None → every cell counts (a pure caller with no warp)."""
+
+    def counted(rows):
+        if resolved_by_lap is None:
+            return rows
+        return [[v if k < len(ok) and ok[k] else np.nan for k, v in enumerate(r)]
+                for r, ok in zip(rows, resolved_by_lap, strict=True)]
 
     def column(rows, k):
         vals = np.asarray([r[k] for r in rows if k < len(r)], float)
         return vals[np.isfinite(vals)]
 
+    times_by_lap, apex_by_lap = counted(times_by_lap), counted(apex_by_lap)
+    grip_by_lap = counted(grip_by_lap)
+    n_laps = len(times_by_lap)
     out: list[CornerReport] = []
     for k, (cid, direction) in enumerate(zip(cids, directions, strict=True)):
         times = column(times_by_lap, k)
@@ -825,7 +873,7 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
         sig = sigma(times)
         loss = med - best if n else None
         out.append(CornerReport(
-            cid=int(cid), direction=int(direction), n=n,
+            cid=int(cid), direction=int(direction), n=n, n_laps=n_laps,
             best_s=best, median_s=med, sigma_s=sig, median_loss_s=loss,
             apex_best_kmh=float(np.max(apex)) if len(apex) else None,
             apex_median_kmh=float(np.median(apex)) if len(apex) else None,
@@ -866,13 +914,42 @@ def brake_consistency(cids, rows_by_lap) -> list[BrakeConsistency]:
 
 
 def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
-                     best_exits) -> list[StraightStat]:
+                     best_exits, edges_by_lap=None, best_edges=None) -> list[StraightStat]:
     """The straight-line report: per straight (N corners → N+1 straights) the session's
     best/median/σ time + trap-speed best/median, and the preceding corner's exit-speed
     delta + leverage (see StraightStat). `times_by_lap`/`traps_by_lap` rows are aligned to
     the N+1 straights; `exits_by_lap` rows + `best_exits` to the N corners. Ragged rows are
-    tolerated (a degenerate lap contributes only the columns it has)."""
+    tolerated (a degenerate lap contributes only the columns it has).
+
+    WHICH CELLS COUNT (C4). `edges_by_lap` is `CornerModel.lap_edge_resolved` for each row (the
+    four per-lap inputs then being the same laps in the same order), `best_edges` the same for the
+    lap `best_exits` came from. Straight k runs from corner k's exit (the start line for k=0) to
+    corner k+1's entry (the finish line for k=N), and a value counts only where the edges it READS
+    were matched on track: the time needs both ends, the trap speed its end, the exit Δ the
+    preceding corner's exit — on the best lap too, or there is no Δ. The timing line is the warp's
+    fixed anchor, so it is always matched. An interpolated corner edge put the time a median
+    0.22 s and the speed there a median 1.1-1.6 km/h (up to 11.5 km/h) off an independent line
+    crossing on the D24 0060 pair (`CornerModel.lap_edge_resolved`); a matched one 0.004 s and
+    0.015 km/h. None → every value counts (a pure caller with no warp)."""
     n_corners = len(cids)
+
+    if edges_by_lap is not None:
+        def keep(rows, flags):
+            return [[v if k < len(ok) and ok[k] else np.nan for k, v in enumerate(r)]
+                    for r, ok in zip(rows, flags, strict=True)]
+
+        ends = [(list(e[1::2]), list(e[0::2])) for e in edges_by_lap]   # (exits, enters)
+        start_ok = [[True, *exits] for exits, _ in ends]                 # N+1 straight starts
+        end_ok = [[*enters, True] for _, enters in ends]                 # N+1 straight ends
+        times_by_lap = keep(times_by_lap, [[a and b for a, b in zip(s0, s1, strict=True)]
+                                           for s0, s1 in zip(start_ok, end_ok, strict=True)])
+        traps_by_lap = keep(traps_by_lap, end_ok)
+        exits_by_lap = keep(exits_by_lap, [exits for exits, _ in ends])
+    if best_edges is not None:
+        best_exit_ok = list(best_edges[1::2])
+        best_exits = [v if k < len(best_exit_ok) and best_exit_ok[k] else np.nan
+                      for k, v in enumerate(best_exits)]
+    n_laps = len(times_by_lap) if edges_by_lap is not None else None
 
     def column(rows, k):
         vals = np.asarray([r[k] for r in rows if k < len(r)], float)
@@ -889,8 +966,8 @@ def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
         # preceding corner is C_N across the timing line — its delta is reported on the
         # LAST straight (same physical exit), so k=0 reads None rather than double-counting.
         delta = None
+        exits = column(exits_by_lap, k - 1) if k >= 1 else None
         if k >= 1:
-            exits = column(exits_by_lap, k - 1)
             if len(exits) and k - 1 < len(best_exits) and np.isfinite(best_exits[k - 1]):
                 delta = float(np.median(exits)) - float(best_exits[k - 1])
         spread = (med - best) if n else None
@@ -911,6 +988,9 @@ def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
             trap_best_kmh=float(np.max(traps)) if len(traps) else None,
             trap_median_kmh=float(np.median(traps)) if len(traps) else None,
             exit_delta_kmh=delta, leverage=leverage,
+            n_laps=n_laps,
+            n_trap=len(traps) if n_laps is not None else None,
+            n_exit=len(exits) if (n_laps is not None and exits is not None) else None,
         ))
     return out
 
