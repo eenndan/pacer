@@ -2902,8 +2902,9 @@ class Session:
 
         It reads `_brake_rows` — the SAME per-lap list `brake_report` aggregates for the Stats ▸
         BRAKING table — so the metres this prints are the metres that table prints. It used to be
-        the BEST lap's single application, which disagreed with the table by up to 9.3 m on the
-        real recordings and inverted the advice outright at 0062's C1 (see coaching.BrakeHabit)."""
+        the BEST lap's single application, which disagreed with the table by up to 12.6 m on the
+        real recordings and, at 0062's C1, shrank a 12 m habit to a ~3 m shrug (see
+        coaching.BrakeHabit)."""
         rows = self._brake_rows()
         corner_list = self.corners.corner_list()
         if not rows or not corner_list:
@@ -2917,7 +2918,7 @@ class Session:
 
         The window is a FRACTION of the lap odometer, not metres and not a corner id, because the
         corner partition is re-derived per session: between the two D24 recordings C8's own window
-        grew 45.0 m → 56.3 m and with it its own-window median time by +0.550 s, none of which the
+        grew 45.0 m → 56.3 m and with it its own-window median time by +0.549 s, none of which the
         driver did (studio/focus.py). Measured over one stored window instead, the same corner is
         +0.042 s. Each lap projects the fractions onto its own total, exactly as `lap_corner_stats`
         projects a corner window, and the seconds come off that lap's own elapsed clock."""
@@ -2935,8 +2936,9 @@ class Session:
         come from there so the focus store, the library row and the session record all key off one
         definition of "which recording is this". The baseline numbers are measured HERE, by
         `focus_samples`, so the stored median is the same statistic the next session will produce
-        for the same window rather than the corner service's differently-projected one (the two
-        run 0.01–0.07 s apart on the D24 laps, which is the size of the thing being compared).
+        for the same window rather than the corner service's differently-projected one (their
+        per-corner medians run 0.03–0.18 s apart on 0060 and 0.01–0.08 s apart on 0062, which is
+        the size of the thing being compared).
 
         Corners with no usable window, or no clean lap through it, are dropped rather than stored
         with a fabricated baseline — the whole point of the item is the number it carries."""

@@ -709,7 +709,7 @@ class LibraryController:
         The baseline is measured HERE, now, over this session's clean laps (``Session.focus_items``)
         and stored as a lap-FRACTION window: the corner partition is re-derived per session, so a
         corner id alone would have compared two different stretches of track next time (measured:
-        C8's window grew 11.2 m between the two D24 recordings, worth +0.550 s of imaginary
+        C8's window grew 11.2 m between the two D24 recordings, worth +0.549 s of imaginary
         slowness). An untracked session cannot hold a list at all — the list is per track."""
         entry = self._current_library_entry() or {}
         track = entry.get("track")
