@@ -178,10 +178,12 @@ def _fit_start_line(laps, base):
     count fewer. The ±10 % distance band (#68) cannot see this, because it bands against the median
     piece, and here the median piece is the fragment.
 
-    What this cannot see: a wider line that cuts every lap into two halves both inside the band
-    (the second crossing within a few percent of half a lap). That doubles the count without
-    dropping driving time, exactly as recovering a base line that missed most passes would, and
-    only the geometry of the pieces tells those two apart. Neither occurs on any recording here."""
+    What the count-and-driving rule alone cannot see: a wider line that cuts every lap into two
+    halves both inside the band (the second crossing within a few percent of half a lap). That
+    doubles the count without dropping driving time, exactly as recovering a base line that missed
+    most passes would, and only the geometry of the pieces tells those two apart. That geometry is
+    now read: `_band_lap_ids` refuses a lap that does not end where it started, going the same way
+    (`_signal.MAX_LAP_GAP_M` / `MAX_LAP_TURN_DEG`, L3), so such halves count for nothing here."""
     laps.sectors = pacer.Sectors(start_line=base, sector_lines=[])
     laps.update()
     base_n, base_s = _counted_driving(laps)

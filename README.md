@@ -134,7 +134,7 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   and 0 of 12 grip cells rendered a readable value"* is the comment above the fix. A companion
   guard proves the app never writes into its own source tree, from a tripwire on every write path
   Python and Qt expose.
-- **117 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
+- **118 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
   widgets and measure them. The whole thing runs in about nine minutes; `pixi run golden`, the gate
   you actually run after every maths change, takes under a second. CI runs all of it plus an
   end-to-end offscreen smoke on every pull request.

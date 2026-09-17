@@ -456,6 +456,70 @@ def test_a_none_alignment_means_no_warp_could_be_built():
           f"(lap 3 at {drift:.4%} is warped)")
 
 
+def test_a_corner_is_resolved_only_where_both_its_edges_are_knots_of_the_lap_warp():
+    """F7's per-cell trust flag (`CornerModel.lap_corner_resolved`) is a READ of this memo: a corner
+    is resolved on a lap iff its enter AND exit are knots of that lap's warp, i.e. were matched on
+    track rather than interpolated. Checked against a from-scratch warp on the drift fixture whose
+    run-wide lap has one boundary its spatial match cannot find — and that fixture property is
+    asserted too, or every corner would be resolved and this would prove nothing."""
+    from _synthetic import drift_noise_session
+
+    s = drift_noise_session()
+    corner_list, total_ref = s.corners.basis()
+    frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+    ref_trace = s.corners._best_trace()
+    unresolved = 0
+    for lap in s.valid_lap_ids():
+        got = s.corners.lap_corner_resolved(lap)
+        total = total_of(s, lap)
+        knots = C.lap_alignment(frame, total_ref, total,
+                                traces=s.corners._lap_traces(lap, ref_trace))[0]
+        want = [bool(np.isin(c.enter, knots) and np.isin(c.exit, knots)) for c in corner_list]
+        assert got == want, (lap, got, want)
+        assert len(got) == len(s.corners.lap_corner_stats(lap))
+        unresolved += got.count(False)
+    assert all(s.corners.lap_corner_resolved(s.best_lap_id())), "the best lap matches itself"
+    assert unresolved >= 1, "the drift fixture no longer has an interpolated corner edge"
+
+    # No warp at all (every edge is the normalized fraction) -> nothing is resolved; no corner
+    # basis -> [] exactly where lap_corner_stats is [].
+    off_line = fixture()
+    times, xs, ys, speed, cum = off_line._cols_cache[2]
+    off_line._cols_cache[2] = (times, xs, ys + 10.0, speed, cum)
+    seed_corner_basis(off_line, spans=_SPANS, total=float(TOTAL))
+    assert off_line.corners.lap_alignment(2, total_of(off_line, 2)) is None
+    assert off_line.corners.lap_corner_resolved(2) == [False] * len(_SPANS)
+    no_basis = fixture()
+    seed_corner_basis(no_basis, spans=(), total=float(TOTAL))
+    assert no_basis.corners.lap_corner_resolved(1) == [] == no_basis.corners.lap_corner_stats(1)
+    print(f"ok resolved = both edges are warp knots ({unresolved} interpolated corner(s) on the "
+          "drift fixture), all False without a warp, [] without a basis")
+
+
+def test_session_corner_matrix_is_the_corner_stats_and_their_resolution_unrolled():
+    """End to end through the real Session on a seven-lap drift session (the noise laps followed by
+    the band ladder — enough laps for the grid's floor): rows are the consistency laps, cells are
+    `lap_corner_stats` times verbatim, the resolution is `lap_corner_resolved` verbatim, and no
+    interpolated cell carries a mark."""
+    from _synthetic import _drift_session, drift_band_laps, drift_noise_laps
+
+    first = drift_noise_laps()
+    s = _drift_session(first + drift_band_laps(t0=float(first[-1]["cols"][0][-1])))
+    m = s.corner_matrix()
+    assert m is not None and m.lap_ids == s.consistency_lap_ids()
+    assert m.cids == [c.cid for c in s.corners.corner_list()]
+    for r, lap in enumerate(m.lap_ids):
+        assert m.cells[r] == [st.time for st in s.corners.lap_corner_stats(lap)]
+        assert m.resolved[r] == s.corners.lap_corner_resolved(lap)
+    flat = [x for row in m.resolved for x in row]
+    assert not all(flat), "the session no longer carries an interpolated corner edge"
+    assert not any(m.is_behind(r, c) for r, row in enumerate(m.resolved)
+                   for c, ok in enumerate(row) if not ok)
+    assert m.n_resolved == [sum(row[c] for row in m.resolved) for c in range(len(m.cids))]
+    print(f"ok Session.corner_matrix: {len(m.lap_ids)} laps x {len(m.cids)} corners, "
+          f"{flat.count(False)} interpolated cell(s), none marked")
+
+
 def test_no_comment_says_a_none_alignment_is_a_lap_below_the_drift_gate():
     """THE CLAIM — the half a fact test cannot cover, because a comment goes false on its own. #300
     removed the gate and left the wording behind in twenty-odd places, one of them a note printed in

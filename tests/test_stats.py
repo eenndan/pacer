@@ -50,6 +50,7 @@ from _synthetic import bare_session, seed_cols  # noqa: E402
 _APP = themed_app()
 
 from studio.stats import (  # noqa: E402
+    COAST_LEAD_ALPHA,
     LAT_G_BAND,
     MATRIX_MIN_LAPS,
     MATRIX_SCALE_MIN_S,
@@ -70,6 +71,9 @@ from studio.stats import (  # noqa: E402
     best_consecutive_mean,
     brake_consistency,
     clock_hhmm,
+    coast_report,
+    coast_seconds_by_piece,
+    corner_matrix,
     corner_report,
     cov_pct,
     envelope_g,
@@ -258,6 +262,157 @@ def test_straights_report_labels_deltas_and_leverage():
     assert abs(s2.exit_delta_kmh - 0.5) < 1e-12               # field FASTER than best ->
     assert s2.leverage == 0.0                                 # no leverage claim
     print("test_straights_report_labels_deltas_and_leverage OK")
+
+
+# ------------------------------------------------------------------- coasting, by place (F5)
+def _span(a, b, dur=0.0):
+    return SimpleNamespace(start_dist=float(a), end_dist=float(b), duration=float(dur))
+
+
+def test_coast_seconds_by_piece_splits_a_span_at_the_edges_on_the_laps_own_clock():
+    """A coast that runs out of a corner into the next straight is SPLIT at the corner's edge, and
+    each side is read off the lap's own clock — not apportioned by distance, and never counted in
+    full on both sides (coaching's per-corner window counts an overlapping span whole, which is
+    right for its question and wrong for a table whose rows must add up)."""
+    dist = np.arange(0.0, 101.0)                            # 1 m samples
+    # The lap slows through 40-50 m: 0.2 s per metre there, 0.1 s per metre elsewhere.
+    dt = np.where((dist[1:] > 40.0) & (dist[1:] <= 50.0), 0.2, 0.1)
+    elapsed = np.concatenate([[0.0], np.cumsum(dt)])
+    spans = [_span(40.0, 60.0, float(elapsed[60] - elapsed[40])), _span(90.0, 95.0, 0.5)]
+    got = coast_seconds_by_piece(spans, [0.0, 50.0, 100.0], dist, elapsed)
+    assert np.allclose(got, [2.0, 1.0 + 0.5]), got          # 10 m slow (2.0 s) | 10 m + 5 m
+    assert abs(got.sum() - sum(sp.duration for sp in spans)) < 1e-12
+    # A span entirely outside every piece contributes nothing; no piece, no seconds.
+    assert np.allclose(coast_seconds_by_piece([_span(-5.0, -1.0)], [0.0, 50.0, 100.0],
+                                              dist, elapsed), [0.0, 0.0])
+    assert coast_seconds_by_piece(spans, [0.0], dist, elapsed).size == 0
+    print("test_coast_seconds_by_piece_splits_a_span_at_the_edges_on_the_laps_own_clock OK")
+
+
+def test_coast_report_names_ranks_and_rings_like_the_straights_table():
+    """Pieces run S/F → C1, C1, C1 → C2, C2, C2 → S/F; a straight is named and ringed exactly as the
+    STRAIGHTS table names it (one helper), a place nobody coasted in is left out, and the share
+    and laps columns are arithmetic on the rows."""
+    rows = [[0.0, 1.0, 0.2, 0.0, 0.0],
+            [0.0, 1.2, 0.0, 0.0, 0.0],
+            [0.0, 0.8, 0.4, 0.0, 0.1]]
+    rep = coast_report([1, 2], rows)
+    assert rep.n_laps == 3 and abs(rep.per_lap_s - 3.7 / 3) < 1e-12
+    assert [p.label for p in rep.places] == ["C1", "C1 → C2", "C2 → S/F"]   # C2, S/F → C1 omitted
+    assert [p.ring_cid for p in rep.places] == [1, 1, 2]
+    assert [p.index for p in rep.places] == [1, 2, 4]
+    assert [p.laps for p in rep.places] == [3, 2, 1]
+    assert abs(rep.places[0].s_per_lap - 1.0) < 1e-12
+    assert abs(sum(p.share for p in rep.places) - 1.0) < 1e-12
+    labels = [st.label for st in straights_report([1, 2], [[1, 1, 1]], [[1, 1, 1]], [[1, 1]],
+                                                  [1, 1])]
+    assert rep.places[1].label == labels[1] and rep.places[2].label == labels[2]
+    # No lap at all -> no report; laps with no coasting anywhere -> a report with no places.
+    assert coast_report([1, 2], []) is None
+    empty = coast_report([1, 2], [[0.0] * 5] * 4)
+    assert empty.places == [] and empty.lead_separable is False and empty.per_lap_s == 0.0
+    print("test_coast_report_names_ranks_and_rings_like_the_straights_table OK")
+
+
+def test_coast_report_does_not_crown_a_leader_the_laps_cannot_separate():
+    """THE CLAIM THIS TABLE MAKES. A place leads only if the laps separate it from every other
+    place; otherwise it is TIED with each place they cannot separate it from.
+
+    Shaped on the owner's recordings: D24, where the busiest corners each coast on about half the
+    laps and sit within a few hundredths of a second a lap of each other (the leader tied with 10
+    places on 0060 and 7 on 0062), against Sandown, where C1 coasts on nearly every lap at roughly
+    twice the runner-up."""
+    n = 40
+    lap = np.arange(n)
+    # D24-shaped: two corners, each a 0.5 s coast on about half the laps — C1 on the 20 even laps,
+    # C2 on 19 of the odd ones. C1 leads by 0.0125 s a lap, which no lap-to-lap order supports.
+    a = np.where(lap % 2 == 0, 0.5, 0.0)
+    b = np.where((lap % 2 == 1) & (lap != 39), 0.5, 0.0)
+    d24 = coast_report([1, 2], np.column_stack([np.zeros(n), a, np.zeros(n), b, np.zeros(n)]))
+    assert d24.places[0].label == "C1" and d24.places[0].s_per_lap > d24.places[1].s_per_lap
+    assert not d24.lead_separable, "a leader the laps cannot separate was crowned"
+    assert all(p.tied for p in d24.places)
+    # Sandown-shaped: ~1.0 s on every lap against 0.6 s on 32 laps of 40.
+    c1 = 1.0 + 0.25 * np.sin(lap)
+    c4 = np.where(lap % 5 == 0, 0.0, 0.6 + 0.2 * np.cos(lap))
+    sandown = coast_report([1, 4], np.column_stack([np.zeros(n), c1, np.zeros(n), c4,
+                                                    np.zeros(n)]))
+    assert sandown.lead_separable and sandown.places[0].label == "C1"
+    assert [p.tied for p in sandown.places] == [True, False]
+    assert 0.0 < COAST_LEAD_ALPHA < 0.5
+    print("test_coast_report_does_not_crown_a_leader_the_laps_cannot_separate OK")
+
+
+def test_session_coast_report_cuts_the_straights_tables_pieces_and_keeps_every_coast_second():
+    """The real `Session` path, on the drift + noise fixture (the one where a lap drifts past its
+    normalized projection, so the warp matters, and GPS noise reaches the coast detector).
+
+    1. EVERY COAST SECOND LANDS IN EXACTLY ONE PLACE: each clean lap's row sums to that lap's
+       `lap_coasting_spans`, so the table's s / lap column adds up to the mean of the Coast s the
+       PER LAP grid prints for the same laps — two surfaces, one quantity, one total.
+    2. THE PIECES ARE THE STRAIGHTS TABLE'S PIECES: a single span covering a whole lap splits into
+       exactly the corner/straight times `corners.segment_times` gives that lap through the same
+       memoized warp — not a second projection that agrees most of the time.
+    3. No g signal, no instrument: None, not a report of zero coasting."""
+    from _synthetic import drift_noise_session
+
+    from studio import corners as corners_alg
+
+    s = drift_noise_session()
+    ids = s.consistency_lap_ids()
+    rep = s.coast_report()
+    cids, rows = s._coast_rows()
+    assert rep is not None and rep.n_laps == len(ids) == len(rows) and rep.places
+    for i, row in zip(ids, rows, strict=True):
+        spans = s.driving.lap_coasting_spans(i)
+        assert spans, f"the fixture's lap {i} has no coast to split — this check would be vacuous"
+        assert abs(float(np.sum(row)) - sum(sp.duration for sp in spans)) < 1e-9, (i, row)
+    coast_col = {r.idx: r.coast_s for r in s.stats.lap_stats()}
+    assert abs(rep.per_lap_s - float(np.mean([coast_col[i] for i in ids]))) < 1e-9
+
+    basis = s.corners.basis()
+    corner_list = s.corners.corner_list()
+    drifted = False
+    for i in ids:
+        dist, _v, elapsed = s._lap_arrays(i)
+        whole = [SimpleNamespace(start_dist=float(dist[0]), end_dist=float(dist[-1]),
+                                 duration=float(elapsed[-1] - elapsed[0]))]
+        s.driving._coasting_spans_cache[i] = whole
+        align = s.corners.lap_alignment(i, float(dist[-1]))
+        drifted |= align is not None and not np.allclose(
+            corners_alg.project_boundaries([c.enter for c in corner_list], float(basis[1]),
+                                           float(dist[-1]), alignment=align),
+            corners_alg.project_boundaries([c.enter for c in corner_list], float(basis[1]),
+                                           float(dist[-1]), alignment=None), atol=0.5)
+        expect = corners_alg.segment_times(corner_list, float(basis[1]), dist, elapsed, None,
+                                           align)
+        _cids, got = s._coast_rows()
+        assert np.allclose(got[ids.index(i)], expect, atol=1e-9), (i, got[ids.index(i)], expect)
+    assert drifted, "no lap's warp differs from the normalized projection — (2) would pass on either"
+
+    s.driving._thresholds_cache = None
+    assert s.coast_report() is None
+    print("test_session_coast_report_cuts_the_straights_tables_pieces_and_keeps_every_coast_second OK")
+
+
+def test_a_tie_is_decided_place_by_place_not_by_rank():
+    """"Tied" is a question about ONE place against the leader, so the tied rows need not be the
+    top of the order: a tie turns on the place's lap-to-lap spread, not on its rank. On D24 0060
+    the rare-but-long coast on C9 → C10 (3 of 38 laps, 0.099 s a lap) is tied while C1 → C2 (5 of
+    38, 0.097 s) is not. Here a place coasting on 4 laps of 40 stays tied BELOW a steadier place
+    that separates; a rule that cut the order at the first separated row would untie it — which is
+    why the vs top column is read per row, not as a cut."""
+    n = 40
+    lead = np.full(n, 0.6)                          # 0.6 s on every lap
+    steady = np.full(n, 0.5)                        # 0.5 s on every lap: separates, 2nd by rank
+    rare = np.zeros(n)
+    rare[:4] = 4.5                                  # 0.45 s a lap, all of it on 4 laps: 3rd
+    rep = coast_report([1, 2], np.column_stack([np.zeros(n), lead, rare, steady, np.zeros(n)]))
+    assert [p.label for p in rep.places] == ["C1", "C2", "C1 → C2"]
+    assert [p.tied for p in rep.places] == [True, False, True], [(p.label, p.tied)
+                                                                 for p in rep.places]
+    assert not rep.lead_separable
+    print("test_a_tie_is_decided_place_by_place_not_by_rank OK")
 
 
 def test_phase_matrix_medians_and_positive_part_share():
@@ -1448,6 +1603,95 @@ def test_stats_view_straights_table_and_fix_first_tile():
     v.refresh()
     assert v._straights_section.isHidden() and v.t_fix_first.isHidden()
     print("test_stats_view_straights_table_and_fix_first_tile OK")
+
+
+def _coast_places(*rows):
+    from studio.stats import CoastPlace
+    return [CoastPlace(index=i, label=label, ring_cid=ring, s_per_lap=s, laps=laps, share=share,
+                       tied=tied)
+            for i, (label, ring, s, laps, share, tied) in enumerate(rows)]
+
+
+def test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map():
+    """The COASTING table on a stubbed report: ranked rows, the "vs top" word on every row, the
+    unlisted count in the heading, the note that says what the order is worth, and a row click that
+    rings the place on the map through the one corner_clicked pathway."""
+    _app()
+    from studio.stats import CoastReport
+    from studio.stats_panel import (
+        _DRIVING_COAST,
+        COAST_LESS,
+        COAST_LIST_MIN_S,
+        COAST_TIED,
+        COAST_TOP,
+        COASTING_TOOLTIP,
+        RING_ROLE,
+        StatsView,
+    )
+    sess = _fake_view_session()
+    # D24-shaped: no place separates from the leader except the last listed one.
+    sess.coast_report = lambda: CoastReport(n_laps=38, per_lap_s=1.1, lead_separable=False,
+                                            places=_coast_places(
+        ("C1", 1, 0.311, 17, 0.28, True),
+        ("C9 → C10", 9, 0.099, 3, 0.09, True),
+        ("C1 → C2", 1, 0.097, 5, 0.09, False),
+        ("C8", 8, 0.02, 2, 0.02, False)))
+    v = StatsView(sess)
+    t = v.coasting_table
+    assert not t.isHidden() and not v._coasting_section.isHidden()
+    assert t.rowCount() == 3, "a place under COAST_LIST_MIN_S is counted, not listed"
+    assert v._coasting_section.text() == f"COASTING · 1 under {COAST_LIST_MIN_S:.2f} s a lap not listed"
+    assert [t.item(r, 0).text() for r in range(3)] == ["C1", "C9 → C10", "C1 → C2"]
+    assert [t.item(r, 1).text() for r in range(3)] == ["0.31", "0.10", "0.10"]
+    assert t.item(0, 2).text() == "17/38" and t.item(0, 3).text() == "28"
+    words = [t.item(r, 4).text() for r in range(3)]
+    assert words == [COAST_TIED, COAST_TIED, COAST_LESS], (
+        f"the vs top column crowns a leader the laps did not separate: {words}")
+    note = v.coasting_note.text()
+    assert note.startswith("No one place leads: C1 and C9 → C10 are tied"), note
+    assert "38 clean laps cannot put them in order" in note, note
+    assert _DRIVING_COAST in COASTING_TOOLTIP and t.toolTip() == COASTING_TOOLTIP
+    fired = []
+    v.corner_clicked.connect(fired.append)
+    t.selectRow(1)
+    assert fired[-1] == 9 and t.item(1, 0).data(RING_ROLE) == 9   # a straight rings its feeder
+    t.clearSelection()
+    assert fired[-1] is None
+
+    # Sandown-shaped: a leader that separates reads "top", everything else "less".
+    sess.coast_report = lambda: CoastReport(n_laps=59, per_lap_s=3.76, lead_separable=True,
+                                            places=_coast_places(
+        ("C1", 1, 1.016, 54, 0.27, True), ("C4", 4, 0.619, 47, 0.16, False)))
+    v.refresh()
+    assert v._coasting_section.text() == "COASTING"
+    assert [t.item(r, 4).text() for r in range(2)] == [COAST_TOP, COAST_LESS]
+    assert v.coasting_note.text() == ("C1 holds the most coasting — 1.02 s a lap, more than C4 "
+                                      "(0.62 s) or anywhere else by a margin these 59 clean laps "
+                                      "can separate."), v.coasting_note.text()
+
+    # A session that did not coast keeps the heading and says so; no instrument hides it all.
+    sess.coast_report = lambda: CoastReport(n_laps=12, per_lap_s=0.0, places=[],
+                                            lead_separable=False)
+    v.refresh()
+    assert t.isHidden() and not v._coasting_section.isHidden()
+    assert v.coasting_note.text() == "No coasting was detected on the 12 clean laps."
+    sess.coast_report = lambda: None
+    v.refresh()
+    assert v._coasting_section.isHidden() and t.isHidden() and v.coasting_note.isHidden()
+    print("test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map OK")
+
+
+def test_coast_note_names_at_most_six_tied_places():
+    from studio.stats import CoastReport
+    from studio.stats_panel import coast_note
+    places = _coast_places(*[(f"C{k}", k, 0.4 - 0.01 * k, 10, 0.1, True) for k in range(1, 12)])
+    note = coast_note(CoastReport(n_laps=38, per_lap_s=4.0, places=places, lead_separable=False))
+    assert note.startswith("No one place leads: C1, C2, C3, C4, C5, C6 and 5 more are tied — "
+                           "between 0.29 and 0.39 s of coasting a lap"), note
+    one = coast_note(CoastReport(n_laps=1, per_lap_s=0.5, lead_separable=True,
+                                 places=_coast_places(("C3", 3, 0.5, 1, 1.0, True))))
+    assert one == "All the coasting on the 1 clean lap is in C3: 0.50 s a lap.", one
+    print("test_coast_note_names_at_most_six_tied_places OK")
 
 
 def test_stats_view_trend_sparkline_shows_and_hides():
@@ -3532,6 +3776,170 @@ def test_stats_view_split_matrix_hides_under_the_decorative_floor():
     assert v.splits_note.isHidden()
     assert not v._sector_section.isHidden()
     print("test_stats_view_split_matrix_hides_under_the_decorative_floor OK")
+
+
+# ------------------------------------------------------------ F7: the laps × corners grid
+def _corner_grid_fixture():
+    """Eight laps × two corners, every cell's resolution chosen on purpose.
+
+    C1: laps 0-5 resolved at 4.00-4.05 s; lap 6 RESOLVED and a whole second off (5.00); lap 7 the
+        SAME 5.00 but UNRESOLVED — its window edge was interpolated, so it must be neither marked nor
+        counted. Resolved median 4.03, scale 0.40 (the p90 of the resolved deviations).
+    C2: laps 0-5 resolved at 3.00-3.25 in 0.05 steps; laps 6 and 7 UNRESOLVED and a whole second
+        FAST (2.00) — counted, they would drag the typical from 3.125 to 3.075."""
+    ids = list(range(8))
+    c1 = [4.00, 4.01, 4.02, 4.03, 4.04, 4.05, 5.00, 5.00]
+    c2 = [3.00, 3.05, 3.10, 3.15, 3.20, 3.25, 2.00, 2.00]
+    times = [[a, b] for a, b in zip(c1, c2, strict=True)]
+    resolved = [[True, True]] * 6 + [[True, False], [False, False]]
+    return ids, times, resolved
+
+
+def test_corner_matrix_never_marks_or_counts_a_cell_whose_window_edge_was_interpolated():
+    """F7. Measured on the D24 0060 pair against an independent gate-crossing time, a corner cell
+    with an interpolated window edge is off by a median 0.219 s (max 0.886 s) and a matched one by
+    0.004 s (max 0.024 s); 7 of the 10 marks the plain rule put on interpolated cells were not
+    confirmed. So the grid shows those cells and refuses them twice: no ▼, and no vote in the
+    typical the other laps are measured against (stats.CornerMatrix has the numbers)."""
+    ids, times, resolved = _corner_grid_fixture()
+    m = corner_matrix(ids, [1, 2], times, resolved)
+    assert m is not None and m.cids == [1, 2]
+    assert m.n_resolved == [7, 6], f"resolved cells miscounted: {m.n_resolved}"
+    assert abs(m.medians[0] - 4.03) < 1e-9, m.medians
+    assert abs(m.medians[1] - 3.125) < 1e-9, (
+        f"two interpolated, fast cells moved C2's typical: {m.medians[1]}")
+    assert abs(m.scales[0] - 0.40) < 1e-9, m.scales
+    # The same +0.97 s: marked where the window was matched, not where it was interpolated.
+    assert m.is_behind(6, 0), "a resolved cell a second off its typical carries no ▼"
+    assert not m.is_behind(7, 0), "an interpolated cell was marked"
+    assert m.cells[7][0] == 5.00 and m.resolved[7][0] is False  # shown, never hidden
+    assert sum(m.is_behind(r, c) for r in range(8) for c in range(2)) == 1
+    print("test_corner_matrix_never_marks_or_counts_a_cell_whose_window_edge_was_interpolated OK")
+
+
+def test_corner_matrix_refuses_a_column_it_cannot_take_a_typical_of():
+    """A percentile needs values to be a percentile OF (MATRIX_MIN_LAPS) — and in this grid the
+    values are the RESOLVED cells, so a corner matched on too few laps gets no typical and no mark
+    however far a lap is off. The whole grid still refuses under MATRIX_MIN_LAPS laps, like SPLITS,
+    and a lap that projected no row is kept as a blank row rather than dropped."""
+    ids = list(range(MATRIX_MIN_LAPS + 2))
+    times = [[3.0 + 0.01 * i] for i in ids]
+    times[0] = [9.0]
+    few = [[i < MATRIX_MIN_LAPS - 1] for i in ids]
+    m = corner_matrix(ids, [4], times, few)
+    assert m.n_resolved == [MATRIX_MIN_LAPS - 1], f"resolved cells miscounted: {m.n_resolved}"
+    assert m.medians == [None] and m.scales == [None], (m.medians, m.scales)
+    assert not any(m.is_behind(r, 0) for r in range(len(ids)))
+    # ...one more resolved lap and the same +6 s is marked.
+    enough = [[i < MATRIX_MIN_LAPS] for i in ids]
+    assert corner_matrix(ids, [4], times, enough).is_behind(0, 0)
+    assert corner_matrix(ids[:MATRIX_MIN_LAPS - 1], [4], times[:MATRIX_MIN_LAPS - 1],
+                         enough[:MATRIX_MIN_LAPS - 1]) is None
+    assert corner_matrix(ids, [], [[] for _ in ids], [[] for _ in ids]) is None
+    degenerate = corner_matrix(ids, [4, 5], [[3.0, 2.0]] * (len(ids) - 1) + [[]],
+                               [[True, True]] * (len(ids) - 1) + [[]])
+    assert degenerate.lap_ids == ids and degenerate.cells[-1] == [None, None]
+    assert degenerate.resolved[-1] == [False, False]
+    print("test_corner_matrix_refuses_a_column_it_cannot_take_a_typical_of OK")
+
+
+def test_corner_and_split_grids_mark_by_one_rule():
+    """A ▼ on the Stats page means one thing: ≥ the column's own p90-above-median, floored at
+    MATRIX_SCALE_MIN_S, compared at print resolution. With every cell resolved the corner grid must
+    decide exactly what the split grid decides on the same numbers."""
+    rng = np.random.default_rng(2026)
+    rows = (rng.normal(0.0, 0.18, size=(40, 5)) + np.array([2.7, 2.5, 4.6, 6.2, 6.9])).round(3)
+    rows[3, 1] += 0.9
+    rows[17, 4] += 0.45
+    rows = [list(map(float, r)) for r in rows]
+    ids = list(range(40))
+    sm = split_matrix(ids, rows, columns=5)
+    cm = corner_matrix(ids, [1, 2, 3, 4, 5], rows, [[True] * 5] * 40)
+    assert cm.medians == sm.medians and cm.scales == sm.scales
+    marks = [(r, c) for r in range(40) for c in range(5) if sm.is_behind(r, c)]
+    assert marks and marks == [(r, c) for r in range(40) for c in range(5) if cm.is_behind(r, c)]
+    print("test_corner_and_split_grids_mark_by_one_rule OK")
+
+
+def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
+    """The page half of F7 on a stub session: the header is the session's own corners, a resolved
+    cell past its scale wears the behind hue AND the ▼ that survives greyscale, an interpolated cell
+    is muted italic (the trust tier's PROVISIONAL treatment) with no ▼ however far off it is, and
+    the note says what the grid is over — including the ⊘ / ⚠ laps that are not rows at all."""
+    _app()
+    from PySide6.QtGui import QColor
+
+    from studio import theme
+    from studio.lap_table import BEST_SECTOR_MARK, DROPOUT_MARK, EXCLUDED_MARK, PROVISIONAL_COLOR
+    from studio.stats_panel import StatsView
+    ids, times, resolved = _corner_grid_fixture()
+    sess = _fake_view_session()                    # excluded (5,), dropout {1}
+    sess.corner_matrix = lambda: corner_matrix(ids, [3, 7], times, resolved)
+    sess.lap_time = lambda i: 69.0 + i
+    v = StatsView(sess)
+    t = v.corner_grid_table
+    assert not v._corner_grid_band.isHidden() and not t.isHidden()
+    header = [t.horizontalHeaderItem(c).text() for c in range(t.columnCount())]
+    assert header == ["Lap", "C3", "C7", "Lap time"], header
+    assert t.rowCount() == 8 and t.item(0, 0).text() == "1"          # 1-based, app-wide
+    assert t.item(6, 3).text() == "1:15.000", t.item(6, 3).text()
+    slow = t.item(6, 1)
+    assert slow.text() == f"{theme.DELTA_BEHIND_ARROW} 5.00", slow.text()
+    assert slow.foreground().color() == QColor(theme.behind_colour())
+    assert "+0.97 s against your typical C3 (4.03 s" in slow.toolTip(), slow.toolTip()
+    assert "7 laps matched on track" in slow.toolTip(), slow.toolTip()
+    same = t.item(7, 1)
+    assert same.text() == "5.00", f"an interpolated cell carries a mark: {same.text()!r}"
+    assert same.font().italic() and same.foreground().color() == PROVISIONAL_COLOR, (
+        "an interpolated cell is not muted in the trust tier's provisional style")
+    assert same.toolTip().startswith("Not marked: on lap 8, C3"), same.toolTip()
+    plain = t.item(0, 1)
+    assert not plain.font().italic() and not plain.text().startswith(theme.DELTA_BEHIND_ARROW)
+    note = v.corner_grid_note.text()
+    assert "8 clean laps × 2 corners." in note, note
+    assert "▼ is 0.30–0.40 s or more slower" in note, note
+    assert "3 of 16 cells are muted" in note, note
+    assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded and 1 {DROPOUT_MARK} GPS-dropout laps "
+            "(see the Laps tab).") in note, note
+    # No ★ anywhere in it: "quickest" is the CORNERS table's question (stats.CornerMatrix).
+    assert not any(BEST_SECTOR_MARK in t.item(r, c).text()
+                   for r in range(t.rowCount()) for c in range(t.columnCount()))
+    v.hide()
+    # No corner matrix (no corners, or under the floor): the whole band hides.
+    bare = StatsView(_fake_view_session())
+    assert bare._corner_grid_band.isHidden() and bare.corner_grid_table.isHidden()
+    assert bare.corner_grid_note.isHidden()
+    bare.hide()
+    print("test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out OK")
+
+
+def test_the_corner_grid_takes_the_page_width_and_never_the_column_packing():
+    """Measured on both D24 recordings through the real StatsView: the grid wants 913 / 924 px, and
+    registered in a section column it became that column's minimum and dropped the page a whole
+    composition at EVERY dashboard width (0062 at the default 1440x900 window: two columns → one).
+    It lives full width under the columns instead, so it must never reach the packer."""
+    _app()
+    from studio.stats_panel import StatsView
+    cids = list(range(1, 13))
+    ids = list(range(10))
+    times = [[2.5 + 0.1 * c + 0.01 * i for c in range(12)] for i in ids]
+    sess = _fake_view_session()
+    sess.corner_matrix = lambda: corner_matrix(ids, cids, times, [[True] * 12] * 10)
+    wide = StatsView(sess)
+    narrow = StatsView(_fake_view_session())
+    for v in (wide, narrow):
+        v.resize(1420, 900)
+        v.show()
+    _settle()
+    assert wide.corner_grid_table.content_width() > 700, wide.corner_grid_table.content_width()
+    got = [wide._group_min_width(g) for g in range(3)]
+    want = [narrow._group_min_width(g) for g in range(3)]
+    assert got == want, f"the corner grid widened a section column: {got} vs {want}"
+    assert wide._layout == narrow._layout, (wide._layout, narrow._layout)
+    assert not any(wide.corner_grid_table in tables for tables in wide._column_tables)
+    for v in (wide, narrow):
+        v.hide()
+    print("test_the_corner_grid_takes_the_page_width_and_never_the_column_packing OK")
 
 
 def test_every_longitudinal_surface_names_which_filter_it_read():

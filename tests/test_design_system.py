@@ -957,6 +957,11 @@ def test_no_table_header_floats_off_its_data():
         stats_service.split_matrix(
             list(range(_n)), [[20.0 + 0.1 * i, 25.0 - 0.1 * i, 24.0] for i in range(_n)],
             columns=3))
+    # Stats ▸ CORNERS BY LAP is seeded the same way and for the same reason (two laps against
+    # MATRIX_MIN_LAPS), with one interpolated cell so the muted treatment is under the rule too.
+    session.corner_matrix = lambda _n=stats_service.MATRIX_MIN_LAPS: stats_service.corner_matrix(
+        list(range(_n)), [1, 2], [[2.5 + 0.1 * i, 4.0 + 0.3 * (i == 2)] for i in range(_n)],
+        [[True, i != 1] for i in range(_n)])
     view.stats_view.refresh()
     for _ in range(4):
         _APP.processEvents()
@@ -975,11 +980,16 @@ def test_no_table_header_floats_off_its_data():
               "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
               "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
               "STATS/PER LAP": stats.lap_table,
+              # F5's COASTING table: a sixth report grid, its "vs top" column a WORD, right-aligned
+              # like the numbers it sits beside.
+              "STATS/COASTING": stats.coasting_table,
               # The two grids the STINTS / SPLITS PR added. SPLITS is here for completeness and
               # is empty on this fixture (it needs sector lines AND stats.MATRIX_MIN_LAPS laps);
               # STINTS fills whenever the synthetic session's laps do not tile the clock, and a
               # column of it is exactly as capable of floating off its data as the nine above.
-              "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table}
+              "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table,
+              # F7's laps x corners grid: full width under the columns, same _ReportTable.
+              "STATS/CORNERS BY LAP": stats.corner_grid_table}
     # ...and the dict really is every table the view ships: anything with cells that is not in it
     # would be a tenth surface nobody brought to the rule.
     missed = [f"{type(t).__name__} under {type(t.parentWidget()).__name__}"
@@ -1073,6 +1083,13 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
         stats_service.BrakeConsistency(cid=cid, n=2, median_dist_m=90.0 + cid, sigma_m=1.4,
                                        span_m=2.0, commit_pct=82.0, metres_later_med=-1.2)
         for cid in (1, 2)]
+    # CORNERS BY LAP needs MATRIX_MIN_LAPS laps to have a row (see the header guard above), and
+    # its lap-time column reads every one of them.
+    real_lap_time = session.lap_time
+    session.lap_time = lambda i: (real_lap_time(i) if i < 2 else 69.0)
+    session.corner_matrix = lambda _n=stats_service.MATRIX_MIN_LAPS: stats_service.corner_matrix(
+        list(range(_n)), [1, 2], [[2.5 + 0.1 * i, 4.0] for i in range(_n)],
+        [[True, True] for _ in range(_n)])
     view.stats_view.refresh()
     for _ in range(4):
         _APP.processEvents()
@@ -1089,8 +1106,10 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
     named = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
              "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
              "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
+             "STATS/COASTING": stats.coasting_table,
              "STATS/PER LAP": stats.lap_table, "COACHING": coach.table, "LIBRARY": dlg.table,
-             "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table}
+             "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table,
+             "STATS/CORNERS BY LAP": stats.corner_grid_table}
     by_widget = {id(t): n for n, t in named.items()}
     # Every table in the real view PLUS the coaching + library fixtures, named where we know it and
     # labelled structurally where we do not — a new grid is measured whether or not anyone updated

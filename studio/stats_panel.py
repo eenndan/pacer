@@ -45,9 +45,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, driving, gmeter, media_clock, provenance_panel, theme, units
+from . import corners, data_quality, driving, gmeter, media_clock, provenance_panel, theme, units
 from . import stats as stats_service
-from ._signal import fmt_hms, fmt_time, plural
+from ._signal import exclusion_summary, fmt_hms, fmt_time, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
 # and the coaching headline can never state different totals for the same three corners — L5-02.
@@ -602,6 +602,26 @@ SPLITS_TOOLTIP = (
 SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best; ▼ is {scale} or more "
                "slower than that sector's own typical lap, each sector scaled by its own spread. "
                "Interior sectors are timed to the 10 Hz fix grid (±0.1 s).")
+# The CORNERS BY LAP grid: the SPLITS grid's idiom over the detected corners, which unlike sector
+# lines exist on every recording the owner has. Its one difference from SPLITS — the muted,
+# never-marked cell — and its missing ★ are measured, not styled: see stats.CornerMatrix.
+CORNER_GRID_TOOLTIP = (
+    "Every clean lap down the page, every corner across it. A cell is that lap's time through that "
+    "corner — the same number the Corners page shows for the lap. The behind hue and ▼ mark a lap "
+    "that gave away notably more than your TYPICAL lap through the same corner: its median, scaled "
+    f"by that corner's own spread (its {stats_service.MATRIX_SCALE_PCT:g}th percentile above the "
+    f"median, floored at {stats_service.MATRIX_SCALE_MIN_S:.2f} s) — the SPLITS grid's rule, so a "
+    "▼ means the same thing on both.\n\n"
+    "MUTED CELLS ARE NEVER MARKED. A lap's corner windows are placed by matching its line to your "
+    f"best lap's on the track; an edge with no match within {corners.SPATIAL_MATCH_MAX_M:g} m is "
+    "interpolated between its neighbours instead. Timed a second, independent way — the moment the "
+    "lap crosses the track at each edge — such cells were a median 0.22 s off (up to 0.89 s) on "
+    "the owner's 38-lap recording, as large as the mark itself, against 0.004 s for matched ones. "
+    "They are shown, because they are the lap's real reading, but they never carry a ▼ and never "
+    "count towards the typical. So the typical here can differ from the CORNERS table's Median, "
+    "which is over every clean lap.\n\n"
+    "NO ★ HERE. The quickest time through each corner is the CORNERS table's Best above; this grid "
+    "answers a different question — which laps lost time, and where.")
 
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
               "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
@@ -743,6 +763,74 @@ def driving_tooltip_gps(why: str) -> str:
               f"{gmeter.LONG_SMOOTH_S:g} s window the peak-braking tile and the friction circle "
               f"carry on an IMU-driven meter is absent from them too"
             + _DRIVING_BRAKE_TAIL + _DRIVING_COAST)
+
+
+# COASTING: where the session's coasting HAPPENS, by place (`Session.coast_report`). The coast
+# paragraph is `_DRIVING_COAST` itself, not a paraphrase: the window is the one quantity #275 found
+# wrong and #279/#297 had to re-state on every surface, and it applies on BOTH g paths (the coast
+# series is rebuilt from the lap's own speed either way), so one sentence serves every recording.
+COAST_COLUMNS = ["Where", "s / lap", "Laps", "Share %", "vs top"]
+# The "vs top" cell: what the laps say about this place against the one with the most coasting.
+# Words, not a tint — which rows are level is the table's one claim, and it has to survive a
+# colour-blind palette and a screen reader.
+COAST_TOP, COAST_TIED, COAST_LESS = "top", "tied", "less"
+# A place holding less than the detector's shortest coast (driving.MIN_COAST_S) on one lap in five
+# is listed by count, not by row — the heading says how many. On the owner's five recordings that
+# leaves 7-14 rows holding 96.5-99.2 % of the coasting, against 12-20 places with any at all.
+COAST_LIST_MIN_S = driving.MIN_COAST_S / 5
+COAST_NAMES_MAX = 6       # the note names this many tied places, then counts the rest
+COASTING_TOOLTIP = (
+    "Where the coasting is. Every clean lap's coasting is split over the corner/straight "
+    "partition — the pieces the STRAIGHTS table is cut from, each corner's edges projected onto "
+    "that lap — and read off that lap's own clock, so a coast running out of a corner into the "
+    "straight is split at the edge, never counted twice. s / lap is the session's coasting in that "
+    "place divided by the clean laps, so the column adds up to the MEAN coasting per lap, not the "
+    "median the DRIVING tile shows; Laps counts the clean laps that coasted there at all.\n\n"
+    "This is where the coasting HAPPENS, not where it costs time. Coaching's “coasting” "
+    "reason is a different number: how much longer your typical lap coasts in a corner than your "
+    "best lap does.\n\n"
+    "The order is a ranking only where the laps can separate it. vs top says, place by place, "
+    f"whether a paired sign-flip test over the clean laps separates it from the first row at "
+    f"p < {stats_service.COAST_LEAD_ALPHA:g}: \u201c{COAST_TOP}\u201d is a first row that "
+    f"separates from every other place, \u201c{COAST_TIED}\u201d a place the laps cannot tell "
+    f"apart from it (the first row too, when anything is), \u201c{COAST_LESS}\u201d one they "
+    "can. Click a row to ring the place on the map (a straight rings the corner feeding it).\n\n"
+    + _DRIVING_COAST)
+
+
+def _name_list(names: list[str], limit: int = COAST_NAMES_MAX) -> str:
+    """"C1, C3 and C6" / "C1, C3, C6, C4, C5, C10 and 5 more"."""
+    if len(names) > limit:
+        return f"{', '.join(names[:limit])} and {len(names) - limit} more"
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def coast_note(report) -> str:
+    """The line under the COASTING table: what the order in it is worth.
+
+    A LEAD THE LAPS CANNOT SEPARATE IS SAID TO BE ONE. #311 refused to crown a coaching corner the
+    measurement could not separate from the next, and the same shape is here on both D24
+    recordings: the leader ties with 10 other places on 0060 and 7 on 0062, and the two recordings
+    put different corners on top. A table sorted by a column always has a first row; this sentence
+    is what stops the first row reading as a finding when it is not."""
+    n = report.n_laps
+    laps = plural(n, "clean lap")
+    places = report.places
+    if not places:
+        return f"No coasting was detected on the {laps}."
+    lead = places[0]
+    if len(places) == 1:
+        return f"All the coasting on the {laps} is in {lead.label}: {lead.s_per_lap:.2f} s a lap."
+    if report.lead_separable:
+        nxt = places[1]
+        return (f"{lead.label} holds the most coasting — {lead.s_per_lap:.2f} s a lap, more than "
+                f"{nxt.label} ({nxt.s_per_lap:.2f} s) or anywhere else by a margin these {laps} "
+                f"can separate.")
+    tied = [p for p in places if p.tied]
+    lo = min(p.s_per_lap for p in tied)
+    return (f"No one place leads: {_name_list([p.label for p in tied])} are tied — between "
+            f"{lo:.2f} and {lead.s_per_lap:.2f} s of coasting a lap, and these {laps} cannot put "
+            f"them in order.")
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed. ★ marks the session-best lap.\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
@@ -1951,6 +2039,7 @@ class StatsView(QWidget):
         self.corners_note.setProperty("role", "TableNote")
         col.addWidget(self.corners_note)
 
+
         # ====================== COLUMN 3 — the three remaining report tables
         # BRAKING, STRAIGHTS and PER LAP are the page's tallest, narrowest content — three grids
         # of numbers that cap themselves at their own columns and so leave the most empty canvas
@@ -1973,6 +2062,29 @@ class StatsView(QWidget):
             self._on_corner_sort)
         self.braking_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.braking_table)
+
+        # --- where the coasting is, by place (hidden without corners / a g signal / clean laps).
+        # Beside BRAKING because the two are the off-power half and the on-brake half of one
+        # stretch of track. Column 0 sorts by RANK (most coasting first), not by track order: the
+        # question this table answers is "where", and its "vs top" column and the note under it say
+        # what that order is worth. (Opening on a numeric column instead would put Qt's indicator
+        # over a right-aligned header label.)
+        self._coasting_section = self._section("COASTING")
+        self._coasting_section.setToolTip(COASTING_TOOLTIP)
+        col.addWidget(self._coasting_section)
+        self.coasting_table = self._make_table(COAST_COLUMNS)
+        self.coasting_table.setToolTip(COASTING_TOOLTIP)
+        self.coasting_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.coasting_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.coasting_table.setFocusPolicy(Qt.ClickFocus)
+        self.coasting_table.itemSelectionChanged.connect(self._on_coast_row_selected)
+        self.coasting_table.horizontalHeader().sortIndicatorChanged.connect(
+            self._on_corner_sort)
+        self.coasting_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+        col.addWidget(self.coasting_table)
+        self.coasting_note = WrapLabel()
+        self.coasting_note.setProperty("role", "TableNote")
+        col.addWidget(self.coasting_note)
 
         # --- the straight-line report (hidden without corners / a best lap)
         self._straights_section = self._section("STRAIGHTS")
@@ -2005,6 +2117,38 @@ class StatsView(QWidget):
         # would hand that difference to whichever of their sections happened to be stretchable.
         for holder in self._columns:
             holder.layout().addStretch(1)
+
+        # ====================== FULL WIDTH, UNDER THE COLUMNS — CORNERS BY LAP
+        # Laps down, corners across (hidden without corners / under the decorative floor).
+        #
+        # NOT IN A SECTION COLUMN, and that was measured rather than preferred. The natural home is
+        # under CORNERS (the same corners, unrolled lap by lap, as SPLITS is SECTORS unrolled), but
+        # a lap, twelve corners and a lap time want 913 px on the 0060 pair and 924 px on 0062,
+        # against the 718 px CORNERS table that sets that column's width today. Registered in the
+        # column, it became the column's minimum and knocked the composition down a form at every
+        # dashboard width: at the default 1440x900 window (a 1420 px pane) 0060 fell from two
+        # columns to "(0,) (1, 2)" and 0062 to ONE column; at 1280x800 both fell to one; at
+        # 1900 px both lost the three-column page. Left in the column but unregistered, it would
+        # hide three corners and the lap time behind an inner bar at the default window, which is
+        # the defect `_group_min_width` exists to stop.
+        #
+        # So it takes the page's width instead, below every column: no composition moves, and it
+        # shows whole wherever the pane holds it. In a quadrant it scrolls itself, like every
+        # other table on the page there. It is deliberately NOT registered in `_column_tables`.
+        self._corner_grid_band = QWidget()
+        band = QVBoxLayout(self._corner_grid_band)
+        band.setContentsMargins(0, 0, 0, 0)
+        band.setSpacing(theme.SPACE_XS)
+        self._corner_grid_section = self._section("CORNERS BY LAP")
+        band.addWidget(self._corner_grid_section)
+        self.corner_grid_table = _ReportTable(SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS, ROW_HEIGHT)
+        self.corner_grid_table.setToolTip(CORNER_GRID_TOOLTIP)
+        band.addWidget(self.corner_grid_table)
+        self.corner_grid_note = WrapLabel()
+        self.corner_grid_note.setProperty("role", "TableNote")
+        band.addWidget(self.corner_grid_note)
+        # Between the column grid and the page's slack (the stretch added right after the grid).
+        page.insertWidget(page.indexOf(self._column_grid) + 1, self._corner_grid_band)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -2609,7 +2753,9 @@ class StatsView(QWidget):
         self._refresh_sectors(session, bool(valid))
         self._refresh_splits(session, self._split_matrix(session))
         self._refresh_corners(session, unit, u_label)
+        self._refresh_corner_grid(session)
         self._refresh_braking(session)
+        self._refresh_coasting(session)
         self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_g_provenance(session)
@@ -3371,6 +3517,123 @@ class StatsView(QWidget):
             n=len(matrix.lap_ids), c=n_cols,
             scale=f"{lo:.2f} s" if lo == hi else f"{lo:.2f}–{hi:.2f} s"))
 
+    def _refresh_corner_grid(self, session):
+        """The laps × corners grid. The matrix is Session's (`corner_matrix`), None without corners
+        or under stats.MATRIX_MIN_LAPS clean laps — the same decorative floor SPLITS holds."""
+        matrix = getattr(session, "corner_matrix", lambda: None)()
+        has = matrix is not None
+        self._corner_grid_band.setVisible(has)
+        self._corner_grid_section.setVisible(has)
+        self.corner_grid_table.setVisible(has)
+        self.corner_grid_note.setVisible(has)
+        t = self.corner_grid_table
+        if not has:
+            t.setRowCount(0)
+            self.corner_grid_note.setText("")
+            return
+        n_cols = len(matrix.cids)
+        t.set_columns(SPLIT_LEAD_COLUMNS + [f"C{cid}" for cid in matrix.cids]
+                      + SPLIT_TAIL_COLUMNS)
+        behind = QColor(theme.behind_colour())
+        lap_time = getattr(session, "lap_time", None)
+        # The lap time is the one column here the start line moves, so it is demoted exactly as the
+        # PER LAP grid below demotes the same number (see _timing_note).
+        timing_note = self._timing_note(session)
+        d = stats_service.MATRIX_DECIMALS
+        t.setRowCount(len(matrix.lap_ids))
+        for r, lap_id in enumerate(matrix.lap_ids):
+            t.setItem(r, 0, QTableWidgetItem(str(lap_id + 1)))
+            complete = True
+            for c, cid in enumerate(matrix.cids):
+                val = matrix.cells[r][c]
+                item = self._num_item(DASH if val is None else f"{val:.{d}f}")
+                if val is None:
+                    complete = False
+                else:
+                    med = matrix.medians[c]
+                    if not matrix.resolved[r][c]:
+                        # THE MEASURED REFUSAL: shown in the trust tier's muted italic, never marked,
+                        # and not part of the typical (stats.CornerMatrix has the numbers).
+                        item.setForeground(PROVISIONAL_COLOR)
+                        theme.apply_provisional_style(item)
+                        item.setToolTip(
+                            f"Not marked: on lap {lap_id + 1}, C{cid}'s entry or exit could not be "
+                            f"matched to your best lap's line within "
+                            f"{corners.SPATIAL_MATCH_MAX_M:g} m, so its edge is interpolated and "
+                            "this time is not precise enough to compare with the other laps.")
+                    elif med is None:
+                        item.setToolTip(
+                            f"Not marked: only {plural(matrix.n_resolved[c], 'lap')} matched C{cid} "
+                            "on track at both edges — too few to say what a typical lap through it "
+                            "is.")
+                    else:
+                        if matrix.is_behind(r, c):
+                            item.setForeground(behind)
+                            item.setText(theme.DELTA_BEHIND_ARROW + " " + item.text())
+                        item.setToolTip(
+                            f"{val - med:+.{d}f} s against your typical C{cid} ({med:.{d}f} s, the "
+                            f"median of the {matrix.n_resolved[c]} laps matched on track through "
+                            "it).")
+                t.setItem(r, c + 1, item)
+            lt = lap_time(lap_id) if (complete and lap_time is not None) else None
+            tail = self._num_item(fmt_time(lt) if lt is not None else DASH)
+            if timing_note and lt is not None:
+                tail.setForeground(PROVISIONAL_COLOR)
+                theme.apply_provisional_style(tail)
+                tail.setToolTip(timing_note)
+            t.setItem(r, n_cols + 1, tail)
+        self._fit_table(t)
+        self.corner_grid_note.setText(self._corner_grid_note_text(session, matrix))
+
+    @staticmethod
+    def _corner_grid_note_text(session, matrix) -> str:
+        """The line under CORNERS BY LAP: the sample, what ▼ is measured against, what the muted
+        cells are, and which laps are not rows at all — the ⊘ / ⚠ counts the page's lap tile and
+        DATA TRUST card print, in the same marks."""
+        n_laps, n_cols = len(matrix.lap_ids), len(matrix.cids)
+        scales = [s for s in matrix.scales if s is not None]
+        parts = [f"{plural(n_laps, 'clean lap')} × {plural(n_cols, 'corner')}."]
+        if scales:
+            lo, hi = min(scales), max(scales)
+            scale = f"{lo:.2f} s" if lo == hi else f"{lo:.2f}–{hi:.2f} s"
+            parts.append(f"▼ is {scale} or more slower than that corner's typical lap, each corner "
+                         "scaled by its own spread.")
+        unmarkable = [f"C{cid}" for cid, med in zip(matrix.cids, matrix.medians, strict=True)
+                      if med is None]
+        if unmarkable and scales:
+            parts.append(f"Too few laps matched on track to mark {', '.join(unmarkable)}.")
+        elif unmarkable:
+            parts.append("Too few laps matched on track to mark any corner.")
+        cells = [(val, res) for row, rrow in zip(matrix.cells, matrix.resolved, strict=True)
+                 for val, res in zip(row, rrow, strict=True) if val is not None]
+        muted = sum(1 for _val, res in cells if not res)
+        if muted:
+            parts.append(f"{muted} of {len(cells)} cells are muted: that lap's corner edge was not "
+                         "matched on track, so the time is shown but never marked or counted in "
+                         "the typical.")
+        excluded = len(getattr(session, "excluded_lap_ids", list)() or [])
+        dropouts = len(session.dropout_lap_ids()) if hasattr(session, "dropout_lap_ids") else 0
+        left = []
+        if excluded:
+            left.append(f"{excluded} {EXCLUDED_MARK} excluded")
+        if dropouts:
+            left.append(f"{dropouts} {DROPOUT_MARK} GPS-dropout")
+        if left:
+            parts.append(f"Not in the grid: {' and '.join(left)} "
+                         f"lap{'' if excluded + dropouts == 1 else 's'} (see the Laps tab).")
+        return " ".join(parts)
+
+    @staticmethod
+    def _timing_note(session) -> str:
+        """Why a LAP TIME on this page is demoted, or "" when it is not: the provisional start line
+        or a degraded clock. One author for the PER LAP grid and CORNERS BY LAP, which both print
+        the same laps' times."""
+        verified = getattr(session, "timing_verified", True)
+        quality = getattr(session, "timing_quality", None)
+        return (PROVISIONAL_TOOLTIP if not verified
+                else estimated_timing_tooltip(quality)
+                if quality is not None and quality.degraded else "")
+
     def _corners_note_text(self, session, report) -> str:
         """The one line that connects this page's answers to each other, live.
 
@@ -3553,6 +3816,66 @@ class StatsView(QWidget):
         t.setSortingEnabled(True)
         self._fit_table(t)
 
+    def _refresh_coasting(self, session):
+        """The COASTING table + its note. Hidden outright without a report (no corners, no clean
+        lap, or no g signal — no coasting instrument to report on); a session that simply did not
+        coast keeps the heading and says so in the note instead of showing an empty grid."""
+        report = getattr(session, "coast_report", lambda: None)()
+        has = report is not None
+        self._coasting_section.setVisible(has)
+        self.coasting_note.setVisible(has)
+        listed = [p for p in report.places if p.s_per_lap >= COAST_LIST_MIN_S] if has else []
+        self.coasting_table.setVisible(bool(listed))
+        if not has:
+            self.coasting_table.setRowCount(0)
+            return
+        unlisted = len(report.places) - len(listed)
+        self._coasting_section.setText(
+            f"COASTING · {unlisted} under {COAST_LIST_MIN_S:.2f} s a lap not listed"
+            if unlisted else "COASTING")
+        self.coasting_note.setText(coast_note(report))
+        mono = theme.mono_font(theme.TABLE)
+
+        def cell(text: str, key):
+            item = _NumItem(text)
+            item.setData(NUM_ROLE, key)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.coasting_table
+        t.setSortingEnabled(False)
+        t.blockSignals(True)
+        t.clearSelection()
+        t.setRowCount(len(listed))
+        for r, p in enumerate(listed):
+            name = _NumItem(p.label)
+            name.setData(NUM_ROLE, r)             # sort key: the rank
+            name.setData(RING_ROLE, p.ring_cid)   # the corner the map rings
+            t.setItem(r, 0, name)
+            t.setItem(r, 1, cell(f"{p.s_per_lap:.2f}", p.s_per_lap))
+            t.setItem(r, 2, cell(f"{p.laps}/{report.n_laps}", p.laps))
+            t.setItem(r, 3, cell(f"{p.share * 100.0:.0f}", p.share))
+            if not p.tied:
+                t.setItem(r, 4, cell(COAST_LESS, 2))
+            elif report.lead_separable:
+                t.setItem(r, 4, cell(COAST_TOP, 0))
+            else:
+                t.setItem(r, 4, cell(COAST_TIED, 1))
+        t.blockSignals(False)
+        t.setSortingEnabled(True)
+        self._fit_table(t)
+
+    def _on_coast_row_selected(self):
+        """A COASTING row rings its place on the map — a corner rings itself, a straight the corner
+        feeding it — through the same corner_clicked pathway as the other tables."""
+        rows = self.coasting_table.selectionModel().selectedRows()
+        if rows:
+            item = self.coasting_table.item(rows[0].row(), 0)
+            self.corner_clicked.emit(item.data(RING_ROLE) if item else None)
+        else:
+            self.corner_clicked.emit(None)
+
     def _refresh_straights(self, session, unit, u_label):
         report = getattr(session, "straights_report", list)() or []
         # B8: a start line inside a corner section produces ~0-duration S/F stubs — noise
@@ -3713,10 +4036,14 @@ class StatsView(QWidget):
             # arithmetic invented to make the two numbers meet. State both true counts instead.
             count = getattr(session, "lap_count", None)
             total = count() if callable(count) else len(valid) + len(excluded)
+            # WHY, per reason — it used to say "their distance off the session median" for every
+            # excluded lap, which was already false for a lap with a stop and is false again for a
+            # piece that does not end where it started. getattr-guarded for the lighter doubles.
+            why = exclusion_summary(getattr(session, "excluded_lap_reasons", dict)() or {})
             rows.append(("Statistics use",
                          f"{len(valid)} of the {total} laps found — "
-                         f"{len(excluded)} {EXCLUDED_MARK} excluded, their distance off the "
-                         "session median (see the Laps tab).", True))
+                         f"{len(excluded)} {EXCLUDED_MARK} excluded"
+                         + (f": {why}" if why else "") + " (see the Laps tab).", True))
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
         # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
         # the other three caveats: it is one, and it was the only one printed among the provenance.
@@ -3927,10 +4254,7 @@ class StatsView(QWidget):
         # measured whatever the start line is, and muting the whole table would tell the reader
         # nothing about which numbers the unverified line actually moves.
         verified = getattr(session, "timing_verified", True)
-        quality = getattr(session, "timing_quality", None)
-        timing_note = (PROVISIONAL_TOOLTIP if not verified
-                       else estimated_timing_tooltip(quality)
-                       if quality is not None and quality.degraded else "")
+        timing_note = self._timing_note(session)
         best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
         # The Laps tab suppresses the ★/best colour entirely while provisional (a "best" against
         # an arbitrary start line is meaningless). Match it, or this page would keep vouching for

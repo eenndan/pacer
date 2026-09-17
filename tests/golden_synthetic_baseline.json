@@ -5,6 +5,49 @@
   "best_lap_total_distance": 588.0,
   "best_rolling_lap": "__unsupported__",
   "coaching_opportunities": "__unsupported__",
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 2,
+   "per_lap_s": 15.821726206820657,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 6.112188941938498,
+     "share": 0.3863161871239794,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 5.960348273931656,
+     "share": 0.37671921483271426,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 1.9360067616239638,
+     "share": 0.12236381393007308,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 1.8131822293265394,
+     "share": 0.11460078411323328,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1
@@ -39,6 +82,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -181,6 +225,10 @@
      0.865764713631566,
      0.9073111246762499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 228.0,
@@ -267,6 +315,10 @@
     "lap_corner_grip": [
      0.970060740266392,
      1.0460889118119072
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -410,6 +462,40 @@
     "share": 0.0
    }
   },
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 4,
+   "per_lap_s": 4.701348274465104,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 4,
+     "ring_cid": 2,
+     "s_per_lap": 2.500656240621602,
+     "share": 0.5319019342182459,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 4,
+     "ring_cid": 1,
+     "s_per_lap": 2.0508381129532296,
+     "share": 0.4362233966141476,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 1,
+     "ring_cid": 2,
+     "s_per_lap": 0.14985392089027272,
+     "share": 0.031874669167606465,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1,
@@ -446,6 +532,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    8.416565202289595,
    7.55112853295304
@@ -15711,6 +15798,10 @@
      0.7602455567074966,
      0.7602455567055494
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 216.1059159801467,
@@ -15888,6 +15979,10 @@
      0.6897855561221172,
      0.7424588055298684
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 298.2516486922753,
@@ -16058,6 +16153,10 @@
      0.6754956155601488,
      0.703593787267423
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 265.07198243234785,
@@ -16227,6 +16326,10 @@
     "lap_corner_grip": [
      0.647741053034477,
      0.6807758891917984
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -16783,6 +16886,49 @@
     "share": 0.0
    }
   },
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 3,
+   "per_lap_s": 4.734922650231984,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 3,
+     "ring_cid": 2,
+     "s_per_lap": 2.1340852137033104,
+     "share": 0.4507117373076311,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 3,
+     "ring_cid": 1,
+     "s_per_lap": 2.1008266721454163,
+     "share": 0.443687643354108,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 0.2666422396717536,
+     "share": 0.05631395893208301,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 0.23336852471150374,
+     "share": 0.04928666040617792,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1,
@@ -16818,6 +16964,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    8.141853715014477,
    7.793777280334599
@@ -28810,6 +28957,10 @@
      0.7173604335268619,
      0.71736043352499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 201.10267824425773,
@@ -28973,6 +29124,10 @@
     "lap_corner_grip": [
      0.6858326967003374,
      0.685832800053749
+    ],
+    "lap_corner_resolved": [
+     false,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -29143,6 +29298,10 @@
     "lap_corner_grip": [
      0.6392656774593561,
      0.6392656920280506
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -29698,6 +29857,49 @@
     "share": 0.0
    }
   },
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 3,
+   "per_lap_s": 4.298777851755204,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 3,
+     "ring_cid": 2,
+     "s_per_lap": 2.398920855668692,
+     "share": 0.558047179546439,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 3,
+     "ring_cid": 1,
+     "s_per_lap": 1.4667065532527015,
+     "share": 0.3411915209002579,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 0.23325471753379645,
+     "share": 0.054260705153339764,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 0.19989572530001473,
+     "share": 0.046500594399963395,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1,
@@ -29733,6 +29935,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    8.196308787334369,
    7.847556710984062
@@ -41725,6 +41928,10 @@
      0.7412286504159837,
      0.7412286504140226
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 232.3594235273592,
@@ -41921,6 +42128,10 @@
      0.6745050515450843,
      0.6745051071364738
     ],
+    "lap_corner_resolved": [
+     false,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 282.5590402226825,
@@ -42084,6 +42295,10 @@
     "lap_corner_grip": [
      0.7060766221761466,
      0.7060766252312987
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
@@ -42569,6 +42784,49 @@
   "best_lap_total_distance": 588.0,
   "best_rolling_lap": "__unsupported__",
   "coaching_opportunities": "__unsupported__",
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 2,
+   "per_lap_s": 15.821726206820657,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 6.112188941938498,
+     "share": 0.3863161871239794,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 5.960348273931656,
+     "share": 0.37671921483271426,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 1.9360067616239638,
+     "share": 0.12236381393007308,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 1.8131822293265394,
+     "share": 0.11460078411323328,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1
@@ -42603,6 +42861,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -42745,6 +43004,10 @@
      0.865764713631566,
      0.9073111246762499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 228.0,
@@ -42832,6 +43095,10 @@
      0.970060740266392,
      1.0460889118119072
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 298.5,
@@ -42904,6 +43171,49 @@
   "best_lap_total_distance": 588.0,
   "best_rolling_lap": "__unsupported__",
   "coaching_opportunities": "__unsupported__",
+  "coast_report": {
+   "lead_separable": false,
+   "n_laps": 2,
+   "per_lap_s": 15.821726206820657,
+   "places": [
+    {
+     "index": 0,
+     "label": "S/F \u2192 C1",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 6.112188941938498,
+     "share": 0.3863161871239794,
+     "tied": true
+    },
+    {
+     "index": 2,
+     "label": "C1 \u2192 C2",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 5.960348273931656,
+     "share": 0.37671921483271426,
+     "tied": true
+    },
+    {
+     "index": 1,
+     "label": "C1",
+     "laps": 2,
+     "ring_cid": 1,
+     "s_per_lap": 1.9360067616239638,
+     "share": 0.12236381393007308,
+     "tied": true
+    },
+    {
+     "index": 3,
+     "label": "C2",
+     "laps": 2,
+     "ring_cid": 2,
+     "s_per_lap": 1.8131822293265394,
+     "share": 0.11460078411323328,
+     "tied": true
+    }
+   ]
+  },
   "consistency_lap_ids": [
    0,
    1
@@ -42938,6 +43248,7 @@
     1
    ]
   ],
+  "corner_matrix": null,
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -43080,6 +43391,10 @@
      0.865764713631566,
      0.9073111246762499
     ],
+    "lap_corner_resolved": [
+     true,
+     true
+    ],
     "lap_corner_stats": [
      {
       "apex_dist": 228.0,
@@ -43166,6 +43481,10 @@
     "lap_corner_grip": [
      0.970060740266392,
      1.0460889118119072
+    ],
+    "lap_corner_resolved": [
+     true,
+     true
     ],
     "lap_corner_stats": [
      {
