@@ -115,14 +115,13 @@ import os
 import shutil
 import uuid
 
-from . import data_quality
+from . import app_support, data_quality
 
 _log = logging.getLogger(__name__)
 
 VERSION = 1
 
 _FILENAME = "marks.json"
-_APP_DIR_NAME = "pacer"
 
 # ---------------------------------------------------------------- the vocabulary
 #: The two kinds. `KIND_AUTO` never reaches the file — see the module docstring.
@@ -223,9 +222,9 @@ MIN_DEGRADED_S = 5.0
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). The single seam the
     tests monkeypatch, so the suite never touches the user's real marks (mirrors
-    ``session_record._app_support_dir`` / ``library._app_support_dir``)."""
-    return os.path.join(
-        os.path.expanduser("~"), "Library", "Application Support", _APP_DIR_NAME)
+    ``session_record._app_support_dir`` / ``library._app_support_dir``, resolved through
+    ``app_support.resolve``)."""
+    return app_support.resolve()
 
 
 def marks_path() -> str:

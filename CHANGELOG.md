@@ -680,6 +680,14 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   AST call graph — those pieces call each other in a cycle, so the library/PB methods alone could
   not move without splitting it — and a before/after drive of the real window over both D24
   recordings dumps byte-identical stores, status lines, menus, dialogs and PB cards.
+- **No test can reach the owner's app-support directory any more, in-process or in a child.** A
+  `ctest` run wrote a `stadium` row from the synthetic fixture into a real `library.json`:
+  `test_load_failure` patched no seam, and its library write had been dead only while a test double
+  raised first. Every jail was an in-process attribute patch, opt-in per file and invisible to a
+  child process. The seven store seams now resolve through `studio/app_support.py`, which jails any
+  process CTest starts (a flag on every registration), any test file run by hand, and every child of
+  either, and `studio/dev/_jail.py` exports its jail too. The app itself resolves exactly as before.
+  `tests/test_app_support_jail.py` checks each form a test process takes, plus that control.
 
 ## [0.2.0] — 2026-09-06
 
