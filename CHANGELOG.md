@@ -13,6 +13,24 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
+  seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
+  ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed
+  is a **per-recording verdict** — a camera with no gyroscope, a gyro that never tracks the racing
+  line, or a measurement past a second all leave it uninstalled — and the only place that was ever
+  stated was the rotation row's tooltip, which exists only where there IS a gyro. Driven over D24's
+  0060 pair with the lag estimator forced to its own refusing branch, every GPS-derived overlay sat
+  **~0.46 s (14 frames at 30 fps) behind the picture** while the DATA TRUST card read
+  `Timing: GPS9 true clock · 0% of moving fixes rejected` and nothing on the window said otherwise.
+  The card now carries a **Video sync** row: *corrected*, with the rate difference, the drift it
+  removes across this recording (0.08 s on 0060, 0.14 s on 0062) and the lag that was taken out
+  (0.48 s / 0.46 s); or a ⚠ caveat when the lag could not be measured or the map could not be
+  fitted at all. A GPS5-era camera — **eight of the ten bundled samples** — says instead that its
+  telemetry and its picture are already on one clock and nothing is converted, and a recording with
+  no GPS in it gets **no row**, because the Timing row above already says nothing in it can be
+  lap-timed. The **±0.05 s floor** no correction can remove (where a fix sat inside its 1.001 s
+  GPMF payload is recorded nowhere) is stated once, in the card's tooltip, and the rotation tooltip
+  now points at the row instead of restating it.
 - **Export the two-lap comparison — locked to the same point on TRACK, not the same time on the
   clock.** Compare mode has always been on screen only; **File ▸ Export comparison video…** now
   renders the pair you are comparing into one MP4, stacked or side by side. Both panes are held at
@@ -221,6 +239,22 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   rename rather than being orphaned by it.
 
 ### Changed
+
+- **Coaching stops crowning one corner when two of them are the same number.** The plan's second
+  line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
+  of the owner's recordings, that crown is not something the data supports: the top two corners are
+  0.086 s and **0.005 s** apart, a paired permutation test over the lap-by-lap corner times cannot
+  tell them apart (p = 0.125 and p = 0.837), and resampling the laps hands the crown to the
+  runner-up in 14 % and **46 %** of draws. Split one session into its odd and its even laps and the
+  crown changes on both recordings. The line now reads "Start with C3 or C12: +0.15 s and +0.14 s
+  sit closer together than your own lap-to-lap spread, so either is the same call." A lead the
+  measurement *does* separate is unchanged, word for word — and the ranking underneath is unchanged
+  too: 17 of its 30 ranked corner pairs do separate.
+  - **What was refused on the way, and why:** a seconds interval beside each recommendation. The
+    three things such an interval could mean — the corner's lap-to-lap spread, the uncertainty on
+    its median, and the benefit measured on the laps that already did the recommended thing —
+    disagree by 4× on the same corner, and the third one's **sign flips** between recordings and is
+    confounded by lap pace. The numbers are in `studio/docs/refused-2026-09.md` §3.
 
 - **Every lap's corners are now measured in the same frame — which moves the ideal lap and
   reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not

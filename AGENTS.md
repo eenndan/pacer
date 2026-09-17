@@ -261,9 +261,10 @@ the golden gate above.
 
 **Before proposing a feature, check it was not already measured and refused.**
 [studio/docs/refused-2026-09.md](studio/docs/refused-2026-09.md) records the ones whose evidence
-would otherwise live only in a closed pull request — the mistake-hangover detector and the
-ideal-lap recombination dotplot, each with the numbers that killed it. They stay refused unless you
-bring NEW evidence; "it would be nice to have" is not new evidence.
+would otherwise live only in a closed pull request — the mistake-hangover detector, the ideal-lap
+recombination dotplot and a seconds interval on coaching recommendations, each with the numbers
+that killed it. They stay refused unless you bring NEW evidence; "it would be nice to have" is not
+new evidence.
 
 **Changelog:** a user-visible change (feature, fix, behaviour tweak) gets a line under
 `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR — grouped Added/Changed/Fixed, one

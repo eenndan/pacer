@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, driving, gmeter, provenance_panel, theme, units
+from . import data_quality, driving, gmeter, media_clock, provenance_panel, theme, units
 from . import stats as stats_service
 from ._signal import fmt_hms, fmt_time, plural
 
@@ -146,6 +146,99 @@ def gps_lateral_clause(session) -> str | None:
     refusal = axis.refusal() if axis is not None else None
     return (f"this recording's accelerometer was not used: {refusal}" if refusal
             else "no usable accelerometer")
+
+
+#: The DATA TRUST term for the picture↔telemetry fact. Named once so the row, its test and the
+#: docs cannot drift into three spellings of one thing.
+VIDEO_SYNC_TERM = "Video sync"
+
+#: WHAT NO CORRECTION REMOVES, stated once beside the row that states what the corrections did.
+#: `studio/media_clock.py` measures it: a GPMF payload spans 1.001 s and carries 9, 10 or 11 fixes
+#: laid evenly across it, so where a fix really sat inside its payload is recorded nowhere. It is a
+#: FLOOR — the part that does NOT grow through a recording, which is exactly what distinguishes it
+#: from the two clock errors the app now takes out.
+VIDEO_SYNC_TIP = (
+    "Where a GPS fix sits inside its 1.001 s GPMF payload is recorded nowhere, so no method can "
+    "place a telemetry instant on the picture better than about ±0.05 s — 1.5 frames at 30 fps. "
+    "That floor sits under whatever this row says, and unlike a clock difference it does not grow "
+    "through a recording. Lap times are differences taken on one clock, so none of this moves "
+    "them.")
+
+
+def video_sync_row(session):
+    """Is what is drawn over a frame that frame's own? — as a (term, value, caveat) row, or None.
+
+    THE FACT THE CARD COULD NOT STATE. The app crosses ONE seam between the picture and the
+    telemetry (`Session.media_time`), and two corrections ride on it: the two clocks' ~27 ppm rate
+    difference, and the GPS timestamps' own measured lag. The second one is a PER-RECORDING
+    VERDICT — `Session.gps_lag_applied_s` is None for a camera with no gyro, for a gyro that never
+    tracks the racing line, and for a measurement past `media_clock.MAX_GPS_LAG_S` — and until this
+    row the only place it was stated was the ROTATION row's tooltip, which exists only when there
+    is a gyro to measure an offset with. So the disclosure was absent on all ten bundled samples,
+    and absent on precisely the recordings where the correction had FAILED.
+
+    Measured on the real StudioWindow with `rotation.measure_lag` forced to its own refusing branch
+    over D24's 0060 pair (the #283 idiom — the real gate driven to the branch the owner's files
+    never reach): `gps_lag_applied_s` None, every GPS-derived overlay ~0.46 s — 14 frames at
+    30 fps — behind the picture, and the card read `Timing: GPS9 true clock · 0% of moving fixes
+    rejected` with the rotation row silently dropping its clause. Nothing on the window said so.
+
+    FOUR STATES, and all four occur. Both D24 recordings are the first (fitted map, +26.73 /
+    +27.11 ppm, lag +0.4764 / +0.4589 s installed). Eight of the ten bundled samples are the third
+    — a GPS5 camera never leaves the media clock, so `media_clock.fit` returns IDENTITY because
+    there is genuinely nothing to convert, which must not read as a failed fit. `karma.mp4` is the
+    fifth: no GPS trace at all, so there is nothing to place on the picture and the Timing row
+    above already says nothing here can be lap-timed — no row rather than a fifth sentence.
+
+    ACCESSORS ONLY, and it returns None for a session that models no clock at all. Every other
+    suite in this repo builds a duck-typed stand-in; "this object knows nothing about a map" is not
+    "this recording's map could not be fitted", and reporting the first as the second is the
+    failure mode `track_name`'s `""` default already exists to avoid."""
+    clock = getattr(session, "media_clock", None)
+    quality = getattr(session, "timing_quality", None)
+    if not isinstance(clock, media_clock.MediaClock) or quality is None:
+        return None
+    if getattr(quality, "no_gps", False):
+        return None
+    applied = getattr(session, "gps_lag_applied_s", None)
+    # The RATE FIT alone — `gps_lag` is a separate installation and would otherwise make every
+    # corrected recording look like a fitted one even where the fit was refused.
+    fitted = not clock.without_gps_lag().is_identity
+    ppm = abs(clock.rate - 1.0) * 1e6
+    # The recording's own length, off the object the clock rides on. Absent (a stand-in, a session
+    # with no chapter map) means the seconds figure is omitted, never invented.
+    span = getattr(getattr(session, "chapters", None), "total_duration", None)
+    drift = (f", {ppm * 1e-6 * float(span):.2f} s across this recording"
+             if isinstance(span, (int, float)) and not isinstance(span, bool) and span > 0
+             else "")
+    if applied:
+        basis = (f"the trace is placed on the picture's own clock (the two run {ppm:.1f} ppm "
+                 f"apart{drift}) and " if fitted else "")
+        return (VIDEO_SYNC_TERM,
+                f"corrected — {basis}the GPS timestamps' measured {abs(applied):.2f} s lag is "
+                f"taken out, so the speed, Δ and map dot beside a frame are that frame's own, in "
+                f"the app and in an exported clip alike", False)
+    if fitted:
+        # The forced case above, and the honest half-correction: the drift is out, the lag is not.
+        # "around half a second" is what it measured wherever it COULD be measured (+0.476 /
+        # +0.459 s on the two D24 recordings) — this recording's own is unknown, which is the
+        # whole point of the row, so the figure is offered as a scale and not as this file's.
+        return (VIDEO_SYNC_TERM,
+                f"the two clocks' {ppm:.1f} ppm drift is taken out{drift}, but this recording's "
+                f"GPS-timestamp lag could not be measured — so the speed, Δ and map dot drawn "
+                f"over the video may trail the picture by the receiver's own fix latency, which "
+                f"measures around half a second on the recordings where it can be measured. Lap "
+                f"times are differences taken on one clock and are unaffected.", True)
+    if getattr(quality, "media_clock", False):
+        return (VIDEO_SYNC_TERM,
+                "this camera writes no GPS clock of its own, so the telemetry and the picture are "
+                "already on one clock — there is nothing to convert, and nothing is shifted.",
+                False)
+    return (VIDEO_SYNC_TERM,
+            "the picture↔telemetry map could not be fitted on this recording, so everything drawn "
+            "over the video keeps the uncorrected mapping — which drifts from the picture by up "
+            "to about 0.2 s by the end of a long session. Lap times are differences taken on one "
+            "clock and are unaffected.", True)
 # (The local TILE_VALUE_PT alias is gone: the step it named is theme.EMPHASIS, the tile that used
 # it is widgets.Tile, and the two call sites left in this file read the token directly.)
 TILES_PER_ROW = 4         # tile-grid max columns in a normal (quadrant-width) pane
@@ -3673,6 +3766,15 @@ class StatsView(QWidget):
                         "The stationary lead-in before you drive off is trimmed by the loader "
                         "and left out of the verdict, so opening one chapter or all of them "
                         "gives the same answer.")
+        # …and what that clock is worth AGAINST THE PICTURE, which is the other half of the same
+        # question and the half a viewer can check for themselves. The row above names the axis the
+        # times are measured on; this one says whether the numbers painted beside a frame belong to
+        # that frame. It sits here because it qualifies the row above, and it is a CAVEAT when the
+        # correction did not land — see `video_sync_row` for the state that made it necessary.
+        sync = video_sync_row(session)
+        if sync is not None:
+            rows.append(sync)
+            tips.append(VIDEO_SYNC_TIP)
         # …and the SAME fact per second, which is a different verdict often enough to be worth its
         # own row. Measured on the owner's two recordings, the two rows come out INVERTED: 0060
         # rejects not one fix (the row above reads 0 %) and yet 17 of its 38 clean laps contain a
@@ -3786,29 +3888,23 @@ class StatsView(QWidget):
                         "and moves this ratio to 0.5, and a gyroscope read through the wrong "
                         "gravity axis lands negative.")
             if rot.lag_clause:
-                # WHAT WAS MEASURED AND WHAT WAS DONE WITH IT ARE TWO SENTENCES, from two
-                # sources. The clause is the measurement (`RotationCheck`); whether the overlay is
-                # corrected by it is the SESSION's answer (`gps_lag_applied_s`), because a
-                # measurement can be refused — no gyro, or a value past the clock's bound — and a
-                # tooltip that assumed the correction landed would be the same class of lie the
-                # stated-but-uncorrected offset was.
-                applied = getattr(session, "gps_lag_applied_s", None)
-                done = (
-                    f"The video overlay IS corrected by it: the picture↔telemetry mapping carries "
-                    f"the measured {abs(applied):.2f} s, so the speed, Δ, map dot and dial beside "
-                    f"a frame are that frame's own — in the app and in an exported clip alike. The "
-                    f"figures above are not shifted; they describe the two channels as recorded."
-                    if applied else
-                    "Nothing is shifted to match on this recording: the offset could not be "
-                    "applied, so the overlay keeps the uncorrected mapping.")
+                # WHAT WAS MEASURED AND WHAT WAS DONE WITH IT ARE TWO SENTENCES, from two sources
+                # — and since the Video sync row they are two SURFACES, which is the fix for the
+                # hole this tooltip had. The clause here is the MEASUREMENT (`RotationCheck`);
+                # whether the overlay is corrected by it is the SESSION's answer
+                # (`gps_lag_applied_s`), and that answer is true of every recording — including
+                # the ones with no gyro, where this tooltip does not exist at all and the
+                # correction is exactly as likely to have been refused. So the action is stated
+                # once, in the row, and pointed at from here rather than restated.
                 tips.append(
                     f"The two channels are not on the same clock. The gyroscope is timestamped on "
                     f"the camera's media clock — the one the picture plays on — and the GPS trace "
                     f"on its receiver's own. Measured on this recording, {rot.lag_clause}: the "
                     f"correlation above is what they score with that offset still in "
                     f"(r={rot.lag_corr:+.2f} at the offset, {rot.lag_corr_at_zero:+.2f} without "
-                    f"it). {done} Lap times are differences taken on one clock, so none of this "
-                    f"moves them.")
+                    f"it). The figures above are not shifted; they describe the two channels as "
+                    f"recorded, and what the app did with the offset is the Video sync row above. "
+                    f"Lap times are differences taken on one clock, so none of this moves them.")
             tips.append(f"The measured channel is the {session.rotation_device() or 'camera'}'s "
                         f"gyroscope (GPMF GYRO, ~200 Hz), projected onto gravity so it reads a "
                         f"road-plane yaw rate however the camera is tilted on its mount. The "
