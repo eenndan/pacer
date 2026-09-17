@@ -27,4 +27,11 @@ than one: the strip's naive-second cells indexed by telemetry windows, each join
 against the stamps the strip binned. Its rule is written in `Session.quality_timeline`.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p5_clock_crossing_scale
+
+`p6_corner_match_cause` also loads each recording itself. It asks why 0060's corner boundaries fail
+the spatial match far more often than 0062's. It relaxes one gate of the real
+`corners._spatial_matches` at a time, and tests GNSS scatter, the reference lap, the threshold and
+chapter seams against each other. Its verdict is `studio/docs/corner-match-0060-2026-09.md`.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause
 """
