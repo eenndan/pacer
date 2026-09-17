@@ -56,20 +56,33 @@ REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX
 
 def _real_media_usable() -> bool:
     """Whether the opt-in real-media file is present AND actually PARSEABLE. Existence alone is
-    not enough: a file that exists but does not PARSE (a partial copy, or a path some tool
-    overwrote — which is exactly what happened to this default path on the dev machine) raises
-    inside the GPMF parser, turning these deliberately-optional tests into hard failures. Cached
-    so the probe runs once per session."""
+    not enough: a file that exists but does not parse raises inside the GPMF parser, turning these
+    deliberately-optional tests into hard failures. Cached so the probe runs once per session.
+
+    THE TWO WAYS THIS PROBE FAILS ARE REPORTED SEPARATELY, and the split is not cosmetic. A bare
+    `import pacer` from the repo root resolves to the C++ `pacer/` source directory — a PEP 420
+    namespace portion with no `GPMFSource` — so a run without the bindings on PYTHONPATH raised
+    AttributeError here and printed it as "<the owner's own footage> is present but unreadable":
+    an import problem wearing the clothes of data loss, on a machine where a dev tool really did
+    destroy 11.9 GB of footage. CTest injects the bindings, so it is the standalone run that hits
+    it. Neither branch guesses at a CAUSE for the file; the parser's own words are enough."""
     global _REAL_MEDIA_OK
     if _REAL_MEDIA_OK is None:
         _REAL_MEDIA_OK = False
         if os.path.exists(REAL_MP4):
             try:
                 import pacer
-                pacer.GPMFSource(REAL_MP4)
+                open_gpmf = pacer.GPMFSource
+            except (ImportError, AttributeError) as exc:
+                print(f"skip real-media tests: the pacer bindings are not importable in this run "
+                      f"({exc}) — this says nothing about {REAL_MP4}. Run under CTest, or with "
+                      f"PYTHONPATH=bindings/pacer.")
+                return _REAL_MEDIA_OK
+            try:
+                open_gpmf(REAL_MP4)
                 _REAL_MEDIA_OK = True
             except Exception as exc:  # noqa: BLE001 — any parser failure = "not usable"
-                print(f"skip real-media tests: {REAL_MP4} is present but unreadable ({exc})")
+                print(f"skip real-media tests: {REAL_MP4} did not parse as GPMF ({exc})")
     return _REAL_MEDIA_OK
 
 

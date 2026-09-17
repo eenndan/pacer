@@ -28,6 +28,8 @@ Usage:  python -m studio.dev.golden_session_dump <out.json> [--force]
         The RECORDING to dump is REAL / $PACER_GOLDEN_MP4 — never a CLI argument. It must be a
         real MP4: the tool refuses (exit 2) a path that is missing, not an MP4 container, or
         unreadable by the GPMF parser, rather than fingerprinting whatever it can open.
+        No PYTHONPATH is needed — the module puts the built bindings on `sys.path` itself — and a
+        refusal names only what it measured (see `preflight`).
 """
 from __future__ import annotations
 
@@ -39,7 +41,19 @@ import tempfile
 import numpy as np
 
 # repo root is three levels up from studio/dev/<this file> (studio/dev -> studio -> root).
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _ROOT)
+# …and the BUILT BINDINGS, so the workflow AGENTS.md documents works as written.
+#
+# That workflow is `pixi run python -m studio.dev.golden_session_dump <out.json>` with no
+# PYTHONPATH, and from the repo root it used to resolve `pacer` to the C++ SOURCE directory:
+# `pacer/` has no `__init__.py`, and neither does the `site-packages/pacer/` the build deploys the
+# compiled module into, so both are PEP 420 namespace PORTIONS — `import pacer` then succeeds and
+# has no `GPMFSource`. `bindings/pacer/pacer/` is a REGULAR package, and a regular package beats
+# any number of namespace portions, so putting it on the path settles the resolution in every
+# install state. Inserted immediately after the repo root: exactly where `PYTHONPATH=bindings/pacer`
+# would put it, which is the same fix the `smoke` pixi task applies via its env.
+sys.path.insert(1, os.path.join(_ROOT, "bindings", "pacer"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # The gate's reference recording. Overridable, because the default path is only a convention — and
@@ -312,37 +326,85 @@ def _resolve_out_path(argv: list[str]) -> str:
     return out_path
 
 
+class BindingsUnavailable(Exception):
+    """The compiled `pacer` bindings are not usable in THIS PROCESS.
+
+    A fact about the run, and kept in its own exception type for one reason: it used to arrive at
+    the same `except Exception` as every parser error, so an `import pacer` that had resolved to
+    the repo's C++ source directory was announced as "a file some tool overwrote"."""
+
+
+def gpmf_opener():
+    """`pacer.GPMFSource`, or raise `BindingsUnavailable` naming what `pacer` resolved to instead.
+
+    `import pacer` SUCCEEDING is not evidence that the bindings are there — see the sys.path note
+    at the top of this module — so the attribute is what gets checked, not the import."""
+    try:
+        import pacer
+    except Exception as exc:  # noqa: BLE001 — a half-built .so raises more than ImportError
+        raise BindingsUnavailable(f"`import pacer` failed: {exc}") from exc
+    opener = getattr(pacer, "GPMFSource", None)
+    if opener is None:
+        where = (getattr(pacer, "__file__", None)
+                 or f"a namespace package spanning {list(getattr(pacer, '__path__', []))}")
+        raise BindingsUnavailable(
+            f"`import pacer` resolved to {where}, which has no GPMFSource")
+    return opener
+
+
+def preflight(path: str, *, opener_factory=gpmf_opener) -> str | None:
+    """The FATAL message for `path`, or None when the gate may fingerprint it.
+
+    PRESENT-BUT-NOT-A-RECORDING, in escalating probes, because `Session.load` no longer raises on
+    one shape of it: it now SKIPS a path that was read and is not an MP4 (chapters.split_non_mp4)
+    so a chaptered recording survives one destroyed chapter. That is right for the app and wrong
+    for a gate — a fingerprint taken over "whatever of this recording could be opened" is not a
+    fingerprint of the recording. So the gate insists on the file it was pointed at, itself, and
+    says WHICH way it failed (an unreadable file is not an overwritten one).
+
+    EVERY sentence here is held to one rule: report what was measured, never how it came to be.
+    "Could not be read", "its first box header is not an ISO media box", "did not parse as GPMF"
+    are observations this function made. "Some tool overwrote it" is a story about the past that
+    no probe here can see — and on the machine this gate runs on, where a dev tool really did
+    write a JSON dump over 11.9 GB of the owner's only race recording, it is the most alarming
+    sentence the software can produce. It was printed for a missing `PYTHONPATH`.
+
+    `opener_factory` is injected by tests/test_golden_hermetic.py so both failure modes can be
+    driven without a build."""
+    if not os.path.exists(path):
+        return (f"FATAL: real session not found at {path} "
+                f"(set PACER_GOLDEN_MP4 to another recording)")
+    from studio import chapters
+    probe = chapters.probe_mp4(path)
+    if probe == chapters.MP4_UNREADABLE:
+        return (f"FATAL: {path} exists but could not be read (permissions, a directory, or a "
+                f"volume that went away) — this says nothing about its contents. Fix the access "
+                f"or set PACER_GOLDEN_MP4 to another recording.")
+    if probe != chapters.MP4_CONTAINER:
+        return (f"FATAL: {path} exists, and its first box header is not an ISO media box — so "
+                f"whatever it holds, it is not video. Point PACER_GOLDEN_MP4 at a recording; on "
+                f"the dev Desktop, ~/Desktop/D24/GX020060.MP4.")
+    try:
+        open_gpmf = opener_factory()
+    except BindingsUnavailable as exc:
+        return (f"FATAL: the pacer bindings are not usable in this run ({exc}). That is a problem "
+                f"with the ENVIRONMENT, and says nothing at all about {path}. Build them with "
+                f"`pixi run build`; from a layout this module cannot work out for itself, run it "
+                f"with PYTHONPATH=bindings/pacer.")
+    try:  # an MP4 that the GPMF parser still refuses → say so here, not from deep in the loader
+        open_gpmf(path)
+    except Exception as exc:  # noqa: BLE001 — report the parser's own words, whatever they are
+        return (f"FATAL: {path} is an MP4 container but did not parse as GPMF ({exc}). That is "
+                f"what this read measured, not a claim about how the file came to be that way. "
+                f"Point PACER_GOLDEN_MP4 at a recording this build can parse.")
+    return None
+
+
 def main():
     out_path = _resolve_out_path(sys.argv)
-    if not os.path.exists(REAL):
-        print(f"FATAL: real session not found at {REAL} "
-              "(set PACER_GOLDEN_MP4 to another recording)", file=sys.stderr)
-        sys.exit(2)
-    # PRESENT-BUT-NOT-A-RECORDING, in escalating probes, because `Session.load` no longer raises on
-    # one shape of it: it now SKIPS a path that was read and is not an MP4 (chapters.split_non_mp4)
-    # so a chaptered recording survives one destroyed chapter. That is right for the app and wrong
-    # for a gate — a fingerprint taken over "whatever of this recording could be opened" is not a
-    # fingerprint of the recording. So the gate insists on the file it was pointed at, itself, and
-    # says WHICH way it failed (an unreadable file is not an overwritten one).
-    from studio import chapters
-    probe = chapters.probe_mp4(REAL)
-    if probe == chapters.MP4_UNREADABLE:
-        print(f"FATAL: {REAL} exists but could not be read (permissions, a directory, or a volume "
-              "that went away) — this says nothing about its contents. Fix the access or set "
-              "PACER_GOLDEN_MP4 to another recording.", file=sys.stderr)
-        sys.exit(2)
-    if probe != chapters.MP4_CONTAINER:
-        print(f"FATAL: {REAL} exists but is not an MP4 at all (its first box header is not an ISO "
-              "media box) — something has overwritten it. Set PACER_GOLDEN_MP4 to a real "
-              "recording; on the dev Desktop, ~/Desktop/D24/GX020060.MP4.", file=sys.stderr)
-        sys.exit(2)
-    try:  # an MP4 that the GPMF parser still refuses → say so here, not from deep in the loader
-        import pacer
-        pacer.GPMFSource(REAL)
-    except Exception as exc:  # noqa: BLE001
-        print(f"FATAL: {REAL} exists but is not readable as GPMF ({exc}) — a partial copy, or a "
-              "file some tool overwrote. Set PACER_GOLDEN_MP4 to a complete recording.",
-              file=sys.stderr)
+    fatal = preflight(REAL)
+    if fatal:
+        print(fatal, file=sys.stderr)
         sys.exit(2)
 
     # Redirect EVERY app-support seam to a temp dir. `library` so nothing touches the user's data —
