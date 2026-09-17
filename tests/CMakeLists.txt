@@ -357,6 +357,15 @@ add_test(NAME test_corner_alignment_memo
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_alignment_memo.py)
 set_tests_properties(test_corner_alignment_memo PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The session GEOMETRY model (M7): the consensus line of a session's clean laps + each lap's rigid
+# receiver shift against it, and what CornerModel.lap_alignment does with them. The control that
+# decides whether it may ship at all lives here — a rigid translation and a wider racing line are
+# PLANTED on the same synthetic loop and the fit must recover one and refuse the other.
+add_test(NAME test_corner_drift
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_drift.py)
+set_tests_properties(test_corner_drift PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Data-export writers (studio.export_data, F11): laps/channels CSV schema + the
 # float-repr round-trip exactness + the self-contained HTML report (XML-parsed, embedded
 # PNGs decoded), on bare Sessions seeded via tests/_synthetic with a FakeLaps duck-type.
@@ -825,7 +834,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_lap_time_axis
                         test_delta_engine test_controllers test_central_view_realqt
                         test_load_failure test_load_affordances test_load_lifecycle
                         test_validate_wallclock
-                        test_corners test_corner_alignment_memo
+                        test_corners test_corner_alignment_memo test_corner_drift
                         test_consistency test_gmeter test_gmeter_overlay test_rotation
                         test_export_data test_export_disclosures
                         test_driving test_coaching test_focus_list test_library test_export_video

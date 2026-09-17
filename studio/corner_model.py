@@ -564,6 +564,8 @@ class CornerModel:
         self._segment_bests_cache: object = _UNSET  # the ideal-lap segment composite
         # Per-(lap, total_lap) monotone warp onto the reference odometer — see lap_alignment.
         self._align_cache: dict[tuple[int, float], object] = {}
+        self._geometry_cache: object = _UNSET   # corners.SessionGeometry or None — see geometry()
+        self._shift_cache: dict[int, object] = {}  # lap id -> its fitted rigid shift
 
     def invalidate(self) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
@@ -574,6 +576,8 @@ class CornerModel:
         self._bests_cache = _UNSET
         self._segment_bests_cache = _UNSET
         self._align_cache.clear()
+        self._geometry_cache = _UNSET
+        self._shift_cache.clear()
 
     def invalidate_stats(self) -> None:
         """Drop ONLY the per-lap stats (not the corner detection) — called from
@@ -586,9 +590,16 @@ class CornerModel:
         keeping it here would be sound — but dropping it makes its lifetime a strict subset of
         `_stats_cache`'s, which is the invariant this file already documents and tests. The win
         is entirely WITHIN one refresh (one derivation instead of nine), so the extra clearing
-        costs nothing measurable and removes a whole class of staleness argument."""
+        costs nothing measurable and removes a whole class of staleness argument.
+
+        The session GEOMETRY memo goes with it for the same reason. Like the warp it does not
+        depend on the Δ baseline — it is fitted from the clean laps' traces and the local best
+        lap's — but tying its lifetime to `_stats_cache`'s keeps one invalidation story instead
+        of two, and it is refitted once per refresh at worst."""
         self._stats_cache.clear()
         self._align_cache.clear()
+        self._geometry_cache = _UNSET
+        self._shift_cache.clear()
 
     # -------------------------------------------------------- spatial traces for the per-lap warp
     def _best_trace(self) -> tuple | None:
@@ -616,6 +627,55 @@ class CornerModel:
             return None
         return (*ref_trace, xs, ys, cum)
 
+    # ------------------------------------------------- the session's geometry (receiver de-drift)
+    def geometry(self):
+        """This session's `corners.SessionGeometry` — the consensus line of its CLEAN laps plus
+        each lap's rigid receiver shift against it — or None when there is nothing to fit one
+        from (no usable best lap, fewer than `corners.DRIFT_MIN_LAPS` clean laps, too few stations
+        answering). Memoized with the warps and dropped by the same two invalidations.
+
+        WHAT IT IS FOR is in `corners.SessionGeometry`: a consumer receiver's position error is
+        nearly constant over one lap, so each lap's whole trace sits displaced by one vector, and
+        the spatial match's 3 m gate was being spent on that instead of on the driving. It is
+        fitted from the clean laps only (`_clean_lap_ids` — the same set every "best" here is
+        drawn from) so that one dropout lap's reconstructed trace cannot tilt the consensus; a lap
+        outside that set is still measured against it, on demand, by `lap_shift`."""
+        if self._geometry_cache is not _UNSET:
+            return self._geometry_cache
+        self._geometry_cache = None
+        ref_trace = self._best_trace()
+        if ref_trace is not None:
+            traces = {}
+            for lid in self._clean_lap_ids():
+                _t, xs, ys, _v, cum = self._lap_columns(lid)
+                if len(cum) >= 2 and float(cum[-1]) > 0:
+                    traces[int(lid)] = (xs, ys, cum)
+            self._geometry_cache = corners.session_geometry(ref_trace, traces)
+        return self._geometry_cache
+
+    def lap_shift(self, lap_id: int) -> tuple[float, float]:
+        """The rigid translation to remove from `lap_id` before matching it against the reference
+        lap — `SessionGeometry.relative_shift`, so the reference lap gets exactly (0, 0) against
+        itself. (0, 0) when there is no geometry, or when the lap has no usable trace.
+
+        A lap that was not in the consensus set (a GPS-dropout lap: excluded from every "best",
+        still drawn) is FITTED HERE against that consensus rather than left uncorrected, so one
+        session has one frame. Memoized per lap alongside the warps."""
+        geom = self.geometry()
+        best = self._best_lap_id()
+        if geom is None or best is None:
+            return 0.0, 0.0
+        lap_id = int(lap_id)
+        got = self._shift_cache.get(lap_id, _UNSET)
+        if got is _UNSET:
+            got = geom.shift.get(lap_id)
+            if got is None:
+                _t, xs, ys, _v, cum = self._lap_columns(lap_id)
+                got = (geom.fit(xs, ys, cum)[0] if len(cum) >= 2 and float(cum[-1]) > 0
+                       else np.zeros(2))
+            self._shift_cache[lap_id] = got
+        return geom.relative_shift(got, best)
+
     def lap_alignment(self, lap_id: int, total_lap: float) -> object | None:
         """ONE lap's monotone warp onto the reference (best) lap's odometer — the thing every
         corner-window projection in the app is a read of — MEMOIZED per (lap, total_lap).
@@ -637,8 +697,15 @@ class CornerModel:
         `corners.NORMALIZED_DRIFT_MAX`. #300 deleted that constant, so every lap with a trace pair
         has been warped since and the sentence was false from that commit. Measured on the owner's
         recordings, None is not reached at all: 0 of 38 laps (D24 0060 pair) and 0 of 65 (0062),
-        carrying 4-22 and 20-22 matched interior knots of 24 corner boundaries.
+        carrying 12-22 and 22-22 matched interior knots of 24 corner boundaries (4-22 and 20-22
+        before the session geometry below de-drifted them).
         `tests/test_corner_alignment_memo.py` drives all three causes and guards the wording.
+
+        THE MATCH RUNS THROUGH THE SESSION'S GEOMETRY (M7). The comparison lap's trace is moved by
+        `lap_shift` and the anchor sideways by `corners.anchor_offsets`, so the 3 m gate is spent on
+        the two lines rather than on the receiver's own bias. On the D24 0060 pair that takes the
+        interior boundaries matched from 61.8 % to 95.1 % and `lap_corner_resolved` from 220 to 422
+        of 456 cells; on 0062, from 99.7 % to 100 % and 776 to 780 of 780.
 
         WHY THIS EXISTS. The warp is built from the WHOLE corner partition, so it is the same
         object for every window of a lap — but nine independent call paths each derived it for
@@ -673,8 +740,21 @@ class CornerModel:
         # The warp is fitted to the WHOLE partition (corners.project_boundaries' `frame`), so a
         # caller asking about one corner gets the alignment the whole-partition callers use.
         frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        ref_trace = self._best_trace()
+        # The receiver's rigid bias is taken out of the comparison lap, and the reference lap's own
+        # NON-RIGID deviation from the session's consensus out of the anchor (corners.anchor_offsets
+        # — sideways only, so the odometer frame is untouched). THE REFERENCE LAP IS EXEMPT FROM
+        # BOTH: its odometer IS the frame, so it must keep matching its own trace exactly, and a
+        # sideways anchor would put its own boundaries a metre or more from their definition — on
+        # 0060, past the very gate this is widening (its residual runs to 4.9 m at the C8 exit) —
+        # and `lap_corner_resolved(best)` would start reading False.
+        shift, anchor = (0.0, 0.0), None
+        if ref_trace is not None and lap_id != self._best_lap_id():
+            shift = self.lap_shift(lap_id)
+            anchor = corners.anchor_offsets(frame, self.geometry(), self._best_lap_id(), *ref_trace)
         align = corners.lap_alignment(frame, total_ref, float(total_lap),
-                                      traces=self._lap_traces(lap_id, self._best_trace()))
+                                      traces=self._lap_traces(lap_id, ref_trace),
+                                      lap_shift=shift, anchor_offset=anchor)
         self._align_cache[key] = align
         return align
 
