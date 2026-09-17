@@ -907,15 +907,15 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
 # mechanism on hover".
 #
 # Every figure is measured, not asserted: `ideal_total` over random subsets of each recording's
-# clean laps (20,000 draws per N) falls 0.074 / 0.248 / 0.268 / 0.324 / 0.334 s per doubling of lap
-# count on the owner's five, and on D24's three chapters it is still falling 0.301 s per doubling
+# clean laps (20,000 draws per N) falls 0.074 / 0.268 / 0.324 / 0.326 / 0.377 s per doubling of lap
+# count on the owner's five, and on D24's three chapters it is still falling 0.233 s per doubling
 # over the last one measured (50→65 laps) — nothing is being approached. Over six start-line
-# positions per recording the detected corner count moves 11↔12 on D24 and 7↔8 on Sandown, and the
-# headline gap by up to +69 %. The full table and its sources are in corner_model.IdealSample;
-# this is the version a reader gets on hover.
+# positions per recording the detected corner count moved 11↔12 on D24 and 7↔8 on Sandown, and
+# the headline gap by up to +69 % (measured before #300, not since). The full table and its
+# sources are in corner_model.IdealSample; this is the version a reader gets on hover.
 IDEAL_SAMPLE_TOOLTIP = (
     "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
-    "of how many laps you recorded: measured on real recordings it falls 0.07–0.33 s per doubling "
+    "of how many laps you recorded: measured on real recordings it falls 0.07–0.38 s per doubling "
     "of lap count and keeps falling — there is no floor it settles on. It also moves when the "
     "corners are re-detected, which happens every time you drag the start/finish line. Compare it "
     "with another session only when the two have a similar lap count and corner count.")
@@ -1660,7 +1660,8 @@ class StatsView(QWidget):
         # 0-sector hide. The ideal is no longer a sum of sector splits, so that gate was hiding
         # the number on precisely the recordings it is now worth showing on: sector_count() == 0
         # on ALL FIVE (D24 1ch and 3ch, Sandown 1ch and 3ch, SD_30_08), so the corrected ideal —
-        # 0.21 to 1.42 s under the best lap — was invisible everywhere it had been fixed.
+        # 1.37 s on D24 one chapter and 1.49 s on three under the best lap — was invisible everywhere
+        # it had been fixed.
         self._ideal_section = self._section("IDEAL LAP")
         col.addWidget(self._ideal_section)
         self.t_theoretical = Tile("theoretical best")
@@ -1670,7 +1671,7 @@ class StatsView(QWidget):
         col.addLayout(self._grid(self.t_theoretical, self.t_ideal_gap))
         # WHAT THE TWO TILES ABOVE WERE MINIMISED OVER — the line this block was missing.
         #
-        # Both numbers are order statistics: `-1.42 s from 65 laps` and `-0.84 s from 5 laps` are
+        # Both numbers are order statistics: `-1.49 s from 65 laps` and `-0.95 s from 5 laps` are
         # the SAME DRIVING on D24's three chapters, measured over random subsets. Without the
         # counts a reader has no way to know that, and the app was inviting exactly that mistake —
         # the Library's Ideal-lap column holds two rows 0.57 s apart for no reason but lap count.
@@ -2456,7 +2457,7 @@ class StatsView(QWidget):
         from; the measured PACE tiles beside it are unmuted because they ARE laps you drove.
 
         `text` overrides the m:ss.mmm formatting for a target that is a DIFFERENCE rather than a
-        lap time ("-1.42 s"). It is still a synthesized number and still takes the mute — the rule
+        lap time ("-1.49 s"). It is still a synthesized number and still takes the mute — the rule
         is about where the number came from, not about how it is printed.
 
         `caption` re-labels the tile per refresh, for a target whose SAMPLE belongs on it — the

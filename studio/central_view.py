@@ -97,8 +97,9 @@ _HERO_WIDEST_SPEED_KMH = 188.0
 # flag is identically the best lap time, so the app's largest number was a structural null in the
 # state the app always opens in (D4-08). The ideal is now the corner/straight partition composite,
 # which is strictly faster than any single lap, so that note is gone: on the DEFAULT selection (the
-# session best) the hero sweeps 0.00 → +0.94 s on D24 one chapter, +1.42 s on three, +1.14 s on
-# Sandown — measured at 25 ms of media clock across the whole lap. There is nothing left to excuse.
+# session best) the hero climbs from 0.00 to the whole gap by the flag — 1.37 s on D24 one chapter
+# and 1.49 s on three, peaking 0.02 s and 0.01 s above that just before it (+1.14 s on Sandown when
+# that was measured, before #300). There is nothing left to excuse.
 #
 # The OTHER reference still needs its note, and that one is not a defect: Δ-to-best on the best lap
 # is exactly 0.000 for the whole lap, because the reference IS the lap. Switching to it is the one
@@ -127,7 +128,7 @@ _IDEAL_CHIP_TIP = (
 #
 # The hero is the app's largest text and the only ideal surface with no prose beside it, so a
 # reader who never opens Stats meets Δideal here and nowhere else. The number is an order
-# statistic: on D24's three chapters the same driving reads a 0.84 s gap over 5 laps and a 1.42 s
+# statistic: on D24's three chapters the same driving reads a 0.95 s gap over 5 laps and a 1.49 s
 # gap over 65 (random subsets, 20,000 draws per N), and the corner count it is partitioned by moves
 # 11↔12 with the start/finish line. Stats says so under its tiles; here it goes on the chip's
 # hover, which is where the reference is chosen.
@@ -138,7 +139,7 @@ _IDEAL_CHIP_TIP = (
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
-    "(0.07–0.33 s per doubling of lap count, measured) and moves when dragging the start/finish "
+    "(0.07–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
     "line changes which corners pacer finds. The Stats page prints both counts under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the

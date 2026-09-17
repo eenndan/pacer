@@ -348,7 +348,7 @@ add_test(NAME test_export_data
 # every in-app surface follows: the share card printed "+4.56 s vs your ideal lap" with no lap
 # count and the laps.csv trailer printed "Theoretical best,62.869" bare, while the Stats tile the
 # number comes from is captioned `theoretical best · 24 laps` — and the ideal is an order statistic
-# that moves 68.016 -> 66.781 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
+# that moves 67.917 -> 66.709 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
 # exported TEXT against `theoretical_best()` / `ideal_sample()` directly (not "looks similar") on
 # the CSV, the HTML report, the clipboard summary and the card at once, plus every value
 # `stats_summary` publishes against the accessor the Stats page reads — "the report cannot drift
@@ -1089,13 +1089,15 @@ add_test(NAME test_camera_support
 # moved the app's ideal on D24's three chapters by +0.218 s and the table in
 # corner_model.IdealSample — plus the README, both Stats tooltips, the hero chip, two Library
 # hovers, Session.ideal_total, the laps.csv writer and the landing page's screenshot — all went on
-# quoting the old value. Three checks: the table falls monotonically (the "no floor it settles on"
-# claim the shipping tooltips make), its rate column is recomputed from its own endpoint cells, and
-# every sentence in the tree saying "per doubling of lap count" — found BY SEARCH over git
-# ls-files, so the twelfth surface cannot be forgotten — quotes a rate this table publishes. A
-# fourth, opt-in, loads a real recording named by PACER_IDEAL_TABLE_MP4 (comma-separated chapters)
-# and asserts the row's `all` cell IS Session.ideal_total(); it prints SKIP without the footage,
-# which is why the first three read text and cost nothing. PYTHONPATH for that opt-in half.
+# quoting the old value, and after #300 both D24 rows went stale again. Four text checks, all
+# FOUND BY SEARCH over git ls-files so the twelfth surface cannot be forgotten: the table falls
+# monotonically (the "no floor it settles on" claim the shipping tooltips make), its rate column
+# is recomputed from its own endpoint cells, every "per doubling of lap count" rate and every
+# "X s over 5 laps, Y s over N" pair is the table's, and every D24 gap the tree quotes is the one
+# the docstring publishes. A fifth, opt-in, loads a real recording named by PACER_IDEAL_TABLE_MP4
+# (comma-separated chapters), asserts the row's `all` cell IS Session.ideal_total() and re-runs
+# the table's own Monte-Carlo over every rung; it prints SKIP without the footage, which is why
+# the text checks cost nothing. PYTHONPATH for that opt-in half.
 add_test(NAME test_ideal_sample_table
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ideal_sample_table.py)
 set_tests_properties(test_ideal_sample_table PROPERTIES

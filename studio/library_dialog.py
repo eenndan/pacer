@@ -110,14 +110,14 @@ from .widgets import NumItem as _NumItem
 #
 # THE FIFTH COLUMN IS THE SAMPLE, and it is here because the two time columns beside it are both
 # MINIMA over the session's laps. A minimum over more laps is never larger, so ranking either one
-# across sessions ranks session length as well as pace — and this index holds the demonstration:
-# Sandown chapter 1 (23 laps) stores an ideal of 47.941 and Sandown chapters 1–3 (59 laps) stores
-# 47.375. 0.57 s apart, same driver, same day, same track, one recording a subset of the other;
-# the entire difference is how many laps were loaded.
+# across sessions ranks session length as well as pace — and this index holds the demonstration,
+# as stored before #300: Sandown chapter 1 (23 laps) stores an ideal of 47.941 and Sandown
+# chapters 1–3 (59 laps) stores 47.375. 0.57 s apart, same driver, same day, same track, one
+# recording a subset of the other; the entire difference is how many laps were loaded.
 #
 # WHY A COLUMN AND NOT A SORT REFUSAL ON `Ideal lap`. Suppressing that one column's sort was the
 # obvious fix and it is the wrong one, measured: over random subsets of the clean laps the BEST
-# LAP falls 0.047–0.178 s per doubling of lap count against the ideal's 0.074–0.334 s, and on
+# LAP falls 0.047–0.178 s per doubling of lap count against the ideal's 0.074–0.377 s, and on
 # SD_30_08's last doubling (20 → 25 laps) the best lap moves the MORE of the two. A dialog that
 # refused to rank the ideal while happily ranking the best lap beside it would be advertising a
 # distinction of degree as one of kind. The confound belongs to the ROW, so the disclosure is a
@@ -161,9 +161,9 @@ _BEST_HEADER_TIP = (
 _THEO_HEADER_TIP = (
     "Ideal lap — the quickest time through each corner and each straight, stitched into one lap.\n"
     "A sum of per-segment minima, so it falls faster than the best lap does as a session gets "
-    "longer: 0.07–0.33 s per doubling of lap count on the owner's recordings, with no plateau. "
-    "Two rows are comparable on this number only if their Laps are comparable — Sandown chapter 1 "
-    "(23 laps) and Sandown chapters 1–3 (59 laps) are 0.57 s apart on the same driving.")
+    "longer: 0.07–0.38 s per doubling of lap count on the owner's recordings, with no plateau. "
+    "Two rows are comparable on this number only if their Laps are comparable — D24 chapter 1 "
+    "(21 laps) and D24 chapters 1–3 (65 laps) are 0.69 s apart on the same driving.")
 _COND_HEADER_TIP = (
     "Conditions — what you recorded about the day, in File ▸ Session record….\n"
     "pacer never looks the weather up: nothing leaves this Mac. A dry-day best and a wet-day best "
@@ -464,7 +464,7 @@ def _ideal_cell(entry: dict) -> tuple[float | None, str | None]:
     the way export_data and the Stats tile do. Equality with ``best`` is that state's signature:
     the composite is a sum of per-segment minima over the clean laps, so it ties the best lap
     exactly when one lap supplied every one of them, and any genuinely stitched ideal is strictly
-    faster (0.21–1.42 s on the recordings measured). A degenerate session ALSO writes the tie
+    faster (1.37 s on D24 one chapter and 1.49 s on three). A degenerate session ALSO writes the tie
     through ``Session.library_entry``, which is why this is checked on read."""
     theo, best = entry.get("theoretical"), entry.get("best")
     if theo is None:

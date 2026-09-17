@@ -310,6 +310,20 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **The ideal lap's published sample table was stale on both D24 rows, and the figures derived
+  from it were stale in seventeen other files.** Since #300 warped every lap, the app's ideal on D24's
+  three chapters is 66.709 s, not 66.781, and on chapter 1 alone it is 67.403 s, not 67.831. Every
+  rung below those cells had moved as well, by 0.10 to 0.42 s. Both rows were re-measured through
+  `Session.load` on the footage. Several things moved with them: the headline gap (−1.49 s over
+  65 laps, −0.95 s over 5), the ideal's range per doubling of lap count (0.07–0.38 s in three
+  shipping tooltips, which said 0.33), the per-doubling decrement (which now shrinks from 0.413 s
+  to 0.233 s rather than "a fifth"), and the ideal-lap and hero screenshots with their alt text.
+  The Sandown and SD_30_08 rows could not be re-measured, because that footage is not on this
+  machine. They now carry a ‡ saying so, and the Library's Ideal-lap hover, which quoted two of
+  them as current, now uses the two D24 rows instead. `tests/test_ideal_sample_table.py` has new
+  checks, each found by search: the 5-lap/whole-recording pairs, every D24 gap in the tree, the
+  screenshots' alt text, and range endpoints. Its opt-in footage half now re-runs the table's
+  Monte-Carlo over every rung, not only the last cell.
 - **The provenance panel named the wrong clock for every lap time it explained.** Right-clicking a
   lap time opens a panel that states the window the number was measured over; its axis line read
   `media-clock seconds`, and the window is not on the media clock — it is the GPS9 true-clock
