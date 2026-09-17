@@ -930,10 +930,11 @@ def test_brake_habit_is_the_same_number_the_braking_table_shows():
     table's "m later" column answer ONE question, so they must be ONE number.
 
     They were not: coaching read the BEST lap's single application and BRAKING the median over the
-    clean laps. Measured on the real recordings the pair disagreed by up to 9.3 m, and at 0062's C1
-    the best lap braked within 3 m of its own optimum while the driver's habit over 62 laps was
-    12.2 m early — so the surfaces gave opposite advice. Both now medianize ONE per-lap list; this
-    pins that they still do, over rows where the best lap is deliberately unrepresentative."""
+    clean laps. Measured on the real recordings the pair disagreed by up to 12.6 m, and at 0062's
+    C1 the best lap braked within 3 m of its own optimum while the driver's habit over 62 laps was
+    12.2 m early — so one surface shrugged where the other said brake 12 m later. Both now medianize
+    ONE per-lap list; this pins that they still do, over rows where the best lap is deliberately
+    unrepresentative."""
     from studio import stats as stats_service
     # Five laps into two corners. C1: the best (first) lap brakes 30 m late, the other four 10 m —
     # exactly the "one unrepresentative lap" shape. C2: the best lap has NO matched application.
