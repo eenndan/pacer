@@ -6,7 +6,7 @@ safe to reuse from any dialog or panel without dragging that surface's dependenc
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -242,12 +242,60 @@ def chip(text: str = "", *, tone: str | None = None, parent=None) -> QLabel:
     target, the role assistive tech announces). See that rule in theme.py for why the split is the
     point rather than a compromise.
 
-    `tone="warn"` is the amber trust tint."""
+    `tone="warn"` is the amber trust tint. A chip that has somewhere to TAKE you is an `ActionChip`."""
     label = QLabel(text, parent)
     label.setProperty("role", "Chip")
     if tone:
         label.setProperty("tone", tone)
     return label
+
+
+class ActionChip(QPushButton):
+    """A chip with ONE action behind it: the static `chip`'s pill, as a button that takes you to
+    the place that explains it (the lap panel's data-quality chip opens DATA TRUST).
+
+    NOT A TOGGLE. `ToggleButton` with `role="Chip"` is the two-state twin; this one is never
+    checkable, so assistive tech announces a plain button and there is no ON state for the amber
+    to be confused with — its amber is the static `tone`, exactly as on the label chip.
+
+    IT OWNS ITS ACTIVATION KEYS WHILE FOCUSED, and that is the whole reason this is a class rather
+    than a `QPushButton` with a property. The window binds Space to play/pause as a WindowShortcut,
+    and a QShortcut outranks a focused QPushButton: measured offscreen, a focused plain button in a
+    window carrying that shortcut received nothing on Space, Return or Enter while the shortcut
+    fired. A chip you can Tab to and then cannot press is the "button that does nothing" the static
+    chip was built to avoid being. So a focused ActionChip accepts the ShortcutOverride for those
+    three keys, which hands them to the button; unfocused, it takes nothing and Space is play/pause
+    as it always was. Return and Enter click as well as Space, because nothing else in the window
+    binds them and a chip reads as a link as much as a button."""
+
+    _ACTIVATE = (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)
+
+    def __init__(self, text: str = "", *, tone: str | None = None, parent=None):
+        super().__init__(text, parent)
+        self.setProperty("role", "Chip")
+        if tone:
+            self.setProperty("tone", tone)
+        self.setAutoDefault(False)
+        self.setCursor(Qt.PointingHandCursor)
+
+    @classmethod
+    def _is_activation(cls, event) -> bool:
+        # KeypadModifier is how the numeric keypad's Enter arrives; it is still Enter.
+        plain = (event.modifiers() & ~Qt.KeypadModifier) == Qt.NoModifier
+        return plain and event.key() in cls._ACTIVATE
+
+    def event(self, event):
+        if event.type() == QEvent.ShortcutOverride and self._is_activation(event):
+            event.accept()
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        if self._is_activation(event) and event.key() != Qt.Key_Space:
+            self.click()          # Space goes through QAbstractButton's own press/release
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 def set_tone(widget: QWidget, tone: str | None) -> None:

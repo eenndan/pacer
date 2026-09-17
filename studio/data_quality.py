@@ -199,6 +199,30 @@ class TimingQuality:
                     "accurate. See the note over the map.")
         return ""
 
+    def cost(self) -> str:
+        """What a degraded clock COSTS, as the clause the DATA TRUST card's Timing row ends on.
+
+        The row already names the clock and the rejected share, and on a degraded recording that was
+        all it said: "video clock (estimated) · 0% of moving fixes rejected" and "GPS9 true clock ·
+        12% of moving fixes rejected" are the clean row's own shape with a different word or number
+        in it, so a reader sent there by the lap panel's amber chip found nothing saying why the
+        chip was lit. This is the missing half, in the same words summary() and detail() use (the
+        ~0.1% drift, "GPS quality low"), so the card cannot drift from the banner and the chip's
+        hover. Empty when not degraded — and for the no-GPS state, whose row is a sentence of its
+        own because there is no clock to qualify."""
+        media, low = self.media_clock, self.low_gps_quality
+        if self.no_gps:
+            return ""
+        if media and low:
+            return ("lap times may drift ~0.1%, and GPS quality is low, so the positions are less "
+                    "accurate too")
+        if media:
+            return "lap times may drift ~0.1%, so treat the absolute times as approximate"
+        if low:
+            return ("GPS quality low, so the positions and the times derived from them may be "
+                    "less accurate")
+        return ""
+
 
 # ============================================================ the LOCATABLE half of the verdict
 # `TimingQuality` above is ONE verdict for a WHOLE recording, and that is the shape of the thing it
