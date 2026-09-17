@@ -13,6 +13,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Where you coast, by place — and whether the order means anything.** The coast number has been
+  real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
+  Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
+  corner/straight partition the STRAIGHTS table is cut from, ranks the places by seconds per lap
+  and rings the selected place on the map. A table sorted by a column always has a first row, so
+  each row says **top**, **tied** or **less** against it — a paired sign-flip test over the laps —
+  and a line under the table says what that order is worth. On both D24 recordings the laps cannot
+  separate the leader from 10 and 7 other places (and the two recordings crown different corners);
+  on all three Sandown recordings C1 holds about twice the next place's coasting and separates.
+  Zones grown from where the laps coast were built first and refused: their leader changed with
+  the coverage threshold and merge gap chosen.
 - **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
   seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
   ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed

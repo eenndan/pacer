@@ -743,6 +743,74 @@ def driving_tooltip_gps(why: str) -> str:
               f"{gmeter.LONG_SMOOTH_S:g} s window the peak-braking tile and the friction circle "
               f"carry on an IMU-driven meter is absent from them too"
             + _DRIVING_BRAKE_TAIL + _DRIVING_COAST)
+
+
+# COASTING: where the session's coasting HAPPENS, by place (`Session.coast_report`). The coast
+# paragraph is `_DRIVING_COAST` itself, not a paraphrase: the window is the one quantity #275 found
+# wrong and #279/#297 had to re-state on every surface, and it applies on BOTH g paths (the coast
+# series is rebuilt from the lap's own speed either way), so one sentence serves every recording.
+COAST_COLUMNS = ["Where", "s / lap", "Laps", "Share %", "vs top"]
+# The "vs top" cell: what the laps say about this place against the one with the most coasting.
+# Words, not a tint — which rows are level is the table's one claim, and it has to survive a
+# colour-blind palette and a screen reader.
+COAST_TOP, COAST_TIED, COAST_LESS = "top", "tied", "less"
+# A place holding less than the detector's shortest coast (driving.MIN_COAST_S) on one lap in five
+# is listed by count, not by row — the heading says how many. On the owner's five recordings that
+# leaves 7-14 rows holding 96.5-99.2 % of the coasting, against 12-20 places with any at all.
+COAST_LIST_MIN_S = driving.MIN_COAST_S / 5
+COAST_NAMES_MAX = 6       # the note names this many tied places, then counts the rest
+COASTING_TOOLTIP = (
+    "Where the coasting is. Every clean lap's coasting is split over the corner/straight "
+    "partition — the pieces the STRAIGHTS table is cut from, each corner's edges projected onto "
+    "that lap — and read off that lap's own clock, so a coast running out of a corner into the "
+    "straight is split at the edge, never counted twice. s / lap is the session's coasting in that "
+    "place divided by the clean laps, so the column adds up to the MEAN coasting per lap, not the "
+    "median the DRIVING tile shows; Laps counts the clean laps that coasted there at all.\n\n"
+    "This is where the coasting HAPPENS, not where it costs time. Coaching's “coasting” "
+    "reason is a different number: how much longer your typical lap coasts in a corner than your "
+    "best lap does.\n\n"
+    "The order is a ranking only where the laps can separate it. vs top says, place by place, "
+    f"whether a paired sign-flip test over the clean laps separates it from the first row at "
+    f"p < {stats_service.COAST_LEAD_ALPHA:g}: \u201c{COAST_TOP}\u201d is a first row that "
+    f"separates from every other place, \u201c{COAST_TIED}\u201d a place the laps cannot tell "
+    f"apart from it (the first row too, when anything is), \u201c{COAST_LESS}\u201d one they "
+    "can. Click a row to ring the place on the map (a straight rings the corner feeding it).\n\n"
+    + _DRIVING_COAST)
+
+
+def _name_list(names: list[str], limit: int = COAST_NAMES_MAX) -> str:
+    """"C1, C3 and C6" / "C1, C3, C6, C4, C5, C10 and 5 more"."""
+    if len(names) > limit:
+        return f"{', '.join(names[:limit])} and {len(names) - limit} more"
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def coast_note(report) -> str:
+    """The line under the COASTING table: what the order in it is worth.
+
+    A LEAD THE LAPS CANNOT SEPARATE IS SAID TO BE ONE. #311 refused to crown a coaching corner the
+    measurement could not separate from the next, and the same shape is here on both D24
+    recordings: the leader ties with 10 other places on 0060 and 7 on 0062, and the two recordings
+    put different corners on top. A table sorted by a column always has a first row; this sentence
+    is what stops the first row reading as a finding when it is not."""
+    n = report.n_laps
+    laps = plural(n, "clean lap")
+    places = report.places
+    if not places:
+        return f"No coasting was detected on the {laps}."
+    lead = places[0]
+    if len(places) == 1:
+        return f"All the coasting on the {laps} is in {lead.label}: {lead.s_per_lap:.2f} s a lap."
+    if report.lead_separable:
+        nxt = places[1]
+        return (f"{lead.label} holds the most coasting — {lead.s_per_lap:.2f} s a lap, more than "
+                f"{nxt.label} ({nxt.s_per_lap:.2f} s) or anywhere else by a margin these {laps} "
+                f"can separate.")
+    tied = [p for p in places if p.tied]
+    lo = min(p.s_per_lap for p in tied)
+    return (f"No one place leads: {_name_list([p.label for p in tied])} are tied — between "
+            f"{lo:.2f} and {lead.s_per_lap:.2f} s of coasting a lap, and these {laps} cannot put "
+            f"them in order.")
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed. ★ marks the session-best lap.\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
@@ -1974,6 +2042,29 @@ class StatsView(QWidget):
         self.braking_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.braking_table)
 
+        # --- where the coasting is, by place (hidden without corners / a g signal / clean laps).
+        # Beside BRAKING because the two are the off-power half and the on-brake half of one
+        # stretch of track. Column 0 sorts by RANK (most coasting first), not by track order: the
+        # question this table answers is "where", and its "vs top" column and the note under it say
+        # what that order is worth. (Opening on a numeric column instead would put Qt's indicator
+        # over a right-aligned header label.)
+        self._coasting_section = self._section("COASTING")
+        self._coasting_section.setToolTip(COASTING_TOOLTIP)
+        col.addWidget(self._coasting_section)
+        self.coasting_table = self._make_table(COAST_COLUMNS)
+        self.coasting_table.setToolTip(COASTING_TOOLTIP)
+        self.coasting_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.coasting_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.coasting_table.setFocusPolicy(Qt.ClickFocus)
+        self.coasting_table.itemSelectionChanged.connect(self._on_coast_row_selected)
+        self.coasting_table.horizontalHeader().sortIndicatorChanged.connect(
+            self._on_corner_sort)
+        self.coasting_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+        col.addWidget(self.coasting_table)
+        self.coasting_note = WrapLabel()
+        self.coasting_note.setProperty("role", "TableNote")
+        col.addWidget(self.coasting_note)
+
         # --- the straight-line report (hidden without corners / a best lap)
         self._straights_section = self._section("STRAIGHTS")
         col.addWidget(self._straights_section)
@@ -2610,6 +2701,7 @@ class StatsView(QWidget):
         self._refresh_splits(session, self._split_matrix(session))
         self._refresh_corners(session, unit, u_label)
         self._refresh_braking(session)
+        self._refresh_coasting(session)
         self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_g_provenance(session)
@@ -3552,6 +3644,66 @@ class StatsView(QWidget):
         t.blockSignals(False)
         t.setSortingEnabled(True)
         self._fit_table(t)
+
+    def _refresh_coasting(self, session):
+        """The COASTING table + its note. Hidden outright without a report (no corners, no clean
+        lap, or no g signal — no coasting instrument to report on); a session that simply did not
+        coast keeps the heading and says so in the note instead of showing an empty grid."""
+        report = getattr(session, "coast_report", lambda: None)()
+        has = report is not None
+        self._coasting_section.setVisible(has)
+        self.coasting_note.setVisible(has)
+        listed = [p for p in report.places if p.s_per_lap >= COAST_LIST_MIN_S] if has else []
+        self.coasting_table.setVisible(bool(listed))
+        if not has:
+            self.coasting_table.setRowCount(0)
+            return
+        unlisted = len(report.places) - len(listed)
+        self._coasting_section.setText(
+            f"COASTING · {unlisted} under {COAST_LIST_MIN_S:.2f} s a lap not listed"
+            if unlisted else "COASTING")
+        self.coasting_note.setText(coast_note(report))
+        mono = theme.mono_font(theme.TABLE)
+
+        def cell(text: str, key):
+            item = _NumItem(text)
+            item.setData(NUM_ROLE, key)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.coasting_table
+        t.setSortingEnabled(False)
+        t.blockSignals(True)
+        t.clearSelection()
+        t.setRowCount(len(listed))
+        for r, p in enumerate(listed):
+            name = _NumItem(p.label)
+            name.setData(NUM_ROLE, r)             # sort key: the rank
+            name.setData(RING_ROLE, p.ring_cid)   # the corner the map rings
+            t.setItem(r, 0, name)
+            t.setItem(r, 1, cell(f"{p.s_per_lap:.2f}", p.s_per_lap))
+            t.setItem(r, 2, cell(f"{p.laps}/{report.n_laps}", p.laps))
+            t.setItem(r, 3, cell(f"{p.share * 100.0:.0f}", p.share))
+            if not p.tied:
+                t.setItem(r, 4, cell(COAST_LESS, 2))
+            elif report.lead_separable:
+                t.setItem(r, 4, cell(COAST_TOP, 0))
+            else:
+                t.setItem(r, 4, cell(COAST_TIED, 1))
+        t.blockSignals(False)
+        t.setSortingEnabled(True)
+        self._fit_table(t)
+
+    def _on_coast_row_selected(self):
+        """A COASTING row rings its place on the map — a corner rings itself, a straight the corner
+        feeding it — through the same corner_clicked pathway as the other tables."""
+        rows = self.coasting_table.selectionModel().selectedRows()
+        if rows:
+            item = self.coasting_table.item(rows[0].row(), 0)
+            self.corner_clicked.emit(item.data(RING_ROLE) if item else None)
+        else:
+            self.corner_clicked.emit(None)
 
     def _refresh_straights(self, session, unit, u_label):
         report = getattr(session, "straights_report", list)() or []
