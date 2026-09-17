@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Two features were built far enough to **measure**, and the measurement said not to ship them. The
+Five features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -213,6 +213,143 @@ actionability margin the per-row gate already applies, on numbers the row alread
 modelled interval, no new field, no golden leaf). Validated against the permutation ground truth on
 all 30 ranked pairs of both recordings: **0 misses** (it never stays silent on a pair the
 permutation calls a tie) and 2 over-calls, both marginal (p = 0.039 and p = 0.066).
+
+---
+
+## 4. A per-corner GPS-quality abstain — refused (#255, re-measured here)
+
+**The idea.** `coaching.corner_evidence` refuses to make a claim about a corner with too few clean
+instances (`ABSTAIN_FEW_LAPS`), with no second lap at the target (`ABSTAIN_ONE_OFF`), or whose claim
+is inside the corner's own interquartile spread (`ABSTAIN_SPREAD`) — but never because the GPS was
+degraded *through that corner*. Add a fourth reason keyed on fix quality inside the corner window.
+
+**It was refused once already, in #255, on a different statistic** (the interior sample gap), **and
+that evidence lived only in the pull request** — which is the exact failure this file exists to fix.
+So it is re-measured here at the cell such a gate would actually key on: one (clean lap × corner)
+window, over both recordings and all ten bundled samples, via `studio/dev/probes/p4_corner_gps_quality.py`.
+
+|  | 0060 | 0062 |
+|---|---|---|
+| clean laps × corners = cells | 38 × 12 = **456** | 65 × 12 = **780** |
+| cells inheriting a class below `GOOD` | **26** (5.7 %) | **0** |
+| cells containing a **rejected** fix | **0** | **0** |
+| worst kept DOP per cell (median / max) | 2.60 / **8.96** | 1.62 / **4.80** |
+| cells above `DOP_GOOD_MAX` (5.0) | 26 | **0** |
+| whole-recording verdict | `gps9_trueclock`, 0 % rejected, **not degraded** | `gps9_trueclock`, 0 % rejected, **not degraded** |
+| per-LAP, the DATA TRUST card's row | 17 of 38 below good | 0 of 65 |
+
+**Four measured reasons to refuse it:**
+
+1. **The proposed key is identically zero.** Keyed on *degraded fixes inside the corner window* —
+   the form the backlog specified — it fires on **0 of 1,236 cells across both recordings**. Not one
+   rejected fix falls inside any corner window of either recording. 0060 rejects no fix at all, and
+   every one of 0062's 482 rejections is in the 48 s of lock acquisition before the kart moves. The
+   gate as specified is unreachable code.
+2. **The only key that CAN fire was already refused one level up.** The reachable signal is the DOP
+   band, and it fires on 0060 only — 26 of 456 cells, on a recording the app itself reports as `0 %
+   of moving fixes rejected` and **not degraded**. That is precisely the case the `[u]` block in
+   [`studio/data_quality.py`](../data_quality.py) already measured and refused at LAP level: the
+   same recording puts 17 of 38 clean laps below good, and marking them "would mark 45 % of the rows
+   of a recording the app itself reports as clean". A per-corner abstain is that same invention one
+   level down. **The codes follow the app's verdicts; they do not add to them.**
+3. **It does not replicate.** 0060 has real structure — C8 18.4 %, C10 15.8 %, C9 and C11 10.5 %,
+   C6 7.9 %, and **five corners at exactly zero**. 0062 has nothing at all: 0 of 780 cells, worst
+   kept DOP anywhere **4.80**, below the 5.0 threshold at every corner of every lap. Same driver,
+   same track, one day apart. So the corner a per-corner reason would name is a property of one
+   afternoon's sky, not of the corner — and a driver who was told "C8 is unreliable" on Saturday
+   would be told nothing at all about it on Sunday.
+4. **A third of the firing is a clock-labelling artifact.** The strip's cells are MEDIA seconds and
+   a corner window is TELEMETRY seconds. `Session.lap_quality` measures that crossing and documents
+   it as harmless — it changes the class of **0 of 38** and **0 of 65** whole laps. At corner scale
+   it stops being harmless: indexing the same 456 cells on the media clock instead moves **9 of
+   them** across a class boundary. A lap window is ~70 s against a 1.00 s cell; a corner window is
+   ~3-6 s, so the same ≤0.166 s of labelling error that rounds away over a lap decides the verdict
+   for about a third of the 26 cells that fire.
+
+**No fixture outside D24 can reach it either.** All ten bundled samples come back with **0 corners
+and 0 clean laps** — most are a few seconds long, and `karma.mp4` carries no GPS at all
+(`NO_GPS_TRACE`). A synthetic-only gate would therefore be a reason no shipped fixture exercises,
+gating a claim no real recording asked it to gate.
+
+**#255's own two numbers reproduce exactly**, and they are the reason the window is thin enough for
+all of this to be marginal: the worst interior sample gap inside any corner window on any clean lap
+is **0.1010 s** on both recordings — exactly the 10 Hz fix period, i.e. no interior gap at all — and
+the thinnest window is **20 samples** (0060) / **22** (0062).
+
+**What would be new evidence:** a recording that rejects fixes *while moving* inside a corner
+window, or one whose degraded corners are the same corners on two different days. Neither exists in
+anything this repo can currently load.
+
+---
+
+## 5. A minimum segment length for the ideal-lap partition — refused (M4)
+
+**The idea.** 16 of the 0060 pair's 23 real segments have a donor-admission band (±5 % of the
+segment's own span) narrower than the ±3 m a boundary match is guaranteed to, so admission on those
+segments is decided by noise — the pair's 2.25 m C2-C3 sliver refuses laps arbitrarily. Give the
+partition a **minimum segment length** so those slivers are never cut, and the noise goes away.
+
+**How it was tested.** The real `CornerModel` driven over each fixture's own per-lap arrays — the
+stand-in reproduces `Session.ideal_total()` to 1e-9 on all three before anything is varied — with
+the admission **bootstrapped over each boundary's OWN measured residual**: every projected edge is
+re-drawn from the residual distribution measured at *that* edge, the admission is recomputed, and
+the segment times are left alone, so every move in the ideal is the admission decision moving.
+Fixtures: `GX020060+GX030060` (38 clean laps), `GX020060` alone (24), `GX010062+GX020062+GX030062`
+(65).
+
+**The premise's yardstick is the wrong one.** `corners.SPATIAL_MATCH_MAX_M` is the worst case a
+match may *pass*, not the error it carries. Since #300 warped every lap, the measured per-boundary
+longitudinal residual is one to two orders of magnitude under that gate:
+
+| | 0060 pair | 0060 ch 1 | 0062 |
+|---|---|---|---|
+| boundary residual, median | 0.099 m | 0.077 m | 0.010 m |
+| segments with band < 3 m — *the premise* | 16 / 23 | 16 / 23 | 17 / 23 |
+| segments with band < their own residual | **7 / 23** | **4 / 23** | **0 / 23** |
+| refused cells | 170 / 950 | 117 / 600 | 33 / 1625 |
+| refusals within one cell-residual of the threshold | 41 % | 38 % | 9 % |
+| the named sliver (C2-C3, 2.25 m) | 6 of 38, 5 marginal | 3 of 24, 3 marginal | **0 of 65** |
+
+On the 65-lap recording the app headlines, the defect class does not exist.
+
+**The candidate, built and measured.** Absorb every straight under 5 m into the corner before it,
+so no sub-sample segment is ever cut. Corner and segment counts stay 12 and 25 — merging the corner
+*pair* instead is a re-cut, and a coarser partition raises the ideal by +0.2 … +1.5 s for the
+reason `corner_model.IdealSample`'s last paragraph already gives.
+
+| | 0060 pair | 0060 ch 1 | 0062 |
+|---|---|---|---|
+| ideal, shipped | 65.464 s | 66.450 s | 66.709 s |
+| ideal, candidate | 65.500 (**+0.036**) | 66.479 (**+0.030**) | 66.735 (**+0.026**) |
+| admission-noise sd, shipped → candidate | 0.294 → **0.289** | 0.324 → **0.325** | 0.005 → **0.006** |
+| …sub-resolution segments held instead | 0.183 | 0.214 | 0.002 |
+| best lap's time-in-corner moves | +0.29 s on 5 of 12 | +0.29 s on 3 of 12 | +0.24 s on 5 of 12 |
+
+**Four measured reasons to refuse it:**
+
+1. **It does not remove the noise it was proposed for.** The admission's own spread is unchanged to
+   three decimal places, and on two of three fixtures the candidate is very slightly *noisier*.
+2. **The noise is not a property of short segments.** Holding the sub-resolution segments at their
+   shipped decision takes the pair's spread 0.294 → 0.183 s, so they carry about a third of it; the
+   worst-flipping segments include a **17.3 m** and a **61.6 m** one, because the pair's badly
+   matched boundaries sit around C7–C9 (median residual 2–3 m) and not on its slivers. A minimum
+   segment length cannot reach those.
+3. **The move is far inside the number's own width.** +0.026 … +0.036 s against the ±0.25 s
+   cross-fixture spread `MAX_DONOR_SPAN_DEV` already documents, and against 0.72 / 0.60 / 0.36 s for
+   a doubling of N on these three fixtures (arbiter refit per candidate). It would move the app's
+   headline claim without improving it.
+4. **Nothing is missing from the reader's surface today.** On all three fixtures the best lap is
+   admitted on all 25 segments, so no row is dropped from the Stats decomposition either way. The
+   price, in exchange, is a quarter-second change in a displayed time-in-corner on up to 5 of 12
+   corners and a move in every corner-derived leaf in the app.
+
+**Premises refuted on the way:**
+
+- The backlog's "segment 4 refuses **4 of 38** laps" is pre-#300; it refuses **6 of 38** today, and
+  **0 of 65** on the other recording.
+- The two exemption rows in `corner_model.MAX_DONOR_SPAN_DEV`'s block were also pre-#300 (the wide
+  one read −0.984 / −1.066 / −0.217, and reads −1.200 / −1.080 / −0.184 today). They are refreshed
+  in that block, which is where the next person will look.
 
 ---
 
