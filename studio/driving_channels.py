@@ -193,13 +193,21 @@ class DrivingChannels:
 
         THE JOIN IS BY LABEL, AND THAT IS A MEASUREMENT, NOT AN OVERSIGHT. The lap times are GPS9
         TELEMETRY seconds and the g series is stamped on the camera's MEDIA clock — two axes
-        (studio/media_clock.py), so the obvious repair is to cross `Session.media_clock` here the
-        way `Session.g_at_time` does. Measured on both D24 recordings, that repair is BACKWARDS.
-        Residual offset of `gm.lat_g` against the path-derived lateral g (`rotation.measure_lag`,
-        the product's own estimator, 0060 / 0062):
+        (studio/media_clock.py), so the obvious repair is to cross a clock here. WHICH map matters,
+        and the names do not say: `Session.media_clock.to_media` / `Session.media_time` is the
+        PICTURE map, carrying the GPS lag since #301, and `media_clock.without_gps_lag()` is the
+        STAMP map (the rate fit alone), which is what `Session.g_at_time` crosses since #309.
+        Measured on both D24 recordings, the picture map is BACKWARDS. Residual offset of
+        `gm.lat_g` against the path-derived lateral g (`rotation.measure_lag`, the product's own
+        estimator, 0060 / 0062):
 
-            joined BY LABEL (shipped)    +0.011 s / -0.047 s     r 0.963 / 0.971
-            joined through the clock     -0.399 s / -0.404 s     r 0.963 / 0.971
+            joined BY LABEL (shipped)    +0.009 s / -0.047 s     r 0.961 / 0.971
+            the STAMP map                +0.072 s / +0.040 s     r 0.961 / 0.972
+            the PICTURE map              -0.409 s / -0.418 s     r 0.961 / 0.972
+
+        (Re-measured when T9 added the stamp-map row; #303's original run read +0.011 / -0.047 by
+        label and -0.399 / -0.404 through the picture map. Neither verdict moves: by label is
+        within the ~0.07 s by which ACCL's content delay differs from the GPS stamps' either way.)
 
         and a bias-free ENU-vector sweep of the whole IMU acceleration against the path's peaks at
         -0.01 s / -0.06 s. The same run reproduces `RotationCheck.gps_lag_s` to four decimals off
@@ -425,7 +433,8 @@ class DrivingChannels:
 
         CLOCK: the three series are paired at ONE INDEX on the g grid — GPS-derived longitudinal,
         IMU lateral, trace speed — i.e. by label, exactly as `_lap_g_arrays` does and for the
-        reason measured there. Crossing `Session.media_clock` for the lateral moves this divisor
+        reason measured there. Crossing `Session.media_clock`'s PICTURE map (the one carrying the
+        GPS lag; see `_lap_g_arrays` for which map is which) for the lateral moves this divisor
         1.424 -> 1.406 g (-1.21 %) and 1.370 -> 1.349 g (-1.49 %) on the two D24 recordings, away
         from the path reference it is checked against."""
         if self._grip_env_cache is not _UNSET:

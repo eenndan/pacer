@@ -16,9 +16,10 @@ freezing/clearing `followed_lap`); only WHERE the fields live moved — off Stud
 controllers' own attributes and onto this shared object.
 
 Fields:
-  * `latest_t`   — the most recent media time `positionChanged` reported (recorded on the hot video
+  * `latest_t`   — the most recent playhead time `positionChanged` reported, already on the TELEMETRY
+    clock (`player_pane._on_position` crosses back before it emits; recorded on the hot video
     path; cheap). `0.0` until the first frame.
-  * `applied_t`  — the media time the map/plot/readout were last driven for. The ~30 Hz tick advances
+  * `applied_t`  — the telemetry time the map/plot/readout were last driven for. The ~30 Hz tick advances
     it to `latest_t` ONLY when they differ (the gate that throttles the heavy view refresh and breaks
     the drag↔positionChanged feedback loop). `None` until the first apply / poster-seek.
   * `followed_lap` — the lap the speed/Δ charts are currently auto-following (current-vs-best). The

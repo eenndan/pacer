@@ -500,6 +500,189 @@ def test_a_session_with_no_chapter_map_still_answers_for_the_dial():
     assert abs(s.g_at_time(4.0)[0] - 4.0) < 0.02
 
 
+# ------------------------------------------------- which map: the accelerometer is not the gyro
+def test_the_accelerometer_is_placed_on_its_own_clock_not_the_gyros():
+    """The dev probes had ONE inertial conversion — the gyro's, which takes the GPS lag out — and
+    `_accel` placed every accelerometer sample on the track through it.
+
+    GYRO and ACCL are stamped together on one sample grid, and their CONTENT still rides different
+    maps. Measured with `rotation.measure_lag` against the path on both D24 recordings, + = the
+    path runs behind: the gyro reads +0.007 / +0.002 s through its map; raw |ACCL horizontal|
+    against |v · ω_path| reads **+0.095 / +0.053 s through the stamp map and −0.382 / −0.406 s
+    through the gyro's** (r 0.905 / 0.921 either way). So P2's and P3's roughness sat ~0.4 s —
+    ~7 m at the recordings' median speed, one of P3's 5.3 m bins — from where it was measured, and
+    P3's cross-session r moves 0.945 -> 0.952 once it does not.
+
+    NEGATIVE CONTROL, watched: `lap_windows` back on `_align.to_gyro_clock` fails the first assert
+    with the lag itself as the gap."""
+    from types import SimpleNamespace
+
+    from studio.dev.probes import _accel, _align
+
+    t = np.linspace(1000.0, 1070.0, 701)
+    d = np.linspace(0.0, 1058.0, 701)
+    zeros = np.zeros_like(t)
+    rec = SimpleNamespace(clock_rate=D24_RATE, clock_offset=0.0256, gps_lag_s=D24_LAG,
+                          laps=lambda: iter([(0, (t, zeros, zeros, zeros + 15.0, d))]))
+    stamp = media_clock.MediaClock(rate=D24_RATE, offset=0.0256).to_media(t)
+
+    (windows, _frac), = _accel.lap_windows(rec)
+    gap = float(np.max(np.abs(windows - stamp)))
+    assert gap < 1e-9, f"ACCL lap windows are {gap:+.4f} s off the stamp map (the lag is {D24_LAG})"
+    # The two probe maps really are the lag apart, so the assert above can tell them apart.
+    assert abs(float(np.median(_align.to_gyro_clock(rec, t) - stamp)) + D24_LAG) < 1e-9
+    assert np.array_equal(_align.to_accl_clock(rec, t), stamp)
+    # And a sample stamped at the moment the lap was half done lands half-way round the lap.
+    tq = np.array([float(np.interp(0.5, d / d[-1], stamp))])
+    frac, lap = _accel.to_track_fraction(rec, tq)
+    assert lap[0] == 0 and abs(float(frac[0]) - 0.5) < 1e-9, (frac, lap)
+
+
+# Every executable clock crossing under `studio/` (dev probes included), keyed by (file, enclosing
+# function, callee), with the MAP it takes and why. Both maps land on the same media axis, so no
+# name can say which one a call needs (`studio/media_clock.py`, "WHICH MAP"): #301 put the dial on
+# the wrong one, #314 put the quality strip on the wrong one, and the probes put the accelerometer
+# on the wrong one. A new crossing fails `test_every_clock_crossing_is_declared_with_the_map_it_takes`
+# until it is written here with its reason — which is the point: the question gets asked.
+#   "picture" — the footage position whose frame shows the event (the lag is in it)
+#   "stamp"   — the camera's own media stamp (the rate fit alone)
+_P, _S = ("picture",), ("stamp",)
+CROSSINGS = {
+    # --- the maps themselves
+    ("studio/media_clock.py", "MediaClock.correction_at", "to_media"):
+        (_P, "states the installed map's own correction"),
+    ("studio/session.py", "Session.media_time", "to_media"): (_P, "THE picture map"),
+    ("studio/session.py", "Session.telemetry_time", "to_telemetry"): (_P, "its exact inverse"),
+    # --- seeking and painting the picture
+    ("studio/player_pane.py", "PlayerPane.seek", "to_media"): (_P, "a seek lands on a frame"),
+    ("studio/player_pane.py", "PlayerPane._on_position", "to_telemetry"):
+        (_P, "the frame on screen -> the trace sample it shows"),
+    ("studio/export_video.py", "lap_window_for_export", "_media_time"):
+        (_P, "the exported window is footage"),
+    ("studio/export_video.py", "overlay_values_at", "_telemetry_time"):
+        (_P, "a burned frame -> the trace sample it shows; g crosses back itself (g_at_time)"),
+    ("studio/export_video.py", "_strip_runs", "_telemetry_time"):
+        (_P, "a burned frame's lap clock, like the live one"),
+    ("studio/export_compare.py", "lock_to_track", "_telemetry_time"): (_P, "pane A's frame"),
+    ("studio/export_compare.py", "lock_to_track", "_media_time"):
+        (_P, "pane B's frame, on pane B's own recording's map"),
+    ("studio/session.py", "Session.lap_channels", "to_media"):
+        (_P, "the channels CSV's t_video_s: where in the footage each row is"),
+    # --- indexing a series stamped on the camera's clock whose content carries the GPS delay
+    ("studio/session.py", "Session.g_at_time", "without_gps_lag"):
+        (_S, "ACCL content: +0.072 / +0.040 s stamp vs -0.409 / -0.418 s picture (#309, T9)"),
+    ("studio/session.py", "Session.g_at_time", "to_media"): (_S, "the call on that map"),
+    ("studio/session.py", "Session._build_rotation", "without_gps_lag"):
+        (_S, "the lag is measured on the map it is not yet in, or it measures itself"),
+    ("studio/rotation.py", "_cross_check", "to_media"): (_S, "the map `_build_rotation` hands in"),
+    ("studio/stats_panel.py", "video_sync_row", "without_gps_lag"):
+        (_S, "states the rate fit on its own, apart from the lag"),
+    # --- dev probes: two streams, two maps (`studio/dev/probes/_align.py`)
+    ("studio/dev/probes/_align.py", "to_gyro_clock", "to_media"):
+        (_S, "the stamp map, then the lag subtracted: the gyro's picture map, spelled out"),
+    ("studio/dev/probes/_align.py", "from_gyro_clock", "to_telemetry"):
+        (_S, "its inverse, lag added back first"),
+    ("studio/dev/probes/_align.py", "to_accl_clock", "to_media"):
+        (_S, "ACCL content: +0.095 / +0.053 s stamp vs -0.382 / -0.406 s picture"),
+    ("studio/dev/probes/_align.py", "residual_lag", "to_gyro_clock"):
+        (_P, "gyro content: +0.007 / +0.002 s picture vs +0.476 / +0.459 s stamp"),
+    ("studio/dev/probes/_align.py", "residual_lag", "to_media"):
+        (_S, "the uncorrected control reading beside it"),
+    ("studio/dev/probes/_accel.py", "lap_windows", "to_accl_clock"):
+        (_S, "places ACCL samples on the track (P2, P3)"),
+    ("studio/dev/probes/p1_sideslip.py", "_residual_lag_sweep", "to_gyro_clock"):
+        (_P, "gyro vs path"),
+    ("studio/dev/probes/p1_sideslip.py", "_loop_ratios", "to_gyro_clock"): (_P, "gyro vs path"),
+    ("studio/dev/probes/p1_sideslip.py", "analyse", "to_gyro_clock"): (_P, "gyro vs path"),
+    ("studio/dev/probes/p4_corner_gps_quality.py", "probe_recording", "without_gps_lag"):
+        (_S, "the quality strip's own axis; crossing media_time here was #314's 9 of 456 (#318)"),
+    ("studio/dev/probes/p4_corner_gps_quality.py", "probe_recording", "to_media"):
+        (_S, "the call on that map"),
+    ("studio/dev/probes/p5_clock_crossing_scale.py", "_joins", "without_gps_lag"):
+        (_S, "the 'pure' join, which the per-fix residual shows is the strip's axis"),
+    ("studio/dev/probes/p5_clock_crossing_scale.py", "_joins", "to_media"):
+        (("stamp", "picture"), "compares both maps against the fixes' own stamps, on purpose"),
+}
+# Callees whose NAME fixes the map, checked against the declaration so the table cannot drift
+# from the code it describes.
+_PICTURE_BY_NAME = {"media_time", "_media_time", "telemetry_time", "_telemetry_time",
+                    "to_gyro_clock"}
+_STAMP_BY_NAME = {"to_accl_clock", "without_gps_lag"}
+_CROSSING_NAMES = _PICTURE_BY_NAME | _STAMP_BY_NAME | {"to_media", "to_telemetry",
+                                                       "from_gyro_clock"}
+
+
+def _clock_crossings():
+    """-> {(relpath, scope, callee): [ast.Call, ...]} over every module under `studio/`."""
+    import ast
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    found: dict = {}
+    for root, _dirs, files in os.walk(os.path.join(repo, "studio")):
+        for name in sorted(files):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, repo).replace(os.sep, "/")
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+
+            def walk(node, scope, rel=rel):
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        walk(child, [*scope, child.name])
+                        continue
+                    if isinstance(child, ast.Call):
+                        fn = child.func
+                        callee = (fn.attr if isinstance(fn, ast.Attribute)
+                                  else fn.id if isinstance(fn, ast.Name) else None)
+                        if callee in _CROSSING_NAMES:
+                            key = (rel, ".".join(scope) or "<module>", callee)
+                            found.setdefault(key, []).append(child)
+                    walk(child, scope)
+
+            walk(tree, [])
+    return found
+
+
+def test_every_clock_crossing_is_declared_with_the_map_it_takes():
+    """THE GUARD A NAME COULD NOT BE. Every call that crosses between the telemetry clock and the
+    media axis is in `CROSSINGS` with the map it takes — picture or stamp — and the measured reason.
+
+    Both directions, like `tests/test_layering.py`: a crossing the table does not list fails, and so
+    does an entry that no longer matches any call, so the table cannot quietly describe a codebase
+    that has moved. Where the code itself fixes the map — a callee NAMED for one, or a call chained
+    through `without_gps_lag()` — the declaration must agree with it.
+
+    NEGATIVE CONTROL, watched: `_accel.lap_windows` put back on `_align.to_gyro_clock` (the defect
+    T9 fixed) fails with that call undeclared AND the `to_accl_clock` entry stale."""
+    import ast
+
+    found = _clock_crossings()
+    undeclared = sorted(k for k in found if k not in CROSSINGS)
+    stale = sorted(k for k in CROSSINGS if k not in found)
+    assert not undeclared and not stale, (
+        "every clock crossing must be declared with the map it takes (see CROSSINGS and "
+        f"studio/media_clock.py 'WHICH MAP'):\n  undeclared {undeclared}\n  stale {stale}")
+    disagree = []
+    for key, calls in found.items():
+        maps, _why = CROSSINGS[key]
+        callee = key[2]
+        if callee in _PICTURE_BY_NAME and "picture" not in maps:
+            disagree.append((key, "named for the picture map"))
+        if callee in _STAMP_BY_NAME and "stamp" not in maps:
+            disagree.append((key, "named for the stamp map"))
+        for call in calls:
+            chain = call.func.value if isinstance(call.func, ast.Attribute) else None
+            through_stamp = chain is not None and any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "without_gps_lag" for n in ast.walk(chain))
+            if through_stamp and "stamp" not in maps:
+                disagree.append((key, f"line {call.lineno} is chained through without_gps_lag()"))
+    assert not disagree, f"a declaration contradicts its own call: {disagree}"
+    print(f"ok {len(found)} clock crossings, each declared with its map")
+
+
 class _NO_ROTATION:   # noqa: N801 — a sentinel, not a class anyone instantiates
     """`Session` with no `_rotation` attribute at all: `_build_rotation` sets it inside its try."""
 

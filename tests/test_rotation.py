@@ -451,6 +451,56 @@ def test_a_channel_that_never_tracks_the_path_reports_no_offset_rather_than_zero
     print("ok an untracking channel reports NO offset rather than 0.00 s")
 
 
+def test_the_gps_lag_is_quoted_as_one_figure_or_names_its_statistic():
+    """ONE FIGURE, AND EVERY OTHER SPELLING SAYS WHICH STATISTIC IT IS.
+
+    The figure is `measure_lag` over the whole recording — +0.4764 s (0060) / +0.4589 s (0062),
+    what `Session._install_gps_lag` installs. "0.483" spells TWO other statistics of the same
+    quantity: #291's whole-recording reading through a plain per-sample np.interp harness
+    (+0.4834), and — by coincidence — `measure_lag`'s own per-lap median (+0.4827). #301 then
+    called #291's figure a per-lap median, and four agents in one campaign quoted one of these at
+    each other and had to stop and say which (#299, #303). "0.485" is that harness's per-lap median.
+
+    So a line that quotes either spelling near a lag must name its statistic within two lines —
+    the harness, a per-lap median, a per-chapter figure — and the module doc must carry the figure
+    itself. JSON (the golden baseline's floats) is not prose and is not scanned.
+
+    NEGATIVE CONTROL, watched: on the tree before T9 this lists `studio/rotation.py`'s module doc
+    ("run 0.483 s (0060) … BEHIND"), `studio/dev/probes/_align.py` ("+0.483 s (0060) and +0.459 s")
+    and `tests/test_quality_strip.py`'s "real" 0060 `RotationCheck(gps_lag_s=0.483)`."""
+    import re
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spelling = re.compile(r"(?<![\d.])0\.48[35](?!\d)")
+    lag_word = re.compile(r"lag|late|behind|GPS", re.IGNORECASE)
+    statistic = re.compile(r"harness|np\.interp|per[- ]lap|median|per[- ]chapter|statistic",
+                           re.IGNORECASE)
+    this_file = os.path.abspath(__file__)
+    paths = [os.path.join(repo, n) for n in os.listdir(repo) if n.endswith(".md")]
+    for top in ("studio", "tests", "docs"):
+        for root, _dirs, files in os.walk(os.path.join(repo, top)):
+            paths += [os.path.join(root, n) for n in files if n.endswith((".py", ".md"))]
+    bad = []
+    for path in sorted(paths):
+        if os.path.abspath(path) == this_file:
+            continue
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        for i, line in enumerate(lines):
+            if not spelling.search(line):
+                continue
+            window = "\n".join(lines[max(0, i - 2):i + 3])
+            if lag_word.search(window) and not statistic.search("\n".join(lines[max(0, i - 2):i + 1])):
+                bad.append(f"{os.path.relpath(path, repo)}:{i + 1}: {line.strip()[:90]}")
+    assert not bad, ("a GPS-lag spelling other than the installed +0.4764 / +0.4589 s, with no "
+                     f"statistic named beside it (see studio/rotation.py 'WHAT IT IS'): {bad}")
+    with open(os.path.join(repo, "studio", "rotation.py"), encoding="utf-8") as f:
+        doc = f.read()
+    assert "+0.4764 s" in doc and "+0.4589 s" in doc and "WHOLE RECORDING" in doc, (
+        "rotation.py's module doc must state the installed figure itself")
+    print("ok the GPS lag is one figure; every other spelling names its statistic")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -195,7 +195,7 @@ def fingerprint(s, *, strict: bool = True) -> dict:
         row["lap_brake_map_markers"] = guard(
             lambda lid=lid: _round(s.driving.lap_brake_map_markers(lid)))
         row["corner_map_markers_count"] = guard(lambda: len(s.corners.corner_map_markers()))
-        # corner-entry media time per corner.
+        # corner-entry time per corner (telemetry, whatever the accessor's name says).
         row["corner_entry_media_time"] = _round(
             {cid: guard(lambda lid=lid, cid=cid: s.corners.corner_entry_media_time(lid, cid))
              for cid in cids})

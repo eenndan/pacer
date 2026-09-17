@@ -971,8 +971,9 @@ class CornerModel:
                 for i, c in enumerate(corner_list)]
 
     def corner_entry_media_time(self, lap_id: int, cid: int) -> float | None:
-        """Media-clock time (s) `lap_id` enters corner `cid` — the jump-to seek target. Projects
-        the corner's enter point onto this lap's odometer and reads elapsed->media there. None if
+        """TELEMETRY-clock time (s) `lap_id` enters corner `cid` — the jump-to seek target, which
+        the player crosses to the media clock itself; the name predates the second clock. Projects
+        the corner's enter point onto this lap's odometer and reads elapsed there. None if
         unknown/degenerate. Absolute (lap start + elapsed).
 
         Goes through the SAME spatial alignment as its siblings — since the memo it now reads

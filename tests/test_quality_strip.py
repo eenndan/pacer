@@ -460,8 +460,8 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
         n=26562, corr=0.87, gain=0.89, corner_n=9000, corner_corr=0.946, corner_gain=0.87,
         straight_n=8000, straight_rms_gyro=0.24, straight_rms_path=0.05, straight_mean_gyro=0.026,
         loop_n=38, loop_ratio_gyro=0.983, loop_ratio_path=1.001, ok=True,
-        gps_lag_s=0.483, lag_corr=0.917, lag_corr_at_zero=0.854)
-    rows, tip = _trust_rows(real, applied_lag=0.483)
+        gps_lag_s=0.4764, lag_corr=0.917, lag_corr_at_zero=0.854)
+    rows, tip = _trust_rows(real, applied_lag=0.4764)
     value = next(r[1] for r in rows if r[0] == "Rotation cross-check")
     assert "0.48 s" in value, value
     assert "behind" in value, value
@@ -485,7 +485,7 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
     assert "overlay IS corrected" not in tip, tip
     assert "0.48 s" in tip, tip                       # the MEASUREMENT stays here
     fit = MediaClock(rate=1.0 + 26.73e-6, offset=0.0256)
-    rows_on, _ = _trust_rows(real, applied_lag=0.483, clock=fit.with_gps_lag(0.483))
+    rows_on, _ = _trust_rows(real, applied_lag=0.4764, clock=fit.with_gps_lag(0.4764))
     sync = next(r for r in rows_on if r[0] == VIDEO_SYNC_TERM)
     assert sync[1].startswith("corrected") and "0.48 s" in sync[1], sync
     assert sync[2] is False, sync

@@ -11,7 +11,7 @@ number below is reproducible from them.
 |---|---|---|
 | **P1 sideslip rate** (`beta_dot`) | does `omega_path − omega_gyro` measure the car? | **REFUSED** — below its own noise floor on 0062 (0.71x), 1.36x on 0060; no per-lap resolution |
 | **P2 wheel hop / chatter** | is there a coherent 5-25 Hz oscillation? | **REFUSED** — no narrowband peak, and the peak frequency is indistinguishable from random |
-| **P3 track bump map** | is vertical roughness a property of the track? | **REAL** — r=+0.945 across two different days against a 0.301 null, and it is not the speed profile. Feature decision deliberately NOT taken here |
+| **P3 track bump map** | is vertical roughness a property of the track? | **REAL** — r=+0.952 across two different days against a 0.288 null, and it is not the speed profile. Feature decision deliberately NOT taken here |
 
 ## What the recordings are
 
@@ -36,8 +36,9 @@ Every probe here compares a GPS-derived quantity against an inertial one, and **
 stack between them. Neither is optional; together they are worth about half a second.
 
 1. **The axes are different.** `Session._lap_columns` times are the GPS9 **true-clock (telemetry)**
-   axis `load._gps9_times` builds. `ACCL`/`GRAV`/`GYRO` times are the **media** clock. The map
-   between them is `Session.media_clock`, and it is not identity:
+   axis `load._gps9_times` builds. `ACCL`/`GRAV`/`GYRO` times are the camera's **media** stamps.
+   The map between them is `Session.media_clock.without_gps_lag()` — the rate fit alone — and it
+   is not identity:
 
    | | rate | offset | ramp over the recording |
    |---|---|---|---|
@@ -47,25 +48,49 @@ stack between them. Neither is optional; together they are worth about half a se
    **Two in-repo docstrings used to say otherwise; both have since been corrected**:
    `pacer/laps/laps.hpp` ("times  media-clock seconds") and `Session._lap_columns`
    ("media-clock seconds"), along with the rest of that comment family. The code that
-   gives them away is `Session._build_rotation`, which passes `to_media=` into `rotation.compute`
+   gives them away is `Session._build_rotation`, which passes
+   `to_media=self.media_clock.without_gps_lag().to_media` into `rotation.compute`
    precisely because the lap traces it hands over are *not* on the gyro's clock. Anything that
    believes those docstrings inherits the ramp as a fake drift — which is exactly why this repo
    used to read the offset below as "~0.35-0.40 s".
 
 2. **A constant offset remains underneath.** PR #291: the GPS trace's timestamps land after the
-   gyro's for the same event, constant, with no step at a chapter seam, settled against the picture
-   itself. `RotationCheck.gps_lag_s` reads **+0.4764 s (0060)** and **+0.4589 s (0062)**.
+   gyro's for the same event, constant, with no seam step larger than the per-lap spread, settled
+   against the picture itself. `RotationCheck.gps_lag_s` — `rotation.measure_lag`'s whole-recording
+   figure, the one the app installs — reads **+0.4764 s (0060)** and **+0.4589 s (0062)**.
 
-So lap times reach the inertial clock as `media_clock.to_media(t) − gps_lag_s` (`_align.to_inertial`).
+**The two inertial streams do not ride the same one of those clocks.** GYRO and ACCL are stamped
+together on one sample grid, and their *content* still disagrees about when by about the lag
+itself. Measured with `rotation.measure_lag` (+ = the path runs behind the channel):
 
-**The sign is verified, not assumed.** Every probe re-measures the residual offset with the
-product's own `rotation.measure_lag` after applying the correction. A sign error does not produce a
-small error, it produces a doubled one (≈ −0.95 s):
-
-| | before the correction | after |
+| 0060 / 0062 | through the stamp map (rate fit only) | through the rate fit **and** the lag |
 |---|---|---|
-| 0060 | +0.476 s | **+0.007 s** |
-| 0062 | +0.459 s | **+0.002 s** |
+| GYRO yaw rate vs path yaw rate | +0.476 / +0.459 s | **+0.007 / +0.002 s** |
+| raw \|ACCL horizontal\| vs \|v · ω_path\| | **+0.095 / +0.053 s** | −0.382 / −0.406 s |
+
+r is 0.917 / 0.879 and 0.905 / 0.921 whichever map is used — only the lag tells them apart. So lap
+times reach the **gyro's** clock as `stamp.to_media(t) − gps_lag_s` (`_align.to_gyro_clock`,
+numerically `Session.media_time`) and the **accelerometer's** as `stamp.to_media(t)`
+(`_align.to_accl_clock`). The g series says the same thing from the product side
+(`studio/docs/gmeter-validation.md`).
+
+**Corrected 2026-09-17 (T9).** This document first described one conversion for both streams, and
+`_accel` placed every ACCL sample through the gyro's. P1 (gyro) was unaffected. **P2 and P3 placed
+their roughness ~0.4 s — ~7 m at the recordings' median speed, one 5.3 m bin — from where it was
+measured.** Neither verdict moves; P3's numbers below are re-measured through the right map, and
+the values they replace are given beside them.
+
+**The placement is verified, not assumed.** Every probe re-measures the residual offset of each
+stream it places with the product's own `rotation.measure_lag` after applying that stream's map. A
+sign error on the gyro does not produce a small error, it produces a doubled one (≈ −0.95 s):
+
+| | GYRO before its correction | GYRO after | ACCL through its own map | ACCL through the gyro's (control) |
+|---|---|---|---|---|
+| 0060 | +0.476 s | **+0.007 s** | **+0.095 s** | −0.382 s |
+| 0062 | +0.459 s | **+0.002 s** | **+0.053 s** | −0.406 s |
+
+The ACCL's residual is the ~0.05–0.1 s by which its content's own delay differs from the GPS
+timestamps'; no map removes it.
 
 P1's independent residual-lag sweep agrees: its correlation peak sits at −0.010 s (0060) and
 +0.000 s (0062), with the plateau within 0.002 of the peak spanning ±0.08 s.
@@ -218,8 +243,9 @@ agrees: at a lag of 4 frames (the first that shares **no** samples — adjacent 
 27.6 % of the time against a 12.0 % chance rate. Weakly above chance, with no stable frequency to
 recur *at*.
 
-**Band power does repeat by place on track** — r=+0.954 / +0.972 vertical, +0.968 / +0.980
-horizontal, split-half odd vs even laps. But that is P3's result, not this one: a place-on-track
+**Band power does repeat by place on track** — r=+0.953 / +0.974 vertical, +0.966 / +0.978
+horizontal, split-half odd vs even laps (placed through the ACCL's own clock; through the gyro's,
+before T9, +0.954 / +0.972 and +0.968 / +0.980). But that is P3's result, not this one: a place-on-track
 pattern with no narrowband peak is a bump map, not chatter. The probe said so in advance.
 
 **Where the energy actually is** (vertical): 0.5-5 Hz 53.6 % / 57.0 %, 5-25 Hz 44.5 % / 41.3 %,
@@ -237,27 +263,30 @@ sound and the answer is no.
 ## P3 — track bump map: the signal is REAL (and this package stops there)
 
 Vertical acceleration, high-passed above 3 Hz (boxcar subtraction, the primitive the rest of the app
-filters with), rolling 0.25 s RMS, median-binned into 200 track-distance bins (~5.3 m).
+filters with), rolling 0.25 s RMS, median-binned into 200 track-distance bins (~5.3 m). Every
+number in this section is placed through the ACCL's own clock (`_align.to_accl_clock`); the figure
+in brackets is the one first published here, placed through the gyro's (see the T9 correction
+above). The two profiles are one bin apart.
 
 | | median | range | roughest / smoothest |
 |---|---|---|---|
-| 0060 | 3.656 m/s² | [1.440, 14.131] | 9.8x |
-| 0062 | 4.048 m/s² | [1.397, 14.923] | 10.7x |
+| 0060 | 3.651 m/s² [3.656] | [1.478, 14.374] [1.440, 14.131] | 9.7x [9.8x] |
+| 0062 | 4.101 m/s² [4.048] | [1.378, 15.039] [1.397, 14.923] | 10.9x [10.7x] |
 
 **(1) It repeats lap to lap.** Split-half, odd vs even laps, by track position:
 
 | | split-half r | phase-randomised surrogate null (\|r\| p95) |
 |---|---|---|
-| 0060 | **+0.967** | 0.306 |
-| 0062 | **+0.986** | 0.293 |
+| 0060 | **+0.967** [+0.967] | 0.297 [0.306] |
+| 0062 | **+0.986** [+0.986] | 0.291 [0.293] |
 
 The null matters: a bump profile is a smooth 1-D signal, and two smooth signals correlate by chance
 far more often than independent-sample intuition says. The surrogates keep the profile's power
 spectrum — its smoothness — and destroy only its phase.
 
-**(2) It repeats session to session — different days, same track.** r=**+0.945**, at a circular
-shift of **0 bins**, against the same 0.301 null. The control is the speed profile the app already
-draws, which *must* reproduce: r=+0.989 at a shift of 1 bin. So the two independently auto-fitted
+**(2) It repeats session to session — different days, same track.** r=**+0.952** [+0.945], at a
+circular shift of **0 bins**, against a 0.288 [0.301] null. The control is the speed profile the
+app already draws, which *must* reproduce: r=+0.989 at a shift of 1 bin. So the two independently auto-fitted
 start lines agree to about one bin, and the bump map reproduces nearly as well as speed does.
 
 **(3) It is not the speed profile.** This is the confound that could have made it worthless — road
@@ -266,22 +295,24 @@ and add nothing. It does not:
 
 | | r(bump, speed) | split-half with speed regressed out | across-session with speed regressed out |
 |---|---|---|---|
-| 0060 | −0.229 | +0.966 | — |
-| 0062 | −0.309 | +0.985 | — |
-| both | — | — | **+0.941** (vs +0.945 raw) |
+| 0060 | −0.134 [−0.229] | +0.967 [+0.966] | — |
+| 0062 | −0.238 [−0.309] | +0.986 [+0.985] | — |
+| both | — | — | **+0.952** (vs +0.952 raw) [+0.941 vs +0.945] |
 
-The correlation with speed is weak and **negative**, and removing it costs the cross-session
-correlation 0.004. The signal is where the track is, not how fast the kart was going.
+The correlation with speed is weak and **negative** — weaker still once the roughness sits where it
+was measured — and removing it costs the cross-session correlation nothing [0.004]. The signal is where the track is, not how fast the kart was going.
 
 **(4) The alignment sensitivity test, and what it cannot see.** Repeating the within-session
-split-half at deliberate mis-alignments of ±0.25 s and ±0.5 s moves r by less than 0.002
-(+0.967 → +0.967/+0.968 on 0060; +0.986 → +0.984/+0.986 on 0062). **Stated honestly: this test is
+split-half at deliberate mis-alignments of ±0.25 s and ±0.5 s moves r by at most 0.002
+(+0.967 → +0.966…+0.968 on 0060; +0.986 → +0.984…+0.986 on 0062). **Stated honestly: this test is
 weak by construction** — both halves are displaced *identically*, so a common-mode shift is
 invisible to it. What it establishes is that the map's *reproducibility* is robust; what it cannot
-establish is that the map is correctly *positioned*. Positioning is exactly what the ~8 m clock
-correction buys, and it starts to matter the moment this is drawn next to a corner on a map. The
-best evidence for positioning is (2): two recordings, each aligned independently, agree at a
-circular shift of zero bins.
+establish is that the map is correctly *positioned*, and neither can (2), whose two recordings went
+through the same map. **That blindness is exactly how the first version of this section shipped one
+bin mispositioned**: it took the GPS lag out of a stream whose content carries it, every test here
+passed, and only a residual lag against an independent reference — `_align.check_accl`, run on
+every probe start — could see it. Positioning is what matters the moment this is drawn next to a
+corner on a map, so that check is the evidence for it, not (2).
 
 ### Verdict, and why it stops here
 
@@ -299,7 +330,7 @@ its own.
 
 **What a follow-up would have to settle:** whether the disambiguation is worth a surface at all;
 where it would live (the lateral-g trace's own explanation, not a new map mode); and whether the
-9.8-10.7x dynamic range survives on a track that is not this one. Note also that this channel is
+9.7-10.9x dynamic range survives on a track that is not this one. Note also that this channel is
 made of exactly the vibration that makes the IMU's longitudinal axis untrustworthy — the same energy,
 localized instead of averaged.
 
