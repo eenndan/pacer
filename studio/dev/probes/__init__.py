@@ -11,7 +11,9 @@ distribution" has done its whole job.
     pixi run python -m studio.dev.probes.p3_bumpmap
 
 Probes p1-p3 each compare a GPS-derived quantity against an inertial one, so each of them goes
-through `_align` — read that module before changing any of them.
+through `_align` — read that module before changing any of them. It has TWO maps: the gyro's
+content rides the picture and the accelerometer's rides its stamps, so a probe that places ACCL
+through the gyro's map puts it ~0.4 s from where it was measured (T9 found P2 and P3 doing that).
 
 `p4_corner_gps_quality` is the odd one out and needs neither the cache nor `_align`: it asks whether
 the GPS-quality signal can support a PER-CORNER coaching abstain, which is a question about one

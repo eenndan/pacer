@@ -14,10 +14,13 @@ Four things have to be true, and each has a null beside it:
 
 (3) is the one that can quietly ruin this: road excitation grows with speed, so a "bump map" that
 is really a speed map would reproduce perfectly and mean nothing new — the app already draws
-speed. (4) exists because placing an inertial sample on the track is a CROSS-CLOCK operation: the
-ACCL stream is on the media clock, the lap columns are on the GPS9 telemetry clock, and the GPS
-timestamps land ~0.46-0.48 s late on top of that (PR #291). Uncorrected, every bump is displaced
-~8 m at 60 km/h. `_align` applies both corrections; (4) measures how much that mattered.
+speed. (4) exists because placing an accelerometer sample on the track is a CROSS-CLOCK operation:
+the ACCL stream carries the camera's media stamps and the lap columns are on the GPS9 telemetry
+clock, ~27 ppm apart. The GPS timestamps are also ~0.46-0.48 s late against the PICTURE (PR #291),
+but the ACCL's content carries very nearly the same delay, so `_align.to_accl_clock` takes out the
+rate difference and NOT the lag. Until T9 this probe took the lag out too — the gyro's map — and
+every bump sat ~0.4 s (~7 m, one bin) from where it was measured; `_align.check_accl` now measures
+the placement on each run, and (4) measures how much a mis-alignment moves the verdict.
 
     pixi run python -m studio.dev.probes.p3_bumpmap
 """
@@ -58,7 +61,7 @@ def profile(rec, lap_subset=None, shift_s: float = 0.0):
     bins = np.clip((frac[on] * NBINS).astype(int), 0, NBINS - 1)
     vals = rms[on]
     # Speed on the same bins, from the GPS columns. Both are GPS-derived, so this half needs no
-    # clock conversion — it is the inertial channel that has to be moved onto the track.
+    # clock conversion — it is the accelerometer channel that has to be moved onto the track.
     sf, sv = [], []
     for _i, (tt, _x, _y, v, d) in rec.laps():
         if len(tt) < 8 or d[-1] <= 0:
@@ -149,6 +152,7 @@ def report():
         print("  " + _align.describe(rec))
         gt, gyaw = yaw_rate_series(rec.gyro, rec.grav)
         _align.check(rec, gt, gyaw)
+        _align.check_accl(rec)      # the stream this probe actually places on the track
         bump, speed = profile(rec)
         profs[key] = (bump, speed, rec)
         odd, even = np.arange(0, n, 2), np.arange(1, n, 2)
