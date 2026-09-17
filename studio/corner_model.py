@@ -458,30 +458,33 @@ class SegmentBests:
         tests/test_session_pure.py::test_beat_counts_are_not_a_fixed_tolerance_hit_rate.
 
         The correlation this docstring used to lead with ("r = −0.04 … −0.50 against the same
-        durations") does not reproduce and understated the coupling. Re-measured independently on
-        FIVE recordings, subject = the best lap, non-point segments only, beat rate against each
-        segment's mean duration:
+        durations") does not reproduce. Re-measured on the owner's FIVE recordings as the app opens
+        them (the owner's saved start line restored where there is one, †): subject = the best lap;
+        the segments longer than POINT_SPAN_M on the reference odometer; beat rate (beat / n)
+        against the segment's mean duration over the composite laps; Spearman with tied ranks
+        averaged; permutation p two-sided on Spearman, over 20,000 shuffles of the beat rates
+        (seed 0). tests/test_measured_figures.py derives the sentence under the table from its cells
+        and, given the footage, re-measures every cell:
 
         | recording      | n  | r      | Spearman | permutation p |
         |----------------|----|--------|----------|---------------|
-        | D24 1 ch       | 24 | −0.176 | −0.239   | 0.264 |
-        | D24 3 ch       | 24 | −0.340 | −0.331   | 0.117 |
-        | Sandown ch 1   | 15 | −0.297 | −0.289   | 0.297 |
-        | Sandown 3 ch   | 15 | −0.602 | −0.596   | **0.019** |
-        | SD_30_08       |  5 | −0.905 | −0.900   | 0.067 (exact, 120 permutations) |
+        | D24 1 ch       | 23 | +0.058 | −0.021   | 0.926 |
+        | D24 3 ch       | 23 | −0.326 | −0.361   | 0.094 |
+        | Sandown ch 1 † | 15 | −0.056 | +0.082   | 0.772 |
+        | Sandown 3 ch † | 15 | −0.249 | −0.239   | 0.389 |
+        | SD_30_08 †     | 15 | −0.178 | −0.038   | 0.893 |
 
-        THIS TABLE IS FROM BEFORE #300 AND IS NOT RE-MEASURED, and its SD_30_08 row is not of laps:
-        its five segments are two corners of the 13 s pieces the loader's start line cut from a
-        46 s lap until T13, where a whole lap has 15. The table's method does not reproduce on
-        today's D24 either (one chapter gives n 23, r +0.058), so the row is marked here rather
-        than replaced beside four rows from another tree. One of five is distinguishable from
-        chance, and the strongest r sits on the recording with FIVE segments, where n makes
-        p ≥ 0.017 unreachable at any effect size. A residual negative
-        correlation is also what a real track produces — a short piece of road has less room to
-        differ, so more laps land level with the subject — and because the statistic is provably
-        invariant to scale, that correlation is a fact about the driving, not about the units. The
-        rejected `hit_counts` had no such defence: its coupling came from a tolerance measured in
-        seconds against segments of unequal length.
+        None of the five is distinguishable from chance at p < 0.05, and the strongest r (D24 3 ch)
+        explains 11 % of the variance in beat rate. The table this replaces (#213, before #300, on
+        the loader's start lines) found one of five under 0.05, and was not measured the way it
+        said: every row kept one POINT segment (a zero-width edge segment of the reference lap that
+        reads 0 s on some laps and a sliver on others), its Spearman broke tied beat rates in sort
+        order, and its SD_30_08 row was two corners of the 13 s pieces the loader cut from a 46 s
+        lap until T13. Four of the five r are negative, which is what a real track produces — a
+        short piece of road has less room to differ, so more laps land level with the subject — and
+        because the statistic is provably invariant to scale, that correlation is a fact about the
+        driving, not about the units. The rejected `hit_counts` had no such defence: its coupling
+        came from a tolerance measured in seconds against segments of unequal length.
 
         It is also the question a driver is actually asking: have I been here before, or was that
         once? And both of its factors are printed as columns beside the row, with the product in

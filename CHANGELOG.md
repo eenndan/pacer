@@ -342,6 +342,21 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   quoted beside it from its cells and from the constants the code applies, finds every other quote
   by search (25 stale figures in 9 other files), and re-measures every cell from the footage when pointed
   at it.
+- **Three more tables from before #300: the brake-habit comparison, the focus list's cross-session
+  figures, and the beat-rate correlations.** The coaching hint used to read the best lap's single
+  brake application where Stats ▸ BRAKING read the median. Re-measured, the two disagreed by up to
+  **12.6 m** (0062 C6), not 9.3 m, and at 0062's C1 the best lap's "~3 m later" against the 62-lap
+  habit's 12.2 m is a shrug against a real instruction, not "opposite advice": both say later. The
+  focus list's three promoted corners are still C12, C4 and C2 on 0060, now for +0.330 / +0.244 /
+  +0.204 s (was +0.259 / +0.221 / +0.110); every re-measured window figure came back identical.
+  Two statements about the spread test were wrong in themselves: it compares against **the wider
+  of the two sessions'** interquartile ranges, not the corner's own, and C8's +0.549 s of
+  window growth was called "a whole second". `SegmentBests.beat_counts`' correlation table does not
+  survive: re-measured as the app opens each recording, **none of the five** rows is
+  distinguishable from chance (was one), and the table it replaces had kept a zero-width point
+  segment in every row, broken tied ranks in sort order, and measured SD_30_08's 13 s pieces.
+  `tests/test_measured_figures.py` now derives the prose around all three from their cells, finds
+  every quote elsewhere, and re-measures each cell from the footage.
 - **The channels CSV's time column said "media" and was a third of a second off the footage.**
   The per-lap channels export headed its time column `t_media_s`, and the values were the GPS9
   true-clock (telemetry) seconds the lap was timed on. Lined up against the video by that name,
