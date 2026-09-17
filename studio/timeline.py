@@ -58,7 +58,7 @@ class Timeline:
         string literal it would keep. It is the 67 call sites and definitions across 20 files a rename
         touches while nothing reads the name wrongly — every caller passes and receives telemetry (T9
         checked each). The hazard that DID bite is the other way round: `Session.media_time`,
-        which does cross, is the PICTURE map, not "the media-clock time" of a camera stamp.
+        which does cross, is the PICTURE map, not a camera stamp's own number on that axis.
 
         `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
         axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For

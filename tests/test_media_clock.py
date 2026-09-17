@@ -594,9 +594,14 @@ CROSSINGS = {
         (_P, "gyro vs path"),
     ("studio/dev/probes/p1_sideslip.py", "_loop_ratios", "to_gyro_clock"): (_P, "gyro vs path"),
     ("studio/dev/probes/p1_sideslip.py", "analyse", "to_gyro_clock"): (_P, "gyro vs path"),
-    ("studio/dev/probes/p4_corner_gps_quality.py", "probe_recording", "media_time"):
-        (_P, "THE WRONG MAP for the quality strip (#314's 9 of 456); #318 moves it to the stamp "
-             "map — replace this entry with that one when it lands"),
+    ("studio/dev/probes/p4_corner_gps_quality.py", "probe_recording", "without_gps_lag"):
+        (_S, "the quality strip's own axis; crossing media_time here was #314's 9 of 456 (#318)"),
+    ("studio/dev/probes/p4_corner_gps_quality.py", "probe_recording", "to_media"):
+        (_S, "the call on that map"),
+    ("studio/dev/probes/p5_clock_crossing_scale.py", "_joins", "without_gps_lag"):
+        (_S, "the 'pure' join, which the per-fix residual shows is the strip's axis"),
+    ("studio/dev/probes/p5_clock_crossing_scale.py", "_joins", "to_media"):
+        (("stamp", "picture"), "compares both maps against the fixes' own stamps, on purpose"),
 }
 # Callees whose NAME fixes the map, checked against the declaration so the table cannot drift
 # from the code it describes.
