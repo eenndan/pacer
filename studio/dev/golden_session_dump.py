@@ -174,6 +174,9 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     # surface through here. A user-facing number with no fingerprint is a number that can move in
     # silence, so this one is fingerprinted too.
     put("phase_report", lambda: _round(s.phase_report()))
+    # The Stats page's COASTING table (F5): per place, the coast seconds per lap and whether the
+    # laps separate it from the leader — a user-facing ranking, so it is fingerprinted from birth.
+    put("coast_report", lambda: _round(s.coast_report()))
 
     # Per-lap sweeps. Use a representative subset of valid laps (all of them — there are ~18).
     cids = [c.cid for c in guard(lambda: s.corners.corner_list(), default=[])]

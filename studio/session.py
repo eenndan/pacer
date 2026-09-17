@@ -2717,6 +2717,46 @@ class Session:
             return []
         return stats_service.brake_consistency([c.cid for c in corner_list], rows)
 
+    def coast_report(self) -> stats_service.CoastReport | None:
+        """WHERE the coasting is (the Stats page's COASTING table): every clean lap's coasting
+        spans split over the corner/straight partition and ranked by seconds per lap, with the
+        places the laps cannot separate from the leader marked tied (stats.COAST_LEAD_ALPHA).
+
+        The partition edges are the ones `straights_report` cuts at — each corner's enter/exit
+        projected onto the lap through the corner service's memoized warp — and the spans are
+        `driving.lap_coasting_spans`, the same ones the Coast s column and the DRIVING tiles sum.
+        Both live on the lap's own GPS odometer and clock, so placing a coast on the track crosses
+        no clock. None without corners / clean laps / a g signal (no coasting instrument at all —
+        distinct from a report with no places, which is a session that did not coast). Not
+        cached (read on load / re-segment only)."""
+        rows = self._coast_rows()
+        return None if rows is None else stats_service.coast_report(*rows)
+
+    def _coast_rows(self) -> tuple[list[int], list[np.ndarray]] | None:
+        """(corner cids, one row per clean lap of the 2N+1 partition pieces' coast seconds) — the
+        matrix `coast_report` ranks, kept separate so a probe can shuffle or split exactly the rows
+        the page reads (studio/dev/probes/p6_coast_places.py). None where `coast_report` is."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners.corner_list()
+        basis = self.corners.basis()
+        if not corner_list or basis is None or not ids or self.driving.thresholds() is None:
+            return None
+        total_ref = float(basis[1])
+        interior = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        rows = []
+        for i in ids:
+            dist, _speed_kmh, elapsed = self._lap_arrays(i)
+            if len(dist) < 2 or float(dist[-1]) <= 0:
+                continue
+            total_lap = float(dist[-1])
+            projected = corners_alg.project_boundaries(
+                interior, total_ref, total_lap,
+                alignment=self.corners.lap_alignment(i, total_lap))
+            edges = [0.0, *projected.tolist(), total_lap]
+            rows.append(stats_service.coast_seconds_by_piece(
+                self.driving.lap_coasting_spans(i), edges, dist, elapsed))
+        return ([c.cid for c in corner_list], rows) if rows else None
+
     def straights_report(self) -> list[stats_service.StraightStat]:
         """The straight-line report (the Stats page's STRAIGHTS table): per straight of the
         corner/straight partition, the session best/median/σ time + trap-speed stats + the
