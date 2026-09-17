@@ -602,21 +602,45 @@ def test_compare_tick_noop_until_pair_set():
 
 
 # ============================================= F7 Phase B: cross-recording video compare
-def _attach_reference(primary, *, ref_lap=5, faster=0.95, overlay=True):
+def _attach_reference(primary, *, ref_lap=5, faster=0.95, overlay=True, extra_laps=()):
     """Build a SECOND bare reference Session and adopt it as the primary's cross-recording
     reference. The reference lap mirrors the primary's lap A curve but `faster`× the time (so the
     deltas are non-trivial) on its OWN clock (anchored away from 0). Returns (ref_session, ref_lap).
     Stubs only what the cross-recording compare reads: lap_window / lap_time / g_at_time on the
-    reference, plus chapters/video_path as the pane-B video source marker."""
+    reference, plus chapters/video_path as the pane-B video source marker.
+
+    `extra_laps` is an F1 addition: a sequence of `(lap_id, faster)` for FURTHER laps of the
+    reference recording, each on its own window further along the reference clock. They are seeded
+    into `_dist_cache` AND `_cols_cache` (so the real `Session._lap_arrays` / `lap_trace_xy` serve
+    them, which is what `reference_lap_choices` and the per-lap view read) and added to the
+    reference's valid set. Default empty, so every pre-F1 caller gets exactly the old single-lap
+    reference."""
     ta = primary._dist_cache[3][0]   # lap A times (the _make_session lap A id is 3)
     da = primary._dist_cache[3][1]   # lap A dists
     r_times = (ta - ta[0]) * faster + 1000.0   # reference's own clock, anchored at 1000 s
-    from tests._synthetic import seed_lap
-    ref = bare_session({ref_lap: (r_times, da.copy())}, best=ref_lap, valid=[ref_lap])
+    from tests._synthetic import seed_cols, seed_lap
+    extra = list(extra_laps)
+    ref = bare_session({ref_lap: (r_times, da.copy())}, best=ref_lap,
+                       valid=[ref_lap, *(lid for lid, _f in extra)])
     seed_lap(ref, ref_lap, r_times, da.copy())
+    seed_cols(ref, ref_lap, r_times, da.copy())
     rwin = (float(r_times[0]), float(r_times[-1]))
-    ref.lap_window = lambda lid, _w=rwin: _w
-    ref.lap_time = lambda lid, _t=float(r_times[-1] - r_times[0]): _t
+    windows = {ref_lap: rwin}
+    lap_times = {ref_lap: float(r_times[-1] - r_times[0])}
+    # Each extra lap sits on its OWN stretch of the reference clock, 100 s past the previous one, so
+    # a pane-B repoint has a genuinely different window to seek to (a shared window would let a
+    # no-op repoint pass the test).
+    t0 = float(r_times[-1])
+    for lid, lap_faster in extra:
+        e_times = (ta - ta[0]) * lap_faster + (t0 + 100.0)
+        seed_lap(ref, lid, e_times, da.copy())
+        seed_cols(ref, lid, e_times, da.copy())
+        windows[lid] = (float(e_times[0]), float(e_times[-1]))
+        lap_times[lid] = float(e_times[-1] - e_times[0])
+        t0 = float(e_times[-1])
+    ref.lap_window = lambda lid, _w=windows: _w.get(lid)
+    ref.lap_time = lambda lid, _t=lap_times: _t.get(lid)
+    ref.lap_trace_xy = lambda _lid: (np.zeros(0), np.zeros(0))
     # Reference g: a DIFFERENT deterministic signal from the primary's, to prove pane B routes
     # through the reference session (not self.session).
     ref.g_at_time = lambda t: (round(0.5 * t, 6), round(-0.6 * t, 6), round(0.7 * t, 6))
@@ -736,6 +760,134 @@ def test_cross_compare_disabled_without_reference():
     assert compare.enter_cross() is False
     assert not compare.active and not compare.cross
     print("test_cross_compare_disabled_without_reference OK")
+
+
+def _cross_with_picker(extra=((6, 0.80), (7, 1.15))):
+    """A cross-recording compare whose reference recording holds SEVERAL comparable laps — the F1
+    state. Returns (session, lap_a, ref_session, adopted_lap, controllers...).
+
+    THE `faster` FACTORS ARE CHOSEN SO THE LAPS' Δ CURVES DO NOT COINCIDE, and that is not
+    cosmetic: at the adopted lap's 0.95 and a picked 0.90, the picked lap's Δ at its own midpoint
+    (−0.10 × 6.0 s) and the adopted lap's Δ clamped to its finish (0.95 × 12.0 − 12.0) are BOTH
+    −0.600 s, so a badge left on the baseline was indistinguishable from one following the pick and
+    the test passed in both directions. 0.80 separates them (−1.200 s vs −0.600 s)."""
+    s, a, _b = _make_session()
+    ref, ref_lap = _attach_reference(s, extra_laps=extra)
+    # The per-lap view builds through the real cross_reference.build, which asks the PRIMARY for its
+    # fit loop; a bare Session has no render cache, so say "no loop" (and the picked lap therefore
+    # gets no drawable ring — which test C below is specifically about).
+    s._reference_fit_loop = lambda: None
+    bundle = _make_controllers(s)
+    bundle[6]["applied_t"] = 105.0  # state; the playhead sits inside lap A
+    return s, a, ref, ref_lap, bundle
+
+
+def test_f1_pane_b_picker_offers_every_comparable_reference_lap():
+    """F1. Pane B's picker was built as `choices=[ref_lap]` — one entry, the reference's best lap —
+    so a cross-recording compare could only ever play that one lap of the other recording, however
+    many comparable laps it held. It must now list every lap `Session.reference_lap_choices()`
+    admits, and still OPEN on the adopted lap so entering compare is unchanged.
+
+    Measured on the owner's pair, this is 65 laps offered where 1 was offered before (0062 as the
+    reference) and 38 where 1 was (0060)."""
+    _s, _a, _ref, ref_lap, bundle = _cross_with_picker()
+    _scrub, compare, video = bundle[0], bundle[1], bundle[2]
+    assert compare.enter_cross() is True
+    (_spec_a, spec_b), _kwargs = video.compare_args
+    assert spec_b.choices == [ref_lap, 6, 7], (
+        f"pane B must offer every comparable reference lap, got {spec_b.choices}")
+    assert len(spec_b.choice_labels) == len(spec_b.choices), "ids and labels stay parallel"
+    assert spec_b.lap_id == ref_lap, "…and it still OPENS on the adopted lap (the Δ baseline)"
+    print(f"test_f1_pane_b_picker_offers_every_comparable_reference_lap OK: {spec_b.choices}")
+
+
+def test_f1_pane_b_repoint_moves_the_reference_pane_and_not_the_charts():
+    """F1's trust decision, asserted where it is made. `on_pane_repoint` used to return early for
+    ANY pane-B repoint in cross mode ("locked to the reference lap"), so this did nothing at all.
+
+    Picking another reference lap must move pane B — its lap, its window on the REFERENCE clock, its
+    caption, its g scope — and must NOT move the Δ baseline or the chart overlay, which are
+    session-wide and stay on the adopted lap."""
+    s, a, ref, ref_lap, bundle = _cross_with_picker()
+    _scrub, compare, video, plots = bundle[0], bundle[1], bundle[2], bundle[3]
+    assert compare.enter_cross() is True
+    seeks_before = len(video.pane_seeks)
+
+    compare.on_pane_repoint(1, 6)
+
+    assert compare._ref_lap_b == 6, "pane B must record WHICH reference lap it is showing"
+    assert compare.lap_b == 6
+    (side, spec), _kwargs = video.reseed_args
+    assert side == 1 and spec.lap_id == 6, (side, spec.lap_id)
+    assert spec.window == ref.lap_window(6), "pane B's window is on the REFERENCE clock"
+    assert 6 in spec.choices and ref_lap in spec.choices, spec.choices
+    # The caption ADMITS that this pane is off the Δ baseline, and names the lap that is on it.
+    assert "the Δ charts and lap table still compare against" in spec.caption, spec.caption
+    assert f"lap {lap_label(ref_lap)}" in spec.caption, spec.caption
+    # The chart overlay stays on the PRIMARY lap alone, and the session baseline never moved.
+    assert plots.lap_sets[-1] == [a], plots.lap_sets[-1]
+    assert s.reference_lap_id() == ref_lap, "a pane-B pick must not re-adopt the reference"
+    # Both panes were re-seeked to their lap starts, once — the ordinary repoint cost, not a
+    # per-frame corrective seek (the ~765 ms dual-seek finding refused the latter, not this).
+    assert len(video.pane_seeks) == seeks_before + 2, video.pane_seeks[seeks_before:]
+    # Back to the adopted lap: the caption drops the caveat, because there is nothing to admit.
+    compare.on_pane_repoint(1, ref_lap)
+    (_side, spec_back), _k = video.reseed_args
+    assert "still compare against" not in spec_back.caption, spec_back.caption
+    print("test_f1_pane_b_repoint_moves_the_reference_pane_and_not_the_charts OK")
+
+
+def test_f1_pane_b_badge_follows_the_picked_lap_and_the_ghost_stays_off_without_a_ring():
+    """The per-tick half. Pane B's Δ badge must be the picked lap's Δ, not the adopted lap's — the
+    two differ, so a badge left on the baseline would describe a lap that is not on screen.
+
+    And the HONEST DEGRADATION: a picked lap whose racing line cannot be fitted into this session's
+    frame has no overlay ring, so the map ghost is not drawn at all rather than placed on the
+    adopted lap's ring — which would put the reference kart at a position nothing measured. The map
+    says why on its own surface; the Δ badge is unaffected, because it is arc length and needs no
+    fit."""
+    s, a, ref, ref_lap, bundle = _cross_with_picker()
+    _scrub, compare, video, _plots, map_view = bundle[0], bundle[1], bundle[2], bundle[3], bundle[4]
+    assert compare.enter_cross() is True
+    compare.on_pane_repoint(1, 6)
+
+    w6 = ref.lap_window(6)
+    t_b = 0.5 * (w6[0] + w6[1])
+    video.pane_times[0], video.pane_times[1] = 105.0, t_b
+    ghosts_before = len(map_view.ghost_pos)
+    compare._compare_last_t = None
+    compare.tick()
+
+    want = s.reference_delta_vs_lap(a, t_b, 6)
+    assert want is not None
+    assert video.badges[-1] == (1, theme.format_delta_run(want), theme.delta_colour(want)), (
+        video.badges[-1])
+    # …and that is genuinely NOT the adopted lap's answer at the same instant.
+    adopted_answer = s.reference_delta_vs_lap(a, t_b, ref_lap)
+    assert adopted_answer is None or abs(want - adopted_answer) > 1e-9, (want, adopted_answer)
+    # The ghost is suppressed, not misplaced: lap 6 has no drawable ring in this fixture.
+    assert s.reference_overlay_xy(6) is None, "fixture precondition: the picked lap has no ring"
+    assert len(map_view.ghost_pos) == ghosts_before, (
+        f"the ghost was drawn for a lap with no fitted racing line: {map_view.ghost_pos[-1]}")
+    print(f"test_f1_pane_b_badge_follows_the_picked_lap OK: picked Δ={want:+.4f}s vs adopted "
+          f"{adopted_answer}, ghost suppressed")
+
+
+def test_f1_leaving_compare_forgets_the_picked_reference_lap():
+    """Pane B's pick is per-compare: the next cross compare opens on the adopted lap. Otherwise a
+    pick would outlive the reference it was made against — the same failure `exit` already avoids
+    for `_session_b` (QA-W2R-05)."""
+    _s, _a, _ref, ref_lap, bundle = _cross_with_picker()
+    compare, video = bundle[1], bundle[2]
+    assert compare.enter_cross() is True
+    compare.on_pane_repoint(1, 7)
+    assert compare._ref_lap_b == 7
+    compare.exit()
+    assert compare._ref_lap_b is None, "the pick must not survive leaving compare"
+    assert compare.enter_cross() is True
+    (_spec_a, spec_b), _kwargs = video.compare_args
+    assert compare._ref_lap_b == ref_lap and spec_b.lap_id == ref_lap
+    print("test_f1_leaving_compare_forgets_the_picked_reference_lap OK")
 
 
 def test_d5_toggle_reenters_cross_after_off_on():

@@ -64,6 +64,11 @@ class CompareController:
         # (_session_b is self.session, byte-identical to same-recording compare).
         self._cross = False
         self._session_b: Session = session
+        # F1: WHICH lap of the reference recording pane B is showing. None outside cross. It starts
+        # at the adopted reference lap (`session.reference_lap_id()`) and moves with pane B's picker;
+        # the Δ CHARTS/TABLE do NOT follow it (see on_pane_repoint), so this is also the flag that
+        # decides whether pane B has to admit it is off the Δ baseline (_cross_caption_b).
+        self._ref_lap_b: int | None = None
         # Sticky "prefer cross-recording compare" so toggling compare off/on after a cross compare
         # re-enters cross (keeping pane B's reference footage) instead of falling back to same-recording.
         self._prefer_cross = False
@@ -177,17 +182,26 @@ class CompareController:
             self._set_pane_badge(1, None, same_lap=True)
         elif self._cross:
             # Cross badge routing: pane A vs the reference, pane B (the reference) vs the primary.
+            # Pane A's Δ is against the adopted reference (the session-wide baseline); pane B's is
+            # against the lap pane B is actually SHOWING, which is the adopted lap until the picker
+            # moves it. Passing `_ref_lap_b` is what stops the badge describing a lap that is not on
+            # screen — with it None (never entered through enter_cross) this is the pre-F1 call.
             self._set_pane_badge(0, self.session.delta_at_lap(a, t_a))
-            self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b))
+            self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b, self._ref_lap_b))
         else:
             self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
             self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
         # F4 map ghost: lap B's kart at the same t_b the badge used (both panes play time-into-lap).
         if self.map is not None:
             if self._cross:
-                # Cross ghost rides the fitted reference line, not the primary trace.
-                i = self.session.reference_overlay_index_at_progress(t_b)
-                xy = self.session.reference_overlay_xy()
+                # Cross ghost rides the fitted reference line, not the primary trace — and the line
+                # of the lap pane B is SHOWING, which after a pane-B pick is not the adopted lap.
+                # Both reads take the same `_ref_lap_b`, so the index can never be taken on one ring
+                # and applied to another. A lap whose racing-line fit was refused has no ring at
+                # all, so the ghost is simply not drawn (the map says why on its own surface) — the
+                # Δ badge above is unaffected, because it is arc length and needs no fit.
+                i = self.session.reference_overlay_index_at_progress(t_b, self._ref_lap_b)
+                xy = self.session.reference_overlay_xy(self._ref_lap_b)
                 if i is not None and xy is not None:
                     self.map.set_ghost_pos(float(xy[i, 0]), float(xy[i, 1]))
             else:
@@ -291,7 +305,13 @@ class CompareController:
     def enter_cross(self) -> bool:
         """Enter cross-recording compare: pane A = this recording's lap, pane B = the reference
         recording's lap with its own footage/telemetry. Returns False (no-op) if no reference is
-        loaded or the windows are degenerate. Pane B's picker is locked to the single reference lap."""
+        loaded or the windows are degenerate.
+
+        F1: pane B's picker lists EVERY comparable lap of the reference recording
+        (`session.reference_lap_choices()`), not just the adopted one. It opens on the adopted lap,
+        so entering compare is unchanged; picking another moves pane B's footage, window, Δ badge
+        and map ghost, and NOT the Δ charts/table — see on_pane_repoint for why, and
+        _cross_caption_b for where pane B admits the difference."""
         ref_sess = self.session.reference_session()
         ref_lap = self.session.reference_lap_id()
         if ref_sess is None or ref_lap is None:
@@ -313,24 +333,107 @@ class CompareController:
         self._cross = True
         self._session_b = ref_sess
         self._prefer_cross = True  # so a later toggle off/on re-enters cross
+        self._ref_lap_b = ref_lap  # pane B OPENS on the adopted lap — the Δ baseline
         cap_b = self._cross_caption_b(ref_sess, ref_lap)
-        # Pane B's spec is the only cross-vs-same difference: reference footage + picker locked to the
-        # single reference lap. No cross-exclusion here — the two lap ids index DIFFERENT recordings,
-        # so an equal id is not the same lap (see _picker_items / _other_lap).
+        # Pane B's spec is the only cross-vs-same difference: reference footage + a picker over the
+        # reference recording's own comparable laps (F1). No cross-exclusion here — the two lap ids
+        # index DIFFERENT recordings, so an equal id is not the same lap (see _picker_items /
+        # _other_lap).
         ids_a, labels_a = self._picker_items(valid, None)
+        ids_b, labels_b = self._ref_picker_items(ref_sess, ref_lap)
         spec_a = PaneSpec(a, wa, self._lap_caption(a), source=None,
                           choices=ids_a, choice_labels=labels_a)
         spec_b = PaneSpec(ref_lap, wb, cap_b,
                           source=(ref_sess.chapters or ref_sess.video_path),
-                          choices=[ref_lap],
-                          choice_labels=[self._ref_choice_label(ref_sess, ref_lap)])
+                          choices=ids_b, choice_labels=labels_b)
         self._enter(spec_a, spec_b)
         return True
 
+    def _ref_picker_items(self, ref_sess: Session, current: int) -> tuple[list[int], list[str]]:
+        """Pane B's picker contents in a CROSS compare: the reference recording's COMPARABLE laps
+        (`Session.reference_lap_choices`), with parallel labels.
+
+        `current` is always offered even if the session declines to list it. Two reasons: a picker
+        that does not contain its own selection leaves the combo showing an item it cannot re-select
+        (video_view.set_lap_choices only selects `current` when it is in `ids`), and a session double
+        without the F1 seam would otherwise strand pane B on an EMPTY picker — the getattr guard is
+        the same one every other duck-typed session read here uses."""
+        choices = getattr(self.session, "reference_lap_choices", None)
+        ids = list(choices()) if callable(choices) else []
+        if current not in ids:
+            ids = [current, *ids]
+        return ids, [self._ref_choice_label(ref_sess, lid) for lid in ids]
+
+    def _repoint_reference_pane(self, lap_id: int) -> None:
+        """Pane B's picker moved to another lap OF THE REFERENCE RECORDING (F1).
+
+        WHAT MOVES: pane B's lap, its window (on the REFERENCE clock), its caption, its g scope, and
+        — through `_ref_lap_b` — its Δ badge and the map ghost, so every surface describing pane B
+        describes the lap now in it.
+
+        WHAT DOES NOT: the Δ charts, the lap table and the sector guides. Those are measured against
+        the ADOPTED reference lap, which is a SESSION-WIDE baseline (`Session.reference_lap_id`) —
+        `corners.invalidate_stats()`, the per-corner Δ columns and the chart x-axis extent are all
+        derived from it. Re-adopting on a video pick would silently recompute the whole comparison
+        because the user wanted to watch a different lap of their friend's footage, and it would move
+        the golden fingerprint with it. So the baseline stays put and pane B SAYS it is off it (see
+        `_cross_caption_b`) rather than leaving the two to disagree in silence.
+
+        The lap is validated against `reference_lap_choices()` — the picker's own contents — so a
+        programmatic repoint cannot land pane B on a reference lap the session refused as
+        incomparable.
+
+        THE SEEK COST IS THE ORDINARY ONE. This re-seeks both panes to their lap starts, exactly as
+        a same-recording repoint does, once per pick. It is not the per-frame corrective seek the
+        ~765 ms dual-seek measurement refused: that figure killed holding a distance LOCK during
+        playback, where the seek recurs every frame. The other cost a pick can incur — building the
+        picked lap's racing line, measured at 0.210-0.556 s — is paid once and memoized by
+        `Session._reference_view`, never on the tick."""
+        ref_sess = self._session_b
+        adopted = self.session.reference_lap_id()
+        choices = getattr(self.session, "reference_lap_choices", None)
+        allowed = list(choices()) if callable(choices) else []
+        if lap_id not in allowed and lap_id != adopted:
+            return
+        window = ref_sess.lap_window(lap_id)
+        if window is None:
+            return
+        self._ref_lap_b = lap_id
+        self._compare_b = lap_id  # in cross, pane B's id indexes the REFERENCE recording
+        ids, labels = self._ref_picker_items(ref_sess, lap_id)
+        self.video.reseed_pane(1, PaneSpec(
+            lap_id, window, self._cross_caption_b(ref_sess, lap_id),
+            choices=ids, choice_labels=labels))
+        self.video.set_pane_gmeter_lap(1, lap_id)
+        # Realign the pair at S/F so the two laps roll together from the start line, as on entry.
+        self._reset_pair_to_start()
+        # The chart overlay stays [A] and auto-follow stays frozen on A — a cross compare draws the
+        # primary lap alone (the reference is the baseline, not a second curve), and that is true
+        # whichever reference lap pane B is playing.
+        self.plots.set_laps([self._compare_a])
+        self.playback.followed_lap = self._compare_a
+        self._compare_last_t = None  # force the next tick() to recompute for the new pane-B lap
+        self._on_pair_changed()
+
     def _cross_caption_b(self, ref_sess: Session, ref_lap: int) -> str:
-        """Pane B CAPTION for cross compare (the pane's tooltip): reference label + lap + time."""
+        """Pane B CAPTION for cross compare (the pane's tooltip): reference label + lap + time.
+
+        F1: when pane B is showing a lap OTHER than the adopted reference lap, the caption says so
+        and names the lap the Δ charts and table are still measured against. Without that sentence
+        the window holds two honest numbers that contradict each other — a pane badged against lap 12
+        beside a Δ chart drawn against lap 41 — with nothing on screen saying which is which. That is
+        the failure this campaign kept finding (a trust card claiming a clock the overlays did not
+        use; a g-meter refusing the accelerometer in silence), so the pane admits it instead."""
         label = self.session.reference_label() or "reference"
-        return f"{label} · lap {lap_label(ref_lap)} · {fmt_time(ref_sess.lap_time(ref_lap))}"
+        caption = f"{label} · lap {lap_label(ref_lap)} · {fmt_time(ref_sess.lap_time(ref_lap))}"
+        # getattr-guarded like every other duck-typed session read here: a stand-in session that
+        # cannot say which lap was adopted has no baseline to be off, so it gets the bare caption.
+        adopted_fn = getattr(self.session, "reference_lap_id", None)
+        adopted = adopted_fn() if callable(adopted_fn) else None
+        if adopted is not None and ref_lap != adopted:
+            caption += (f" — this pane only; the Δ charts and lap table still compare against "
+                        f"lap {lap_label(adopted)}, this reference's best")
+        return caption
 
     def _ref_choice_label(self, ref_sess: Session, ref_lap: int) -> str:
         """Pane B's PICKER ITEM for cross compare: the lap, in the same shape every other picker
@@ -347,6 +450,10 @@ class CompareController:
         self._session_b = self.session
         self._compare = False
         self._compare_a = self._compare_b = None
+        # Forget WHICH reference lap pane B was showing, so the next cross compare opens on the
+        # adopted lap (the Δ baseline) rather than resuming a pick from a reference that may since
+        # have been cleared and replaced — the same reasoning as resetting _session_b just above.
+        self._ref_lap_b = None
         self.video.exit_compare()
         if self.map is not None:
             self.map.clear_ghost()  # the ghost exists only while compare is on
@@ -366,7 +473,11 @@ class CompareController:
         if not self._compare:
             return
         if self._cross and side != 0:
-            # cross — pane B is locked to the reference lap, ignore its single-entry repoint
+            # cross — pane B holds a lap of the REFERENCE recording, so it is repointed against the
+            # reference's laps, not this session's (F1). Its own handler, because almost nothing
+            # below applies: the lap id indexes another recording, the window is on another clock,
+            # and the chart overlay must NOT follow.
+            self._repoint_reference_pane(lap_id)
             return
         valid = self.session.valid_lap_ids()
         if lap_id not in valid:

@@ -250,6 +250,12 @@ class Session:
         # F7 Phase B: keep the live reference Session so pane B can play its footage with its own
         # telemetry (g / lap window / lap id). None = DORMANT.
         self._reference_session: Session | None = None
+        # F1: per-lap `ReferenceLap` views for laps of the reference recording OTHER than the
+        # adopted one (the pane-B picker). Memoized because building one runs the racing-line fit —
+        # measured 0.210-0.556 s a lap on the owner's recordings, which is tick-hostile. Keyed by
+        # the reference lap id; the ADOPTED lap is never stored here (it IS `_reference`). Dropped
+        # whenever the reference changes, so a view can never outlive the recording it describes.
+        self._reference_views: dict[int, cross_reference.ReferenceLap | None] = {}
 
         # Full-trace local-metre xs/ys + media time + km/h speed, in one track_columns crossing
         # (bulk, like _lap_columns).
@@ -559,6 +565,12 @@ class Session:
         # F7 Phase B: keep the live reference Session so pane B can play its footage with its own
         # telemetry.
         self._reference_session = ref
+        # F1: drop any per-lap views built for the PREVIOUS reference. The cache is keyed by lap id
+        # alone, and lap ids are small integers every recording has — so adopting a second reference
+        # without this serves the FIRST recording's fitted racing line for the second's lap of the
+        # same number. `load_reference` reaches here without going through `clear_reference`, so
+        # clearing there is not enough; this is the line that makes the invalidation structural.
+        self._reference_views = {}
         # The Δ baseline changed (best lap -> reference), so per-lap corner-stat deltas are stale;
         # invalidate_stats() drops only those (detection windows unchanged), recomputed lazily.
         self.corners.invalidate_stats()
@@ -796,6 +808,11 @@ class Session:
         self._reference = None
         # F7 Phase B: drop the retained live reference Session too (frees its decode/arrays).
         self._reference_session = None
+        # F1: and the per-lap views built for pane B's picker — they hold fitted racing lines for a
+        # recording that is no longer the reference, so keeping them would both leak those arrays
+        # (the same reason the live Session is dropped) and let a stale ring be drawn if a later
+        # reference happened to reuse a lap id.
+        self._reference_views = {}
         # Revert the Δ baseline to the local best; the per-lap deltas vs the cleared reference are
         # stale (detection windows unchanged), recomputed lazily.
         self.corners.invalidate_stats()
@@ -982,13 +999,21 @@ class Session:
         ref = self._ref
         return ref.total_time if ref is not None else None
 
-    def reference_overlay_xy(self):
+    def reference_overlay_xy(self, ref_lap_id: int | None = None):
         """The reference racing line as an (M,2) ring in THIS session's local frame (for the
         map best-lap overlay), or None when there's no reference or its spatial fit was too
         poor to draw. The charts/table reference is unaffected by a None here (they align by
-        distance, which is frame-independent)."""
-        ref = self._ref
-        return ref.overlay_xy if ref is not None else None
+        distance, which is frame-independent).
+
+        `ref_lap_id` names WHICH lap of the reference recording to draw; None (the default, and
+        every call the map makes) is the ADOPTED lap — the Δ baseline — so the map's faint line
+        keeps meaning the lap the charts and table are measured against. Only the compare GHOST
+        passes another lap, because the ghost marks where pane B's kart is and pane B can now be
+        pointed at any comparable reference lap (F1). That split is deliberate: two surfaces show
+        a reference line and they are allowed to differ only because each says which lap it is —
+        the map ring is the baseline, the ghost is the pane."""
+        view = self._reference_view(ref_lap_id)
+        return view.overlay_xy if view is not None else None
 
     # ----------------------------------------- cross-recording VIDEO compare (F7 Phase B)
     # The retained live reference Session + the lookups pane B needs (ChapterMap video source,
@@ -1001,12 +1026,145 @@ class Session:
         return getattr(self, "_reference_session", None)
 
     def reference_lap_id(self) -> int | None:
-        """The reference lap id (the reference recording's best lap) that pane B is locked to, or
-        None when dormant. v1 locks pane B to this lap (no pane-B picker)."""
+        """The ADOPTED reference lap id (the reference recording's best lap), or None when dormant.
+
+        This is the Δ BASELINE — the lap the charts, the lap table, the sector guides and the map's
+        faint ring are all measured against. It is NOT "the lap pane B is locked to" any more, which
+        is what this docstring used to say: pane B now picks from `reference_lap_choices()` (F1) and
+        the baseline does not follow it. The compare controller keeps pane B's own lap; this stays
+        the session-wide answer."""
         ref = self._ref
         return ref.lap_id if ref is not None else None
 
-    def _reference_progress_at(self, t_ref: float) -> tuple[float, float] | None:
+    def reference_lap_choices(self) -> list[int]:
+        """The reference recording's laps pane B may be pointed at: every VALID lap of the retained
+        reference Session that is also COMPARABLE with this session's laps — the same ±10 % band
+        (`_lap_length_refusal`) `set_reference_session` admitted the adopted lap on. Empty when
+        dormant or when no live reference Session is retained (a data-only reference).
+
+        WHY THE BAND IS RE-ASKED PER LAP rather than inherited from adoption: adoption bands exactly
+        ONE lap, the reference's best. A recording whose start line was dragged mid-session, or whose
+        in-lap was cut short, can hold laps of quite a different length beside a perfectly comparable
+        best — and the normalized-distance alignment (s = dist/total) would stretch such a lap over
+        this one and report the length difference as time gained. That is the same failure
+        `_lap_length_refusal` exists to refuse, so offering a lap in a picker must clear the same bar
+        as adopting one.
+
+        Measured on the owner's own pair, this guard does not fire on good data: 65 of 65 valid laps
+        of 0062 are comparable with 0060, and 38 of 38 of 0060 with 0062 — against the ONE lap the
+        picker offered before. So it trims nothing real; it is the honest behaviour on a reference
+        whose laps are not all laps, which is the state the band was written for.
+
+        The ADOPTED lap is always offered when it is valid: it passed this band on adoption, and a
+        picker that dropped the lap the Δ baseline is built from would be refusing its own reference."""
+        ref = self._ref
+        ref_sess = self.reference_session()
+        if ref is None or ref_sess is None:
+            return []
+        adopted = ref.lap_id
+        out: list[int] = []
+        for lid in ref_sess.valid_lap_ids():
+            if lid == adopted:
+                out.append(lid)
+                continue
+            try:
+                dist, _speed_kmh, _elapsed = ref_sess._lap_arrays(lid)
+            except Exception:  # noqa: BLE001 — a lap we cannot read is a lap we cannot offer
+                continue
+            if len(dist) < 2 or float(dist[-1]) <= 0:
+                continue
+            if self._lap_length_refusal(float(dist[-1])) is None:
+                out.append(lid)
+        return out
+
+    def _reference_curve(self, ref_lap_id: int | None = None):
+        """`(dist, elapsed, window)` for ONE lap of the reference recording — its own arc-length
+        odometer + seconds-from-its-own-start, plus its window on the reference's GLOBAL clock.
+        None when dormant, when no live reference Session is retained, or when the lap is
+        degenerate/unreadable.
+
+        This is the CHEAP half of a reference lap: no racing-line fit. Measured on the owner's
+        recordings it costs 0.0000 s against `_reference_view`'s 0.210-0.556 s, which is why the Δ
+        badge and the pane window read this and never wait on the overlay.
+
+        `ref_lap_id` None (or the adopted lap) returns the ADOPTED lap's already-extracted arrays
+        verbatim — the same objects the delta paths read before F1 — so every pre-existing caller is
+        byte-identical and the golden fingerprint cannot move."""
+        ref = self._ref
+        ref_sess = self.reference_session()
+        if ref is None or ref_sess is None:
+            return None
+        lap_id = ref.lap_id if ref_lap_id is None else ref_lap_id
+        window = ref_sess.lap_window(lap_id)
+        if window is None:
+            return None
+        if lap_id == ref.lap_id:
+            _times, dists, elapsed = ref.time_dist_elapsed()
+        else:
+            try:
+                dists, _speed_kmh, elapsed = ref_sess._lap_arrays(lap_id)
+            except Exception:  # noqa: BLE001 — an unreadable lap is simply not a reference lap
+                return None
+        if len(dists) < 2 or len(elapsed) < 2:
+            return None
+        if float(dists[-1]) <= 0 or float(elapsed[-1]) <= 0:
+            return None
+        return dists, elapsed, window
+
+    def _reference_view(self, ref_lap_id: int | None = None) -> cross_reference.ReferenceLap | None:
+        """The `ReferenceLap` for one lap of the reference recording — the ADOPTED lap when
+        `ref_lap_id` is None or names it (returned verbatim, so nothing recomputes and the golden
+        cannot move), else a lap pane B was pointed at, built on demand and MEMOIZED.
+
+        THE MEMO IS THE POINT. Building one runs `reference.fit_loop_to_loop` — a 512-offset cyclic
+        search over both directions plus an ICP polish — and that was measured on the owner's
+        recordings at 0.210-0.556 s per lap (median 0.221 s for 0062's laps, 0.242 s for 0060's).
+        That is the same order as the ~765 ms dual seek that killed live distance-locked playback,
+        so it must never land on the 30 Hz tick. The picker pays it ONCE the first time a lap is
+        shown; every later tick reads the memo. A lap whose fit is refused caches its None too, so a
+        bad lap is not re-fitted on every frame either.
+
+        None when dormant, when no live reference Session is retained, or when the lap is
+        degenerate — in which case the ghost is simply not drawn (see reference_overlay_xy)."""
+        ref = self._ref
+        if ref is None:
+            return None
+        if ref_lap_id is None or ref_lap_id == ref.lap_id:
+            return ref
+        cache = getattr(self, "_reference_views", None)
+        if cache is None:  # bare-Session (no-__init__) test path — the slot is absent
+            cache = self._reference_views = {}
+        if ref_lap_id in cache:
+            return cache[ref_lap_id]
+        cache[ref_lap_id] = view = self._build_reference_view(ref_lap_id)
+        return view
+
+    def _build_reference_view(self, ref_lap_id: int) -> cross_reference.ReferenceLap | None:
+        """Build (uncached) the `ReferenceLap` for a non-adopted reference lap, through the SAME
+        `cross_reference.build` the adopted lap went through — same overlay fit, same drawable gate,
+        same `is_geometric` caveat. Reusing that call is what keeps a picked lap held to exactly the
+        standard the adopted one was held to, rather than a looser one nobody wrote down."""
+        ref = self._ref
+        ref_sess = self.reference_session()
+        if ref is None or ref_sess is None:
+            return None
+        try:
+            dist, speed_kmh, elapsed = ref_sess._lap_arrays(ref_lap_id)
+        except Exception:  # noqa: BLE001 — an unreadable lap yields no view
+            return None
+        if len(dist) < 2 or float(dist[-1]) <= 0:
+            return None
+        rx, ry = ref_sess.lap_trace_xy(ref_lap_id)
+        ref_loop = np.column_stack([rx, ry]) if len(rx) >= 10 else None
+        return cross_reference.build(
+            dist=dist, speed_kmh=speed_kmh, elapsed=elapsed,
+            loop_xy=ref_loop, primary_loop_xy=self._reference_fit_loop(),
+            source_label=ref.source_label, lap_id=ref_lap_id,
+            is_geometric=ref.is_geometric,
+        )
+
+    def _reference_progress_at(self, t_ref: float,
+                               ref_lap_id: int | None = None) -> tuple[float, float] | None:
         """The reference lap's progress at the reference recording's GLOBAL TELEMETRY time
         `t_ref`, returned as `(s, elapsed_into_lap)`:
           * `s` ∈ [0, 1] — the reference lap's NORMALIZED track fraction, clamped to the window;
@@ -1016,17 +1174,14 @@ class Session:
         WHY rebase: `t_ref` is the reference recording's GLOBAL clock but the reference's
         dist/elapsed arrays are from-0, so subtract the lap-window start (t_into = t_ref −
         window[0]) before interpolating, else a ~1000 s t_ref clamps a [0..60] axis to the finish."""
-        ref = self._ref
-        if ref is None:
+        # The reference's OWN from-0 arc-length curves (so t_into and these arrays share one zero)
+        # plus that lap's window on the reference GLOBAL clock — for the ADOPTED lap when
+        # `ref_lap_id` is None, else for the lap pane B was pointed at. No racing-line fit is
+        # touched here: progress is arc length, which is why a picked lap's Δ badge is free.
+        curve = self._reference_curve(ref_lap_id)
+        if curve is None:
             return None
-        ref_sess = self.reference_session()
-        if ref_sess is None:
-            return None
-        window = ref_sess.lap_window(ref.lap_id)
-        if window is None:
-            return None
-        # The reference's OWN from-0 arc-length curves, so t_into and these arrays share one zero.
-        _times, dists, elapsed = ref.time_dist_elapsed()
+        dists, elapsed, window = curve
         total_dist = float(dists[-1]) if len(dists) else 0.0
         total_time = float(elapsed[-1]) if len(elapsed) else 0.0
         if total_dist <= 0 or total_time <= 0:
@@ -1038,35 +1193,46 @@ class Session:
         elapsed_into_lap = float(np.interp(t_into, elapsed, elapsed))
         return s, elapsed_into_lap
 
-    def reference_overlay_index_at_progress(self, t_ref: float) -> int | None:
-        """The index into `reference_overlay_xy()` of the reference kart's position at the reference
-        recording's GLOBAL TELEMETRY time `t_ref` — for the F4 map ghost in cross-recording
+    def reference_overlay_index_at_progress(self, t_ref: float,
+                                            ref_lap_id: int | None = None) -> int | None:
+        """The index into `reference_overlay_xy(ref_lap_id)` of the reference kart's position at the
+        reference recording's GLOBAL TELEMETRY time `t_ref` — for the F4 map ghost in cross-recording
         compare. The overlay ring is the reference racing line ALREADY fit into THIS session's local
         frame (cross_reference), sampled along its own arc length; the reference lap's normalized
         progress at `t_ref` (distance-fraction, via `_reference_progress_at`) maps onto it directly.
         None when there's no overlay (no reference or a poor spatial fit) — the ghost is then
         suppressed, the charts/table are unaffected.
 
+        `ref_lap_id` names WHICH reference lap, defaulting to the adopted one (F1: pane B can be
+        pointed elsewhere). THE CALLER MUST PASS THE SAME LAP TO BOTH THIS AND `reference_overlay_xy`
+        — an index taken on one lap's ring and applied to another's would place the ghost at a
+        position nothing measured.
+
         Distinct from `index_at_time` (which indexes the PRIMARY trace): the cross-recording ghost
         must sit on the reference overlay line, not the primary trace."""
-        ref = self._ref
-        if ref is None or ref.overlay_xy is None:
+        view = self._reference_view(ref_lap_id)
+        if view is None or view.overlay_xy is None:
             return None
-        prog = self._reference_progress_at(t_ref)
+        prog = self._reference_progress_at(t_ref, ref_lap_id)
         if prog is None:
             return None
         s, _elapsed_into_lap = prog
-        m = len(ref.overlay_xy)
+        m = len(view.overlay_xy)
         if m == 0:
             return None
         return min(int(round(s * (m - 1))), m - 1)
 
-    def reference_delta_vs_lap(self, lap_id: int, t_ref: float) -> float | None:
+    def reference_delta_vs_lap(self, lap_id: int, t_ref: float,
+                               ref_lap_id: int | None = None) -> float | None:
         """Δ (s) of the reference lap vs primary `lap_id` at the reference's position at GLOBAL
         ref clock `t_ref`; pane B's badge. None if degenerate.
 
-        Mirror of pane A: source = reference (via `_reference_progress_at`), baseline = primary."""
-        prog = self._reference_progress_at(t_ref)
+        Mirror of pane A: source = reference (via `_reference_progress_at`), baseline = primary.
+
+        `ref_lap_id` is WHICH reference lap pane B is showing (F1), defaulting to the adopted one.
+        It costs nothing to honour — progress is arc length, so no racing-line fit is involved — and
+        honouring it is what stops the badge describing a lap the user is not looking at."""
+        prog = self._reference_progress_at(t_ref, ref_lap_id)
         if prog is None:
             return None
         s, elapsed_ref = prog  # reference's track fraction + its own time-into-lap, both clamped
