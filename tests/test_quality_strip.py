@@ -312,8 +312,15 @@ class _Check:
         self.lag_corr_at_zero = lag_corr_at_zero
 
     @property
+    def loop_exact(self):
+        """The signed exact target, as `RotationCheck` computes it: a clockwise circuit closes at
+        -1.000 x 2pi and an anticlockwise one at +1.000, and the row quotes whichever this
+        recording is rather than a literal 1.000."""
+        return -1.0 if self.loop_ratio_path < 0 else 1.0
+
+    @property
     def loop_error_pct(self):
-        return abs(self.loop_ratio_gyro - 1.0) * 100.0
+        return abs(self.loop_ratio_gyro - self.loop_exact) * 100.0
 
 
 def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None,
