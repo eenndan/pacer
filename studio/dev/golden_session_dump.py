@@ -182,13 +182,13 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     # surface through here. A user-facing number with no fingerprint is a number that can move in
     # silence, so this one is fingerprinted too.
     put("phase_report", lambda: _round(s.phase_report()))
+    # The Stats page's COASTING table (F5): per place, the coast seconds per lap and whether the
+    # laps separate it from the leader — a user-facing ranking, so it is fingerprinted from birth.
+    put("coast_report", lambda: _round(s.coast_report()))
     # The Stats page's CORNERS BY LAP grid. Its cells are `lap_corner_stats` times (fingerprinted
     # per lap below), but the typical, the scale and the marks are decided over the RESOLVED cells
     # only, and that resolution is a read of the lap warps' knots that no other leaf exposes.
     put("corner_matrix", lambda: _round(s.corner_matrix()))
-    # The Stats page's COASTING table (F5): per place, the coast seconds per lap and whether the
-    # laps separate it from the leader — a user-facing ranking, so it is fingerprinted from birth.
-    put("coast_report", lambda: _round(s.coast_report()))
 
     # Per-lap sweeps. Use a representative subset of valid laps (all of them — there are ~18).
     cids = [c.cid for c in guard(lambda: s.corners.corner_list(), default=[])]

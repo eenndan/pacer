@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Five features were built far enough to **measure**, and the measurement said not to ship them. The
+Six features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -396,6 +396,141 @@ reason `corner_model.IdealSample`'s last paragraph already gives.
 - The two exemption rows in `corner_model.MAX_DONOR_SPAN_DEV`'s block were also pre-#300 (the wide
   one read −0.984 / −1.066 / −0.217, and reads −1.200 / −1.080 / −0.184 today). They are refreshed
   in that block, which is where the next person will look.
+
+---
+
+## 6. An overdriving detector — refused (F4)
+
+**The idea.** Overdriving is carrying more speed into a corner than lets you get out of it fast.
+Detect it per corner from the laps you already drove: if the laps that entered a corner faster
+were the laps that got through it slower, name that corner.
+
+**What was built.** The backlog's form, exactly: over the clean laps, the Spearman ρ of entry speed
+(`CornerStat.entry_speed`, read at the corner's projected enter boundary) against time in the
+corner; a within-lap permutation null (each lap's corner labels shuffled, so a lap that is fast
+everywhere stays fast everywhere and only corner identity dies); max-statistic FWER over the
+corners; an 8-lap gate. It was also run on two other outcomes a coach would accept as the cost of
+overdriving: the corner plus the straight after it, and the exit speed. 20,000 permutations each,
+through the real `Session.load` path on current `main`, by `studio/dev/probes/p7_overdrive.py`:
+D24 0060 (38 clean laps × 12 corners), D24 0062 (65 × 12), Sandown 09-05 (59 × 7), SD 30-08
+(37 × 7) and Sandown 3h (62 × 7). Corner identity across recordings of one track was checked by apex
+position: C1…C12 on the two D24 days sit within 8.8 m of each other, and C1…C7 on the three Sandown
+days within 4.5 m.
+
+### As proposed, it names no corner on any recording
+
+| recording | time in corner | corner + next straight | exit speed | largest ρ on the backlog's form |
+|---|---|---|---|---|
+| 0060 | — | — | **C9** | C4 +0.36, p_fwer 0.301 |
+| 0062 | — | — | — | C9 +0.03, p_fwer 1.000 |
+| Sandown 09-05 | — | — | — | C2 +0.14, p_fwer 1.000 |
+| SD 30-08 | — | — | — | C6 −0.09, p_fwer 1.000 |
+| Sandown 3h | — | — | — | C6 −0.31, p_fwer 0.991 |
+
+One overdriven corner in 135 corner-outcome cells, and none on the backlog's own outcome. What the
+detector does find is the opposite: faster in, faster through (0060 C1; 0062 C3, and C7 and C11 on
+exit speed). A faster lap produces that, and so does reading a boundary inside a braking zone: arrive
+faster and you cover the first metres of the window sooner. It is not the claim.
+
+### The one overdriven corner is where the boundary was measured badly
+
+0060 C9 on exit speed: ρ +0.50, p_fwer 0.041. Every entry and exit speed is read at a projected
+boundary, and C9's enter boundary sits in a braking zone where speed falls by about a km/h per metre.
+The probe measures where that boundary lands on each lap, against the reference lap's own point:
+
+| C9 | 0060 | 0062 |
+|---|---|---|
+| enter boundary is a spatial match (not interpolated) | **26 %** of laps | 100 % |
+| longitudinal residual of the projected enter point, sd | **3.10 m** | 0.01 m |
+| speed gradient there | −0.89 km/h per m | −0.97 km/h per m |
+| entry-speed error that residual alone implies | **2.77 km/h** | 0.01 km/h |
+| entry-speed spread across the laps (sd) | 2.66 km/h | 1.91 km/h |
+
+On 0060 the placement error by itself is as large as the spread it is supposed to measure. It is not
+independent of the outcome either: the enter residual correlates **+0.41** with the exit speed.
+Re-read at the point level with the reference lap's point, the two readings of the same 38 laps'
+entry speed agree only at ρ +0.49, and the exit-speed relation falls from **+0.50 to +0.05**
+(p_fwer 1.000).
+
+**The re-read has an artifact of its own, with the same sign.** Re-read level, C9 is named on time in
+the corner (ρ +0.64, p_fwer 0.001) and on corner + straight (+0.49, p_fwer 0.041). That is the
+window's own length. Between the two re-read ends it measures 42.3 m, with sd **3.74 m** and range
+**33.6–49.0 m**; on 0062 it is 39.3 m with sd 0.95 m. ρ(path, time) is +0.89 and ρ(entry, path)
++0.67; holding the path length, the time relation is **+0.12**. No driving line makes a 42 m corner
+15 m longer on one lap than another. That spread is where the GPS put the two ends.
+
+So each reading of that corner carries a measurement artifact that lands on the overdriving sign,
+and neither is named under the other reading. The same corner, same driver, next day, with every
+boundary matched: 0062 C9 reads +0.03 / +0.12 / +0.18 on the app's readings and +0.03 / +0.13 /
++0.19 re-read (time in corner / corner + straight / exit speed; p_fwer ≥ 0.93 on all six). Inside 0060 itself, the backlog's form names C9 in neither half and in
+neither the odd nor the even laps; exit speed names it in the even laps only.
+
+C9 is not the only exposed corner on 0060. The same arithmetic gives C11 2.91 km/h of implied entry
+error against a 5.15 km/h spread, C5 2.51 against 2.98 and C7 1.94 against 2.97. On 0062 and all
+three Sandown recordings no enter boundary exceeds 0.59 km/h (Sandown 3h C4).
+
+### Controls
+
+**Negative control** — entry speeds shuffled across laps, 300 replicates × 1,000 permutations, on
+time in corner and on exit speed. It names an overdriven corner **0.7–3.7 %** of the time and names
+any corner 2.7–6.3 %. The flag is the maximum over every corner, so choosing which corner to name is
+inside that rate. (#311's selection problem was a different question: is the top corner separable
+from *some* other.)
+
+**Positive control** — an overdriving cost planted into each corner in turn, on the laps as driven:
+the corner's time grows by β × (that lap's entry speed − the mean). Corners named:
+
+| β, s per km/h | 0060 | 0062 | Sandown 09-05 | SD 30-08 | Sandown 3h |
+|---|---|---|---|---|---|
+| 0.01 | 0 / 12 | 0 / 12 | 0 / 7 | 0 / 7 | 0 / 7 |
+| 0.02 | 2 / 12 | 0 / 12 | 0 / 7 | 0 / 7 | 0 / 7 |
+| 0.04 | 4 / 12 | 8 / 12 | 0 / 7 | 1 / 7 | 0 / 7 |
+| 0.08 | 9 / 12 | 11 / 12 | 3 / 7 | 4 / 7 | 2 / 7 |
+
+At 0.04 s per km/h, a lap that enters 2–3 km/h faster (about one lap-to-lap spread at most corners)
+loses about 0.1 s in that corner. A coach would point that out at once, and the detector names it on
+**13 of 45** corners. On Sandown 3h the laps' own entry speeds already go with faster corners at every
+corner (ρ −0.31 to −0.52). There a planted 0.04 is invisible on all 7 corners, and 0.08 is found on 2.
+
+**Covariate cross-check** — a partial rank correlation given the rest of the lap, lap order and
+stint, in place of the within-lap null. It names no overdriven corner either. Its placebo pairs a
+corner's entry speed with a non-adjacent corner's time, where no causal path exists, and names a
+corner in the faster-in, faster-elsewhere direction **19.0–34.0 %** of the time (0 % on SD 30-08).
+The rest of the lap, lap order and stint do not remove lap-level pace. The within-lap null does,
+which is why it is the form measured above. It is also why its power is what the table says.
+
+### Replication across recordings of one track
+
+The per-corner ρ on time in corner agrees between 0060 and 0062 at r = +0.48 (same sign on 8 of 12).
+That agreement is almost entirely in the faster-in, faster-through direction. On exit speed it is
++0.07. Across the three Sandown days the agreement on time in corner is −0.08, −0.01 and +0.65.
+
+### Three measured reasons to refuse it
+
+1. **As proposed, it names nothing.** No corner on any of five recordings on the backlog's outcome,
+   and one corner-outcome cell of 135 on any outcome.
+2. **Its silence means nothing.** A cost of 0.1 s for a lap that enters one spread faster
+   (0.04 s per km/h) goes unnamed on 32 of 45 corners, 20 of the 21 at Sandown. "No corner is
+   overdriven" would be printed about laps that could not have shown it.
+3. **The one corner it names is the measurement.** Two different placement artifacts put the same
+   corner on the overdriving sign, and neither is named under the other reading. The corner does
+   not replicate on the next day's recording, where every boundary is matched.
+
+**What would be new evidence:** a recording whose enter boundaries are spatially matched on nearly
+every lap, as on 0062 and the Sandown sessions today, where a corner is named on the backlog's form
+in both halves of the session with a window path-length spread near 0062's 1 m. An entry-speed
+measurement that does not depend on where a boundary lands would also count, provided a planted
+0.04 s per km/h is named on most corners.
+
+**Premises refuted on the way:**
+
+- The brief expected the effect to be confounded by line, lap in the stint, tyre state and traffic.
+  The lap-level ones are absorbed by the within-lap null. The confound that decided the only named
+  corner was **where the boundary lands inside a braking zone**, which the brief did not name. This
+  echoes #265, where corner-window proximity mattered more than lap pace.
+- #311's warning that the max-statistic correction does not cover selection does not apply to this
+  flag, which is itself the maximum over all corners: the shuffled-label control names an
+  overdriven corner at 0.7–3.7 %.
 
 ---
 
