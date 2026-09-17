@@ -46,13 +46,19 @@ _N_OUT = 600
 #   * 65 real Daytona MK laps — every valid lap of GX010062 (21) and of the 3-chapter
 #     GX010062+63+64 (65), i.e. the same circuit at two different lap counts:
 #         coverage 100.0 % on EVERY lap;  RMS 0.57 – 1.45 m
-#   * 26 laps of two other circuits — Sandown (1 valid lap) and a 53 x 67 m unnamed kart track
-#     (25 valid laps):
+#   * 26 "laps" of another circuit, which were all PIECES of one: Sandown chapter 3's single valid
+#     lap (23.2 s, 319 m) and SD_30_08's 25 (13 s, 53 x 67 m) are cut from the same 740 m
+#     Sandown Park lap, the second by the loader's start line as it was chosen until T13:
 #         coverage 71.9 % / 82.4 – 97.1 %;  RMS 9.40 m / 5.11 – 6.35 m
-# The two populations do not overlap on EITHER half, so both thresholds sit in a gap:
+#   * re-measured on WHOLE Sandown Park laps (T13) — Sandown chapter 1's 23 and SD_30_08's 23 on
+#     the owner's saved line, 125 x 192 m:
+#         coverage 75.1 – 79.9 %;  RMS 7.67 – 8.48 m
+# The populations do not overlap on EITHER half, so both thresholds sit in a gap:
 #   coverage 0.98 — 2 pp under the real laps (which are all exactly 1.000, so this tolerates
 #     ~2 % of a lap's points being a genuine off-line excursion) and 0.9 pp over the best
-#     foreign lap. Note 0.95 would NOT do: one foreign lap fits at 97.1 %.
+#     foreign loop. Note 0.95 would NOT do: a PIECE of a foreign lap fits at 97.1 %, because a
+#     partial loop can be pressed onto most of this one. A whole foreign lap sits far lower, but
+#     a piece is what the fit is handed whenever a start line cuts laps short.
 #   RMS 3.0 m — 2.1x the worst real lap and 1.7x under the best foreign one (their geometric
 #     midpoint is 2.72 m). Absolute metres are the right unit precisely BECAUSE this file
 #     stores a single 210 m circuit: any loop the donor may legitimately serve is that circuit

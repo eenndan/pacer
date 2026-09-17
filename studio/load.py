@@ -149,21 +149,50 @@ def _band_lap_count(laps) -> int:
     return len(_band_lap_ids(laps))
 
 
+def _counted_driving(laps) -> tuple[int, float]:
+    """The band laps a segmentation counts, and the seconds of driving they add up to."""
+    ids = _band_lap_ids(laps)
+    return len(ids), float(sum(laps.lap_time(i) for i in ids))
+
+
 def _fit_start_line(laps, base):
-    """Choose the start/finish line for a known track: prefer the exact track line; if a wider
-    line (`_widen` scales about the midpoint) recovers more band-laps a short segment missed,
-    take the smallest such factor. Capped below where the longer line over-segments. Sets
-    `laps.sectors`; returns the chosen Segment."""
+    """Choose the start/finish line: prefer the given line (a known track's, or the unknown-track
+    heuristic's); if a wider line (`_widen` scales about the midpoint) recovers band-laps the short
+    segment missed, take the smallest such factor. Sets `laps.sectors`; returns the chosen Segment.
+
+    A WIDER LINE HAS TO COUNT MORE LAPS AND MORE DRIVING, not only more laps. A wider line crosses
+    the trace everywhere the base line does, and possibly somewhere else too, so its pieces are the
+    base line's pieces cut again. Recovering a pass the base line stepped over cuts an EXCLUDED
+    double-length piece into two counted laps: the count rises and so does the driving time the
+    counted laps add up to. Reaching a SECOND stretch of track cuts every COUNTED lap in two, and
+    the band, which is centred on the median piece, then keeps whichever half is more numerous.
+    That is more "laps" as well, and a rule that asked only for more took it.
+
+    Measured on the owner's footage (T13). On SD_30_08, the unknown-track heuristic's 30 m line
+    counts 23 laps of 47.6 s / 740 m, 1109 s of driving, which is what the owner's own saved line
+    gives (23 laps, median 47.6 s). Its ×1.5 widening reaches a second stretch and cuts 50 pieces,
+    of which 25 of 13.3 s / 203 m are counted: 25 > 23, so it was taken, and every lap the app
+    showed was 27 % of one. Those 25 pieces add up to 340 s of driving. On both chapters it is 39
+    pieces against 37 laps, 518 s against 1777 s. No other recording the owner has takes a widened
+    line under either rule: D24 counts the same laps at every factor, and Sandown's wider lines
+    count fewer. The ±10 % distance band (#68) cannot see this, because it bands against the median
+    piece, and here the median piece is the fragment.
+
+    What this cannot see: a wider line that cuts every lap into two halves both inside the band
+    (the second crossing within a few percent of half a lap). That doubles the count without
+    dropping driving time, exactly as recovering a base line that missed most passes would, and
+    only the geometry of the pieces tells those two apart. Neither occurs on any recording here."""
     laps.sectors = pacer.Sectors(start_line=base, sector_lines=[])
     laps.update()
-    base_n = _band_lap_count(laps)
+    base_n, base_s = _counted_driving(laps)
     best_seg = base
     # Smallest-first: take the first factor that recovers a band lap the short segment missed.
     for factor in (1.15, 1.3, 1.5):
         seg = _widen(base, factor)
         laps.sectors = pacer.Sectors(start_line=seg, sector_lines=[])
         laps.update()
-        if _band_lap_count(laps) > base_n:
+        n, secs = _counted_driving(laps)
+        if n > base_n and secs >= base_s:
             best_seg = seg
             break
     laps.sectors = pacer.Sectors(start_line=best_seg, sector_lines=[])
