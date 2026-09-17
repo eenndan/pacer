@@ -49,6 +49,7 @@ from . import (
     chapters,
     data_quality,
     demo,
+    ingest,
     library,
     prefs,
     share_card,
@@ -617,8 +618,14 @@ class StudioWindow(QMainWindow):
         Files are first GROUPED into distinct recordings (chapters.group_into_recordings — same
         folder + GoPro recording id NNNN = one recording). Dropping the chapters of ONE recording
         loads it exactly as before; dropping SEVERAL unrelated recordings must NOT fold them onto one
-        clock (which fabricates bogus laps), so we open only the FIRST and say so — the user opens the
-        rest one at a time (a batch-import queue is a noted follow-up, not this)."""
+        clock (which fabricates bogus laps), so we open only the FIRST and say so — the user opens
+        the rest one at a time.
+
+        A BACKGROUND BATCH-IMPORT QUEUE WAS MEASURED AND REFUSED, and this line used to call it "a
+        noted follow-up": on the owner's four footage folders it would have imported one real
+        recording and four files with no telemetry, to save two drop gestures on rows the second
+        drop produces identically. The numbers are in `studio/docs/refused-2026-09.md` §7 — what
+        came out of measuring it is the offerable-recording count in `_open_recordings`."""
         self._set_dragover(False)   # the drag is over either way; never leave the zone lit
         paths = self._dropped_mp4s(event.mimeData())
         if not paths:
@@ -652,11 +659,31 @@ class StudioWindow(QMainWindow):
         # names it on the other one (QA D4-02): dropping GX010062 loads 66 laps across 3 chapters,
         # picking the same file in File ▸ Open… loads 22.
         to_load = chapters.order_chapters(first + chapters.discover_siblings(first[0]))
+        # COUNT ONLY WHAT THE APP COULD ACTUALLY OFFER TO OPEN. `group_into_recordings` parses
+        # filenames and nothing else, so every stray .MP4 beside the footage came back as its own
+        # "recording" — and the app's OWN exports live exactly there, because `_export_default`
+        # saves next to the recording as `<stem>…_overlay.mp4` (`export_controller.py:157-163`,
+        # `:756-757`). Measured on the owner's four footage folders: of the five recordings this
+        # message offered beyond the one it opened, FOUR were files with no telemetry that
+        # `Session.load` refuses in 0.00 s — two overlay clips Pacer rendered from the very
+        # recording it had just opened (`SD_30_08_26`), one more plus an 8.5 GB non-GoPro clip
+        # (`Sandown 3h 2026`). So on half the owner's folders this sentence over-counted his
+        # recordings and then sent him to open files the loader cannot open.
+        # The gate is the LOADER'S OWN, not a name heuristic — ~0.4-5.2 ms per candidate
+        # (`ingest.carries_telemetry`), so it is affordable right here on the drop. Only the
+        # recordings we are NOT opening are probed; the first one is opened either way and fails
+        # loudly on its own if it can't be read, exactly as before.
+        # TELEMETRY_UNKNOWN COUNTS AS OFFERABLE, deliberately: a file that could not be read says
+        # nothing about its contents (still copying, locked, a volume that went away), and dropping
+        # it from the count would silently under-report the user's own recordings. Only a positive
+        # "read it, no telemetry in it" is excluded.
+        offerable = [g for g in groups[1:]
+                     if ingest.recording_carries_telemetry(g) != ingest.TELEMETRY_ABSENT]
         drop_notice = None
-        if len(groups) > 1:
+        if offerable:
             drop_notice = (
-                f"Dropped {len(groups)} recordings — opened {chapters.recording_label(to_load)}. "
-                "Open the others one at a time.")
+                f"Dropped {len(offerable) + 1} recordings — "
+                f"opened {chapters.recording_label(to_load)}. Open the others one at a time.")
         self._load(to_load, drop_notice=drop_notice)
         if drop_notice:
             # Transient here so a FAILED load doesn't strand it; the post-load notice re-states it
