@@ -49,6 +49,18 @@ from ._signal import DASH, exclusion_summary, fmt_hms, fmt_time, lap_label
 # dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
 DROPOUT_FLAG = "gps-dropout"
 
+# laps.csv's C5 disclosure column: which of a lap's corner cells are interpolated rather than
+# measured. One name and one separator, so the writer, the HTML report, the legend under both and
+# the test that pins the column set cannot spell it three ways. A space, like `quality`'s, because
+# the file is comma-separated and a corner label never contains one.
+INTERPOLATED_COLUMN = "corners_interpolated"
+INTERPOLATED_SEP = " "
+INTERPOLATED_NOTE = (
+    "corners_interpolated lists the corners this lap did not match on track: their "
+    "*_time_s and *_apex_* cells are interpolated between the neighbouring matches, a median "
+    "0.22 s off an independently timed crossing against 0.004 s for a matched one. Every value is "
+    "still written — the column says which ones the app's own corner tables leave out.")
+
 # laps.csv trailer (the session-summary footer rows mirroring the lap table's footer below
 # the table): a labeled section AFTER the lap rows, separated by one blank row, led by its own
 # `summary,time_s,over_laps,note` mini-header so the file stays cleanly parseable (split on the
@@ -167,6 +179,20 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
       quality                                   the row's QUALITY MARKERS, space-separated
                                                 Analysis Function codes (`data_quality.lap_marks`)
                                                 — "" for a row with nothing to disclose
+      corners_interpolated                      the corner labels whose window this lap did NOT
+                                                match on track (`INTERPOLATED_SEP`-separated) —
+                                                "" when every corner was measured
+
+    `corners_interpolated` IS THE FILE'S HALF OF THE ONE RULE (C5), AND IT KEEPS EVERY ROW. Since
+    C4 the app's own corner surfaces count only cells matched on track at both edges: an
+    interpolated window sits a median 0.22 s off an independent line-crossing time against
+    0.004 s for a matched one (`CornerModel.lap_corner_resolved`). The CSV is an EXTERNAL FORMAT
+    and a reader may be diffing this week's file against last week's, so nothing is dropped and no
+    cell is blanked — the `C*_time_s` and `C*_apex_*` columns still carry every value they carried
+    before, and this column says which of them are a guess between neighbouring matches. A reader
+    that wants the app's numbers filters on it; a reader that wants the raw dump ignores it.
+    Measured on the owner's D24 recordings: 34 of the 0060 pair's 456 exported cells are
+    interpolated (7.5 %, over 16 of its 38 laps) and 0 of 0062's 780.
 
     THE `quality` COLUMN IS APPENDED, AND `flag` IS UNTOUCHED. `flag` is the file's oldest
     machine contract and a consumer testing `flag == DROPOUT_FLAG` keeps working; widening it
@@ -194,11 +220,14 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
 
     sfx, speed = _speed_column(unit)
 
+    resolved_of = getattr(session.corners, "lap_corner_resolved", None)
+
     headers = ["lap", "time_s", "dist_m", f"entry_{sfx}", "flag"]
     headers += [f"S{i + 1}_s" for i in range(n_splits)]
     for c in corner_list:
         headers += [f"{c.label}_time_s", f"{c.label}_apex_{sfx}"]
     headers.append("quality")
+    headers.append(INTERPOLATED_COLUMN)
 
     rows: list[tuple[int, list[str]]] = []
     for r in rows_meta:
@@ -216,8 +245,26 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
             cells += [_f3(s.time), _f3(speed(s.apex_speed))] if s is not None else ["", ""]
         # `dropout_ids` is passed in so the per-lap read does not re-fetch the set per row.
         cells.append(" ".join(data_quality.lap_marks(session, lap_id, dropout_ids)))
+        cells.append(interpolated_corners(corner_list, resolved_of, lap_id))
         rows.append((lap_id, cells))
     return headers, rows
+
+
+def interpolated_corners(corner_list, resolved_of, lap_id: int) -> str:
+    """The `corners_interpolated` cell: the labels of the corners whose window this lap did not
+    match on track at both edges, joined by `INTERPOLATED_SEP`, or "" when every one was matched.
+
+    `resolved_of` is `CornerModel.lap_corner_resolved` (or None). getattr-guarded at the call site
+    for the same reason every other optional accessor here is: the writers are driven by duck-typed
+    Session doubles in the suite and by cross-recording references in the app, and a model with no
+    warp must degrade to "nothing to disclose", never to a failed export. A corner the accessor has
+    no flag for is left unmarked — this column's job is to name what is KNOWN to be interpolated,
+    and a missing flag is not that."""
+    if resolved_of is None:
+        return ""
+    flags = resolved_of(lap_id)
+    return INTERPOLATED_SEP.join(c.label for k, c in enumerate(corner_list)
+                                 if k < len(flags) and not flags[k])
 
 
 def quality_key(headers, rows) -> list[tuple[str, str]]:
@@ -235,6 +282,14 @@ def quality_key(headers, rows) -> list[tuple[str, str]]:
     col = list(headers).index("quality")
     present = {m for _lap_id, cells in rows if len(cells) > col for m in cells[col].split()}
     return data_quality.mark_key(present)
+
+
+def any_interpolated(headers, rows) -> bool:
+    """Does this file actually carry an interpolated corner cell? Located BY NAME for the reason
+    `quality_key` gives, and read off the ROWS so the legend can never appear on a file that has
+    nothing to explain (or be missing from one that does)."""
+    col = list(headers).index(INTERPOLATED_COLUMN)
+    return any(cells[col] for _lap_id, cells in rows if len(cells) > col)
 
 
 def _ideal_sample(session):
@@ -322,11 +377,18 @@ def write_laps_csv(path: str, session) -> None:
     extra LABELLED ROWS inside the existing 4-wide trailer rather than a second blank-separated
     section, so "split on the blank row" still yields exactly two parts and the file stays
     rectangular. Nothing is emitted for a clean session: a key listing four marks on a file that
-    carries none teaches the reader that the marks are decoration."""
+    carries none teaches the reader that the marks are decoration.
+
+    AND, BY THE SAME RULE, THE `corners_interpolated` KEY (C5). The column is a new one in this
+    file's column set — say so wherever this change is announced — and it names corners whose
+    cells the app's own tables do not count, so a file that carries one carries a trailer row
+    saying what that means. Like the quality key it is derived from the ROWS: a session that
+    matched every corner emits nothing."""
     headers, rows = laps_table(session)
     summary = laps_summary(session)
     key = quality_key(headers, rows)
     broke = data_quality.break_in_series(session)
+    interpolated = any_interpolated(headers, rows)
 
     def body(f):
         w = csv.writer(f)
@@ -338,6 +400,8 @@ def write_laps_csv(path: str, session) -> None:
             w.writerow([f"{SUMMARY_MARKER}: {row.label}", row.value, row.over_laps, row.note])
         for code, meaning in key:
             w.writerow([f"{SUMMARY_MARKER}: quality {code}", "", "", meaning])
+        if interpolated:
+            w.writerow([f"{SUMMARY_MARKER}: {INTERPOLATED_COLUMN}", "", "", INTERPOLATED_NOTE])
         if broke:
             w.writerow([f"{SUMMARY_MARKER}: break in series", "", "", broke])
 
@@ -784,6 +848,10 @@ def write_report_html(path: str, session, source_label: str = "",
                    "(UK Government Analysis Function symbols): "
                    + "; ".join(f"<b>{esc(code)}</b> {esc(meaning)}" for code, meaning in key)
                    + ".</p>")
+    # …and the same for the C5 disclosure column, for the same reason and on the same terms: a
+    # reader of the page has no other way to know that a corner cell beside it is a guess.
+    if any_interpolated(headers, rows):
+        out.append(f'<p class="note">{esc(INTERPOLATED_NOTE)}</p>')
     broke = data_quality.break_in_series(session)
     if broke:  # WHICH break — the [b] code alone says only that there is one
         out.append(f'<p class="note">Break in series: {esc(broke)}.</p>')

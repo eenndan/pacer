@@ -131,15 +131,19 @@ def report_coaching(s, ids, cells) -> None:
     # rule since #331 while `Session.corner_consistency` (coaching's only reader) counts every cell.
     from studio import consistency
 
-    sig_all = consistency.corner_spreads([c.cid for c in corner_list], [list(r) for r in times])
-    rep = s.corner_report()
-    print("   σ: corner_consistency (every cell) vs the CORNERS table (the rule)")
-    for j, c in enumerate(corner_list):
-        mine = next(sp.sigma for sp in sig_all if sp.cid == c.cid)
-        theirs = next((r.sigma_s for r in rep if r.cid == c.cid), None)
-        flag = "" if theirs is None or abs(mine - theirs) < 5e-4 else "   <-- disagree"
-        print(f"   C{c.cid:<4} coaching σ {mine:.3f}  CORNERS σ "
-              f"{'—' if theirs is None else f'{theirs:.3f}'}{flag}")
+    every = consistency.corner_spreads([c.cid for c in corner_list], [list(r) for r in times])
+    shipped = {sp.cid: sp.sigma for sp in s.corner_consistency()}
+    rep = {r.cid: r.sigma_s for r in s.corner_report()}
+    print("   σ: what coaching reads (Session.corner_consistency) against the CORNERS table's "
+          "own σ, and against counting every cell")
+    for c in corner_list:
+        mine, theirs = shipped.get(c.cid), rep.get(c.cid)
+        raw = next(sp.sigma for sp in every if sp.cid == c.cid)
+        flag = ("   <-- DISAGREE" if mine is not None and theirs is not None
+                and abs(mine - theirs) >= 5e-4 else "")
+        print(f"   C{c.cid:<4} coaching σ {mine if mine is None else f'{mine:.3f}'}  "
+              f"CORNERS σ {theirs if theirs is None else f'{theirs:.3f}'}  "
+              f"(every cell {raw:.3f}){flag}")
 
 
 # ─── 3. the ideal lap ────────────────────────────────────────────────────────────────────────────
@@ -201,13 +205,17 @@ def report_braking(s, ids, cells) -> None:
             per_cid_all[bp.cid].append(float(bp.metres_later))
             if res_by_lap[i][index[bp.cid]]:
                 per_cid_rule[bp.cid].append(float(bp.metres_later))
-    print("4. BRAKING — the per-corner habit (median m later), every cell vs the rule")
-    print("   corner  laps_all  laps_rule   m_all   m_rule      Δm")
+    shipped = {h.cid: h for h in s.coaching_brake_points().values()}
+    print("4. BRAKING — the per-corner habit (median m later), every cell vs the rule, "
+          "and what the app now prints")
+    print("   corner  laps_all  laps_rule   m_all   m_rule      Δm   shipped (laps)")
     for c in corner_list:
         a, b = per_cid_all[c.cid], per_cid_rule[c.cid]
         ma, mb = _median(a), _median(b)
+        h = shipped.get(c.cid)
         print(f"   C{c.cid:<4}  {len(a):>8}  {len(b):>9}  {ma:>+6.1f}  {mb:>+6.1f}  "
-              f"{mb - ma:>+6.1f}")
+              f"{mb - ma:>+6.1f}   "
+              f"{'—' if h is None else f'{float(h.metres_later):+6.1f} ({int(h.n_laps)})'}")
 
 
 # ─── 5. coasting ─────────────────────────────────────────────────────────────────────────────────
