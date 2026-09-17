@@ -3458,10 +3458,29 @@ class Session:
         clock it was built on (`load` takes it on the raw, pre-trim naive times). Empty (never
         None) on a Session built without a load.
 
-        The scrubber and every lap window are on the TELEMETRY axis, so `lap_quality` below
-        indexes these cells with a time from the other clock. Measured, that is a note and not a
-        defect: the two axes differ by at most 0.095 s (0060) / 0.166 s (0062) against a 1.00 s
-        cell."""
+        The scrubber and every lap window are on the TELEMETRY axis, so every consumer indexes
+        these cells with a time from the other clock. WHETHER THAT MATTERS DEPENDS ON WHAT THE
+        CONSUMER DOES WITH THE WINDOW, and it is measured per kept fix against the naive stamps the
+        strip actually binned (`studio/dev/probes/p5_clock_crossing_scale.py`, both D24 recordings):
+
+          * the label is off by the two clocks' ramp plus payload packing, −0.01…+0.14 s (0060) and
+            +0.01…+0.20 s (0062), 1st-99th percentile, against a 1.00 s cell;
+          * a window changes class only when an edge lands that close to a class change, so how
+            OFTEN it happens does not depend on the window's length: ~0.1 % of windows on 0060 at
+            every length from 0.1 s to 20 s (0.03 % at 70 s), and none on 0062;
+          * what the length decides is how much of a consumer's ANSWER that is. Of the windows
+            graded below good on 0060, the label gets 0.07 % wrong at a lap (70 s), 0.5 % at 20 s,
+            1.1 % at 10 s, 2.6 % at 3 s and 4.6 % at 1 s.
+
+        SO: at lap length it is a note, and `lap_quality` must stay as it is. A consumer that ACTS
+        on the class of a window shorter than ~10 s — gates, counts or abstains on it — crosses
+        `media_clock.without_gps_lag().to_media` first: the rate fit alone, which cuts that share
+        ~3x (1.4 % at 1 s, 0.3 % at 10 s); what it leaves is payload packing no map removes. NEVER
+        `media_time`. Since #301 it also carries the GPS lag, which is a correction for the
+        picture and not part of this axis (a fix's telemetry and naive stamps carry it equally),
+        and it is worse than not converting at every length — 31 % of 1 s verdicts wrong, 7.8 % at
+        10 s. A consumer that only PAINTS the class moves by a pixel or two rather than by a
+        verdict; see `video_view._QualityStrip`, the one short-window consumer the app has."""
         return getattr(self, "_quality_timeline", None) or data_quality.empty_timeline()
 
     def lap_quality(self, lap_id: int) -> int | None:
@@ -3479,7 +3498,13 @@ class Session:
         and 0 of 65 (0062); the first cell index moves for 0 and 4 of them, never far enough to
         reach a different verdict, because the worst shift is 0.095 / 0.166 s against a 1.00 s
         cell. Converting here would therefore buy nothing and would put this accessor on a clock
-        none of its neighbours use."""
+        none of its neighbours use. Re-measured against the fixes' own naive stamps, it is still 0
+        of 38 and 0 of 65 under every map (`p5_clock_crossing_scale`).
+
+        THAT VERDICT IS A LAP'S, NOT THE CROSSING'S. It holds because a lap is ~70 s: the same
+        crossing decides 1.1 % of below-good verdicts over a 10 s window and 4.6 % over a 1 s one.
+        Do not copy this accessor's shape into a shorter window — see `quality_timeline` above for
+        the rule, and cross `media_clock.without_gps_lag()` (never `media_time`) when you do."""
         tl = self.quality_timeline
         if not len(tl):
             return None
