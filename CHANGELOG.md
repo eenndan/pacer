@@ -222,6 +222,22 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **Coaching stops crowning one corner when two of them are the same number.** The plan's second
+  line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
+  of the owner's recordings, that crown is not something the data supports: the top two corners are
+  0.086 s and **0.005 s** apart, a paired permutation test over the lap-by-lap corner times cannot
+  tell them apart (p = 0.125 and p = 0.837), and resampling the laps hands the crown to the
+  runner-up in 14 % and **46 %** of draws. Split one session into its odd and its even laps and the
+  crown changes on both recordings. The line now reads "Start with C3 or C12: +0.15 s and +0.14 s
+  sit closer together than your own lap-to-lap spread, so either is the same call." A lead the
+  measurement *does* separate is unchanged, word for word — and the ranking underneath is unchanged
+  too: 17 of its 30 ranked corner pairs do separate.
+  - **What was refused on the way, and why:** a seconds interval beside each recommendation. The
+    three things such an interval could mean — the corner's lap-to-lap spread, the uncertainty on
+    its median, and the benefit measured on the laps that already did the recommended thing —
+    disagree by 4× on the same corner, and the third one's **sign flips** between recordings and is
+    confounded by lap pace. The numbers are in `studio/docs/refused-2026-09.md` §3.
+
 - **Every lap's corners are now measured in the same frame — which moves the ideal lap and
   reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not
   by assuming the lap is a uniformly stretched copy of the best one. That spatial match used to run
