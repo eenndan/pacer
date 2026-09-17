@@ -582,7 +582,7 @@ class BeatRow:
         return f"<{self.name}{' †' if self.saved else ''} n {self.n} r {self.r:+} ρ {self.rho:+} p {self.p}>"
 
 
-_BEAT_LINE = re.compile(r"^\s+\| (D24 1 ch|D24 3 ch|Sandown ch 1|Sandown 3 ch|SD_30_08)( †)?\s*\| (\d+)\s*\| "
+_BEAT_LINE = re.compile(r"^\s+\| (D24 1 ch|D24 3 ch|Sandown ch 1|Sandown 3 ch|SD_30_08)( †)?\s*\|\s+(\d+)\s*\| "
                         r"([−+-]\d\.\d{3}) \| ([−+-]\d\.\d{3})\s*\| (\d\.\d{3}) \|\s*$")
 # The beat-rate table's names for the lap sets the floor table names in full.
 _BEAT_SETS = {"D24 1 ch": "D24 1 chapter", "D24 3 ch": "D24 3 chapters", "Sandown ch 1": "Sandown chapter 1",
