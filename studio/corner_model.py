@@ -782,8 +782,13 @@ class CornerModel:
         D24 recordings (full table in `stats.CornerMatrix`): resolved cells agree with it to a
         median 0.004 s (max 0.024 s); cells with an interpolated edge disagree by a median 0.219 s
         (max 0.886 s) on the 0060 pair, where 236 of its 456 cells are unresolved (4 of 780 on 0062).
-        Descriptive only for every surface except the CORNERS BY LAP grid, which is the one that
-        compares one lap's cell against the others."""
+        THE ONE RULE for which cells a cross-lap corner statistic may count: the CORNERS BY LAP grid
+        marks by it, and since C4 the CORNERS table (`Session.corner_report`), its Best's
+        provenance, the Corners page ★ (`corner_session_bests`) and the phase split
+        (`Session.phase_report`) count by it too — and the STRAIGHTS table by the same rule one
+        level finer (`lap_edge_resolved`). NOT YET: coaching (`Session.coaching_opportunities`, the
+        σ it reads from `Session.corner_consistency`), the BRAKING table's brake points, and the
+        ideal lap (`segment_bests`) still count every cell."""
         basis = self.basis()
         if basis is None or not basis[0] or self._best_lap_id() is None:
             return []
@@ -799,11 +804,54 @@ class CornerModel:
         on_knot = np.isin(edges, knots)
         return [bool(on_knot[2 * i] and on_knot[2 * i + 1]) for i in range(len(corner_list))]
 
-    def corner_session_bests(self) -> list[float]:
+    def lap_edge_resolved(self, lap_id: int) -> list[bool]:
+        """Per corner EDGE, interleaved [C1 enter, C1 exit, C2 enter, …] (aligned to the corner
+        partition): was it read off a direct spatial match — a knot of this lap's warp — rather
+        than interpolated? The same read of the same memoized warp as `lap_corner_resolved`, one
+        level finer, and `lap_corner_resolved(lap)[k]` is exactly `edges[2k] and edges[2k + 1]`.
+        [] where that is []; all False without a warp.
+
+        WHY AN EDGE AND NOT ONLY A CORNER. A time, an apex or a grip figure is measured OVER a
+        window, so it needs both edges. A SPEED is read AT one edge — the Corners page's Entry and
+        Exit columns, and the STRAIGHTS table's trap speed (the next corner's entry) and exit Δ
+        (the previous corner's exit) — so it needs only that one. Measured against the Doppler speed
+        at an independent line crossing on each edge, over the D24 0060 pair's 38 laps (C4):
+
+            entry speed   matched 272   |Δ| median 0.014 km/h, p90 0.10, max 0.29
+                          interpolated 155   median 1.57 km/h, p90 4.70, max 11.5
+            exit speed    matched 297   |Δ| median 0.015 km/h, p90 0.09, max 0.66
+                          interpolated 156   median 1.10 km/h, p90 4.42, max 7.1
+
+        (0062: 1,447 matched edges at a median 0.004 km/h; 4 interpolated.) Holding a matched entry
+        to its interpolated exit would throw away a speed that is good to 0.014 km/h, so the rule
+        is one rule applied at the granularity each quantity is read at."""
+        basis = self.basis()
+        if basis is None or not basis[0] or self._best_lap_id() is None:
+            return []
+        corner_list, _total_ref = basis
+        dist, _speed_kmh, _elapsed = self._lap_arrays(lap_id)
+        if len(dist) < 2 or float(dist[-1]) <= 0:
+            return []
+        align = self.lap_alignment(lap_id, float(dist[-1]))
+        if align is None:
+            return [False] * (2 * len(corner_list))
+        edges = np.asarray([b for c in corner_list for b in (float(c.enter), float(c.exit))], float)
+        return [bool(x) for x in np.isin(edges, align[0])]
+
+    def corner_session_bests(self) -> list[float | None]:
         """Per-corner session-best time-in-corner over the CLEAN laps (`_clean_lap_ids`) — the
         purple-cell convention, and now actually matching the per-sector session bests its own
         docstring has always claimed parity with. [] when no corners. Cached; cleared on
         re-segment.
+
+        C4: only cells matched on track at both edges (`lap_corner_resolved`) can be the best — the
+        rule the Stats page's CORNERS table and CORNERS BY LAP grid count by. An interpolated window
+        is a median 0.22 s off an independent crossing time on the D24 0060 pair (0.004 s for a
+        matched one), and a MINIMUM is the statistic that error favours: counting every cell, the
+        Corners page ★ sat on an interpolated cell in C2, C6 and C8, whose crossing times were 0.53,
+        0.41 and 0.29 s slower than the starred time. None for a corner no clean lap matched: no
+        cell there can be starred, rather than the least imprecise one being starred. (The best lap
+        is matched against its own line, and resolves every corner on both D24 recordings.)
 
         §4.1: this ran on the raw valid set while `session_best_splits`, `best_lap_id`,
         `best_rolling_lap` and the ideal composite all excluded GPS-dropout laps. A dropout lap's
@@ -813,12 +861,15 @@ class CornerModel:
         wrong until a recording with one arrived, and then only one column of it."""
         if self._bests_cache is not _UNSET:
             return self._bests_cache
-        per_lap = [self.lap_corner_stats(i) for i in self._clean_lap_ids()]
-        per_lap = [st for st in per_lap if st]
+        per_lap = [(self.lap_corner_stats(i), self.lap_corner_resolved(i))
+                   for i in self._clean_lap_ids()]
+        per_lap = [(st, res) for st, res in per_lap if st]
         n = len(self.corner_list())
-        self._bests_cache = [
-            min(st[i].time for st in per_lap) for i in range(n)
-        ] if per_lap and n else []
+        bests: list[float | None] = []
+        for i in range(n):
+            counted = [st[i].time for st, res in per_lap if res[i]]
+            bests.append(min(counted) if counted else None)
+        self._bests_cache = bests if per_lap and n else []
         return self._bests_cache
 
     # ------------------------------------------------------------------ ideal lap (D1)

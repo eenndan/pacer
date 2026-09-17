@@ -210,6 +210,88 @@ def test_a_corner_time_printed_as_the_best_is_marked_as_the_best():
     print("test_a_corner_time_printed_as_the_best_is_marked_as_the_best OK")
 
 
+class _FakeUnmatchedCornerSession(_FakeCornerSession):
+    """C4: the same one-corner laps, with lap 2 — the quickest double, 2.7461 — and a planted lap 4,
+    quicker still at print (2.60), both INTERPOLATED on track: lap 2 at its entry, lap 4 at its
+    exit. The session best counts matched corners only (CornerModel.corner_session_bests), so it
+    is lap 0's 2.7478."""
+
+    TIMES = {**_CORNER_TIMES, 4: 2.60}
+    EDGES = {2: [False, True], 4: [True, False]}      # (entry, exit); every other lap matched
+
+    def __init__(self):
+        super().__init__()
+        times, edges = self.TIMES, self.EDGES
+
+        def stats_for(lap):
+            t = times.get(lap)
+            if t is None:
+                return []
+            return [SimpleNamespace(time=t, delta=t - 2.7478, apex_speed=44.9,
+                                    apex_speed_delta=0.4, entry_speed=45.7, exit_speed=47.9)]
+
+        matched = [t for lap, t in times.items() if lap not in edges]
+        self.corners = SimpleNamespace(
+            corner_list=lambda: self._cl,
+            lap_corner_stats=stats_for,
+            lap_edge_resolved=lambda lap: edges.get(lap, [True, True]),
+            lap_corner_resolved=lambda lap: [all(edges.get(lap, [True, True]))],
+            corner_session_bests=lambda: [min(matched)])
+
+    def lap_count(self):
+        return len(self.TIMES)
+
+
+def test_an_interpolated_corner_is_never_starred_and_reads_as_provisional():
+    """The ★ says no matched lap took this corner quicker, and a best that counts only corners
+    matched on track makes that false for an interpolated time that prints at or under it — the
+    very error a minimum over interpolated windows selects for (on D24 0060 the starred C2, C6 and
+    C8 times were 0.53, 0.41 and 0.29 s quicker than those laps' own line crossings). So an
+    interpolated corner is never starred, and each value read off an interpolated edge is shown in
+    the provisional tier with the reason on hover — the treatment the Stats page's CORNERS BY LAP
+    grid gives the cell — at the granularity it is READ at: Time, Δbest, Apex, Δapex and Grip span
+    the window and need both edges; Entry and Exit are read at one edge each."""
+    from studio.lap_table import PROVISIONAL_COLOR, UNMATCHED_CORNER_TIP, UNMATCHED_EDGE_TIP
+
+    window_cols, entry_col, exit_col = (1, 2, 3, 4, 7), 5, 6
+    from studio.units import speed_label
+
+    sess = _FakeUnmatchedCornerSession()
+    table = CornerTable(sess)
+    table.resize(700, 320)
+    table.show()
+    unit = speed_label(table._speed_unit)
+    marked, muted = [], {}
+
+    def is_muted(item):
+        return item.font().italic() and item.foreground().color() == PROVISIONAL_COLOR
+
+    for lap in sorted(sess.TIMES):
+        table.set_lap(lap)
+        _APP.processEvents()
+        if table.table.item(0, 1).text().endswith(BEST_SECTOR_MARK.strip()):
+            marked.append(lap)
+        muted[lap] = {c for c in range(1, table.table.columnCount())
+                      if is_muted(table.table.item(0, c))}
+        for c in muted[lap]:
+            tip = table.table.item(0, c).toolTip()
+            if c == entry_col:
+                assert tip == UNMATCHED_EDGE_TIP.format(label="C1", edge="entry", unit=unit), tip
+            elif c == exit_col:
+                assert tip == UNMATCHED_EDGE_TIP.format(label="C1", edge="exit", unit=unit), tip
+            else:
+                assert tip == UNMATCHED_CORNER_TIP.format(label="C1"), tip
+    # Both interpolated laps print at or under the best (the fixture must make that true)...
+    assert all(round(sess.TIMES[lap], 2) <= 2.75 for lap in sess.EDGES)
+    # ...and neither is starred, while the matched laps that tie at print still are.
+    assert marked == [0, 1], f"starred {marked}; interpolated laps are {sorted(sess.EDGES)}"
+    assert muted[2] == {*window_cols, entry_col}, ("lap 2: entry interpolated", muted[2])
+    assert muted[4] == {*window_cols, exit_col}, ("lap 4: exit interpolated", muted[4])
+    assert all(not muted[lap] for lap in sess.TIMES if lap not in sess.EDGES), muted
+    table.hide()
+    print("test_an_interpolated_corner_is_never_starred_and_reads_as_provisional OK")
+
+
 class _FakeExcludedSession:
     """A session whose start/finish line mis-segments: some laps are valid, some are banded out,
     and some crossings never cleared the coarse gate at all. Modelled on the D24 0060 pair with

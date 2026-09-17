@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import data_quality
-from ._signal import MAX_DOP, MIN_FIX, lap_label
+from ._signal import MAX_DOP, MIN_FIX, lap_label, plural
 
 # The two axes a window can be stated on. A lap time is bounded by two INSTANTS; a sector split
 # and a corner are bounded by two ODOMETER POSITIONS and only become times after an interpolation.
@@ -72,7 +72,9 @@ METHODS: dict[str, str] = {
         "A corner best is the quickest time any clean lap spent inside that corner. One lap's "
         "time in the corner is the elapsed time at the corner's exit boundary minus the elapsed "
         "time at its entry boundary, interpolated on that lap's (odometer, elapsed) curve; the "
-        "session best is the minimum of those over the clean laps."
+        "session best is the minimum of those over the clean laps whose entry and exit were both "
+        "matched to the best lap's line on track. A lap where either was interpolated between "
+        "its neighbours instead is left out: its window can be tenths of a second out."
     ),
 }
 
@@ -655,26 +657,39 @@ def sector_split(*, lap_id: int, sector: int, of: int, value: float, fmt,
 
 def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
                 fixes: LapFixes, d0: float, d1: float, per_lap: tuple[tuple[int, float], ...],
-                clock: str) -> Provenance:
+                clock: str, left_out: int = 0) -> Provenance:
     """Provenance for one corner's session-best time.
 
     Two tables, because the number is two operations deep: the raw fixes of the lap that WON the
     corner, and the per-lap times the minimum was taken over. A panel that showed only the first
-    would hide the comparison; only the second, only the winner's data."""
+    would hide the comparison; only the second, only the winner's data.
+
+    `per_lap` is the population the Best counts — laps matched on track through this corner — and
+    `left_out` how many clean laps were not, because their window was interpolated. They are
+    counted rather than listed: an interpolated time can be quicker than the best, and a row
+    reading faster than the number it explains would contradict the panel's own heading."""
     rows = fixes.window(d0, d1, pad=1)
     t_at = elapsed_at([d0, d1], fixes.dists, fixes.elapsed)
     sub = elapsed_at([d0, d1], fixes.dists[rows], fixes.elapsed[rows])
     roles = [BRACKET if (fixes.dists[i] < d0 or fixes.dists[i] > d1) else RAW for i in rows]
     inside = fixes.window(d0, d1)
     ranked = sorted(per_lap, key=lambda lt: lt[1])
+    matched = " matched on track" if left_out else ""
+    note = ("Clean laps only: the valid laps with no GPS dropout. A dropout lap's distance is "
+            "reconstructed from its speed trace, so its corner boundaries — and the time "
+            "between them — are exactly what must not be allowed to win a corner.")
+    if left_out:
+        note += (f" {plural(left_out, 'more clean lap')} left out: {label}'s entry or exit could "
+                 f"not be matched to the best lap's line on track there, so its window was "
+                 f"interpolated between the neighbouring corners and is not precise enough to "
+                 f"compare.")
     population = Table(
-        caption=f"Time in {label} on each of the {len(per_lap)} clean laps, quickest first",
+        caption=f"Time in {label} on each of the {len(per_lap)} clean laps{matched}, quickest "
+                f"first",
         columns=("lap", "time in corner (s)", "vs best (s)"),
         formats=("{}", "{:.4f}", "{:+.4f}"),
         rows=tuple((lap_label(lap), t, t - value) for lap, t in ranked),
-        note=("Clean laps only: the valid laps with no GPS dropout. A dropout lap's distance is "
-              "reconstructed from its speed trace, so its corner boundaries — and the time "
-              "between them — are exactly what must not be allowed to win a corner."),
+        note=note,
     )
     rebuilt = float(sub[1] - sub[0])
     return Provenance(
@@ -692,7 +707,9 @@ def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
             population,
         ),
         steps=(
-            Step("laps compared", f"{len(per_lap)} clean laps"),
+            Step("laps compared",
+                 f"{len(per_lap)} clean laps" + (f" ({left_out} interpolated, left out)"
+                                                 if left_out else "")),
             Step("quickest", f"lap {lap_label(donor_lap)}"),
             Step("corner entry", f"d = {d0:.4f} m  ->  elapsed {t_at[0]:.9f} s"),
             Step("corner exit", f"d = {d1:.4f} m  ->  elapsed {t_at[1]:.9f} s"),
