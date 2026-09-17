@@ -725,6 +725,155 @@ def test_reference_session_retained_and_cleared():
     print("test_reference_session_retained_and_cleared OK")
 
 
+# ----------------------------------------------- F1: pane B may be pointed at any comparable lap
+def _multi_lap_reference():
+    """A primary + a reference recording holding THREE laps: the adopted best (5), a second
+    comparable lap (6), and a lap of a quite different LENGTH (7) that the comparability band must
+    refuse. Returns (primary, ref, lap_ids). The primary's median lap distance is stubbed so the
+    real `_lap_length_refusal` band runs (a bare Session's `laps` stub carries no distances)."""
+    p_times, p_dists = odometer(150, 0.40, 0.0, 900.0)
+    primary = make_session({2: (p_times, p_dists)}, best=2, valid=[2])
+    r5_t, r5_d = odometer(150, 0.40, 1000.0, 920.0)   # adopted best, comparable
+    r6_t, r6_d = odometer(150, 0.42, 2000.0, 910.0)   # another comparable lap, a different time
+    r7_t, r7_d = odometer(150, 0.40, 3000.0, 2000.0)  # 2.2x the median — NOT a comparable lap
+    ref = make_session({5: (r5_t, r5_d), 6: (r6_t, r6_d), 7: (r7_t, r7_d)},
+                       best=5, valid=[5, 6, 7])
+    windows = {5: (float(r5_t[0]), float(r5_t[-1])),
+               6: (float(r6_t[0]), float(r6_t[-1])),
+               7: (float(r7_t[0]), float(r7_t[-1]))}
+    ref.lap_window = lambda lid, _w=windows: _w.get(lid)
+    # Each reference lap gets its OWN loop, so an overlay taken for one lap is distinguishable from
+    # another's; the primary's fit loop is lap 5's, so lap 5 fits at scale 1 and is drawable.
+    loops = {5: loop_xy(), 6: loop_xy(cx=0.0, cy=0.0), 7: loop_xy(scale=40.0)}
+    ref.lap_trace_xy = lambda lid, _l=loops: (_l[lid][:, 0], _l[lid][:, 1])
+    primary._reference_fit_loop = lambda: loop_xy()
+    primary._median_valid_lap_distance = lambda: 900.0
+    assert primary.set_reference_session(ref, source_label="friend") is None
+    return primary, ref, (5, 6, 7)
+
+
+def test_reference_lap_choices_offers_every_comparable_lap_not_just_the_adopted_one():
+    """F1. Pane B used to be locked to the reference's best lap — `reference_lap_id()` was the only
+    lap the picker could list. The session must now offer every VALID reference lap that clears the
+    SAME ±10 % comparability band adoption applied, and must refuse the one that does not: a lap of
+    a different length gets stretched over this session's by the normalized-distance alignment, and
+    the length difference is reported as time gained.
+
+    Measured on the owner's own recordings, the band refuses nothing real (65/65 laps of 0062 are
+    comparable with 0060, 38/38 the other way) — lap 7 here is the synthetic case that proves the
+    guard still bites."""
+    primary, _ref, (adopted, comparable, wrong_length) = _multi_lap_reference()
+    choices = primary.reference_lap_choices()
+    assert adopted in choices, "the picker must offer the lap the Δ baseline is built from"
+    assert comparable in choices, f"a comparable reference lap must be offered: {choices}"
+    assert wrong_length not in choices, (
+        f"a reference lap 2.2x the session's median length must not be offered: {choices}")
+    assert choices == [adopted, comparable], choices
+    # The adopted lap — the Δ BASELINE — is unmoved by the existence of a picker.
+    assert primary.reference_lap_id() == adopted
+    # Dormant once the reference is cleared: nothing to pick from.
+    primary.clear_reference()
+    assert primary.reference_lap_choices() == []
+    print(f"test_reference_lap_choices OK: offers {choices} of [5, 6, 7] "
+          f"(lap 7 refused on length), baseline still lap {adopted}")
+
+
+def test_a_picked_reference_lap_moves_pane_bs_delta_and_ghost_but_never_the_baseline():
+    """F1's trust contract, which the backlog left as an open decision: a pane-B pick moves what
+    PANE B reports and nothing else.
+
+    * `reference_delta_vs_lap` / `reference_overlay_xy` / `reference_overlay_index_at_progress`
+      answer for the lap they are ASKED about, so pane B's badge and the map ghost describe the lap
+      on screen rather than a lap the user cannot see;
+    * with no lap named they answer for the ADOPTED lap exactly as before — that default is what
+      keeps every pre-F1 caller (the map's faint ring, the golden dump) byte-identical;
+    * `reference_lap_id()` — the Δ charts', the lap table's and the sector guides' baseline — does
+      not move at all.
+    """
+    primary, ref, (adopted, other, _wrong) = _multi_lap_reference()
+    w_adopted = ref.lap_window(adopted)
+    w_other = ref.lap_window(other)
+
+    # 1. The Δ badge answers for the lap it is asked about. The two laps sit on DIFFERENT stretches
+    #    of the reference clock, so each is asked at its own lap's midpoint.
+    t_adopted = 0.5 * (w_adopted[0] + w_adopted[1])
+    t_other = 0.5 * (w_other[0] + w_other[1])
+    d_default = primary.reference_delta_vs_lap(2, t_adopted)
+    d_adopted = primary.reference_delta_vs_lap(2, t_adopted, adopted)
+    d_other = primary.reference_delta_vs_lap(2, t_other, other)
+    assert d_default == d_adopted, "no lap named must mean the adopted lap, exactly"
+    assert d_other is not None and abs(d_other - d_adopted) > 1e-9, (
+        f"a picked lap must produce its OWN Δ, got {d_other} vs {d_adopted}")
+    # A lap asked at a time OUTSIDE its own window still clamps inside it (the from-0 rebase), so a
+    # picked lap can never read as the finish just because the other lap's clock is elsewhere.
+    assert primary.reference_delta_vs_lap(2, w_other[0], other) is not None
+
+    # 2. The overlay ring follows the lap too — and the no-argument call, which is the ONLY call the
+    #    map makes, still returns the adopted lap's ring.
+    ring_default = primary.reference_overlay_xy()
+    ring_adopted = primary.reference_overlay_xy(adopted)
+    assert ring_default is ring_adopted, "the map's ring must still be the adopted lap's"
+    i_default = primary.reference_overlay_index_at_progress(t_adopted)
+    assert i_default == primary.reference_overlay_index_at_progress(t_adopted, adopted)
+    assert i_default is not None and 0 <= i_default < len(ring_default)
+
+    # 3. The baseline never moved.
+    assert primary.reference_lap_id() == adopted, "a pane-B pick must not re-adopt the reference"
+    assert primary.reference_lap_time() == primary._ref.total_time
+    print(f"test_a_picked_reference_lap OK: Δ adopted {d_adopted:+.4f}s vs picked {d_other:+.4f}s, "
+          f"baseline still lap {adopted}")
+
+
+def test_adopting_a_second_reference_drops_the_first_ones_per_lap_views():
+    """The memo is keyed by LAP ID alone, and lap ids are small integers every recording has. So a
+    cache that survived a reference swap would serve the FIRST recording's fitted racing line for the
+    SECOND recording's lap of the same number — a ghost riding a line from a recording that is no
+    longer loaded, which is precisely the class of silent wrongness the overlay's scale gate exists
+    to refuse.
+
+    `load_reference` adopts by calling `set_reference_session` DIRECTLY — it never passes through
+    `clear_reference` — so clearing on clear alone leaves the swap path uncovered. Found by reading
+    the diff, not by a failing feature test."""
+    primary, _ref, (_adopted, other, _wrong) = _multi_lap_reference()
+    primary._reference_view(other)          # build and cache a view for a picked lap
+    assert other in primary._reference_views, "precondition: the view really was cached"
+
+    # A DIFFERENT reference recording, same track, comparable lap length.
+    r9_t, r9_d = odometer(150, 0.40, 5000.0, 915.0)
+    ref2 = make_session({9: (r9_t, r9_d)}, best=9, valid=[9])
+    ref2.lap_window = lambda lid, _w=(float(r9_t[0]), float(r9_t[-1])): _w
+    loop2 = loop_xy()  # hoisted: a call in a default argument is a ruff B008
+    ref2.lap_trace_xy = lambda lid, _l=loop2: (_l[:, 0], _l[:, 1])
+    assert primary.set_reference_session(ref2, source_label="another friend") is None
+
+    assert primary._reference_views == {}, (
+        f"adopting a new reference kept the old one's views: {list(primary._reference_views)}")
+    assert primary.reference_lap_id() == 9, "the new reference's best lap is the new baseline"
+    print("test_adopting_a_second_reference_drops_the_first_ones_per_lap_views OK")
+
+
+def test_a_picked_reference_laps_view_is_built_once_and_cached():
+    """The per-lap view is MEMOIZED, and that is a correctness-of-responsiveness claim, not a
+    micro-optimisation: building one runs `reference.fit_loop_to_loop`, measured at 0.210-0.556 s
+    per lap on the owner's recordings — the same order as the ~765 ms dual seek that killed live
+    distance-locked playback. The compare tick runs at 30 Hz, so an unmemoized view would re-fit the
+    racing line on every frame. Counted here by construction rather than timed, because a wall-clock
+    assertion on this box (load average 40-90) would be a flake."""
+    primary, ref, (_adopted, other, _wrong) = _multi_lap_reference()
+    calls = []
+    real_trace = ref.lap_trace_xy
+    ref.lap_trace_xy = lambda lid, _f=real_trace, _c=calls: (_c.append(lid), _f(lid))[1]
+    for _ in range(30):  # a second of compare ticks
+        primary.reference_overlay_xy(other)
+        primary.reference_overlay_index_at_progress(2000.0, other)
+    assert calls.count(other) == 1, f"the view was rebuilt {calls.count(other)} times, not memoized"
+    # Adopting a NEW reference drops the memo, so a view can never outlive the recording it describes.
+    primary.clear_reference()
+    assert primary._reference_views == {}, primary._reference_views
+    print(f"test_a_picked_reference_laps_view_is_built_once OK: 30 ticks -> "
+          f"{calls.count(other)} fit")
+
+
 def test_reference_delta_vs_lap_endpoint_is_negated_laptime_diff():
     """Pane B's badge = reference vs primary. The production contract is that `t_ref` is the
     reference recording's GLOBAL media clock (the reference lap sits at its lap_window start ≈

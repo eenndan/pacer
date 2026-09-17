@@ -27,6 +27,15 @@ This test enforces that the redirect stays complete as `studio` grows: any modul
 `_app_support_dir` seam must be added to the jail helper (and to the dump's own list), or the
 gate and the harnesses silently stop being hermetic again.
 
+**The gate's second credibility problem was the opposite direction: it blamed the recording for
+its own environment.** Run as AGENTS.md documents it — no PYTHONPATH — `import pacer` resolved to
+the repo's C++ `pacer/` directory (a namespace portion with no `GPMFSource`) and the tool printed
+"not readable as GPMF … a partial copy, or a file some tool overwrote" about the owner's intact
+11.9 GB recording. On a machine where a dev tool really had destroyed 11.9 GB of footage, that is
+the most alarming sentence this software can produce, and it was wrong twice: wrong about the
+cause, and wrong to implicate the file at all. The preflight tests below hold the line that a
+problem with THIS RUN is reported as one.
+
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_golden_hermetic.py
 """
 import ast
@@ -208,10 +217,125 @@ def test_jail_moves_every_seam_and_adopts_an_existing_jail():
             m._app_support_dir = fn
 
 
+# ---------------------------------------------------------------------------------------------
+# THE GATE MUST NEVER REPORT A PROBLEM WITH THIS RUN AS A VERDICT ON THE RECORDING.
+#
+# The eight bytes below are the smallest thing `chapters.probe_mp4` accepts as an MP4 container
+# (`00 00 00 14 'ftyp'`), so the preflight gets all the way to the parser on a file that is not
+# video and cannot be mistaken for anyone's footage.
+_FAKE_MP4 = b"\x00\x00\x00\x14ftypisom"
+
+# The sentences the preflight is not allowed to say about a file it only failed to OPEN. Each one
+# asserts a HISTORY the tool cannot know — that bytes were destroyed, or that a copy was cut short.
+_GUESSES = ("overwrote", "overwritten", "partial copy", "incomplete")
+
+
+def _fake_recording(tmp: str) -> str:
+    """A GoPro-named, container-shaped file in `tmp`. Never a path under the owner's Desktop."""
+    path = os.path.join(tmp, "GX020060.MP4")
+    with open(path, "wb") as f:
+        f.write(_FAKE_MP4)
+    return path
+
+
+def test_preflight_blames_the_environment_when_the_bindings_are_missing():
+    """A missing `pacer` is a fact about THIS PROCESS. Reported as one — never as damage to the
+    recording, and never with advice ("set PACER_GOLDEN_MP4 to a complete recording") that sends
+    the operator looking for a fresh copy of a file that was fine all along."""
+    import tempfile
+
+    from studio.dev import golden_session_dump as dump
+
+    def no_bindings():
+        raise dump.BindingsUnavailable(
+            "`import pacer` resolved to a namespace package with no GPMFSource")
+
+    with tempfile.TemporaryDirectory(prefix="pacer-preflight-") as tmp:
+        path = _fake_recording(tmp)
+        msg = dump.preflight(path, opener_factory=no_bindings)
+
+    assert msg, "a run with no usable bindings must fail the gate, not fingerprint whatever loads"
+    low = msg.lower()
+    for guess in _GUESSES:
+        assert guess not in low, (
+            f"the missing-bindings message accuses the recording ({guess!r}): {msg!r}. An import "
+            f"problem must never present as data loss — this is the one message whose false "
+            f"positive tells the owner a tool ate their footage.")
+    assert "bindings" in low and "pythonpath=bindings/pacer" in low, (
+        f"the missing-bindings message must name the real cause and the fix: {msg!r}")
+
+
+def test_preflight_states_a_parse_failure_without_guessing_why():
+    """"This file did not parse as GPMF" is a fact the tool measured. "Some tool overwrote it" is
+    a story about how it got that way, which the tool cannot see and must not tell."""
+    import tempfile
+
+    from studio.dev import golden_session_dump as dump
+
+    def parser_refuses(path):
+        raise RuntimeError(f"Failed to open file: {path}")
+
+    with tempfile.TemporaryDirectory(prefix="pacer-preflight-") as tmp:
+        path = _fake_recording(tmp)
+        msg = dump.preflight(path, opener_factory=lambda: parser_refuses)
+
+    assert msg, "an unparseable recording must fail the gate"
+    low = msg.lower()
+    assert "did not parse as gpmf" in low, f"the parse failure must be stated as itself: {msg!r}"
+    assert path in msg, f"the failing path must be named: {msg!r}"
+    for guess in _GUESSES:
+        assert guess not in low, (
+            f"the parse-failure message guesses at a cause ({guess!r}): {msg!r}")
+
+
+def test_documented_golden_command_reaches_the_parser_without_pythonpath():
+    """AGENTS.md's real-media workflow is `pixi run python -m studio.dev.golden_session_dump …`
+    with NO PYTHONPATH, and before this it could not work as written.
+
+    The repo's C++ `pacer/` directory and the cmake-deployed `site-packages/pacer/` both lack an
+    `__init__.py`, so they are PEP 420 namespace portions: `import pacer` succeeded and had no
+    `GPMFSource`, and the resulting AttributeError was printed as
+
+        FATAL: ~/Desktop/D24/GX020060.MP4 exists but is not readable as GPMF
+        (module 'pacer' has no attribute 'GPMFSource') — a partial copy, or a file some tool
+        overwrote.
+
+    about an intact 11.9 GB recording. Driven as a SUBPROCESS with PYTHONPATH stripped, because
+    that is the only way to reproduce the resolution order the operator actually gets; CTest
+    injects `PYTHONPATH=bindings/pacer` into this very process."""
+    import subprocess
+    import tempfile
+
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    with tempfile.TemporaryDirectory(prefix="pacer-preflight-") as tmp:
+        env["PACER_GOLDEN_MP4"] = _fake_recording(tmp)
+        proc = subprocess.run(
+            [sys.executable, "-m", "studio.dev.golden_session_dump",
+             os.path.join(tmp, "out.json")],
+            cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=300)
+
+    err = proc.stderr
+    low = err.lower()
+    assert "has no attribute" not in err, (
+        f"the documented command still resolves `pacer` to a namespace package — it must find the "
+        f"built bindings on its own:\n{err}")
+    for guess in _GUESSES:
+        assert guess not in low, (
+            f"the documented command blamed the recording for an import problem ({guess!r}):\n"
+            f"{err}")
+    assert "did not parse as gpmf" in low, (
+        f"the fake container should have reached the real parser and been reported as a parse "
+        f"failure; got exit {proc.returncode}:\n{err}\n{proc.stdout}")
+
+
 if __name__ == "__main__":
     test_jail_helper_redirects_every_app_support_seam()
     test_dump_redirects_every_app_support_seam()
     test_every_window_building_harness_is_jailed()
     test_seam_redirect_actually_takes_effect()
     test_jail_moves_every_seam_and_adopts_an_existing_jail()
-    print("OK: the jail covers every app-support seam, every harness uses it, and it takes effect")
+    test_preflight_blames_the_environment_when_the_bindings_are_missing()
+    test_preflight_states_a_parse_failure_without_guessing_why()
+    test_documented_golden_command_reaches_the_parser_without_pythonpath()
+    print("OK: the jail covers every app-support seam, every harness uses it, it takes effect, "
+          "and the gate's preflight never reports an import problem as damage to the recording")
