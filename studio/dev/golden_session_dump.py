@@ -167,6 +167,14 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     put("lap_time_trend", lambda: _round(s.lap_time_trend()))
     put("sector_sigmas", lambda: _round(s.sector_sigmas()))
     put("corner_consistency", lambda: _round(s.corner_consistency()))
+    # The Stats page's CORNERS table (Best / Median / σ / Med loss / apex / grip per corner). It had
+    # no leaf of its own: its Best agreed with `corner_session_bests` only by construction, and its
+    # Median, σ, apex and grip columns reached no leaf at all — so C4, which changes which lap ×
+    # corner cells those columns count, would have moved them in silence.
+    put("corner_report", lambda: _round(s.corner_report()))
+    # ...and the STRAIGHTS table, for the same reason: its times, trap speeds and exit Δ are read at
+    # the same corner edges, and nothing fingerprinted them either.
+    put("straights_report", lambda: _round(s.straights_report()))
     put("coaching_opportunities", lambda: _round(s.coaching_opportunities()))
     # The Stats page's phase matrix had NO golden coverage until the decomposition it reads moved
     # from ∫ds/v to the lap's own clock and nothing in this dump noticed: the change showed up only

@@ -40,6 +40,34 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 63.421978154182185,
+    "apex_median_kmh": 53.311386804505744,
+    "best_s": 5.355549612626405,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.9179127269489791,
+    "median_loss_s": 1.2978184306448588,
+    "median_s": 6.653368043271263,
+    "n": 2,
+    "score": 2.3820061180789707,
+    "sigma_s": 1.8353924261157253
+   },
+   {
+    "apex_best_kmh": 64.65975582730609,
+    "apex_median_kmh": 53.930275641067695,
+    "best_s": 5.101721166438146,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.9767000182440786,
+    "median_loss_s": 1.2820819992290495,
+    "median_s": 6.383803165667196,
+    "n": 2,
+    "score": 2.3245912731722336,
+    "sigma_s": 1.8131377513841338
+   }
+  ],
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -336,6 +364,47 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 11.340586862768772,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 12.61857917120113,
+    "n": 2,
+    "ring_cid": 2,
+    "sigma_s": 1.8073540551935416,
+    "trap_best_kmh": 64.93850646153334,
+    "trap_median_kmh": 55.737108405111215
+   },
+   {
+    "best_s": 10.997253282330089,
+    "exit_delta_kmh": 3.3352103514306677,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.0,
+    "median_s": 12.299161403771652,
+    "n": 2,
+    "ring_cid": 1,
+    "sigma_s": 1.8411761223063376,
+    "trap_best_kmh": 64.83877973451699,
+    "trap_median_kmh": 55.72445245650559
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 4.753641342534777,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 2,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 64.65975582730609,
+    "trap_median_kmh": 59.90611448477131
+   }
+  ],
   "theoretical_best": 32.79511092416341,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -456,6 +525,34 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 43.91508011407284,
+    "apex_median_kmh": 42.105413437798745,
+    "best_s": 8.416565202289595,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.6826405858411331,
+    "median_loss_s": 0.5987908901035137,
+    "median_s": 9.015356092393109,
+    "n": 4,
+    "score": 0.21717569571618317,
+    "sigma_s": 0.3626903804074904
+   },
+   {
+    "apex_best_kmh": 43.39838139457583,
+    "apex_median_kmh": 42.35891690941767,
+    "best_s": 7.55112853295304,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.7230262963986458,
+    "median_loss_s": 0.22653473532949597,
+    "median_s": 7.777663268282536,
+    "n": 4,
+    "score": 0.04569836061846668,
+    "sigma_s": 0.2017278301802069
+   }
+  ],
   "corner_session_bests": [
    8.416565202289595,
    7.55112853295304
@@ -16724,6 +16821,47 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 10.105946433279124,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 10.39279135923811,
+    "n": 4,
+    "ring_cid": 2,
+    "sigma_s": 0.2277341449816082,
+    "trap_best_kmh": 50.32550065915696,
+    "trap_median_kmh": 48.958131829963285
+   },
+   {
+    "best_s": 9.703049110744658,
+    "exit_delta_kmh": -0.07512184719343651,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.020615494206431256,
+    "median_s": 9.977476524028932,
+    "n": 4,
+    "ring_cid": 1,
+    "sigma_s": 0.21810773431758346,
+    "trap_best_kmh": 48.073353079805514,
+    "trap_median_kmh": 46.214452430499776
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": -2.449032407092652,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 4,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 45.604266435856154,
+    "trap_median_kmh": 43.1552340287635
+   }
+  ],
   "theoretical_best": 35.77668927926642,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -16845,6 +16983,34 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 43.30631120514848,
+    "apex_median_kmh": 43.265446757359946,
+    "best_s": 8.141853715014477,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.6858326967003374,
+    "median_loss_s": 0.2729676779973147,
+    "median_s": 8.414821393011792,
+    "n": 3,
+    "score": 0.06577012593311087,
+    "sigma_s": 0.2409447390095683
+   },
+   {
+    "apex_best_kmh": 43.81505544727177,
+    "apex_median_kmh": 42.49377798821298,
+    "best_s": 7.793777280334599,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.685832800053749,
+    "median_loss_s": 0.224011886578797,
+    "median_s": 8.017789166913396,
+    "n": 3,
+    "score": 0.05158933310240622,
+    "sigma_s": 0.23029730203294135
+   }
+  ],
   "corner_session_bests": [
    8.141853715014477,
    7.793777280334599
@@ -29653,6 +29819,47 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 10.160401505599015,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 10.17983188793761,
+    "n": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.3112085396083723,
+    "trap_best_kmh": 49.33979963374403,
+    "trap_median_kmh": 48.811862282574744
+   },
+   {
+    "best_s": 9.77750855299184,
+    "exit_delta_kmh": -1.3126795431905478,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.04490404636972392,
+    "median_s": 9.811716480282747,
+    "n": 3,
+    "ring_cid": 1,
+    "sigma_s": 0.3164014545103215,
+    "trap_best_kmh": 49.07312636965417,
+    "trap_median_kmh": 48.91620061843389
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": -1.0143385486304197,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 44.71221432144365,
+    "trap_median_kmh": 43.697875772813234
+   }
+  ],
   "theoretical_best": 35.87354105393993,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -29773,6 +29980,34 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 43.7683820604404,
+    "apex_median_kmh": 42.84346343763562,
+    "best_s": 8.196308787334369,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.7060766221761466,
+    "median_loss_s": 0.199561773797873,
+    "median_s": 8.395870561132242,
+    "n": 3,
+    "score": 0.048645771989220946,
+    "sigma_s": 0.24376297656329726
+   },
+   {
+    "apex_best_kmh": 43.39160227598176,
+    "apex_median_kmh": 42.74733461758497,
+    "best_s": 7.847556710984062,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.7060766252312987,
+    "median_loss_s": 0.19214839979390064,
+    "median_s": 8.039705110777962,
+    "n": 3,
+    "score": 0.0409911858418332,
+    "sigma_s": 0.21333087283474936
+   }
+  ],
   "corner_session_bests": [
    8.196308787334369,
    7.847556710984062
@@ -42607,6 +42842,47 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 10.105946433279124,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 10.26086602750059,
+    "n": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.1888063972960927,
+    "trap_best_kmh": 50.66187079131482,
+    "trap_median_kmh": 49.70076000820705
+   },
+   {
+    "best_s": 9.623669739979182,
+    "exit_delta_kmh": -2.080473656614515,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.27933960067986446,
+    "median_s": 9.757937049633284,
+    "n": 3,
+    "ring_cid": 1,
+    "sigma_s": 0.14056171531439715,
+    "trap_best_kmh": 50.79124270236929,
+    "trap_median_kmh": 49.9494709165858
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 0.0,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 3,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 44.388024016965346,
+    "trap_median_kmh": 44.33091291731549
+   }
+  ],
   "theoretical_best": 35.77348167157673,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -42656,6 +42932,34 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 63.421978154182185,
+    "apex_median_kmh": 53.311386804505744,
+    "best_s": 5.355549612626405,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.9179127269489791,
+    "median_loss_s": 1.2978184306448588,
+    "median_s": 6.653368043271263,
+    "n": 2,
+    "score": 2.3820061180789707,
+    "sigma_s": 1.8353924261157253
+   },
+   {
+    "apex_best_kmh": 64.65975582730609,
+    "apex_median_kmh": 53.930275641067695,
+    "best_s": 5.101721166438146,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.9767000182440786,
+    "median_loss_s": 1.2820819992290495,
+    "median_s": 6.383803165667196,
+    "n": 2,
+    "score": 2.3245912731722336,
+    "sigma_s": 1.8131377513841338
+   }
+  ],
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -42952,6 +43256,47 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 11.340586862768772,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 12.61857917120113,
+    "n": 2,
+    "ring_cid": 2,
+    "sigma_s": 1.8073540551935416,
+    "trap_best_kmh": 64.93850646153334,
+    "trap_median_kmh": 55.737108405111215
+   },
+   {
+    "best_s": 10.997253282330089,
+    "exit_delta_kmh": 3.3352103514306677,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.0,
+    "median_s": 12.299161403771652,
+    "n": 2,
+    "ring_cid": 1,
+    "sigma_s": 1.8411761223063376,
+    "trap_best_kmh": 64.83877973451699,
+    "trap_median_kmh": 55.72445245650559
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 4.753641342534777,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 2,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 64.65975582730609,
+    "trap_median_kmh": 59.90611448477131
+   }
+  ],
   "theoretical_best": 32.79511092416341,
   "track_name": "Stadium",
   "valid_lap_ids": [
@@ -43000,6 +43345,34 @@
    ]
   ],
   "corner_matrix": null,
+  "corner_report": [
+   {
+    "apex_best_kmh": 63.421978154182185,
+    "apex_median_kmh": 53.311386804505744,
+    "best_s": 5.355549612626405,
+    "cid": 1,
+    "direction": 1,
+    "grip_median": 0.9179127269489791,
+    "median_loss_s": 1.2978184306448588,
+    "median_s": 6.653368043271263,
+    "n": 2,
+    "score": 2.3820061180789707,
+    "sigma_s": 1.8353924261157253
+   },
+   {
+    "apex_best_kmh": 64.65975582730609,
+    "apex_median_kmh": 53.930275641067695,
+    "best_s": 5.101721166438146,
+    "cid": 2,
+    "direction": 1,
+    "grip_median": 0.9767000182440786,
+    "median_loss_s": 1.2820819992290495,
+    "median_s": 6.383803165667196,
+    "n": 2,
+    "score": 2.3245912731722336,
+    "sigma_s": 1.8131377513841338
+   }
+  ],
   "corner_session_bests": [
    5.355549612626405,
    5.101721166438146
@@ -43296,6 +43669,47 @@
   "sector_sigmas": "__unsupported__",
   "session_best_splits": "__unsupported__",
   "session_date": "__unsupported__",
+  "straights_report": [
+   {
+    "best_s": 11.340586862768772,
+    "exit_delta_kmh": null,
+    "index": 0,
+    "label": "S/F \u2192 C1",
+    "leverage": 0.0,
+    "median_s": 12.61857917120113,
+    "n": 2,
+    "ring_cid": 2,
+    "sigma_s": 1.8073540551935416,
+    "trap_best_kmh": 64.93850646153334,
+    "trap_median_kmh": 55.737108405111215
+   },
+   {
+    "best_s": 10.997253282330089,
+    "exit_delta_kmh": 3.3352103514306677,
+    "index": 1,
+    "label": "C1 \u2192 C2",
+    "leverage": 0.0,
+    "median_s": 12.299161403771652,
+    "n": 2,
+    "ring_cid": 1,
+    "sigma_s": 1.8411761223063376,
+    "trap_best_kmh": 64.83877973451699,
+    "trap_median_kmh": 55.72445245650559
+   },
+   {
+    "best_s": 0.0,
+    "exit_delta_kmh": 4.753641342534777,
+    "index": 2,
+    "label": "C2 \u2192 S/F",
+    "leverage": 0.0,
+    "median_s": 0.0,
+    "n": 2,
+    "ring_cid": 2,
+    "sigma_s": 0.0,
+    "trap_best_kmh": 64.65975582730609,
+    "trap_median_kmh": 59.90611448477131
+   }
+  ],
   "theoretical_best": 32.79511092416341,
   "track_name": "Stadium",
   "valid_lap_ids": [
