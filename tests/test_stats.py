@@ -223,6 +223,36 @@ def test_corner_report_composes_columns():
     print("test_corner_report_composes_columns OK")
 
 
+def test_corner_report_counts_only_the_cells_matched_on_track():
+    """C4: a lap's corner whose window was interpolated (not matched on track at both edges) counts
+    towards nothing in that corner's row. The planted cell is the one a minimum SELECTS: the
+    quickest time, the highest apex speed and a grip reading, all on the interpolated lap — the
+    shape measured on D24 0060, where the CORNERS Best sat on such a cell in C2, C6 and C8."""
+    rows_t = [[3.20, 5.0], [2.90, 5.4], [3.40, 5.8], [3.30, 5.2]]
+    rows_a = [[58.0, 44.0], [66.0, 42.0], [56.0, 40.0], [57.0, 41.0]]
+    rows_g = [[0.70, 0.8], [1.10, 0.7], [0.72, 0.6], [math.nan] * 2]   # lap 3: no g signal
+    resolved = [[True, False], [False, False], [True, False], [True, False]]
+    c1, c2 = corner_report([1, 2], [1, -1], rows_t, rows_a, rows_g, resolved)
+    counted = [3.20, 3.40, 3.30]
+    assert (c1.n, c1.n_laps) == (3, 4), (c1.n, c1.n_laps)
+    assert c1.best_s == 3.20, ("an interpolated cell set the Best", c1.best_s)
+    assert c1.median_s == 3.30, c1.median_s
+    assert abs(c1.sigma_s - float(np.std(counted, ddof=1))) < 1e-12
+    assert abs(c1.median_loss_s - 0.10) < 1e-9
+    assert c1.apex_best_kmh == 58.0 and c1.apex_median_kmh == 57.0, (c1.apex_best_kmh,
+                                                                     c1.apex_median_kmh)
+    assert abs(c1.grip_median - 0.71) < 1e-12, c1.grip_median
+    # A corner NO lap matched keeps its row, says how many laps it had, and publishes nothing.
+    assert (c2.cid, c2.n, c2.n_laps) == (2, 0, 4), c2
+    assert (c2.best_s, c2.median_s, c2.sigma_s, c2.median_loss_s, c2.apex_best_kmh,
+            c2.apex_median_kmh, c2.grip_median) == (None,) * 7, c2
+    assert c2.score == 0.0, "an untimed corner must never be ranked among the worst"
+    # No mask (a pure caller with no warp) counts every cell, exactly as before.
+    a1, _ = corner_report([1, 2], [1, -1], rows_t, rows_a, rows_g)
+    assert (a1.n, a1.best_s, a1.apex_best_kmh) == (4, 2.90, 66.0), a1
+    print("test_corner_report_counts_only_the_cells_matched_on_track OK")
+
+
 def test_brake_consistency_aggregates_matched_corners():
     rows = [
         {1: (100.0, 0.90, 2.0), 2: (300.0, 0.80, -1.0)},
@@ -264,6 +294,40 @@ def test_straights_report_labels_deltas_and_leverage():
     print("test_straights_report_labels_deltas_and_leverage OK")
 
 
+def test_straights_report_counts_each_value_by_the_edges_it_reads():
+    """C4, one level finer than a corner: a straight's TIME needs both its ends matched on track,
+    its TRAP speed only its end (the next corner's entry), its EXIT Δ only the preceding corner's
+    exit — on the best lap too. The timing line is always matched. Each planted interpolated edge
+    carries the value a best/median would pick, so reading it would move the column."""
+    times = [[5.0, 8.0, 4.0], [4.0, 7.0, 3.0], [5.1, 8.3, 4.05], [5.2, 8.6, 4.1]]
+    traps = [[70.0, 90.0, 60.0], [99.0, 99.0, 60.5], [71.0, 89.0, 61.0], [69.0, 88.0, 59.0]]
+    exits = [[50.0, 40.0], [60.0, 40.2], [49.0, 40.5], [48.0, 41.0]]
+    best_exits = [51.0, 40.0]
+    #          C1 enter, C1 exit, C2 enter, C2 exit
+    edges = [[True, True, True, True],
+             [False, False, False, True],     # lap 1: C1 both edges and C2's entry interpolated
+             [True, True, True, True],
+             [True, True, True, True]]
+    s0, s1, s2 = straights_report([1, 2], times, traps, exits, best_exits, edges,
+                                  [True, True, True, True])
+    # S/F → C1 ends at C1's entry: lap 1's time AND trap are out; the start line is matched.
+    assert (s0.n, s0.n_trap, s0.n_laps, s0.n_exit) == (3, 3, 4, None), s0
+    assert s0.best_s == 5.0 and s0.trap_best_kmh == 71.0, s0
+    # C1 → C2 runs C1 exit -> C2 entry (both out on lap 1); its exit Δ reads C1's exit (out).
+    assert (s1.n, s1.n_trap, s1.n_exit) == (3, 3, 3), s1
+    assert s1.best_s == 8.0 and s1.trap_best_kmh == 90.0, s1
+    assert abs(s1.exit_delta_kmh - (49.0 - 51.0)) < 1e-12, s1.exit_delta_kmh
+    # C2 → S/F runs C2 exit (matched on lap 1) -> the finish line: lap 1 counts in full here.
+    assert (s2.n, s2.n_trap, s2.n_exit) == (4, 4, 4), s2
+    assert s2.best_s == 3.0, s2
+    # The best lap's own exit unmatched -> no Δ can be taken against it.
+    _, b1, _ = straights_report([1, 2], times, traps, exits, best_exits, edges,
+                                [True, False, True, True])
+    assert b1.exit_delta_kmh is None and b1.leverage == 0.0, b1
+    # No edges (a pure caller) -> every value counts, and nothing claims to have counted.
+    a0, _, _ = straights_report([1, 2], times, traps, exits, best_exits)
+    assert (a0.n, a0.best_s, a0.n_laps, a0.n_trap) == (4, 4.0, None, None), a0
+    print("test_straights_report_counts_each_value_by_the_edges_it_reads OK")
 # ------------------------------------------------------------------- coasting, by place (F5)
 def _span(a, b, dur=0.0):
     return SimpleNamespace(start_dist=float(a), end_dist=float(b), duration=float(dur))
@@ -1605,6 +1669,36 @@ def test_stats_view_straights_table_and_fix_first_tile():
     print("test_stats_view_straights_table_and_fix_first_tile OK")
 
 
+def test_stats_view_straights_say_how_many_laps_each_column_counted():
+    """C4 on the STRAIGHTS table's face: a column that counted fewer laps than the table has says
+    how many on hover, and a straight NO lap matched at both ends is a row of dashes that explains
+    itself — not dropped as a ~0 s stub, which is a different fact."""
+    _app()
+    from studio.stats import StraightStat
+    from studio.stats_panel import DASH, StatsView
+    sess = _fake_view_session()
+    sess.straights_report = lambda: [
+        StraightStat(index=1, label="C1 → C2", ring_cid=1, n=38, best_s=8.0, median_s=8.3,
+                     sigma_s=0.3, trap_best_kmh=90.0, trap_median_kmh=89.0,
+                     exit_delta_kmh=-2.0, leverage=0.6, n_laps=38, n_trap=38, n_exit=38),
+        StraightStat(index=8, label="C8 → C9", ring_cid=8, n=0, best_s=None, median_s=None,
+                     sigma_s=None, trap_best_kmh=88.0, trap_median_kmh=87.0,
+                     exit_delta_kmh=-1.0, leverage=0.0, n_laps=38, n_trap=10, n_exit=8),
+    ]
+    v = StatsView(sess)
+    t = v.straights_table
+    assert t.rowCount() == 2, "a straight with no matched time was dropped as a stub"
+    rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
+    full, part = rows["C1 → C2"], rows["C8 → C9"]
+    assert all(t.item(full, c).toolTip() == "" for c in range(1, 7)), "an all-laps row disclosed"
+    for c in (1, 2, 3):
+        assert t.item(part, c).text() == DASH
+        assert "No value" in t.item(part, c).toolTip() and "38" in t.item(part, c).toolTip()
+    for c in (4, 5):
+        assert "10 of 38" in t.item(part, c).toolTip(), t.item(part, c).toolTip()
+    assert "8 of 38" in t.item(part, 6).toolTip() and "C8's exit" in t.item(part, 6).toolTip()
+    v.hide()
+    print("test_stats_view_straights_say_how_many_laps_each_column_counted OK")
 def _coast_places(*rows):
     from studio.stats import CoastPlace
     return [CoastPlace(index=i, label=label, ring_cid=ring, s_per_lap=s, laps=laps, share=share,
@@ -3137,6 +3231,175 @@ def test_corners_note_names_both_baselines_and_reconciles_them():
     assert view.corners_note.text() == "" and not view.corners_note.isVisible(), (
         view.corners_note.text())
     print("ok corners-note: both baselines named, three totals reconciled, hidden when empty")
+
+
+def test_every_cross_lap_corner_surface_counts_the_same_cells():
+    """C4 — ONE rule for which lap × corner cells count, end to end through the real Session on the
+    seven-lap drift session: the CORNERS table (`corner_report`), the Corners page ★'s bests
+    (`corner_session_bests`), the CORNERS BY LAP grid's typical and the phase split
+    (`phase_report`) count exactly the corners `lap_corner_resolved` marks True; the STRAIGHTS
+    table (`straights_report`) counts by the same rule per edge (`lap_edge_resolved`), of which a
+    resolved corner is exactly two matched edges; and the real Corners page stars none of the
+    others. (The Best cell's provenance needs raw fixes this fixture's laps do not carry;
+    tests/test_provenance.py holds it to the same cells.)
+
+    Three states are driven, because the fixture alone reaches only one of them. Its interpolated
+    edge (lap 1, C1's exit) is on a SLOWER lap than the best, so it moves the Median and σ but no
+    Best; the Best half is proved by planting what D24 0060 measured — the quickest cell of a corner
+    interpolated — and the no-match half by planting a corner no lap matched. Each plant patches
+    the EDGE resolution (and the corner resolution derived from it) on a FRESH session, so every
+    cache is built under it."""
+    from _synthetic import _drift_session, drift_band_laps, drift_noise_laps
+
+    from studio.lap_table import BEST_SECTOR_MARK, CornerTable
+
+    first = drift_noise_laps()
+    laps = first + drift_band_laps(t0=float(first[-1]["cols"][0][-1]))
+
+    def session(flip=()):
+        """`flip` = {(lap, edge index)} planted as interpolated."""
+        s = _drift_session(laps)
+        if flip:
+            real = s.corners.lap_edge_resolved
+
+            def edges(lap):
+                return [False if (lap, e) in flip else ok for e, ok in enumerate(real(lap))]
+
+            s.corners.lap_edge_resolved = edges
+            s.corners.lap_corner_resolved = lambda lap: [
+                a and b for a, b in zip(edges(lap)[0::2], edges(lap)[1::2], strict=True)]
+        return s
+
+    def agree(s):
+        ids = s.consistency_lap_ids()
+        n = len(s.corners.corner_list())
+        edges = {i: s.corners.lap_edge_resolved(i) for i in ids}
+        cells = {i: ([st.time for st in s.corners.lap_corner_stats(i)],
+                     s.corners.lap_corner_resolved(i)) for i in ids}
+        for i in ids:
+            assert cells[i][1] == [edges[i][2 * k] and edges[i][2 * k + 1] for k in range(n)], i
+        report = s.corner_report()
+        bests = s.corners.corner_session_bests()
+        matrix = s.corner_matrix()
+        phase = s.phase_report()
+        assert matrix is not None and len(report) == len(bests) == len(matrix.cids) == n
+        for k, row in enumerate(report):
+            counted = {i: t[k] for i, (t, res) in cells.items() if res[k]}
+            assert (row.n, row.n_laps) == (len(counted), len(ids)), (row.cid, row.n, row.n_laps)
+            assert row.n == matrix.n_resolved[k], (row.cid, row.n, matrix.n_resolved[k])
+            want = min(counted.values()) if counted else None
+            assert row.best_s == want == bests[k], (row.cid, row.best_s, want, bests[k])
+            if not counted:
+                assert row.median_s is None and matrix.medians[k] is None, row.cid
+                assert phase is None or phase.rows[k] is None, (row.cid, phase.rows[k])
+                continue
+            assert row.median_s == float(np.median(list(counted.values()))), row.cid
+            if matrix.medians[k] is not None:
+                assert row.median_s == matrix.medians[k], (row.cid, row.median_s, matrix.medians)
+        # STRAIGHTS: straight j runs corner j's exit (edge 2j-1; the start line for j=0) to corner
+        # j+1's entry (edge 2j; the finish line for j=n).
+        for j, st in enumerate(s.straights_report()):
+            start = [j == 0 or edges[i][2 * j - 1] for i in ids]
+            end = [j == n or edges[i][2 * j] for i in ids]
+            assert st.n_laps == len(ids), (j, st.n_laps)
+            assert st.n == sum(a and b for a, b in zip(start, end, strict=True)), (j, st.n)
+            assert st.n_trap == sum(end), (j, st.n_trap)
+            assert st.n_exit == (None if j == 0 else sum(start)), (j, st.n_exit)
+        return report
+
+    s = session()
+    report = agree(s)
+    c1_all = float(np.median([s.corners.lap_corner_stats(i)[0].time
+                              for i in s.consistency_lap_ids()]))
+    assert report[0].n < report[0].n_laps, "the drift session no longer carries an interpolated cell"
+    assert report[0].median_s != c1_all, "the interpolated cell no longer moves C1's Median"
+    # ...and that edge is C1's EXIT, so the straight after C1 loses its time and exit Δ on that lap
+    # but keeps its trap speed (read at C2's entry): the edge granularity, not only the corner's.
+    after_c1 = s.straights_report()[1]
+    n_ids = len(s.consistency_lap_ids())
+    assert after_c1.n < n_ids and after_c1.n_exit < n_ids and after_c1.n_trap == n_ids, (
+        "the fixture's interpolated edge is no longer C1's exit alone", after_c1)
+
+    # THE BEST: C2's quickest cell, its exit planted as interpolated. It must leave the Best and the
+    # ★ source together — and the Corners page must neither star it nor pass it off as measured,
+    # while that lap's C2 ENTRY speed (a matched edge) stays a plain reading.
+    ids = s.consistency_lap_ids()
+    quick = min(ids, key=lambda i: s.corners.lap_corner_stats(i)[1].time)
+    planted = session(flip={(quick, 3)})
+    report = agree(planted)
+    assert report[1].best_s > s.corner_report()[1].best_s, "the planted cell did not set the Best"
+    table = CornerTable(planted)
+    table.set_lap(quick)
+    time_cell, entry_cell, exit_cell = (table.table.item(1, c) for c in (1, 5, 6))
+    assert not time_cell.text().endswith(BEST_SECTOR_MARK.strip()), (
+        "the Corners page starred an interpolated corner", time_cell.text())
+    assert time_cell.font().italic() and exit_cell.font().italic(), "an interpolated value is plain"
+    assert not entry_cell.font().italic(), "a speed read at a MATCHED edge was muted"
+
+    # NO MATCH: C1's entry interpolated on every lap. Its row stays, empty; nothing is starred there.
+    untimed = session(flip={(i, 0) for i in ids})
+    report = agree(untimed)
+    assert report[0].n == 0 and report[0].score == 0.0, report[0]
+    assert untimed.corners.corner_session_bests()[0] is None
+    assert untimed.straights_report()[0].trap_best_kmh is None
+    print(f"ok one cell set: CORNERS, ★ bests, the grid, the phase split and STRAIGHTS agree on the "
+          f"drift session, with lap {quick}'s C2 exit planted as interpolated and with C1's entry "
+          f"matched on no lap")
+
+
+def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched():
+    """C4, on the face of the CORNERS table. Its rows now count only corners matched on track, so
+    a Best or Median over fewer laps than the page's other tables says so where the number is, a
+    corner no lap matched reads as dashes that EXPLAIN themselves, and the caption states the count
+    and that the Coaching total beside it still counts every lap. Nothing is said when every lap
+    counted, so a clean recording's page is unchanged."""
+    _APP  # noqa: B018
+    from studio.stats import CornerReport
+    from studio.stats_panel import DASH, WORST_LOSS_MARK, StatsView
+
+    full = CornerReport(cid=1, direction=1, n=38, best_s=2.48, median_s=2.69, sigma_s=0.4,
+                        median_loss_s=0.21, apex_best_kmh=73.4, apex_median_kmh=67.4,
+                        grip_median=0.72, score=0.08, n_laps=38)
+    part = CornerReport(cid=8, direction=-1, n=7, best_s=2.09, median_s=2.11, sigma_s=0.09,
+                        median_loss_s=0.02, apex_best_kmh=77.1, apex_median_kmh=74.2,
+                        grip_median=0.68, score=0.002, n_laps=38)
+    none = CornerReport(cid=9, direction=1, n=0, best_s=None, median_s=None, sigma_s=None,
+                        median_loss_s=None, apex_best_kmh=None, apex_median_kmh=None,
+                        grip_median=None, score=0.0, n_laps=38)
+    sess = _fake_view_session()
+    sess.corner_report = lambda: [full, part, none]
+    sess.phase_report = lambda: None
+    sess.coaching_opportunities = lambda: SimpleNamespace(
+        enough=True, rows=[SimpleNamespace(cid=8, time_lost=0.05)])
+    view = StatsView(sess)
+    t = view.corners_table
+    rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
+
+    for col in (1, 2):
+        assert t.item(rows["C1"], col).toolTip() == "", "a corner every lap counted says nothing"
+        tip = t.item(rows["C8"], col).toolTip()
+        assert "7 of 38" in tip and "interpolated" in tip, tip
+        assert t.item(rows["C9"], col).text() == DASH
+        tip = t.item(rows["C9"], col).toolTip()
+        assert "No time for C9" in tip and "38" in tip, tip
+    assert not t.item(rows["C9"], 4).text().startswith(WORST_LOSS_MARK), "untimed corner marked"
+
+    note = view.corners_note.text()
+    assert "Only corners matched on track count: 45 of 114" in note, note
+    assert "the other 69 were interpolated" in note, note
+    assert "No lap matched C9 on track" in note, note
+    assert "against your best lap — counting every clean lap, interpolated corners too —" in note
+    assert "Different baselines" in note, note
+
+    # Every lap counted: the caption and the coaching sentence are exactly what they were.
+    sess.corner_report = lambda: [full]
+    view.refresh()
+    note = view.corners_note.text()
+    assert "matched on track" not in note and "interpolated" not in note, note
+    assert "against your best lap and totals" in note, note
+    view.hide()
+    print("ok CORNERS: partial counts disclosed on the cell, an unmatched corner dashed and named, "
+          "and the coaching sentence says it counts differently")
 
 
 def test_digest_tooltip_reads_the_ideal_delta_instead_of_a_baked_range():

@@ -13,6 +13,13 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
+  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
+  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
+  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
+  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
+  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
+  marked or counted in the typical.
 - **Where you coast, by place — and whether the order means anything.** The coast number has been
   real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
   Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
@@ -24,13 +31,6 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   on all three Sandown recordings C1 holds about twice the next place's coasting and separates.
   Zones grown from where the laps coast were built first and refused: their leader changed with
   the coverage threshold and merge gap chosen.
-- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
-  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
-  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
-  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
-  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
-  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
-  marked or counted in the typical.
 - **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
   seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
   ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed
@@ -328,6 +328,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A corner time or speed pacer had to interpolate is no longer published as a measurement.** A
+  corner edge a lap does not match to the best lap's line on track is interpolated, and on the 38-lap
+  D24 recording that put 236 of 456 corner times a median 0.22 s (up to 0.96 s) and the speeds read at
+  those edges a median 1.1-1.6 km/h (up to 11.5 km/h) off an independent line-crossing reading —
+  against 0.004 s and 0.015 km/h for matched ones. The CORNERS table's Best sat on such a cell in C2,
+  C6 and C8, and its Median moved by up to 0.35 s. Now one rule decides what counts, at the
+  granularity each value is read at (a window needs both edges, a speed its own): the CORNERS table,
+  the Corners page ★, a Best's provenance panel, the STRAIGHTS times, trap speeds and exit Δ, and the
+  where-the-time-goes phase split count only matched cells, say how many laps they counted, and show
+  a dash where no lap matched. The Corners page still shows each lap's reading, muted with the reason.
+  Coaching and the ideal lap still count every cell and are the next step.
 - **A piece of a lap is no longer counted as a lap, and every excluded lap now says why.** A
   start/finish line long enough to reach a second stretch of track cuts each pass it reaches in
   two, and when the pieces outnumber the laps the median bands count the pieces: Sandown chapter 3

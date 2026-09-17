@@ -26,6 +26,7 @@
  "corner_consistency": [],
  "corner_map_markers": [],
  "corner_matrix": null,
+ "corner_report": [],
  "corner_session_bests": [],
  "corners": [],
  "delta": {
@@ -61,6 +62,7 @@
   null
  ],
  "session_date": "2018-01-24",
+ "straights_report": [],
  "theoretical_best": null,
  "track_name": null,
  "valid_lap_ids": []

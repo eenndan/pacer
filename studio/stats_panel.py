@@ -516,11 +516,48 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "(this column's own Best cell — not your best lap's corner, which is what the "
                    "Coaching page measures against and why its numbers are smaller), apex speeds "
                    "and median grip utilization. "
+                   "Every column counts only the laps whose corner was matched to your best lap's "
+                   "line on track at entry AND exit: an interpolated corner can be tenths of a "
+                   "second out, so it is left out (hover Best or Median for how many laps count), "
+                   "and a corner no lap matched shows dashes rather than a guess. "
                    f"The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
                    "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
                    "cells are not simply this column's three largest numbers; hover one for its "
                    "own score. That's where practice pays first. Click a row to ring "
                    "the corner's apex on the map; click a column header to sort.")
+
+
+def _corner_count_tip(report) -> str:
+    """The CORNERS table's Best/Median hover when not every lap counted: how many did, and why the
+    rest did not. "" when every lap was matched on track (nothing to disclose) or the report never
+    counted its laps (`n_laps` None). A corner NO lap matched says so instead of explaining a dash
+    as missing data (C4: see stats.corner_report for the measurement)."""
+    n, of = report.n, getattr(report, "n_laps", None)
+    if of is None or n >= of:
+        return ""
+    if n == 0:
+        return (f"No time for C{report.cid}: on none of the {of} clean laps could its entry and "
+                "exit both be matched to your best lap's line on track, and an interpolated corner "
+                "time can be tenths of a second out.")
+    return (f"Over the {n} of {of} clean laps matched on track at C{report.cid}'s entry and exit. "
+            f"On the other {of - n} the corner was interpolated between its neighbours, which can "
+            "put its time tenths of a second out, so they are left out of this whole row.")
+
+
+def _straight_count_tip(n: int, of: int | None, what: str) -> str:
+    """One STRAIGHTS column's hover when not every lap counted (C4), or "" when all did / the
+    report never counted. `what` names the edges that column reads, e.g. "both ends of this
+    straight"."""
+    if of is None or n >= of:
+        return ""
+    if n == 0:
+        return (f"No value: on none of the {of} clean laps was {what} matched to your best lap's "
+                "line on track, and an interpolated edge can put it well out.")
+    return (f"Over the {n} of {of} clean laps matched on track at {what}. On the other {of - n} "
+            "that edge was interpolated between neighbouring corners, which can put a time tenths "
+            "of a second and a speed several km/h out, so they are left out.")
+
+
 BRAKE_COLUMNS = ["Corner", "n", "Onset σ m", "Span m", "Commit %", "m later"]
 STRAIGHT_COLUMNS = ["Straight", "Best", "Median", "σ (s)", "Trap best", "Trap med", "Exit Δ"]
 RING_ROLE = NUM_ROLE + 1   # the map-ring corner cid stored on a straight row's label item
@@ -531,6 +568,11 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "faster). A slow exit ahead of a long straight is the costliest "
                      "mistake on track: the FIX FIRST tile ranks exit deficit × straight "
                      "time spread. Trap speed doubles as a gearing/engine-health proxy. "
+                     "Each column counts only the laps whose corner edges IT reads were matched "
+                     "to your best lap's line on track — the time both ends of the straight, the "
+                     "trap speed its end, Exit Δ the corner before it — because an interpolated "
+                     "edge can put a time tenths of a second and a speed several km/h out (hover "
+                     "a cell for how many laps count). "
                      "Click a row to ring the corner feeding that straight.")
 BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the cross-lap "
                    "scatter of your brake-onset POINT (σ and max−min span, metres, compared "
@@ -618,8 +660,8 @@ CORNER_GRID_TOOLTIP = (
     "lap crosses the track at each edge — such cells were a median 0.22 s off (up to 0.89 s) on "
     "the owner's 38-lap recording, as large as the mark itself, against 0.004 s for matched ones. "
     "They are shown, because they are the lap's real reading, but they never carry a ▼ and never "
-    "count towards the typical. So the typical here can differ from the CORNERS table's Median, "
-    "which is over every clean lap.\n\n"
+    "count towards the typical. The CORNERS table above counts the same matched cells, so its "
+    "Median is this typical wherever a corner has one.\n\n"
     "NO ★ HERE. The quickest time through each corner is the CORNERS table's Best above; this grid "
     "answers a different question — which laps lost time, and where.")
 
@@ -3648,6 +3690,19 @@ class StatsView(QWidget):
         parts = [f"Med loss is measured against each corner's own Best above — the quickest "
                  f"anyone went through it, which is usually not your best lap's corner. "
                  f"Summed, that is {total:.2f} s."]
+        # C4: which cells this table counted, when that is not all of them — the one thing that
+        # makes its numbers differ from a surface that counts every lap (stats.corner_report).
+        counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
+        left_out = sum(of - n for n, of in counted)
+        if left_out:
+            parts.append(
+                f"Only corners matched on track count: {sum(n for n, _ in counted)} of "
+                f"{sum(of for _, of in counted)} lap × corner times here; the other {left_out} "
+                f"were interpolated between matched points, and are shown muted lap by lap.")
+            untimed = [f"C{r.cid}" for r in report if getattr(r, "n_laps", None) and r.n == 0]
+            if untimed:
+                parts.append(f"No lap matched {', '.join(untimed)} on track, so "
+                             f"{'it has' if len(untimed) == 1 else 'they have'} no times.")
         opp_fn = getattr(session, "coaching_opportunities", None)
         opp = opp_fn() if opp_fn is not None else None
         # The Coaching tab's own totals are over its RANKED rows (the corners that survived its
@@ -3656,9 +3711,13 @@ class StatsView(QWidget):
         rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
         if rows:
             top = rows[:PANEL_TOP_N]
+            # Coaching still counts every clean lap's corner time, interpolated or not — said here
+            # whenever this table left some out, because that is then a second difference between
+            # the two numbers this sentence puts side by side.
+            every = " — counting every clean lap, interpolated corners too —" if left_out else ""
             parts.append(
-                f"The Coaching tab measures the SAME corners against your best lap and totals "
-                f"{sum(r.time_lost for r in rows):.2f} s, "
+                f"The Coaching tab measures the SAME corners against your best lap{every} and "
+                f"totals {sum(r.time_lost for r in rows):.2f} s, "
                 f"{sum(round(r.time_lost, 2) for r in top):.2f} s of it in its top {len(top)}.")
         gap = self._ideal_gap(session)
         if gap is not None:
@@ -3725,8 +3784,13 @@ class StatsView(QWidget):
             name = set_corner_direction(_NumItem(f"C{cr.cid}"), cr.direction)
             name.setData(NUM_ROLE, cr.cid)   # numeric key: C10 must not sort before C2
             t.setItem(r, 0, name)
-            t.setItem(r, 1, cell(cr.best_s, "{:.2f}"))
-            t.setItem(r, 2, cell(cr.median_s, "{:.2f}"))
+            best, median = cell(cr.best_s, "{:.2f}"), cell(cr.median_s, "{:.2f}")
+            count_tip = _corner_count_tip(cr)
+            if count_tip:
+                best.setToolTip(count_tip)
+                median.setToolTip(count_tip)
+            t.setItem(r, 1, best)
+            t.setItem(r, 2, median)
             t.setItem(r, 3, cell(cr.sigma_s, "{:.2f}"))
             loss = cell(cr.median_loss_s, "+{:.2f}")
             # The tooltip is built in the SAME branch as the cue, so the reason can never be
@@ -3881,8 +3945,11 @@ class StatsView(QWidget):
         # B8: a start line inside a corner section produces ~0-duration S/F stubs — noise
         # rows with no driving content (BRAKING already omits unmatched corners the same way).
         full_n = len(report)
+        # C4: a straight NO lap matched at both ends has no time at all, which is not the same as
+        # a ~0-duration one — it stays, as a row of dashes that says why.
         report = [st for st in report
-                  if max(st.best_s or 0.0, st.median_s or 0.0) >= 0.05]
+                  if (st.n == 0 and st.n_laps)
+                  or max(st.best_s or 0.0, st.median_s or 0.0) >= 0.05]
         stubs = full_n - len(report)
         has = bool(report)
         self._straights_section.setVisible(has)
@@ -3927,15 +3994,27 @@ class StatsView(QWidget):
             name.setData(NUM_ROLE, st.index)      # sort key: track order
             name.setData(RING_ROLE, st.ring_cid)  # the corner feeding this straight
             t.setItem(r, 0, name)
-            t.setItem(r, 1, cell(st.best_s, "{:.2f}"))
-            t.setItem(r, 2, cell(st.median_s, "{:.2f}"))
-            t.setItem(r, 3, cell(st.sigma_s, "{:.2f}"))
-            t.setItem(r, 4, cell(units.convert_speed(st.trap_best_kmh, unit)
-                                 if st.trap_best_kmh is not None else None, "{:.1f}"))
-            t.setItem(r, 5, cell(units.convert_speed(st.trap_median_kmh, unit)
-                                 if st.trap_median_kmh is not None else None, "{:.1f}"))
-            t.setItem(r, 6, cell(units.convert_speed(st.exit_delta_kmh, unit)
-                                 if st.exit_delta_kmh is not None else None, "{:+.1f}"))
+            cells = [
+                cell(st.best_s, "{:.2f}"), cell(st.median_s, "{:.2f}"),
+                cell(st.sigma_s, "{:.2f}"),
+                cell(units.convert_speed(st.trap_best_kmh, unit)
+                     if st.trap_best_kmh is not None else None, "{:.1f}"),
+                cell(units.convert_speed(st.trap_median_kmh, unit)
+                     if st.trap_median_kmh is not None else None, "{:.1f}"),
+                cell(units.convert_speed(st.exit_delta_kmh, unit)
+                     if st.exit_delta_kmh is not None else None, "{:+.1f}"),
+            ]
+            # How many laps each column counted, where that is not all of them (C4).
+            of = getattr(st, "n_laps", None)
+            tips = [_straight_count_tip(st.n, of, "both ends of this straight")] * 3 + [
+                _straight_count_tip(st.n_trap if st.n_trap is not None else 0, of,
+                                    "this straight's end")] * 2
+            tips.append(_straight_count_tip(st.n_exit, of, f"C{st.ring_cid}'s exit")
+                        if st.n_exit is not None else "")
+            for col, (item, tip) in enumerate(zip(cells, tips, strict=True), start=1):
+                if tip:
+                    item.setToolTip(tip)
+                t.setItem(r, col, item)
         t.blockSignals(False)
         t.setSortingEnabled(True)
         self._fit_table(t)
