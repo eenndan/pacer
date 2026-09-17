@@ -73,6 +73,17 @@ So the gyro is within 1.7-2.5 % of exact: the remaining ~0.89/0.92 regression ga
 two is the sensor's, not the reference's. It is also the reason `ok` keys off the loop ratio and
 not off the gain.
 
+BOTH D24 RECORDINGS RUN ANTICLOCKWISE, AND THAT WAS A HOLE IN THE VERDICT. A clockwise circuit
+closes at -2*pi, which is exact in exactly the same way, but `ok` compared the SIGNED ratio
+against [0.90, 1.10] — so every right-hand track failed a test it passed. Measured over the real
+load path, all three of the owner's clockwise recordings printed DISAGREE while agreeing to
+within 3 %: Sandown_09_05_2026 -0.974 x 2*pi vs -0.999 inferred over 59 laps (corners r=+0.94),
+SD_30_08_26 -0.961 vs -0.999 over 37 (r=+0.95), Sandown 3h 2026 -0.973 vs -1.000 over 62
+(r=+0.93). The band is now on |ratio| and the SIGN is checked against the path reference; the
+exact target a surface quotes is `RotationCheck.loop_exact`, +1.000 or -1.000, and not a
+literal. `tests/test_rotation.py` mirrors its fixture to carry the clockwise case the suite had
+never had.
+
 WHAT THIS TEST CAUGHT FIRST. When this channel landed, the path reference here was `v * kappa`
 and it read 1.102 / 1.065 x 2*pi — a 6.5-10 % over-read that neither the correlation (+0.87) nor
 the control (1.000) could have located, and which was written up as a property of the inferred
@@ -207,12 +218,25 @@ _TWO_PI = 2.0 * np.pi
 # only thing standing between a helmet-cam's vibration-dominated stream and a "measured" label,
 # and a dead stream scores 0 outright.
 _CORR_MIN = 0.6
-# Scale: the closed-loop ratio, which unlike a regression slope has an exact target (1.0). The
+# Scale: the closed-loop ratio, whose exact target is ONE WHOLE TURN — |1.0|, not +1.0. The
 # measured medians are 0.983 and 0.975, with per-lap spreads of [0.945, 1.036] and [0.947, 0.997].
 # A +-10 % band on the MEDIAN clears both comfortably while a x0.5 mis-scale lands at 0.49 — and
 # THAT is the case the correlation cannot see: halving the gyro leaves the corner r bit-identical
 # at +0.946 (measured), so without this ratio the verdict would pass a channel reading half.
-# A wrong gravity permutation lands at -0.48 / -0.44 on those recordings, failing on sign too.
+#
+# THE BAND IS ON THE MAGNITUDE, BECAUSE DIRECTION OF TRAVEL IS NOT A SENSOR PROPERTY. A clockwise
+# circuit closes at -2*pi and an anticlockwise one at +2*pi; both are exact, and which one a
+# recording gets is a fact about the track. Comparing the SIGNED ratio against [0.90, 1.10]
+# therefore failed every right-hand track outright — measured over the real load path, all three
+# of the owner's clockwise recordings printed DISAGREE with both channels agreeing to within 3 %
+# (Sandown_09_05_2026 -0.974 vs -0.999 x 2*pi over 59 laps, r=+0.94 through the corners;
+# SD_30_08_26 -0.961 vs -0.999 over 37; Sandown 3h 2026 -0.973 vs -1.000 over 62). Both D24
+# recordings run anticlockwise (+0.983 / +0.975), which is why nothing caught it.
+#
+# The SIGN is still checked — against the path reference rather than against a hard-coded +1, so
+# the question it asks is "do the two channels agree which way the kart went?", which is the
+# thing a mount or permutation error breaks. A wrong gravity permutation lands at -0.48 / -0.44
+# on the D24 recordings: mirrored AND at half scale, refused on either count on its own.
 _LOOP_MIN, _LOOP_MAX = 0.90, 1.10
 
 
@@ -247,17 +271,30 @@ class RotationCheck:
     lag_corr_at_zero: float = 0.0    # … against the correlation with the offset left in
 
     @property
+    def loop_exact(self) -> float:
+        """This recording's exact closed-lap target: +1.000 x 2*pi anticlockwise, -1.000 clockwise.
+
+        Read off the PATH reference, never off the gyro: which way the circuit runs is a fact
+        about the track, and the path is the channel here that is not the one under test. Every
+        surface quoting "against an exact 1.000" has to quote this instead, or it tells a driver
+        at a right-hand circuit that a correct channel is 200 % wrong."""
+        return -1.0 if self.loop_ratio_path < 0 else 1.0
+
+    @property
     def loop_error_pct(self) -> float:
-        """How far the measured channel's per-lap rotation lands from the exact 2*pi, in percent."""
-        return abs(self.loop_ratio_gyro - 1.0) * 100.0
+        """How far the measured channel's per-lap rotation lands from the exact one turn, in
+        percent. Signed target (`loop_exact`), so a mirrored channel still reads ~200 % — the
+        distance is from the turn the track actually makes, not from its magnitude."""
+        return abs(self.loop_ratio_gyro - self.loop_exact) * 100.0
 
     @property
     def path_loop_error_pct(self) -> float:
         """The same for the inferred channel — reported beside it because it is the reference the
         gain is measured against, and a reference that has drifted off its own exact target is
         not one a scale verdict can be read from. It was 6.5-10 % off until the basis fix the
-        module doc describes; on both D24 recordings it is now 0.1 %."""
-        return abs(self.loop_ratio_path - 1.0) * 100.0
+        module doc describes; on both D24 recordings it is now 0.1 %, and 0.1 % on all three of
+        the owner's clockwise recordings too."""
+        return abs(self.loop_ratio_path - self.loop_exact) * 100.0
 
     @property
     def lag_clause(self) -> str:
@@ -288,7 +325,8 @@ class RotationCheck:
                 f"straights rms {self.straight_rms_gyro:.2f} vs {self.straight_rms_path:.2f} "
                 f"rad/s; closed-lap rotation {self.loop_ratio_gyro:.3f}x2pi measured vs "
                 f"{self.loop_ratio_path:.3f}x2pi inferred ({self.loop_error_pct:.1f}% vs "
-                f"{self.path_loop_error_pct:.1f}% off exact) over {self.loop_n} laps{lag}.")
+                f"{self.path_loop_error_pct:.1f}% off an exact {self.loop_exact:+.3f}) over "
+                f"{self.loop_n} laps{lag}.")
 
 
 @dataclass
@@ -601,8 +639,14 @@ def _cross_check(t_gyro, yaw, lap_traces, to_media=None) -> RotationCheck | None
 
     loop_n, loop_gyro, loop_path = _loop_ratios(t_gyro, yaw, path_t, path_w, slices)
     corner_corr = _corr(at[corner], path_w[corner]) if int(np.sum(corner)) > 2 else 0.0
-    ok = (corner_corr >= _CORR_MIN and loop_n > 0
-          and _LOOP_MIN <= loop_gyro <= _LOOP_MAX)
+    # SCALE on the magnitude, DIRECTION against the path — see the _LOOP_MIN/_LOOP_MAX block.
+    # A lap closes at one whole turn either way round, so `abs` is what makes a right-hand circuit
+    # judged on its channel rather than on its geography; the sign is then required to match the
+    # reference, so "direction is irrelevant" never becomes "sign is unchecked". Both are NaN-safe:
+    # a NaN ratio compares False in every relation here, and `loop_n > 0` already excludes it.
+    same_way = np.sign(loop_gyro) == np.sign(loop_path) and np.sign(loop_gyro) != 0
+    ok = (corner_corr >= _CORR_MIN and loop_n > 0 and same_way
+          and _LOOP_MIN <= abs(loop_gyro) <= _LOOP_MAX)
     return RotationCheck(
         n=int(np.sum(finite)),
         corr=_corr(at[finite], path_w[finite]),
