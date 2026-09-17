@@ -203,6 +203,9 @@ def fingerprint(s, *, strict: bool = True) -> dict:
         row["lap_corner_stats"] = guard(lambda lid=lid: _round(s.corners.lap_corner_stats(lid)))
         row["lap_corner_resolved"] = guard(
             lambda lid=lid: _round(s.corners.lap_corner_resolved(lid)))
+        # C4: the same read one level finer — which EDGES matched. The STRAIGHTS table's trap
+        # speed and exit Δ count by it, and no other leaf exposes it.
+        row["lap_edge_resolved"] = guard(lambda lid=lid: _round(s.corners.lap_edge_resolved(lid)))
         row["lap_corner_grip"] = guard(lambda lid=lid: _round(s.driving.lap_corner_grip(lid)))
         row["lap_brake_events"] = guard(lambda lid=lid: _round(s.driving.lap_brake_events(lid)))
         row["lap_coasting_spans"] = guard(lambda lid=lid: _round(s.driving.lap_coasting_spans(lid)))
