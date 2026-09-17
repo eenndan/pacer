@@ -152,6 +152,29 @@ def _build_oval(**kw):
     return _build(path=_oval, per=_OVAL_PER, phase=_OVAL_PHASE * _OVAL_PER, **kw)
 
 
+def _mirror(path):
+    """The SAME track driven the other way round: reflect it in the x axis.
+
+    Every shape above is counterclockwise, which is how a verdict that only ever accepts a lap
+    closing at +2*pi reached production — D24 runs anticlockwise and the suite had no clockwise
+    case at all. A reflection turns each left-hand corner into the identical right-hand one:
+    radii, arc lengths, speeds and the arc-length parametrisation are untouched, both channels'
+    sign flips, and the lap closes at -2*pi instead of +2*pi. So the ONLY thing that differs
+    between a fixture and its mirror is the direction of travel — and in IEEE arithmetic the
+    negation is exact, which is why the tests below can compare the two to the last bit."""
+
+    def mirrored(s):
+        x, y, k = path(s)
+        return x, -y, -k
+
+    return mirrored
+
+
+def _build_oval_cw(**kw):
+    """The oval fixture, driven CLOCKWISE (`_mirror`). Every Sandown recording runs this way."""
+    return _build(path=_mirror(_oval), per=_OVAL_PER, phase=_OVAL_PHASE * _OVAL_PER, **kw)
+
+
 def test_recovers_the_known_yaw_rate_through_an_arbitrary_camera_tilt():
     """The whole point: a kart turning at a known rate, a camera bolted on crooked, and the
     module must return the KART's rate — not a camera-axis component of it."""
@@ -232,6 +255,79 @@ def test_the_verdict_catches_a_halved_channel_the_correlation_cannot_see():
     assert abs(half.gain - 0.5 * good.gain) < 1e-6
     print(f"ok x0.5 fault: corner r unchanged at {half.corner_corr:+.4f}, "
           f"loop {good.loop_ratio_gyro:.3f} -> {half.loop_ratio_gyro:.3f} x 2pi, ok -> False")
+
+
+def test_the_verdict_does_not_depend_on_which_way_the_track_runs():
+    """A CLOCKWISE lap closes at -2*pi, and that is exactly as exact as +2*pi.
+
+    The defect this pins: the verdict read `_LOOP_MIN <= loop_ratio_gyro <= _LOOP_MAX` on the
+    SIGNED ratio, so a lap that closes clockwise failed a test it passes. Measured over the real
+    load path on the owner's own footage before the fix — all three of his clockwise recordings
+    printed "Rotation cross-check: DISAGREES" in DATA TRUST while both channels agreed to within
+    3 %:
+
+        Sandown_09_05_2026  gyro -0.974 x 2pi, path -0.999, corners r=+0.94, 59 laps -> DISAGREE
+        SD_30_08_26         gyro -0.961 x 2pi, path -0.999, corners r=+0.95, 37 laps -> DISAGREE
+        Sandown 3h 2026     gyro -0.973 x 2pi, path -1.000, corners r=+0.93, 62 laps -> DISAGREE
+        D24 0060 / 0062     gyro +0.983 / +0.975 x 2pi                          -> AGREE
+
+    D24 is anticlockwise, which is why nothing in this suite caught it: every fixture above turns
+    left. The mirror is compared leaf by leaf against its original, so this cannot pass by the
+    clockwise case merely landing somewhere lenient."""
+    ccw = rotation.compute(*_build_oval()).cross
+    cw = rotation.compute(*_build_oval_cw()).cross
+    assert ccw is not None and cw is not None
+    assert ccw.loop_ratio_gyro > 0 and ccw.loop_ratio_path > 0, "the fixture must turn LEFT"
+    assert cw.loop_ratio_gyro < 0 and cw.loop_ratio_path < 0, (
+        f"the mirrored fixture must turn RIGHT (gyro {cw.loop_ratio_gyro:+.4f} x 2pi)")
+    assert ccw.ok, "the counter-clockwise control must pass"
+    assert cw.ok, (
+        f"a CLOCKWISE lap failed the verdict: closed-lap rotation {cw.loop_ratio_gyro:+.4f} x 2pi "
+        f"measured vs {cw.loop_ratio_path:+.4f} inferred, corners r={cw.corner_corr:+.4f} — the "
+        f"two channels agree, and the only thing wrong is the direction of travel")
+
+    # …and not merely "also passes": every statistic on the card must be the mirror's own.
+    assert abs(cw.loop_ratio_gyro + ccw.loop_ratio_gyro) < 1e-9, (cw.loop_ratio_gyro,
+                                                                  ccw.loop_ratio_gyro)
+    assert abs(cw.loop_ratio_path + ccw.loop_ratio_path) < 1e-9
+    assert abs(cw.corner_corr - ccw.corner_corr) < 1e-9, (cw.corner_corr, ccw.corner_corr)
+    assert abs(cw.corner_gain - ccw.corner_gain) < 1e-9
+    # The "% off exact" figures are DISTANCES from the target, so they must be mirror-invariant
+    # too — they read 197.4 % and 199.9 % on the owner's clockwise footage before the fix.
+    assert abs(cw.loop_error_pct - ccw.loop_error_pct) < 1e-6, (cw.loop_error_pct,
+                                                                ccw.loop_error_pct)
+    assert abs(cw.path_loop_error_pct - ccw.path_loop_error_pct) < 1e-6
+    assert cw.loop_error_pct < 1.0, cw.loop_error_pct
+    # …and the exact target the surfaces quote carries the direction rather than always +1.000.
+    assert cw.loop_exact == -1.0 and ccw.loop_exact == 1.0
+    assert "-1.000" in cw.summary() and "AGREE" in cw.summary(), cw.summary()
+    print(f"ok direction-blind verdict: clockwise loop {cw.loop_ratio_gyro:+.4f} x 2pi vs "
+          f"counter-clockwise {ccw.loop_ratio_gyro:+.4f}, both ok, both "
+          f"{cw.loop_error_pct:.2f}% off their own exact target")
+
+
+def test_a_channel_turning_the_opposite_way_from_the_path_is_still_rejected():
+    """Making direction irrelevant must not make the SIGN irrelevant. Feed the clockwise lap
+    traces the counter-clockwise gyro — a mirrored sensor, the fault a gravity permutation
+    produces — and the two channels now disagree about which way the kart went. Both the corner
+    correlation and the closed-lap sign catch it, and both are asserted: the correlation is the
+    one that bites here, so the sign guard is pinned directly rather than through `ok`."""
+    gyro_ccw, grav, _ = _build_oval()
+    _g, _v, traces_cw = _build_oval_cw()
+    c = rotation.compute(gyro_ccw, grav, traces_cw).cross
+    assert c is not None
+    assert not c.ok, (
+        f"a channel turning the opposite way from the path passed: loop {c.loop_ratio_gyro:+.4f} "
+        f"vs {c.loop_ratio_path:+.4f} x 2pi, corners r={c.corner_corr:+.4f}")
+    assert np.sign(c.loop_ratio_gyro) != np.sign(c.loop_ratio_path), (
+        c.loop_ratio_gyro, c.loop_ratio_path)
+    assert c.corner_corr < rotation._CORR_MIN, c.corner_corr
+    # The magnitude alone would have passed — which is exactly why the sign is checked against
+    # the path reference and not against a hard-coded +1.
+    assert rotation._LOOP_MIN <= abs(c.loop_ratio_gyro) <= rotation._LOOP_MAX, c.loop_ratio_gyro
+    print(f"ok mirrored sensor rejected: loop {c.loop_ratio_gyro:+.4f} vs path "
+          f"{c.loop_ratio_path:+.4f} x 2pi (|ratio| {abs(c.loop_ratio_gyro):.3f} is IN band), "
+          f"corners r={c.corner_corr:+.4f}")
 
 
 def test_the_verdict_catches_the_wrong_gravity_permutation():
@@ -332,7 +428,11 @@ def test_summary_names_both_scale_statistics():
     that discriminates (the closed-lap ratio) beside the one that does not (the correlation)."""
     gyro, grav, traces = _build_oval()
     s = rotation.compute(gyro, grav, traces).cross.summary()
-    assert "AGREE" in s and "r=" in s and "gain" in s and "2pi" in s and "off exact" in s
+    assert "AGREE" in s and "r=" in s and "gain" in s and "2pi" in s
+    # The exact target is quoted WITH ITS SIGN: this fixture turns left, so +1.000. A surface that
+    # prints a bare "1.000" tells a driver at a right-hand circuit his correct channel is 200 %
+    # wrong — which is what DATA TRUST did on all three of the owner's clockwise recordings.
+    assert "off an exact +1.000" in s, s
     print(f"ok summary: {s}")
 
 
