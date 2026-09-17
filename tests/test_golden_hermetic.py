@@ -187,18 +187,31 @@ def test_jail_moves_every_seam_and_adopts_an_existing_jail():
     state out from under a write-jail that is watching the first directory)."""
     import tempfile
 
-    from studio import demo, library, prefs, track_db
+    from studio import app_support, demo, library, prefs, track_db
     from studio.dev import _jail
 
     mods = (demo, library, prefs, track_db)
     originals = {m: m._app_support_dir for m in mods}
+    env_before = os.environ.get(app_support.DIR_ENV)
     try:
+        # Since H8 a test process is never un-jailed (studio/app_support.py), so the process's own
+        # jail is what a harness finds first, and it is adopted like any outer jail.
+        own = _jail.divert_app_support("pacer-jail-test-")
+        assert not own.created and os.path.abspath(own.dir) != os.path.abspath(_jail._REAL_DIR), (
+            f"a test process's own jail must be adopted, not replaced: {own}")
+
+        # The FRESH case, as a harness outside tests/ meets it: the library seam reports the real
+        # directory. Only the path string is compared — divert repoints every seam before returning
+        # and nothing in this test writes a store.
+        library._app_support_dir = lambda: _jail._REAL_DIR
         jail = _jail.divert_app_support("pacer-jail-test-")
         for m in mods:
             assert os.path.abspath(m._app_support_dir()) == os.path.abspath(jail.dir), (
                 f"{m.__name__} still resolves to {m._app_support_dir()} after the jail")
         assert prefs.prefs_path().startswith(jail.dir), "prefs.json is still the operator's own"
         assert jail.created, "a fresh jail must report itself as owned by this run"
+        assert os.environ.get(app_support.DIR_ENV) == jail.dir, (
+            "the jail patched this process but did not export itself to the processes it starts")
 
         # Second call: the existing jail wins, a fresh temp dir is NOT created, and the caller is
         # told it does not own the directory — `_smoke` rmtree's what it owns.
@@ -215,6 +228,10 @@ def test_jail_moves_every_seam_and_adopts_an_existing_jail():
     finally:
         for m, fn in originals.items():
             m._app_support_dir = fn
+        if env_before is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = env_before
 
 
 # ---------------------------------------------------------------------------------------------
