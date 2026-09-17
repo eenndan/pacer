@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Two features were built far enough to **measure**, and the measurement said not to ship them. The
+Three features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -103,6 +103,72 @@ opposite, and worse.
 driven — an **order statistic**, with no sampling uncertainty. Its only instability is in **N**, and
 N is a monotone ladder, not a distribution. That ladder is what `corner_model.IdealSample` publishes
 and what the Stats page's sample disclosure states.
+
+---
+
+## 3. A per-corner GPS-quality abstain — refused (#255, re-measured here)
+
+**The idea.** `coaching.corner_evidence` refuses to make a claim about a corner with too few clean
+instances (`ABSTAIN_FEW_LAPS`), with no second lap at the target (`ABSTAIN_ONE_OFF`), or whose claim
+is inside the corner's own interquartile spread (`ABSTAIN_SPREAD`) — but never because the GPS was
+degraded *through that corner*. Add a fourth reason keyed on fix quality inside the corner window.
+
+**It was refused once already, in #255, on a different statistic** (the interior sample gap), **and
+that evidence lived only in the pull request** — which is the exact failure this file exists to fix.
+So it is re-measured here at the cell such a gate would actually key on: one (clean lap × corner)
+window, over both recordings and all ten bundled samples, via `studio/dev/probes/p4_corner_gps_quality.py`.
+
+|  | 0060 | 0062 |
+|---|---|---|
+| clean laps × corners = cells | 38 × 12 = **456** | 65 × 12 = **780** |
+| cells inheriting a class below `GOOD` | **26** (5.7 %) | **0** |
+| cells containing a **rejected** fix | **0** | **0** |
+| worst kept DOP per cell (median / max) | 2.60 / **8.96** | 1.62 / **4.80** |
+| cells above `DOP_GOOD_MAX` (5.0) | 26 | **0** |
+| whole-recording verdict | `gps9_trueclock`, 0 % rejected, **not degraded** | `gps9_trueclock`, 0 % rejected, **not degraded** |
+| per-LAP, the DATA TRUST card's row | 17 of 38 below good | 0 of 65 |
+
+**Four measured reasons to refuse it:**
+
+1. **The proposed key is identically zero.** Keyed on *degraded fixes inside the corner window* —
+   the form the backlog specified — it fires on **0 of 1,236 cells across both recordings**. Not one
+   rejected fix falls inside any corner window of either recording. 0060 rejects no fix at all, and
+   every one of 0062's 482 rejections is in the 48 s of lock acquisition before the kart moves. The
+   gate as specified is unreachable code.
+2. **The only key that CAN fire was already refused one level up.** The reachable signal is the DOP
+   band, and it fires on 0060 only — 26 of 456 cells, on a recording the app itself reports as `0 %
+   of moving fixes rejected` and **not degraded**. That is precisely the case the `[u]` block in
+   [`studio/data_quality.py`](../data_quality.py) already measured and refused at LAP level: the
+   same recording puts 17 of 38 clean laps below good, and marking them "would mark 45 % of the rows
+   of a recording the app itself reports as clean". A per-corner abstain is that same invention one
+   level down. **The codes follow the app's verdicts; they do not add to them.**
+3. **It does not replicate.** 0060 has real structure — C8 18.4 %, C10 15.8 %, C9 and C11 10.5 %,
+   C6 7.9 %, and **five corners at exactly zero**. 0062 has nothing at all: 0 of 780 cells, worst
+   kept DOP anywhere **4.80**, below the 5.0 threshold at every corner of every lap. Same driver,
+   same track, one day apart. So the corner a per-corner reason would name is a property of one
+   afternoon's sky, not of the corner — and a driver who was told "C8 is unreliable" on Saturday
+   would be told nothing at all about it on Sunday.
+4. **A third of the firing is a clock-labelling artifact.** The strip's cells are MEDIA seconds and
+   a corner window is TELEMETRY seconds. `Session.lap_quality` measures that crossing and documents
+   it as harmless — it changes the class of **0 of 38** and **0 of 65** whole laps. At corner scale
+   it stops being harmless: indexing the same 456 cells on the media clock instead moves **9 of
+   them** across a class boundary. A lap window is ~70 s against a 1.00 s cell; a corner window is
+   ~3-6 s, so the same ≤0.166 s of labelling error that rounds away over a lap decides the verdict
+   for about a third of the 26 cells that fire.
+
+**No fixture outside D24 can reach it either.** All ten bundled samples come back with **0 corners
+and 0 clean laps** — most are a few seconds long, and `karma.mp4` carries no GPS at all
+(`NO_GPS_TRACE`). A synthetic-only gate would therefore be a reason no shipped fixture exercises,
+gating a claim no real recording asked it to gate.
+
+**#255's own two numbers reproduce exactly**, and they are the reason the window is thin enough for
+all of this to be marginal: the worst interior sample gap inside any corner window on any clean lap
+is **0.1010 s** on both recordings — exactly the 10 Hz fix period, i.e. no interior gap at all — and
+the thinnest window is **20 samples** (0060) / **22** (0062).
+
+**What would be new evidence:** a recording that rejects fixes *while moving* inside a corner
+window, or one whose degraded corners are the same corners on two different days. Neither exists in
+anything this repo can currently load.
 
 ---
 
