@@ -42,4 +42,13 @@ same lap to show the fit separates them, and scores the result against a CURVATU
 rigid translation cannot move. Its numbers are the evidence for M7.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor
+
+`p10_heat_to_heat` loads the three present Sandown recordings and puts every pair through the real
+`focus.verdict`, with the whole lap as the window. It checks once against the owner's own
+session-record store (read, never written) and once against a planted pair of records that agree.
+It asks whether a session-level "better than last time" would ever be allowed, and whether the
+change it would print is bigger than the spread inside one session. Its verdict is
+`studio/docs/refused-2026-09.md` §8.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_heat_to_heat
 """
