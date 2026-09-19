@@ -11,6 +11,68 @@ import numpy as np
 
 import pacer
 
+from . import chapters
+
+# `carries_telemetry`'s three answers. THREE, and the third is the point, exactly as in
+# `chapters.probe_mp4`: "I opened this file and pacer found no GoPro telemetry in it" and "I could
+# not read this file" are different facts about the world and must lead to opposite behaviour. The
+# first is permanent and local to one file; the second is temporary and says nothing about the
+# contents (a chmod, a still-copying file, an unmounted volume), so it must never be reported as a
+# verdict on what the file holds.
+TELEMETRY_PRESENT = "telemetry"
+TELEMETRY_ABSENT = "no_telemetry"
+TELEMETRY_UNKNOWN = "unknown"
+
+
+def carries_telemetry(path: str) -> str:
+    """Can pacer read GoPro telemetry out of `path`? -> `TELEMETRY_PRESENT` / `TELEMETRY_ABSENT` /
+    `TELEMETRY_UNKNOWN`.
+
+    This is the LOADER'S OWN FIRST GATE and nothing more: `pacer.GPMFSource`'s constructor calls
+    `OpenMP4Source` for the GPMF trak and raises when the file hasn't got one
+    (`pacer/gps-source/gps-source.cpp:17-23`). It reads the moov atom, not the payloads, so it is
+    CHEAP — measured on this machine over the owner's own footage: 5.23 ms and 1.64 ms on the two
+    11.9 GB chapters of D24 recording 0062, 0.78 ms on a 147 MB overlay export, 1.32 ms on an
+    8.5 GB non-GoPro clip, 0.42 ms on the 2.4 MB stub. Cheap enough to answer "is this actually a
+    recording?" on the UI thread, which is the whole reason it exists: `StudioWindow._open_recordings`
+    would otherwise have to LOAD a file (2.2-2.4 s for a three-chapter recording) to find out, and
+    that is the difference between a question the drop path can ask and one it cannot.
+
+    `TELEMETRY_UNKNOWN` is returned whenever the bytes did not arrive — the caller must treat it as
+    "assume it is a recording" and let the real load fail loudly on it, never as a silent skip. A
+    file that READS and proves not to be an MP4 container at all (the destroyed stub) is
+    `TELEMETRY_ABSENT`: that is a positive verdict, and `chapters.probe_mp4` already drew exactly
+    that line.
+
+    NOT a claim that the file has usable LAPS, a track, or anything else a load decides — only that
+    pacer can get at its telemetry stream. Everything past that is `Session.load`'s business."""
+    probe = chapters.probe_mp4(path)
+    if probe == chapters.MP4_UNREADABLE:
+        return TELEMETRY_UNKNOWN
+    if probe == chapters.MP4_NOT_A_CONTAINER:
+        return TELEMETRY_ABSENT
+    try:
+        pacer.GPMFSource(path)
+    except Exception:  # noqa: BLE001 — any refusal from the C++ opener is "no telemetry here"
+        return TELEMETRY_ABSENT
+    return TELEMETRY_PRESENT
+
+
+def recording_carries_telemetry(paths: list[str]) -> str:
+    """The same three answers for a whole RECORDING (its chapter list), which is the unit the app
+    opens.
+
+    ANY chapter with telemetry makes the recording readable, because `Session.load` drops the
+    chapters it can't parse and loads the rest — `~/Desktop/D24/GX010060.MP4` is 2.4 MB of JSON and
+    recording 0060 still loads its other two chapters. So a recording is only `TELEMETRY_ABSENT`
+    when EVERY chapter was read and none of them had any, and `TELEMETRY_UNKNOWN` the moment one
+    chapter could not be read at all — the unreadable case propagates, so a locked or still-copying
+    file can never turn into "this isn't a recording"."""
+    verdicts = [carries_telemetry(p) for p in paths]
+    if not verdicts or TELEMETRY_PRESENT in verdicts:
+        return TELEMETRY_PRESENT if verdicts else TELEMETRY_UNKNOWN
+    return TELEMETRY_UNKNOWN if TELEMETRY_UNKNOWN in verdicts else TELEMETRY_ABSENT
+
 
 def chain_sources(paths):
     """Build the `SequentialGPSSource` chain over the GoPro chapters ->

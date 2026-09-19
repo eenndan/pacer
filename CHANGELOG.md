@@ -272,6 +272,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **Dragging the start/finish line is twice as quick, because the Stats page stops redrawing itself
+  where nobody can see it.** Every edit that re-segments a session — a start-line drag, a sector
+  edit, ⌘Z, loading a reference — rebuilds each session-derived surface, and the Stats dashboard is
+  one of five pages in the lap panel, four of which are hidden at any moment. Measured on the real
+  three-chapter load of D24's 65-lap recording, that rebuild is **396 ms** and the Stats page is
+  **200 ms of it — 50.5 %**; skipping it while another tab is showing leaves **196 ms**, and drag
+  ten times on the Laps tab and the page now renders once, when you open it. What makes that safe
+  is that the deferral cannot be observed: the page pays its debt before Qt can paint a pixel of
+  it, and before it is handed to anything that asks for it — the GPS chip's jump to DATA TRUST, the
+  docs-image harness, the tests. A figure on this page never predates the edit that changed it.
+
 - **Coaching stops crowning one corner when two of them are the same number.** The plan's second
   line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
   of the owner's recordings, that crown is not something the data supports: the top two corners are
@@ -342,6 +353,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **Dropping a folder no longer counts Pacer's own exports as recordings you should go and open.**
+  A multi-file drop groups by filename, so every stray `.MP4` beside the footage came back as its
+  own recording — and the app saves its overlay clips exactly there, next to the recording they came
+  from. On the owner's four footage folders, five of the recordings that message offered beyond the
+  one it opened were really one: the other four carry no telemetry and the loader refuses them in
+  0.00 s, two of them being overlay clips Pacer had rendered from the recording it had just opened.
+  The drop now counts only what it could actually offer, using the loader's own first gate rather
+  than a name heuristic — 0.4–5.2 ms per candidate, including 5.23 ms on an 11.9 GB chapter — and a
+  file it could not read still counts, because that says nothing about what is in it. A background
+  batch-import queue for those extra recordings was measured and refused in the same pass
+  (`studio/docs/refused-2026-09.md` §7).
 - **A corner time or speed pacer had to interpolate is no longer published as a measurement.** A
   corner edge a lap does not match to the best lap's line on track is interpolated, and on the 38-lap
   D24 recording that put 236 of 456 corner times a median 0.22 s (up to 0.96 s) and the speeds read at

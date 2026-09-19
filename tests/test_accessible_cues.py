@@ -556,6 +556,11 @@ def test_stats_spark_pb_colour_follows_the_palette():
         sess = _fake_view_session()
         sess.lap_time_trend = lambda: [(0, 70.0), (1, 71.2), (2, 69.8)]  # lap 3 = a new PB
         view = StatsView(sess)
+        # SHOWN, because since P1 the Stats page renders only when it can be seen: `refresh_palette`
+        # defers on a page that is off screen (the debt is paid by showEvent, or by CentralView's
+        # accessor). In the app a colour-blind flip repaints whatever page is up, which is what this
+        # asserts; without the show it would be asserting the deferral instead.
+        view.show()
         assert view.spark.isVisibleTo(view), "the sparkline shows with >=2 clean laps"
 
         def _pb_brush():
@@ -572,6 +577,7 @@ def test_stats_spark_pb_colour_follows_the_palette():
         assert _pb_brush() == QColor(theme.best_lap_colour()).name().upper()
         assert _baseline_pen() == QColor(theme.best_lap_colour()).name().upper()
         assert _pb_brush() != QColor(theme.C.ahead).name().upper()  # actually changed
+        view.hide()
     finally:
         theme.set_palette(theme.PALETTE_STANDARD)
     print("test_stats_spark_pb_colour_follows_the_palette OK")
