@@ -19,11 +19,15 @@ Four findings, all on ``studio/coaching_panel.py``:
     column is now "Done it?" (a count over its denominator); the RULE it established — a table cell
     never states a number without the unit or sample that makes it checkable — is what is pinned.
   * L5-10 — the ESTIMATED brake-point hint is derived from `apex − d` under CONSTANT-DECEL,
-    straight-line braking, which the friction circle only affords on the APPROACH. On D24's C10 the
-    optimum lands at 870.6 m — 59 m inside an 811.6..891.1 m corner window, 19.4 m before the apex —
-    so the cell asked for "Brake ~50 m later" beside its own measured "~0.36 s longer on the
-    brakes". (The sweep's headline arithmetic, "50.4 m is 2.1 s of travel, 7x the 0.30 s", conflates
-    travel time with time LOST and is deliberately not repeated here — the evidence is geometric.)
+    straight-line braking, which the friction circle only affords on the APPROACH. AS MEASURED AT
+    THE TIME: on D24's C10 the optimum landed at 870.6 m — 59 m inside an 811.6..891.1 m corner
+    window, 19.4 m before the apex — so the cell asked for "Brake ~50 m later" beside its own
+    measured "~0.36 s longer on the brakes". Those metres are a RECORD of the finding, not a live
+    figure: #300, #335 and C5 each moved them, and what the app computes today is
+    `coaching_panel.BRAKE_HINT_MAX_PAST_TURN_IN_M`'s own table, which
+    tests/test_measured_figures.py re-measures. (The sweep's headline arithmetic, "50.4 m is 2.1 s
+    of travel, 7x the 0.30 s", conflates travel time with time LOST and is deliberately not
+    repeated here — the evidence is geometric.)
 
 Every layout assertion here is on PIXELS (`rowHeight`, `columnWidth`, `sectionSize`, a real
 `fontMetrics` advance against the section's own chrome) — never on `strings().elided`, which models

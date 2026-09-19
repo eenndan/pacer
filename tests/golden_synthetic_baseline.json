@@ -17021,9 +17021,9 @@
      "direction": 1,
      "entry_dist": 196.6656075185435,
      "evidence": {
-      "abstain": "one_off",
-      "iqr": 0.2401922169547035,
-      "n_laps": 3,
+      "abstain": "few_laps",
+      "iqr": 0.24019221695470527,
+      "n_laps": 2,
       "reach": "rare",
       "reach_laps": 1
      },
@@ -17036,11 +17036,11 @@
       "apex_speed_deficit": 0.04086444778853604,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.19979720957964275,
-      "contribution": 0.1616461783409728,
+      "contribution": 0.166616401860087,
       "kind": "line",
-      "sigma": 0.24053573071069398
+      "sigma": 0.3396830907938038
      },
-     "time_lost": 0.2624500243205503
+     "time_lost": 0.24019221695470439
     },
     {
      "cid": 2,
@@ -17133,10 +17133,10 @@
   "corner_consistency": [
    {
     "cid": 1,
-    "median_loss": 0.2624500243205503,
-    "n": 3,
-    "score": 0.06312860837498298,
-    "sigma": 0.24053573071069398
+    "median_loss": 0.2401922169547035,
+    "n": 2,
+    "score": 0.08158923463978958,
+    "sigma": 0.3396830907938038
    },
    {
     "cid": 2,
@@ -30067,7 +30067,7 @@
     "trap_median_kmh": 43.697875772813234
    }
   ],
-  "theoretical_best": 35.852731735463514,
+  "theoretical_best": 35.90774898123084,
   "track_name": "Stadium",
   "valid_lap_ids": [
    0,
@@ -30085,32 +30085,6 @@
    "median_lap_id": 2,
    "n_laps": 3,
    "rows": [
-    {
-     "cid": 1,
-     "direction": 1,
-     "entry_dist": 195.9149754287781,
-     "evidence": {
-      "abstain": "one_off",
-      "iqr": 0.237372732050936,
-      "n_laps": 3,
-      "reach": "rare",
-      "reach_laps": 1
-     },
-     "phases": {
-      "apex": 0.06743383363736655,
-      "entry": 0.06576930588437158,
-      "exit": 0.06635863427613486
-     },
-     "reason": {
-      "apex_speed_deficit": 0.9249186228047819,
-      "brake_extra_s": 2.244601123599219,
-      "coast_extra_s": 0.0,
-      "contribution": 0.17603473018781812,
-      "kind": "braking",
-      "sigma": 0.238374395117198
-     },
-     "time_lost": 0.19956248240228014
-    },
     {
      "cid": 2,
      "direction": 1,
@@ -30136,6 +30110,32 @@
       "sigma": 0.22132165568074855
      },
      "time_lost": 0.19214805520060807
+    },
+    {
+     "cid": 1,
+     "direction": 1,
+     "entry_dist": 195.9149754287781,
+     "evidence": {
+      "abstain": "few_laps",
+      "iqr": 0.09978124120114096,
+      "n_laps": 2,
+      "reach": "rare",
+      "reach_laps": 1
+     },
+     "phases": {
+      "apex": 0.06743383363736655,
+      "entry": 0.06576930588437158,
+      "exit": 0.06635863427613486
+     },
+     "reason": {
+      "apex_speed_deficit": 0.9249186228047819,
+      "brake_extra_s": 2.244601123599219,
+      "coast_extra_s": 0.0,
+      "contribution": 0.08801736509390906,
+      "kind": "braking",
+      "sigma": 0.14111198457707336
+     },
+     "time_lost": 0.09978124120114007
     }
    ],
    "theme": {
@@ -30201,18 +30201,18 @@
   ],
   "corner_consistency": [
    {
-    "cid": 1,
-    "median_loss": 0.19956248240228014,
-    "n": 3,
-    "score": 0.04757058603073,
-    "sigma": 0.238374395117198
-   },
-   {
     "cid": 2,
     "median_loss": 0.19214805520060807,
     "n": 3,
     "score": 0.04252652571283445,
     "sigma": 0.22132165568074855
+   },
+   {
+    "cid": 1,
+    "median_loss": 0.09978124120114096,
+    "n": 2,
+    "score": 0.01408032896945664,
+    "sigma": 0.14111198457707336
    }
   ],
   "corner_map_markers": [
@@ -43162,7 +43162,7 @@
     "trap_median_kmh": 44.33091291731549
    }
   ],
-  "theoretical_best": 35.752994611399856,
+  "theoretical_best": 35.90774898123084,
   "track_name": "Stadium",
   "valid_lap_ids": [
    0,

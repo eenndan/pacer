@@ -235,10 +235,30 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
         sd = float(np.std(lap["cols"][3] - lap["clean_speed"]))
         assert abs(sd - DN_SPEED_SIGMA_MPS) <= 0.15 * DN_SPEED_SIGMA_MPS, f"lap {i} speed sd {sd}"
 
-    donors = s.corners.segment_bests().donors
-    assert any(d not in (None, 0) for d in donors), f"every segment donated by the best lap: {donors}"
+    # THE COMPOSITE, AND WHAT C5 CHANGED ABOUT IT. This used to assert that some segment was
+    # donated by a lap other than the best — "the ideal is not a duplicate of the best lap". It
+    # was true here for exactly one reason: lap 1 was the quickest through C1→C2, and C1→C2 is one
+    # of the two segments bounded by the unmatched boundary above. The fixture's whole composite
+    # advantage was a window nobody matched, which is the defect C5 exists for, in miniature.
+    #
+    # So the property pinned is now the SHARP one, and it still fails both ways: lap 1 must still
+    # be the fastest through that segment on the clock (or the mask below is masking nothing), and
+    # it must not donate it. A multi-donor composite over MATCHED cells is covered by the stadium
+    # phase — three of this fingerprint's six — whose donors are [0, 1, 0, 1, None] with every
+    # cell resolved.
+    sb = s.corners.segment_bests()
+    seg = next(j for j, lbl in enumerate(sb.labels) if lbl == "C1-C2")
+    row = sb.lap_ids.index(1)
+    assert not sb.resolved[row][seg], "lap 1's C1→C2 is no longer the interpolated segment"
+    assert sb.times[row, seg] == sb.times[:, seg].min(), (
+        f"lap 1 is no longer the quickest through C1→C2 ({sb.times[:, seg].tolist()}) — the "
+        f"resolution mask would then be excluding a cell that was losing anyway")
+    assert sb.donors[seg] not in (None, 1), (
+        f"C1→C2 is donated by lap {sb.donors[seg]}, whose window was interpolated")
+    assert sb.bests[seg] > sb.times[row, seg], (sb.bests[seg], sb.times[row, seg])
     print(f"ok drift+noise fixture: lap 1 drift {drift[1]:.3%}, unmatched boundary "
-          f"{unmatched[0]:.1f} m, segment donors {donors}")
+          f"{unmatched[0]:.1f} m, its quickest C1→C2 ({sb.times[row, seg]:.3f} s) refused the "
+          f"composite in favour of {sb.bests[seg]:.3f} s, segment donors {sb.donors}")
 
 
 def test_drift_median_fixture_puts_the_drift_where_coaching_reads():

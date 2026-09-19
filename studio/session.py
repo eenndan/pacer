@@ -2568,7 +2568,16 @@ class Session:
         """The "most inconsistent corners" ranking over the consistency laps: per corner,
         the sample σ of time-in-corner and the median time lost vs the per-corner best,
         ranked by σ × median_loss (corners that are BOTH inconsistent and slow first —
-        see studio/consistency.py for the weighting rationale). [] without corners."""
+        see studio/consistency.py for the weighting rationale). [] without corners.
+
+        C5: only cells matched on track at both edges count (`CornerModel.lap_corner_resolved`) —
+        the rule the CORNERS table, the grid and the Corners page ★ have counted by since C4. This
+        σ IS that table's σ column: one quantity, one definition, one lap set. Counting every cell
+        it disagreed with the printed one on 12 of 12 corners on the D24 0060 pair, by up to
+        0.038 s (C10, 0.654 against the table's 0.692) — small, and there is no version of "two
+        surfaces, one quantity" that tolerates it. `coaching.summarize` is the only reader (it is
+        the LINE signal behind a coaching reason), so the CORNERS table and the coaching row now
+        answer "how repeatable is this corner?" with the same number."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
         if not corner_list or not ids:
@@ -2577,7 +2586,9 @@ class Session:
         for i in ids:
             st = self.corners.lap_corner_stats(i)
             if len(st) == len(corner_list):  # degenerate laps project to [] — skip
-                times_by_lap.append([s.time for s in st])
+                res = self.corners.lap_corner_resolved(i)
+                times_by_lap.append([s.time if k < len(res) and res[k] else math.nan
+                                     for k, s in enumerate(st)])
         return consistency.rank_corners(
             consistency.corner_spreads([c.cid for c in corner_list], times_by_lap))
 
@@ -2728,13 +2739,26 @@ class Session:
         Onsets and optima are projected into the reference odometer (× ref_total/lap_total, the
         house normalized projection) so cross-lap spread measures driver scatter, not lap-length
         drift; `metres_later` is a LENGTH DIFFERENCE within one lap and needs no projection. []
-        without corners / g signal / clean laps."""
+        without corners / g signal / clean laps.
+
+        C5: A BRAKE POINT IS A WINDOW MEASUREMENT, so it counts only where the lap matched that
+        corner on track at both edges (`CornerModel.lap_corner_resolved`). Everything the row
+        carries is read inside the projected window — the brake event is the last onset inside
+        [enter − lead, exit], and the optimum is this lap's `apex_dist` minus a braking distance
+        computed from its `apex_speed` — so on an interpolated cell the whole row is measured
+        against a boundary nobody matched. The effect on what is printed is SMALL and is reported
+        as such: on the D24 0060 pair the BRAKING table's "m later" moves by at most 0.7 m (C9,
+        21.1 → 20.4) against the 2.0 m the coaching hint itself calls noise
+        (`coaching_panel.BRAKE_HINT_MIN_M`), and 0062 does not move at all. It is applied anyway
+        because it is one line, because the same window's grip column has counted this way since
+        C4, and because both surfaces medianize THIS list, so they stay one answer."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
         basis = self.corners.basis()
         if not corner_list or not ids or basis is None:
             return []
         ref_total = float(basis[1])
+        index = {int(c.cid): k for k, c in enumerate(corner_list)}
         rows: list[dict] = []
         for i in ids:
             bps = self.driving.lap_brake_points(i)
@@ -2743,13 +2767,23 @@ class Session:
             td = self._lap_time_dist(i)
             lap_total = float(td[1][-1]) if td is not None else 0.0
             scale = ref_total / lap_total if ref_total > 0 and lap_total > 0 else 1.0
-            rows.append({
+            res = self.corners.lap_corner_resolved(i)
+
+            def matched(cid: int, res=res) -> bool:
+                k = index.get(int(cid))
+                return k is not None and k < len(res) and bool(res[k])
+
+            row = {
                 bp.cid: (bp.actual_brake_dist * scale,
                          (bp.peak_decel_g / bp.a_max_g) if bp.a_max_g > 0 else None,
                          bp.metres_later,
                          bp.optimal_brake_dist * scale)
-                for bp in bps
-            })
+                for bp in bps if matched(bp.cid)
+            }
+            # A lap that matched no corner contributes no row at all, exactly as a lap with no
+            # detected brake event does — it lowers n, it never fakes a value.
+            if row:
+                rows.append(row)
         return rows
 
     def brake_report(self) -> list[stats_service.BrakeConsistency]:
@@ -2867,7 +2901,11 @@ class Session:
         coaching.MIN_LAPS valid, dropout-free laps — the friendly "need more laps" state, no
         crash. Composes only existing accessors: corners(), lap_corner_stats(),
         consistency_lap_ids(), corner_consistency(), lap_brake_events(), lap_coasting_spans(),
-        best_lap_id(), lap_time()."""
+        best_lap_id(), lap_time().
+
+        C5: only cells matched on track at both edges, on this lap AND on the best lap it is
+        subtracted from, count towards a row (`CornerModel.lap_corner_resolved` — the rule in
+        `coaching.summarize`'s block, and the one the CORNERS table has counted by since C4)."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
         best = self.best_lap_id()
@@ -2881,6 +2919,7 @@ class Session:
         cand_ids: list[int] = []
         lap_times: list[float] = []
         corner_times_by_lap: list[list[float]] = []
+        resolved_by_lap: list[list[bool]] = []
         for i in ids:
             st = self.corners.lap_corner_stats(i)
             if len(st) != n:
@@ -2888,6 +2927,9 @@ class Session:
             cand_ids.append(i)
             lap_times.append(self.lap_time(i))
             corner_times_by_lap.append([s.time for s in st])
+            # C5: which of this lap's corner windows were matched on track at both edges. Rows
+            # stay aligned to cand_ids because they are appended in the same branch.
+            resolved_by_lap.append(self.corners.lap_corner_resolved(i))
 
         # The best lap's own per-corner time-in-corner (its self-delta is 0; we need the raw
         # times as the per-corner baseline the median loss is measured against).
@@ -2983,6 +3025,10 @@ class Session:
                           if med_id is not None and median_lap_total else None),
             best_align=(self.corners.lap_alignment(best, best_lap_total)
                         if best_lap_total else None),
+            # C5: which cells the loss, the evidence and the reach may count — this lap's matched
+            # corners and the best lap's, since every one of those is a difference between the two.
+            resolved_by_lap=resolved_by_lap,
+            best_resolved=self.corners.lap_corner_resolved(best),
         )
 
     def coaching_brake_points(self) -> dict:
