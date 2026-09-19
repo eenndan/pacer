@@ -46,7 +46,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import corners, data_quality, driving, gmeter, media_clock, provenance_panel, theme, units
+from . import (
+    corners,
+    data_quality,
+    driving,
+    gmeter,
+    media_clock,
+    provenance,
+    provenance_panel,
+    theme,
+    units,
+)
 from . import stats as stats_service
 from ._signal import exclusion_summary, fmt_hms, fmt_time, plural
 
@@ -526,6 +536,7 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "line on track at entry AND exit: an interpolated corner can be tenths of a "
                    "second out, so it is left out (hover Best or Median for how many laps count), "
                    "and a corner no lap matched shows dashes rather than a guess. "
+                   + provenance.CORNER_MATCH_DRIFT + " "
                    f"The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
                    "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
                    "cells are not simply this column's three largest numbers; hover one for its "
@@ -579,6 +590,7 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "trap speed its end, Exit Δ the corner before it — because an interpolated "
                      "edge can put a time tenths of a second and a speed several km/h out (hover "
                      "a cell for how many laps count). "
+                     + provenance.CORNER_MATCH_DRIFT + " "
                      "Click a row to ring the corner feeding that straight.")
 BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the cross-lap "
                    "scatter of your brake-onset POINT (σ and max−min span, metres, compared "
@@ -662,8 +674,9 @@ CORNER_GRID_TOOLTIP = (
     "▼ means the same thing on both.\n\n"
     "MUTED CELLS ARE NEVER MARKED. A lap's corner windows are placed by matching its line to your "
     f"best lap's on the track; an edge with no match within {corners.SPATIAL_MATCH_MAX_M:g} m is "
-    "interpolated between its neighbours instead. Timed a second, independent way — the moment the "
-    "lap crosses the track at each edge — such cells were a median 0.22 s off (up to 0.89 s) on "
+    "interpolated between its neighbours instead. " + provenance.CORNER_MATCH_DRIFT + " "
+    "Timed a second, independent way — the moment the lap crosses the track at each edge — "
+    "interpolated cells were a median 0.22 s off (up to 0.89 s) on "
     "the owner's 38-lap recording, as large as the mark itself, against 0.004 s for matched ones. "
     "They are shown, because they are the lap's real reading, but they never carry a ▼ and never "
     "count towards the typical. The CORNERS table above counts the same matched cells, so its "
@@ -3756,11 +3769,17 @@ class StatsView(QWidget):
                         # and not part of the typical (stats.CornerMatrix has the numbers).
                         item.setForeground(PROVISIONAL_COLOR)
                         theme.apply_provisional_style(item)
+                        # "EVEN WITH THE DRIFT TAKEN OUT" IS UNHEDGED, and may be: this grid is
+                        # never drawn under stats.MATRIX_MIN_LAPS clean laps, which is more than the
+                        # corners.DRIFT_MIN_LAPS the receiver-drift fit needs (#335) — pinned in
+                        # tests/test_provenance_panel.py. Without it, "3 m" reads as 3 m of raw GPS
+                        # position, and a reader blames their line for the receiver's scatter.
                         item.setToolTip(
                             f"Not marked: on lap {lap_id + 1}, C{cid}'s entry or exit could not be "
                             f"matched to your best lap's line within "
-                            f"{corners.SPATIAL_MATCH_MAX_M:g} m, so its edge is interpolated and "
-                            "this time is not precise enough to compare with the other laps.")
+                            f"{corners.SPATIAL_MATCH_MAX_M:g} m, even with the GPS receiver's "
+                            "drift taken out, so its edge is interpolated and this time is not "
+                            "precise enough to compare with the other laps.")
                     elif med is None:
                         item.setToolTip(
                             f"Not marked: only {plural(matrix.n_resolved[c], 'lap')} matched C{cid} "
@@ -3869,12 +3888,15 @@ class StatsView(QWidget):
         rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
         if rows:
             top = rows[:PANEL_TOP_N]
-            # Coaching still counts every clean lap's corner time, interpolated or not — said here
-            # whenever this table left some out, because that is then a second difference between
-            # the two numbers this sentence puts side by side.
-            every = " — counting every clean lap, interpolated corners too —" if left_out else ""
+            # Since #339 Coaching counts a cell only where the lap AND the best lap matched that
+            # corner on track — the rule this table counts by — so when this table left some out,
+            # the sentence says Coaching did too: a reader who has just been told cells were left
+            # out here would otherwise have to guess whether the total beside it counts them.
+            # (It said the OPPOSITE until W1. COASTING still counts every cell, deliberately —
+            # see CornerModel.lap_corner_resolved — and is not named here.)
+            same = ", leaving out the same interpolated times," if left_out else ""
             parts.append(
-                f"The Coaching tab measures the SAME corners against your best lap{every} and "
+                f"The Coaching tab measures the SAME corners against your best lap{same} and "
                 f"totals {sum(r.time_lost for r in rows):.2f} s, "
                 f"{sum(round(r.time_lost, 2) for r in top):.2f} s of it in its top {len(top)}.")
         gap = self._ideal_gap(session)

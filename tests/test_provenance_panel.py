@@ -280,6 +280,74 @@ def test_the_corners_table_offers_inspection_on_the_best_cell_only():
           f"{prov.formatted!r} matches its cell; {table.columnCount() - 2} other columns decline")
 
 
+# What a driver must be told about the corner match since #335, in the words the surfaces use. The
+# 3 m is judged with each lap's receiver drift taken out, the trace is moved RIGIDLY (which is why a
+# different racing line is not cancelled with it), and the best lap's edge moves SIDEWAYS only —
+# the fastest lap stays the reference and the corner stays where it was along the track.
+DRIFT_STORY = ("drift is taken out", "as one piece", "sideways", "the line it drove")
+
+
+def test_every_surface_that_explains_the_corner_match_says_the_drift_is_taken_out():
+    """W1. The CORNERS table's Best and the panel that explains it show ONE quantity, and both said
+    a corner edge counts when it is "matched to your best lap's line" (the grid: "within 3 m").
+    Still true after #335, but not the whole story: the match now judges each lap's line with the
+    receiver's drift removed first, which is most of why D24 0060's matched share rose (the figure
+    lives in #335, not here). A reader of the old sentence concludes that a muted cell means they
+    drove 3 m off their best line, and that GPS scatter alone can mute one — no longer so.
+
+    Driven on the REAL widgets over the REAL synthetic recording: the Stats page's three table
+    tooltips that describe the match, a muted CORNERS BY LAP cell's own hover, and the provenance
+    panel opened on a CORNERS Best. The story must be on every one, and the sentence that tells it
+    must be the SAME sentence everywhere — one author, so the two surfaces cannot split again."""
+    from studio import corners, stats
+
+    s = _session()
+    # The sentence describes something that RAN on this fixture, not a code path it never reaches.
+    assert s.corners.geometry() is not None, "the fixture no longer fits a session geometry"
+
+    view = StatsView(s)
+    view.refresh()
+    tips = {"CORNERS": view.corners_table.toolTip(),
+            "STRAIGHTS": view.straights_table.toolTip(),
+            "CORNERS BY LAP": view.corner_grid_table.toolTip()}
+    cid = int(view.corners_table.item(0, 0).data(NUM_ROLE))
+    prov = s.corner_best_provenance(cid)
+    assert prov is not None
+    panel = provenance_panel.ProvenancePanel(prov)
+    tips["provenance panel"] = " ".join(w.text() for w in panel.findChildren(QLabel))
+    panel.close()
+    for where, text in tips.items():
+        missing = [p for p in DRIFT_STORY if p not in text]
+        assert not missing, f"{where} does not say the receiver's drift is taken out {missing}: {text}"
+        assert provenance.CORNER_MATCH_DRIFT in text, f"{where} re-words the one sentence: {text}"
+    assert prov.method.count(provenance.CORNER_MATCH_DRIFT) == 1, prov.method
+
+    # A MUTED cell's own hover quotes the 3 m, so it must say what the 3 m is judged on. It says so
+    # unhedged, which is only true because the grid never draws below a lap count the drift fit
+    # always has — pinned here, so the clause cannot quietly go false.
+    assert stats.MATRIX_MIN_LAPS >= corners.DRIFT_MIN_LAPS, (stats.MATRIX_MIN_LAPS,
+                                                              corners.DRIFT_MIN_LAPS)
+    real = s.corners.lap_corner_resolved
+    muted_lap = next(i for i in s.consistency_lap_ids() if i != s.best_lap_id())
+    s.corners.lap_corner_resolved = lambda lap: [ok and lap != muted_lap for ok in real(lap)]
+    try:
+        view.refresh()
+    finally:
+        s.corners.lap_corner_resolved = real
+    grid = view.corner_grid_table
+    hovers = [grid.item(r, c).toolTip() for r in range(grid.rowCount())
+              for c in range(1, grid.columnCount() - 1)
+              if grid.item(r, c) is not None and grid.item(r, c).toolTip().startswith("Not marked: on lap ")]
+    assert hovers, "planting an unmatched lap produced no muted cell to hover"
+    want = (f"within {corners.SPATIAL_MATCH_MAX_M:g} m, even with the GPS receiver's drift taken "
+            "out,")
+    wrong = [h for h in hovers if want not in h]
+    assert not wrong, f"a muted cell quotes the 3 m without saying what it is judged on: {wrong[0]}"
+    view.hide()
+    print(f"test_every_surface_that_explains_the_corner_match_says_the_drift_is_taken_out OK — "
+          f"{len(tips)} surfaces carry one sentence, {len(hovers)} muted cell(s) say what 3 m means")
+
+
 def test_the_surfaces_use_one_menu_label():
     """Two context menus, one string. Three wordings for one action is how a feature stops looking
     like one feature — so the label is checked the way the design guards check a token: no call
