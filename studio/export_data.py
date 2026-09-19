@@ -188,11 +188,12 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
     `corners_interpolated` IS THE FILE'S HALF OF THE ONE RULE (C5), AND IT KEEPS EVERY ROW. Since
     C4 the app's own corner surfaces count only cells matched on track at both edges: an
     interpolated window sat a median 0.22 s off an independent line-crossing time against
-    0.004 s for a matched one on D24 before #335 (`CornerModel.lap_corner_resolved`). The CSV is an EXTERNAL FORMAT
-    and a reader may be diffing this week's file against last week's, so nothing is dropped and no
-    cell is blanked — the `C*_time_s` and `C*_apex_*` columns still carry every value they carried
-    before, and this column says which of them are a guess between neighbouring matches. A reader
-    that wants the app's numbers filters on it; a reader that wants the raw dump ignores it.
+    0.004 s for a matched one on D24 before #335 (`CornerModel.lap_corner_resolved`). The CSV is
+    an EXTERNAL FORMAT and a reader may be diffing this week's file against last week's, so
+    nothing is dropped and no cell is blanked — the `C*_time_s` and `C*_apex_*` columns still
+    carry every value they carried before, and this column says which of them are a guess between
+    neighbouring matches. A reader that wants the app's numbers filters on it; a reader that wants
+    the raw dump ignores it.
     Measured on the owner's D24 recordings: 34 of the 0060 pair's 456 exported cells are
     interpolated (7.5 %, over 16 of its 38 laps) and 0 of 0062's 780.
 

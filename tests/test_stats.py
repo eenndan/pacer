@@ -4082,8 +4082,8 @@ def test_corner_matrix_never_marks_or_counts_a_cell_whose_window_edge_was_interp
     """F7. Measured on the D24 0060 pair before #335 against an independent gate-crossing time, a
     corner cell with an interpolated window edge was off by a median 0.219 s (max 0.886 s) and a
     matched one by 0.004 s (max 0.024 s); 7 of the 10 marks the plain rule put on interpolated
-    cells were not confirmed. So the grid shows those cells and refuses them twice: no ▼, and no vote in the
-    typical the other laps are measured against (stats.CornerMatrix has the numbers)."""
+    cells were not confirmed. So the grid shows those cells and refuses them twice: no ▼, and no
+    vote in the typical the other laps are measured against (stats.CornerMatrix has the numbers)."""
     ids, times, resolved = _corner_grid_fixture()
     m = corner_matrix(ids, [1, 2], times, resolved)
     assert m is not None and m.cids == [1, 2]

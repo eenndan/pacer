@@ -923,9 +923,8 @@ def summarize(
     # `Session.phase_report` applies to the thirds of the same window, and the rule the CORNERS
     # table, the grid, the ★ and STRAIGHTS have counted by since C4. An interpolated window was a
     # median 0.22 s off an independent crossing time against 0.004 s for a matched one on D24
-    # before #335, and every
-    # number on a coaching row — the loss, the evidence, the reach, the IQR — comes out of this
-    # one matrix. Measured on the D24 0060 pair after #335 (422 of 456 cells resolved) the losses
+    # before #335, and every number on a coaching row — the loss, the evidence, the reach, the
+    # IQR — comes out of this one matrix. Measured on the D24 0060 pair after #335 (422 of 456 cells resolved) the losses
     # move by at most 0.045 s and two ABSTAINED rows swap places; on 0062 (780 of 780) nothing
     # moves at all. It is a small correction, and it is the one that makes the panel's "Time lost"
     # and the CORNERS table's σ beside it two readings of one measurement.

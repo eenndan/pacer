@@ -579,11 +579,11 @@ class CornerMatrix:
                                          0062:   4 of 780   |Δ| max 0.082 s (3 scorable)
 
     Before #335, C4 re-measured the same 236 cells for `corner_report` against a line crossing it
-    built itself, and read a median 0.221 s, max 0.960 s. That is the same statistic over the same cells, with
-    two separately built crossing references. The medians agree to 2 ms. The maxima differ by
-    0.074 s, and nothing on record says which reference is the better one, so a surface quoting a
-    maximum says which measurement it is: 0.89 s is this gate's, 0.96 s is C4's line. Both are from
-    before #335.
+    built itself, and read a median 0.221 s, max 0.960 s. That is the same statistic over the same
+    cells, with two separately built crossing references. The medians agree to 2 ms. The maxima
+    differ by 0.074 s, and nothing on record says which reference is the better one, so a surface
+    quoting a maximum says which measurement it is: 0.89 s is this gate's, 0.96 s is C4's line.
+    Both are from before #335.
 
     On 0060 the interpolated cells' error is as large as the ▼ itself: of the 10 marks the plain
     rule put on them that the gate could score, it agreed with 3; of the 20 it put on resolved

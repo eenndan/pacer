@@ -884,9 +884,9 @@ class CornerModel:
 
         WHAT IT SEPARATES, measured against an independent gate-crossing time per cell on the two
         D24 recordings before #335 changed corner matching (full table, stale since, in
-        `stats.CornerMatrix`): resolved cells agree with it to a
-        median 0.004 s (max 0.024 s); cells with an interpolated edge disagree by a median 0.219 s
-        (max 0.886 s) on the 0060 pair, where 236 of its 456 cells are unresolved (4 of 780 on 0062).
+        `stats.CornerMatrix`): resolved cells agreed with it to a median 0.004 s (max 0.024 s);
+        cells with an interpolated edge disagreed by a median 0.219 s (max 0.886 s) on the 0060
+        pair, where 236 of its 456 cells were unresolved (4 of 780 on 0062). #335 left 34.
         THE ONE RULE for which cells a cross-lap corner statistic may count. The CORNERS BY LAP
         grid marks by it; since C4 the CORNERS table (`Session.corner_report`), its Best's
         provenance, the Corners page ★ (`corner_session_bests`) and the phase split
@@ -980,11 +980,12 @@ class CornerModel:
         C4: only cells matched on track at both edges (`lap_corner_resolved`) can be the best — the
         rule the Stats page's CORNERS table and CORNERS BY LAP grid count by. An interpolated window
         was a median 0.22 s off an independent crossing time on the D24 0060 pair before #335
-        (0.004 s for a matched one), and a MINIMUM is the statistic that error favours: counting every cell, the
-        Corners page ★ sat on an interpolated cell in C2, C6 and C8, whose crossing times were 0.53,
-        0.41 and 0.29 s slower than the starred time. None for a corner no clean lap matched: no
-        cell there can be starred, rather than the least imprecise one being starred. (The best lap
-        is matched against its own line, and resolves every corner on both D24 recordings.)
+        (0.004 s for a matched one), and a MINIMUM is the statistic that error favours: counting
+        every cell, the Corners page ★ sat on an interpolated cell in C2, C6 and C8, whose crossing
+        times were 0.53, 0.41 and 0.29 s slower than the starred time. None for a corner no clean
+        lap matched: no cell there can be starred, rather than the least imprecise one being
+        starred. (The best lap is matched against its own line, and resolves every corner on both
+        D24 recordings.)
 
         §4.1: this ran on the raw valid set while `session_best_splits`, `best_lap_id`,
         `best_rolling_lap` and the ideal composite all excluded GPS-dropout laps. A dropout lap's
@@ -1045,8 +1046,8 @@ class CornerModel:
 
         C5: AND IT MUST HAVE BEEN MEASURED. A segment whose boundaries this lap did not match on
         track (`lap_segment_resolved`) is timed between two guesses, a median 0.22 s off an
-        independent line crossing against 0.004 s for a matched one (D24, before #335) — and the composite is a
-        MINIMUM, the statistic that error favours, so it is the same argument
+        independent line crossing against 0.004 s for a matched one (D24, before #335) — and the
+        composite is a MINIMUM, the statistic that error favours, so it is the same argument
         `corner_session_bests` makes for the purple cells. Measured on the D24 0060 pair (38 laps,
         92.5 % of cells resolved after #335) the composite's winning donor sat on an interpolated
         boundary in 5 of its 25 segments and the ideal read **65.637 s where the matched cells say
