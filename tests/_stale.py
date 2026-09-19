@@ -66,7 +66,7 @@ def _normal(s: str) -> str:
     return " ".join(s.split())
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def in_app_strings(rel: str) -> tuple[str, ...]:
     """Every string a studio module can show or write: each str constant that is not a docstring,
     whitespace-normalised. Adjacent literals arrive already joined, the way the parser joins them,
