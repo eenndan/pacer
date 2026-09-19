@@ -54,6 +54,22 @@ DISTANCE = "distance"
 # the same reason data_quality.no_laps_body() is: three panels stating one method three ways is
 # how a method description drifts from the method. `tests/test_provenance.py` asserts every id a
 # builder emits is present here and that every sentence here is emitted by a builder.
+# What "matched to the best lap's line" has meant since #335, told ONCE and quoted by every surface
+# that explains the corner match — this panel's corner-best method and the Stats page's CORNERS,
+# STRAIGHTS and CORNERS BY LAP tooltips — so the table and the panel that explains its Best cannot
+# describe the match two ways. The mechanism is `corners.SessionGeometry` (each clean lap's rigid
+# receiver shift, removed from DRIFT_MIN_LAPS clean laps) and `corners.anchor_offsets` (the best
+# lap's boundary point moved PERPENDICULAR to its travel, from ANCHOR_MIN_LAPS). "With enough clean
+# laps" is the honest hedge for both thresholds; the fastest lap stays the reference, and the corner
+# window stays where it was along it, which is what "sideways" says. No figure: the matched-share
+# gain #335 measured is a D24 figure nothing in the tree re-derives, and one typed here would rot.
+CORNER_MATCH_DRIFT = (
+    "With enough clean laps, the GPS receiver's drift is taken out before matching: each lap's "
+    "trace is shifted as one piece to cancel the steady offset the receiver put on that lap, and "
+    "the best lap's corner edges are moved sideways onto the laps' typical line, so a lap is "
+    "judged on the line it drove, not on where the GPS put it."
+)
+
 METHODS: dict[str, str] = {
     "lap_time.line_crossings": (
         "Lap time is the finish-line crossing instant minus the start-line crossing instant. "
@@ -74,7 +90,8 @@ METHODS: dict[str, str] = {
         "time at its entry boundary, interpolated on that lap's (odometer, elapsed) curve; the "
         "session best is the minimum of those over the clean laps whose entry and exit were both "
         "matched to the best lap's line on track. A lap where either was interpolated between "
-        "its neighbours instead is left out: its window can be tenths of a second out."
+        "its neighbours instead is left out: its window can be tenths of a second out. "
+        + CORNER_MATCH_DRIFT
     ),
 }
 

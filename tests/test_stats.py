@@ -3367,8 +3367,9 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     """C4, on the face of the CORNERS table. Its rows now count only corners matched on track, so
     a Best or Median over fewer laps than the page's other tables says so where the number is, a
     corner no lap matched reads as dashes that EXPLAIN themselves, and the caption states the count
-    and that the Coaching total beside it still counts every lap. Nothing is said when every lap
-    counted, so a clean recording's page is unchanged."""
+    and that the Coaching total beside it counts the same cells (W1: it said "every lap" until
+    #339 made that false). Nothing is said when every lap counted, so a clean recording's page
+    is unchanged."""
     _APP  # noqa: B018
     from studio.stats import CornerReport
     from studio.stats_panel import DASH, WORST_LOSS_MARK, StatsView
@@ -3404,7 +3405,12 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     assert "Only corners matched on track count: 45 of 114" in note, note
     assert "the other 69 were interpolated" in note, note
     assert "No lap matched C9 on track" in note, note
-    assert "against your best lap — counting every clean lap, interpolated corners too —" in note
+    # W1: since #339 Coaching counts only the cells this table counts (a lap's corner, and the best
+    # lap's, matched on track), so the caption says it counts the SAME cells. Until W1 it said
+    # Coaching counted every clean lap, interpolated or not, which #339 had made false.
+    assert "interpolated corners too" not in note, note
+    assert ("The Coaching tab measures the SAME corners against your best lap, leaving out the "
+            "same interpolated times, and totals" in note), note
     assert "Different baselines" in note, note
 
     # Every lap counted: the caption and the coaching sentence are exactly what they were.
@@ -3415,7 +3421,7 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     assert "against your best lap and totals" in note, note
     view.hide()
     print("ok CORNERS: partial counts disclosed on the cell, an unmatched corner dashed and named, "
-          "and the coaching sentence says it counts differently")
+          "and the coaching sentence says it leaves out the same cells")
 
 
 def test_digest_tooltip_reads_the_ideal_delta_instead_of_a_baked_range():
