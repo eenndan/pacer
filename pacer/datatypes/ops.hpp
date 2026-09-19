@@ -5,6 +5,13 @@
 // return it inherits the arithmetic operators, a dot product (`Scalar`) and
 // Euclidean magnitude. Every reduction walks indices 0..N-1 in ascending order,
 // so the floating-point accumulation is deterministic down to the bit.
+//
+// THE ONLY USERS ARE THE GEOMETRY VECTORS — Vec3f and Point, both in
+// pacer/geometry/geometry.hpp, which includes this header directly. Its
+// neighbour datatypes.hpp deliberately does NOT: GPSSample, PointInTime,
+// IMUSample and QuatSample are plain telemetry records that derive from
+// nothing. Include this from the header that actually mixes it in, so the
+// mixins do not arrive by accident everywhere a GPS fix is named.
 
 #include <cmath>
 #include <cstddef>

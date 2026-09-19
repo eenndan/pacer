@@ -312,10 +312,10 @@ void py_init_module_pacer(nb::module_ &m) {
       )
       .def_rw("first", &pacer::Segment::first, "")
       .def_rw("second", &pacer::Segment::second, "")
-      .def("intersects",
-          &pacer::Segment::Intersects,
-          nb::arg("fst"), nb::arg("snd"), nb::arg("ratio"),
-          " True iff this segment and fst->snd cross PROPERLY. Both straddle tests use\n strict signs, so a touch — an endpoint of either segment lying exactly on\n the other's supporting line — is NOT a crossing (pinned by\n tests/test_geometry, including that a trace vertex sitting exactly on a\n timing line produces no crossing from either adjacent segment). On a True\n return, if `ratio` is non-null it gets the crossing's fraction along\n fst->snd, so fst*(1-ratio) + snd*ratio is the intersection point (Split\n uses it to interpolate the crossing sample/time). `ratio` is untouched on\n False.")
+      .def("intersection_ratio",
+          &pacer::Segment::IntersectionRatio,
+          nb::arg("fst"), nb::arg("snd"),
+          " The fraction along fst->snd at which it PROPERLY crosses this segment.\n There is no value when it does not cross (nullopt in C++, None in Python).\n On a crossing, fst*(1-ratio) + snd*ratio is the intersection point — that\n is how Split interpolates the crossing sample and its time.\n\n Both straddle tests use strict signs, so a touch — an endpoint of either\n segment lying exactly on the other's supporting line — is NOT a crossing\n (pinned by tests/test_geometry, including that a trace vertex sitting\n exactly on a timing line produces no crossing from either adjacent\n segment). That strictness is what stops one pass being counted twice.\n\n This is the ONE implementation of the crossing test; the out-parameter\n form (Intersects) is a thin adapter over it, so the two cannot disagree.\n It is also the form Python is given, because an out-parameter cannot be\n read from Python — see the note in bindings/pacer/generate-bindings.py.")
       .def("__eq__",
           &pacer::Segment::operator==, nb::arg("other"))
       ;

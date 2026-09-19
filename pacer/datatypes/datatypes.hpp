@@ -2,8 +2,6 @@
 
 #include <cstdint>
 
-#include "ops.hpp"
-
 namespace pacer {
 
 // A single GPS fix. lat/lon are degrees, altitude is metres, and the two speeds
