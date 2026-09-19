@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Seven features were built far enough to **measure**, and the measurement said not to ship them. The
+Nine features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -646,6 +646,166 @@ the same three-answer discipline `chapters.probe_mp4` already keeps.
 Pacer exports, for whom the first table's one-in-five becomes most-of-five; or a measurement showing
 the second drop gesture is a real barrier rather than a keystroke. Note that the cheap gate shipped
 here is also what a future queue would want as its admission test, so it has been paid for already.
+
+---
+
+## 9. The hesitation metric (lift-to-brake gap per corner) — refused (M5)
+
+**The idea.** Between lifting off the throttle and getting on the brake there is a gap. A driver who
+dithers there loses time no lap chart shows, so publish that gap per corner (roadmap LATER,
+"Hesitation metric", scored 6.5 · M).
+
+**What it is measured with, and why that settles it.** Both ends of the gap come off ONE series —
+`_signal.speed_long_g` on the lap's native ~10 Hz grid, the same derivative `driving.brake_events`
+runs on. So the gap inherits that grid's **0.1 s quantum** and that derivative's **0.10–0.12 g of
+noise**, while the signal it has to find — a kart's off-power drag — measures **0.042–0.046 g**.
+The thing to detect is smaller than the noise on the instrument detecting it.
+
+Measured on four present recordings (D24 is gone), through the app's own brake events and the
+shipped corner-match window; a brake attaches to 91–98 % of the (lap × corner) cells.
+
+| | Sandown 3h · 62×7 | SD_30_08 · 37×7 | SD_19_09 · 36×7 | MK_18_09 · 19×12 |
+|---|---|---|---|---|
+| gap on the brake detector's own series | **0.050 s** [p10 0.050, p90 0.150] | 0.050 [0.050, 0.150] | 0.050 [0.050, 0.150] | 0.050 [0.050, 0.150] |
+| gap on the coast channel's 0.50 s series | 0.150 [0.050, 0.350] | 0.150 [0.050, 0.151] | 0.150 [0.050, 0.250] | 0.150 [0.050, 0.510] |
+| a coast span ENDS within 0.5 s of the onset | 4 % | 1 % | 6 % | 6 % |
+
+0.050 s is this estimator's floor — half a sample, returned when there is no off-power sample at
+all between the throttle and the brake. **That is the median on every recording.** The backlog's
+literal wording ("the end of the app's own coast span to the brake onset") is a different number
+again — median **5.5–6.4 s**, because the coast the app detects is almost never the one abutting
+the brake.
+
+### The null: what the instrument reports when there is no hesitation at all
+
+The shipped estimator was run over a synthetic approach carrying a **planted** gap, built from each
+recording's own entry speed, drag decel, brake ramp and block-bootstrapped speed noise (600
+approaches per planted value).
+
+| planted gap | 0.0 s | 0.2 s | 0.3 s | 0.5 s | 0.8 s |
+|---|---|---|---|---|---|
+| estimate, brake series (Sandown 3h) | 0.050 | 0.050 | 0.050 | 0.050 | **0.050** |
+| estimate, 0.50 s series (Sandown 3h) | 0.150 | 0.150 | 0.250 | 0.450 | 0.650 |
+| share clearing the planted-zero p95, 0.50 s series | 1 % | 6 % | 21 % | 76 % | 94 % |
+
+**With the noise switched off the same estimator recovers the planted gap** (0.8 s → 0.75 s,
+0.5 → 0.45, 0.3 → 0.25) — the probe's own negative control, so what follows is the channel, not a
+broken estimator.
+
+Two things follow. The brake detector's own series **cannot resolve a gap at all** — 0.8 s of
+planted hesitation still reads 0.050 s. The coast channel's 0.50 s series **can**, from about
+0.3 s upward, at the cost of ~0.05 s of bias and ±0.1 s of spread per event.
+
+**And the measured data is the planted-zero distribution.** Observed median vs planted-zero median:
+0.050 / 0.050 s on the bare series and 0.150 / 0.150 s on the 0.50 s series, on all four
+recordings. The share of events above the planted-zero p95 — 5 % is what no hesitation looks like —
+is 4 / 6 / 5 / 2 % (bare) and 14 / 3 / 6 / 16 % (0.50 s). The typical approach on these recordings
+goes from throttle to brake inside one sample.
+
+### With the instrument that does work, the gap predicts nothing
+
+Per-corner Spearman of the 0.50 s gap against the corner's own time, pooled (pre-specified,
+selects no corner), 20,000 permutations:
+
+| | Sandown 3h | SD_30_08 | SD_19_09 | MK_18_09 |
+|---|---|---|---|---|
+| pooled ρ | +0.038 (p 0.48) | +0.029 (p 0.66) | +0.070 (p 0.37) | +0.023 (p 0.80) |
+| pooled ρ, lap pace removed | +0.110 (p 0.035) | **−0.095** (p 0.16) | +0.027 (p 0.72) | +0.011 (p 0.90) |
+
+One of eight reaches 0.05, and the same statistic on another recording of the same track has the
+**opposite sign**. The per-corner best is never family-wise significant.
+
+**Power, end to end.** A hesitation of 0.30 s ± 0.15 s lap to lap, costing the corner its own
+duration (β = 1.0 s per s — the physical ceiling), planted and then passed through the simulation's
+own measurement model before the test: on the 0.50 s series the pooled test fires **100 / 100 / 100 /
+100 %** (Sandown 3h, SD_30_08, SD_19_09, MK) and at β = 0.5 still **100 / 100 / 100 / 71 %**. On the
+bare series the same effect is found **14 / 14 / 22 / 8 %** of the time. So the silence above is a
+measurement, not a shortage of laps — the test would have seen the effect, on the series that can
+carry it, had it been there.
+
+**Selection control** (nothing to find): "some corner at FWER 0.05" fires 3.3–6.7 %, "the TOP
+corner read off its own p" fires **20.0–34.7 %**, the #311 trap again.
+
+### Why this is a refusal and not a smaller feature
+
+A per-corner number whose median IS its instrument's floor cannot be published with a corner's name
+on it. Quantised to 0.1 s, the whole distribution occupies two or three values, the two windows the
+app already ships over this signal disagree by a median 0.100 s about it, and the per-corner median
+does not repeat between the odd and even laps of one session on the series that can measure it
+(split-half ρ +0.68 / +0.83 / +0.39 / +0.43, but over per-corner medians that take only the values
+0.05 and 0.15).
+
+**What would be new evidence:** a throttle or brake-pressure channel (a real pedal input, not a
+speed derivative), or a GPS/IMU chain that puts the lift and the onset on a grid finer than 0.1 s
+with noise below the ~0.04 g drag step. Nothing on a GoPro's GPS9 does.
+
+---
+
+## 10. Driver learning vs session evolution, by median polish — refused (M5)
+
+**The idea.** A session gets faster for two reasons — the track and tyres coming to the driver, and
+the driver working a corner out. Median-polish the laps × corners matrix of corner times: the lap
+effects' trend is the session, and a corner whose residual trends on top of that is learning
+(roadmap LATER, scored 6 · L, "most speculative survivor").
+
+**The first problem is not statistical.** Median polish separates **common** from
+**corner-specific**. It does not separate the driver from the track. A driver who simply gets
+faster everywhere lands entirely in the lap effects, beside the rubbering-in, and no arithmetic
+here can tell those two apart. Only the corner-specific half is testable, so only it was tested.
+
+**The common half is real, and the app already ships it** (the Stats page's pace trend and the
+per-stint trends, `stats.Stint`):
+
+| lap effects' Theil-Sen trend | Sandown 3h | SD_30_08 | SD_19_09 | MK_18_09 |
+|---|---|---|---|---|
+| across the session | −0.045 s | −0.064 s | −0.087 s | **−0.335 s** |
+| shuffled-order p | 0.31 | 0.028 | 0.0001 | 0.0018 |
+
+**The corner-specific half never beats its null.** The null shuffles the lap ORDER, permuting whole
+rows of the residual matrix, so every lap keeps its own residuals across every corner and only time
+order dies. The pre-specified statistic is the summed squared per-corner rank trend, which selects
+nothing (20,000 permutations):
+
+| | Sandown 3h | SD_30_08 | SD_19_09 | MK_18_09 |
+|---|---|---|---|---|
+| pre-specified global p | **0.139** | **0.457** | **0.308** | **0.297** |
+| top corner, uncorrected p | 0.035 | 0.065 | 0.050 | 0.029 |
+| the same corner, family-wise p | 0.198 | 0.357 | 0.284 | 0.171 |
+| split-half (odd vs even laps) agreement of the per-corner trends | r +0.46, 5 of 7 signs | r −0.18, 1 of 7 | r +0.11, 4 of 7 | r −0.09, 2 of 6 |
+
+The second and third rows are the whole story: read by eye, every recording has a corner at
+p < 0.07; corrected, none of them survives. The selection control says why — with the lap order
+shuffled, "the top corner by its own p" fires **27.3–30.3 %** of the time.
+
+**Power, by planting into the real matrices.** A known corner-specific improvement added to ONE
+corner and put through the whole chain (polish, then the trend test):
+
+| planted across the session | Sandown 3h (61 laps) | SD_30_08 (35) | SD_19_09 (34) | MK_18_09 (18) |
+|---|---|---|---|---|
+| 0.10 s — some corner named / the RIGHT one | 26 % / 26 % | 18 % / 18 % | 4 % / 4 % | 0 % / 0 % |
+| 0.20 s | 42 % / 23 % | 46 % / 46 % | 86 % / 86 % | 0 % / 0 % |
+| 0.40 s | 98 % / 84 % | 100 % / 100 % | 100 % / 100 % | 0 % / 0 % |
+
+So the test is not blind: it finds a 0.4 s corner-specific move almost always on a 34–61 lap
+session, and names the right corner 84–100 % of the time. It finds nothing in the real data. On a
+19-lap session it finds nothing at any size, which is itself the answer for short sessions.
+
+**The mirror-image control passes:** a purely COMMON improvement of the same size (planted into
+every corner) is misread as corner-specific **0 %** of the time, 200 replicates at each size on
+every recording. The decomposition does not leak — there is simply nothing in the corner-specific
+half to decompose.
+
+**The one hit, and why it is not an exception.** Of eleven tests (four whole sessions + seven
+stints), one fires: Sandown 3h's fourth stint (32 laps), global p 0.0026, C5 ρ +0.603
+(p_fwer 0.0022). P(the smallest of eleven p-values is that small under a global null) ≈ 2.8 %, so it
+is marginal before anything else is said — and the sign is wrong for the story: C5 gets **slower**
+across that stint while C1 and C2 get faster (ρ −0.39, −0.41), which is a redistribution of one
+lap's time between corners, not a corner being learned. The same recording's third stint reads
+C5 ρ +0.23, global p 0.88.
+
+**What would be new evidence:** a session of 40+ laps where a corner-specific trend of ≥0.2 s
+survives the pre-specified global test AND repeats in the odd/even split of the same session — the
+two things the planted controls say such a session would show.
 
 ---
 

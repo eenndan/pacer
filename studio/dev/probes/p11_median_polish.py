@@ -165,8 +165,9 @@ def report(key: str, d: dict, rng) -> None:
         print("  too few laps")
         return
     stints, counts = np.unique(d["stint"], return_counts=True)
+    laps_per_stint = dict(zip(stints.tolist(), counts.tolist(), strict=True))
     print(f"  lap time: first 5 {np.round(d['lap_time'][:5], 2).tolist()}, last 5 "
-          f"{np.round(d['lap_time'][-5:], 2).tolist()}; stints {dict(zip(stints.tolist(), counts.tolist()))}")
+          f"{np.round(d['lap_time'][-5:], 2).tolist()}; stints {laps_per_stint}")
 
     pol = median_polish(M)
     row, col = pol["row"], pol["col"]
