@@ -1966,12 +1966,19 @@ def test_dialog_opens_tall_enough_to_browse_and_holds_the_pb_chart_to_its_band()
     roomy, tall_rows = dlg.pb_plot.height(), _rows_visible(dlg)
     table_at_860 = dlg.table.viewport().height()
     assert roomy <= _PB_PLOT_MAX_H, (roomy, tall_rows)
-    # Every further pixel the dialog gains belongs to the LIST: growing the dialog by 120 px must
-    # grow the table by ~120 px, not the 72 px (60%) it grew by on main.
+    # Every further pixel the dialog gains belongs to the LIST once the chart is at its ceiling:
+    # growing the dialog by 120 px must grow the table by 120 px less whatever the chart still had
+    # left of its band — not the 72 px (60%) it grew by on main, where the chart had no ceiling.
+    # (Stated against the chart's REMAINING room rather than as a flat 114: since the privacy note
+    # was set at the app's prose measure (U5) it is 84 px taller, so at 880x860 the chart sits at
+    # 181 px of its band rather than on the ceiling, and takes its last 19 px on the way up.)
     dlg.resize(880, 980)
     _settle()
     gained = dlg.table.viewport().height() - table_at_860
-    assert gained >= 114, (gained, _rows_visible(dlg))
+    chart_gain = dlg.pb_plot.height() - roomy
+    assert dlg.pb_plot.height() <= _PB_PLOT_MAX_H, dlg.pb_plot.height()
+    assert chart_gain <= _PB_PLOT_MAX_H - roomy, (chart_gain, roomy)
+    assert gained >= 120 - chart_gain - 6, (gained, chart_gain, _rows_visible(dlg))
     # …and the chart still yields FIRST when the dialog is small, back down toward its 150 px floor.
     dlg.resize(880, 600)
     _settle()
@@ -2038,6 +2045,37 @@ def _privacy_note(dlg):
         if label.text() == PRIVACY_NOTE:
             return label
     raise AssertionError("the privacy note is not in the dialog")
+
+
+def test_the_privacy_note_is_set_at_the_apps_prose_measure():
+    """U5. The note is ~1,000 characters of prose, and it had no maximum width: at the 880 px
+    default it ran 856 px wide — a median 166 characters to the line, more than twice the ~45-75 a
+    reader's eye tracks back across — and wider still on a wider dialog. It is capped at the app's
+    one prose measure (theme.EMPTY_MEASURE_PX, the same step the empty states and the Stats page's
+    notes use), at every dialog width, and it stays on the dialog's LEFT edge with the list above
+    it rather than floating centred under it (an un-aligned item narrower than its cell is centred).
+
+    Measured on the real, fully wired dialog at the default size and at a wide one."""
+    from PySide6.QtCore import QPoint
+    for size in (_DEFAULT_SIZE, (1600, _DEFAULT_SIZE[1])):
+        dlg = _wired_dialog(_many_entries())
+        dlg.show()
+        _settle()
+        dlg.resize(*size)
+        _settle()
+        note = _privacy_note(dlg)
+        assert note.width() <= theme.EMPTY_MEASURE_PX, (
+            f"at {dlg.width()}x{dlg.height()} the privacy note is {note.width()} px wide — past the "
+            f"app's {theme.EMPTY_MEASURE_PX} px prose measure")
+        # ...and it USES the measure rather than shrink-wrapping to some narrower hint.
+        assert note.width() == theme.EMPTY_MEASURE_PX, (note.width(), dlg.width())
+        note_x = note.mapTo(dlg, QPoint(0, 0)).x()
+        table_x = dlg.table.mapTo(dlg, QPoint(0, 0)).x()
+        assert note_x == table_x, (
+            f"the capped note starts at x={note_x}, the list above it at x={table_x}")
+        dlg.hide()
+        dlg.deleteLater()
+    print("test_the_privacy_note_is_set_at_the_apps_prose_measure OK")
 
 
 def test_dialog_privacy_note_fits_inside_the_dialog_at_its_own_minimum():

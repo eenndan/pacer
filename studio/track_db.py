@@ -156,7 +156,7 @@ class BuiltInTrack(ValueError):
     def __init__(self, name: str):
         self.name = str(name)
         super().__init__(
-            f"{self.name!r} is one of pacer's built-in tracks, so it cannot be renamed or deleted")
+            f"{self.name!r} is one of Pacer's built-in tracks, so it cannot be renamed or deleted")
 
 
 def _app_support_dir() -> str:

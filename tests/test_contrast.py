@@ -12,7 +12,8 @@ Four guarantees, all measurable, none of them opinions:
      by more than the ~2.3 CIE76 JND under a deuteranopia simulation, and it must never be WORSE
      than the default ramp it replaces. Shipped, its lower half stepped 0.90-1.16 over dE 7.5 —
      a flat orange bar across half the speed range, and 5.4x worse than simply leaving the option
-     off (40.3).
+     off (40.3). And nothing the user SELECTED — the accent start line and the primary lap's
+     brake glyphs — may be the colour of the ramp it is drawn on (U5).
 
   3. WCAG AA ON EVERY ENABLED TEXT STYLE (U1-01, L10-05). 4.5:1 at body/caption sizes. `text_muted`
      is allowed to stay below it ONLY on disabled chrome, which WCAG 1.4.3 explicitly exempts — and
@@ -361,7 +362,7 @@ def test_colourblind_map_ramp_steps_clear_the_jnd_under_deuteranopia():
     half of the ramp may be a dead zone. Shipped, the lower half stepped 0.90-1.16 over dE 7.5 —
     a flat orange bar across half the speed range.
 
-    (The DEFAULT ramp is deliberately NOT held to this: red->amber->green necks to 1.44 at the
+    (The DEFAULT ramp is deliberately NOT held to this: red->yellow->green necks to 1.60 at the
     handover under simulation, which is precisely why the colour-blind palette exists. It is held
     to the JND under normal vision below.)"""
     try:
@@ -401,23 +402,74 @@ def test_the_accessible_ramp_is_never_worse_than_the_default_one():
     print("test_the_accessible_ramp_is_never_worse_than_the_default_one OK")
 
 
-def test_default_map_ramp_is_byte_identical_and_the_mid_anchor_is_an_accessor():
-    """The default palette must be untouched by the colour-blind fix (existing users see no change):
-    ends on the semantic tokens, amber in the middle. And the mid anchor is per-palette, resolved
-    through an accessor like every other swappable hue."""
+def test_default_map_ramp_ends_on_the_semantic_tokens_and_its_middle_is_the_data_hue():
+    """The default ramp ends on the semantic tokens and passes through C.data_mid — the palette's
+    DATA hue — in the middle, not the accent. The mid anchor is per-palette and resolved through an
+    accessor like every other swappable hue, and in NEITHER palette is it the accent.
+
+    This test used to pin the accent as the default ramp's middle ("existing users see no change"),
+    which is exactly the monoculture U5 removed: see the selection-vs-data guard below."""
     try:
         theme.set_palette(theme.PALETTE_STANDARD)
-        assert theme.ramp_mid_colour() == C.accent
-        assert theme.rainbow_colors(3)[1].upper() == C.accent.upper()
+        assert theme.ramp_mid_colour() == C.data_mid
+        assert theme.rainbow_colors(3)[1].upper() == C.data_mid.upper()
         assert theme.rainbow_colors()[0].upper() == C.behind.upper()
         assert theme.rainbow_colors()[-1].upper() == C.ahead.upper()
         theme.set_palette(theme.PALETTE_COLORBLIND)
-        assert theme.ramp_mid_colour() != C.accent, "the CB ramp needs its OWN mid anchor"
         assert theme.rainbow_colors()[0] == theme.behind_colour()
         assert theme.rainbow_colors()[-1] == theme.ahead_colour()
+        for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+            theme.set_palette(pal)
+            assert theme.ramp_mid_colour().upper() != C.accent.upper(), (
+                f"{pal}: the data scales' middle is the selection accent again")
     finally:
         theme.set_palette(theme.PALETTE_STANDARD)
-    print("test_default_map_ramp_is_byte_identical_and_the_mid_anchor_is_an_accessor OK")
+    print("test_default_map_ramp_ends_on_the_semantic_tokens_and_its_middle_is_the_data_hue OK")
+
+
+# What the map paints ON the ramp, in the accent: the start/finish line (and its provisional cue)
+# and the primary lap's brake glyphs (CHART_SERIES slot 0). Read from the modules that draw them,
+# not restated here, so a change to either is judged by this test rather than bypassing it.
+# 10 dE is "clearly a different colour side by side" — ~4 JND — and 3 JND is the deuteranopic
+# floor. The colour-blind palette's slow end is its own deliberate orange (#F0902B, 13.4 / 7.9 from
+# the accent); a start line or an onset glyph almost never sits on a lap's slowest bucket.
+_SELECTION_ON_RAMP_MIN_DE = 10.0
+_SELECTION_ON_RAMP_MIN_DE_DEUT = 3 * JND
+
+
+def test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it():
+    """U5. The start line and the primary lap's brake glyphs are the ACCENT and sit on the map's
+    channel ramp, and the default ramp's middle WAS the accent: bucket 7 was 2.62 dE from the start
+    line's own colour (1.97 deuteranopic). Measured on the owner's Sandown Park recordings, the
+    start line crossed a bucket within 10 dE of itself on 35 of 37 laps (SD_30_08_26), 43 of 62
+    (Sandown 3h 2026) and 30 of 36 (SD_19_09_26), and 14-26 % of the amber brake glyphs landed on
+    one, on all four recordings. With C.data_mid: none, on any of them.
+
+    Every bucket, both palettes, both views (normal + severity-1.0 deuteranopia)."""
+    from studio import map_view
+    drawn_on_ramp = {"START_COLOR": map_view.START_COLOR,
+                     "brake glyph slot 0": theme.CHART_SERIES[0]}
+    worst = []
+    try:
+        for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+            theme.set_palette(pal)
+            ramp = [_hx(c) for c in theme.rainbow_colors()]
+            for what, hexv in drawn_on_ramp.items():
+                sel = _hx(hexv)
+                d_n = [_dE(sel, b) for b in ramp]
+                d_d = [_dE(_deut(sel), _deut(b)) for b in ramp]
+                k_n, k_d = int(np.argmin(d_n)), int(np.argmin(d_d))
+                worst.append(f"{pal}/{what}: {d_n[k_n]:.2f} (b{k_n}) / {d_d[k_d]:.2f} deut (b{k_d})")
+                assert d_n[k_n] >= _SELECTION_ON_RAMP_MIN_DE, (
+                    f"{pal}: {what} {hexv} is {d_n[k_n]:.2f} dE from ramp bucket {k_n} "
+                    f"{theme.rainbow_colors()[k_n]} — the selection dissolves into the data under it")
+                assert d_d[k_d] >= _SELECTION_ON_RAMP_MIN_DE_DEUT, (
+                    f"{pal}: {what} {hexv} is {d_d[k_d]:.2f} dE deuteranopic from ramp bucket "
+                    f"{k_d} {theme.rainbow_colors()[k_d]}")
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it OK "
+          f"({'; '.join(worst)})")
 
 
 # =========================================================================== 3. WCAG AA on text
@@ -965,7 +1017,8 @@ def _run_all():
     test_ideal_star_icon_and_ideal_line_share_one_accessor()
     test_colourblind_map_ramp_steps_clear_the_jnd_under_deuteranopia()
     test_the_accessible_ramp_is_never_worse_than_the_default_one()
-    test_default_map_ramp_is_byte_identical_and_the_mid_anchor_is_an_accessor()
+    test_default_map_ramp_ends_on_the_semantic_tokens_and_its_middle_is_the_data_hue()
+    test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it()
     test_every_enabled_text_style_clears_wcag_aa()
     test_the_derived_inventory_covers_the_whole_stylesheet()
     test_text_muted_is_confined_to_wcag_exempt_disabled_chrome()
