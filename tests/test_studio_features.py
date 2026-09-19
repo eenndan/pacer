@@ -1290,7 +1290,10 @@ def _rebuild_window(comparing=False):
     w.corner_table = _ViewSpy()
     w.map = _ViewSpy()
     w.opportunities = _ViewSpy()
-    w.stats_view = _ViewSpy()
+    # `_stats`, not `stats_view`: since P1 the Stats page is reached through a read-only
+    # CentralView property that flushes a deferred render before handing the widget over, and the
+    # raw attribute is what the seam itself drives. Assertions below read `w._stats.calls`.
+    w._stats = _ViewSpy()
     w.plots = _ViewSpy()
 
     # _comparing() reads self.compare; mimic its on/off via the real predicate's contract.
@@ -1364,7 +1367,9 @@ def test_rebuild_derived_views_refreshes_the_union_of_views():
     assert "set_corners" in w.map.calls, "map corners not re-pushed"
     assert "refresh" in w.corner_table.calls, "corner table not refreshed"
     assert "refresh" in w.opportunities.calls, "opportunities panel not refreshed"
-    assert "refresh" in w.stats_view.calls, "stats page not refreshed"
+    # P1: the seam asks the page to render WHEN IT CAN BE SEEN — StatsView itself decides whether
+    # that is now or on its next showEvent, so the seam's obligation is this one call.
+    assert "refresh_when_shown" in w._stats.calls, "stats page not refreshed"
     assert rec.driving == 1, "driving channels not refreshed"
     assert rec.sector == 1, "sector lines not refreshed"
     # reselect=True picks the default selection and does NOT redraw the (absent) compare overlay.
