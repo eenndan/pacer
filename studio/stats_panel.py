@@ -1588,8 +1588,10 @@ class _ReportTable(QTableWidget):
 
 
 class StatsView(QWidget):
-    """The Stats page (see the module docstring). Contract: refresh() on load/re-segment,
-    refresh_palette() after a palette flip, set_speed_unit() from the View ▸ Units toggle."""
+    """The Stats page (see the module docstring). Contract: refresh_when_shown() on
+    load/re-segment, refresh_palette() after a palette flip, set_speed_unit() from the View ▸ Units
+    toggle — all three render now if the page is on screen and defer if it is not (see
+    `refresh_when_shown`). `refresh()` is the unconditional render underneath them."""
 
     # Clicked CORNERS-table row's cid (None on deselect) -> the map apex ring, via the
     # maximize-aware CentralView handler (restore the grid first, then ring).
@@ -1613,6 +1615,19 @@ class StatsView(QWidget):
         self._layout = PAGE_LAYOUTS[-1]      # the composition in force; the single column to start
         self._column_tables: list[list] = [[] for _ in range(PAGE_COLS_MAX)]
         self._scroll = None
+        # P1 — THE PAGE RENDERS ONLY WHEN IT CAN BE SEEN. This page is half of every
+        # `rebuild_derived_views`: measured on D24 GX010062 (65 laps, the real File ▸ Load full
+        # recording path), a start-line drag's rebuild is 396 ms of which `refresh()` is 200 ms —
+        # 50.5 % — and four of the five stack pages beside it are hidden while it runs. `True` here
+        # means "the widgets on this page predate the last session edit"; see `refresh_when_shown`.
+        #
+        # THE STALENESS IS NEVER OBSERVABLE, which is the whole design and not a nicety: this page
+        # and its DATA TRUST card are the app's honesty surfaces, so a figure that silently predates
+        # the last edit would be worse than the 200 ms. Both routes to this page's contents are
+        # closed by construction — `showEvent` pays the debt before Qt can paint a pixel of it, and
+        # `CentralView.stats_view` (the ONLY name the widget has outside this module) pays it before
+        # handing the object to anyone. Neither depends on a caller remembering.
+        self._stale = False
 
         body = QWidget()
         page = QVBoxLayout(body)
@@ -2558,9 +2573,18 @@ class StatsView(QWidget):
         self._reflow_tiles()
 
     def showEvent(self, event):
-        """Reflow once the page is on screen too — the scrollbar's visibility (and so the usable
-        width) is only settled then. Idempotent: the reflow early-returns when nothing changed."""
+        """Pay any deferred render BEFORE the page is laid out or painted, then reflow once it is
+        on screen — the scrollbar's visibility (and so the usable width) is only settled then.
+        Idempotent: the reflow early-returns when nothing changed.
+
+        THE FLUSH IS FIRST, and it is first for two reasons. Qt delivers this event while the page
+        is becoming visible and before it can paint, so no stale pixel can reach a screen; and the
+        reflow below measures tile size hints, which are wrong if it runs over the previous
+        session's contents. This is the tab bar's, the maximize toggle's and the window's own show —
+        every route by which this page starts being visible goes through here, so none of them has
+        to remember anything."""
         super().showEvent(event)
+        self.flush_if_stale()
         self._reflow_tiles()
 
     def hideEvent(self, event):
@@ -2771,9 +2795,45 @@ class StatsView(QWidget):
         tile.setToolTip(f"{note}\n\n{tip}")
 
     # ------------------------------------------------------------------ contract
+    def refresh_when_shown(self):
+        """Rebuild NOW if this page is on screen; otherwise mark it stale and rebuild when it next
+        becomes visible, or the moment anything asks `CentralView` for it.
+
+        THE SEAM'S ENTRY POINT — `rebuild_derived_views`, a palette flip and a unit flip all come
+        through here, and the app has no other way in. `refresh()` below keeps its old contract
+        (it renders, unconditionally), so a caller holding this widget and calling `refresh()`
+        gets exactly what it always got.
+
+        WHY IT IS WORTH A FLAG. On D24 GX010062 (65 laps) a rebuild is 396 ms and this page is 200
+        of them; the lap panel shows one of five pages at a time, and every path that rebuilds —
+        a start-line drag, a sector edit, ⌘Z, a reference load — was paying for a page the user
+        was not looking at. Deferring does not make the work cheaper, it makes it CONDITIONAL:
+        drag ten times on the Laps tab and the page renders once, when you open it.
+
+        `isVisible()` is the predicate rather than `isActiveWindow` or a tab-index check because it
+        is exactly Qt's own answer to "will this be painted": false for a non-current stack page,
+        for a collapsed splitter child and before the window's first show, and true the instant any
+        of those changes — at which point `showEvent` fires and pays the debt."""
+        if self.isVisible():
+            self.refresh()
+        else:
+            self._stale = True
+
+    def flush_if_stale(self):
+        """Render a deferred rebuild, if one is owed. Cheap and idempotent when none is.
+
+        Called from `showEvent` (before Qt can paint) and from the `CentralView.stats_view`
+        accessor (before the widget is handed to anybody), which between them cover every way this
+        page's contents can be observed."""
+        if self._stale:
+            self.refresh()
+
     def refresh(self):
         """Rebuild every group from the session (load / re-segmentation / unit or palette
-        flip — the reads are cached on the service side, so a re-render is cheap)."""
+        flip — the reads are cached on the service side, so a re-render is cheap).
+
+        UNCONDITIONAL: this is the render itself. The seam calls `refresh_when_shown`."""
+        self._stale = False
         session = self.session
         st = getattr(session, "stats", None)
         unit = self._speed_unit
@@ -3222,16 +3282,20 @@ class StatsView(QWidget):
     def refresh_palette(self):
         """Re-render after a colour-blind-palette flip: the best-lap ★ row tint + the purple
         best-sector cells go through the palette accessors, so a re-render recolours them.
-        Cheap — every service read is cached."""
-        self.refresh()
+        Cheap — every service read is cached. Deferred on a hidden page like any other rebuild:
+        the new palette is read at render time, so the page that is eventually shown is in it."""
+        self.refresh_when_shown()
 
     def set_speed_unit(self, unit: str):
-        """Re-render the speed-bearing tiles/columns in the new display unit (View ▸ Units)."""
+        """Re-render the speed-bearing tiles/columns in the new display unit (View ▸ Units).
+
+        The unit is STORED even when the render is deferred — `refresh` reads `self._speed_unit`,
+        so a page shown after a flip comes up in the new unit, never in the old one."""
         unit = units.normalize_unit(unit)
         if unit == self._speed_unit:
             return
         self._speed_unit = unit
-        self.refresh()
+        self.refresh_when_shown()
 
     # ------------------------------------------------------------------ groups
     def _show_no_laps_prose(self, on: bool) -> None:

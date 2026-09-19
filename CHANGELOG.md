@@ -27,13 +27,6 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   fixed vector shows up as a perpendicular offset that changes sign twice around a closed lap, and
   driving wider does not. A 3 m parallel curve planted on a real D24 lap is read as 0.02 m of drift.
 
-- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
-  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
-  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
-  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
-  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
-  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
-  marked or counted in the typical.
 - **Where you coast, by place — and whether the order means anything.** The coast number has been
   real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
   Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
@@ -278,6 +271,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   rename rather than being orphaned by it.
 
 ### Changed
+
+- **Dragging the start/finish line is twice as quick, because the Stats page stops redrawing itself
+  where nobody can see it.** Every edit that re-segments a session — a start-line drag, a sector
+  edit, ⌘Z, loading a reference — rebuilds each session-derived surface, and the Stats dashboard is
+  one of five pages in the lap panel, four of which are hidden at any moment. Measured on the real
+  three-chapter load of D24's 65-lap recording, that rebuild is **396 ms** and the Stats page is
+  **200 ms of it — 50.5 %**; skipping it while another tab is showing leaves **196 ms**, and drag
+  ten times on the Laps tab and the page now renders once, when you open it. What makes that safe
+  is that the deferral cannot be observed: the page pays its debt before Qt can paint a pixel of
+  it, and before it is handed to anything that asks for it — the GPS chip's jump to DATA TRUST, the
+  docs-image harness, the tests. A figure on this page never predates the edit that changed it.
 
 - **Coaching stops crowning one corner when two of them are the same number.** The plan's second
   line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
