@@ -548,6 +548,15 @@ class CornerMatrix:
     it was re-measured here as what it does to the marks. The check is independent of the time
     itself: a lap that really lost time in a corner should usually carry a lower minimum speed
     through it, and the minimum speed is read off the Doppler channel, not off the window edges.
+
+    ⚠ STALE — NOT RE-MEASURABLE (T16). Both tables in this docstring were measured on D24 before
+    #335 changed corner matching, which moved which cells are resolved: 220 → 422 of 456 on the
+    0060 pair and 776 → 780 of 780 on 0062 (#335's own count). So their counts no longer describe
+    the app, and their other cells were never re-measured. D24 is no longer available, so neither
+    table can be. They are the record of that measurement, not what the app computes today. The
+    first is what checked MATRIX_SCALE_MIN_S's 0.30 on corner times; that check is carried forward
+    unverified (the constant's own reason, the SPLITS grid's 10 Hz floor, does not depend on it).
+
     Resolved cells only, both D24 recordings, floor → marks · share with a below-typical minimum:
 
         floor           0.10    0.15    0.20    0.25    0.30    0.40
@@ -568,6 +577,13 @@ class CornerMatrix:
                                          0062: 776 of 780   |Δ| median 0.001 s, p90 0.006, max 0.021
         cells with an interpolated edge  0060: 236 of 456   |Δ| median 0.219 s, p90 0.579, max 0.886
                                          0062:   4 of 780   |Δ| max 0.082 s (3 scorable)
+
+    Before #335, C4 re-measured the same 236 cells for `corner_report` against a line crossing it
+    built itself, and read a median 0.221 s, max 0.960 s. That is the same statistic over the same cells, with
+    two separately built crossing references. The medians agree to 2 ms. The maxima differ by
+    0.074 s, and nothing on record says which reference is the better one, so a surface quoting a
+    maximum says which measurement it is: 0.89 s is this gate's, 0.96 s is C4's line. Both are from
+    before #335.
 
     On 0060 the interpolated cells' error is as large as the ▼ itself: of the 10 marks the plain
     rule put on them that the gate could score, it agreed with 3; of the 20 it put on resolved
@@ -888,7 +904,13 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
     window was not matched on track at both edges counts towards NOTHING in that corner's row —
     not its time, not its apex speed, not its grip. It is the rule the CORNERS BY LAP grid
     (`corner_matrix`) marks by, re-measured for this table on the owner's D24 recordings against an
-    independent time, the moment each lap crosses a line drawn across the track at each edge:
+    independent time, the moment each lap crosses a line drawn across the track at each edge.
+
+    ⚠ STALE — NOT RE-MEASURABLE (T16). Measured on D24 before #335 changed corner matching, which
+    left 34 of the 0060 pair's 456 cells interpolated rather than 236 (#339's count), so the
+    split below no longer describes the app. D24 is no longer available, so the table cannot be
+    re-measured. Before #335 `CornerMatrix` read the same 236 cells against a gate of its own,
+    median 0.219 s, max 0.886 s; a maximum quoted anywhere says which of the two it is.
 
         0060 pair (38 laps)   matched 220 of 456 cells   |Δt| median 0.004 s, max 0.022 s
                               interpolated 236           |Δt| median 0.221 s, max 0.960 s
@@ -1076,8 +1098,8 @@ def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
     preceding corner's exit — on the best lap too, or there is no Δ. The timing line is the warp's
     fixed anchor, so it is always matched. An interpolated corner edge put the time a median
     0.22 s and the speed there a median 1.1-1.6 km/h (up to 11.5 km/h) off an independent line
-    crossing on the D24 0060 pair (`CornerModel.lap_edge_resolved`); a matched one 0.004 s and
-    0.015 km/h. None → every value counts (a pure caller with no warp)."""
+    crossing on the D24 0060 pair before #335 (`CornerModel.lap_edge_resolved`); a matched one
+    0.004 s and 0.015 km/h. None → every value counts (a pure caller with no warp)."""
     n_corners = len(cids)
 
     if edges_by_lap is not None:

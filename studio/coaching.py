@@ -110,6 +110,14 @@ _NO_PHASES = PhaseLoss(entry=0.0, apex=0.0, exit=0.0)
 # best gap can be smaller than the corner's own lap-to-lap scatter, in which case the row is not an
 # opportunity at all, it is sampling noise wearing a number.
 #
+# ⚠ STALE — NOT RE-MEASURABLE (T16). The table below was measured on D24 before #335 changed corner
+# matching. #339 re-ran its footage check after #335 and it no longer matched the app, on 0062's
+# rows as well as 0060's, although 0062 has no interpolated corner cell. D24 is no longer
+# available, so the table cannot be re-measured. Its cells, the bullets under it and every note in
+# this file that reads them (REACH_REPEAT_FRAC's and SPREAD_MARGIN's included) are the record of
+# that measurement, not what the app computes today. Restoring D24, re-basing the table on other
+# recordings or leaving it disclosed like this is the owner's decision.
+#
 # MEASURED, on the two real D24 recordings (0060: 38 clean laps, 12 corners, 9 rows above the
 # panel's display resolution; 0062: 65 clean laps, 12 corners, 10 rows). 0060 is GX020060 +
 # GX030060 and 0062 is GX010062 + GX020062 + GX030062. Every row, re-measured after #300 warped
@@ -172,11 +180,19 @@ MIN_CORNER_LAPS = 3
 MIN_REACH_LAPS = 2
 
 # ...and it needs to be more than a rounding-level rate: fewer than 1 lap in 10 at the target is a
-# corner you have visited, not a pace you have established. Measured, the 19 real rows' reach rates
-# sort as 5.3 6.2 7.7 9.2 9.2 | 15.8 15.8 18.4 18.4 20.0 20.0 21.1 27.7 30.8 33.8 34.2 36.8 38.5
-# 44.7 % — no row sits between 9.2 and 15.8 %, and that gap across 10 % is the second-widest in the
-# set (6.56 points, against 6.64 for 21.1 → 27.7 %). When this was first measured, before #300, it
-# was the widest.
+# corner you have visited, not a pace you have established.
+#
+# THE MEASURED REASON FOR 10 % NO LONGER HOLDS, AND THE VALUE IS CARRIED FORWARD UNVERIFIED (T16).
+# The line was put in a gap. On the evidence table above, measured on D24 before #335, the 19 real
+# rows' reach rates sort as 5.3 6.2 7.7 9.2 9.2 | 15.8 15.8 18.4 18.4 20.0 20.0 21.1 27.7 30.8
+# 33.8 34.2 36.8 38.5 44.7 % — no row sits between 9.2 and 15.8 %, and that gap across 10 % is the
+# second-widest in the set (6.56 points, against 6.64 for 21.1 → 27.7 %). Before #300 it was the
+# widest. #339 re-measured the rows after #335 changed corner matching, and the gap is gone: the
+# 10 % line now falls in only the 4th-widest gap of the set, 3.08 points wide, against 6.33 for
+# 10.8 → 17.1 %. So no measurement puts the line at 10 % rather than somewhere else any more, and
+# a different line would re-sort corners between execution and pace work. The value is NOT moved
+# here. Re-deciding a behaviour constant needs the rows re-measured, and D24 is no longer
+# available; re-basing them on other recordings is the owner's call (T16).
 REACH_REPEAT_FRAC = 0.10
 
 # A claim must clear half the corner's own INTERQUARTILE spread to be aimable. Not a significance
@@ -184,7 +200,8 @@ REACH_REPEAT_FRAC = 0.10
 # — but an ACTIONABILITY test: a driver cannot aim at 0.03 s inside a band whose middle half is
 # 0.20 s wide, however real the 0.03 s is. Measured: 7 of the 19 real rows abstain here, and the
 # highest-ranked is sixth on both recordings (0060 C1, 0.058 s on offer against a 0.200 s
-# interquartile band; 0062 C11, 0.063 s against 0.175 s).
+# interquartile band; 0062 C11, 0.063 s against 0.175 s). Those rows are the evidence table's, stale
+# since #335 (T16). The margin's case is the actionability argument above, not those counts.
 SPREAD_MARGIN = 0.5
 
 # How a corner's target relates to what the driver has actually produced — the "can't vs didn't"
@@ -286,6 +303,13 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # `best_lap_id()`); Stats ▸ BRAKING's "m later" column read the MEDIAN of that same quantity over
 # the clean laps. Nothing cross-referenced them, so the disagreement was invisible and unresolvable.
 #
+# ⚠ STALE — NOT RE-MEASURABLE (T16). The table below was measured on D24 before #335 changed corner
+# matching. #339 re-ran its footage check after #335 and it no longer matched the app. D24 is no
+# longer available, so the table cannot be re-measured. Its cells, the prose under it and
+# MIN_BRAKE_LAPS' note are the record of that measurement, not what the app computes today. THE
+# RULE at the end of this block does not rest on the cells: it is an argument about which
+# statistic to print.
+#
 # MEASURED, on the two real D24 recordings, over the rows whose hint the coaching panel would show
 # if it still read the best lap: a RANKED row whose best lap has a matched brake application, at
 # least BRAKE_HINT_MIN_M of metres, and an optimum no more than BRAKE_HINT_MAX_PAST_TURN_IN_M past
@@ -321,9 +345,10 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # sample of a scattered distribution — the BRAKING table's σ and span columns exist precisely
 # because that scatter is large — and it was the only number on the row that was not.
 
-# A braking habit needs at least this many matched applications before it is a habit. (Measured, a
-# real recording is nowhere near it: every corner on the two D24 recordings matched on at least 31
-# of its clean laps. This guards a 3-lap session, not a normal one.)
+# A braking habit needs at least this many matched applications before it is a habit. (Measured on
+# the table above, before #335 and stale since (T16), a real recording is nowhere near it: every
+# corner on the two D24 recordings matched on at least 31 of its clean laps. This guards a 3-lap
+# session, not a normal one.)
 MIN_BRAKE_LAPS = 3
 
 
@@ -398,6 +423,11 @@ class Opportunity:
 # RANKED TIME rather than a row count, because the ranking's own unit is seconds and a count lets
 # six trivial corners outvote the one that matters.
 #
+# ⚠ STALE — NOT RE-MEASURABLE (T16). The table below was measured on D24 before #335 changed corner
+# matching. #339 re-ran its footage check after #335 and it no longer matched the app. D24 is no
+# longer available, so the table cannot be re-measured. Its cells, the verdicts drawn from them
+# below and THEME_SHARE's note are the record of that measurement, not what the app computes today.
+#
 # MEASURED, on the two real recordings and on each of their chapters loaded alone, over the ranked
 # (non-abstained) rows, after #300 warped every lap. "top cause" is the reason holding the most
 # ranked time, whether or not it clears THEME_SHARE:
@@ -431,7 +461,8 @@ THEME_SPLIT = "split"          # neither side holds a clear majority — say so,
 THEME_NONE = "none"            # nothing ranked (every row abstained, or there are no rows)
 
 # The share one side must hold before it is called the session's theme. 0.60 is a clear majority
-# with room to spare; measured, 0060 lands at 0.70 and 0062 at 0.73, and one corner tips either:
+# with room to spare; measured on the THEME table above (stale since #335, T16), 0060 lands at 0.70
+# and 0062 at 0.73, and one corner tips either:
 # 0060 would fall to a SPLIT if its C4 (reached on 6 of 38 laps; the line is 4) tipped the other
 # way, and 0062 would if its C3 (reached on 6 of 65 laps; the line is 7) did.
 THEME_SHARE = 0.60
@@ -890,8 +921,9 @@ def summarize(
     # lap's, so it needs both of them measured: a lap's cell counts only where that lap matched
     # the corner on track at both edges AND the best lap did too — the same pairing
     # `Session.phase_report` applies to the thirds of the same window, and the rule the CORNERS
-    # table, the grid, the ★ and STRAIGHTS have counted by since C4. An interpolated window is a
-    # median 0.22 s off an independent crossing time against 0.004 s for a matched one, and every
+    # table, the grid, the ★ and STRAIGHTS have counted by since C4. An interpolated window was a
+    # median 0.22 s off an independent crossing time against 0.004 s for a matched one on D24
+    # before #335, and every
     # number on a coaching row — the loss, the evidence, the reach, the IQR — comes out of this
     # one matrix. Measured on the D24 0060 pair after #335 (422 of 456 cells resolved) the losses
     # move by at most 0.045 s and two ABSTAINED rows swap places; on 0062 (780 of 780) nothing

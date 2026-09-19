@@ -725,6 +725,11 @@ BRAKE_HINT_MIN_M = 2.0
 # brake zone"). Past one brake zone beyond turn-in the estimate is outside its own domain, so those
 # rows show the measured reason sentence and no metres.
 #
+# ⚠ UNVERIFIED — NOT RE-MEASURABLE (T16). Unlike coaching.py's tables, this one was measured AFTER
+# #335 changed corner matching: #339 measured it on D24 with #335 and its own change in, and its
+# footage check came back byte-identical. D24 is no longer available, so no change since #339 can
+# be checked against it. Read the table as of #339, not as re-verified.
+#
 # MEASURED (T15), on the owner's two D24 recordings. The figures this note used to carry —
 # "3 of 11 ranked corners", an optimum at 870.6 m, 19.4 m before its apex — predate #300's removal
 # of the drift gate, #335's corner de-drift and C5's resolved-cell rule, each of which moved them;

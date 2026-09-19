@@ -706,6 +706,15 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # every valid lap of the owner's five real recordings, after #300 warped every lap; "prints a minus
 # sign" is what the readout printed before the clamp below existed, a raw Δ under -DELTA_EVEN_EPS_S:
 #
+# ⚠ STALE — NOT RE-MEASURABLE (T16). The table was measured before #335 changed corner matching.
+# #339 re-ran its footage check after #335 and it no longer matched the app, and its own change
+# moved none of it. The D24 and Sandown_09_05_2026 rows cannot be re-measured, because those
+# recordings are no longer available. SD_30_08's two rows can, and re-measured on 2026-09-19 both
+# are stale too: −0.262 s on the loader's line (10.75 % / 9.61 %) and −0.255 s on the saved one
+# (8.32 % / 7.59 %), on the same 23 laps. Every row and the wobble sentence under the table are the
+# record of that measurement, not what the app computes today. The clamp's case does not rest on
+# them: the ideal is defined at partition edges, not between them.
+#
 #   recording              laps  samples     floor   raw Δ < 0   prints a minus sign
 #   D24 1 chapter            21    58567  -0.020 s     1.18 %        0.58 %
 #   D24 3 chapters           65   181288  -0.008 s     0.11 %        0.03 %

@@ -194,19 +194,29 @@ class IdealSample(NamedTuple):
     shape. Holding the partition is what makes the fall a theorem rather than a trend: same
     pieces, more candidates.)
 
+    ⚠ STALE — NOT RE-MEASURABLE (T16). ‡ ROWS ARE NOT RE-MEASURED, and since #335 changed corner
+    matching that is all five. #339 found the `all` cells stale by 0.05–0.43 s after #335. The D24
+    and Sandown_09_05_2026 rows cannot be re-measured, because those recordings are no longer
+    available. SD_30_08's can, and re-measured on 2026-09-19 as the app opens it, it is stale too:
+    46.764 / 46.570 / 46.435 / — / 46.413 (23), a rate of 0.160 s. Its `all` cell moved 0.017 s,
+    less than the 0.05 s #339 gives as the smallest move. The cells, the rates, the gaps and the
+    decrements below, and every surface that quotes them, are the record of that measurement, not
+    what the app computes today. The best-lap rates are the exception: a best lap is a lap time,
+    which corner matching does not move, and SD_30_08's re-measured 0.119 as published.
+
     | recording        | 5 laps | 10 | 20 | 40 | all | per doubling of N |
     |------------------|--------|----|----|----|-----|-------------------|
-    | D24 1 chapter    | 68.184 | 67.776 | 67.424 | — | 67.403 (21) | 0.377 s |
-    | D24 3 chapters   | 67.917 | 67.516 | 67.179 | 66.883 | 66.709 (65) | 0.326 s |
-    | Sandown ch 1     | 48.867 | 48.408 | 48.151 | — | 48.097 (24) | 0.340 s |
-    | Sandown 3 ch     | 48.290 | 47.933 | 47.633 | 47.382 | 47.265 (59) | 0.288 s |
-    | SD_30_08         | 46.768 | 46.594 | 46.455 | — | 46.430 (23) | 0.153 s |
+    | D24 1 chapter ‡  | 68.184 | 67.776 | 67.424 | — | 67.403 (21) | 0.377 s |
+    | D24 3 chapters ‡ | 67.917 | 67.516 | 67.179 | 66.883 | 66.709 (65) | 0.326 s |
+    | Sandown ch 1 ‡   | 48.867 | 48.408 | 48.151 | — | 48.097 (24) | 0.340 s |
+    | Sandown 3 ch ‡   | 48.290 | 47.933 | 47.633 | 47.382 | 47.265 (59) | 0.288 s |
+    | SD_30_08 ‡       | 46.768 | 46.594 | 46.455 | — | 46.430 (23) | 0.153 s |
 
-    WHICH ROWS ARE TRUE OF THE APP TODAY. All five, re-measured after #300 warped every lap (it
-    removed the drift gate), AS THE APP OPENS EACH RECORDING: `Session.load`, then the start line
-    the owner saved beside it, which `StudioWindow` applies before anything is drawn. D24 is
-    `GX010062.MP4` alone (1 chapter) and with `GX020062` + `GX030062` (3 chapters), and has no
-    saved line. Sandown is `GX010059` alone and with `GX020059` + `GX030059`, SD_30_08 is
+    WHICH ROWS WERE TRUE OF THE APP, AND WHEN. All five, until #335: re-measured after #300 warped
+    every lap (it removed the drift gate), AS THE APP OPENS EACH RECORDING: `Session.load`, then
+    the start line the owner saved beside it, which `StudioWindow` applies before anything is
+    drawn. D24 is `GX010062.MP4` alone (1 chapter) and with `GX020062` + `GX030062` (3 chapters),
+    and has no saved line. Sandown is `GX010059` alone and with `GX020059` + `GX030059`, SD_30_08 is
     `GX010065`, and both have one. The D24 `all` cells had moved from 67.831 to 67.403 and from
     66.781 to 66.709 — on 3 chapters the −0.071 s #300 measured for its own change
     (MAX_DONOR_SPAN_DEV's block), to rounding. The Sandown rows were measured before #300 on the
@@ -215,8 +225,9 @@ class IdealSample(NamedTuple):
     because until T13 the loader's line cut each 46 s Sandown Park lap into a 13.3 s and a 34 s
     piece and counted the short ones (`load._fit_start_line`). Every cell, gap, decrement and
     top-rung rate here is what tests/test_ideal_sample_table.py prints from its fixed seed when
-    pointed at that footage, so re-running it reproduces them rather than approximating them. A
-    row that has not been re-measured against the current app carries a ‡; none does today.
+    pointed at that footage, so re-running it reproduced them rather than approximating them. A
+    row that has not been re-measured against the current app carries a ‡; since #335, all five do
+    (the ⚠ paragraph above the table).
 
     THE RATE COLUMN IS THE WHOLE MEASURED RANGE — (5-lap cell − `all` cell) ÷ log2(laps ÷ 5) — so
     it is recomputable from the row's own two ends, and tests/test_ideal_sample_table.py recomputes
@@ -469,7 +480,15 @@ class SegmentBests:
         against the segment's mean duration over the composite laps; Spearman with tied ranks
         averaged; permutation p two-sided on Spearman, over 20,000 shuffles of the beat rates
         (seed 0). tests/test_measured_figures.py derives the sentence under the table from its cells
-        and, given the footage, re-measures every cell:
+        and, given the footage, re-measures every cell.
+
+        ⚠ STALE — NOT RE-MEASURABLE (T16). The table was measured before #335 changed corner
+        matching, and #339 re-ran its footage check after #335: it no longer matched the app. The
+        D24 and Sandown_09_05_2026 rows cannot be re-measured, because those recordings are no
+        longer available. SD_30_08's row can, and re-measured on 2026-09-19 it is stale too: r
+        −0.297, Spearman −0.335, permutation p 0.218, still not distinguishable from chance. Every
+        cell and the verdict under the table are the record of that measurement, not what the app
+        computes today.
 
         | recording      | n  | r      | Spearman | permutation p |
         |----------------|----|--------|----------|---------------|
@@ -864,7 +883,8 @@ class CornerModel:
         neighbour is not a knot and is therefore not resolved, which is the fail-closed direction.
 
         WHAT IT SEPARATES, measured against an independent gate-crossing time per cell on the two
-        D24 recordings (full table in `stats.CornerMatrix`): resolved cells agree with it to a
+        D24 recordings before #335 changed corner matching (full table, stale since, in
+        `stats.CornerMatrix`): resolved cells agree with it to a
         median 0.004 s (max 0.024 s); cells with an interpolated edge disagree by a median 0.219 s
         (max 0.886 s) on the 0060 pair, where 236 of its 456 cells are unresolved (4 of 780 on 0062).
         THE ONE RULE for which cells a cross-lap corner statistic may count. The CORNERS BY LAP
@@ -959,8 +979,8 @@ class CornerModel:
 
         C4: only cells matched on track at both edges (`lap_corner_resolved`) can be the best — the
         rule the Stats page's CORNERS table and CORNERS BY LAP grid count by. An interpolated window
-        is a median 0.22 s off an independent crossing time on the D24 0060 pair (0.004 s for a
-        matched one), and a MINIMUM is the statistic that error favours: counting every cell, the
+        was a median 0.22 s off an independent crossing time on the D24 0060 pair before #335
+        (0.004 s for a matched one), and a MINIMUM is the statistic that error favours: counting every cell, the
         Corners page ★ sat on an interpolated cell in C2, C6 and C8, whose crossing times were 0.53,
         0.41 and 0.29 s slower than the starred time. None for a corner no clean lap matched: no
         cell there can be starred, rather than the least imprecise one being starred. (The best lap
@@ -1025,7 +1045,7 @@ class CornerModel:
 
         C5: AND IT MUST HAVE BEEN MEASURED. A segment whose boundaries this lap did not match on
         track (`lap_segment_resolved`) is timed between two guesses, a median 0.22 s off an
-        independent line crossing against 0.004 s for a matched one — and the composite is a
+        independent line crossing against 0.004 s for a matched one (D24, before #335) — and the composite is a
         MINIMUM, the statistic that error favours, so it is the same argument
         `corner_session_bests` makes for the purple cells. Measured on the D24 0060 pair (38 laps,
         92.5 % of cells resolved after #335) the composite's winning donor sat on an interpolated
