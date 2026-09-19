@@ -5,7 +5,8 @@
 
 #include <pacer/datatypes/datatypes.hpp>
 
-bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
+std::optional<double> pacer::Segment::IntersectionRatio(Point fst,
+                                                        Point snd) const {
   // Proper-crossing test. Two segments cross iff each one's endpoints fall on
   // strictly opposite sides of the other's supporting line. "Side" is the sign
   // of the line's perpendicular (Rot()) dotted with the offset to an endpoint;
@@ -15,7 +16,7 @@ bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
   // Test 1: do this segment's endpoints straddle the line through fst->snd?
   const Point perp_other = (snd - fst).Rot();
   if (perp_other.Scalar(second - fst) * perp_other.Scalar(first - fst) >= 0) {
-    return false;
+    return std::nullopt;
   }
 
   // Test 2: does fst->snd straddle this segment's supporting line?
@@ -23,16 +24,26 @@ bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
   double d_snd = perp_self.Scalar(snd - first);
   double d_fst = perp_self.Scalar(fst - first);
   if (d_snd * d_fst >= 0) {
-    return false;
+    return std::nullopt;
   }
 
   // Crossing fraction along fst->snd, by the ratio of perpendicular distances.
-  if (ratio != nullptr) {
-    d_snd = std::abs(d_snd);
-    d_fst = std::abs(d_fst);
-    *ratio = d_fst / (d_snd + d_fst);
-  }
+  d_snd = std::abs(d_snd);
+  d_fst = std::abs(d_fst);
+  return d_fst / (d_snd + d_fst);
+}
 
+bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
+  // Adapter, not a second implementation — the arithmetic lives in
+  // IntersectionRatio, so the out-parameter form and the Python-visible form
+  // cannot drift apart. `ratio` stays untouched when there is no crossing.
+  const std::optional<double> r = IntersectionRatio(fst, snd);
+  if (!r.has_value()) {
+    return false;
+  }
+  if (ratio != nullptr) {
+    *ratio = *r;
+  }
   return true;
 }
 
