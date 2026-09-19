@@ -1164,7 +1164,7 @@ add_footage_test(test_ideal_sample_table test_the_table_still_matches_the_app)
 # The text checks derive every figure quoted beside each table from its cells and from the
 # constants the code applies (read with ast), and search the tree for every other quote of them.
 # An opt-in half re-measures every cell from the owner's footage (PACER_MEASURED_FIGURES_DIR, the
-# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/): six footage registrations, each
+# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/): seven footage registrations, each
 # reported Skipped without it.
 add_test(NAME test_measured_figures
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measured_figures.py)
@@ -1172,15 +1172,16 @@ set_tests_properties(test_measured_figures PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 add_footage_test(test_measured_figures test_the_coaching_tables_match_the_footage)
 add_footage_test(test_measured_figures test_the_brake_habit_table_matches_the_footage)
+add_footage_test(test_measured_figures test_the_brake_hint_gate_table_matches_the_footage)
 add_footage_test(test_measured_figures test_the_beat_rate_table_matches_the_footage)
 add_footage_test(test_measured_figures test_the_focus_tables_match_the_footage)
 add_footage_test(test_measured_figures test_the_floor_table_matches_the_footage)
 add_footage_test(test_measured_figures test_the_refusal_record_matches_the_footage)
 
 # EVERY REAL-FOOTAGE CHECK IS REPORTED SKIPPED WITHOUT ITS RECORDING, BY NAME (G1). The day
-# ~/Desktop/D24 went, eleven real-footage checks in four files each printed a skip line and let
+# ~/Desktop/D24 went, twelve real-footage checks in four files each printed a skip line and let
 # their file report Passed — a green gate claiming coverage nothing on the machine could provide.
-# Holds the mechanism above in place: the runner's three exit codes, a FLOOR of the eleven checks,
+# Holds the mechanism above in place: the runner's three exit codes, a FLOOR of those checks,
 # FOOTAGE_CHECKS <-> footage.* registrations one-to-one with SKIP_RETURN_CODE (read from
 # `ctest --show-only=json-v1`), and THE NEGATIVE CONTROL — each check run as CTest runs it, under a
 # HOME with no footage, must exit 77 naming itself (before: exit 0, "ALL 84 ... passed"). Plus: a

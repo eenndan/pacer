@@ -1,8 +1,8 @@
 """A real-footage check without its recording is REPORTED AS SKIPPED, by name — never read as a pass.
 
-G1, measured 2026-09-19, the day `~/Desktop/D24` went: eleven checks in four files re-measure
-something on a real recording, and every one of them, finding none, printed a "skip" line and
-returned. Their runners counted that as a pass (`ok  test_real_render_smoke_if_ffmpeg_and_media`,
+G1, measured 2026-09-19, the day `~/Desktop/D24` went: eleven checks in four files (twelve once
+#339 merged the same day) re-measure something on a real recording, and every one of them, finding
+none, printed a "skip" line and returned. Their runners counted that as a pass (`ok  test_real_render_smoke_if_ffmpeg_and_media`,
 "ALL 84 export-video tests passed", "7 ideal-sample-table checks passed") and CTest said `Passed`
 for all four files. A green gate claimed real-footage coverage that nothing on the machine could
 provide, and no line of any gate's output said so.
@@ -46,7 +46,8 @@ import _footage  # noqa: E402
 from studio.dev import footage as dev_footage  # noqa: E402
 
 # Every real-footage check in the repo on 2026-09-19, found by searching tests/, studio/dev/ and
-# pyproject.toml for a recording path, a footage variable or a skip branch (the PR has the table).
+# pyproject.toml for a recording path, a footage variable or a skip branch (the PR has the table),
+# plus the one #339 added that day.
 # A FLOOR, not the list: a new footage check joins its file's FOOTAGE_CHECKS and needs no edit here.
 _AT_G1 = (
     ("test_export_video.py", "test_real_render_smoke_if_ffmpeg_and_media"),
@@ -58,6 +59,8 @@ _AT_G1 = (
     ("test_measured_figures.py", "test_the_floor_table_matches_the_footage"),
     ("test_measured_figures.py", "test_the_refusal_record_matches_the_footage"),
     ("test_measured_figures.py", "test_the_brake_habit_table_matches_the_footage"),
+    # #339 (C5), merged while this was in review, added a twelfth with the same print-and-return.
+    ("test_measured_figures.py", "test_the_brake_hint_gate_table_matches_the_footage"),
     ("test_measured_figures.py", "test_the_beat_rate_table_matches_the_footage"),
     ("test_measured_figures.py", "test_the_focus_tables_match_the_footage"),
 )

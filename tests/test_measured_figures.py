@@ -580,6 +580,108 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
           f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
 
 
+# ─── coaching_panel.py: the brake hint's geometry gate ───────────────────────────────────────────
+class HintRow:
+    def __init__(self, rec, cid, turn_in, apex, optimum, hint):
+        self.rec, self.cid, self.turn_in = rec, cid, turn_in
+        self.apex, self.optimum, self.hint = apex, optimum, hint
+
+    @property
+    def past_turn_in(self) -> float:
+        return self.optimum - self.turn_in
+
+    @property
+    def past_apex(self) -> float:
+        return self.optimum - self.apex
+
+    def __repr__(self):
+        return (f"<{self.rec} C{self.cid} turn-in {self.turn_in} apex {self.apex} "
+                f"optimum {self.optimum} {self.hint}>")
+
+
+_HINT_LINE = re.compile(r"^#\s+(00\d\d)\s+C(\d+)\s+(-?\d+\.\d)\s+(-?\d+\.\d)\s+(-?\d+\.\d)\s+"
+                        r"(shown|suppressed)\s*$")
+
+
+def _hint_rows() -> list[HintRow]:
+    rows = []
+    for line in _read(_PANEL).splitlines():
+        m = _HINT_LINE.match(line)
+        if m:
+            rows.append(HintRow(m.group(1), int(m.group(2)), float(m.group(3)),
+                                float(m.group(4)), float(m.group(5)), m.group(6)))
+    assert {r.rec for r in rows} == {"0060", "0062"}, (
+        f"coaching_panel.py's brake-hint gate table parsed to {rows!r}")
+    return rows
+
+
+def _hint_gate() -> float:
+    """BRAKE_HINT_MAX_PAST_TURN_IN_M, which is an ALIAS rather than a literal — read the constant it
+    aliases and pin the alias itself, so neither half can move without the other being seen."""
+    assert "BRAKE_HINT_MAX_PAST_TURN_IN_M = coaching.BRAKE_APPROACH_M" in _read(_PANEL), (
+        "the hint gate is no longer one brake zone; this check reads BRAKE_APPROACH_M for it")
+    return float(_constant(_COACHING, "BRAKE_APPROACH_M"))
+
+
+def test_the_brake_hint_gate_prose_is_its_table_s_arithmetic():
+    """T15 — coaching_panel.py's L5-10 note quoted "3 of 11 ranked corners", measured before #300
+    removed the drift gate. It is a table now, and every count, name and range in the sentence
+    under it is recomputed here from the table's own cells and from the gate the code applies."""
+    rows = _hint_rows()
+    text = _flatten(_read(_PANEL))
+    gate = _hint_gate()
+
+    # 1. Each row's own verdict is the gate applied to its two cells — the recomputable claim the
+    #    note makes for the reader ("past turn-in is optimum − turn-in").
+    for r in rows:
+        assert r.hint == ("suppressed" if r.past_turn_in > gate else "shown"), (r, gate)
+    shown = [r for r in rows if r.hint == "shown"]
+    dropped = [r for r in rows if r.hint == "suppressed"]
+
+    # 2. The counts and the named corners.
+    m = _need(r"The gate is narrow: (\d+) of the (\d+) ranked rows lose their metres — "
+              r"([^.]+?)\. The", text, "the hint gate's count sentence")
+    assert (int(m.group(1)), int(m.group(2))) == (len(dropped), len(rows)), (m.groups(), rows)
+    named = set(re.findall(r"(00\d\d)'s ((?:C\d+(?:,? (?:and )?)?)+)", m.group(3)))
+    got = {(rec, tuple(sorted(int(c) for c in re.findall(r"C(\d+)", cs))))
+           for rec, cs in named}
+    want = {(rec, tuple(sorted(r.cid for r in dropped if r.rec == rec)))
+            for rec in {r.rec for r in dropped}}
+    assert got == want, (f"the sentence names {sorted(got)}; the table drops {sorted(want)}")
+
+    # 3. The two ranges, each rounded from the table's own cells.
+    m = _need(r"The (\d+) it keeps sit (\d+\.\d)\.\.(\d+\.\d) m past turn-in, inside the approach "
+              r"the physics assumes; the (\d+) it drops sit (\d+\.\d)\.\.(\d+\.\d) m past it",
+              text, "the hint gate's two ranges")
+    for n, lo, hi, group in ((m.group(1), m.group(2), m.group(3), shown),
+                             (m.group(4), m.group(5), m.group(6), dropped)):
+        assert int(n) == len(group), (n, group)
+        past = [r.past_turn_in for r in group]
+        # One-decimal cells pin each difference to ±0.2 m.
+        assert abs(float(lo) - min(past)) <= 0.2 and abs(float(hi) - max(past)) <= 0.2, (
+            lo, hi, sorted(round(p, 1) for p in past))
+    assert max(r.past_turn_in for r in shown) <= gate < min(r.past_turn_in for r in dropped), (
+        "the two ranges overlap the gate")
+
+    # 4. …and the sharpest form of the objection: a suppressed optimum past the corner's own apex.
+    m = _need(r"Two of those three are past the APEX as well \((00\d\d) C(\d+) by (\d+\.\d) m, "
+              r"(00\d\d) C(\d+) by (\d+\.\d) m\)", text, "the past-the-apex clause")
+    beyond = sorted((r for r in dropped if r.past_apex > 0), key=lambda r: (r.rec, r.cid))
+    assert len(beyond) == 2, f"{len(beyond)} suppressed rows sit past their apex, not two: {dropped}"
+    for i, r in enumerate(beyond):
+        rec, cid, by = m.group(1 + 3 * i), int(m.group(2 + 3 * i)), float(m.group(3 + 3 * i))
+        assert (rec, cid) == (r.rec, r.cid), (m.groups(), beyond)
+        assert abs(by - r.past_apex) <= 0.2, (by, r.past_apex)
+
+    # 5. A row in this table is a row the hint would otherwise print: its habit clears the noise
+    #    floor. The metres themselves are coaching.py's brake-habit table where the two overlap.
+    floor = _constant(_PANEL, "BRAKE_HINT_MIN_M")
+    assert floor > 0
+    _need(r"on both recordings that is every ranked row", text, "the every-ranked-row claim")
+    print(f"test_the_brake_hint_gate_prose_is_its_table_s_arithmetic OK "
+          f"({len(rows)} rows, {len(dropped)} suppressed)")
+
+
 # ─── corner_model.py: the beat-rate correlation table ────────────────────────────────────────────
 class BeatRow:
     def __init__(self, name, saved, n, r, rho, p):
@@ -1216,15 +1318,25 @@ def _recombination(s) -> dict[str, float]:
     import numpy as np
 
     sb = s.ideal_segment_bests()
-    times, admitted = np.asarray(sb.times, float), np.asarray(sb.admitted, bool)
+    times = np.asarray(sb.times, float)
+    # C5: a cell may donate only when it is BOTH admitted (MAX_DONOR_SPAN_DEV) and resolved (its two
+    # boundaries matched on track). This stand-in re-runs the composite over subsets, so it has to
+    # mask exactly as `CornerModel.segment_bests` does — including the two-stage fallback, a column
+    # with nothing resolved dropping back to its admitted cells rather than to every cell.
+    span = np.asarray(sb.admitted, bool)
+    admitted = span & np.asarray(sb.resolved, bool)
     lap_times = np.asarray([s.lap_time(i) for i in sb.lap_ids], float)
     ideal, best = float(s.ideal_total()), float(s.lap_time(s.best_lap_id()))
 
-    def ideal_of(t, a):
+    def ideal_of(t, a, sp=None):
+        sp = a if sp is None else sp
+        empty = ~a.any(axis=0)
+        a = np.where(empty[None, :], sp, a)
         m = np.where(a, t, np.inf).min(axis=0)
         return float(np.where(np.isinf(m), t.min(axis=0), m).sum())
 
-    assert abs(ideal_of(times, admitted) - ideal) < 1e-9, "the stand-in no longer reproduces the ideal"
+    assert abs(ideal_of(times, admitted, span) - ideal) < 1e-9, (
+        "the stand-in no longer reproduces the ideal")
     cols = [times[admitted[:, j], j] if admitted[:, j].any() else times[:, j] for j in range(times.shape[1])]
     grid, pmf = 0.001, np.array([1.0])
     for c in cols:
@@ -1236,7 +1348,7 @@ def _recombination(s) -> dict[str, float]:
     moves = []
     for k in range(times.shape[0]):
         keep = np.arange(times.shape[0]) != k
-        moves.append(abs(ideal_of(times[keep], admitted[keep]) - ideal))
+        moves.append(abs(ideal_of(times[keep], admitted[keep], span[keep]) - ideal))
     sd = math.sqrt(sum(float(np.var(c)) for c in cols))
     return {"laps": len(sb.lap_ids), "ideal": round(ideal, 3), "best": round(best, 3),
             "lo": round(sum(float(c.min()) for c in cols), 3), "hi": round(sum(float(c.max()) for c in cols), 3),
@@ -1360,6 +1472,57 @@ def test_the_brake_habit_table_matches_the_footage():
     assert not problems, "coaching.py's brake-habit table is not what the app computes:\n  " + \
         "\n  ".join(problems) + "\n" + report
     print(f"test_the_brake_habit_table_matches_the_footage OK\n{report}")
+
+
+def _hint_measure(s):
+    """coaching_panel's brake-hint gate table off one real session: one row per RANKED coaching row
+    that has a habit to print, with the corner's turn-in and apex on the reference odometer and the
+    median optimum the panel gates on. Read through the panel's OWN predicate, not a copy of it."""
+    from studio import coaching_panel as panel
+
+    opps = s.coaching_opportunities()
+    habits = s.coaching_brake_points()
+    corner = {int(c.cid): c for c in s.corners.corner_list()}
+    rows, ungated = [], []
+    for r in sorted((r for r in opps.rows if r.evidence.ranked), key=lambda r: r.cid):
+        bp = habits.get(r.cid)
+        # `entry_dist=None` skips the geometry gate, so this asks "would there be metres at all?"
+        if bp is None or panel._brake_point_hint(bp, None) is None:
+            ungated.append(r.cid)
+            continue
+        hint = panel._brake_point_hint(bp, r.entry_dist)
+        rows.append((r.cid, float(r.entry_dist), float(corner[int(r.cid)].apex),
+                     float(bp.optimal_brake_dist), "shown" if hint else "suppressed"))
+    return rows, ungated
+
+
+def test_the_brake_hint_gate_table_matches_the_footage():
+    """T15 — re-measure coaching_panel's gate table on the two D24 recordings. The row SET is the
+    app's own ranked set, so a corner that stops being ranked is a failure here rather than a row
+    that quietly goes missing."""
+    root = _footage_root()
+    pub = _hint_rows()
+    problems, lines = [], []
+    with _Footage(root) as fx:
+        for rec in ("0060", "0062"):
+            s = fx.load(rec)
+            if s is None:
+                problems.append(f"{rec}: footage missing under {root}")
+                continue
+            rows, ungated = _hint_measure(s)
+            for cid, turn_in, apex, optimum, hint in rows:
+                lines.append(f"#   {rec}  C{cid:<6d}{turn_in:>10.1f}{apex:>9.1f}{optimum:>11.1f}   {hint}")
+            got = [(c, round(t, 1), round(a, 1), round(o, 1), h) for c, t, a, o, h in rows]
+            want = [(r.cid, r.turn_in, r.apex, r.optimum, r.hint) for r in pub if r.rec == rec]
+            if got != want:
+                problems.append(f"hint gate {rec}: published {want}, measured {got}")
+            if ungated:
+                problems.append(f"{rec}: ranked rows with no metres to gate {ungated} — the note "
+                                f"says that is every ranked row on both recordings")
+    report = "\n".join(["  re-measured brake-hint gate table:"] + lines)
+    assert not problems, "coaching_panel.py's brake-hint gate table is not what the app computes:\n  " + \
+        "\n  ".join(problems) + "\n" + report
+    print(f"test_the_brake_hint_gate_table_matches_the_footage OK\n{report}")
 
 
 def _avg_ranks(x):
@@ -1531,6 +1694,7 @@ def test_the_focus_tables_match_the_footage():
 # name without PACER_MEASURED_FIGURES_DIR, and not part of `_run_all`.
 FOOTAGE_CHECKS = (test_the_coaching_tables_match_the_footage,
                   test_the_brake_habit_table_matches_the_footage,
+                  test_the_brake_hint_gate_table_matches_the_footage,
                   test_the_beat_rate_table_matches_the_footage,
                   test_the_focus_tables_match_the_footage,
                   test_the_floor_table_matches_the_footage,
@@ -1545,6 +1709,7 @@ def _run_all():
     test_every_quote_of_the_coaching_figures_is_coaching_py_s()
     test_the_brake_habit_prose_is_its_table_s_arithmetic()
     test_every_quote_of_the_brake_habit_figures_is_the_table_s()
+    test_the_brake_hint_gate_prose_is_its_table_s_arithmetic()
     test_the_beat_rate_verdict_is_derived_from_its_table()
     test_the_focus_prose_is_its_tables_arithmetic()
     test_every_quote_of_the_focus_figures_is_focus_py_s()

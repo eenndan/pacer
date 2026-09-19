@@ -231,6 +231,15 @@ _NO_EVIDENCE = Evidence(n_laps=0, reach_laps=0, reach=REACH_UNKNOWN, iqr=0.0,
                         abstain=ABSTAIN_NONE)
 
 
+def _finite_median(values) -> float:
+    """The median of the finite entries, NaN when there are none. `np.nanmedian` would do it but
+    warns on an all-NaN column, and a corner nobody matched is a normal outcome here, not an
+    anomaly to print at the user's terminal."""
+    v = np.asarray(values, float)
+    v = v[np.isfinite(v)]
+    return float(np.median(v)) if v.size else float("nan")
+
+
 def corner_evidence(times, target: float, time_lost: float) -> Evidence:
     """One corner's Evidence from its per-lap times and the target the loss is measured against.
 
@@ -829,6 +838,8 @@ def summarize(
     best_traces: tuple | None = None,
     median_align=corners_mod.DERIVE_ALIGNMENT,
     best_align=corners_mod.DERIVE_ALIGNMENT,
+    resolved_by_lap: list[list[bool]] | None = None,
+    best_resolved: list[bool] | None = None,
     top_n: int | None = None,
     min_laps: int = MIN_LAPS,
 ) -> Opportunities:
@@ -852,6 +863,9 @@ def summarize(
     alignment in the phase decomposition (omitted → the normalized projection).
     median_align/best_align are those two laps' warps ALREADY BUILT (Session hands over the corner
     service's memoized ones); omitted → derived here from the traces, exactly as before.
+    resolved_by_lap/best_resolved are `CornerModel.lap_corner_resolved` for the candidate laps
+    (rows aligned to candidate_lap_ids) and for the best lap — WHICH CELLS COUNT, see the block
+    below; omitted → every cell counts, the pure-caller default.
     top_n caps how many ranked rows get a dominant reason attached; None (the default) analyses
     EVERY ranked row, so a REASON_NONE row means "measured, nothing fired" rather than "not looked
     at" — the rows below any cap are shown too (the Opportunities dialog lists all of them).
@@ -872,7 +886,31 @@ def summarize(
     # but stay defensive) by only using columns present for every lap.
     if times.ndim != 2 or times.shape[1] != n_corners or len(best) != n_corners:
         return Opportunities(enough=False, n_laps=n_laps, median_lap_id=med_id, rows=[])
-    losses = np.median(times - best[None, :], axis=0)  # (n_corners,)
+    # WHICH CELLS COUNT (C5). `time_lost` is a DIFFERENCE between this lap's window and the best
+    # lap's, so it needs both of them measured: a lap's cell counts only where that lap matched
+    # the corner on track at both edges AND the best lap did too — the same pairing
+    # `Session.phase_report` applies to the thirds of the same window, and the rule the CORNERS
+    # table, the grid, the ★ and STRAIGHTS have counted by since C4. An interpolated window is a
+    # median 0.22 s off an independent crossing time against 0.004 s for a matched one, and every
+    # number on a coaching row — the loss, the evidence, the reach, the IQR — comes out of this
+    # one matrix. Measured on the D24 0060 pair after #335 (422 of 456 cells resolved) the losses
+    # move by at most 0.045 s and two ABSTAINED rows swap places; on 0062 (780 of 780) nothing
+    # moves at all. It is a small correction, and it is the one that makes the panel's "Time lost"
+    # and the CORNERS table's σ beside it two readings of one measurement.
+    if resolved_by_lap is not None:
+        ok = np.zeros(times.shape, bool)
+        for i, row in enumerate(resolved_by_lap[:times.shape[0]]):
+            ok[i, :len(row)] = np.asarray(row[:n_corners], bool)
+        if best_resolved is not None:
+            keep = np.zeros(n_corners, bool)
+            keep[:len(best_resolved)] = np.asarray(best_resolved[:n_corners], bool)
+            ok &= keep[None, :]
+        times = np.where(ok, times, np.nan)
+    # A corner with no counted cell has an undefined loss (NaN, which sorts out of the ranking
+    # below) and therefore no row — the same place a corner that is not losing time ends up, and
+    # one row fewer is what "we could not measure this corner" honestly looks like here: there is
+    # no cell to show and no target to jump to.
+    losses = np.asarray([_finite_median(times[:, j] - best[j]) for j in range(n_corners)], float)
 
     # D2: the typical lap's (odometer, elapsed) trace + best lap's, for the entry/apex/exit Δt
     # decomposition — the CLOCK, not the speed channel (`_span_clock`). Both must be present (and

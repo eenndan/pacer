@@ -224,7 +224,7 @@ what it measured — missing, unreadable, not an MP4 container, not parseable as
 that are not importable in this run — and never guesses at a cause
 (`studio.dev.golden_session_dump.preflight`, held by `tests/test_golden_hermetic.py`).
 
-**Real-footage checks.** Eleven checks re-measure something on a real recording, and each is its own
+**Real-footage checks.** Twelve checks re-measure something on a real recording, and each is its own
 CTest registration, `footage.<check>`. Without its recording CTest lists it under *"The following
 tests did not run: … (Skipped)"* — a skip, never a pass, and never a failure (CI has no footage at
 all). **When you report gates, name every `footage.*` that skipped.** Until 2026-09-19 each of them
@@ -237,7 +237,7 @@ every real-footage check in the repo became a green no-op. `tests/_footage.py` h
 | `PACER_GOLDEN_MP4` | THE recording (any real one) | the golden dump; `footage.test_real_render_smoke_if_ffmpeg_and_media`, `…_real_chaptered_non_first_chapter_render_if_media`, `…_real_render_quality_levels_if_media`; the primary of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX020060.MP4` |
 | `PACER_GOLDEN_REF_MP4` | a second, DIFFERENT recording | the reference of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX010062.MP4` |
 | `PACER_IDEAL_TABLE_MP4` | comma-separated chapters of one recording in the ideal-lap table | `footage.test_the_table_still_matches_the_app` | none |
-| `PACER_MEASURED_FIGURES_DIR` | the folder holding `D24/`, `Sandown_09_05_2026/`, `SD_30_08_26/` | the six `footage.test_the_*_footage` in `test_measured_figures` | none |
+| `PACER_MEASURED_FIGURES_DIR` | the folder holding `D24/`, `Sandown_09_05_2026/`, `SD_30_08_26/` | the seven `footage.test_the_*_footage` in `test_measured_figures` | none |
 
 The first two live in `studio/dev/footage.py`, shared by the dump and the tests. The last two
 re-measure PUBLISHED tables whose rows are named recordings (and chapter selections sibling

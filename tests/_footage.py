@@ -1,6 +1,6 @@
 """Real-footage checks: where one finds its recording, and how its ABSENCE is reported.
 
-THE PROBLEM THIS FIXES (G1, 2026-09-19). Eleven checks in four test files re-measure something on
+THE PROBLEM THIS FIXES (G1, 2026-09-19). Twelve checks in four test files re-measure something on
 a real recording. Each one, finding no recording, printed a "skip" line and RETURNED — and its
 file's runner then counted it as a pass: `ok  test_real_render_smoke_if_ffmpeg_and_media`, "ALL 84
 export-video tests passed", CTest `Passed`. While `~/Desktop/D24` existed that was a convenience;
