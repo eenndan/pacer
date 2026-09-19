@@ -936,7 +936,8 @@ def _fake_segment_bests(single_donor=False):
     donors = [int(times[:, j].argmin()) for j in range(times.shape[1])]
     return SegmentBests(labels=["start", "C1", "C1-C2", "C2", "C2-finish"], cids=[1, 2],
                         lap_ids=[0, 1, 2], times=times,
-                        admitted=np.ones(times.shape, bool), bests=bests, donors=donors,
+                        admitted=np.ones(times.shape, bool),
+                        resolved=np.ones(times.shape, bool), bests=bests, donors=donors,
                         s_edges=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
                         donor_span=[(0.0, 0.0)] * times.shape[1])
 
@@ -1161,6 +1162,7 @@ def test_the_ideal_note_adds_up_in_the_numbers_on_screen():
         sb = SegmentBests(
             labels=[f"s{j}" for j in range(n_seg)], cids=[1, 2, 3], lap_ids=[0, 1, 2],
             times=times, admitted=np.ones(times.shape, bool),
+            resolved=np.ones(times.shape, bool),
             bests=[float(c.min()) for c in times.T],
             donors=[int(times[:, j].argmin()) for j in range(n_seg)],
             s_edges=list(np.linspace(0.0, 1.0, n_seg + 1)),
@@ -1321,7 +1323,7 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
     keep, times = [1, 2], sb.times[1:]
     donors = [keep[int(times[:, j].argmin())] for j in range(times.shape[1])]
     two = SegmentBests(labels=sb.labels, cids=sb.cids, lap_ids=keep,
-                       times=times, admitted=sb.admitted[1:],
+                       times=times, admitted=sb.admitted[1:], resolved=sb.resolved[1:],
                        bests=[float(c.min()) for c in times.T], donors=donors,
                        s_edges=sb.s_edges, donor_span=sb.donor_span)
     assert two.single_donor_id() is None and len(two.donor_ids()) == 2, two.donor_ids()
@@ -4649,6 +4651,202 @@ def test_the_raw_stats_page_attribute_is_only_touched_where_it_immediately_re_re
     assert decorators == ["property"], (
         f"CentralView.stats_view must be a plain read-only property, not {decorators}")
     print("test_the_raw_stats_page_attribute_is_only_touched_where_it_immediately_re_renders OK")
+
+
+def _flippable_drift_session():
+    """The C4 drift session with a `flip` hook: `session({(lap, edge index), …})` plants those
+    corner EDGES as interpolated on a FRESH session, so every cache is built under the plant.
+
+    Identical in shape to the helper inside
+    `test_every_cross_lap_corner_surface_counts_the_same_cells`; shared here because C5's
+    consumers need the same three states and a second copy would drift from the first."""
+    from _synthetic import _drift_session, drift_band_laps, drift_noise_laps
+
+    first = drift_noise_laps()
+    laps = first + drift_band_laps(t0=float(first[-1]["cols"][0][-1]))
+
+    def session(flip=()):
+        s = _drift_session(laps)
+        if flip:
+            real = s.corners.lap_edge_resolved
+
+            def edges(lap):
+                return [False if (lap, e) in flip else ok for e, ok in enumerate(real(lap))]
+
+            s.corners.lap_edge_resolved = edges
+            s.corners.lap_corner_resolved = lambda lap: [
+                a and b for a, b in zip(edges(lap)[0::2], edges(lap)[1::2], strict=True)]
+        return s
+
+    return session
+
+
+def test_the_ideal_lap_composites_only_over_segments_the_donor_matched():
+    """C5 — the ideal lap is a MINIMUM, so an interpolated cell wins it by being wrong.
+
+    `CornerModel.segment_bests` now takes the per-segment minimum over the cells that are both
+    admitted (MAX_DONOR_SPAN_DEV) and RESOLVED (`lap_segment_resolved`), and `SegmentBests`
+    carries the second mask so a reader can see which. Driven through the real Session on the
+    drift fixture: the mask is exactly the model's, the winner of a segment whose donor is planted
+    as interpolated moves to the quickest lap that matched it, and the total rises with it.
+
+    Measured on the owner's D24 0060 pair, where 34 of 456 cells are interpolated after #335: the
+    winning donor sat on an unmatched boundary in 5 of the 25 segments and the composite read
+    65.637 s against 65.864 s over matched cells only — 0.226 s, 0.133 s of it in C7→C8."""
+    session = _flippable_drift_session()
+    s = session()
+    sb = s.corners.segment_bests()
+    assert sb is not None and len(sb.bests) == 2 * len(sb.cids) + 1
+
+    def piece_mask(lid) -> list[bool]:
+        """Segment j runs between partition edges j−1 and j, the timing line standing in at both
+        ends. Derived here from `lap_edge_resolved` ALONE, which predates C5, so check 0 below is
+        a statement about the composite's VALUE on any tree rather than about a new accessor."""
+        e = s.corners.lap_edge_resolved(lid)
+        return [(j == 0 or e[j - 1]) and (j == len(e) or e[j]) for j in range(len(e) + 1)]
+
+    # 0. THE PROPERTY ITSELF: no segment may be WON by a lap that did not match its two
+    # boundaries. The fixture is chosen for it — lap 1's C1 exit is interpolated and its C1→C2 is
+    # the quickest in the session, so a tree that counts every cell buys 0.167 s off a guess.
+    for j in range(len(sb.bests)):
+        if sb.bests[j] <= 0.0:
+            continue
+        for r, lid in enumerate(sb.lap_ids):
+            if sb.times[r, j] == sb.bests[j]:
+                assert piece_mask(lid)[j], (
+                    f"segment {sb.labels[j]} is won by lap {lid} on a boundary it never matched "
+                    f"({sb.bests[j]:.3f} s)")
+
+    # 1. The mask IS the model's, row for row — not a second derivation that can drift from it.
+    for r, lid in enumerate(sb.lap_ids):
+        assert list(sb.resolved[r]) == s.corners.lap_segment_resolved(lid) == piece_mask(lid), lid
+        # …and the partition's two end pieces ride on the timing line, which every lap matches.
+        edges = s.corners.lap_edge_resolved(lid)
+        assert sb.resolved[r][0] == edges[0] and sb.resolved[r][-1] == edges[-1], lid
+
+    # The fixture's own interpolated edge (lap 1, C1's exit) takes C1 and C1→C2 off that lap.
+    assert not all(sb.resolved.ravel()), "the drift session no longer carries an interpolated edge"
+
+    # 2. Plant the WINNER of a real segment. Every lap tied for the quickest, or planting one of a
+    # tie leaves the minimum exactly where it was and the assertion below measures nothing (the
+    # lesson #335 paid for on this same fixture).
+    counts = np.asarray(sb.admitted, bool) & np.asarray(sb.resolved, bool)
+
+    def holders(j) -> list[int]:
+        """The laps that hold segment j's best TODAY — counted cells only. The fixture's own
+        interpolated cell is the column minimum on C1→C2 and is already excluded, so planting the
+        raw argmin would plant a lap the composite had stopped reading (it did, and the assertion
+        below then measured nothing)."""
+        return [sb.lap_ids[r] for r in range(len(sb.lap_ids))
+                if counts[r, j] and sb.times[r, j] == sb.bests[j]]
+
+    def runner_up_gap(j) -> float:
+        """How far segment j's best has to move once every lap holding it is planted — 0.0 where
+        nothing is left to win it. Picking the segment that maximises this keeps the assertion
+        below off a tie decided in the fourth decimal."""
+        col = np.asarray(sb.times[:, j], float)
+        rest = col[counts[:, j] & (col > sb.bests[j])]
+        return float(rest.min() - sb.bests[j]) if rest.size else 0.0
+
+    seg = max((j for j in range(len(sb.bests))
+               if sb.donors[j] is not None and sb.bests[j] > 0.0), key=runner_up_gap)
+    assert runner_up_gap(seg) > 1e-3, "no segment has a runner-up to fall back on"
+    tied = holders(seg)
+    assert tied, seg
+    # Segment j sits between partition edges j-1 and j; edge j-1 is the timing line for j == 0.
+    edge = seg if seg == 0 else seg - 1
+    planted = session(flip={(lid, edge) for lid in tied})
+    after = planted.corners.segment_bests()
+    assert all(not after.resolved[after.lap_ids.index(lid)][seg] for lid in tied), tied
+    assert after.bests[seg] - sb.bests[seg] > 1e-3, (
+        f"segment {sb.labels[seg]}'s best did not move off the laps planted as interpolated: "
+        f"{sb.bests[seg]} -> {after.bests[seg]}")
+    assert after.donors[seg] not in tied, after.donors[seg]
+    assert after.donors[seg] is not None and after.resolved[
+        after.lap_ids.index(after.donors[seg])][seg], "the new donor is itself interpolated"
+    assert planted.ideal_total() > s.ideal_total(), (planted.ideal_total(), s.ideal_total())
+
+    # 3. …and `admitted` is NOT quietly merged with it: the plan's denominator is documented as a
+    # function of the spans alone, and folding resolution in would move 22 of the 25 beat counts
+    # on the D24 0060 pair. Same mask as before the plant.
+    assert (after.admitted == sb.admitted).all(), "the plant moved the span-admission mask"
+
+    # 4. A segment NO admitted lap matched keeps its column rather than collapsing to inf.
+    every = session(flip={(lid, edge) for lid in sb.lap_ids})
+    fallback = every.corners.segment_bests()
+    assert not fallback.resolved[:, seg].any()
+    # It falls back to the whole ADMITTED column — the pre-C5 answer — rather than to inf, which
+    # is what a min over an empty set would be and what would poison the total.
+    admitted_min = float(np.min(np.asarray(sb.times[:, seg], float)[
+        np.asarray(sb.admitted[:, seg], bool)]))
+    assert fallback.bests[seg] == admitted_min, (fallback.bests[seg], admitted_min)
+    assert math.isfinite(every.ideal_total()) and every.ideal_total() > 0.0
+    print(f"ok ideal lap: {sb.labels[seg]} re-won by a lap that matched it "
+          f"({sb.bests[seg]:.3f} -> {after.bests[seg]:.3f} s), the mask is the model's, "
+          f"admission untouched, and a segment nobody matched still has a number")
+
+
+def test_coaching_the_brake_points_and_the_line_sigma_count_only_matched_cells():
+    """C5 — the three remaining cross-lap corner statistics, through the real Session.
+
+    * COACHING's loss, evidence and reach count a cell only where this lap AND the best lap
+      matched the corner: `time_lost` is a difference between the two, so both halves must be
+      measured. Measured on the D24 0060 pair the losses move up to 0.045 s and two abstained
+      rows swap places; on 0062 (every cell matched) nothing moves.
+    * THE LINE SIGMA coaching reads (`Session.corner_consistency`) is the CORNERS table's own σ.
+      Counting every cell the two disagreed on 12 of 12 corners of the 0060 pair, by up to
+      0.038 s — one quantity, one lap set, two printed numbers.
+    * A BRAKE POINT is read inside the projected window (the last onset in [enter − lead, exit],
+      and an optimum built from that window's apex), so an interpolated corner contributes no row
+      to `_brake_rows` — and therefore none to the BRAKING table or to the coaching hint, which
+      medianize the same list. At most 0.7 m on 0060, nothing on 0062."""
+    session = _flippable_drift_session()
+    s = session()
+    ids = s.consistency_lap_ids()
+    best = s.best_lap_id()
+    corner_list = s.corners.corner_list()
+
+    # σ: the two surfaces agree corner for corner, on the untouched fixture and under a plant.
+    for label, sess in (("as loaded", s), ("with C1 planted on lap 2", session(flip={(2, 0)}))):
+        spread = {sp.cid: sp.sigma for sp in sess.corner_consistency()}
+        table = {r.cid: r.sigma_s for r in sess.corner_report()}
+        for c in corner_list:
+            assert (c.cid in spread) == (table.get(c.cid) is not None), (label, c.cid)
+            if c.cid in spread:
+                assert abs(spread[c.cid] - table[c.cid]) < 1e-12, (label, c.cid, spread, table)
+
+    # COACHING: each row's evidence counts exactly the cells both laps matched.
+    rows = {r.cid: r for r in s.coaching_opportunities().rows}
+    best_res = s.corners.lap_corner_resolved(best)
+    for k, c in enumerate(corner_list):
+        counted = [i for i in ids
+                   if s.corners.lap_corner_resolved(i)[k] and best_res[k]
+                   and len(s.corners.lap_corner_stats(i)) == len(corner_list)]
+        if c.cid in rows:
+            assert rows[c.cid].evidence.n_laps == len(counted), (c.cid, rows[c.cid].evidence)
+    assert any(r.evidence.n_laps < len(ids) for r in rows.values()), (
+        "no coaching row drops the fixture's interpolated cell", {c: r.evidence.n_laps for c, r in rows.items()})
+
+    # …and a corner the BEST lap did not match has no counted cell anywhere, so it carries no row
+    # at all: there is no cell to show and no target to jump to.
+    blind = session(flip={(best, 0)})
+    assert corner_list[0].cid not in {r.cid for r in blind.coaching_opportunities().rows}, (
+        "a corner whose baseline is interpolated still ranks")
+
+    # BRAKING: the corner's row leaves `_brake_rows` on the laps that did not match it.
+    braked = {cid: [k for k, row in enumerate(s._brake_rows()) if cid in row]
+              for cid in (c.cid for c in corner_list)}
+    assert any(braked.values()), "the drift fixture no longer detects a brake point"
+    target = next(c.cid for c in corner_list if braked[c.cid])
+    k_target = next(k for k, c in enumerate(corner_list) if c.cid == target)
+    n_before = next(b.n for b in s.brake_report() if b.cid == target)
+    gone = session(flip={(i, 2 * k_target) for i in ids})
+    assert all(target not in row for row in gone._brake_rows()), gone._brake_rows()
+    assert target not in gone.coaching_brake_points(), "an interpolated corner still has a habit"
+    assert next((b.n for b in gone.brake_report() if b.cid == target), 0) == 0, (
+        f"C{target} kept {n_before} brake rows measured in a window nobody matched")
+    print(f"ok coaching + braking: the LINE σ is the CORNERS table's, an unmatched baseline drops "
+          f"the row, and C{target}'s {n_before} brake points go with its window")
 
 
 if __name__ == "__main__":

@@ -394,7 +394,30 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   the Corners page ★, a Best's provenance panel, the STRAIGHTS times, trap speeds and exit Δ, and the
   where-the-time-goes phase split count only matched cells, say how many laps they counted, and show
   a dash where no lap matched. The Corners page still shows each lap's reading, muted with the reason.
-  Coaching and the ideal lap still count every cell and are the next step.
+
+- **…and the coaching rows, the ideal lap and the brake points now count by the same rule.** Those
+  three still counted every cell. The **ideal lap** is a per-segment minimum, which is the statistic
+  that error favours: on the 38-lap D24 recording the composite's winning donor sat on an
+  unmatched boundary in 5 of its 25 segments, and the theoretical best read **65.637 s where the
+  matched cells say 65.864 s** — 0.226 s of ideal nobody drove, 0.133 s of it in one corner exit.
+  (The four recordings the published sample table covers do not move by a millisecond; they match
+  96 %–100 % of their cells.) **Coaching** now measures a corner's time lost only where this lap and
+  your best lap both matched it, which moves the losses by up to 0.045 s and reorders two rows on
+  that recording — and its "how repeatable is this corner?" σ is now the same number the CORNERS
+  table prints beside it, where the two disagreed on 12 of 12 corners by up to 0.038 s. The **Stats ▸
+  BRAKING** table's brake points drop a lap whose corner window was interpolated, which moves the
+  metres by at most 0.7 m — under the 2 m the hint itself calls noise, applied so one rule stays one
+  rule. **Stats ▸ COASTING is deliberately left alone**: masking its cells would break that table's
+  own stated sum and reshuffle places it already prints as tied, and the leader does not change on
+  either recording.
+
+- **The exported laps.csv and the HTML report say which corner cells are interpolated.** The file is
+  an external format, so nothing is dropped and no cell is blanked — a new **`corners_interpolated`**
+  column names the corners whose window that lap did not match on track, with a legend under the
+  table explaining what it means and emitted only on a file that carries one. **This changes the
+  column set**: the column is appended after `quality`, so a reader that goes by header name is
+  unaffected and one that counts columns is not. On the owner's recordings it marks 34 of 456
+  exported corner cells on one and 0 of 780 on the other.
 - **A piece of a lap is no longer counted as a lap, and every excluded lap now says why.** A
   start/finish line long enough to reach a second stretch of track cuts each pass it reaches in
   two, and when the pieces outnumber the laps the median bands count the pieces: Sandown chapter 3

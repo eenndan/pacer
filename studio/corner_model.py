@@ -346,8 +346,12 @@ class SegmentBests:
       lap_ids   — the laps that contributed a row, in session order (see CornerModel.segment_bests
                   for the set).
       times     — (len(lap_ids), 2N+1) float: each lap's own segment times.
-      admitted  — (len(lap_ids), 2N+1) bool: which cells may donate (see MAX_DONOR_SPAN_DEV).
-      bests     — 2N+1 minima over the admitted cells.
+      admitted  — (len(lap_ids), 2N+1) bool: which cells cover their own segment (see
+                  MAX_DONOR_SPAN_DEV). It is a function of the SPANS, never of the times.
+      resolved  — (len(lap_ids), 2N+1) bool: which cells were MATCHED on track at both of their
+                  boundaries (`CornerModel.lap_segment_resolved`) rather than interpolated
+                  between neighbours. Also never a function of the times.
+      bests     — 2N+1 minima over the cells that are BOTH admitted and resolved (C5).
       donors    — 2N+1 lap ids, the argmin per segment; None for a POINT segment (best == 0),
                   where every lap ties at 0 and naming a winner would be arbitrary.
       s_edges   — 2N+2 normalized distances [0…1] of the partition edges on the REFERENCE
@@ -362,6 +366,7 @@ class SegmentBests:
     lap_ids: list[int]
     times: np.ndarray
     admitted: np.ndarray
+    resolved: np.ndarray
     bests: list[float]
     donors: list[int | None]
     s_edges: list[float]
@@ -862,13 +867,24 @@ class CornerModel:
         D24 recordings (full table in `stats.CornerMatrix`): resolved cells agree with it to a
         median 0.004 s (max 0.024 s); cells with an interpolated edge disagree by a median 0.219 s
         (max 0.886 s) on the 0060 pair, where 236 of its 456 cells are unresolved (4 of 780 on 0062).
-        THE ONE RULE for which cells a cross-lap corner statistic may count: the CORNERS BY LAP grid
-        marks by it, and since C4 the CORNERS table (`Session.corner_report`), its Best's
+        THE ONE RULE for which cells a cross-lap corner statistic may count. The CORNERS BY LAP
+        grid marks by it; since C4 the CORNERS table (`Session.corner_report`), its Best's
         provenance, the Corners page ★ (`corner_session_bests`) and the phase split
-        (`Session.phase_report`) count by it too — and the STRAIGHTS table by the same rule one
-        level finer (`lap_edge_resolved`). NOT YET: coaching (`Session.coaching_opportunities`, the
-        σ it reads from `Session.corner_consistency`), the BRAKING table's brake points, and the
-        ideal lap (`segment_bests`) still count every cell."""
+        (`Session.phase_report`) count by it; the STRAIGHTS table and the ideal lap
+        (`segment_bests`) by the same rule one and two levels finer (`lap_edge_resolved`,
+        `lap_segment_resolved`); and since C5 coaching (`Session.coaching_opportunities` and the σ
+        it reads from `Session.corner_consistency`) and the BRAKING table's brake points
+        (`Session._brake_rows`) as well.
+
+        TWO SURFACES STILL COUNT EVERY CELL ON PURPOSE, each with its measurement. The per-lap CSV
+        writes every value and DISCLOSES which are interpolated instead
+        (`export_data.INTERPOLATED_COLUMN` — it is an external format, and a reader diffing last
+        week's file needs the rows to stay put). The COASTING table's places
+        (`Session.coast_report`) keep every cell because masking them would break the column's own
+        stated invariant — "s / lap … adds up to the MEAN coasting per lap" — to reorder places the
+        table already prints as tied: on the D24 0060 pair the leader is unchanged, the per-lap
+        total would read 2.883 s where the laps coasted 2.812, and the sum-preserving alternative
+        (whole laps only) throws away 16 of 38 laps."""
         basis = self.basis()
         if basis is None or not basis[0] or self._best_lap_id() is None:
             return []
@@ -917,6 +933,23 @@ class CornerModel:
             return [False] * (2 * len(corner_list))
         edges = np.asarray([b for c in corner_list for b in (float(c.enter), float(c.exit))], float)
         return [bool(x) for x in np.isin(edges, align[0])]
+
+    def lap_segment_resolved(self, lap_id: int) -> list[bool]:
+        """`lap_edge_resolved` read on the 2N+1 pieces of the corner/straight PARTITION rather
+        than on the corner windows: piece j runs between partition edges j and j+1, so it is
+        resolved iff both of those were matched on track. [] where `lap_edge_resolved` is [].
+
+        The two end pieces are bounded by the TIMING LINE, which is the warp's fixed anchor — the
+        same physical point on every lap by definition — so "S/F → C1" needs only C1's entry and
+        "C{N} → finish" only C{N}'s exit. This is the same one rule at the granularity a SEGMENT
+        time is read at, and it is what `segment_bests` (the ideal lap) and the STRAIGHTS table
+        count by; `stats.straights_report` derives the identical mask from the edges itself,
+        because it is handed the edges and not the model."""
+        edges = self.lap_edge_resolved(lap_id)
+        if not edges:
+            return []
+        e = np.asarray(edges, bool)
+        return [bool(x) for x in (np.concatenate(([True], e)) & np.concatenate((e, [True])))]
 
     def corner_session_bests(self) -> list[float | None]:
         """Per-corner session-best time-in-corner over the CLEAN laps (`_clean_lap_ids`) — the
@@ -990,6 +1023,27 @@ class CornerModel:
         refused any segment whose projected span is not comparable to its own expected span
         (MAX_DONOR_SPAN_DEV) — that is the sufficiency half.
 
+        C5: AND IT MUST HAVE BEEN MEASURED. A segment whose boundaries this lap did not match on
+        track (`lap_segment_resolved`) is timed between two guesses, a median 0.22 s off an
+        independent line crossing against 0.004 s for a matched one — and the composite is a
+        MINIMUM, the statistic that error favours, so it is the same argument
+        `corner_session_bests` makes for the purple cells. Measured on the D24 0060 pair (38 laps,
+        92.5 % of cells resolved after #335) the composite's winning donor sat on an interpolated
+        boundary in 5 of its 25 segments and the ideal read **65.637 s where the matched cells say
+        65.864 s** — 0.226 s of ideal that nobody drove, 0.133 s of it in C7→C8 alone. The other
+        four recordings the `IdealSample` table publishes do not move by so much as a millisecond
+        (0062 one and three chapters resolve 100 % of their cells; Sandown and SD_30_08 96.4-98.8 %,
+        and none of their unresolved cells was winning anything).
+
+        `admitted` KEEPS ITS OWN MEANING and is not merged with this. It is published as a count
+        (`SegmentGain.n`, `beat_counts`) and the scale-free proof in `beat_counts` rests on it
+        being a function of the SPANS alone; resolution is likewise not a function of the times,
+        so folding it in would keep that proof — but it would move 22 of the 25 beat counts on the
+        0060 pair, which is a different statistic on a separately published table (`beat_counts`'
+        own). The two masks are therefore both carried, and only the MINIMUM — the one an
+        interpolated cell can win by being wrong — takes both. That the plan's denominator still
+        counts interpolated cells is a known gap, recorded here rather than fixed in passing.
+
         Cached; cleared on re-segment (`invalidate`)."""
         if self._segment_bests_cache is not _UNSET:
             return self._segment_bests_cache
@@ -1021,7 +1075,7 @@ class CornerModel:
             labels.append(f"{c.label}-{nxt}")
 
         ref_trace = self._best_trace()
-        rows, spans, edges, lap_ids, expected = [], [], [], [], []
+        rows, spans, edges, lap_ids, expected, resolved = [], [], [], [], [], []
         for lid in self._clean_lap_ids():
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
             if len(dist) < 2 or float(dist[-1]) <= 0:
@@ -1044,6 +1098,7 @@ class CornerModel:
             # The width each reference segment has on THIS lap under its uniform line-length
             # scaling — what the projected span is compared against (see MAX_DONOR_SPAN_DEV).
             expected.append(ref_span * (total_lap / total_ref) if total_ref > 0 else ref_span)
+            resolved.append(self.lap_segment_resolved(lid))
             lap_ids.append(lid)
         if not rows:
             return None
@@ -1060,7 +1115,12 @@ class CornerModel:
         for j in range(times.shape[1]):
             if not admitted[:, j].any():
                 admitted[:, j] = True
-        masked = np.where(admitted, times, np.inf)
+        # C5: …and of those, the cells whose two boundaries this lap actually MATCHED on track.
+        may_donate = admitted & np.asarray(resolved, bool)
+        for j in range(times.shape[1]):
+            if not may_donate[:, j].any():
+                may_donate[:, j] = admitted[:, j]
+        masked = np.where(may_donate, times, np.inf)
         bests = [float(v) for v in masked.min(axis=0)]
         donors: list[int | None] = [
             None if bests[j] <= 0.0 else lap_ids[int(masked[:, j].argmin())]
@@ -1068,7 +1128,7 @@ class CornerModel:
         ]
         self._segment_bests_cache = SegmentBests(
             labels=labels, cids=[int(c.cid) for c in corner_list], lap_ids=lap_ids,
-            times=times, admitted=admitted, bests=bests,
+            times=times, admitted=admitted, resolved=np.asarray(resolved, bool), bests=bests,
             donors=donors,
             s_edges=[e / total_ref for e in ref_edges] if total_ref > 0 else ref_edges,
             donor_span=[(0.0, 0.0) if donors[j] is None else
