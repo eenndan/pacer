@@ -675,9 +675,11 @@ CORNER_GRID_TOOLTIP = (
     "MUTED CELLS ARE NEVER MARKED. A lap's corner windows are placed by matching its line to your "
     f"best lap's on the track; an edge with no match within {corners.SPATIAL_MATCH_MAX_M:g} m is "
     "interpolated between its neighbours instead. " + provenance.CORNER_MATCH_DRIFT + " "
-    "Timed a second, independent way — the moment the lap crosses the track at each edge — "
-    "interpolated cells were a median 0.22 s off (up to 0.89 s) on "
-    "the owner's 38-lap recording, as large as the mark itself, against 0.004 s for matched ones. "
+    "Timed a second, independent way — the moment the lap crosses a gate drawn across the track "
+    "at each edge — interpolated cells were a median 0.22 s off (up to 0.89 s) on the owner's "
+    "38-lap recording before a September 2026 change to corner matching, as large as the mark "
+    "itself, against 0.004 s for matched ones; that change — the drift correction just described "
+    "— left far fewer cells interpolated, and the figure has not been re-measured since. "
     "They are shown, because they are the lap's real reading, but they never carry a ▼ and never "
     "count towards the typical. The CORNERS table above counts the same matched cells, so its "
     "Median is this typical wherever a corner has one.\n\n"
@@ -1064,8 +1066,9 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
 # sources are in corner_model.IdealSample; this is the version a reader gets on hover.
 IDEAL_SAMPLE_TOOLTIP = (
     "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
-    "of how many laps you recorded: measured on real recordings it falls 0.15–0.38 s per doubling "
-    "of lap count and keeps falling — there is no floor it settles on. It also moves when the "
+    "of how many laps you recorded: measured on real recordings, before a September 2026 change "
+    "to corner matching and not re-measured since, it falls 0.15–0.38 s per doubling of lap "
+    "count and keeps falling — there is no floor it settles on. It also moves when the "
     "corners are re-detected, which happens every time you drag the start/finish line. Compare it "
     "with another session only when the two have a similar lap count and corner count.")
 THEORETICAL_TOOLTIP = ("Theoretical best — your quickest time through each corner and each "

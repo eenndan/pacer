@@ -201,6 +201,34 @@ def _scanned_texts():
 # 0.623 s per doubling on a recording this table does not carry, and must not be swept in here.
 _QUOTES = re.compile(r"per doubling of lap count", re.IGNORECASE)
 
+# T16. A ‡ row's figures are not current, so wherever a reader meets one WITHOUT this table beside
+# it (an in-app string, README.md, docs/), the sentence has to date itself before #335. The
+# best-lap control is exempt: it is lap times, which corner matching does not move. The one
+# recording left to test that on, SD_30_08, re-measured 0.119 s per doubling on 2026-09-19, as
+# published.
+import _stale
+
+
+def _stale_ideal_figures() -> set[str]:
+    """Every figure the scans below read that comes off a ‡ row: that row's rate, the range across
+    the rates when either end is ‡, the D24 3-chapter decrements and gaps, and the top-rung ideal
+    rates of D24 1 chapter and SD_30_08."""
+    rows = _rows()
+    out = set()
+    for r in rows:
+        if not r.verified:
+            out |= {f"{r.rate:.3f}", f"{r.rate:.2f}"}
+    lo, hi = min(rows, key=lambda r: r.rate), max(rows, key=lambda r: r.rate)
+    if not (lo.verified and hi.verified):
+        out |= {f"{lo.rate:.2f}", f"{hi.rate:.2f}", f"{lo.rate:.3f}", f"{hi.rate:.3f}"}
+    if not _row("D24 3").verified:
+        out |= {r for _a, _b, r in _decrements()} | _gap_pair()
+    if not _row("D24 1").verified:
+        out.add(_top_rung()[0])
+    if not _row("SD_30_08").verified:
+        out.add(_sd_last_doubling()[2])
+    return out
+
 
 def _flatten(text: str) -> str:
     """One file as one line: a newline (with its comment marks and indent) becomes a space, and so
@@ -348,6 +376,8 @@ def test_every_surface_quotes_this_table():
     # gap is published by the same docstring, so it is read from there rather than waved through.
     ok.update(_gap_pair())
 
+    stale_figures = _stale_ideal_figures()
+    unmarked = []
     seen = 0
     for rel, text in _scanned_texts():
         if not _QUOTES.search(text):
@@ -356,6 +386,17 @@ def test_every_surface_quotes_this_table():
             if not _QUOTES.search(sentence):
                 continue
             seen += 1
+            stale = [n for n in re.findall(r"(?<![\d.])\d\.\d{2,3}(?![\d])", sentence) if n in stale_figures]
+            if stale:
+                # The number WITH the phrase is what locates the quote: the bare phrase also sits in
+                # the best-lap tooltip, whose rates no corner-matching change can move.
+                n = re.escape(stale[0])
+                m = (re.search(n + r".{0,80}?per doubling of lap count", sentence, re.I)
+                     or re.search(r"per doubling of lap count.{0,80}?" + n, sentence, re.I))
+                p = _stale.unmarked(rel, m.group(0) if m else stale[0], sentence,
+                                    "a rate off IdealSample's ‡ rows")
+                if p:
+                    unmarked.append(p)
             # A bare `0.xx` / `0.xxx`, not the tail of a lap time: 67.957 is a cell, not a rate.
             for num in re.findall(r"(?<![\d.])\d\.\d{2,3}(?![\d])", sentence):
                 assert num in ok, (
@@ -371,6 +412,7 @@ def test_every_surface_quotes_this_table():
                     f"{rel} quotes the range {lo}–{hi} s per doubling of lap count; the table's "
                     f"ranges are {sorted(ranges)} — the table is the source.")
     assert seen >= 8, f"the scan found only {seen} sentences; it has gone vacuous"
+    assert not unmarked, "\n  ".join(["stale IdealSample rates presented as current:"] + unmarked)
     print(f"test_every_surface_quotes_this_table OK ({seen} sentences)")
 
 
@@ -390,10 +432,12 @@ def test_every_five_lap_pair_is_the_table_s():
     against the row with its lap count."""
     by_n = {r.all_n: r for r in _rows()}
     hits: dict[str, int] = {}
+    unmarked = []
     for rel, text in _scanned_texts():
         flat = re.sub(r"\s+", " ", text)
         for form in _PAIR_FORMS:
-            for five, whole, n in form.findall(flat):
+            for m in form.finditer(flat):
+                five, whole, n = m.groups()
                 row = by_n.get(int(n))
                 assert row, f"{rel} quotes the ideal over {n} laps; no table row has {n}"
                 want = (f"{row.cells[0]:.3f}", f"{row.all_s:.3f}")
@@ -401,15 +445,24 @@ def test_every_five_lap_pair_is_the_table_s():
                     f"{rel} says {five} s over 5 laps and {whole} s over {n}; the table's "
                     f"{row.name} row says {want} — the table is the source")
                 hits[rel] = hits.get(rel, 0) + 1
+                if not row.verified:
+                    p = _stale.unmarked(rel, m.group(0), _stale.sentence_at(flat, m.start(), m.end()),
+                                        f"IdealSample's {row.name} {_UNVERIFIED} row")
+                    if p:
+                        unmarked.append(p)
         # "… chapter 1 (21 laps) and … chapters 1–3 (65 laps) are 0.69 s apart": two rows' `all`
         # cells, subtracted — the Library's Ideal-lap header hover makes its whole case with it.
-        for n_a, n_b, apart in re.findall(r"\((\d+) laps\) and [^()]{1,40}\((\d+) laps\) are "
-                                          r"(\d\.\d\d) s apart", flat):
+        for m in re.finditer(r"\((\d+) laps\) and [^()]{1,40}\((\d+) laps\) (?:are|were) "
+                             r"(\d\.\d\d) s apart", flat):
+            n_a, n_b, apart = m.groups()
             a, b = by_n.get(int(n_a)), by_n.get(int(n_b))
             assert a and b, f"{rel} compares {n_a} laps with {n_b}; the table lacks one of them"
-            assert a.verified and b.verified, (
+            # Anywhere, not only where a reader sees it: this comparison is a claim about the app.
+            sentence = _stale.sentence_at(flat, m.start(), m.end())
+            unit = _stale.presented_unit(rel, m.group(0), sentence) or sentence
+            assert (a.verified and b.verified) or _stale.QUOTE_MARK.search(unit), (
                 f"{rel} quotes {a.name} against {b.name} as current, and one of them is "
-                f"{_UNVERIFIED} — not re-measured")
+                f"{_UNVERIFIED} — not re-measured. Say it was measured before #335.")
             assert apart == f"{abs(a.all_s - b.all_s):.2f}", (
                 f"{rel} says {n_a} and {n_b} laps are {apart} s apart; the table's `all` cells are "
                 f"{abs(a.all_s - b.all_s):.2f} s apart")
@@ -418,6 +471,7 @@ def test_every_five_lap_pair_is_the_table_s():
         assert rel in hits, (
             f"{rel} no longer states the ideal over 5 laps against the whole recording")
     assert len(hits) >= 4, f"the pair scan found only {sorted(hits)}; it has gone vacuous"
+    assert not unmarked, "\n  ".join(["stale IdealSample cells presented as current:"] + unmarked)
     print(f"test_every_five_lap_pair_is_the_table_s OK ({sum(hits.values())} pairs in "
           f"{len(hits)} files)")
 
@@ -436,29 +490,48 @@ def test_every_d24_gap_is_the_docstring_s():
                            r"(\d\.\d\d) s on three")
     alt = re.compile(r"(?:1:(\d\d\.\d{3}) theoretical best over (\d+) laps|theoretical best "
                      r"1:(\d\d\.\d{3}) over (\d+) laps), [−-](\d\.\d\d) s on the table")
+    # T16: every gap here is a D24 row's; while those rows are ‡, a reader who meets one without the
+    # table (an in-app string, README.md, docs/) has to be told it predates #335.
+    d24_stale = not (_row("D24 1").verified and all_3ch.verified)
+    unmarked = []
+
+    def presented(rel: str, flat: str, m: re.Match) -> None:
+        if d24_stale:
+            p = _stale.unmarked(rel, m.group(0), _stale.sentence_at(flat, m.start(), m.end()),
+                                f"a D24 gap off IdealSample's {_UNVERIFIED} rows")
+            if p:
+                unmarked.append(p)
+
     seen = 0
     for rel, text in _scanned_texts():
         flat = re.sub(r"\s+", " ", text)
-        for value, where in at_n.findall(flat):
+        for m in at_n.finditer(flat):
+            value, where = m.groups()
             want = g.at5_3ch if where.startswith("5") else g.all_3ch
             assert value == want, (
                 f"{rel} quotes a {value} s gap at {where}; IdealSample publishes {want} "
                 f"(D24 3 chapters) — the docstring is the source")
+            presented(rel, flat, m)
             seen += 1
-        for one, three in one_three.findall(flat):
+        for m in one_three.finditer(flat):
+            one, three = m.groups()
             assert (one, three) == (g.all_1ch, g.all_3ch), (
                 f"{rel} quotes {one} s on D24 one chapter and {three} s on three; IdealSample "
                 f"publishes {g.all_1ch} and {g.all_3ch}")
+            presented(rel, flat, m)
             seen += 1
-        for a_s, a_n, b_s, b_n, gap in alt.findall(flat):
+        for m in alt.finditer(flat):
+            a_s, a_n, b_s, b_n, gap = m.groups()
             secs, n = (a_s, a_n) if a_s else (b_s, b_n)
             assert int(n) == all_3ch.all_n, f"{rel}: a screenshot of {n} laps is not a D24 row"
             assert (f"{60 + float(secs):.3f}", gap) == (f"{all_3ch.all_s:.3f}", g.all_3ch), (
                 f"{rel} describes a screenshot reading 1:{secs} and −{gap} s; the table reads "
                 f"{all_3ch.all_s:.3f} s and IdealSample −{g.all_3ch} s. Regenerate the image "
                 "(studio/dev/media_capture.py) and its alt text together.")
+            presented(rel, flat, m)
             seen += 1
     assert seen >= 12, f"the gap scan found only {seen} quotations; it has gone vacuous"
+    assert not unmarked, "\n  ".join(["stale D24 gaps presented as current:"] + unmarked)
     print(f"test_every_d24_gap_is_the_docstring_s OK ({seen} quotations)")
 
 

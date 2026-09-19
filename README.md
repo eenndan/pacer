@@ -70,7 +70,10 @@ of your clean laps have already matched it, and which lap set the mark. The gain
 headline. It is an *order statistic*, so it falls as a session gets longer — the app says how many
 laps it was minimised over rather than letting you read it as a floor.
 
-<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP: 1:06.709 theoretical best over 65 laps, −1.49 s on the table vs your best, stitched from 20 of your 65 clean laps across 12 corners and 13 straights, with a per-segment gain table whose twelve rows hold 1.35 s of the 1.49 s">
+<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP, captured on the owner's recording before a September 2026 change to corner matching and not re-measured since: 1:06.709 theoretical best over 65 laps, −1.49 s on the table vs your best, stitched from 20 of your 65 clean laps across 12 corners and 13 straights, with a per-segment gain table whose twelve rows hold 1.35 s of the 1.49 s">
+
+*The screenshot's figures were measured before a September 2026 change to how Pacer matches corners,
+on a recording that is no longer available, so they have not been re-measured since.*
 
 **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation. Brake
 points, corner apexes and draggable start/sector lines sit on it, and every mark is named in the
@@ -157,7 +160,8 @@ than it is. So that is a rule with an owner in the code:
   the UI does; the card refuses on provisional timing and the video warns before it burns a number
   into a file someone else will see.
 - **the ideal lap discloses its sample**, because a sum of per-segment minima falls the longer you
-  stay out. Same driving, same recording: 67.917 s over 5 laps, 66.709 s over 65.
+  stay out. Same driving, same recording: 67.917 s over 5 laps, 66.709 s over 65, as measured
+  before a September 2026 change to corner matching (not re-measured since).
 - **DATA TRUST** puts the accuracy story inside the product, not only on this page.
 - **a citable marker vocabulary on the way out.** In the app a caveat has hover, colour and weight
   to carry it, so pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An

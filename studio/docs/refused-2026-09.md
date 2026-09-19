@@ -68,6 +68,12 @@ segments, plot them, and mark where the ideal and your best lap fall.
 **What was measured.** The actual 20-dot layout was built, rather than argued about from moments.
 Re-measured after #300 warped every lap, which moved every cell below except the best lap:
 
+> **⚠ STALE — NOT RE-MEASURABLE (T16).** The table below was measured on D24 before #335 changed
+> corner matching, and it is known stale. #339 read 0060's ideal as 65.637 s after #335 and
+> 65.864 s after its own change, against the 65.464 s below. D24 is no longer available, so the
+> table cannot be re-measured. It is the record of that measurement, not what the app computes
+> today, and whether the verdict under it still holds cell for cell is unverified.
+
 | | 0060 (38 laps) | 0062 (65 laps) |
 |---|---|---|
 | ideal / best lap | 65.464 / 68.228 | 66.709 / 68.201 |
