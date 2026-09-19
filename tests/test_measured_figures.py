@@ -33,6 +33,12 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      reports it SKIPPED by name (tests/_footage.py) instead of this file counting it as passed.
      Since 2026-09-19 `D24/` and `Sandown_09_05_2026/` are gone from that Desktop, so a run with the
      variable set FAILS naming each missing lap set; which recordings the tables move to is T16.
+  4. A TABLE CHECK 3 CANNOT RE-MEASURE SAYS SO WHERE IT IS PUBLISHED (T16). #339 found eight of
+     these tables stale after #335 changed corner matching, and then their recordings went. Each
+     table whose rows name a recording in `tests/_stale.GONE` must carry a "⚠ STALE" or
+     "⚠ UNVERIFIED — NOT RE-MEASURABLE (T16)" mark in its own paragraph, and check 2's quotes, where
+     a reader meets them without the table, must date themselves before #335. It has a negative
+     control that plants every defect it looks for.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
