@@ -367,7 +367,7 @@ def test_a_raising_view_build_on_a_reload_rolls_back_to_the_working_session():
         assert DIALOGS and "unchanged" in DIALOGS[-1][1], DIALOGS
 
         # (1) The title is part of the commit, so it is part of the rollback. It used to read
-        #     "Pacer Studio — doomed-GX010077.MP4" over the good session.
+        #     "Pacer — doomed-GX010077.MP4" over the good session.
         assert win.windowTitle() == good_title, (
             f"the window is titled after the recording that FAILED: {win.windowTitle()!r}")
         assert "GX010077" not in win.windowTitle(), win.windowTitle()

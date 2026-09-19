@@ -1,4 +1,4 @@
-# pacer studio
+# studio — the Pacer desktop app
 
 A local **PySide6 + pyqtgraph** desktop app for race-telemetry analysis — a greenfield UI
 on top of the existing C++ `pacer` core (reused via its nanobind Python bindings). Chosen

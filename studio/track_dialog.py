@@ -7,7 +7,7 @@ itself onto every future recording at that location. This dialog is the other ha
 
     ┌──────────────────────────────────────────────┐
     │  3 saved tracks                              │
-    │  These are the circuits pacer auto-detects…  │ ← what a delete does and does not touch
+    │  These are the circuits Pacer auto-detects…  │ ← what a delete does and does not touch
     ├──────────────────────────────────────────────┤
     │  Daytona Milton Keynes   (built-in)          │ ← built-ins are listed, never editable
     │  Sandown Park                                │
@@ -67,11 +67,11 @@ EDITABLE_ROLE = Qt.UserRole + 2    # whether a rename/delete can reach it
 # library's personal-best history, so deleting the circuit deliberately leaves every analysed
 # session exactly where it is, filed under the name it was driven as.
 _NOTE = (
-    "These are the circuits pacer auto-detects, with the start/finish and sector lines you saved "
+    "These are the circuits Pacer auto-detects, with the start/finish and sector lines you saved "
     "for each (tracks.json). Deleting one only stops FUTURE recordings at that location detecting "
     "it — your analysed sessions, their lap times and their personal-best history are kept, and no "
     "video file is touched. A copy of the list is kept as tracks.json.bak before any change, so "
-    "\"Restore…\" puts it back. Built-in circuits ship with pacer and cannot be renamed or deleted; "
+    "\"Restore…\" puts it back. Built-in circuits ship with Pacer and cannot be renamed or deleted; "
     "saving your own lines over one makes a copy you can."
 )
 
@@ -289,8 +289,8 @@ class TrackManagerDialog(QDialog):
         if reverts is not None:
             body = (
                 f"Put the built-in “{name}” back?\n\n"
-                "This circuit ships with pacer, so it is not removed — the start/finish line you "
-                "saved over it is discarded and pacer's own line comes back. Recordings here will "
+                "This circuit ships with Pacer, so it is not removed — the start/finish line you "
+                "saved over it is discarded and Pacer's own line comes back. Recordings here will "
                 "detect the built-in line instead of yours."
             )
         else:

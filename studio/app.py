@@ -2058,7 +2058,7 @@ class StudioWindow(QMainWindow):
         self._record_action = menu.addAction("Session record…")
         self._record_action.setToolTip(
             "Write up this session: conditions, tyres and kart setup. Two sessions' lap times are "
-            "only comparable if these were — and pacer never looks the weather up, so nothing "
+            "only comparable if these were — and Pacer never looks the weather up, so nothing "
             "leaves this Mac")
         self._record_action.triggered.connect(self.library_ctl.edit_current_record)
         # No session yet at construction time — seeded through the gate so the item is honest
@@ -2181,7 +2181,7 @@ class StudioWindow(QMainWindow):
         self._fullscreen_action = view_menu.addAction("Enter Full Screen")
         self._fullscreen_action.setShortcut(QKeySequence.FullScreen)  # ⌘⌃F on macOS
         self._fullscreen_action.setToolTip(
-            "Show pacer full screen (⌘⌃F). Press Esc or ⌘⌃F again to exit.")
+            "Show Pacer full screen (⌘⌃F). Press Esc or ⌘⌃F again to exit.")
         self._fullscreen_action.triggered.connect(self._toggle_fullscreen)
         # One-action route to the full-window statistics dashboard: flip the lap panel to its
         # Stats page + maximize it (CentralView.show_stats_maximized; a second trigger restores
@@ -2257,7 +2257,7 @@ class StudioWindow(QMainWindow):
         self._shortcuts_action.triggered.connect(self._show_shortcuts)
         self._privacy_action = help_menu.addAction("Your data && privacy")
         self._privacy_action.setToolTip(
-            "What pacer stores on this Mac (all local/offline) and how to remove it")
+            "What Pacer stores on this Mac (all local/offline) and how to remove it")
         self._privacy_action.triggered.connect(self._show_privacy)
         self._about_action = help_menu.addAction(f"About {APP_NAME}")
         self._about_action.setToolTip(f"What {APP_NAME} is and what it does")
@@ -2315,7 +2315,7 @@ class StudioWindow(QMainWindow):
         ShortcutsDialog(self).exec()
 
     def _show_about(self):
-        """Help ▸ About pacer studio: the small themed About card (name / tagline / blurb)."""
+        """Help ▸ About Pacer: the small themed About card (name / tagline / blurb)."""
         AboutDialog(self).exec()
 
     def _report_problem(self):
@@ -2325,7 +2325,7 @@ class StudioWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl(ISSUES_URL))
 
     def _show_privacy(self):
-        """Help ▸ Your data & privacy: the local-data disclosure card (what pacer stores + how to
+        """Help ▸ Your data & privacy: the local-data disclosure card (what Pacer stores + how to
         remove it). All local/offline; the copy lives in help_dialog.PRIVACY_PARAGRAPHS."""
         PrivacyDialog(self).exec()
 
@@ -3248,7 +3248,7 @@ class StudioWindow(QMainWindow):
         (that one dropped). A message asserting "your circuits are missing" would be false in the
         commonest of the three, so it says what is true in all of them and points at the copy."""
         box = QMessageBox(QMessageBox.Warning, f"{APP_NAME} — saved tracks rewritten",
-                          "Your saved-track database could not be read in full, so pacer has "
+                          "Your saved-track database could not be read in full, so Pacer has "
                           "rewritten it in the format this version understands. Some circuits, or "
                           "some of their details, may be missing from it now.\n\nNothing was "
                           "thrown away: the file as it was before this save is kept beside it.",
@@ -3778,10 +3778,11 @@ def main(argv: list[str] | None = None) -> int:
     # Brand the running app: the Dock/window icon and the app name Qt reports. NOTE the macOS
     # menu-bar showing "Python" in a NON-FROZEN dev run is expected — AppKit reads the menu-bar
     # app name from the running bundle's Info.plist (here the python interpreter's) before Qt can
-    # override it. The shipped .app sets CFBundleName="Pacer Studio" (packaging/pacer.spec) so the
+    # override it. The shipped .app sets CFBundleName=APP_NAME (packaging/pacer.spec) so the
     # product is correct; we do NOT pull in pyobjc/Foundation just to fix a cosmetic dev-only label.
-    app.setApplicationName("Pacer Studio")
-    app.setApplicationDisplayName("Pacer Studio")
+    # Nothing is keyed on this name — no QSettings, no QStandardPaths — so renaming it moves no data.
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
     app.setOrganizationName("pacer")  # additive; the library.json path is built from a hard-coded _APP_DIR_NAME, so this cannot move it
     _icon = Path(__file__).resolve().parent / "assets" / "pacer.icns"
     if _icon.exists():

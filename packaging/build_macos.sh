@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build_macos.sh — build an UNSIGNED "Pacer Studio.app" + a .dmg from the repo.
+# build_macos.sh — build an UNSIGNED "Pacer.app" + a .dmg from the repo.
 #
 # Produces a locally-runnable macOS app from the `studio` desktop app via PyInstaller
 # (packaging/pacer.spec), then wraps it in a drag-to-Applications .dmg with hdiutil.
@@ -15,7 +15,7 @@
 # Usage (from anywhere; paths are resolved from the script location):
 #   packaging/build_macos.sh
 #
-# Output: dist/Pacer Studio.app  and  dist/Pacer-Studio-<version>.dmg
+# Output: dist/Pacer.app  and  dist/Pacer-<version>.dmg
 #
 # This app is UNSIGNED. To distribute it past Gatekeeper you must codesign + notarize + staple it
 # with YOUR Apple Developer ID — those steps are documented (commented, not run) at the bottom and
@@ -26,10 +26,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SPEC="${SCRIPT_DIR}/pacer.spec"
-APP_NAME="Pacer Studio"
+APP_NAME="Pacer"   # == studio.APP_NAME (tests/test_version.py pins it)
 APP_PATH="${REPO_ROOT}/dist/${APP_NAME}.app"
 VERSION="$(grep -m1 '^version' "${REPO_ROOT}/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')"
-DMG_PATH="${REPO_ROOT}/dist/Pacer-Studio-${VERSION}.dmg"
+DMG_PATH="${REPO_ROOT}/dist/${APP_NAME}-${VERSION}.dmg"
 
 cd "${REPO_ROOT}"
 

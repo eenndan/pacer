@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pacer Studio — a race-telemetry workstation validated against a transponder</title>
+<title>Pacer — a race-telemetry workstation validated against a transponder</title>
 <meta name="description" content="Case study: a macOS desktop app that turns one GoPro recording into transponder-validated lap timing, a racing line, deltas and synced video. Lap times unbiased to ±0.003 s over 107 clean laps. Built as an engineering showcase; source is the only distribution.">
 
 <!-- The mark is the app's own icon (studio/assets/pacer.icns, drawn by studio/dev/make_icon.py):
@@ -13,14 +13,14 @@
 
 <!-- Open Graph / Twitter — a case study still wants to render when it is shared. -->
 <meta property="og:type" content="article">
-<meta property="og:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
+<meta property="og:title" content="Pacer — a race-telemetry workstation validated against a transponder">
 <meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
 <meta property="og:image" content="media/og.png">
 <meta property="og:image:width" content="2560">
 <meta property="og:image:height" content="1280">
 <meta property="og:url" content="https://eenndan.github.io/pacer/">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
+<meta name="twitter:title" content="Pacer — a race-telemetry workstation validated against a transponder">
 <meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
 <meta name="twitter:image" content="media/og.png">
 
@@ -300,12 +300,12 @@
 <!-- ===================== HEADER ===================== -->
 <header>
   <div class="wrap navbar">
-    <a class="brand" href="#top" aria-label="Pacer Studio">
+    <a class="brand" href="#top" aria-label="Pacer">
       <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
         <path d="M4 5 L12 13 L4 21" stroke="var(--accent-press)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M12 5 L20 13 L12 21" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      Pacer Studio
+      Pacer
     </a>
     <div class="nav-links">
       <a class="long" href="#accuracy">Accuracy</a>
@@ -322,7 +322,7 @@
   <div class="wrap">
     <p class="eyebrow">Case study · race telemetry · macOS</p>
     <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against a real transponder.</span></h1>
-    <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware.</p>
+    <p class="lead">Pacer is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware.</p>
     <p class="lead">It is also an engineering showcase, and this page is the case study: what it claims, how each claim is checked, and where the limits are.</p>
 
     <div class="callout">
@@ -331,7 +331,7 @@
 
     <figure class="figure">
       <img src="media/hero.png" width="2880" height="1800"
-           alt="The Pacer Studio window on a real kart session: GoPro video with its own transport, a speed-coloured track map with brake points and a named key, the SPEED · Δ TO IDEAL charts reading Δideal +0.61 s, and the tabbed lap panel with lap 42 starred as the session best at 1:08.201.">
+           alt="The Pacer window on a real kart session: GoPro video with its own transport, a speed-coloured track map with brake points and a named key, the SPEED · Δ TO IDEAL charts reading Δideal +0.61 s, and the tabbed lap panel with lap 42 starred as the session best at 1:08.201.">
       <figcaption>One window on one recording. The four panels are independently resizable and any one of them maximises to the whole window; the lap panel below the video is five full-height pages — <strong>Laps, Corners, Stats, Coaching, Marks</strong> — on one tab bar.</figcaption>
     </figure>
   </div>

@@ -168,7 +168,7 @@ _THEO_HEADER_TIP = (
     "(21 laps) and D24 chapters 1–3 (65 laps) are 0.69 s apart on the same driving.")
 _COND_HEADER_TIP = (
     "Conditions — what you recorded about the day, in File ▸ Session record….\n"
-    "pacer never looks the weather up: nothing leaves this Mac. A dry-day best and a wet-day best "
+    "Pacer never looks the weather up: nothing leaves this Mac. A dry-day best and a wet-day best "
     "are not the same measurement, so filter to one tag before reading the times beside it as a "
     "ranking of pace.")
 _TYRES_HEADER_TIP = (
@@ -193,9 +193,9 @@ _TYRES_HEADER_TIP = (
 # Telling them apart needs a stored flag on the migrated entries (studio/library.py `_migrate` /
 # `_norm_entry`); see this PR's hand-off note.
 _IDEAL_STALE_TIP = (
-    "Ideal lap: not stored for this recording.\nEither it was analyzed before pacer built the "
+    "Ideal lap: not stored for this recording.\nEither it was analyzed before Pacer built the "
     "ideal lap from your corners and straights (the old value was a copy of the best lap, so the "
-    "migration retired it), or pacer found no corners here to stitch one from. Re-opening the "
+    "migration retired it), or Pacer found no corners here to stitch one from. Re-opening the "
     "recording fills it in if there are corners to find.")
 _IDEAL_ONE_DONOR_TIP = (
     "Ideal lap: same as the best lap for this recording.\nOne lap was quickest through every "
@@ -243,11 +243,11 @@ EMPTY_LIBRARY_ICON = "ph.folder-open"
 # the search box, and the label the unknown-track filter bucket stands for.
 _UNKNOWN_LABEL = "unknown track"
 
-# Privacy disclosure — a calm, factual note of what pacer stores locally and where. Surfaced in the
+# Privacy disclosure — a calm, factual note of what Pacer stores locally and where. Surfaced in the
 # Library dialog (this is where a user browsing their recorded history would look) and by
 # Help ▸ Your data & privacy. Everything is on-disk and offline; nothing is uploaded — say so.
 PRIVACY_NOTE = (
-    "Everything pacer analyzes stays on this Mac — nothing is uploaded or shared, and the "
+    "Everything Pacer analyzes stays on this Mac — nothing is uploaded or shared, and the "
     "conditions in a session record are typed by you, never looked up online. "
     "It stores your start/finish + sector lines in a small \"<name>.pacer.json\" file next to "
     "each video, and under ~/Library/Application Support/pacer it keeps this library index (file "
@@ -599,7 +599,7 @@ class LibraryDialog(QDialog):
         self.condition_filter.addItem(_NO_RECORD, _NO_RECORD)
         self.condition_filter.setToolTip(
             "Show only sessions you recorded as this kind of day — or the ones with no session "
-            "record yet. Conditions are typed in File ▸ Session record…; pacer never fetches them.")
+            "record yet. Conditions are typed in File ▸ Session record…; Pacer never fetches them.")
         self.condition_filter.currentIndexChanged.connect(self._apply_filter)
         filter_row.addWidget(self.condition_filter)
         root.addLayout(filter_row)
@@ -794,7 +794,7 @@ class LibraryDialog(QDialog):
         if self._manage_tracks is not None:
             self.tracks_btn = QPushButton("Saved tracks…")
             self.tracks_btn.setToolTip(
-                "Rename or delete the circuits pacer auto-detects (tracks.json). Your analysed "
+                "Rename or delete the circuits Pacer auto-detects (tracks.json). Your analysed "
                 "recordings and their personal-best history are kept either way")
             self.tracks_btn.clicked.connect(lambda: self._manage_tracks(self))
             buttons.addWidget(self.tracks_btn)

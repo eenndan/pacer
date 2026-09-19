@@ -220,10 +220,10 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = shortcut_groups()
 # Kept here (with the shortcuts / about copy) as the single source of the app's Help-menu text.
 PRIVACY_TITLE = "Your data & privacy"
 PRIVACY_PARAGRAPHS = [
-    "Pacer Studio runs entirely on your Mac. It does not upload, sync or share anything — no "
+    f"{APP_NAME} runs entirely on your Mac. It does not upload, sync or share anything — no "
     "account, no network, no telemetry. Everything below stays on this computer, offline.",
     "What it stores, and where:",
-    "•  Timing-line sidecar — when you place or drag a start/finish or sector line, pacer saves "
+    "•  Timing-line sidecar — when you place or drag a start/finish or sector line, Pacer saves "
     "those lines next to your video as a small \"<name>.pacer.json\" file, so your lap timing "
     "survives a restart. It holds those lines' coordinates and the track name — no video.",
     "•  Session library — each analyzed recording is indexed in "
@@ -250,13 +250,13 @@ PRIVACY_PARAGRAPHS = [
     # record with it since that store landed, and now the marks too. Said as what it DOES cover it
     # costs no line and stops understating the gesture.
     "\"Clear library\" to wipe the whole index. That covers a recording's own data only — "
-    "to remove everything, including your preferences and saved tracks, quit pacer and delete the "
+    "to remove everything, including your preferences and saved tracks, quit Pacer and delete the "
     "folder \"~/Library/Application Support/pacer\". Your video files are never touched.",
 ]
 
 APP_TAGLINE = "Race-telemetry analysis for GoPro footage."
 APP_BLURB = (
-    "Open a GoPro recording and Pacer Studio reconstructs the laps from its embedded GPS — then "
+    f"Open a GoPro recording and {APP_NAME} reconstructs the laps from its embedded GPS — then "
     "lets you scrub the footage against the map, speed / Δ charts and a g-meter overlay, compare "
     "your laps (and other recordings) side by side, and find where the time goes."
 )
@@ -486,7 +486,7 @@ class ShortcutsDialog(QDialog):
 
 
 class AboutDialog(QDialog):
-    """Help ▸ About pacer studio. A small themed card: app name (hero), one-line tagline, and a
+    """Help ▸ About Pacer. A small themed card: app name (hero), one-line tagline, and a
     short blurb on what it does (analyses GoPro race telemetry). Self-contained / app-state-free."""
 
     def __init__(self, parent=None):
@@ -536,7 +536,7 @@ class AboutDialog(QDialog):
 
 
 class PrivacyDialog(QDialog):
-    """Help ▸ Your data & privacy. A read-only, themed card disclosing what pacer stores locally
+    """Help ▸ Your data & privacy. A read-only, themed card disclosing what Pacer stores locally
     (the per-video .pacer.json sidecar + all three app-support files — library.json, prefs.json,
     tracks.json) and how to remove it. All copy is single-sourced from PRIVACY_PARAGRAPHS.
     Self-contained / app-state-free (headless-safe)."""

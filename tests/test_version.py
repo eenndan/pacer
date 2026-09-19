@@ -6,7 +6,7 @@ files carry it as well and neither can import the canonical one: the root one is
 the string `packaging/build_macos.sh` names the .dmg from, and `bindings/pacer/pyproject.toml` is
 the bindings package's own metadata. The release recipe in AGENTS.md named only two of the three
 for four releases' worth of history, and a `grep __version__ tests/` returned nothing — so a bump
-that missed a file would have shipped a `Pacer-Studio-<a>.dmg` whose About card read `<b>`, and
+that missed a file would have shipped a `Pacer-<a>.dmg` whose About card read `<b>`, and
 nothing in CI would have said a word.
 
 Each site is read the way ITS OWN consumer reads it, not with one canonical parser:
@@ -104,7 +104,7 @@ def test_the_three_version_sites_agree():
         f"{root_toml!r} — the .dmg would be named from the wrong line")
     assert root_toml == canonical, (
         f"pyproject.toml version = {root_toml!r} != studio/__init__.py __version__ {canonical!r}. "
-        f"build_macos.sh would write Pacer-Studio-{root_toml}.dmg holding an app whose About "
+        f"build_macos.sh would write Pacer-{root_toml}.dmg holding an app whose About "
         f"card reads {canonical}.")
 
     # 3. The bindings package — the site AGENTS.md's release recipe used to omit.
@@ -144,6 +144,115 @@ def test_every_released_section_has_its_compare_link():
             f"CHANGELOG.md has a `## [{version}]` heading with no `[{version}]:` link definition "
             f"at the foot of the file")
     print(f"test_every_released_section_has_its_compare_link OK ({len(defined)} links)")
+
+
+# ------------------------------------------------------------------------------ the product name
+# The name is release identity too, and it had drifted further than the version ever did: the
+# window titles and the .app said "Pacer Studio" (APP_NAME, CFBundleName), the welcome screen and
+# the README said "Pacer", and the app's own prose said "pacer" — three spellings of one product.
+# The owner's decision is "Pacer" (U5). Every site below is read the way its consumer reads it.
+_RETIRED = ("Pacer Studio", "Pacer-Studio")
+# A lowercase `pacer` used as the product's NAME inside a user-visible string. Not a path, a file
+# name, an identifier or a module (`pacer.json`, `.../pacer/`, `pacer::Laps`, `_pacer`).
+_LOWERCASE_NAME = re.compile(r"(?<![\w./~-])pacer(?![\w./:-])")
+# Where a lowercase `pacer` in a string literal is NOT the product name, or is not fixed YET — each
+# a decision with a reason, capped at today's count so a NEW lowercase name in the file still fails.
+_LOWERCASE_ALLOWED = {
+    # Identifiers: the app-support folder name and the Qt organisation (an identifier, not a label).
+    "app_support.py": 1,
+    "app.py": 1,
+    # An exported provenance CSV's metadata KEY ("pacer provenance"): a file-format field a
+    # spreadsheet or script may already key on, not prose.
+    "provenance.py": 1,
+    # The share card's logotype: a lowercase wordmark set as a graphic, by design since the card
+    # was introduced ("a subtle 'pacer' wordmark"). Running text says APP_NAME.
+    "share_card.py": 1,
+    # NOT FIXED YET, deliberately: another package (C5) is editing coaching, the ideal lap and the
+    # braking/coasting surfaces in parallel, and these files are its. Sweep them once it lands.
+    "coaching_panel.py": 2,
+    "focus.py": 2,
+    "corner_model.py": 1,
+    "plots_view.py": 2,
+}
+
+
+def _app_name_off_disk():
+    m = re.search(r'^APP_NAME\s*=\s*"([^"]+)"', _read("studio", "__init__.py"), re.MULTILINE)
+    assert m, "studio/__init__.py no longer declares APP_NAME = \"...\""
+    return m.group(1)
+
+
+def _prose_literals(path):
+    """Every non-docstring string constant in one module (f-string parts included)."""
+    import ast
+    tree = ast.parse(_read(path), path)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                docs.add(id(first.value))
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
+
+
+def test_the_product_is_spelled_one_way():
+    """U5. One name wherever a person reads it — the app's own chrome, the macOS bundle, the
+    README and the landing page — and the retired spelling nowhere a user or a build can see it."""
+    import studio
+    name = _app_name_off_disk()
+    assert studio.APP_NAME == name, (studio.APP_NAME, name)
+
+    # The .app: its bundle, its executable, and the two Info.plist keys the menu bar and Finder read.
+    spec = _read("packaging", "pacer.spec")
+    for key in ("CFBundleName", "CFBundleDisplayName"):
+        m = re.search(rf'"{key}":\s*"([^"]+)"', spec)
+        assert m and m.group(1) == name, f"pacer.spec {key} = {m and m.group(1)!r}, APP_NAME {name!r}"
+    names = re.findall(r'^\s*name="([^"]+)"', spec, re.MULTILINE)
+    assert names == [name, name, f"{name}.app"], (
+        f"pacer.spec EXE / COLLECT / BUNDLE names {names} do not spell APP_NAME {name!r}")
+    sh = re.search(r'^APP_NAME="([^"]+)"', _read("packaging", "build_macos.sh"), re.MULTILINE)
+    assert sh and sh.group(1) == name, f"build_macos.sh APP_NAME={sh and sh.group(1)!r}"
+    ci = re.search(r'APP="dist/([^"]+)\.app"', _read(".github", "workflows", "ci.yml"))
+    assert ci and ci.group(1) == name, f"ci.yml checks dist/{ci and ci.group(1)}.app"
+
+    # The public pages: the README's title and the landing page's <title>, og:title and wordmark.
+    readme_h1 = _read("README.md").splitlines()[0]
+    assert readme_h1 == f"# {name}", f"README.md opens {readme_h1!r}, APP_NAME is {name!r}"
+    page = _read("docs", "index.html")
+    title = re.search(r"<title>([^<]+)</title>", page).group(1)
+    og = re.search(r'property="og:title" content="([^"]+)"', page).group(1)
+    brand = re.search(r'<a class="brand"[^>]*aria-label="([^"]+)"', page).group(1)
+    for what, text in (("<title>", title), ("og:title", og)):
+        assert text.startswith(f"{name} — "), f"docs/index.html {what} is {text!r}"
+    assert brand == name, f"docs/index.html brand aria-label is {brand!r}"
+
+    # The retired spelling, anywhere a user or the build reads (CHANGELOG is history, exempt).
+    stale = []
+    for top in ("docs", "packaging", ".github"):
+        for dirpath, _dirs, files in os.walk(_repo(top)):
+            for fn in files:
+                if fn.endswith((".md", ".html", ".sh", ".spec", ".yml", ".yaml", ".py")):
+                    rel = os.path.relpath(os.path.join(dirpath, fn), _REPO)
+                    stale += [f"{rel}: {r!r}" for r in _RETIRED if r in _read(rel)]
+    stale += [f"README.md: {r!r}" for r in _RETIRED if r in _read("README.md")]
+    lower = {}
+    for fn in sorted(os.listdir(_repo("studio"))):
+        if not fn.endswith(".py"):
+            continue
+        for node in _prose_literals(os.path.join("studio", fn)):
+            stale += [f"studio/{fn}:{node.lineno}: {r!r}" for r in _RETIRED if r in node.value]
+            hits = len(_LOWERCASE_NAME.findall(node.value))
+            if hits:
+                lower.setdefault(fn, []).append((node.lineno, node.value[:60]))
+                lower[fn] += [None] * (hits - 1)
+    assert not stale, f"the retired name is still spelled out: {stale}"
+    over = {fn: [h for h in hits if h] for fn, hits in lower.items()
+            if len(hits) > _LOWERCASE_ALLOWED.get(fn, 0)}
+    assert not over, (
+        f"the product is spelled lowercase in user-visible text (say {name!r}, or APP_NAME): {over}")
+    print(f"test_the_product_is_spelled_one_way OK ({name!r}; lowercase allowed in "
+          f"{sum(len(v) for v in lower.values())} literals across {sorted(lower)})")
 
 
 # ------------------------------------------------------------------------------------- runner

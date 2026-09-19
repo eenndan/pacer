@@ -255,7 +255,7 @@ class SessionRecordDialog(QDialog):
         root.addWidget(self.notes, 1)
 
         privacy = QLabel(
-            "Typed by you and stored on this Mac only — pacer never looks conditions up online. "
+            "Typed by you and stored on this Mac only — Pacer never looks conditions up online. "
             "Blank fields are simply not recorded.")
         privacy.setWordWrap(True)
         privacy.setProperty("role", "Hint")

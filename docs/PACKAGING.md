@@ -1,6 +1,6 @@
-# Packaging Pacer Studio for macOS
+# Packaging Pacer for macOS
 
-This builds a standalone, double-clickable **`Pacer Studio.app`** (and a drag-to-install `.dmg`)
+This builds a standalone, double-clickable **`Pacer.app`** (and a drag-to-install `.dmg`)
 from the `studio` desktop app, with **no pixi / no Python install required** on the target Mac.
 
 Target: macOS 12+ on Apple Silicon (`osx-arm64` — the only platform this repo supports).
@@ -58,8 +58,8 @@ packaging/build_macos.sh
 
 Output:
 
-- `dist/Pacer Studio.app` — run locally with `open "dist/Pacer Studio.app"`
-- `dist/Pacer-Studio-<version>.dmg` — the drag-to-Applications disk image
+- `dist/Pacer.app` — run locally with `open "dist/Pacer.app"`
+- `dist/Pacer-<version>.dmg` — the drag-to-Applications disk image
 
 To run the spec directly (what the script does): `pyinstaller --noconfirm packaging/pacer.spec`.
 
@@ -75,24 +75,24 @@ xcrun notarytool store-credentials pacer-notary \
 
 # 1. codesign (hardened runtime + timestamp; --deep signs the bundled .so / ffmpeg / Python fwk)
 codesign --force --deep --options runtime --timestamp \
-  --sign "Developer ID Application: <YOUR NAME> (<TEAMID>)" "dist/Pacer Studio.app"
-codesign --verify --deep --strict --verbose=2 "dist/Pacer Studio.app"
+  --sign "Developer ID Application: <YOUR NAME> (<TEAMID>)" "dist/Pacer.app"
+codesign --verify --deep --strict --verbose=2 "dist/Pacer.app"
 
 # 2. notarize the dmg (recreate it from the signed .app first), submit and wait
-hdiutil create -volname "Pacer Studio" -srcfolder "dist/Pacer Studio.app" \
-  -ov -format UDZO "dist/Pacer-Studio-<version>.dmg"
-xcrun notarytool submit "dist/Pacer-Studio-<version>.dmg" --keychain-profile pacer-notary --wait
+hdiutil create -volname "Pacer" -srcfolder "dist/Pacer.app" \
+  -ov -format UDZO "dist/Pacer-<version>.dmg"
+xcrun notarytool submit "dist/Pacer-<version>.dmg" --keychain-profile pacer-notary --wait
 
 # 3. staple the ticket (so it validates offline) and verify with Gatekeeper
-xcrun stapler staple "dist/Pacer Studio.app"
-xcrun stapler staple "dist/Pacer-Studio-<version>.dmg"
-spctl --assess --type execute --verbose=4 "dist/Pacer Studio.app"
+xcrun stapler staple "dist/Pacer.app"
+xcrun stapler staple "dist/Pacer-<version>.dmg"
+spctl --assess --type execute --verbose=4 "dist/Pacer.app"
 ```
 
 ## Gatekeeper
 
 If you skip notarization, a user can still open the unsigned app via **right-click ▸ Open** (or
-`xattr -dr com.apple.quarantine "Pacer Studio.app"`), but Gatekeeper will warn on first launch.
+`xattr -dr com.apple.quarantine "Pacer.app"`), but Gatekeeper will warn on first launch.
 
 ## Demo data
 

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import APP_NAME, theme
 from .theme import C
 
 # What the welcome screen's "Open demo" button says while its resolve is in flight. Owned HERE
@@ -241,11 +241,13 @@ class WelcomeView(QWidget):
         self.drop_icon.setPixmap(theme.brand_mark(DROP_GLYPH_PX))
         self.drop_icon.setAlignment(Qt.AlignCenter)
         # The pixmap carries no text, so the meaning has to survive where a screen reader reads.
-        self.drop_icon.setAccessibleName("Pacer")
+        self.drop_icon.setAccessibleName(APP_NAME)
         zone.addWidget(self.drop_icon)
 
-        # Intentional short brand lockup on the welcome screen — NOT the full APP_NAME wordmark.
-        title = QLabel("Pacer")
+        # The product name, from its one source (studio/__init__.py). This used to be a literal
+        # "Pacer" under a comment calling it a "short brand lockup — NOT the full APP_NAME", which
+        # is how the welcome screen and every window title came to spell the product two ways.
+        title = QLabel(APP_NAME)
         title.setProperty("role", "Title")   # shared with the About / privacy cards
         title.setAlignment(Qt.AlignCenter)
         subtitle = QLabel("Drop a GoPro recording here — or open one — to get your laps.")
