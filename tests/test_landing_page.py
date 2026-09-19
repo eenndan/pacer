@@ -347,15 +347,18 @@ _CORE_TOLERANCE = 0.05
 def _ctest_registrations() -> int:
     """How many tests `ctest -N` would list, derived from tests/CMakeLists.txt.
 
-    Two registration forms: the `add_pacer_test` macro (one Catch2 executable each) and a literal
-    `add_test(NAME …)` per Python suite. Derived rather than pinned, so ADDING A TEST updates the
-    expected number by itself and only the PROSE has to catch up."""
+    Three registration forms: the `add_pacer_test` macro (one Catch2 executable each), a literal
+    `add_test(NAME …)` per Python suite, and `add_footage_test` (one real-footage check each, which
+    CTest reports Skipped wherever its recording is absent — CI included). Derived rather than
+    pinned, so ADDING A TEST updates the expected number by itself and only the PROSE has to catch
+    up."""
     with open(_CMAKE, encoding="utf-8") as f:
         text = f.read()
     catch2 = len(re.findall(r"^add_pacer_test\(", text, re.M))
     python = len(re.findall(r"^add_test\(NAME\b", text, re.M))
-    assert catch2 and python, "neither registration form found — this check has gone vacuous"
-    return catch2 + python
+    footage = len(re.findall(r"^add_footage_test\(", text, re.M))
+    assert catch2 and python and footage, "a registration form found nothing — this check has gone vacuous"
+    return catch2 + python + footage
 
 
 def _core_lines() -> int:
