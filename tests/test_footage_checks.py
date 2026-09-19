@@ -223,7 +223,8 @@ def test_a_footage_check_without_its_recording_is_reported_skipped_by_name():
             if proc.returncode == _footage.SKIP_RETURN_CODE and f"SKIPPED {check}: " in out:
                 continue
             vacuous = proc.returncode == 0
-            tail = "\n      ".join((out + proc.stderr).strip().splitlines()[-4:])
+            said = [ln for ln in out.splitlines() if check in ln or "passed" in ln]
+            tail = "\n      ".join(said[-3:] or (out + proc.stderr).strip().splitlines()[-4:])
             wrong.append(f"{fname} {_footage.FLAG} {check}: exit {proc.returncode}"
                          + (" — REPORTED AS A PASS with no recording anywhere" if vacuous else "")
                          + f"\n      {tail}")
@@ -316,9 +317,14 @@ def test_footage_is_found_only_through_the_helper():
             continue
         tree = ast.parse(open(os.path.join(_TESTS, name), encoding="utf-8").read())
         for n in ast.walk(tree):
-            if isinstance(n, ast.Attribute) and n.attr == "expanduser":
-                offenders.append(f"{name}:{n.lineno} calls expanduser — resolve footage through "
-                                 "tests/_footage.py")
+            # `expanduser("~")` is HOME itself (the app-support jail's own check spells the real
+            # directory that way); any other argument is a path under it, which is what footage is.
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "expanduser"
+                    and not (len(n.args) == 1 and isinstance(n.args[0], ast.Constant)
+                             and n.args[0].value == "~")):
+                offenders.append(f"{name}:{n.lineno} expands a path under HOME — resolve footage "
+                                 "through tests/_footage.py")
         for c in _code_constants(tree):
             if c.value.startswith("~/"):
                 offenders.append(f"{name}:{c.lineno} hard-codes {c.value!r}")

@@ -16,9 +16,11 @@ real-GUI bugs:
      deferred-seek apply on the genuinely-loaded source FILE (PlayerPane._source_is_chapter).
 
 These tests use the REAL VideoView / PlayerPane with PACER_NO_MEDIA=1 (the production widget tree,
-an inert media triplet) where a real decoder isn't needed, plus an OPT-IN real-media test on the
-D24 footage when present (skipped otherwise) that proves pane B's actual QMediaPlayer source is the
-reference file at the reference lap's S/F. Run: python tests/test_video_view_compare.py
+an inert media triplet) where a real decoder isn't needed, plus a real-media FOOTAGE_CHECK on two
+real recordings (`PACER_GOLDEN_MP4` + `PACER_GOLDEN_REF_MP4`) that proves pane B's actual
+QMediaPlayer source is the reference file at the reference lap's S/F. That one is its own CTest
+registration, reported SKIPPED without its recordings (tests/_footage.py).
+Run: python tests/test_video_view_compare.py
 """
 import os
 import sys
@@ -37,6 +39,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+import _footage  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 
 from studio import chapters, theme  # noqa: E402
@@ -1077,40 +1080,33 @@ def test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum():
     print("test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum OK")
 
 
-# --------------------------------------------------------------- Issue 1+3 real media (opt-in)
-def _d24():
-    """The D24 cross-recording media for the OPT-IN real-media proof. Skipped unless
-    PACER_D24_MEDIA=1 is set AND the footage is present: loading two 3-chapter 12 GB recordings
-    takes minutes, so the default ctest run (and any machine without the footage) skips it — the
-    headless tests above already cover the three fixes' logic; this is the on-hardware proof."""
-    if os.environ.get("PACER_D24_MEDIA") != "1":
-        return (None, None)
-    d = os.path.expanduser("~/Desktop/D24")
-    prim = os.path.join(d, "GX010060.MP4")
-    ref = os.path.join(d, "GX010062.MP4")
-    return (prim, ref) if (os.path.exists(prim) and os.path.exists(ref)) else (None, None)
-
-
+# --------------------------------------------------------------- Issue 1+3 real media (footage)
 def test_real_media_pane_b_is_reference_at_lap_start():
     """REAL widgets on REAL media (the whole point — the fakes hid this): build a StudioWindow on
-    the D24 primary, load the 0062 reference, enter cross compare via the app path, pump the event
-    loop until the async load + deferred seek settle, then assert the SECONDARY pane's actual
-    QMediaPlayer source is a REFERENCE file (stem != GX010060) resolved to the reference lap's
-    CHAPTER + a global time ≈ the reference lap-window start. Skipped when D24 isn't present."""
+    the recording `PACER_GOLDEN_MP4` names, load the DIFFERENT recording `PACER_GOLDEN_REF_MP4`
+    names as the reference, enter cross compare via the app path, pump the event loop until the
+    async load + deferred seek settle, then assert the SECONDARY pane's actual QMediaPlayer source
+    is one of the REFERENCE's chapter files (none of the primary's) resolved to the reference
+    lap's CHAPTER + a global time ≈ the reference lap-window start.
+
+    A FOOTAGE_CHECK: its own CTest registration, reported SKIPPED without both recordings. Loading
+    two chaptered recordings takes minutes; the headless tests above already cover the three
+    fixes' logic, and this is the on-hardware proof. It used to hard-code D24 behind
+    `PACER_D24_MEDIA=1`, with the primary on GX010060.MP4 — the chapter a dev tool overwrote."""
     import time
 
-    prim_path, ref_path = _d24()
-    if prim_path is None:
-        print("test_real_media_pane_b_is_reference_at_lap_start SKIPPED "
-              "(set PACER_D24_MEDIA=1 with ~/Desktop/D24 footage to run the on-hardware proof)")
-        return
+    prim_path, ref_path = _footage.recording(), _footage.reference()
+    prim = chapters.discover_siblings(prim_path)
+    ref = chapters.discover_siblings(ref_path)
+    prim_files = {os.path.realpath(p) for p in prim}
+    ref_files = {os.path.realpath(p) for p in ref}
+    assert not prim_files & ref_files, (
+        f"PACER_GOLDEN_MP4 ({prim_path}) and PACER_GOLDEN_REF_MP4 ({ref_path}) are chapters of ONE "
+        "recording — a cross-recording proof needs two, or it cannot tell pane B's file from pane A's")
     # The full StudioWindow needs a real decoder for this proof, so DROP the headless flag for it.
     os.environ.pop("PACER_NO_MEDIA", None)
     from studio.app import StudioWindow
     from studio.session import Session  # noqa: F401  (ensures the studio import graph is built)
-
-    prim = chapters.discover_siblings(prim_path)
-    ref = chapters.discover_siblings(ref_path)
 
     def pump(secs):
         end = time.time() + secs
@@ -1145,9 +1141,10 @@ def test_real_media_pane_b_is_reference_at_lap_start():
             landed = True
             break
     assert landed, "the reference pane never resolved its lap-start seek"
-    src = os.path.basename(sec.player.source().toLocalFile())
-    stem = os.path.splitext(src)[0]
-    assert "0062" in stem and "0060" not in stem, f"pane B is not a reference file: {src}"
+    src = os.path.realpath(sec.player.source().toLocalFile())
+    assert src in ref_files and src not in prim_files, (
+        f"pane B is not a reference file: {src} (reference chapters {sorted(ref_files)})")
+    src = os.path.basename(src)
     gl = sec.current_global_time()
     assert abs(gl - win_b[0]) < 1.0, (gl, win_b[0])
     # Restore the flag for any subsequent tests in the module.
@@ -1191,10 +1188,16 @@ def _run_all():
     test_l8_07_scrub_slider_clears_the_hit_target_floor()
     test_ia_06_compare_button_carries_a_visible_label()
     test_u9_04_f_key_reaches_the_video_focus_gesture()
-    test_real_media_pane_b_is_reference_at_lap_start()
     test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum()
     print("ALL VIDEO-VIEW COMPARE TESTS PASSED")
 
 
+# Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name
+# without its two recordings, and not part of `_run_all`.
+FOOTAGE_CHECKS = (test_real_media_pane_b_is_reference_at_lap_start,)
+
+
 if __name__ == "__main__":
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
     _run_all()
