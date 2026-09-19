@@ -272,6 +272,26 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **The map's colour ramp has its own middle, so what you selected no longer dissolves into it.**
+  The start/finish line and the primary lap's brake glyphs are the amber accent and are drawn *on*
+  the speed / Δ / grip ramp, whose middle was that same amber: one bucket sat 2.62 dE from the start
+  line's own colour. On the owner's recordings, the start line crossed a bucket within 10 dE of
+  itself on 35 of 37 laps (SD_30_08_26), 43 of 62 (Sandown 3h 2026) and 30 of 36 (SD_19_09_26), and
+  14-26 % of the amber brake glyphs sat on one. The default ramp now runs red → **yellow** → green
+  through a new data token, `C.data_mid` (`#EFE45A`), which also becomes the GPS-quality strip's
+  "moderate" band and the derived "warn" marks. Every bucket clears the accent by at least 23.8 dE
+  (14.6 under deuteranopia), and the ramp's weakest step gets better in both views. **Visible
+  outside the app:** a saved share card carries the new ramp in its map.
+- **The app's own sentences spell the product "Pacer".** 34 of them said "pacer" in lower
+  case ("Show pacer full screen", "What pacer stores on this Mac", "Found by pacer"). The name now
+  follows one written convention (beside `APP_NAME` in `studio/__init__.py`, enforced by
+  `tests/test_version.py`). The formal name **"Pacer Studio"** is unchanged; it covers the `.app`,
+  the `.dmg`, window and About titles, the landing page and exported file headers. **"Pacer"** is
+  the name in a sentence. **"pacer"** is the share card's lowercase logotype only.
+- **The library's privacy note is set at a readable width.** It ran the full width of the dialog,
+  166 characters to a line at the default size. It is now capped at the app's prose measure,
+  83 characters to a line, at the cost of about two rows of the list at the default size (the
+  dialog's minimum opening height moved from 710 to 750 px so it still shows at least five).
 - **Dragging the start/finish line is twice as quick, because the Stats page stops redrawing itself
   where nobody can see it.** Every edit that re-segments a session — a start-line drag, a sector
   edit, ⌘Z, loading a reference — rebuilds each session-derived surface, and the Stats dashboard is

@@ -148,7 +148,7 @@ _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
     "(0.15–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
-    "line changes which corners pacer finds. The Stats page prints both counts under it.")
+    "line changes which corners Pacer finds. The Stats page prints both counts under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the
 # laps.csv trailer, the share card and the Library cell ONE gate — `ideal_donor_lap_id() is not
@@ -174,7 +174,7 @@ _IDEAL_ONE_LAP_REASON = (
     "readout is measured against your best lap instead. It comes back as soon as a different lap "
     "is quickest somewhere.")
 _IDEAL_NONE_REASON = (
-    "Unavailable on this recording: pacer found no corners here, so there is no corner/straight "
+    "Unavailable on this recording: Pacer found no corners here, so there is no corner/straight "
     "partition to stitch an ideal lap from. The readout is measured against your best lap "
     "instead.")
 # The same two facts as the hero's own hover — where the alternative would be printing
@@ -182,7 +182,7 @@ _IDEAL_NONE_REASON = (
 _IDEAL_HOVER_REASONS = {
     "one_lap": ("No Δ to an ideal lap here: one lap was quickest through every corner and every "
                 "straight, so your ideal lap IS that lap."),
-    "none": ("No Δ to an ideal lap here: pacer found no corners on this recording, so there is "
+    "none": ("No Δ to an ideal lap here: Pacer found no corners on this recording, so there is "
              "nothing to stitch one from."),
 }
 
@@ -736,7 +736,7 @@ class CentralView(QWidget):
             # of it is what the app computed, this one is what you concluded. Measured, the page
             # costs the window's minimum width 955 → 984 px (26 of it this tab) and its minimum
             # height nothing at all — see marks_panel for the whole budget.
-            ("Marks", "What you wrote down against this recording, plus what pacer detected — GPS "
+            ("Marks", "What you wrote down against this recording, plus what Pacer detected — GPS "
                       "dropouts, laps left out of your times, and stretches of degraded GPS. "
                       "B drops a mark at the playhead; , and . jump between them. Press 5."),
         ):

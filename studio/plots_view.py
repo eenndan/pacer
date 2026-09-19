@@ -216,7 +216,7 @@ IDEAL_IS_ONE_LAP_TIP = (
 # could not draw", fixed by #156) surviving in one more state, and it is the same fact the hero's
 # `vs ideal` chip and the Stats IDEAL LAP block already withhold on.
 NO_IDEAL_TIP = (
-    "Unavailable here: pacer found no corners on this recording, so there is no corner/straight "
+    "Unavailable here: Pacer found no corners on this recording, so there is no corner/straight "
     "partition to stitch an ideal lap from and nothing to overlay.")
 # L6-07: the empty state names the cause AND the way out. It used to say so in this file's OWN
 # words ("No lap data to plot." + a charts-specific reason), which made it the third of four
@@ -439,7 +439,7 @@ class PlotsView(QWidget):
         self.brake_throttle_btn = ToggleButton(
             "Brake/Throttle", glyph="ph.gauge",
             tooltip="Brake/Throttle band (ESTIMATED): a pedal-style trace under the speed curve, "
-                    "inferred from the GPS speed-derivative — pacer has no pedal sensors. Red "
+                    "inferred from the GPS speed-derivative — Pacer has no pedal sensors. Red "
                     "fills below the line while braking, green above while on power. Derived from "
                     "the same signal as the brake points; not measured.")
         self.brake_throttle_btn.toggled.connect(self._on_brake_throttle_toggled)
