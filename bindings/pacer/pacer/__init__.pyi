@@ -163,16 +163,22 @@ class Segment:
     first: Point
     second: Point
 
-    def intersects(self, fst: Point, snd: Point, ratio: float) -> bool:
-        """True iff this segment and fst->snd cross PROPERLY. Both straddle tests use
-        strict signs, so a touch — an endpoint of either segment lying exactly on
-        the other's supporting line — is NOT a crossing (pinned by
-        tests/test_geometry, including that a trace vertex sitting exactly on a
-        timing line produces no crossing from either adjacent segment). On a True
-        return, if `ratio` is non-null it gets the crossing's fraction along
-        fst->snd, so fst*(1-ratio) + snd*ratio is the intersection point (Split
-        uses it to interpolate the crossing sample/time). `ratio` is untouched on
-        False.
+    def intersection_ratio(self, fst: Point, snd: Point) -> float | None:
+        """The fraction along fst->snd at which it PROPERLY crosses this segment.
+        There is no value when it does not cross (nullopt in C++, None in Python).
+        On a crossing, fst*(1-ratio) + snd*ratio is the intersection point — that
+        is how Split interpolates the crossing sample and its time.
+
+        Both straddle tests use strict signs, so a touch — an endpoint of either
+        segment lying exactly on the other's supporting line — is NOT a crossing
+        (pinned by tests/test_geometry, including that a trace vertex sitting
+        exactly on a timing line produces no crossing from either adjacent
+        segment). That strictness is what stops one pass being counted twice.
+
+        This is the ONE implementation of the crossing test; the out-parameter
+        form (Intersects) is a thin adapter over it, so the two cannot disagree.
+        It is also the form Python is given, because an out-parameter cannot be
+        read from Python — see the note in bindings/pacer/generate-bindings.py.
         """
         pass
 

@@ -3330,8 +3330,16 @@ def test_every_cross_lap_corner_surface_counts_the_same_cells():
     # ★ source together — and the Corners page must neither star it nor pass it off as measured,
     # while that lap's C2 ENTRY speed (a matched edge) stays a plain reading.
     ids = s.consistency_lap_ids()
-    quick = min(ids, key=lambda i: s.corners.lap_corner_stats(i)[1].time)
-    planted = session(flip={(quick, 3)})
+    times = {i: s.corners.lap_corner_stats(i)[1].time for i in ids}
+    # EVERY lap tied for the quickest, not just the first of them. This fixture stacks the
+    # drift-noise laps on the drift-band ones and BOTH families start from the same undrifted
+    # reference line at the same speeds, so two of its laps carry the identical C2 time
+    # (7.793777 s, with or without the session geometry). Planting one of a tie leaves the Best
+    # exactly where it was and the assertion below would be measuring nothing.
+    quickest = min(times.values())
+    tied = [i for i in ids if times[i] == quickest]
+    quick = tied[0]
+    planted = session(flip={(i, 3) for i in tied})
     report = agree(planted)
     assert report[1].best_s > s.corner_report()[1].best_s, "the planted cell did not set the Best"
     table = CornerTable(planted)

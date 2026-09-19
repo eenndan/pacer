@@ -93,6 +93,16 @@ add_test(NAME test_imu_orientation
 # empty-return trio is unchanged. Imports pacer only (no Qt, no telemetry file).
 add_test(NAME test_laps_bindings
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_laps_bindings.py)
+# The CROSSING test as Python sees it (H4). `Segment::Intersects` answers through a
+# `double *ratio` out-parameter, which litgen bound as a by-value float: the call type-checked,
+# returned the right bool, and dropped the fraction into a temporary. Python now gets
+# `intersection_ratio(fst, snd) -> float | None` and `intersects` is excluded — both pinned here,
+# because the binding is GENERATED and a regen that lost either half would restore the lossy call
+# silently. Also checks `studio.provenance.crossing_fraction` — the Qt-free, pacer-free Python
+# transcription the provenance panel re-derives with — against the core value for value, which
+# was not possible from Python before. Imports pacer + studio.provenance (no Qt, no telemetry).
+add_test(NAME test_geometry_bindings
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_geometry_bindings.py)
 # Single-pass ingest (PR #40): read_recording's shared chain == the pre-#40 two-fresh-chains
 # reads (bundled GoPro samples), + IMU-after-GPS-drain invariance on a Python stub source.
 # Imports pacer + studio.ingest only (no Qt).
@@ -346,6 +356,15 @@ set_tests_properties(test_corners PROPERTIES
 add_test(NAME test_corner_alignment_memo
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_alignment_memo.py)
 set_tests_properties(test_corner_alignment_memo PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The session GEOMETRY model (M7): the consensus line of a session's clean laps + each lap's rigid
+# receiver shift against it, and what CornerModel.lap_alignment does with them. The control that
+# decides whether it may ship at all lives here — a rigid translation and a wider racing line are
+# PLANTED on the same synthetic loop and the fit must recover one and refuse the other.
+add_test(NAME test_corner_drift
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_drift.py)
+set_tests_properties(test_corner_drift PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Data-export writers (studio.export_data, F11): laps/channels CSV schema + the
 # float-repr round-trip exactness + the self-contained HTML report (XML-parsed, embedded
@@ -805,7 +824,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_lap_time_axis
                         test_gapfill
                         test_import_ergonomics test_reference test_gps_source_bindings
                         test_imu_orientation
-                        test_laps_bindings test_ingest_equivalence test_sidecar test_track_db
+                        test_laps_bindings test_geometry_bindings
+                        test_ingest_equivalence test_sidecar test_track_db
                         test_session_pure test_sector_integrity test_load_internals
                         test_load_pipeline test_fit_start_line test_lap_closure
                         test_session_services
@@ -814,7 +834,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_lap_time_axis
                         test_delta_engine test_controllers test_central_view_realqt
                         test_load_failure test_load_affordances test_load_lifecycle
                         test_validate_wallclock
-                        test_corners test_corner_alignment_memo
+                        test_corners test_corner_alignment_memo test_corner_drift
                         test_consistency test_gmeter test_gmeter_overlay test_rotation
                         test_export_data test_export_disclosures
                         test_driving test_coaching test_focus_list test_library test_export_video
