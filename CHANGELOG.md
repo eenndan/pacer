@@ -282,7 +282,7 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   "moderate" band and the derived "warn" marks. Every bucket clears the accent by at least 23.8 dE
   (14.6 under deuteranopia), and the ramp's weakest step gets better in both views. **Visible
   outside the app:** a saved share card carries the new ramp in its map.
-- **The app's own sentences spell the product "Pacer".** About 30 of them said "pacer" in lower
+- **The app's own sentences spell the product "Pacer".** 34 of them said "pacer" in lower
   case ("Show pacer full screen", "What pacer stores on this Mac", "Found by pacer"). The name now
   follows one written convention (beside `APP_NAME` in `studio/__init__.py`, enforced by
   `tests/test_version.py`). The formal name **"Pacer Studio"** is unchanged; it covers the `.app`,

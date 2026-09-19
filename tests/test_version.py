@@ -152,7 +152,7 @@ def test_every_released_section_has_its_compare_link():
 #            window and About titles, the landing page's product name, exported file headers.
 #   SHORT    "Pacer": the product in a sentence, the welcome headline, the README's title.
 #   WORDMARK "pacer": the share card's logotype only.
-# What had drifted was a FOURTH form, lowercase "pacer" in about 30 user-visible sentences (U5).
+# What had drifted was a FOURTH form, lowercase "pacer" in 34 user-visible sentences (U5).
 _FORMAL, _SHORT, _WORDMARK = "Pacer Studio", "Pacer", "pacer"
 # The formal name in any casing or joiner ("pacer studio", "Pacer studio", "PacerStudio"...). Only
 # two spellings are legal: the name itself, and its hyphenated form inside the .dmg FILE name.
@@ -161,8 +161,8 @@ _DMG_STEM = _FORMAL.replace(" ", "-") + "-"
 # A lowercase `pacer` used as the product's NAME inside a user-visible string. Not a path, a file
 # name, an identifier or a module (`pacer.json`, `.../pacer/`, `pacer::Laps`, `_pacer`).
 _LOWERCASE_NAME = re.compile(r"(?<![\w./~-])pacer(?![\w./:-])")
-# Where a lowercase `pacer` in a string literal is NOT the product name, or is not fixed YET — each
-# a decision with a reason, capped at today's count so a NEW lowercase name in the file still fails.
+# Where a lowercase `pacer` in a string literal is NOT the product name — each a decision with a
+# reason, capped at today's count so a NEW lowercase name in the file still fails.
 _LOWERCASE_ALLOWED = {
     # Identifiers: the app-support folder name and the Qt organisation (an identifier, not a label).
     "app_support.py": 1,
@@ -172,12 +172,6 @@ _LOWERCASE_ALLOWED = {
     "provenance.py": 1,
     # The WORDMARK form: the share card's logotype, set as a graphic.
     "share_card.py": 1,
-    # NOT FIXED YET, deliberately: another package (C5) is editing coaching, the ideal lap and the
-    # braking/coasting surfaces in parallel, and these files are its. Sweep them once it lands.
-    "coaching_panel.py": 2,
-    "focus.py": 2,
-    "corner_model.py": 1,
-    "plots_view.py": 2,
 }
 
 
