@@ -8,8 +8,8 @@ Pure-numpy core (studio.map_view module functions):
     break); -1 segments are skipped; unused buckets come back empty.
   * `resample_grid_to_points` — the 400-grid Δ resampled onto a lap's odometer == a direct
     np.interp on normalized distance (REUSE, never recompute), endpoint preserved.
-  * `theme.rainbow_colors` — 16 perceptually-ordered entries anchored red (C.behind) → amber
-    (C.accent) → green (C.ahead), so bucket 0 = slow/losing and bucket 15 = fast/gaining.
+  * `theme.rainbow_colors` — 16 perceptually-ordered entries anchored red (C.behind) → yellow
+    (C.data_mid) → green (C.ahead), so bucket 0 = slow/losing and bucket 15 = fast/gaining.
 
 MapView-level (offscreen, stub session — no pacer laps, no telemetry file):
   * toggling OFF restores the EXACT pre-toggle rendering: the same item objects with the same
@@ -158,19 +158,34 @@ def test_delta_sign_convention_ahead_lands_in_green_buckets():
 # ------------------------------------------------------------------ colormap
 def test_rainbow_colors_anchored_and_ordered():
     """16 entries; ends anchored EXACTLY on the semantic tokens (red C.behind → green C.ahead)
-    with the amber accent mid-ramp; red strictly hands over to green along the ramp."""
+    with the DATA hue (C.data_mid, not the selection accent) mid-ramp; red strictly hands over to
+    green along the ramp."""
     cols = theme.rainbow_colors()
     assert len(cols) == theme.MAP_RAINBOW_N == 16
     assert cols[0].upper() == theme.C.behind.upper()
     assert cols[-1].upper() == theme.C.ahead.upper()
     mid = theme.rainbow_colors(3)[1]
-    assert mid.upper() == theme.C.accent.upper()
+    assert mid.upper() == theme.C.data_mid.upper()
 
-    def rgb(h):
-        return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+    # "Red hands over to green" is a statement about HUE, so it is asserted on the CIELAB hue angle
+    # (D65), which must rise bucket by bucket from red (~31 deg) through yellow to green (~160).
+    # This used to be "the sRGB green channel never falls", a proxy that held for the amber middle
+    # by coincidence: a light-yellow middle — ColorBrewer's RdYlGn, the textbook form of this very
+    # ramp, and what C.data_mid is — carries MORE green than the green end, and fails the proxy
+    # while being perfectly ordered. The hue angle held for the amber ramp too (31 -> 160 deg,
+    # monotone), and it fails for a middle that leaves the red-yellow-green arc (a neutral grey
+    # middle wanders 31 -> 30 -> 31), which the green-channel check would not have caught.
+    def hue_deg(h):
+        rgb = np.array([int(h[i:i + 2], 16) for i in (1, 3, 5)], float) / 255.0
+        lin = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+        x, y, z = np.array([[.4124, .3576, .1805], [.2126, .7152, .0722],
+                            [.0193, .1192, .9505]]) @ lin / np.array([.95047, 1.0, 1.08883])
+        f = [np.cbrt(t) if t > .008856 else 7.787 * t + 16 / 116 for t in (x, y, z)]
+        return math.degrees(math.atan2(200 * (f[1] - f[2]), 500 * (f[0] - f[1])))
 
-    g = [rgb(c)[1] for c in cols]
-    assert all(b >= a for a, b in zip(g[:-1], g[1:], strict=True)), "green channel must rise"
+    hues = [hue_deg(c) for c in cols]
+    assert all(b >= a for a, b in zip(hues[:-1], hues[1:], strict=True)), (
+        f"the ramp's hue must rise from red to green: {[round(h) for h in hues]}")
     print("test_rainbow_colors_anchored_and_ordered OK")
 
 

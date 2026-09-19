@@ -249,7 +249,7 @@ def test_every_strip_colour_clears_wcag_and_the_deuteranopia_ramp_in_both_palett
     a non-text UI component (1.4.11) and, between each other, to the CIE76 JND under a
     severity-1.0 deuteranopia simulation, in BOTH palettes.
 
-    Not "they look different": the standard palette's own map ramp necks to 1.44 dE under exactly
+    Not "they look different": the standard palette's own map ramp necks to 1.60 dE under exactly
     this simulation (tests/test_contrast.py), which is why that file exists and why a new
     three-colour semantic surface does not get to skip the measurement."""
     worst_pair, worst_bg = 1e9, 1e9

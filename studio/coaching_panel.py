@@ -401,7 +401,7 @@ class FocusBlock(QWidget):
         if report is not None and not report.active:
             self._headline = "Focus list · empty"
             self._lines = [f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at "
-                           "this track, pacer measures the same corners again and says whether "
+                           "this track, Pacer measures the same corners again and says whether "
                            "they moved — or why it can't tell."]
         self.headline.setText(self._headline)
         for label, text in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS, strict=False):
@@ -433,7 +433,7 @@ class FocusBlock(QWidget):
             if full and not on_list else
             "Select a corner in the table below to put it on your focus list" if cid is None else
             f"C{cid} is already on your focus list" if on_list else
-            f"Work on C{cid}: pacer will measure this exact stretch of track again next time "
+            f"Work on C{cid}: Pacer will measure this exact stretch of track again next time "
             "you're here")
         self.drop_button.setText(f"Remove C{cid}" if on_list else "Remove from focus list")
         self.drop_button.setEnabled(on_list)

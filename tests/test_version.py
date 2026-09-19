@@ -146,6 +146,137 @@ def test_every_released_section_has_its_compare_link():
     print(f"test_every_released_section_has_its_compare_link OK ({len(defined)} links)")
 
 
+# ------------------------------------------------------------------------------ the product name
+# THE NAME CONVENTION (written down beside APP_NAME in studio/__init__.py): three forms, one job each.
+#   FORMAL   "Pacer Studio": APP_NAME, the macOS bundle, the .dmg, the application/display names,
+#            window and About titles, the landing page's product name, exported file headers.
+#   SHORT    "Pacer": the product in a sentence, the welcome headline, the README's title.
+#   WORDMARK "pacer": the share card's logotype only.
+# What had drifted was a FOURTH form, lowercase "pacer" in 34 user-visible sentences (U5).
+_FORMAL, _SHORT, _WORDMARK = "Pacer Studio", "Pacer", "pacer"
+# The formal name in any casing or joiner ("pacer studio", "Pacer studio", "PacerStudio"...). Only
+# two spellings are legal: the name itself, and its hyphenated form inside the .dmg FILE name.
+_FORMAL_ANY = re.compile(r"pacer[ _-]?studio", re.IGNORECASE)
+_DMG_STEM = _FORMAL.replace(" ", "-") + "-"
+# A lowercase `pacer` used as the product's NAME inside a user-visible string. Not a path, a file
+# name, an identifier or a module (`pacer.json`, `.../pacer/`, `pacer::Laps`, `_pacer`).
+_LOWERCASE_NAME = re.compile(r"(?<![\w./~-])pacer(?![\w./:-])")
+# Where a lowercase `pacer` in a string literal is NOT the product name — each a decision with a
+# reason, capped at today's count so a NEW lowercase name in the file still fails.
+_LOWERCASE_ALLOWED = {
+    # Identifiers: the app-support folder name and the Qt organisation (an identifier, not a label).
+    "app_support.py": 1,
+    "app.py": 1,
+    # An exported provenance CSV's metadata KEY ("pacer provenance"): a file-format field a
+    # spreadsheet or script may already key on, not prose.
+    "provenance.py": 1,
+    # The WORDMARK form: the share card's logotype, set as a graphic.
+    "share_card.py": 1,
+}
+
+
+def _app_name_off_disk():
+    m = re.search(r'^APP_NAME\s*=\s*"([^"]+)"', _read("studio", "__init__.py"), re.MULTILINE)
+    assert m, "studio/__init__.py no longer declares APP_NAME = \"...\""
+    return m.group(1)
+
+
+def _prose_literals(path):
+    """Every non-docstring string constant in one module (f-string parts included)."""
+    import ast
+    tree = ast.parse(_read(path), path)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                docs.add(id(first.value))
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
+
+
+def _misspelt_formal(text):
+    """Every spelling of the formal name in `text` other than the name itself or the .dmg stem."""
+    out = []
+    for m in _FORMAL_ANY.finditer(text):
+        if m.group(0) == _FORMAL or text[m.start():m.end() + 1] == _DMG_STEM:
+            continue
+        out.append(m.group(0))
+    return out
+
+
+def test_the_product_name_follows_its_three_form_convention():
+    """U5. The formal name is the one the bundle already carries, and every surface that states the
+    product's IDENTITY says it; a sentence says the short form; the share card's logotype is the
+    only lowercase one; and no fourth spelling (a mis-cased formal name, a lowercase name in a
+    sentence) can creep back."""
+    import studio
+    formal = _app_name_off_disk()
+    assert formal == _FORMAL and studio.APP_NAME == _FORMAL, (
+        f"APP_NAME is {formal!r}; the product's formal name is {_FORMAL!r}. Renaming the product "
+        "is the owner's decision, not a refactor")
+
+    # FORMAL — the .app (bundle, executable, and the two Info.plist keys the menu bar and Finder
+    # read), the .dmg, CI's bundle check, the running app's own names, and the landing page.
+    spec = _read("packaging", "pacer.spec")
+    for key in ("CFBundleName", "CFBundleDisplayName"):
+        m = re.search(rf'"{key}":\s*"([^"]+)"', spec)
+        assert m and m.group(1) == _FORMAL, f"pacer.spec {key} = {m and m.group(1)!r}"
+    names = re.findall(r'^\s*name="([^"]+)"', spec, re.MULTILINE)
+    assert names == [_FORMAL, _FORMAL, f"{_FORMAL}.app"], f"pacer.spec EXE/COLLECT/BUNDLE {names}"
+    sh = _read("packaging", "build_macos.sh")
+    m = re.search(r'^APP_NAME="([^"]+)"', sh, re.MULTILINE)
+    assert m and m.group(1) == _FORMAL, f"build_macos.sh APP_NAME={m and m.group(1)!r}"
+    assert f"/dist/{_DMG_STEM}${{VERSION}}.dmg" in sh, "build_macos.sh's .dmg name drifted"
+    ci = re.search(r'APP="dist/([^"]+)\.app"', _read(".github", "workflows", "ci.yml"))
+    assert ci and ci.group(1) == _FORMAL, f"ci.yml checks dist/{ci and ci.group(1)}.app"
+    app_py = _read("studio", "app.py")
+    for call in ("setApplicationName", "setApplicationDisplayName"):
+        m = re.search(rf'app\.{call}\((?:"([^"]+)"|APP_NAME)\)', app_py)
+        assert m and m.group(1) in (None, _FORMAL), f"app.py {call}({m and m.group(1)!r})"
+    page = _read("docs", "index.html")
+    title = re.search(r"<title>([^<]+)</title>", page).group(1)
+    og = re.search(r'property="og:title" content="([^"]+)"', page).group(1)
+    brand = re.search(r'<a class="brand"[^>]*aria-label="([^"]+)"', page).group(1)
+    for what, text in (("<title>", title), ("og:title", og)):
+        assert text.startswith(f"{_FORMAL} — "), f"docs/index.html {what} is {text!r}"
+    assert brand == _FORMAL, f"docs/index.html brand aria-label is {brand!r}"
+
+    # SHORT — the README's title.
+    readme_h1 = _read("README.md").splitlines()[0]
+    assert readme_h1 == f"# {_SHORT}", f"README.md opens {readme_h1!r}"
+
+    # WORDMARK — the share card's logotype (and, by the allow-list below, nowhere else).
+    card = [n.value for n in _prose_literals(os.path.join("studio", "share_card.py"))]
+    assert _WORDMARK in card, "the share card no longer sets its lowercase logotype"
+
+    # NO FOURTH SPELLING, anywhere a user or the build reads (CHANGELOG is history, exempt).
+    bad = []
+    public = ["README.md"]
+    for top in ("docs", "packaging", ".github"):
+        for dirpath, _dirs, files in os.walk(_repo(top)):
+            public += [os.path.relpath(os.path.join(dirpath, fn), _REPO) for fn in files
+                       if fn.endswith((".md", ".html", ".sh", ".spec", ".yml", ".yaml", ".py"))]
+    for rel in public:
+        bad += [f"{rel}: {w!r}" for w in _misspelt_formal(_read(rel))]
+    lower = {}
+    for fn in sorted(os.listdir(_repo("studio"))):
+        if not fn.endswith(".py"):
+            continue
+        for node in _prose_literals(os.path.join("studio", fn)):
+            bad += [f"studio/{fn}:{node.lineno}: {w!r}" for w in _misspelt_formal(node.value)]
+            for _ in _LOWERCASE_NAME.findall(node.value):
+                lower.setdefault(fn, []).append((node.lineno, node.value[:60]))
+    assert not bad, f"the formal name is spelled some other way: {bad}"
+    over = {fn: hits for fn, hits in lower.items() if len(hits) > _LOWERCASE_ALLOWED.get(fn, 0)}
+    assert not over, (
+        f"the product is spelled lowercase in user-visible text — a sentence says {_SHORT!r}, a "
+        f"title or an export says APP_NAME: {over}")
+    print(f"test_the_product_name_follows_its_three_form_convention OK (formal {_FORMAL!r}, short "
+          f"{_SHORT!r}, wordmark {_WORDMARK!r}; {sum(len(v) for v in lower.values())} allowed "
+          f"lowercase literals in {sorted(lower)})")
+
+
 # ------------------------------------------------------------------------------------- runner
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
