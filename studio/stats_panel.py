@@ -1051,8 +1051,9 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
 # sources are in corner_model.IdealSample; this is the version a reader gets on hover.
 IDEAL_SAMPLE_TOOLTIP = (
     "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
-    "of how many laps you recorded: measured on real recordings it falls 0.15–0.38 s per doubling "
-    "of lap count and keeps falling — there is no floor it settles on. It also moves when the "
+    "of how many laps you recorded: measured on real recordings, before a September 2026 change "
+    "to corner matching and not re-measured since, it falls 0.15–0.38 s per doubling of lap "
+    "count and keeps falling — there is no floor it settles on. It also moves when the "
     "corners are re-detected, which happens every time you drag the start/finish line. Compare it "
     "with another session only when the two have a similar lap count and corner count.")
 THEORETICAL_TOOLTIP = ("Theoretical best — your quickest time through each corner and each "

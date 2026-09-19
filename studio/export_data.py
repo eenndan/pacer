@@ -57,8 +57,10 @@ INTERPOLATED_COLUMN = "corners_interpolated"
 INTERPOLATED_SEP = " "
 INTERPOLATED_NOTE = (
     "corners_interpolated lists the corners this lap did not match on track: their "
-    "*_time_s and *_apex_* cells are interpolated between the neighbouring matches, a median "
-    "0.22 s off an independently timed crossing against 0.004 s for a matched one. Every value is "
+    "*_time_s and *_apex_* cells are interpolated between the neighbouring matches, which put "
+    "them a median 0.22 s off an independently timed crossing against 0.004 s for a matched one, "
+    "measured on one recording before a September 2026 change to corner matching and not "
+    "re-measured since. Every value is "
     "still written — the column says which ones the app's own corner tables leave out.")
 
 # laps.csv trailer (the session-summary footer rows mirroring the lap table's footer below
@@ -185,8 +187,8 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
 
     `corners_interpolated` IS THE FILE'S HALF OF THE ONE RULE (C5), AND IT KEEPS EVERY ROW. Since
     C4 the app's own corner surfaces count only cells matched on track at both edges: an
-    interpolated window sits a median 0.22 s off an independent line-crossing time against
-    0.004 s for a matched one (`CornerModel.lap_corner_resolved`). The CSV is an EXTERNAL FORMAT
+    interpolated window sat a median 0.22 s off an independent line-crossing time against
+    0.004 s for a matched one on D24 before #335 (`CornerModel.lap_corner_resolved`). The CSV is an EXTERNAL FORMAT
     and a reader may be diffing this week's file against last week's, so nothing is dropped and no
     cell is blanked — the `C*_time_s` and `C*_apex_*` columns still carry every value they carried
     before, and this column says which of them are a guess between neighbouring matches. A reader
