@@ -461,10 +461,11 @@ def test_every_stored_colour_name_resolves_to_a_distinct_real_hue():
         for name, hue in resolved.items():
             assert isinstance(hue, str) and hue.startswith("#"), (palette, name, hue)
         # The collision this test was written for: `amber` (CHART_SERIES slot 0) and `warn`
-        # (ramp_mid_colour) are the SAME #F5A623 in the standard palette, which is why slot 0 is
-        # not in the vocabulary at all.
+        # (ramp_mid_colour) were the SAME #F5A623 in the standard palette, which is why slot 0 is
+        # not in the vocabulary at all. Since U5 the data scales' middle is C.data_mid, so no mark
+        # colour is the selection accent in EITHER palette.
         assert len(set(resolved.values())) == len(marks.COLOURS), (palette, resolved)
-        assert theme.C.accent not in resolved.values() or palette == theme.PALETTE_STANDARD
+        assert theme.C.accent not in resolved.values(), (palette, resolved)
     theme.set_palette(theme.PALETTE_STANDARD)
     assert theme.mark_colour("not-a-colour") == theme.C.text_dim, "an unknown name must not raise"
     # Every type's DEFAULT colour is in the vocabulary (a default outside it would be stored and
