@@ -298,9 +298,11 @@ _TREND_WORD = {"improving": "improving", "stalled": "off your PB"}
 # 139 px viewport — 4.6 rows of a 201-recording library, 2.3% of it — with the PB chart on its 150 px
 # floor and a 4-line privacy paragraph, a filter row and a button row taking the rest: at 600 px
 # everything is on a minimum and the layout's stretch factors never get to apply at all. 880x860
-# gives the table 349 px (11.6 rows, 2.5x) with the chart at the top of its band, and it is the
-# tallest round number that still opens UNCLAMPED on the smallest Mac this app targets (a 13" Air
-# has ~931 px of available height; _SCREEN_MARGIN leaves 871). Anything smaller than that — an old
+# gave the table 349 px (11.6 rows, 2.5x) with the chart at the top of its band. It is 8.50 rows
+# since the session-record lines and the privacy note's prose measure (U5) took their share, with
+# the chart at 181 px of its 150-200 band. 860 is the tallest round number that still opens
+# UNCLAMPED on the smallest Mac this app targets (a 13" Air has ~931 px of available height;
+# _SCREEN_MARGIN leaves 871). Anything smaller than that — an old
 # 1280x800 panel, a half-height external display — is handled by _fit_to_screen rather than by
 # opening a dialog taller than the screen.
 _DEFAULT_SIZE = (880, 860)
@@ -311,20 +313,23 @@ _PB_PLOT_MAX_H = 200
 # The FLOOR under the height the dialog OPENS at. A remembered size is stored verbatim, and Qt lets
 # the user drag the dialog all the way to the layout's own minimum — where the table's viewport is
 # 29 px, 0.97 of ONE row of a 201-recording library, and (since the size is remembered) every future
-# open comes back that way. 710 px is the measured height at which the table shows 5 rows at the
+# open comes back that way. This is the measured height at which the table shows 5 rows at the
 # dialog's NARROWEST width, 581 px, where the privacy note wraps tallest and so leaves the list
 # least; a wider dialog gets more (6.4 rows at 719, the width the shipping dialog's button row now
 # imposes). It was 680 until the session-record lines landed: the two lines under the table
 # (the selected row's record + its like-for-like verdict) cost the list 1.4 rows at that width —
 # 5.0 became 4.25, measured — so the floor moved with them rather than the guarantee quietly
 # lapsing. That is the rule this constant is for: anything added between the table and the buttons
-# re-measures this number in the same PR. It is deliberately far below the 860 px default
-# — a user is allowed to want a small window — and exists only to rule out the sizes at which a list
-# dialog stops showing a list. 5 rows is the bound this dialog already argued for when it rejected a
+# re-measures this number in the same PR — and it did again when the privacy note was capped at
+# the app's prose measure (U5): at 440 px the note wraps to 12 lines instead of the 9 it took at
+# this width, 710 px showed 3.82 rows, and 744 is the smallest height that shows 5 (5.04). 750
+# keeps about the slack 710 had (5.25 rows now, 5.32 then). It is deliberately far below the
+# 860 px default — a user is allowed to want a small window — and exists only to rule out the
+# sizes at which a list dialog stops showing a list. 5 rows is the bound this dialog already argued for when it rejected a
 # 4.6-row default as too little: the library should never OPEN showing less list than the size that
 # was called broken. The screen still overrules it (_fit_to_screen runs after), and it is applied to
 # the size being OPENED, never to the size being stored — see _apply_geometry.
-_MIN_BROWSABLE_H = 710
+_MIN_BROWSABLE_H = 750
 # The width _MIN_BROWSABLE_H was measured at — and therefore the premise the height floor RESTS on:
 # height alone cannot buy rows at a width where the privacy note (a WrapLabel, so its wrapped height
 # is part of the layout minimum) and the PB plot's 150 px floor eat everything the floor adds.
@@ -748,10 +753,29 @@ class LibraryDialog(QDialog):
         # the note painted 45 px past its box — through the button row, taking the two sentences
         # about tracks.json with it. The wrapper makes the dialog's minimum height include the
         # note's REAL wrapped height at whatever width it is being shown at.
+        #
+        # AT THE APP'S PROSE MEASURE (theme.EMPTY_MEASURE_PX), because it had none: the paragraph
+        # ran the full width of the dialog, so at the 880 px default it set a median 166
+        # characters to the line (max 170) in 6 lines — more than twice the ~45-75 a reader's eye
+        # can track back across. Capped, it sets 83 (max 91) in 12 lines. The cost is real and was
+        # measured rather than waved through: the note is part of the layout's minimum, so the
+        # six extra lines come off the list above it — 10.82 -> 8.50 visible rows at the default
+        # size — and _MIN_BROWSABLE_H moved with it (see there) so the 5-row floor still holds.
+        #
+        # THE CAP IS THE LABEL'S MAXIMUM IN A ROW WITH A TRAILING STRETCH, the stats page's
+        # zero-lap-prose idiom: an UN-ALIGNED item would be centred under a left-aligned table
+        # (QWidgetItem centres a widget narrower than its cell), and an AlignLeft flag would hand
+        # the label its sizeHint — QLabel's roughly-square wrap heuristic — instead of the measure.
+        # MOUNT, THEN FILL (§3.9): the row joins `root` before the label joins the row.
         privacy = WrapLabel(PRIVACY_NOTE)
         privacy.setFont(theme.mono_font(11))
         privacy.setProperty("role", "Note")
-        root.addWidget(privacy)
+        privacy.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        self._privacy_row = QHBoxLayout()
+        self._privacy_row.setContentsMargins(0, 0, 0, 0)
+        root.addLayout(self._privacy_row)
+        self._privacy_row.addWidget(privacy, 1)
+        self._privacy_row.addStretch(0)
 
         # ----- buttons
         buttons = QHBoxLayout()
