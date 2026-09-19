@@ -62,6 +62,27 @@ class C:
     behind = "#E8746B"          # behind / danger red
     best = "#B794F6"            # best-sector purple
 
+    # --- data: the MIDDLE of what a measurement says, never what the user picked ---
+    # The accent above is SELECTION: the start/finish line the user drags, the lap the map is
+    # following, the primary lap's curve and brake glyphs (CHART_SERIES[0]), the scrub bar's
+    # current-lap bracket. Until this token existed the default palette also used it as the
+    # MIDDLE of every data scale — the map ramp's mid anchor, the GPS-quality strip's "moderate"
+    # band, the derived "warn" marks — so the app said "you picked this" and "the data is
+    # middling" in one hue. On the map the two sit on top of each other: measured on the owner's
+    # Sandown Park recordings (every chapter), the start line crossed a ramp bucket within CIE76
+    # dE 10 of its own colour on 35 of 37 laps (SD_30_08_26), 43 of 62 (Sandown 3h 2026) and 30
+    # of 36 (SD_19_09_26) — 17, 18 and 9 of them at dE 2.62, barely over the 2.3 JND — and 14-26 %
+    # of the amber brake glyphs landed on such a bucket, on all four recordings the owner has.
+    # Afterwards: none, on any of them. A light yellow is the textbook middle of a red -> yellow
+    # -> green scale (ColorBrewer RdYlGn), and this one was picked by measurement, not taste: every
+    # bucket of the default ramp now clears the accent by >= 23.8 dE (14.6 deuteranopic), up from
+    # 2.62 (1.97), and the ramp's weakest step IMPROVES in both views (5.91 -> 6.66 normal,
+    # 1.44 -> 1.60 at the deuteranopic handover). It is >= 31 dE from every other hue in the app
+    # (every neutral, semantic and CHART_SERIES token; lime is the nearest). A darker, duller
+    # yellow buys more distance from amber but costs a third of the deuteranopic span; this is the
+    # measured balance. tests/test_contrast.py holds the separation and the steps.
+    data_mid = "#EFE45A"
+
 
 # ====================================================================== spatial tokens
 # The DIMENSIONAL half of the design system, and the newer half. The colour tokens above were
@@ -244,15 +265,17 @@ PALETTE_COLORBLIND = "colorblind"
 # cue, so it takes a distinct teal (also CB-safe against both blue and orange).
 #
 # "mid" is the map ramp's MIDDLE anchor (see rainbow_colors) and is PER-PALETTE for a measured
-# reason. The default ramp red -> amber -> green already separates cleanly, so it keeps the amber
-# accent. Reusing that amber in the colour-blind palette killed the ramp's whole lower half: amber
+# reason. The default ramp is red -> C.data_mid -> green: its own data hue, NOT the accent, so the
+# selection chrome drawn ON the ramp (the start line, the primary lap's brake glyphs) never
+# dissolves into it (see the note on C.data_mid). It was red -> amber accent -> green until then.
+# Reusing that amber in the colour-blind palette killed the ramp's whole lower half: amber
 # #F5A623 sits right next to the CB "behind" orange #F0902B, so buckets 0..7 spanned deuteranopic
 # CIE76 dE 7.5 with per-bucket steps of 0.90-1.16 — below the ~2.3 JND, i.e. a flat orange bar over
 # half the speed range, and 5.4x WORSE than the same half of the DEFAULT ramp (40.3). The CB
 # palette therefore diverges through a light warm neutral instead, which is the textbook CB-safe
 # orange -> light -> blue diverging scheme: lower half 58.3, upper 69.0, minimum step 7.01 (3x JND).
 _PALETTES = {
-    PALETTE_STANDARD:  {"ahead": C.ahead, "behind": C.behind, "best": C.best, "mid": C.accent},
+    PALETTE_STANDARD:  {"ahead": C.ahead, "behind": C.behind, "best": C.best, "mid": C.data_mid},
     PALETTE_COLORBLIND: {"ahead": "#4C9BFF", "behind": "#F0902B", "best": "#38C7C7",
                          "mid": "#EDE7DC"},
 }
@@ -302,9 +325,11 @@ def best_sector_colour() -> str:
 
 
 def ramp_mid_colour() -> str:
-    """The map ramp's MIDDLE anchor for the active palette (amber by default, a light warm neutral
-    in the colour-blind palette — see _PALETTES for the measured reason). Only rainbow_colors reads
-    it; it exists as an accessor, not a constant, so the ramp can never freeze mid-flip."""
+    """The MIDDLE of every data scale for the active palette: C.data_mid by default, a light warm
+    neutral in the colour-blind palette — see _PALETTES for the measured reason. The map ramp's mid
+    anchor (via rainbow_colors), the GPS-quality strip's "moderate" band and the derived "warn"
+    marks all read it. Never the accent, in either palette: amber is what the USER picked. It is
+    an accessor, not a constant, so none of those surfaces can freeze mid-flip."""
     return _PALETTES[_active_palette]["mid"]
 
 
@@ -329,10 +354,10 @@ CHART_SERIES = [
 #
 # The five IDENTITY names are CHART_SERIES slots 1-5 verbatim, because those already carry the
 # measured deuteranopia separation work above and there is no reason for the app to own a SECOND
-# categorical set. SLOT 0 (the amber accent) IS NOT OFFERED: `warn` below resolves to that same
-# accent in the standard palette, so offering both would be one colour wearing two labels — and the
-# scrub bar this palette is painted over already spends the accent on the current-lap bracket 10 px
-# below. `grey` is the NEUTRAL the default "note" type opens with, and `warn` / `bad` are the two
+# categorical set. SLOT 0 (the amber accent) IS NOT OFFERED: the scrub bar this palette is painted
+# over already spends the accent on the current-lap bracket 10 px below, and the accent means what
+# the user SELECTED, which a note is not. (It was also, until C.data_mid, the very hue `warn`
+# resolved to in the standard palette — one colour wearing two labels.) `grey` is the NEUTRAL the default "note" type opens with, and `warn` / `bad` are the two
 # SEMANTIC hues reserved for the derived marks: a mark that says "the GPS dropped out here" must
 # wear the hue the surfaces reporting that already wear, or the marks band and the quality strip a
 # sub-step below it would disagree in colour about one fact.
@@ -426,7 +451,7 @@ def series_symbol(colour) -> str:
 
 
 # Track-map current lap coloured by a channel (speed / Δ-vs-best), quantized into MAP_RAINBOW_N
-# buckets through the behind → accent → ahead ramp so it matches the Δ readout. The ramp endpoints
+# buckets through the behind → mid → ahead ramp so it matches the Δ readout. The ramp anchors
 # follow the ACTIVE palette (see rainbow_colors), so the colour-blind option recolours the map too.
 MAP_RAINBOW_N = 16  # rainbow buckets (one PlotCurveItem each); smooth enough, cheap enough
 
@@ -449,7 +474,7 @@ def qcolor(token: str, alpha: int | None = None) -> QColor:
 def rainbow_colors(n: int = MAP_RAINBOW_N) -> list[str]:
     """`n` hex colours low→high along the behind → mid → ahead ramp (index 0 = slow/losing,
     n-1 = fast/gaining). ALL THREE anchors follow the ACTIVE palette, so the map ramp matches the Δ
-    readout in both the default (red→amber→green) and colour-blind (orange→neutral→blue) palettes —
+    readout in both the default (red→yellow→green) and colour-blind (orange→neutral→blue) palettes —
     and the colour-blind ramp keeps a usable lower half, which a shared amber mid anchor destroyed
     (see _PALETTES["mid"])."""
     anchors = [_hex_rgb(behind_colour()), _hex_rgb(ramp_mid_colour()), _hex_rgb(ahead_colour())]

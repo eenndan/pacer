@@ -42,6 +42,11 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
     from .session import Session
 
 # Track-map pens: best = quiet faint reference, current = bright amber accent.
+#
+# THE ACCENT IS SELECTION ON THIS CANVAS, AND ONLY SELECTION: the line the user drags, the lap the
+# map is following, the primary lap's brake glyphs. The DATA drawn under them — the channel ramp —
+# never carries it: its middle is theme.C.data_mid, not the accent (see the note there). Until it
+# was, the start line sat on a ramp bucket 2.62 dE from its own colour on 17 of 37 laps at Sandown.
 START_COLOR = C.accent              # start/finish line — accent so it's the clear anchor
 SECTOR_COLOR = C.text_dim           # sector lines — visible but quieter than the start line
 # Best lap = quiet reference (secondary grey, width 1.5 so the track shape still reads); current

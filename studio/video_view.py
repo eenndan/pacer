@@ -682,7 +682,7 @@ class _MarksBand(QWidget):
         n = len(self._marks)
         auto = sum(1 for m in self._marks if m["kind"] == marks_model.KIND_AUTO)
         detail = (f"{n} mark{'' if n == 1 else 's'} on this recording"
-                  + (f" ({auto} found by pacer)" if auto else ""))
+                  + (f" ({auto} found by Pacer)" if auto else ""))
         self.setToolTip(f"Marks — hover one for what it says. {detail}. "
                         "B adds one at the playhead; , and . jump between them.")
         self.setAccessibleDescription(detail)

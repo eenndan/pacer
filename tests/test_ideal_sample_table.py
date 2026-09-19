@@ -30,7 +30,9 @@ WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
      they cannot see a screenshot's pixels: an alt text that matches the table beside a PNG
      that does not is invisible to them (regenerate with studio/dev/media_capture.py).
   5. THE TABLE IS STILL TRUE OF THE APP. Opt-in, because it needs a recording CI does not have:
-     set `PACER_IDEAL_TABLE_MP4` to a comma-separated chapter list. The check matches the
+     set `PACER_IDEAL_TABLE_MP4` to a comma-separated chapter list. Without it this check is
+     reported SKIPPED by name — it is its own CTest registration, `footage.<name>`, and not part of
+     this file's ordinary run or count (tests/_footage.py). The check matches the
      recording to the row by its clean-lap count, asserts the `all` cell IS
      `Session.ideal_total()` to the millisecond, and then RE-RUNS THE TABLE'S STATED METHOD
      (20,000 random subsets per rung, partition held) over the app's own per-lap segment matrix.
@@ -49,7 +51,7 @@ the loader's start line, which `load._fit_start_line` no longer chooses.
 
 Run:  python tests/test_ideal_sample_table.py
       PACER_IDEAL_TABLE_MP4=~/Desktop/D24/GX010062.MP4,…/GX020062.MP4,…/GX030062.MP4 \\
-          python tests/test_ideal_sample_table.py
+          python tests/test_ideal_sample_table.py --footage test_the_table_still_matches_the_app
 """
 
 from __future__ import annotations
@@ -62,6 +64,9 @@ import sys
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SOURCE = os.path.join(_REPO, "studio", "corner_model.py")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _footage  # noqa: E402  (stdlib only: checks 1-4 still import no Qt, pacer or numpy)
 
 # The rung columns of the published table, in order. The first is the one every rate is measured
 # FROM; "all" is the whole recording and carries its own lap count.
@@ -574,7 +579,8 @@ def test_the_table_still_matches_the_app():
 
     Opt-in via `PACER_IDEAL_TABLE_MP4` (comma-separated chapters, e.g. the three that make D24's
     65-lap recording). It cannot run in CI — the recordings are 11 GB each and are not committed —
-    so it prints SKIP instead, exactly like the real-media checks in test_chapter_timeline.py. The
+    so there CTest reports it SKIPPED, by name: it is a FOOTAGE_CHECK (tests/_footage.py). It used
+    to print a skip line and return, and this file then counted it among its passes. The
     dev-Desktop gate to run it with is the same one AGENTS.md already names for a core-math
     change: if the golden dump moved, this moved too.
 
@@ -582,11 +588,8 @@ def test_the_table_still_matches_the_app():
     moved too, by −0.10 and −0.16 s. The version of this check that compared only `all` would have
     been satisfied by a hand-edit of that one cell, leaving the rest of the row, and the rate
     computed from it, false."""
-    paths = [p.strip() for p in os.environ.get("PACER_IDEAL_TABLE_MP4", "").split(",") if p.strip()]
-    if not paths:
-        print("skip test_the_table_still_matches_the_app (set PACER_IDEAL_TABLE_MP4 to a "
-              "comma-separated chapter list of one of the five recordings in the table)")
-        return
+    paths = _footage.recording_list(
+        "PACER_IDEAL_TABLE_MP4", "a comma-separated chapter list of one of the recordings in the table")
     sys.path.insert(0, _REPO)
     # …and the bindings AHEAD of it: the repo root holds the C++ source folder `pacer/`, which
     # shadows the binding package as a namespace portion when nothing else on the path is a real
@@ -604,7 +607,7 @@ def test_the_table_still_matches_the_app():
         mod._app_support_dir = lambda: tmp          # hermetic, like the golden dump
     from studio.session import Session
 
-    s = Session.load([os.path.expanduser(p) for p in paths])
+    s = Session.load(paths)
     # AS THE APP OPENS IT: `StudioWindow._on_session_loaded` applies the start line the owner saved
     # beside the recording before anything is drawn, through this same seam. Without it, SD_30_08
     # was measured on a line the owner never sees (T13). A recording with no saved line (D24 0062)
@@ -702,12 +705,20 @@ def test_the_table_still_matches_the_app():
           f"\n    and its prose:    {prose}")
 
 
+# Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name
+# without PACER_IDEAL_TABLE_MP4, and not in `_run_all`'s count.
+FOOTAGE_CHECKS = (test_the_table_still_matches_the_app,)
+
+
 def _run_all():
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    fns = [v for k, v in sorted(globals().items())
+           if k.startswith("test_") and callable(v) and v not in FOOTAGE_CHECKS]
     for fn in fns:
         fn()
     print(f"\n{len(fns)} ideal-sample-table checks passed")
 
 
 if __name__ == "__main__":
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
     sys.exit(_run_all())

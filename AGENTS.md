@@ -204,7 +204,9 @@ Run the **manual D24 gate** around a core-math change (the fixture defaults to
 `~/Desktop/D24/GX020060.MP4` — a ~11.9 GB dev-Desktop-only recording, **not committed**; CI never
 sees it and runs the synthetic gate above instead. Chapter **2**, not 1: `GX010060.MP4` on that
 Desktop is a 2.4 MB JSON dump a dev tool wrote over the footage, and the gate now refuses it
-loudly instead of fingerprinting it. Override with `PACER_GOLDEN_MP4`):
+loudly instead of fingerprinting it. Override with `PACER_GOLDEN_MP4` — and since 2026-09-19 you
+must: D24 is gone from the dev machine too, and the default was deliberately left where it was; see
+"Real-footage checks" below):
 
 ```bash
 pixi run python -m studio.dev.golden_session_dump /tmp/before.json   # BEFORE the change
@@ -221,6 +223,40 @@ namespace package with no `GPMFSource`), and the tool reported that AttributeErr
 what it measured — missing, unreadable, not an MP4 container, not parseable as GPMF, or bindings
 that are not importable in this run — and never guesses at a cause
 (`studio.dev.golden_session_dump.preflight`, held by `tests/test_golden_hermetic.py`).
+
+**Real-footage checks.** Twelve checks re-measure something on a real recording, and each is its own
+CTest registration, `footage.<check>`. Without its recording CTest lists it under *"The following
+tests did not run: … (Skipped)"* — a skip, never a pass, and never a failure (CI has no footage at
+all). **When you report gates, name every `footage.*` that skipped.** Until 2026-09-19 each of them
+printed a skip line inside its file and the file reported `Passed`, so when `~/Desktop/D24` went
+every real-footage check in the repo became a green no-op. `tests/_footage.py` has the mechanism;
+`tests/test_footage_checks.py` holds it, including the negative control.
+
+| Variable | Points at | Checks | Default |
+|---|---|---|---|
+| `PACER_GOLDEN_MP4` | THE recording (any real one) | the golden dump; `footage.test_real_render_smoke_if_ffmpeg_and_media`, `…_real_chaptered_non_first_chapter_render_if_media`, `…_real_render_quality_levels_if_media`; the primary of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX020060.MP4` |
+| `PACER_GOLDEN_REF_MP4` | a second, DIFFERENT recording | the reference of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX010062.MP4` |
+| `PACER_IDEAL_TABLE_MP4` | comma-separated chapters of one recording in the ideal-lap table | `footage.test_the_table_still_matches_the_app` | none |
+| `PACER_MEASURED_FIGURES_DIR` | the folder holding `D24/`, `Sandown_09_05_2026/`, `SD_30_08_26/` | the seven `footage.test_the_*_footage` in `test_measured_figures` | none |
+
+The first two live in `studio/dev/footage.py`, shared by the dump and the tests. The last two
+re-measure PUBLISHED tables whose rows are named recordings (and chapter selections sibling
+discovery cannot express), so they cannot take "a recording" and keep their own variables. A default
+that is absent is a skip; **a variable you set that names something absent is a failure.** The
+defaults still name D24 on purpose: which recording the published figures move to is T16, and
+re-pointing a default would silently change what those numbers mean. To get real coverage today,
+point the variable at a present recording (read-only; record sizes and mtimes around the run):
+
+```bash
+PACER_GOLDEN_MP4="$HOME/Desktop/Sandown 3h 2026/GX010064.MP4" \
+  pixi run ctest --test-dir build/Release -R '^footage\.test_real_render' --output-on-failure
+```
+
+A new real-footage check goes in its file's `FOOTAGE_CHECKS`, finds its recording through
+`tests/_footage.py` (which raises `FootageMissing` rather than printing a skip), and gets
+`add_footage_test(<file> <check>)` beside the file's registration. `test_footage_checks` fails the
+build when a declaration and a registration disagree or a declared check passes without its
+recording, and a check left in its file's ordinary run fails that run with `FootageMissing`.
 
 **Run one test:** `pixi run ctest --test-dir build/Release -R test_<name>` — CTest injects the
 `PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` env each suite needs (a bare

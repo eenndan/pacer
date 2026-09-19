@@ -302,7 +302,7 @@ class IdealSample(NamedTuple):
         table and the partition-sensitivity numbers are there, not baked into shipping copy (§5.5
         is the standing lesson about empirical constants in honesty text)."""
         return (f"Stitched from {self.donors} of your {self.laps} clean laps, across the "
-                f"{plural(self.corners, 'corner')} and {plural(self.straights, 'straight')} pacer "
+                f"{plural(self.corners, 'corner')} and {plural(self.straights, 'straight')} Pacer "
                 "found here. Both counts set it: the ideal is the minimum over those laps of those "
                 "pieces, so more laps find a lower one and a different set of corners cuts it "
                 "differently.")

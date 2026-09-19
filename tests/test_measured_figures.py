@@ -28,14 +28,18 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      cell by the method the table states, and prints the re-measured table in the source's own
      syntax. A size-and-mtime tripwire over every file in those folders must come back unchanged.
      `D24/GX010060.MP4` is 2.4 MB of JSON a tool wrote over the owner's footage; nothing here opens
-     it, and the loaders below assert as much.
+     it, and the loaders below assert as much. Each of these checks is its own CTest registration,
+     `footage.<name>`, and not part of this file's ordinary run: with the variable unset, CTest
+     reports it SKIPPED by name (tests/_footage.py) instead of this file counting it as passed.
+     Since 2026-09-19 `D24/` and `Sandown_09_05_2026/` are gone from that Desktop, so a run with the
+     variable set FAILS naming each missing lap set; which recordings the tables move to is T16.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
 each corner's best instance, the end-of-lap range) are checked by 3 alone.
 
 Run:  python tests/test_measured_figures.py
-      PACER_MEASURED_FIGURES_DIR=~/Desktop python tests/test_measured_figures.py
+      PACER_MEASURED_FIGURES_DIR=~/Desktop python tests/test_measured_figures.py --footage <check>
 """
 
 from __future__ import annotations
@@ -46,6 +50,9 @@ import os
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _footage  # noqa: E402
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _COACHING = os.path.join(_REPO, "studio", "coaching.py")
@@ -1108,17 +1115,9 @@ def _published() -> list[tuple]:
 
 
 def _footage_check_names() -> set[str]:
-    """Every check that re-measures a published table against footage: #341's `FOOTAGE_CHECKS` in
-    this file and in test_ideal_sample_table.py, or, on a tree that predates them, the checks named
-    for it."""
-    names = set()
-    for mod in (sys.modules[__name__], _ideal):
-        checks = getattr(mod, "FOOTAGE_CHECKS", None)
-        if checks is None:
-            checks = [v for k, v in vars(mod).items() if callable(v) and k.startswith("test_") and k.endswith(
-                ("_match_the_footage", "_matches_the_footage", "_still_matches_the_app"))]
-        names |= {fn.__name__ for fn in checks}
-    return names
+    """Every check that re-measures a published table against footage: `FOOTAGE_CHECKS` in this file
+    and in test_ideal_sample_table.py, each its own `footage.<name>` CTest registration (#341)."""
+    return {fn.__name__ for fn in (*FOOTAGE_CHECKS, *_ideal.FOOTAGE_CHECKS)}
 
 
 def _block_above(lines: list[str], row: int, path: str) -> list[int]:
@@ -1428,9 +1427,11 @@ def test_the_refusal_record_s_verdict_is_derived_from_its_table():
 
 
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
-def _footage_root() -> str | None:
-    root = os.environ.get("PACER_MEASURED_FIGURES_DIR", "").strip()
-    return os.path.expanduser(root) if root else None
+def _footage_root() -> str:
+    """The folder `PACER_MEASURED_FIGURES_DIR` names; unset raises `FootageMissing`, which CTest
+    reports as the calling check SKIPPED."""
+    return _footage.directory("PACER_MEASURED_FIGURES_DIR",
+                              "the folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/")
 
 
 _LAP_SETS = {
@@ -1543,9 +1544,6 @@ def test_the_coaching_tables_match_the_footage():
     """Re-measure both coaching tables, and the prose figures only footage can give, on every lap
     set the THEME table names."""
     root = _footage_root()
-    if not root:
-        print("skip test_the_coaching_tables_match_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     ev, th = _evidence_rows(), _theme_rows()
     text = _flatten(_read(_COACHING))
     problems, ev_lines, th_lines, single_one_off, zs, gaps = [], [], [], [], {}, {}
@@ -1621,9 +1619,6 @@ def _floor_measure(s):
 
 def test_the_floor_table_matches_the_footage():
     root = _footage_root()
-    if not root:
-        print("skip test_the_floor_table_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     rows = _floor_rows()
     text = _flatten(_read(_THEME))
     problems, lines, ends, peaks = [], [], [], []
@@ -1699,9 +1694,6 @@ def _recombination(s) -> dict[str, float]:
 
 def test_the_refusal_record_matches_the_footage():
     root = _footage_root()
-    if not root:
-        print("skip test_the_refusal_record_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     now, _then = _record_tables()
     text = _flatten(_read(_REFUSED))
     jack = _need(r"at most \*\*(\d\.\d{3}) s\*\* and \*\*(\d\.\d{3}) s\*\*, with only \*\*(\d+)/\d+\*\* and "
@@ -1772,9 +1764,6 @@ def _brake_measure(s):
 
 def test_the_brake_habit_table_matches_the_footage():
     root = _footage_root()
-    if not root:
-        print("skip test_the_brake_habit_table_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     pub = _brake_rows()
     text = _flatten(_read(_COACHING))
     problems, lines, gaps, unbraked, fewest = [], [], {}, {}, []
@@ -1846,9 +1835,6 @@ def test_the_brake_hint_gate_table_matches_the_footage():
     app's own ranked set, so a corner that stops being ranked is a failure here rather than a row
     that quietly goes missing."""
     root = _footage_root()
-    if not root:
-        print("skip test_the_brake_hint_gate_table_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     pub = _hint_rows()
     problems, lines = [], []
     with _Footage(root) as fx:
@@ -1909,9 +1895,6 @@ def _beat_measure(s, n_perm: int = 20000):
 
 def test_the_beat_rate_table_matches_the_footage():
     root = _footage_root()
-    if not root:
-        print("skip test_the_beat_rate_table_matches_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     rows = _beat_rows()
     problems, lines = [], []
     with _Footage(root) as fx:
@@ -1980,9 +1963,6 @@ def _focus_measure(s60, p60, s62, p62):
 
 def test_the_focus_tables_match_the_footage():
     root = _footage_root()
-    if not root:
-        print("skip test_the_focus_tables_match_the_footage (set PACER_MEASURED_FIGURES_DIR)")
-        return
     rows, windows = _focus_tables()
     text = _flatten(_read(_FOCUS))
     problems, lines = [], []
@@ -2044,6 +2024,17 @@ def test_the_focus_tables_match_the_footage():
     print(f"test_the_focus_tables_match_the_footage OK\n{report}")
 
 
+# Each is its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by
+# name without PACER_MEASURED_FIGURES_DIR, and not part of `_run_all`.
+FOOTAGE_CHECKS = (test_the_coaching_tables_match_the_footage,
+                  test_the_brake_habit_table_matches_the_footage,
+                  test_the_brake_hint_gate_table_matches_the_footage,
+                  test_the_beat_rate_table_matches_the_footage,
+                  test_the_focus_tables_match_the_footage,
+                  test_the_floor_table_matches_the_footage,
+                  test_the_refusal_record_matches_the_footage)
+
+
 def _run_all():
     test_every_table_no_footage_can_re_measure_carries_its_mark()
     test_the_mark_guard_fails_on_each_planted_defect()
@@ -2062,15 +2053,10 @@ def _run_all():
     test_the_floor_table_is_consistent_with_its_own_definitions()
     test_every_quote_of_the_floor_is_a_row_of_the_table()
     test_the_refusal_record_s_verdict_is_derived_from_its_table()
-    test_the_coaching_tables_match_the_footage()
-    test_the_brake_habit_table_matches_the_footage()
-    test_the_brake_hint_gate_table_matches_the_footage()
-    test_the_beat_rate_table_matches_the_footage()
-    test_the_focus_tables_match_the_footage()
-    test_the_floor_table_matches_the_footage()
-    test_the_refusal_record_matches_the_footage()
     print("\nmeasured-figures checks passed")
 
 
 if __name__ == "__main__":
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
     sys.exit(_run_all())

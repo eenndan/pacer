@@ -11,8 +11,10 @@ need neither ffmpeg nor a media file:
     the decode->paint->encode pump, the progress callback, and cooperative cancellation.
 
 Two GATING tiers:
-  * REAL-D24-MEDIA / VideoToolbox-hardware tests self-skip (not fail) when the media file / a VT
-    session is absent — so CI without them still passes.
+  * REAL-MEDIA tests (FOOTAGE_CHECKS) are NOT part of this file's ordinary run. Each is its own
+    CTest registration, `footage.<check>`, on the recording `PACER_GOLDEN_MP4` names — and without
+    it CTest reports that check as SKIPPED, by name, rather than this file counting it as passed
+    (tests/_footage.py). VideoToolbox-hardware tests still self-skip when no VT session exists.
   * NO-MEDIA ffmpeg tests (synthetic-clip render, watchdog, cancel, GUI worker, fallback,
     determinism) gate through `_require_ffmpeg`: ffmpeg is a LOCKED pixi dependency (pyproject.toml),
     so inside the pixi env (CI's `pixi run test`) a missing ffmpeg FAILS LOUDLY rather than silently
@@ -43,53 +45,41 @@ from _qtapp import themed_app  # noqa: E402
 # `theme.mono_font` fell through Inter to the mono stack and Qt substituted whatever it could find.
 _APP = themed_app()
 
+import _footage  # noqa: E402
+
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 
-# CHAPTER **2**, deliberately. The obvious default — GX010060.MP4, chapter 1 — is the file a dev
-# tool overwrote with a 2.4 MB JSON dump on the owner's machine. It exists, so these tests did not
-# fail; it does not parse, so `_real_media_usable` answered False and every real-media test in this
-# file skipped itself PERMANENTLY while reporting a clean run. GX020060.MP4 is intact, and
-# `chapters.discover_siblings` still expands it to the whole 0060 chain for the chaptered tests.
-REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX020060.MP4"))
 
+def _real_media(label: str) -> str:
+    """The recording `PACER_GOLDEN_MP4` names (default: D24's intact chapter 2), present AND
+    PARSEABLE, for one of the real-render checks — or `FootageMissing`, which CTest reports as that
+    check SKIPPED. It used to answer False, and each check printed a skip line and RETURNED, so the
+    runner below counted three renders nobody had done as three passes; D24's own chapter 1 — the
+    2.4 MB JSON a dev tool wrote over the footage — once held all three there permanently.
 
-def _real_media_usable() -> bool:
-    """Whether the opt-in real-media file is present AND actually PARSEABLE. Existence alone is
-    not enough: a file that exists but does not parse raises inside the GPMF parser, turning these
-    deliberately-optional tests into hard failures. Cached so the probe runs once per session.
-
-    THE TWO WAYS THIS PROBE FAILS ARE REPORTED SEPARATELY, and the split is not cosmetic. A bare
+    THE TWO WAYS THE PROBE FAILS ARE REPORTED SEPARATELY, and the split is not cosmetic. A bare
     `import pacer` from the repo root resolves to the C++ `pacer/` source directory — a PEP 420
     namespace portion with no `GPMFSource` — so a run without the bindings on PYTHONPATH raised
     AttributeError here and printed it as "<the owner's own footage> is present but unreadable":
     an import problem wearing the clothes of data loss, on a machine where a dev tool really did
     destroy 11.9 GB of footage. CTest injects the bindings, so it is the standalone run that hits
     it. Neither branch guesses at a CAUSE for the file; the parser's own words are enough."""
-    global _REAL_MEDIA_OK
-    if _REAL_MEDIA_OK is None:
-        _REAL_MEDIA_OK = False
-        if os.path.exists(REAL_MP4):
-            try:
-                import pacer
-                open_gpmf = pacer.GPMFSource
-            except (ImportError, AttributeError) as exc:
-                print(f"skip real-media tests: the pacer bindings are not importable in this run "
-                      f"({exc}) — this says nothing about {REAL_MP4}. Run under CTest, or with "
-                      f"PYTHONPATH=bindings/pacer.")
-                return _REAL_MEDIA_OK
-            try:
-                open_gpmf(REAL_MP4)
-                _REAL_MEDIA_OK = True
-            except Exception as exc:  # noqa: BLE001 — any parser failure = "not usable"
-                print(f"skip real-media tests: {REAL_MP4} did not parse as GPMF ({exc})")
-    return _REAL_MEDIA_OK
-
-
-_REAL_MEDIA_OK: bool | None = None
-# The chaptered D24 recording (0060: chapters 1-3) for the gated real chaptered render. On the dev
-# machine chapter 1 is the destroyed stub, which Session.load skips — chapters 2+3 still chain.
-REAL_CHAPTER_DIR = os.path.dirname(REAL_MP4)
+    path = _footage.recording()
+    try:
+        import pacer
+        open_gpmf = pacer.GPMFSource
+    except (ImportError, AttributeError) as exc:
+        raise _footage.FootageMissing(
+            f"the pacer bindings are not importable in this run ({exc}) — this says nothing about "
+            f"{path}. Run under CTest, or with PYTHONPATH=bindings/pacer") from None
+    try:
+        open_gpmf(path)
+    except Exception as exc:  # noqa: BLE001 — any parser failure = "not usable"
+        raise _footage.FootageMissing(f"{path} did not parse as GPMF ({exc})") from None
+    if not _require_ffmpeg(label):
+        raise _footage.FootageMissing("no ffmpeg on PATH, outside the pixi env")
+    return path
 
 
 def _in_pixi_env() -> bool:
@@ -107,7 +97,7 @@ def _require_ffmpeg(label: str) -> bool:
     LOUDLY if we're inside the pixi env (ffmpeg is a locked dep there, so absence = a broken
     env/PATH that must not hide these regression tests); otherwise — e.g. a bare-python local run
     with the pixi bin off PATH — it returns False so the caller skips. This only guards tests that
-    need ffmpeg ALONE (a synthetic clip / mocked media); the real-D24-media tests still self-skip."""
+    need ffmpeg ALONE (a synthetic clip / mocked media); the real-media checks go through `_real_media`."""
     if ev.ffmpeg_available():
         return True
     assert not _in_pixi_env(), (
@@ -739,45 +729,43 @@ def test_render_lap_rejects_unusable_lap(monkeypatch_restore):
 
 # --------------------------------------------------------------------------- gated real render
 def test_real_render_smoke_if_ffmpeg_and_media():
-    """End-to-end on the real D24 media — GATED: skipped (not failed) unless ffmpeg/ffprobe AND
-    the media file are present, so CI without them still passes. Renders a SHORT 2 s window of the
-    best lap at 360p and asserts the output is a non-empty valid file with a couple of frames."""
-    if not ev.ffmpeg_available() or not _real_media_usable():
-        print("skip real_render_smoke (no ffmpeg or media)")
-        return
+    """End-to-end on real media (a FOOTAGE_CHECK: reported SKIPPED without ffmpeg + a recording).
+    Renders a SHORT 2 s window of the best lap at 360p and asserts the output is a non-empty valid
+    file with a couple of frames."""
+    import tempfile
+    real = _real_media("real_render_smoke")
     from studio.session import Session
-    s = Session.load([REAL_MP4])
+    s = Session.load([real])
     best = s.best_lap_id()
     t0, _ = s.lap_window(best)
-    out = os.path.join(os.environ.get("TMPDIR", "/tmp"), "f9_unit_smoke.mp4")
-    spec = ev.ExportSpec(src_path=REAL_MP4, out_path=out, lap_id=best, t0=t0, t1=t0 + 2.0,
-                         config=ev.OverlayConfig(out_height=360))
-    res = ev.Renderer(s, spec).run()
-    assert res.frames > 30                                   # ~120 at 60 fps
-    assert os.path.getsize(out) > 0
-    w, h, _ = ev.probe_video_size(out)
-    assert h == 360
-    os.remove(out)
-    print("real_render_smoke OK")
+    with tempfile.TemporaryDirectory(prefix="pacer-f9-smoke-") as tmp:
+        out = os.path.join(tmp, "smoke.mp4")
+        spec = ev.ExportSpec(src_path=real, out_path=out, lap_id=best, t0=t0, t1=t0 + 2.0,
+                             config=ev.OverlayConfig(out_height=360))
+        res = ev.Renderer(s, spec).run()
+        assert res.frames > 30                                   # ~120 at 60 fps
+        assert os.path.getsize(out) > 0
+        w, h, _ = ev.probe_video_size(out)
+        assert h == 360
+    print(f"real_render_smoke OK ({res.frames} frames of lap {best} of {os.path.basename(real)})")
 
 
 def test_real_chaptered_non_first_chapter_render_if_media():
-    """THE BUG, end-to-end — GATED on ffmpeg + the chaptered D24 recording (skipped, not failed,
-    without them). Loads the FULL chaptered recording (REAL_MP4 + siblings), finds a lap whose
-    GLOBAL window falls OUTSIDE the first chapter, and renders a SHORT window of it.
+    """THE BUG, end-to-end — a FOOTAGE_CHECK on a CHAPTERED recording (reported SKIPPED without
+    ffmpeg + one). Loads the FULL chaptered recording (the named file + its siblings), finds a lap
+    whose GLOBAL window falls OUTSIDE the first chapter, and renders a SHORT window of it.
 
     This is the exact case the old code broke: it seeked the global t0 into the FIRST chapter file,
     which is past that file's end for a non-first-chapter lap -> zero frames -> an empty progress
     bar. The fix resolves the window to the right chapter file at the file-LOCAL offset, so this
     must produce REAL frames. We ALSO assert the resolved source is NOT the first chapter file +
     that its local seek is the global-minus-offset (the precise gap)."""
-    if not ev.ffmpeg_available() or not _real_media_usable():
-        print("skip real_chaptered_non_first_chapter_render (no ffmpeg or media)")
-        return
-    sibs = chapters.discover_siblings(REAL_MP4)
+    import tempfile
+    real = _real_media("real_chaptered_non_first_chapter_render")
+    sibs = chapters.discover_siblings(real)
     if len(sibs) < 2:
-        print("skip real_chaptered_non_first_chapter_render (recording is single-chapter)")
-        return
+        raise _footage.FootageMissing(f"{real} is a single-chapter recording; this check needs a "
+                                      "chaptered one")
     from studio.session import Session
     s = Session.load(sibs)
     cm = s.chapters
@@ -802,7 +790,8 @@ def test_real_chaptered_non_first_chapter_render_if_media():
     assert src.probe_path == cm.chapters[ci].path, "must point at the chapter the lap falls in"
     assert src.probe_path != cm.chapters[0].path, "must NOT be the first chapter file (the old bug)"
     assert abs(src.time_offset - cm.chapters[ci].offset) < 1e-6
-    out = os.path.join(os.environ.get("TMPDIR", "/tmp"), "f9_chaptered_smoke.mp4")
+    tmp = tempfile.TemporaryDirectory(prefix="pacer-f9-chaptered-")
+    out = os.path.join(tmp.name, "chaptered.mp4")
     spec = ev.ExportSpec(out_path=out, lap_id=lap, t0=t0, t1=min(t1, t0 + 2.0),
                          source=src, config=ev.OverlayConfig(out_height=360))
     # the file-local seek lands inside the chapter (well before its end), not past EOF
@@ -815,8 +804,7 @@ def test_real_chaptered_non_first_chapter_render_if_media():
         assert h == 360
     finally:
         src.cleanup()
-        if os.path.exists(out):
-            os.remove(out)
+        tmp.cleanup()
     print(f"real_chaptered_non_first_chapter_render OK (lap {lap} in chapter {ci}, {res.frames} frames)")
 
 
@@ -1612,22 +1600,21 @@ def test_overlay_painter_size_scale_tracks_height():
 
 
 def test_real_render_quality_levels_if_media():
-    """The quality picker end-to-end — GATED on ffmpeg + media (skipped, not failed, without them).
+    """The quality picker end-to-end — a FOOTAGE_CHECK (reported SKIPPED without ffmpeg + media).
     Renders the SAME short window at 720p-standard and 1080p-high and asserts both are valid files
     whose resolution differs and whose bitrate differs (the picker actually changes the encode)."""
-    if not ev.ffmpeg_available() or not _real_media_usable():
-        print("skip real_render_quality_levels (no ffmpeg or media)")
-        return
+    import tempfile
+    real = _real_media("real_render_quality_levels")
     from studio.session import Session
-    s = Session.load(chapters.discover_siblings(REAL_MP4))
+    s = Session.load(chapters.discover_siblings(real))
     best = s.best_lap_id()
     t0, _ = s.lap_window(best)
-    tmp = os.environ.get("TMPDIR", "/tmp")
-    out_lo = os.path.join(tmp, "f9_q_720_std.mp4")
-    out_hi = os.path.join(tmp, "f9_q_1080_high.mp4")
+    tmp = tempfile.TemporaryDirectory(prefix="pacer-f9-quality-")
+    out_lo = os.path.join(tmp.name, "q_720_std.mp4")
+    out_hi = os.path.join(tmp.name, "q_1080_high.mp4")
     for out, cfg in [(out_lo, ev.OverlayConfig(out_height=720, quality="standard")),
                      (out_hi, ev.OverlayConfig(out_height=1080, quality="high"))]:
-        ev.render_lap(s, REAL_MP4, out, best, config=cfg)
+        ev.render_lap(s, real, out, best, config=cfg)
         assert os.path.getsize(out) > 0
 
     def probe_bitrate(path):
@@ -1642,8 +1629,7 @@ def test_real_render_quality_levels_if_media():
     assert h_lo == 720 and h_hi == 1080                      # resolution picker took effect
     br_lo, br_hi = probe_bitrate(out_lo), probe_bitrate(out_hi)
     assert br_hi > br_lo > 0, f"high bitrate {br_hi} must exceed standard {br_lo}"
-    for out in (out_lo, out_hi):
-        os.remove(out)
+    tmp.cleanup()
     print(f"real_render_quality_levels OK (720/std {br_lo} < 1080/high {br_hi} bps)")
 
 
@@ -2483,9 +2469,19 @@ def test_the_single_lap_progress_fill_is_a_time_fraction(monkeypatch_restore):
     print("ok single-lap fill: a clamped, monotonic TIME fraction")
 
 
+# Each is its own CTest registration, `footage.<name>` (tests/_footage.py), so a machine without a
+# recording reports them SKIPPED by name — they are not in this file's ordinary run or its count.
+FOOTAGE_CHECKS = (test_real_render_smoke_if_ffmpeg_and_media,
+                  test_real_chaptered_non_first_chapter_render_if_media,
+                  test_real_render_quality_levels_if_media)
+
+
 if __name__ == "__main__":
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
     import inspect
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and v not in FOOTAGE_CHECKS]
     failed = 0
     for t in tests:
         needs_restore = "monkeypatch_restore" in inspect.signature(t).parameters

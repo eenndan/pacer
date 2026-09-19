@@ -66,8 +66,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # that did not set PACER_GOLDEN_MP4 fingerprinted nothing at all. GX020060.MP4 is intact.
 # Point PACER_GOLDEN_MP4 at any real recording; both sides of a comparison just have to use the
 # same one (the fingerprint is recording-specific — a before/after pair taken on DIFFERENT
-# recordings compares nothing).
-REAL = os.path.expanduser(os.environ.get("PACER_GOLDEN_MP4", "~/Desktop/D24/GX020060.MP4"))
+# recordings compares nothing). The variable and the default live in `studio.dev.footage`, which
+# the real-footage checks in tests/ read too: one variable points all of them at a recording.
+# Since 2026-09-19 the default is not on the dev machine either, and `preflight` refuses it.
+from studio.dev import footage  # noqa: E402
+
+REAL = footage.recording_path()
 
 
 def _round(v):

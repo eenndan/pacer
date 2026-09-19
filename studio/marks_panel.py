@@ -48,7 +48,7 @@ from .widgets import NUM_ROLE, EmptyState, NumItem, PanelToolbar, icon_button
 # answers badly (six types, and "mine" is five of them). `ALL` leads because it is the honest
 # default: a page that opened already hiding rows would be a page that lies about the count.
 FILTER_ALL, FILTER_MINE, FILTER_AUTO = "all", "mine", "auto"
-_FILTERS = ((FILTER_ALL, "All marks"), (FILTER_MINE, "Mine"), (FILTER_AUTO, "Found by pacer"))
+_FILTERS = ((FILTER_ALL, "All marks"), (FILTER_MINE, "Mine"), (FILTER_AUTO, "Found by Pacer"))
 
 _HEADERS = ("Time", "Lap", "Type", "What")
 
@@ -65,7 +65,7 @@ _EMPTY_BODY = (
     "A mark is where you write down what you concluded — \"baulked here\", \"kerb\", \"that was "
     "the one\" — at the second it happened, against the footage that shows it. Press B while the "
     "video is playing to drop one at the playhead; , and . jump between them afterwards. "
-    "pacer adds its own marks for the things it detects: GPS dropouts, laps it left out of your "
+    "Pacer adds its own marks for the things it detects: GPS dropouts, laps it left out of your "
     "times, and stretches where the GPS went bad."
 )
 _FILTERED_TITLE = "No marks match this filter."
@@ -117,7 +117,7 @@ class MarksPanel(QWidget):
         for key, label in _FILTERS:
             self.filter_combo.addItem(label, key)
         self.filter_combo.setToolTip(
-            "Which marks to list: everything, only the ones you wrote, or only the ones pacer "
+            "Which marks to list: everything, only the ones you wrote, or only the ones Pacer "
             "derived from what it detected.")
         self.filter_combo.currentIndexChanged.connect(self._refill)
 
@@ -342,7 +342,7 @@ def _row_tooltip(mark: dict) -> str:
     else:
         lines.append(f"This mark is in {mark.get('chapter')}, which this open does not include — "
                      "open the full recording to see it on the bar.")
-    lines.append("Found by pacer, and re-checked on every open."
+    lines.append("Found by Pacer, and re-checked on every open."
                  if mark["kind"] == marks_model.KIND_AUTO else "You wrote this.")
     return "\n".join(lines)
 

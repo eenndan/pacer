@@ -272,6 +272,26 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **The map's colour ramp has its own middle, so what you selected no longer dissolves into it.**
+  The start/finish line and the primary lap's brake glyphs are the amber accent and are drawn *on*
+  the speed / Δ / grip ramp, whose middle was that same amber: one bucket sat 2.62 dE from the start
+  line's own colour. On the owner's recordings, the start line crossed a bucket within 10 dE of
+  itself on 35 of 37 laps (SD_30_08_26), 43 of 62 (Sandown 3h 2026) and 30 of 36 (SD_19_09_26), and
+  14-26 % of the amber brake glyphs sat on one. The default ramp now runs red → **yellow** → green
+  through a new data token, `C.data_mid` (`#EFE45A`), which also becomes the GPS-quality strip's
+  "moderate" band and the derived "warn" marks. Every bucket clears the accent by at least 23.8 dE
+  (14.6 under deuteranopia), and the ramp's weakest step gets better in both views. **Visible
+  outside the app:** a saved share card carries the new ramp in its map.
+- **The app's own sentences spell the product "Pacer".** 34 of them said "pacer" in lower
+  case ("Show pacer full screen", "What pacer stores on this Mac", "Found by pacer"). The name now
+  follows one written convention (beside `APP_NAME` in `studio/__init__.py`, enforced by
+  `tests/test_version.py`). The formal name **"Pacer Studio"** is unchanged; it covers the `.app`,
+  the `.dmg`, window and About titles, the landing page and exported file headers. **"Pacer"** is
+  the name in a sentence. **"pacer"** is the share card's lowercase logotype only.
+- **The library's privacy note is set at a readable width.** It ran the full width of the dialog,
+  166 characters to a line at the default size. It is now capped at the app's prose measure,
+  83 characters to a line, at the cost of about two rows of the list at the default size (the
+  dialog's minimum opening height moved from 710 to 750 px so it still shows at least five).
 - **Dragging the start/finish line is twice as quick, because the Stats page stops redrawing itself
   where nobody can see it.** Every edit that re-segments a session — a start-line drag, a sector
   edit, ⌘Z, loading a reference — rebuilds each session-derived surface, and the Stats dashboard is
@@ -757,6 +777,22 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Engineering
 
+- **A real-footage check without its recording is reported SKIPPED, by name — no longer as a
+  pass.** Twelve checks re-measure something on a real recording (three real renders, the
+  cross-recording compare proof, the ideal-lap table and seven measured-figure tables). Each printed a
+  skip line and returned when its recording was missing, and its file then reported `Passed`:
+  when `~/Desktop/D24` left the dev machine on 2026-09-19, every one of them became a green no-op
+  and nothing in any gate's output said so. Each is now its own CTest registration,
+  `footage.<check>`, with `SKIP_RETURN_CODE`, so CTest lists it by name under "did not run …
+  (Skipped)" — CI, which has no footage, stays green. One variable, `PACER_GOLDEN_MP4`, points the
+  golden dump and every recording-agnostic check at a recording (`PACER_REAL_MP4` and
+  `PACER_D24_MEDIA` are retired; the compare proof's second recording is `PACER_GOLDEN_REF_MP4`,
+  and its primary no longer defaults to the chapter a tool overwrote). Defaults still name D24:
+  which recording the published figures move to is an open decision. A variable you set that names
+  a missing file fails instead of skipping. `tests/test_footage_checks.py` holds all of it,
+  including the negative control: each check, run as CTest runs it under a HOME with no footage,
+  exits 77 naming itself — where before the same command exited 0 with "ALL 84 export-video tests
+  passed".
 - **The ideal lap's published sample table was re-measured, and a guard now holds it to the app.**
   Fixing the boundary projection moved the ideal on D24's three chapters from 66.563 s to 66.781,
   and the measured table in `corner_model.IdealSample` — plus the README, both Stats tooltips, the
