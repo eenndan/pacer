@@ -2216,12 +2216,18 @@ def test_stats_view_unit_flip():
     _app()
     from studio.stats_panel import StatsView
     v = StatsView(_fake_view_session())
+    # SHOWN, because since P1 this page renders only when it can be seen: `set_speed_unit` stores
+    # the unit and defers the render on a page that is not on screen (it is paid by showEvent or by
+    # CentralView's accessor). Showing it keeps this test asserting what it always asserted — that
+    # the flip itself re-renders — rather than the deferral.
+    v.show()
     v.set_speed_unit("mph")
     assert "60.6 mph" in v.t_vmax.value.text()                   # 97.5 km/h -> mph
     assert "speeds in mph" in v._laps_section.text()
     assert v.lap_table.item(0, 2).text() == "59.0"               # 95.0 km/h -> mph
     v.set_speed_unit("kmh")
     assert "97.5 km/h" in v.t_vmax.value.text()
+    v.hide()
     print("test_stats_view_unit_flip OK")
 
 
@@ -3988,10 +3994,14 @@ def test_stats_view_stint_table_appears_with_two_runs_and_states_its_sample():
            "no lap was analysed" in v.stints_table.item(1, 0).toolTip()
     assert "R1 20 laps" in v.stints_note.text() and "R2 13 laps" in v.stints_note.text()
     assert "3:28" in v.stints_note.text(), v.stints_note.text()   # 207.6 s, the D24 threshold
-    # mph flips the speed columns AND the heading, like every other speed on this page.
+    # mph flips the speed columns AND the heading, like every other speed on this page. Shown
+    # first: since P1 a unit flip on a page that cannot be seen is deferred, not dropped (see
+    # test_stats_view_unit_flip), and what is under test here is the re-render.
+    v.show()
     v.set_speed_unit("mph")
     assert "mph" in v._stints_section.text()
     assert v.stints_table.item(0, 6).text() == "16.3"
+    v.hide()
     print("test_stats_view_stint_table_appears_with_two_runs_and_states_its_sample OK")
 
 
@@ -4539,6 +4549,106 @@ def test_the_stats_page_quotes_the_braking_window_only_where_that_window_exists(
     imu.hide()
     print("ok braking window: quoted where it exists, said to be absent where it is not, and the "
           "no-g-meter page stops naming an accelerometer it just said it does not have")
+
+
+def test_stats_view_defers_a_render_it_cannot_be_seen_making_and_pays_it_on_show():
+    """P1, at the widget's own level: `refresh_when_shown` renders a VISIBLE page and marks a
+    hidden one stale; `flush_if_stale` and `showEvent` pay the debt; `refresh` is unconditional.
+
+    And the fact that makes the deferral safe for the View ▸ Units flip: the unit is STORED even
+    when the render is deferred, so a page shown after a flip comes up in the new unit rather than
+    in the one the user just left."""
+    _app()
+    from studio.lap_table import DROPOUT_MARK
+    from studio.stats_panel import StatsView
+    s = _fake_view_session()
+    v = StatsView(s)                                 # __init__ renders once, unconditionally
+    try:
+        assert not v.isVisible() and not v._stale
+        before = v.t_laps.value.text()
+        assert f"3 {DROPOUT_MARK}" not in before, before
+
+        s.dropout_lap_ids = lambda: {0, 1, 2}        # a session change the laps tile must show
+        v.refresh_when_shown()                       # hidden -> deferred
+        assert v._stale, "a hidden page rendered instead of deferring"
+        assert v.t_laps.value.text() == before, (
+            f"the deferred render happened anyway: {v.t_laps.value.text()!r}")
+
+        v.flush_if_stale()                           # ...and the debt is payable on demand
+        assert not v._stale
+        assert f"3 {DROPOUT_MARK}" in v.t_laps.value.text(), v.t_laps.value.text()
+        assert "97.5 km/h" in v.t_vmax.value.text()
+
+        v.set_speed_unit("mph")                      # a View ▸ Units flip, also deferred
+        assert v._stale, "set_speed_unit rendered a page that cannot be seen"
+        assert "97.5 km/h" in v.t_vmax.value.text(), "the deferred flip rendered anyway"
+
+        v.show()                                     # showEvent pays it — IN THE NEW UNIT
+        assert not v._stale, "the page became visible still owing a render"
+        assert "60.6 mph" in v.t_vmax.value.text(), (
+            f"a page shown after a unit flip came up in the old unit: {v.t_vmax.value.text()!r}")
+
+        # Visible from here on: the seam renders immediately, nothing is ever owed.
+        v.refresh_when_shown()
+        assert not v._stale
+    finally:
+        v.hide()
+    print("test_stats_view_defers_a_render_it_cannot_be_seen_making_and_pays_it_on_show OK")
+
+
+def test_the_raw_stats_page_attribute_is_only_touched_where_it_immediately_re_renders():
+    """THE STRUCTURAL HALF of P1's no-stale-number guarantee, pinned by exact equality.
+
+    The Stats page renders lazily, so a reader that reaches the widget without flushing would put a
+    figure that predates the last edit on the app's honesty surface. `CentralView.stats_view` is a
+    read-only property that flushes first, and it is the widget's ONLY name outside
+    `stats_panel.py` — `studio/dev/media_capture.py`, the quality chip's `reveal_trust` and every
+    test go through it. The raw `self._stats` exists so the four methods that re-render (or
+    re-defer) the page on their very next statement do not pay for a render they are about to
+    redo — and a fifth use of it would be a hole.
+
+    EXACT EQUALITY, like `test_layering`'s allow-lists: a method that stops touching `_stats` fails
+    this too, so the set cannot quietly stop being true. Source-level `ast`, no import."""
+    import ast
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(repo, "studio", "central_view.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+
+    #  _construct_panels   builds it
+    #  stats_view          the accessor itself (flushes, then hands it over)
+    #  rebuild_derived_views / refresh_timing_trust / set_speed_unit / refresh_palette
+    #                      each re-renders or re-defers the page on the next line
+    PINNED = {"_construct_panels", "stats_view", "rebuild_derived_views",
+              "refresh_timing_trust", "set_speed_unit", "refresh_palette"}
+
+    touching = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute) and node.attr == "_stats" \
+                    and isinstance(node.value, ast.Name) and node.value.id == "self":
+                touching.add(fn.name)
+            # `getattr(self, "_stats", ...)` reaches it by name, which a plain Attribute scan
+            # would wave through — the exact shape that has hidden call sites in this repo before.
+            if isinstance(node, ast.Constant) and node.value == "_stats":
+                touching.add(fn.name)
+    assert touching == PINNED, (
+        f"studio/central_view.py reaches the raw Stats page from an unexpected set of methods.\n"
+        f"  unexpected: {sorted(touching - PINNED)}\n"
+        f"  no longer touching it: {sorted(PINNED - touching)}\n"
+        f"Everything else must use the `stats_view` property, which flushes a deferred render "
+        f"before handing the widget over.")
+
+    # ...and the property must stay read-only: a setter would let a caller swap in a widget the
+    # flush never runs on.
+    (cls,) = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "CentralView"]
+    props = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "stats_view"]
+    assert len(props) == 1, f"expected exactly one `stats_view` definition, got {len(props)}"
+    decorators = [ast.unparse(d) for d in props[0].decorator_list]
+    assert decorators == ["property"], (
+        f"CentralView.stats_view must be a plain read-only property, not {decorators}")
+    print("test_the_raw_stats_page_attribute_is_only_touched_where_it_immediately_re_renders OK")
 
 
 if __name__ == "__main__":

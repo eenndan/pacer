@@ -405,6 +405,34 @@ class CentralView(QWidget):
         if 0 <= self._initial_lap_tab < self.tab_bar.count():
             self.tab_bar.setCurrentIndex(self._initial_lap_tab)
 
+    # ------------------------------------------------------------- the Stats page accessor
+    @property
+    def stats_view(self) -> StatsView:
+        """The Stats page — GUARANTEED CURRENT, whoever is asking.
+
+        The page renders lazily (P1: `StatsView.refresh_when_shown`; half of every 396 ms rebuild
+        on a 65-lap recording went into a page nobody was looking at). The hazard that buys is
+        that some reader picks up a figure that silently predates the last start-line drag — and
+        this page and its DATA TRUST card are where the app makes its honesty claims, so that
+        would be strictly worse than the 200 ms.
+
+        SO THE GUARD IS STRUCTURAL, NOT A CONVENTION. The widget's only attribute name outside
+        `stats_panel.py` is this property, the raw `self._stats` is touched only by the handful of
+        methods that build it or re-render it on the next line (pinned by `tests/test_stats.py`), and
+        anything that says `view.stats_view` — the data-quality chip's `reveal_trust`, the corner
+        table's click wiring, `studio/dev/media_capture.py`'s page grab, every test — gets the
+        debt paid before the object is handed over. No caller has to remember; the other route to
+        the page's contents (Qt painting it) is closed by `StatsView.showEvent`.
+
+        A `CentralView.__new__`'d unit fixture has no panels, so this raises `AttributeError`
+        exactly as a missing plain attribute would, and `getattr(view, "stats_view", None)` still
+        answers None."""
+        stats = self.__dict__.get("_stats")
+        if stats is None:
+            raise AttributeError("stats_view")
+        stats.flush_if_stale()
+        return stats
+
     # ------------------------------------------------------------------ lifecycle
     def showEvent(self, event):
         """First show: restore the persisted grid-splitter sizes — SYNCHRONOUSLY here, and then
@@ -577,7 +605,9 @@ class CentralView(QWidget):
         self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
         self._corner_lap: int | None = None  # the lap the Corners view describes
         # Stats mode: the 3rd page — the session-statistics dashboard (studio/stats_panel.py).
-        self.stats_view = StatsView(self.session)
+        # UNDERSCORED, and the `stats_view` property below is the only way to it: the page renders
+        # lazily (P1), and the property is where the debt is paid. See its docstring.
+        self._stats = StatsView(self.session)
 
         # Always-on Δ/speed readout for the current moment (hero #DiffBox; Δ colour set per-tick).
         # By default it LEADS with Δ-to-IDEAL (the moat number: how far off your own achievable lap
@@ -1321,7 +1351,10 @@ class CentralView(QWidget):
         self.corner_table.set_speed_unit(unit)
         self.map.set_speed_unit(unit)
         self.opportunities.set_speed_unit(unit)
-        self.stats_view.set_speed_unit(unit)
+        # RAW `_stats`, not the property: this pushes the new unit and re-renders on the next
+        # statement, so flushing first would spend 200 ms drawing the page in the unit the user
+        # just left. StatsView stores the unit whether or not it renders now.
+        self._stats.set_speed_unit(unit)
         # Re-render the readout in place from the last stashed moment (no tick needed).
         self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
                               self._last_diff_lap)
@@ -1358,7 +1391,7 @@ class CentralView(QWidget):
         self.corner_table.refresh()
         self.map.refresh_palette()
         self.opportunities.refresh()
-        self.stats_view.refresh_palette()
+        self._stats.refresh_palette()   # raw: it re-renders (or defers) on its own — see above
         self.plots.refresh_palette()
         # AFTER plots.refresh_palette(): that re-pens the curves and redraws the glyph items from
         # their cached colour, so the re-push has to land on top of it, not before it.
@@ -1882,7 +1915,12 @@ class CentralView(QWidget):
         # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
         self.opportunities.refresh()
-        self.stats_view.refresh()
+        # P1: the Stats page renders only when it can be seen. On a hidden page this marks it
+        # stale and returns — half this seam's 396 ms on a 65-lap recording, spent on one of five
+        # stack pages. Nothing can read the stale page: `CentralView.stats_view` and
+        # `StatsView.showEvent` both flush first. Raw `_stats`, since the property would flush the
+        # very render we are about to redo.
+        self._stats.refresh_when_shown()
         # The hero's reference chip: which of the three ideal states this session is in can change
         # under a re-segmentation (a start-line drag re-partitions and re-picks the donors), so it
         # is decided here with the rest of the session-derived state, beside the Stats IDEAL LAP
@@ -1930,9 +1968,9 @@ class CentralView(QWidget):
         mp = getattr(self, "map", None)
         if mp is not None:
             mp.refresh_provisional_cue()
-        stats = getattr(self, "stats_view", None)
+        stats = getattr(self, "_stats", None)
         if stats is not None:
-            stats.refresh()
+            stats.refresh_when_shown()   # raw + P1-deferred, as in rebuild_derived_views
 
     def _refresh_trust_banners(self):
         """Refresh the ONE trust strip over the map from the session's two orthogonal axes, as two
