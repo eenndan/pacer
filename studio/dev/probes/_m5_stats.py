@@ -167,6 +167,23 @@ def selection_control(X, Y, *, outer: int, inner: int, rng, null: str = "column"
     return {k: v / outer for k, v in fires.items()}
 
 
+def complete_block(M, *, min_cover: float = 0.9):
+    """(cols, rows) masks of the largest rectangular block of `M` with no missing cell.
+
+    A column needs a value on at least `min_cover` of the rows to be in at all; the rows kept are
+    then the ones complete across those columns. Rectangular on purpose: every statistic here
+    permutes whole columns or whole rows, and a ragged matrix would make each permutation a
+    slightly different test."""
+    M = np.asarray(M, float)
+    cols = np.isfinite(M).mean(axis=0) >= min_cover
+    if cols.sum() < 2:
+        return None
+    rows = np.isfinite(M[:, cols]).all(axis=1)
+    if rows.sum() < 8:
+        return None
+    return cols, rows
+
+
 def theil_sen(y, x=None) -> float:
     """Median pairwise slope of y against x (lap index by default) — robust to a single bad lap."""
     y = np.asarray(y, float)
