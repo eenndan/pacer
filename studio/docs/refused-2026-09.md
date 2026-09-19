@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Six features were built far enough to **measure**, and the measurement said not to ship them. The
+Seven features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -531,6 +531,121 @@ measurement that does not depend on where a boundary lands would also count, pro
 - #311's warning that the max-statistic correction does not cover selection does not apply to this
   flag, which is itself the maximum over all corners: the shuffled-label control names an
   overdriven corner at 0.7–3.7 %.
+
+---
+
+## 7. A background batch-import queue for a multi-recording drop — refused (F3)
+
+**The idea.** Dropping several unrelated recordings opens the first and tells the user to open the
+rest one at a time, so the library and the personal-best history only learn about the others by
+hand. Give the drop a background queue that loads each remaining recording **headless into the
+library, not into the window**, reusing `Session.load` and the library upsert; cancellable; one
+summary line at the end. The backlog rated it *"low value per unit work"*.
+
+**How it was tested.** The real drop path, driven over the owner's four footage folders exactly as
+a folder drop reaches it — `StudioWindow._dropped_mp4s` on a `QMimeData` carrying the folder URL,
+then `chapters.group_into_recordings` — and then the real `Session.load` on every recording the
+queue would have imported. Read-only throughout; all four folders were size/mtime-snapshotted before
+and after and were unchanged, and every app-support seam was diverted through `studio/dev/_jail.py`.
+
+### The gesture is not rare — but four fifths of what the queue would import is Pacer's own output
+
+| dropped folder | .MP4 files | recordings | opened in the window | **queued by F3** |
+|---|---|---|---|---|
+| `D24` | 6 | 2 | recording 0060 · 3 chapters | recording 0062 · 3 chapters |
+| `Sandown_09_05_2026` | 3 | 1 | recording 0059 · 3 chapters | — |
+| `SD_30_08_26` | 4 | **3** | recording 0065 · 2 chapters | `GX010065_lap22_overlay.mp4`, `GX010065_lap23_overlay.mp4` |
+| `Sandown 3h 2026` | 5 | **3** | recording 0064 · 3 chapters | `GX010064_lap30_overlay.mp4`, `Sandown_3h_2026.mp4` |
+
+So the brief's "rare gesture" is **wrong** — three of the owner's four folders are a multi-recording
+drop today. But `group_into_recordings` parses filenames and nothing else, and the app's OWN exports
+live in the footage folder, because `_export_default` saves next to the recording
+(`export_controller.py:157-163`, suffix `_overlay.mp4` at `:756-757`). Handing those five queue
+candidates to the real loader:
+
+| queued candidate | size | `Session.load` |
+|---|---|---|
+| recording 0062 (3 chapters) | 34.7 GB | **OK in 2.44 s, 65 valid laps** |
+| `GX010065_lap22_overlay.mp4` | 0.1 GB | `RuntimeError: Failed to open file`, 0.00 s |
+| `GX010065_lap23_overlay.mp4` | 0.1 GB | `RuntimeError: Failed to open file`, 0.00 s |
+| `GX010064_lap30_overlay.mp4` | 0.1 GB | `RuntimeError: Failed to open file`, 0.00 s |
+| `Sandown_3h_2026.mp4` | 8.5 GB | `RuntimeError: Failed to open file`, 0.00 s |
+
+**One of five candidates is a real recording.** The other four carry no telemetry — two of them are
+overlay clips Pacer rendered from the very recording it had just opened. The whole measured yield of
+the feature, across every recording the owner has on this machine, is **one library row**.
+
+### The row it would produce is real — and the drop that already works produces the same one
+
+This is the half of the backlog entry that holds up, so it is worth stating plainly. Loaded headless
+with an **empty** track database, D24 0062 comes back `track='Daytona Milton Keynes'` (matched from
+the built-in registry), `verified=True`, `degraded=False`, `lap_count=65`, `best=68.20060941901284`,
+`library.is_trustworthy` **True**, `trust_label` None — a fully PB-eligible entry, not the grey
+"unknown track · provisional" row that would have made the feature pointless. Saving the track first
+and re-loading changes only the name and the last two digits of the best (`68.20060942531973`).
+
+But `_open_recordings` computes `to_load` the same way for a recording dropped alone as for one in a
+crowd (`app.py`, `order_chapters(first + discover_siblings(first[0]))`), so **dropping the second
+recording on its own produces a byte-identical entry** — two independent loads of that chained path
+agreed on `best` to all 17 digits. The queue does not buy a row the user cannot otherwise get, and it
+does not buy it sooner in wall-clock terms either: the load costs the same 2.3 s whoever asks for it.
+What it buys is **one drop gesture**, for a recording the user just dropped because they intend to
+open it.
+
+### "Cancellable" is machinery for an operation shorter than finding the cancel control
+
+`Session.load` over the 34.7 GB, three-chapter recording 0062: **2.32 s, 2.22 s, 2.44 s** across
+three runs. A three-recording queue finishes in about seven seconds. The app has nowhere to put a
+cancel control for that — the status bar is not interactive, and the only precedent
+(`_cancel_demo`) is a welcome-screen button that exists because a demo fetch is an unbounded
+network download with no upper bound on its duration.
+
+### The summary line would be a report about the app's own exports
+
+F3 asks for "one summary line at the end", and partial failure is the normal case. On
+`SD_30_08_26` that line reads *"2 of 2 recordings couldn't be read"* — about two overlay clips
+Pacer produced from the recording it had just opened. That is a worse message than the one it
+replaces, and there is no phrasing that rescues it, because the premise it is reporting on is wrong.
+
+### Three more costs, for completeness
+
+- **It widens a store with a live incident this month.** `update_library` reads `self.win.session`
+  in three places plus `_library_excludes`, so a headless importer means parameterising the
+  load-time library writer on a session that is not the window's. That store was polluted for real
+  on 2026-09-17 and only jailed by #328; a second, unattended writer into it is new risk against
+  one measured library row.
+- **It needs its own token space.** Every `_load` does `_load_token += 1`, and so does
+  `closeEvent`, so a batch worker parked in `_load_workers` would be silently superseded the moment
+  the user opened anything else — the one thing a background import must survive.
+- **It converts a drop from "open what I picked" into "read every MP4 in this folder"**, and the
+  owner's folders hold 8.5 GB derived edits beside the footage.
+
+### What shipped instead
+
+Measuring the queue found the defect it was proposing to build on top of: **the drop message
+over-counted the owner's recordings and then sent him to open files the loader refuses.** The
+question the drop actually needed answering was not "import these for me" but "is this a recording
+at all", and that question is **cheap**. `pacer.GPMFSource`'s constructor is the loader's own first
+gate (`pacer/gps-source/gps-source.cpp:17-23`); it reads the moov atom, not the payloads:
+
+| file | size | `pacer.GPMFSource(path)` |
+|---|---|---|
+| `GX010062.MP4` | 11.9 GB | 5.23 ms — opened |
+| `GX020062.MP4` | 11.9 GB | 1.64 ms — opened |
+| `GX010065_lap22_overlay.mp4` | 0.1 GB | 0.78 ms — refused |
+| `Sandown_3h_2026.mp4` | 8.5 GB | 1.32 ms — refused |
+| `GX010060.MP4` (the destroyed stub) | 2.4 MB | 0.42 ms — refused |
+
+**0.4–5.2 ms, against 2,300 ms plus a thread, a queue, a token space, a cancel affordance and a
+summary line.** So `ingest.carries_telemetry` / `recording_carries_telemetry` answer it on the UI
+thread during the drop itself, and `_open_recordings` counts only the recordings it could actually
+offer. An unreadable file still counts — "I could not read it" is not a verdict on its contents,
+the same three-answer discipline `chapters.probe_mp4` already keeps.
+
+**What would be new evidence:** a user whose card folders hold several real recordings and few or no
+Pacer exports, for whom the first table's one-in-five becomes most-of-five; or a measurement showing
+the second drop gesture is a real barrier rather than a keystroke. Note that the cheap gate shipped
+here is also what a future queue would want as its admission test, so it has been paid for already.
 
 ---
 

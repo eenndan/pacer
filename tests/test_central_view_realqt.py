@@ -1110,6 +1110,9 @@ def _run_all():
     test_karmas_absent_g_meter_is_not_described_as_an_accelerometer_page()
     test_u2_lap_table_cap_notice_reaches_the_window_status_bar()
     test_the_fixture_window_writes_its_library_entry_into_a_jail_never_the_real_library()
+    test_the_stats_page_handed_to_a_reader_is_never_stale()
+    test_the_stats_page_pays_its_deferred_render_before_it_can_be_painted()
+    test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stats_tab()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -1608,6 +1611,138 @@ def test_the_fixture_window_writes_its_library_entry_into_a_jail_never_the_real_
         view.dispose()
         win.deleteLater()
     print("test_the_fixture_window_writes_its_library_entry_into_a_jail_never_the_real_library OK")
+
+
+# ------------------------------------------------------------------ P1: the Stats page's staleness
+#
+# The three tests below are ONE contract in three parts. The Stats page renders lazily now
+# (`StatsView.refresh_when_shown` — half of a 396 ms rebuild on a 65-lap recording went into a page
+# nobody was looking at), and the risk that buys is a figure on the app's HONESTY SURFACE that
+# silently predates the last edit. So two of the three are negative controls on staleness and only
+# the third is about speed; if the design is ever unwound, the first two are what must go red.
+
+def _shown_view_on_the_laps_tab():
+    """A real CentralView, shown, with the lap panel on LAPS — i.e. the Stats page mounted in the
+    stack but NOT visible, which is the state the deferral exists for."""
+    view, s, _t0, _t1 = _real_central_view()
+    view.resize(1000, 760)
+    view.show()
+    view.select_lap_tab(0)
+    _APP.processEvents()
+    assert not view._stats.isVisible(), "the Stats page should be a hidden stack page on Laps"
+    return view, s
+
+
+def _flag_a_dropout(view, s, ids=(1,)):
+    """A session change the Stats page MUST show, on a NUMBER and not on prose: the laps tile
+    counts GPS-dropout laps beside the valid ones (`2` -> `2 · 1 ⚠`), and it is one of the figures
+    the DATA TRUST story on that page is told in. Returns (tile text before the change, the mark)."""
+    from studio.lap_table import DROPOUT_MARK
+    before = view.stats_view.t_laps.value.text()      # through the accessor: current by contract
+    assert DROPOUT_MARK not in before, before
+    s.dropout_lap_ids = lambda: set(ids)
+    view.rebuild_derived_views(reselect=True)
+    return before, DROPOUT_MARK
+
+
+def test_the_stats_page_handed_to_a_reader_is_never_stale():
+    """NEGATIVE CONTROL #1 — the accessor. Anything that says `view.stats_view` gets a page that
+    already knows about the last edit, even though the page is hidden and deliberately did not
+    re-render when the edit happened.
+
+    This is the failure the whole design is built to prevent, and PR #233 declined to defer for
+    exactly this reason. Watched fail on a tree with the `flush_if_stale()` line deleted from the
+    `CentralView.stats_view` property:
+
+        AssertionError: the accessor handed out a page that predates the edit: '2' == '2'
+
+    The reader here is `view.stats_view` because that is the name `studio/dev/media_capture.py`,
+    the corner-table wiring and every test use — there is no other name for the widget."""
+    view, s = _shown_view_on_the_laps_tab()
+    try:
+        before, mark = _flag_a_dropout(view, s)
+        assert view._stats._stale, (
+            "a hidden page should have DEFERRED its render — this test proves nothing otherwise")
+        after = view.stats_view.t_laps.value.text()
+        assert after != before, (
+            f"the accessor handed out a page that predates the edit: {after!r} == {before!r}")
+        assert mark in after, f"the excluded lap is not on the page the reader was handed: {after!r}"
+        assert not view._stats._stale, "the accessor left the page still owing a render"
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_the_stats_page_handed_to_a_reader_is_never_stale OK")
+
+
+def test_the_stats_page_pays_its_deferred_render_before_it_can_be_painted():
+    """NEGATIVE CONTROL #2 — the other route to the page's contents: being LOOKED AT.
+
+    Every read below goes through a reference held BEFORE the edit, never through
+    `CentralView.stats_view`, so the accessor cannot rescue it: what is asserted is that arriving
+    on the page — by the tab bar, and by the data-quality chip's `show_data_trust` — leaves nothing
+    owed. Watched fail with `flush_if_stale()` deleted from `StatsView.showEvent`:
+
+        AssertionError: the page became visible still owing a render
+
+    `reveal_trust` is included deliberately: #333 made the GPS chip open the DATA TRUST card and
+    scroll to a row, which makes it a reader of exactly the surface that must not lie."""
+    view, s = _shown_view_on_the_laps_tab()
+    try:
+        page = view._stats                 # HELD: nothing below re-enters the accessor
+        before, mark = _flag_a_dropout(view, s)
+        assert page._stale and mark not in page.t_laps.value.text(), (
+            "the hidden page rendered anyway — the deferral this test guards is not in force")
+
+        view.select_lap_tab(2)             # exactly what a click on the "Stats" tab does
+        _APP.processEvents()
+        assert page.isVisible()
+        assert not page._stale, "the page became visible still owing a render"
+        assert mark in page.t_laps.value.text(), (
+            f"a painted Stats page is showing pre-edit numbers: {page.t_laps.value.text()!r}")
+
+        # ...and the same again for the chip's landing, from a fresh deferral.
+        view.select_lap_tab(0)
+        _APP.processEvents()
+        s.dropout_lap_ids = lambda: {0, 1}
+        view.rebuild_derived_views(reselect=True)
+        assert page._stale
+        view.show_data_trust()
+        _APP.processEvents()
+        assert not page._stale, "reveal_trust landed the reader on a page still owing a render"
+        assert f"2 {mark}" in page.t_laps.value.text(), page.t_laps.value.text()
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_the_stats_page_pays_its_deferred_render_before_it_can_be_painted OK")
+
+
+def test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stats_tab():
+    """THE SAVING ITSELF, asserted as a call count rather than a clock (a timing assertion on a
+    loaded CI box is a flake). On D24 GX010062 (65 laps) the render this skips is 200 ms of a
+    396 ms `rebuild_derived_views`; here it is simply "did it happen at all".
+
+    Both directions, because half a deferral is a bug: a rebuild while the Stats tab is showing
+    must still render immediately — the user is looking at the numbers that just changed."""
+    view, _s = _shown_view_on_the_laps_tab()
+    try:
+        renders = []
+        real = view._stats.refresh
+        view._stats.refresh = lambda: (renders.append(1), real())[1]
+
+        view.rebuild_derived_views(reselect=True)
+        assert renders == [], f"the hidden Stats page rendered {len(renders)} time(s) anyway"
+
+        view.select_lap_tab(2)             # arriving pays the one deferred render
+        _APP.processEvents()
+        assert len(renders) == 1, renders
+        view.rebuild_derived_views(reselect=True)
+        assert len(renders) == 2, (
+            "a rebuild did NOT render the Stats page the user is looking at")
+    finally:
+        del view._stats.refresh
+        view.hide()
+        view.dispose()
+    print("test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stats_tab OK")
 
 
 if __name__ == "__main__":
