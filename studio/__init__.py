@@ -1,4 +1,4 @@
-"""studio — Pacer, the local PySide6 + pyqtgraph desktop app for race-telemetry analysis.
+"""pacer studio — a local PySide6 + pyqtgraph desktop app for race-telemetry analysis.
 
 Greenfield UI on top of the existing C++ `pacer` core (via its nanobind bindings).
 Single-language Python, optimized for fast iteration. Panels:
@@ -18,13 +18,19 @@ Run:  pixi run studio [GoPro.MP4 ...]   (or: python -m studio [files])
 # names the .dmg; bindings/pacer/pyproject.toml is the bindings package). tests/test_version.py
 # pins all three together — bump them in one commit.
 #
-# THE PRODUCT IS "Pacer", spelled one way everywhere a person reads it: the window and every
-# dialog title (from here), the welcome screen, the About card, the Help prose, the macOS bundle
-# (packaging/pacer.spec's CFBundleName and `Pacer.app`), the README and the landing page. It was
-# "Pacer Studio" here, "Pacer" on the welcome screen and in the README, and "pacer" in running
-# prose — three spellings of one name. tests/test_version.py pins the spelling across all of them.
-# Two lowercase forms are NOT the name and stay: identifiers (the `pacer` package, the
-# "~/Library/Application Support/pacer" folder, ".pacer.json" sidecars, the `app.pacer.studio`
-# bundle id) and the share card's "pacer" logotype, a lowercase wordmark set in a graphic by design.
+# THE NAME CONVENTION — three forms, each with one job. tests/test_version.py enforces all three.
+#   * FORMAL  "Pacer Studio" (APP_NAME): the product's identity. Use it for the macOS bundle
+#     (packaging/pacer.spec's CFBundleName / CFBundleDisplayName, `Pacer Studio.app`, the
+#     `Pacer-Studio-<v>.dmg`), the application and display names, every window and dialog title,
+#     the About card, the landing page's product name and the header of every EXPORTED file,
+#     because an export carries the product's identity outside the app. Always this constant,
+#     never a retyped literal.
+#   * SHORT   "Pacer", capitalised: the product in a SENTENCE ("Pacer never looks the weather
+#     up"), the welcome screen's headline and the README's title.
+#   * WORDMARK "pacer", lowercase: the share card's logotype, set as a graphic. Nowhere else.
+# Lowercase "pacer" in a sentence is NOT a fourth form. It was the actual inconsistency (about 30
+# user-visible sentences, fixed in U5). Identifiers are not names and keep their own spelling: the
+# `pacer` package, "~/Library/Application Support/pacer", ".pacer.json" sidecars and the
+# `app.pacer.studio` bundle id.
 __version__ = "0.2.0"
-APP_NAME = "Pacer"
+APP_NAME = "Pacer Studio"

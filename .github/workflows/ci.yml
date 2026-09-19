@@ -131,7 +131,7 @@ jobs:
           pixi run pyinstaller --noconfirm --clean packaging/pacer.spec
       - name: Assert the .app bundle is well-formed
         run: |
-          APP="dist/Pacer.app"
+          APP="dist/Pacer Studio.app"
           test -d "$APP" || { echo "::error::PyInstaller produced no $APP"; exit 1; }
           find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm +111 | grep -q . \
             || { echo "::error::no executable in $APP/Contents/MacOS"; exit 1; }

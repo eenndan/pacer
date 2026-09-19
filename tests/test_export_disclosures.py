@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_export_data import PNG_1PX, make_session, make_stitched_session  # noqa: E402
 
-from studio import APP_NAME, export_data, share_card  # noqa: E402
+from studio import export_data, share_card  # noqa: E402
 from studio._signal import DASH, fmt_hms, fmt_time  # noqa: E402
 
 
@@ -341,7 +341,7 @@ def test_clipboard_text_is_plain_and_complete():
     s = make_stitched_session()
     text = export_data.stats_summary_text(s, None, title="GX0X0060")
     assert "<" not in text and ">" not in text, "the clipboard payload must be plain text"
-    assert text.startswith(f"{APP_NAME} — "), text[:80]
+    assert text.startswith("Pacer Studio"), text[:80]
     assert "GX0X0060" in text and (s.track_name or "") in text
     for sec in export_data.stats_summary(s):
         assert sec.title in text

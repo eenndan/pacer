@@ -1009,7 +1009,7 @@ set_tests_properties(test_export_pill_budget PROPERTIES
 # `pyproject.toml` — which `packaging/build_macos.sh` names the .dmg from — and
 # `bindings/pacer/pyproject.toml` repeat it and cannot import it. AGENTS.md's release recipe named
 # only the first two until v0.2.0, and nothing in CI compared any of them, so a partial bump would
-# have produced a Pacer-<a>.dmg holding an app whose About card read <b>. Each site is read
+# have produced a Pacer-Studio-<a>.dmg holding an app whose About card read <b>. Each site is read
 # the way its OWN consumer reads it (the spec's literal regex; build_macos.sh's grep|sed pipeline;
 # tomllib), plus the two changelog steps that travel with a bump. Pure stdlib: no Qt, no pacer, no
 # telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block above.

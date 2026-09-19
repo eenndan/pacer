@@ -2315,7 +2315,7 @@ class StudioWindow(QMainWindow):
         ShortcutsDialog(self).exec()
 
     def _show_about(self):
-        """Help ▸ About Pacer: the small themed About card (name / tagline / blurb)."""
+        """Help ▸ About Pacer Studio: the small themed About card (name / tagline / blurb)."""
         AboutDialog(self).exec()
 
     def _report_problem(self):
@@ -3778,11 +3778,10 @@ def main(argv: list[str] | None = None) -> int:
     # Brand the running app: the Dock/window icon and the app name Qt reports. NOTE the macOS
     # menu-bar showing "Python" in a NON-FROZEN dev run is expected — AppKit reads the menu-bar
     # app name from the running bundle's Info.plist (here the python interpreter's) before Qt can
-    # override it. The shipped .app sets CFBundleName=APP_NAME (packaging/pacer.spec) so the
+    # override it. The shipped .app sets CFBundleName="Pacer Studio" (packaging/pacer.spec) so the
     # product is correct; we do NOT pull in pyobjc/Foundation just to fix a cosmetic dev-only label.
-    # Nothing is keyed on this name — no QSettings, no QStandardPaths — so renaming it moves no data.
-    app.setApplicationName(APP_NAME)
-    app.setApplicationDisplayName(APP_NAME)
+    app.setApplicationName("Pacer Studio")
+    app.setApplicationDisplayName("Pacer Studio")
     app.setOrganizationName("pacer")  # additive; the library.json path is built from a hard-coded _APP_DIR_NAME, so this cannot move it
     _icon = Path(__file__).resolve().parent / "assets" / "pacer.icns"
     if _icon.exists():

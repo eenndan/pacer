@@ -408,7 +408,8 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     # A LOWERCASE LOGOTYPE, BY DESIGN, and not a misspelling of the product: it is set as a
     # graphic (accent, semibold, paired with a muted tagline) in the way a wordmark is, and it
     # has been "a subtle 'pacer' wordmark" since the card was introduced (module docstring).
-    # Running text says APP_NAME ("Pacer"); a logotype is free to set it in its own case.
+    # The WORDMARK form of the name convention in studio/__init__.py (formal "Pacer Studio",
+    # prose "Pacer", wordmark "pacer"), and the only place that form is used.
     _draw_text(p, pad, CARD_H - 56, "pacer", _font(40, theme.W_SEMIBOLD), theme.C.accent)
     _draw_text(p, 0, CARD_H - 56, "race telemetry", _font(28), theme.C.text_muted,
                align_right_at=right)

@@ -220,7 +220,7 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = shortcut_groups()
 # Kept here (with the shortcuts / about copy) as the single source of the app's Help-menu text.
 PRIVACY_TITLE = "Your data & privacy"
 PRIVACY_PARAGRAPHS = [
-    f"{APP_NAME} runs entirely on your Mac. It does not upload, sync or share anything — no "
+    "Pacer Studio runs entirely on your Mac. It does not upload, sync or share anything — no "
     "account, no network, no telemetry. Everything below stays on this computer, offline.",
     "What it stores, and where:",
     "•  Timing-line sidecar — when you place or drag a start/finish or sector line, Pacer saves "
@@ -256,7 +256,7 @@ PRIVACY_PARAGRAPHS = [
 
 APP_TAGLINE = "Race-telemetry analysis for GoPro footage."
 APP_BLURB = (
-    f"Open a GoPro recording and {APP_NAME} reconstructs the laps from its embedded GPS — then "
+    "Open a GoPro recording and Pacer Studio reconstructs the laps from its embedded GPS — then "
     "lets you scrub the footage against the map, speed / Δ charts and a g-meter overlay, compare "
     "your laps (and other recordings) side by side, and find where the time goes."
 )
@@ -486,7 +486,7 @@ class ShortcutsDialog(QDialog):
 
 
 class AboutDialog(QDialog):
-    """Help ▸ About Pacer. A small themed card: app name (hero), one-line tagline, and a
+    """Help ▸ About Pacer Studio. A small themed card: app name (hero), one-line tagline, and a
     short blurb on what it does (analyses GoPro race telemetry). Self-contained / app-state-free."""
 
     def __init__(self, parent=None):

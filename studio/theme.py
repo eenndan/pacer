@@ -1,4 +1,4 @@
-"""Pacer design system — single source of truth for the dark theme.
+"""Pacer Studio design system — single source of truth for the dark theme.
 
 Pacer-free (no telemetry imports); font handling degrades gracefully to the system
 font stack when the bundled Inter TTFs are unavailable. Public surface: C (colour/scale

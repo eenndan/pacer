@@ -282,12 +282,12 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   "moderate" band and the derived "warn" marks. Every bucket clears the accent by at least 23.8 dE
   (14.6 under deuteranopia), and the ramp's weakest step gets better in both views. **Visible
   outside the app:** a saved share card carries the new ramp in its map.
-- **The product is spelled "Pacer" everywhere you read it.** Window and dialog titles, the About
-  card and the macOS menu bar said "Pacer Studio", the welcome screen and README said "Pacer", and
-  the app's own sentences said "pacer". It is now "Pacer" throughout, including the `.app`
-  (`Pacer.app`, `Pacer-<version>.dmg`), the landing page and its social card. **Visible outside
-  the app:** an exported session summary and HTML report now start "Pacer —". The share card's
-  lowercase "pacer" logotype is a wordmark and stays as it is.
+- **The app's own sentences spell the product "Pacer".** About 30 of them said "pacer" in lower
+  case ("Show pacer full screen", "What pacer stores on this Mac", "Found by pacer"). The name now
+  follows one written convention (beside `APP_NAME` in `studio/__init__.py`, enforced by
+  `tests/test_version.py`). The formal name **"Pacer Studio"** is unchanged; it covers the `.app`,
+  the `.dmg`, window and About titles, the landing page and exported file headers. **"Pacer"** is
+  the name in a sentence. **"pacer"** is the share card's lowercase logotype only.
 - **The library's privacy note is set at a readable width.** It ran the full width of the dialog,
   166 characters to a line at the default size. It is now capped at the app's prose measure,
   83 characters to a line, at the cost of about two rows of the list at the default size (the
