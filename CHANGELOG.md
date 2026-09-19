@@ -373,6 +373,20 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **The corner match is described the way it now works, on the Stats page and in the panel that
+  explains a corner Best.** Both said an edge counts when it is "matched to your best lap's line"
+  (the CORNERS BY LAP grid: "within 3 m"). That is still true, but since the receiver's drift is
+  taken out before the match, it read as 3 m of raw GPS position, which let a reader blame their
+  line for the receiver's scatter. One sentence, written once and quoted by the CORNERS, STRAIGHTS
+  and CORNERS BY LAP tooltips and the corner-best method, now says that each lap's trace is shifted
+  as one piece to cancel that lap's drift, and that the best lap's corner edges move sideways onto
+  the laps' typical line. The fastest lap is still the reference. A muted grid cell's hover says its
+  3 m is judged with the drift taken out. The CORNERS caption also stopped saying that Coaching
+  counts "interpolated corners too". That has been false since Coaching moved onto the CORNERS
+  table's rule, and the caption now says Coaching leaves out the same interpolated times. COASTING
+  still counts every cell by design, and laps.csv still flags interpolated cells without dropping
+  them. Neither is described by this caption.
+
 - **Dropping a folder no longer counts Pacer's own exports as recordings you should go and open.**
   A multi-file drop groups by filename, so every stray `.MP4` beside the footage came back as its
   own recording — and the app saves its overlay clips exactly there, next to the recording they came
