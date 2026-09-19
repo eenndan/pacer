@@ -272,6 +272,27 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **The map's colour ramp has its own middle, so what you selected no longer dissolves into it.**
+  The start/finish line and the primary lap's brake glyphs are the amber accent and are drawn *on*
+  the speed / Δ / grip ramp, whose middle was that same amber: one bucket sat 2.62 dE from the start
+  line's own colour. On the owner's recordings, the start line crossed a bucket within 10 dE of
+  itself on 35 of 37 laps (SD_30_08_26), 43 of 62 (Sandown 3h 2026) and 30 of 36 (SD_19_09_26), and
+  14-26 % of the amber brake glyphs sat on one. The default ramp now runs red → **yellow** → green
+  through a new data token, `C.data_mid` (`#EFE45A`), which also becomes the GPS-quality strip's
+  "moderate" band and the derived "warn" marks. Every bucket clears the accent by at least 23.8 dE
+  (14.6 under deuteranopia), and the ramp's weakest step gets better in both views. **Visible
+  outside the app:** a saved share card carries the new ramp in its map.
+- **The product is spelled "Pacer" everywhere you read it.** Window and dialog titles, the About
+  card and the macOS menu bar said "Pacer Studio", the welcome screen and README said "Pacer", and
+  the app's own sentences said "pacer". It is now "Pacer" throughout, including the `.app`
+  (`Pacer.app`, `Pacer-<version>.dmg`), the landing page and its social card. **Visible outside
+  the app:** an exported session summary and HTML report now start "Pacer —". The share card's
+  lowercase "pacer" logotype is a wordmark and stays as it is.
+- **The library's privacy note is set at a readable width.** It ran the full width of the dialog,
+  166 characters to a line at the default size. It is now capped at the app's prose measure,
+  83 characters to a line, at the cost of about two rows of the list at the default size (the
+  dialog's minimum opening height moved from 710 to 750 px so it still shows at least five).
+
 - **Coaching stops crowning one corner when two of them are the same number.** The plan's second
   line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
   of the owner's recordings, that crown is not something the data supports: the top two corners are

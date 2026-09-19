@@ -440,9 +440,10 @@ _SELECTION_ON_RAMP_MIN_DE_DEUT = 3 * JND
 def test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it():
     """U5. The start line and the primary lap's brake glyphs are the ACCENT and sit on the map's
     channel ramp, and the default ramp's middle WAS the accent: bucket 7 was 2.62 dE from the start
-    line's own colour (1.97 deuteranopic). Measured on the owner's Sandown Park sessions, the start
-    line crossed a bucket within 10 dE of itself on 21 of 23 laps (SD_30_08_26) and 22 of 26
-    (SD_19_09_26), and 15-27 % of the amber brake glyphs landed on one, on all four recordings.
+    line's own colour (1.97 deuteranopic). Measured on the owner's Sandown Park recordings, the
+    start line crossed a bucket within 10 dE of itself on 35 of 37 laps (SD_30_08_26), 43 of 62
+    (Sandown 3h 2026) and 30 of 36 (SD_19_09_26), and 14-26 % of the amber brake glyphs landed on
+    one, on all four recordings. With C.data_mid: none, on any of them.
 
     Every bucket, both palettes, both views (normal + severity-1.0 deuteranopia)."""
     from studio import map_view

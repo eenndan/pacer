@@ -69,10 +69,11 @@ class C:
     # MIDDLE of every data scale — the map ramp's mid anchor, the GPS-quality strip's "moderate"
     # band, the derived "warn" marks — so the app said "you picked this" and "the data is
     # middling" in one hue. On the map the two sit on top of each other: measured on the owner's
-    # Sandown Park sessions, the start line crossed a ramp bucket within CIE76 dE 10 of its own
-    # colour on 21 of 23 laps (SD_30_08_26) and 22 of 26 (SD_19_09_26) — 7 of each at dE 2.62,
-    # barely over the 2.3 JND — and 15-27 % of the amber brake glyphs landed on such a bucket on
-    # all four recordings the owner has. A light yellow is the textbook middle of a red -> yellow
+    # Sandown Park recordings (every chapter), the start line crossed a ramp bucket within CIE76
+    # dE 10 of its own colour on 35 of 37 laps (SD_30_08_26), 43 of 62 (Sandown 3h 2026) and 30
+    # of 36 (SD_19_09_26) — 17, 18 and 9 of them at dE 2.62, barely over the 2.3 JND — and 14-26 %
+    # of the amber brake glyphs landed on such a bucket, on all four recordings the owner has.
+    # Afterwards: none, on any of them. A light yellow is the textbook middle of a red -> yellow
     # -> green scale (ColorBrewer RdYlGn), and this one was picked by measurement, not taste: every
     # bucket of the default ramp now clears the accent by >= 23.8 dE (14.6 deuteranopic), up from
     # 2.62 (1.97), and the ramp's weakest step IMPROVES in both views (5.91 -> 6.66 normal,
