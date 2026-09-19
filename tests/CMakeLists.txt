@@ -21,6 +21,24 @@ add_pacer_test(test_gps_source      pacer::gps-source)
 # CMakeLists pins it to the pixi env), so a machine where find_package fails should fail the
 # configure loudly instead of silently dropping the 109 Python tests from the suite.
 find_package(Python REQUIRED COMPONENTS Interpreter)
+
+# REAL-FOOTAGE CHECKS (G1): one registration per check, `footage.<check>`, running
+# `<file>.py --footage <check>`. Without its recording the check exits 77 and CTest lists it BY NAME
+# under "The following tests did not run: ... (Skipped)" — it does not pass, and it does not fail
+# (CI has no footage at all). Before this, each one printed a skip line inside its file and the file
+# reported Passed, so when ~/Desktop/D24 went every real-footage check became a silent no-op. The
+# recording comes from PACER_GOLDEN_MP4 (tests/_footage.py lists every variable); a file's
+# FOOTAGE_CHECKS and these lines are held one-to-one by test_footage_checks. TIMEOUT: with footage
+# present one check loads several multi-GB recordings, far past the suite's --timeout.
+function(add_footage_test file check)
+    add_test(NAME footage.${check}
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --footage ${check})
+    set_tests_properties(footage.${check} PROPERTIES
+                         SKIP_RETURN_CODE 77
+                         TIMEOUT 3600
+                         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+endfunction()
+
 add_test(NAME test_scrub_conversion
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_scrub_conversion.py)
 add_test(NAME test_lap_timing
@@ -251,11 +269,13 @@ set_tests_properties(test_compare PROPERTIES
 # Cross-recording compare + layout fixes (f7 phase B): REAL VideoView / PlayerPane widgets (the
 # PR-#80 fakes hid the bugs) — the toggle-re-entrancy that put pane B on the primary source, the
 # equal+draggable compare splitter, and the file-matched deferred-seek gate. PACER_NO_MEDIA builds
-# the inert media triplet; the opt-in real-media proof self-skips without ~/Desktop/D24. Offscreen.
+# the inert media triplet. The real-media proof on two recordings (PACER_GOLDEN_MP4 +
+# PACER_GOLDEN_REF_MP4) is its own footage registration. Offscreen.
 add_test(NAME test_video_view_compare
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_video_view_compare.py)
 set_tests_properties(test_video_view_compare PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_footage_test(test_video_view_compare test_real_media_pane_b_is_reference_at_lap_start)
 # F4 compare-mode map ghost: CompareController places lap B's kart on a REAL MapView at
 # index_at_time(t_b) per tick (setPos-only, one lazy item); exit restores the item state
 # byte-identically; zero ghost work outside compare. Imports map_view -> Qt, so run offscreen.
@@ -432,13 +452,16 @@ set_tests_properties(test_focus_list PROPERTIES
 # Video-overlay export PURE LOGIC (studio.export_video, F9): the lap-window trim math, the
 # per-frame overlay-value lookup against a synthetic Session (same accessors the live readout
 # reads), the ffmpeg decode/encode command construction, and the Renderer pump + cancel with the
-# subprocess + ffprobe MOCKED — so NO ffmpeg is needed to run. The one real-render smoke is gated
-# behind ffmpeg_available() + the D24 media file (skipped, not failed, on CI without them).
-# Builds a QImage + a headless g-meter dial, so run offscreen.
+# subprocess + ffprobe MOCKED — so NO ffmpeg is needed to run. The three real renders need ffmpeg +
+# the recording PACER_GOLDEN_MP4 names, and are footage registrations of their own (reported
+# Skipped, not Passed, on CI). Builds a QImage + a headless g-meter dial, so run offscreen.
 add_test(NAME test_export_video
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_video.py)
 set_tests_properties(test_export_video PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_footage_test(test_export_video test_real_render_smoke_if_ffmpeg_and_media)
+add_footage_test(test_export_video test_real_chaptered_non_first_chapter_render_if_media)
+add_footage_test(test_export_video test_real_render_quality_levels_if_media)
 # The DISTANCE-LOCKED two-lap compare export (studio.export_compare): the lock's math against the
 # app's own `Session.delta_between` on a real (synthetic-data) Session, the proof that it is a
 # RESAMPLE and not an offset, the per-recording media-clock crossing, the audio decision, the pill
@@ -1127,12 +1150,13 @@ add_test(NAME test_camera_support
 # "X s over 5 laps, Y s over N" pair is the table's, and every D24 gap the tree quotes is the one
 # the docstring publishes. A fifth, opt-in, loads a real recording named by PACER_IDEAL_TABLE_MP4
 # (comma-separated chapters), asserts the row's `all` cell IS Session.ideal_total() and re-runs
-# the table's own Monte-Carlo over every rung; it prints SKIP without the footage, which is why
-# the text checks cost nothing. PYTHONPATH for that opt-in half.
+# the table's own Monte-Carlo over every rung; it is a footage registration, reported Skipped
+# without the footage, which is why the text checks cost nothing.
 add_test(NAME test_ideal_sample_table
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ideal_sample_table.py)
 set_tests_properties(test_ideal_sample_table PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+add_footage_test(test_ideal_sample_table test_the_table_still_matches_the_app)
 
 # THREE MORE TABLES MEASURED ON FOOTAGE (T8/T12): coaching.py's evidence + THEME tables,
 # theme.py's pointwise-Δ floor table and the #272 recombination record in
@@ -1140,11 +1164,32 @@ set_tests_properties(test_ideal_sample_table PROPERTIES
 # The text checks derive every figure quoted beside each table from its cells and from the
 # constants the code applies (read with ast), and search the tree for every other quote of them.
 # An opt-in half re-measures every cell from the owner's footage (PACER_MEASURED_FIGURES_DIR, the
-# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/); it prints SKIP without it.
+# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/): seven footage registrations, each
+# reported Skipped without it.
 add_test(NAME test_measured_figures
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measured_figures.py)
 set_tests_properties(test_measured_figures PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+add_footage_test(test_measured_figures test_the_coaching_tables_match_the_footage)
+add_footage_test(test_measured_figures test_the_brake_habit_table_matches_the_footage)
+add_footage_test(test_measured_figures test_the_brake_hint_gate_table_matches_the_footage)
+add_footage_test(test_measured_figures test_the_beat_rate_table_matches_the_footage)
+add_footage_test(test_measured_figures test_the_focus_tables_match_the_footage)
+add_footage_test(test_measured_figures test_the_floor_table_matches_the_footage)
+add_footage_test(test_measured_figures test_the_refusal_record_matches_the_footage)
+
+# EVERY REAL-FOOTAGE CHECK IS REPORTED SKIPPED WITHOUT ITS RECORDING, BY NAME (G1). The day
+# ~/Desktop/D24 went, twelve real-footage checks in four files each printed a skip line and let
+# their file report Passed — a green gate claiming coverage nothing on the machine could provide.
+# Holds the mechanism above in place: the runner's three exit codes, a FLOOR of those checks,
+# FOOTAGE_CHECKS <-> footage.* registrations one-to-one with SKIP_RETURN_CODE (read from
+# `ctest --show-only=json-v1`), and THE NEGATIVE CONTROL — each check run as CTest runs it, under a
+# HOME with no footage, must exit 77 naming itself (before: exit 0, "ALL 84 ... passed"). Plus: a
+# NAMED recording that is missing fails, and footage is found only through tests/_footage.py.
+add_test(NAME test_footage_checks
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_footage_checks.py)
+set_tests_properties(test_footage_checks PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer;PACER_CTEST_COMMAND=${CMAKE_CTEST_COMMAND};PACER_CTEST_DIR=${CMAKE_BINARY_DIR}")
 
 # THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
 # its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two
