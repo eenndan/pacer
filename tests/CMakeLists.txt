@@ -426,6 +426,9 @@ add_test(NAME test_driving
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_driving.py)
 set_tests_properties(test_driving PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# D1: on a real recording, the brake/throttle band (the chart's, and the map's Line: Pedal) holds
+# each braking zone whole against zones defined without it, and paints no brake outside a glyph's event.
+add_footage_test(test_driving test_pedal_band_holds_each_braking_zone_whole)
 # Auto coaching summary (studio.coaching / coaching_panel, F10): the per-corner median-time-loss
 # ranking + the DETERMINISTIC dominant-reason selection (a planted apex-speed deficit ⇒ apex; a
 # planted late-throttle coast the best lap lacks ⇒ coasting; an earlier/longer brake ⇒ braking;
@@ -1105,6 +1108,13 @@ add_test(NAME test_session_record
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_record.py)
 set_tests_properties(test_session_record PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# GEARING ARITHMETIC (M3): engine RPM from road speed for a single-speed kart, hand-worked cases,
+# and the STRUCTURAL class gate — a shifter or an unstated class gets no drivetrain object, so no
+# number at all. Not wired to a surface (the owner has no session record; refused-2026-09.md).
+# Pure: no Qt, no pacer core, no files.
+add_test(NAME test_gearing
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gearing.py)
 
 # PLAYBACK RATE (slow motion) + the telemetry lock it must not cost (feat/playback-rate). Two
 # halves: the rate itself — one ladder, one rate across the shell, both compare panes seeded and

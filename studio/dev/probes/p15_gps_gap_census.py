@@ -5,7 +5,7 @@ ends, so the map's bridge curves the way the kart turned instead of borrowing an
 (`studio/gapfill.py`). `studio/docs/gps-accuracy-research.md` T5 had already ranked it a
 low-priority visual nicety with no timing effect. The package is only worth anything if two things
 hold, and this probe measures both, in that order. Its verdict is `studio/docs/refused-2026-09.md`
-§12.
+§13.
 
   1. THE CENSUS. How often does a present recording have a gap, and how long is it? One real
      `Session.load` per recording, all chapters (`chapters.discover_siblings`). The loader's own

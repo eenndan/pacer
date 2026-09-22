@@ -1842,10 +1842,12 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
         # lateral-dominant. Numerator and divisor share the SAME validated axes (clean GPS-derived
         # longitudinal + IMU lateral). Normalised to the SESSION envelope (not each lap's own peak) so a
         # slow lap reads genuinely lower; ~100% means at this session's grip limit (it can read a little
-        # over when a corner sits just past the robust p98 envelope).
+        # over when a corner sits just past the robust p98 envelope). The last sentence is the one
+        # comparison it supports (theme.GRIP_COMPARE_NOTE, shared with Stats ▸ CORNERS and the map).
         "Grip utilisation (ESTIMATED): median combined |g| in the corner vs the session friction-circle "
         "envelope (%). Estimated from the clean GPS-derived longitudinal + IMU lateral g; ~100% = at the "
-        "session's grip limit. Normalised session-wide so a slower lap reads lower.",
+        "session's grip limit. Normalised session-wide so a slower lap reads lower. "
+        + theme.GRIP_COMPARE_NOTE,
     ]
 
 

@@ -67,11 +67,22 @@ and still cannot rank corners against each other).
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
 
+`p14_rpm_audio` asks whether the audio track carries the engine (M3). It checks its pitch estimator
+against a KNOWN signal first: an engine-like tone in speed-dependent wind, through an automatic gain
+control and the AAC codec, with ffmpeg used only through pipes. It then runs the frozen estimator on
+the four present recordings, against the one law a single-speed kart must obey above clutch
+lock-up: the tone is proportional to road speed. `studio.gearing`, the arithmetic an RPM number
+would have to agree with, reads the measured constant as sprocket pairs. Its verdict is
+`refused-2026-09.md` §11. The tone is real and wind does not drown it, but it is not an RPM.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real
+
 `p15_gps_gap_census` loads all four present recordings itself and asks whether any of them has a
 GPS dropout for the map's gap bridge to fill (L2, a gyro-yaw bridge). It wraps the loader's own
 read, quality gate and clean stages to attribute every hole, counts the gaps the map would bridge
 with the app's own `gapfill.find_gaps`, and then PLANTS gaps in memory to score today's bridge
-against the fixes it replaced. Its verdict is `studio/docs/refused-2026-09.md` §12.
+against the fixes it replaced. Its verdict is `studio/docs/refused-2026-09.md` §13.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p15_gps_gap_census
 """

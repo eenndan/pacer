@@ -1134,8 +1134,12 @@ class MapView(QWidget):
         self.rainbow_combo.setToolTip(
             "Colour the current lap's line by a channel: Speed (red = slow, green = fast), "
             "Δ to best (red = losing, green = gaining), Δ rate (where you are losing it RIGHT "
-            "HERE), Grip (ESTIMATED: red = on the session's "
-            "grip limit, green = grip left unused), or Elevation (red = the lowest point of the "
+            # Grip's gloss ends in the sentence the Corners and Stats grip columns carry
+            # (theme.GRIP_COMPARE_NOTE): this line is the same reading per sample, and "green =
+            # grip left unused" beside it read as a headroom claim between corners. Tooltip only —
+            # the toolbar's width is its items' text, and none of them changed.
+            "HERE), Grip (ESTIMATED: red = on the session's grip limit, green = well under it. "
+            f"{theme.GRIP_COMPARE_NOTE}), or Elevation (red = the lowest point of the "
             "lap, green = the highest). Δ to best is CUMULATIVE — it shows how far behind you "
             "already were, so a corner you are gaining in still paints red while you carry a "
             "deficit into it. Δ rate is its slope: seconds lost per second of driving, smoothed "

@@ -532,6 +532,10 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "(this column's own Best cell — not your best lap's corner, which is what the "
                    "Coaching page measures against and why its numbers are smaller), apex speeds "
                    "and median grip utilization. "
+                   # One row per corner, so this column is the one grip surface whose only on-screen
+                   # comparison is the unsupported one — and it sorts. The shared sentence says so,
+                   # and where the supported comparison lives (theme.GRIP_COMPARE_NOTE).
+                   f"Grip %: {theme.GRIP_COMPARE_NOTE} The Corners tab shows it lap by lap. "
                    "Every column counts only the laps whose corner was matched to your best lap's "
                    "line on track at entry AND exit: an interpolated corner can be tenths of a "
                    "second out, so it is left out (hover Best or Median for how many laps count), "

@@ -48,7 +48,9 @@ divider between them drags.
 - **Track map** — your racing line, with corners, brake points, and the start/sector lines you can
   drag. One dropdown switches what the line is coloured *by*: **Off**, **Speed**, **Δ to best**,
   **Grip (est)** (how much of the available grip you used) or **Elevation**. The key names every
-  mark on the plot.
+  mark on the plot. Grip is the one to read with care, here and in its Corners and Stats columns:
+  compare it lap to lap within the same corner, not corner to corner. A lower reading does not
+  mean that corner has more grip to spare.
 - **Speed · Δ to ideal charts** — the speed trace and the cumulative time delta, distance-aligned
   so corners line up. The live readout leads with **Δideal**: how far you are off your *theoretical
   ideal* — the best you've driven at each point on track, stitched together (not a single drivable

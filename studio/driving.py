@@ -91,13 +91,37 @@ MIN_COAST_S = 0.25        # s; drop coast blips between brake-release and thrott
 #                           transits.
 MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
 # D3: the synthetic brake/throttle band. A SECONDARY VISUALISATION of the SAME speed-derived
-# longitudinal g the brake detector runs on (NOT a new detector) — it just maps that g to a
-# bounded 0..1 pedal-style intensity. Braking is normalised so g == -theta_b reads ~full brake
-# (the session's own brake-threshold = "on the brakes"); throttle is normalised to a fixed accel
-# envelope (karts rarely sustain > ~0.5 g of forward accel). Smoothed with the detector's boxcar
-# so the band tracks the same signal the brake glyphs sit on. ESTIMATED, never measured.
+# longitudinal g the brake detector runs on (NOT a new detector). Throttle is normalised to a fixed
+# accel envelope (karts rarely sustain > ~0.5 g of forward accel). ESTIMATED, never measured.
+#
+# THE BRAKE HALF IS THE DETECTOR'S OWN BRAKING (D1), and it used to be a second, cruder detector:
+# every bare 10 Hz sample past BRAKE_INTENSITY_FLOOR = 0.18 g, no hysteresis, no duration. The
+# derivative carries ~0.1 g of noise, so a braking zone broke wherever one sample dipped. Measured
+# on the four recordings here (Sandown 3h 0064, SD 0068, SD 0065, MK 0067; 154 valid laps) against
+# braking zones defined WITHOUT the band — runs where the 0.5 s-smoothed speed decelerates past
+# 0.16 g for 0.3 s and 2 km/h, which leaves that noise at ~0.03 g:
+#   * 36.5-50.0 % of zones painted as 2+ pieces, and 20.9-37.7 painted brake runs a lap for 7-12
+#     zones. Of the zone samples left unpainted, 69-72 % were a one-sample dip under theta_b, 16-23 %
+#     sat between theta_b (0.16) and the 0.18 floor — braking to the detector, 0 to the band — and
+#     6-12 % read positive.
+#   * NOW: each detector fragment that lasts MIN_BRAKE_S, painted -1 from its first sample past
+#     -theta_b to its last. Fragmented zones 5.8-12.9 %; recall 83.6-86.2 -> 91.9-94.6 %; precision
+#     74.4-84.0 -> 82.4-88.9 %; brake painted while ACCELERATING 0.23-0.46 -> 0.00-0.02 s a lap.
+#     All three improve at every one of 9 reference settings (0.3/0.5/0.7 s x 0.12/0.16/0.20 g) on
+#     every recording. The detector itself is untouched: its events are byte-identical, so the
+#     glyphs, coaching, the brake-habit table and a_max do not move.
+#   * REFUSED, measured: holding -1 over each detected EVENT (#347's suggestion) bridges the
+#     maneuver merge's coasts and paints brake 1.3-4.3 s a lap while accelerating (precision
+#     45.7-62.1 %); painting the whole fragment, tails included, costs 0.9-3.7 points of precision —
+#     its lead-in and release decelerate at 0.056-0.16 g, which is COAST_DRAG_MIN..theta_b, the
+#     coast channel's own band.
+#   * 3.0-7.4 % of detected events hold no fragment that lasts MIN_BRAKE_S (short blips the merge
+#     strings together — `merge_brake_maneuvers` expects such a group to fall to MIN_BRAKE_S, and it
+#     does not). The band paints none of them: 70 of the 73 lie in no reference zone.
+# BINARY ON PURPOSE. Normalised at theta_b, any genuine brake saturates, as designed ("g ==
+# -theta_b reads full brake"). A graded level off this series would be half noise: inside the
+# reference zones the per-sample noise is sd 0.11-0.14 g against a signal spread of sd 0.12-0.15 g.
 THROTTLE_ENV_G = 0.50     # g; positive long-g at/above this reads ~full throttle (clip)
-BRAKE_INTENSITY_FLOOR = 0.18  # g; brake decel below this reads as 0 (engine braking / lift, not a brake)
 # (longitudinal-g clip MAX_LONG_G and the speed_long_g helper live in studio._signal)
 # Maneuver merge: the release hysteresis splits one braking-into-a-corner (threshold brake -> ease/
 # trail -> re-brake) into several events. These fuse the fragments back into ONE brake point.
@@ -290,11 +314,29 @@ def brake_events(dist, elapsed, long_g, theta_b: float, *,
     if n < 2:
         return []
     g = boxcar(g, _smooth_window(elapsed))
-    hi = float(theta_b)                  # ENTER braking below -hi
-    lo = float(theta_b) * RELEASE_RATIO  # RELEASE only once decel recovers above -lo
     # Collect raw fragments (no MIN_BRAKE_S yet — a short pre-onset spike must be free to fold into
     # its parent maneuver before the duration test). Each: (i0, i1, onset_dist, onset_time, peak, end_dist).
-    raw: list[tuple] = []
+    raw = [(j0, j1, float(dist[j0]), float(elapsed[j0]), float(-g[j0:j1 + 1].min()), float(dist[j1]))
+           for j0, j1 in _brake_fragments(g, theta_b)]
+    if not raw:
+        return []
+    g_gate = boxcar(g, _win(elapsed, MERGE_GATE_S))
+    return merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows)
+
+
+def _brake_fragments(g: np.ndarray, theta_b: float) -> list[tuple[int, int]]:
+    """The brake detector's Schmitt fragments on an already-smoothed long-g, as inclusive
+    (i0, i1) index pairs in track order: ENTER below -theta_b, extended backwards and forwards for
+    as long as the decel stays past -theta_b*RELEASE_RATIO. Every sample of a fragment is
+    therefore decelerating (g < -theta_b*RELEASE_RATIO < 0).
+
+    ONE loop, two readers: `brake_events` fuses these into maneuvers (the glyphs, coaching, the
+    brake-habit table, a_max); `brake_throttle_intensity` paints the sustained ones as the band's
+    brake half. Before D1 the band thresholded each sample itself and they disagreed."""
+    n = len(g)
+    hi = float(theta_b)                  # ENTER braking below -hi
+    lo = float(theta_b) * RELEASE_RATIO  # RELEASE only once decel recovers above -lo
+    out: list[tuple[int, int]] = []
     i = 0
     while i < n:
         if g[i] < -hi:
@@ -305,16 +347,11 @@ def brake_events(dist, elapsed, long_g, theta_b: float, *,
             j1 = j0
             while j1 + 1 < n and g[j1 + 1] < -lo:  # extend forwards until decel releases
                 j1 += 1
-            seg = g[j0:j1 + 1]
-            raw.append((j0, j1, float(dist[j0]), float(elapsed[j0]),
-                        float(-seg.min()), float(dist[j1])))
+            out.append((j0, j1))
             i = j1 + 1
         else:
             i += 1
-    if not raw:
-        return []
-    g_gate = boxcar(g, _win(elapsed, MERGE_GATE_S))
-    return merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows)
+    return out
 
 
 def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[BrakeEvent]:
@@ -435,17 +472,22 @@ def coasting_spans(dist, elapsed, speed_kmh, long_g, theta_b: float) -> list[Coa
 def brake_throttle_intensity(elapsed, long_g, theta_b: float) -> np.ndarray:
     """D3: per-sample ESTIMATED brake/throttle intensity in [-1, 1] from the SAME clean
     speed-derived longitudinal g the brake detector uses (NOT a new detector) — for the chart's
-    pedal-style band under the speed curve.
+    pedal-style band under the speed curve, and the map's Line: Pedal, which paints this array.
 
-      * braking  (g < 0): -min(decel / theta_b, 1), so g == -theta_b ≈ -1.0 (full brake, the
-        session's own brake threshold), and a sub-threshold lift/engine-brake below
-        BRAKE_INTENSITY_FLOOR reads 0 (it isn't a brake).
+      * braking: -1.0 over each of the brake detector's own Schmitt fragments (`_brake_fragments`)
+        that lasts MIN_BRAKE_S, from its first sample past -theta_b to its last — the detector's
+        hysteresis holds it across the noise dips between — and 0 everywhere else a sample
+        decelerates, the fragment's lift lead-in and release tail included. No threshold of the
+        band's own. The D3 block above THROTTLE_ENV_G has the measurements behind each of those,
+        and behind the level being binary.
       * throttle (g > 0): +min(accel / THROTTLE_ENV_G, 1), proportional to forward accel and
-        clipped to a sane envelope so a GPS-noise spike can't exceed full.
-      * near-zero g (cruise / mild coast): ~0.
+        clipped to a sane envelope so a GPS-noise spike can't exceed full. A fragment never holds a
+        sample with g > 0, so the two halves never overwrite each other.
+      * near-zero g (cruise / mild coast): 0.
 
-    Same SMOOTH_S boxcar as the detector so the band tracks the brake glyphs. Aligned to the
-    shorter of `elapsed`/`long_g`; theta_b<=0 (no g signal) -> zeros."""
+    Same SMOOTH_S boxcar as the detector so the band tracks the brake glyphs: every painted brake
+    run lies inside a detected event. Aligned to the shorter of `elapsed`/`long_g`; theta_b<=0 (no
+    g signal) -> zeros."""
     elapsed = np.asarray(elapsed, float)
     g = np.asarray(long_g, float)
     n = min(len(elapsed), len(g))
@@ -454,12 +496,13 @@ def brake_throttle_intensity(elapsed, long_g, theta_b: float) -> np.ndarray:
     elapsed, g = elapsed[:n], g[:n]
     g = boxcar(g, _smooth_window(elapsed))
     out = np.zeros(n)
-    brake = g < 0.0
-    decel = -g[brake]
-    decel = np.where(decel >= BRAKE_INTENSITY_FLOOR, decel, 0.0)
-    out[brake] = -np.minimum(decel / float(theta_b), 1.0)
     accel = g > 0.0
     out[accel] = np.minimum(g[accel] / THROTTLE_ENV_G, 1.0)
+    for i0, i1 in _brake_fragments(g, theta_b):
+        if float(elapsed[i1] - elapsed[i0]) < MIN_BRAKE_S:
+            continue  # the detector's own shortest-real-brake floor: a noise spike, not a brake
+        past = np.flatnonzero(g[i0:i1 + 1] < -theta_b)  # never empty: a fragment ENTERS there
+        out[i0 + past[0]:i0 + past[-1] + 1] = -1.0
     return out
 
 
