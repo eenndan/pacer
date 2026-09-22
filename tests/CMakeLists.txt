@@ -1103,6 +1103,13 @@ add_test(NAME test_session_record
 set_tests_properties(test_session_record PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# GEARING ARITHMETIC (M3): engine RPM from road speed for a single-speed kart, hand-worked cases,
+# and the STRUCTURAL class gate — a shifter or an unstated class gets no drivetrain object, so no
+# number at all. Not wired to a surface (the owner has no session record; refused-2026-09.md).
+# Pure: no Qt, no pacer core, no files.
+add_test(NAME test_gearing
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gearing.py)
+
 # PLAYBACK RATE (slow motion) + the telemetry lock it must not cost (feat/playback-rate). Two
 # halves: the rate itself — one ladder, one rate across the shell, both compare panes seeded and
 # fanned out, and the rate re-applied at a chapter seam (a new media source carries none) — and the

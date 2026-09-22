@@ -17,10 +17,15 @@ automatic gain control. This probe asks the question in the only order that can 
      speed must be ONE constant per recording, and the audio must sit on the picture's clock.
   3. THE GEARING CHECK. The gearing arithmetic (`studio.gearing`) turns trap speed, sprockets and
      tyre circumference into RPM. It is the only independent check of an audio RPM, and it needs
-     a session record — so this probe counts on how many recordings both can be computed.
+     a session record — so this probe counts on how many recordings both can be computed, and
+     then asks the weaker question it CAN answer: which ordinary sprocket pairs reproduce the
+     measured tone under each reading of which engine order the tone is.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real [KEY ...]
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real \\
+        [0064 0065 0068 0067] [--dump DIR [--reuse]]
+
+The verdict is `studio/docs/refused-2026-09.md` ("Engine RPM from the audio track").
 
 SAFETY, enforced rather than promised:
   * EVERY FOOTAGE FOLDER IS READ-ONLY. A recording is only ever an ffmpeg INPUT (`-i <path>`), and
@@ -30,8 +35,9 @@ SAFETY, enforced rather than promised:
   * `studio.dev._jail` diverts every app-support seam before any load, and the real app-support
     directory is snapshotted before and after the run and must come back unchanged. The owner's
     `session_records.json` is READ in place (that is the question in step 3), never written.
-  * Nothing is written anywhere except what `--dump DIR` names (a JSON of the per-recording
-    numbers); no temp file is created by any step.
+  * Nothing is written anywhere except into the directory `--dump DIR` names (a JSON of the
+    per-recording numbers, and each recording's extracted arrays so `--reuse` can skip the load).
+    No step picks a file name of its own under the shared temp root, and ffmpeg writes no file.
 """
 
 from __future__ import annotations
@@ -535,6 +541,18 @@ def _modal_ratio(r: np.ndarray) -> float:
     return float(np.exp(np.median(near)))
 
 
+def _accel_brake_gap(rec: dict, lag: float, conf: np.ndarray, vmax: float) -> float:
+    """Median tone/speed ratio under braking minus under acceleration, in % of the constant,
+    above 60 % of top speed, at `lag`. Zero when the two series are aligned (and no slip)."""
+    v = _speed_at(rec, rec["t"], lag)
+    dv = np.gradient(np.nan_to_num(v), HOP_S)
+    m = conf & np.isfinite(v) & (v > 0.6 * vmax)
+    q = rec["f0"] / v
+    k = _modal_ratio(q[m])
+    ok = m & (np.abs(q / k - 1) < 0.08)
+    return float(100 * (np.median(q[ok & (dv < -3)]) - np.median(q[ok & (dv > 3)])) / k)
+
+
 def analyse(rec: dict, thr: float) -> dict:
     """Step 2: does the tone behave like a single-speed kart's engine?"""
     t, f0, sal, lvl = rec["t"], rec["f0"], rec["sal"], rec["lvl"]
@@ -542,22 +560,38 @@ def analyse(rec: dict, thr: float) -> dict:
     conf = sal >= thr
     res: dict = {"key": rec["key"], "frames": len(t), "confident": float(conf.mean())}
 
-    # The audio's own lag against the GPS stamps: the lag that makes the tone and the road speed
-    # agree best, over confident frames with the clutch surely locked (above 40 % of top speed).
-    lags = np.arange(-1.5, 1.5001, 0.02)
-    corr = []
+    # The audio's own lag against the GPS speed's stamps, measured two independent ways on frames
+    # where the clutch is surely locked (above 60 % of top speed):
+    #   (a) the lag at which the most frames sit within 2 % of one tone/speed constant;
+    #   (b) the peak of the cross-correlation of the two series' frame-to-frame CHANGES, which
+    #       only transitions (braking, acceleration) can move — a constant offset cannot fake it.
+    # And the symptom a wrong lag leaves: under braking the tone reads HIGH against the speed and
+    # under acceleration LOW (or the reverse), so the two medians split. `gap` is that split.
+    lags = np.arange(-0.5, 1.0001, 0.02)
+    lf = np.where(conf, np.log(np.where(f0 > 0, f0, 1.0)), np.nan)
+    frac, xc = [], []
     for lag in lags:
         v = _speed_at(rec, t, lag)
-        m = conf & np.isfinite(v) & (v > 0.4 * vmax)
-        corr.append(np.corrcoef(np.log(f0[m]), np.log(v[m]))[0, 1] if m.sum() > 50 else np.nan)
-    corr = np.array(corr)
-    best = int(np.nanargmax(corr))
-    res.update(lag=float(lags[best]), lag_r=float(corr[best]),
-               r_at_zero=float(corr[np.argmin(np.abs(lags))]),
-               gps_lag=rec["gps_lag"])
-    v = _speed_at(rec, t, res["lag"])
-    moving = np.isfinite(v) & (v > 0.4 * vmax)
-    m = conf & moving
+        m = conf & np.isfinite(v) & (v > 0.6 * vmax)
+        q = f0[m] / v[m]
+        frac.append(np.mean(np.abs(q / _modal_ratio(q) - 1) < 0.02) if m.sum() > 50 else np.nan)
+        dlf, dlv = np.diff(lf), np.diff(np.log(np.where(v > 1, v, np.nan)))
+        mm = (np.isfinite(dlf) & np.isfinite(dlv) & (np.abs(dlf) < 0.05)
+              & (np.nan_to_num(v[1:]) > 0.5 * vmax))
+        xc.append(np.corrcoef(dlf[mm], dlv[mm])[0, 1] if mm.sum() > 50 else np.nan)
+    frac, xc = np.array(frac), np.array(xc)
+    lag = float(lags[int(np.nanargmax(frac))])
+    res.update(lag=lag, lag_xcorr=float(lags[int(np.nanargmax(xc))]),
+               xcorr_r=float(np.nanmax(xc)), gps_lag=rec["gps_lag"],
+               gap_pct=_accel_brake_gap(rec, lag, conf, vmax),
+               gap_pct_at_gps_lag=(_accel_brake_gap(rec, rec["gps_lag"], conf, vmax)
+                                   if rec["gps_lag"] is not None else None))
+    v = _speed_at(rec, t, lag)
+    # Above 60 % of top speed a single-speed kart's centrifugal clutch is surely locked, so there
+    # the tone MUST be one constant times the road speed. Below it the clutch may slip, and the
+    # bands show whether it does.
+    locked = np.isfinite(v) & (v > 0.6 * vmax)
+    m = conf & locked
     ratio = f0[m] / v[m]                   # Hz per km/h
     k = _modal_ratio(ratio)
     q = ratio / k
@@ -565,20 +599,22 @@ def analyse(rec: dict, thr: float) -> dict:
     octave = np.zeros(len(q), bool)
     for o in OCTAVES:
         octave |= np.abs(q / o - 1) < 0.03
-    res.update(k_hz_per_kmh=k, moving_frames=int(moving.sum()),
-               covered=float(m.sum() / max(moving.sum(), 1)),
+    res.update(k_hz_per_kmh=k, locked_frames=int(locked.sum()),
+               covered=float(m.sum() / max(locked.sum(), 1)),
                within3=float(np.mean(e < 0.03)), within5=float(np.mean(e < 0.05)),
                octave=float(np.mean(octave & (e >= 0.03))),
                other=float(np.mean(~octave & (e >= 0.05))))
-    # By speed band: wind grows with speed, so a wind-dominated estimate degrades towards the top.
+    # By speed band. Wind grows with speed, so a wind-dominated estimate degrades towards the
+    # TOP; a slipping clutch shows at the BOTTOM as a tone above the locked constant (q > 1).
     bands = []
-    for lo, hi in ((0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
-        b = moving & (v >= lo * vmax) & (v < hi * vmax)
+    for lo, hi in ((0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
+        b = np.isfinite(v) & (v >= lo * vmax) & (v < hi * vmax)
         bb = b & conf
         qq = f0[bb] / v[bb] / k
         bands.append({"band": f"{lo:.0%}-{min(hi, 1.0):.0%}", "frames": int(b.sum()),
                       "covered": float(bb.sum() / max(b.sum(), 1)),
                       "within3": float(np.mean(np.abs(qq - 1) < 0.03)) if len(qq) else math.nan,
+                      "q_p50": float(np.median(qq)) if len(qq) else math.nan,
                       "salience_p50": float(np.median(sal[b])) if b.any() else math.nan,
                       "level_p50_dbfs": float(np.median(lvl[b])) if b.any() else math.nan})
     res["bands"] = bands
@@ -631,9 +667,43 @@ def gearing_check(recs: dict) -> dict:
     rows = {}
     for key, rec in recs.items():
         r = session_record.get(store, rec["fingerprint"])
-        rows[key] = {"record": r is not None, "rpm": None}
+        # The record has sprockets but no tyre circumference and no class (#258's schema), so even
+        # a filled-in record could not feed `gearing.single_speed` today.
+        rows[key] = {"record": r is not None,
+                     "sprockets": (r["sprocket_front"], r["sprocket_rear"]) if r else None,
+                     "rpm": None}
     return {"store_present": os.path.exists(path),
             "records": len(store.get("records", {})), "rows": rows}
+
+
+# The two readings of a tone at the crank's own rate or twice it, and the sprockets that fit each.
+# A kart tone at ~187 Hz at the end of a straight is 11,200 rpm if it is the crank rate (a two-stroke
+# fires once a turn) and 5,600 rpm if it is twice the crank rate (a four-stroke single's strong 2nd
+# order). Read as a four-stroke's FIRING rate it would be 22,400 rpm, which no kart engine turns.
+READINGS = (("tone = crank rate", 1.0), ("tone = 2 x crank rate", 2.0))
+NOMINAL_CIRCUMFERENCE_M = 0.88     # an 11 x 7.10-5 rear tyre, ~280 mm across
+FRONT_TEETH = range(9, 21)
+REAR_TEETH = range(50, 101)
+
+
+def implied_gearing(k_hz_per_kmh: float, speed_kmh: float, tol: float = 0.0075) -> list[dict]:
+    """For each reading of the tone, the engine RPM it implies at `speed_kmh` and every sprocket
+    pair on a nominal tyre whose GEARING RPM (`studio.gearing`) lands within `tol` of it. The count
+    is the point: if both readings are matched by ordinary sprockets, the audio cannot say which
+    kart this is, and only a record can."""
+    from studio import gearing
+
+    out = []
+    for name, order in READINGS:
+        rpm = k_hz_per_kmh * speed_kmh * 60.0 / order
+        pairs = []
+        for f in FRONT_TEETH:
+            for r in REAR_TEETH:
+                g = gearing.single_speed(gearing.SINGLE_SPEED, f, r, NOMINAL_CIRCUMFERENCE_M)
+                if abs(g.rpm_at(speed_kmh) / rpm - 1) <= tol:
+                    pairs.append(f"{f}/{r}")
+        out.append({"reading": name, "rpm": rpm, "pairs": pairs})
+    return out
 
 
 _ARRAYS = ("tt", "tv", "stamp", "t", "f0", "sal", "lvl")
@@ -678,12 +748,35 @@ def real(keys: list[str], dump: str | None, reuse: bool = False) -> None:
         res = analyse(rec, thr)
         results[key] = res
         _print_result(rec, res)
+    print("\nTHE CONSTANT ACROSS RECORDINGS (tone per km/h, clutch locked; one rear tooth on a "
+          "76 is 1.3 %):")
+    keys_done = list(results)
+    for key in keys_done:
+        meds = np.array([p[1] for p in results[key]["per_lap"] if np.isfinite(p[1])])
+        se = 1.2533 * np.std(meds) / math.sqrt(len(meds)) / np.median(meds) * 100
+        print(f"  {key} {recs[key]['track']:<24} k {results[key]['k_hz_per_kmh']:.4f}  per-lap "
+              f"median {np.median(meds):.4f} over {len(meds)} laps (SE of the median {se:.2f} %)")
+    for a in range(len(keys_done)):
+        for b in range(a + 1, len(keys_done)):
+            ka, kb = (results[keys_done[a]]["k_hz_per_kmh"], results[keys_done[b]]["k_hz_per_kmh"])
+            print(f"  {keys_done[a]} vs {keys_done[b]}: {100 * (kb / ka - 1):+.2f} %")
     g = gearing_check(recs)
     print(f"\nGEARING CHECK: owner's session_records.json "
           f"{'present' if g['store_present'] else 'ABSENT'}, {g['records']} record(s)")
     for key, row in g["rows"].items():
         print(f"  {key}: record {'yes' if row['record'] else 'NO'}  gearing RPM "
               f"{row['rpm'] if row['rpm'] is not None else '— (cannot be computed)'}")
+    print("\nWHAT THE TONE ALONE IMPLIES at each recording's median top-of-lap speed, on a nominal "
+          f"{NOMINAL_CIRCUMFERENCE_M} m tyre (sprocket pairs within 0.75 %):")
+    for key, res in results.items():
+        if not res["tops"]:
+            continue
+        v_top = float(np.median([s for s, _f in res["tops"]]))
+        for row in implied_gearing(res["k_hz_per_kmh"], v_top):
+            res.setdefault("implied", []).append(row)
+            print(f"  {key} at {v_top:.1f} km/h, {row['reading']:<22}: {row['rpm']:7.0f} rpm, "
+                  f"{len(row['pairs'])} pairs fit: {' '.join(row['pairs'][:8])}"
+                  f"{' ...' if len(row['pairs']) > 8 else ''}")
     if _folder_state(_REAL_APP_SUPPORT) != real_before:
         raise SystemExit("ABORT: the real app-support directory changed during the run")
     print("\nreal app-support directory unchanged; every footage folder unchanged")
@@ -700,17 +793,21 @@ def _print_result(rec: dict, res: dict) -> None:
           f"laps {len(rec['laps'])}  vmax {rec['vmax']:.1f} km/h  (load {rec['load_s']:.0f} s)")
     print(f"frames {res['frames']}  confident {res['confident']:.0%}   audio level dBFS "
           f"p5/p50/p95 {' / '.join(f'{x:.1f}' for x in res['level_p5_p50_p95_dbfs'])}")
-    print(f"lag of the GPS stamps behind the AUDIO: {res['lag']:+.2f} s (r {res['lag_r']:.3f}; "
-          f"r at 0 s {res['r_at_zero']:.3f}); installed GPS lag from the gyro "
-          f"{res['gps_lag'] if res['gps_lag'] is not None else 'none'}")
-    print(f"tone / speed above 40 % of top: k = {res['k_hz_per_kmh']:.4f} Hz per km/h;  "
-          f"covered {res['covered']:.0%} of {res['moving_frames']} frames;  of those within 3 % "
-          f"{res['within3']:.0%}, within 5 % {res['within5']:.0%}, octave {res['octave']:.0%}, "
-          f"other {res['other']:.0%}")
+    gl = res["gps_lag"]
+    print(f"GPS speed stamps behind the AUDIO: {res['lag']:+.2f} s by the 2 % count, "
+          f"{res['lag_xcorr']:+.2f} s by the change cross-correlation (r {res['xcorr_r']:.3f}); "
+          f"braking-minus-acceleration ratio gap {res['gap_pct']:+.2f} % there. The installed "
+          f"lag (gyro vs GPS path) is "
+          + (f"{gl:+.3f} s, where the gap is {res['gap_pct_at_gps_lag']:+.2f} %" if gl is not None
+             else "none"))
+    print(f"tone / speed above 60 % of top (clutch locked): k = {res['k_hz_per_kmh']:.4f} Hz per "
+          f"km/h;  covered {res['covered']:.0%} of {res['locked_frames']} frames;  of those "
+          f"within 3 % {res['within3']:.0%}, within 5 % {res['within5']:.0%}, octave "
+          f"{res['octave']:.0%}, other {res['other']:.0%}")
     for b in res["bands"]:
         print(f"   speed {b['band']:>9}: frames {b['frames']:6d} covered {b['covered']:5.0%} "
-              f"within 3 % {b['within3']:5.0%}  salience p50 {b['salience_p50']:5.1f}  "
-              f"level p50 {b['level_p50_dbfs']:6.1f} dBFS")
+              f"within 3 % {b['within3']:5.0%}  tone/(k·speed) p50 {b['q_p50']:.3f}  "
+              f"salience p50 {b['salience_p50']:5.1f}  level p50 {b['level_p50_dbfs']:6.1f} dBFS")
     st = res["stopped"]
     print(f"   stopped (<3 km/h): frames {st['frames']}  covered {st['covered']:.0%}  "
           f"f0 p25/p50/p75 {st['f0_p25_p50_p75']}  level p50 {st['level_p50_dbfs']:.1f} dBFS")
