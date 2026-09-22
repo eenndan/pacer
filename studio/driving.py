@@ -116,8 +116,9 @@ MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
 #     its lead-in and release decelerate at 0.056-0.16 g, which is COAST_DRAG_MIN..theta_b, the
 #     coast channel's own band.
 #   * 3.0-7.4 % of detected events hold no fragment that lasts MIN_BRAKE_S (short blips the merge
-#     strings together — `merge_brake_maneuvers` expects such a group to fall to MIN_BRAKE_S, and it
-#     does not). The band paints none of them: 70 of the 73 lie in no reference zone.
+#     strings together into a span of MIN_BRAKE_S or more — `merge_brake_maneuvers` keeps such a
+#     group; its docstring says so). The band paints none of them: 70 of the 73 lie in no reference
+#     zone.
 # BINARY ON PURPOSE. Normalised at theta_b, any genuine brake saturates, as designed ("g ==
 # -theta_b reads full brake"). A graded level off this series would be half noise: inside the
 # reference zones the per-sample noise is sd 0.11-0.14 g against a signal spread of sd 0.12-0.15 g.
@@ -367,9 +368,17 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
     a single-sample S/F-seam graze where the smoothed long-g just kisses -theta_b) still folds into
     the maneuver (peak/release/duration), but it does NOT get to set the brake point: that would
     yank the onset back onto the noise. The group keeps the EARLIEST onset overall only as a
-    fallback (no sub-fragment reached the floor) — such a group is then dropped by the merged-span
-    test below anyway. peak = max, duration = the true onset->release span; MIN_BRAKE_S also gates
-    the merged span."""
+    fallback, when no sub-fragment reaches the floor. peak = max, duration = the true
+    onset->release span, and MIN_BRAKE_S gates that MERGED span.
+
+    SUCH A GROUP IS NOT DROPPED. The merged span runs from the first blip's onset to the last
+    blip's release, coasts included, so a string of short blips spread over MIN_BRAKE_S or more
+    survives as an event whose onset is its first blip. Only a group whose whole span is shorter
+    goes. #349 measured it on four recordings (154 valid laps): 73 detected events, 3.0-7.4 % per
+    recording, hold no fragment that lasts MIN_BRAKE_S, and 70 of those 73 overlap no
+    independently defined braking zone. They are glyphs and inputs to coaching, the brake-habit
+    table and BRAKING; the D3 band paints none of them. Dropping them is a detector change, and
+    it has not been made."""
     def corner_of(d):
         if corner_windows is None:
             return None
