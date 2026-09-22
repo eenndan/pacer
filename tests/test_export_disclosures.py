@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_export_data import PNG_1PX, make_session, make_stitched_session  # noqa: E402
 
-from studio import export_data, share_card  # noqa: E402
+from studio import data_quality, export_data, share_card  # noqa: E402
 from studio._signal import DASH, fmt_hms, fmt_time  # noqa: E402
 
 
@@ -84,14 +84,45 @@ def test_csv_trailer_stays_ascii():
     """laps.csv is the MACHINE-readable file and has been pure ASCII its whole life; the
     disclosure must not be what breaks that. The caption's separator is a middle dot, so the
     trailer carries the ASCII `sentence()` and the bare `over_laps` integer instead — the two
-    HUMAN surfaces (report, clipboard) print the caption verbatim (asserted below)."""
+    HUMAN surfaces (report, clipboard) print the caption verbatim (asserted below).
+
+    EVERY ROW THE TRAILER CAN CARRY, not only the ideal's. This test used to write the stitched
+    session exactly as it comes — a named track, a clean clock, every corner matched, no break — so
+    the trailer it checked held the two summary rows and nothing else. The quality key, the
+    `corners_interpolated` legend (C5) and the break-in-series row were never written here, and the
+    C5 legend shipped with an em dash in it. That row is not a corner case: on every recording
+    present on the owner's machine (Sandown 3h 2026, SD_19_09_26, MK_18_09_26) at least one lap
+    has an interpolated corner, so every laps.csv they export carried the dash. So the session is
+    driven into each state that adds a row, and the test first asserts the rows are THERE — an
+    ASCII check over rows that were never written passes by construction."""
     s = make_stitched_session()
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "laps.csv")
-        export_data.write_laps_csv(path, s)
-        raw = open(path, "rb").read()
-    raw.decode("ascii")  # raises UnicodeDecodeError the moment a non-ASCII mark creeps in
-    print(f"test_csv_trailer_stays_ascii OK ({len(raw)} bytes, ascii)")
+    s.track_name = None                                  # provisional timing -> [p]
+    s._timing_quality = data_quality.TimingQuality(      # media clock + low GPS -> [e] and [u]
+        clock=data_quality.MEDIA_CLOCK_FALLBACK, dropped_fraction=0.12)
+    s.skipped_chapters = ["GX020001.MP4"]                # [b] and the break-in-series row
+    real = s.corners.lap_corner_resolved
+    s.corners.lap_corner_resolved = lambda lap: [          # one interpolated cell -> the C5 legend
+        ok and not (lap == 0 and k == 0) for k, ok in enumerate(real(lap))]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "laps.csv")
+            export_data.write_laps_csv(path, s)
+            raw = open(path, "rb").read()
+    finally:
+        s.corners.lap_corner_resolved = real
+    text = raw.decode("utf-8")
+    marker = export_data.SUMMARY_MARKER
+    labels = {line.split(",", 1)[0] for line in text.splitlines()
+              if line.startswith(f"{marker}: ")}
+    want = {f"{marker}: {label}" for label in (
+        "Theoretical best", "Best rolling", "quality [p]", "quality [e]", "quality [b]",
+        "quality [u]", export_data.INTERPOLATED_COLUMN, "break in series")}
+    assert want <= labels, f"the trailer never wrote {sorted(want - labels)} — nothing to check"
+    bad = [(line.split(",", 1)[0], sorted({ch for ch in line if ord(ch) > 127}))
+           for line in text.splitlines() if any(ord(ch) > 127 for ch in line)]
+    assert not bad, f"laps.csv is no longer pure ASCII — row: non-ASCII characters {bad}"
+    raw.decode("ascii")  # and the whole file, header and lap rows included
+    print(f"test_csv_trailer_stays_ascii OK ({len(raw)} bytes, ascii, {len(labels)} trailer rows)")
 
 
 def test_report_prints_the_ideal_with_its_caption_and_sentence():

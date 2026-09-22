@@ -55,13 +55,17 @@ DROPOUT_FLAG = "gps-dropout"
 # the file is comma-separated and a corner label never contains one.
 INTERPOLATED_COLUMN = "corners_interpolated"
 INTERPOLATED_SEP = " "
+# PURE ASCII, like `data_quality.MARK_MEANING` and for its reason: this sentence is a laps.csv
+# trailer row, and that file has been ASCII its whole life (a spreadsheet guessing MacRoman renders
+# an em dash as three characters of junk). It shipped with one, and `test_csv_trailer_stays_ascii`
+# could not see it: its session had no interpolated cell, so this row was never written there.
 INTERPOLATED_NOTE = (
     "corners_interpolated lists the corners this lap did not match on track: their "
     "*_time_s and *_apex_* cells are interpolated between the neighbouring matches, which put "
     "them a median 0.22 s off an independently timed crossing against 0.004 s for a matched one, "
     "measured on one recording before a September 2026 change to corner matching and not "
     "re-measured since. Every value is "
-    "still written — the column says which ones the app's own corner tables leave out.")
+    "still written; the column says which ones the app's own corner tables leave out.")
 
 # laps.csv trailer (the session-summary footer rows mirroring the lap table's footer below
 # the table): a labeled section AFTER the lap rows, separated by one blank row, led by its own
