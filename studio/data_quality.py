@@ -224,6 +224,26 @@ class TimingQuality:
         return ""
 
 
+def timing_word(quality) -> str:
+    """The ONE word for a degraded clock — the lap panel's data-quality chip — or "" when clean.
+
+    THREE WORDS FOR THREE STATES. "ESTIMATED" is reserved for the media-clock fallback, the only
+    state whose times really are estimated (M3); a true-clock recording whose only concern is
+    rejected fixes is "GPS LOW"; and a recording with no usable fix at all is "NO GPS" (#333: it
+    used to fall through to "GPS LOW", a chip calling the GPS poor on a file that has none).
+
+    One function because two surfaces print it. The chip always did, and the exported report's
+    Timing row and the clipboard summary's `Timing:` line (`export_data._timing_meta`) prefixed
+    EVERY degraded state with "ESTIMATED —", so the report of a true-clock recording called its
+    times estimated while the chip beside the same numbers said GPS LOW. Duck-typed and
+    getattr-guarded like everything export-facing: a stand-in quality object reads as clean."""
+    if quality is None or not getattr(quality, "degraded", False):
+        return ""
+    if getattr(quality, "no_gps", False):
+        return "NO GPS"
+    return "ESTIMATED" if getattr(quality, "media_clock", False) else "GPS LOW"
+
+
 # ============================================================ the LOCATABLE half of the verdict
 # `TimingQuality` above is ONE verdict for a WHOLE recording, and that is the shape of the thing it
 # cannot say. Measured on the owner's own recordings: the D24 0062 trio rejects 482 of 50,492 fixes

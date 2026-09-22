@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, plots_view, sidecar, theme, units
+from . import chapters, data_quality, plots_view, sidecar, theme, units
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
@@ -2026,12 +2026,10 @@ class CentralView(QWidget):
             return
         # THREE words for three states, not two. The no-GPS verdict (karma.mp4: not one fix) used
         # to fall through to "GPS LOW" — a chip saying the GPS was poor on a recording that has
-        # none, opening a DATA TRUST row that says "no GPS fixes survived".
-        if getattr(quality, "no_gps", False):
-            word = "NO GPS"
-        else:
-            word = "ESTIMATED" if quality.media_clock else "GPS LOW"
-        badge.setText(word)
+        # none, opening a DATA TRUST row that says "no GPS fixes survived". The word is shared
+        # with the exported report and clipboard summary (data_quality.timing_word), so a file
+        # leaving the app names the clock the way this chip does.
+        badge.setText(data_quality.timing_word(quality))
         # The hover says where a click goes as well as what the chip means — it is the only place a
         # pointer user learns that the pill is not just a label.
         badge.setToolTip(f"{quality.detail()}\n\nClick to see this in DATA TRUST on the Stats page.")

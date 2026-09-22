@@ -494,9 +494,10 @@ def _timing_meta(session) -> str:
         card out entirely and what puts the amber banner on the map and the Stats page; a document
         that leaves the app stating those times with no such qualifier is the same defect one
         surface further out.
-      * `timing_quality.degraded` — the media-clock fallback and/or a concerning share of rejected
-        GPS fixes. `concerns()` is the shipped sentence list the in-app data-quality banner stacks,
-        joined here rather than re-worded.
+      * `timing_quality.degraded` — the media-clock fallback, a concerning share of rejected GPS
+        fixes, or no GPS at all. `concerns()` is the shipped sentence list the in-app data-quality
+        banner stacks, joined here rather than re-worded, behind the chip's own word for the state
+        (`data_quality.timing_word`).
 
     Neither wrong ⇒ "verified start line · GPS9 true clock", the plain good case. getattr-guarded
     throughout: a Session double without these is reported as the good case, never as a crash in
@@ -508,7 +509,11 @@ def _timing_meta(session) -> str:
     quality = getattr(session, "timing_quality", None)
     concerns = quality.concerns() if quality is not None else []
     if concerns:
-        bits.append("ESTIMATED — " + " ".join(concerns))
+        # Led by the lap panel's own chip word (ESTIMATED / GPS LOW / NO GPS), not by
+        # "ESTIMATED" for all three: that called a true-clock recording's times estimated, and a
+        # recording with no GPS at all "ESTIMATED — No GPS fixes survived", beside a chip saying
+        # NO GPS. The burned overlay stamp already used the chip's words.
+        bits.append(f"{data_quality.timing_word(quality) or 'ESTIMATED'} — " + " ".join(concerns))
     if not bits:
         bits.append("verified start line · GPS9 true clock")
     return " · ".join(bits)

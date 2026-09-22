@@ -367,6 +367,47 @@ def test_report_states_what_the_timing_is_worth():
     print("test_report_states_what_the_timing_is_worth OK")
 
 
+def test_the_exported_timing_names_the_clock_state_in_the_chips_word():
+    """The report's Timing row and the clipboard's `Timing:` line name a degraded clock with the
+    lap panel's own chip word: ESTIMATED, GPS LOW or NO GPS.
+
+    They used to prefix EVERY degraded state with "ESTIMATED —". On a true-clock recording whose
+    only concern is rejected fixes that is the overclaim the chip itself was corrected for (M3: the
+    word "estimated" is reserved for the media-clock fallback), and on a recording with no GPS at
+    all it read "ESTIMATED — No GPS fixes survived", beside a chip saying NO GPS (#333) and a
+    burned-in overlay stamp saying GPS LOW for the other state. One session, three exports, two
+    vocabularies.
+
+    The words are spelled out here, not read from the code under test, so a test comparing a
+    constant with itself cannot pass it. They are the chip's words (`_refresh_quality_badge`,
+    pinned literally by tests/test_quality_chip_trust.py) and the burned stamp's."""
+    cases = (
+        ("media clock", data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK),
+         "ESTIMATED"),
+        ("true clock, 12 % rejected", data_quality.TimingQuality(dropped_fraction=0.12),
+         "GPS LOW"),
+        ("no GPS trace", data_quality.TimingQuality(clock=data_quality.NO_GPS_TRACE), "NO GPS"),
+        ("media clock and 12 % rejected",
+         data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK,
+                                    dropped_fraction=0.12), "ESTIMATED"),
+    )
+    wrong = []
+    for name, quality, word in cases:
+        s = make_stitched_session()
+        s._timing_quality = quality
+        meta = export_data._timing_meta(s)
+        text = export_data.stats_summary_text(s, None)
+        doc = _write_report(s)
+        if f"{word} — " not in meta:
+            wrong.append(f"{name}: the Timing line does not say {word!r}: {meta!r}")
+        if word != "ESTIMATED" and "ESTIMATED" in meta:
+            wrong.append(f"{name}: a {word} clock is called ESTIMATED: {meta!r}")
+        if f"Timing: {meta}" not in text or meta not in doc:
+            wrong.append(f"{name}: the clipboard and the report do not both carry {meta!r}")
+    assert not wrong, "\n".join(wrong)
+    print("test_the_exported_timing_names_the_clock_state_in_the_chips_word OK")
+
+
 def test_clipboard_text_is_plain_and_complete():
     """The "Copy stats summary" payload: every group, every row, the disclosure, no markup."""
     s = make_stitched_session()
@@ -654,6 +695,7 @@ if __name__ == "__main__":
     test_the_clipboard_summary_states_the_timing_too()
     test_pace_group_follows_the_pages_gate_not_the_pace_summarys()
     test_report_states_what_the_timing_is_worth()
+    test_the_exported_timing_names_the_clock_state_in_the_chips_word()
     test_clipboard_text_is_plain_and_complete()
     test_writers_are_atomic_and_leave_no_partial_file()
     test_a_users_own_tmp_file_beside_the_target_survives()
