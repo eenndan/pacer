@@ -785,16 +785,20 @@ def test_delta_to_ideal_tooltips_are_honest_not_best_sector():
 # ============================================================ labelled grip-map control
 def test_grip_map_reachable_via_labelled_combo():
     """The map's rainbow channel is now a LABELLED dropdown (Off · Speed · Δ · Δ rate · Grip ·
-    Elevation) — every channel visible and one click, Grip no longer an undiscoverable blind-cycle
-    step. Selecting the Grip entry sets the grip mode (the same render path the old cycle hit); the
-    cycle API works."""
+    Pedal · Elevation) — every channel visible and one click, Grip no longer an undiscoverable
+    blind-cycle step. Selecting the Grip entry sets the grip mode (the same render path the old
+    cycle hit); the cycle API works. Both ESTIMATED channels say so in the real header (F6)."""
     view, _s, _t0, _t1 = _real_central_view()
     combo = view.map.rainbow_combo
     # Every channel is a labelled, visible entry (not hidden behind a cycle).
     modes = [combo.itemData(i) for i in range(combo.count())]
-    assert modes == ["off", "speed", "delta", "delta_rate", "grip", "elevation"], modes
+    assert modes == ["off", "speed", "delta", "delta_rate", "grip", "brake_throttle",
+                     "elevation"], modes
     grip_idx = modes.index("grip")
     assert "grip" in combo.itemText(grip_idx).lower(), combo.itemText(grip_idx)
+    for est in ("grip", "brake_throttle"):
+        assert combo.itemText(modes.index(est)).endswith(theme.ESTIMATED_MARK), (
+            f"the {est} entry is an estimate and must say so: {combo.itemText(modes.index(est))!r}")
 
     # Selecting Grip drives the map to the grip channel in ONE click. (Clear the current lap first so
     # _apply_rainbow cleanly no-ops here — the grip channel needs a g signal this fixture doesn't
@@ -805,7 +809,9 @@ def test_grip_map_reachable_via_labelled_combo():
     _APP.processEvents()
     assert view.map._rainbow_mode == "grip", "the labelled Grip entry must select the grip channel"
     # And the legacy cycle path is preserved + keeps the combo in sync (the rainbow tests' driver).
-    view.map._cycle_rainbow()  # grip -> elevation
+    view.map._cycle_rainbow()  # grip -> pedal
+    assert view.map._rainbow_mode == "brake_throttle"
+    view.map._cycle_rainbow()  # pedal -> elevation
     assert view.map._rainbow_mode == "elevation"
     view.map._cycle_rainbow()  # elevation -> off (wraps)
     assert view.map._rainbow_mode == "off"
