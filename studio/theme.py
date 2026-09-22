@@ -579,6 +579,21 @@ def estimated_label(title: str) -> str:
     return f"{title}{ESTIMATED_SUFFIX}"
 
 
+# WHAT A GRIP READING CAN BE COMPARED WITH — one sentence, shared verbatim by every surface that
+# shows one: the Corners tab's "Grip (est)" column, the Stats page's CORNERS "Grip %" column (both
+# `driving.corner_grip`, the median of the per-sample value over the corner) and the map's Grip line
+# (`driving.grip_utilization`, that per-sample value, over the SAME session divisor). #346 measured
+# it on four recordings (studio/docs/grip-regrounding-2026-09.md): WITHIN one corner, across laps,
+# the reading tracks the corner's own time, and survives the lap's pace being removed. BETWEEN
+# corners the test has no power with one track's handful of corners, so a low corner is NOT a
+# corner shown to have grip to spare, and a sortable column of corners invites exactly that
+# reading. No figure goes in
+# this sentence: the measured values live in the probe and the doc, where they can be re-derived,
+# and a number typed into shipping copy is right on one recording and quietly wrong on the next.
+GRIP_COMPARE_NOTE = ("Compare it lap to lap within the same corner, not corner to corner: a lower "
+                     "reading does not mean that corner has more grip to spare.")
+
+
 # Δ/speed text formatters: single source for the live #DiffBox and the burned-in export.
 # Composable fragments so the two readouts can't drift.
 

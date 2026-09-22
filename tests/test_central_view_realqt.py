@@ -1109,6 +1109,7 @@ def _run_all():
     test_the_charts_header_never_has_to_choose_between_identity_and_controls()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
+    test_every_grip_surface_says_it_compares_laps_not_corners()
     test_splitter_handles_stay_thin_under_the_theme()
     test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it()
     test_hero8s_refused_imu_is_disclosed_on_the_real_view()
@@ -1433,6 +1434,65 @@ def test_stats_corner_row_click_restores_grid_then_rings_map():
     _APP.processEvents()
     assert view._maximized_panel is None, "row click must restore the grid before ringing"
     print("test_stats_corner_row_click_restores_grid_then_rings_map OK")
+
+
+# W2 (from #346): what the one supported grip comparison is, in the driver's words. Asserted as a
+# phrase on each surface's REAL text rather than through the shared constant alone, so the test
+# cannot pass by comparing a constant with itself.
+_GRIP_SAYS = "lap to lap within the same corner, not corner to corner"
+
+
+def test_every_grip_surface_says_it_compares_laps_not_corners():
+    """W2. #346 measured that a corner's grip reading tracks that corner's own time ACROSS LAPS
+    (pooled over four recordings, and with the lap's pace removed), and that ranking corners
+    AGAINST EACH OTHER by it is unpowered with this few corners — see
+    studio/docs/grip-regrounding-2026-09.md. Nothing beside the number said so, which left a low
+    reading free to be read as "the corner with the most headroom": the one comparison the data
+    does not support.
+
+    FOUR places show it, found by search (every reader of `lap_corner_grip` /
+    `lap_grip_utilization` / `grip_median`, and every doc naming the column): the Corners tab's
+    "Grip (est)" column, the Stats page's CORNERS "Grip %" column, the map's Grip line and the
+    driver's guide. They must say the SAME thing, so the three in-app ones carry one shared
+    sentence and the guide its words. Each surface is read off the real widget, and every one
+    missing the sentence is named before the test fails, not just the first."""
+    view, _s, _t0, _t1 = _real_central_view()
+    try:
+        corners = view.corner_table.table
+        grip_cols = [c for c in range(corners.columnCount())
+                     if corners.horizontalHeaderItem(c).text().startswith("Grip")]
+        assert len(grip_cols) == 1, "the Corners tab must have exactly one Grip column"
+        stats = view.stats_view.corners_table
+        stats_heads = [stats.horizontalHeaderItem(c).text() for c in range(stats.columnCount())]
+        assert "Grip %" in stats_heads, stats_heads
+        guide = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "docs", "FIRST_LAP.md")
+        with open(guide, encoding="utf-8") as f:
+            guide_text = " ".join(f.read().split())   # the guide wraps its lines at 100 cols
+        surfaces = {
+            "Corners tab · Grip (est) header tooltip":
+                corners.horizontalHeaderItem(grip_cols[0]).toolTip(),
+            "Stats ▸ CORNERS table tooltip": stats.toolTip(),
+            "map ▸ line-colour dropdown tooltip": view.map.rainbow_combo.toolTip(),
+            "docs/FIRST_LAP.md": guide_text,
+        }
+        missing = [name for name, text in surfaces.items() if _GRIP_SAYS not in text]
+        assert not missing, (
+            f"these grip surfaces never say what the reading can compare "
+            f"({_GRIP_SAYS!r}): {missing}")
+        # One sentence, not four paraphrases of it: the in-app three carry the shared constant
+        # verbatim, so a later edit to one cannot quietly leave the others saying something else.
+        note = getattr(theme, "GRIP_COMPARE_NOTE", None)
+        assert note and _GRIP_SAYS in note, note
+        drift = [name for name, text in surfaces.items()
+                 if name != "docs/FIRST_LAP.md" and note not in text]
+        assert not drift, f"these surfaces paraphrase the grip sentence instead of sharing it: {drift}"
+        # No figure in the prose: the measured ρ belong to #346's probe and record, where a test
+        # derives them; a literal here would rot the day a recording changed.
+        assert not any(ch.isdigit() for ch in note), note
+    finally:
+        view.dispose()
+    print("test_every_grip_surface_says_it_compares_laps_not_corners OK")
 
 
 def test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it():
