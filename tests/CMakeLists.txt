@@ -1158,7 +1158,11 @@ add_test(NAME test_camera_support
 # the docstring publishes. A fifth, opt-in, loads a real recording named by PACER_IDEAL_TABLE_MP4
 # (comma-separated chapters), asserts the row's `all` cell IS Session.ideal_total() and re-runs
 # the table's own Monte-Carlo over every rung; it is a footage registration, reported Skipped
-# without the footage, which is why the text checks cost nothing.
+# without the footage, which is why the text checks cost nothing. A sixth check CONTROLS that
+# fifth one's stand-in for `CornerModel.segment_bests`' masking rule — the app never composites a
+# subset, so the check has to carry a copy of the rule, and the copy had been left on the pre-#339
+# mask (H9). It drives the real rule on the synthetic drift fixtures and ships wrong shapes it has
+# to classify; it needs no footage, and it is the only one here that imports numpy and pacer.
 add_test(NAME test_ideal_sample_table
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ideal_sample_table.py)
 set_tests_properties(test_ideal_sample_table PROPERTIES
