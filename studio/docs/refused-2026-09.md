@@ -102,8 +102,14 @@ would draw, moved by at most 0.07 s.
 
 **How it is measured**, since #272 did not write it down. 0060 is `GX020060` + `GX030060`; 0062 is
 `GX010062` + `GX020062` + `GX030062`. A recombination draws each of the 25 corner/straight segments
-independently and uniformly from the clean laps whose cell is admitted as a donor
-(`corner_model.MAX_DONOR_SPAN_DEV`). Support is the sum of the per-segment minima and maxima, so its
+independently and uniformly from the clean laps whose cell MAY DONATE, which is two conditions and
+not one: the cell is admitted (`corner_model.MAX_DONOR_SPAN_DEV`) and, since #339, resolved — its
+two boundaries matched on track rather than interpolated — with the model's own two-stage fallback,
+a segment nothing may donate on dropping back to that segment's admitted cells. This paragraph said
+"admitted" alone until H9, while the stand-in that re-measures the record
+(`tests/test_measured_figures.py`) has applied both conditions since #339: the published method was
+describing a rule the check had stopped using. The cells below predate #339 and are not re-measured
+by this correction. Support is the sum of the per-segment minima and maxima, so its
 left end is the ideal. The sd is the square root of the summed per-segment variances, divided by
 the sample sd of the clean laps' times. The percentile comes from the exact distribution of the sum
 on a 1 ms grid. The 20 dots sit at its (i + ½)/20 quantiles. On #272's own tree this reproduces
