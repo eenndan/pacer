@@ -4925,6 +4925,60 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
           f"FEW_LAPS reads {sentence!r}")
 
 
+def test_braking_coasting_and_the_phase_tiles_say_which_laps_they_count():
+    """Lane A. #331 and #339 put the phase split and BRAKING on the matched-only rule, and #339
+    left COASTING counting every lap on purpose. The Stats page's copy said none of it:
+
+      * the phase tiles' hover opened "Every clean lap's Δt-vs-best" — since #331 a lap's triple
+        counts only where it AND the best lap matched the corner;
+      * BRAKING's n dropped the braked laps whose corner was interpolated (MK_18_09_26 C1: n 12,
+        three more clean laps braked there) and its hover still read "over the clean laps";
+      * COASTING shares the STRAIGHTS table's pieces and says so, but keeps the laps STRAIGHTS
+        leaves out — 10.3 % of MK_18_09_26's coasting sits in a piece bounded by an interpolated
+        edge — and its hover never said which way it counts.
+
+    Each sentence is checked against the behaviour it describes on the real Session, so the copy
+    and the rule cannot drift apart again in either direction."""
+    from studio.stats_panel import StatsView
+
+    session = _flippable_drift_session()
+    s = session()
+    ids = s.consistency_lap_ids()
+
+    # COASTING keeps the lap whose C1 exit is interpolated; STRAIGHTS leaves it out.
+    assert s.coast_report().n_laps == len(ids), s.coast_report().n_laps
+    assert any(st.n < len(ids) for st in s.straights_report()), [st.n for st in s.straights_report()]
+    # BRAKING leaves out a braked lap planted as interpolated at that corner.
+    corner_list = s.corners.corner_list()
+    lap, k = next((i, k) for i in ids for k, c in enumerate(corner_list)
+                  if any(bp.cid == c.cid for bp in s.driving.lap_brake_points(i)))
+    cid = corner_list[k].cid
+    before = next(b.n for b in s.brake_report() if b.cid == cid)
+    planted = session(flip={(lap, 2 * k)})
+    after = next((b.n for b in planted.brake_report() if b.cid == cid), 0)
+    assert after == before - 1, (cid, before, after)
+
+    # The three hovers are the page's own, fixed at construction — read off the real StatsView (the
+    # duck-typed page session: the drift fixture carries no pacer lap/sector stand-in for the rest
+    # of the page), against the behaviour measured on the real Session above.
+    view = StatsView(_fake_view_session())
+    try:
+        coast = view.coasting_table.toolTip()
+        assert "interpolated" in coast and "STRAIGHTS" in coast and "keeps every clean lap" in coast, (
+            "COASTING counts the laps STRAIGHTS leaves out and does not say so", coast)
+        braking = view.braking_table.toolTip()
+        assert "matched to your best lap's line on track" in braking, (
+            f"BRAKING's n left out lap {lap + 1}'s C{cid} brake point and its hover does not say "
+            f"why: {braking}")
+        phase = view.t_phase_entry.toolTip()
+        assert not phase.startswith("Every clean lap's"), phase
+        assert "matched on track" in phase, phase
+    finally:
+        view.hide()
+    print(f"ok the Stats copy: COASTING keeps {len(ids)} laps where STRAIGHTS counts fewer, BRAKING "
+          f"C{cid} {before} -> {after} under a plant and says why, the phase tiles name their rule")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
