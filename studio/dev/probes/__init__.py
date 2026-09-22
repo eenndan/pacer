@@ -77,4 +77,12 @@ would have to agree with, reads the measured constant as sprocket pairs. Its ver
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real
+
+`p15_gps_gap_census` loads all four present recordings itself and asks whether any of them has a
+GPS dropout for the map's gap bridge to fill (L2, a gyro-yaw bridge). It wraps the loader's own
+read, quality gate and clean stages to attribute every hole, counts the gaps the map would bridge
+with the app's own `gapfill.find_gaps`, and then PLANTS gaps in memory to score today's bridge
+against the fixes it replaced. Its verdict is `studio/docs/refused-2026-09.md` §13.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p15_gps_gap_census
 """

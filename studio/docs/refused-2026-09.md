@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Twelve features were built far enough to **measure**, and the measurement said not to ship them. The
+Thirteen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1071,6 +1071,106 @@ Three measured reasons:
 
 **What would be new evidence:** a pedal-pressure channel, or a smoothed brake series validated
 sample by sample against one.
+
+---
+
+## 13. A gyro-yaw bridge across GPS dropouts on the map — refused (L2)
+
+**The idea.** Where a lap's GPS drops out, the map bridges the hole with another lap's shape
+(`studio/gapfill.py`), or with a spline when no lap covers that stretch. The export's map inset
+draws a straight chord, because `lap_trace_xy` is not gap-filled. The proposal was to integrate
+the gyro's yaw across the hole instead, only across the hole, never across a lap, and anchored at
+both ends, so the bridge curves the way the kart turned. `gps-accuracy-research.md` T5 had already
+ranked it a map-only visual nicety that cannot change a lap time.
+
+**How it was tested.** `studio/dev/probes/p15_gps_gap_census.py` loads all four present recordings
+through the real `Session.load`, all chapters. Every app-support seam is jailed, and the owner's
+`tracks.json` is copied into the jail. The probe wraps the loader's read, quality-gate and clean
+stages, calling each one through unchanged, so every hole can be traced to where it came from. It
+counts the gaps the map would bridge with `gapfill.find_gaps`, the call behind the lap table's
+dropout flag and the marks band, over every lap, valid or excluded. The footage folders and the
+real app-support directory were size/mtime-snapshotted before and after, and were unchanged.
+
+### There is nothing to bridge
+
+| recording | laps (valid) | raw fixes | raw holes > 0.35 s while moving | fixes the gate rejects, all / while moving | gaps in the kept trace | gaps inside a lap | longest step inside a valid lap |
+|---|---|---|---|---|---|---|---|
+| 0064, Sandown 3h | 70 (62) | 45,027 | 0 | 0 / 0 | 0 | 0 | 0.101 s |
+| 0065, SD 30-08 | 39 (37) | 25,663 | 0 | 561 / 0 | 0 | 0 | 0.101 s |
+| 0068, SD 19-09 | 38 (36) | 23,246 | 0 | 0 / 0 | 0 | 0 | 0.101 s |
+| 0067, MK 18-09 (anticlockwise) | 22 (19) | 26,832 | 0 | 2,799 / 1,260 (6.4 %) | 16 | 0 | 0.101 s |
+
+- **Not one fix is missing inside any lap of any present recording.** Across the 154 valid laps
+  there are 79,480 steps between interior fixes, and none is longer than 0.101 s. None is even
+  one missing fix long (> 0.15 s). The excluded laps have no gap either.
+- **The receiver never stopped reporting.** Every hole comes from the quality gate
+  (`_gate_quality`: no 3D fix, or DOP > 10). Every raw fix inside each of MK's 16 holes was one the
+  gate rejected, and on the three Sandown recordings the gate rejects nothing while the kart is
+  moving.
+- **MK's 16 holes are all before the first lap.** They run from 0.40 s to 33.4 s, about 96 s in
+  total, and all 16 fall in the 194 s of driving before lap 0 starts. No lap overlay draws that
+  stretch. The whole-trace overlay breaks there on purpose (`map_view._trace_runs`), and L2 bridges
+  only inside a lap, so none of these is a gap it could ever be asked to fill.
+
+This is the same answer the D24 recordings gave: `Session.auto_marks` records zero dropout marks
+on both full chains. (#332's "0 gaps in any clean lap" cannot say this by itself: the clean set,
+`consistency_lap_ids`, excludes dropout laps by definition.)
+
+### Even a planted gap is already bridged to within a pen width
+
+No present recording has a gap, so gaps were **planted**. Fixes were deleted in memory from every
+valid lap, every 4 s along it, and `gapfill.reconstruct_lap` was run on what was left with the
+app's own donors (`Session._donors_for`). **A planted gap is not evidence that dropouts happen.**
+It says only how much a better bridge could win if one did. The error is each deleted fix's
+distance from the bridge the app would draw. Each cell is the 90th percentile, over all planted
+holes of that length, of the worst deleted fix per hole, in metres:
+
+| hole | 0064 | 0065 | 0068 | 0067 (MK) | straight chord, all four |
+|---|---|---|---|---|---|
+| 0.5 s | 0.06 | 0.04 | 0.04 | 0.09 | 0.34–0.38 |
+| 1 s | 0.25 | 0.22 | 0.20 | 0.37 | 1.35–1.52 |
+| 2 s | 0.88 | 0.81 | 0.77 | 1.05 | 5.05–5.64 |
+| 3 s | 1.53 | 1.26 | 1.40 | 1.89 | 10.93–11.66 |
+| 5 s | 2.45 | 1.82 | 1.92 | 3.43 | 24.03–25.19 |
+
+That is 723, 410, 398 and 317 holes of each length. The kept trace is already smoothed (a 13-fix
+boxcar), and the holes were cut after smoothing, so their edge fixes were averaged with the fixes
+that are now missing. A real dropout's edges are smoothed without them. That bias is stated here,
+not corrected.
+
+**At the map's own scale.** The whole Sandown circuit spans 196–213 m and MK spans 326 m. Fitted to
+the map panel's 544 px minimum width, that is 0.36–0.39 m per pixel at Sandown and 0.60 at MK
+(0.20–0.21 and 0.33 at 1,000 px). The current lap is drawn with a 3 px pen, 1.1–1.8 m wide at
+that size.
+
+- **Up to 2 s, today's bridge is inside its own line width.** Its 90th percentile is 0.77–1.05 m,
+  about 2 px. At 3 s it is about one pen width, and at 5 s 5–6 px. That is still 7–14 times closer
+  than the straight chord.
+- **The only large misses are hairpins with no donor.** On 5 s holes, 1–3 per recording fall back
+  to the spline because no donor qualifies, and they miss by 19–27 m. All seven are hairpins: the
+  heading turns 174–193°, and the true path is 2.3–3.5 times its chord. The donor filter rejects
+  every donor there, six times in seven on its arc/chord ceiling (`DONOR_ARC_RATIO_HI` = 3.0).
+  This is the one place a gyro bridge would draw visibly better. The cheaper fix, if a real 5 s
+  hole through a hairpin ever appears, is that bound. On MK the fallback also fires on 10 shorter
+  holes (0.5–3 s), nine of them on lap 1, and the worst of those misses by 5.94 m.
+
+### What building it would have cost
+
+- **A new clock crossing.** Gyro content lines up with `media_time`, and GPS with
+  `media_clock.without_gps_lag()`. On these four recordings the two are 0.39–0.50 s apart (the
+  loader's own lag estimates were +0.498, +0.439, +0.393 and +0.433 s). The bridge would need its
+  own `CROSSINGS` entry in `tests/test_media_clock.py` and a test of its own.
+- **A yaw sign, tested in both directions.** Every Sandown recording is clockwise, and a
+  clockwise-only sign bug shipped unnoticed in #334.
+- **Anchoring at both ends,** which is exactly what the borrow's `_similarity_map` already does to
+  a donor shape.
+- **No analysis value moves either way.** The bridge is only drawn (see the `gapfill` module
+  docstring).
+
+**What would be new evidence:** a recording with gaps inside its laps (`p15_gps_gap_census` prints
+them) long enough, about 3 s or more, that today's bridge misses by more than a pen width at the
+map's size. A hole through a hairpin where no donor qualifies would also count. Even then, try
+the donor arc/chord bound before a gyro path.
 
 ---
 

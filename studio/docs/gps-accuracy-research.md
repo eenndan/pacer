@@ -236,7 +236,9 @@ intrinsic GPS quality (DOP) sets it, not our algorithm.
 3. **(Low priority, map-only) IMU-curved dropout bridge.** If/when the core binds CORI or GYRO, draw
    the dropout fill as a heading-integrated curve instead of borrow/straight. Visual nicety only; the
    cross-lap borrow already reconstructs the real corner shape. **Not worth binding the IMU for this
-   alone.**
+   alone.** *Measured and refused in September 2026 (L2), with the gyro already bound: none of the
+   four recordings present then has a single gap inside a lap. See
+   [`refused-2026-09.md`](refused-2026-09.md) §13.*
 4. **Do NOT** pursue: GPS+IMU EKF for timing (no leverage, high cost), map-matching to a centerline
    (destroys the racing-line signal), Doppler-aided smoothing (overfits), spline crossing (<1 ms),
    RTK/PPK (no raw observables).
