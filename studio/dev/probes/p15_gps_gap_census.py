@@ -155,6 +155,7 @@ def census(key: str, s, seen: dict) -> dict:
     in_other = [g for lap, gs in lap_gaps.items() if lap not in valid for g in gs]
     flagged = s.dropout_lap_ids()
     assert flagged == {lap for lap in valid if lap_gaps[lap]}, "lap-table flag disagrees"
+    assert len(seen["clean_naive"]) == len(s.tt), "the kept trace is not _clean's output"
     span = (float(s.tt[-1] - s.tt[0]) if len(s.tt) > 1 else 0.0)
     # Where each whole-trace hole sits against the lap windows: a hole no lap contains is one the
     # per-lap bridge can never be asked to fill (L2 is per lap, never across a lap boundary).
@@ -168,6 +169,12 @@ def census(key: str, s, seen: dict) -> dict:
                       else f"{ta - last:.0f} s after the last lap ends" if ta >= last
                       else "between laps")
         g["kmh"] = (float(s.tv[g["i"]]), float(s.tv[g["j"]]))
+        # Which stage made it: the raw fixes strictly inside the hole, on the naive clock both
+        # sides share (the kept trace IS `_clean`'s output, index for index), and how many of
+        # them the gate rejected. All rejected = the gate's hole; any accepted = `_clean`'s.
+        na, nb = seen["clean_naive"][g["i"]], seen["clean_naive"][g["j"]]
+        inside = (seen["raw_naive"] > na) & (seen["raw_naive"] < nb)
+        g["raw_inside"], g["gate_inside"] = int(inside.sum()), int((inside & ~seen["raw_ok"]).sum())
     return {
         "key": key, "laps": s.lap_count(), "valid": len(valid), "raw": len(seen["raw_naive"]),
         "raw_moving": int(moving.sum()), "raw_dt_med": float(np.median(raw_dt)),
@@ -187,8 +194,8 @@ def plant(s) -> dict:
     from studio import gapfill
 
     med_dt = s._median_sample_dt()
-    out = {d: {"fill_max": [], "fill_rms": [], "chord_max": [], "src": {}, "worst": {}}
-           for d in PLANT_S}
+    out = {d: {"fill_max": [], "fill_rms": [], "chord_max": [], "src": {}, "worst": {},
+               "no_donor": []} for d in PLANT_S}
     for lap in s.valid_lap_ids():
         xs, ys, ts = s._lap_trace_xyt(lap)
         n = len(ts)
@@ -218,6 +225,12 @@ def plant(s) -> dict:
                 kind = fills[0]["source"].split(":")[0]
                 rec["src"][kind] = rec["src"].get(kind, 0) + 1
                 rec["worst"][kind] = max(rec["worst"].get(kind, 0.0), float(err.max()))
+                if kind == "spline-fallback":
+                    # No donor qualified: say what shape the true path had there.
+                    arc = float(np.sum(np.hypot(np.diff(xs[a:b + 1]), np.diff(ys[a:b + 1]))))
+                    hdg = np.unwrap(np.arctan2(np.diff(ys[a:b + 1]), np.diff(xs[a:b + 1])))
+                    rec["no_donor"].append((lap, float(err.max()), arc / fills[0]["chord_m"],
+                                            float(np.degrees(hdg[-1] - hdg[0]))))
     return out
 
 
@@ -226,6 +239,8 @@ def _pct(a, q) -> float:
 
 
 def report(c: dict, p: dict) -> None:
+    from studio import gapfill
+
     g_in, g_out, g_frac = c["gate"]
     c_in, c_out = c["clean"]
     print(f"\n=== {c['key']}: {c['laps']} laps ({c['valid']} valid), kept trace {c['span']:.0f} s")
@@ -242,7 +257,8 @@ def report(c: dict, p: dict) -> None:
           f"lap-table dropout flags {c['flagged'] or 'none'}")
     for g in c["trace_gaps"]:
         print(f"    trace gap {g['dt']:6.2f} s (~{g['n_missing']} fixes), {g['where']}, mouths "
-              f"{g['kmh'][0]:.0f} -> {g['kmh'][1]:.0f} km/h")
+              f"{g['kmh'][0]:.0f} -> {g['kmh'][1]:.0f} km/h; raw fixes inside {g['raw_inside']}, "
+              f"gate-rejected {g['gate_inside']}")
     for g in c["gaps_valid"] + c["gaps_other"]:
         print(f"    LAP gap: {g['dt']:.2f} s, ~{g['n_missing']} fixes missing")
     d = c["dts"]
@@ -264,6 +280,10 @@ def report(c: dict, p: dict) -> None:
               f"{_pct(fm, 99):5.2f} {max(fm) if fm else float('nan'):5.2f}      "
               f"{_pct(fr, 50):5.2f} {_pct(fr, 90):5.2f}        {_pct(cm, 50):5.2f} "
               f"{_pct(cm, 90):6.2f}   {src}")
+        for lap, worst, ratio, turn in r["no_donor"]:
+            print(f"        no donor: lap {lap}, misses by {worst:.2f} m; true path {ratio:.2f} x "
+                  f"its chord (donor band {gapfill.DONOR_ARC_RATIO_LO}-"
+                  f"{gapfill.DONOR_ARC_RATIO_HI}), heading turns {turn:+.0f} deg")
 
 
 def main() -> None:
