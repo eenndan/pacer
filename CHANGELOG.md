@@ -13,6 +13,16 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Line: Pedal (est) — the brake/throttle band, painted on the racing line.** The speed chart's
+  Brake/Throttle band now has a map view: red where you brake, green where you are accelerating,
+  the ramp's middle colour for a lift or a steady speed. It is the band's own values, not a second
+  estimate, so the chart and the map cannot disagree about where a brake zone is — on the three
+  present recordings every valid lap paints exactly the band's array (62/62, 36/36, 19/19). It
+  answers something the Speed line does not: only 25-31 % of the Speed line's three reddest
+  buckets are braking (they are the apexes you have already slowed for), and the Speed colour at a
+  point carries 10-13 % of the information in the Pedal colour there. Labelled `(est)` in the
+  dropdown and on both ends of its legend; Pacer has no pedal sensors.
+
 - **Corner windows are placed after the receiver's own drift is taken out.** A consumer GNSS
   receiver's position error is nearly constant over one 90-second lap, so each lap's whole trace sits
   displaced by one vector — measured on the owner's D24 0060 recording at a median 1.34 m and up to

@@ -26,7 +26,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from studio import map_render  # noqa: E402
+from studio import map_render, theme  # noqa: E402
 from studio.map_render import (  # noqa: E402
     GRIP_UTIL_DISPLAY_MAX,
     bucket_polylines,
@@ -429,6 +429,67 @@ def test_rainbow_channel_degenerate_lap_is_none():
         assert rainbow_channel(mode, t, xs, ys, speed, cum,
                                np.array([0.0]), np.linspace(0, 1, 400)) is None, mode
     print("test_rainbow_channel_degenerate_lap_is_none OK")
+
+
+def test_rainbow_channel_brake_throttle_is_the_bands_own_fixed_symmetric_scale():
+    """F6. The Pedal channel paints the D3 band's intensity AS GIVEN, on the band's own fixed
+    [-1, 1]: full brake in the bottom (red) bucket, full throttle in the top (green) one, a lift or
+    a cruise (0) on the boundary between the two middle buckets — the ramp's neutral anchor. It is
+    NOT negated, and NOT stretched to the lap's own range: a lap that only ever reaches half
+    throttle paints half-way up the ramp, where a min/max scale would have painted it full green."""
+    t, xs, ys, speed, cum = _lap_arrays(n=7)
+    pedal = np.array([-1.0, -1.0, 0.0, 0.0, 0.5, 0.5, 1.0])
+    seg, lo, hi = rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None, pedal=pedal)
+    # segment means -1, -0.5, 0, 0.25, 0.5, 0.75 on [-1, 1] x 16 buckets
+    assert seg.tolist() == [0, 4, 8, 10, 12, 14], seg.tolist()
+    half = np.array([0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
+    seg_half, _lo, _hi = rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None,
+                                         pedal=half)
+    assert seg_half.max() == 12, f"half throttle was stretched to the lap's own max: {seg_half}"
+    assert (lo, hi) == (map_render.PEDAL_LO_LABEL, map_render.PEDAL_HI_LABEL)
+    assert lo.startswith("brake") and hi.startswith("throttle"), (lo, hi)
+    for end in (lo, hi):
+        assert end.endswith(theme.ESTIMATED_MARK), f"a legend end is not marked estimated: {end!r}"
+    print("test_rainbow_channel_brake_throttle_is_the_bands_own_fixed_symmetric_scale OK")
+
+
+def test_rainbow_channel_brake_throttle_never_reads_the_speed():
+    """One quantity, one source: the channel's only input is the band's array. The same pedal array
+    over two unrelated speed traces paints identically, and a pedal array that CONTRADICTS the speed
+    (braking while the speed rises) is painted as given — a re-derivation from the speed, i.e. a
+    second detector, would paint this rising ramp all throttle."""
+    t, xs, ys, speed, cum = _lap_arrays(n=40)
+    pedal = np.sin(np.linspace(0.0, 4 * math.pi, 40))
+    a = rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None, pedal=pedal)[0]
+    b = rainbow_channel("brake_throttle", t, xs, ys, speed[::-1] * 3.0, cum, None, None,
+                        pedal=pedal)[0]
+    assert a.tolist() == b.tolist(), "the speed trace changed the painted pedal channel"
+    assert (a < 7).any(), "braking in the band must paint brake buckets whatever the speed does"
+    print("test_rainbow_channel_brake_throttle_never_reads_the_speed OK")
+
+
+def test_rainbow_channel_brake_throttle_degrades_like_grip():
+    """No g signal (None) or a band SHORTER than the map points → None (nothing painted — a padded
+    tail would paint a pedal state nobody measured); a longer band is cut to the points; an all-zero
+    band is the one-label hint, still marked estimated; a GPS dropout is not painted as a chord."""
+    t, xs, ys, speed, cum = _lap_arrays(n=10)
+    assert rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None) is None
+    assert rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None,
+                           pedal=np.zeros(9)) is None
+    assert rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None,
+                           pedal=np.full(10, np.nan)) is None
+    longer = rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None,
+                             pedal=np.linspace(-1.0, 1.0, 12))
+    assert longer is not None and len(longer[0]) == 9
+    seg, lo, hi = rainbow_channel("brake_throttle", t, xs, ys, speed, cum, None, None,
+                                  pedal=np.zeros(10))
+    assert seg is None and hi == "" and theme.ESTIMATED_MARK in lo and "no gradient" in lo, lo
+    t2 = t.copy()
+    t2[5:] += 5.0
+    seg, _lo, _hi = rainbow_channel("brake_throttle", t2, xs, ys, speed, cum, None, None,
+                                    pedal=np.linspace(-1.0, 1.0, 10))
+    assert seg[4] == -1 and (np.delete(seg, 4) >= 0).all(), seg
+    print("test_rainbow_channel_brake_throttle_degrades_like_grip OK")
 
 
 def test_grip_display_max_is_the_module_constant():

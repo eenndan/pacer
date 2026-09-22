@@ -233,6 +233,9 @@ add_test(NAME test_rainbow_map
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rainbow_map.py)
 set_tests_properties(test_rainbow_map PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# F6: on a real recording, every valid lap's Line: Pedal is exactly the speed chart's
+# brake/throttle band array, painted.
+add_footage_test(test_rainbow_map test_pedal_mode_paints_the_chart_band)
 # map_render (E2): the pure-numpy track-map math extracted from map_view — bucketize /
 # bucket_polylines / resample_grid_to_points + the rainbow_channel per-channel value/bucket math
 # (speed/Δ/grip, the Δ+grip negation, the grip fixed scale, the GPS-dropout NaN-mask, the None
