@@ -19,8 +19,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import _footage  # noqa: E402
+
 from studio import driving as D  # noqa: E402
-from studio._signal import MAX_LONG_G, G, speed_long_g  # noqa: E402
+from studio._signal import MAX_LONG_G, G, boxcar, speed_long_g  # noqa: E402
 
 
 # --------------------------------------------------------------- synthetic g traces
@@ -451,6 +453,96 @@ def test_pedal_band_paints_one_braking_zone_as_one_piece():
     assert [round(e.onset_time, 1) for e in events] == [9.6, 25.0], events
     assert not (brake & ~inside).any(), np.flatnonzero(brake & ~inside)
     print(f"ok pedal band: one zone one piece, tails / spike / merged coast unpainted ({events})")
+
+
+# A braking zone defined WITHOUT the band or the detector, for the real-footage check below: a run
+# where the SMOOTHED speed decelerates past a physical brake application for long enough to lose
+# speed. 0.5 s takes the 10 Hz derivative's ~0.1 g of noise down to ~0.03 g, so the reference does
+# not flicker the way the old band did; it has no hysteresis and no merge, so it favours neither the
+# old band nor the new one. The D1 PR swept 0.3/0.5/0.7 s x 0.12/0.16/0.20 g: every setting ranks
+# the two the same way.
+_REF_SMOOTH_S, _REF_DECEL_G, _REF_MIN_S, _REF_MIN_DV_KMH = 0.5, 0.16, 0.3, 2.0
+
+
+def _reference_braking_zones(elapsed, speed_kmh):
+    """(mask, [(i0, i1)], smoothed long-g) of the reference braking zones on one lap."""
+    elapsed = np.asarray(elapsed, float)
+    speed_kmh = np.asarray(speed_kmh, float)
+    g_ref = speed_long_g(boxcar(speed_kmh, D._win(elapsed, _REF_SMOOTH_S)), elapsed)
+    zones = [(a, b) for a, b in _runs(g_ref < -_REF_DECEL_G)
+             if elapsed[b] - elapsed[a] >= _REF_MIN_S
+             and np.ptp(speed_kmh[a:b + 1]) >= _REF_MIN_DV_KMH]
+    mask = np.zeros(len(elapsed), bool)
+    for a, b in zones:
+        mask[a:b + 1] = True
+    return mask, zones, g_ref
+
+
+def test_pedal_band_holds_each_braking_zone_whole():
+    """D1 on a REAL recording (`PACER_GOLDEN_MP4`, chapters expanded): the band the chart draws and
+    the map's Line: Pedal paints (`driving.lap_brake_throttle`) holds each braking zone whole,
+    judged against braking zones defined without it (`_reference_braking_zones`), on every valid
+    lap. The recording's folder is snapshotted (size + mtime) and must be unchanged afterwards.
+
+    Each bound sits between what the old per-sample band and this one measured on the four
+    recordings on this machine (Sandown 3h 0064, SD 0068, SD 0065, MK 0067 — old | new):
+      * zones painted as 2+ pieces     36.5-50.0 %  |  5.8-12.9 %    -> under 20 %
+      * zone samples painted (recall)  83.6-86.2 %  | 91.9-94.6 %    -> at least 89 %
+      * brake painted while the smoothed speed RISES  0.23-0.46 | 0.00-0.02 s a lap -> under 0.1 s
+    and two hold by construction: every painted brake sample lies inside a detected brake event
+    (the glyphs'), and the brake half is binary."""
+    from studio import chapters
+    from studio.session import Session
+
+    path = _footage.recording()
+    files = chapters.discover_siblings(path)
+    folder = os.path.dirname(os.path.abspath(files[0]))
+
+    def state():
+        return {f: (os.stat(os.path.join(folder, f)).st_size,
+                    os.stat(os.path.join(folder, f)).st_mtime_ns)
+                for f in sorted(os.listdir(folder)) if not f.startswith(".")}
+
+    before = state()
+    session = Session.load(files)
+    assert state() == before, f"a file in {folder} changed during the load"
+    ids = session.valid_lap_ids()
+    assert ids, "no valid laps"
+    pieces, tp, fn, rising_s, outside = [], 0.0, 0.0, 0.0, []
+    for lid in ids:
+        dists, elapsed, band = session.driving.lap_brake_throttle(lid)
+        assert band is not None, f"lap {lid}: no band"
+        ch = session.lap_channels(lid)
+        n = len(band)
+        assert np.allclose(ch["dist_m"][:n], dists), f"lap {lid}: the band is not on the lap's grid"
+        brake = band < 0
+        assert not brake.any() or set(np.unique(band[brake]).tolist()) == {-1.0}, (
+            f"lap {lid}: brake levels {np.unique(band[brake])}")
+        inside = np.zeros(n, bool)
+        for e in session.driving.lap_brake_events(lid):
+            inside |= (elapsed >= e.onset_time - 1e-9) & (elapsed <= e.onset_time + e.duration + 1e-9)
+        outside += [(lid, round(float(d), 1)) for d in dists[brake & ~inside]]
+        zmask, zones, g_ref = _reference_braking_zones(elapsed, ch["speed_kmh"][:n])
+        runs = _runs(brake)
+        pieces += [sum(1 for a, b in runs if b >= z0 and a <= z1) for z0, z1 in zones]
+        dt = np.gradient(elapsed)
+        tp += float(dt[brake & zmask].sum())
+        fn += float(dt[~brake & zmask].sum())
+        rising_s += float(dt[brake & (g_ref > 0)].sum())
+    assert state() == before, f"a file in {folder} changed during the check"
+    pieces = np.asarray(pieces)
+    frag = float((pieces >= 2).mean())
+    recall = tp / (tp + fn)
+    rising = rising_s / len(ids)
+    summary = (f"{len(pieces)} zones over {len(ids)} laps of {os.path.basename(files[0])} "
+               f"(+{len(files) - 1} chapters): {100 * frag:.1f} % in 2+ pieces, recall "
+               f"{100 * recall:.1f} %, {rising:.3f} s a lap painted while accelerating, "
+               f"{len(outside)} brake samples outside every detected event")
+    assert frag < 0.20, f"the band breaks braking zones into pieces: {summary}"
+    assert recall >= 0.89, f"the band leaves braking unpainted: {summary}"
+    assert rising < 0.10, f"the band paints brake while the kart accelerates: {summary}"
+    assert not outside, f"brake painted where no glyph's event is: {summary}; (lap, m) {outside[:8]}"
+    print(f"test_pedal_band_holds_each_braking_zone_whole: {summary}")
 
 
 def test_corner_grip_math():
@@ -1343,8 +1435,16 @@ def test_corner_table_grip_dash_without_g():
     print("ok corner table: Grip cell dashes when no g signal")
 
 
+# Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name without
+# its recording, and left out of the ordinary run below.
+FOOTAGE_CHECKS = (test_pedal_band_holds_each_braking_zone_whole,)
+
+
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and v not in FOOTAGE_CHECKS]
     for t in tests:
         t()
         print(f"ok  {t.__name__}")
