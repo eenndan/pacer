@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Ten features were built far enough to **measure**, and the measurement said not to ship them. The
+Eleven features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -914,6 +914,119 @@ C5 ρ +0.23, global p 0.88.
 **What would be new evidence:** a session of 40+ laps where a corner-specific trend of ≥0.2 s
 survives the pre-specified global test AND repeats in the odd/even split of the same session — the
 two things the planted controls say such a session would show.
+
+---
+
+## 11. An engine-RPM readout, from the gearing or from the audio track — refused (M3)
+
+**The idea.** Two routes to engine RPM for a single-speed kart. (1) Arithmetic: trap speed ÷ tyre
+circumference × rear/front sprocket teeth. The session record already stores the sprockets, so add
+tyre circumference and kart class to it and show RPM at trap speed, never for a shifter. (2) The
+audio: read RPM off the engine's tone. The research that proposed (2) said it "would not bet" on
+it, expecting wind noise and the camera's automatic gain control to drown the engine.
+
+**What shipped.** Only the arithmetic: `studio/gearing.py`, with hand-worked tests
+(`tests/test_gearing.py`). Its class gate is structural. A shifter, or a class nobody stated, gets
+no drivetrain object, so there is nothing to ask for a number. The p14 probe is its one caller. No
+record field, no form row and no readout shipped.
+
+### The gearing readout: nobody could see it
+
+On 2026-09-22 the owner has **no `session_records.json` at all**. That is PR #343's finding, and
+this probe re-read the directory. So a gearing RPM would show on **0 of his 4 present recordings**.
+A filled-in record would not be enough either: it holds sprockets, but no tyre circumference and no
+class. The two new fields would have no writer except a form row that serves no one yet. All four
+recordings are at Daytona circuits (Sandown Park, Milton Keynes). The audio below also finds the
+drivetrain constant unchanged, to within half a sprocket tooth, across three Sandown days months
+apart. That fits circuit-set gearing better than gearing the driver chooses, so the sprocket fields
+may stay blank even when records exist.
+
+### The audio: the research was wrong about the wind, and it is still not an RPM
+
+`studio/dev/probes/p14_rpm_audio.py` tested a pitch estimator on a **known signal first**. The
+estimator is subharmonic summation on a whitened 0.4 s spectrum, one estimate per GPS fix. The
+known signal is a harmonic tone following a kart-like speed trace, with three harmonic profiles.
+It sits in wind noise whose level grows with the square of speed and gusts by ±3 dB. The mix then
+goes through an automatic gain control, a limiter and ffmpeg's AAC codec. The estimator abstains
+below the 99th percentile of what wind alone scores. That threshold was fixed on the synthetic
+signal and never moved on footage.
+
+| planted fundamental | +10 dB | 0 dB | −10 dB | −15 dB | −20 dB |
+|---|---|---|---|---|---|
+| 22–50 Hz | 100 % / 100 % | 98 / 99 | 53 / 89 | 18 / 71 | 6 / 59 |
+| 45–100 Hz | 100 / 99 | 95 / 99 | 77 / 99 | 38 / 92 | 13 / 81 |
+| 90–200 Hz | 90 / 96 | 89 / 97 | 76 / 96 | 60 / 94 | 23 / 90 |
+| 135–300 Hz | 89 / 94 | 86 / 92 | 77 / 91 | 52 / 86 | 31 / 87 |
+
+Each cell reads *frames the estimator answers / of those, within 5 % of the planted
+fundamental*. The median error of an answered frame is 0.11–0.33 %. SNR is engine power over wind
+power in 20–1200 Hz, before the gain control. **The gain control and the codec cost nothing:** at
+90–200 Hz, answered / within 5 % goes from 72 / 97 % with the resampler alone to 86 / 98 % with
+the gain control and the codec, at −10 dB.
+
+**Then the owner's four recordings**, all chapters, footage read only through an ffmpeg pipe. Above
+60 % of top speed a centrifugal clutch is locked, so the engine's tone **must** be one constant
+times road speed. Measured:
+
+| | 0064 Sandown 3h | 0065 SD 30-08 | 0068 SD 19-09 | 0067 MK 18-09 |
+|---|---|---|---|---|
+| clutch-locked frames answered | 75 % | 71 % | 71 % | 68 % |
+| … of those within 3 % / 5 % of ONE constant | **83 / 91 %** | **87 / 92 %** | **83 / 90 %** | 71 / 81 % |
+| … an octave off | 4 % | 4 % | 4 % | 3 % |
+| top 20 % of speed, where wind is worst: answered / within 3 % | 90 / 89 % | 87 / 93 % | 84 / 92 % | 76 / 81 % |
+| the constant (Hz per km/h); per-lap spread (IQR / median) | 2.2105; 0.53 % (61 laps) | 2.2188; 0.16 % (37) | 2.2251; 0.21 % (36) | 2.1419; 0.30 % (19) |
+| tone at each lap's top speed (median) | 183.3 Hz @ 84.1 km/h | 187.5 @ 85.9 | 188.0 @ 85.9 | 185.0 @ 87.9 |
+| 100 ms audio level, p5 / p50 / p95 (dBFS) | −16.4 / −11.8 / −10.1 | −14.9 / −11.7 / −9.6 | −13.3 / −11.5 / −9.6 | −22.3 / −11.7 / −9.4 |
+
+- **Wind does not dominate.** The tone is answered most often, and most accurately, at the top of
+  the straight, where the wind is loudest. The footage's median salience per speed band is 25–36.
+  The synthetic signal scores 23–35 at −10 dB and 17–25 at −15 dB, so real footage behaves like
+  the −10 dB row, where the estimator still holds.
+- **Gain control is present, and harmless.** The median level moves by ≤ 1.1 dB between 20–40 %
+  and 80–100 % of top speed on every recording. Wind pressure grows with the square of speed, so
+  over that threefold range wind alone would read ~19 dB louder on an uncontrolled microphone.
+  Pitch does not care about level; the synthetic chain above says so.
+- **It is the engine, not the chain or a tyre.** With the kart stopped, a tone is still there in
+  56–90 % of frames (median 41–72 Hz). Below 60 % of top speed the tone runs **2–12 % above** the
+  locked constant on all four recordings (20–40 %: ×1.018–1.119; 40–60 %: ×1.035–1.053). That is
+  a centrifugal clutch below lock-up. A wheel or chain tone can do neither.
+
+**So why is it refused?** Three measured reasons.
+
+1. **Above lock-up it is the speed trace again.** 83–87 % of frames at Sandown (71 % at Milton
+   Keynes) sit within 3 % of speed × one constant, and that constant moves by 0.16–0.53 % from lap
+   to lap. An RPM trace drawn from it would repeat the speed trace the app already draws, scaled.
+2. **The constant is not an RPM, and the audio cannot say which RPM.** At each recording's median
+   top-of-lap speed, the tone reads **11,150–11,470 rpm** if it is the crank's own rate (a
+   two-stroke fires once a turn). It reads **5,580–5,740 rpm** if it is twice that rate (a
+   four-stroke single's strong second order). Read as a four-stroke's firing rate it would be over
+   22,000 rpm, which no kart engine turns. Ordinary sprockets on a nominal 0.88 m tyre fit **both**
+   readings on every recording (via `studio.gearing`, within 0.75 %). On 0068, 11 pairs fit the
+   first reading (9/63 through 14/99) and 7 fit the second (15/53 through 20/71). On the other
+   three, 6–8 pairs fit the first and 4–6 the second. The engine type would have to be typed in.
+3. **The one independent check cannot run.** The gearing arithmetic is the only thing an audio RPM
+   could be checked against, and it needs the record that does not exist: **0 of 4** recordings.
+
+**Two things it did find, not built.** (a) Clutch slip below ~60 % of top speed is the one quantity
+the audio measures that speed cannot. On a fleet kart the driver cannot change the clutch, so it
+would need its own package and its own reason. (b) The drivetrain constant is a fingerprint of the
+drivetrain. Three Sandown days differ by only 0.28–0.66 % (each constant's standard error is
+≤ 0.05 %), less than half of one rear tooth (1.3 % on a 76). Milton Keynes is 3.1–3.7 % lower,
+about two and a half to three rear teeth (or a different tyre). That could one day answer the session record's "was the gearing the same?"
+without anyone typing it. Nothing asks that question today.
+
+**A clock note for whoever owns the overlay lag (X3).** The audio and the GPS speed field line up
+best when the speed is taken **+0.12 to +0.32 s** late. That comes from two independent measures
+on each recording: the most frames within 2 %, and the peak of the cross-correlation of their
+changes. At that lag, the constant under braking and under acceleration differ by 0.27–0.59 %. At
+the installed GPS lag (+0.39 to +0.50 s, measured from gyro against the GPS *positions*) they differ
+by **3.5–4.2 %** on all four recordings. Either the receiver's speed field has less latency than its
+positions, or the audio sits behind the picture. This probe cannot tell which. Only the picture can.
+
+**What would be new evidence:** session records on the present recordings that carry the
+sprockets, a measured tyre circumference and the engine type. p14's gearing check would then print
+the two RPMs side by side. If they agree within ~2 % at trap speed on two recordings, an audio RPM
+has its independent check and both fields earn their form rows.
 
 ---
 

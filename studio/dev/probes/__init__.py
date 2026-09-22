@@ -66,4 +66,15 @@ and still cannot rank corners against each other).
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
+
+`p14_rpm_audio` asks whether the audio track carries the engine (M3). It checks its pitch estimator
+against a KNOWN signal first: an engine-like tone in speed-dependent wind, through an automatic gain
+control and the AAC codec, with ffmpeg used only through pipes. It then runs the frozen estimator on
+the four present recordings, against the one law a single-speed kart must obey above clutch
+lock-up: the tone is proportional to road speed. `studio.gearing`, the arithmetic an RPM number
+would have to agree with, reads the measured constant as sprocket pairs. Its verdict is
+`refused-2026-09.md` §11. The tone is real and wind does not drown it, but it is not an RPM.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real
 """
