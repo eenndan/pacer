@@ -16,14 +16,14 @@ object it returns. There is no function here that takes a class and a speed and 
 
 WHAT THIS IS NOT. A slipping clutch is not a locked ratio: below lock-up the engine turns faster
 than this says. `studio/dev/probes/p14_rpm_audio.py` measured that on all four of the owner's present
-recordings (the engine's tone sits 3.5-12 % above the locked constant below 60 % of top speed), so
+recordings (the engine's tone sits 2-12 % above the locked constant below 60 % of top speed), so
 this is a number for the END of a straight (trap speed), which is where the backlog asked for it.
 Tyre growth at speed and rear-tyre slip move it by a few per cent as well.
 
 NOT WIRED TO ANY SURFACE, DELIBERATELY. The inputs live in the session record, and on 2026-09-22 the
 owner has no `session_records.json` at all, so a gearing RPM would show on 0 of his 4 present
 recordings. The record fields and the readout were refused on that measurement
-(`studio/docs/refused-2026-09.md`, "Engine RPM"); what is kept is the arithmetic and its class
+(`studio/docs/refused-2026-09.md` §11); what is kept is the arithmetic and its class
 gate, which the p14 probe uses to read the audio's measured tone-per-speed constant as gearing.
 
 Pure: no Qt, no pacer core, no I/O.

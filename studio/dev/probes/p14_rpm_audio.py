@@ -25,7 +25,7 @@ automatic gain control. This probe asks the question in the only order that can 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real \\
         [0064 0065 0068 0067] [--dump DIR [--reuse]]
 
-The verdict is `studio/docs/refused-2026-09.md` ("Engine RPM from the audio track").
+The verdict is `studio/docs/refused-2026-09.md` §11.
 
 SAFETY, enforced rather than promised:
   * EVERY FOOTAGE FOLDER IS READ-ONLY. A recording is only ever an ffmpeg INPUT (`-i <path>`), and
