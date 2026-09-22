@@ -385,7 +385,7 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   a lap to 0.00–0.02 s. The brake points, coaching and the brake-habit table do not move: the
   detector is unchanged, and its events are byte-identical on all 154 laps. The brake half stays
   on/off on purpose: inside a braking zone the per-sample noise is as large as the braking's own
-  variation. The map's **Line: Pedal (est)** paints the same array and changes with it.
+  variation. The map's Pedal line (#347) paints this same array, so it changes with it.
 
 - **The corner match is described the way it now works, on the Stats page and in the panel that
   explains a corner Best.** Both said an edge counts when it is "matched to your best lap's line"
