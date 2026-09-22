@@ -51,4 +51,19 @@ change it would print is bigger than the spread inside one session. Its verdict 
 `studio/docs/refused-2026-09.md` §8.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_heat_to_heat
+
+`p11_hesitation`, `p12_median_polish` and `p13_grip_regrounding` are the M5 set: the three LATER
+analytics ideas, each with a null it has to beat and a planted effect that says what its silence is
+worth. They share `_m5_cache` (one `Session.load` per recording, everything the three read packed
+into one pickle) and `_m5_stats` (the permutation machinery, the max-statistic correction and the
+selection control that a max-statistic correction does NOT cover). Verdicts: `refused-2026-09.md`
+§9 (hesitation — the gap's median IS the instrument's floor) and §10 (the learning/evolution
+decomposition — the corner-specific half never beats a shuffled lap order), and
+`grip-regrounding-2026-09.md` (the one that passed: Grip % is not pace-blind within a corner,
+and still cannot rank corners against each other).
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
 """

@@ -10,7 +10,9 @@ PACER-FREE (numpy only). Labels three things on a lap:
     rejected real coasts. Measured on a COAST_SMOOTH_S window, which is NOT the brake detector's
     window: a brake onset is a step and must not be smeared, a coast is sustained membership of a
     band narrower than the raw signal's own noise. Same g, two instruments — see COAST_SMOOTH_S.
-  * PER-CORNER GRIP UTILIZATION — median(|g|)/envelope_max inside each corner window.
+  * PER-CORNER GRIP UTILIZATION — median(|g|) inside each corner window over the SESSION grip
+    envelope (grip_envelope, the p98 of |g| across the whole recording — not the lap's own peak,
+    so a slow lap reads genuinely lower and the values compare across laps).
 
 Brake and coast run on the LONGITUDINAL g derived from the GPS SPEED TRACE (d|v|/dt), not the
 IMU longitudinal channel: on real recordings the IMU forward axis is vibration-dominated
@@ -524,7 +526,16 @@ def corner_grip(dist, long_g, lat_g, windows, envelope: float, *,
 
     `long_g`/`lat_g` are the SAME validated axes the envelope is built from (clean speed-derived
     longitudinal + IMU lateral; see DrivingChannels._lap_g_arrays / _grip_envelope), so numerator
-    and divisor share one friction circle and the value is unbiased."""
+    and divisor share one friction circle and the value is unbiased.
+
+    WHAT THE NUMBER IS GOOD FOR, measured (studio/docs/grip-regrounding-2026-09.md, M5): WITHIN one
+    corner, across the laps of one session, it tracks that corner's own time — pooled Spearman
+    -0.43 to -0.71 on four recordings, still -0.25 to -0.60 with the lap's own pace removed, and it
+    keeps most of that with the apex-speed column beside it held. BETWEEN corners it says nothing
+    that was demonstrable: against each corner's median time lost the rank correlation runs -0.07 to
+    -0.61 at p 0.17-0.91, and with 7-12 corners that test needs |rho| > 0.75 to reach 5 %, so a
+    corner reading 70 % is NOT thereby a corner with 30 % to give. The roadmap's "grip headroom per
+    corner" stays gated on that."""
     dist = np.asarray(dist, float)
     lg = np.asarray(long_g, float)
     la = np.asarray(lat_g, float)
