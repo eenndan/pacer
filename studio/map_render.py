@@ -355,8 +355,10 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
         # glyph (a GPS-dropout lap, a caveated trust term): on the one channel where the low end is
         # the driver doing it RIGHT — at the limit, using the grip he has — it read as a warning
         # about his best cornering. "committed" says the same thing in the coach's voice, keeps the
-        # endpoint labelled, and leaves ⚠ meaning exactly one thing app-wide.
-        return seg_buckets, "committed", "unused (est.)"
+        # endpoint labelled, and leaves ⚠ meaning exactly one thing app-wide. The mark is the
+        # shared `estimated_label` one, as on the Pedal legend beside it: it read "(est.)", the
+        # fourth spelling theme.ESTIMATED_MARK exists to rule out.
+        return seg_buckets, "committed", estimated_label("unused")
     if mode == "brake_throttle":
         return _pedal_channel(times, len(xs), pedal)
     if mode == "elevation":
