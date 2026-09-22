@@ -4855,6 +4855,76 @@ def test_coaching_the_brake_points_and_the_line_sigma_count_only_matched_cells()
           f"the row, and C{target}'s {n_before} brake points go with its window")
 
 
+def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
+    """Lane A, between #339 and the copy it met. Since #339 a coaching row's `evidence.n_laps` is
+    the laps whose time through THAT corner counts — matched on track at its entry and exit, on
+    the lap and on the best lap — not the session's clean laps. The copy written before it still
+    called that number "your clean laps":
+
+      * the "Done it?" hover said "3 of your 16 clean laps" on MK_18_09_26's C2, under a headline
+        reading "median of 19 clean laps" — the driver has 19; 3 were interpolated at C2. 7 of the
+        11 rows shown there carry a count under 19;
+      * the FEW_LAPS abstain said "only 2 clean laps through this corner". MIN_CORNER_LAPS equals
+        coaching.MIN_LAPS, so since #339 that abstain fires ONLY because corners went unmatched —
+        the sentence is false every time it is shown.
+
+    Driven on the REAL panel and dialog over the real Session: the drift fixture's own interpolated
+    C1 exit (lap 1) is the MK shape in miniature."""
+    from studio import coaching, coaching_panel
+
+    session = _flippable_drift_session()
+    s = session()
+    total = len(s.consistency_lap_ids())
+    opps = s.coaching_opportunities()
+    short = {r.cid: r.evidence.n_laps for r in opps.rows if 0 < r.evidence.n_laps < total}
+    full = {r.cid: r.evidence.n_laps for r in opps.rows if r.evidence.n_laps == total}
+    assert short, ("the fixture no longer leaves a lap out of a coaching row",
+                   {r.cid: r.evidence.n_laps for r in opps.rows}, total)
+
+    panel = coaching_panel.OpportunitiesPanel(s)
+    panel.resize(1400, 900)
+    panel.show()
+    _APP.processEvents()
+    panel.refresh()
+    _APP.processEvents()
+    dialog = coaching_panel.OpportunitiesDialog(opps, brake_points={}, session=s)
+    try:
+        for where, table, col in (("panel", panel.table, coaching_panel._PANEL_COL_REACH),
+                                  ("dialog", dialog.table, coaching_panel._COL_REACH)):
+            tips = {int(table.item(r, 0).text()[1:]): table.item(r, col).toolTip()
+                    for r in range(table.rowCount())}
+            for cid, n in short.items():
+                tip = tips[cid]
+                assert f"of your {n} clean laps" not in tip, (
+                    f"{where}: C{cid}'s hover calls the {n} laps matched on track 'your clean laps' "
+                    f"— the session has {total}: {tip!r}")
+                assert f"{n} of your {total} clean laps" in tip, (where, cid, tip)
+            for cid, n in full.items():
+                if cid in tips:
+                    assert f"of your {n} clean laps" in tips[cid], (where, cid, tips[cid])
+    finally:
+        panel.close()
+        dialog.close()
+
+    # FEW_LAPS: C2's entry planted as interpolated on every lap but the best and one other, so two
+    # cells count and the corner abstains for want of laps it could MATCH, not laps it drove. That
+    # is the ONLY way it fires while a summary needs as many clean laps as a corner does — the
+    # premise the new sentence and its comment rest on, pinned here.
+    assert coaching.MIN_CORNER_LAPS <= coaching.MIN_LAPS, (coaching.MIN_CORNER_LAPS,
+                                                          coaching.MIN_LAPS)
+    best = s.best_lap_id()
+    keep = {best, next(i for i in s.consistency_lap_ids() if i != best)}
+    few = session(flip={(i, 2) for i in s.consistency_lap_ids() if i not in keep})
+    row = next(r for r in few.coaching_opportunities().rows if r.cid == 2)
+    assert row.evidence.abstain == coaching.ABSTAIN_FEW_LAPS and row.evidence.n_laps == 2, row.evidence
+    sentence = coaching.abstain_sentence(row)
+    assert "only 2 clean laps through this corner" not in sentence, (
+        f"C2 was driven on all {total} clean laps and matched on track on 2: {sentence!r}")
+    assert "matched on track" in sentence, sentence
+    print(f"ok coaching counts: {short} of {total} clean laps say so on the panel and the dialog; "
+          f"FEW_LAPS reads {sentence!r}")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
