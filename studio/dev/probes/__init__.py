@@ -66,4 +66,12 @@ and still cannot rank corners against each other).
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
+
+`p15_gps_gap_census` loads all four present recordings itself and asks whether any of them has a
+GPS dropout for the map's gap bridge to fill (L2, a gyro-yaw bridge). It wraps the loader's own
+read, quality gate and clean stages to attribute every hole, counts the gaps the map would bridge
+with the app's own `gapfill.find_gaps`, and then PLANTS gaps in memory to score today's bridge
+against the fixes it replaced. Its verdict is `studio/docs/refused-2026-09.md` §12.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p15_gps_gap_census
 """
