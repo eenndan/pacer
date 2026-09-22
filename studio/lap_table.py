@@ -73,9 +73,13 @@ BEST_SPLIT_TIP = "★ Session best — no lap crossed this sector quicker."
 BEST_CORNER_TIP = ("★ Session best — no lap matched on track at this corner's entry and exit took it "
                    "quicker.")
 # A corner edge this lap did NOT match on track (CornerModel.lap_edge_resolved): it is interpolated
-# between neighbouring matched points. On the D24 0060 pair that put a corner's TIME a median 0.22 s
-# (up to 0.96 s) off an independent line-crossing time, against 0.004 s matched, and the SPEED read
-# at the edge a median 1.1-1.6 km/h (up to 11.5 km/h) off, against 0.015 km/h. Such a cell is shown
+# between neighbouring matched points. On the D24 0060 pair, before #335 changed corner matching,
+# that put a corner's TIME a median 0.22 s (up to 0.96 s against C4's line crossing) off an
+# independent line-crossing time, against 0.004 s matched, and the SPEED read at the edge a median
+# 1.1-1.6 km/h (up to 11.5 km/h) off, against 0.015 km/h. The Stats grid's tooltip quotes 0.89 s:
+# the same 236 cells against CornerMatrix's own gate (stats.py has both measurements). Both are
+# stale since #335, which left 34 of the 456 cells interpolated, and D24 is no longer available to
+# re-measure them (T16). Such a cell is shown
 # in the PROVISIONAL tier — the treatment the Stats page's CORNERS BY LAP grid gives the same cell —
 # and is never starred, at the granularity the value is read at: Time, Δbest, Apex, Δapex and Grip
 # are measured over the window and need both edges; Entry and Exit are read at one edge each.

@@ -165,7 +165,8 @@ _THEO_HEADER_TIP = (
     "A sum of per-segment minima, so it falls faster than the best lap does as a session gets "
     "longer: 0.15–0.38 s per doubling of lap count on the owner's recordings, with no plateau. "
     "Two rows are comparable on this number only if their Laps are comparable — D24 chapter 1 "
-    "(21 laps) and D24 chapters 1–3 (65 laps) are 0.69 s apart on the same driving.")
+    "(21 laps) and D24 chapters 1–3 (65 laps) were 0.69 s apart on the same driving. Both figures "
+    "were measured before a September 2026 change to corner matching and not re-measured since.")
 _COND_HEADER_TIP = (
     "Conditions — what you recorded about the day, in File ▸ Session record….\n"
     "Pacer never looks the weather up: nothing leaves this Mac. A dry-day best and a wet-day best "

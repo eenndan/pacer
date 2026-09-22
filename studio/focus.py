@@ -20,6 +20,12 @@ every verdict here is gated and a blocked verdict carries **no number at all** (
 is None whenever ``kind`` is ``OUTCOME_NO_VERDICT`` — the refusal is enforced in the model, not in
 the copy, so no surface can print a delta the evidence does not support).
 
+⚠ STALE — NOT RE-MEASURABLE (T16). The two tables below were measured on D24 before #335 changed
+corner matching. #339 re-ran their footage check after #335 and it no longer matched the app; its
+record does not say which cells moved. D24 is no longer available, so neither table can be
+re-measured. Every figure below, and every quote of one elsewhere in the tree, is the record of
+that measurement, not what the app computes today.
+
 MEASURED, on the two real D24 recordings — the same driver at the same track on CONSECUTIVE DAYS
 (0060: 2026-05-23, 38 laps; 0062: 2026-05-24, 65 laps), which is the input this feature takes.
 Promote 0060's top three ranked corners and measure them again on 0062 over the SAME windows.
