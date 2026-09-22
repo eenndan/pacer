@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Ten features were built far enough to **measure**, and the measurement said not to ship them. The
+Eleven features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -914,6 +914,50 @@ C5 ρ +0.23, global p 0.88.
 **What would be new evidence:** a session of 40+ laps where a corner-specific trend of ≥0.2 s
 survives the pre-specified global test AND repeats in the odd/even split of the same session — the
 two things the planted controls say such a session would show.
+
+---
+
+## 11. The Brake/Throttle band: a graded brake half, or one held over each detected brake event — refused (D1)
+
+**The ideas.** #347 painted the speed chart's Brake/Throttle band onto the map and found two things
+wrong with it: each braking zone came out in pieces, and the brake half was on/off only. It
+suggested holding the band at full over each detected brake event. D1 fixed the pieces a different
+way: the band now paints the brake detector's own Schmitt fragments that last `MIN_BRAKE_S`, full
+from their first sample past −θ_b to their last. The two alternatives below stay refused.
+
+**How they were judged.** Against braking zones defined without the band or the detector: runs where
+the speed, smoothed over 0.5 s, decelerates past 0.16 g for at least 0.3 s and 2 km/h. At 0.5 s the
+10 Hz derivative's ~0.1 g of noise is down to ~0.03 g, and the reference has no hysteresis and no
+merge, so it favours none of the candidates. It covered the four present recordings, 154 valid laps.
+Across a sweep of 0.3/0.5/0.7 s × 0.12/0.16/0.20 g, the shipped band beat the old one on recall,
+precision and fragmentation at every setting on every recording. Holding the band over each event had
+the lowest precision everywhere.
+
+| 0.5 s / 0.16 g reference | Sandown 3h · 0064 | SD_19_09 · 0068 | SD_30_08 · 0065 | MK_18_09 · 0067 |
+|---|---|---|---|---|
+| zones painted in 2+ pieces: old band → shipped | 46.6 → 10.5 % | 36.5 → 7.3 % | 46.7 → 5.8 % | 50.0 → 12.9 % |
+| precision: old / shipped / **held over each event** / **whole fragment** | 74.4 / 82.4 / **45.7** / **73.5** % | 81.5 / 86.5 / **56.2** / **78.5** % | 83.4 / 88.0 / **61.4** / **79.7** % | 84.0 / 88.9 / **62.1** / **82.4** % |
+| recall: old / shipped / held over each event | 83.6 / 91.9 / 98.7 % | 86.0 / 93.1 / 99.1 % | 86.2 / 94.6 / 99.7 % | 86.1 / 93.5 / 99.0 % |
+| brake painted while the kart accelerates, s a lap: old / shipped / held | 0.39 / 0.02 / **4.31** | 0.23 / 0.00 / **1.82** | 0.24 / 0.00 / **1.34** | 0.46 / 0.01 / **3.60** |
+
+Three measured reasons:
+
+1. **Holding the band over each event paints the maneuver merge's coasts.** `merge_brake_maneuvers`
+   fuses fragments across up to 25 m of coast so that a corner gets ONE brake point. The event's
+   span is the extent of that point, not of the braking. Painting it buys 5-7 points of recall and
+   paints brake for 1.3–4.3 s a lap while the kart is accelerating. Precision falls to 45.7–62.1 %.
+2. **Painting the whole fragment, lead-in and release included, costs precision too.** Those tails
+   decelerate at 0.056–0.16 g, which is `COAST_DRAG_MIN`..θ_b: the coast channel's own band.
+   Precision falls below the OLD band's on all four recordings (73.5–82.4 % against 74.4–84.0 %).
+3. **A graded brake level would be half noise.** Inside the reference zones, the series the band
+   reads carries per-sample noise (raw minus 0.5 s-smoothed) of sd 0.136 / 0.113 / 0.109 / 0.129 g.
+   The braking's own variation there is sd 0.132 / 0.149 / 0.143 / 0.122 g. The design already
+   normalises braking at θ_b ("g == −θ_b reads full brake"), so any genuine brake saturates, and
+   deceleration is not pedal pressure either. Grading it off a smoothed series would be a new
+   instrument with a new normalisation, not a fix.
+
+**What would be new evidence:** a pedal-pressure channel, or a smoothed brake series validated
+sample by sample against one.
 
 ---
 
