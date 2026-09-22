@@ -43,6 +43,15 @@ WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
      the number the app prints. When it fails it prints the re-measured row in the table's own
      syntax.
 
+AND A CONTROL ON CHECK 5'S STAND-IN, which does run in CI. Re-measuring the table means re-running
+the ideal lap over random subsets, which the app never computes — so check 5 carries a STAND-IN for
+`CornerModel.segment_bests`' masking rule, and a stand-in that has drifted from the rule re-measures
+nothing. It had drifted: #339 gave the model a second mask (a cell may donate only where it is
+admitted AND resolved), fixed the twin stand-in in `test_measured_figures._recombination`, and this
+file kept masking on `admitted` alone (H9). `test_the_stand_in_masks_as_the_app_does` drives the
+REAL rule on `_synthetic`'s drift fixtures and ships deliberately-wrong shapes it has to classify.
+It is the only check in this file that imports numpy and pacer.
+
 ‡ ROWS. A row not re-measured against the current app carries a ‡ and the docstring must say
 what it means. #319 marked the Sandown and SD_30_08 rows because their footage was believed to be
 elsewhere; it was on the same machine, and T13 re-measured all three. The SD_30_08 row turned out
@@ -540,14 +549,42 @@ _DRAWS = 20_000
 _SEED = 20260917
 
 
-def _subset_means(times, admitted, lap_times, n: int) -> tuple[float, float]:
+def _ideal(times, may_donate, admitted, axis: int = 0):
+    """THE APP'S OWN MASKING RULE, over one lap set (`axis=0`) or a batch of them (`axis=1`).
+
+    C5 (#339): a cell may donate to the composite minimum only where it is BOTH admitted — its
+    projected span is comparable to its expected one, MAX_DONOR_SPAN_DEV — and RESOLVED, its two
+    boundaries matched on track rather than interpolated. `CornerModel.segment_bests` carries both
+    masks and takes the minimum over their conjunction, and it falls back in TWO stages: a segment
+    no lap may donate drops to that segment's ADMITTED cells, and only a segment no lap is
+    admitted on drops to every lap. This stand-in re-runs the composite over subsets the app never
+    computes, so it has to mask exactly as the model does, fallbacks included; the same shape as
+    `test_measured_figures._recombination`, which #339 fixed for the #272 record.
+
+    Masking on `admitted` alone — what this file did until H9 — is not a weaker version of the
+    rule, it is the pre-#339 rule. Over the full set the caller's own guard would catch it (on the
+    D24 0060 pair it reads 65.637 s where the app reads 65.864). Over a SUBSET nothing catches it:
+    on SD_30_08 the two rules pick different donors in 12 of 20,000 five-lap draws, by up to
+    0.223 s on one draw, which moves that rung's published cell by 0.00002 s — inside the 0.005 s
+    tolerance below, so the row is reported current while being re-measured by a rule the app
+    dropped. `test_the_stand_in_masks_as_the_app_does` is the control that fails when it does."""
+    import numpy as np
+
+    empty = ~may_donate.any(axis=axis)
+    may = np.where(np.expand_dims(empty, axis), admitted, may_donate)
+    m = np.where(may, times, np.inf).min(axis=axis)
+    return np.where(np.isinf(m), times.min(axis=axis), m).sum(axis=-1)
+
+
+def _subset_means(times, may_donate, admitted, lap_times, n: int) -> tuple[float, float]:
     """The table's stated method at one rung: the mean IDEAL and the mean BEST LAP over `_DRAWS`
     random `n`-lap subsets of the clean laps, the partition and every cell's admission held (the
     admission is per cell — a lap's own projected span against its own expected span — so holding
-    the partition holds it). The one subset-dependent rule, a segment no subset lap is admitted
-    on falling back to the whole column, is `CornerModel.segment_bests`' own; the caller proves
-    this reproduces the app over the full set before it varies anything. Seeded per rung, so a
-    cell does not depend on which other rungs were drawn first."""
+    the partition holds it). The two subset-dependent rules, a segment no subset lap may donate on
+    falling back to its admitted cells and then to the whole column, are `CornerModel.segment_bests`'
+    own and live in `_ideal`; the caller proves this reproduces the app over the full set before it
+    varies anything. Seeded per rung, so a cell does not depend on which other rungs were drawn
+    first."""
     import numpy as np
 
     rng = np.random.default_rng((_SEED, n))
@@ -557,19 +594,135 @@ def _subset_means(times, admitted, lap_times, n: int) -> tuple[float, float]:
     while left:
         k = min(2_000, left)
         idx = np.argsort(rng.random((k, laps)), axis=1)[:, :n]
-        t, a = times[idx], admitted[idx]
-        m = np.where(a, t, np.inf).min(axis=1)
-        ideal_sum += float(np.where(np.isinf(m), t.min(axis=1), m).sum(axis=1).sum())
+        ideal_sum += float(_ideal(times[idx], may_donate[idx], admitted[idx], axis=1).sum())
         best_sum += float(lap_times[idx].min(axis=1).sum())
         left -= k
     return ideal_sum / _DRAWS, best_sum / _DRAWS
 
 
-def _full_set_ideal(times, admitted) -> float:
+def _full_set_ideal(times, may_donate, admitted) -> float:
+    """The composite over every lap — what `Session.ideal_total()` prints, by the app's rule."""
+    return float(_ideal(times, may_donate, admitted))
+
+
+def _pre_339_ideal(times, admitted):
+    """THE DEFECT, KEPT AS A SHAPE. `admitted` alone, the rule `_full_set_ideal` and
+    `_subset_means` used until H9. Never called by the check — only by the control below, which
+    has to be able to tell it apart from the app's rule or it is not controlling anything."""
     import numpy as np
 
     m = np.where(admitted, times, np.inf).min(axis=0)
     return float(np.where(np.isinf(m), times.min(axis=0), m).sum())
+
+
+# Each shape is (times, admitted, resolved, the composite worked out by hand). Between them they
+# reach all four branches of `CornerModel.segment_bests`' rule, including both fallback stages.
+_MASK_SHAPES = {
+    "an unresolved cell is the quickest": (
+        [[1.0, 5.0], [2.0, 4.0]], [[1, 1], [1, 1]], [[0, 1], [1, 1]], 2.0 + 4.0),
+    "an unresolved cell wins one segment and an unadmitted cell another": (
+        [[1.0, 5.0, 9.0], [2.0, 4.0, 8.0], [3.0, 6.0, 7.0]],
+        [[1, 1, 1], [1, 1, 1], [1, 1, 0]], [[0, 1, 1], [1, 1, 1], [1, 1, 1]], 2.0 + 4.0 + 8.0),
+    "an unadmitted cell is the quickest": (
+        [[1.0, 5.0], [2.0, 4.0]], [[0, 1], [1, 1]], [[1, 1], [1, 1]], 2.0 + 4.0),
+    "a segment nothing may donate falls back to its ADMITTED cells, not to every lap": (
+        [[1.0, 5.0], [2.0, 4.0]], [[0, 1], [1, 1]], [[0, 1], [0, 1]], 2.0 + 4.0),
+    "a segment nothing is admitted on falls back to every lap": (
+        [[1.0, 5.0], [2.0, 4.0]], [[0, 1], [0, 1]], [[0, 1], [1, 1]], 1.0 + 4.0),
+    "every cell resolved is the plain minimum": (
+        [[1.0, 5.0], [2.0, 4.0]], [[1, 1], [1, 1]], [[1, 1], [1, 1]], 1.0 + 4.0),
+}
+
+# …and these are the shapes above that the pre-#339 rule gets WRONG. Pinned in both directions: a
+# control that stops distinguishing the two rules passes for every shape at once, which is the
+# failure mode a stand-in is most prone to (tests/test_temp_isolation.py's lesson).
+_CAUGHT_BY_THE_CONTROL = {
+    "an unresolved cell is the quickest",
+    "an unresolved cell wins one segment and an unadmitted cell another",
+}
+
+
+def test_the_stand_in_masks_as_the_app_does():
+    """THE CONTROL ON THE CHECK ABOVE, and it runs in CI without a recording.
+
+    `test_the_table_still_matches_the_app` re-measures a published table by re-running the ideal
+    lap over random subsets, which the app never computes — so it carries a STAND-IN for
+    `CornerModel.segment_bests`' masking rule, and a stand-in that has drifted from the rule
+    re-measures nothing. It had drifted: #339 gave the model a second mask (a cell may donate only
+    where it is admitted AND resolved) and fixed the twin stand-in in
+    `test_measured_figures._recombination`; this file's kept masking on `admitted` alone. Its own
+    full-set guard would have caught that on a recording where an unresolved cell wins outright —
+    the D24 0060 pair, 65.637 s against the app's 65.864 — but the per-rung cells, which is what
+    the table publishes, had nothing behind them at all. On SD_30_08, the one recording of the five
+    still on this machine, the two rules pick different donors in 12 of 20,000 five-lap draws (up
+    to 0.223 s on a single draw) and the rung cell moves 0.00002 s — well inside the 0.005 s
+    tolerance, so the check reported the row current while measuring it by a rule the app dropped.
+
+    Two halves. The first drives the REAL rule: on `_synthetic`'s drift fixtures the stand-in must
+    equal `CornerModel.segment_bests`' own `bests`, and the fixture must be one where that means
+    something — drift_noise's quickest C1→C2 sits on an unmatched boundary and is refused, worth
+    0.155 s, so a stand-in masking on `admitted` alone is 0.155 s light. The second ships
+    deliberately-wrong shapes the stand-in has to classify, reaching the two fallback stages the
+    fixtures do not, and pins exactly which of them the pre-#339 rule gets wrong."""
+    import numpy as np
+
+    sys.path.insert(0, _REPO)
+    sys.path.insert(0, os.path.join(_REPO, "bindings", "pacer"))
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import _synthetic
+
+    lines = []
+    exercised = 0
+    for label in ("drift_noise", "drift_median", "drift_band"):
+        s = getattr(_synthetic, f"{label}_session")()
+        sb = s.corners.segment_bests()
+        assert sb is not None, f"{label} has no corner partition to composite on"
+        times = np.asarray(sb.times, float)
+        admitted = np.asarray(sb.admitted, bool)
+        may_donate = admitted & np.asarray(sb.resolved, bool)
+        app = float(np.sum(sb.bests))
+        got = _full_set_ideal(times, may_donate, admitted)
+        assert abs(got - app) < 1e-9, (
+            f"{label}: the stand-in composites {got:.6f} s where CornerModel.segment_bests — the "
+            f"rule it stands in for — composites {app:.6f} s. The stand-in has to BE the app "
+            f"before the check varies anything, or every published cell it re-measures is a "
+            f"measurement of a copy of the rule.")
+        # The SUBSET path too, drawn at the full lap count so its answer is the same one: a fix
+        # applied to `_full_set_ideal` alone would leave every published rung cell still wrong.
+        lap_times = np.array([s.lap_time(i) for i in sb.lap_ids], float)
+        mean_ideal, _best = _subset_means(times, may_donate, admitted, lap_times, times.shape[0])
+        assert abs(mean_ideal - app) < 1e-9, (
+            f"{label}: the subset path composites {mean_ideal:.6f} s over the whole lap set where "
+            f"the model composites {app:.6f} — the rung cells do not use the app's rule")
+        drift = app - _pre_339_ideal(times, admitted)
+        exercised += drift > 1e-3
+        lines.append(f"  {label}: {app:.6f} s, {drift:+.6f} s against the pre-#339 rule")
+    assert exercised >= 2, (
+        "no drift fixture still carries a cell that is admitted, unresolved and quickest, so this "
+        "half of the control cannot tell the two rules apart:\n" + "\n".join(lines))
+
+    caught = set()
+    for label, (t, a, r, want) in _MASK_SHAPES.items():
+        times = np.asarray(t, float)
+        admitted = np.asarray(a, bool)
+        may_donate = admitted & np.asarray(r, bool)
+        got = _full_set_ideal(times, may_donate, admitted)
+        assert abs(got - want) < 1e-9, (
+            f"the stand-in composites {got} where {label!r} composites {want} by the model's rule")
+        # …and through the batched path the rung cells run on, which has its own fallback code.
+        batch = _ideal(np.stack([times, times]), np.stack([may_donate, may_donate]),
+                       np.stack([admitted, admitted]), axis=1)
+        assert [float(v) for v in batch] == [want, want], (
+            f"{label!r}: the batched path gives {list(batch)}, the single one {want}")
+        if abs(_pre_339_ideal(times, admitted) - want) > 1e-9:
+            caught.add(label)
+    assert caught == _CAUGHT_BY_THE_CONTROL, (
+        f"the shapes the pre-#339 rule gets wrong are {sorted(caught)}, not "
+        f"{sorted(_CAUGHT_BY_THE_CONTROL)} — a control that no longer separates the two rules "
+        f"passes for every shape at once")
+    print(f"test_the_stand_in_masks_as_the_app_does OK ({len(_MASK_SHAPES)} shapes, "
+          f"{len(caught)} of them lost on the pre-#339 rule; real rule on 3 fixtures)\n"
+          + "\n".join(lines))
 
 
 def test_the_table_still_matches_the_app():
@@ -624,18 +777,23 @@ def test_the_table_still_matches_the_app():
     # loader's own lines), and taking the first would report one recording's row as the other's
     # stale figures. The row whose `all` cell is nearest is the recording's own.
     row = min(rows, key=lambda r: abs(r.all_s - got))
-    times, admitted = np.asarray(sb.times, float), np.asarray(sb.admitted, bool)
+    times = np.asarray(sb.times, float)
+    # BOTH of the model's masks, and both are needed: `admitted` is the span test alone, and it is
+    # what a segment nothing may donate on falls back to (`_ideal`). C5 takes the minimum over the
+    # conjunction. Masking on `admitted` alone here measured the pre-#339 rule (H9).
+    admitted = np.asarray(sb.admitted, bool)
+    may_donate = admitted & np.asarray(sb.resolved, bool)
     lap_times = np.array([s.lap_time(i) for i in sb.lap_ids], float)
     # The stand-in has to BE the app before anything is varied, or every cell below measures a
     # copy of the rule rather than the rule.
-    assert abs(_full_set_ideal(times, admitted) - got) < 1e-9, (
+    assert abs(_full_set_ideal(times, may_donate, admitted) - got) < 1e-9, (
         "the subset minimum no longer reproduces Session.ideal_total() over every lap — "
         "CornerModel.segment_bests changed its rule and this check has to follow it")
 
-    means = {n: _subset_means(times, admitted, lap_times, n) for n in _RUNGS if n < laps}
+    means = {n: _subset_means(times, may_donate, admitted, lap_times, n) for n in _RUNGS if n < laps}
     for n in (8, 15, 30, 50):              # the shape sentence's intermediate rungs
         if n < laps and n not in means:
-            means[n] = _subset_means(times, admitted, lap_times, n)
+            means[n] = _subset_means(times, may_donate, admitted, lap_times, n)
     means[laps] = (got, float(lap_times.min()))
     cells = [means[n][0] if n < laps else None for n in _RUNGS]
     rate = (means[5][0] - got) / math.log2(laps / 5)
