@@ -277,6 +277,38 @@ def test_the_product_name_follows_its_three_form_convention():
           f"lowercase literals in {sorted(lower)})")
 
 
+def _prose(text):
+    """`text` without its code: fenced blocks, inline code spans, <code>/<pre> and URLs. What is
+    left is what a reader reads as words. Identifiers keep their own spelling (`pacer`, the
+    bindings package; `~/Library/Application Support/pacer`), so they are not the product's name."""
+    text = re.sub(r"```.*?```", "", text, flags=re.S)
+    text = re.sub(r"`[^`\n]*`", "", text)
+    text = re.sub(r"<(code|pre)\b[^>]*>.*?</\1>", "", text, flags=re.S)
+    return re.sub(r"https?://\S+", "", text)
+
+
+def test_the_published_prose_never_spells_the_product_lowercase():
+    """U5's fourth form, outside the app. The convention test above checks the README and docs/
+    only for a mis-spelt FORMAL name. It checks the lowercase product name ("pacer keeps its own
+    marks") only in studio/'s string literals, so a lowercase name in the README's prose passed.
+    The README is the first page of the repository, and it carried exactly one.
+
+    Scope: the README and every Markdown/HTML page under docs/, with code stripped. CHANGELOG is
+    history and stays exempt, as above."""
+    pages = ["README.md"]
+    for dirpath, _dirs, files in os.walk(_repo("docs")):
+        pages += [os.path.relpath(os.path.join(dirpath, fn), _REPO) for fn in files
+                  if fn.endswith((".md", ".html"))]
+    bad = []
+    for rel in sorted(pages):
+        text = _prose(_read(rel))
+        for m in _LOWERCASE_NAME.finditer(text):
+            bad.append(f"{rel}: …{text[max(0, m.start() - 40):m.end() + 25]!r}")
+    assert not bad, (f"the product is spelled lowercase in published prose — a sentence says "
+                     f"{_SHORT!r}: {bad}")
+    print(f"test_the_published_prose_never_spells_the_product_lowercase OK ({len(pages)} pages)")
+
+
 # ------------------------------------------------------------------------------------- runner
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
