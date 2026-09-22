@@ -606,6 +606,9 @@ CROSSINGS = {
         (_S, "a chapter offset is a footage stamp, not an event in the picture"),
     ("studio/dev/probes/p6_corner_match_cause.py", "_seam_laps", "to_telemetry"):
         (_S, "the call on that map; it only names which lap spans a seam"),
+    ("studio/dev/probes/p14_rpm_audio.py", "extract", "without_gps_lag"):
+        (_S, "the speed's own stamps: the probe MEASURES the audio's lag against them"),
+    ("studio/dev/probes/p14_rpm_audio.py", "extract", "to_media"): (_S, "the call on that map"),
 }
 # Callees whose NAME fixes the map, checked against the declaration so the table cannot drift
 # from the code it describes.
