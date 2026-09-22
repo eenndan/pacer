@@ -4,8 +4,8 @@ What lives here (and ONLY here): the array math the rainbow line and the buckete
 rendering need — value→bucket quantization (`bucketize`), per-bucket draw-array grouping
 (`bucket_polylines`), grid→points Δ resampling (`resample_grid_to_points`), the local gain/loss
 rate (`delta_rate`), and the per-channel rainbow computation (`rainbow_channel`: the channel→value
-mapping, the Δ/Δ-rate/grip NEGATION, the fixed grip scale, the Δ-rate SYMMETRIC scale, and the
-GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy arrays and returns
+mapping, the Δ/Δ-rate/grip NEGATION, the fixed grip scale, the Δ-rate and brake/throttle SYMMETRIC
+scales, and the GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy arrays and returns
 plain numpy arrays / scalars, and no function here touches Qt or pacer.
 
 The MODULE, however, is not Qt-free at import: `from .theme import MAP_RAINBOW_N` takes one int
@@ -25,7 +25,7 @@ import numpy as np
 
 from . import units
 from .gapfill import GAP_TIME_S
-from .theme import MAP_RAINBOW_N
+from .theme import MAP_RAINBOW_N, estimated_label
 
 # D5 grip utilization clips to [0, GRIP_UTIL_DISPLAY_MAX] for bucketing so the colour scale is the
 # physical 0..limit range, not stretched to a lap's own max (a low-load lap then reads honestly low).
@@ -113,6 +113,31 @@ RATE_FLAT_HINT_VALUE = f"under {2 * RATE_FLAT_EPS_SS:.2f} s/s"
 # min/max normalised per lap), and that is exactly what these two labels now claim. Elevation
 # analytics stay out of scope; this is what the existing control says about itself (MAP-09).
 ELEVATION_LO_LABEL = "lowest"
+
+# ---- BRAKE / THROTTLE channel (the chart's D3 band, painted on the line) ----
+# NOT A DETECTOR. The value painted is `DrivingChannels.lap_brake_throttle`'s intensity, the very
+# array the speed chart's Brake/Throttle band fills from (`lap_brake_throttle_plot` returns it
+# unchanged in time mode and only re-projects its x in distance mode). Nothing here reads a speed,
+# a g or a threshold, so the map and the chart cannot disagree about where a brake zone is: there
+# is one computation and two drawings of it. Measured on the three present recordings, the band's
+# array and the one this channel paints are `np.array_equal` on every valid lap (62/62, 36/36,
+# 19/19), and the footage check `footage.test_pedal_mode_paints_the_chart_band` re-asserts it.
+#
+# The band is already bounded to [-1, +1] (full brake at the session's own brake threshold, full
+# throttle at driving.THROTTLE_ENV_G), so the scale is FIXED at those bounds rather than this lap's
+# min/max — a lap that never reaches full throttle must not be stretched until it looks like it
+# did. It is the app's second DIVERGING channel after Δ rate and takes the same symmetric
+# treatment: zero lands on the boundary between the two middle buckets, where `rainbow_colors`
+# puts its middle anchor, so a lift or a cruise paints the ramp's own neutral. The two ends are
+# `behind_colour()` and `ahead_colour()`, which are exactly the chart band's brake and throttle
+# fills (`plots_view._draw_brake_throttle`), in either palette — one quantity, one source, one
+# colour for each half.
+PEDAL_LO, PEDAL_HI = -1.0, 1.0
+# Both ends carry the estimate mark: the channel is the GPS speed derivative, not a pedal sensor,
+# and either end may be the one a reader looks at (the reasoning `_delta_rate_channel` gives for
+# putting the unit on both of its ends).
+PEDAL_LO_LABEL = estimated_label("brake")
+PEDAL_HI_LABEL = estimated_label("throttle")
 
 
 def _flat_hint(channel: str, value: str) -> str:
@@ -257,8 +282,26 @@ def _delta_rate_channel(times, d_pts):
     return seg_buckets, f"losing {_fmt_rate(scale)}", f"gaining {_fmt_rate(scale)}"
 
 
+def _pedal_channel(times, n_points, pedal):
+    """The BRAKE / THROTTLE channel: per-segment buckets + legend for the D3 band's intensity.
+
+    `pedal` is `DrivingChannels.lap_brake_throttle(lap)[2]` as fetched — never recomputed here (see
+    PEDAL_LO). Aligned to the map points the way the grip channel is: the lap's arrays can differ by
+    a sample at the end, so a longer array is cut to the points and a SHORTER one is refused rather
+    than padded, because a padded tail would paint a pedal state nobody measured."""
+    if pedal is None or len(pedal) < n_points:
+        return None
+    vals = np.asarray(pedal[:n_points], float)
+    finite = np.isfinite(vals)
+    if not finite.any():
+        return None
+    if not np.any(vals[finite] != 0.0):
+        return None, _flat_hint(estimated_label("brake / throttle"), "neutral"), ""
+    return _seg_buckets(times, vals, lo=PEDAL_LO, hi=PEDAL_HI), PEDAL_LO_LABEL, PEDAL_HI_LABEL
+
+
 def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
-                    speed_unit=None, elevation=None):
+                    speed_unit=None, elevation=None, pedal=None):
     """Compute the per-segment bucket ids + legend texts for one rainbow channel. Pure numpy.
 
     Inputs are the lap's already-fetched per-sample arrays (the map fetches them from Session):
@@ -266,7 +309,9 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
         km/h / gap-aware odometer), all index-aligned;
       * `grip_util` — the per-sample grip utilization (lap_grip_channel), or None (no g signal);
       * `delta_grid` — the lap's Δ-vs-best curve ON THE 400-POINT GRID (delta()'s y-series), or
-        None (no best lap for Δ).
+        None (no best lap for Δ);
+      * `pedal` — the D3 brake/throttle intensity in [-1, 1] (lap_brake_throttle), or None (no g
+        signal). Painted as fetched: see `_pedal_channel`.
 
     Returns `(seg_buckets, lo_text, hi_text)` where seg_buckets has len(xs)-1 entries (bucket per
     segment, -1 = skip), or None when the channel can't be computed (degenerate lap, missing g for
@@ -275,7 +320,8 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     (`_flat_hint`) — and the widget then shows that one label with no colour ramp.
     The Δ, Δ-RATE and grip channels are NEGATED so AHEAD / GAINING /
     UNUSED grip land in the HIGH (green) buckets; grip uses a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale
-    and Δ-rate a SYMMETRIC one about zero (see `_delta_rate_channel`).
+    and Δ-rate a SYMMETRIC one about zero (see `_delta_rate_channel`). Brake/throttle is painted
+    un-negated on the band's own fixed [-1, 1] (braking red, throttle green — the band's colours).
     """
     if len(xs) < 2:
         return None
@@ -311,6 +357,8 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
         # about his best cornering. "committed" says the same thing in the coach's voice, keeps the
         # endpoint labelled, and leaves ⚠ meaning exactly one thing app-wide.
         return seg_buckets, "committed", "unused (est.)"
+    if mode == "brake_throttle":
+        return _pedal_channel(times, len(xs), pedal)
     if mode == "elevation":
         # Altitude along the lap (metres, boxcar-smoothed at load). Informational — no good/bad
         # direction — so it rides this lap's own min→max range: low = low (red) bucket, high = green.
