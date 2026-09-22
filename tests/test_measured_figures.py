@@ -33,6 +33,12 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      reports it SKIPPED by name (tests/_footage.py) instead of this file counting it as passed.
      Since 2026-09-19 `D24/` and `Sandown_09_05_2026/` are gone from that Desktop, so a run with the
      variable set FAILS naming each missing lap set; which recordings the tables move to is T16.
+  4. A TABLE CHECK 3 CANNOT RE-MEASURE SAYS SO WHERE IT IS PUBLISHED (T16). #339 found eight of
+     these tables stale after #335 changed corner matching, and then their recordings went. Each
+     table whose rows name a recording in `tests/_stale.GONE` must carry a "⚠ STALE" or
+     "⚠ UNVERIFIED — NOT RE-MEASURABLE (T16)" mark in its own paragraph, and check 2's quotes, where
+     a reader meets them without the table, must date themselves before #335. It has a negative
+     control that plants every defect it looks for.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -215,7 +221,16 @@ def test_the_reach_line_and_the_spread_gate_are_the_table_s():
     rows = _evidence_rows()
     text = _flatten(_read(_COACHING))
     frac_line = _constant(_COACHING, "REACH_REPEAT_FRAC")
-    m = _need(r"Measured, the (\d+) real rows' reach rates sort as ([\d. |]+?) % — no row sits between "
+    # T16: the gap below is what the (stale) table says, and it is no longer the reason. #339 found
+    # the line in the 4th-widest gap once #335 changed corner matching, so the note has to say the
+    # value is carried forward unverified rather than present the gap as its justification.
+    note = _need(r"THE MEASURED REASON FOR (\d+) % NO LONGER HOLDS, AND THE VALUE IS CARRIED FORWARD "
+                 r"UNVERIFIED \(T16\)\.(.*?)REACH_REPEAT_FRAC = ", text,
+                 "REACH_REPEAT_FRAC's note, which must say its measured reason no longer holds")
+    assert int(note.group(1)) == round(100 * frac_line), (note.group(1), frac_line)
+    for claim in ("before #335", "#339", "4th-widest gap", "is NOT moved"):
+        assert claim in note.group(2), f"REACH_REPEAT_FRAC's note no longer says {claim!r}"
+    m = _need(r"the (\d+) real rows' reach rates sort as ([\d. |]+?) % — no row sits between "
               r"(\d+\.\d) and (\d+\.\d) %, and that gap across (\d+) % is the (second-widest|widest) in the "
               r"set \((\d+\.\d\d) points, against (\d+\.\d\d) for (\d+\.\d) → (\d+\.\d) %\)", text,
               "REACH_REPEAT_FRAC's measured note")
@@ -393,6 +408,17 @@ def _scanned():
             yield rel, _flatten(open(path, encoding="utf-8", errors="ignore").read())
 
 
+def _presented(problems: list[str], rel: str, m: re.Match, text: str, what: str,
+               sentence: str | None = None) -> None:
+    """T16: every table these scans quote is marked stale, so a quote a reader meets WITHOUT the
+    table (an in-app string, README.md, docs/, studio/README.md) has to date itself before #335.
+    `text` is what `m` matched in; `sentence` is given when the scan already split one out."""
+    unit = sentence if sentence is not None else _stale.sentence_at(text, m.start(), m.end())
+    p = _stale.unmarked(rel, m.group(0), unit, what)
+    if p:
+        problems.append(p)
+
+
 def test_every_quote_of_the_coaching_figures_is_coaching_py_s():
     """README's module map, the coaching panel's docstring, focus.py and the coaching tests all
     quoted the evidence and THEME figures. Each quote, wherever it is, must be the table's."""
@@ -408,6 +434,7 @@ def test_every_quote_of_the_coaching_figures_is_coaching_py_s():
         for m in re.finditer(r"(?:σ|sigma) ?(?:≥|>=) ?[^.;]{0,40}?\bon \**(\d+) of (?:the |those )?(\d+)\**"
                              r"((?:[^.;]|\.\d){0,80})", text):
             found["sigma"].append(rel)
+            _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
             if (int(m.group(1)), int(m.group(2))) != (n_sigma, len(rows)):
                 problems.append(f"{rel}: σ ≥ time lost on {m.group(1)} of {m.group(2)}, the table says "
                                 f"{n_sigma} of {len(rows)}")
@@ -423,26 +450,31 @@ def test_every_quote_of_the_coaching_figures_is_coaching_py_s():
         for m in re.finditer(r"0062(?:'s)? C1[^.]{0,30}?(?:σ|sigma)?[^.]{0,20}?reads (\d\.\d{3}) s "
                              r"(?:against an? |while the interquartile range is )(\d\.\d{3}) s", text):
             found["iqr"].append(rel)
+            _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
             if (float(m.group(1)), float(m.group(2))) != (c1.sigma, c1.iqr):
                 problems.append(f"{rel}: 0062 C1 σ {m.group(1)} / IQR {m.group(2)}, the table says "
                                 f"{c1.sigma} / {c1.iqr}")
         for m in re.finditer(r"0060 (?:is )?(\d+) ?% execution(?:,| and) 0062 (?:is )?(\d+) ?% pace", text):
             found["theme"].append(rel)
+            _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
             if (int(m.group(1)), int(m.group(2))) != (t["0060"].execution, t["0062"].pace):
                 problems.append(f"{rel}: 0060 {m.group(1)} % execution / 0062 {m.group(2)} % pace, the "
                                 f"table says {t['0060'].execution} / {t['0062'].pace}")
         for m in re.finditer(r"braking holds (\d+) ?% of 0060's ranked time[^.]{0,20}?(\d+) ?% of 0062's", text):
             found["cause"].append(rel)
+            _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
             if (int(m.group(1)), int(m.group(2))) != (t["0060"].cause_pct, t["0062"].cause_pct):
                 problems.append(f"{rel}: braking {m.group(1)} % / {m.group(2)} %, the table says "
                                 f"{t['0060'].cause_pct} / {t['0062'].cause_pct}")
         for m in re.finditer(r"OTHER laps[^.]{0,60}?\((\d+)\.\.(\d+) of them\)", text):
             found["beaten"].append(rel)
+            _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
             if (int(m.group(1)), int(m.group(2))) != (min(beaten), max(beaten)):
                 problems.append(f"{rel}: {m.group(1)}..{m.group(2)} other laps beat the target, the "
                                 f"table says {min(beaten)}..{max(beaten)}")
         for m in re.finditer(r"ONE_OFF[^.]{0,120}?fired on (\d+) of (?:the )?(\d+) rows", text):
             found["beaten"].append(rel)
+            _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
             if (int(m.group(1)), int(m.group(2))) != (sum(r.gate == "one_off" for r in rows), len(rows)):
                 problems.append(f"{rel}: ONE_OFF fired on {m.group(1)} of {m.group(2)} rows, the table "
                                 f"has {sum(r.gate == 'one_off' for r in rows)} of {len(rows)}")
@@ -549,12 +581,14 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
         # cut coaching.py's own at "i.e.".
         for m in re.finditer(r"(?i:habit) over (\d+) laps was (\d+\.\d) m|(\d+)-lap habit was (\d+\.\d) m", flat):
             found["habit"].append(rel)
+            _presented(problems, rel, m, flat, "coaching.py's brake-habit table")
             laps, habit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
             if (int(laps), float(habit)) != (c1.laps, c1.habit):
                 problems.append(f"{rel}: 0062 C1's habit over {laps} laps was {habit} m; the table "
                                 f"says {c1.laps} laps, {c1.habit} m")
         for m in re.finditer(r"within (\d) m of its own optimum", flat):
             found["within"].append(rel)
+            _presented(problems, rel, m, flat, "coaching.py's brake-habit table")
             if not c1.best <= int(m.group(1)) < c1.best + 1:
                 problems.append(f"{rel}: 0062 C1's best lap 'within {m.group(1)} m'; the table "
                                 f"says {c1.best} m")
@@ -564,6 +598,7 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
             if re.search(r"habit|median|table", sentence):
                 for m in re.finditer(r"up to (\d+\.\d) m\b", sentence):
                     found["upto"].append(rel)
+                    _presented(problems, rel, m, sentence, "coaching.py's brake-habit table", sentence)
                     if float(m.group(1)) != worst:
                         problems.append(f"{rel}: the two brake answers 'up to {m.group(1)} m' apart; "
                                         f"coaching.py's table says {worst}")
@@ -864,6 +899,7 @@ def test_every_quote_of_the_focus_figures_is_focus_py_s():
             for m in re.finditer(r"top three \(C(\d+) \+(\d\.\d{3}) s, C(\d+) \+(\d\.\d{3}) s, C(\d+) \+(\d\.\d{3}) s\)",
                                  sentence):
                 found["promoted"].append(rel)
+                _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                 got = [(int(m.group(1 + 2 * i)), float(m.group(2 + 2 * i))) for i in range(3)]
                 if got != [(r.cid, r.promoted) for r in rows]:
                     problems.append(f"{rel}: promotes {got}; focus.py's table says "
@@ -871,6 +907,7 @@ def test_every_quote_of_the_focus_figures_is_focus_py_s():
             for m in re.finditer(r"moves them ([−+-]\d\.\d{3}) / ([−+-]\d\.\d{3}) / ([−+-]\d\.\d{3}) s(.{0,60})",
                                  sentence):
                 found["moves"].append(rel)
+                _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                 if [_signed(x) for x in m.groups()[:3]] != [r.change for r in rows]:
                     problems.append(f"{rel}: moves them {m.groups()[:3]}; the table's changes are "
                                     f"{[r.change for r in rows]}")
@@ -879,15 +916,18 @@ def test_every_quote_of_the_focus_figures_is_focus_py_s():
                                     f"two sessions' spreads")
             for m in re.finditer(r"C8's (?:own )?window grew (\d+\.\d) m → (\d+\.\d) m", sentence):
                 found["grew"].append(rel)
+                _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                 if (float(m.group(1)), float(m.group(2))) != (w60, w62):
                     problems.append(f"{rel}: C8 grew {m.group(1)} → {m.group(2)} m; focus.py says {w60} → {w62}")
             for m in re.finditer(r"C8(?:'s)? window grew (\d+\.\d) m (?:between|and)", sentence):
                 found["grew_by"].append(rel)
+                _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                 if abs(float(m.group(1)) - (w62 - w60)) > 0.1 + 1e-9:
                     problems.append(f"{rel}: C8 grew {m.group(1)} m; focus.py says {w60} → {w62}")
             if "C8" in sentence:
                 for m in re.finditer(r"(?:median time (?:by )?|worth |with it )\+?(\d\.\d{3}) s", sentence):
                     found["own"].append(rel)
+                    _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                     if float(m.group(1)) != own_d:
                         problems.append(f"{rel}: C8's own-window change {m.group(1)} s; focus.py says {own_d}")
                     if "whole second" in sentence and own_d < 1.0:
@@ -895,10 +935,12 @@ def test_every_quote_of_the_focus_figures_is_focus_py_s():
             if "stored window" in sentence:
                 for m in re.finditer(r"(?:the same corner is|C8 is[^.]{0,12}?) \+(\d\.\d{3}) s", sentence):
                     found["stored"].append(rel)
+                    _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                     if float(m.group(1)) != stored_d:
                         problems.append(f"{rel}: C8 over the stored window {m.group(1)} s; focus.py says {stored_d}")
             for m in re.finditer(r"(\d\.\d\d) ?% (?:apart|of real lap-total drift)", sentence):
                 found["pct"].append(rel)
+                _presented(problems, rel, m, sentence, "focus.py's tables", sentence)
                 if m.group(1) != pct:
                     problems.append(f"{rel}: the D24 lap totals {m.group(1)} % apart; focus.py says {pct}")
             for m in re.finditer(r"MAX_LAP_TOTAL_DRIFT` \((\d+) %", sentence):
@@ -990,14 +1032,18 @@ def test_every_quote_of_the_floor_is_a_row_of_the_table():
                 continue
             for m in re.finditer(r"end-of-lap values of \+(\d+\.\d\d) … \+(\d+\.\d\d) s", sentence):
                 found.append(rel)
+                _presented(problems, rel, m, sentence, "theme.py's floor table", sentence)
                 if m.groups() != ends:
                     problems.append(f"{rel}: end-of-lap values +{m.group(1)} … +{m.group(2)} s, theme.py "
                                     f"says +{ends[0]} … +{ends[1]}")
-            quotes = re.findall(r"(?:floor(?: is)?|worst excursion (?:to|is)|most negative value is) \**([−-]0\.\d{3}) s",
-                                sentence) + re.findall(r"([−-]0\.\d{3}) s floor", sentence)
+            hits = [*re.finditer(r"(?:floor(?: is)?|worst excursion (?:to|is)|most negative value is) \**"
+                                 r"([−-]0\.\d{3}) s", sentence), *re.finditer(r"([−-]0\.\d{3}) s floor", sentence)]
+            quotes = [m.group(1) for m in hits]
             if not quotes:
                 continue
             found.append(rel)
+            for m in hits:
+                _presented(problems, rel, m, sentence, "theme.py's floor table", sentence)
             named = [r for r in rows if r.name in sentence]
             allowed = {f"{r.floor:.3f}" for r in named} if named else {deepest}
             for q in quotes:
@@ -1013,6 +1059,300 @@ def test_every_quote_of_the_floor_is_a_row_of_the_table():
     assert not problems, "\n  ".join(["floor quotes that are not theme.py's table:"] + problems)
     print(f"test_every_quote_of_the_floor_is_a_row_of_the_table OK ({len(found)} sentences in "
           f"{sorted(set(found))})")
+
+
+# ─── T16: a table no footage here can re-measure says so where it is published ───────────────────
+# #339 ran this file's footage half after #335 changed corner matching. Eight of the nine tables
+# below no longer matched the app. The ninth, the brake-hint gate, had just been re-measured and
+# did. Then D24 and Sandown_09_05_2026 left the owner's machine (tests/_stale.py), so none of the
+# nine can be re-measured where it stands.
+#
+# WHICH tables need a mark is DERIVED, not listed: a table needs one when one of its own rows names
+# a recording in `_stale.GONE`, read off the rows through `_LAP_SETS`. WHAT the mark says is
+# checked against the status below. That status is #339's record, a fact about a measurement, and
+# no text check could derive it. Every footage check must re-measure a table in this registry, so a
+# new footage check cannot publish a table the guard has never heard of.
+import _stale
+import test_ideal_sample_table as _ideal
+
+_STATS = os.path.join(_REPO, "studio", "stats.py")
+
+
+def _published() -> list[tuple]:
+    """(name, file, first-row pattern, the `_LAP_SETS` keys its rows name, the footage check that
+    re-measures it or None, the recorded status) for every table a footage check re-measures, and
+    for the D24 tables of the same kind that no check does."""
+    stale, unverified = _stale.STALE, _stale.UNVERIFIED
+    return [
+        # #339: the check failed after #335, on 0062's rows too, and 0062 has no interpolated cell.
+        ("coaching.py's evidence table", _COACHING, _EV_LINE, lambda: [r.rec for r in _evidence_rows()],
+         "test_the_coaching_tables_match_the_footage", stale),
+        ("coaching.py's THEME table", _COACHING, _THEME_LINE, lambda: list(_theme_rows()),
+         "test_the_coaching_tables_match_the_footage", stale),
+        ("coaching.py's brake-habit table", _COACHING, _BRAKE_LINE, lambda: [r.rec for r in _brake_rows()],
+         "test_the_brake_habit_table_matches_the_footage", stale),
+        # #339 (T15) re-measured this one after #335 and C5, and it came back byte-identical.
+        ("coaching_panel.py's brake-hint gate table", _PANEL, _HINT_LINE, lambda: [r.rec for r in _hint_rows()],
+         "test_the_brake_hint_gate_table_matches_the_footage", unverified),
+        # #339: the beat-rate, focus and floor checks failed after #335; the floor re-measure was
+        # byte-identical before and after #339's own change, so the move is #335's.
+        ("corner_model.py's beat-rate table", _CORNER_MODEL, _BEAT_LINE,
+         lambda: [_BEAT_SETS[r.name] for r in _beat_rows()], "test_the_beat_rate_table_matches_the_footage", stale),
+        # focus.py's two tables compare 0060 with 0062, which its prose names; the rows are corners.
+        ("focus.py's cross-session tables", _FOCUS, _FOCUS_LINE, lambda: ["0060", "0062"],
+         "test_the_focus_tables_match_the_footage", stale),
+        ("theme.py's floor table", _THEME, _FLOOR_LINE, lambda: [r.name for r in _floor_rows()],
+         "test_the_floor_table_matches_the_footage", stale),
+        # #339: 0060's ideal is 65.864 s after it (65.637 after #335); the record publishes 65.464.
+        ("the #272 recombination record", _REFUSED, re.compile(r"^\| \| 0060 \(38 laps\)"), lambda: list(_record_tables()[0]),
+         "test_the_refusal_record_matches_the_footage", stale),
+        # #339: the `all` cells are stale by 0.05–0.43 s on all five rows.
+        ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
+         lambda: [_BEAT_SETS.get(r.name, r.name) for r in _ideal._rows()],
+         "test_the_table_still_matches_the_app", stale),
+        # No footage check re-measures these two, but they are D24 tables of the same kind: how far
+        # an interpolated corner cell is off. #335 moved which cells are interpolated (0060: 236 →
+        # 34 of 456), so both describe cells the app no longer has.
+        ("stats.CornerMatrix's gate-crossing table", _STATS, re.compile(r"^\s+cells with both edges matched\s+0060:"),
+         lambda: ["0060", "0062"], None, stale),
+        ("stats.corner_report's line-crossing table", _STATS, re.compile(r"^\s+0060 pair \(38 laps\)\s+matched"),
+         lambda: ["0060", "0062"], None, stale),
+    ]
+
+
+def _footage_check_names() -> set[str]:
+    """Every check that re-measures a published table against footage: `FOOTAGE_CHECKS` in this file
+    and in test_ideal_sample_table.py, each its own `footage.<name>` CTest registration (#341)."""
+    return {fn.__name__ for fn in (*FOOTAGE_CHECKS, *_ideal.FOOTAGE_CHECKS)}
+
+
+def _block_above(lines: list[str], row: int, path: str) -> list[int]:
+    """The line indices above `row`, nearest first, that belong to the same comment block, the
+    same docstring or the same markdown section — the paragraph a table's mark has to sit in."""
+    out = []
+    for j in range(row - 1, -1, -1):
+        line = lines[j]
+        if path.endswith(".md"):
+            if line.startswith("## "):
+                break
+        elif lines[row].lstrip().startswith("#"):
+            if not line.lstrip().startswith("#"):
+                break
+        elif '"""' in line:
+            out.append(j)                      # the docstring's opening line is part of it
+            break
+        out.append(j)
+    return out
+
+
+def _find_mark(lines: list[str], row: int, path: str) -> tuple[int, str] | None:
+    for j in _block_above(lines, row, path):
+        m = _stale.TABLE_MARK.search(lines[j])
+        if m:
+            return j, m.group(1)
+    return None
+
+
+# IdealSample marks each row it could not re-measure with ‡, and its own checks read that mark
+# (a quote of a ‡ row must not read as current), so a gone recording's row has to carry it too.
+_IDEAL_ROW = re.compile(r"^\s+\| ((?:D24|Sandown|SD_30_08)[^|‡]*?)\s*(‡)?\s*\|")
+
+
+def _mark_problems(texts: dict[str, str]) -> list[str]:
+    """What is wrong with the marks, given each publishing file's text — a function of the text so
+    the negative control can hand it a planted copy."""
+    problems = []
+    for name, path, first_row, lap_sets, _check, status in _published():
+        rel = os.path.relpath(path, _REPO)
+        lines = texts[path].splitlines()
+        row = next((i for i, line in enumerate(lines) if first_row.match(line)), None)
+        if row is None:
+            problems.append(f"{name}: no row of it in {rel} — update this registry with the table")
+            continue
+        gone = sorted({_LAP_SETS[s][0] for s in lap_sets()} & set(_stale.GONE))
+        if not gone:
+            continue        # every row's recording is here, so its footage check can answer
+        found = _find_mark(lines, row, path)
+        if found is None:
+            problems.append(f"{name} ({rel}:{row + 1}) is presented without its mark. Its rows need "
+                            f"{' and '.join(gone)}, no longer available, so no footage check can say "
+                            f"whether it is current: head the paragraph above it with "
+                            f"'⚠ {status} — NOT RE-MEASURABLE (T16).'")
+            continue
+        j, said = found
+        if said != status:
+            problems.append(f"{name}: marked {said} at {rel}:{j + 1}, but #339's record makes it {status}")
+        para = _flatten("\n".join(lines[j:row]))
+        missing = [w for w in ("#335", "corner matching", "no longer available", *gone) if w not in para]
+        if missing:
+            problems.append(f"{name}: its mark at {rel}:{j + 1} does not say {missing}")
+        if path == _CORNER_MODEL and "IdealSample" in name:
+            for line in lines[row:row + 8]:
+                m = _IDEAL_ROW.match(line)
+                if m and _LAP_SETS[_BEAT_SETS.get(m.group(1), m.group(1))][0] in _stale.GONE and not m.group(2):
+                    problems.append(f"{name}: the {m.group(1)} row needs a recording that is no longer "
+                                    f"available and does not carry ‡")
+    return problems
+
+
+def test_every_table_no_footage_can_re_measure_carries_its_mark():
+    """T16. Each table below is re-measured by a footage check that cannot run: its recordings are
+    gone. So the place that publishes it must say so — measured on the named recordings, before or
+    after #335 changed corner matching, stale or unverified per #339, and not re-measurable."""
+    tables = _published()
+    registered, checks = {t[4] for t in tables if t[4]}, _footage_check_names()
+    assert registered == checks, (
+        f"footage checks with no registered table: {sorted(checks - registered)}; registered checks "
+        f"that do not exist: {sorted(registered - checks)} — each footage check's table belongs in "
+        f"_published()")
+    problems = _mark_problems({t[1]: _read(t[1]) for t in tables})
+    assert not problems, "tables presented as current that no footage can re-measure:\n  " + \
+        "\n  ".join(problems)
+    print(f"test_every_table_no_footage_can_re_measure_carries_its_mark OK ({len(tables)} tables, "
+          f"{sum(t[5] == _stale.STALE for t in tables)} stale, "
+          f"{sum(t[5] == _stale.UNVERIFIED for t in tables)} unverified)")
+
+
+def test_the_mark_guard_fails_on_each_planted_defect():
+    """The guard's negative control. Each defect is planted in a COPY of the published text and must
+    be named: every table's mark stripped in turn, a status flipped, a gone recording dropped from a
+    mark, a ‡ dropped from an IdealSample row. The presented-quote rule gets the same treatment on a
+    doc sentence and on an in-app string."""
+    tables = _published()
+    clean = {t[1]: _read(t[1]) for t in tables}
+    assert not _mark_problems(clean), "the control needs a clean tree to plant into"
+
+    def planted(path: str, span: range, old: str, new: str) -> dict[str, str]:
+        lines = clean[path].splitlines()
+        assert any(old in lines[i] for i in span), (old, [lines[i] for i in span])
+        for i in span:
+            lines[i] = lines[i].replace(old, new)
+        return {**clean, path: "\n".join(lines)}
+
+    def mark_of(name: str) -> tuple[str, int, int]:
+        """(file, the mark's line, the table's first row) for one registered table."""
+        t = next(t for t in tables if t[0] == name)
+        lines = clean[t[1]].splitlines()
+        row = next(i for i, line in enumerate(lines) if t[2].match(line))
+        j, _status = _find_mark(lines, row, t[1])
+        return t[1], j, row
+
+    for name, *_ in tables:
+        path, j, _row = mark_of(name)
+        tag = _stale.TABLE_MARK.search(clean[path].splitlines()[j]).group(0)
+        got = _mark_problems(planted(path, range(j, j + 1), tag, "a note"))
+        assert any(p.startswith(name) and "without its mark" in p for p in got), (name, got)
+    path, j, _row = mark_of("theme.py's floor table")
+    got = _mark_problems(planted(path, range(j, j + 1), "⚠ STALE", "⚠ UNVERIFIED"))
+    assert any("marked UNVERIFIED" in p for p in got), got
+    path, j, row = mark_of("coaching.py's evidence table")
+    got = _mark_problems(planted(path, range(j, row), "D24", "the recording"))
+    assert any(p.startswith("coaching.py's evidence table") and "does not say ['D24']" in p for p in got), got
+    row = next(i for i, line in enumerate(clean[_CORNER_MODEL].splitlines()) if line.lstrip().startswith("| D24 3"))
+    got = _mark_problems(planted(_CORNER_MODEL, range(row, row + 1), "‡", ""))
+    assert any("D24 3 chapters row" in p and "does not carry ‡" in p for p in got), got
+
+    # The presented-quote rule: a doc sentence and an in-app string, each with its mark taken out.
+    # (Planted figures are made up, so no scan of the real tree mistakes this file for a quote.)
+    doc = "Same driving, same recording: 12.345 s here and 11.111 s there"
+    assert _stale.unmarked("README.md", "11.111 s there", doc, "a table") is not None
+    assert _stale.unmarked("README.md", "11.111 s there", doc + ", measured before #335.", "a table") is None
+    assert _stale.unmarked("studio/coaching.py", "11.111 s there", doc, "a table") is None, (
+        "a code comment or docstring is a note to a developer, and the table carries the mark")
+    tip = "Two rows are 9.99 s apart on the same driving."
+    real = _stale.in_app_strings
+    try:
+        _stale.in_app_strings = lambda rel: (tip,)
+        assert _stale.unmarked("studio/library_dialog.py", "9.99 s apart", "…", "a table") is not None
+        _stale.in_app_strings = lambda rel: (tip + " Measured before a September 2026 change to corner matching.",)
+        assert _stale.unmarked("studio/library_dialog.py", "9.99 s apart", "…", "a table") is None
+    finally:
+        _stale.in_app_strings = real
+
+    # The interpolated-cell error: undated, a maximum without its measurement, a maximum swapped.
+    crossing = _crossing_tables()
+    bare = "Timed at each crossing, such cells were a median 0.22 s off (up to 0.89 s) on the recording."
+    got = _crossing_quote_problems("x", bare, *crossing)[1]
+    assert any("before #335" in p for p in got) and any("gate measurement" in p for p in got), got
+    fine = "Timed at a gate before #335, such cells were a median 0.22 s off (up to 0.89 s) on the recording."
+    assert _crossing_quote_problems("x", fine, *crossing) == (1, []), _crossing_quote_problems("x", fine, *crossing)
+    swapped = fine.replace("0.89 s", "0.96 s")
+    assert any("line measurement" in p for p in _crossing_quote_problems("x", swapped, *crossing)[1])
+    print(f"test_the_mark_guard_fails_on_each_planted_defect OK ({len(tables)} marks stripped, status, "
+          f"recording and ‡ planted; a doc sentence and an in-app string without the quote mark; an "
+          f"undated, an unattributed and a swapped interpolated-cell maximum)")
+
+
+def _crossing_tables() -> tuple[dict[str, float], dict[str, float]]:
+    """stats.py's two measurements of how far a corner cell is off an independent crossing time:
+    CornerMatrix's (a gate drawn across the track) and corner_report's (a line), each as
+    {"median": interpolated median, "max": interpolated max, "matched_max": matched max}."""
+    text = _read(_STATS)
+    g = _need(r"cells with both edges matched\s+0060: \d+ of \d+\s+\|Δ\| median \d\.\d{3} s, p90 \d\.\d{3}, "
+              r"max (\d\.\d{3})\s+.*?cells with an interpolated edge\s+0060: (\d+) of \d+\s+\|Δ\| median "
+              r"(\d\.\d{3}) s, p90 \d\.\d{3}, max (\d\.\d{3})", text.replace("\n", " "), "CornerMatrix's gate table")
+    c = _need(r"0060 pair \(38 laps\)\s+matched \d+ of \d+ cells\s+\|Δt\| median \d\.\d{3} s, max (\d\.\d{3}) s\s+"
+              r"interpolated (\d+)\s+\|Δt\| median (\d\.\d{3}) s, max (\d\.\d{3}) s", text.replace("\n", " "),
+              "corner_report's line table")
+    assert g.group(2) == c.group(2), "the two tables no longer measure the same interpolated cells"
+    return ({"median": float(g.group(3)), "max": float(g.group(4)), "matched_max": float(g.group(1))},
+            {"median": float(c.group(3)), "max": float(c.group(4)), "matched_max": float(c.group(1))})
+
+
+def _crossing_quote_problems(rel: str, sentence: str, gate: dict, line: dict) -> tuple[int, list[str]]:
+    """(quotes of the interpolated-cell error in `sentence`, what is wrong with them)."""
+    if not re.search(r"cross(?:ing|es the track)|gate", sentence):
+        return 0, []
+    medians = {gate["median"], line["median"]}
+    quoted, problems = 0, []
+    # A table row's own cells ("|Δ| median 0.219 s") are the table, not a quote of it.
+    for m in re.finditer(r"(?<!\| )median (0\.2\d{1,2}) s(?![\w.])", sentence):
+        quoted += 1
+        q = m.group(1)
+        if not any(f"{v:.{len(q) - 2}f}" == q for v in medians):
+            problems.append(f"{rel}: an interpolated cell a median {q} s off; stats.py measured {sorted(medians)}")
+        if not _stale.QUOTE_MARK.search(sentence):
+            problems.append(f"{rel}: quotes the interpolated-cell error ({q} s) without saying it was "
+                            f"measured before #335 — the cells it describes are no longer interpolated")
+    if not quoted:
+        return 0, []
+    for mx in re.finditer(r"(?<!\| )(?:up to|max) (\d\.\d{2,3}) s", sentence):
+        v = mx.group(1)
+        which = [name for name, t in (("gate", gate), ("line", line))
+                 for key in ("max", "matched_max") if f"{t[key]:.{len(v) - 2}f}" == v]
+        if not which:
+            problems.append(f"{rel}: a maximum of {v} s, which neither stats.py table measured")
+        elif not any(re.search({"gate": r"gate", "line": r"line[- ]cross"}[w], sentence) for w in which):
+            other = line["max"] if which[0] == "gate" else gate["max"]
+            problems.append(f"{rel}: a maximum of {v} s without saying it is the {which[0]} "
+                            f"measurement (the {'line' if which[0] == 'gate' else 'gate'} read {other} s)")
+    return quoted, problems
+
+
+def test_every_quote_of_the_interpolated_cell_error_is_dated_and_names_its_measurement():
+    """How far an interpolated corner cell is off was measured twice on D24's 0060 pair, over the
+    same 236 cells, before #335: CornerMatrix against a gate (median 0.219 s, max 0.886 s) and C4's
+    corner_report against a line (0.221 s, 0.960 s). The tree quoted both maxima, 0.89 s in the
+    CORNERS BY LAP tooltip and 0.96 s in lap_table.py, as if they were one figure. #335 then left 34
+    of the 456 cells interpolated, so every quote is of a population the app no longer has.
+
+    So every sentence quoting the median must be one of the two tables' medians and date itself
+    before #335, wherever it is. A quoted maximum must be one of the tables' maxima, and the
+    sentence must say which measurement it is (gate or line). CHANGELOG.md records what a release
+    said, and studio/dev/ and studio/docs/ are dated records, so none of them is read here."""
+    tables = _crossing_tables()
+    found, problems = [], []
+    for rel, flat in _scanned():
+        if rel.startswith(("studio/dev/", "studio/docs/")):
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+", flat):
+            quoted, wrong = _crossing_quote_problems(rel, sentence, *tables)
+            found += [rel] * quoted
+            problems += wrong
+    assert len(found) >= 10, f"the scan found only {found} — a phrasing changed"
+    assert not problems, "quotes of the interpolated-cell error:\n  " + "\n  ".join(problems)
+    print(f"test_every_quote_of_the_interpolated_cell_error_is_dated_and_names_its_measurement OK "
+          f"({len(found)} quotes in {sorted(set(found))})")
 
 
 # ─── refused-2026-09.md: the #272 recombination record ───────────────────────────────────────────
@@ -1702,6 +2042,9 @@ FOOTAGE_CHECKS = (test_the_coaching_tables_match_the_footage,
 
 
 def _run_all():
+    test_every_table_no_footage_can_re_measure_carries_its_mark()
+    test_the_mark_guard_fails_on_each_planted_defect()
+    test_every_quote_of_the_interpolated_cell_error_is_dated_and_names_its_measurement()
     test_the_evidence_prose_is_its_table_s_arithmetic()
     test_the_reach_line_and_the_spread_gate_are_the_table_s()
     test_the_theme_table_is_the_evidence_table_s_arithmetic()

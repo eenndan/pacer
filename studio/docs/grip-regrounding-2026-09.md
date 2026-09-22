@@ -10,7 +10,7 @@ strongly, on every recording, and keeps most of that after the lap's own pace an
 column beside it are held. The gate it was under is the BETWEEN-corner reading, and that one is
 still not supported.** This is a measurement, not a feature: no surface changed here.
 
-The probe is [`studio/dev/probes/p12_grip_regrounding.py`](../dev/probes/p12_grip_regrounding.py).
+The probe is [`studio/dev/probes/p13_grip_regrounding.py`](../dev/probes/p13_grip_regrounding.py).
 
 ## What was measured, and on what
 
@@ -99,5 +99,5 @@ is as strong on the anticlockwise track as on the clockwise ones.
 
 ```
 PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache          # load once
-PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_grip_regrounding
+PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
 ```

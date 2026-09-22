@@ -1,4 +1,4 @@
-"""P10 — the hesitation metric (lift-to-brake gap per corner), measured (M5.1).
+"""P11 — the hesitation metric (lift-to-brake gap per corner), measured (M5.1).
 
 THE IDEA (roadmap LATER, "Hesitation metric"). Between lifting off the throttle and getting on the
 brake there is a gap. A driver who dithers there loses time nobody can see on a lap chart, so
@@ -33,8 +33,8 @@ runs on — so the gap inherits that grid's 0.1 s quantum and that derivative's 
     selection control for "the top corner" (#311 measured that rule firing 19-21 % on shuffled
     data, not 5 %).
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_hesitation
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_hesitation MK_18_09
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation MK_18_09
 
 SAFETY: every footage folder is read-only and is snapshotted (size + mtime) around each load by
 `_m5_cache`; the app-support seams are diverted before any studio import resolves one, and the real

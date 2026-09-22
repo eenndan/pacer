@@ -43,7 +43,16 @@ rigid translation cannot move. Its numbers are the evidence for M7.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor
 
-`p10_hesitation`, `p11_median_polish` and `p12_grip_regrounding` are the M5 set: the three LATER
+`p10_heat_to_heat` loads the three present Sandown recordings and puts every pair through the real
+`focus.verdict`, with the whole lap as the window. It checks once against the owner's own
+session-record store (read, never written) and once against a planted pair of records that agree.
+It asks whether a session-level "better than last time" would ever be allowed, and whether the
+change it would print is bigger than the spread inside one session. Its verdict is
+`studio/docs/refused-2026-09.md` §8.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_heat_to_heat
+
+`p11_hesitation`, `p12_median_polish` and `p13_grip_regrounding` are the M5 set: the three LATER
 analytics ideas, each with a null it has to beat and a planted effect that says what its silence is
 worth. They share `_m5_cache` (one `Session.load` per recording, everything the three read packed
 into one pickle) and `_m5_stats` (the permutation machinery, the max-statistic correction and the
@@ -54,7 +63,7 @@ decomposition — the corner-specific half never beats a shuffled lap order), an
 and still cannot rank corners against each other).
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_hesitation
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_median_polish
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_grip_regrounding
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
 """

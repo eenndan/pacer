@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Nine features were built far enough to **measure**, and the measurement said not to ship them. The
+Ten features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -67,6 +67,12 @@ segments, plot them, and mark where the ideal and your best lap fall.
 
 **What was measured.** The actual 20-dot layout was built, rather than argued about from moments.
 Re-measured after #300 warped every lap, which moved every cell below except the best lap:
+
+> **⚠ STALE — NOT RE-MEASURABLE (T16).** The table below was measured on D24 before #335 changed
+> corner matching, and it is known stale. #339 read 0060's ideal as 65.637 s after #335 and
+> 65.864 s after its own change, against the 65.464 s below. D24 is no longer available, so the
+> table cannot be re-measured. It is the record of that measurement, not what the app computes
+> today, and whether the verdict under it still holds cell for cell is unverified.
 
 | | 0060 (38 laps) | 0062 (65 laps) |
 |---|---|---|
@@ -646,6 +652,102 @@ the same three-answer discipline `chapters.probe_mp4` already keeps.
 Pacer exports, for whom the first table's one-in-five becomes most-of-five; or a measurement showing
 the second drop gesture is a real barrier rather than a keystroke. Note that the cheap gate shipped
 here is also what a future queue would want as its admission test, so it has been paid for already.
+
+---
+
+## 8. A heat-to-heat comparison against the previous comparable session — refused (F8)
+
+**The idea.** The library stores each session's best lap, ideal lap and lap count, but not its
+typical pace, so it cannot answer "was this session better than the last one I can compare it
+with?". Store the median lap, σ and top speed on every entry (a schema bump from v3, with a
+migration of the owner's live `library.json`). Show the change only against a session that the
+session record (#258) says was comparable, using the refusal rules the focus list already applies
+(`focus.verdict`).
+
+**How it was tested.** `studio/dev/probes/p10_heat_to_heat.py` loads the owner's three present
+Sandown recordings through the real `Session.load`, all chapters. Every app-support seam is jailed,
+and the owner's `tracks.json` is copied into the jail so the track and start line are the ones his
+own app uses. The footage folders and the real app-support directory were size/mtime-snapshotted
+before and after, and were unchanged. The comparison is `focus.verdict` itself, with the whole lap
+as its window: the baseline is the earlier session's clean-lap median and interquartile range
+(IQR), and the sample is the later session's. It runs twice: once against the owner's real
+session-record store, and once against a planted pair of records that agree ("dry" on both).
+
+| recording | date | clean laps | median | IQR | σ | best | top speed | lap length | runs (laps @ median) |
+|---|---|---|---|---|---|---|---|---|---|
+| 0064, Sandown 3h | 19 Jul | 62 | 48.202 | 2.846 | 5.816 | 47.076 | 86.1 km/h | 730.6 m | 2 @ 65.828, 6 @ 49.220, 22 @ 47.795, 32 @ 48.080 |
+| 0065, SD 30-08 | 30 Aug | 37 | 47.566 | 0.776 | 1.681 | 46.912 | 87.4 km/h | 737.9 m | 12 @ 48.052, 25 @ 47.360 |
+| 0068, SD 19-09 | 19 Sep | 36 | 47.435 | 0.520 | 0.767 | 46.808 | 87.0 km/h | 737.3 m | 11 @ 47.697, 25 @ 47.370 |
+
+All three have a trusted start line and a clock that is not estimated. Each best lap is identical,
+to every stored digit, to the one on the owner's library row for that recording.
+
+### Today it refuses every pair, and always for the same reason
+
+On 2026-09-19 the owner has no `session_records.json` at all. So every pair is refused because there is no
+session record. Every pair passes the four gates checked before that one: same track, a trusted
+start line on both sides, neither clock estimated, and lap lengths within 1.01 % of each other
+(the limit is 2 %).
+
+| pair | previous session? | the verdict today | with records that agree |
+|---|---|---|---|
+| 0064 → 0065 | yes | no verdict: no session record | unchanged |
+| 0064 → 0068 | no | no verdict: no session record | unchanged |
+| 0065 → 0068 | yes | no verdict: no session record | unchanged |
+
+A comparison in the Library would therefore print the focus list's own refusal on every row the
+owner has: *"There's no session record for 30 Aug and today…"*. The focus list already prints that
+line for corners, along with the fix (File ▸ Session record…). A second surface would repeat it.
+
+### With the records written, it would say "no change you can act on" three times out of three
+
+| pair | Δ median | bar (½ × wider IQR) | Δ / bar | SE of Δ | Δ / SE | Δ best | Δ top speed |
+|---|---|---|---|---|---|---|---|
+| 0064 → 0065 | −0.636 | 1.423 | 0.45 | 0.356 | 1.8 | −0.163 | +1.3 km/h |
+| 0064 → 0068 | −0.766 | 1.423 | 0.54 | 0.345 | 2.2 | −0.268 | +0.9 km/h |
+| 0065 → 0068 | −0.131 | 0.388 | 0.34 | 0.143 | 0.9 | −0.104 | −0.4 km/h |
+
+The bar is the one the focus list applies to a corner, `coaching.SPREAD_MARGIN` × the wider of the
+two IQRs. The standard error (SE) uses the normal approximation that `focus.verdict`'s comment
+uses, 1.2533 × IQR / 1.349 / √laps, for each median.
+
+- **Every change is inside the bar,** at 0.34 to 0.54 of it.
+- **The one pair with the same shape of day cannot be told from zero.** 0065 → 0068 is two runs
+  each, 11–12 laps and then 25. Its 0.131 s is 0.9 standard errors. The two 25-lap runs are
+  47.360 and 47.370 s, 0.010 s apart. All of the session-level change comes from the short first
+  run (48.052 → 47.697 s). A session median measures how much of the day was a warm-up run as much
+  as it measures pace.
+- **The endurance recording cannot be compared this way.** 0064's first run is 2 laps at a
+  65.8 s median. That stretches its σ to 5.8 s and its IQR to 2.85 s, which puts its bar at
+  1.42 s, 3.7 times 0065's. Almost no change would clear it.
+- **The sizes are small next to the conditions.** The largest change here is 0.77 s. The coach
+  quoted in `session_record.py` puts up to 4 s a lap on temperature and humidity alone.
+- **Top speed moves by 0.4–1.3 km/h,** about 1.5 % at most. A driver changes it through gearing, and
+  gearing is in the session record, which no session has.
+
+**What a driver could act on: nothing at the session level.** The best-lap change is already on
+the Library's PB chart (46.912 → 46.808 s). The comparison a driver can act on is per corner, and
+the focus list already makes it, behind the same gate.
+
+### What building it would have cost
+
+- **A migration of the owner's live library for fields no real pair could use.** The library has
+  8 entries at v3, and 4 of them point at recordings that are gone: three rows for D24 0060 and one
+  for Sandown 09-05. Their new fields would stay empty for good. That leaves Milton Keynes with one
+  present recording (0067) and so no pair at all. This package changed nothing in `library.py`,
+  and the owner's `library.json` is untouched.
+- **A backup-slot hazard, for whoever bumps the schema next.** `library.json.bak` is also the slot
+  `clear` writes and `restore` reads. A migration backup written there would replace the backup of
+  a cleared library. A future bump should write a version-named copy instead. (An older build
+  reading a newer file is already safe: `load` reads it best-effort, and `save` backs it up before
+  overwriting it.)
+
+**What would be new evidence:** session records on two sessions at one track that agree, and a
+median-lap change larger than half the wider IQR. A statistic that leaves out the warm-up run (for
+example, the median of the longest run) would also count, if it clears that bar on a real pair.
+Storing the numbers is a separate question. Recordings do disappear (D24 and Sandown 09-05 did), so
+recording the numbers when a session is opened is the only way to keep them. That is a reason to
+store them once something reads them, not before.
 
 ---
 

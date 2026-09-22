@@ -1,4 +1,4 @@
-"""P11 — driver learning vs session evolution, by median polish over the lap x corner matrix (M5.2).
+"""P12 — driver learning vs session evolution, by median polish over the lap x corner matrix (M5.2).
 
 THE IDEA (roadmap LATER, "Driver-learning vs session-evolution decomposition"). A session gets
 faster for two different reasons — the track rubbers in, the tyres and fuel come to the driver
@@ -29,7 +29,7 @@ probe tests exactly that half:
     shuffled-order null) with the seconds it is worth, since the product claim is a split of one
     number into two.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_median_polish
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
 
 SAFETY: as `_m5_cache` — read-only footage snapshotted around every load, app-support seams
 diverted before any studio import resolves one, nothing written.

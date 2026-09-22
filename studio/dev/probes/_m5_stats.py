@@ -13,7 +13,7 @@ TWO RULES, BOTH FROM MEASURED FAILURES IN THIS TREE:
     each lap's own level before the statistic, and `within_lap_permute` is the null that keeps each
     lap's own values and destroys only corner identity.
 
-Nothing here is product code; it is pure numpy and is only imported by `studio/dev/probes/p1*`.
+Nothing here is product code; it is pure numpy and is only imported by the M5 probes (`p11_hesitation`, `p12_median_polish`, `p13_grip_regrounding`).
 """
 
 from __future__ import annotations

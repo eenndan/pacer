@@ -1,4 +1,4 @@
-"""P12 — is the per-corner Grip % column worth anything beyond description? (M5.3)
+"""P13 — is the per-corner Grip % column worth anything beyond description? (M5.3)
 
 THE QUESTION. `driving.corner_grip` divides a corner's median combined |g| by the SESSION grip
 envelope (`driving.grip_envelope`, the p98 of |g| over the whole recording), so the number is
@@ -29,7 +29,7 @@ built on it.
     direction-dependent sign bug shipped unnoticed in this campaign (#334), so the left/right
     corner split is printed for a clockwise track and an anticlockwise one.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_grip_regrounding
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
 
 SAFETY: as `_m5_cache` — read-only footage snapshotted around every load, app-support seams
 diverted before any studio import resolves one, nothing written.

@@ -147,7 +147,8 @@ _IDEAL_CHIP_TIP = (
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
-    "(0.15–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
+    "(0.15–0.38 s per doubling of lap count, measured before a September 2026 change to corner "
+    "matching and not re-measured since) and moves when dragging the start/finish "
     "line changes which corners Pacer finds. The Stats page prints both counts under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the
