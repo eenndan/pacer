@@ -426,6 +426,9 @@ add_test(NAME test_driving
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_driving.py)
 set_tests_properties(test_driving PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# D1: on a real recording, the brake/throttle band (the chart's, and the map's Line: Pedal) holds
+# each braking zone whole against zones defined without it, and paints no brake outside a glyph's event.
+add_footage_test(test_driving test_pedal_band_holds_each_braking_zone_whole)
 # Auto coaching summary (studio.coaching / coaching_panel, F10): the per-corner median-time-loss
 # ranking + the DETERMINISTIC dominant-reason selection (a planted apex-speed deficit ⇒ apex; a
 # planted late-throttle coast the best lap lacks ⇒ coasting; an earlier/longer brake ⇒ braking;
