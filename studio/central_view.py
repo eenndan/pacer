@@ -1998,7 +1998,10 @@ class CentralView(QWidget):
         strip = getattr(self, "_trust_strip", None)
         if strip is None:  # partially-built view (no banner chrome) — nothing to refresh
             return
-        provisional = not self.session.timing_verified
+        # No GPS trace, no line to drag: the amber call to action would sit directly above the
+        # quality line saying no lap can be timed (data_quality.no_start_line).
+        provisional = (not self.session.timing_verified
+                       and not data_quality.no_start_line(self.session))
         quality = self.session.timing_quality
         degraded = quality.degraded
         # The map banner + the table header chip read the SAME shared summary/detail off

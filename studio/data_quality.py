@@ -244,6 +244,19 @@ def timing_word(quality) -> str:
     return "ESTIMATED" if getattr(quality, "media_clock", False) else "GPS LOW"
 
 
+def no_start_line(session) -> bool:
+    """True when this recording has no GPS trace, and so no start/finish line to confirm.
+
+    `timing_verified` is False on such a recording, and every provisional-timing surface used to
+    take that at its word. On karma.mp4 (0 fixes; its start line is the (0,0)-(0,0) placeholder)
+    the map's trust strip asked the reader to "drag the start/finish line on the map" directly
+    above its own "No usable GPS in this recording — no lap can be timed". The DATA TRUST card the
+    NO GPS chip opens blamed the track database for the missing line. The report said the line
+    "was auto-fitted", which it was not. Those surfaces ask this instead. Duck-typed: a stand-in
+    with no timing verdict has a line."""
+    return bool(getattr(getattr(session, "timing_quality", None), "no_gps", False))
+
+
 # ============================================================ the LOCATABLE half of the verdict
 # `TimingQuality` above is ONE verdict for a WHOLE recording, and that is the shape of the thing it
 # cannot say. Measured on the owner's own recordings: the D24 0062 trio rejects 482 of 50,492 fixes

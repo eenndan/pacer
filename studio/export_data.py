@@ -503,7 +503,10 @@ def _timing_meta(session) -> str:
     throughout: a Session double without these is reported as the good case, never as a crash in
     the middle of writing a report."""
     bits = []
-    if not getattr(session, "timing_verified", True):
+    # Not on a recording with no GPS trace: no line was fitted there, and the NO GPS bit below
+    # says what is actually wrong (data_quality.no_start_line).
+    if (not getattr(session, "timing_verified", True)
+            and not data_quality.no_start_line(session)):
         bits.append("PROVISIONAL — the start/finish line was auto-fitted and not confirmed, so "
                     "every lap time and split below is measured from an arbitrary point")
     quality = getattr(session, "timing_quality", None)
