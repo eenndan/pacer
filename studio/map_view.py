@@ -209,12 +209,14 @@ _RAINBOW_ORDER = ("off", "speed", "delta", "delta_rate", "grip", "brake_throttle
 #
 # "Pedal", not the chart's "Brake/Throttle", AND THAT IS A MEASURED WIDTH. PanelToolbar pins the
 # combo at its sizeHint, which is its widest entry, and the map toolbar's width is the right
-# column's minimum: 544 px against the 557 px the charts panel already sets there
-# (test_map_key.test_the_map_toolbars_glyphs_cost_the_window_no_minimum_width). In the themed font
-# "Line: Brake/Throttle (est)" needs 152 px against today's widest entry's 91 and would widen the
-# combo by 62 px, pushing the window's own minimum up; "Line: Pedal (est)" needs 99 px (+8). The
-# legend under the line and the dropdown's tooltip say "brake" / "throttle" and name the chart
-# band, so the two words the chart uses are one glance away.
+# column's minimum, which must stay under the charts panel's
+# (test_map_key.test_the_map_toolbars_glyphs_cost_the_window_no_minimum_width). Measured in the
+# themed font: "Line: Brake/Throttle (est)" needs 152 px against the previous widest entry's 91
+# ("Line: Grip (est)"), which would widen the combo by 62 px and the toolbar from 544 to ~606 px,
+# past the charts panel's 553 — raising the window's own minimum width. "Line: Pedal (est)" needs
+# 99 px: the toolbar goes 544 -> 552 px, ONE pixel under 553. The next entry wider than this one
+# will trip that guard. The legend under the line and the dropdown's tooltip say "brake" /
+# "throttle" and name the chart band, so the chart's two words are one glance away.
 _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
                          "delta_rate": "Line: Δ rate", "grip": theme.estimated_label("Line: Grip"),
                          "brake_throttle": theme.estimated_label("Line: Pedal"),
