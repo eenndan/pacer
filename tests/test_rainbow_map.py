@@ -559,10 +559,15 @@ def test_pedal_line_and_chart_band_brake_and_throttle_in_the_same_colours():
             mv.refresh_palette()
             mv.set_current_lap(1)
             mv.set_rainbow_mode("brake_throttle")
-            items = mv._rainbow._items
-            assert items[0].xData.size > 0 and items[-1].xData.size > 0
-            map_brake = items[0].opts["pen"].color().name().upper()
-            map_throttle = items[-1].opts["pen"].color().name().upper()
+            # The pen that actually DRAWS each stretch — found by the stretch's own points, not by
+            # bucket index, so a channel that put the brakes in the wrong bucket cannot pass on the
+            # ramp's two end colours alone.
+            def pen_drawing(x, items=mv._rainbow._items):
+                owners = [it for it in items if it.xData is not None and np.any(it.xData == x)]
+                assert len(owners) == 1, f"{len(owners)} bucket items draw the point x={x}"
+                return owners[0].opts["pen"].color().name().upper()
+            map_brake = pen_drawing(float(s.tx[2]))            # inside the full-brake half
+            map_throttle = pen_drawing(float(s.tx[n - 3]))     # inside the full-throttle half
             assert (map_brake, map_throttle) == (band_brake, band_throttle), (
                 f"{pal}: the map paints brake/throttle {map_brake}/{map_throttle}, the chart band "
                 f"{band_brake}/{band_throttle}")

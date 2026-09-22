@@ -5,8 +5,8 @@ rendering need — value→bucket quantization (`bucketize`), per-bucket draw-ar
 (`bucket_polylines`), grid→points Δ resampling (`resample_grid_to_points`), the local gain/loss
 rate (`delta_rate`), and the per-channel rainbow computation (`rainbow_channel`: the channel→value
 mapping, the Δ/Δ-rate/grip NEGATION, the fixed grip scale, the Δ-rate and brake/throttle SYMMETRIC
-scales, and the GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy arrays and returns
-plain numpy arrays / scalars, and no function here touches Qt or pacer.
+scales, and the GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy
+arrays and returns plain numpy arrays / scalars, and no function here touches Qt or pacer.
 
 The MODULE, however, is not Qt-free at import: `from .theme import MAP_RAINBOW_N` takes one int
 from the palette module, and `theme` imports PySide6 — so `import studio.map_render` really does
