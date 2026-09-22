@@ -373,6 +373,20 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **The Brake/Throttle band paints a braking zone as one piece.** Its brake half used to be a second,
+  cruder detector: every 10 Hz sample decelerating past 0.18 g, with no hysteresis. The speed
+  derivative carries about 0.1 g of noise, so a zone broke wherever one sample dipped, and the floor
+  sat above the brake detector's own 0.16 g threshold. Measured on the four recordings on this machine
+  against braking zones defined without the band, **36.5–50 % of zones painted as two or more pieces**
+  and the band drew 21–38 separate red runs a lap. It now paints the brake detector's own braking:
+  each fragment that lasts the detector's 0.25 s minimum, full from its first sample past the
+  threshold to its last. Fragmented zones fall to 5.8–12.9 %. Recall rises from 84–86 % to 92–95 %,
+  precision from 74–84 % to 82–89 %, and red painted while the kart accelerates drops from 0.23–0.46 s
+  a lap to 0.00–0.02 s. The brake points, coaching and the brake-habit table do not move: the
+  detector is unchanged, and its events are byte-identical on all 154 laps. The brake half stays
+  on/off on purpose: inside a braking zone the per-sample noise is as large as the braking's own
+  variation. The map's **Line: Pedal (est)** paints the same array and changes with it.
+
 - **The corner match is described the way it now works, on the Stats page and in the panel that
   explains a corner Best.** Both said an edge counts when it is "matched to your best lap's line"
   (the CORNERS BY LAP grid: "within 3 m"). That is still true, but since the receiver's drift is

@@ -342,7 +342,7 @@ def test_brake_throttle_intensity_band():
     g = np.zeros(n)
     g[300:420] = -0.40           # hard brake (above theta_b) -> strong negative
     g[600:720] = 0.30            # clear acceleration -> positive throttle
-    g[800:880] = -0.10           # sub-floor lift/engine braking (< BRAKE_INTENSITY_FLOOR) -> ~0
+    g[800:880] = -0.10           # lift/engine braking, never past theta_b: no detector fragment -> 0
     inten = D.brake_throttle_intensity(elapsed, g, THETA_B)
     assert len(inten) == n, len(inten)
     assert inten.min() >= -1.0 and inten.max() <= 1.0, (inten.min(), inten.max())
@@ -357,6 +357,100 @@ def test_brake_throttle_intensity_band():
     # No g signal (theta_b <= 0) -> all zeros.
     assert np.all(D.brake_throttle_intensity(elapsed, g, 0.0) == 0.0)
     print("ok brake/throttle band: hard brake strong-, on-power +, lift/cruise 0, clipped to [-1,1]")
+
+
+def _pedal_lap():
+    """A 10 Hz lap (the real lap grid, so SMOOTH_S is the no-op it is on the footage) at 25 m/s,
+    with theta_b = 0.16 g — the value all four recordings on this machine derive. Three stretches:
+
+      * ONE braking zone, 100..129, at 0.45 g with three single-sample dips the bare 10 Hz
+        derivative's ~0.1 g of noise produces inside a real zone: to 0.10 and 0.12 g (under
+        theta_b, above the detector's 0.056 g release) and to 0.17 g (above theta_b, under the old
+        band's 0.18 g floor). A 0.4 s lift at 0.08 g leads into it (96..99) and a 0.3 s 0.07 g
+        release trails it (130..132): decel the detector's Schmitt fragment reaches into, and the
+        coast channel's own band (COAST_DRAG_MIN..theta_b);
+      * a one-sample 0.30 g noise spike in a cruise at 200 — shorter than MIN_BRAKE_S;
+      * two 1.0 s brake applications, 250..259 and 265..274, with a 0.5 s (12.5 m) coast between
+        them that decelerates at only 0.02 g. The detector's maneuver merge fuses them into ONE
+        event (the coast is under MERGE_TROUGH_GAP_M), but nobody is braking in that gap."""
+    n = 400
+    elapsed = np.arange(n) * 0.1
+    dist = np.arange(n) * 2.5
+    g = np.zeros(n)
+    g[96:100] = -0.08
+    g[100:130] = -0.45
+    g[108], g[115], g[121] = -0.10, -0.12, -0.17
+    g[130:133] = -0.07
+    g[200] = -0.30
+    g[250:260] = -0.40
+    g[260:265] = -0.02
+    g[265:275] = -0.40
+    g[320:340] = 0.30            # on power
+    return dist, elapsed, g, 0.16
+
+
+def _runs(mask):
+    m = np.asarray(mask, bool).astype(int)
+    d = np.diff(np.r_[0, m, 0])
+    return [(int(a), int(b))
+            for a, b in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1) - 1, strict=True)]
+
+
+def test_pedal_band_paints_one_braking_zone_as_one_piece():
+    """D1: the band's brake half is the brake DETECTOR'S own braking — each of its Schmitt fragments
+    (enter below -theta_b, release above -theta_b*RELEASE_RATIO) that lasts MIN_BRAKE_S, painted at
+    full from its first sample past -theta_b to its last.
+
+    It used to threshold each bare 10 Hz sample at BRAKE_INTENSITY_FLOOR (0.18 g) with no
+    hysteresis, so the derivative's own noise cut one zone into pieces: on the four recordings on
+    this machine 36-50 % of independently-defined braking zones painted as 2+ pieces (5.8-12.9 %
+    now), and the band painted 21-38 brake runs a lap for 7-12 zones, 69-80 % of them shorter than
+    5 m. The floor also sat ABOVE theta_b (0.18 vs 0.16), so a sample the detector counts as braking
+    read 0.
+
+    Four claims: the zone paints as ONE piece; its lift lead-in and release tail do not (the
+    fragment reaches into them, and painting them cost precision against every reference tried); a
+    noise spike shorter than MIN_BRAKE_S paints nothing; and a coast the detector's maneuver MERGE
+    bridges is NOT painted — that one refuses "hold the band over each detected event", which
+    painted brake for 1.3-4.3 s a lap while the kart was ACCELERATING."""
+    dist, elapsed, g, theta = _pedal_lap()
+    band = D.brake_throttle_intensity(elapsed, g, theta)
+    brake = band < 0
+
+    zone = _runs(brake[90:140])
+    assert zone == [(10, 39)], (
+        f"the braking zone 100..129 painted as {len(zone)} piece(s) "
+        f"{[(a + 90, b + 90) for a, b in zone]} — one zone is one piece, from its first sample past "
+        f"-theta_b to its last; values {band[94:134].round(2).tolist()}")
+    assert not brake[195:206].any(), (
+        f"a 0.1 s noise spike painted brake at {np.flatnonzero(brake[195:206]) + 195} — shorter than "
+        f"MIN_BRAKE_S ({D.MIN_BRAKE_S} s), it is not a brake application")
+
+    events = D.brake_events(dist, elapsed, g, theta)
+    merged = [e for e in events if 250 * 2.5 - 1 <= e.onset_dist <= 250 * 2.5 + 1]
+    assert len(merged) == 1 and merged[0].onset_time + merged[0].duration >= elapsed[274] - 1e-9, (
+        f"the fixture must make the detector MERGE the two applications across the coast: {events}")
+    assert not brake[260:265].any(), (
+        f"the band painted brake over the coast the maneuver merge bridged: {band[258:267].round(2)}")
+    assert _runs(brake[245:280]) == [(5, 14), (20, 29)], _runs(brake[245:280])
+
+    # Binary brake half, proportional throttle half: the throttle is untouched by the fix.
+    assert set(np.unique(band[brake]).tolist()) == {-1.0}, np.unique(band[brake])
+    assert np.allclose(band[320:340], 0.30 / D.THROTTLE_ENV_G), band[320:340]
+    # The band and the glyphs are one detector: every painted run lies inside a detected event, and
+    # each event's red starts at its first sample past -theta_b (its glyph sits at the fragment's
+    # lead-in, which the band leaves to the coast channel).
+    inside = np.zeros(len(g), bool)
+    for e in events:
+        span = (elapsed >= e.onset_time - 1e-9) & (elapsed <= e.onset_time + e.duration + 1e-9)
+        inside |= span
+        first_past = int(np.flatnonzero(span & (g < -theta))[0])
+        assert brake[first_past] and not brake[span & (elapsed < elapsed[first_past])].any(), (
+            f"the event at {e.onset_time:.1f} s: red must open at its first sample past -theta_b "
+            f"({elapsed[first_past]:.1f} s)")
+    assert [round(e.onset_time, 1) for e in events] == [9.6, 25.0], events
+    assert not (brake & ~inside).any(), np.flatnonzero(brake & ~inside)
+    print(f"ok pedal band: one zone one piece, tails / spike / merged coast unpainted ({events})")
 
 
 def test_corner_grip_math():
