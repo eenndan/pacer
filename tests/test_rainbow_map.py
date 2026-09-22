@@ -21,6 +21,10 @@ MapView-level (offscreen, stub session — no pacer laps, no telemetry file):
     the draggable timing-line handles + video marker) is preserved exactly; and no corner label is
     ever left buried under the MOVING video-position marker, which the once-per-corner-set declutter
     layout could not see — enforced with the layout itself still off the ~30 Hz tick.
+  * (F6) Line: Pedal paints the speed chart's own brake/throttle band array — never a pedal state
+    re-derived from the speed — in the band's own brake and throttle colours in both palettes, and
+    degrades like grip without a g signal. `footage.test_pedal_mode_paints_the_chart_band` checks
+    every valid lap of a real recording (`PACER_GOLDEN_MP4`).
 Run: python tests/test_rainbow_map.py
 """
 import math
@@ -39,6 +43,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+import _footage  # noqa: E402
 from _synthetic import bare_session  # noqa: E402
 
 from studio import theme  # noqa: E402
@@ -219,7 +224,13 @@ def _stub_session(n=60):
     # Stub the DrivingChannels service face MapView reads (session.driving.lap_grip_utilization);
     # set the backing _driving slot since session.driving is a (settable-only-via-slot) property.
     grip = np.linspace(0.1, 1.1, n)
-    s._driving = SimpleNamespace(lap_grip_utilization=lambda lid: grip)
+    # F6 Line: Pedal — the D3 band's (dist, elapsed, intensity), deliberately NON-PHYSICAL: it brakes
+    # and re-throttles twice while the stub's speed only ever rises. A map that re-derived the pedal
+    # state from the speed (a second detector) would paint this lap all throttle; one that paints the
+    # band paints the brakes.
+    pedal = np.sin(np.linspace(0.0, 4 * math.pi, n))
+    s._driving = SimpleNamespace(lap_grip_utilization=lambda lid: grip,
+                                 lap_brake_throttle=lambda lid: (cum, t, pedal))
     # F3 Line: Elevation — a synthetic altitude ramp (metres), aligned to xy.
     elev = np.linspace(10.0, 40.0, n)
     s.lap_elevation_channel = lambda lid: elev
@@ -258,7 +269,10 @@ def test_toggle_off_restores_exact_items_and_pens():
     mv._cycle_rainbow()  # delta rate → grip
     assert mv._rainbow_mode == "grip"
     assert sum(it.xData.size for it in mv._rainbow._items) > 0, "grip rainbow must hold data"
-    mv._cycle_rainbow()  # grip → elevation
+    mv._cycle_rainbow()  # grip → pedal
+    assert mv._rainbow_mode == "brake_throttle"
+    assert sum(it.xData.size for it in mv._rainbow._items) > 0, "pedal rainbow must hold data"
+    mv._cycle_rainbow()  # pedal → elevation
     assert mv._rainbow_mode == "elevation"
     assert sum(it.xData.size for it in mv._rainbow._items) > 0, "elevation rainbow must hold data"
     mv._cycle_rainbow()  # elevation → off
@@ -376,8 +390,8 @@ def test_default_channel_is_speed_and_combo_reads_speed():
     """A freshly-built MapView leads with the SPEED gradient (the signature visual): the mode is
     'speed', the labelled combo already shows 'Line: Speed', and once the current lap is set the
     speed rainbow paints without any user action. Cycling still walks the WHOLE channel list in
-    order — off → speed → Δ → Δ rate → grip → elevation → off, the two Δ channels adjacent — and
-    the combo stays in sync at every step."""
+    order — off → speed → Δ → Δ rate → grip → pedal → elevation → off, the two Δ channels adjacent
+    and the two estimated g channels adjacent — and the combo stays in sync at every step."""
     s = _stub_session()
     mv = MapView(s)
     assert mv._rainbow_mode == "speed", "the map must open speed-coloured"
@@ -389,11 +403,12 @@ def test_default_channel_is_speed_and_combo_reads_speed():
     assert mv._legend.isVisibleTo(mv), "the speed legend shows on load"
     # Cycling still visits every channel in order, combo mirroring the mode each step.
     seen = [mv._rainbow_mode]
-    for _ in range(6):
+    for _ in range(7):
         mv._cycle_rainbow()
         assert mv.rainbow_combo.currentData() == mv._rainbow_mode, "combo must stay in sync"
         seen.append(mv._rainbow_mode)
-    assert seen == ["speed", "delta", "delta_rate", "grip", "elevation", "off", "speed"], seen
+    assert seen == ["speed", "delta", "delta_rate", "grip", "brake_throttle", "elevation", "off",
+                    "speed"], seen
     print("test_default_channel_is_speed_and_combo_reads_speed OK")
 
 
@@ -446,6 +461,167 @@ def test_grip_channel_degrades_when_no_g():
     assert all(it.isVisible() for it in mv._current_overlay._items), "overlay stays visible"
     assert not mv._legend.isVisibleTo(mv), "legend hidden when nothing painted"
     print("test_grip_channel_degrades_when_no_g OK")
+
+
+# ----------------------------------------------- F6 Line: Pedal (the D3 band on the racing line)
+def _painted(mv):
+    """Every rainbow bucket item's (xData, yData), empty arrays for an unused bucket."""
+    out = []
+    for it in mv._rainbow._items:
+        x = np.empty(0) if it.xData is None else np.asarray(it.xData)
+        y = np.empty(0) if it.yData is None else np.asarray(it.yData)
+        out.append((x, y))
+    return out
+
+
+def _same_polylines(a, b):
+    return len(a) == len(b) and all(
+        np.array_equal(ax, bx, equal_nan=True) and np.array_equal(ay, by, equal_nan=True)
+        for (ax, ay), (bx, by) in zip(a, b, strict=True))
+
+
+def _pedal_polylines(xs, ys, pedal):
+    """What the band's own array paints, bucket by bucket, on the fixed [-1, 1] scale."""
+    seg = 0.5 * (pedal[:-1] + pedal[1:])
+    return bucket_polylines(xs, ys, bucketize(seg, theme.MAP_RAINBOW_N, lo=-1.0, hi=1.0),
+                            theme.MAP_RAINBOW_N)
+
+
+def test_pedal_channel_paints_the_bands_own_array():
+    """F6, one quantity one source, on the REAL widget. The stub's band brakes twice while its speed
+    only rises, so the painting separates the two possible sources: the band's own array paints
+    brake buckets; the pedal state re-derived from this speed trace through the detector's own
+    helpers — a second detector — paints none, and the test checks the two really do differ before
+    it trusts the comparison."""
+    from studio import driving
+    from studio._signal import speed_long_g
+
+    s = _stub_session()
+    mv = MapView(s)
+    mv.set_current_lap(1)
+    mv.set_rainbow_mode("brake_throttle")
+    _APP.processEvents()
+    assert mv.rainbow_combo.currentText() == "Line: Pedal (est)", mv.rainbow_combo.currentText()
+    xs, ys = s.tx, s.ty
+    _d, _e, band = s.driving.lap_brake_throttle(1)
+    want = _pedal_polylines(xs, ys, np.asarray(band, float))
+    rederived = driving.brake_throttle_intensity(np.asarray(s.tt), speed_long_g(s.tv, s.tt), 0.16)
+    second = _pedal_polylines(xs, ys, rederived)
+    assert not _same_polylines(want, second), "the stub cannot tell the band from a re-derivation"
+    got = _painted(mv)
+    assert _same_polylines(got, want), "the map did not paint the band's own array"
+    assert got[0][0].size > 0, "the band's full-brake stretches must paint the bottom bucket"
+    assert all(not it.isVisible() for it in mv._current_overlay._items), "painted over the overlay"
+    lg = mv._legend
+    assert lg.isVisibleTo(mv) and lg._strip.isVisibleTo(lg), "the legend and its ramp show"
+    assert (lg.lo_label.text(), lg.hi_label.text()) == ("brake (est)", "throttle (est)")
+    print("test_pedal_channel_paints_the_bands_own_array OK")
+
+
+def test_pedal_channel_degrades_when_no_g():
+    """No g signal (the band accessor's (None, None, None)) paints nothing, keeps the plain overlay
+    and hides the legend — the grip channel's degrade, not a crash and not a flat mid-colour line."""
+    s = _stub_session()
+    s.driving.lap_brake_throttle = lambda lid: (None, None, None)
+    mv = MapView(s)
+    mv.set_current_lap(1)
+    mv.set_rainbow_mode("brake_throttle")
+    assert all(x.size == 0 for x, _y in _painted(mv)), "must not paint"
+    assert all(it.isVisible() for it in mv._current_overlay._items), "overlay stays visible"
+    assert not mv._legend.isVisibleTo(mv), "legend hidden when nothing painted"
+    print("test_pedal_channel_degrades_when_no_g OK")
+
+
+def test_pedal_line_and_chart_band_brake_and_throttle_in_the_same_colours():
+    """The map's Pedal line and the speed chart's Brake/Throttle band are two drawings of one array,
+    so they must not colour its two halves differently — in EITHER palette. Full brake paints the
+    map's bottom bucket and full throttle its top one; those pens must be the band's brake and
+    throttle fills (the band's alpha aside), read off the real PlotsView and the real MapView."""
+    from test_accessible_cues import _bt_fill_colours, _FakeChartSession
+
+    from studio.plots_view import PlotsView
+
+    s = _stub_session()
+    n = len(s.tx)
+    full = np.where(np.arange(n) < n // 2, -1.0, 1.0)
+    s.driving.lap_brake_throttle = lambda lid: (None, None, full)
+    seen = {}
+    try:
+        for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+            theme.set_palette(pal)
+            pv = PlotsView(_FakeChartSession())
+            pv.set_laps([0])
+            pv.set_brake_throttle([(np.linspace(0.0, 200.0, 100),
+                                    np.where(np.arange(100) < 50, -1.0, 1.0))])
+            pv.brake_throttle_btn.setChecked(True)
+            band_brake, band_throttle = _bt_fill_colours(pv)
+            mv = MapView(s)
+            mv.refresh_palette()
+            mv.set_current_lap(1)
+            mv.set_rainbow_mode("brake_throttle")
+            # The pen that actually DRAWS each stretch — found by the stretch's own points, not by
+            # bucket index, so a channel that put the brakes in the wrong bucket cannot pass on the
+            # ramp's two end colours alone.
+            def pen_drawing(x, items=mv._rainbow._items):
+                owners = [it for it in items if it.xData is not None and np.any(it.xData == x)]
+                assert len(owners) == 1, f"{len(owners)} bucket items draw the point x={x}"
+                return owners[0].opts["pen"].color().name().upper()
+            map_brake = pen_drawing(float(s.tx[2]))            # inside the full-brake half
+            map_throttle = pen_drawing(float(s.tx[n - 3]))     # inside the full-throttle half
+            assert (map_brake, map_throttle) == (band_brake, band_throttle), (
+                f"{pal}: the map paints brake/throttle {map_brake}/{map_throttle}, the chart band "
+                f"{band_brake}/{band_throttle}")
+            seen[pal] = (map_brake, map_throttle)
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    assert seen[theme.PALETTE_STANDARD] != seen[theme.PALETTE_COLORBLIND], "the flip moved nothing"
+    print(f"test_pedal_line_and_chart_band_brake_and_throttle_in_the_same_colours OK {seen}")
+
+
+# ---------------------------------------------------------------- real footage (tests/_footage.py)
+def test_pedal_mode_paints_the_chart_band():
+    """F6 on a REAL recording: for EVERY valid lap the map's Pedal line is exactly the chart band's
+    array (`lap_brake_throttle_plot`, the accessor the speed chart draws from), painted — and it
+    paints on every one of them, so the band reaches the map points on every lap rather than being
+    refused as short. The recording is `PACER_GOLDEN_MP4`'s, chapters expanded; its folder is
+    snapshotted (size + mtime) and must be unchanged afterwards."""
+    from studio import chapters
+    from studio.map_render import rainbow_channel
+    from studio.session import Session
+
+    path = _footage.recording()
+    files = chapters.discover_siblings(path)
+    folder = os.path.dirname(os.path.abspath(files[0]))
+
+    def state():
+        return {f: (os.stat(os.path.join(folder, f)).st_size,
+                    os.stat(os.path.join(folder, f)).st_mtime_ns)
+                for f in sorted(os.listdir(folder)) if not f.startswith(".")}
+
+    before = state()
+    session = Session.load(files)
+    assert state() == before, f"a file in {folder} changed during the load"
+    ids = session.valid_lap_ids()
+    assert ids, "no valid laps"
+    mv = MapView(session)
+    mv.set_rainbow_mode("brake_throttle")
+    painted = 0
+    for lid in ids:
+        mv.set_current_lap(lid)
+        _x, band = session.driving.lap_brake_throttle_plot(lid, "time")
+        assert band is not None, f"lap {lid}: the chart band has nothing to draw"
+        _xd, band_d = session.driving.lap_brake_throttle_plot(lid, "distance")
+        assert band_d is None or np.array_equal(band_d, band), f"lap {lid}: the band's two x modes"
+        ch = session.lap_channels(lid)
+        got = rainbow_channel("brake_throttle", ch["t_telemetry_s"], ch["x_m"], ch["y_m"],
+                              ch["speed_kmh"], ch["dist_m"], None, None, pedal=band)
+        assert got is not None and got[0] is not None, f"lap {lid}: the band was not paintable"
+        want = bucket_polylines(ch["x_m"], ch["y_m"], got[0], theme.MAP_RAINBOW_N)
+        assert _same_polylines(_painted(mv), want), f"lap {lid}: the map is not the chart band"
+        painted += 1
+    assert state() == before, f"a file in {folder} changed during the check"
+    print(f"test_pedal_mode_paints_the_chart_band: {painted}/{len(ids)} valid laps of "
+          f"{os.path.basename(files[0])} (+{len(files) - 1} chapters) paint the band's own array")
 
 
 # ----------------------------------------------- B4 unknown-track provisional start cue
@@ -713,8 +889,16 @@ def test_marker_tick_never_relayouts_the_corner_labels():
     print("test_marker_tick_never_relayouts_the_corner_labels OK")
 
 
+# Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name without
+# its recording, and left out of the ordinary run below.
+FOOTAGE_CHECKS = (test_pedal_mode_paints_the_chart_band,)
+
+
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and v not in FOOTAGE_CHECKS]
     for t in tests:
         t()
         print(f"ok  {t.__name__}")
