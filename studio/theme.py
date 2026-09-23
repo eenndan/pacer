@@ -596,7 +596,7 @@ def estimated_label(title: str) -> str:
 
 
 # WHAT A GRIP READING CAN BE COMPARED WITH — one sentence, shared verbatim by every surface that
-# shows one: the Corners tab's "Grip (est)" column, the Stats page's CORNERS "Grip %" column (both
+# shows one: the "Grip (est)" column on the Corners tab and on the Stats page's CORNERS table (both
 # `driving.corner_grip`, the median of the per-sample value over the corner) and the map's Grip line
 # (`driving.grip_utilization`, that per-sample value, over the SAME session divisor). #346 measured
 # it on four recordings (studio/docs/grip-regrounding-2026-09.md): WITHIN one corner, across laps,

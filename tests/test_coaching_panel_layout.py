@@ -458,6 +458,23 @@ def test_reason_cell_drops_the_metres_and_names_the_target():
     print("test_reason_cell_drops_the_metres_and_names_the_target OK")
 
 
+def test_the_brake_hint_names_the_laps_it_counted():
+    """Lane A. Since #339 `Session._brake_rows` — the list the hint's `BrakeHabit` medians — drops
+    a lap's brake point wherever that lap's corner was interpolated, so `n_laps` counts the clean
+    laps that braked into the corner AND were matched on track there. The hover still called them
+    "the N clean laps you braked into this corner": on MK_18_09_26's C2 it read 16 where 18 clean
+    laps braked into C2 (two were interpolated there, and the BRAKING table's n reads the same 16)."""
+    ok = coaching.Opportunity(cid=12, direction=1, time_lost=0.034, entry_dist=972.4,
+                              reason=_reason(coaching.REASON_BRAKING))
+    p = _panel([ok], (900, 600),
+               brake_points={12: _bp(cid=12, actual=973.7, optimal=980.7, n_laps=16)})
+    tip = p.table.item(0, _PANEL_COL_REASON).toolTip()
+    assert "Brake ~7 m later into C12" in p.table.item(0, _PANEL_COL_REASON).text()
+    assert "16 clean laps you braked into this corner," not in tip, tip
+    assert "16 clean laps that braked into this corner and were matched on track" in tip, tip
+    print("test_the_brake_hint_names_the_laps_it_counted OK")
+
+
 def _run_all():
     test_narrow_panel_spends_its_width_on_the_prose()
     test_wide_panel_keeps_the_reach_column()
@@ -471,6 +488,7 @@ def _run_all():
     test_reach_cell_never_states_a_count_without_its_denominator()
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
     test_reason_cell_drops_the_metres_and_names_the_target()
+    test_the_brake_hint_names_the_laps_it_counted()
     test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 

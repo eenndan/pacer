@@ -380,6 +380,11 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   0.00 s. Earlier figures of ~0.35–0.40 s in this repo were measured against raw telemetry time,
   which slides by 0.10–0.17 s across a session because the two clocks also differ by ~27 ppm;
   which stream is late was settled against the picture itself.
+- **Grip has one name.** Stats ▸ CORNERS called the per-corner grip reading "Grip %", while the
+  Corners tab and the map called the same number "Grip (est)". All three now say **Grip (est)**.
+  The % moved into the section heading ("CORNERS · speeds in km/h · grip %"), as the Corners tab
+  already shows it in its unit line. The map's grip legend now reads "unused (est)" rather than
+  "unused (est.)". No export changes: the CSV and HTML reports have no per-corner grip column.
 
 ### Fixed
 

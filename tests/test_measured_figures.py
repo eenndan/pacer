@@ -39,6 +39,12 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      "⚠ UNVERIFIED — NOT RE-MEASURABLE (T16)" mark in its own paragraph, and check 2's quotes, where
      a reader meets them without the table, must date themselves before #335. It has a negative
      control that plants every defect it looks for.
+  5. `refused-2026-09.md` NUMBERS ITS SECTIONS ONCE EACH, AND ITS INTRO COUNTS THEM. Two PRs from one
+     base each take "the next free section" and collide on merge. That has happened in four waves.
+     The sections must run 1..N, the intro's count word is derived from N, and every
+     "refused-2026-09.md … §N" in the tree must land on a section that exists. A dev probe's
+     citation must also land on the section that names the probe. It has a negative control built
+     from the collisions that really happened (#314/#315, #348/#349/#351).
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -1432,6 +1438,216 @@ def test_the_refusal_record_s_verdict_is_derived_from_its_table():
           f"(0 of 20 dots left of the best lap on both, sd {'/'.join(ratios)}×)")
 
 
+# ─── refused-2026-09.md: its section numbers, its count, and every citation of a section ─────────
+# In four waves running, two pull requests each claimed the same section number here: #314 and
+# #315 both wrote §4, and #348, #349 and #351 all wrote §11 or §12. No per-PR run can see that,
+# because each PR is consistent on its own base. Git flags the two appended sections as a conflict,
+# and whoever resolves it renumbers by hand: the section, the intro's count, and every file that
+# cites the section. Git flags none of the citing files. #351's probe merged its "§12" cleanly, and
+# after the merge §12 was D1's section. These checks make that hand resolution checkable on the
+# combined tree: numbers 1..N in order and each used once, an intro count DERIVED from N, and every
+# "refused-2026-09.md … §N" anywhere in the tree landing on a section that exists. A dev probe's
+# citation must also land on a section that names the probe, because each section's numbers come
+# from its probe.
+_REFUSED_HEADING = re.compile(r"^## (.*)$", re.M)
+_REFUSED_NUMBERED = re.compile(r"(\d+)\. \S")
+_REFUSED_UNNUMBERED = ("Related refusals that already live in the tree",)
+_REFUSED_INTRO = re.compile(r"^([A-Z][a-z]+(?:-[a-z]+)?) features were built far enough", re.M)
+_REFUSED_NAME = re.compile(r"refused-2026-09\.md")
+_SECTION_REF = re.compile(r"§(\d+)\b(?!\.\d)")          # "§4.5" is another doc's subsection
+# A citation's § numbers are the ones after the doc's name, up to the end of that sentence or the
+# next file named in it, whichever comes first.
+_CITATION_END = re.compile(r"[.;:!?][*_)\]`'\"]*(?=\s|$)|\.(?:md|py)\b")
+_PROBE_NAME = re.compile(r"\bp\d+_[a-z0-9_]+")
+_ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+         "fifteen sixteen seventeen eighteen nineteen").split()
+_TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
+
+
+def _count_word(n: int) -> str:
+    """1..99 the way the intro spells its count: "Thirteen", "Twenty-one"."""
+    word = _ONES[n] if n < 20 else _TENS[n // 10] + (f"-{_ONES[n % 10]}" if n % 10 else "")
+    return word.capitalize()
+
+
+def _refused_sections(doc: str) -> dict[int, str]:
+    """{section number: its heading and body} — the LAST of any duplicated number wins, which is
+    fine: a duplicate already fails `_refused_numbering_problems`."""
+    heads = list(_REFUSED_HEADING.finditer(doc))
+    out = {}
+    for k, m in enumerate(heads):
+        num = _REFUSED_NUMBERED.match(m.group(1))
+        if num:
+            out[int(num.group(1))] = doc[m.start():heads[k + 1].start() if k + 1 < len(heads) else None]
+    return out
+
+
+def _refused_numbering_problems(doc: str) -> tuple[list[int], list[str]]:
+    """(the section numbers in file order, what is wrong with them and with the intro's count). A
+    function of the text, so the negative control can hand it a planted copy."""
+    numbers, problems = [], []
+    for m in _REFUSED_HEADING.finditer(doc):
+        head = m.group(1).strip()
+        num = _REFUSED_NUMBERED.match(head)
+        if num:
+            numbers.append(int(num.group(1)))
+        elif head not in _REFUSED_UNNUMBERED:
+            problems.append(f"'## {head}' is neither a numbered section ('## N. …') nor one of "
+                            f"{list(_REFUSED_UNNUMBERED)}, so a refusal written under it is outside "
+                            f"the count")
+    dup = sorted({n for n in numbers if numbers.count(n) > 1})
+    if dup:
+        problems.append(f"§{', §'.join(map(str, dup))} claimed more than once. Two refusals written "
+                        f"from the same base took the same number: keep the one already on main "
+                        f"(other files cite it), renumber the other to the next free number, and "
+                        f"move every citation of it")
+    elif numbers != list(range(1, len(numbers) + 1)):
+        problems.append(f"the sections run {numbers}, not 1..{len(numbers)} in order")
+    intro = _REFUSED_INTRO.search(doc)
+    want = _count_word(len(numbers))
+    if intro is None:
+        problems.append("the intro's '<Count> features were built far enough …' sentence is gone, "
+                        "so nothing states the count this check derives")
+    elif intro.group(1) != want:
+        problems.append(f"the intro says '{intro.group(1)} features', but the doc has {len(numbers)} "
+                        f"numbered sections: it must say '{want}'")
+    return numbers, problems
+
+
+def _refused_citations(files: dict[str, str]) -> list[tuple[str, int, set[str]]]:
+    """(file, cited section, the dev probes that citation speaks for) for every "refused-2026-09.md
+    … §N" in `files`. Scanned a paragraph at a time, because the probes index names each probe at the
+    head of the paragraph that cites its section; a probe module also speaks for itself."""
+    out = []
+    for rel, raw in files.items():
+        own = re.fullmatch(r"studio/dev/probes/(p\d+_[a-z0-9_]+)\.py", rel)
+        for para in re.split(r"\n[ \t#]*\n", raw):
+            flat = _flatten(para)
+            probes = set(_PROBE_NAME.findall(flat)) | ({own.group(1)} if own else set())
+            cited = set()
+            for m in _REFUSED_NAME.finditer(flat):
+                window = flat[m.end():m.end() + 240]
+                end = _CITATION_END.search(window)
+                cited |= {int(n) for n in _SECTION_REF.findall(window[:end.start() if end else None])}
+            out += [(rel, n, probes if rel.startswith("studio/dev/probes/") else set())
+                    for n in sorted(cited)]
+    return out
+
+
+def _refused_citation_problems(doc: str, files: dict[str, str]) -> tuple[int, list[str]]:
+    """(how many citations were found, what is wrong with them). A function of the texts, like
+    `_refused_numbering_problems`, for the same reason."""
+    sections = _refused_sections(doc)
+    cites = _refused_citations(files)
+    problems = []
+    for rel, n, probes in cites:
+        if n not in sections:
+            problems.append(f"{rel} cites refused-2026-09.md §{n}, and there is no §{n} "
+                            f"(the doc has §1–§{max(sections)})")
+        elif probes and not any(p in sections[n] for p in probes):
+            head = sections[n].splitlines()[0]
+            problems.append(f"{rel} cites §{n} for {sorted(probes)}, but §{n} is '{head}' and names "
+                            f"none of them: the citation points at another refusal's section (a "
+                            f"renumbered collision), or §{n} should name the probe its numbers come from")
+    return len(cites), problems
+
+
+def _refused_tree() -> dict[str, str]:
+    """Every tracked text file that could cite the doc, except the doc and this file (whose negative
+    control plants wrong citations on purpose). CHANGELOG.md stays in: a released entry is history,
+    but the section numbers it cites are never renumbered, so they still have to resolve."""
+    out = {}
+    for rel in _tracked_files():
+        path = os.path.join(_REPO, rel)
+        if rel == os.path.relpath(_REFUSED, _REPO) or rel.endswith(os.path.basename(__file__)):
+            continue
+        if os.path.exists(path):
+            out[rel] = open(path, encoding="utf-8", errors="ignore").read()
+    return out
+
+
+def test_the_refusals_doc_numbers_its_sections_once_each_and_counts_them():
+    """The integrator's hand check, made automatic. Run on a combined tree, it fails on two
+    refusals that took the same number, on a gap, on an intro count nobody bumped, and on a citation
+    that did not move with its section."""
+    doc = _read(_REFUSED)
+    tree = _refused_tree()
+    numbers, problems = _refused_numbering_problems(doc)
+    found, cite_problems = _refused_citation_problems(doc, tree)
+    problems += cite_problems
+    # A citation outside the probes can only be checked for existence, and after a collision the
+    # stale number still exists. So name every file that cites a doubled number, for the hand fix.
+    for n in sorted({n for n in numbers if numbers.count(n) > 1}):
+        citers = sorted({rel for rel, m, _p in _refused_citations(tree) if m == n})
+        problems.append(f"§{n} is cited by {citers or 'nothing'}: check which refusal each one means")
+    assert not problems, "studio/docs/refused-2026-09.md:\n  " + "\n  ".join(problems)
+    # Both directions: the scan has to find the citations it exists for, so a regex that stops
+    # matching cannot turn this into a check over nothing.
+    subjects = {("studio/dev/probes/p4_corner_gps_quality.py", 4),
+                ("studio/dev/probes/p15_gps_gap_census.py", 13)}
+    seen = {(rel, n) for rel, n, _p in _refused_citations(tree)}
+    assert subjects <= seen, f"the citation scan lost {sorted(subjects - seen)} — it has lost its subject"
+    print(f"test_the_refusals_doc_numbers_its_sections_once_each_and_counts_them OK "
+          f"(§1–§{len(numbers)}, intro '{_count_word(len(numbers))}', {found} citations resolve)")
+
+
+def test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen():
+    """THE NEGATIVE CONTROL. Each planted copy is a shape that really reached this repo, or the
+    hand fix that would have missed one. Every one must be caught, and the safe shapes must pass."""
+    doc = _read(_REFUSED)
+    n = len(_refused_sections(doc))
+    assert n >= 13, n
+    last, prev = f"## {n}. ", f"## {n - 1}. "
+    related = "## " + _REFUSED_UNNUMBERED[0]
+    word = _count_word(n)
+    planted_docs = {
+        "#348 + #349: two sections numbered the same": doc.replace(last, prev),
+        "a gap, the next refusal numbered one too far": doc.replace(last, f"## {n + 1}. "),
+        "two sections in the wrong order": doc.replace(prev, "## @@. ").replace(last, prev)
+                                              .replace("## @@. ", last),
+        "the intro not bumped": doc.replace(f"{word} features were built",
+                                            f"{_count_word(n - 1)} features were built"),
+        "a new section with its heading misspelt": doc.replace(
+            related, f"## {n + 1} An unnumbered refusal — refused (X9)\n\n---\n\n{related}"),
+    }
+    for label, text in planted_docs.items():
+        assert text != doc, f"the plant for {label!r} changed nothing — the fixture moved"
+        _nums, problems = _refused_numbering_problems(text)
+        assert problems, f"the numbering check missed: {label}"
+    p15 = "studio/dev/probes/p15_gps_gap_census.py"
+    p4 = "studio/dev/probes/p4_corner_gps_quality.py"
+    p15_text = _read(os.path.join(_REPO, p15))
+    p4_text = _read(os.path.join(_REPO, p4))
+    planted_cites = {
+        "#351: p15 still citing §12 after its refusal became §13":
+            {p15: p15_text.replace("refused-2026-09.md`\n§13", "refused-2026-09.md`\n§12")},
+        "#314: a probe pointing at the section another PR took":
+            {p4: p4_text.replace("refused-2026-09.md` §4", "refused-2026-09.md` §3")},
+        "a citation of a section that does not exist":
+            {"studio/x.py": f"# The numbers are in `studio/docs/refused-2026-09.md` §{n + 1}.\n"},
+        "the § wrapped onto the next comment line":
+            {"studio/x.py": f"# Its verdict is `refused-2026-09.md`\n# §{n + 1} (a new refusal).\n"},
+    }
+    for label, files in planted_cites.items():
+        assert all(text not in (p15_text, p4_text) for text in files.values()), \
+            f"the plant for {label!r} changed nothing — the fixture moved"
+        _found, problems = _refused_citation_problems(doc, files)
+        assert problems, f"the citation check missed: {label}"
+    safe = {
+        "a mention with no section": "# the full refusal is in studio/docs/refused-2026-09.md.\n",
+        "another doc's subsection": "# refused-2026-09.md does not cover it (market research §44.5).\n",
+        "a § after another file in the sentence":
+            "# refused-2026-09.md and `corner-match-0060-2026-09.md` §44 agree.\n",
+        "two sections in one sentence": "# Verdicts: `refused-2026-09.md`\n# §9 (one) and §10 (two).\n",
+    }
+    for label, src in safe.items():
+        _found, problems = _refused_citation_problems(doc, {"studio/x.py": src})
+        assert not problems, f"the citation check flagged {label}, which is safe: {problems}"
+    print(f"test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen OK — "
+          f"{len(planted_docs) + len(planted_cites)} planted collisions caught, {len(safe)} safe "
+          f"shapes passed")
+
+
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
 def _footage_root() -> str:
     """The folder `PACER_MEASURED_FIGURES_DIR` names; unset raises `FootageMissing`, which CTest
@@ -2059,6 +2275,8 @@ def _run_all():
     test_the_floor_table_is_consistent_with_its_own_definitions()
     test_every_quote_of_the_floor_is_a_row_of_the_table()
     test_the_refusal_record_s_verdict_is_derived_from_its_table()
+    test_the_refusals_doc_numbers_its_sections_once_each_and_counts_them()
+    test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen()
     print("\nmeasured-figures checks passed")
 
 

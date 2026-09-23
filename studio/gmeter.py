@@ -108,7 +108,7 @@ LONG_SMOOTH_S = 0.35
 #
 #  * MATCHING THEM AT THE LATERAL'S 0.15 s BARELY MOVES A NUMBER. The p98 envelope (the dashed ring
 #    and the "grip ceiling" tile) goes 1.425 -> 1.447 g and 1.368 -> 1.378 g — +1.5 % and +0.7 %,
-#    one last digit of a tile that prints two — and the CORNERS "Grip %" column moves at most one
+#    one last digit of a tile that prints two — and the CORNERS "Grip (est)" column moves at most one
 #    point, reordering 0 and 1 of its 66 corner pairs. p98|a| is very nearly a LATERAL statistic:
 #    1.375 of that 1.425 g, and 1.334 of the 1.368, is the lateral axis on its own.
 #  * MATCHING THEM AT 0.35 s COSTS THE ONE AXIS THIS APP MEASURES WELL. Peak lateral g falls
