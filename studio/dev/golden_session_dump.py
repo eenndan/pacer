@@ -1,9 +1,10 @@
 """Whole-public-API numerical fingerprint of a real Session — the equivalence gate for the
 F1 god-object decomposition.
 
-Loads the real D24 recording (the `library` AND `track_db` app-support seams redirected to a temp
-dir, so nothing touches the user's app-support and the fingerprint cannot depend on which tracks
-they happen to have saved), then dumps a DENSE fingerprint (thousands of float/int values) of EVERY
+Loads one real recording — `PACER_GOLDEN_MP4`, by default chapter 1 of the working set's
+`MK_18_09_26` (see REAL below) — with the `library` AND `track_db` app-support seams redirected to a
+temp dir, so nothing touches the user's app-support and the fingerprint cannot depend on which tracks
+they happen to have saved; then dumps a DENSE fingerprint (thousands of float/int values) of EVERY
 public analysis method the refactor might touch, across a representative sweep of laps + modes + a
 distance/time grid. FIVE phases are captured into one JSON so cache-invalidation behaviour is
 fingerprinted too:
@@ -56,19 +57,25 @@ sys.path.insert(0, _ROOT)
 sys.path.insert(1, os.path.join(_ROOT, "bindings", "pacer"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# The gate's reference recording. Overridable, because the default path is only a convention — and
-# a file that EXISTS while failing to parse used to surface as a bare "Failed to open file".
+# The gate's recording: PACER_GOLDEN_MP4, else `studio.dev.footage.RECORDING_DEFAULT` — since G2
+# (2026-09-23) chapter 1 of the working set's MK_18_09_26, the recording on D24's own circuit, so a
+# dump covers the corners and braking zones the D24 gate covered (the reason is beside the default).
+# Overridable, because the default path is only a convention — and a file that EXISTS while failing
+# to parse used to surface as a bare "Failed to open file". It is READ, never written: it is the
+# owner's footage, and nothing about it comes from this tool's command line.
 #
-# THE DEFAULT IS CHAPTER **2**, and that is not a typo. GX010060.MP4 — the obvious default, and the
-# one this line carried — is the file this tool's own CLI destroyed, writing a JSON dump over
-# 11.9 GB of the owner's footage (its argument is the OUTPUT; see the usage note above). It still
-# EXISTS, still parses as a GoPro name, and is 2.4 MB of JSON, so every run of the real-D24 gate
-# that did not set PACER_GOLDEN_MP4 fingerprinted nothing at all. GX020060.MP4 is intact.
+# WHY THAT LAST CLAUSE IS LOAD-BEARING. The D24-era default was chapter **2**, GX020060.MP4, because
+# GX010060.MP4 — the obvious default, and the one this line once carried — is the file this tool's
+# own CLI destroyed, writing a JSON dump over 11.9 GB of the owner's footage (its argument is the
+# OUTPUT; see the usage note above). It went on parsing as a GoPro name while holding 2.4 MB of
+# JSON, so every real-D24 run that did not set PACER_GOLDEN_MP4 fingerprinted nothing at all.
+# D24 left the dev machine on 2026-09-19; `_resolve_out_path` still refuses any output that is not
+# a new `.json`, whatever the recording is.
 # Point PACER_GOLDEN_MP4 at any real recording; both sides of a comparison just have to use the
 # same one (the fingerprint is recording-specific — a before/after pair taken on DIFFERENT
 # recordings compares nothing). The variable and the default live in `studio.dev.footage`, which
 # the real-footage checks in tests/ read too: one variable points all of them at a recording.
-# Since 2026-09-19 the default is not on the dev machine either, and `preflight` refuses it.
+# A default that is not on the machine running the dump is refused by `preflight`, by name.
 from studio.dev import footage  # noqa: E402
 
 REAL = footage.recording_path()
@@ -106,7 +113,7 @@ _UNSUPPORTED = "__unsupported__"
 def fingerprint(s, *, strict: bool = True) -> dict:
     """Dense fingerprint of one Session STATE — every public analysis accessor, swept.
 
-    strict=True (default, the real D24 gate): every accessor is called directly; any exception
+    strict=True (default, the real-footage gate): every accessor is called directly; any exception
     propagates — behaviour is byte-identical to the original single-flow dump.
 
     strict=False (the CI synthetic gate): each accessor is guarded so an accessor a *bare*
@@ -115,7 +122,8 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     Python Session-math the equivalence gate protects (real corner detection / driving channels /
     delta / bests / consistency, all seeded on the synthetic session) is still fingerprinted in
     full; only the C++ Laps passthroughs (lap_count, sector geometry, session_date, ...) fall to
-    the sentinel. This never runs on the D24 path, so the real fingerprint stays byte-identical."""
+    the sentinel. This never runs on the real-footage path, so the real fingerprint stays
+    byte-identical."""
     out: dict = {}
 
     def put(key, thunk):
@@ -396,8 +404,11 @@ def preflight(path: str, *, opener_factory=gpmf_opener) -> str | None:
     `opener_factory` is injected by tests/test_golden_hermetic.py so both failure modes can be
     driven without a build."""
     if not os.path.exists(path):
+        named = bool(os.environ.get(footage.RECORDING_ENV, "").strip())
         return (f"FATAL: real session not found at {path} "
-                f"(set PACER_GOLDEN_MP4 to another recording)")
+                + ("(PACER_GOLDEN_MP4 names it; point it at a recording that is here)" if named else
+                   f"(that is the default, {footage.RECORDING_DEFAULT}; set PACER_GOLDEN_MP4 to a "
+                   f"recording on this machine — the working set is listed in studio/dev/footage.py)"))
     from studio import chapters
     probe = chapters.probe_mp4(path)
     if probe == chapters.MP4_UNREADABLE:
@@ -407,7 +418,8 @@ def preflight(path: str, *, opener_factory=gpmf_opener) -> str | None:
     if probe != chapters.MP4_CONTAINER:
         return (f"FATAL: {path} exists, and its first box header is not an ISO media box — so "
                 f"whatever it holds, it is not video. Point PACER_GOLDEN_MP4 at a recording; on "
-                f"the dev Desktop, ~/Desktop/D24/GX020060.MP4.")
+                f"the dev Desktop, one of the working set in studio/dev/footage.py (the default is "
+                f"{footage.RECORDING_DEFAULT}).")
     try:
         open_gpmf = opener_factory()
     except BindingsUnavailable as exc:

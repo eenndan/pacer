@@ -22,15 +22,15 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      quoted in session.py and corner_model.py), and each quote must equal what the table says.
      CHANGELOG.md is exempt: a released entry records what was true at release, and so is
      studio/docs/coaching-tables-on-d24.md, the record of these tables' superseded D24 editions.
-  3. THE TABLES ARE STILL TRUE OF THE APP. Opt-in, because it needs the owner's footage, which CI
-     does not have: set `PACER_MEASURED_FIGURES_DIR` to the folder holding the working set —
-     `Sandown 3h 2026/`, `SD_19_09_26/`, `SD_30_08_26/` and `MK_18_09_26/` (on the dev machine,
-     `~/Desktop`). Each check loads its recordings through `Session.load`, with every app-support
+  3. THE TABLES ARE STILL TRUE OF THE APP. It needs the owner's footage, which CI does not have: the
+     working set — `Sandown 3h 2026/`, `SD_19_09_26/`, `SD_30_08_26/` and `MK_18_09_26/` — found on
+     the Desktop by default (G2), or under the folder `PACER_MEASURED_FIGURES_DIR` names. Each check
+     loads its recordings through `Session.load`, with every app-support
      seam jailed, re-measures every cell by the method the table states, and prints the re-measured
      table in the source's own syntax BEFORE comparing — a re-base pastes that printout, it never
      retypes a cell. A size-and-mtime tripwire over every file in the folders a check loads must come
      back unchanged. Each of these checks is its own CTest registration, `footage.<name>`, and not
-     part of this file's ordinary run: with the variable unset, CTest reports it SKIPPED by name
+     part of this file's ordinary run: without its recordings, CTest reports it SKIPPED by name
      (tests/_footage.py) instead of this file counting it as passed. The tables were measured on
      D24 until T16b (2026-09-23) re-based them on the working set the owner chose when D24 left his
      machine; `_LAP_SETS` says which recording stands where.
@@ -53,7 +53,8 @@ is. Figures that exist only in prose and need footage to derive (the z-score, th
 each corner's best instance, the end-of-lap range) are checked by 3 alone.
 
 Run:  python tests/test_measured_figures.py
-      PACER_MEASURED_FIGURES_DIR=~/Desktop python tests/test_measured_figures.py --footage <check>
+      python tests/test_measured_figures.py --footage <check>      (on the Desktop working set)
+      PACER_MEASURED_FIGURES_DIR=<folder> python tests/test_measured_figures.py --footage <check>
 """
 
 from __future__ import annotations
@@ -1929,15 +1930,18 @@ def test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen():
 
 
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
-def _footage_root() -> str:
-    """The folder `PACER_MEASURED_FIGURES_DIR` names; unset raises `FootageMissing`, which CTest
-    reports as the calling check SKIPPED."""
-    return _footage.directory("PACER_MEASURED_FIGURES_DIR",
-                              "the folder holding the working set: 'Sandown 3h 2026/', SD_19_09_26/, "
-                              "SD_30_08_26/ and MK_18_09_26/")
+# WHERE THE LAP SETS ARE FOUND (G2): under the folder PACER_MEASURED_FIGURES_DIR names, else under
+# the Desktop — the working set's home, and where `_LAP_SETS` says every table's recordings are, so by
+# default each check re-measures exactly the recordings its table names. `_Footage` asks for every
+# chapter file of the lap sets a check loads: from the default, one that is not there makes the check
+# a SKIP naming it; from a folder the variable names, a FAILURE (tests/_footage.py).
+_FIGURES_ENV = "PACER_MEASURED_FIGURES_DIR"
+_FIGURES_WHAT = ("the lap sets the tables name, in 'Sandown 3h 2026/', SD_19_09_26/, SD_30_08_26/ "
+                 "and MK_18_09_26/")
 
 
-# Every lap set a published table names, as (folder under PACER_MEASURED_FIGURES_DIR, chapter files).
+# Every lap set a published table names, as (folder under the Desktop, or under
+# PACER_MEASURED_FIGURES_DIR when it is set; chapter files).
 # T16b (2026-09-23): the owner made the Desktop recordings the working set, and the tables this file
 # re-measures moved onto them by role — 0068 (SD_19_09_26) stands where D24's 0060 stood, 0064
 # (Sandown 3h 2026) where 0062 did, and MK_18_09_26, the one anticlockwise recording, joins the floor
@@ -1978,12 +1982,14 @@ _LAP_SETS = {
 
 class _Footage:
     """Loads lap sets read-only, jailed, and proves on exit that no file in the footage folders
-    changed size or modification time. `names` are the lap sets the check will load: the tripwire
-    covers their folders, and nothing else under the root is looked at."""
+    changed size or modification time. `names` are the lap sets the check will load: every chapter
+    file they name must be under the root before anything is opened (G2), the tripwire covers their
+    folders, and nothing else under the root is looked at."""
 
-    def __init__(self, root: str, names):
-        self.root = root
+    def __init__(self, names):
         self.names = set(names)
+        self.root = _footage.directory(_FIGURES_ENV, _FIGURES_WHAT, [
+            os.path.join(folder, f) for folder, files in (_LAP_SETS[n] for n in self.names) for f in files])
         sys.path.insert(0, _REPO)
         sys.path.insert(0, os.path.join(_REPO, "bindings", "pacer"))
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -2082,15 +2088,14 @@ def _coaching_measure(s):
 def test_the_coaching_tables_match_the_footage():
     """Re-measure both coaching tables, and the prose figures only footage can give, on every lap
     set the THEME table names."""
-    root = _footage_root()
     ev, th = _evidence_rows(), _theme_rows()
     text = _flatten(_read(_COACHING))
     problems, ev_lines, th_lines, single_one_off, zs, gaps, corners = [], [], [], [], {}, {}, {}
-    with _Footage(root, th) as fx:
+    with _Footage(th) as fx:
         for name, pub in th.items():
             s = fx.load(name)
             if s is None:
-                problems.append(f"{name}: footage missing under {root}")
+                problems.append(f"{name}: footage missing under {fx.root}")
                 continue
             rows, theme, z, gap, one_off, extra = _coaching_measure(s)
             laps, ranked, rs, ab, ex, pa, cause, cp = theme
@@ -2175,17 +2180,16 @@ def _floor_line(name: str, saved: bool, got: tuple) -> str:
 
 
 def test_the_floor_table_matches_the_footage():
-    root = _footage_root()
     rows = _floor_rows()
     text = _flatten(_read(_THEME))
     problems, lines, ends, peaks = [], [], [], []
-    with _Footage(root, {r.name for r in rows}) as fx:
+    with _Footage({r.name for r in rows}) as fx:
         for r in rows:
             if r.saved and not any(line.startswith("#   and on the start line") for line in lines):
                 lines.append(_FLOOR_SAVED_HEAD)
             s = fx.load(r.name, saved_line=r.saved)
             if s is None:
-                problems.append(f"{r.name}: footage missing under {root}")
+                problems.append(f"{r.name}: footage missing under {fx.root}")
                 continue
             got, end, peak = _floor_measure(s)
             ends.extend(end)
@@ -2255,16 +2259,15 @@ def _recombination(s) -> dict[str, float]:
 
 
 def test_the_refusal_record_matches_the_footage():
-    root = _footage_root()
     now = _record_tables()[0]           # the D24 tables below it are the record, not re-measurable
     recs = list(now)
     text = _flatten(_read(_REFUSED))
     problems, lines, got = [], [], {}
-    with _Footage(root, recs) as fx:
+    with _Footage(recs) as fx:
         for rec in recs:
             s = fx.load(rec)
             if s is None:
-                problems.append(f"{rec}: footage missing under {root}")
+                problems.append(f"{rec}: footage missing under {fx.root}")
                 continue
             got[rec] = _recombination(s)
     # The re-measured table in the doc's own syntax, and the jackknife beside it, BEFORE any
@@ -2340,16 +2343,15 @@ def _brake_measure(s):
 
 
 def test_the_brake_habit_table_matches_the_footage():
-    root = _footage_root()
     pub = _brake_rows()
     pair = _pair()
     text = _flatten(_read(_COACHING))
     problems, lines, gaps, unbraked, fewest = [], [], {}, {}, []
-    with _Footage(root, pair) as fx:
+    with _Footage(pair) as fx:
         for rec in pair:
             s = fx.load(rec)
             if s is None:
-                problems.append(f"{rec}: footage missing under {root}")
+                problems.append(f"{rec}: footage missing under {fx.root}")
                 continue
             rows, unbraked[rec], least = _brake_measure(s)
             fewest.append(least)
@@ -2421,15 +2423,14 @@ def test_the_brake_hint_gate_table_matches_the_footage():
     """T15 — re-measure coaching_panel's gate table on the evidence table's two recordings (T16b: the
     working set's 0068 and 0064). The row SET is the app's own ranked set, so a corner that stops
     being ranked is a failure here rather than a row that quietly goes missing."""
-    root = _footage_root()
     pub = _hint_rows()
     pair = _pair()
     problems, lines = [], []
-    with _Footage(root, pair) as fx:
+    with _Footage(pair) as fx:
         for rec in pair:
             s = fx.load(rec)
             if s is None:
-                problems.append(f"{rec}: footage missing under {root}")
+                problems.append(f"{rec}: footage missing under {fx.root}")
                 continue
             rows, ungated = _hint_measure(s)
             for cid, turn_in, apex, optimum, hint in rows:
@@ -2483,14 +2484,13 @@ def _beat_measure(s, n_perm: int = 20000):
 
 
 def test_the_beat_rate_table_matches_the_footage():
-    root = _footage_root()
     rows = _beat_rows()
     problems, lines = [], []
-    with _Footage(root, {_BEAT_SETS[r.name] for r in rows}) as fx:
+    with _Footage({_BEAT_SETS[r.name] for r in rows}) as fx:
         for row in rows:
             s = fx.load(_BEAT_SETS[row.name], saved_line=row.saved)
             if s is None:
-                problems.append(f"{row.name}: footage missing under {root}")
+                problems.append(f"{row.name}: footage missing under {fx.root}")
                 continue
             n, r, rho, p = _beat_measure(s)
             label = row.name + (" †" if row.saved else "")
@@ -2561,15 +2561,14 @@ def _focus_measure(s_then, p_then, s_now, p_now):
 
 
 def test_the_focus_tables_match_the_footage():
-    root = _footage_root()
     rows, windows = _focus_tables()
     then, now = _focus_pair()
     text = _flatten(_read(_FOCUS))
     problems, lines, wlines = [], [], []
-    with _Footage(root, (then, now)) as fx:
+    with _Footage((then, now)) as fx:
         s_then, s_now = fx.load(then), fx.load(now)
         if s_then is None or s_now is None:
-            raise AssertionError(f"focus footage missing under {root}")
+            raise AssertionError(f"focus footage missing under {fx.root}")
         got = _focus_measure(s_then, fx.paths(then), s_now, fx.paths(now))
     def row(cells, widths):
         """One docstring-table row, each cell left-aligned under its header, as focus.py lays it out."""
@@ -2639,7 +2638,7 @@ def test_the_focus_tables_match_the_footage():
     print("test_the_focus_tables_match_the_footage OK")
 
 # Each is its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by
-# name without PACER_MEASURED_FIGURES_DIR, and not part of `_run_all`.
+# name without the lap sets it loads, and not part of `_run_all`.
 FOOTAGE_CHECKS = (test_the_coaching_tables_match_the_footage,
                   test_the_brake_habit_table_matches_the_footage,
                   test_the_brake_hint_gate_table_matches_the_footage,

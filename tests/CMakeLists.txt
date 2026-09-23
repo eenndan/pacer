@@ -26,15 +26,19 @@ find_package(Python REQUIRED COMPONENTS Interpreter)
 # `<file>.py --footage <check>`. Without its recording the check exits 77 and CTest lists it BY NAME
 # under "The following tests did not run: ... (Skipped)" — it does not pass, and it does not fail
 # (CI has no footage at all). Before this, each one printed a skip line inside its file and the file
-# reported Passed, so when ~/Desktop/D24 went every real-footage check became a silent no-op. The
-# recording comes from PACER_GOLDEN_MP4 (tests/_footage.py lists every variable); a file's
-# FOOTAGE_CHECKS and these lines are held one-to-one by test_footage_checks. TIMEOUT: with footage
-# present one check loads several multi-GB recordings, far past the suite's --timeout.
+# reported Passed, so when ~/Desktop/D24 went every real-footage check became a silent no-op. Each
+# finds its recording through tests/_footage.py: by default the Desktop working set (G2), overridden
+# by PACER_GOLDEN_MP4 and the other variables it lists. A file's FOOTAGE_CHECKS and these lines are
+# held one-to-one by test_footage_checks. LABELS footage: `pixi run test-footage` runs exactly these
+# (`ctest -L footage`); `pixi run test-fast` reports them SKIPPED by name instead of running them
+# (PACER_FOOTAGE_DEFAULTS=off), and `pixi run test` runs them with everything else. TIMEOUT: with
+# footage present one check loads several multi-GB recordings, far past the suite's --timeout.
 function(add_footage_test file check)
     add_test(NAME footage.${check}
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --footage ${check})
     set_tests_properties(footage.${check} PROPERTIES
                          SKIP_RETURN_CODE 77
+                         LABELS footage
                          TIMEOUT 3600
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endfunction()
@@ -1162,9 +1166,9 @@ add_test(NAME test_camera_support
 # is recomputed from its own endpoint cells, every "per doubling of lap count" rate and every
 # "X s over 5 laps, Y s over N" pair is the table's, and every gap the tree quotes is one the
 # docstring publishes — off the working-set table T16b re-based, or off the D24-era record kept
-# beneath it, which no in-app string may quote. A fifth, opt-in, loads a real recording named by
-# PACER_IDEAL_TABLE_MP4 (comma-separated chapters of one row, found by its chapter files in
-# ROW_RECORDINGS), asserts the row's `all` cell IS Session.ideal_total() and re-runs
+# beneath it, which no in-app string may quote. A fifth loads every row's recording (its chapter
+# files in ROW_RECORDINGS, on the Desktop; PACER_IDEAL_TABLE_MP4 names one instead), asserts each
+# row's `all` cell IS Session.ideal_total() and re-runs
 # the table's own Monte-Carlo over every rung; it is a footage registration, reported Skipped
 # without the footage, which is why the text checks cost nothing. A sixth check CONTROLS that
 # fifth one's stand-in for `CornerModel.segment_bests`' masking rule — the app never composites a
@@ -1182,9 +1186,9 @@ add_footage_test(test_ideal_sample_table test_the_table_still_matches_the_app)
 # studio/docs/refused-2026-09.md — all measured before #300 warped every lap, all stale after it.
 # The text checks derive every figure quoted beside each table from its cells and from the
 # constants the code applies (read with ast), and search the tree for every other quote of them.
-# An opt-in half re-measures every cell from the owner's footage (PACER_MEASURED_FIGURES_DIR, the
-# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/): seven footage registrations, each
-# reported Skipped without it.
+# A footage half re-measures every cell on the owner's working set, found on the Desktop (or under
+# PACER_MEASURED_FIGURES_DIR): seven footage registrations, each reported Skipped without the lap
+# sets it loads.
 add_test(NAME test_measured_figures
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measured_figures.py)
 set_tests_properties(test_measured_figures PROPERTIES
