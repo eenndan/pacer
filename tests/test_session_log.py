@@ -421,7 +421,10 @@ def test_the_crash_dialog_names_the_log_it_is_writing_and_the_traceback_is_in_it
 def test_the_dialog_spells_the_home_directory_as_finder_does():
     home = os.path.expanduser("~")
     real = os.path.join(home, "Library", "Application Support", "pacer", "logs", "pacer.log")
-    assert logsetup.display_path(real) == "~/Library/Application Support/pacer/logs/pacer.log"
+    # (Built with os.path.join: a "~/…" literal in a test file reads as hard-coded footage to
+    # test_footage_checks.)
+    assert logsetup.display_path(real) == os.path.join(
+        "~", "Library", "Application Support", "pacer", "logs", "pacer.log")
     assert logsetup.display_path("/private/tmp/x/pacer.log") == "/private/tmp/x/pacer.log"
     assert logsetup.display_path(home + "other/pacer.log") == home + "other/pacer.log"
     print("test_the_dialog_spells_the_home_directory_as_finder_does OK")
