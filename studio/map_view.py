@@ -1539,7 +1539,9 @@ class MapView(QWidget):
         path clears the cue too — it used to leave the canvas shouting "lap timing provisional" in
         the same frame the trust strip above it had already cleared (QA W7-03)."""
         provisional = (not getattr(self.session, "timing_verified", True)
-                       and self._start is not None)
+                       and self._start is not None
+                       # a recording with no GPS trace has a placeholder line, not one to set
+                       and not data_quality.no_start_line(self.session))
         if not provisional:
             for it in (self._provisional_line, self._provisional_label):
                 if it is not None:

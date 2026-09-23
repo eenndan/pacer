@@ -400,6 +400,23 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   yellow "moderate" colour, even when its own text said "GPS poor" and the strip under it was red.
   That was 5 of the 7 marks on the one present recording with poor GPS. A mark now takes the
   colour of the worst class in its stretch, which is the class its text names.
+- **laps.csv is pure ASCII again.** The `corners_interpolated` legend row added in C5 carried an
+  em dash, so every laps.csv with an interpolated corner cell stopped being ASCII. That is every
+  export from the three recordings present today. A spreadsheet that guesses MacRoman shows the
+  dash as junk. The test that guards this wrote a session with no interpolated cell, so the row was
+  never written there. It now drives every row the trailer can carry.
+
+- **The report and the copied summary name a degraded clock the way the chip does.** Their Timing
+  line started with "ESTIMATED —" for every degraded state. On a true-clock recording with rejected
+  fixes that called the times estimated, beside a chip saying GPS LOW. On a recording with no GPS it
+  read "ESTIMATED — No GPS fixes survived", beside a chip saying NO GPS. Both now use the chip's
+  word.
+
+- **A recording with no GPS stops asking for a start/finish line.** With no trace there is no line
+  to confirm. The map's trust strip still asked the reader to drag one, directly above "no lap can
+  be timed". The map drew its dashed cue on the placeholder line. The DATA TRUST card blamed the
+  track database, and the report said the line "was auto-fitted". None of the four appears on such
+  a recording any more.
 
 - **The Brake/Throttle band paints a braking zone as one piece.** Its brake half used to be a second,
   cruder detector: every 10 Hz sample decelerating past 0.18 g, with no hysteresis. The speed
