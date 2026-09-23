@@ -20,25 +20,27 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
   2. EVERY QUOTE ELSEWHERE IS THE TABLE'S. The tracked tree is searched for the phrasings that
      quote these figures (README, the coaching panel, focus.py, the tests' docstrings, the floor
      quoted in session.py and corner_model.py), and each quote must equal what the table says.
-     CHANGELOG.md is exempt: a released entry records what was true at release.
+     CHANGELOG.md is exempt: a released entry records what was true at release, and so is
+     studio/docs/coaching-tables-on-d24.md, the record of these tables' superseded D24 editions.
   3. THE TABLES ARE STILL TRUE OF THE APP. Opt-in, because it needs the owner's footage, which CI
-     does not have: set `PACER_MEASURED_FIGURES_DIR` to the folder holding `D24/`,
-     `Sandown_09_05_2026/` and `SD_30_08_26/` (on the dev machine, `~/Desktop`). Each check loads
-     its recordings through `Session.load`, with every app-support seam jailed, re-measures every
-     cell by the method the table states, and prints the re-measured table in the source's own
-     syntax. A size-and-mtime tripwire over every file in those folders must come back unchanged.
-     `D24/GX010060.MP4` is 2.4 MB of JSON a tool wrote over the owner's footage; nothing here opens
-     it, and the loaders below assert as much. Each of these checks is its own CTest registration,
-     `footage.<name>`, and not part of this file's ordinary run: with the variable unset, CTest
-     reports it SKIPPED by name (tests/_footage.py) instead of this file counting it as passed.
-     Since 2026-09-19 `D24/` and `Sandown_09_05_2026/` are gone from that Desktop, so a run with the
-     variable set FAILS naming each missing lap set; which recordings the tables move to is T16.
-  4. A TABLE CHECK 3 CANNOT RE-MEASURE SAYS SO WHERE IT IS PUBLISHED (T16). #339 found eight of
-     these tables stale after #335 changed corner matching, and then their recordings went. Each
-     table whose rows name a recording in `tests/_stale.GONE` must carry a "⚠ STALE" or
-     "⚠ UNVERIFIED — NOT RE-MEASURABLE (T16)" mark in its own paragraph, and check 2's quotes, where
-     a reader meets them without the table, must date themselves before #335. It has a negative
-     control that plants every defect it looks for.
+     does not have: set `PACER_MEASURED_FIGURES_DIR` to the folder holding the working set —
+     `Sandown 3h 2026/`, `SD_19_09_26/`, `SD_30_08_26/` and `MK_18_09_26/` (on the dev machine,
+     `~/Desktop`). Each check loads its recordings through `Session.load`, with every app-support
+     seam jailed, re-measures every cell by the method the table states, and prints the re-measured
+     table in the source's own syntax BEFORE comparing — a re-base pastes that printout, it never
+     retypes a cell. A size-and-mtime tripwire over every file in the folders a check loads must come
+     back unchanged. Each of these checks is its own CTest registration, `footage.<name>`, and not
+     part of this file's ordinary run: with the variable unset, CTest reports it SKIPPED by name
+     (tests/_footage.py) instead of this file counting it as passed. The tables were measured on
+     D24 until T16b (2026-09-23) re-based them on the working set the owner chose when D24 left his
+     machine; `_LAP_SETS` says which recording stands where.
+  4. A TABLE CHECK 3 CANNOT RE-MEASURE SAYS SO WHERE IT IS PUBLISHED (T16), AND ONE IT CAN DOES
+     NOT (T16b). #339 found eight of these tables stale after #335 changed corner matching, and then
+     their recordings went. Each table whose rows name a recording in `tests/_stale.GONE` must carry
+     a "⚠ STALE" or "⚠ UNVERIFIED — NOT RE-MEASURABLE (T16)" mark in its own paragraph, and check 2's
+     quotes, where a reader meets them without the table, must date themselves before #335. A table
+     re-measured on the working set must carry neither, and a quote of it must not date itself. It
+     has a negative control that plants every defect it looks for.
   5. `refused-2026-09.md` NUMBERS ITS SECTIONS ONCE EACH, AND ITS INTRO COUNTS THEM. Two PRs from one
      base each take "the next free section" and collide on merge. That has happened in four waves.
      The sections must run 1..N, the intro's count word is derived from N, and every
@@ -1258,7 +1260,9 @@ def test_every_quote_of_the_floor_is_a_row_of_the_table():
 # #339 ran this file's footage half after #335 changed corner matching. Eight of the nine tables
 # below no longer matched the app. The ninth, the brake-hint gate, had just been re-measured and
 # did. Then D24 and Sandown_09_05_2026 left the owner's machine (tests/_stale.py), so none of the
-# nine can be re-measured where it stands.
+# nine could be re-measured where it stood. T16b (2026-09-23) re-based this file's seven on the
+# working set the owner chose; IdealSample's is its part B's, and the two stats tables have no
+# footage check at all.
 #
 # WHICH tables need a mark is DERIVED, not listed: a table needs one when one of its own rows names
 # a recording in `_stale.GONE`, read off the rows through `_LAP_SETS`. WHAT the mark says is

@@ -3,10 +3,13 @@
 WHY THIS EXISTS. Nine tables in the tree were measured on real footage, and each has a check that
 re-measures it (tests/test_measured_figures.py, tests/test_ideal_sample_table.py). PR #339 ran
 those checks after #335 changed corner matching, and eight of the nine no longer matched the app.
-Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them can be re-measured. The
-owner has not chosen between restoring D24, re-basing the tables on other recordings, or
-disclosing. Disclosure is the default until he does, and it has one rule: no figure the app or the
-docs present may read as current when it is known stale or cannot be verified.
+Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them could be re-measured.
+Disclosure was the default until the owner chose, and it has one rule: no figure the app or the
+docs present may read as current when it is known stale or cannot be verified. On 2026-09-23 he
+chose to re-base the tables on the Desktop recordings (the working set). T16b part A re-measured
+the seven in tests/test_measured_figures.py there (part B re-bases IdealSample's); a re-measured
+table drops its mark, and its quotes drop their date. The marks stay on what could not be
+re-measured.
 
 This module is the vocabulary both test files share. It has no Qt, no pacer and no numpy:
 
@@ -36,8 +39,9 @@ import re
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The footage folders (as test_measured_figures._LAP_SETS names them) that are NOT on the owner's
-# machine. The owner removed both on or before 2026-09-19, in a Desktop reorganisation. SD_30_08_26
-# is still there, so SD_30_08 rows CAN be re-measured, and T16 did so on 2026-09-19.
+# machine. The owner moved both off it on or before 2026-09-19, in a Desktop reorganisation. The
+# working set T16b re-based the tables on (Sandown 3h 2026, SD_19_09_26, SD_30_08_26, MK_18_09_26)
+# is all still there.
 GONE = ("D24", "Sandown_09_05_2026")
 
 STALE = "STALE"
