@@ -136,10 +136,10 @@ _IDEAL_CHIP_TIP = (
 #
 # The hero is the app's largest text and the only ideal surface with no prose beside it, so a
 # reader who never opens Stats meets Δideal here and nowhere else. The number is an order
-# statistic: on D24's three chapters the same driving reads a 0.95 s gap over 5 laps and a 1.49 s
-# gap over 65 (random subsets, 20,000 draws per N), and the corner count it is partitioned by moves
-# 11↔12 with the start/finish line. Stats says so under its tiles; here it goes on the chip's
-# hover, which is where the reference is chosen.
+# statistic: on Sandown 3h's three chapters the same driving reads a 0.59 s gap over 5 laps and a
+# 1.29 s gap over 62 (random subsets, 20,000 draws per N; corner_model.IdealSample), and the corner
+# count it is partitioned by moved 11↔12 with the start/finish line on D24. Stats says so under its
+# tiles; here it goes on the chip's hover, which is where the reference is chosen.
 #
 # APPENDED to _IDEAL_CHIP_TIP, never replacing it — same contract as the two unavailable-state
 # reasons below, and tests/test_central_view_realqt.py pins the constant's own honesty words
@@ -147,9 +147,9 @@ _IDEAL_CHIP_TIP = (
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
-    "(0.15–0.38 s per doubling of lap count, measured before a September 2026 change to corner "
-    "matching and not re-measured since) and moves when dragging the start/finish "
-    "line changes which corners Pacer finds. The Stats page prints both counts under it.")
+    "(0.17–0.74 s per doubling of lap count on the owner's recordings) and moves when dragging "
+    "the start/finish line changes which corners Pacer finds. The Stats page prints both counts "
+    "under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the
 # laps.csv trailer, the share card and the Library cell ONE gate — `ideal_donor_lap_id() is not

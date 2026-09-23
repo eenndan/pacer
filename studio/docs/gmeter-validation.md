@@ -1,5 +1,11 @@
 # G-meter validation: camera→kart frame transform & ACCL-vs-GPS cross-check
 
+> **A record, not a current measurement (T16b, 2026-09-23).** Figures naming 0060 or 0062 were
+> measured on D24; the `GX010065` rows are SD_30_08, which is still here. D24 — the Daytona 24-hour
+> race recordings `GX0*0060` and `GX0*0062`, May 2026 — left the development machine on 2026-09-19,
+> so these figures are kept as the record of this investigation and were not re-measured on the
+> Desktop working set.
+
 The friction-circle g-meter overlay is driven by the GoPro's **real accelerometer** (the GPMF
 `ACCL` stream), transformed from the camera body frame into the kart's horizontal frame. This
 note records how the transform was derived empirically and how well the ACCL-derived g matches

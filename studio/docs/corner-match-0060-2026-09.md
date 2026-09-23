@@ -1,5 +1,10 @@
 # Why D24 0060 matches only 48 % of its corners on track — 2026-09 (M6)
 
+> **A record, not a current measurement (T16b, 2026-09-23).** Every figure below was measured on
+> D24. D24 — the Daytona 24-hour race recordings `GX0*0060` and `GX0*0062`, May 2026 — left the
+> development machine on 2026-09-19, so these figures are kept as the record of this investigation
+> and were not re-measured on the Desktop working set.
+
 #329 found that on the D24 0060 pair, **236 of 456** corner cells have an edge interpolated rather
 than matched on track (0062: **4 of 780**). Interpolated cells are a median **0.22 s** wrong. #330
 found C9's entry matched on only **26 %** of 0060's laps. C4 stops the Corners table counting those

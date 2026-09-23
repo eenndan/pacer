@@ -1,5 +1,10 @@
 # Friction-circle brake-release detection: measured, and NOT shipped
 
+> **A record, not a current measurement (T16b, 2026-09-23).** Every figure below was measured on
+> D24. D24 — the Daytona 24-hour race recordings `GX0*0060` and `GX0*0062`, May 2026 — left the
+> development machine on 2026-09-19, so these figures are kept as the record of this investigation
+> and were not re-measured on the Desktop working set; re-proposing this means measuring it there.
+
 A proposal to detect an early trail-brake release with no pedal channels, from the shape of the
 total planar g vector alone. It was measured end-to-end on both D24 recordings and **rejected**.
 This note records the numbers so the idea is not rebuilt from scratch; it is attractive enough to
