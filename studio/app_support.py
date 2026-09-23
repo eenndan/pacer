@@ -1,8 +1,9 @@
 """Where pacer keeps its state on disk — and the rule that keeps every test and tool out of it.
 
 Seven stores live in one directory, ``~/Library/Application Support/pacer``: the library index,
-prefs, saved tracks, marks, the focus list, session records and the demo cache. Each store module
-keeps its own ``_app_support_dir()`` seam (tests still patch it, and ``tests/test_golden_hermetic``
+prefs, saved tracks, marks, the focus list, session records and the demo cache — and so does the
+session log (``logsetup``, ``logs/pacer.log``), which the app writes on every start. Each of those
+modules keeps its own ``_app_support_dir()`` seam (tests still patch it, and ``tests/test_golden_hermetic``
 finds every one by AST); every one of those seams resolves through ``resolve()`` here.
 
 WHY THIS MODULE EXISTS (H8). On 2026-09-17 a routine ``ctest`` run wrote a ``stadium`` row from the

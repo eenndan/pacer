@@ -236,10 +236,12 @@ def test_the_real_startup_path_puts_every_family_in_the_file_before_the_process_
         not_on_stderr = [n for n, frag in _FAMILIES if frag not in proc.stderr]
         assert not not_on_stderr, f"stderr lost {not_on_stderr}:\n{proc.stderr[-4000:]}"
         # A real Qt C++ warning, through the existing message handler.
-        assert "WARNING studio.app: Qt: QPainter::end: Painter not active" in text, text
+        assert "WARNING studio.app: Qt: QPainter::end: Painter not active" in text, (
+            f"the Qt C++ warning never reached the file:\n{text}")
         # The crash itself: the traceback, not only the one-line notice.
-        assert "ERROR studio.app: unhandled exception" in text, text
-        assert "Traceback (most recent call last)" in text, text
+        assert "ERROR studio.app: unhandled exception" in text, (
+            f"the unhandled exception never reached the file:\n{text}")
+        assert "Traceback (most recent call last)" in text, f"no traceback in the file:\n{text}"
         assert "RuntimeError: E2-PROBE thread boom" in text, text
         assert "error report not shown (off the GUI thread (e2-probe-thread))" in text, text
         # The throwaway HOME's real app-support directory was never created, logs/ least of all.
@@ -334,30 +336,42 @@ def test_the_log_never_grows_past_three_files_of_512_kb():
     file past its cap, and both are driven here — records full of em dashes (3 bytes each in
     UTF-8; the stdlib's rollover test counts characters) and one record four times the cap."""
     cap = logsetup.MAX_BYTES * (1 + logsetup.BACKUP_COUNT)
+    worst: dict = {"total": 0, "file": 0, "at": None}
     with tempfile.TemporaryDirectory(prefix="pacer-e2-") as tmp, _FreshLogging(tmp):
         logsetup.configure()
+        logs = os.path.join(tmp, "logs")
         log = logging.getLogger("studio.marks")
+
+        def _measure(at):
+            # After EVERY record, not just at the end: a file that overshoots rotates out of sight
+            # a few hundred records later, and "never" is the claim.
+            sizes = {f: os.path.getsize(os.path.join(logs, f)) for f in os.listdir(logs)}
+            if sum(sizes.values()) > worst["total"]:
+                worst.update(total=sum(sizes.values()), at=at)
+            worst["file"] = max(worst["file"], *sizes.values())
+            return sizes
+
         dashes = "—" * 700
         for i in range(2500):
             log.warning("rotation %05d %s", i, dashes if i % 3 else "ascii " * 80)
+            _measure(i)
             if i == 1200:
                 log.warning("huge %s", "z" * (4 * logsetup.MAX_BYTES))
+                _measure("huge")
         log.warning("the newest record")
-        for h in logging.getLogger().handlers:
-            h.flush()
-        logs = os.path.join(tmp, "logs")
-        files = sorted(os.listdir(logs))
-        sizes = {f: os.path.getsize(os.path.join(logs, f)) for f in files}
+        sizes = _measure("end")
+        files = sorted(sizes)
         with open(os.path.join(logs, "pacer.log"), encoding="utf-8") as f:
             newest = f.read()
     assert files == ["pacer.log", "pacer.log.1", "pacer.log.2"], (
         f"rotation left {files} — the bound needs it to have rotated, and no further than 2")
-    over = {f: s for f, s in sizes.items() if s > logsetup.MAX_BYTES}
-    assert not over, f"a log file passed its {logsetup.MAX_BYTES}-byte cap: {over}"
-    assert sum(sizes.values()) <= cap, f"{sum(sizes.values())} bytes on disk > {cap}: {sizes}"
+    assert worst["file"] <= logsetup.MAX_BYTES, (
+        f"a log file reached {worst['file']} bytes, past its {logsetup.MAX_BYTES}-byte cap")
+    assert worst["total"] <= cap, (
+        f"the log reached {worst['total']} bytes on disk (after record {worst['at']}) > {cap}")
     assert "the newest record" in newest, "the live file lost the newest record"
     print(f"test_the_log_never_grows_past_three_files_of_512_kb OK "
-          f"({sum(sizes.values())} bytes across {files}, cap {cap})")
+          f"(at most {worst['total']} bytes on disk, one file at most {worst['file']}; cap {cap})")
 
 
 # ------------------------------------------------------------------------------ where the user sees it
@@ -393,9 +407,10 @@ def test_the_crash_dialog_names_the_log_it_is_writing_and_the_traceback_is_in_it
             studio_app._REPORTED.clear()
             studio_app._REPORTED.update(reported)
         text = fl.file_text()
-    assert studio_app.CRASH_LOG_LINE in body, body
+    assert studio_app.CRASH_LOG_LINE in body, f"the crash dialog does not point at the log: {body!r}"
     assert logsetup.display_path(path) in body, f"the dialog does not name {path}: {body!r}"
-    assert "ERROR studio.app: unhandled exception" in text, text
+    assert "ERROR studio.app: unhandled exception" in text, (
+        f"the excepthook's traceback never reached the file:\n{text}")
     assert "Traceback (most recent call last)" in text and "E2-traceback-token" in text, text
     # And with no log being written, it names nothing.
     assert logsetup.active_log_path() is None

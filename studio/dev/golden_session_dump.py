@@ -457,8 +457,17 @@ def main():
     # cheap to redirect and the next one added would silently reintroduce this. tests/
     # test_golden_hermetic.py enforces that this list stays complete.
     tmp = tempfile.mkdtemp(prefix="pacer-golden-")
-    from studio import (app_support, demo, focus, library, logsetup, marks, prefs, session_record,
-                        track_db)
+    from studio import (
+        app_support,
+        demo,
+        focus,
+        library,
+        logsetup,
+        marks,
+        prefs,
+        session_record,
+        track_db,
+    )
     for _mod in (demo, focus, library, logsetup, marks, prefs, session_record, track_db):
         _mod._app_support_dir = lambda: tmp  # type: ignore[attr-defined]
     os.environ[app_support.DIR_ENV] = tmp  # a patch stops at the process boundary; this does not
