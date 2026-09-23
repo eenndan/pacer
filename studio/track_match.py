@@ -6,7 +6,7 @@ loops, so the overlay itself does not need a shared track NAME. But the admissio
 `Session.set_reference_session` must still refuse two genuinely different circuits (overlaying
 them is worse than refusing). When BOTH recordings carry a detected registry `track_name` the
 gate matches on the name; when EITHER is an unknown track (name None — the common case, since the
-shipped DB holds ~one track) there is no name to compare, so we fall back to GEOMETRY here.
+shipped DB holds two tracks) there is no name to compare, so we fall back to GEOMETRY here.
 
 Two independent checks, BOTH required (AND) — either alone is spoofable:
 

@@ -732,7 +732,7 @@ class Session:
             (the confirmed-track path, byte-identical to the pre-fallback behaviour: no caveat).
             Different names => refuse (a name mismatch is authoritative).
           * EITHER side is an unknown track (name None — the common case, since the shipped DB
-            holds ~one track) — there is no name to compare, so fall back to GEOMETRY: match on
+            holds two tracks) — there is no name to compare, so fall back to GEOMETRY: match on
             the GPS centroid distance + footprint size (studio/track_match.py). Same place =>
             admit as UNVERIFIED; else refuse. This is the "race a friend's GoPro off an unknown
             track" path — the moat feature, previously dead on every unnamed track."""

@@ -10,7 +10,7 @@ itself onto every future recording at that location. This dialog is the other ha
     │  These are the circuits Pacer auto-detects…  │ ← what a delete does and does not touch
     ├──────────────────────────────────────────────┤
     │  Daytona Milton Keynes   (built-in)          │ ← built-ins are listed, never editable
-    │  Sandown Park                                │
+    │  Sandown Park   (built-in, refined by you)   │ ← deletable (reverts), never renamed
     │  Whilton Mill            (2 sector lines)    │
     ├──────────────────────────────────────────────┤
     │  [Rename…] [Delete…] [Restore…]      [Close] │
@@ -72,7 +72,7 @@ _NOTE = (
     "it — your analysed sessions, their lap times and their personal-best history are kept, and no "
     "video file is touched. A copy of the list is kept as tracks.json.bak before any change, so "
     "\"Restore…\" puts it back. Built-in circuits ship with Pacer and cannot be renamed or deleted; "
-    "saving your own lines over one makes a copy you can."
+    "saving your own lines over one makes a copy you can delete, which puts Pacer's line back."
 )
 
 
@@ -221,10 +221,12 @@ class TrackManagerDialog(QDialog):
         what it holds so the button explains its own greyed-out state before it is clicked."""
         row = self._selected()
         on = row is not None and bool(row.get("editable"))
-        for attr in ("rename_btn", "delete_btn"):
+        # A built-in the user refined can be deleted (its shipped line comes back) but not renamed:
+        # the store refuses that, because the seed would return under the old name beside it.
+        for attr, enabled in (("rename_btn", on and not row.get("builtin")), ("delete_btn", on)):
             btn = getattr(self, attr, None)
             if btn is not None:
-                btn.setEnabled(on)
+                btn.setEnabled(bool(enabled))
         btn = getattr(self, "restore_btn", None)
         if btn is not None:
             info = self._backup
@@ -257,7 +259,8 @@ class TrackManagerDialog(QDialog):
         """Ask for a new name and apply it. The store owns every refusal (blank, already taken, a
         built-in, absent) and its message is shown verbatim."""
         row = self._selected()
-        if self._rename_track is None or row is None or not row.get("editable"):
+        # A built-in, refined or not, is never offered (the button is off; a double-click lands here).
+        if self._rename_track is None or row is None or not row.get("editable") or row.get("builtin"):
             return
         old = str(row["name"])
         new, ok = QInputDialog.getText(self, "Rename track", "Track name:", text=old)

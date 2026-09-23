@@ -39,6 +39,15 @@ from studio import track_db  # noqa: E402
 _MK_CENTROID = [52.0403, -0.7847]
 _MK_START = [[52.04031, -0.78487], [52.04020, -0.78460]]
 
+# Sandown Park (Q2): the owner's own saved entry, copied bit for bit into the seed. Pinned here the way
+# MK's is, so an edit to the shipped line is a deliberate one.
+_SP_CENTROID = [51.37603659615385, -0.36095558076923084]
+_SP_BBOX = [51.37544968461538, -0.3623875461538462, 51.376623507692315, -0.35952361538461547]
+_SP_START = [[51.37617427563954, -0.3616823772388991], [51.376337128483875, -0.3617820116787019]]
+
+# Every built-in, in the order the merged view lists them.
+_BUILTIN_NAMES = ["Daytona Milton Keynes", "Sandown Park"]
+
 
 def _pacer_available() -> bool:
     try:
@@ -79,6 +88,117 @@ def test_all_tracks_includes_seed_when_db_empty():
         p = os.path.join(d, "tracks.json")
         names = [e["name"] for e in track_db.all_tracks(p)]
         assert "Daytona Milton Keynes" in names
+
+
+def test_seed_has_sandown_park_as_the_owner_saved_it():
+    """Q2: Sandown Park ships as a built-in, carrying the owner's saved entry field for field — so
+    a fresh install, every jailed test and his own app time Sandown on ONE line. Before this, only
+    his tracks.json knew the circuit, and every published Sandown figure was measured on a line the
+    loader auto-fitted, which his app never shows."""
+    sp = next((e for e in track_db.SEED if e["name"] == "Sandown Park"), None)
+    assert sp is not None, "Sandown Park is not a built-in track"
+    assert sp["centroid"] == _SP_CENTROID
+    assert sp["bbox"] == _SP_BBOX
+    assert sp["start"] == _SP_START
+    assert sp["sectors"] == []
+    assert track_db._valid_entry(sp) and track_db._norm_entry(sp) == sp, "the seed is not canonical"
+    assert [e["name"] for e in track_db.SEED] == _BUILTIN_NAMES
+
+
+def test_sandown_park_detects_on_a_fresh_install():
+    """With NO user file, a trace at Sandown detects Sandown Park — SD_30_08's measured trace
+    centroid (the anchor the L12-09 sweep recorded) is ~4 m from the built-in's — and it is a
+    built-in, so the timing is trusted rather than provisional (Session.timing_verified)."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")          # never written: a first-ever run
+        hit = track_db.detect(*_SD_CENTROID, p)
+        assert hit is not None and hit["name"] == "Sandown Park", hit
+        assert hit["start"] == _SP_START
+        assert track_db.is_builtin("Sandown Park")
+        assert not os.path.exists(p), "detecting a track wrote the user's file"
+
+
+def _owner_shaped_file(p, sandown_start):
+    """A tracks.json shaped like a real user's: schema 1, the user's OWN "Sandown Park" entry (with
+    `sandown_start` as its line) and one other circuit, written the way `save` writes it. Built here,
+    in a temp dir, never read from anyone's app-support."""
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "tracks": [
+            {"name": "Sandown Park", "centroid": _SP_CENTROID, "bbox": _SP_BBOX,
+             "start": sandown_start, "sectors": []},
+            {"name": "Croft", "centroid": [54.45, -1.55], "bbox": None,
+             "start": [[54.45, -1.55], [54.451, -1.549]], "sectors": []}]}, f, indent=2)
+        f.write("\n")
+
+
+def _fingerprint(p):
+    import hashlib
+    st = os.stat(p)
+    with open(p, "rb") as f:
+        return st.st_size, st.st_mtime_ns, hashlib.sha256(f.read()).hexdigest()
+
+
+def test_a_saved_sandown_park_overrides_the_built_in_and_is_never_rewritten(monkeypatch):
+    """Q2's precedence rule, on a copy of a realistic user file: the user's saved "Sandown Park"
+    OVERRIDES the built-in of the same name (the rule `all_tracks` already applies to MK), so the
+    merged view — and the track manager built from it — holds ONE Sandown Park, it detects with
+    the USER's line, and the manager marks it as a refined built-in whose delete brings the
+    shipped line back. Nothing on the read path rewrites, re-saves or "migrates" the file: its
+    bytes and mtime are identical afterwards.
+
+    Two user lines: a refined one ~12 m along the straight (the case the rule exists for), and one
+    identical to the built-in, which is the owner's real file — his saved line IS the built-in."""
+    from studio.library_controller import LibraryController
+    refined = [[51.3762, -0.3615], [51.3764, -0.3616]]
+    for label, user_start in (("refined", refined), ("identical", _SP_START)):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "tracks.json")
+            _owner_shaped_file(p, user_start)
+            before = _fingerprint(p)
+            monkeypatch.setattr(track_db, "_app_support_dir", lambda _d=d: _d)
+
+            merged = track_db.all_tracks()
+            assert [e["name"] for e in merged].count("Sandown Park") == 1, (label, merged)
+            assert next(e for e in merged if e["name"] == "Sandown Park")["start"] == user_start
+            hit = track_db.detect(*_SD_CENTROID)
+            assert hit["name"] == "Sandown Park" and hit["start"] == user_start, (label, hit)
+            reverts = track_db.reverts_to_builtin("Sandown Park")
+            assert reverts is not None and reverts["start"] == _SP_START, label
+            assert track_db.user_names() == ["Sandown Park", "Croft"]
+            assert not track_db.unreadable() and track_db.backup_pending() is None
+
+            rows = LibraryController._track_rows(None)
+            sandown = [r for r in rows if r["name"] == "Sandown Park"]
+            assert len(sandown) == 1, f"{label}: the manager lists {len(sandown)} Sandown Parks"
+            assert sandown[0]["builtin"] and sandown[0]["editable"], sandown
+            assert [r["name"] for r in rows] == ["Daytona Milton Keynes", "Sandown Park", "Croft"]
+
+            assert _fingerprint(p) == before, f"{label}: reading the user's tracks rewrote the file"
+            assert not os.path.exists(p + ".bak"), f"{label}: reading the user's tracks backed it up"
+
+
+def test_renaming_a_refined_built_in_is_refused():
+    """A user's saved "Sandown Park" is a REFINED built-in now. Renaming it would move the user's
+    entry to the new name and bring the seed back under the old one — two circuits for one place,
+    the fork `BuiltInTrack` exists to refuse. So it is refused, before anything is written; deleting
+    it is still allowed and reverts to the shipped line."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        _owner_shaped_file(p, _SP_START)
+        before = _fingerprint(p)
+        raised = None
+        try:
+            track_db.rename_track("Sandown Park", "Sandown", p)
+        except ValueError as exc:
+            raised = exc
+        assert isinstance(raised, track_db.BuiltInTrack), raised
+        assert "renamed" in str(raised) and "deleted" not in str(raised), str(raised)
+        assert _fingerprint(p) == before and not os.path.exists(p + ".bak")
+        names = [e["name"] for e in track_db.all_tracks(p)]
+        assert names.count("Sandown Park") == 1 and "Sandown" not in names, names
+        track_db.remove_track("Sandown Park", p)
+        sp = next(e for e in track_db.all_tracks(p) if e["name"] == "Sandown Park")
+        assert sp["start"] == _SP_START, "deleting the refined copy did not bring the built-in back"
 
 
 def test_save_load_roundtrip_bit_exact():
@@ -580,6 +700,65 @@ def test_daytona_mk_seed_unchanged():
         assert trk.sectors == ()                              # the seed defines no sectors
 
 
+def _loop_through_sandown_line(direction: int, laps_n: int = 3):
+    """A synthetic circle (r = 100 m, 20 m/s, 10 Hz) whose circumference crosses the built-in
+    Sandown Park start/finish line square at its midpoint, driven `direction` = -1 (clockwise, as
+    every Sandown recording is) or +1 (anticlockwise). Returns a `pacer.Laps` fed the way the loader
+    feeds it, with its coordinate system set."""
+    import pacer
+    (a_lat, a_lon), (b_lat, b_lon) = _SP_START
+    m_lat, m_lon = (a_lat + b_lat) / 2, (a_lon + b_lon) / 2
+    k_lon = _M_PER_DEG_LAT * math.cos(math.radians(m_lat))
+    ue, un = (b_lon - a_lon) * k_lon, (b_lat - a_lat) * _M_PER_DEG_LAT
+    norm = math.hypot(ue, un)
+    ue, un = ue / norm, un / norm
+    r = 100.0
+    c_lat, c_lon = m_lat + r * un / _M_PER_DEG_LAT, m_lon + r * ue / k_lon   # centre along the line
+    theta0 = math.atan2(-un, -ue)                                             # the midpoint's angle
+    laps = pacer.Laps()
+    per_lap = 314
+    for i in range((laps_n + 1) * per_lap):          # half a lap in, `laps_n` laps, half a lap out
+        th = theta0 + direction * 2.0 * math.pi * (i + 0.37 - per_lap / 2) / per_lap
+        laps.add_point(pacer.GPSSample(
+            lat=c_lat + r * math.sin(th) / _M_PER_DEG_LAT, lon=c_lon + r * math.cos(th) / k_lon,
+            altitude=0.0, full_speed=20.0, ground_speed=20.0), i * 0.1)
+    mn, mx = laps.min_max()
+    cs = pacer.CoordinateSystem(pacer.GPSSample(lat=(mn.y + mx.y) / 2, lon=(mn.x + mx.x) / 2,
+                                                altitude=0))
+    laps.set_coordinate_system(cs)
+    return laps, cs, ((mn.y + mx.y) / 2, (mn.x + mx.x) / 2)
+
+
+def test_sandown_park_times_the_same_either_way_round():
+    """Every Sandown recording is CLOCKWISE, and a clockwise-only sign bug has shipped unnoticed
+    before (#334, in the rotation cross-check). So the loader's known-track branch — detect, place
+    the built-in line in local metres, `_fit_start_line` — is driven here over one loop both ways
+    round: each direction must detect Sandown Park on an empty user DB, keep the built-in line
+    unwidened, and cut the same laps to the same times. A crossing test that read the side a car
+    crosses from, or a line whose orientation mattered, would split the two."""
+    if not _pacer_available():
+        print("skip test_sandown_park_times_the_same_either_way_round (no pacer)")
+        return
+    from studio import _signal, load, tracks
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        got = {}
+        for direction, label in ((-1, "clockwise"), (+1, "anticlockwise")):
+            laps, cs, (clat, clon) = _loop_through_sandown_line(direction)
+            trk = tracks.detect_track(clat, clon, db_path=p)
+            assert trk is not None and trk.name == "Sandown Park", (label, trk)
+            base = tracks.start_line_segment(trk, cs)
+            chosen = load._fit_start_line(laps, base)
+            assert (chosen.first.x, chosen.first.y) == (base.first.x, base.first.y), (
+                f"{label}: the built-in line had to be widened to find the laps")
+            ids = _signal._band_lap_ids(laps)
+            got[label] = [laps.lap_time(i) for i in ids]
+        cw, acw = got["clockwise"], got["anticlockwise"]
+        assert len(cw) == len(acw) >= 2, got
+        for a, b in zip(cw, acw, strict=True):
+            assert abs(a - b) < 1e-6 and abs(a - 31.4) < 0.05, got
+
+
 # ===================================== Save-as-track guard (offscreen Qt; skipped without pacer)
 
 def test_save_track_guard(monkeypatch):
@@ -738,7 +917,7 @@ def test_removing_the_last_track_leaves_a_usable_store():
         assert track_db.load(p) == track_db.empty_db()
         assert track_db.unreadable(p) is False, "an emptied DB must not read as a damaged one"
         names = [e["name"] for e in track_db.all_tracks(p)]
-        assert names == ["Daytona Milton Keynes"], names
+        assert names == _BUILTIN_NAMES, names
         assert track_db.detect(54.45, -1.55, p) is None
         track_db.save_track(_entry("Whilton Mill", centroid=(52.28, -1.10)), p)
         assert {e["name"] for e in track_db.load(p)["tracks"]} == {"Whilton Mill"}
@@ -813,20 +992,20 @@ def test_rename_to_a_name_already_taken_is_refused():
     `all_tracks` is name-keyed, so one would silently swallow the other. Refused; both survive."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "tracks.json")
-        a_start = [[51.376, -0.361], [51.3761, -0.3608]]
+        a_start = [[51.30, 0.55], [51.3001, 0.5502]]
         b_start = [[54.45, -1.55], [54.451, -1.549]]
-        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361), start=a_start), p)
+        track_db.save_track(_entry("Buckmore Park", centroid=(51.30, 0.55), start=a_start), p)
         track_db.save_track(_entry("Croft", centroid=(54.45, -1.55), start=b_start), p)
         raised = None
         try:
-            track_db.rename_track("Sandown Park", "Croft", p)
+            track_db.rename_track("Buckmore Park", "Croft", p)
         except ValueError as exc:
             raised = exc
         assert raised is not None, "a rename onto a taken name was written silently"
         assert isinstance(raised, track_db.TrackNameInUse)
         assert "Croft" in str(raised)
         stored = {e["name"]: e["start"] for e in track_db.load(p)["tracks"]}
-        assert stored == {"Sandown Park": a_start, "Croft": b_start}, stored
+        assert stored == {"Buckmore Park": a_start, "Croft": b_start}, stored
 
 
 def test_rename_to_an_empty_name_is_refused():
@@ -834,18 +1013,18 @@ def test_rename_to_an_empty_name_is_refused():
     the circuit VANISH on the next load. Refused before it reaches disk; the track is untouched."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "tracks.json")
-        start = [[51.376, -0.361], [51.3761, -0.3608]]
-        track_db.save_track(_entry("Sandown Park", centroid=(51.376, -0.361), start=start), p)
+        start = [[51.30, 0.55], [51.3001, 0.5502]]
+        track_db.save_track(_entry("Buckmore Park", centroid=(51.30, 0.55), start=start), p)
         for bad in ("", "   ", "\t\n"):
             raised = None
             try:
-                track_db.rename_track("Sandown Park", bad, p)
+                track_db.rename_track("Buckmore Park", bad, p)
             except ValueError as exc:
                 raised = exc
             assert raised is not None, f"a rename to {bad!r} was accepted"
             db = track_db.load(p)
             assert len(db["tracks"]) == 1, f"the circuit vanished renaming to {bad!r}"
-            assert db["tracks"][0]["name"] == "Sandown Park"
+            assert db["tracks"][0]["name"] == "Buckmore Park"
             assert db["tracks"][0]["start"] == start
 
 
@@ -882,18 +1061,18 @@ def test_renaming_a_built_in_is_refused():
         assert raised is not None, "renaming a built-in silently forked it into two circuits"
         assert isinstance(raised, track_db.BuiltInTrack)
         names = [e["name"] for e in track_db.all_tracks(p)]
-        assert names == ["Daytona Milton Keynes"], names
+        assert names == _BUILTIN_NAMES, names
 
 
 def test_rename_keeps_a_backup_first():
     """A rename rewrites durable history, so it takes the same .bak copy a delete does."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "tracks.json")
-        track_db.save_track(_entry("Sandown Par", centroid=(51.376, -0.361)), p)
-        track_db.rename_track("Sandown Par", "Sandown Park", p)
+        track_db.save_track(_entry("Buckmore Prk", centroid=(51.30, 0.55)), p)
+        track_db.rename_track("Buckmore Prk", "Buckmore Park", p)
         assert os.path.exists(p + ".bak"), "a rename left no backup"
         old = {e["name"] for e in track_db.load(p + ".bak")["tracks"]}
-        assert old == {"Sandown Par"}, old
+        assert old == {"Buckmore Prk"}, old
 
 
 def test_renaming_a_track_that_is_not_there_is_refused():
@@ -970,7 +1149,7 @@ def _dialog_rows():
     """The row model the app hands the dialog: a built-in, a refined built-in and a user track."""
     return [
         {"name": "Daytona Milton Keynes", "builtin": True, "editable": False, "sectors": 0},
-        {"name": "Sandown Park", "builtin": False, "editable": True, "sectors": 2},
+        {"name": "Whilton Mill", "builtin": False, "editable": True, "sectors": 2},
     ]
 
 
@@ -997,8 +1176,36 @@ def test_dialog_never_offers_to_edit_a_built_in():
     assert not (item.flags() & Qt.ItemIsSelectable), "a built-in row is selectable"
     assert not (item.flags() & Qt.ItemIsEnabled), "a built-in row is enabled"
     # The selection landed on the editable row instead, so the buttons ARE armed for that one.
-    assert dlg._selected()["name"] == "Sandown Park"
+    assert dlg._selected()["name"] == "Whilton Mill"
     assert dlg.rename_btn.isEnabled() and dlg.delete_btn.isEnabled()
+    dlg.deleteLater()
+
+
+def test_dialog_offers_a_refined_built_in_delete_but_not_rename(monkeypatch):
+    """A refined built-in — the owner's saved "Sandown Park" since Q2 — is selectable because its
+    delete means something (the shipped line comes back), but Rename… stays off and a double-click
+    asks nothing: the store would refuse it, and a button that can only refuse is not offered."""
+    from studio import track_dialog
+    from studio.track_dialog import NAME_ROLE
+    asked = []
+    monkeypatch.setattr(track_dialog.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: asked.append(a) or ("Sandown", True)))
+    rows = [{"name": "Daytona Milton Keynes", "builtin": True, "editable": False, "sectors": 0},
+            {"name": "Sandown Park", "builtin": True, "editable": True, "sectors": 0}]
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    renamed = []
+    dlg = track_dialog.TrackManagerDialog(rows, rename_track=lambda *a: renamed.append(a) or rows,
+                                          delete_track=lambda *a: rows)
+    assert dlg._selected()["name"] == "Sandown Park"
+    item = next(dlg.list.item(i) for i in range(dlg.list.count())
+                if dlg.list.item(i).data(NAME_ROLE) == "Sandown Park")
+    assert "refined by you" in item.text(), item.text()
+    assert dlg.delete_btn.isEnabled(), "a refined built-in's delete (revert) is not offered"
+    assert not dlg.rename_btn.isEnabled(), "a refined built-in's Rename… is armed"
+    dlg._rename_selected()                               # what a double-click does
+    assert asked == [] and renamed == [], (asked, renamed)
     dlg.deleteLater()
 
 
@@ -1010,15 +1217,15 @@ def test_dialog_rename_routes_the_typed_name_through_the_callback(monkeypatch):
 
     def _renamed(old, new):
         calls.append((old, new))
-        return [{"name": "Sandown Park Karting", "builtin": False, "editable": True, "sectors": 2}]
+        return [{"name": "Whilton Mill Karting", "builtin": False, "editable": True, "sectors": 2}]
 
     monkeypatch.setattr(track_dialog.QInputDialog, "getText",
-                        staticmethod(lambda *a, **k: ("  Sandown Park Karting  ", True)))
+                        staticmethod(lambda *a, **k: ("  Whilton Mill Karting  ", True)))
     dlg = _track_dialog(rename_track=_renamed)
     dlg._rename_selected()
-    assert calls == [("Sandown Park", "Sandown Park Karting")], calls
+    assert calls == [("Whilton Mill", "Whilton Mill Karting")], calls
     assert dlg.list.count() == 1
-    assert "Sandown Park Karting" in dlg.list.item(0).text()
+    assert "Whilton Mill Karting" in dlg.list.item(0).text()
     dlg.deleteLater()
 
 
@@ -1065,7 +1272,7 @@ def test_dialog_delete_asks_first_and_a_declined_confirm_deletes_nothing(monkeyp
     monkeypatch.setattr(track_dialog.QMessageBox, "question",
                         _answer(track_dialog.QMessageBox.Yes))
     dlg._delete_selected()
-    assert calls == ["Sandown Park"], calls
+    assert calls == ["Whilton Mill"], calls
     dlg.deleteLater()
 
 
@@ -1144,7 +1351,7 @@ def test_app_delete_leaves_every_analysed_session_alone(monkeypatch):
         ctl = LibraryController(win, studio_app.STATUS_MS)
         rows = ctl._delete_track("Sonoma")
 
-        assert [r["name"] for r in rows] == ["Daytona Milton Keynes"], rows
+        assert [r["name"] for r in rows] == _BUILTIN_NAMES, rows
         assert track_db.load()["tracks"] == []
         idx = library.load()
         assert len(idx["entries"]) == 3, "deleting a circuit dropped analysed sessions"
