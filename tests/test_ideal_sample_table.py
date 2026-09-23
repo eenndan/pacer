@@ -1,7 +1,8 @@
 """THE IDEAL LAP'S MEASURED TABLE IS A PUBLISHED NUMBER, AND THIS IS WHAT CHECKS IT.
 
 WHY THIS FILE EXISTS. `corner_model.IdealSample` carries a measured table — the ideal lap over
-random subsets of five real recordings — and a dozen other surfaces quote a figure out of it: the
+random subsets of the owner's working-set recordings (T16b; the D24-era table it replaced is kept
+beneath it as the record) — and a dozen other surfaces quote a figure out of it: the
 README, both Stats tooltips, the hero chip, two Library header hovers, `Session.ideal_total`, the
 laps.csv writer, the landing page and its screenshot. #228 moved the app's ideal on D24's three
 chapters by +0.218 s and every one of those numbers became false in the same instant. Nothing went
@@ -22,9 +23,12 @@ WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
      whole surface families — a guard with the family hard-coded would miss the twelfth surface
      exactly the way the sweep did.
   3. EVERY "X s OVER 5 LAPS, Y s OVER N" PAIR IS A ROW'S OWN TWO CELLS, found by search.
-  4. EVERY D24 GAP QUOTED IN THE TREE IS THE ONE THE DOCSTRING PUBLISHES — "−G s at 5 laps",
-     "G s gap over 65", "G s on D24 one chapter and G s on three", the screenshot alt text's
-     "1:SS.mmm theoretical best over N laps, −G s on the table" — found by search.
+  4. EVERY GAP QUOTED IN THE TREE IS ONE THE DOCSTRING PUBLISHES — "−G s at 5 laps",
+     "G s gap over 62", "G s on D24 one chapter and G s on three", the screenshot alt text's
+     "1:SS.mmm theoretical best over N laps, −G s on the table" — found by search, and read
+     against the current table or the record by the lap count it names.
+     A figure off the RECORD is dated wherever a reader meets it (a public doc may still describe
+     the D24 screenshots in D24's numbers), and an in-app string may not quote it at all.
      Checks 1-4 read text — no Qt, no pacer, no numpy — and run in CI. They prove that every
      surface agrees with the TABLE. They cannot prove that the table agrees with the APP, and
      they cannot see a screenshot's pixels: an alt text that matches the table beside a PNG
@@ -32,16 +36,16 @@ WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
   5. THE TABLE IS STILL TRUE OF THE APP. Opt-in, because it needs a recording CI does not have:
      set `PACER_IDEAL_TABLE_MP4` to a comma-separated chapter list. Without it this check is
      reported SKIPPED by name — it is its own CTest registration, `footage.<name>`, and not part of
-     this file's ordinary run or count (tests/_footage.py). The check matches the
-     recording to the row by its clean-lap count, asserts the `all` cell IS
+     this file's ordinary run or count (tests/_footage.py). The check finds the row by the
+     recording's chapter files (`ROW_RECORDINGS`), asserts the `all` cell IS
      `Session.ideal_total()` to the millisecond, and then RE-RUNS THE TABLE'S STATED METHOD
      (20,000 random subsets per rung, partition held) over the app's own per-lap segment matrix.
      Every rung cell must come out within Monte-Carlo error. So must the prose figures the
-     docstring publishes beside the row: the best lap's own rate, and on D24 and SD_30_08 the
-     gap at both ends, the per-doubling decrements and the top-rung rates. The recording is loaded
-     AS THE APP OPENS IT — `Session.load`, then the start line saved beside it — because that is
-     the number the app prints. When it fails it prints the re-measured row in the table's own
-     syntax.
+     docstring publishes beside the row: the best lap's own rate, and on the primary recording
+     the gap at both ends, the per-doubling decrements and its first chapter's gap. The recording
+     is loaded AS THE APP OPENS IT on a fresh library — `Session.load`, then the start line saved
+     beside it — because that is the number the app prints. When it fails, even on a table it
+     cannot read, it prints the re-measured row in the table's own syntax.
 
 AND A CONTROL ON CHECK 5'S STAND-IN, which does run in CI. Re-measuring the table means re-running
 the ideal lap over random subsets, which the app never computes — so check 5 carries a STAND-IN for
@@ -59,8 +63,9 @@ not to measure laps at all: 12.862 s over 25 "laps" was 25 pieces of 13 s cut fr
 the loader's start line, which `load._fit_start_line` no longer chooses.
 
 Run:  python tests/test_ideal_sample_table.py
-      PACER_IDEAL_TABLE_MP4=~/Desktop/D24/GX010062.MP4,…/GX020062.MP4,…/GX030062.MP4 \\
+      PACER_IDEAL_TABLE_MP4="$D/GX010064.MP4,$D/GX020064.MP4,$D/GX030064.MP4" \\
           python tests/test_ideal_sample_table.py --footage test_the_table_still_matches_the_app
+      (D="$HOME/Desktop/Sandown 3h 2026"; once per row of ROW_RECORDINGS to re-measure the table)
 """
 
 from __future__ import annotations
