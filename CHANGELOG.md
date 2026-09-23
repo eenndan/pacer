@@ -383,6 +383,17 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A lift is no longer read as a brake.** The brake detector kept a string of one-sample blips as a
+  brake event whenever the blips were spread over its 0.25 s minimum, even though none of them lasted
+  that long. On the four recordings on this machine that was 5–7 % of brake glyphs, and 70 of those
+  73 lay in no braking zone defined without the detector; the Brake/Throttle band painted none of
+  them. 61 of the 1,121 per-corner brake points were read off one. 54 of those were corners that lap
+  never braked for, and they now read "no brake" like the laps that did not touch the brakes there.
+  7 came after the corner's real brake; 5 of those move back 23–41 m onto it. In Stats ▸ BRAKING a
+  corner that was often only lifted for now counts fewer laps (one fell from 20 to 9), the "m later"
+  medians move by at most 1.5 m, and braking per lap falls by 0.3–1.2 s. No coaching hint appears or
+  disappears; a few move by 1 m.
+
 - **The Brake/Throttle band paints a braking zone as one piece.** Its brake half used to be a second,
   cruder detector: every 10 Hz sample decelerating past 0.18 g, with no hysteresis. The speed
   derivative carries about 0.1 g of noise, so a zone broke wherever one sample dipped, and the floor

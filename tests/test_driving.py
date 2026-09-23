@@ -171,7 +171,7 @@ def test_a_string_of_blips_with_no_sustained_brake_is_not_a_brake_event():
 
     MIN_BRAKE_S used to gate only the MERGED span, blip to blip with the coasts included, so four
     single-sample blips over 0.6 s were one event whose onset was the first blip. On four real
-    recordings that was 3.0-7.4 % of events, 70 of 73 in no independently defined braking zone,
+    recordings that was 5.0-7.4 % of events, 70 of 73 in no independently defined braking zone,
     and 61 of 1,121 per-corner brake points. When such a string came after the corner's real brake
     it was the LAST onset in the corner's window, so `lap_brake_points` read the brake point off it.
 
