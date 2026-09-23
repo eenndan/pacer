@@ -20,7 +20,11 @@ gate prints it under "The following tests did not run: … (Skipped)". This file
     footage and no footage variable, exits with the skip code and prints its own name. On the tree
     before this change the same command ran the whole file and exited 0;
   * a recording the operator NAMED that is not there fails instead of skipping;
-  * footage is found only through `tests/_footage.py`, and the golden dump reads the same variable.
+  * footage is found only through `tests/_footage.py`, and the golden dump reads the same variable;
+  * every DEFAULT names a recording of the Desktop working set, never one that left the machine
+    (G2: until then every default was on D24, so all fourteen checks could only ever skip);
+  * `pixi run test-fast` reports each check SKIPPED by name even with its footage PRESENT, towards
+    `pixi run test-footage`, which runs them by label — and a variable the operator set still runs.
 
 Run:  QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer python tests/test_footage_checks.py
 """
@@ -72,6 +76,16 @@ _FOOTAGE_ENVS = (dev_footage.RECORDING_ENV, dev_footage.REFERENCE_ENV,
 # The variables the consolidation retired. A test reading one would be pointed nowhere.
 _RETIRED_ENVS = ("PACER_REAL_MP4", "PACER_D24_MEDIA")
 
+# One call per lookup in tests/_footage.py, each with a default. The two table lookups get stand-in
+# rows here; their real ones are the tables' own (`ROW_RECORDINGS`, `_LAP_SETS`).
+_STAND_IN_SET = ("Stand-in Track/GX010001.MP4", "Stand-in Track/GX020001.MP4")
+_LOOKUPS = (
+    (_footage.recording, ()),
+    (_footage.pair, ()),
+    (_footage.recording_sets, ("PACER_IDEAL_TABLE_MP4", "every row", [list(_STAND_IN_SET)])),
+    (_footage.directory, ("PACER_MEASURED_FIGURES_DIR", "the lap sets", _STAND_IN_SET)),
+)
+
 
 def _test_files() -> list[str]:
     return sorted(n for n in os.listdir(_TESTS) if n.startswith("test_") and n.endswith(".py"))
@@ -114,8 +128,11 @@ def _registrations() -> dict[str, dict]:
 
 
 def _no_footage_env(home: str) -> dict:
-    """The environment CTest gives a footage registration, on a machine with no footage at all."""
-    env = {k: v for k, v in os.environ.items() if k not in _FOOTAGE_ENVS + _RETIRED_ENVS}
+    """The environment CTest gives a footage registration, on a machine with no footage at all —
+    with the defaults IN USE, so what is measured is their absence, not `pixi run test-fast`'s
+    `PACER_FOOTAGE_DEFAULTS=off` (which would skip every check whatever the machine holds)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in _FOOTAGE_ENVS + _RETIRED_ENVS + (_footage.DEFAULTS_ENV,)}
     env["HOME"] = home                      # every `~/Desktop/...` default now resolves into `home`
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["PYTHONPATH"] = os.path.join(_REPO, "bindings", "pacer")
@@ -195,6 +212,10 @@ def test_every_footage_check_is_registered_to_report_a_skip():
         if reg["properties"].get("SKIP_RETURN_CODE") != _footage.SKIP_RETURN_CODE:
             problems.append(f"footage.{check} has SKIP_RETURN_CODE "
                             f"{reg['properties'].get('SKIP_RETURN_CODE')}, not {_footage.SKIP_RETURN_CODE}")
+        # `pixi run test-footage` selects on this label (G2); without it the check never runs there.
+        if "footage" not in (reg["properties"].get("LABELS") or []):
+            problems.append(f"footage.{check} carries LABELS {reg['properties'].get('LABELS')}, "
+                            "not `footage` — `pixi run test-footage` (`ctest -L footage`) skips it")
     names = {f"footage.{c}" for _, c in declared}
     orphans = sorted(n for n in regs if n.startswith("footage.") and n not in names)
     problems += [f"{n} is registered but no file declares it in FOOTAGE_CHECKS" for n in orphans]
@@ -241,35 +262,28 @@ def test_a_footage_check_without_its_recording_is_reported_skipped_by_name():
 def test_a_named_recording_that_is_missing_fails_rather_than_skips():
     """Skip only what nobody asked for. A default that is not here is a skip; a recording the
     operator NAMED that is not here is a mistake, and skipping it would be the same no-op again."""
-    saved = {k: os.environ.get(k) for k in _FOOTAGE_ENVS + ("HOME",)}
+    saved = {k: os.environ.get(k) for k in _FOOTAGE_ENVS + ("HOME", _footage.DEFAULTS_ENV)}
     try:
         with tempfile.TemporaryDirectory(prefix="pacer-g1-named-") as home:
-            for k in _FOOTAGE_ENVS:
+            for k in _FOOTAGE_ENVS + (_footage.DEFAULTS_ENV,):
                 os.environ.pop(k, None)
             os.environ["HOME"] = home
-            for fn in (_footage.recording, _footage.reference):
-                try:
-                    fn()
-                except _footage.FootageMissing as exc:
-                    assert home in exc.reason and "default" in exc.reason, exc.reason
-                else:
-                    raise AssertionError(f"{fn.__name__}() found a recording under an empty HOME")
-            for fn, args in ((_footage.recording_list, ("PACER_IDEAL_TABLE_MP4", "chapters")),
-                             (_footage.directory, ("PACER_MEASURED_FIGURES_DIR", "a folder"))):
+            os.makedirs(os.path.join(home, "Desktop"))      # a Desktop, with nothing on it
+            for fn, args in _LOOKUPS:
                 try:
                     fn(*args)
-                except _footage.FootageMissing:
-                    pass
+                except _footage.FootageMissing as exc:
+                    assert home in exc.reason, exc.reason
                 else:
-                    raise AssertionError(f"{fn.__name__}{args} did not skip with its variable unset")
+                    raise AssertionError(f"{fn.__name__}{args} found footage under an empty HOME")
 
             ghost = os.path.join(home, "Desktop", "GX010064.MP4")
             for env, fn, args in ((dev_footage.RECORDING_ENV, _footage.recording, ()),
-                                  (dev_footage.REFERENCE_ENV, _footage.reference, ()),
-                                  ("PACER_IDEAL_TABLE_MP4", _footage.recording_list,
-                                   ("PACER_IDEAL_TABLE_MP4", "chapters")),
-                                  ("PACER_MEASURED_FIGURES_DIR", _footage.directory,
-                                   ("PACER_MEASURED_FIGURES_DIR", "a folder"))):
+                                  (dev_footage.REFERENCE_ENV, _footage.pair, ()),
+                                  *(("PACER_IDEAL_TABLE_MP4", fn, args) for fn, args in _LOOKUPS
+                                    if fn is _footage.recording_sets),
+                                  *(("PACER_MEASURED_FIGURES_DIR", fn, args) for fn, args in _LOOKUPS
+                                    if fn is _footage.directory)):
                 os.environ[env] = ghost
                 try:
                     fn(*args)
@@ -356,6 +370,177 @@ def test_the_golden_dump_reads_the_same_variable_and_default():
     print("test_the_golden_dump_reads_the_same_variable_and_default OK")
 
 
+# ----------------------------------------------------------------------------- the defaults (G2)
+def _desktop_folder(default: str) -> str:
+    """The folder a `~/Desktop/<folder>/<chapter>` default names."""
+    prefix = dev_footage.DESKTOP + "/"
+    assert default.startswith(prefix), f"{default!r} is not a recording on the Desktop"
+    return default[len(prefix):].split("/")[0]
+
+
+def test_every_default_names_a_recording_still_on_the_machine():
+    """G2. Every recording a footage check or the golden dump falls back on is one of the Desktop
+    working set, never one `_stale.GONE` lists. A default on a recording that has left the machine
+    turns its checks into skips on every run, for good, and a skip is not coverage: from 2026-09-19
+    until G2 all fourteen checks and the dump were in exactly that state, their defaults on D24.
+
+    Also held: the compare pair is two DIFFERENT recordings (one recording cannot tell pane B's file
+    from pane A's), and the ideal-lap table's default rows name no recording that left either."""
+    import _stale
+    import test_ideal_sample_table as ideal
+
+    defaults = {name: getattr(dev_footage, name)
+                for name in ("RECORDING_DEFAULT", "PAIR_RECORDING_DEFAULT", "REFERENCE_DEFAULT")}
+    problems = [f"studio/dev/footage.py {name} = {path!r} names {_desktop_folder(path)!r}, which "
+                f"_stale.GONE says left the machine — every check reading it would only ever skip"
+                for name, path in defaults.items() if _desktop_folder(path) in _stale.GONE]
+    working_set = (dev_footage.SANDOWN_3H, dev_footage.SD_19_09, dev_footage.MK_18_09)
+    problems += [f"{name} = {path!r} is not one of the working set {working_set}"
+                 for name, path in defaults.items() if path not in working_set]
+    pair = (defaults["PAIR_RECORDING_DEFAULT"], defaults["REFERENCE_DEFAULT"])
+    if _desktop_folder(pair[0]) == _desktop_folder(pair[1]):
+        problems.append(f"the compare pair's defaults are one recording: {pair}")
+    problems += [f"the ideal-lap table's row {name!r} names {folder!r}, which left the machine"
+                 for name, (folder, _files) in ideal.ROW_RECORDINGS.items() if folder in _stale.GONE]
+    assert not problems, "footage defaults that cannot run here:\n  " + "\n  ".join(problems)
+    print(f"test_every_default_names_a_recording_still_on_the_machine OK ({len(defaults)} defaults, "
+          f"{len(ideal.ROW_RECORDINGS)} table rows)")
+
+
+def _stand_in_desktop(home: str) -> list[str]:
+    """Create an EMPTY stand-in, under `home`, for every file a default names — the recordings in
+    studio/dev/footage.py, the ideal-lap table's rows and `_STAND_IN_SET` — so a lookup that goes on
+    to open one opens nothing real. Returns what it made."""
+    import test_ideal_sample_table as ideal
+
+    cut = len(dev_footage.DESKTOP) + 1
+    rel = {p[cut:] for p in (dev_footage.RECORDING_DEFAULT, dev_footage.PAIR_RECORDING_DEFAULT,
+                             dev_footage.REFERENCE_DEFAULT)}
+    rel |= {os.path.join(folder, f) for folder, files in ideal.ROW_RECORDINGS.values() for f in files}
+    rel |= set(_STAND_IN_SET)
+    made = []
+    for r in sorted(rel):
+        path = os.path.join(home, "Desktop", r)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+        made.append(path)
+    return made
+
+
+def _one_check_per_lookup() -> list[tuple[str, str]]:
+    """A declared footage check for each lookup in tests/_footage.py, found in its file's source."""
+    by_lookup: dict[str, tuple[str, str] | None] = dict.fromkeys(
+        ("_footage.recording()", "_footage.pair()", "_footage.recording_sets(", "_footage.directory("))
+    for fname, check in _declared():
+        src = open(os.path.join(_TESTS, fname), encoding="utf-8").read()
+        for key, found in by_lookup.items():
+            if found is None and key in src:
+                by_lookup[key] = (fname, check)
+    assert all(by_lookup.values()), f"no declared check uses one of the lookups: {by_lookup}"
+    return sorted(set(by_lookup.values()))
+
+
+def test_the_fast_loop_reports_a_present_default_skipped_and_still_runs_a_named_one():
+    """`pixi run test-fast` sets PACER_FOOTAGE_DEFAULTS=off (G2): the defaults now name recordings
+    that ARE on the dev Mac, and the fast loop reports the checks rather than paying minutes to run
+    them. Off must mean exactly that and no more:
+      * on a Desktop that HOLDS every default (empty stand-ins), each lookup returns its default
+        when the variable is unset — a present default is used, which is the whole of G2;
+      * with it off, each raises FootageMissing saying where the check does run;
+      * a recording the operator NAMED is still used with it off (off is about defaults);
+      * any other value fails rather than guessing;
+      * and THE REGISTRATIONS THEMSELVES, one per lookup, run as CTest runs them under test-fast's
+        environment with their footage present, exit with the skip code naming `test-footage`."""
+    saved = {k: os.environ.get(k) for k in _FOOTAGE_ENVS + ("HOME", _footage.DEFAULTS_ENV)}
+    checks = _one_check_per_lookup()
+    try:
+        with tempfile.TemporaryDirectory(prefix="pacer-g2-home-") as home:
+            for k in _FOOTAGE_ENVS + (_footage.DEFAULTS_ENV,):
+                os.environ.pop(k, None)
+            os.environ["HOME"] = home
+            made = _stand_in_desktop(home)
+            desktop = os.path.join(home, "Desktop")
+            used = {fn.__name__: fn(*args) for fn, args in _LOOKUPS}
+            cut = len(dev_footage.DESKTOP) + 1
+            assert used["recording"] == os.path.join(desktop, dev_footage.RECORDING_DEFAULT[cut:]), used
+            assert all(p.startswith(desktop + os.sep) for p in used["pair"]), used
+            assert used["recording_sets"] == [[os.path.join(desktop, p) for p in _STAND_IN_SET]], used
+            assert used["directory"] == desktop, used
+
+            os.environ[_footage.DEFAULTS_ENV] = "off"
+            for fn, args in _LOOKUPS:
+                try:
+                    fn(*args)
+                except _footage.FootageMissing as exc:
+                    assert "test-footage" in exc.reason and _footage.DEFAULTS_ENV in exc.reason, exc.reason
+                else:
+                    raise AssertionError(f"{fn.__name__}{args} used a default with "
+                                         f"{_footage.DEFAULTS_ENV}=off")
+            os.environ[dev_footage.RECORDING_ENV] = made[0]
+            assert _footage.recording() == made[0], "a NAMED recording must still run with defaults off"
+            os.environ.pop(dev_footage.RECORDING_ENV)
+
+            os.environ[_footage.DEFAULTS_ENV] = "of"
+            try:
+                _footage.recording()
+            except AssertionError as exc:
+                assert "'of'" in str(exc), exc
+            else:
+                raise AssertionError(f"{_footage.DEFAULTS_ENV}='of' was read as something")
+            os.environ.pop(_footage.DEFAULTS_ENV)
+
+            # One registration per lookup, exactly as `pixi run test-fast` runs it, footage present.
+            env = _no_footage_env(home)
+            env[_footage.DEFAULTS_ENV] = "off"
+            wrong = []
+            for fname, check in checks:
+                proc = subprocess.run([sys.executable, os.path.join(_TESTS, fname), _footage.FLAG, check],
+                                      cwd=_REPO, env=env, capture_output=True, text=True, timeout=300)
+                line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("SKIPPED")), "")
+                if proc.returncode != _footage.SKIP_RETURN_CODE or "test-footage" not in line:
+                    wrong.append(f"{fname} {check}: exit {proc.returncode}, "
+                                 f"{line or (proc.stdout + proc.stderr).strip()[-300:]}")
+            assert not wrong, ("with the defaults off and the footage PRESENT, these were not reported "
+                               "skipped towards `pixi run test-footage`:\n  " + "\n  ".join(wrong))
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("test_the_fast_loop_reports_a_present_default_skipped_and_still_runs_a_named_one OK "
+          f"({len(_LOOKUPS)} lookups, {len(checks)} registrations)")
+
+
+def test_the_fast_loop_reports_footage_and_the_footage_task_runs_it():
+    """Where the checks run, read off pyproject.toml the way pixi reads it. `test-fast` turns the
+    defaults off and EXCLUDES no footage registration — an excluded test vanishes from ctest's
+    output, and a check that cannot run has to say so (#341). `test-footage` selects them by label,
+    under `caffeinate -si` (a Mac that sleeps mid-run reads as a hang, #282). `test`, the pre-PR
+    gate, leaves the defaults on, so on the dev Mac it runs every one."""
+    import re
+    import tomllib
+
+    with open(os.path.join(_REPO, "pyproject.toml"), "rb") as f:
+        tasks = tomllib.load(f)["tool"]["pixi"]["tasks"]
+    fast, full, foot = tasks["test-fast"], tasks["test"], tasks["test-footage"]
+    problems = []
+    if (fast.get("env") or {}).get(_footage.DEFAULTS_ENV) != "off":
+        problems.append(f"test-fast does not set {_footage.DEFAULTS_ENV}=off: {fast.get('env')}")
+    if _footage.DEFAULTS_ENV in (full.get("env") or {}):
+        problems.append(f"test sets {_footage.DEFAULTS_ENV}: the pre-PR gate would skip real footage")
+    footage = sorted(n for n in _registrations() if n.startswith("footage."))
+    for pattern in re.findall(r"-E\s+'([^']*)'", fast["cmd"]):
+        problems += [f"test-fast's -E {pattern!r} excludes {n}, so it vanishes from the report"
+                     for n in footage if re.search(pattern, n)]
+    if re.search(r"(^|\s)-LE(\s|$)", fast["cmd"]):
+        problems.append(f"test-fast excludes a label: {fast['cmd']!r}")
+    if not re.search(r"\s-L\s+footage(\s|$)", foot["cmd"]) or "caffeinate -si" not in foot["cmd"]:
+        problems.append(f"test-footage must be `caffeinate -si ctest … -L footage`: {foot['cmd']!r}")
+    assert not problems, "the footage tasks are out of step:\n  " + "\n  ".join(problems)
+    print(f"test_the_fast_loop_reports_footage_and_the_footage_task_runs_it OK ({len(footage)} checks)")
+
+
 def _run_all():
     test_the_runner_tells_a_pass_a_failure_and_a_skip_apart()
     test_footage_missing_raised_outside_the_runner_names_the_fix()
@@ -365,6 +550,9 @@ def _run_all():
     test_a_named_recording_that_is_missing_fails_rather_than_skips()
     test_footage_is_found_only_through_the_helper()
     test_the_golden_dump_reads_the_same_variable_and_default()
+    test_every_default_names_a_recording_still_on_the_machine()
+    test_the_fast_loop_reports_a_present_default_skipped_and_still_runs_a_named_one()
+    test_the_fast_loop_reports_footage_and_the_footage_task_runs_it()
     print("\nfootage-check tests passed")
 
 

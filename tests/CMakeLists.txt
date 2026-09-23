@@ -26,15 +26,19 @@ find_package(Python REQUIRED COMPONENTS Interpreter)
 # `<file>.py --footage <check>`. Without its recording the check exits 77 and CTest lists it BY NAME
 # under "The following tests did not run: ... (Skipped)" — it does not pass, and it does not fail
 # (CI has no footage at all). Before this, each one printed a skip line inside its file and the file
-# reported Passed, so when ~/Desktop/D24 went every real-footage check became a silent no-op. The
-# recording comes from PACER_GOLDEN_MP4 (tests/_footage.py lists every variable); a file's
-# FOOTAGE_CHECKS and these lines are held one-to-one by test_footage_checks. TIMEOUT: with footage
-# present one check loads several multi-GB recordings, far past the suite's --timeout.
+# reported Passed, so when ~/Desktop/D24 went every real-footage check became a silent no-op. Each
+# finds its recording through tests/_footage.py: by default the Desktop working set (G2), overridden
+# by PACER_GOLDEN_MP4 and the other variables it lists. A file's FOOTAGE_CHECKS and these lines are
+# held one-to-one by test_footage_checks. LABELS footage: `pixi run test-footage` runs exactly these
+# (`ctest -L footage`); `pixi run test-fast` reports them SKIPPED by name instead of running them
+# (PACER_FOOTAGE_DEFAULTS=off), and `pixi run test` runs them with everything else. TIMEOUT: with
+# footage present one check loads several multi-GB recordings, far past the suite's --timeout.
 function(add_footage_test file check)
     add_test(NAME footage.${check}
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --footage ${check})
     set_tests_properties(footage.${check} PROPERTIES
                          SKIP_RETURN_CODE 77
+                         LABELS footage
                          TIMEOUT 3600
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endfunction()

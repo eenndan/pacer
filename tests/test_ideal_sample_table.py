@@ -33,12 +33,13 @@ WHAT CAN BE CHECKED WITHOUT FOOTAGE, AND WHAT CANNOT:
      surface agrees with the TABLE. They cannot prove that the table agrees with the APP, and
      they cannot see a screenshot's pixels: an alt text that matches the table beside a PNG
      that does not is invisible to them (regenerate with studio/dev/media_capture.py).
-  5. THE TABLE IS STILL TRUE OF THE APP. Opt-in, because it needs a recording CI does not have:
-     set `PACER_IDEAL_TABLE_MP4` to a comma-separated chapter list. Without it this check is
-     reported SKIPPED by name — it is its own CTest registration, `footage.<name>`, and not part of
-     this file's ordinary run or count (tests/_footage.py). The check finds the row by the
-     recording's chapter files (`ROW_RECORDINGS`), asserts the `all` cell IS
-     `Session.ideal_total()` to the millisecond, and then RE-RUNS THE TABLE'S STATED METHOD
+  5. THE TABLE IS STILL TRUE OF THE APP. It needs recordings CI does not have: by default every
+     row's own chapter files (`ROW_RECORDINGS`) on the Desktop, or the one comma-separated chapter
+     list `PACER_IDEAL_TABLE_MP4` names. Without them this check is reported SKIPPED by name — it
+     is its own CTest registration, `footage.<name>`, and not part of this file's ordinary run or
+     count (tests/_footage.py). The check finds each row by its recording's chapter files,
+     asserts the `all` cell IS `Session.ideal_total()` to the millisecond, and then RE-RUNS THE
+     TABLE'S STATED METHOD
      (20,000 random subsets per rung, partition held) over the app's own per-lap segment matrix.
      Every rung cell must come out within Monte-Carlo error. So must the prose figures the
      docstring publishes beside the row: the best lap's own rate, and on the primary recording
@@ -63,9 +64,11 @@ not to measure laps at all: 12.862 s over 25 "laps" was 25 pieces of 13 s cut fr
 the loader's start line, which `load._fit_start_line` no longer chooses.
 
 Run:  python tests/test_ideal_sample_table.py
+      python tests/test_ideal_sample_table.py --footage test_the_table_still_matches_the_app
+          (every row, on the Desktop working set; or through CTest: `pixi run test-footage`)
       PACER_IDEAL_TABLE_MP4="$D/GX010064.MP4,$D/GX020064.MP4,$D/GX030064.MP4" \\
           python tests/test_ideal_sample_table.py --footage test_the_table_still_matches_the_app
-      (D="$HOME/Desktop/Sandown 3h 2026"; once per row of ROW_RECORDINGS to re-measure the table)
+          (D="$HOME/Desktop/Sandown 3h 2026"; one recording only — how a new row is measured)
 """
 
 from __future__ import annotations
@@ -857,27 +860,49 @@ def test_the_stand_in_masks_as_the_app_does():
 
 
 def test_the_table_still_matches_the_app():
-    """THE CHECK THAT WOULD HAVE CAUGHT IT, on real footage: load a recording, find its row, assert
-    the row's `all` cell IS `Session.ideal_total()`, and re-measure everything else the docstring
-    publishes about that recording by its own stated method.
+    """THE CHECK THAT WOULD HAVE CAUGHT IT, on real footage: load each recording the table names,
+    find its row, assert the row's `all` cell IS `Session.ideal_total()`, and re-measure everything
+    else the docstring publishes about that recording by its own stated method.
 
-    Opt-in via `PACER_IDEAL_TABLE_MP4` (comma-separated chapters of ONE recording, e.g. the three
-    that make `Sandown 3h 3 chapters`). It cannot run in CI — the recordings are 11 GB a chapter
-    and are not committed — so there CTest reports it SKIPPED, by name: it is a FOOTAGE_CHECK
-    (tests/_footage.py). It used to print a skip line and return, and this file then counted it
-    among its passes. Run it once per row to re-measure the whole table.
+    BY DEFAULT IT RE-MEASURES EVERY ROW, on exactly the chapter files `ROW_RECORDINGS` names, found
+    on the Desktop where the table says they are (G2): the whole table, in one run, ~10 s on the
+    working set. `PACER_IDEAL_TABLE_MP4` (comma-separated chapters of ONE recording, e.g. the three
+    that make `Sandown 3h 3 chapters`) re-measures that one recording instead — which is how a new
+    row is written. It cannot run in CI — the recordings are 11 GB a chapter and are not committed
+    — so there CTest reports it SKIPPED, by name: it is a FOOTAGE_CHECK (tests/_footage.py), and a
+    default row that is not on the machine skips the check rather than passing it on the rest. It
+    used to print a skip line and return, and this file then counted it among its passes.
 
     THE ROW IS FOUND BY ITS CHAPTER FILES (`ROW_RECORDINGS`), not by its lap count. A recording
     that is not a row is still measured, and the check fails printing the row it WOULD be — which
     is how T16b's rows were written: every cell below came off this check's own output, never off
-    a hand-rolled probe.
+    a hand-rolled probe. Every row is measured before the check fails, and each failing row prints
+    its own re-measured line.
 
     WHY THE RUNGS AND NOT ONLY `all`: when the D24 `all` cells went stale, their 5-lap cells had
     moved too, by −0.10 and −0.16 s. The version of this check that compared only `all` would have
     been satisfied by a hand-edit of that one cell, leaving the rest of the row, and the rate
     computed from it, false."""
-    paths = _footage.recording_list(
-        "PACER_IDEAL_TABLE_MP4", "a comma-separated chapter list of one of the recordings in the table")
+    sets = _footage.recording_sets(
+        "PACER_IDEAL_TABLE_MP4", "the chapter files of every row of the table",
+        [[os.path.join(folder, f) for f in files] for folder, files in ROW_RECORDINGS.values()])
+    failed, passed = [], []
+    for paths in sets:
+        try:
+            passed.append(_re_measure_row(paths))
+        except AssertionError as exc:
+            failed.append(str(exc))
+    print("\n".join(passed))
+    assert not failed, (f"{len(failed)} of {len(sets)} recording(s) re-measured off the table:\n"
+                        + "\n".join(failed))
+    print(f"test_the_table_still_matches_the_app OK ({len(sets)} of {len(ROW_RECORDINGS)} rows, "
+          "every rung within Monte-Carlo error)")
+
+
+def _re_measure_row(paths: list[str]) -> str:
+    """One recording's row, re-measured: the line to print when it matches the table, or an
+    AssertionError naming every figure that does not, with the re-measured row in the table's own
+    syntax."""
     chapters = tuple(os.path.basename(p) for p in paths)
     name = next((n for n, (_folder, files) in ROW_RECORDINGS.items() if files == chapters), None)
     sys.path.insert(0, _REPO)
@@ -998,13 +1023,12 @@ def test_the_table_still_matches_the_app():
         f"move.\n  " + "\n  ".join(problems) + f"\n  re-measured row:  {measured}"
         f"\n  and its prose:    {prose}")
     note = "" if row.verified else f" — this row can drop its {_UNVERIFIED}"
-    print(f"test_the_table_still_matches_the_app OK ({label}, {got:.3f} s over {laps} laps, "
-          f"every rung within Monte-Carlo error){note}\n    re-measured row:  {measured}"
-          f"\n    and its prose:    {prose}")
+    return (f"  {label} OK ({got:.3f} s over {laps} laps, every rung within Monte-Carlo error)"
+            f"{note}\n    re-measured row:  {measured}\n    and its prose:    {prose}")
 
 
 # Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name
-# without PACER_IDEAL_TABLE_MP4, and not in `_run_all`'s count.
+# without the table's recordings, and not in `_run_all`'s count.
 FOOTAGE_CHECKS = (test_the_table_still_matches_the_app,)
 
 

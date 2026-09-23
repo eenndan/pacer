@@ -16,18 +16,27 @@ these checks out: they are not in its count, so they can no longer pad it.
 
 WHICH ABSENCE IS A SKIP AND WHICH IS A FAILURE. A default that is not on this machine is a skip. A
 recording the operator NAMED through a variable that is not there is a failure: they asked for real
-coverage, and a typo that quietly skipped would be the same no-op this exists to end. That was
-already the contract of `PACER_MEASURED_FIGURES_DIR` and `PACER_IDEAL_TABLE_MP4`; it is now
-`PACER_GOLDEN_MP4`'s too.
+coverage, and a typo that quietly skipped would be the same no-op this exists to end.
 
-THE VARIABLES (AGENTS.md, "Real-footage checks", has the table):
-  * `PACER_GOLDEN_MP4` — THE recording, for every check that holds on any recording (the golden
-    dump too). Default `~/Desktop/D24/GX020060.MP4`; see `studio/dev/footage.py` for why the
-    default was not moved when D24 went. `PACER_GOLDEN_REF_MP4` names the second, different
-    recording the one cross-recording check needs.
-  * `PACER_IDEAL_TABLE_MP4` and `PACER_MEASURED_FIGURES_DIR` — the checks that re-measure a
-    PUBLISHED table. They cannot take "a recording": each row is a named recording (and a chapter
-    selection sibling discovery cannot express), so they keep their own variables and no default.
+THE DEFAULTS ARE THE DESKTOP WORKING SET (G2, 2026-09-23), chosen per check by what the check
+NEEDS — the recordings and the reason for each are in `studio/dev/footage.py`:
+  * `recording()` — `PACER_GOLDEN_MP4`, default MK_18_09_26: the checks that hold on ANY recording
+    (the real renders, the chaptered render, the two Pedal-band checks) and the golden dump. MK is
+    chaptered and is D24's own circuit.
+  * `pair()` — `PACER_GOLDEN_MP4` + `PACER_GOLDEN_REF_MP4`, default SD_19_09_26 + Sandown 3h: the
+    compare proof needs TWO recordings of ONE track, and MK is the only recording of its track.
+  * `recording_sets()` — `PACER_IDEAL_TABLE_MP4`, default EVERY ROW of the ideal-lap table, and
+    `directory()` — `PACER_MEASURED_FIGURES_DIR`, default the Desktop: the checks that re-measure a
+    PUBLISHED table use exactly the recordings its rows name, found where the table says they are.
+    A variable set to one row (or one folder) still re-measures just that.
+Before G2 every default still named D24, on purpose, so all fourteen checks were reported skipped
+until the tables were re-measured on the working set (T16b) — a default quietly moved to another
+recording would have changed what every published number meant.
+
+WHERE THEY RUN. `pixi run test-fast` sets `PACER_FOOTAGE_DEFAULTS=off`: in that run a default counts
+as absent, so each check is reported SKIPPED by name, with a reason that says where it does run —
+`pixi run test-footage` (just these) and `pixi run test` (the pre-PR gate, everything). A variable
+the operator SET is still used there: `off` turns off the defaults, not the checks.
 
 A check that raises `FootageMissing` from a file's ORDINARY run is not caught there — it fails that
 file, naming itself. That is the tripwire for a new footage check nobody registered.
@@ -49,6 +58,12 @@ from studio.dev import footage as _dev  # noqa: E402
 SKIP_RETURN_CODE = 77
 FLAG = "--footage"
 
+# `off` makes every DEFAULT recording count as absent in this run (pixi run test-fast sets it). Unset
+# or blank uses them; any other value fails, so a misspelt `of` cannot quietly run or skip anything.
+DEFAULTS_ENV = "PACER_FOOTAGE_DEFAULTS"
+_DEFERRED = ("this run does not use the working-set defaults ({env}=off, which `pixi run test-fast` "
+             "sets) — `pixi run test-footage` runs it on {what}")
+
 
 class FootageMissing(Exception):
     """A real-footage check cannot run for want of its recording. Never caught by the check."""
@@ -61,47 +76,96 @@ class FootageMissing(Exception):
         self.reason = reason
 
 
+def _defaults_in_use(what: str) -> None:
+    """Raise `FootageMissing` when this run turned the defaults off; `what` is the default it would
+    have used, named in the skip line."""
+    raw = os.environ.get(DEFAULTS_ENV, "").strip()
+    if raw == "off":
+        raise FootageMissing(_DEFERRED.format(env=DEFAULTS_ENV, what=what))
+    assert not raw, f"{DEFAULTS_ENV}={raw!r}: the one value it takes is 'off'"
+
+
 def _named_file(env: str, default: str) -> str:
     path, named = _dev.resolve(env, default)
-    if os.path.isfile(path):
-        return path
     if named:
+        if os.path.isfile(path):
+            return path
         raise AssertionError(
             f"{env}={os.environ.get(env)!r} names {path}, which is not a file here. A recording "
             f"you point a check at has to exist — unset {env} to report this check as skipped")
+    _defaults_in_use(path)
+    if os.path.isfile(path):
+        return path
     raise FootageMissing(f"{path} is not on this machine ({env} is unset and that is its default)")
 
 
 def recording() -> str:
-    """The recording `PACER_GOLDEN_MP4` names (or its default), which must exist."""
+    """The recording `PACER_GOLDEN_MP4` names (or its default, MK_18_09_26), which must exist."""
     return _named_file(_dev.RECORDING_ENV, _dev.RECORDING_DEFAULT)
 
 
-def reference() -> str:
-    """The second recording `PACER_GOLDEN_REF_MP4` names (or its default), which must exist."""
-    return _named_file(_dev.REFERENCE_ENV, _dev.REFERENCE_DEFAULT)
+def pair() -> tuple[str, str]:
+    """(primary, reference): two DIFFERENT recordings of one track, which must both exist —
+    `PACER_GOLDEN_MP4` and `PACER_GOLDEN_REF_MP4`, defaults SD_19_09_26 and Sandown 3h. The primary's
+    default is not `recording()`'s: MK has no second recording of its track to pair with.
+
+    Both are resolved before either is skipped on: a reference the operator NAMED that is missing
+    fails even when the primary's default is absent too."""
+    found, absent = [], None
+    for env, default in ((_dev.RECORDING_ENV, _dev.PAIR_RECORDING_DEFAULT),
+                         (_dev.REFERENCE_ENV, _dev.REFERENCE_DEFAULT)):
+        try:
+            found.append(_named_file(env, default))
+        except FootageMissing as exc:
+            absent = absent or exc
+    if absent is not None:
+        raise absent
+    return found[0], found[1]
 
 
-def recording_list(env: str, what: str) -> list[str]:
-    """A comma-separated list of chapter files `env` names. No default: unset is a skip, and a
-    listed file that is missing is a failure."""
+def recording_sets(env: str, what: str, defaults) -> list[list[str]]:
+    """The chapter lists a published-table check re-measures, one per row.
+
+    `env` set: the ONE comma-separated chapter list it names; a listed file that is missing FAILS.
+    `env` unset: every list in `defaults` — chapter paths relative to the Desktop, where the table's
+    rows say they are — all of which must be here; one absent is a SKIP naming what is missing (a
+    table half-re-measured is not the table)."""
     raw = os.environ.get(env, "").strip()
-    if not raw:
-        raise FootageMissing(f"{env} is not set — it names {what}")
-    paths = [os.path.expanduser(p.strip()) for p in raw.split(",") if p.strip()]
-    missing = [p for p in paths if not os.path.isfile(p)]
-    assert not missing, f"{env} names files that are not here: {missing}"
-    return paths
+    if raw:
+        paths = [os.path.expanduser(p.strip()) for p in raw.split(",") if p.strip()]
+        missing = [p for p in paths if not os.path.isfile(p)]
+        assert paths and not missing, f"{env} names files that are not here: {missing or raw!r}"
+        return [paths]
+    root = os.path.expanduser(_dev.DESKTOP)
+    sets = [[os.path.join(root, p) for p in chapter_list] for chapter_list in defaults]
+    assert sets and all(sets), f"no default for {env} — the check would measure nothing"
+    _defaults_in_use(f"{what} under {root}")
+    missing = sorted({p for s in sets for p in s if not os.path.isfile(p)})
+    if missing:
+        raise FootageMissing(f"{env} is unset, and its default — {what} under {root} — is not all "
+                             f"on this machine: {len(missing)} missing, e.g. {missing[0]}")
+    return sets
 
 
-def directory(env: str, what: str) -> str:
-    """The folder `env` names. No default: unset is a skip, and a named folder that is missing is a
-    failure."""
+def directory(env: str, what: str, needs) -> str:
+    """The folder a published-table check finds its lap sets under: the one `env` names, else the
+    Desktop. `needs` are the files (relative to that folder) the check will open. From a NAMED
+    folder, a missing one FAILS; from the default, it is a SKIP naming what is missing."""
+    needs = sorted(set(needs))
+    assert needs, f"{env}: a check has to say which files it needs, or a bare Desktop would pass"
     raw = os.environ.get(env, "").strip()
-    if not raw:
-        raise FootageMissing(f"{env} is not set — it names {what}")
-    path = os.path.expanduser(raw)
-    assert os.path.isdir(path), f"{env}={raw!r} names {path}, which is not a folder here"
+    if raw:
+        path = os.path.expanduser(raw)
+        assert os.path.isdir(path), f"{env}={raw!r} names {path}, which is not a folder here"
+        missing = [n for n in needs if not os.path.isfile(os.path.join(path, n))]
+        assert not missing, f"{env}={raw!r}: {what} is not all there — missing {missing}"
+        return path
+    path = os.path.expanduser(_dev.DESKTOP)
+    _defaults_in_use(f"{what} under {path}")
+    missing = [n for n in needs if not os.path.isfile(os.path.join(path, n))]
+    if missing:
+        raise FootageMissing(f"{env} is unset, and its default — {what} under {path} — is not all on "
+                             f"this machine: {len(missing)} missing, e.g. {missing[0]}")
     return path
 
 

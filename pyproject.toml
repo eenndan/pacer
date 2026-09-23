@@ -96,11 +96,21 @@ test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failur
 # loop time would buy speed by weakening the only thing standing between that crash and `main`.
 # So it is excluded from the fast loop and runs in full `test` and in CI, where it belongs.
 #
-# The `footage.*` registrations are deliberately NOT excluded (the pattern above does not match
-# them): without a recording each reports Skipped in under a second, and that named skip list is
-# what a gate report has to quote. With PACER_GOLDEN_MP4 set they really run, past --timeout on
-# their own TIMEOUT property (tests/CMakeLists.txt) — that is the point of setting it.
-test-fast ={ cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 120 -E 'test_export_video|test_compare_lifecycle'", depends-on = ["build"] }
+# THE `footage.*` REGISTRATIONS ARE REPORTED, NOT RUN, HERE (G2). Since their defaults name the
+# Desktop working set, on the dev Mac all fourteen really run, and measured 2026-09-23 they cost
+# ~3 min on top of this loop: one alone re-encodes a whole lap twice (`…_render_quality_levels…`,
+# ~80 s). So this task sets PACER_FOOTAGE_DEFAULTS=off, and each is reported Skipped BY NAME with a
+# reason that says where it runs — a gate report can quote that list, and nothing reads as a pass.
+# They are not excluded with `-E`/`-LE`: an excluded test vanishes from the output, and a check
+# that cannot run has to say so (#341). A variable you SET (PACER_GOLDEN_MP4, …) still runs its
+# checks here, past --timeout on their own TIMEOUT property (tests/CMakeLists.txt). `test` above
+# runs them all with everything else — the pre-PR gate is where real footage belongs — and
+# `test-footage` below runs only them.
+test-fast ={ cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 120 -E 'test_export_video|test_compare_lifecycle'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off" } }
+# Just the real-footage checks (`LABELS footage`, tests/CMakeLists.txt), on their working-set
+# defaults or the recordings your variables name (tests/_footage.py). No --timeout: each carries
+# its own TIMEOUT. On a machine without the footage every one is reported Skipped, by name.
+test-footage = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure -L footage", depends-on = ["build"] }
 # One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }

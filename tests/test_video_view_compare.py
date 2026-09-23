@@ -1087,7 +1087,9 @@ def test_real_media_pane_b_is_reference_at_lap_start():
     names as the reference, enter cross compare via the app path, pump the event loop until the
     async load + deferred seek settle, then assert the SECONDARY pane's actual QMediaPlayer source
     is one of the REFERENCE's chapter files (none of the primary's) resolved to the reference
-    lap's CHAPTER + a global time ≈ the reference lap-window start.
+    lap's CHAPTER + a global time ≈ the reference lap-window start. By default the pair is
+    SD_19_09_26 against Sandown 3h: two recordings of ONE track, since a reference from another track
+    is refused before pane B opens (`tests/_footage.pair`).
 
     A FOOTAGE_CHECK: its own CTest registration, reported SKIPPED without both recordings. Loading
     two chaptered recordings takes minutes; the headless tests above already cover the three
@@ -1095,7 +1097,7 @@ def test_real_media_pane_b_is_reference_at_lap_start():
     `PACER_D24_MEDIA=1`, with the primary on GX010060.MP4 — the chapter a dev tool overwrote."""
     import time
 
-    prim_path, ref_path = _footage.recording(), _footage.reference()
+    prim_path, ref_path = _footage.pair()      # two recordings of one track (tests/_footage.py)
     prim = chapters.discover_siblings(prim_path)
     ref = chapters.discover_siblings(ref_path)
     prim_files = {os.path.realpath(p) for p in prim}
@@ -1127,11 +1129,15 @@ def test_real_media_pane_b_is_reference_at_lap_start():
     reason = win.session.load_reference(ref)
     assert reason is None, f"reference refused: {reason}"
     win._update_reference_status()
-    assert win.compare.enter_cross() is True
+    # The compare controller and the video panes live on the window's CentralView (`win.view`),
+    # which F7 extracted on 2026-06-19. This check read them off the window itself until G2 ran it
+    # for real three months later: every run in between was skipped, so the AttributeError it had
+    # been waiting to raise never surfaced.
+    assert win.view.compare.enter_cross() is True
 
     ref_lap = win.session.reference_lap_id()
     win_b = win.session.reference_session().lap_window(ref_lap)
-    sec = win.video.secondary
+    sec = win.view.video.secondary
     assert sec is not None
     # Pump until the deferred seek lands (bounded — not an unbounded sleep).
     landed = False
