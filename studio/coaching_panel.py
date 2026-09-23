@@ -63,9 +63,11 @@ _HEADER_TIPS = {
     "Corner": "The corner's number in track order, with an arrow for its direction — "
               "anticlockwise is a left-hander, clockwise a right.",
     "Time lost": "Median time lost through this corner versus your own best lap's same corner, "
-                 "over your clean laps (seconds).",
+                 "over your clean laps (seconds). A lap counts at a corner only where it was "
+                 "matched to your best lap's line on track at the corner's entry and exit.",
     "Done it?": "How many of your clean laps already matched or beat your best lap's time "
-                "through this corner. Many of them — repeat what you have already driven. Few — "
+                "through this corner, out of the laps matched on track there (hover a cell for "
+                "the count). Many of them — repeat what you have already driven. Few — "
                 "this is pace you have not established yet, and it needs something new.",
     "Entry · Apex · Exit Δt": "Where in the corner your typical lap is faster/slower than your best "
                               "lap (Δt per third, seconds) — NOT the row's Time lost, which is a "
@@ -848,8 +850,29 @@ _REACH_WORD = {
 }
 
 
-def _reach_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
+def _reach_tip(ev: coaching.Evidence, of: int | None) -> str:
+    """The "Done it?" hover's count sentence. `of` is the session's clean-lap count
+    (`Opportunities.n_laps`), or None from a caller that does not know it.
+
+    SINCE #339 `ev.n_laps` IS NOT THE SESSION'S CLEAN LAPS. It counts the laps whose time through
+    THIS corner counts — matched on track at its entry and exit, on the lap and on the best lap
+    (`coaching.summarize`) — so on MK_18_09_26 C2 it is 16 of 19. This sentence said "3 of your 16
+    clean laps" there, one line under a headline reading "median of 19 clean laps". Where the two
+    differ it now says both, and why, in the words the Stats page's CORNERS hover uses for the same
+    16 (`stats_panel._corner_count_tip`)."""
+    if of is None or ev.n_laps >= of:
+        return (f"{ev.reach_laps} of your {ev.n_laps} clean laps already matched or beat your "
+                "best lap's time through this corner.")
+    return (f"{ev.reach_laps} of the {ev.n_laps} laps that count here already matched or beat "
+            f"your best lap's time through this corner. {ev.n_laps} of your {of} clean laps "
+            f"count: on the other {of - ev.n_laps} the corner could not be matched to your best "
+            "lap's line on track, so its time was interpolated between its neighbours and is left "
+            "out, as the Stats page's CORNERS table leaves it out.")
+
+
+def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> QTableWidgetItem:
     """"Yes · 9/38" — how many clean laps already matched this corner's target, and the word for it.
+    `of` is the session's clean-lap count, for the hover (see `_reach_tip`).
 
     THIS REPLACED THE ±σ COLUMN, deliberately. σ was the raw dispersion printed for the reader to
     interpret, and on the real recordings interpreting it was the whole job: σ ≥ the row's own
@@ -869,8 +892,7 @@ def _reach_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
     item.setFont(num_font)
     item.setForeground(QColor(C.text_dim))
     item.setToolTip(
-        f"{ev.reach_laps} of your {ev.n_laps} clean laps already matched or beat your best lap's "
-        "time through this corner.\nMany — you have the pace here and the work is repeating it. "
+        f"{_reach_tip(ev, of)}\nMany — you have the pace here and the work is repeating it. "
         "Few — you have rarely been this quick, and repeating your usual lap will not find it."
         if word else "Not measured for this row.")
     return item
@@ -911,7 +933,11 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
         # coaching.BrakeHabit). The scope, the sample it came out of, the OBSERVED middle half of
         # that sample — never a modelled margin — and the other surface showing the same number all
         # live here rather than in the cell, because the cell has no vertical room to spare.
-        tip = (f"{tip}\n\n{hint}: over the {bp.n_laps} clean laps you braked into this corner, the "
+        # "…AND WERE MATCHED ON TRACK": since #339 `_brake_rows` drops a lap's brake point where
+        # that lap's corner was interpolated, so n is not every clean lap that braked here (MK_18_09
+        # C2: 16 counted, 18 braked). Always true, so it needs no second count to be honest.
+        tip = (f"{tip}\n\n{hint}: over the {bp.n_laps} clean laps that braked into this corner and "
+               "were matched on track at its entry and exit, the "
                "apex-speed-matched latest sustainable brake point sits "
                f"{_turn_in_phrase(_past_turn_in_m(bp, opp.entry_dist))}; you typically brake "
                f"{_turn_in_phrase(float(bp.actual_brake_dist) - float(opp.entry_dist))}. "
@@ -1059,7 +1085,8 @@ class OpportunitiesDialog(QDialog):
         for r, opp in enumerate(rows):
             table.setItem(r, _COL_CORNER, _corner_cell(opp))
             table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
-            table.setItem(r, _COL_REACH, _reach_cell(opp, num_font))  # have you already done it?
+            # have you already done it? (out of the session's clean laps: see _reach_tip)
+            table.setItem(r, _COL_REACH, _reach_cell(opp, num_font, self._opps.n_laps))
             table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
             table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points, self._speed_unit))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
@@ -1187,7 +1214,8 @@ class OpportunitiesPanel(QWidget):
         # brake points its reason cells need, so a re-tune re-renders without re-reading the session.
         self._all_rows: list[coaching.Opportunity] = []
         self._brake_points: dict = {}
-        self._tuning = False           # re-entrancy guard: a re-render fires resizeEvent
+        self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
+        self._tuning = False         # re-entrancy guard: a re-render fires resizeEvent
         self._tuned_key: tuple | None = None   # the viewport the current row count was tuned for
         self._budgeting = False        # re-entrancy guard: hiding a column fires resizeEvent
         self._theme_budgeting = False  # ditto: shedding a theme line re-lays the page out
@@ -1321,6 +1349,7 @@ class OpportunitiesPanel(QWidget):
         # L2: only shown-resolution rows are opportunities (drop the "+0.00 s" rows).
         self._all_rows = _shown_rows(opps)
         self._brake_points = brake_points
+        self._n_clean = opps.n_laps
         self._tuned_key = None       # a new ranking: re-tune the row count against the viewport
         # The headline shortlist is the top RANKED rows, not the top rows: an abstained corner is
         # displayed but its number is not a claim, so summing it into "time available" would put
@@ -1390,7 +1419,8 @@ class OpportunitiesPanel(QWidget):
                 opp = rows[r]
                 self.table.setItem(r, 0, _corner_cell(opp))
                 self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
-                self.table.setItem(r, 2, _reach_cell(opp, self._num_font))  # have you done it?
+                self.table.setItem(r, 2, _reach_cell(opp, self._num_font,  # have you done it?
+                                                     self._n_clean))
                 self.table.setItem(r, 3, _reason_cell(opp, self._brake_points, self._speed_unit))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
