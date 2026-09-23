@@ -496,6 +496,11 @@ def _classify_laps(laps) -> tuple[list[int], dict[int, str]]:
         if not basic:
             return [], reasons
 
+    # A MEDIAN, SO A SESSION THAT IS HALF NEUTRALISED MOVES IT. Sandown 3h's chapter 1 opened alone
+    # is 11 slow laps of 20 (a yellow or a safety car after the start): its median is 65.09 s against
+    # 48.40 s on the whole recording, so four 82-90 s laps count there that the whole recording puts
+    # out. They are laps, not mis-segmentation, and neither a lower-quartile centre nor a pace cut
+    # pays for itself; the measurements are in `studio/docs/refused-2026-09.md` §14.
     med = float(np.median([t for _, t in basic]))
     lo, hi = LAP_BAND_LO * med, LAP_BAND_HI * med
     timed = [i for i, t in basic if lo <= t <= hi]

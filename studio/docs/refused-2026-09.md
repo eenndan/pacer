@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirteen features were built far enough to **measure**, and the measurement said not to ship them. The
+Fourteen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1209,6 +1209,135 @@ that size.
 them) long enough, about 3 s or more, that today's bridge misses by more than a pen width at the
 map's size. A hole through a hairpin where no donor qualifies would also count. Even then, try
 the donor arc/chord bound before a gyro path.
+
+---
+
+## 14. Taking a neutralised race's slow laps out of the clean set — refused (H10)
+
+**The claim.** #358 found that on `Sandown 3h 2026` chapter 1 opened alone, 8 of the 17 laps the app
+counts as clean run 61–90 s against a 47.4 s best. Clean laps feed the ideal lap, every σ, coaching
+and the published ideal-lap sample table. So either those laps are mis-segmented, which is a defect,
+or they are valid laps driven slowly, and then the question is whether the pace statistics should
+admit them.
+
+**How it was tested.** `studio/dev/probes/p16_slow_clean_laps.py` loads each working-set recording
+through the real `Session.load` and the start line saved beside it. It loads each Sandown 3h chapter
+alone and every recording whole. Every app-support seam is jailed, and the footage folders and the
+real app-support directory were size/mtime-snapshotted before and after, unchanged. For every
+substantial lap it reads the evidence: the lap's distance, the closure the classifier reads, how far
+it strays from the best lap's line, the classifier's own stop measure, and its time under 40 km/h.
+It then loads Sandown 3h twice more with the valid set wrapped, so every number downstream is the
+app's own code, to see what each pace surface does without the laps. With `--owner-tracks` it
+repeats the census on the owner's own start line. Lap numbers below are the app's internal ids; the
+lap table prints each one higher.
+
+### All eight are laps, run under a yellow or a safety car
+
+| lap | time | × best | distance | finish from start | furthest off the best lap's line | longest stop | under 40 km/h |
+|---|---|---|---|---|---|---|---|
+| 1 | 61.82 s | 1.30 | 748.9 m | 0.4 m | 4.7 m | 0.0 s | 25.0 s |
+| 2 | 74.65 s | 1.57 | 747.1 m | 0.5 m | 3.2 m | 0.0 s | 54.5 s |
+| 3 | 88.27 s | 1.86 | 761.5 m | 1.0 m | 4.7 m | 0.0 s | 80.2 s |
+| 4 | 89.73 s | 1.89 | 758.0 m | 0.8 m | 4.6 m | 0.0 s | 79.2 s |
+| 5 | 83.99 s | 1.77 | 752.6 m | 0.6 m | 3.6 m | 0.0 s | 82.6 s |
+| 7 | 82.56 s | 1.74 | 756.8 m | 0.5 m | 4.6 m | 0.0 s | 68.5 s |
+| 13 | 77.09 s | 1.63 | 755.8 m | 0.2 m | 4.3 m | 0.0 s | 56.6 s |
+| 15 | 68.36 s | 1.44 | 753.2 m | 1.7 m | 3.2 m | 0.0 s | 31.7 s |
+| the other 9 | 47.43–53.92 s | 1.00–1.14 | 726.7–745.3 m | ≤ 1.7 m | ≤ 7.7 m | 0.0 s | 0.1–6.3 s |
+
+- **None is mis-segmented.** A missed start-line crossing would double a lap's distance and an
+  extra one would halve it. These run 747–762 m, 1–3 % longer than the racing laps, which a slower,
+  wider line accounts for. Each ends within 1.7 m of where it started, travelling the same way
+  (≤ 3°).
+- **None is a pit lap.** The pit lane on this layout runs about 17 m off the racing line. The two
+  pit laps (14, and 37 on the whole recording) spend 57–84 s more than 10 m off it and stand still
+  for 98–131 s, and both are out on every load. None of the eight strays more than 4.7 m, less than
+  the racing laps' own 7.7 m.
+- **None stops.** The classifier's stop measure reads 0.0 s on all eight. Lap 6, the one lap in
+  that stretch that did stop (6.6 s, on track), is already out.
+- **All eight are sustained slow running**, 25–83 s per lap under 40 km/h against at most 6.3 s on a
+  racing lap. Laps 1–7 are the ten minutes after the opening lap, and 13 and 15 sit either side of
+  the first pit stop. Two are only partly slow. Lap 1 runs from the start to C4 at 0.97–1.08× the
+  other clean laps' median per segment, then 1.30–2.71×. Lap 15 runs C6 to the line at 0.97–1.01×.
+  That is a yellow or a safety car coming out, and going in, mid-lap.
+
+The owner's own start line cuts the laps in different places: seven clean laps over 1.3× the best,
+69.6–90.4 s. Every column says the same there: 747–761 m, finish within 2.2 m of the start, at
+most 4.7 m off the line, no stop, 31.7–81.8 s under 40 km/h. Nothing like them exists anywhere else
+in the working set. No clean lap of Sandown 3h's chapter 2 or 3 alone, SD_19_09, SD_30_08 or
+MK_18_09 is slower than 1.3× its best; their slowest are 1.22, 1.26, 1.06, 1.20 and 1.19×.
+
+### Why chapter 1 counts them and the whole recording does not
+
+The time band is 0.5–1.6 × the MEDIAN of the closed, substantial laps (`_signal._classify_laps`).
+On chapter 1, 11 of those 20 laps are slow, so the median is itself a slow lap: 65.09 s, with the
+upper edge at 104.1 s. On the whole recording the median is 48.40 s and the edge 77.4 s. That is
+why laps 3, 4, 5 and 7 (82.6–89.7 s) are clean on chapter 1 and "off the session median" on the
+whole recording, and why the whole recording still counts laps 1, 2, 13 and 15 (61.8–77.1 s). The
+same thing disarms the Stats sparkline's Tukey fence: on the whole recording it frames out exactly
+those four laps, and on chapter 1 alone it frames out none.
+
+### What each surface does with them and without them
+
+Measured on the real Session, fresh library (the conditions #358's table was measured under). "Lower
+quartile" is the band re-centred on the 25th percentile instead of the median, the direct fix for
+the dragged centre: it drops laps 3, 4, 5 and 7 on chapter 1, and lap 13 on the whole recording.
+
+| surface | ch 1 as counted | without the 8 | lower quartile | whole as counted | without the 4 | lower quartile |
+|---|---|---|---|---|---|---|
+| clean laps | 17 | 9 | 13 | 62 | 58 | 61 |
+| ideal lap | 46.612 s | 46.666 s | 46.618 s | 45.768 s | 45.777 s | 45.766 s |
+| ideal, per doubling of laps | 0.740 s | 0.384 s | 0.485 s | 0.283 s | 0.277 s | 0.283 s |
+| best lap, per doubling | 0.905 s | 0.425 s | 0.682 s | 0.092 s | 0.086 s | 0.091 s |
+| median lap | 53.916 s | 51.077 s | 51.327 s | 48.158 s | 47.974 s | 48.050 s |
+| σ lap | 15.74 s | 2.31 s | 10.32 s | 6.11 s | 2.82 s | 5.11 s |
+| CoV | 29.2 % | 4.5 % | 20.1 % | 12.7 % | 5.9 % | 10.6 % |
+| trend | −1.304 s/lap | +0.365 s/lap | −0.012 s/lap | −0.015 s/lap | −0.000 s/lap | −0.011 s/lap |
+| runs | 2 | 2 | 3 | 4 | 3 | 4 |
+| demonstrated peak braking (`a_max`) | 0.755 g | 0.878 g | 0.780 g | 0.813 g | 0.818 g | 0.816 g |
+| grip ring | 1.435 g | 1.484 g | 1.465 g | 1.490 g | 1.501 g | 1.501 g |
+| coaching rows ranked | 0 | 0 | 0 | 4 | 4 | 4 |
+
+Per corner on chapter 1, the eight laps are most of the spread: C1's σ is 3.73 s with them and
+0.64 s without, and coaching's median time lost at C3 is 0.539 s with them and 0.031 s without. On
+the whole recording they move C1's σ from 1.23 to 0.73 s and C1's time lost from 0.252 to 0.223 s.
+
+### Why none of the alternatives ships
+
+1. **The ideal lap has to keep them.** It is a per-segment minimum, so a slow lap can only give it
+   what it drove fast. On chapter 1, lap 15 wins C6 with 3.151 s, 0.048 s under any other clean lap,
+   in the stretch it drove at race pace, and lap 1 wins the 0.16 s link from C1 to C2 by 0.001 s.
+   Removing them raises chapter 1's ideal by 0.054 s (the partition is re-cut as well) by throwing
+   away segments the driver really drove.
+2. **Re-centring the band is half a fix, and it costs valid laps.** The lower quartile makes chapter
+   1 agree with the whole recording about laps 3, 4, 5 and 7. It also drops lap 13, a valid 77.09 s
+   lap, from the whole recording, where nothing was wrong, and chapter 1's σ is still 10.32 s. It
+   would move both of #358's Sandown 3h rows (17 → 13 laps, the ideal's rate 0.740 → 0.485 s; 62 →
+   61 laps, 45.768 → 45.766 s) and nothing on any other recording. The band exists to catch laps
+   that are not laps; this version excludes more laps that are.
+3. **A pace cut for σ, the trend and coaching has nowhere to go.** Only one recording in the working
+   set has a neutralised stretch, so any threshold would be fitted to these eight laps, and even
+   here there is no gap to put it in. Against the best lap, the whole recording's clean laps run
+   1.00–1.15, then 1.22, 1.23, 1.26, 1.31, 1.45, 1.59 and 1.64. Valid laps on SD_30_08 and MK reach
+   1.197× and 1.190×. The cut that takes exactly #358's eight on chapter 1, 1.3×, clears lap 1 by
+   0.3 % (1.3035×). The speed trace does not separate them either: lap 1 spends 25.0 s under
+   40 km/h, and lap 61, in chapter 3, which a 1.3× cut keeps, spends 25.6 s. A cut against the best
+   lap would also remove a slower co-driver's whole stint in an endurance race, which is a stint,
+   not a neutralisation. The working set cannot test that: the best laps of Sandown 3h's three
+   stretches between pit stops are 47.43, 47.05 and 47.15 s.
+4. **The surfaces already say what they include.** The pace tiles print "median · 17 clean laps",
+   coaching prints "median of 17 clean laps", the ideal prints "theoretical best · 17 laps", and the
+   trend sparkline plots all seventeen. A σ of 15.74 s sits beside the laps that make it.
+
+**What moves because of this refusal: nothing.** The classifier is unchanged, so the clean set,
+#358's ideal-lap table, the coaching tables and the golden fingerprint are unchanged too.
+
+**What would be new evidence:** a slow clean lap that fails the census above (a distance off the
+racing laps', an open closure, a stretch off the line, a stop). Or a second recording with a
+neutralised stretch whose laps separate from the racing laps on some measured quantity, with room
+on both sides. Or a statistic that answers "how consistent is the driver?" without a threshold and
+without breaking when nearly half the laps are neutralised. The median band, the sparkline's fence
+and the Theil–Sen trend all break at chapter 1's 8 of 17.
 
 ---
 

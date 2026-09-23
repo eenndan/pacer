@@ -85,4 +85,13 @@ with the app's own `gapfill.find_gaps`, and then PLANTS gaps in memory to score 
 against the fixes it replaced. Its verdict is `studio/docs/refused-2026-09.md` §13.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p15_gps_gap_census
+
+`p16_slow_clean_laps` loads every working-set recording itself, each Sandown 3h chapter alone and
+every recording whole, and asks what the 61–90 s laps #358 found among chapter 1's clean laps are:
+mis-segmented, pit laps or valid laps driven slowly. It reads each lap's distance, closure, distance
+from the best lap's line, stop and time under 40 km/h, then reloads with the valid set wrapped to
+measure what each pace surface does without them. Its verdict is `studio/docs/refused-2026-09.md`
+§14.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p16_slow_clean_laps --surfaces
 """
