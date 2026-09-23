@@ -509,41 +509,41 @@ class SegmentBests:
         tests/test_session_pure.py::test_beat_counts_are_not_a_fixed_tolerance_hit_rate.
 
         The correlation this docstring used to lead with ("r = −0.04 … −0.50 against the same
-        durations") does not reproduce. Re-measured on the owner's FIVE recordings as the app opens
-        them (the owner's saved start line restored where there is one, †): subject = the best lap;
-        the segments longer than POINT_SPAN_M on the reference odometer; beat rate (beat / n)
-        against the segment's mean duration over the composite laps; Spearman with tied ranks
-        averaged; permutation p two-sided on Spearman, over 20,000 shuffles of the beat rates
-        (seed 0). tests/test_measured_figures.py derives the sentence under the table from its cells
-        and, given the footage, re-measures every cell.
+        durations") does not reproduce. Re-measured on seven lap sets of the owner's four working-set
+        recordings as the app opens them (the owner's saved start line restored where there is one,
+        †): subject = the best lap; the segments longer than POINT_SPAN_M on the reference odometer;
+        beat rate (beat / n) against the segment's mean duration over the composite laps; Spearman
+        with tied ranks averaged; permutation p two-sided on Spearman, over 20,000 shuffles of the
+        beat rates (seed 0). tests/test_measured_figures.py derives the sentence under the table from
+        its cells and, given the footage, re-measures every cell. Sandown 3h is GX010064 alone and
+        with GX020064 + GX030064; SD_19_09 is GX010068 alone and with GX020068; SD_30_08 is GX010065;
+        MK_18_09, the one anticlockwise recording and the one not at Sandown, is GX010067 alone and
+        with GX020067. T16b re-measured it there on 2026-09-23, after the D24 and
+        Sandown_09_05_2026 edition went stale when #335 changed corner matching; that edition is
+        kept in studio/docs/coaching-tables-on-d24.md.
 
-        ⚠ STALE — NOT RE-MEASURABLE (T16). The table was measured before #335 changed corner
-        matching, and #339 re-ran its footage check after #335: it no longer matched the app. The
-        D24 and Sandown_09_05_2026 rows cannot be re-measured, because those recordings are no
-        longer available. SD_30_08's row can, and re-measured on 2026-09-19 it is stale too: r
-        −0.297, Spearman −0.335, permutation p 0.218, still not distinguishable from chance. Every
-        cell and the verdict under the table are the record of that measurement, not what the app
-        computes today.
+        | recording       | n  | r      | Spearman | permutation p |
+        |-----------------|----|--------|----------|---------------|
+        | Sandown 3h 1 ch | 14 | −0.158 | −0.115   | 0.689 |
+        | Sandown 3h 3 ch | 14 | −0.505 | −0.468   | 0.093 |
+        | SD_19_09 1 ch   | 14 | −0.516 | −0.525   | 0.055 |
+        | SD_19_09 2 ch   | 14 | −0.284 | −0.327   | 0.253 |
+        | SD_30_08 †      | 15 | −0.297 | −0.335   | 0.218 |
+        | MK_18_09 1 ch   | 23 | −0.281 | −0.198   | 0.364 |
+        | MK_18_09 2 ch   | 23 | +0.196 | +0.250   | 0.248 |
 
-        | recording      | n  | r      | Spearman | permutation p |
-        |----------------|----|--------|----------|---------------|
-        | D24 1 ch       | 23 | +0.058 | −0.021   | 0.926 |
-        | D24 3 ch       | 23 | −0.326 | −0.361   | 0.094 |
-        | Sandown ch 1 † | 15 | −0.056 | +0.082   | 0.772 |
-        | Sandown 3 ch † | 15 | −0.249 | −0.239   | 0.389 |
-        | SD_30_08 †     | 15 | −0.178 | −0.038   | 0.893 |
-
-        None of the five is distinguishable from chance at p < 0.05, and the strongest r (D24 3 ch)
-        explains 11 % of the variance in beat rate. The table this replaces (#213, before #300, on
-        the loader's start lines) found one of five under 0.05, and was not measured the way it
-        said: every row kept one POINT segment (a zero-width edge segment of the reference lap that
-        reads 0 s on some laps and a sliver on others), its Spearman broke tied beat rates in sort
-        order, and its SD_30_08 row was two corners of the 13 s pieces the loader cut from a 46 s
-        lap until T13. Four of the five r are negative, which is what a real track produces — a
-        short piece of road has less room to differ, so more laps land level with the subject — and
-        because the statistic is provably invariant to scale, that correlation is a fact about the
-        driving, not about the units. The rejected `hit_counts` had no such defence: its coupling
-        came from a tolerance measured in seconds against segments of unequal length.
+        None of the seven is distinguishable from chance at p < 0.05, and the strongest r
+        (SD_19_09 1 ch) explains 27 % of the variance in beat rate — as on D24, where none of five
+        was and the strongest explained 11 %. The table before that (#213, before #300, on the
+        loader's start lines) found one of five under 0.05, and was not measured the way it said:
+        every row kept one POINT segment (a zero-width edge segment of the reference lap that reads
+        0 s on some laps and a sliver on others), its Spearman broke tied beat rates in sort order,
+        and its SD_30_08 row was two corners of the 13 s pieces the loader cut from a 46 s lap until
+        T13. Six of the seven r are negative, which is what a real track produces — a short piece of
+        road has less room to differ, so more laps land level with the subject — and because the
+        statistic is provably invariant to scale, that correlation is a fact about the driving, not
+        about the units. The rejected `hit_counts` had no such defence: its coupling came from a
+        tolerance measured in seconds against segments of unequal length.
 
         It is also the question a driver is actually asking: have I been here before, or was that
         once? And both of its factors are printed as columns beside the row, with the product in
@@ -1207,12 +1207,12 @@ class CornerModel:
         WHY IT MATTERS, measured in #211: drawing each segment as a straight line in (distance,
         time) instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the
         Sandown recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is
-        nowhere near anything anybody drove — and following the donor cut that to −0.159 s. After
-        #300 warped every lap the worst excursion is **−0.280 s**, on SD_30_08 on the loader's own
-        start line (−0.246 s on the owner's saved one; 4.52 % of samples on Sandown chapter 1 and
-        12.01 % on SD_30_08 are negative on the loader's lines — the per-recording table is in
-        `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
-        here" rather than an artefact of the drawing.
+        nowhere near anything anybody drove — and following the donor cut that to −0.159 s.
+        Re-measured on the working set (T16b), the worst excursion is **−0.262 s**, on SD_30_08 on
+        the loader's own start line (−0.255 s on the owner's saved one; 1.43 % of samples on
+        Sandown 3h 3 chapters and 10.75 % on SD_30_08 are negative on the loader's lines — the
+        per-recording table is in `theme.format_ideal_run`'s note), which is then a real "you were
+        up on the ideal through here" rather than an artefact of the drawing.
 
         Those figures read −0.052 s / "under 1 %" until #211 redid this sweep: the original was
         measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the

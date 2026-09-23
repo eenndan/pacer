@@ -3039,8 +3039,8 @@ class Session:
 
         It reads `_brake_rows` — the SAME per-lap list `brake_report` aggregates for the Stats ▸
         BRAKING table — so the metres this prints are the metres that table prints. It used to be
-        the BEST lap's single application, which disagreed with the table by up to 12.6 m on the
-        real recordings and, at 0062's C1, shrank a 12 m habit to a ~3 m shrug (see
+        the BEST lap's single application, which disagreed with the table by up to 5.3 m on the
+        working-set recordings and, at 0064's C7, cut a 12 m habit to ~7 m (see
         coaching.BrakeHabit)."""
         rows = self._brake_rows()
         corner_list = self.corners.corner_list()
@@ -3054,10 +3054,11 @@ class Session:
         CLEAN laps — the one measurement both halves of a cross-session comparison go through.
 
         The window is a FRACTION of the lap odometer, not metres and not a corner id, because the
-        corner partition is re-derived per session: between the two D24 recordings C8's own window
-        grew 45.0 m → 56.3 m and with it its own-window median time by +0.549 s, none of which the
-        driver did (studio/focus.py). Measured over one stored window instead, the same corner is
-        +0.042 s. Each lap projects the fractions onto its own total, exactly as `lap_corner_stats`
+        corner partition is re-derived per session: between the two working-set recordings
+        focus.py measures, C1's own window shrank 169.6 m → 161.4 m and with it its own-window
+        median time by −0.567 s, none of which the driver did (studio/focus.py). Measured over one
+        stored window instead, the same corner is +0.184 s. Each lap projects the fractions onto its
+        own total, exactly as `lap_corner_stats`
         projects a corner window, and the seconds come off that lap's own elapsed clock."""
         laps = []
         for lid in self.consistency_lap_ids():
@@ -3074,8 +3075,8 @@ class Session:
         definition of "which recording is this". The baseline numbers are measured HERE, by
         `focus_samples`, so the stored median is the same statistic the next session will produce
         for the same window rather than the corner service's differently-projected one (their
-        per-corner medians run 0.03–0.18 s apart on 0060 and 0.01–0.08 s apart on 0062, which is
-        the size of the thing being compared).
+        per-corner medians run 0.02–0.11 s apart on 0064 and 0.02–0.11 s apart on 0068, the
+        working-set pair focus.py's tables measure, which is the size of the thing being compared).
 
         Corners with no usable window, or no clean lap through it, are dropped rather than stored
         with a fabricated baseline — the whole point of the item is the number it carries."""
@@ -3446,9 +3447,10 @@ class Session:
 
         The excursions are SMALL, and the measured numbers are the ones in `theme.py`'s
         `format_ideal_run` note (the single place this sweep is tabulated per recording): the
-        floor is **−0.280 s**, on SD_30_08 on the loader's own start line (−0.246 s on the one the
-        owner saved), and 4.52 % of samples on Sandown chapter 1 / 12.01 % on SD_30_08 are
-        negative at all on the loader's own lines, against end-of-lap values of +0.48 … +11.81 s. Drawing the ideal's interior as a straight
+        floor is **−0.262 s**, on SD_30_08 on the loader's own start line (−0.255 s on the one the
+        owner saved), and 1.43 % of samples on Sandown 3h 3 chapters / 10.75 % on SD_30_08 are
+        negative at all on the loader's own lines, against end-of-lap values of +0.50 … +43.12 s.
+        Drawing the ideal's interior as a straight
         line instead — which is what a partition composite does if it does not consult its donors
         — put that at −0.87 s on 18.4 % of samples when #211 measured it; see
         `CornerModel.ideal_elapsed`.

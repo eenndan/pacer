@@ -244,7 +244,7 @@ every real-footage check in the repo became a green no-op. `tests/_footage.py` h
 | `PACER_GOLDEN_MP4` | THE recording (any real one) | the golden dump; `footage.test_real_render_smoke_if_ffmpeg_and_media`, `…_real_chaptered_non_first_chapter_render_if_media`, `…_real_render_quality_levels_if_media`; `footage.test_pedal_band_holds_each_braking_zone_whole`; the primary of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX020060.MP4` |
 | `PACER_GOLDEN_REF_MP4` | a second, DIFFERENT recording | the reference of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX010062.MP4` |
 | `PACER_IDEAL_TABLE_MP4` | comma-separated chapters of ONE row of the ideal-lap table — each row's chapter files are `tests/test_ideal_sample_table.ROW_RECORDINGS`; run once per row | `footage.test_the_table_still_matches_the_app` | none |
-| `PACER_MEASURED_FIGURES_DIR` | the folder holding `D24/`, `Sandown_09_05_2026/`, `SD_30_08_26/` | the seven `footage.test_the_*_footage` in `test_measured_figures` | none |
+| `PACER_MEASURED_FIGURES_DIR` | the folder holding the working set: `Sandown 3h 2026/`, `SD_19_09_26/`, `SD_30_08_26/`, `MK_18_09_26/` (T16b; on the dev machine `~/Desktop`) | the seven `footage.test_the_*_footage` in `test_measured_figures` | none |
 
 The first two live in `studio/dev/footage.py`, shared by the dump and the tests. The last two
 re-measure PUBLISHED tables whose rows are named recordings (and chapter selections sibling

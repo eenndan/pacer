@@ -8,9 +8,11 @@ Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them could 
 it is known stale or cannot be verified.
 
 On 2026-09-23 the owner chose to RE-BASE them on the recordings on his Desktop, the working set
-(T16b). A table whose footage check re-measured every row on the working set is `CURRENT`: it
-names no `GONE` recording and must carry NO mark — a mark left on it would present a current table
-as unverifiable. What it replaced is kept beside it as a record that still carries its mark.
+(T16b). Part A re-measured the seven in tests/test_measured_figures.py there; part B re-based
+IdealSample's. A table whose footage check re-measured every row on the working set is `CURRENT`:
+it names no `GONE` recording and must carry NO mark — a mark left on it would present a current
+table as unverifiable — and its quotes drop their date. What it replaced is kept beside it as a
+record that still carries its mark. The marks stay on what could not be re-measured.
 
 This module is the vocabulary both test files share. It has no Qt, no pacer and no numpy:
 
@@ -41,9 +43,8 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The footage folders (as test_measured_figures._LAP_SETS names them) that are NOT on the owner's
 # machine. The owner moved both to an external drive on or before 2026-09-19 to free disk space;
-# they are not searched for there. SD_30_08_26 is still here, so SD_30_08 rows CAN be re-measured,
-# and T16 did so on 2026-09-19. Since 2026-09-23 the working set is `Sandown 3h 2026`,
-# `SD_19_09_26`, `SD_30_08_26` and `MK_18_09_26` (T16b).
+# they are not searched for there. The working set T16b re-based the tables on (`Sandown 3h 2026`,
+# `SD_19_09_26`, `SD_30_08_26` and `MK_18_09_26`, since 2026-09-23) is all still here.
 GONE = ("D24", "Sandown_09_05_2026")
 
 STALE = "STALE"

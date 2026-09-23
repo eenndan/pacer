@@ -727,43 +727,35 @@ BRAKE_HINT_MIN_M = 2.0
 # brake zone"). Past one brake zone beyond turn-in the estimate is outside its own domain, so those
 # rows show the measured reason sentence and no metres.
 #
-# ⚠ UNVERIFIED — NOT RE-MEASURABLE (T16). Unlike coaching.py's tables, this one was measured AFTER
-# #335 changed corner matching: #339 measured it on D24 with #335 and its own change in, and its
-# footage check came back byte-identical. D24 is no longer available, so no change since #339 can
-# be checked against it. Read the table as of #339, not as re-verified. D2 is one such change: it
-# stopped counting a string of brake blips with no sustained brake as a brake event, which moves
-# the brake points this table's optimum is the median of. On the four present recordings it
-# turned no hint on or off and moved the printed metres by at most 1 m; on D24 it is unmeasured.
-#
-# MEASURED (T15), on the owner's two D24 recordings. The figures this note used to carry —
-# "3 of 11 ranked corners", an optimum at 870.6 m, 19.4 m before its apex — predate #300's removal
-# of the drift gate, #335's corner de-drift and C5's resolved-cell rule, each of which moved them;
-# they are re-measured here as a TABLE so the sentence under it can be derived rather than retyped.
-# One row per RANKED coaching row that has a habit to print (`coaching.MIN_BRAKE_LAPS` laps matched
-# and at least BRAKE_HINT_MIN_M of metres — on both recordings that is every ranked row), with the
-# corner's turn-in and apex on the reference odometer beside the MEDIAN optimum
-# `Session.coaching_brake_points` prints. "past turn-in" is optimum − turn-in, so this gate's
-# verdict is recomputable from the row's own two cells:
+# MEASURED (T16b, 2026-09-23) on the evidence table's two working-set recordings (coaching.py: 0068
+# is SD_19_09_26, 0064 is Sandown 3h 2026), with D2 in — D2 stopped counting a string of brake blips
+# with no sustained brake as a brake event, which moves the brake points this table's optimum is
+# the median of. Its D24 edition (T15, measured after #335 and marked UNVERIFIED once D24 was gone
+# and D2 had moved it) and the figures before that ("3 of 11 ranked corners") are kept in
+# studio/docs/coaching-tables-on-d24.md. One row per RANKED coaching row that has a habit to print
+# (`coaching.MIN_BRAKE_LAPS` laps matched and at least BRAKE_HINT_MIN_M of metres — on both
+# recordings that is every ranked row), with the corner's turn-in and apex on the reference odometer
+# beside the MEDIAN optimum `Session.coaching_brake_points` prints. "past turn-in" is optimum −
+# turn-in, so this gate's verdict is recomputable from the row's own two cells:
 #
 #   rec   corner  turn-in m   apex m  optimum m   hint
-#   0060  C1            0.0     23.5       24.2   shown
-#   0060  C2           77.3     97.4       93.4   shown
-#   0060  C9          626.1    644.9      633.7   shown
-#   0060  C10         812.3    851.9      867.3   suppressed
-#   0062  C1            0.0     23.9       20.1   shown
-#   0062  C3          114.8    133.4      128.5   shown
-#   0062  C6          351.9    401.3      390.3   suppressed
-#   0062  C8          557.5    588.6      604.6   suppressed
-#   0062  C11         895.9    923.7      917.5   shown
-#   0062  C12         972.4   1002.1      982.5   shown
+#   0068  C1            0.0     95.4      118.2   suppressed
+#   0068  C2          163.7    186.4      183.5   shown
+#   0068  C3          256.8    311.6      300.8   suppressed
+#   0068  C5          452.7    480.2      470.7   shown
+#   0068  C7          547.3    571.1      564.3   shown
+#   0064  C1            0.0    102.9      126.3   suppressed
+#   0064  C4          346.8    377.4      363.2   shown
+#   0064  C6          507.4    527.4      521.8   shown
+#   0064  C7          553.2    576.7      568.6   shown
 #
 # (tests/test_measured_figures.py derives the sentence below from these cells and, given the
 # footage, re-measures every one.)
 #
-# The gate is narrow: 3 of the 10 ranked rows lose their metres — 0060's C10 and 0062's C6 and C8.
-# The 7 it keeps sit 7.6..24.2 m past turn-in, inside the approach the physics assumes; the 3 it
-# drops sit 38.5..55.0 m past it. Two of those three are past the APEX as well (0060 C10 by 15.4 m,
-# 0062 C8 by 16.0 m), which is the same objection in its sharpest form: a "latest sustainable brake
+# The gate is narrow: 3 of the 9 ranked rows lose their metres — 0068's C1 and C3 and 0064's C1.
+# The 6 it keeps sit 14.4..19.8 m past turn-in, inside the approach the physics assumes; the 3 it
+# drops sit 44.1..126.3 m past it. Two of those three are past the APEX as well (0064 C1 by 23.4 m,
+# 0068 C1 by 22.7 m), which is the same objection in its sharpest form: a "latest sustainable brake
 # point" downstream of the slowest point of the corner is not a brake point.
 BRAKE_HINT_MAX_PAST_TURN_IN_M = coaching.BRAKE_APPROACH_M
 
@@ -876,7 +868,8 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
 
     THIS REPLACED THE ±σ COLUMN, deliberately. σ was the raw dispersion printed for the reader to
     interpret, and on the real recordings interpreting it was the whole job: σ ≥ the row's own
-    "Time lost" on 16 of the 19 shown rows across the two D24 pairs (worst 12.0x), so the column
+    "Time lost" on 11 of the 12 shown rows across the two working-set recordings (worst 16.8x;
+    coaching.py's evidence table, T16b), so the column
     that mattered most was the one asking for arithmetic. This states the conclusion instead —
     and states it as a COUNT OVER ITS DENOMINATOR, so it stays checkable. σ itself is not lost: the
     REASON_LINE sentence spells it, the Stats ▸ CORNERS table has a σ column, and the Consistency

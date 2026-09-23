@@ -434,7 +434,7 @@ def test_the_hero_never_prints_a_minus_sign_against_the_ideal():
     At every partition EDGE the ideal took the minimum over the clean laps, so Δideal >= 0 there
     and at the flag. INSIDE a segment it replays its donor's pace, and a lap that carries more
     speed through the same corner is transiently ahead of it: this fixture's lap 1 reaches
-    -0.077 s, and on the owner's recordings the floor is -0.280 s (SD_30_08 on the loader's line;
+    -0.077 s, and on the owner's recordings the floor is -0.262 s (SD_30_08 on the loader's line;
     theme.py tabulates every recording above format_ideal_run). Negative is
     real information about a donor's pace, and it is NOT "you beat your ideal" — over any segment,
     and over the lap, that cannot happen. So the app's largest text clamps it at zero rather than

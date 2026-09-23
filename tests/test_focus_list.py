@@ -10,8 +10,8 @@ What is asserted here, on inputs whose answer is known by construction:
     real store;
   * the MEASUREMENT: a window is a FRACTION of the lap odometer, so the same stretch of track is
     compared across two sessions whose corner partitions differ — the failure this design exists
-    to prevent, sized on real data in studio/focus.py (C8's window grew 45.0 m → 56.3 m between the
-    two D24 recordings, worth +0.549 s of "you got slower" that the driver did not do);
+    to prevent, sized on real data in studio/focus.py (C1's window shrank 169.6 m → 161.4 m between
+    the two working-set recordings, worth −0.567 s of "you got faster" that the driver did not do);
   * the GATE: no session record on either side, records that disagree, a provisional start line,
     ESTIMATED timing, mismatched lap lengths and too few clean laps each REFUSE a verdict — and a
     refused verdict carries `delta is None`, so no surface can print a number the evidence does not
@@ -201,11 +201,11 @@ def test_the_structural_gates_fire_before_the_conditions_ones():
         assert o.kind == F.OUTCOME_NO_VERDICT and o.blocker == expected, (expected, o)
         assert o.delta is None, expected
         assert F.outcome_sentence(o).startswith("C4 — can't say"), F.outcome_sentence(o)
-    # …and the lap totals the two real D24 recordings actually have (0.65 % apart) do NOT block.
-    ok = F.verdict([_item(total=1059.2)], _now(total=1066.2), [_sample(4.2)], alike).outcomes[0]
+    # …and the lap totals the working-set pair in focus.py actually has (0.96 % apart) do NOT block.
+    ok = F.verdict([_item(total=730.3)], _now(total=737.3), [_sample(4.2)], alike).outcomes[0]
     assert ok.has_verdict, ok
     print("ok structural gates: track / provisional line / estimated clock / lap length, "
-          "and 0.65 % of real lap-total drift still passes")
+          "and 0.96 % of real lap-total drift still passes")
 
 
 def test_too_few_clean_laps_through_the_window_refuses_the_verdict():
