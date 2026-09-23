@@ -224,8 +224,9 @@ class Evidence:
     """What is actually known about ONE corner: how repeatable its target is, how wide its own
     spread is, and whether that is enough to make a claim."""
 
-    n_laps: int          # clean laps with a finite time through this corner
-    reach_laps: int      # how many of them matched or beat the target (the best lap's own time)
+    n_laps: int          # clean laps whose time through this corner COUNTS — since C5 (#339), the
+    #                      ones matched on track at its entry and exit, on the lap and the best lap
+    reach_laps: int     # how many of them matched or beat the target (the best lap's own time)
     reach: str           # REACH_* — the can't/didn't axis
     iqr: float           # interquartile range of time-in-corner (s); robust where sigma is not
     abstain: str         # ABSTAIN_* — "" when the row carries a ranked claim
@@ -362,8 +363,9 @@ class BrakeHabit:
     corner windows live in, so a brake point can be named against the corner's own turn-in."""
 
     cid: int                    # the Corner.cid this habit belongs to
-    n_laps: int                 # clean laps with a matched brake application into this corner
-    metres_later: float         # MEDIAN optimal − actual (+ = you could brake later)
+    n_laps: int                 # clean laps with a matched brake application into this corner,
+    #                             on a corner matched on track (C5: `Session._brake_rows`)
+    metres_later: float       # MEDIAN optimal − actual (+ = you could brake later)
     optimal_brake_dist: float   # median apex-speed-matched latest sustainable brake point (m)
     actual_brake_dist: float    # median onset where the driver actually brakes (m)
     # The OBSERVED middle half of `metres_later` across those laps — the spread the recommendation
@@ -1112,8 +1114,13 @@ def abstain_sentence(opp: Opportunity) -> str:
     dropped, and more than a confident sentence with no evidence under it. "" for a ranked row."""
     ev = opp.evidence
     if ev.abstain == ABSTAIN_FEW_LAPS:
+        # "COULD BE MATCHED ON TRACK", not "through this corner". MIN_CORNER_LAPS == MIN_LAPS, so a
+        # summary that got this far has at least that many clean laps through EVERY corner: since
+        # C5 (#339) this abstain fires only where corners went unmatched and their times were left
+        # out, and "only 2 clean laps through this corner" was false every time it was shown.
         laps = f"{ev.n_laps} clean lap" + ("" if ev.n_laps == 1 else "s")
-        return f"Not ranked: only {laps} through this corner — too few to call."
+        return (f"Not ranked: only {laps} could be matched on track through this corner — too few "
+                "to call.")
     if ev.abstain == ABSTAIN_ONE_OFF:
         return ("Not ranked: no second lap has matched your best here, so there is no repeatable "
                 "target to aim at.")
