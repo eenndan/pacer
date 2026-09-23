@@ -165,6 +165,45 @@ def test_seam_blip_does_not_anchor_merged_onset():
     print(f"ok M11: seam blip folded in but onset anchored on the real brake @ {e.onset_dist:.0f} m")
 
 
+def test_a_string_of_blips_with_no_sustained_brake_is_not_a_brake_event():
+    """D2: a merged group with NO sustained sub-fragment (none of its own fragments lasts
+    MIN_BRAKE_S) is not a brake event, however far apart its blips are spread.
+
+    MIN_BRAKE_S used to gate only the MERGED span, blip to blip with the coasts included, so four
+    single-sample blips over 0.6 s were one event whose onset was the first blip. On four real
+    recordings that was 3.0-7.4 % of events, 70 of 73 in no independently defined braking zone,
+    and 61 of 1,121 per-corner brake points. When such a string came after the corner's real brake
+    it was the LAST onset in the corner's window, so `lap_brake_points` read the brake point off it.
+
+    On the 10 Hz lap grid every recording has, so SMOOTH_S is the no-op it is in the app."""
+    dist, elapsed = _lap_trace(n=300, dur=30.0, total_dist=1000.0)   # 0.1 s, 3.3 m a sample
+    blips = [122, 124, 126, 128]
+    g = np.zeros(len(dist))
+    g[100:110] = -0.40            # the real brake: 1.0 s, one sustained fragment, at 333 m
+    g[blips] = -0.40              # 43 m on, past MERGE_TROUGH_GAP_M: each blip one sample past -theta_b
+    frags = D._brake_fragments(g, THETA_B)                       # the detector's own fragments
+    assert len(frags) == 1 + len(blips), frags
+    assert all(elapsed[j1] - elapsed[j0] < D.MIN_BRAKE_S for j0, j1 in frags[1:]), frags
+    assert elapsed[blips[-1]] - elapsed[blips[0]] >= D.MIN_BRAKE_S   # ...but their SPAN is not short
+    assert dist[blips[0]] - dist[109] > D.MERGE_TROUGH_GAP_M        # ...and they do not merge back
+    events = D.brake_events(dist, elapsed, g, THETA_B)
+    assert [round(e.onset_dist, 1) for e in events] == [round(dist[100], 1)], (
+        f"a blip string after the real brake became an event of its own, and the LAST onset a "
+        f"corner's window holds: {[(round(e.onset_dist, 1), round(e.duration, 2)) for e in events]}")
+    # Alone, the same string is nothing at all.
+    g_alone = np.zeros(len(dist))
+    g_alone[blips] = -0.40
+    assert D.brake_events(dist, elapsed, g_alone, THETA_B) == []
+    # Blips INSIDE a real maneuver still fold into it: they extend its release, never its onset.
+    g_trail = g.copy()
+    g_trail[[112, 114]] = -0.40   # within MERGE_TROUGH_GAP_M of the brake's release
+    trail = D.brake_events(dist, elapsed, g_trail, THETA_B)
+    assert abs(trail[0].onset_dist - dist[100]) < 1e-9, trail
+    assert abs(trail[0].duration - (elapsed[114] - elapsed[100])) < 1e-9, trail
+    print(f"ok D2: blip string dropped; the real brake @ {events[0].onset_dist:.0f} m is the only "
+          f"event, and blips inside it still extend it to {trail[0].duration:.1f} s")
+
+
 def test_chicane_throttle_squirt_stays_two():
     """Two genuine brake points with a clear hard re-throttle between them (a chicane) stay TWO —
     the throttle-sign safety (smoothed g above +MERGE_ACCEL_G) blocks the merge."""
