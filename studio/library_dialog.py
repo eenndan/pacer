@@ -117,10 +117,10 @@ from .widgets import NumItem as _NumItem
 #
 # WHY A COLUMN AND NOT A SORT REFUSAL ON `Ideal lap`. Suppressing that one column's sort was the
 # obvious fix and it is the wrong one, measured: over random subsets of the clean laps the BEST
-# LAP falls 0.105–0.179 s per doubling of lap count against the ideal's 0.153–0.377 s — the same
-# order of magnitude on every one of the owner's recordings. (This note also cited SD_30_08's last
-# doubling, where the best lap moved more; that was measured on 13 s pieces of its 46 s lap, and
-# on the real laps it moves less — see corner_model.IdealSample.) A dialog that refused to rank the
+# LAP falls 0.077–0.905 s per doubling of lap count against the ideal's 0.166–0.740 s — the same
+# order of magnitude on every one of the owner's recordings, and on Sandown 3h's first chapter the
+# best lap falls the FASTER of the two (T16b's working set; corner_model.IdealSample, which keeps
+# the D24-era table this note used to quote as its record). A dialog that refused to rank the
 # ideal while happily ranking the best lap beside it would be advertising a distinction of degree
 # as one of kind. The confound belongs to the ROW, so the disclosure is a
 # per-row count that both columns can be read against — and it is sortable itself, which is what
@@ -158,15 +158,15 @@ _LAPS_HEADER_TIP = (
 _BEST_HEADER_TIP = (
     "Best lap — the fastest single lap of the recording.\n"
     "A minimum over the session's laps, so it falls as the session gets longer: measured over "
-    "random subsets of the owner's recordings, 0.10–0.18 s per doubling of lap count. The Laps "
+    "random subsets of the owner's recordings, 0.08–0.91 s per doubling of lap count. The Laps "
     "column is the sample it was taken over.")
 _THEO_HEADER_TIP = (
     "Ideal lap — the quickest time through each corner and each straight, stitched into one lap.\n"
-    "A sum of per-segment minima, so it falls faster than the best lap does as a session gets "
-    "longer: 0.15–0.38 s per doubling of lap count on the owner's recordings, with no plateau. "
-    "Two rows are comparable on this number only if their Laps are comparable — D24 chapter 1 "
-    "(21 laps) and D24 chapters 1–3 (65 laps) were 0.69 s apart on the same driving. Both figures "
-    "were measured before a September 2026 change to corner matching and not re-measured since.")
+    "A sum of per-segment minima, so it falls as a session gets longer, usually faster than the "
+    "best lap does: 0.17–0.74 s per doubling of lap count on the owner's recordings, with no "
+    "plateau. Two rows are comparable on this number only if their Laps are comparable — Sandown "
+    "3h chapter 1 (17 laps) and Sandown 3h chapters 1–3 (62 laps) are 0.84 s apart on the same "
+    "driving.")
 _COND_HEADER_TIP = (
     "Conditions — what you recorded about the day, in File ▸ Session record….\n"
     "Pacer never looks the weather up: nothing leaves this Mac. A dry-day best and a wet-day best "

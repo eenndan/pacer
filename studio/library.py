@@ -41,11 +41,12 @@ recording is opened.
 ``lap_count`` IS PART OF THE ANSWER, NOT METADATA. Both ``best`` and ``theoretical`` are MINIMA
 over the session's laps, so both fall as a session gets longer, and a table that ranks either
 without showing the count ranks session length as much as pace. Measured over random subsets of
-the clean laps of the owner's five recordings, per doubling of lap count: ``theoretical`` falls
-0.377 / 0.326 / 0.340 / 0.288 / 0.153 s and ``best`` falls 0.171 / 0.179 / 0.167 / 0.105 /
-0.119 s, recording for recording — the ideal is the more sample-dependent of the two on all five,
-but the best lap beside it still moves between a third and four-fifths as much rather than not at
-all, which is why the dialog shows the count for the ROW rather than qualifying one column. The sharpest real instance is in this index, as
+the clean laps of the owner's five working-set recordings, per doubling of lap count:
+``theoretical`` falls 0.740 / 0.283 / 0.166 / 0.178 / 0.490 s and ``best`` falls 0.905 / 0.092 /
+0.077 / 0.082 / 0.194 s, recording for recording — the ideal is the more sample-dependent of the
+two on four of the five, and on the fifth (Sandown 3h's first chapter, the first hour of a 3-hour session)
+the best lap moves MORE, which is why the dialog shows the count for the ROW rather than qualifying
+one column. The sharpest real instance is in this index, as
 stored before #300: Sandown chapter 1 (23 laps) stores 47.941 and Sandown chapters 1–3 (59 laps)
 stores 47.375 — 0.57 s apart, same driver, same day, same track, and nothing between them but how
 many laps were loaded. ``studio/library_dialog.py`` renders it as the ``Laps`` column; see ``studio/corner_model.py IdealSample`` for the full table.

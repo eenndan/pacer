@@ -1,5 +1,11 @@
 # Start/finish line verification — Daytona Milton Keynes
 
+> **A record, not a current measurement (T16b, 2026-09-23).** Every figure below was measured on
+> D24. D24 — the Daytona 24-hour race recordings `GX0*0060` and `GX0*0062`, May 2026 — left the
+> development machine on 2026-09-19, so these figures are kept as the record of this investigation
+> and were not re-measured on the Desktop working set; MK_18_09_26 is the same circuit and could
+> re-measure it.
+
 **Question.** Is the hard-coded Daytona MK start/finish line in `studio/tracks.py` at the
 *real* physical start/finish, is it well placed for lap segmentation, and does its position
 change the lap times we report versus the transponder?

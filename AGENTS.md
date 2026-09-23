@@ -179,8 +179,10 @@ decomposition, E2, the #50 delta-engine dedup) is held to WHOLE-public-API numer
 via [studio/dev/golden_session_dump.py](studio/dev/golden_session_dump.py) (a dense fingerprint of
 a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/dev/golden_compare.py)
 (leaf-by-leaf compare):
-- **MANUAL, full-coverage half** — the canonical dump loads the real ~11.9 GB `~/Desktop/D24`
-  recording (120k+ leaves, eps 0) and is a dev-Desktop-only gate; it does NOT run in CI.
+- **MANUAL, full-coverage half** — the dump loads one real recording, the chapter
+  `PACER_GOLDEN_MP4` names (a working-set recording, below), and compares at eps 0: 147,104 leaves
+  on `Sandown 3h 2026/GX010064.MP4` and 153,134 on `SD_19_09_26/GX010068.MP4` (measured
+  2026-09-23). It is a dev-Desktop-only gate; it does NOT run in CI.
 - **CI half** — `test_golden_synthetic` automates the SAME machinery
   (`fingerprint(strict=False)` + `golden_compare.walk`, eps 1e-9) over the deterministic SYNTHETIC
   session (`test_session_services._synthetic_session`: stadium loop + seeded g-meter, REAL
@@ -200,15 +202,20 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
   reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.
 
-Run the **manual D24 gate** around a core-math change (the fixture defaults to
-`~/Desktop/D24/GX020060.MP4` — a ~11.9 GB dev-Desktop-only recording, **not committed**; CI never
-sees it and runs the synthetic gate above instead. Chapter **2**, not 1: `GX010060.MP4` on that
-Desktop is a 2.4 MB JSON dump a dev tool wrote over the footage, and the gate now refuses it
-loudly instead of fingerprinting it. Override with `PACER_GOLDEN_MP4` — and since 2026-09-19 you
-must: D24 is gone from the dev machine too, and the default was deliberately left where it was; see
-"Real-footage checks" below):
+Run the **manual real-footage gate** around a core-math change, on the **working set**: the
+recordings on the dev Desktop the owner chose on 2026-09-23 (T16b) — `Sandown 3h 2026` (`GX0*0064`,
+the primary), `SD_19_09_26` (`GX0*0068`), `SD_30_08_26` (`GX0*0065`) and `MK_18_09_26`
+(`GX0*0067`, the only anticlockwise one, on the same Daytona Milton Keynes circuit as D24). Each is
+~12 GB a chapter, **not committed**, and strictly read-only; CI never sees them and runs the
+synthetic gate above instead. Point `PACER_GOLDEN_MP4` at ONE chapter and use the same one for both
+dumps of a comparison. You have to set it: the default in code still names
+`~/Desktop/D24/GX020060.MP4`, and D24 left the dev machine on 2026-09-19 (the owner keeps it on an
+external drive — never search for it or mount it). The default stays until G2 re-points every
+footage default at the working set; see "Real-footage checks" below. The dump's positional
+argument is its OUTPUT; the recording comes only from the variable:
 
 ```bash
+export PACER_GOLDEN_MP4="$HOME/Desktop/Sandown 3h 2026/GX010064.MP4"      # the INPUT, read-only
 pixi run python -m studio.dev.golden_session_dump /tmp/before.json   # BEFORE the change
 # … make the change, then: pixi run build …
 pixi run python -m studio.dev.golden_session_dump /tmp/after.json    # AFTER
@@ -236,20 +243,25 @@ every real-footage check in the repo became a green no-op. `tests/_footage.py` h
 |---|---|---|---|
 | `PACER_GOLDEN_MP4` | THE recording (any real one) | the golden dump; `footage.test_real_render_smoke_if_ffmpeg_and_media`, `…_real_chaptered_non_first_chapter_render_if_media`, `…_real_render_quality_levels_if_media`; `footage.test_pedal_band_holds_each_braking_zone_whole`; the primary of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX020060.MP4` |
 | `PACER_GOLDEN_REF_MP4` | a second, DIFFERENT recording | the reference of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/D24/GX010062.MP4` |
-| `PACER_IDEAL_TABLE_MP4` | comma-separated chapters of one recording in the ideal-lap table | `footage.test_the_table_still_matches_the_app` | none |
+| `PACER_IDEAL_TABLE_MP4` | comma-separated chapters of ONE row of the ideal-lap table — each row's chapter files are `tests/test_ideal_sample_table.ROW_RECORDINGS`; run once per row | `footage.test_the_table_still_matches_the_app` | none |
 | `PACER_MEASURED_FIGURES_DIR` | the folder holding the working set: `Sandown 3h 2026/`, `SD_19_09_26/`, `SD_30_08_26/`, `MK_18_09_26/` (T16b; on the dev machine `~/Desktop`) | the seven `footage.test_the_*_footage` in `test_measured_figures` | none |
 
 The first two live in `studio/dev/footage.py`, shared by the dump and the tests. The last two
 re-measure PUBLISHED tables whose rows are named recordings (and chapter selections sibling
 discovery cannot express), so they cannot take "a recording" and keep their own variables. A default
 that is absent is a skip; **a variable you set that names something absent is a failure.** The
-defaults still name D24 on purpose: which recording the published figures move to is T16, and
-re-pointing a default would silently change what those numbers mean. To get real coverage today,
-point the variable at a present recording (read-only; record sizes and mtimes around the run):
+defaults still name D24. The owner chose the working set on 2026-09-23; T16b re-bases the
+published tables on it (the ideal-lap table's rows now name their own chapter files), and G2
+re-points the defaults after it, so no local gate goes red mid-rebase. Until then, get real
+coverage by pointing the variable at a working-set recording (read-only; record sizes and mtimes
+around the run):
 
 ```bash
 PACER_GOLDEN_MP4="$HOME/Desktop/Sandown 3h 2026/GX010064.MP4" \
   pixi run ctest --test-dir build/Release -R '^footage\.test_real_render' --output-on-failure
+D="$HOME/Desktop/Sandown 3h 2026"   # one row of the ideal-lap table: its three chapters
+PACER_IDEAL_TABLE_MP4="$D/GX010064.MP4,$D/GX020064.MP4,$D/GX030064.MP4" \
+  pixi run ctest --test-dir build/Release -R '^footage\.test_the_table_still_matches_the_app$' -V
 ```
 
 A new real-footage check goes in its file's `FOOTAGE_CHECKS`, finds its recording through

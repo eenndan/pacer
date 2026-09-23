@@ -1,5 +1,11 @@
 # GPS positional / lap-timing accuracy — research & empirical evaluation
 
+> **A record, not a current measurement (T16b, 2026-09-23).** Every figure below was measured on
+> D24, against its transponder log. D24 — the Daytona 24-hour race recordings `GX0*0060` and
+> `GX0*0062`, May 2026 — left the development machine on 2026-09-19, so these figures are kept as
+> the record of this investigation and were not re-measured on the Desktop working set, which has no
+> transponder log.
+
 **Branch:** `gps-research` (off `lap-time-accuracy`). **Date:** 2026-06.
 **Goal:** find techniques to push GPS positional / lap-timing accuracy *higher* for our data
 (consumer ~10 Hz GoPro GPS9 on a kart; lap timing + track map), evaluate each critically against

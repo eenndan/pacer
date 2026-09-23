@@ -3,13 +3,16 @@
 WHY THIS EXISTS. Nine tables in the tree were measured on real footage, and each has a check that
 re-measures it (tests/test_measured_figures.py, tests/test_ideal_sample_table.py). PR #339 ran
 those checks after #335 changed corner matching, and eight of the nine no longer matched the app.
-Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them could be re-measured.
-Disclosure was the default until the owner chose, and it has one rule: no figure the app or the
-docs present may read as current when it is known stale or cannot be verified. On 2026-09-23 he
-chose to re-base the tables on the Desktop recordings (the working set). T16b part A re-measured
-the seven in tests/test_measured_figures.py there (part B re-bases IdealSample's); a re-measured
-table drops its mark, and its quotes drop their date. The marks stay on what could not be
-re-measured.
+Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them could be re-measured, and
+#344 marked them. The rule is one: no figure the app or the docs present may read as current when
+it is known stale or cannot be verified.
+
+On 2026-09-23 the owner chose to RE-BASE them on the recordings on his Desktop, the working set
+(T16b). Part A re-measured the seven in tests/test_measured_figures.py there; part B re-based
+IdealSample's. A table whose footage check re-measured every row on the working set is `CURRENT`:
+it names no `GONE` recording and must carry NO mark — a mark left on it would present a current
+table as unverifiable — and its quotes drop their date. What it replaced is kept beside it as a
+record that still carries its mark. The marks stay on what could not be re-measured.
 
 This module is the vocabulary both test files share. It has no Qt, no pacer and no numpy:
 
@@ -39,13 +42,16 @@ import re
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The footage folders (as test_measured_figures._LAP_SETS names them) that are NOT on the owner's
-# machine. The owner moved both off it on or before 2026-09-19, in a Desktop reorganisation. The
-# working set T16b re-based the tables on (Sandown 3h 2026, SD_19_09_26, SD_30_08_26, MK_18_09_26)
-# is all still there.
+# machine. The owner moved both to an external drive on or before 2026-09-19 to free disk space;
+# they are not searched for there. The working set T16b re-based the tables on (`Sandown 3h 2026`,
+# `SD_19_09_26`, `SD_30_08_26` and `MK_18_09_26`, since 2026-09-23) is all still here.
 GONE = ("D24", "Sandown_09_05_2026")
 
 STALE = "STALE"
 UNVERIFIED = "UNVERIFIED"
+# Re-measured on the working set by its footage check (T16b). Not a mark: the status of a table
+# that must not carry one.
+CURRENT = "CURRENT"
 
 # "⚠ STALE — NOT RE-MEASURABLE (T16)." at the head of the paragraph that marks a table. Any
 # decoration around it (a comment's `#`, markdown's `>` or `**`) is ignored.

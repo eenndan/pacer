@@ -1,5 +1,11 @@
 # Measured-channel probes: sideslip rate, wheel hop, track bump map
 
+> **A record, not a current measurement (T16b, 2026-09-23).** Every figure below was measured on
+> D24. D24 — the Daytona 24-hour race recordings `GX0*0060` and `GX0*0062`, May 2026 — left the
+> development machine on 2026-09-19, so these figures are kept as the record of this investigation
+> and were not re-measured on the Desktop working set; re-proposing a refused channel means
+> measuring it there.
+
 **2026-09-16.** Three speculative channels (§6 of the market research) asked as falsifiable
 questions against both D24 recordings. **Two are refused. One is real and is not a feature yet.**
 

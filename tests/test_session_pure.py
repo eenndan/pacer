@@ -1162,9 +1162,9 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
     the session was, and the number on its own is not comparable between sessions.
 
     Measured on the owner's five recordings over random subsets of the clean laps (20,000 draws
-    per N), `ideal_total` falls 0.153 / 0.288 / 0.326 / 0.340 / 0.377 s per DOUBLING of lap count
-    with no plateau — on D24's three chapters the same driving reads a 0.95 s gap over 5 laps and
-    a 1.49 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
+    per N), `ideal_total` falls 0.166 / 0.178 / 0.283 / 0.490 / 0.740 s per DOUBLING of lap count
+    with no plateau — on Sandown 3h's three chapters the same driving reads a 0.59 s gap over 5 laps
+    and a 1.29 s gap over 62. That table is in corner_model.IdealSample; this is the property it rests
     on, in a form that fails if the composite ever stops being a minimum.
 
     Every proper subset here is checked, not one sample: with three crossing-pace laps that is all

@@ -1278,41 +1278,48 @@ _STATS = os.path.join(_REPO, "studio", "stats.py")
 def _published() -> list[tuple]:
     """(name, file, first-row pattern, the `_LAP_SETS` keys its rows name, the footage check that
     re-measures it or None, the recorded status) for every table a footage check re-measures, and
-    for the D24 tables of the same kind that no check does. A status of None means T16b re-measured
-    the table on the working set, so it carries no mark (`_stale.UNVERIFIED` is unused since)."""
-    stale = _stale.STALE
+    for the D24 tables of the same kind that no check does. A status of `_stale.CURRENT` means T16b
+    re-measured the table on the working set, so it carries no mark (`_stale.UNVERIFIED` is unused
+    since)."""
+    stale, current = _stale.STALE, _stale.CURRENT
     return [
         # T16b re-measured both on the working set (0068 and 0064, and their chapters), 2026-09-23.
         ("coaching.py's evidence table", _COACHING, _EV_LINE, lambda: [r.rec for r in _evidence_rows()],
-         "test_the_coaching_tables_match_the_footage", None),
+         "test_the_coaching_tables_match_the_footage", current),
         ("coaching.py's THEME table", _COACHING, _THEME_LINE, lambda: list(_theme_rows()),
-         "test_the_coaching_tables_match_the_footage", None),
+         "test_the_coaching_tables_match_the_footage", current),
         ("coaching.py's brake-habit table", _COACHING, _BRAKE_LINE, lambda: [r.rec for r in _brake_rows()],
-         "test_the_brake_habit_table_matches_the_footage", None),
+         "test_the_brake_habit_table_matches_the_footage", current),
         # #339 (T15) re-measured this one after #335 and C5 on D24; D2 then moved it, unmeasurably
         # there. T16b re-measured it on the working set, 2026-09-23.
         ("coaching_panel.py's brake-hint gate table", _PANEL, _HINT_LINE, lambda: [r.rec for r in _hint_rows()],
-         "test_the_brake_hint_gate_table_matches_the_footage", None),
+         "test_the_brake_hint_gate_table_matches_the_footage", current),
         # #339: the beat-rate, focus and floor checks failed after #335; the floor re-measure was
         # byte-identical before and after #339's own change, so the move is #335's.
         # T16b re-measured it on the working set (four recordings, seven rows), 2026-09-23.
         ("corner_model.py's beat-rate table", _CORNER_MODEL, _BEAT_LINE,
-         lambda: [_BEAT_SETS[r.name] for r in _beat_rows()], "test_the_beat_rate_table_matches_the_footage", None),
+         lambda: [_BEAT_SETS[r.name] for r in _beat_rows()], "test_the_beat_rate_table_matches_the_footage",
+         current),
         # focus.py's two tables compare the two recordings its header names; the rows are corners.
         # T16b re-measured them on the working set (0064 then 0068), 2026-09-23.
         ("focus.py's cross-session tables", _FOCUS, _FOCUS_LINE, lambda: list(_focus_pair()),
-         "test_the_focus_tables_match_the_footage", None),
+         "test_the_focus_tables_match_the_footage", current),
         # T16b re-measured it on the working set (four recordings, eight rows), 2026-09-23.
         ("theme.py's floor table", _THEME, _FLOOR_LINE, lambda: [r.name for r in _floor_rows()],
-         "test_the_floor_table_matches_the_footage", None),
+         "test_the_floor_table_matches_the_footage", current),
         # T16b re-measured it on the working set, 2026-09-23. (The D24 edition, whose 0060 ideal #339
         # read as 65.864 s against the 65.464 s it publishes, stays below it as the record.)
         ("the #272 recombination record", _REFUSED, _RECORD_HEAD, lambda: list(_record_tables()[0]),
-         "test_the_refusal_record_matches_the_footage", None),
-        # #339: the `all` cells are stale by 0.05–0.43 s on all five rows.
-        ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
-         lambda: [_IDEAL_SETS.get(r.name, r.name) for r in _ideal._rows()],
-         "test_the_table_still_matches_the_app", stale),
+         "test_the_refusal_record_matches_the_footage", current),
+        # T16b re-based it on the working set and its footage check re-measured every row, so it is
+        # CURRENT: it must carry no mark. What it replaced is kept below it as the record.
+        ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| Sandown 3h 1 chapter"),
+         lambda: list(_ideal.ROW_RECORDINGS), "test_the_table_still_matches_the_app", current),
+        # #339: the `all` cells were stale by 0.05–0.43 s on all five rows. No check re-measures the
+        # record: two of its three recordings are gone, and it is history, not a claim about the app.
+        # Its rows use IdealSample's short names, which `_IDEAL_SETS` maps onto `_LAP_SETS` keys.
+        ("corner_model.IdealSample's record", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
+         lambda: [_IDEAL_SETS.get(r.name, r.name) for r in _ideal._record_rows()], None, stale),
         # No footage check re-measures these two, but they are D24 tables of the same kind: how far
         # an interpolated corner cell is off. #335 moved which cells are interpolated (0060: 236 →
         # 34 of 456), so both describe cells the app no longer has.
@@ -1356,8 +1363,9 @@ def _find_mark(lines: list[str], row: int, path: str) -> tuple[int, str] | None:
     return None
 
 
-# IdealSample's short names for the lap sets its rows name, where they are not `_LAP_SETS` keys. Its
-# rows are T16b part B's to re-base; the beat-rate table used the same short names until part A.
+# IdealSample's short names for the lap sets its rows name, where they are not `_LAP_SETS` keys. Since
+# T16b part B only its D24-era record uses them (its current rows are `ROW_RECORDINGS` keys); the
+# beat-rate table used the same short names until part A.
 _IDEAL_SETS = {"Sandown ch 1": "Sandown chapter 1", "Sandown 3 ch": "Sandown 3 chapters"}
 
 # IdealSample marks each row it could not re-measure with ‡, and its own checks read that mark
@@ -1379,19 +1387,22 @@ def _mark_problems(texts: dict[str, str]) -> list[str]:
             continue
         gone = _gone(table)
         found = _find_mark(lines, row, path)
+        if status == _stale.CURRENT:
+            # T16b: re-measured on footage that is here. A stale mark left on it would be the opposite
+            # lie: a current table presented as unverifiable.
+            if gone:
+                problems.append(f"{name} is registered {status}, but its rows need {' and '.join(gone)}, "
+                                f"which are no longer available")
+            if found is not None:
+                problems.append(f"{name} ({rel}:{found[0] + 1}) was re-measured and is {status}, but "
+                                f"still carries a {found[1]} mark: every row names a recording that is "
+                                f"here and it was re-measured on the working set (T16b). 'Not "
+                                f"re-measurable' is false once it has been: drop the mark")
+            continue
         if not gone:
             # T16b: every row's recording is here, so its footage check can answer — and did.
-            if status is not None:
-                problems.append(f"{name}: registered {status}, but every row names a recording that is "
-                                f"here. Re-measure it and register it as re-measured (None)")
-            elif found is not None:
-                problems.append(f"{name} ({rel}:{found[0] + 1}) carries a '⚠ {found[1]}' mark, but every "
-                                f"row names a recording that is here and it was re-measured on the working "
-                                f"set (T16b). 'Not re-measurable' is false once it has been: drop the mark")
-            continue
-        if status is None:
-            problems.append(f"{name}: registered as re-measured, but its rows name {' and '.join(gone)}, "
-                            f"no longer available")
+            problems.append(f"{name}: registered {status}, but every row names a recording that is "
+                            f"here. Re-measure it and register it {_stale.CURRENT}")
             continue
         if found is None:
             problems.append(f"{name} ({rel}:{row + 1}) is presented without its mark. Its rows need "
@@ -1431,7 +1442,7 @@ def test_every_table_no_footage_can_re_measure_carries_its_mark():
     print(f"test_every_table_no_footage_can_re_measure_carries_its_mark OK ({len(tables)} tables, "
           f"{sum(t[5] == _stale.STALE for t in tables)} stale, "
           f"{sum(t[5] == _stale.UNVERIFIED for t in tables)} unverified, "
-          f"{sum(t[5] is None for t in tables)} re-measured on the working set and unmarked)")
+          f"{sum(t[5] == _stale.CURRENT for t in tables)} re-measured on the working set and unmarked)")
 
 
 def test_the_mark_guard_fails_on_each_planted_defect():
@@ -1444,7 +1455,8 @@ def test_the_mark_guard_fails_on_each_planted_defect():
     clean = {t[1]: _read(t[1]) for t in tables}
     assert not _mark_problems(clean), "the control needs a clean tree to plant into"
     marked = [t for t in tables if _gone(t)]
-    remeasured = [t for t in tables if t[5] is None]
+    remeasured = [t for t in tables if t[5] == _stale.CURRENT]
+    assert remeasured, "no table is registered CURRENT, so the half of the guard below is untested"
 
     def planted(path: str, span: range, old: str, new: str) -> dict[str, str]:
         lines = clean[path].splitlines()
@@ -1466,6 +1478,18 @@ def test_the_mark_guard_fails_on_each_planted_defect():
         tag = _stale.TABLE_MARK.search(clean[path].splitlines()[j]).group(0)
         got = _mark_problems(planted(path, range(j, j + 1), tag, "a note"))
         assert any(p.startswith(name) and "without its mark" in p for p in got), (name, got)
+    # T16b: a table re-measured on present footage must NOT carry a stale mark — here appended to a
+    # line of the paragraph above it; below, as a line of its own right above its first row.
+    for name, path, first_row, *_ in remeasured:
+        lines = clean[path].splitlines()
+        row = next(i for i, line in enumerate(lines) if first_row.match(line))
+        above = _block_above(lines, row, path)
+        if not above:
+            continue        # nothing above the row in its block to append to: planted below
+        j = above[0]
+        got = _mark_problems(planted(path, range(j, j + 1), lines[j],
+                                     lines[j] + " ⚠ STALE — NOT RE-MEASURABLE (T16)."))
+        assert any(p.startswith(name) and "still carries a STALE mark" in p for p in got), (name, got)
     name = next(t[0] for t in marked if t[5] == _stale.STALE)
     path, j, _row = mark_of(name)
     got = _mark_problems(planted(path, range(j, j + 1), "⚠ STALE", "⚠ UNVERIFIED"))
@@ -1946,6 +1970,8 @@ _LAP_SETS = {
     "Sandown chapter 1": ("Sandown_09_05_2026", ["GX010059.MP4"]),
     "Sandown 3 chapters": ("Sandown_09_05_2026", ["GX010059.MP4", "GX020059.MP4", "GX030059.MP4"]),
     "SD_30_08": ("SD_30_08_26", ["GX010065.MP4"]),
+    # corner_model.IdealSample's rows since T16b, which name their own chapter files.
+    **{name: (folder, list(files)) for name, (folder, files) in _ideal.ROW_RECORDINGS.items()},
 }
 
 
