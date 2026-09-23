@@ -1166,9 +1166,9 @@ add_test(NAME test_camera_support
 # is recomputed from its own endpoint cells, every "per doubling of lap count" rate and every
 # "X s over 5 laps, Y s over N" pair is the table's, and every gap the tree quotes is one the
 # docstring publishes — off the working-set table T16b re-based, or off the D24-era record kept
-# beneath it, which no in-app string may quote. A fifth, opt-in, loads a real recording named by
-# PACER_IDEAL_TABLE_MP4 (comma-separated chapters of one row, found by its chapter files in
-# ROW_RECORDINGS), asserts the row's `all` cell IS Session.ideal_total() and re-runs
+# beneath it, which no in-app string may quote. A fifth loads every row's recording (its chapter
+# files in ROW_RECORDINGS, on the Desktop; PACER_IDEAL_TABLE_MP4 names one instead), asserts each
+# row's `all` cell IS Session.ideal_total() and re-runs
 # the table's own Monte-Carlo over every rung; it is a footage registration, reported Skipped
 # without the footage, which is why the text checks cost nothing. A sixth check CONTROLS that
 # fifth one's stand-in for `CornerModel.segment_bests`' masking rule — the app never composites a
@@ -1186,9 +1186,9 @@ add_footage_test(test_ideal_sample_table test_the_table_still_matches_the_app)
 # studio/docs/refused-2026-09.md — all measured before #300 warped every lap, all stale after it.
 # The text checks derive every figure quoted beside each table from its cells and from the
 # constants the code applies (read with ast), and search the tree for every other quote of them.
-# An opt-in half re-measures every cell from the owner's footage (PACER_MEASURED_FIGURES_DIR, the
-# folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/): seven footage registrations, each
-# reported Skipped without it.
+# A footage half re-measures every cell on the owner's working set, found on the Desktop (or under
+# PACER_MEASURED_FIGURES_DIR): seven footage registrations, each reported Skipped without the lap
+# sets it loads.
 add_test(NAME test_measured_figures
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measured_figures.py)
 set_tests_properties(test_measured_figures PROPERTIES
