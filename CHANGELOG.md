@@ -16,7 +16,7 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 - **A video export the disk plainly cannot hold is refused before it renders.** The overlay export
   used to find out about a full disk only when ffmpeg hit it mid-render. It now asks the output's
   volume first — off the UI thread, before a frame is decoded — and an All-laps batch is judged by
-  the sum of its files. It refuses only below a floor every one of 59 measured real exports landed
+  the sum of its files. It refuses only below a floor every one of 60 measured real exports landed
   above (60 % of the estimate on the hardware encoder, which lands at 71-80 %), so it never turns
   away an export that would have fitted, and it counts the purgeable space macOS gives back on
   demand, and the file being replaced. The refusal says how much the export needs, how much is

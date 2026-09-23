@@ -1295,14 +1295,15 @@ X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured
 
 # THE FLOOR THE FREE-SPACE GUARD REQUIRES, as a fraction of `estimate_output_bytes`, per codec.
 # Refusing an export that would have fitted is the one failure the guard must not add, so each
-# floor sits BELOW every real file measured against the estimate. Measured 2026-09-23: 40 real
+# floor sits BELOW every real file measured against the estimate. Measured 2026-09-23: 41 real
 # renders plus a 19-file All-laps batch of MK_18_09_26 and SD_19_09_26, both 4K 59.94 HEVC GoPro
-# footage, written to $TMPDIR and sized there — best lap, median lap, and a 60 s window with the
-# kart PARKED (the most compressible picture the recordings hold), at 720p / 1080p / source 4K,
-# both presets, every shape and fit, the compare frame. File bytes over the central estimate:
+# footage, written to $TMPDIR and sized there — best lap, median lap, a 60 s window with the kart
+# PARKED (the most compressible picture the recordings hold) and MK's whole 44.7-minute session,
+# at 720p / 1080p / source 4K, both presets, every shape and fit, the compare frame. File bytes
+# over the central estimate:
 #
 #     codec          n     min     max    what moves it                   floor
-#     VideoToolbox  39   0.707   0.800    nothing much: rate-controlled    0.60
+#     VideoToolbox  40   0.707   0.800    nothing much: rate-controlled    0.60
 #     libx264       13   0.124   0.731    the picture (CRF): 5.9x spread   0.06
 #     ProRes 4444    4   0.710   1.074    resolution (1080p 1.03-1.07,     0.55
 #                                          4K 0.71-0.74)
