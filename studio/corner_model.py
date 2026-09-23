@@ -1172,12 +1172,12 @@ class CornerModel:
         WHY IT MATTERS, measured in #211: drawing each segment as a straight line in (distance,
         time) instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the
         Sandown recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is
-        nowhere near anything anybody drove — and following the donor cut that to −0.159 s. After
-        #300 warped every lap the worst excursion is **−0.280 s**, on SD_30_08 on the loader's own
-        start line (−0.246 s on the owner's saved one; 4.52 % of samples on Sandown chapter 1 and
-        12.01 % on SD_30_08 are negative on the loader's lines — the per-recording table is in
-        `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
-        here" rather than an artefact of the drawing.
+        nowhere near anything anybody drove — and following the donor cut that to −0.159 s.
+        Re-measured on the working set (T16b), the worst excursion is **−0.262 s**, on SD_30_08 on
+        the loader's own start line (−0.255 s on the owner's saved one; 1.43 % of samples on
+        Sandown 3h 3 chapters and 10.75 % on SD_30_08 are negative on the loader's lines — the
+        per-recording table is in `theme.format_ideal_run`'s note), which is then a real "you were
+        up on the ideal through here" rather than an artefact of the drawing.
 
         Those figures read −0.052 s / "under 1 %" until #211 redid this sweep: the original was
         measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the

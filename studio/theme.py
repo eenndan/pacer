@@ -759,40 +759,37 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # every partition EDGE and at the flag — the minimum was taken over the clean laps there — but NOT
 # pointwise. Inside a segment the ideal replays its DONOR lap's pace, and a lap that carries more
 # speed into the same corner is transiently ahead of that donor. Swept at 25 ms of media clock over
-# every valid lap of the owner's five real recordings, after #300 warped every lap; "prints a minus
-# sign" is what the readout printed before the clamp below existed, a raw Δ under -DELTA_EVEN_EPS_S:
-#
-# ⚠ STALE — NOT RE-MEASURABLE (T16). The table was measured before #335 changed corner matching.
-# #339 re-ran its footage check after #335 and it no longer matched the app, and its own change
-# moved none of it. The D24 and Sandown_09_05_2026 rows cannot be re-measured, because those
-# recordings are no longer available. SD_30_08's two rows can, and re-measured on 2026-09-19 both
-# are stale too: −0.262 s on the loader's line (10.75 % / 9.61 %) and −0.255 s on the saved one
-# (8.32 % / 7.59 %), on the same 23 laps. Every row and the wobble sentence under the table are the
-# record of that measurement, not what the app computes today. The clamp's case does not rest on
-# them: the ideal is defined at partition edges, not between them.
+# every valid lap of the working set's four recordings; "prints a minus sign" is what the readout
+# printed before the clamp below existed, a raw Δ under -DELTA_EVEN_EPS_S. Re-measured on the working
+# set on 2026-09-23 (T16b), after the edition measured on D24 and Sandown_09_05_2026 went stale when
+# #335 changed corner matching and those recordings left the owner's machine; that edition is kept in
+# studio/docs/coaching-tables-on-d24.md:
 #
 #   recording              laps  samples     floor   raw Δ < 0   prints a minus sign
-#   D24 1 chapter            21    58567  -0.020 s     1.18 %        0.58 %
-#   D24 3 chapters           65   181288  -0.008 s     0.11 %        0.03 %
-#   Sandown chapter 1        23    47081  -0.164 s     4.52 %        3.75 %
-#   Sandown 3 chapters       59   118831  -0.052 s     0.47 %        0.38 %
-#   SD_30_08                 23    44389  -0.280 s    12.01 %       10.96 %
+#   Sandown 3h 1 chapter     17    43282  -0.015 s     1.29 %        0.45 %
+#   Sandown 3h 3 chapters    62   125577  -0.126 s     1.43 %        1.07 %
+#   SD_19_09 1 chapter       26    49668  -0.040 s     1.69 %        0.91 %
+#   SD_19_09 2 chapters      36    68653  -0.152 s     8.93 %        7.41 %
+#   SD_30_08                 23    44389  -0.262 s    10.75 %        9.61 %
+#   MK_18_09 1 chapter       11    31623   0.000 s     0.00 %        0.00 %
+#   MK_18_09 2 chapters      19    53682  -0.030 s     0.88 %        0.37 %
 #   and on the start line the owner saved beside the recording (its .pacer.json), as the app opens it:
-#   Sandown chapter 1 †      24    49130  -0.013 s     0.10 %        0.05 %
-#   Sandown 3 chapters †     59   118823  -0.030 s     0.80 %        0.42 %
-#   SD_30_08 †               23    44408  -0.246 s     6.28 %        5.46 %
+#   SD_30_08 †               23    44408  -0.255 s     8.32 %        7.59 %
 #
-# The first five rows are the loader's own start line, which is how this table was first measured
-# (#211); D24 has no saved line, so its rows are also what the app shows. † rows restore the saved
-# one. On SD_30_08 the two lines now count the same 23 laps and cut them in different places, which
-# is all that separates the two rows. Until T13 they did not: the loader's line cut each 46 s
-# Sandown Park lap into a 13.3 s and a 34 s piece and counted 25 of the short ones, and the
-# unmarked row read -0.039 s over those. Recordings: D24 is GX010062 alone and with GX020062 +
-# GX030062; Sandown is GX010059 alone and with GX020059 + GX030059; SD_30_08 is GX010065.
-# tests/test_measured_figures.py re-measures every row from them.
+# The first seven rows are the loader's own start line, which is how this table was first measured
+# (#211). Only SD_30_08 has a line saved beside it, so every other row is the line the app opens its
+# recording on unless a saved track overrides it; † restores the saved one. On SD_30_08 the two
+# lines now count the same 23 laps and cut them in different places, which is all that separates
+# the two rows. Until T13 they did not: the loader's line cut each 46 s Sandown Park lap into a
+# 13.3 s and a 34 s piece and counted 25 of the short ones, and the unmarked row read -0.039 s over
+# those. Recordings, all read-only on the owner's Desktop: Sandown 3h is GX010064 alone and with
+# GX020064 + GX030064 (Sandown 3h 2026); SD_19_09 is GX010068 alone and with GX020068 (SD_19_09_26);
+# SD_30_08 is GX010065 (SD_30_08_26); MK_18_09 is GX010067 alone and with GX020067 (MK_18_09_26) —
+# the one recording not at Sandown, and the one driven anticlockwise. tests/test_measured_figures.py
+# re-measures every row from them.
 #
-# against end-of-lap values of +0.48 … +11.81 s. So it is a wobble of at most 0.28 s (0.25 s on the
-# owner's saved lines) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
+# against end-of-lap values of +0.50 … +43.12 s. So it is a wobble of at most 0.26 s (0.26 s on the
+# owner's saved line) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
 # takes it back: over a segment, and over the lap, you cannot be ahead of the ideal. A two-way ramp
 # would flash the "ahead" hue on the app's LARGEST text for a tenth of a second to report something
 # that is not true at any granularity the ideal is defined on — so the DISPLAYED value is clamped

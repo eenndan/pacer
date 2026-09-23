@@ -3446,9 +3446,10 @@ class Session:
 
         The excursions are SMALL, and the measured numbers are the ones in `theme.py`'s
         `format_ideal_run` note (the single place this sweep is tabulated per recording): the
-        floor is **−0.280 s**, on SD_30_08 on the loader's own start line (−0.246 s on the one the
-        owner saved), and 4.52 % of samples on Sandown chapter 1 / 12.01 % on SD_30_08 are
-        negative at all on the loader's own lines, against end-of-lap values of +0.48 … +11.81 s. Drawing the ideal's interior as a straight
+        floor is **−0.262 s**, on SD_30_08 on the loader's own start line (−0.255 s on the one the
+        owner saved), and 1.43 % of samples on Sandown 3h 3 chapters / 10.75 % on SD_30_08 are
+        negative at all on the loader's own lines, against end-of-lap values of +0.50 … +43.12 s.
+        Drawing the ideal's interior as a straight
         line instead — which is what a partition composite does if it does not consult its donors
         — put that at −0.87 s on 18.4 % of samples when #211 measured it; see
         `CornerModel.ideal_elapsed`.

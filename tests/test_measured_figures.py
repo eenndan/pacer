@@ -108,6 +108,11 @@ def _pct(x: float) -> int:
     return int(math.floor(100 * x + 0.5))
 
 
+# A count in the prose is spelled the way these words spell it, and derived from the table it counts.
+_WORDS = dict(enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+                        "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()))
+
+
 # ─── coaching.py: the evidence table ─────────────────────────────────────────────────────────────
 class EvRow:
     def __init__(self, rec, cid, rank, lost, sigma, iqr, reached, laps, gate):
@@ -403,26 +408,59 @@ def _tracked_files() -> list[str]:
     return [f for f in out.stdout.split() if f.endswith(keep)]
 
 
+# T16b: where the D24 editions of the tables T16b re-based on the working set are kept, verbatim, so
+# the history stays readable. It is a dated record of superseded figures, as CHANGELOG.md is of a
+# release, so no scan below reads it as a quote of the current tables.
+_D24_RECORD = os.path.join("studio", "docs", "coaching-tables-on-d24.md")
+
+
 def _scanned():
     """(path, flattened text) for every tracked text file a quote could live in — minus this file
-    (it names the figures it checks) and CHANGELOG.md (a released entry is history)."""
+    (it names the figures it checks), CHANGELOG.md (a released entry is history) and the D24 record
+    (the superseded editions of these tables)."""
     for rel in _tracked_files():
-        if rel.endswith(os.path.basename(__file__)) or rel == "CHANGELOG.md":
+        if rel.endswith(os.path.basename(__file__)) or rel in ("CHANGELOG.md", _D24_RECORD):
             continue
         path = os.path.join(_REPO, rel)
         if os.path.exists(path):
             yield rel, _flatten(open(path, encoding="utf-8", errors="ignore").read())
 
 
+# The quote scans name what they quote; these are the registered tables (`_published`) behind each.
+_QUOTED = {"coaching.py's evidence and THEME tables": ("coaching.py's evidence table", "coaching.py's THEME table"),
+           "coaching.py's brake-habit table": ("coaching.py's brake-habit table",),
+           "focus.py's tables": ("focus.py's cross-session tables",),
+           "theme.py's floor table": ("theme.py's floor table",)}
+
+
+def _gone(table: tuple) -> list[str]:
+    """The recordings in `_stale.GONE` that a registered table's rows name."""
+    return sorted({_LAP_SETS[s][0] for s in table[3]()} & set(_stale.GONE))
+
+
+def _needs_mark(what: str) -> bool:
+    """Whether the tables `what` quotes still name a recording that is gone, so cannot be current."""
+    return any(_gone(t) for t in _published() if t[0] in _QUOTED[what])
+
+
 def _presented(problems: list[str], rel: str, m: re.Match, text: str, what: str,
                sentence: str | None = None) -> None:
-    """T16: every table these scans quote is marked stale, so a quote a reader meets WITHOUT the
-    table (an in-app string, README.md, docs/, studio/README.md) has to date itself before #335.
-    `text` is what `m` matched in; `sentence` is given when the scan already split one out."""
+    """T16: while a quoted table is marked stale, a quote a reader meets WITHOUT the table (an
+    in-app string, README.md, docs/, studio/README.md) has to date itself before #335. T16b: once
+    the table is re-measured on the working set the quote is current, and a date that says it is
+    not is as wrong as a missing one. `text` is what `m` matched in; `sentence` is given when the
+    scan already split one out."""
     unit = sentence if sentence is not None else _stale.sentence_at(text, m.start(), m.end())
-    p = _stale.unmarked(rel, m.group(0), unit, what)
-    if p:
-        problems.append(p)
+    if _needs_mark(what):
+        p = _stale.unmarked(rel, m.group(0), unit, what)
+        if p:
+            problems.append(p)
+        return
+    shown = _stale.presented_unit(rel, m.group(0), unit)
+    if shown is not None and _stale.QUOTE_MARK.search(shown):
+        problems.append(f"{rel}: quotes {what} ({m.group(0)!r}) as measured before #335, but the table "
+                        f"was re-measured on the working set (T16b) and the figure is current: drop the "
+                        f"date. Unit: {shown[:160]!r}…")
 
 
 def test_every_quote_of_the_coaching_figures_is_coaching_py_s():
@@ -976,8 +1014,11 @@ class FloorRow:
         return f"<{self.name}{' †' if self.saved else ''} {self.floor} {self.neg}% {self.minus}%>"
 
 
-_FLOOR_LINE = re.compile(r"^#\s+(D24 1 chapter|D24 3 chapters|Sandown chapter 1|Sandown 3 chapters|SD_30_08)"
-                         r"( †)?\s+(\d+)\s+(\d+)\s+(-\d\.\d{3}) s\s+(\d+\.\d\d) %\s+(\d+\.\d\d) %\s*$")
+# A row names a lap set (`_LAP_SETS`); T16b re-based the table on the working set, so the names are
+# read off the table rather than listed here. A floor with no negative sample at all prints 0.000.
+_FLOOR_LINE = re.compile(r"^#\s+(\S.*?)( †)?\s+(\d+)\s+(\d+)\s+(-?\d\.\d{3}) s\s+(\d+\.\d\d) %\s+(\d+\.\d\d) %\s*$")
+_FLOOR_SAVED_HEAD = ("#   and on the start line the owner saved beside the recording (its .pacer.json), as the "
+                     "app opens it:")
 
 
 def _floor_rows() -> list[FloorRow]:
@@ -988,8 +1029,12 @@ def _floor_rows() -> list[FloorRow]:
             rows.append(FloorRow(m.group(1), bool(m.group(2)), int(m.group(3)), int(m.group(4)),
                                  float(m.group(5)), float(m.group(6)), float(m.group(7))))
     names = [r.name for r in rows if not r.saved]
-    assert sorted(names) == sorted({"D24 1 chapter", "D24 3 chapters", "Sandown chapter 1",
-                                    "Sandown 3 chapters", "SD_30_08"}), f"floor table parsed to {rows!r}"
+    assert len(rows) >= 5 and len(set(names)) == len(names) and all(r.name in _LAP_SETS for r in rows), (
+        f"floor table parsed to {rows!r}")
+    # A † row restores a saved line, so it is the twin of a row on the loader's line: the table
+    # compares the two, and the saved rows follow the head that says what they are.
+    assert {r.name for r in rows if r.saved} <= set(names), rows
+    assert _FLOOR_SAVED_HEAD in _read(_THEME) or not any(r.saved for r in rows), "the † rows' head moved"
     return rows
 
 
@@ -1004,18 +1049,23 @@ def test_the_floor_table_is_consistent_with_its_own_definitions():
         assert (r.floor > -eps) <= (r.minus == 0.0), f"{r!r}: floor above -{eps} yet a minus sign printed"
         assert r.minus == 0.0 or r.floor < -eps, r
     text = _flatten(_read(_THEME))
-    m = _need(r"a wobble of at most (\d\.\d\d) s \((\d\.\d\d) s on the owner's saved lines\)", text,
+    saved = [r for r in rows if r.saved]
+    m = _need(r"a wobble of at most (\d\.\d\d) s \((\d\.\d\d) s on the owner's saved lines?\)", text,
               "the wobble sentence under the floor table")
     assert float(m.group(1)) == round(max(-r.floor for r in rows), 2), (m.group(1), rows)
-    assert float(m.group(2)) == round(max(-r.floor for r in rows if r.saved), 2), (m.group(2), rows)
+    assert float(m.group(2)) == round(max(-r.floor for r in saved), 2), (m.group(2), rows)
+    # T16b: how many rows are on the loader's line, and which recordings have a saved one, are the
+    # table's own shape.
+    m = _need(r"The first (\w+) rows are the loader's own start line", text, "the rows' start-line sentence")
+    assert m.group(1).lower() == _WORDS[sum(not r.saved for r in rows)], (m.group(1), rows)
+    m = _need(r"Only ([\w, ]+?) (?:has|have) a line saved beside (?:it|them)", text, "the saved-line sentence")
+    assert sorted(re.findall(r"[A-Z][\w]+", m.group(1))) == sorted(r.name for r in saved), (m.group(1), saved)
     # T13: "the two lines now count the same N laps" on SD_30_08 is a claim about two rows' cells.
     # When it was false, the loader's row counted 25 pieces of a lap against the saved line's 23.
     m = _need(r"On SD_30_08 the two lines now count the same (\d+) laps", text, "the SD_30_08 line sentence")
     sd = {r.saved: r.laps for r in rows if r.name == "SD_30_08"}
     assert sd == {False: int(m.group(1)), True: int(m.group(1))}, (
         f"theme.py says both SD_30_08 lines count {m.group(1)} laps; its rows count {sd}")
-    # D24 carries no saved line: a † D24 row would claim a restore that cannot happen.
-    assert not [r for r in rows if r.saved and r.name.startswith("D24")], rows
     print(f"test_the_floor_table_is_consistent_with_its_own_definitions OK ({len(rows)} rows)")
 
 
@@ -1107,8 +1157,9 @@ def _published() -> list[tuple]:
         # focus.py's two tables compare 0060 with 0062, which its prose names; the rows are corners.
         ("focus.py's cross-session tables", _FOCUS, _FOCUS_LINE, lambda: ["0060", "0062"],
          "test_the_focus_tables_match_the_footage", stale),
+        # T16b re-measured it on the working set (four recordings, eight rows), 2026-09-23.
         ("theme.py's floor table", _THEME, _FLOOR_LINE, lambda: [r.name for r in _floor_rows()],
-         "test_the_floor_table_matches_the_footage", stale),
+         "test_the_floor_table_matches_the_footage", None),
         # #339: 0060's ideal is 65.864 s after it (65.637 after #335); the record publishes 65.464.
         ("the #272 recombination record", _REFUSED, re.compile(r"^\| \| 0060 \(38 laps\)"), lambda: list(_record_tables()[0]),
          "test_the_refusal_record_matches_the_footage", stale),
@@ -1168,17 +1219,30 @@ def _mark_problems(texts: dict[str, str]) -> list[str]:
     """What is wrong with the marks, given each publishing file's text — a function of the text so
     the negative control can hand it a planted copy."""
     problems = []
-    for name, path, first_row, lap_sets, _check, status in _published():
+    for table in _published():
+        name, path, first_row, _lap_sets, _check, status = table
         rel = os.path.relpath(path, _REPO)
         lines = texts[path].splitlines()
         row = next((i for i, line in enumerate(lines) if first_row.match(line)), None)
         if row is None:
             problems.append(f"{name}: no row of it in {rel} — update this registry with the table")
             continue
-        gone = sorted({_LAP_SETS[s][0] for s in lap_sets()} & set(_stale.GONE))
-        if not gone:
-            continue        # every row's recording is here, so its footage check can answer
+        gone = _gone(table)
         found = _find_mark(lines, row, path)
+        if not gone:
+            # T16b: every row's recording is here, so its footage check can answer — and did.
+            if status is not None:
+                problems.append(f"{name}: registered {status}, but every row names a recording that is "
+                                f"here. Re-measure it and register it as re-measured (None)")
+            elif found is not None:
+                problems.append(f"{name} ({rel}:{found[0] + 1}) carries a '⚠ {found[1]}' mark, but every "
+                                f"row names a recording that is here and it was re-measured on the working "
+                                f"set (T16b). 'Not re-measurable' is false once it has been: drop the mark")
+            continue
+        if status is None:
+            problems.append(f"{name}: registered as re-measured, but its rows name {' and '.join(gone)}, "
+                            f"no longer available")
+            continue
         if found is None:
             problems.append(f"{name} ({rel}:{row + 1}) is presented without its mark. Its rows need "
                             f"{' and '.join(gone)}, no longer available, so no footage check can say "
@@ -1212,21 +1276,25 @@ def test_every_table_no_footage_can_re_measure_carries_its_mark():
         f"that do not exist: {sorted(registered - checks)} — each footage check's table belongs in "
         f"_published()")
     problems = _mark_problems({t[1]: _read(t[1]) for t in tables})
-    assert not problems, "tables presented as current that no footage can re-measure:\n  " + \
+    assert not problems, "tables whose mark does not say what is known of them:\n  " + \
         "\n  ".join(problems)
     print(f"test_every_table_no_footage_can_re_measure_carries_its_mark OK ({len(tables)} tables, "
           f"{sum(t[5] == _stale.STALE for t in tables)} stale, "
-          f"{sum(t[5] == _stale.UNVERIFIED for t in tables)} unverified)")
+          f"{sum(t[5] == _stale.UNVERIFIED for t in tables)} unverified, "
+          f"{sum(t[5] is None for t in tables)} re-measured on the working set and unmarked)")
 
 
 def test_the_mark_guard_fails_on_each_planted_defect():
     """The guard's negative control. Each defect is planted in a COPY of the published text and must
-    be named: every table's mark stripped in turn, a status flipped, a gone recording dropped from a
-    mark, a ‡ dropped from an IdealSample row. The presented-quote rule gets the same treatment on a
-    doc sentence and on an in-app string."""
+    be named: every marked table's mark stripped in turn, a status flipped, a gone recording dropped
+    from a mark, a ‡ dropped from an IdealSample row, and (T16b) a mark planted on every table that
+    was re-measured. The presented-quote rule gets the same treatment on a doc sentence and on an
+    in-app string."""
     tables = _published()
     clean = {t[1]: _read(t[1]) for t in tables}
     assert not _mark_problems(clean), "the control needs a clean tree to plant into"
+    marked = [t for t in tables if _gone(t)]
+    remeasured = [t for t in tables if t[5] is None]
 
     def planted(path: str, span: range, old: str, new: str) -> dict[str, str]:
         lines = clean[path].splitlines()
@@ -1243,20 +1311,32 @@ def test_the_mark_guard_fails_on_each_planted_defect():
         j, _status = _find_mark(lines, row, t[1])
         return t[1], j, row
 
-    for name, *_ in tables:
+    for name, *_ in marked:
         path, j, _row = mark_of(name)
         tag = _stale.TABLE_MARK.search(clean[path].splitlines()[j]).group(0)
         got = _mark_problems(planted(path, range(j, j + 1), tag, "a note"))
         assert any(p.startswith(name) and "without its mark" in p for p in got), (name, got)
-    path, j, _row = mark_of("theme.py's floor table")
+    name = next(t[0] for t in marked if t[5] == _stale.STALE)
+    path, j, _row = mark_of(name)
     got = _mark_problems(planted(path, range(j, j + 1), "⚠ STALE", "⚠ UNVERIFIED"))
-    assert any("marked UNVERIFIED" in p for p in got), got
-    path, j, row = mark_of("coaching.py's evidence table")
+    assert any(p.startswith(name) and "marked UNVERIFIED" in p for p in got), got
+    name = next(t[0] for t in marked if "D24" in _gone(t))
+    path, j, row = mark_of(name)
     got = _mark_problems(planted(path, range(j, row), "D24", "the recording"))
-    assert any(p.startswith("coaching.py's evidence table") and "does not say ['D24']" in p for p in got), got
-    row = next(i for i, line in enumerate(clean[_CORNER_MODEL].splitlines()) if line.lstrip().startswith("| D24 3"))
-    got = _mark_problems(planted(_CORNER_MODEL, range(row, row + 1), "‡", ""))
-    assert any("D24 3 chapters row" in p and "does not carry ‡" in p for p in got), got
+    assert any(p.startswith(name) and "does not say ['D24']" in p for p in got), got
+    row = next((i for i, line in enumerate(clean[_CORNER_MODEL].splitlines())
+                if line.lstrip().startswith("| D24 3") and "‡" in line), None)
+    if row is not None:     # IdealSample's own re-base (T16b part B) takes its ‡ rows away
+        got = _mark_problems(planted(_CORNER_MODEL, range(row, row + 1), "‡", ""))
+        assert any("D24 3 chapters row" in p and "does not carry ‡" in p for p in got), got
+    # T16b: a table re-measured on the working set that still says "not re-measurable" is caught.
+    for name, path, first_row, *_ in remeasured:
+        lines = clean[path].splitlines()
+        row = next(i for i, line in enumerate(lines) if first_row.match(line))
+        lead = "# " if lines[row].lstrip().startswith("#") else ""
+        lines.insert(row, lead + "⚠ STALE — NOT RE-MEASURABLE (T16). Planted.")
+        got = _mark_problems({**clean, path: "\n".join(lines)})
+        assert any(p.startswith(name) and "drop the mark" in p for p in got), (name, got)
 
     # The presented-quote rule: a doc sentence and an in-app string, each with its mark taken out.
     # (Planted figures are made up, so no scan of the real tree mistakes this file for a quote.)
@@ -1274,6 +1354,16 @@ def test_the_mark_guard_fails_on_each_planted_defect():
         assert _stale.unmarked("studio/library_dialog.py", "9.99 s apart", "…", "a table") is None
     finally:
         _stale.in_app_strings = real
+    # …and, per quoted table, the rule `_presented` applies: a quote of a still-marked table must be
+    # dated, and a quote of one re-measured on the working set (T16b) must not be.
+    dated = doc + ", measured before #335."
+    for what in _QUOTED:
+        m = re.search(r"11\.111 s there", doc)
+        with_date, without = [], []
+        _presented(with_date, "README.md", m, dated, what, dated)
+        _presented(without, "README.md", m, doc, what, doc)
+        assert (not with_date and without) if _needs_mark(what) else (with_date and not without), (
+            what, with_date, without)
 
     # The interpolated-cell error: undated, a maximum without its measurement, a maximum swapped.
     crossing = _crossing_tables()
@@ -1284,9 +1374,10 @@ def test_the_mark_guard_fails_on_each_planted_defect():
     assert _crossing_quote_problems("x", fine, *crossing) == (1, []), _crossing_quote_problems("x", fine, *crossing)
     swapped = fine.replace("0.89 s", "0.96 s")
     assert any("line measurement" in p for p in _crossing_quote_problems("x", swapped, *crossing)[1])
-    print(f"test_the_mark_guard_fails_on_each_planted_defect OK ({len(tables)} marks stripped, status, "
-          f"recording and ‡ planted; a doc sentence and an in-app string without the quote mark; an "
-          f"undated, an unattributed and a swapped interpolated-cell maximum)")
+    print(f"test_the_mark_guard_fails_on_each_planted_defect OK ({len(marked)} marks stripped, status, "
+          f"recording and ‡ planted; {len(remeasured)} marks planted on re-measured tables; a doc "
+          f"sentence and an in-app string without the quote mark; a dated and an undated quote of each "
+          f"quoted table; an undated, an unattributed and a swapped interpolated-cell maximum)")
 
 
 def _crossing_tables() -> tuple[dict[str, float], dict[str, float]]:
@@ -1653,10 +1744,32 @@ def _footage_root() -> str:
     """The folder `PACER_MEASURED_FIGURES_DIR` names; unset raises `FootageMissing`, which CTest
     reports as the calling check SKIPPED."""
     return _footage.directory("PACER_MEASURED_FIGURES_DIR",
-                              "the folder holding D24/, Sandown_09_05_2026/ and SD_30_08_26/")
+                              "the folder holding the working set: 'Sandown 3h 2026/', SD_19_09_26/, "
+                              "SD_30_08_26/ and MK_18_09_26/")
 
 
+# Every lap set a published table names, as (folder under PACER_MEASURED_FIGURES_DIR, chapter files).
+# T16b (2026-09-23): the owner made the Desktop recordings the working set, and the tables this file
+# re-measures moved onto them by role — 0068 (SD_19_09_26) stands where D24's 0060 stood, 0064
+# (Sandown 3h 2026) where 0062 did, and MK_18_09_26, the one anticlockwise recording, joins the floor
+# and beat-rate tables as the control that is not Sandown. A full recording's list is exactly what
+# `chapters.discover_siblings` returns for its first chapter (`test_…_match_the_footage` asserts it).
+# The D24 and Sandown_09_05_2026 sets stay for the tables that still name them (IdealSample's) and for
+# `_stale.GONE`'s derivation; nothing loads them, and their folders are gone.
 _LAP_SETS = {
+    "0068": ("SD_19_09_26", ["GX010068.MP4", "GX020068.MP4"]),
+    "0064": ("Sandown 3h 2026", ["GX010064.MP4", "GX020064.MP4", "GX030064.MP4"]),
+    "0068 chapter 1": ("SD_19_09_26", ["GX010068.MP4"]),
+    "0068 chapter 2": ("SD_19_09_26", ["GX020068.MP4"]),
+    "0064 chapter 1": ("Sandown 3h 2026", ["GX010064.MP4"]),
+    "0064 chapter 2": ("Sandown 3h 2026", ["GX020064.MP4"]),
+    "0064 chapter 3": ("Sandown 3h 2026", ["GX030064.MP4"]),
+    "Sandown 3h 1 chapter": ("Sandown 3h 2026", ["GX010064.MP4"]),
+    "Sandown 3h 3 chapters": ("Sandown 3h 2026", ["GX010064.MP4", "GX020064.MP4", "GX030064.MP4"]),
+    "SD_19_09 1 chapter": ("SD_19_09_26", ["GX010068.MP4"]),
+    "SD_19_09 2 chapters": ("SD_19_09_26", ["GX010068.MP4", "GX020068.MP4"]),
+    "MK_18_09 1 chapter": ("MK_18_09_26", ["GX010067.MP4"]),
+    "MK_18_09 2 chapters": ("MK_18_09_26", ["GX010067.MP4", "GX020067.MP4"]),
     "0060": ("D24", ["GX020060.MP4", "GX030060.MP4"]),
     "0062": ("D24", ["GX010062.MP4", "GX020062.MP4", "GX030062.MP4"]),
     "0060 chapter 2": ("D24", ["GX020060.MP4"]),
@@ -1674,10 +1787,12 @@ _LAP_SETS = {
 
 class _Footage:
     """Loads lap sets read-only, jailed, and proves on exit that no file in the footage folders
-    changed size or modification time."""
+    changed size or modification time. `names` are the lap sets the check will load: the tripwire
+    covers their folders, and nothing else under the root is looked at."""
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, names):
         self.root = root
+        self.names = set(names)
         sys.path.insert(0, _REPO)
         sys.path.insert(0, os.path.join(_REPO, "bindings", "pacer"))
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -1687,7 +1802,7 @@ class _Footage:
 
     def _stat(self) -> dict[str, tuple[int, int]]:
         out = {}
-        for folder in {f for f, _ in _LAP_SETS.values()}:
+        for folder in {_LAP_SETS[n][0] for n in self.names}:
             d = os.path.join(self.root, folder)
             if os.path.isdir(d):
                 # stat() reads metadata and opens nothing. Dotfiles are Finder's, not the owner's.
@@ -1708,10 +1823,18 @@ class _Footage:
         return False
 
     def paths(self, name: str) -> list[str] | None:
+        assert name in self.names, f"{name} is outside the folders this check's tripwire watches"
         folder, files = _LAP_SETS[name]
         paths = [os.path.join(self.root, folder, f) for f in files]
         assert not any(os.path.basename(p) == _STUB for p in paths), "the destroyed stub is never opened"
-        return paths if all(os.path.isfile(p) for p in paths) else None
+        if not all(os.path.isfile(p) for p in paths):
+            return None
+        # A lap set is chapters of ONE recording, and a multi-chapter set is the whole of it, in the
+        # order the app chains them (Session.load of one file does not expand chapters).
+        from studio import chapters
+        siblings = chapters.discover_siblings(paths[0])
+        assert set(paths) <= set(siblings) and (len(paths) == 1 or paths == siblings), (name, siblings)
+        return paths
 
     def load(self, name: str, saved_line: bool = False):
         from studio.session import Session
@@ -1753,10 +1876,11 @@ def _coaching_measure(s):
     for r in ranked:
         by_cause[r.reason.kind] = by_cause.get(r.reason.kind, 0.0) + r.time_lost
     total = sum(by_cause.values())
-    cause = max(by_cause.items(), key=lambda kv: kv[1])
+    # A lap set can rank nothing at all (every row abstained): no share, no cause.
+    cause = max(by_cause.items(), key=lambda kv: kv[1]) if by_cause else ("none", 0.0)
     theme = (opps.n_laps, len(ranked), total, sum(r.time_lost for r in opps.rows if not r.evidence.ranked),
-             _pct(opps.theme.execution_s / total), _pct(opps.theme.pace_s / total), cause[0],
-             _pct(cause[1] / total))
+             _pct(opps.theme.execution_s / total) if total else 0, _pct(opps.theme.pace_s / total) if total else 0,
+             cause[0], _pct(cause[1] / total) if total else 0)
     gaps = [float(best_t[k] - mat[:, k].min()) for k in range(n)]
     one_off = sum(r.evidence.abstain == "one_off" for r in opps.rows)
     return rows, theme, z, gaps, one_off
@@ -1839,13 +1963,21 @@ def _floor_measure(s):
             round(100 * float(np.mean(v < -eps)), 2)), (min(ends), max(ends)), peak
 
 
+def _floor_line(name: str, saved: bool, got: tuple) -> str:
+    """One floor-table row in theme.py's own syntax — what a re-base pastes, never retypes."""
+    return (f"#   {name + (' †' if saved else ''):<22s}{got[0]:>5d}{got[1]:>9d}  {got[2]:>6.3f} s"
+            f"{got[3]:>9.2f} %{got[4]:>12.2f} %")
+
+
 def test_the_floor_table_matches_the_footage():
     root = _footage_root()
     rows = _floor_rows()
     text = _flatten(_read(_THEME))
     problems, lines, ends, peaks = [], [], [], []
-    with _Footage(root) as fx:
+    with _Footage(root, {r.name for r in rows}) as fx:
         for r in rows:
+            if r.saved and not any(line.startswith("#   and on the start line") for line in lines):
+                lines.append(_FLOOR_SAVED_HEAD)
             s = fx.load(r.name, saved_line=r.saved)
             if s is None:
                 problems.append(f"{r.name}: footage missing under {root}")
@@ -1853,20 +1985,23 @@ def test_the_floor_table_matches_the_footage():
             got, end, peak = _floor_measure(s)
             ends.extend(end)
             peaks.append(peak)
-            lines.append(f"#   {r.name + (' †' if r.saved else ''):<22s}{got[0]:>5d}{got[1]:>9d}  {got[2]:.3f} s"
-                         f"{got[3]:>9.2f} %{got[4]:>12.2f} %")
+            lines.append(_floor_line(r.name, r.saved, got))
             if got != (r.laps, r.samples, r.floor, r.neg, r.minus):
                 problems.append(f"{r!r}: measured {got}")
+    # The re-measured block, in the source's own syntax, BEFORE any comparison can stop the check.
+    report = "\n".join(["  re-measured floor table:"] + lines)
+    print(report)
+    if ends:
+        print(f"  end-of-lap values {min(ends):.3f} … {max(ends):.3f}; the best lap's Δideal peaks at "
+              f"{max(peaks):.3f} s")
     m = _need(r"against end-of-lap values of \+(\d+\.\d\d) … \+(\d+\.\d\d) s", text, "the end-of-lap range")
     if ends and (float(m.group(1)), float(m.group(2))) != (round(min(ends), 2), round(max(ends), 2)):
         problems.append(f"end-of-lap values {min(ends):.3f} … {max(ends):.3f}, prose {m.groups()}")
     m = _need(r"whose job is to read 0 … \+(\d\.\d) s", text, "the readout's range")
     if peaks and float(m.group(1)) != round(max(peaks), 1):
         problems.append(f"the best lap's Δideal peaks at {max(peaks):.3f} s, prose says +{m.group(1)}")
-    report = "\n".join(["  re-measured floor table:"] + lines)
-    assert not problems, "theme.py's floor table is not what the app computes:\n  " + \
-        "\n  ".join(problems) + "\n" + report
-    print(f"test_the_floor_table_matches_the_footage OK\n{report}")
+    assert not problems, "theme.py's floor table is not what the app computes:\n  " + "\n  ".join(problems)
+    print("test_the_floor_table_matches_the_footage OK")
 
 
 def _recombination(s) -> dict[str, float]:
