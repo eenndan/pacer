@@ -193,9 +193,10 @@ def test_every_footage_check_that_existed_when_d24_went_is_still_one():
 
 def test_every_footage_check_is_registered_to_report_a_skip():
     """Declared <-> registered, one to one, read from `ctest --show-only=json-v1`: the name is
-    `footage.<check>`, the command runs THAT check of THAT file, and SKIP_RETURN_CODE is the
-    runner's. Without the property CTest reads the skip code as a plain failure; without the
-    registration the check never runs at all."""
+    `footage.<check>`, the command runs THAT check of THAT file, SKIP_RETURN_CODE is the
+    runner's, and it holds RESOURCE_LOCK footage. Without the property CTest reads the skip code as
+    a plain failure; without the registration the check never runs at all; without the lock the
+    parallel suite runs these ffmpeg-heavy checks side by side."""
     regs = _registrations()
     declared = _declared()
     assert declared, "no file declares FOOTAGE_CHECKS — this check has gone vacuous"
@@ -216,6 +217,12 @@ def test_every_footage_check_is_registered_to_report_a_skip():
         if "footage" not in (reg["properties"].get("LABELS") or []):
             problems.append(f"footage.{check} carries LABELS {reg['properties'].get('LABELS')}, "
                             "not `footage` — `pixi run test-footage` (`ctest -L footage`) skips it")
+        # `pixi run test` runs four tests at once (CTEST_PARALLEL_LEVEL); the shared lock is what
+        # keeps these checks — one re-encodes a whole lap twice — to one at a time.
+        lock = reg["properties"].get("RESOURCE_LOCK") or []
+        if "footage" not in ([lock] if isinstance(lock, str) else lock):
+            problems.append(f"footage.{check} holds RESOURCE_LOCK {lock or None}, not `footage` — "
+                            "a parallel `pixi run test` would run it beside the other heavy checks")
     names = {f"footage.{c}" for _, c in declared}
     orphans = sorted(n for n in regs if n.startswith("footage.") and n not in names)
     problems += [f"{n} is registered but no file declares it in FOOTAGE_CHECKS" for n in orphans]
