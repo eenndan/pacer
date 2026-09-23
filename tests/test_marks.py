@@ -417,6 +417,38 @@ def test_the_short_degraded_stretches_are_suppressed_and_counted_never_silently_
     print("test_the_short_degraded_stretches_are_suppressed_and_counted_never_silently_dropped OK")
 
 
+def test_a_degraded_mark_wears_the_strip_colour_of_the_class_its_words_name():
+    """A derived mark takes a SEMANTIC hue so that the marks band and the quality strip one
+    sub-step below it cannot disagree about one stretch (theme.mark_colour, marks.TYPE_COLOUR).
+    Every degraded mark wore `warn` — the strip's MODERATE hue — whatever its run's worst class
+    was, so a mark reading "GPS poor for 185 s" sat in yellow over a strip painted red. Measured on
+    MK_18_09_26 (the one present recording with not-GOOD runs), 5 of its 7 degraded marks name a
+    POOR run. Worst-wins is the rule the strip's own pixels and the mark's words already use; the
+    hue now follows it, in both palettes. A NO_FIX run is a hole in the strip, not a colour, so it
+    takes the dropout marks' `bad`: the worse verdict, never the milder one."""
+    from studio.video_view import _QualityStrip
+    N, P, M, G = data_quality.NO_FIX, data_quality.POOR, data_quality.MODERATE, data_quality.GOOD
+    tl = _timeline([P] * 12 + [M] * 14 + [G] * 20 + [M] * 9 + [G] * 20 + [N] * 6 + [M] * 2
+                   + [G] * 10)
+    auto, _ = marks.auto_marks(timeline=tl)
+    degraded = [m for m in auto if m["type"] == marks.TYPE_DEGRADED]
+    assert len(degraded) == 3, degraded
+    try:
+        for palette in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+            theme.set_palette(palette)
+            for m in degraded:
+                worst = tl.worst_between(m["t"], m["t_end"] - 0.001)
+                assert data_quality.QUALITY_LABEL[worst].lower() in m["note"], (worst, m["note"])
+                want = _QualityStrip.class_colour(worst) or theme.behind_colour()
+                got = theme.mark_colour(m["colour"])
+                assert got == want, (
+                    f"{palette}: the mark {m['note']!r} paints {got} ({m['colour']}) over a strip "
+                    f"that paints its worst class {data_quality.QUALITY_LABEL[worst]} in {want}")
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_a_degraded_mark_wears_the_strip_colour_of_the_class_its_words_name OK")
+
+
 def test_a_derived_mark_is_never_written_to_the_file():
     """The auto/manual split is STRUCTURAL, not a convention, and it turns out to be doubly so.
 

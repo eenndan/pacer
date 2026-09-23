@@ -193,7 +193,7 @@ TYPE_COLOUR = {
     TYPE_KART: "blue",
     TYPE_DROPOUT: "bad",
     TYPE_EXCLUDED: "bad",
-    TYPE_DEGRADED: "warn",
+    TYPE_DEGRADED: "warn",   # the MODERATE hue; a POOR / no-fix run is `bad` (DEGRADED_COLOUR)
 }
 
 # A degraded stretch becomes a MARK only at this length, and the number is measured rather than
@@ -733,13 +733,23 @@ def resolve(stored: list[dict], chapter_map) -> list[dict]:
 
 
 # ---------------------------------------------------------------- the derived half
+#: A degraded mark's colour, by the WORST class of its run — the class its own words name ("GPS
+#: poor for 26 s") and the one the strip's pixels fold that run to. It used to be `warn` for every
+#: run, i.e. the strip's MODERATE hue: on MK_18_09_26, 5 of the 7 degraded marks named a POOR run
+#: and sat in yellow over a strip painted red, which is the disagreement the semantic pair exists
+#: to prevent. NO_FIX is a hole in the strip, not a colour, so it takes the dropout marks' `bad`.
+DEGRADED_COLOUR = {data_quality.NO_FIX: "bad", data_quality.POOR: "bad",
+                   data_quality.MODERATE: "warn"}
+
+
 def _auto(mark_id: str, type: str, t: float, t_end: float | None, note: str,
-          lap: int | None = None) -> dict:
+          lap: int | None = None, colour: str | None = None) -> dict:
     """One derived mark, in the same runtime shape `resolve` produces. It carries no anchor: an
-    auto mark is re-derived on every load and never written, so it has nothing to survive."""
+    auto mark is re-derived on every load and never written, so it has nothing to survive.
+    `colour` overrides the type's default (see DEGRADED_COLOUR)."""
     return {"id": mark_id, "kind": KIND_AUTO, "chapter": "", "t": float(t),
             "t_end": None if t_end is None else float(t_end), "type": type,
-            "colour": TYPE_COLOUR[type], "note": note, "created": None, "placed": True,
+            "colour": colour or TYPE_COLOUR[type], "note": note, "created": None, "placed": True,
             "anchor_t": None, "anchor_end": None, "lap": lap}
 
 
@@ -796,7 +806,7 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
         word = data_quality.QUALITY_LABEL[cls].lower()
         out.append(_auto(f"auto:degraded:{t0:.3f}", TYPE_DEGRADED, t0, t1,
                          f"GPS {word} for {t1 - t0:.0f} s — "
-                         f"{data_quality.QUALITY_MEANING[cls]}"))
+                         f"{data_quality.QUALITY_MEANING[cls]}", colour=DEGRADED_COLOUR[cls]))
     out.sort(key=lambda m: (m["t"], m["id"]))
     return out, suppressed
 
