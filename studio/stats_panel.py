@@ -608,7 +608,11 @@ BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the c
                    "in the reference lap's odometer) plus commitment — the median event's "
                    "peak decel as a % of the session's demonstrated maximum — and the "
                    "ESTIMATED median metres you could brake later (the D4 brake-point "
-                   "model). Corners with no matched brake event are omitted. Honesty floor: "
+                   "model). Corners with no matched brake event are omitted. A lap counts at a "
+                   "corner only where it was matched to your best lap's line on track at the "
+                   "corner's entry and exit — the rule the CORNERS table counts by — because a "
+                   "brake point is read inside that window; so n can be fewer than the clean laps "
+                   "that braked there. Honesty floor: "
                    "10 Hz GPS quantizes the onset by ~1.5 m — a σ at or below that is "
                    "measurement, not driving. Click a row to ring the corner on the map.\n\n"
                    "COMMIT % IS A RATIO INSIDE ONE CHANNEL. Both halves of it — the event's peak "
@@ -860,6 +864,14 @@ COASTING_TOOLTIP = (
     "straight is split at the edge, never counted twice. s / lap is the session's coasting in that "
     "place divided by the clean laps, so the column adds up to the MEAN coasting per lap, not the "
     "median the DRIVING tile shows; Laps counts the clean laps that coasted there at all.\n\n"
+    # #339 kept this table counting every lap ON PURPOSE (CornerModel.lap_corner_resolved has the
+    # measurement) and said so only in code. It shares the STRAIGHTS table's pieces and says so one
+    # sentence up, so a reader would take the STRAIGHTS table's lap rule with them.
+    "Unlike the CORNERS and STRAIGHTS tables, it keeps every clean lap — including a lap whose "
+    "corner edge could not be matched to your best lap's line on track and was interpolated. "
+    "Leaving those laps out piece by piece would stop the column adding up to the laps' "
+    "coasting; the cost is that, next to an interpolated edge, that lap's coasting may be split "
+    "at the wrong point.\n\n"
     "This is where the coasting HAPPENS, not where it costs time. Coaching's “coasting” "
     "reason is a different number: how much longer your typical lap coasts in a corner than your "
     "best lap does.\n\n"
@@ -2136,7 +2148,12 @@ class StatsView(QWidget):
         # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
         # from the per-lap aligned thirds decomposition — coach-grade, and computed, not
         # modeled. Hidden with the section / without phase data.
-        phase_tip = ("Every clean lap's Δt-vs-best through each corner, split into "
+        # "WHERE BOTH WERE MATCHED": since C4 (#331) `Session.phase_report` counts a lap's triple
+        # only where that lap AND the best lap it is subtracted from were matched on track at the
+        # corner's edges. This sentence opened "Every clean lap's" from before that.
+        phase_tip = ("Each clean lap's Δt-vs-best through each corner — where the lap and your "
+                     "best lap were both matched on track at its entry and exit, the laps the "
+                     "CORNERS table counts — split into "
                      "equal-distance entry / apex / exit thirds (the same decomposition the "
                      "coaching reasons use), medianed per corner, positive parts summed. "
                      "Seconds = what a typical lap gives away in that phase across the whole "
