@@ -1603,6 +1603,7 @@ def test_an_export_the_disk_plainly_cannot_hold_is_refused_before_a_frame():
         assert "has 1 MB free" in body, body                                # free
         assert td in body, body                                             # where
         assert "Free some space" in body and "another disk" in body, body   # the way out
+        assert os.path.exists(previous), "the refusal deleted the export the user already had"
         with open(previous, "rb") as f:
             assert f.read() == b"the export the user already has", \
                 "the refusal deleted the export the user already had"

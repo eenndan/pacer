@@ -35,6 +35,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from typing import NamedTuple
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -1291,7 +1292,36 @@ def guard_validate_window(spec: ExportSpec) -> None:
 # the size the guard REQUIRES.
 X264_BPP = {20: 0.68, 23: 0.51}
 X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured points
-FREE_SPACE_FLOOR_FRACTION = 0.5   # PROVISIONAL — set from the measured spread
+
+# THE FLOOR THE FREE-SPACE GUARD REQUIRES, as a fraction of `estimate_output_bytes`, per codec.
+# Refusing an export that would have fitted is the one failure the guard must not add, so each
+# floor sits BELOW every real file measured against the estimate. Measured 2026-09-23: 40 real
+# renders plus a 19-file All-laps batch of MK_18_09_26 and SD_19_09_26, both 4K 59.94 HEVC GoPro
+# footage, written to $TMPDIR and sized there — best lap, median lap, and a 60 s window with the
+# kart PARKED (the most compressible picture the recordings hold), at 720p / 1080p / source 4K,
+# both presets, every shape and fit, the compare frame. File bytes over the central estimate:
+#
+#     codec          n     min     max    what moves it                   floor
+#     VideoToolbox  39   0.707   0.800    nothing much: rate-controlled    0.60
+#     libx264       13   0.124   0.731    the picture (CRF): 5.9x spread   0.06
+#     ProRes 4444    4   0.710   1.074    resolution (1080p 1.03-1.07,     0.55
+#                                          4K 0.71-0.74)
+#     PNG sequence   3   0.661   1.042    resolution (1080p 1.01-1.04,     0.50
+#                                          4K 0.66)
+#
+# VIDEOTOOLBOX lands ~0.70 of its stated target in the video stream on every picture measured —
+# parked footage and a flying lap agree to the third digit (0.732 / 0.732) — plus the AAC track,
+# so its floor is tight. LIBX264 is a different animal: CRF spends what the picture asks for, and
+# `X264_BPP` (measured on D24's footage) is 1.4-8x above what this footage asks for; its floor is
+# low because the fallback encoder's real size is simply not predictable to better than that. THE
+# TWO ALPHA OUTPUTS shrink per pixel as the frame grows (the overlay's strokes scale with the short
+# side, the transparent area with its square — ~short_side^-0.5 across 1080p..4K); their floors
+# leave room for a 5.3K source, one step past the largest measured. The PNG figure is apparent
+# bytes: each frame file also rounds up to a 4 KiB block (+1.9-2.3 KB a frame measured, up to
+# +2.8 % of the estimate), which only ever makes the real usage LARGER, so the floor leaves it out.
+FREE_SPACE_FLOOR_FRACTION = {
+    VT_H264: 0.60, SW_H264: 0.06, ALPHA_PRORES: 0.55, ALPHA_PNG: 0.50,
+}
 
 
 def output_codec(config: OverlayConfig) -> str:
@@ -1327,18 +1357,31 @@ def estimate_output_bytes(out_w: int, out_h: int, fps: float, seconds: float,
     return int(bits_per_s * seconds / 8)
 
 
-def estimate_spec_bytes(spec, probe=None) -> int | None:
-    """The central estimate for one queued render, from the spec and the SOURCE'S real frame
-    (`probe`, default an ffprobe), or None when the spec cannot say — a duck-typed stand-in, an
-    unreadable source. None contributes nothing to a requirement: an unknown is never a reason to
-    refuse."""
+class _SpecPlan(NamedTuple):
+    est: int        # central estimate, bytes
+    codec: str      # what writes it (VT_H264 / SW_H264 / ALPHA_PRORES / ALPHA_PNG)
+    frames: int     # how many frames it writes
+
+
+def _spec_plan(spec, probe) -> _SpecPlan | None:
+    """What one queued render will write, or None when the spec cannot say — a duck-typed
+    stand-in, an unreadable source."""
     try:
-        out_w, out_h, fps = spec.output_frame(probe or probe_video_size)
-        seconds = clip_seconds(spec.t0, spec.t1, fps)
-        return estimate_output_bytes(out_w, out_h, fps, seconds, spec.config.quality,
-                                     output_codec(spec.config))
+        out_w, out_h, fps = spec.output_frame(probe)
+        codec = output_codec(spec.config)
+        est = estimate_output_bytes(out_w, out_h, fps, clip_seconds(spec.t0, spec.t1, fps),
+                                    spec.config.quality, codec)
+        return _SpecPlan(est, codec, frame_count(spec.t0, spec.t1, fps))
     except Exception:  # noqa: BLE001 — an estimate that cannot be made is simply not made
         return None
+
+
+def estimate_spec_bytes(spec, probe=None) -> int | None:
+    """The central estimate for one queued render, from the spec and the SOURCE'S real frame
+    (`probe`, default an ffprobe), or None when the spec cannot say. None contributes nothing to a
+    requirement: an unknown is never a reason to refuse."""
+    plan = _spec_plan(spec, probe or probe_video_size)
+    return plan.est if plan is not None else None
 
 
 def fmt_bytes(n: float) -> str:
@@ -1493,21 +1536,16 @@ def guard_free_space(specs, probe=None) -> None:
 
     groups: dict[str, dict] = {}
     for spec in specs:
-        est = estimate_spec_bytes(spec, cached)
-        if not est:
+        plan = _spec_plan(spec, cached)
+        if plan is None or not plan.est:
             continue
         out = os.path.abspath(spec.out_path)
         folder = out if getattr(spec, "is_png_sequence", False) else os.path.dirname(out)
-        frames = None
-        try:
-            _w, _h, fps = spec.output_frame(cached)
-            frames = frame_count(spec.t0, spec.t1, fps)
-        except Exception:  # noqa: BLE001 — without a frame count a sequence reclaims nothing
-            pass
         group = groups.setdefault(folder, {"est": 0, "floor": 0.0, "reclaim": 0, "files": 0})
-        group["est"] += est
-        group["floor"] += est * FREE_SPACE_FLOOR_FRACTION
-        group["reclaim"] += _reclaimable_bytes(spec, frames)
+        group["est"] += plan.est
+        group["floor"] += plan.est * FREE_SPACE_FLOOR_FRACTION.get(
+            plan.codec, min(FREE_SPACE_FLOOR_FRACTION.values()))
+        group["reclaim"] += _reclaimable_bytes(spec, plan.frames)
         group["files"] += 1
     for folder, group in groups.items():
         need = int(group["floor"]) - group["reclaim"]
@@ -1524,7 +1562,7 @@ def guard_free_space(specs, probe=None) -> None:
             have, floor = f"{free / 1e6:,.0f} MB", f"{need / 1e6:,.0f} MB"
         raise InsufficientSpaceError(
             f"{what}, and the disk holding {folder} has {have} free — "
-            f"{_REFUSED_FOR_SPACE_MARKER} it could come out at ({floor}).")
+            f"{_REFUSED_FOR_SPACE_MARKER} the export could come out at ({floor}).")
 
 
 # --------------------------------------------------------------------------- compositing

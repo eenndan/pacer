@@ -1602,7 +1602,11 @@ def test_overlay_painter_size_scale_tracks_height():
 def test_real_render_quality_levels_if_media():
     """The quality picker end-to-end — a FOOTAGE_CHECK (reported SKIPPED without ffmpeg + media).
     Renders the SAME short window at 720p-standard and 1080p-high and asserts both are valid files
-    whose resolution differs and whose bitrate differs (the picker actually changes the encode)."""
+    whose resolution differs and whose bitrate differs (the picker actually changes the encode).
+
+    Both files must also land at or above the free-space guard's floor for them (E1): these are
+    the two real renders every footage run already pays for, so the floor is re-checked against
+    real footage on every run rather than only against the table it was chosen from."""
     import tempfile
     real = _real_media("real_render_quality_levels")
     from studio.session import Session
@@ -1614,8 +1618,22 @@ def test_real_render_quality_levels_if_media():
     out_hi = os.path.join(tmp.name, "q_1080_high.mp4")
     for out, cfg in [(out_lo, ev.OverlayConfig(out_height=720, quality="standard")),
                      (out_hi, ev.OverlayConfig(out_height=1080, quality="high"))]:
-        ev.render_lap(s, real, out, best, config=cfg)
-        assert os.path.getsize(out) > 0
+        spec = ev.build_lap_spec(s, out, best, config=cfg, src_path=real)
+        est, codec = ev.estimate_spec_bytes(spec), ev.output_codec(cfg)
+        try:
+            ev.Renderer(s, spec).run()
+        finally:
+            spec.source.cleanup()
+        size = os.path.getsize(out)
+        assert size > 0
+        # E1: the free-space guard refuses below FREE_SPACE_FLOOR_FRACTION of this estimate, so a
+        # real file landing UNDER that floor is exactly an export it would have wrongly refused.
+        floor = ev.FREE_SPACE_FLOOR_FRACTION[codec] * est
+        assert size >= floor, (
+            f"{os.path.basename(out)} ({codec}) came out at {size:,} B, under the guard's floor "
+            f"{floor:,.0f} B ({size / est:.3f} of the estimate) — the guard would have refused it")
+        print(f"  {os.path.basename(out)} {codec}: {size / est:.3f} of the estimate "
+              f"(floor {ev.FREE_SPACE_FLOOR_FRACTION[codec]})")
 
     def probe_bitrate(path):
         import subprocess as sp
@@ -1834,7 +1852,7 @@ def test_the_guard_refuses_below_its_floor_and_nothing_at_or_above_it():
         spec = _space_spec(os.path.join(td, "lap.mp4"))
         est = EV.estimate_spec_bytes(spec, probe)
         assert est == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * 60.0 / 8), est
-        need = int(est * EV.FREE_SPACE_FLOOR_FRACTION)
+        need = int(est * EV.FREE_SPACE_FLOOR_FRACTION[EV.VT_H264])
         asked = []
         _guard([spec], need, asked)                         # exactly enough: runs
         assert asked == [td], asked
@@ -1893,7 +1911,7 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     # nothing was written rather than that the disk ran out while writing.
     from studio import export_video as EV
     refusal = ("This export would take about 3.4 GB, and the disk holding /Users/x/Movies has "
-               "900 MB free — not enough for even the smallest it could come out at (2.0 GB).")
+               "900 MB free — not enough for even the smallest the export could come out at (2.0 GB).")
     assert EV.is_refused_for_space(refusal) and not EV.is_out_of_space(refusal)
     said = ExportController._export_failure_message(refusal, "/Users/x/Movies/lap.mp4")
     assert said.startswith(refusal) and "Nothing was written" in said, said
