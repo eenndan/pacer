@@ -1731,8 +1731,9 @@ class _EnospcEncoder:
 
 
 def test_a_no_space_failure_asks_the_disk_before_it_skips_the_retry(monkeypatch_restore):
-    """ffmpeg's "No space left on device" is a CLAIM: ffmpeg 7.1 prints it when its own `-shortest`
-    sync queue overflows, and a slow VideoToolbox render hit that with 94.5 GB free. So the words
+    """ffmpeg's "No space left on device" is a CLAIM: ffmpeg 7.1 printed it when its own `-shortest`
+    sync queue overflowed (the mux before E4), and a slow VideoToolbox render hit that with 94.5 GB
+    free. So the words
     only make the renderer ASK THE DISK (free blocks, not purgeable space). Only the disk's answer
     decides whether a render is a doomed retry and whether the user hears "no room".
 
@@ -2460,6 +2461,203 @@ def test_a_fractional_window_muxes_every_frame_it_planned_if_ffmpeg(monkeypatch_
         if os.path.exists(src):
             os.remove(src)
     print("ok fractional window: every planned frame reaches the file")
+
+
+def _make_av_clip(path: str, video_s: float, audio_s: float) -> None:
+    """A synthetic source whose AUDIO track may be shorter than its VIDEO, the shape the last
+    chapter of a GoPro recording has (MK_18_09_26 chapter 2: video 697.346650 s, audio
+    697.344000 s; D24 chapter 3 was 10.4 ms short). `+faststart`, like a camera file."""
+    subprocess.run(
+        [ev.FFMPEG, "-nostdin", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", f"testsrc=size=320x180:rate=30:duration={video_s:g}",
+         "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={audio_s:g}",
+         "-c:v", "libx264", "-g", "30", "-pix_fmt", "yuv420p", "-c:a", "aac",
+         "-movflags", "+faststart", path],
+        check=True, capture_output=True)
+    assert os.path.getsize(path) > 0
+
+
+def _stream_seconds(path: str, sel: str) -> float:
+    return float(subprocess.run(
+        [ev.FFPROBE, "-v", "error", "-select_streams", sel, "-show_entries", "stream=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        check=True, capture_output=True, text=True).stdout.strip())
+
+
+def _muxed_frames(path: str) -> int:
+    return int(subprocess.run(
+        [ev.FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
+         "-show_entries", "stream=nb_read_frames", "-of", "default=noprint_wrappers=1:nokey=1",
+         path], check=True, capture_output=True, text=True).stdout.strip())
+
+
+def test_the_last_frame_and_the_audio_both_reach_the_end_of_a_recording_if_ffmpeg(
+        monkeypatch_restore):
+    """F2 (#205), END TO END: a window that ends where the RECORDING ends keeps its last frame,
+    and the file's audio runs to that frame rather than stopping short of it.
+
+    The last chapter's audio is a few ms shorter than its video, so a run-off clamped to the end
+    of the footage asks for audio that is not there. Under `-shortest` that let the AUDIO end the
+    clip and the muxer dropped the last composited frame (480 -> 479 on D24); `-af apad` fixed it
+    by padding the audio with silence without end. E4 took `-shortest` out of the mux (see
+    `build_encode_cmd`), so what now has to hold is: nothing cuts the video, and the audio is
+    padded to EXACTLY the plan's own length (`apad=whole_dur`) rather than stopping where the
+    source's track did. Measured on MK_18_09_26's last chapter before E4: the file's audio ended
+    at 16.320 s against a 16.333 s picture, cut at an AAC frame boundary.
+
+    Pinned to libx264, the encoder CI has, and repeated on VideoToolbox where a session opens."""
+    if not _require_ffmpeg("the_last_frame_and_the_audio_both_reach_the_end_of_a_recording"):
+        return
+    import tempfile
+    encoders = ["libx264"] + (["videotoolbox"] if ev.videotoolbox_usable() else [])
+    with tempfile.TemporaryDirectory(prefix="pacer-e4-end-") as tmp:
+        src = os.path.join(tmp, "last_chapter.mp4")
+        _make_av_clip(src, video_s=3.0, audio_s=2.98)
+        a_src, v_src = _stream_seconds(src, "a:0"), _stream_seconds(src, "v:0")
+        assert a_src < v_src - 0.005, f"the fixture's audio must run out first: {a_src} vs {v_src}"
+        s = StubSession(lap_id=1, t0=0.0, dur=3.0, n=180)
+        # A run-off clamped to the end of the footage, 55 frames long: 88,000 samples of audio,
+        # 85.94 AAC frames, so a mux that ends the audio on a whole AAC frame stops 20 ms short.
+        t1 = v_src
+        t0 = t1 - 55 / 30.0
+        planned = len(ev.frame_times(t0, t1, 30.0))
+        assert planned == 55, planned
+        clip = ev.clip_seconds(t0, t1, 30.0)
+        for enc in encoders:
+            out = os.path.join(tmp, f"end_{enc}.mp4")
+            spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=t0, t1=t1,
+                                 config=ev.OverlayConfig(out_height=180, fps_cap=30.0,
+                                                         encoder=enc, hwaccel_decode=False))
+            res = ev.Renderer(s, spec).run()
+            assert res.frames == planned, f"{enc}: the decoder ran dry at {res.frames}/{planned}"
+            muxed = _muxed_frames(out)
+            assert muxed == planned, (
+                f"{enc}: rendered {res.frames} frames and the file holds {muxed} of {planned} — "
+                "the mux dropped the recording's last frame")
+            audio = _stream_seconds(out, "a:0")
+            assert abs(audio - clip) < 0.001, (
+                f"{enc}: the file's audio is {audio:.6f} s against a {clip:.6f} s clip — it stops "
+                f"{(clip - audio) * 1000:+.1f} ms short of the last frame")
+            os.remove(out)
+    print(f"ok end of recording: {planned}/{planned} frames and the audio to the last frame "
+          f"({', '.join(encoders)})")
+
+
+def test_the_muxed_audio_stays_on_the_picture_across_a_seam_if_ffmpeg(monkeypatch_restore):
+    """A/V sync THROUGH THE FILE, across a chapter seam: the exported clip's audio must be the
+    audio the mux was fed, at the same instant, before the seam and after it.
+
+    `test_export_seam` checks the audio the mux is FED; this checks what the mux WROTE, which is
+    where E4 changed the command (no `-shortest`, a bounded pad). Two synthetic chapters with
+    deterministic white-noise audio (a sharp cross-correlation peak), a 2 s window centred on the
+    seam, rendered by the real renderer on libx264. The file's audio is decoded and located inside
+    the audio its mux input decodes to (the same `-ss` and concat list): 0.3 s from the start and
+    0.3 s from 1.2 s in (after the seam) must each sit where they sit in the file, to 1 ms.
+
+    What the concat input ITSELF does at the seam is a separate question and E4 does not touch it:
+    on these ffmpeg-made chapters the fed audio starts 21.3 ms (one AAC packet) before t0, as
+    `test_export_seam` allows, and runs 32.0 ms early after the seam — identically under the old
+    `-shortest` mux. On real GoPro chapters it is exact: an E4 export of MK_18_09_26 lap 13, located
+    in each chapter's own audio, was +0.00 ms off at the start, on both sides of the seam, and
+    -0.02 ms at the end."""
+    if not _require_ffmpeg("the_muxed_audio_stays_on_the_picture_across_a_seam"):
+        return
+    import tempfile
+
+    import test_export_seam as tes
+    with tempfile.TemporaryDirectory(prefix="pacer-e4-seam-") as tmp:
+        ch_a, ch_b = os.path.join(tmp, "GX010001.MP4"), os.path.join(tmp, "GX020001.MP4")
+        tes._make_chapter(ch_a, 4.0, seed=7, hue=0)
+        tes._make_chapter(ch_b, 4.0, seed=8, hue=120)
+        cm = chapters.ChapterMap([ch_a, ch_b], [tes._probe_duration(ch_a),
+                                                tes._probe_duration(ch_b)])
+        seam = cm.chapters[1].offset
+        t0, t1 = seam - 1.0, seam + 1.0
+        src = ev.resolve_video_source(cm, t0, t1, tmp_dir=tmp)
+        out = os.path.join(tmp, "seam.mp4")
+        try:
+            assert src.concat_list_path is not None, "the window must span the seam"
+            spec = ev.ExportSpec(out_path=out, lap_id=1, t0=t0, t1=t1, source=src,
+                                 config=ev.OverlayConfig(out_height=180, fps_cap=30.0,
+                                                         encoder="libx264", hwaccel_decode=False))
+            s = StubSession(lap_id=1, t0=t0, dur=t1 - t0, n=40)
+            assert ev.Renderer(s, spec).run().frames == 60
+            fed = tes._audio_at(spec.local_t0, src.input_args(), 2.0)
+        finally:
+            src.cleanup()
+        muxed = tes._audio_at(0.0, ["-i", out], 2.0)
+        sr = tes.SR
+        for label, at in (("before the seam", 0.0), ("after the seam", 1.2)):
+            piece = muxed[int(at * sr):int((at + 0.3) * sr)]
+            lag, sharp = tes._lag_samples(piece, fed)
+            assert sharp > 5.0, f"{label}: the correlation peak is not distinctive ({sharp:.1f}x)"
+            off = lag / sr - at
+            assert abs(off) <= 0.001, (
+                f"{label}: the file's audio at {at:.1f} s is its input's at {lag / sr:.5f} s — "
+                f"{off * 1000:+.2f} ms off the picture")
+            print(f"    {label}: {off * 1000:+.3f} ms (peak {sharp:.0f}x)")
+    print("ok seam sync: the muxed audio sits where its input put it, on both sides of the seam")
+
+
+def test_a_slow_start_behind_videotoolbox_keeps_the_hardware_encode_if_available(
+        monkeypatch_restore):
+    """E4: a VideoToolbox export whose opening frames arrive slowly must finish ON VideoToolbox.
+
+    With `-shortest` in the mux, ffmpeg held each stream in a sync queue until the others caught
+    up. Behind a VideoToolbox encode whose first second arrived below ~10-12 fps, the audio side
+    was let loose into that queue and never released: the endless `apad` silence (or, bounded,
+    a long export's whole soundtrack) piled up until the queue's 131,072-frame FIFO refused a
+    write, and ffmpeg died with "No space left on device" (exit 228) with the disk nearly empty.
+    #365 made that cost one libx264 re-render instead of a false "disk full"; this pins that the
+    re-render is no longer needed at all.
+
+    Reproduced through the REAL renderer on this synthetic clip — the only stand-in is the pace
+    of the first 36 frames (6 fps, the rate two 4K exports at once opened at on this Mac, where
+    two of fourteen such exports failed un-throttled). The window SEEKS into the source as every
+    real lap does: from t0 = 0 the same feed never overflowed. Measured before E4: 4/4 renders
+    at 6 fps and 4/4 at 10 fps failed at frame 30-35; at 15 fps and above none did.
+
+    Skipped (not failed) where no VideoToolbox session opens — CI's runner has none, and libx264
+    never overflowed this queue even fed at 0.5 fps."""
+    if not ev.ffmpeg_available() or not ev.videotoolbox_usable():
+        print("skip a_slow_start_behind_videotoolbox (no ffmpeg or no VT session)")
+        return
+    import tempfile
+    first_failure = []
+
+    class _SlowStart(ev.Renderer):
+        """The production renderer, with its first 36 frames paced at 6 fps."""
+
+        def _compose_frame(self, raw):
+            frame = super()._compose_frame(raw)
+            if self._i < 36:
+                time.sleep(1.0 / 6.0)
+            return frame
+
+        def _raise_if_disk_full(self, exc):
+            first_failure.append(str(exc))
+            return super()._raise_if_disk_full(exc)
+
+    with tempfile.TemporaryDirectory(prefix="pacer-e4-slow-") as tmp:
+        src = os.path.join(tmp, "src.mp4")
+        _make_av_clip(src, video_s=12.0, audio_s=12.0)
+        out = os.path.join(tmp, "slow.mp4")
+        t0, t1 = 5.3, 9.3
+        s = StubSession(lap_id=1, t0=t0, dur=t1 - t0, n=80)
+        spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=t0, t1=t1,
+                             config=ev.OverlayConfig(out_height=360, fps_cap=30.0,
+                                                     encoder="videotoolbox",
+                                                     hwaccel_decode=False))
+        r = _SlowStart(s, spec)
+        assert r.encoder == ev.VT_H264
+        res = r.run()
+        tag = _stream_encoder_tag(out)
+        assert "videotoolbox" in tag.lower(), (
+            f"the VideoToolbox render failed and was re-rendered on {tag!r}; it failed with: "
+            f"{first_failure[0] if first_failure else '(no failure recorded)'}")
+        planned = len(ev.frame_times(t0, t1, 30.0))
+        assert res.frames == planned and _muxed_frames(out) == planned, (res.frames, planned)
+    print(f"ok slow start: VideoToolbox kept, {planned}/{planned} frames")
 
 
 def test_footage_that_runs_out_mid_clip_is_refused_rather_than_called_finished(monkeypatch_restore):

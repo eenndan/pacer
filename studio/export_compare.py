@@ -52,7 +52,7 @@ audio would have to be resampled by a continuously varying factor — which pitc
 note, the one thing in a kart video's audio that carries information. Two engine tracks at the same
 corner but a second apart in time is mush at best. So the clip carries lap A's own audio, untouched
 and in sync with lap A's picture, and pane B is silent. That falls out of inheriting pane A's
-`build_encode_cmd`, `-af apad -shortest` and all.
+`build_encode_cmd`, its audio padded to exactly lap A's clip and all.
 
 Everything else — the stall watchdog, cooperative cancel, the VideoToolbox->libx264 retry, the
 teardown that cannot wedge — is `export_video.Renderer`'s, reached through the extension seams

@@ -1030,8 +1030,9 @@ set_tests_properties(test_export_seam PROPERTIES
 # — on ALL FOUR edges, the vertical one included because nothing in the wave had measured it. Plus
 # F2: `-shortest` let a chapter's AUDIO decide the clip length (D24 ch3 video 1590.005083 s vs
 # audio 1589.994667 s), so a run-off clamped to the footage bound delivered 479 of 480 composited
-# frames with the progress bar at 100 %; `-af apad` makes the video the shortest stream. Offscreen:
-# it paints QImages; no ffmpeg needed (the argv is built, not run).
+# frames with the progress bar at 100 %; since E4 the mux has no `-shortest` (it overflowed an
+# ffmpeg queue) and pads the audio to exactly the clip. Offscreen: it paints QImages; no ffmpeg
+# needed (the argv is built, not run).
 add_test(NAME test_export_pill_budget
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_pill_budget.py)
 set_tests_properties(test_export_pill_budget PROPERTIES
