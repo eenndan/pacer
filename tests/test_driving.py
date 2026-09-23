@@ -165,6 +165,37 @@ def test_seam_blip_does_not_anchor_merged_onset():
     print(f"ok M11: seam blip folded in but onset anchored on the real brake @ {e.onset_dist:.0f} m")
 
 
+def test_a_string_of_blips_with_no_sustained_brake_is_kept_not_dropped():
+    """What `merge_brake_maneuvers` does with a group that has NO sustained sub-fragment, pinned
+    because its docstring said the opposite until #349 measured it: "such a group is then dropped
+    by the merged-span test below anyway". MIN_BRAKE_S gates the MERGED span, blip to blip with
+    the coasts included, so four single-sample blips spread over 0.6 s are one event whose onset is
+    the first blip. On four real recordings that is 3.0-7.4 % of detected events. Keeping them is
+    the detector as it stands; a change to drop them has to change this test, on purpose.
+
+    On the 10 Hz lap grid every recording has, so SMOOTH_S is the no-op it is in the app."""
+    dist, elapsed = _lap_trace(n=300, dur=30.0, total_dist=1000.0)   # 0.1 s, 3.3 m a sample
+    g = np.zeros(len(dist))
+    blips = [100, 102, 104, 106]
+    g[blips] = -0.40              # each one sample past -theta_b; the zeros between release it
+    frags = D._brake_fragments(g, THETA_B)                       # the detector's own fragments
+    assert len(frags) == len(blips), frags
+    assert all(elapsed[j1] - elapsed[j0] < D.MIN_BRAKE_S for j0, j1 in frags), frags  # none sustained
+    assert elapsed[blips[-1]] - elapsed[blips[0]] >= D.MIN_BRAKE_S  # ...but the group's span is
+    events = D.brake_events(dist, elapsed, g, THETA_B)
+    assert len(events) == 1, [(e.onset_dist, e.duration) for e in events]
+    e = events[0]
+    assert abs(e.onset_dist - dist[blips[0]]) < 1e-9, e.onset_dist   # the fallback: first blip
+    assert abs(e.duration - (elapsed[blips[-1]] - elapsed[blips[0]])) < 1e-9, e.duration
+    # The floor still bites where the docstring says it does: the same blips packed into less than
+    # MIN_BRAKE_S are dropped.
+    g_short = np.zeros(len(dist))
+    g_short[[100, 102]] = -0.40
+    assert D.brake_events(dist, elapsed, g_short, THETA_B) == []
+    print(f"ok blip string kept: 1 event @ {e.onset_dist:.0f} m over {e.duration:.2f} s, "
+          f"no fragment of it >= MIN_BRAKE_S")
+
+
 def test_chicane_throttle_squirt_stays_two():
     """Two genuine brake points with a clear hard re-throttle between them (a chicane) stay TWO —
     the throttle-sign safety (smoothed g above +MERGE_ACCEL_G) blocks the merge."""
