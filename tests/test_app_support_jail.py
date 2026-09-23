@@ -34,7 +34,9 @@ THE RULE NOW (`studio/app_support.py`), checked here in every form a test proces
 
 Every child here gets a throwaway HOME, so even a run of this file against a tree WITHOUT the fix
 resolves paths only inside that throwaway and cannot reach the owner's directory. Nothing here
-writes a store.
+writes a store. The one file written is the session log (E2): the app opens it on every start, so
+it is checked by a child that really opens it — into its jail, or, in the control, into its
+throwaway HOME.
 
 Run: python tests/test_app_support_jail.py
 """
@@ -57,7 +59,10 @@ from test_golden_hermetic import seams_in_studio  # noqa: E402
 _DIR_ENV = "PACER_APP_SUPPORT_DIR"
 _JAIL_ENV = "PACER_APP_SUPPORT_JAIL"
 _PROBE_FLAG = "--resolve-probe"
-_KNOWN_SEAMS = {"demo", "focus", "library", "marks", "prefs", "session_record", "track_db"}
+# `logsetup` is not a store, but it WRITES there: the session log, `<app-support>/logs/pacer.log`
+# (E2). Listed so a tree that loses its seam fails here by name rather than by omission.
+_KNOWN_SEAMS = {"demo", "focus", "library", "logsetup", "marks", "prefs", "session_record",
+                "track_db"}
 
 
 def _real_dir() -> str:
@@ -252,6 +257,74 @@ def test_a_dev_harness_jail_reaches_the_processes_it_spawns():
     print("test_a_dev_harness_jail_reaches_the_processes_it_spawns OK")
 
 
+# ------------------------------------------------------------------------------ the session log
+# A child that OPENS the session log for real, the way the app's startup does, writes one line to
+# it, and reports where it went. Stdlib only, no Qt: `studio.logsetup` imports nothing else.
+_LOG_SRC = r"""
+import json, logging, os, sys
+sys.path.insert(0, {repo!r})
+from studio import logsetup
+path = logsetup.configure()
+logging.getLogger("studio.library").warning("H8-LOG-PROBE")
+for h in logging.getLogger().handlers:
+    h.flush()
+text = open(path, encoding="utf-8").read() if path else ""
+print("H8-LOG " + json.dumps({{"path": path, "wrote": "H8-LOG-PROBE" in text,
+                              "real": os.path.join(os.path.expanduser("~"), "Library",
+                                                   "Application Support", "pacer")}}))
+"""
+
+
+def _log_child(env: dict) -> dict:
+    proc = subprocess.run([sys.executable, "-c", _LOG_SRC.format(repo=_REPO)], env=env,
+                          capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, f"log child exited {proc.returncode}:\n{proc.stderr[-3000:]}"
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("H8-LOG ")), None)
+    assert line, f"the log child printed nothing:\n{proc.stdout[-2000:]}\n{proc.stderr[-3000:]}"
+    return json.loads(line[len("H8-LOG "):])
+
+
+def _under(path: str, directory: str) -> bool:
+    path, directory = os.path.realpath(path), os.path.realpath(directory)
+    return path == directory or path.startswith(directory + os.sep)
+
+
+def test_the_session_log_cannot_reach_the_real_directory():
+    """E2. The app now WRITES a file on every start — the session log — so it is held to the rule
+    by a real write, not only a resolved path: in this process, and in a child that actually
+    opens it holding nothing but the jail flag. The child's HOME is a throwaway, and after it exits
+    that HOME's real app-support directory must not exist at all (no `logs/`, no anything).
+
+    The control is the same child with no jail: its log MUST land in its HOME's real directory.
+    That proves the probe can see a real-directory write when there is one, and that the app's
+    own log still goes where the user will look for it."""
+    from studio import library, logsetup
+    here = logsetup.log_path()
+    assert not _under(here, _real_dir()), (
+        f"this test process would write its session log to {here}, inside the real {_real_dir()}")
+    jail = library._app_support_dir()
+    assert here == os.path.join(jail, "logs", "pacer.log"), (
+        f"the log resolves outside this process's jail {jail}: {here}")
+
+    home = tempfile.mkdtemp(prefix="pacer-h8-home-")
+    try:
+        jailed = _log_child(_child_env(home, keep_jail=True))
+        assert jailed["path"] and jailed["wrote"], f"the jailed child opened no log: {jailed}"
+        assert not _under(jailed["path"], jailed["real"]), (
+            f"a jailed child wrote its session log into the real directory: {jailed}")
+        assert not os.path.exists(os.path.join(home, "Library", "Application Support", "pacer")), (
+            f"a jailed child created its HOME's real app-support dir: {os.listdir(home)}")
+
+        control = _log_child(_child_env(home))
+        want = os.path.join(control["real"], "logs", "pacer.log")
+        assert control["path"] == want and control["wrote"], (
+            f"with no jail, the app's log went to {control['path']}, not {want}: {control}")
+        assert os.path.isfile(want), "the control child's log is not where it said"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    print("test_the_session_log_cannot_reach_the_real_directory OK")
+
+
 # ------------------------------------------------------------------------------ the control
 def test_the_app_itself_still_uses_the_real_directory():
     """NEGATIVE CONTROL, and the half that protects the owner the other way: a jail that misfired
@@ -282,6 +355,7 @@ def _run_all():
     test_a_python_c_child_of_a_test_cannot_resolve_it()
     test_a_test_file_run_by_hand_outside_ctest_is_jailed()
     test_a_dev_harness_jail_reaches_the_processes_it_spawns()
+    test_the_session_log_cannot_reach_the_real_directory()
     test_the_app_itself_still_uses_the_real_directory()
     print("ALL APP-SUPPORT JAIL TESTS PASSED")
 

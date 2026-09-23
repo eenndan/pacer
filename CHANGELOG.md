@@ -13,6 +13,13 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Pacer keeps a log file.** Every warning the app raises, Qt's own, and the full traceback of an
+  unexpected error now also go to `~/Library/Application Support/pacer/logs/pacer.log` (three
+  files of at most 512 KB, rotated), so a Pacer launched from Finder, whose console output goes
+  nowhere, still leaves something to attach to a problem report. The "something went wrong" dialog
+  names the file. If the log cannot be written, Pacer starts anyway and says so once on the
+  console. The file stays on this Mac; nothing sends it anywhere.
+
 - **A video export the disk plainly cannot hold is refused before it renders.** The overlay export
   used to find out about a full disk only when ffmpeg hit it mid-render. It now asks the output's
   volume first — off the UI thread, before a frame is decoded — and an All-laps batch is judged by
