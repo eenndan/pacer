@@ -15,6 +15,11 @@ Building it is one command; reading it is the other intended use.
 
 <img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on a real kart session: synced GoPro video, the speed-coloured track map with brake points and named corners, the Δ-to-ideal charts, and the Laps · Corners · Stats · Coaching · Marks panel">
 
+*Every screenshot on this page is a capture of D24 — two recordings of the Daytona 24-hour race at
+Milton Keynes, May 2026, that Pacer was built on. The numbers in them are that recording's. D24 has
+since left the development machine, so they are not re-measured; where a figure is current, the
+text says which recording it comes from.*
+
 ---
 
 ## Accuracy — the claim everything else rests on
@@ -26,6 +31,10 @@ race series scores a session with. Over **107 clean laps** across two recordings
 - **σ 0.0527 s** on the cleaner-GPS recording, **0.0871 s** on the noisier one — about **0.13 %** of
   a ~68 s kart lap, quoting the worse of the two on purpose;
 - 48 clean laps of 57 aligned, and 59 of 65. A modest sample, and the honest one.
+
+Both recordings are D24's, the footage the transponder log covers. The validation was run in June
+2026 and is reported here as it was recorded: the recordings Pacer is developed against now have no
+transponder log, so it has not been repeated on them.
 
 <img src="docs/media/accuracy.png" width="880" alt="Lap-time error against a transponder: recording A mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4">
 
@@ -72,14 +81,16 @@ laps it was minimised over rather than letting you read it as a floor.
 
 <img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP, captured on the owner's recording before a September 2026 change to corner matching and not re-measured since: 1:06.709 theoretical best over 65 laps, −1.49 s on the table vs your best, stitched from 20 of your 65 clean laps across 12 corners and 13 straights, with a per-segment gain table whose twelve rows hold 1.35 s of the 1.49 s">
 
-*The screenshot's figures were measured before a September 2026 change to how Pacer matches corners,
-on a recording that is no longer available, so they have not been re-measured since.*
+*The screenshot is D24's three chapters, captured before a September 2026 change to how Pacer
+matches corners; that recording is no longer available, so its figures have not been re-measured.
+On the recording Pacer is developed against now (Sandown 3h, three chapters), the same page reads
+theoretical best 45.768 over 62 laps, −1.29 s on the table.*
 
 **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation. Brake
 points, corner apexes and draggable start/sector lines sit on it, and every mark is named in the
 key — drag a line and the session re-segments.
 
-<img src="docs/media/map.png" width="620" alt="The map panel maximised: the racing line coloured by speed from 32 to 88 km/h, twelve named corner apexes, brake-point markers, the draggable start-line handle, and the map key naming every glyph">
+<img src="docs/media/map.png" width="620" alt="The map panel maximised, captured on D24: the racing line coloured by speed from 32 to 88 km/h, twelve named corner apexes, brake-point markers, the draggable start-line handle, and the map key naming every glyph">
 
 **Charts, video, and the gap between two laps.** Speed and cumulative Δ to ideal, distance-aligned
 so corners line up. Scrub the chart and the footage follows; play two laps side by side — including
@@ -96,7 +107,7 @@ DRIVING, SPEED · G and **DATA TRUST**, which states what the timing was derived
 fixes were rejected, and the IMU↔GPS cross-check with its **gain** (correlation alone cannot catch
 a mis-scaled channel).
 
-<img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST: GPS9 true clock with 0% of moving fixes rejected, g-meter from IMU lateral and GPS-derived longitudinal, and an IMU↔GPS cross-check reading lateral r=+0.96, lateral gain ×1.11, longitudinal r=+0.81 over 971,016 samples — above the friction circle">
+<img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST, captured on D24: GPS9 true clock with 0% of moving fixes rejected, g-meter from IMU lateral and GPS-derived longitudinal, and an IMU↔GPS cross-check reading lateral r=+0.96, lateral gain ×1.11, longitudinal r=+0.81 over 971,016 samples — above the friction circle">
 
 **Exports.** Lap times and per-lap channels as CSV, a session report as HTML, a shareable lap card
 as an image, and the telemetry burned onto the footage as an MP4 (via ffmpeg).
