@@ -529,7 +529,12 @@ def test_pedal_band_holds_each_braking_zone_whole():
       * zone samples painted (recall)  83.6-86.2 %  | 91.9-94.6 %    -> at least 89 %
       * brake painted while the smoothed speed RISES  0.23-0.46 | 0.00-0.02 s a lap -> under 0.1 s
     and two hold by construction: every painted brake sample lies inside a detected brake event
-    (the glyphs'), and the brake half is binary."""
+    (the glyphs'), and the brake half is binary.
+
+    D2 adds the converse: every detected brake event (every glyph, and every event a brake point
+    can be read off) holds painted brake. Before D2, 25 / 17 / 15 / 16 events on those four
+    recordings held none — strings of blips with no fragment lasting MIN_BRAKE_S, 70 of the 73 in
+    no reference zone — and a corner's brake point was read off 61 of them."""
     from studio import chapters
     from studio.session import Session
 
@@ -547,7 +552,7 @@ def test_pedal_band_holds_each_braking_zone_whole():
     assert state() == before, f"a file in {folder} changed during the load"
     ids = session.valid_lap_ids()
     assert ids, "no valid laps"
-    pieces, tp, fn, rising_s, outside = [], 0.0, 0.0, 0.0, []
+    pieces, tp, fn, rising_s, outside, unpainted, n_events = [], 0.0, 0.0, 0.0, [], [], 0
     for lid in ids:
         dists, elapsed, band = session.driving.lap_brake_throttle(lid)
         assert band is not None, f"lap {lid}: no band"
@@ -559,7 +564,11 @@ def test_pedal_band_holds_each_braking_zone_whole():
             f"lap {lid}: brake levels {np.unique(band[brake])}")
         inside = np.zeros(n, bool)
         for e in session.driving.lap_brake_events(lid):
-            inside |= (elapsed >= e.onset_time - 1e-9) & (elapsed <= e.onset_time + e.duration + 1e-9)
+            span = (elapsed >= e.onset_time - 1e-9) & (elapsed <= e.onset_time + e.duration + 1e-9)
+            inside |= span
+            n_events += 1
+            if not brake[span].any():
+                unpainted.append((lid, round(e.onset_dist, 1)))
         outside += [(lid, round(float(d), 1)) for d in dists[brake & ~inside]]
         zmask, zones, g_ref = _reference_braking_zones(elapsed, ch["speed_kmh"][:n])
         runs = _runs(brake)
@@ -576,11 +585,14 @@ def test_pedal_band_holds_each_braking_zone_whole():
     summary = (f"{len(pieces)} zones over {len(ids)} laps of {os.path.basename(files[0])} "
                f"(+{len(files) - 1} chapters): {100 * frag:.1f} % in 2+ pieces, recall "
                f"{100 * recall:.1f} %, {rising:.3f} s a lap painted while accelerating, "
-               f"{len(outside)} brake samples outside every detected event")
+               f"{len(outside)} brake samples outside every detected event, {len(unpainted)} of "
+               f"{n_events} detected events holding no painted brake")
     assert frag < 0.20, f"the band breaks braking zones into pieces: {summary}"
     assert recall >= 0.89, f"the band leaves braking unpainted: {summary}"
     assert rising < 0.10, f"the band paints brake while the kart accelerates: {summary}"
     assert not outside, f"brake painted where no glyph's event is: {summary}; (lap, m) {outside[:8]}"
+    assert not unpainted, (f"brake events (glyphs, brake points) where the band paints no brake at "
+                           f"all: {summary}; (lap, onset m) {unpainted[:8]}")
     print(f"test_pedal_band_holds_each_braking_zone_whole: {summary}")
 
 
