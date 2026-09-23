@@ -271,6 +271,32 @@ def test_a_compare_spec_frees_both_panes_temp_files():
     spec.cleanup()  # idempotent
 
 
+def test_the_free_space_guard_sizes_the_two_pane_frame():
+    """The compare export reaches the same up-front free-space guard as a single lap, and has to be
+    sized as what it writes: TWO panes, so twice a single lap's frame at the same bitrate target
+    per pixel. Sized as one pane, the guard would require half of the real floor."""
+    probe = {"/a.MP4": (3840, 2160, 60000 / 1001), "/b.MP4": (1920, 1080, 30.0)}.__getitem__
+    real_enc = ev.resolve_encoder
+    try:
+        # BOTH encoders, each pinned: which one "auto" resolves to is a property of the machine
+        # (VideoToolbox here, libx264 on the CI runner), and the doubling must hold on either.
+        for codec in (ev.VT_H264, ev.SW_H264):
+            ev.resolve_encoder = lambda _c, c=codec: c
+            for layout, frame in ((ec.LAYOUT_STACK, (1920, 2160)), (ec.LAYOUT_SIDE, (3840, 1080))):
+                _s, spec = _spec_pair(config=ec.CompareConfig(out_height=1080, layout=layout))
+                assert spec.output_frame(probe) == (*frame, 30.0), (layout, spec.output_frame(probe))
+                single = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=spec.t0, t1=spec.t1,
+                                       src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
+                both = ev.estimate_spec_bytes(spec, probe)
+                one = ev.estimate_spec_bytes(single, probe)
+                # 1 B of rounding: each estimate is truncated to whole bytes on its own.
+                assert one > 0 and abs(both - 2 * one) <= 1, (codec, layout, both, one)
+                spec.cleanup()
+    finally:
+        ev.resolve_encoder = real_enc
+    print("ok free space: a compare is sized as its two-pane frame")
+
+
 def test_the_progress_dialog_names_both_laps():
     """One modal serves both exports, so its label has to be able to describe a PAIR. A compare
     render announced as "lap 4" would name half of what it is doing."""

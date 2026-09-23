@@ -1602,7 +1602,11 @@ def test_overlay_painter_size_scale_tracks_height():
 def test_real_render_quality_levels_if_media():
     """The quality picker end-to-end — a FOOTAGE_CHECK (reported SKIPPED without ffmpeg + media).
     Renders the SAME short window at 720p-standard and 1080p-high and asserts both are valid files
-    whose resolution differs and whose bitrate differs (the picker actually changes the encode)."""
+    whose resolution differs and whose bitrate differs (the picker actually changes the encode).
+
+    Both files must also land at or above the free-space guard's floor for them (E1): these are
+    the two real renders every footage run already pays for, so the floor is re-checked against
+    real footage on every run rather than only against the table it was chosen from."""
     import tempfile
     real = _real_media("real_render_quality_levels")
     from studio.session import Session
@@ -1614,8 +1618,22 @@ def test_real_render_quality_levels_if_media():
     out_hi = os.path.join(tmp.name, "q_1080_high.mp4")
     for out, cfg in [(out_lo, ev.OverlayConfig(out_height=720, quality="standard")),
                      (out_hi, ev.OverlayConfig(out_height=1080, quality="high"))]:
-        ev.render_lap(s, real, out, best, config=cfg)
-        assert os.path.getsize(out) > 0
+        spec = ev.build_lap_spec(s, out, best, config=cfg, src_path=real)
+        est, codec = ev.estimate_spec_bytes(spec), ev.output_codec(cfg)
+        try:
+            ev.Renderer(s, spec).run()
+        finally:
+            spec.source.cleanup()
+        size = os.path.getsize(out)
+        assert size > 0
+        # E1: the free-space guard refuses below FREE_SPACE_FLOOR_FRACTION of this estimate, so a
+        # real file landing UNDER that floor is exactly an export it would have wrongly refused.
+        floor = ev.FREE_SPACE_FLOOR_FRACTION[codec] * est
+        assert size >= floor, (
+            f"{os.path.basename(out)} ({codec}) came out at {size:,} B, under the guard's floor "
+            f"{floor:,.0f} B ({size / est:.3f} of the estimate) — the guard would have refused it")
+        print(f"  {os.path.basename(out)} {codec}: {size / est:.3f} of the estimate "
+              f"(floor {ev.FREE_SPACE_FLOOR_FRACTION[codec]})")
 
     def probe_bitrate(path):
         import subprocess as sp
@@ -1739,6 +1757,175 @@ def test_a_full_disk_does_not_trigger_a_second_doomed_render():
     print("ok enospc: a full disk surfaces immediately instead of re-rendering")
 
 
+def test_the_size_model_is_the_stated_rate_times_the_clip():
+    """`estimate_output_bytes` is the ONE model behind both the picker's "About N MB" and the
+    free-space guard's requirement. VideoToolbox is bitrate-targeted, so it is the stated target;
+    libx264 is CRF-driven, so it is the measured bits-per-pixel table; the two alpha outputs are
+    their own measured rates. Nothing to render costs nothing."""
+    from studio import export_video as EV
+
+    sec = 60.0
+    vt = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.VT_H264)
+    assert vt == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * sec / 8), vt
+    std = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "standard", EV.VT_H264)
+    assert std == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.06) * sec / 8), std
+    x264 = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.SW_H264)
+    assert x264 == int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * sec / 8), x264
+    prores = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.ALPHA_PRORES)
+    png = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.ALPHA_PNG)
+    assert prores == int(1920 * 1080 * 30.0 * EV.PRORES_4444_BPP * sec / 8), prores
+    assert png == int(1920 * 1080 * 30.0 * EV.PNG_SEQUENCE_BPP * sec / 8), png
+    for degenerate in ((0, 1080, 30.0, sec), (1920, 1080, 30.0, 0.0),
+                       (1920, 1080, 30.0, float("nan"))):
+        assert EV.estimate_output_bytes(*degenerate, "high", EV.VT_H264) == 0, degenerate
+    print("ok size model: stated rate x clip, per codec; nothing to render costs nothing")
+
+
+def test_free_space_is_asked_of_the_nearest_existing_folder():
+    """The output does not exist yet, and neither may its folder — so the volume is asked about
+    the nearest folder that does. The answer is the larger of `statvfs` and macOS's own capacity
+    for important usage (which adds back purgeable space `statvfs` cannot see), and None — never
+    zero — when neither can be asked."""
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    from studio import export_video as EV
+
+    asked, real_usage = [], _shutil.disk_usage
+    real_capacity = EV._volume_capacity_for_important_usage
+    with _tempfile.TemporaryDirectory() as td:
+        deep = os.path.join(td, "not", "made", "yet", "lap.mp4")
+        try:
+            _shutil.disk_usage = lambda p: (asked.append(("statvfs", p)),
+                                            types.SimpleNamespace(free=100))[1]
+            EV._volume_capacity_for_important_usage = lambda p: (asked.append(("important", p)),
+                                                                 250)[1]
+            assert EV.free_bytes(deep) == 250
+            assert asked == [("statvfs", td), ("important", td)], asked
+            EV._volume_capacity_for_important_usage = lambda p: None
+            assert EV.free_bytes(deep) == 100            # no purgeable figure: statvfs alone
+
+            def _raise(_p):
+                raise OSError("volume does not answer")
+            _shutil.disk_usage = _raise
+            assert EV.free_bytes(deep) is None, "an unanswerable volume must read as UNKNOWN"
+        finally:
+            _shutil.disk_usage = real_usage
+            EV._volume_capacity_for_important_usage = real_capacity
+        if sys.platform == "darwin":
+            # The real CoreFoundation query, on this machine: a real number, in bytes.
+            important = EV._volume_capacity_for_important_usage(td)
+            assert isinstance(important, int) and important > 0, important
+            assert EV.free_bytes(deep) >= _shutil.disk_usage(td).free - (1 << 30)
+    print("ok free space: nearest existing folder, the larger figure, None when unanswerable")
+
+
+def _space_spec(out_path, t1=60.0, **cfg):
+    from studio import export_video as EV
+    return EV.ExportSpec(out_path=out_path, lap_id=0, t0=0.0, t1=t1,
+                         src_path="/nonexistent/GX010099.MP4", config=EV.OverlayConfig(**cfg))
+
+
+class _Encoder:
+    """Pin the H.264 encoder `resolve_encoder` answers with, for the length of a `with` block.
+
+    THE ENCODER IS A PROPERTY OF THE MACHINE, so any expected size that depends on it has to name
+    it. This Mac opens a VideoToolbox session; the GitHub macos-14 runner does not, and resolves
+    "auto" to libx264 — where an unpinned estimate of the same 60 s lap is 317,260,800 B against
+    VideoToolbox's 46,656,000 B. That is exactly how the first version of the test below passed
+    here and failed in CI."""
+
+    def __init__(self, codec):
+        self.codec = codec
+
+    def __enter__(self):
+        from studio import export_video as EV
+        self._real = EV.resolve_encoder
+        EV.resolve_encoder = lambda _choice: self.codec
+        return self
+
+    def __exit__(self, *_exc):
+        from studio import export_video as EV
+        EV.resolve_encoder = self._real
+
+
+def _guard(specs, free, asked=None):
+    """guard_free_space over `specs` with a 4K 59.94 source and `free` bytes, on whichever encoder
+    the caller has pinned with `_Encoder`."""
+    from studio import export_video as EV
+    real_free = EV.free_bytes
+    EV.free_bytes = lambda p: (asked.append(p) if asked is not None else None, free)[1]
+    try:
+        EV.guard_free_space(specs, probe=lambda _p: (3840, 2160, 60000 / 1001))
+    finally:
+        EV.free_bytes = real_free
+
+
+def test_the_guard_refuses_below_its_floor_and_nothing_at_or_above_it():
+    """The threshold, to the byte, on both sides, on BOTH H.264 encoders: the guard requires
+    FREE_SPACE_FLOOR_FRACTION[codec] of the central estimate, less what the render reclaims by
+    overwriting a previous one. One byte short is refused with the three numbers; exactly enough,
+    or a volume that cannot be asked, refuses nothing.
+
+    Each encoder is PINNED (`_Encoder`) — the resolved one is a property of the machine — so this
+    asserts the VideoToolbox arithmetic and the libx264 arithmetic on every machine, including one
+    where only one of them could ever be resolved."""
+    import tempfile as _tempfile
+
+    from studio import export_video as EV
+
+    probe = lambda _p: (3840, 2160, 60000 / 1001)  # noqa: E731
+    expected = {   # what the module states for a 60 s, 1080p30, "high" clip, per encoder
+        EV.VT_H264: int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * 60.0 / 8),
+        EV.SW_H264: int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * 60.0 / 8),
+    }
+    assert expected[EV.VT_H264] != expected[EV.SW_H264], expected
+    for codec, want in expected.items():
+        with _Encoder(codec), _tempfile.TemporaryDirectory() as td:
+            spec = _space_spec(os.path.join(td, "lap.mp4"))
+            est = EV.estimate_spec_bytes(spec, probe)
+            assert est == want, (codec, est, want)
+            need = int(est * EV.FREE_SPACE_FLOOR_FRACTION[codec])
+            asked = []
+            _guard([spec], need, asked)                         # exactly enough: runs
+            assert asked == [td], (codec, asked)
+            _guard([spec], None)                                # unknown: runs
+            try:
+                _guard([spec], need - 1)
+            except EV.InsufficientSpaceError as exc:
+                text = str(exc)
+            else:
+                raise AssertionError(f"{codec}: one byte below the floor was not refused")
+            assert EV.is_refused_for_space(text) and not EV.is_out_of_space(text), text
+            assert f"about {EV.fmt_bytes(est)}" in text and td in text, text
+            assert f"({EV.fmt_bytes(need)})" in text or f"{need / 1e6:,.0f} MB" in text, text
+
+            # Re-exporting over a previous export: ffmpeg's -y truncates it, so it only has to
+            # find the DIFFERENCE. Without this the re-export a user tries first on a full disk
+            # is refused.
+            with open(spec.out_path, "wb") as f:
+                f.write(b"\0" * 5_000_000)
+            _guard([spec], need - 5_000_000)
+            try:
+                _guard([spec], need - 5_000_001)
+                raise AssertionError(f"{codec}: the reclaim was counted twice")
+            except EV.InsufficientSpaceError:
+                pass
+
+    # A PNG sequence reclaims the frames of an earlier sequence it will overwrite (its own
+    # numbering, overlay_000001.png..N) and nothing else in that folder.
+    with _tempfile.TemporaryDirectory() as td:
+        seq = _space_spec(td, t1=1.0, overlay_only=True, alpha_codec=EV.ALPHA_PNG)
+        n = EV.frame_count(0.0, 1.0, 30.0)
+        for i in (1, n, n + 1):
+            with open(os.path.join(td, f"overlay_{i:06d}.png"), "wb") as f:
+                f.write(b"\0" * 1000)
+        with open(os.path.join(td, "notes.png"), "wb") as f:
+            f.write(b"\0" * 1000)
+        assert EV._reclaimable_bytes(seq, n) == 2000, EV._reclaimable_bytes(seq, n)
+    print("ok guard: refuses one byte under its floor, runs at it, reclaims only what it replaces")
+
+
 def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     """The failure body used to be the raw stderr tail: "[h264_videotoolbox @ 0x…] Error encoding
     frame: -12905" as the explanation of what to do next. Plain language first, the encoder's own
@@ -1754,6 +1941,15 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     assert "isn't there any more" in gone, gone
     generic = ExportController._export_failure_message("Error encoding frame: -12905", "/x/y.mp4")
     assert "encoder stopped partway" in generic and "-12905" not in generic, generic
+    # The up-front refusal is NOT the mid-render "no room left": it kept its numbers, and says
+    # nothing was written rather than that the disk ran out while writing.
+    from studio import export_video as EV
+    refusal = ("This export would take about 3.4 GB, and the disk holding /Users/x/Movies has "
+               "900 MB free — not enough for even the smallest the export could come out at (2.0 GB).")
+    assert EV.is_refused_for_space(refusal) and not EV.is_out_of_space(refusal)
+    said = ExportController._export_failure_message(refusal, "/Users/x/Movies/lap.mp4")
+    assert said.startswith(refusal) and "Nothing was written" in said, said
+    assert "no room left" not in said.lower(), said
     print("ok export-copy: every case names an action, and none of them is an ffmpeg tail")
 
 
