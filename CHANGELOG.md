@@ -282,6 +282,14 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **The ideal lap's hovers quote figures measured on recordings Pacer can still open.** The hero
+  chip, the Stats ideal tiles and the Library's Ideal-lap and Best-lap headers explained the ideal's
+  sample effect with D24 figures marked "measured before a September 2026 change to corner
+  matching". They now quote the table re-measured on the Desktop working set: the ideal falls
+  0.17–0.74 s per doubling of lap count, the best lap 0.08–0.91 s, and Sandown 3h's first chapter
+  and whole recording are 0.84 s apart on the same driving. The Library no longer says the ideal
+  always falls faster than the best lap: on that first chapter it does not.
+
 - **The map's colour ramp has its own middle, so what you selected no longer dissolves into it.**
   The start/finish line and the primary lap's brake glyphs are the amber accent and are drawn *on*
   the speed / Δ / grip ramp, whose middle was that same amber: one bucket sat 2.62 dE from the start
