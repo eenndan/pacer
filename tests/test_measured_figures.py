@@ -1172,9 +1172,10 @@ def _published() -> list[tuple]:
         # T16b re-measured it on the working set (four recordings, eight rows), 2026-09-23.
         ("theme.py's floor table", _THEME, _FLOOR_LINE, lambda: [r.name for r in _floor_rows()],
          "test_the_floor_table_matches_the_footage", None),
-        # #339: 0060's ideal is 65.864 s after it (65.637 after #335); the record publishes 65.464.
-        ("the #272 recombination record", _REFUSED, re.compile(r"^\| \| 0060 \(38 laps\)"), lambda: list(_record_tables()[0]),
-         "test_the_refusal_record_matches_the_footage", stale),
+        # T16b re-measured it on the working set, 2026-09-23. (The D24 edition, whose 0060 ideal #339
+        # read as 65.864 s against the 65.464 s it publishes, stays below it as the record.)
+        ("the #272 recombination record", _REFUSED, _RECORD_HEAD, lambda: list(_record_tables()[0]),
+         "test_the_refusal_record_matches_the_footage", None),
         # #339: the `all` cells are stale by 0.05–0.43 s on all five rows.
         ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
          lambda: [_IDEAL_SETS.get(r.name, r.name) for r in _ideal._rows()],
@@ -1469,23 +1470,28 @@ def test_every_quote_of_the_interpolated_cell_error_is_dated_and_names_its_measu
 
 
 # ─── refused-2026-09.md: the #272 recombination record ───────────────────────────────────────────
+_RECORD_HEAD = re.compile(r"^\| \| (00\d\d) \((\d+) laps\) \| (00\d\d) \((\d+) laps\) \|$")
+
+
 def _record_tables() -> list[dict[str, dict[str, float]]]:
-    """The #272 section's two tables — the current one first, then #272's own — as
-    {rec: {cell: value}}."""
+    """The #272 section's three tables — the working set's first (T16b), then the D24 edition it
+    replaced, then #272's own on D24 — as {rec: {cell: value}}, in the order each table's header
+    names its recordings."""
     text = _read(_REFUSED)
     section = text[text.index("## 2. The ideal-lap recombination dotplot"):text.index("## 3.")]
-    tables, cur = [], None
+    tables, cur, recs = [], None, ()
     for line in section.splitlines():
-        if line.startswith("| | 0060"):
-            laps = [int(x) for x in re.findall(r"\((\d+) laps\)", line)]
-            cur = {"0060": {"laps": laps[0]}, "0062": {"laps": laps[1]}}
+        head = _RECORD_HEAD.match(line)
+        if head:
+            recs = (head.group(1), head.group(3))
+            cur = {head.group(1): {"laps": int(head.group(2))}, head.group(3): {"laps": int(head.group(4))}}
             tables.append(cur)
             continue
         if cur is None or not line.startswith("| ") or line.startswith("|---"):
             continue
         cells = [c.strip() for c in line.strip("|").split("|")]
         label, values = cells[0].strip("* "), cells[1:3]
-        for rec, v in zip(("0060", "0062"), values, strict=True):
+        for rec, v in zip(recs, values, strict=True):
             nums = [float(x) for x in re.findall(r"\d+\.\d+|\d+", v.replace("×", ""))]
             d = cur[rec]
             if label.startswith("ideal / best"):
@@ -1500,16 +1506,20 @@ def _record_tables() -> list[dict[str, dict[str, float]]]:
                 d["dot_lo"], d["dot_hi"] = nums
             elif label.startswith("dots at or left"):
                 d["left"], d["of"] = nums
-    assert len(tables) == 2 and all(len(t["0060"]) == 13 for t in tables), f"parsed {tables!r}"
+    assert len(tables) == 3 and all(len(d) == 13 for t in tables for d in t.values()), f"parsed {tables!r}"
+    assert list(tables[1]) == list(tables[2]) == ["0060", "0062"], "the two D24 tables are the record"
     return tables
 
 
 def test_the_refusal_record_s_verdict_is_derived_from_its_table():
-    """The #272 record: its verdict row and both reasons, recomputed from the current table, and
-    every comparison with #272's own table recomputed from the two."""
-    now, then = _record_tables()
+    """The #272 record: its verdict row and both reasons, recomputed from the working-set table, and
+    every comparison between the D24 edition and #272's own table recomputed from those two."""
+    now, d24, then = _record_tables()
     text = _flatten(_read(_REFUSED))
-    for rec, d in now.items():
+    first, second = now
+    # The verdict is held on every table: the D24 ones are why it was refused, the first is why it
+    # still is.
+    for rec, d in [*now.items(), *d24.items()]:
         assert d["lo"] == d["ideal"], f"{rec}: the support's left end is the ideal by construction, {d}"
         assert abs(d["width"] - round(d["hi"] - d["lo"], 1)) < 1e-9, (rec, d)
         # 20 dots at the (i + ½)/20 quantiles: none is at or left of the best lap exactly when the
@@ -1530,17 +1540,22 @@ def test_the_refusal_record_s_verdict_is_derived_from_its_table():
               text, "reason 2's ratio")
     assert m.group(1) == "–".join(ratios), (m.group(1), ratios)
     m = _need(r"with only \*\*(\d+)/(\d+)\*\* and \*\*(\d+)/(\d+)\*\* laps moving it", text, "the jackknife line")
-    assert (int(m.group(2)), int(m.group(4))) == (now["0060"]["laps"], now["0062"]["laps"]), m.groups()
-    m = _need(r"The support shrank \((\d+\.\d) → (\d+\.\d) s, (\d+\.\d) → (\d+\.\d) s\)", text,
+    assert (int(m.group(2)), int(m.group(4))) == (now[first]["laps"], now[second]["laps"]), m.groups()
+    # The D24 record's own comparison, #272's table against the edition after #300: same recordings.
+    m = _need(r"[Tt]he support shrank \((\d+\.\d) → (\d+\.\d) s, (\d+\.\d) → (\d+\.\d) s\)", text,
               "the support comparison")
-    assert tuple(map(float, m.groups())) == (then["0060"]["width"], now["0060"]["width"],
-                                             then["0062"]["width"], now["0062"]["width"]), m.groups()
+    assert tuple(map(float, m.groups())) == (then["0060"]["width"], d24["0060"]["width"],
+                                             then["0062"]["width"], d24["0062"]["width"]), m.groups()
     m = _need(r"The 20 dots, which are what a plot would draw, moved by at most (\d\.\d\d) s", text,
               "the dots comparison")
-    moved = max(abs(now[r][k] - then[r][k]) for r in now for k in ("dot_lo", "dot_hi"))
+    moved = max(abs(d24[r][k] - then[r][k]) for r in d24 for k in ("dot_lo", "dot_hi"))
     assert float(m.group(1)) == round(moved, 2), (m.group(1), moved)
-    assert now["0060"]["best"] == then["0060"]["best"] and now["0062"]["best"] == then["0062"]["best"], (
+    assert d24["0060"]["best"] == then["0060"]["best"] and d24["0062"]["best"] == then["0062"]["best"], (
         "#300 cannot move a lap time; a best lap that differs between the tables is a typo")
+    m = _need(r"on the working set it moves the ideal by at most \*\*\d\.\d{3} s\*\* and \*\*\d\.\d{3} s\*\*, with "
+              r"only \*\*\d+/\d+\*\* and \*\*\d+/\d+\*\* laps moving it at all \(on D24 after #300: (\d\.\d{3}) s and "
+              r"(\d\.\d{3}) s, (\d+)/(\d+) and (\d+)/(\d+)", text, "the jackknife line's D24 record")
+    assert (int(m.group(4)), int(m.group(6))) == (d24["0060"]["laps"], d24["0062"]["laps"]), m.groups()
     print(f"test_the_refusal_record_s_verdict_is_derived_from_its_table OK "
           f"(0 of 20 dots left of the best lap on both, sd {'/'.join(ratios)}×)")
 
@@ -2067,35 +2082,50 @@ def _recombination(s) -> dict[str, float]:
 
 def test_the_refusal_record_matches_the_footage():
     root = _footage_root()
-    now, _then = _record_tables()
+    now = _record_tables()[0]           # the D24 tables below it are the record, not re-measurable
+    recs = list(now)
     text = _flatten(_read(_REFUSED))
-    jack = _need(r"at most \*\*(\d\.\d{3}) s\*\* and \*\*(\d\.\d{3}) s\*\*, with only \*\*(\d+)/\d+\*\* and "
-                 r"\*\*(\d+)/\d+\*\*", text, "the jackknife line")
-    problems, lines = [], []
-    with _Footage(root) as fx:
-        for i, rec in enumerate(("0060", "0062")):
+    problems, lines, got = [], [], {}
+    with _Footage(root, recs) as fx:
+        for rec in recs:
             s = fx.load(rec)
             if s is None:
                 problems.append(f"{rec}: footage missing under {root}")
                 continue
-            got = _recombination(s)
-            pub = now[rec]
-            pct = f"{got['pct']:.1g}" if got["pct"] < 0.1 else f"{got['pct']:.2f}"
-            lines.append(f"  {rec} ({got['laps']} laps): ideal / best {got['ideal']:.3f} / {got['best']:.3f} · "
-                         f"support [{got['lo']:.3f} … {got['hi']:.3f}] = {got['hi'] - got['lo']:.1f} s · sd "
-                         f"{got['sd']:.3f} ({got['ratio']:.2f}×) · percentile {pct} · dots {got['dot_lo']:.3f} … "
-                         f"{got['dot_hi']:.3f}, {got['left']} of 20 left · jackknife {got['jack_max']:.3f} s, "
-                         f"{got['jack_n']}/{got['laps']}")
-            for key in ("laps", "ideal", "best", "lo", "hi", "sd", "ratio", "dot_lo", "dot_hi", "left"):
-                if abs(got[key] - pub[key]) > 1e-9:
-                    problems.append(f"{rec} {key}: published {pub[key]}, measured {got[key]}")
-            if float(pct) != pub["pct"]:
-                problems.append(f"{rec} percentile: published {pub['pct']}, measured {pct}")
-            if (round(got["jack_max"], 3), got["jack_n"]) != (float(jack.group(1 + i)), int(jack.group(3 + i))):
-                problems.append(f"{rec} jackknife: measured {got['jack_max']:.3f} s, {got['jack_n']} laps")
-    assert not problems, "the #272 record is not what the app computes:\n  " + "\n  ".join(problems) + \
-        "\n" + "\n".join(lines)
-    print("test_the_refusal_record_matches_the_footage OK\n" + "\n".join(lines))
+            got[rec] = _recombination(s)
+    # The re-measured table in the doc's own syntax, and the jackknife beside it, BEFORE any
+    # comparison can stop the check.
+    pcts = {rec: f"{g['pct']:.1g}" if g["pct"] < 0.1 else f"{g['pct']:.2f}" for rec, g in got.items()}
+    if len(got) == 2:
+        a, b = (got[r] for r in recs)
+        pa, pb = (pcts[r] for r in recs)
+        lines = [f"| | {recs[0]} ({a['laps']} laps) | {recs[1]} ({b['laps']} laps) |", "|---|---|---|",
+                 f"| ideal / best lap | {a['ideal']:.3f} / {a['best']:.3f} | {b['ideal']:.3f} / {b['best']:.3f} |",
+                 f"| recombination support | [{a['lo']:.3f} … {a['hi']:.3f}] = **{a['hi'] - a['lo']:.1f} s** | "
+                 f"[{b['lo']:.3f} … {b['hi']:.3f}] = **{b['hi'] - b['lo']:.1f} s** |",
+                 f"| recombination sd | {a['sd']:.3f} (**{a['ratio']:.2f}×** the real lap-time sd) | "
+                 f"{b['sd']:.3f} (**{b['ratio']:.2f}×**) |",
+                 f"| best lap's percentile in it | **{pa}th** | **{pb}th** |",
+                 f"| the 20 dots span | {a['dot_lo']:.3f} … {a['dot_hi']:.3f} | {b['dot_lo']:.3f} … {b['dot_hi']:.3f} |",
+                 f"| **dots at or left of the best lap** | **{a['left']} of 20** | **{b['left']} of 20** |"]
+        print("\n".join(["  re-measured #272 record:"] + lines))
+        print(f"  jackknife: at most **{a['jack_max']:.3f} s** and **{b['jack_max']:.3f} s**, with only "
+              f"**{a['jack_n']}/{a['laps']}** and **{b['jack_n']}/{b['laps']}** laps moving it at all")
+    for rec, g in got.items():
+        pub = now[rec]
+        for key in ("laps", "ideal", "best", "lo", "hi", "sd", "ratio", "dot_lo", "dot_hi", "left"):
+            if abs(g[key] - pub[key]) > 1e-9:
+                problems.append(f"{rec} {key}: published {pub[key]}, measured {g[key]}")
+        if float(pcts[rec]) != pub["pct"]:
+            problems.append(f"{rec} percentile: published {pub['pct']}, measured {pcts[rec]}")
+    jack = _need(r"on the working set it moves the ideal by at most \*\*(\d\.\d{3}) s\*\* and \*\*(\d\.\d{3}) s\*\*, "
+                 r"with only \*\*(\d+)/\d+\*\* and \*\*(\d+)/\d+\*\*", text, "the jackknife line")
+    for i, rec in enumerate(recs):
+        g = got.get(rec)
+        if g and (round(g["jack_max"], 3), g["jack_n"]) != (float(jack.group(1 + i)), int(jack.group(3 + i))):
+            problems.append(f"{rec} jackknife: measured {g['jack_max']:.3f} s, {g['jack_n']} laps")
+    assert not problems, "the #272 record is not what the app computes:\n  " + "\n  ".join(problems)
+    print("test_the_refusal_record_matches_the_footage OK")
 
 
 def _brake_measure(s):

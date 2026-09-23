@@ -112,3 +112,10 @@ start line (−0.246 s on the one the owner saved), and 4.52 % of samples on San
         driving, not about the units. The rejected `hit_counts` had no such defence: its coupling
         came from a tolerance measured in seconds against segments of unequal length.
 ```
+
+## refused-2026-09.md §2 — the #272 recombination record
+
+Its D24 editions stay in §2 itself, below the working-set table: the edition re-measured after #300
+(the one #344 marked stale) and #272's own. The mark it carried read: "The table below was measured on
+D24 before #335 changed corner matching, and it is known stale. #339 read 0060's ideal as 65.637 s
+after #335 and 65.864 s after its own change, against the 65.464 s below."

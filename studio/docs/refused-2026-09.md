@@ -71,13 +71,23 @@ Two premises from the brief were refuted on the way:
 segments, plot them, and mark where the ideal and your best lap fall.
 
 **What was measured.** The actual 20-dot layout was built, rather than argued about from moments.
-Re-measured after #300 warped every lap, which moved every cell below except the best lap:
+Re-measured on the working set on 2026-09-23 (T16b), on the pair that stands where D24's 0060 and
+0062 stood: 0068 is `SD_19_09_26` (`GX010068` + `GX020068`) and 0064 is `Sandown 3h 2026`
+(`GX010064` + `GX020064` + `GX030064`):
 
-> **⚠ STALE — NOT RE-MEASURABLE (T16).** The table below was measured on D24 before #335 changed
-> corner matching, and it is known stale. #339 read 0060's ideal as 65.637 s after #335 and
-> 65.864 s after its own change, against the 65.464 s below. D24 is no longer available, so the
-> table cannot be re-measured. It is the record of that measurement, not what the app computes
-> today, and whether the verdict under it still holds cell for cell is unverified.
+| | 0068 (36 laps) | 0064 (62 laps) |
+|---|---|---|
+| ideal / best lap | 46.176 / 46.842 | 45.768 / 47.054 |
+| recombination support | [46.176 … 52.235] = **6.1 s** | [45.768 … 85.716] = **39.9 s** |
+| recombination sd | 0.541 (**0.79×** the real lap-time sd) | 2.643 (**0.43×**) |
+| best lap's percentile in it | **0.57th** | **0.24th** |
+| the 20 dots span | 46.954 … 49.103 | 47.375 … 56.880 |
+| **dots at or left of the best lap** | **0 of 20** | **0 of 20** |
+
+The D24 edition it replaces, re-measured after #300 warped every lap (which moved every cell except
+the best lap). It was measured before #335 changed corner matching and went stale then: #339 read
+0060's ideal as 65.637 s after #335 and 65.864 s after its own change, against the 65.464 s here.
+It is kept as the record of that measurement:
 
 | | 0060 (38 laps) | 0062 (65 laps) |
 |---|---|---|
@@ -99,23 +109,24 @@ As #272 published it, before #300:
 | the 20 dots span | 68.377 … 73.039 | 68.832 … 71.057 |
 | **dots at or left of the best lap** | **0 of 20** | **0 of 20** |
 
-**The verdict holds on the new numbers.** Both reasons below are still true of every cell: no dot
-sits at or left of the best lap on either recording, and the spread is narrower than the laps
-driven on both. The support shrank (23.0 → 19.5 s, 13.2 → 12.7 s) mostly at its slow end, where
-fewer of the slowest cells are admitted as donors after #300. The 20 dots, which are what a plot
-would draw, moved by at most 0.07 s.
+**The verdict holds on the working set.** Both reasons below are true of every cell of the first
+table: no dot sits at or left of the best lap on either recording, and the spread is narrower than
+the laps driven on both. It held on D24 too. Between #272's table and the D24 edition after #300,
+the support shrank (23.0 → 19.5 s, 13.2 → 12.7 s) mostly at its slow end, where fewer of the slowest
+cells are admitted as donors after #300. The 20 dots, which are what a plot would draw, moved by at
+most 0.07 s.
 
-**How it is measured**, since #272 did not write it down. 0060 is `GX020060` + `GX030060`; 0062 is
-`GX010062` + `GX020062` + `GX030062`. A recombination draws each of the 25 corner/straight segments
-independently and uniformly from the clean laps whose cell MAY DONATE, which is two conditions and
-not one: the cell is admitted (`corner_model.MAX_DONOR_SPAN_DEV`) and, since #339, resolved — its
-two boundaries matched on track rather than interpolated — with the model's own two-stage fallback,
-a segment nothing may donate on dropping back to that segment's admitted cells. This paragraph said
-"admitted" alone until H9, while the stand-in that re-measures the record
-(`tests/test_measured_figures.py`) has applied both conditions since #339: the published method was
-describing a rule the check had stopped using. The cells below predate #339 and are not re-measured
-by this correction. Support is the sum of the per-segment minima and maxima, so its
-left end is the ideal. The sd is the square root of the summed per-segment variances, divided by
+**How it is measured**, since #272 did not write it down. The D24 tables' 0060 is `GX020060` +
+`GX030060` and their 0062 is `GX010062` + `GX020062` + `GX030062`. A recombination draws each
+corner/straight segment independently and uniformly from the clean laps whose cell MAY DONATE,
+which is two conditions and not one: the cell is admitted (`corner_model.MAX_DONOR_SPAN_DEV`) and,
+since #339, resolved — its two boundaries matched on track rather than interpolated — with the
+model's own two-stage fallback, a segment nothing may donate on dropping back to that segment's
+admitted cells. This paragraph said "admitted" alone until H9, while the stand-in that re-measures
+the record (`tests/test_measured_figures.py`) has applied both conditions since #339: the published
+method was describing a rule the check had stopped using. The D24 cells predate #339; the
+working-set table was measured under both conditions. Support is the sum of the per-segment minima
+and maxima, so its left end is the ideal. The sd is the square root of the summed per-segment variances, divided by
 the sample sd of the clean laps' times. The percentile comes from the exact distribution of the sum
 on a 1 ms grid. The 20 dots sit at its (i + ½)/20 quantiles. On #272's own tree this reproduces
 every published cell: support and sd exactly, dots within 6 ms, jackknife exactly. The exception is
@@ -129,8 +140,8 @@ row from the rest of it.
    the ideal *and* the best lap stranded off the left edge. The annotation the feature exists to
    carry is outside the plotted body.
 2. **The premise is wrong at the root.** A uniform recombination is the **average** stitching, not an
-   achievable one, and the central limit theorem over 25 independent picks makes its spread
-   *narrower than the laps actually driven* (0.60× the real sd on both recordings). The plot would
+   achievable one, and the central limit theorem over its independent per-segment picks makes its
+   spread *narrower than the laps actually driven* (0.43–0.79× the real sd). The plot would
    claim to show what you can do while **understating real lap-to-lap variation**. That is the
    exact overclaim the ideal-lap disclosure exists to prevent.
 
@@ -139,10 +150,11 @@ opposite, and worse.
 
 **Two alternatives were measured and also not shipped:**
 
-- **Jackknife** (drop one lap, recompute, partition held): moves the ideal by at most **0.200 s**
-  and **0.073 s**, with only **13/38** and **20/65** laps moving it at all (#272: 0.231 s and
-  0.135 s, 15/38 and 18/65). So "is this fragile to one lap?" is already answered — **no** — and a
-  plot to answer it would be decoration.
+- **Jackknife** (drop one lap, recompute, partition held): on the working set it moves the ideal by
+  at most **0.041 s** and **0.147 s**, with only **14/36** and **11/62** laps moving it at all (on
+  D24 after #300: 0.200 s and 0.073 s, 13/38 and 20/65; #272: 0.231 s and 0.135 s, 15/38 and
+  18/65). So "is this fragile to one lap?" is already answered — **no** — and a plot to answer it
+  would be decoration.
 - **Ideal over any N of these laps** does work as a dotplot, but it is a **different statistic**: it
   needs a stochastic accessor with golden-gate care, and the repo has already ruled against baking
   per-recording empirical constants into shipping copy.
