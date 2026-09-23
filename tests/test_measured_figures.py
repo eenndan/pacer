@@ -477,6 +477,7 @@ def test_the_theme_prose_follows_the_table_and_THEME_SHARE():
     assert (float(m.group(3)), float(m.group(4))) == (c.ranked_s, c.abstained_s) and c.abstained_s > c.ranked_s > 0, c
     print(f"test_the_theme_prose_follows_the_table_and_THEME_SHARE OK (THEME_SHARE {share})")
 
+
 # ─── quotes of the coaching figures elsewhere in the tree ────────────────────────────────────────
 def _tracked_files() -> list[str]:
     out = subprocess.run(["git", "-C", _REPO, "ls-files"], capture_output=True, text=True)
@@ -755,6 +756,7 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
     print(f"test_every_quote_of_the_brake_habit_figures_is_the_table_s OK "
           f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
 
+
 # ─── coaching_panel.py: the brake hint's geometry gate ───────────────────────────────────────────
 class HintRow:
     def __init__(self, rec, cid, turn_in, apex, optimum, hint):
@@ -785,7 +787,7 @@ def _hint_rows() -> list[HintRow]:
         if m:
             rows.append(HintRow(m.group(1), int(m.group(2)), float(m.group(3)),
                                 float(m.group(4)), float(m.group(5)), m.group(6)))
-    assert {r.rec for r in rows} == {"0060", "0062"}, (
+    assert {r.rec for r in rows} == set(_pair()), (
         f"coaching_panel.py's brake-hint gate table parsed to {rows!r}")
     return rows
 
@@ -1138,6 +1140,7 @@ def test_every_quote_of_the_focus_figures_is_focus_py_s():
     print(f"test_every_quote_of_the_focus_figures_is_focus_py_s OK "
           f"({sum(map(len, found.values()))} quotes: {sorted({f for v in found.values() for f in v})})")
 
+
 # ─── theme.py: the pointwise-Δ floor table ───────────────────────────────────────────────────────
 class FloorRow:
     def __init__(self, name, saved, laps, samples, floor, neg, minus):
@@ -1271,8 +1274,9 @@ _STATS = os.path.join(_REPO, "studio", "stats.py")
 def _published() -> list[tuple]:
     """(name, file, first-row pattern, the `_LAP_SETS` keys its rows name, the footage check that
     re-measures it or None, the recorded status) for every table a footage check re-measures, and
-    for the D24 tables of the same kind that no check does."""
-    stale, unverified = _stale.STALE, _stale.UNVERIFIED
+    for the D24 tables of the same kind that no check does. A status of None means T16b re-measured
+    the table on the working set, so it carries no mark (`_stale.UNVERIFIED` is unused since)."""
+    stale = _stale.STALE
     return [
         # T16b re-measured both on the working set (0068 and 0064, and their chapters), 2026-09-23.
         ("coaching.py's evidence table", _COACHING, _EV_LINE, lambda: [r.rec for r in _evidence_rows()],
@@ -1281,9 +1285,10 @@ def _published() -> list[tuple]:
          "test_the_coaching_tables_match_the_footage", None),
         ("coaching.py's brake-habit table", _COACHING, _BRAKE_LINE, lambda: [r.rec for r in _brake_rows()],
          "test_the_brake_habit_table_matches_the_footage", None),
-        # #339 (T15) re-measured this one after #335 and C5, and it came back byte-identical.
+        # #339 (T15) re-measured this one after #335 and C5 on D24; D2 then moved it, unmeasurably
+        # there. T16b re-measured it on the working set, 2026-09-23.
         ("coaching_panel.py's brake-hint gate table", _PANEL, _HINT_LINE, lambda: [r.rec for r in _hint_rows()],
-         "test_the_brake_hint_gate_table_matches_the_footage", unverified),
+         "test_the_brake_hint_gate_table_matches_the_footage", None),
         # #339: the beat-rate, focus and floor checks failed after #335; the floor re-measure was
         # byte-identical before and after #339's own change, so the move is #335's.
         # T16b re-measured it on the working set (four recordings, seven rows), 2026-09-23.
@@ -2113,6 +2118,7 @@ def test_the_coaching_tables_match_the_footage():
     assert not problems, "coaching.py's measured figures are not what the app computes:\n  " + "\n  ".join(problems)
     print("test_the_coaching_tables_match_the_footage OK")
 
+
 def _floor_measure(s):
     """The floor table's stated method: every valid lap, every 25 ms of its window."""
     import numpy as np
@@ -2357,6 +2363,7 @@ def test_the_brake_habit_table_matches_the_footage():
     assert not problems, "coaching.py's brake-habit table is not what the app computes:\n  " + "\n  ".join(problems)
     print("test_the_brake_habit_table_matches_the_footage OK")
 
+
 def _hint_measure(s):
     """coaching_panel's brake-hint gate table off one real session: one row per RANKED coaching row
     that has a habit to print, with the corner's turn-in and apex on the reference odometer and the
@@ -2380,14 +2387,15 @@ def _hint_measure(s):
 
 
 def test_the_brake_hint_gate_table_matches_the_footage():
-    """T15 — re-measure coaching_panel's gate table on the two D24 recordings. The row SET is the
-    app's own ranked set, so a corner that stops being ranked is a failure here rather than a row
-    that quietly goes missing."""
+    """T15 — re-measure coaching_panel's gate table on the evidence table's two recordings (T16b: the
+    working set's 0068 and 0064). The row SET is the app's own ranked set, so a corner that stops
+    being ranked is a failure here rather than a row that quietly goes missing."""
     root = _footage_root()
     pub = _hint_rows()
+    pair = _pair()
     problems, lines = [], []
-    with _Footage(root) as fx:
-        for rec in ("0060", "0062"):
+    with _Footage(root, pair) as fx:
+        for rec in pair:
             s = fx.load(rec)
             if s is None:
                 problems.append(f"{rec}: footage missing under {root}")
@@ -2402,10 +2410,11 @@ def test_the_brake_hint_gate_table_matches_the_footage():
             if ungated:
                 problems.append(f"{rec}: ranked rows with no metres to gate {ungated} — the note "
                                 f"says that is every ranked row on both recordings")
-    report = "\n".join(["  re-measured brake-hint gate table:"] + lines)
+    # The re-measured block in the source's own syntax, BEFORE any comparison can stop the check.
+    print("\n".join(["  re-measured brake-hint gate table:"] + lines))
     assert not problems, "coaching_panel.py's brake-hint gate table is not what the app computes:\n  " + \
-        "\n  ".join(problems) + "\n" + report
-    print(f"test_the_brake_hint_gate_table_matches_the_footage OK\n{report}")
+        "\n  ".join(problems)
+    print("test_the_brake_hint_gate_table_matches_the_footage OK")
 
 
 def _avg_ranks(x):

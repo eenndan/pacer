@@ -405,3 +405,47 @@ MAX_LAP_TOTAL_DRIFT = 0.02
   stored window; the pair's lap totals 0.65 % apart (1059.2 vs 1066.2 m); promoted C12 +0.330 s, C4 +0.244 s,
   C2 +0.204 s moved −0.026 / +0.061 / +0.039 s, all three unchanged; window vs corner-service medians 0.03–0.18 s
   apart on 0060 and 0.01–0.08 s on 0062.
+
+## coaching_panel.py — the brake hint's geometry-gate table (above BRAKE_HINT_MAX_PAST_TURN_IN_M)
+
+```text
+# ⚠ UNVERIFIED — NOT RE-MEASURABLE (T16). Unlike coaching.py's tables, this one was measured AFTER
+# #335 changed corner matching: #339 measured it on D24 with #335 and its own change in, and its
+# footage check came back byte-identical. D24 is no longer available, so no change since #339 can
+# be checked against it. Read the table as of #339, not as re-verified. D2 is one such change: it
+# stopped counting a string of brake blips with no sustained brake as a brake event, which moves
+# the brake points this table's optimum is the median of. On the four present recordings it
+# turned no hint on or off and moved the printed metres by at most 1 m; on D24 it is unmeasured.
+#
+# MEASURED (T15), on the owner's two D24 recordings. The figures this note used to carry —
+# "3 of 11 ranked corners", an optimum at 870.6 m, 19.4 m before its apex — predate #300's removal
+# of the drift gate, #335's corner de-drift and C5's resolved-cell rule, each of which moved them;
+# they are re-measured here as a TABLE so the sentence under it can be derived rather than retyped.
+# One row per RANKED coaching row that has a habit to print (`coaching.MIN_BRAKE_LAPS` laps matched
+# and at least BRAKE_HINT_MIN_M of metres — on both recordings that is every ranked row), with the
+# corner's turn-in and apex on the reference odometer beside the MEDIAN optimum
+# `Session.coaching_brake_points` prints. "past turn-in" is optimum − turn-in, so this gate's
+# verdict is recomputable from the row's own two cells:
+#
+#   rec   corner  turn-in m   apex m  optimum m   hint
+#   0060  C1            0.0     23.5       24.2   shown
+#   0060  C2           77.3     97.4       93.4   shown
+#   0060  C9          626.1    644.9      633.7   shown
+#   0060  C10         812.3    851.9      867.3   suppressed
+#   0062  C1            0.0     23.9       20.1   shown
+#   0062  C3          114.8    133.4      128.5   shown
+#   0062  C6          351.9    401.3      390.3   suppressed
+#   0062  C8          557.5    588.6      604.6   suppressed
+#   0062  C11         895.9    923.7      917.5   shown
+#   0062  C12         972.4   1002.1      982.5   shown
+#
+# (tests/test_measured_figures.py derives the sentence below from these cells and, given the
+# footage, re-measures every one.)
+#
+# The gate is narrow: 3 of the 10 ranked rows lose their metres — 0060's C10 and 0062's C6 and C8.
+# The 7 it keeps sit 7.6..24.2 m past turn-in, inside the approach the physics assumes; the 3 it
+# drops sit 38.5..55.0 m past it. Two of those three are past the APEX as well (0060 C10 by 15.4 m,
+# 0062 C8 by 16.0 m), which is the same objection in its sharpest form: a "latest sustainable brake
+# point" downstream of the slowest point of the corner is not a brake point.
+BRAKE_HINT_MAX_PAST_TURN_IN_M = coaching.BRAKE_APPROACH_M
+```
