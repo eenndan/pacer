@@ -1699,62 +1699,116 @@ def monkeypatch_restore():
     return None
 
 
-def test_a_full_disk_does_not_trigger_a_second_doomed_render():
-    """§7.5: `run()` falls back from the hardware encoder to libx264 whenever a VideoToolbox encode
-    fails. That is right for a codec/session problem and useless when the DISK IS FULL — the retry
-    re-renders the whole clip on the slower software encoder and fails for the same reason minutes
-    later. The user's disk does not get emptier while they wait.
+class _EnospcEncoder:
+    """A fake ffmpeg encode that takes `fail_after` frames and then dies the way ffmpeg 7.1 did on a
+    slow VideoToolbox render with 94.5 GB free: exit status 228 (its -28) and this stderr tail."""
 
-    ffmpeg reports it as a stderr tail rather than an errno, so the discrimination is on the words
-    the encoder, the muxer and the OS actually use."""
-    from studio import export_video as EV
+    TAIL = (b"[af#0:1 @ 0x10de0a7d0] Error sending frames to consumers: No space left on device\n"
+            b"[af#0:1 @ 0x10de0a7d0] Task finished with error code: -28 (No space left on "
+            b"device)\n")
 
-    assert EV.is_out_of_space("av_interleaved_write_frame(): No space left on device")
-    assert EV.is_out_of_space("ENOSPC")
-    assert EV.is_out_of_space("Disk full")
-    assert not EV.is_out_of_space("Error encoding frame: -12905")
-    assert not EV.is_out_of_space("")
-    assert not EV.is_out_of_space(None)
+    def __init__(self, fail_after):
+        import io
+        self._left = fail_after
+        self.returncode = None
+        self.stdout = None
+        self.stderr = io.BytesIO(self.TAIL)
+        self.stdin = types.SimpleNamespace(write=self._write, flush=lambda: None,
+                                           close=lambda: None)
 
-    # ...and the fallback is skipped: a VT encode error that says "no space" must raise instead of
-    # constructing a second Renderer.
-    built = []
-    real_init = EV.Renderer.__init__
+    def _write(self, _frame):
+        if self._left <= 0:
+            self.returncode = 228
+            raise BrokenPipeError(32, "Broken pipe")
+        self._left -= 1
 
-    def _spy(self, session, spec):
-        built.append(spec)
-        return real_init(self, session, spec)
+    def wait(self, *_a, **_k):
+        return self.returncode
 
-    class _Doomed(EV.Renderer):
-        def _run_chunked(self, progress, cancel, chunk):
-            raise EV._EncodeError(EV.VT_H264,
-                                  "av_interleaved_write_frame(): No space left on device")
+    def kill(self):
+        if self.returncode is None:
+            self.returncode = -9
 
-    r = object.__new__(_Doomed)
-    r._fallback_allowed = True
-    r._encoder = EV.VT_H264
-    r._session = None
-    r._spec = None
-    r.cancel = lambda: None
-    EV.Renderer.__init__ = _spy
-    try:
-        raised = None
+
+def test_a_no_space_failure_asks_the_disk_before_it_skips_the_retry(monkeypatch_restore):
+    """ffmpeg's "No space left on device" is a CLAIM: ffmpeg 7.1 prints it when its own `-shortest`
+    sync queue overflows, and a slow VideoToolbox render hit that with 94.5 GB free. So the words
+    only make the renderer ASK THE DISK (free blocks, not purgeable space). Only the disk's answer
+    decides whether a render is a doomed retry and whether the user hears "no room".
+
+    The REAL Renderer, with its real painter, on a stub session; ffmpeg is faked to fail the way it
+    failed. Pinned to VideoToolbox (the only encoder with a retry to take or skip):
+      * full (1 MB free): DiskFullError, whose sentence carries what the disk said; no 2nd encoder;
+      * room (90 GB), or a volume that cannot be asked: the libx264 retry runs and the render ends.
+    On main the first had no figures and the other two never retried."""
+    s = StubSession(lap_id=2, t0=0.0, dur=2.0, n=400)
+    # 1080p60 over 2 s: the least VideoToolbox can make of it is ~1.9 MB, so 1 MB is a full disk.
+    cfg = ev.OverlayConfig(out_height=1080, fps_cap=None, encoder="auto", workers=1)
+    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/exports/lap.mp4", lap_id=2, t0=0.0,
+                         t1=2.0, config=cfg)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
+    real_free = ev.free_bytes
+    for free, retried in ((90_000_000_000, True), (None, True), (1_000_000, False)):
+        encoders, asked = [], []
+
+        def fake_popen(cmd, _encoders=encoders, **_kw):
+            if cmd[-1] == "pipe:1":
+                return _FakeProc(frame_bytes=out_w * out_h * 3, nframes=10_000, is_decoder=True)
+            encoder = cmd[cmd.index("-c:v") + 1]
+            _encoders.append(encoder)
+            return _EnospcEncoder(fail_after=5) if encoder == ev.VT_H264 else _FakeProc()
+
+        ev.subprocess.Popen = fake_popen                      # type: ignore[assignment]
+        ev.probe_video_size = lambda _p: (3840, 2160, 60.0)   # type: ignore[assignment]
+        ev.probe_source_duration = lambda _s: 1.0e9           # type: ignore[assignment]
+        ev.videotoolbox_decode_available = lambda: False      # type: ignore[assignment]
+        ev.resolve_encoder = (lambda c: ev.SW_H264 if c == "libx264"  # type: ignore[assignment]
+                              else ev.VT_H264)
+        ev.free_bytes = (lambda p, purgeable=True, _f=free, _asked=asked:
+                         (_asked.append((p, purgeable)), _f)[1])
         try:
-            EV.Renderer.run(r)
-        except BaseException as exc:  # noqa: BLE001 — the TYPE is what is under test
-            raised = exc
-    finally:
-        EV.Renderer.__init__ = real_init
-    # Caught broadly on purpose: without the discrimination this falls through to the fallback and
-    # dies constructing the second Renderer, so a narrow `except RuntimeError` would report an
-    # unrelated AttributeError instead of the thing that actually broke.
-    assert isinstance(raised, RuntimeError), (
-        "a full disk must surface as a clean RuntimeError instead of falling through to the "
-        f"software retry (got {type(raised).__name__ if raised else None}: {raised})")
-    assert "No space left" in str(raised), raised
-    assert built == [], ("a second Renderer was constructed for a render that cannot succeed",
-                         built)
-    print("ok enospc: a full disk surfaces immediately instead of re-rendering")
+            r = ev.Renderer(s, spec)
+            assert r.encoder == ev.VT_H264, r.encoder
+            try:
+                res = r.run()
+                raised = None
+            except Exception as exc:  # noqa: BLE001 — the TYPE is what is under test
+                raised = exc
+        finally:
+            ev.free_bytes = real_free
+        if retried:
+            assert encoders == [ev.VT_H264, ev.SW_H264], (
+                f"free={free}: a no-space CLAIM with room to spare skipped the libx264 retry: "
+                f"{encoders} ({raised!r})")
+            assert raised is None and res.frames == 120, (free, raised)
+        else:
+            assert encoders == [ev.VT_H264], (
+                f"a second encoder was started for a disk with 1 MB left: {encoders}")
+            assert isinstance(raised, ev.DiskFullError), (
+                f"a full disk must surface as DiskFullError (got {type(raised).__name__}: {raised})")
+            text = str(raised)
+            assert ev.is_out_of_space(text), text
+            est = ev.estimate_output_bytes(out_w, out_h, 60.0, ev.clip_seconds(0.0, 2.0, 60.0),
+                                           "high", ev.VT_H264)
+            least = ev.fmt_bytes(ev.floor_bytes(est, ev.VT_H264))
+            sentence = ev.disk_full_sentence(text)
+            assert sentence == (
+                f"There's no room left on the disk holding /exports: it had 1 MB free when the "
+                f"export stopped, and this export needs at least {least}."), sentence
+            assert "No space left on device" in text and "No space" not in sentence, text
+        assert asked == [("/exports", False)], (
+            f"free={free}: the disk was not asked, free blocks only, about the output's folder: "
+            f"{asked}")
+
+    # The words are a claim; only the renderer's sentence is a verdict.
+    assert ev.reports_no_space("av_interleaved_write_frame(): No space left on device")
+    assert ev.reports_no_space("ENOSPC") and ev.reports_no_space("Disk full")
+    assert not ev.reports_no_space("Error encoding frame: -12905")
+    assert not ev.reports_no_space("") and not ev.reports_no_space(None)
+    assert not ev.is_out_of_space("av_interleaved_write_frame(): No space left on device")
+    assert not ev.is_out_of_space(_EnospcEncoder.TAIL.decode())
+    assert not ev.is_out_of_space(None)
+    print("ok enospc: the disk decides — full skips the retry with a true sentence, room retries")
 
 
 def test_the_size_model_is_the_stated_rate_times_the_clip():
@@ -1802,6 +1856,12 @@ def test_free_space_is_asked_of_the_nearest_existing_folder():
                                                                  250)[1]
             assert EV.free_bytes(deep) == 250
             assert asked == [("statvfs", td), ("important", td)], asked
+            # After a write has FAILED, purgeable space is not room: that write is the proof it
+            # had not been freed for the writer. `purgeable=False` asks statvfs alone, and does not
+            # even ask CoreFoundation (E3).
+            asked.clear()
+            assert EV.free_bytes(deep, purgeable=False) == 100
+            assert asked == [("statvfs", td)], asked
             EV._volume_capacity_for_important_usage = lambda p: None
             assert EV.free_bytes(deep) == 100            # no purgeable figure: statvfs alone
 
@@ -1809,6 +1869,7 @@ def test_free_space_is_asked_of_the_nearest_existing_folder():
                 raise OSError("volume does not answer")
             _shutil.disk_usage = _raise
             assert EV.free_bytes(deep) is None, "an unanswerable volume must read as UNKNOWN"
+            assert EV.free_bytes(deep, purgeable=False) is None, "…with free blocks alone too"
         finally:
             _shutil.disk_usage = real_usage
             EV._volume_capacity_for_important_usage = real_capacity
@@ -1932,9 +1993,21 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     words behind Details — the shape the load-failure table and the crash report already use."""
     from studio.export_controller import ExportController
 
-    full = ExportController._export_failure_message("av_interleaved_write_frame(): No space left on device",
-                                     "/Users/x/Movies/lap.mp4")
-    assert "no room left" in full.lower() and "/Users/x/Movies" in full, full
+    # A full disk is a sentence the RENDERER writes after asking the disk (`DiskFullError`), and
+    # it goes in front with its figures; the encoder's tail after it stays behind Details.
+    full = ExportController._export_failure_message(
+        "There's no room left on the disk holding /Users/x/Movies: it had 1 MB free when the "
+        "export stopped, and this export needs at least 11 MB.\n\nffmpeg encode failed "
+        "(h264_videotoolbox, rc=228): … No space left on device", "/Users/x/Movies/lap.mp4")
+    assert full == ("There's no room left on the disk holding /Users/x/Movies: it had 1 MB free "
+                    "when the export stopped, and this export needs at least 11 MB. Free some "
+                    "space, or choose somewhere else, and export again."), full
+    # ffmpeg's own "No space left on device" is only a CLAIM — ffmpeg 7.1 also prints it when a
+    # queue inside ffmpeg overflows with the disk nearly empty — so on its own it gets the honest
+    # generic, never "no room left" (E3).
+    claim = ExportController._export_failure_message(
+        "av_interleaved_write_frame(): No space left on device", "/Users/x/Movies/lap.mp4")
+    assert "no room" not in claim.lower() and "encoder stopped partway" in claim, claim
     denied = ExportController._export_failure_message("Permission denied", "/x/y.mp4")
     assert "isn't allowed to write" in denied, denied
     gone = ExportController._export_failure_message("No such file or directory", "/x/y.mp4")
