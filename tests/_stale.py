@@ -29,7 +29,8 @@ This module is the vocabulary both test files share. It has no Qt, no pacer and 
     recording. `STALE` means #339 re-ran the table's check after #335 and it failed. `UNVERIFIED`
     means #339 re-measured it after #335 and it matched, and no later change can be checked.
   * `QUOTE_MARK` is what a SENTENCE quoting one of those tables must say on a surface a reader sees
-    without the table beside it: an in-app string, README.md, docs/, studio/README.md or AGENTS.md.
+    without the table beside it: an in-app string, README.md, docs/, studio/README.md, AGENTS.md,
+    or the pacer/ and tests/ READMEs that took AGENTS.md's reference sections.
     Developer docs date it with the PR, "before #335". User-facing copy uses "before a September
     2026 change to corner matching", because a PR number means nothing to a driver. A code comment
     or docstring quoting a table is a note to a developer, and the table it names carries the mark.
@@ -67,8 +68,10 @@ TABLE_MARK = re.compile(r"⚠ (STALE|UNVERIFIED) — NOT RE-MEASURABLE \(T16\)")
 QUOTE_MARK = re.compile(r"before #335|before a September 2026 change to corner matching", re.I)
 
 # The docs a reader meets without the table beside them. CHANGELOG.md is history, and
-# studio/docs/ holds dated design records, one of which is a marked table itself.
-PRESENTED_DOCS = ("README.md", "AGENTS.md", os.path.join("studio", "README.md"))
+# studio/docs/ holds dated design records, one of which is a marked table itself. The pacer/ and
+# tests/ READMEs hold what AGENTS.md was trimmed of, so they keep the rule that text had there.
+PRESENTED_DOCS = ("README.md", "AGENTS.md", os.path.join("studio", "README.md"),
+                  os.path.join("pacer", "README.md"), os.path.join("tests", "README.md"))
 
 
 def sentence_at(flat: str, start: int, end: int) -> str:

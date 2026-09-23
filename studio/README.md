@@ -87,7 +87,7 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 3. **Core-math is gated.** Any change to timing (the GPS9 clock) / geometry / delta / segmentation
    must preserve the golden equivalence — `pixi run golden` (synthetic, in CI) and `max|Δ|=0` on the
    manual real-footage dump, on the working-set recording `PACER_GOLDEN_MP4` names — by default
-   `MK_18_09_26`, D24's own circuit (see [AGENTS.md](../AGENTS.md)).
+   `MK_18_09_26`, D24's own circuit (see [tests/README.md](../tests/README.md)).
 
 ### Common changes → files to touch
 
