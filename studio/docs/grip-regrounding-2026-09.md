@@ -1,5 +1,9 @@
 # The Grip % column, re-grounded — 2026-09-20
 
+*The name: this reading is labelled **Grip (est)** on the Corners tab, on Stats ▸ CORNERS and on
+the map's line. When this was written, Stats ▸ CORNERS still called it "Grip %". Below, "Grip %"
+means that same per-corner reading.*
+
 **The August roadmap gated "grip headroom + utilisation trend per corner" on a re-grounding,
 because the per-corner grip channel was then described as "pace-blind (~0.6)" and nothing had
 re-checked it after its normalisation changed.** This is that re-check, measured on four present
