@@ -762,33 +762,37 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # every valid lap of the working set's four recordings; "prints a minus sign" is what the readout
 # printed before the clamp below existed, a raw Δ under -DELTA_EVEN_EPS_S. Re-measured on the working
 # set on 2026-09-23 (T16b), after the edition measured on D24 and Sandown_09_05_2026 went stale when
-# #335 changed corner matching and those recordings left the owner's machine; that edition is kept in
-# studio/docs/coaching-tables-on-d24.md:
+# #335 changed corner matching and those recordings left the owner's machine (that edition is kept in
+# studio/docs/coaching-tables-on-d24.md), and again the same day once Q2 made Sandown Park a
+# built-in track:
 #
 #   recording              laps  samples     floor   raw Δ < 0   prints a minus sign
-#   Sandown 3h 1 chapter     17    43282  -0.015 s     1.29 %        0.45 %
-#   Sandown 3h 3 chapters    62   125577  -0.126 s     1.43 %        1.07 %
-#   SD_19_09 1 chapter       26    49668  -0.040 s     1.69 %        0.91 %
-#   SD_19_09 2 chapters      36    68653  -0.152 s     8.93 %        7.41 %
-#   SD_30_08                 23    44389  -0.262 s    10.75 %        9.61 %
+#   Sandown 3h 1 chapter     17    42921  -0.050 s     0.74 %        0.65 %
+#   Sandown 3h 3 chapters    62   125212  -0.000 s     0.00 %        0.00 %
+#   SD_19_09 1 chapter       26    49666  -0.009 s     0.22 %        0.12 %
+#   SD_19_09 2 chapters      36    68632  -0.103 s     2.40 %        2.06 %
+#   SD_30_08                 23    44408  -0.255 s     8.32 %        7.59 %
 #   MK_18_09 1 chapter       11    31623   0.000 s     0.00 %        0.00 %
 #   MK_18_09 2 chapters      19    53682  -0.030 s     0.88 %        0.37 %
 #   and on the start line the owner saved beside the recording (its .pacer.json), as the app opens it:
 #   SD_30_08 †               23    44408  -0.255 s     8.32 %        7.59 %
 #
-# The first seven rows are the loader's own start line, which is how this table was first measured
-# (#211). Only SD_30_08 has a line saved beside it, so every other row is the line the app opens its
-# recording on unless a saved track overrides it; † restores the saved one. On SD_30_08 the two
-# lines now count the same 23 laps and cut them in different places, which is all that separates
-# the two rows. Until T13 they did not: the loader's line cut each 46 s Sandown Park lap into a
-# 13.3 s and a 34 s piece and counted 25 of the short ones, and the unmarked row read -0.039 s over
-# those. Recordings, all read-only on the owner's Desktop: Sandown 3h is GX010064 alone and with
+# The first seven rows are each circuit's built-in line as the loader places it — Daytona Milton
+# Keynes', and Sandown Park's, which since Q2 is the owner's own saved line — so every row is the
+# line the app opens its recording on unless a saved track overrides it. Only SD_30_08 has a line
+# saved beside it; † restores the saved one. On SD_30_08 the two lines now count the same 23 laps,
+# and they are one line to within a micrometre, so the two rows are identical. Until Q2 the Sandown
+# rows were the loader's own auto-fitted line, as #211 first measured this table: SD_30_08's read
+# -0.262 s with 10.75 % of samples negative, and cut the laps in different places from its saved
+# line. Until T13 the two did not even count the same laps: the loader's line cut each 46 s Sandown
+# Park lap into a 13.3 s and a 34 s piece and counted 25 of the short ones, and the unmarked row read
+# -0.039 s over those. Recordings, all read-only on the owner's Desktop: Sandown 3h is GX010064 alone and with
 # GX020064 + GX030064 (Sandown 3h 2026); SD_19_09 is GX010068 alone and with GX020068 (SD_19_09_26);
 # SD_30_08 is GX010065 (SD_30_08_26); MK_18_09 is GX010067 alone and with GX020067 (MK_18_09_26) —
 # the one recording not at Sandown, and the one driven anticlockwise. tests/test_measured_figures.py
 # re-measures every row from them.
 #
-# against end-of-lap values of +0.50 … +43.12 s. So it is a wobble of at most 0.26 s (0.26 s on the
+# against end-of-lap values of +0.50 … +43.82 s. So it is a wobble of at most 0.26 s (0.26 s on the
 # owner's saved line) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
 # takes it back: over a segment, and over the lap, you cannot be ahead of the ideal. A two-way ramp
 # would flash the "ahead" hue on the app's LARGEST text for a tenth of a second to report something

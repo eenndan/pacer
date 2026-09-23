@@ -117,7 +117,7 @@ from .widgets import NumItem as _NumItem
 #
 # WHY A COLUMN AND NOT A SORT REFUSAL ON `Ideal lap`. Suppressing that one column's sort was the
 # obvious fix and it is the wrong one, measured: over random subsets of the clean laps the BEST
-# LAP falls 0.077–0.905 s per doubling of lap count against the ideal's 0.166–0.740 s — the same
+# LAP falls 0.082–0.785 s per doubling of lap count against the ideal's 0.160–0.742 s — the same
 # order of magnitude on every one of the owner's recordings, and on Sandown 3h's first chapter the
 # best lap falls the FASTER of the two (T16b's working set; corner_model.IdealSample, which keeps
 # the D24-era table this note used to quote as its record). A dialog that refused to rank the
@@ -158,14 +158,14 @@ _LAPS_HEADER_TIP = (
 _BEST_HEADER_TIP = (
     "Best lap — the fastest single lap of the recording.\n"
     "A minimum over the session's laps, so it falls as the session gets longer: measured over "
-    "random subsets of the owner's recordings, 0.08–0.91 s per doubling of lap count. The Laps "
+    "random subsets of the owner's recordings, 0.08–0.79 s per doubling of lap count. The Laps "
     "column is the sample it was taken over.")
 _THEO_HEADER_TIP = (
     "Ideal lap — the quickest time through each corner and each straight, stitched into one lap.\n"
     "A sum of per-segment minima, so it falls as a session gets longer, usually faster than the "
-    "best lap does: 0.17–0.74 s per doubling of lap count on the owner's recordings, with no "
+    "best lap does: 0.16–0.74 s per doubling of lap count on the owner's recordings, with no "
     "plateau. Two rows are comparable on this number only if their Laps are comparable — Sandown "
-    "3h chapter 1 (17 laps) and Sandown 3h chapters 1–3 (62 laps) are 0.84 s apart on the same "
+    "3h chapter 1 (17 laps) and Sandown 3h chapters 1–3 (62 laps) are 0.77 s apart on the same "
     "driving.")
 _COND_HEADER_TIP = (
     "Conditions — what you recorded about the day, in File ▸ Session record….\n"

@@ -136,8 +136,8 @@ _IDEAL_CHIP_TIP = (
 #
 # The hero is the app's largest text and the only ideal surface with no prose beside it, so a
 # reader who never opens Stats meets Δideal here and nowhere else. The number is an order
-# statistic: on Sandown 3h's three chapters the same driving reads a 0.59 s gap over 5 laps and a
-# 1.29 s gap over 62 (random subsets, 20,000 draws per N; corner_model.IdealSample), and the corner
+# statistic: on Sandown 3h's three chapters the same driving reads a 0.61 s gap over 5 laps and a
+# 1.27 s gap over 62 (random subsets, 20,000 draws per N; corner_model.IdealSample), and the corner
 # count it is partitioned by moved 11↔12 with the start/finish line on D24. Stats says so under its
 # tiles; here it goes on the chip's hover, which is where the reference is chosen.
 #
@@ -147,7 +147,7 @@ _IDEAL_CHIP_TIP = (
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
-    "(0.17–0.74 s per doubling of lap count on the owner's recordings) and moves when dragging "
+    "(0.16–0.74 s per doubling of lap count on the owner's recordings) and moves when dragging "
     "the start/finish line changes which corners Pacer finds. The Stats page prints both counts "
     "under it.")
 

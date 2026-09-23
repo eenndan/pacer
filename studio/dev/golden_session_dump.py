@@ -494,7 +494,9 @@ def main():
     result["ref_cleared"] = fingerprint(s)
 
     # DETECTED-TRACK phase. The hermetic DB above means every phase so far ran the unknown-track
-    # path (`track_name is None`, start line auto-fitted). That is half the loader's behaviour, so
+    # path (`track_name is None`, start line auto-fitted) — unless the recording is at a BUILT-IN
+    # circuit (Daytona Milton Keynes, and Sandown Park since Q2), which detects even in an empty DB,
+    # so there every phase already ran the detected path. The unknown path is half the loader, so
     # seed the empty DB from THIS session's own geometry and load again: `detect` now matches, the
     # stored lines are adopted instead of auto-fitted, and `timing_verified` is True. Seeding from
     # the recording keeps it deterministic — the entry is a function of the input file, not of the

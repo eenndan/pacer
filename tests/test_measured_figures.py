@@ -245,17 +245,21 @@ def test_the_evidence_prose_is_its_table_s_arithmetic():
     routine = sum(_reach_side(r) == "execution" for r in rows)
     assert (int(m.group(3)), int(m.group(4)), int(m.group(5))) == (routine, len(rows), len(rows) - routine)
 
-    m = _need(r"fires on one of the (\d+) rows, (00\d\d) C(\d+) at z (\d\.\d\d), and every row but that "
-              r"one has at least two OTHER laps strictly beating it \((\d+)\.\.(\d+) of them\)", text,
-              "the lone-outlier paragraph")
-    assert int(m.group(1)) == len(rows)
+    # Q2: on the built-in Sandown Park line `z > 1.5` fires on NO row, and no row is thin. Both forms
+    # are read, and each is held to the table: a thin row (fewer than two OTHER laps beating the
+    # target) is exactly the row the paragraph names, or there is none and it names none.
+    m = _need(r"fires on (?:one of the (\d+) rows, (00\d\d) C(\d+) at z (\d\.\d\d), and every row but that "
+              r"one has|none of the (\d+) rows, and every row has) at least two OTHER laps strictly beating it "
+              r"\((\d+)\.\.(\d+) of them\)", text, "the lone-outlier paragraph")
+    assert int(m.group(1) or m.group(5)) == len(rows)
     # The best lap's own instance is one of `reached`, so the laps strictly beating it are the rest.
     beaten = [r.reached - 1 for r in rows]
-    assert (int(m.group(5)), int(m.group(6))) == (min(beaten), max(beaten)), (m.groups(), beaten)
+    assert (int(m.group(6)), int(m.group(7))) == (min(beaten), max(beaten)), (m.groups(), beaten)
     thin = [r for r in rows if r.reached - 1 < 2]
-    assert [(r.rec, r.cid) for r in thin] == [(m.group(2), int(m.group(3)))], (
-        f"the paragraph names {m.group(2)} C{m.group(3)} as the one exception; the table's rows "
-        f"with fewer than two other laps beating the target are {thin!r}")
+    named = [(m.group(2), int(m.group(3)))] if m.group(2) else []
+    assert [(r.rec, r.cid) for r in thin] == named, (
+        f"the paragraph names {named or 'no row'} as the exception; the table's rows with fewer than "
+        f"two other laps beating the target are {thin!r}")
     assert "has not fired on either full recording" in text
     assert not [r for r in rows if r.gate == "one_off"], "the table has a ONE_OFF row the prose denies"
     print(f"test_the_evidence_prose_is_its_table_s_arithmetic OK ({len(rows)} rows)")
@@ -443,9 +447,11 @@ def test_the_theme_prose_follows_the_table_and_THEME_SHARE():
         closest = min(ranked_sets, key=lambda n: max(ranked_sets[n].execution, ranked_sets[n].pace))
         c = ranked_sets[closest]
         for what in ("the THEME block", "theme_sentence's SPLIT example"):
-            m = _need(r"[Nn]o lap set of the working set lands (?:on a SPLIT|there) — (00\d\d)'s chapter (\d) "
+            # The closest may be a chapter or (Q2: 0068 at 78 %) a whole recording.
+            m = _need(r"[Nn]o lap set of the working set lands (?:on a SPLIT|there) — (00\d\d)(?:'s chapter (\d))? "
                       r"comes closest, at (\d+) % (execution|pace)", text, what)
-            assert (f"{m.group(1)} chapter {m.group(2)}", int(m.group(3)), m.group(4)) == (
+            said = m.group(1) + (f" chapter {m.group(2)}" if m.group(2) else "")
+            assert (said, int(m.group(3)), m.group(4)) == (
                 closest, max(c.execution, c.pace), c.kind), (m.groups(), closest, c)
             text = text[m.end():]
         text = _flatten(_read(_COACHING))
@@ -453,12 +459,23 @@ def test_the_theme_prose_follows_the_table_and_THEME_SHARE():
         m = _need(r"\((00\d\d)'s chapter (\d) alone lands here\)", text, "theme_sentence's SPLIT example")
         assert f"{m.group(1)} chapter {m.group(2)}" in splits, (m.groups(), splits)
 
-    m = _need(r"(00\d\d) lands at (0\.\d\d) and (00\d\d) at (0\.\d\d)", text, "THEME_SHARE's measured note")
+    m = _need(r"(00\d\d) lands at ([01]\.\d\d) and (00\d\d) at ([01]\.\d\d)", text, "THEME_SHARE's measured note")
     assert (m.group(1), m.group(3)) == (a, b), m.groups()
     for rec, pub in ((a, m.group(2)), (b, m.group(4))):
         assert round(float(pub) * 100) == max(t[rec].execution, t[rec].pace), (rec, pub, t[rec])
-    # "one corner tips either": flip the named corner's reach side in the evidence table and the
-    # code's verdict rule must come out SPLIT, and "the line" is the rule's own threshold.
+    # Which single corner tips each recording to a SPLIT: flip one corner's reach side in the evidence
+    # table and run the code's verdict rule. The note names a corner that does, with its reach and
+    # "the line" (the rule's own threshold), or says that none does — and then it must take two.
+    def _tipped(rec, flip):
+        ranked = [r for r in rows if r.rec == rec and r.gate == "ranked"]
+        side = {id(r): _reach_side(r) for r in ranked}
+        for row in flip:
+            side[id(row)] = "pace" if side[id(row)] == "execution" else "execution"
+        total = sum(r.lost for r in ranked)
+        e = sum(r.lost for r in ranked if side[id(r)] == "execution") / total
+        return _kind(e, 1 - e) == "split"
+
+    named = set()
     for rec, cid, reached, laps, line in re.findall(
             r"(00\d\d) would(?: fall to a SPLIT)? if its C(\d+) \(reached on (\d+) of (\d+) laps; the line "
             r"is (\d+)\)", text):
@@ -466,13 +483,16 @@ def test_the_theme_prose_follows_the_table_and_THEME_SHARE():
         assert (row.reached, row.laps) == (int(reached), int(laps)), row
         assert int(line) == max(_constant(_COACHING, "MIN_REACH_LAPS"),
                                 math.ceil(_constant(_COACHING, "REACH_REPEAT_FRAC") * row.laps)), (line, row)
+        assert _tipped(rec, [row]), f"{rec} C{cid} tipped does not make a SPLIT"
+        named.add(rec)
+    for rec in (a, b):
+        if rec in named:
+            continue
+        _need(rf"No single corner tips {rec}\b[^.]*?; it would take two", text, f"THEME_SHARE's note on {rec}")
         ranked = [r for r in rows if r.rec == rec and r.gate == "ranked"]
-        side = {id(r): _reach_side(r) for r in ranked}
-        side[id(row)] = "pace" if side[id(row)] == "execution" else "execution"
-        total = sum(r.lost for r in ranked)
-        e = sum(r.lost for r in ranked if side[id(r)] == "execution") / total
-        assert _kind(e, 1 - e) == "split", f"{rec} C{cid} tipped leaves {e:.3f} execution, not a SPLIT"
-    assert len(re.findall(r"if its C\d+ \(reached on", text)) == 2, "THEME_SHARE's note names two corners"
+        assert not any(_tipped(rec, [r]) for r in ranked), f"a single corner does tip {rec}"
+        assert any(_tipped(rec, [p, q]) for i, p in enumerate(ranked) for q in ranked[i + 1:]), (
+            f"no two corners tip {rec} either")
 
     m = _need(r"\((00\d\d)'s chapter (\d) alone: (\d\.\d{3}) s ranked against (\d\.\d{3}) s abstained\)", text,
               "theme_sentence's abstained-majority example")
@@ -688,15 +708,23 @@ def test_the_brake_habit_prose_is_its_table_s_arithmetic():
         assert abs(float(worst) - top.gap) <= 0.1 + 1e-9 and int(cid) == top.cid, (rec, worst, cid, top)
 
     split = _split_row(rows)
+    # Every direction word is the sign of its cell: + (could brake later) is a brake point BEFORE the
+    # optimum, printed "later", and a habit that is "early". Q2 moved the widest split from two
+    # answers pointing the same way to two pointing opposite ways, so the verdict is derived too.
     m = _need(r"(00\d\d)'s C(\d+) is the one that shows what the split cost: the best lap braked (\d+\.\d) m "
-              r"before its own optimum, so coaching printed \"~(\d+) m later\", while the driver's HABIT over "
-              r"(\d+) laps was (\d+\.\d) m early\. Both say \"later\", and the single lap says about half as much",
-              text, "the split-cost paragraph")
+              r"(before|past) its own optimum, so coaching printed \"~(\d+) m (later|earlier)\", while the "
+              r"driver's HABIT over (\d+) laps was (\d+\.\d) m (early|late)\. (The two point opposite ways|Both "
+              r"say \"(?:later|earlier)\", and the single lap says about half as much)", text, "the split-cost paragraph")
     assert (m.group(1), int(m.group(2))) == (split.rec, split.cid), (m.groups(), f"the widest gap is {split!r}")
-    assert (float(m.group(3)), m.group(4)) == (split.best, f"{split.best:.0f}"), (m.groups(), split)
-    assert (int(m.group(5)), float(m.group(6))) == (split.laps, split.habit), (m.groups(), split)
-    assert split.best > 0 and split.habit > 0, f"{split!r}: the two do not both say 'later'"
-    assert 0.4 <= split.best / split.habit < 0.65, f"{split!r}: not 'about half as much'"
+    assert (float(m.group(3)), m.group(5)) == (abs(split.best), f"{abs(split.best):.0f}"), (m.groups(), split)
+    assert (m.group(4), m.group(6)) == (("before", "later") if split.best > 0 else ("past", "earlier")), (
+        m.groups(), split)
+    assert (int(m.group(7)), float(m.group(8))) == (split.laps, abs(split.habit)), (m.groups(), split)
+    assert m.group(9) == ("early" if split.habit > 0 else "late"), (m.groups(), split)
+    opposite = (split.best > 0) != (split.habit > 0)
+    assert m.group(10).startswith("The two point opposite") == opposite, (m.group(10), split)
+    if not opposite:
+        assert 0.4 <= split.best / split.habit < 0.65, f"{split!r}: not 'about half as much'"
     # D24's C1 was a shrug: a best lap under twice the noise floor. The working set has none.
     m = _need(r"no best lap in the table sits that close to it — the nearest is (\d+\.\d) m", text,
               "the noise-floor sentence")
@@ -727,15 +755,15 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
             found["habit"].append(rel)
             _presented(problems, rel, m, flat, "coaching.py's brake-habit table")
             laps, habit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
-            if (int(laps), float(habit)) != (split.laps, split.habit):
+            if (int(laps), float(habit)) != (split.laps, abs(split.habit)):
                 problems.append(f"{rel}: {split.rec} C{split.cid}'s habit over {laps} laps was {habit} m; the "
                                 f"table says {split.laps} laps, {split.habit} m")
-        for m in re.finditer(r"braked (\d+\.\d) m before its own optimum", flat):
+        for m in re.finditer(r"braked (\d+\.\d) m (before|past) its own optimum", flat):
             found["before"].append(rel)
             _presented(problems, rel, m, flat, "coaching.py's brake-habit table")
-            if float(m.group(1)) != split.best:
-                problems.append(f"{rel}: the best lap braked {m.group(1)} m before its optimum; the table "
-                                f"says {split.best} m at {split.rec} C{split.cid}")
+            if (float(m.group(1)), m.group(2)) != (abs(split.best), "before" if split.best > 0 else "past"):
+                problems.append(f"{rel}: the best lap braked {m.group(1)} m {m.group(2)} its optimum; the "
+                                f"table says {split.best:+} m at {split.rec} C{split.cid}")
         for sentence in re.split(r"(?<=[.!?])\s+", flat):
             if not re.search(r"best lap", sentence, re.I):
                 continue
@@ -1030,9 +1058,11 @@ def test_the_focus_prose_is_its_tables_arithmetic():
     assert (int(m.group(1)), _signed(m.group(2)), _signed(m.group(6))) == (cid, own_d, stored_d), (m.groups(), cid)
     assert m.group(3) == ("slower" if own_d > 0 else "faster") and m.group(5) == (
         "longer" if w_now > w_then else "shorter"), (m.groups(), windows[cid])
-    # "more than all of it": the stored window reads the other way; "most": the same way, smaller.
-    assert m.group(4) == ("more than all" if (own_d > 0) != (stored_d > 0) else "most") and \
-        abs(stored_d) < abs(own_d), (m.groups(), windows[cid])
+    # "more than all of it": the stored window reads the other way, so the window's own share (own −
+    # stored) is larger than the whole reported change; "most": the same way, and smaller.
+    other_way = (own_d > 0) != (stored_d > 0)
+    assert m.group(4) == ("more than all" if other_way else "most"), (m.groups(), windows[cid])
+    assert other_way or abs(stored_d) < abs(own_d), (m.groups(), windows[cid])
     for c, (_wt, _wn, o_then, o_now, o_d, at, s_d) in windows.items():
         assert abs(o_d - (o_now - o_then)) <= 0.001 + 1e-9, f"C{c}: own change is not {o_now} − {o_then}"
         assert abs(s_d - (at - o_then)) <= 0.001 + 1e-9, f"C{c}: stored change is not {at} − {o_then}"
@@ -1171,7 +1201,7 @@ def _floor_rows() -> list[FloorRow]:
     names = [r.name for r in rows if not r.saved]
     assert len(rows) >= 5 and len(set(names)) == len(names) and all(r.name in _LAP_SETS for r in rows), (
         f"floor table parsed to {rows!r}")
-    # A † row restores a saved line, so it is the twin of a row on the loader's line: the table
+    # A † row restores a saved line, so it is the twin of a row on the line the loader places: the table
     # compares the two, and the saved rows follow the head that says what they are.
     assert {r.name for r in rows if r.saved} <= set(names), rows
     assert _FLOOR_SAVED_HEAD in _read(_THEME) or not any(r.saved for r in rows), "the † rows' head moved"
@@ -1194,9 +1224,10 @@ def test_the_floor_table_is_consistent_with_its_own_definitions():
               "the wobble sentence under the floor table")
     assert float(m.group(1)) == round(max(-r.floor for r in rows), 2), (m.group(1), rows)
     assert float(m.group(2)) == round(max(-r.floor for r in saved), 2), (m.group(2), rows)
-    # T16b: how many rows are on the loader's line, and which recordings have a saved one, are the
-    # table's own shape.
-    m = _need(r"The first (\w+) rows are the loader's own start line", text, "the rows' start-line sentence")
+    # T16b: how many rows are on the line the loader places, and which recordings have a saved one,
+    # are the table's own shape. (Q2: at Sandown that is now the built-in line, not an auto-fit.)
+    m = _need(r"The first (\w+) rows are (?:the loader's own start line|each circuit's built-in line)", text,
+              "the rows' start-line sentence")
     assert m.group(1).lower() == _WORDS[sum(not r.saved for r in rows)], (m.group(1), rows)
     m = _need(r"Only ([\w, ]+?) (?:has|have) a line saved beside (?:it|them)", text, "the saved-line sentence")
     assert sorted(re.findall(r"[A-Z][\w]+", m.group(1))) == sorted(r.name for r in saved), (m.group(1), saved)
@@ -2135,11 +2166,16 @@ def test_the_coaching_tables_match_the_footage():
     for rec, n in (m.group(1, 2), m.group(3, 4)):
         if rec in corners and corners[rec] != int(n):
             problems.append(f"{rec} has {corners[rec]} corners; the header says {n}")
-    m = _need(r"fires on one of the \d+ rows, (00\d\d) C(\d+) at z (\d\.\d\d)", text, "the z sentence")
-    named_z = zs.get(m.group(1), {}).get(int(m.group(2)))
-    if [o[:2] for o in over] != [(m.group(1), int(m.group(2)))] or named_z is None or \
-            abs(named_z - float(m.group(3))) > 0.005:
-        problems.append(f"z > 1.5 fires on {over}; the prose names {m.groups()} (measured z {named_z})")
+    m = _need(r"fires on (?:one of the \d+ rows, (00\d\d) C(\d+) at z (\d\.\d\d)|none of the \d+ rows)", text,
+              "the z sentence")
+    if m.group(1) is None:
+        if over:
+            problems.append(f"z > 1.5 fires on {over}; the prose says it fires on none")
+    else:
+        named_z = zs.get(m.group(1), {}).get(int(m.group(2)))
+        if [o[:2] for o in over] != [(m.group(1), int(m.group(2)))] or named_z is None or \
+                abs(named_z - float(m.group(3))) > 0.005:
+            problems.append(f"z > 1.5 fires on {over}; the prose names {m.groups()} (measured z {named_z})")
     m = _need(r"at all (\d+) of (\d+) corners \(by (\d\.\d\d)\.\.(\d\.\d\d) s on (00\d\d), (\d\.\d\d)\.\.(\d\.\d\d) s "
               r"on (00\d\d)\)", text, "the optimal-line sentence")
     for lo, hi, rec in (m.group(3, 4, 5), m.group(6, 7, 8)):
@@ -2525,8 +2561,9 @@ def _focus_measure(s_then, p_then, s_now, p_now):
         rec = session_record.blank_record()
         rec["conditions"] = "dry"
         session_record.put(store, fp, rec)
-    # The two gates a jailed run cannot pass (no saved track to trust a line by, no session record),
-    # forced open so the spread test the table's verdict column reports is the one `verdict` applies.
+    # The two gates before the spread test: the start line (trusted since Q2, when Sandown Park became
+    # a built-in; forced anyway, so the column does not depend on it) and the session record (which a
+    # jailed run never has), forced open so the verdict column is the one `verdict` applies.
     trusted = [dataclasses.replace(it, verified=True) for it in items]
     alike = s_now.focus_report(trusted, {**e_now, "verified": True}, store, e_then["track"])
     rows = []
@@ -2597,13 +2634,19 @@ def test_the_focus_tables_match_the_footage():
                   f"{r.now_iqr:.3f}", f"{r.change:+.3f}", f"{r.bar:.3f}", r.verdict) for r in rows]
     if measured != published:
         problems.append(f"promoted three: published {published}, measured {measured}")
-    m = _need(r"the gate blocks all (\w+) verdicts at `(\w+)`", text, "the blocker sentence")
-    if got["blockers"] != [m.group(2)] * len(rows) or m.group(2) != got["unverified"] or \
-            m.group(1) != _WORDS[len(rows)]:
-        problems.append(f"with no saved track and no session records the verdicts are blocked by "
-                        f"{got['blockers']}; the prose says all {m.group(1)} at {m.group(2)}")
+    # Q2: with Sandown Park built in, both lines are trusted and the gate stops at the session records
+    # instead of the start line. Which gate it is, is read off the app, not typed here.
+    m = _need(r"the gate (?:passes the start line and )?blocks all (\w+) verdicts at `(\w+)`", text,
+              "the blocker sentence")
+    if got["blockers"] != [m.group(2)] * len(rows) or m.group(1) != _WORDS[len(rows)]:
+        problems.append(f"with no session records the verdicts are blocked by {got['blockers']}; the "
+                        f"prose says all {m.group(1)} at {m.group(2)}")
+    if m.group(2) == got["unverified"] and all(got["trusted"]):
+        problems.append(f"the prose blames the start line; both are trusted ({got['trusted']})")
     if any(got["trusted"]) and "neither recording's start line is trusted" in text:
         problems.append(f"the prose says neither start line is trusted; measured {got['trusted']}")
+    if not all(got["trusted"]) and "both start lines are trusted" in text:
+        problems.append(f"the prose says both start lines are trusted; measured {got['trusted']}")
     m = _need(r"\((00\d\d): (\d{4}-\d\d-\d\d), (\d+) laps; (00\d\d): (\d{4}-\d\d-\d\d), (\d+) laps\)", text,
               "the dates")
     laps = {(r[9], r[10]) for r in got["rows"]}

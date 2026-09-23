@@ -42,8 +42,8 @@ recording is opened.
 over the session's laps, so both fall as a session gets longer, and a table that ranks either
 without showing the count ranks session length as much as pace. Measured over random subsets of
 the clean laps of the owner's five working-set recordings, per doubling of lap count:
-``theoretical`` falls 0.740 / 0.283 / 0.166 / 0.178 / 0.490 s and ``best`` falls 0.905 / 0.092 /
-0.077 / 0.082 / 0.194 s, recording for recording — the ideal is the more sample-dependent of the
+``theoretical`` falls 0.742 / 0.273 / 0.160 / 0.178 / 0.490 s and ``best`` falls 0.785 / 0.093 /
+0.087 / 0.082 / 0.194 s, recording for recording — the ideal is the more sample-dependent of the
 two on four of the five, and on the fifth (Sandown 3h's first chapter, the first hour of a 3-hour session)
 the best lap moves MORE, which is why the dialog shows the count for the ROW rather than qualifying
 one column. The sharpest real instance is in this index, as

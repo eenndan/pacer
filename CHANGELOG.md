@@ -13,6 +13,13 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Added
 
+- **Sandown Park is a built-in track.** A recording at Sandown now detects the circuit on a fresh
+  install and is timed on the owner's own saved start/finish line, copied into Pacer bit for bit —
+  so its lap times are trusted rather than provisional, two Sandown sessions share one lap odometer,
+  and the focus list can compare them. Before, Pacer auto-fitted a line there that sat at C1's
+  turn-in, about 100 m from the real start/finish, and differently placed on every recording. A
+  Sandown Park you saved yourself still wins, and is listed once, as a built-in you refined.
+
 - **Line: Pedal (est) — the brake/throttle band, painted on the racing line.** The speed chart's
   Brake/Throttle band now has a map view: red where you brake, green where you are accelerating,
   the ramp's middle colour for a lift or a steady speed. It is the band's own values, not a second
@@ -282,12 +289,16 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Changed
 
+- **A built-in track you refined can be deleted, not renamed.** Renaming it moved your line to the
+  new name and brought Pacer's own line back under the old one — two circuits for one place. The
+  saved-tracks manager no longer offers Rename… on it; Delete… still puts Pacer's line back.
+
 - **The ideal lap's hovers quote figures measured on recordings Pacer can still open.** The hero
   chip, the Stats ideal tiles and the Library's Ideal-lap and Best-lap headers explained the ideal's
   sample effect with D24 figures marked "measured before a September 2026 change to corner
   matching". They now quote the table re-measured on the Desktop working set: the ideal falls
-  0.17–0.74 s per doubling of lap count, the best lap 0.08–0.91 s, and Sandown 3h's first chapter
-  and whole recording are 0.84 s apart on the same driving. The Library no longer says the ideal
+  0.16–0.74 s per doubling of lap count, the best lap 0.08–0.79 s, and Sandown 3h's first chapter
+  and whole recording are 0.77 s apart on the same driving. The Library no longer says the ideal
   always falls faster than the best lap: on that first chapter it does not.
 
 - **The map's colour ramp has its own middle, so what you selected no longer dissolves into it.**

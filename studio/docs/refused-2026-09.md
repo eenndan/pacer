@@ -73,15 +73,17 @@ segments, plot them, and mark where the ideal and your best lap fall.
 **What was measured.** The actual 20-dot layout was built, rather than argued about from moments.
 Re-measured on the working set on 2026-09-23 (T16b), on the pair that stands where D24's 0060 and
 0062 stood: 0068 is `SD_19_09_26` (`GX010068` + `GX020068`) and 0064 is `Sandown 3h 2026`
-(`GX010064` + `GX020064` + `GX030064`):
+(`GX010064` + `GX020064` + `GX030064`). Both are timed on the built-in Sandown Park line, which is
+the owner's own saved line (Q2, re-measured the same day; until then a fresh library cut them on the
+loader's own line, and the ideals read 46.176 and 45.768 s):
 
 | | 0068 (36 laps) | 0064 (62 laps) |
 |---|---|---|
-| ideal / best lap | 46.176 / 46.842 | 45.768 / 47.054 |
-| recombination support | [46.176 … 52.235] = **6.1 s** | [45.768 … 85.716] = **39.9 s** |
-| recombination sd | 0.541 (**0.79×** the real lap-time sd) | 2.643 (**0.43×**) |
-| best lap's percentile in it | **0.57th** | **0.24th** |
-| the 20 dots span | 46.954 … 49.103 | 47.375 … 56.880 |
+| ideal / best lap | 46.196 / 46.808 | 45.809 / 47.076 |
+| recombination support | [46.196 … 52.286] = **6.1 s** | [45.809 … 83.666] = **37.9 s** |
+| recombination sd | 0.540 (**0.70×** the real lap-time sd) | 2.435 (**0.42×**) |
+| best lap's percentile in it | **0.28th** | **0.24th** |
+| the 20 dots span | 46.962 … 49.331 | 47.393 … 56.219 |
 | **dots at or left of the best lap** | **0 of 20** | **0 of 20** |
 
 The D24 edition it replaces, re-measured after #300 warped every lap (which moved every cell except
@@ -141,7 +143,7 @@ row from the rest of it.
    carry is outside the plotted body.
 2. **The premise is wrong at the root.** A uniform recombination is the **average** stitching, not an
    achievable one, and the central limit theorem over its independent per-segment picks makes its
-   spread *narrower than the laps actually driven* (0.43–0.79× the real sd). The plot would
+   spread *narrower than the laps actually driven* (0.42–0.70× the real sd). The plot would
    claim to show what you can do while **understating real lap-to-lap variation**. That is the
    exact overclaim the ideal-lap disclosure exists to prevent.
 
@@ -151,7 +153,7 @@ opposite, and worse.
 **Two alternatives were measured and also not shipped:**
 
 - **Jackknife** (drop one lap, recompute, partition held): on the working set it moves the ideal by
-  at most **0.041 s** and **0.147 s**, with only **14/36** and **11/62** laps moving it at all (on
+  at most **0.042 s** and **0.132 s**, with only **13/36** and **13/62** laps moving it at all (on
   D24 after #300: 0.200 s and 0.073 s, 13/38 and 20/65; #272: 0.231 s and 0.135 s, 15/38 and
   18/65). So "is this fragile to one lap?" is already answered — **no** — and a plot to answer it
   would be decoration.
@@ -1279,7 +1281,12 @@ those four laps, and on chapter 1 alone it frames out none.
 
 ### What each surface does with them and without them
 
-Measured on the real Session, fresh library (the conditions #358's table was measured under). "Lower
+Measured on the real Session, fresh library (the conditions #358's table was measured under). At
+Sandown that meant the loader's own start line until Q2 made Sandown Park a built-in track on the
+owner's saved line; a fresh library now opens chapter 1 the way the paragraph above on his line
+describes it (17 clean laps, seven of them 69.6–90.4 s; the ideal 46.582 s on chapter 1 and 45.809 s
+on the whole recording). The table below is still the loader's line; the census on his line is the
+paragraph above. "Lower
 quartile" is the band re-centred on the 25th percentile instead of the median, the direct fix for
 the dragged centre: it drops laps 3, 4, 5 and 7 on chapter 1, and lap 13 on the whole recording.
 

@@ -3039,9 +3039,9 @@ class Session:
 
         It reads `_brake_rows` — the SAME per-lap list `brake_report` aggregates for the Stats ▸
         BRAKING table — so the metres this prints are the metres that table prints. It used to be
-        the BEST lap's single application, which disagreed with the table by up to 5.3 m on the
-        working-set recordings and, at 0064's C7, cut a 12 m habit to ~7 m (see
-        coaching.BrakeHabit)."""
+        the BEST lap's single application, which disagreed with the table by up to 20.4 m on the
+        working-set recordings and, at 0064's C4, turned a 6 m "later" habit into "~14 m earlier"
+        (see coaching.BrakeHabit)."""
         rows = self._brake_rows()
         corner_list = self.corners.corner_list()
         if not rows or not corner_list:
@@ -3055,9 +3055,9 @@ class Session:
 
         The window is a FRACTION of the lap odometer, not metres and not a corner id, because the
         corner partition is re-derived per session: between the two working-set recordings
-        focus.py measures, C1's own window shrank 169.6 m → 161.4 m and with it its own-window
-        median time by −0.567 s, none of which the driver did (studio/focus.py). Measured over one
-        stored window instead, the same corner is +0.184 s. Each lap projects the fractions onto its
+        focus.py measures, C1's own window grew 173.4 m → 179.5 m and with it its own-window
+        median time by +0.062 s, none of which the driver did (studio/focus.py). Measured over one
+        stored window instead, the same corner is −0.139 s. Each lap projects the fractions onto its
         own total, exactly as `lap_corner_stats`
         projects a corner window, and the seconds come off that lap's own elapsed clock."""
         laps = []
@@ -3075,7 +3075,7 @@ class Session:
         definition of "which recording is this". The baseline numbers are measured HERE, by
         `focus_samples`, so the stored median is the same statistic the next session will produce
         for the same window rather than the corner service's differently-projected one (their
-        per-corner medians run 0.02–0.11 s apart on 0064 and 0.02–0.11 s apart on 0068, the
+        per-corner medians run 0.01–0.17 s apart on 0064 and 0.01–0.07 s apart on 0068, the
         working-set pair focus.py's tables measure, which is the size of the thing being compared).
 
         Corners with no usable window, or no clean lap through it, are dropped rather than stored
@@ -3370,7 +3370,7 @@ class Session:
 
         IT IS A FUNCTION OF HOW MANY LAPS YOU RECORDED, and a surface that prints it without
         `ideal_sample()` is inviting the reader to compare two numbers that are not comparable.
-        Measured over random subsets of the clean laps it falls 0.17 … 0.74 s per DOUBLING of lap
+        Measured over random subsets of the clean laps it falls 0.16 … 0.74 s per DOUBLING of lap
         count on the owner's five working-set recordings, with no plateau; the full table, the best-lap
         control and the partition sensitivity are in `corner_model.IdealSample`."""
         sb = self.ideal_segment_bests()
@@ -3447,9 +3447,9 @@ class Session:
 
         The excursions are SMALL, and the measured numbers are the ones in `theme.py`'s
         `format_ideal_run` note (the single place this sweep is tabulated per recording): the
-        floor is **−0.262 s**, on SD_30_08 on the loader's own start line (−0.255 s on the one the
-        owner saved), and 1.43 % of samples on Sandown 3h 3 chapters / 10.75 % on SD_30_08 are
-        negative at all on the loader's own lines, against end-of-lap values of +0.50 … +43.12 s.
+        floor is **−0.255 s**, on SD_30_08 (on its built-in line and on the one the owner saved
+        beside it, which are one line since Q2), and 0.00 % of samples on Sandown 3h 3 chapters /
+        8.32 % on SD_30_08 are negative at all, against end-of-lap values of +0.50 … +43.82 s.
         Drawing the ideal's interior as a straight
         line instead — which is what a partition composite does if it does not consult its donors
         — put that at −0.87 s on 18.4 % of samples when #211 measured it; see

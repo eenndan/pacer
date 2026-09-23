@@ -1081,16 +1081,17 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
 # mechanism on hover".
 #
 # Every figure is measured, not asserted: `ideal_total` over random subsets of each recording's
-# clean laps (20,000 draws per N) falls 0.166 / 0.178 / 0.283 / 0.490 / 0.740 s per doubling of lap
-# count on the owner's five working-set rows (T16b), and on Sandown 3h's three chapters it is still
-# falling 0.301 s per doubling over the last one measured (50→62 laps) — nothing is being
+# clean laps (20,000 draws per N) falls 0.160 / 0.178 / 0.273 / 0.490 / 0.742 s per doubling of lap
+# count on the owner's five working-set rows (T16b, re-measured on the built-in Sandown Park line by
+# Q2), and on Sandown 3h's three chapters it is still falling 0.252 s per doubling over the last one
+# measured (50→62 laps) — nothing is being
 # approached. Over six start-line positions per recording the detected corner count moved 11↔12 on
 # D24 and 7↔8 on Sandown_09_05_2026, and the headline gap by up to +69 % (measured before #300 on
 # recordings no longer here, not since). The full table and its sources are in
 # corner_model.IdealSample; this is the version a reader gets on hover.
 IDEAL_SAMPLE_TOOLTIP = (
     "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
-    "of how many laps you recorded: measured on the owner's recordings, it falls 0.17–0.74 s "
+    "of how many laps you recorded: measured on the owner's recordings, it falls 0.16–0.74 s "
     "per doubling of lap count and keeps falling — there is no floor it settles on. It also "
     "moves when the corners are re-detected, which happens every time you drag the start/finish "
     "line. Compare it with another session only when the two have a similar lap count and "

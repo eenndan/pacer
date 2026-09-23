@@ -196,9 +196,9 @@ class IdealSample(NamedTuple):
 
     | recording             | 5 laps | 10 | 20 | 40 | all | per doubling of N |
     |-----------------------|--------|----|----|----|-----|-------------------|
-    | Sandown 3h 1 chapter  | 47.918 | 46.931 | — | — | 46.612 (17) | 0.740 s |
-    | Sandown 3h 3 chapters | 46.797 | 46.465 | 46.199 | 45.949 | 45.768 (62) | 0.283 s |
-    | SD_19_09 2 chapters   | 46.649 | 46.454 | 46.297 | — | 46.176 (36) | 0.166 s |
+    | Sandown 3h 1 chapter  | 47.892 | 46.914 | — | — | 46.582 (17) | 0.742 s |
+    | Sandown 3h 3 chapters | 46.801 | 46.465 | 46.198 | 45.963 | 45.809 (62) | 0.273 s |
+    | SD_19_09 2 chapters   | 46.652 | 46.464 | 46.316 | — | 46.196 (36) | 0.160 s |
     | SD_30_08 2 chapters   | 46.731 | 46.523 | 46.352 | — | 46.218 (37) | 0.178 s |
     | MK_18_09 2 chapters   | 66.947 | 66.412 | — | — | 66.004 (19) | 0.490 s |
 
@@ -211,13 +211,13 @@ class IdealSample(NamedTuple):
     three are Sandown Park, clockwise, 7 corners. MK_18_09 is Daytona Milton Keynes, anticlockwise,
     12 corners — the only track here that turns the other way. Each is measured AS THE APP OPENS IT
     ON A FRESH LIBRARY: `Session.load`, then the start line saved beside the recording, which
-    `StudioWindow` applies before anything is drawn (SD_30_08 has one). MK_18_09 is timed on the
-    built-in Daytona Milton Keynes line. The Sandown Park recordings without a saved line are cut by
-    the loader's own line, because a fresh library does not know Sandown Park. THE OWNER'S LIBRARY
-    DOES — he saved the track — and with his line the same check reads 45.809 over 62 laps on
-    Sandown 3h 3 chapters (+0.041 s), 46.582 over 17 on its first chapter (−0.030) and 46.196 over
-    36 on SD_19_09 (+0.020), with every other cell within 0.03 s; SD_30_08 and MK_18_09 do not move.
-    The check runs hermetic, so the table is what any fresh install prints. Every cell, gap,
+    `StudioWindow` applies before anything is drawn (SD_30_08 has one). Every row is timed on a
+    BUILT-IN line: MK_18_09 on Daytona Milton Keynes', the Sandown rows on Sandown Park's, which is
+    the owner's own saved line, copied into the app bit for bit (Q2, 2026-09-23). SD_30_08's saved
+    line is that same line to within a micrometre. So the table is what a fresh install prints AND
+    what the owner's app prints. Until Q2 a fresh library did not know Sandown Park and cut Sandown 3h
+    and SD_19_09 on the loader's own line, and this table read 46.612 over 17 laps, 45.768 over 62
+    and 46.176 over 36 there; on his line his app read what the table reads now. Every cell, gap,
     decrement and rate here is what tests/test_ideal_sample_table.py prints from its fixed seed when
     pointed at that footage, so re-running it reproduces them rather than approximating them. A row
     that has not been re-measured against the current app carries a ‡; none does.
@@ -230,25 +230,25 @@ class IdealSample(NamedTuple):
 
     There is no plateau, and the decrement does NOT grow with N — this docstring once said it did,
     off the boundary projection #228 replaced. Measured, it stays large across the whole range: on
-    Sandown 3h 3 chapters, 0.350 s per doubling over 5 → 8 laps, 0.282 over 8 → 15, 0.248 over
-    20 → 30, and 0.301 over 50 → 62. A twelvefold range of N does not reach a floor. So on the whole
+    Sandown 3h 3 chapters, 0.355 s per doubling over 5 → 8 laps, 0.284 over 8 → 15, 0.239 over
+    20 → 30, and 0.252 over 50 → 62. A twelvefold range of N does not reach a floor. So on the whole
     recording the gap the app headlines ("on the table") keeps growing with lap count — Sandown 3h 3
-    chapters reads −0.59 s at 5 laps and −1.29 s at 62, same driving, same recording. THAT IS NOT A
+    chapters reads −0.61 s at 5 laps and −1.27 s at 62, same driving, same recording. THAT IS NOT A
     LAW, and the first chapter alone breaks it: on Sandown 3h 1 chapter the gap at the fitted line
-    is 0.81 s over its 17 laps, down from 1.10 s at five, because there the best lap falls faster
+    is 0.87 s over its 17 laps, down from 0.95 s at five, because there the best lap falls faster
     than the ideal (next paragraph).
 
     THE BEST LAP HAS THE SAME PROPERTY, WHICH IS WHY THE DISCLOSURE IS PER RECORDING AND NOT PER
     COLUMN. The best lap is also a minimum over the session's laps: measured the same way, row for
-    row, it falls 0.905 / 0.092 / 0.077 / 0.082 / 0.194 s per doubling on those five, against the
-    ideal's 0.740 / 0.283 / 0.166 / 0.178 / 0.490 — LESS than the ideal on four of the five over the
-    whole range, and MORE on Sandown 3h 1 chapter. That row is the first hour of a 3-hour session: 8 of its
-    17 clean laps run 61 to 90 s against a 47.4 s best, so the best of five laps is often a slow lap
-    and the best of seventeen never is. Until T16b this paragraph said the best lap falls less than
+    row, it falls 0.785 / 0.093 / 0.087 / 0.082 / 0.194 s per doubling on those five, against the
+    ideal's 0.742 / 0.273 / 0.160 / 0.178 / 0.490 — LESS than the ideal on four of the five over the
+    whole range, and MORE on Sandown 3h 1 chapter. That row is the first hour of a 3-hour session: 7 of its
+    17 clean laps run 69.6 to 90.4 s against a 47.5 s best, so the best of five laps is often a slow
+    lap and the best of seventeen never is. Until T16b this paragraph said the best lap falls less than
     the ideal on every recording; it did on all five of the record's rows, and it does not here. It
     was never the argument, which the new row only sharpens: the best lap is not a column a ranking
-    can trust either, because it falls 0.08 … 0.91 s per doubling across these rows against the
-    ideal's 0.17 … 0.74 — the same order of magnitude, and on one row the larger. Suppressing the
+    can trust either, because it falls 0.08 … 0.79 s per doubling across these rows against the
+    ideal's 0.16 … 0.74 — the same order of magnitude, and on one row the larger. Suppressing the
     ideal's ranking while leaving the best lap's alone would advertise a distinction the numbers do
     not support; naming the sample fixes both. See studio/library_dialog.py's Laps column.
 
@@ -510,8 +510,8 @@ class SegmentBests:
 
         The correlation this docstring used to lead with ("r = −0.04 … −0.50 against the same
         durations") does not reproduce. Re-measured on seven lap sets of the owner's four working-set
-        recordings as the app opens them (the owner's saved start line restored where there is one,
-        †): subject = the best lap; the segments longer than POINT_SPAN_M on the reference odometer;
+        recordings as the app opens them (each on its circuit's built-in line — Sandown Park's is the
+        owner's own since Q2 — and the line saved beside SD_30_08 restored, †): subject = the best lap; the segments longer than POINT_SPAN_M on the reference odometer;
         beat rate (beat / n) against the segment's mean duration over the composite laps; Spearman
         with tied ranks averaged; permutation p two-sided on Spearman, over 20,000 shuffles of the
         beat rates (seed 0). tests/test_measured_figures.py derives the sentence under the table from
@@ -520,21 +520,26 @@ class SegmentBests:
         MK_18_09, the one anticlockwise recording and the one not at Sandown, is GX010067 alone and
         with GX020067. T16b re-measured it there on 2026-09-23, after the D24 and
         Sandown_09_05_2026 edition went stale when #335 changed corner matching; that edition is
-        kept in studio/docs/coaching-tables-on-d24.md.
+        kept in studio/docs/coaching-tables-on-d24.md. Q2 re-measured it the same day on the
+        built-in Sandown Park line: until then a fresh library cut Sandown 3h and SD_19_09 on the
+        loader's own line, and on those four rows the table read 14 segments, r −0.158 / −0.505 /
+        −0.516 / −0.284 and p 0.689 / 0.093 / 0.055 / 0.253 — none of the seven under 0.05.
 
         | recording       | n  | r      | Spearman | permutation p |
         |-----------------|----|--------|----------|---------------|
-        | Sandown 3h 1 ch | 14 | −0.158 | −0.115   | 0.689 |
-        | Sandown 3h 3 ch | 14 | −0.505 | −0.468   | 0.093 |
-        | SD_19_09 1 ch   | 14 | −0.516 | −0.525   | 0.055 |
-        | SD_19_09 2 ch   | 14 | −0.284 | −0.327   | 0.253 |
+        | Sandown 3h 1 ch | 15 | −0.094 | −0.041   | 0.883 |
+        | Sandown 3h 3 ch | 15 | −0.493 | −0.506   | 0.057 |
+        | SD_19_09 1 ch   | 15 | −0.384 | −0.436   | 0.104 |
+        | SD_19_09 2 ch   | 15 | −0.577 | −0.554   | 0.035 |
         | SD_30_08 †      | 15 | −0.297 | −0.335   | 0.218 |
         | MK_18_09 1 ch   | 23 | −0.281 | −0.198   | 0.364 |
         | MK_18_09 2 ch   | 23 | +0.196 | +0.250   | 0.248 |
 
-        None of the seven is distinguishable from chance at p < 0.05, and the strongest r
-        (SD_19_09 1 ch) explains 27 % of the variance in beat rate — as on D24, where none of five
-        was and the strongest explained 11 %. The table before that (#213, before #300, on the
+        One of the seven is distinguishable from chance at p < 0.05, and the strongest r
+        (SD_19_09 2 ch) explains 33 % of the variance in beat rate — against D24, where none of five
+        was and the strongest explained 11 %. One row in seven at p = 0.035, beside three more
+        between 0.05 and 0.11, is a hint of a coupling on SD_19_09, not an established one: seven
+        tests at 0.05 expect a third of a false positive. The table before that (#213, before #300, on the
         loader's start lines) found one of five under 0.05, and was not measured the way it said:
         every row kept one POINT segment (a zero-width edge segment of the reference lap that reads
         0 s on some laps and a sliver on others), its Spearman broke tied beat rates in sort order,
@@ -1208,11 +1213,12 @@ class CornerModel:
         time) instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the
         Sandown recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is
         nowhere near anything anybody drove — and following the donor cut that to −0.159 s.
-        Re-measured on the working set (T16b), the worst excursion is **−0.262 s**, on SD_30_08 on
-        the loader's own start line (−0.255 s on the owner's saved one; 1.43 % of samples on
-        Sandown 3h 3 chapters and 10.75 % on SD_30_08 are negative on the loader's lines — the
-        per-recording table is in `theme.format_ideal_run`'s note), which is then a real "you were
-        up on the ideal through here" rather than an artefact of the drawing.
+        Re-measured on the working set (T16b, and again once Q2 made Sandown Park a built-in), the
+        worst excursion is **−0.255 s**, on SD_30_08, where the built-in line and the line saved
+        beside the recording are one line (8.32 % of samples on SD_30_08 are negative, 2.40 % on
+        SD_19_09 2 chapters and 0.00 % on Sandown 3h 3 chapters — the per-recording table is in
+        `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
+        here" rather than an artefact of the drawing.
 
         Those figures read −0.052 s / "under 1 %" until #211 redid this sweep: the original was
         measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the

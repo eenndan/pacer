@@ -827,8 +827,8 @@ def test_the_table_shows_the_sample_its_two_time_columns_are_minima_over():
     0.47 s and 0.57 s apart, entirely on lap count. Those are the two rows this test builds.
 
     WHY A COLUMN AND NOT A SORT REFUSAL on `Ideal lap`, which was the obvious alternative:
-    measured over random subsets of the clean laps, the ideal falls 0.166-0.740 s per doubling of
-    lap count and the BEST LAP falls 0.077-0.905 s — the same order of magnitude on all five of
+    measured over random subsets of the clean laps, the ideal falls 0.160-0.742 s per doubling of
+    lap count and the BEST LAP falls 0.082-0.785 s — the same order of magnitude on all five of
     the owner's working-set recordings, and on Sandown 3h's first chapter the best lap falls the
     faster of the two (corner_model.IdealSample, T16b). Un-sorting one
     column while the other kept its sort would advertise a distinction the numbers do not support,

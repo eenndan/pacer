@@ -14,6 +14,12 @@ it names no `GONE` recording and must carry NO mark — a mark left on it would 
 table as unverifiable — and its quotes drop their date. What it replaced is kept beside it as a
 record that still carries its mark. The marks stay on what could not be re-measured.
 
+The same day Q2 made Sandown Park a built-in track, on the owner's own saved start line, so a jailed
+check stopped auto-fitting one there. Every table with a Sandown row was re-measured by its footage
+check on the built-in line and republished; they stay `CURRENT`, and where a figure's conclusion moved
+the publishing docstring says what it read on the loader's line before. Nothing here changed: no
+recording came back and none left, so no mark moved.
+
 This module is the vocabulary both test files share. It has no Qt, no pacer and no numpy:
 
   * `GONE` names the recordings that are no longer available. A recording comes off the list only
