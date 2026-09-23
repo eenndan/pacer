@@ -249,9 +249,16 @@ PRIVACY_PARAGRAPHS = [
     # "the sidecars and the library only" was already false — forgetting has taken the session
     # record with it since that store landed, and now the marks too. Said as what it DOES cover it
     # costs no line and stops understating the gesture.
+    # THE LOG FILE IS NAMED HERE, NOT IN A BULLET OF ITS OWN (E2). It is a file the app writes, so
+    # this card has to say so, but the card had 13 px of slack (a 667 px body in its 680 px cap on
+    # the 800 px harness display, measured): a two-line bullet took the body to 711 px and opened
+    # the card on a scrollbar. The words added below land on this paragraph's last line, so the card
+    # is exactly as tall as it was; longer wordings ("the app's warnings log …") measured one line
+    # over. What the log holds is said where it is needed: the crash dialog names it.
     "\"Clear library\" to wipe the whole index. That covers a recording's own data only — "
-    "to remove everything, including your preferences and saved tracks, quit Pacer and delete the "
-    "folder \"~/Library/Application Support/pacer\". Your video files are never touched.",
+    "to remove everything, including your preferences, saved tracks and log file "
+    "(logs/pacer.log), quit Pacer and delete the folder \"~/Library/Application Support/pacer\". "
+    "Your video files are never touched.",
 ]
 
 APP_TAGLINE = "Race-telemetry analysis for GoPro footage."

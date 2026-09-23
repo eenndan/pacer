@@ -1340,6 +1340,18 @@ add_test(NAME test_quality_chip_trust
 set_tests_properties(test_quality_chip_trust PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# THE SESSION LOG (E2): every record the app logs reaches stderr (unchanged) AND a rotating
+# <app-support>/logs/pacer.log — the only one of the two a Finder-launched .app keeps. Drives the
+# real startup call (app.install_excepthook) in a jailed child that ends by SIGKILLing itself, and
+# reads back a warning from every logger family, a real Qt C++ warning and an unhandled thread
+# exception's traceback; an unwritable log dir and a mid-session write failure (RLIMIT_FSIZE) each
+# degrade to stderr and say so once; configure() is idempotent; three files of at most 512 KB; the
+# crash dialog names the log. Offscreen Qt; the bindings because it imports studio.app.
+add_test(NAME test_session_log
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_log.py)
+set_tests_properties(test_session_log PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # NO TEST MAY REACH THE OWNER'S REAL APP-SUPPORT DIRECTORY (H8). On 2026-09-17 a ctest run wrote a
 # `stadium` row from the synthetic fixture into the owner's real library.json: test_load_failure
 # patched no seam, and its library write had been dead only while a test double raised first.

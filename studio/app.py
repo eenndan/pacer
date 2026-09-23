@@ -51,6 +51,7 @@ from . import (
     demo,
     ingest,
     library,
+    logsetup,
     prefs,
     share_card,
     sidecar,
@@ -159,6 +160,10 @@ DEMO_UNAVAILABLE_MESSAGE = (
 
 _log = logging.getLogger("studio.app")
 
+# The crash dialog's pointer to the session log (studio.logsetup), followed on the next line by the
+# log's path. The SHORT product name, because it is a sentence (studio/__init__.py's convention).
+CRASH_LOG_LINE = "Pacer's log of this session has the details — attach it to your report:"
+
 
 def _show_error_report(exc_type, exc, tb):
     """Show a themed "Something went wrong" dialog for an otherwise-unhandled exception, with the
@@ -166,19 +171,28 @@ def _show_error_report(exc_type, exc, tb):
     (the same ISSUES_URL as Help ▸ Report a problem…). Factored out of the excepthook so a test can
     call it directly (with QDesktopServices.openUrl monkeypatched) without actually raising.
 
-    The full traceback is logged to stderr by the excepthook (dev console trace kept); here it is the
+    The full traceback is logged by the excepthook (stderr and the session log); here it is the
     user-facing surface — a plain-language headline + the raw class name only inside Details, matching
     the load-failure dialog's tone. Returns the dialog so a caller/test can inspect it."""
     import traceback
 
     summary = f"{exc_type.__name__}: {exc}" if exc is not None else exc_type.__name__
     detail = "".join(traceback.format_exception(exc_type, exc, tb))
-    box = QMessageBox(
-        QMessageBox.Critical, f"{APP_NAME} — something went wrong",
-        f"Something went wrong and {APP_NAME} hit an unexpected error.\n\n"
-        "The app is still running — you can keep working, but if this keeps happening, "
-        "please report it so it can be fixed.\n\n"
-        f"{summary}")
+    text = (f"Something went wrong and {APP_NAME} hit an unexpected error.\n\n"
+            "The app is still running — you can keep working, but if this keeps happening, "
+            "please report it so it can be fixed.\n\n"
+            f"{summary}")
+    # WHERE THE LOG IS, on the one surface that appears when it is needed. The excepthook has
+    # already written this traceback there, beside every warning that led up to it; in a .app
+    # launched from Finder it is the only copy that outlives the dialog. Only a log actually being
+    # written is named — pointing at a file that never opened would send the user looking for
+    # nothing.
+    log = logsetup.active_log_path()
+    if log is not None:
+        text += f"\n\n{CRASH_LOG_LINE}\n{logsetup.display_path(log)}"
+    box = QMessageBox(QMessageBox.Critical, f"{APP_NAME} — something went wrong", text)
+    # Selectable, so the path can be copied into Finder's Go to Folder (⇧⌘G) or the report.
+    box.setTextInteractionFlags(Qt.TextSelectableByMouse)
     # The BODY has to carry the product name. macOS drops a QMessageBox's window title — the
     # constructor's title argument above leaves windowTitle() == '' here, and setting it explicitly
     # does not change that — so on the one surface that shows up when the app is already
@@ -254,7 +268,7 @@ def _report_is_showable(exc_type=None, tb=None) -> str | None:
 
 def _excepthook(exc_type, exc, tb):
     """Top-level sys.excepthook (installed by main() AFTER the QApplication exists): log the full
-    traceback to stderr AND, if a QApplication is running, surface it in a themed Report-a-problem
+    traceback (stderr and the session log) AND, if a QApplication is running, surface it in a themed Report-a-problem
     dialog rather than silently dying. Without this, an unhandled exception in ANY signal handler (a
     start-line drag, a scrub tick, a menu action, the g-meter repaint) propagates to Qt's default
     handler, which on PySide6 prints to a stderr the user never sees and can silently kill the app
@@ -268,9 +282,12 @@ def _excepthook(exc_type, exc, tb):
     guarded — on any failure it falls back to the default excepthook. It does NOT sys.exit: a
     recoverable slot error should leave the app alive where it can."""
     try:
-        # Keep the console trace for devs (and for the pre-/no-QApplication headless/CLI case, this is
-        # the whole behaviour — a normal stderr traceback).
-        sys.__excepthook__(exc_type, exc, tb)
+        # The traceback goes through `logging`, not straight to stderr: the root logger puts it on
+        # stderr (the dev console trace, as before) AND in the session log (studio.logsetup), which
+        # in a Finder-launched .app is the only one of the two that exists. With logging not
+        # configured at all (a headless caller), the stdlib's last-resort handler still prints it,
+        # traceback included, to stderr — so that case keeps its normal trace too.
+        _log.error("unhandled exception", exc_info=(exc_type, exc, tb))
         app = QApplication.instance()
         if app is None:
             return  # pre-QApplication / headless: the stderr trace above is the correct behaviour
@@ -337,13 +354,12 @@ def install_excepthook():
     and Qt slots), `threading.excepthook` (the export's plain threads — measured as reaching
     nothing at all before this), and `qInstallMessageHandler` (Qt's own C++ warnings).
 
-    Logging is configured to stderr only, deliberately. A log FILE is the obvious next step for the
-    frozen .app and is NOT taken here: it would be a fifth app-support writer, and §7.5's own
-    finding is that an unwritable app-support dir already fails silently — a log file that cannot
-    be written would be one more of exactly that."""
-    if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO, stream=sys.stderr,
-                            format="%(levelname)s %(name)s: %(message)s")
+    All three report through `logging`, which `logsetup.configure` points at stderr (the dev
+    console, in the format it always had) AND a rotating session log under app-support — the half
+    a Finder-launched .app, whose stderr is /dev/null, actually keeps. The file half is best
+    effort: an app-support dir it cannot write leaves stderr alone and says so there, once,
+    rather than being one more thing that fails silently (§7.5)."""
+    logsetup.configure()
     sys.excepthook = _excepthook
     threading.excepthook = _thread_excepthook
     qInstallMessageHandler(_qt_message_handler)

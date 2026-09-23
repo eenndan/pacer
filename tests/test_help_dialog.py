@@ -433,12 +433,16 @@ print("RESULT " + json.dumps(dict(avail=avail, opened=opened, floor=d.height(),
 
 # --------------------------------------------------- L1-04: the privacy card names every store
 def test_privacy_card_names_every_store_it_writes():
-    from studio import library, prefs, track_db
+    from studio import library, logsetup, prefs, track_db
     copy = " ".join(PRIVACY_PARAGRAPHS)
     for store in (os.path.basename(prefs.prefs_path()),
                   os.path.basename(track_db.db_path()),
                   os.path.basename(library.library_path())):
         assert store in copy, f"{store} is written by the app but not disclosed"
+    # E2: the session log is a file the app writes too, and it holds file paths. Named in the
+    # removal route, as the path under the folder that route deletes.
+    log_rel = f"{logsetup.LOG_DIR_NAME}/{logsetup.LOG_FILENAME}"
+    assert log_rel in copy, f"the session log ({log_rel}) is written by the app but not disclosed"
     assert ".pacer.json" in copy or "pacer.json" in copy, copy
     # The sidecar bullet's "only" was false at app scope (the app also stores GPS coordinates in
     # tracks.json and a filesystem path in prefs.json), under a card that frames the list as
