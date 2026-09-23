@@ -1826,57 +1826,91 @@ def _space_spec(out_path, t1=60.0, **cfg):
                          src_path="/nonexistent/GX010099.MP4", config=EV.OverlayConfig(**cfg))
 
 
+class _Encoder:
+    """Pin the H.264 encoder `resolve_encoder` answers with, for the length of a `with` block.
+
+    THE ENCODER IS A PROPERTY OF THE MACHINE, so any expected size that depends on it has to name
+    it. This Mac opens a VideoToolbox session; the GitHub macos-14 runner does not, and resolves
+    "auto" to libx264 — where an unpinned estimate of the same 60 s lap is 317,260,800 B against
+    VideoToolbox's 46,656,000 B. That is exactly how the first version of the test below passed
+    here and failed in CI."""
+
+    def __init__(self, codec):
+        self.codec = codec
+
+    def __enter__(self):
+        from studio import export_video as EV
+        self._real = EV.resolve_encoder
+        EV.resolve_encoder = lambda _choice: self.codec
+        return self
+
+    def __exit__(self, *_exc):
+        from studio import export_video as EV
+        EV.resolve_encoder = self._real
+
+
 def _guard(specs, free, asked=None):
-    """guard_free_space over `specs` with a 4K 59.94 source, VideoToolbox, and `free` bytes."""
+    """guard_free_space over `specs` with a 4K 59.94 source and `free` bytes, on whichever encoder
+    the caller has pinned with `_Encoder`."""
     from studio import export_video as EV
-    real_free, real_enc = EV.free_bytes, EV.resolve_encoder
+    real_free = EV.free_bytes
     EV.free_bytes = lambda p: (asked.append(p) if asked is not None else None, free)[1]
-    EV.resolve_encoder = lambda _c: EV.VT_H264
     try:
         EV.guard_free_space(specs, probe=lambda _p: (3840, 2160, 60000 / 1001))
     finally:
-        EV.free_bytes, EV.resolve_encoder = real_free, real_enc
+        EV.free_bytes = real_free
 
 
 def test_the_guard_refuses_below_its_floor_and_nothing_at_or_above_it():
-    """The threshold, to the byte, on both sides: the guard requires FREE_SPACE_FLOOR_FRACTION of
-    the central estimate, less what the render reclaims by overwriting a previous one. One byte
-    short is refused with the three numbers; exactly enough, or a volume that cannot be asked,
-    refuses nothing."""
+    """The threshold, to the byte, on both sides, on BOTH H.264 encoders: the guard requires
+    FREE_SPACE_FLOOR_FRACTION[codec] of the central estimate, less what the render reclaims by
+    overwriting a previous one. One byte short is refused with the three numbers; exactly enough,
+    or a volume that cannot be asked, refuses nothing.
+
+    Each encoder is PINNED (`_Encoder`) — the resolved one is a property of the machine — so this
+    asserts the VideoToolbox arithmetic and the libx264 arithmetic on every machine, including one
+    where only one of them could ever be resolved."""
     import tempfile as _tempfile
 
     from studio import export_video as EV
 
     probe = lambda _p: (3840, 2160, 60000 / 1001)  # noqa: E731
-    with _tempfile.TemporaryDirectory() as td:
-        spec = _space_spec(os.path.join(td, "lap.mp4"))
-        est = EV.estimate_spec_bytes(spec, probe)
-        assert est == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * 60.0 / 8), est
-        need = int(est * EV.FREE_SPACE_FLOOR_FRACTION[EV.VT_H264])
-        asked = []
-        _guard([spec], need, asked)                         # exactly enough: runs
-        assert asked == [td], asked
-        _guard([spec], None)                                # unknown: runs
-        try:
-            _guard([spec], need - 1)
-        except EV.InsufficientSpaceError as exc:
-            text = str(exc)
-        else:
-            raise AssertionError("one byte below the floor was not refused")
-        assert EV.is_refused_for_space(text) and not EV.is_out_of_space(text), text
-        assert f"about {EV.fmt_bytes(est)}" in text and td in text, text
-        assert f"({EV.fmt_bytes(need)})" in text or f"{need / 1e6:,.0f} MB" in text, text
+    expected = {   # what the module states for a 60 s, 1080p30, "high" clip, per encoder
+        EV.VT_H264: int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * 60.0 / 8),
+        EV.SW_H264: int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * 60.0 / 8),
+    }
+    assert expected[EV.VT_H264] != expected[EV.SW_H264], expected
+    for codec, want in expected.items():
+        with _Encoder(codec), _tempfile.TemporaryDirectory() as td:
+            spec = _space_spec(os.path.join(td, "lap.mp4"))
+            est = EV.estimate_spec_bytes(spec, probe)
+            assert est == want, (codec, est, want)
+            need = int(est * EV.FREE_SPACE_FLOOR_FRACTION[codec])
+            asked = []
+            _guard([spec], need, asked)                         # exactly enough: runs
+            assert asked == [td], (codec, asked)
+            _guard([spec], None)                                # unknown: runs
+            try:
+                _guard([spec], need - 1)
+            except EV.InsufficientSpaceError as exc:
+                text = str(exc)
+            else:
+                raise AssertionError(f"{codec}: one byte below the floor was not refused")
+            assert EV.is_refused_for_space(text) and not EV.is_out_of_space(text), text
+            assert f"about {EV.fmt_bytes(est)}" in text and td in text, text
+            assert f"({EV.fmt_bytes(need)})" in text or f"{need / 1e6:,.0f} MB" in text, text
 
-        # Re-exporting over a previous export: ffmpeg's -y truncates it, so it only has to find
-        # the DIFFERENCE. Without this the re-export a user tries first on a full disk is refused.
-        with open(spec.out_path, "wb") as f:
-            f.write(b"\0" * 5_000_000)
-        _guard([spec], need - 5_000_000)
-        try:
-            _guard([spec], need - 5_000_001)
-            raise AssertionError("the reclaim was counted twice")
-        except EV.InsufficientSpaceError:
-            pass
+            # Re-exporting over a previous export: ffmpeg's -y truncates it, so it only has to
+            # find the DIFFERENCE. Without this the re-export a user tries first on a full disk
+            # is refused.
+            with open(spec.out_path, "wb") as f:
+                f.write(b"\0" * 5_000_000)
+            _guard([spec], need - 5_000_000)
+            try:
+                _guard([spec], need - 5_000_001)
+                raise AssertionError(f"{codec}: the reclaim was counted twice")
+            except EV.InsufficientSpaceError:
+                pass
 
     # A PNG sequence reclaims the frames of an earlier sequence it will overwrite (its own
     # numbering, overlay_000001.png..N) and nothing else in that folder.

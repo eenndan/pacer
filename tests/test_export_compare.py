@@ -277,16 +277,21 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
     per pixel. Sized as one pane, the guard would require half of the real floor."""
     probe = {"/a.MP4": (3840, 2160, 60000 / 1001), "/b.MP4": (1920, 1080, 30.0)}.__getitem__
     real_enc = ev.resolve_encoder
-    ev.resolve_encoder = lambda _c: ev.VT_H264
     try:
-        for layout, frame in ((ec.LAYOUT_STACK, (1920, 2160)), (ec.LAYOUT_SIDE, (3840, 1080))):
-            _s, spec = _spec_pair(config=ec.CompareConfig(out_height=1080, layout=layout))
-            assert spec.output_frame(probe) == (*frame, 30.0), (layout, spec.output_frame(probe))
-            single = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=spec.t0, t1=spec.t1,
-                                   src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
-            both, one = ev.estimate_spec_bytes(spec, probe), ev.estimate_spec_bytes(single, probe)
-            assert one > 0 and abs(both - 2 * one) <= 1, (layout, both, one)   # 1 B of rounding
-            spec.cleanup()
+        # BOTH encoders, each pinned: which one "auto" resolves to is a property of the machine
+        # (VideoToolbox here, libx264 on the CI runner), and the doubling must hold on either.
+        for codec in (ev.VT_H264, ev.SW_H264):
+            ev.resolve_encoder = lambda _c, c=codec: c
+            for layout, frame in ((ec.LAYOUT_STACK, (1920, 2160)), (ec.LAYOUT_SIDE, (3840, 1080))):
+                _s, spec = _spec_pair(config=ec.CompareConfig(out_height=1080, layout=layout))
+                assert spec.output_frame(probe) == (*frame, 30.0), (layout, spec.output_frame(probe))
+                single = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=spec.t0, t1=spec.t1,
+                                       src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
+                both = ev.estimate_spec_bytes(spec, probe)
+                one = ev.estimate_spec_bytes(single, probe)
+                # 1 B of rounding: each estimate is truncated to whole bytes on its own.
+                assert one > 0 and abs(both - 2 * one) <= 1, (codec, layout, both, one)
+                spec.cleanup()
     finally:
         ev.resolve_encoder = real_enc
     print("ok free space: a compare is sized as its two-pane frame")
