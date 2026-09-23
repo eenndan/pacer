@@ -4316,8 +4316,11 @@ class StatsView(QWidget):
                          "auto-fitted, not confirmed — every lap time and split below is "
                          "measured from an arbitrary point. Drag it on the map.", True))
         # "" (not None) as the getattr default: a test double that models no track at all must
-        # not be reported as a recording whose track lookup FAILED.
-        if getattr(session, "track_name", "") is None:
+        # not be reported as a recording whose track lookup FAILED. And not on a recording with
+        # no GPS trace: there was no location to look up, and the Timing row below already says
+        # why there is no line — blaming the track database beside it was a second, wrong cause.
+        if (getattr(session, "track_name", "") is None
+                and not data_quality.no_start_line(session)):
             rows.append(("Track",
                          "unknown — not in the track database, so the start/finish line "
                          "could not be placed for you.", True))

@@ -55,13 +55,17 @@ DROPOUT_FLAG = "gps-dropout"
 # the file is comma-separated and a corner label never contains one.
 INTERPOLATED_COLUMN = "corners_interpolated"
 INTERPOLATED_SEP = " "
+# PURE ASCII, like `data_quality.MARK_MEANING` and for its reason: this sentence is a laps.csv
+# trailer row, and that file has been ASCII its whole life (a spreadsheet guessing MacRoman renders
+# an em dash as three characters of junk). It shipped with one, and `test_csv_trailer_stays_ascii`
+# could not see it: its session had no interpolated cell, so this row was never written there.
 INTERPOLATED_NOTE = (
     "corners_interpolated lists the corners this lap did not match on track: their "
     "*_time_s and *_apex_* cells are interpolated between the neighbouring matches, which put "
     "them a median 0.22 s off an independently timed crossing against 0.004 s for a matched one, "
     "measured on one recording before a September 2026 change to corner matching and not "
     "re-measured since. Every value is "
-    "still written — the column says which ones the app's own corner tables leave out.")
+    "still written; the column says which ones the app's own corner tables leave out.")
 
 # laps.csv trailer (the session-summary footer rows mirroring the lap table's footer below
 # the table): a labeled section AFTER the lap rows, separated by one blank row, led by its own
@@ -490,21 +494,29 @@ def _timing_meta(session) -> str:
         card out entirely and what puts the amber banner on the map and the Stats page; a document
         that leaves the app stating those times with no such qualifier is the same defect one
         surface further out.
-      * `timing_quality.degraded` — the media-clock fallback and/or a concerning share of rejected
-        GPS fixes. `concerns()` is the shipped sentence list the in-app data-quality banner stacks,
-        joined here rather than re-worded.
+      * `timing_quality.degraded` — the media-clock fallback, a concerning share of rejected GPS
+        fixes, or no GPS at all. `concerns()` is the shipped sentence list the in-app data-quality
+        banner stacks, joined here rather than re-worded, behind the chip's own word for the state
+        (`data_quality.timing_word`).
 
     Neither wrong ⇒ "verified start line · GPS9 true clock", the plain good case. getattr-guarded
     throughout: a Session double without these is reported as the good case, never as a crash in
     the middle of writing a report."""
     bits = []
-    if not getattr(session, "timing_verified", True):
+    # Not on a recording with no GPS trace: no line was fitted there, and the NO GPS bit below
+    # says what is actually wrong (data_quality.no_start_line).
+    if (not getattr(session, "timing_verified", True)
+            and not data_quality.no_start_line(session)):
         bits.append("PROVISIONAL — the start/finish line was auto-fitted and not confirmed, so "
                     "every lap time and split below is measured from an arbitrary point")
     quality = getattr(session, "timing_quality", None)
     concerns = quality.concerns() if quality is not None else []
     if concerns:
-        bits.append("ESTIMATED — " + " ".join(concerns))
+        # Led by the lap panel's own chip word (ESTIMATED / GPS LOW / NO GPS), not by
+        # "ESTIMATED" for all three: that called a true-clock recording's times estimated, and a
+        # recording with no GPS at all "ESTIMATED — No GPS fixes survived", beside a chip saying
+        # NO GPS. The burned overlay stamp already used the chip's words.
+        bits.append(f"{data_quality.timing_word(quality) or 'ESTIMATED'} — " + " ".join(concerns))
     if not bits:
         bits.append("verified start line · GPS9 true clock")
     return " · ".join(bits)
