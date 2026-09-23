@@ -33,12 +33,17 @@ find_package(Python REQUIRED COMPONENTS Interpreter)
 # (`ctest -L footage`); `pixi run test-fast` reports them SKIPPED by name instead of running them
 # (PACER_FOOTAGE_DEFAULTS=off), and `pixi run test` runs them with everything else. TIMEOUT: with
 # footage present one check loads several multi-GB recordings, far past the suite's --timeout.
+# RESOURCE_LOCK footage: the suite runs four tests at once (CTEST_PARALLEL_LEVEL, pyproject.toml),
+# and these are the ffmpeg-heavy ones — one re-encodes a whole lap twice — so they run one at a
+# time, as they always have, beside the light suites rather than beside each other.
+# test_footage_checks pins it.
 function(add_footage_test file check)
     add_test(NAME footage.${check}
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --footage ${check})
     set_tests_properties(footage.${check} PROPERTIES
                          SKIP_RETURN_CODE 77
                          LABELS footage
+                         RESOURCE_LOCK footage
                          TIMEOUT 3600
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endfunction()
@@ -990,14 +995,21 @@ add_test(NAME test_repo_write_safety
 set_tests_properties(test_repo_write_safety PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
-# ...and the other direction: a test may not write a FIXED name into the shared $TMPDIR. ctest runs
-# serially, so this never bites inside one run — but $TMPDIR is /tmp/claude-501, keyed on the uid
-# and shared by every concurrent agent lane, and test_export_compare's teardown deleted a clip
-# another lane's ffprobe was still decoding. That failure looks like a real export defect and cost
-# two separate agents a full diagnosis (#296, #298). AST-only: no Qt, no bindings, no temp files of
-# its own, milliseconds.
+# ...and the other direction: a test may not write a FIXED name into the shared $TMPDIR. $TMPDIR is
+# /tmp/claude-501, keyed on the uid and shared by every concurrent agent lane, and ctest now runs
+# four tests at once, so two registrations of ONE run can collide as well as two runs.
+# test_export_compare's teardown deleted a clip another lane's ffprobe was still decoding. That
+# failure looks like a real export defect and cost two separate agents a full diagnosis (#296,
+# #298). AST-only: no Qt, no bindings, no temp files of its own, milliseconds.
 add_test(NAME test_temp_isolation
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_temp_isolation.py)
+
+# THE SUITE RUNS IN PARALLEL BY DEFAULT, AND A RUN CAN STILL BE MADE SERIAL: `pixi run test` and
+# `test-fast` set CTEST_PARALLEL_LEVEL (a task that loses it silently goes back to one core) and
+# carry no -j of their own (ctest 4 rejects a second one, so `pixi run test-fast -j1` would fail).
+# The measurements behind the level are in pyproject.toml. Pure tomllib, milliseconds.
+add_test(NAME test_parallel_suite
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_parallel_suite.py)
 
 # THE SEAM-CROSSING branch of the overlay export's source resolution. A lap window that spans a
 # GoPro chapter boundary decodes through the concat demuxer, and its first frame out has to BE the
