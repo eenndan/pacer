@@ -500,8 +500,14 @@ LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s",
 #: column inserted before it moves the menu with it.
 _CORNER_BEST_COL = 1
 
+# ONE NAME FOR GRIP, the Corners tab's (`lap_table.CORNER_COLUMNS`) and the map's: it is the same
+# `driving.corner_grip` reading, and until #350's follow-up this column alone called it "Grip %".
+# The % moved to the section heading, the way the Corners tab puts it in its unit caption.
+# Measured on Sandown 3h and MK_18_09: the header's ink is 42 -> 57 px, the column 85 -> 101 px and
+# the table 718 -> 734 px. That costs no column at the 1260 / 1420 / 1900 px dashboard widths (same
+# composition, nothing hidden). In a quadrant this table already scrolls, and 16 px more of it does.
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
-                  "Grip %"]
+                  theme.estimated_label("Grip")]
 WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
 # ...and MARKED, not merely tinted. The cue used to be hue and nothing else — tinted and plain
 # cells were identical in size, weight, family, alignment and format, and carried the same tooltip
@@ -531,11 +537,12 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "time-in-corner, the median loss VS THE BEST ANYONE DID IN THAT CORNER "
                    "(this column's own Best cell — not your best lap's corner, which is what the "
                    "Coaching page measures against and why its numbers are smaller), apex speeds "
-                   "and median grip utilization. "
+                   "and median grip utilization (ESTIMATED, % of the session's grip envelope). "
                    # One row per corner, so this column is the one grip surface whose only on-screen
                    # comparison is the unsupported one — and it sorts. The shared sentence says so,
                    # and where the supported comparison lives (theme.GRIP_COMPARE_NOTE).
-                   f"Grip %: {theme.GRIP_COMPARE_NOTE} The Corners tab shows it lap by lap. "
+                   f"{CORNER_COLUMNS[-1]}: {theme.GRIP_COMPARE_NOTE} The Corners tab shows it lap "
+                   "by lap. "
                    "Every column counts only the laps whose corner was matched to your best lap's "
                    "line on track at entry AND exit: an interpolated corner can be tenths of a "
                    "second out, so it is left out (hover Best or Median for how many laps count), "
@@ -601,7 +608,11 @@ BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the c
                    "in the reference lap's odometer) plus commitment — the median event's "
                    "peak decel as a % of the session's demonstrated maximum — and the "
                    "ESTIMATED median metres you could brake later (the D4 brake-point "
-                   "model). Corners with no matched brake event are omitted. Honesty floor: "
+                   "model). Corners with no matched brake event are omitted. A lap counts at a "
+                   "corner only where it was matched to your best lap's line on track at the "
+                   "corner's entry and exit — the rule the CORNERS table counts by — because a "
+                   "brake point is read inside that window; so n can be fewer than the clean laps "
+                   "that braked there. Honesty floor: "
                    "10 Hz GPS quantizes the onset by ~1.5 m — a σ at or below that is "
                    "measurement, not driving. Click a row to ring the corner on the map.\n\n"
                    "COMMIT % IS A RATIO INSIDE ONE CHANNEL. Both halves of it — the event's peak "
@@ -853,6 +864,14 @@ COASTING_TOOLTIP = (
     "straight is split at the edge, never counted twice. s / lap is the session's coasting in that "
     "place divided by the clean laps, so the column adds up to the MEAN coasting per lap, not the "
     "median the DRIVING tile shows; Laps counts the clean laps that coasted there at all.\n\n"
+    # #339 kept this table counting every lap ON PURPOSE (CornerModel.lap_corner_resolved has the
+    # measurement) and said so only in code. It shares the STRAIGHTS table's pieces and says so one
+    # sentence up, so a reader would take the STRAIGHTS table's lap rule with them.
+    "Unlike the CORNERS and STRAIGHTS tables, it keeps every clean lap — including a lap whose "
+    "corner edge could not be matched to your best lap's line on track and was interpolated. "
+    "Leaving those laps out piece by piece would stop the column adding up to the laps' "
+    "coasting; the cost is that, next to an interpolated edge, that lap's coasting may be split "
+    "at the wrong point.\n\n"
     "This is where the coasting HAPPENS, not where it costs time. Coaching's “coasting” "
     "reason is a different number: how much longer your typical lap coasts in a corner than your "
     "best lap does.\n\n"
@@ -2129,7 +2148,12 @@ class StatsView(QWidget):
         # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
         # from the per-lap aligned thirds decomposition — coach-grade, and computed, not
         # modeled. Hidden with the section / without phase data.
-        phase_tip = ("Every clean lap's Δt-vs-best through each corner, split into "
+        # "WHERE BOTH WERE MATCHED": since C4 (#331) `Session.phase_report` counts a lap's triple
+        # only where that lap AND the best lap it is subtracted from were matched on track at the
+        # corner's edges. This sentence opened "Every clean lap's" from before that.
+        phase_tip = ("Each clean lap's Δt-vs-best through each corner — where the lap and your "
+                     "best lap were both matched on track at its entry and exit, the laps the "
+                     "CORNERS table counts — split into "
                      "equal-distance entry / apex / exit thirds (the same decomposition the "
                      "coaching reasons use), medianed per corner, positive parts summed. "
                      "Seconds = what a typical lap gives away in that phase across the whole "
@@ -3942,7 +3966,9 @@ class StatsView(QWidget):
             self.corners_table.setRowCount(0)
             self.corners_note.setText("")
             return
-        self._corners_section.setText(f"CORNERS · speeds in {u_label}")
+        # The Grip column's % lives here, as it does in the Corners tab's unit caption: the header
+        # carries the name every grip surface shares (see CORNER_COLUMNS).
+        self._corners_section.setText(f"CORNERS · speeds in {u_label} · grip %")
         self.corners_note.setText(self._corners_note_text(session, report))
         # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
         # "behind" hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
@@ -4290,8 +4316,11 @@ class StatsView(QWidget):
                          "auto-fitted, not confirmed — every lap time and split below is "
                          "measured from an arbitrary point. Drag it on the map.", True))
         # "" (not None) as the getattr default: a test double that models no track at all must
-        # not be reported as a recording whose track lookup FAILED.
-        if getattr(session, "track_name", "") is None:
+        # not be reported as a recording whose track lookup FAILED. And not on a recording with
+        # no GPS trace: there was no location to look up, and the Timing row below already says
+        # why there is no line — blaming the track database beside it was a second, wrong cause.
+        if (getattr(session, "track_name", "") is None
+                and not data_quality.no_start_line(session)):
             rows.append(("Track",
                          "unknown — not in the track database, so the start/finish line "
                          "could not be placed for you.", True))
@@ -4429,7 +4458,7 @@ class StatsView(QWidget):
             rows.append(("g-meter", value, bool(refusal)))
         else:
             # The card used to go SILENT about the g channel exactly when it is missing — while
-            # the peak-g tiles, the per-lap g columns and the corner Grip % all render em-dashes
+            # the peak-g tiles, the per-lap g columns and the corner Grip (est) all render em-dashes
             # with no stated reason anywhere on the window. Split on NO_GMETER_NOTE's own "term:
             # value" colon so the constant stays the single source of that sentence.
             term, _, value = NO_GMETER_NOTE.partition(": ")

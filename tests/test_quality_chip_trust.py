@@ -378,8 +378,58 @@ def test_leaving_the_stats_page_clears_the_mark():
     print("test_leaving_the_stats_page_clears_the_mark OK")
 
 
+def test_a_recording_with_no_gps_asks_for_no_start_line():
+    """NO GPS means there is no trace and so no start/finish line to confirm. The surfaces around
+    the chip must not say otherwise.
+
+    Measured on the real window over karma.mp4 (0 fixes, start line (0,0)-(0,0)) before the fix:
+      * the map's trust strip opened with the amber call to action "Lap timing is unverified — drag
+        the start/finish line on the map to where a lap begins.", directly above its own second line
+        "No usable GPS in this recording — no lap can be timed.";
+      * the DATA TRUST card the NO GPS chip opens gave a second, wrong cause beside the Timing row:
+        "Track: unknown — not in the track database, so the start/finish line could not be placed
+        for you.";
+      * the report and the copied summary led with "PROVISIONAL — the start/finish line was
+        auto-fitted and not confirmed", which is also false: no line was fitted.
+
+    The control is hero6.mp4. It has a media-clock trace and no laps, so dragging the line IS
+    the way out, and it keeps its provisional line."""
+    from studio import export_data
+    win, view, session = _loaded("karma.mp4")
+    try:
+        assert session.timing_quality.no_gps and not session.timing_verified
+        wrong = []
+        if view.provisional_banner.isVisibleTo(view):
+            wrong.append(f"strip: {view.provisional_banner.text()!r}")
+        if not view.quality_banner.isVisibleTo(view):
+            wrong.append("strip: the NO GPS line itself is gone")
+        card = {t: v for t, v, _c in view.stats_view.trust_card.rows()}
+        if "Track" in card:
+            wrong.append(f"card: Track: {card['Track']!r}")
+        if "Timing" not in card:
+            wrong.append("card: the Timing row the chip opens is gone")
+        if view.map._provisional_label is not None:
+            wrong.append("map: the dashed 'drag to set start/finish' cue is drawn")
+        meta = export_data._timing_meta(session)
+        if "PROVISIONAL" in meta or "NO GPS" not in meta:
+            wrong.append(f"export Timing: {meta!r}")
+        assert not wrong, ("a recording with no GPS still asks for a start/finish line:\n  "
+                           + "\n  ".join(wrong))
+    finally:
+        _close(win)
+    win, view, session = _loaded("hero6.mp4")
+    try:
+        assert not session.timing_quality.no_gps and not session.timing_verified
+        assert view.provisional_banner.isVisibleTo(view), "the control lost its call to action"
+        assert "PROVISIONAL" in export_data._timing_meta(session)
+    finally:
+        _close(win)
+    print("test_a_recording_with_no_gps_asks_for_no_start_line OK")
+
+
 if __name__ == "__main__":
     test_every_state_the_chip_shows_names_the_same_fact_as_the_row_it_opens()
+    test_a_recording_with_no_gps_asks_for_no_start_line()
     test_a_clean_recording_keeps_its_timing_row_and_hides_the_chip()
     test_the_chip_is_a_keyboard_stop_only_while_it_is_shown()
     test_the_shown_chip_keeps_its_amber_pill_and_rings_on_focus_without_moving()

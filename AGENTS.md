@@ -306,10 +306,11 @@ the golden gate above.
 
 **Before proposing a feature, check it was not already measured and refused.**
 [studio/docs/refused-2026-09.md](studio/docs/refused-2026-09.md) records the ones whose evidence
-would otherwise live only in a closed pull request — the mistake-hangover detector, the ideal-lap
-recombination dotplot, a seconds interval on coaching recommendations and the per-corner
-GPS-quality abstain, each with the numbers that killed it. They stay refused unless you bring NEW
-evidence; "it would be nice to have" is not new evidence.
+would otherwise live only in a closed pull request, each with the numbers that killed it — from the
+mistake-hangover detector and the ideal-lap recombination dotplot onwards. Write a new one as the
+next free section on your base: `tests/test_measured_figures.py` derives the intro's count, and
+fails on a doubled or skipped number and on a citation of a section that moved. They stay
+refused unless you bring NEW evidence; "it would be nice to have" is not new evidence.
 
 **Changelog:** a user-visible change (feature, fix, behaviour tweak) gets a line under
 `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR — grouped Added/Changed/Fixed, one

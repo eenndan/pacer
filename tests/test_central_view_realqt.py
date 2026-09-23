@@ -1452,19 +1452,35 @@ def test_every_grip_surface_says_it_compares_laps_not_corners():
 
     FOUR places show it, found by search (every reader of `lap_corner_grip` /
     `lap_grip_utilization` / `grip_median`, and every doc naming the column): the Corners tab's
-    "Grip (est)" column, the Stats page's CORNERS "Grip %" column, the map's Grip line and the
-    driver's guide. They must say the SAME thing, so the three in-app ones carry one shared
-    sentence and the guide its words. Each surface is read off the real widget, and every one
-    missing the sentence is named before the test fails, not just the first."""
+    Grip column, the Stats page's CORNERS Grip column, the map's Grip line and the driver's guide.
+    They must say the SAME thing, so the three in-app ones carry one shared sentence and the guide
+    its words. Each surface is read off the real widget, and every one missing the sentence is
+    named before the test fails, not just the first.
+
+    And they must call it by ONE NAME. #350 left the Corners tab and the map saying "Grip (est)"
+    and Stats ▸ CORNERS saying "Grip %" for the same reading; a reader has no way to know those are
+    one number. Every in-app label is read off its widget and must be `estimated_label("Grip")`."""
     view, _s, _t0, _t1 = _real_central_view()
     try:
         corners = view.corner_table.table
-        grip_cols = [c for c in range(corners.columnCount())
-                     if corners.horizontalHeaderItem(c).text().startswith("Grip")]
-        assert len(grip_cols) == 1, "the Corners tab must have exactly one Grip column"
         stats = view.stats_view.corners_table
-        stats_heads = [stats.horizontalHeaderItem(c).text() for c in range(stats.columnCount())]
-        assert "Grip %" in stats_heads, stats_heads
+        combo = view.map.rainbow_combo
+        grip_name = theme.estimated_label("Grip")
+        labels = {
+            "Corners tab header": [corners.horizontalHeaderItem(c).text()
+                                   for c in range(corners.columnCount())],
+            "Stats ▸ CORNERS header": [stats.horizontalHeaderItem(c).text()
+                                       for c in range(stats.columnCount())],
+            "map line-colour entry": [combo.itemText(i).removeprefix("Line: ")
+                                      for i in range(combo.count())],
+        }
+        grip_named = {where: [t for t in texts if "grip" in t.lower()]
+                      for where, texts in labels.items()}
+        misnamed = {where: got for where, got in grip_named.items() if got != [grip_name]}
+        assert not misnamed, (
+            f"one grip reading, one name: every surface must say exactly {grip_name!r}, and these "
+            f"do not: {misnamed}")
+        grip_cols = [labels["Corners tab header"].index(grip_name)]
         guide = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "docs", "FIRST_LAP.md")
         with open(guide, encoding="utf-8") as f:

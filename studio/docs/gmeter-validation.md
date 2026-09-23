@@ -262,7 +262,7 @@ kept:
 | …(0062) | 1.368 g | 1.378 (+0.7 %) | 1.309 (−4.4 %) |
 | `driving.grip_envelope`, the divisor under every grip number (0060 / 0062) | 1.424 / 1.370 g | +1.7 % / +1.1 % | −4.9 % / −4.7 % |
 | peak lateral g tile (0060 / 0062) | 1.717 / 1.858 g | unchanged | 1.503 / 1.495 (−12 % / −20 %) |
-| CORNERS "Grip %" column | 54–78 % | ≤1 point; 0 and 1 of 66 corner pairs reorder | +4 to +6 points; 4 of 66 reorder |
+| CORNERS "Grip (est)" column | 54–78 % | ≤1 point; 0 and 1 of 66 corner pairs reorder | +4 to +6 points; 4 of 66 reorder |
 | per-lap envelope utilization, rank vs shipped | — | ρ +0.970 / +0.974 | ρ +0.965 / +0.925 |
 | cross-check lateral **gain** | 1.092 / 1.108 | unchanged | 1.075 / 1.091 |
 | cross-check lateral r | 0.956 / 0.959 | unchanged | 0.967 / 0.969 |
