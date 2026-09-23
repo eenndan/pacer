@@ -443,8 +443,8 @@ set_tests_properties(test_coaching PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # The FOCUS LIST (studio.focus) — the cross-session training loop and, mostly, the gate that
 # decides whether it may say anything: the lap-FRACTION window (so two sessions whose corner
-# partitions differ still compare the same stretch of track — the D24 pair's C8 window grew 11.2 m
-# and with it 0.549 s of imaginary slowness), the refusals (no session record on either side,
+# partitions differ still compare the same stretch of track — the working-set pair's C1 window
+# shrank 8.2 m and with it −0.567 s of imaginary speed), the refusals (no session record on either side,
 # records that disagree, a provisional start line, ESTIMATED timing, mismatched lap lengths, too
 # few clean laps) each carrying delta=None so no surface can print an unsupported number, the
 # spread test reusing coaching.SPREAD_MARGIN and its IQR, the store's persistence discipline
