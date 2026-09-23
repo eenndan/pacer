@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_export_data import PNG_1PX, make_session, make_stitched_session  # noqa: E402
 
-from studio import export_data, share_card  # noqa: E402
+from studio import data_quality, export_data, share_card  # noqa: E402
 from studio._signal import DASH, fmt_hms, fmt_time  # noqa: E402
 
 
@@ -84,14 +84,45 @@ def test_csv_trailer_stays_ascii():
     """laps.csv is the MACHINE-readable file and has been pure ASCII its whole life; the
     disclosure must not be what breaks that. The caption's separator is a middle dot, so the
     trailer carries the ASCII `sentence()` and the bare `over_laps` integer instead — the two
-    HUMAN surfaces (report, clipboard) print the caption verbatim (asserted below)."""
+    HUMAN surfaces (report, clipboard) print the caption verbatim (asserted below).
+
+    EVERY ROW THE TRAILER CAN CARRY, not only the ideal's. This test used to write the stitched
+    session exactly as it comes — a named track, a clean clock, every corner matched, no break — so
+    the trailer it checked held the two summary rows and nothing else. The quality key, the
+    `corners_interpolated` legend (C5) and the break-in-series row were never written here, and the
+    C5 legend shipped with an em dash in it. That row is not a corner case: on every recording
+    present on the owner's machine (Sandown 3h 2026, SD_19_09_26, MK_18_09_26) at least one lap
+    has an interpolated corner, so every laps.csv they export carried the dash. So the session is
+    driven into each state that adds a row, and the test first asserts the rows are THERE — an
+    ASCII check over rows that were never written passes by construction."""
     s = make_stitched_session()
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "laps.csv")
-        export_data.write_laps_csv(path, s)
-        raw = open(path, "rb").read()
-    raw.decode("ascii")  # raises UnicodeDecodeError the moment a non-ASCII mark creeps in
-    print(f"test_csv_trailer_stays_ascii OK ({len(raw)} bytes, ascii)")
+    s.track_name = None                                  # provisional timing -> [p]
+    s._timing_quality = data_quality.TimingQuality(      # media clock + low GPS -> [e] and [u]
+        clock=data_quality.MEDIA_CLOCK_FALLBACK, dropped_fraction=0.12)
+    s.skipped_chapters = ["GX020001.MP4"]                # [b] and the break-in-series row
+    real = s.corners.lap_corner_resolved
+    s.corners.lap_corner_resolved = lambda lap: [          # one interpolated cell -> the C5 legend
+        ok and not (lap == 0 and k == 0) for k, ok in enumerate(real(lap))]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "laps.csv")
+            export_data.write_laps_csv(path, s)
+            raw = open(path, "rb").read()
+    finally:
+        s.corners.lap_corner_resolved = real
+    text = raw.decode("utf-8")
+    marker = export_data.SUMMARY_MARKER
+    labels = {line.split(",", 1)[0] for line in text.splitlines()
+              if line.startswith(f"{marker}: ")}
+    want = {f"{marker}: {label}" for label in (
+        "Theoretical best", "Best rolling", "quality [p]", "quality [e]", "quality [b]",
+        "quality [u]", export_data.INTERPOLATED_COLUMN, "break in series")}
+    assert want <= labels, f"the trailer never wrote {sorted(want - labels)} — nothing to check"
+    bad = [(line.split(",", 1)[0], sorted({ch for ch in line if ord(ch) > 127}))
+           for line in text.splitlines() if any(ord(ch) > 127 for ch in line)]
+    assert not bad, f"laps.csv is no longer pure ASCII — row: non-ASCII characters {bad}"
+    raw.decode("ascii")  # and the whole file, header and lap rows included
+    print(f"test_csv_trailer_stays_ascii OK ({len(raw)} bytes, ascii, {len(labels)} trailer rows)")
 
 
 def test_report_prints_the_ideal_with_its_caption_and_sentence():
@@ -334,6 +365,47 @@ def test_report_states_what_the_timing_is_worth():
     doc = _write_report(s)
     assert "PROVISIONAL" in doc and "arbitrary point" in doc, doc[:2000]
     print("test_report_states_what_the_timing_is_worth OK")
+
+
+def test_the_exported_timing_names_the_clock_state_in_the_chips_word():
+    """The report's Timing row and the clipboard's `Timing:` line name a degraded clock with the
+    lap panel's own chip word: ESTIMATED, GPS LOW or NO GPS.
+
+    They used to prefix EVERY degraded state with "ESTIMATED —". On a true-clock recording whose
+    only concern is rejected fixes that is the overclaim the chip itself was corrected for (M3: the
+    word "estimated" is reserved for the media-clock fallback), and on a recording with no GPS at
+    all it read "ESTIMATED — No GPS fixes survived", beside a chip saying NO GPS (#333) and a
+    burned-in overlay stamp saying GPS LOW for the other state. One session, three exports, two
+    vocabularies.
+
+    The words are spelled out here, not read from the code under test, so a test comparing a
+    constant with itself cannot pass it. They are the chip's words (`_refresh_quality_badge`,
+    pinned literally by tests/test_quality_chip_trust.py) and the burned stamp's."""
+    cases = (
+        ("media clock", data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK),
+         "ESTIMATED"),
+        ("true clock, 12 % rejected", data_quality.TimingQuality(dropped_fraction=0.12),
+         "GPS LOW"),
+        ("no GPS trace", data_quality.TimingQuality(clock=data_quality.NO_GPS_TRACE), "NO GPS"),
+        ("media clock and 12 % rejected",
+         data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK,
+                                    dropped_fraction=0.12), "ESTIMATED"),
+    )
+    wrong = []
+    for name, quality, word in cases:
+        s = make_stitched_session()
+        s._timing_quality = quality
+        meta = export_data._timing_meta(s)
+        text = export_data.stats_summary_text(s, None)
+        doc = _write_report(s)
+        if f"{word} — " not in meta:
+            wrong.append(f"{name}: the Timing line does not say {word!r}: {meta!r}")
+        if word != "ESTIMATED" and "ESTIMATED" in meta:
+            wrong.append(f"{name}: a {word} clock is called ESTIMATED: {meta!r}")
+        if f"Timing: {meta}" not in text or meta not in doc:
+            wrong.append(f"{name}: the clipboard and the report do not both carry {meta!r}")
+    assert not wrong, "\n".join(wrong)
+    print("test_the_exported_timing_names_the_clock_state_in_the_chips_word OK")
 
 
 def test_clipboard_text_is_plain_and_complete():
@@ -623,6 +695,7 @@ if __name__ == "__main__":
     test_the_clipboard_summary_states_the_timing_too()
     test_pace_group_follows_the_pages_gate_not_the_pace_summarys()
     test_report_states_what_the_timing_is_worth()
+    test_the_exported_timing_names_the_clock_state_in_the_chips_word()
     test_clipboard_text_is_plain_and_complete()
     test_writers_are_atomic_and_leave_no_partial_file()
     test_a_users_own_tmp_file_beside_the_target_survives()
