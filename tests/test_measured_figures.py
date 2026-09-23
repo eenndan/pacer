@@ -113,6 +113,11 @@ _WORDS = dict(enumerate("zero one two three four five six seven eight nine ten e
                         "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()))
 
 
+def _opening(n: int) -> str:
+    """A count as a sentence opens with it: "None", "One", … "Seven"."""
+    return "None" if n == 0 else _WORDS[n].capitalize()
+
+
 # ─── coaching.py: the evidence table ─────────────────────────────────────────────────────────────
 class EvRow:
     def __init__(self, rec, cid, rank, lost, sigma, iqr, reached, laps, gate):
@@ -770,11 +775,13 @@ class BeatRow:
         return f"<{self.name}{' †' if self.saved else ''} n {self.n} r {self.r:+} ρ {self.rho:+} p {self.p}>"
 
 
-_BEAT_LINE = re.compile(r"^\s+\| (D24 1 ch|D24 3 ch|Sandown ch 1|Sandown 3 ch|SD_30_08)( †)?\s*\|\s+(\d+)\s*\| "
+# The beat-rate table's names for the lap sets the floor table names in full. T16b re-based both on
+# the working set (2026-09-23); the D24 and Sandown_09_05_2026 names went with the rows they named.
+_BEAT_SETS = {"Sandown 3h 1 ch": "Sandown 3h 1 chapter", "Sandown 3h 3 ch": "Sandown 3h 3 chapters",
+              "SD_19_09 1 ch": "SD_19_09 1 chapter", "SD_19_09 2 ch": "SD_19_09 2 chapters",
+              "SD_30_08": "SD_30_08", "MK_18_09 1 ch": "MK_18_09 1 chapter", "MK_18_09 2 ch": "MK_18_09 2 chapters"}
+_BEAT_LINE = re.compile(r"^\s+\| (" + "|".join(map(re.escape, _BEAT_SETS)) + r")( †)?\s*\|\s+(\d+)\s*\| "
                         r"([−+-]\d\.\d{3}) \| ([−+-]\d\.\d{3})\s*\| (\d\.\d{3}) \|\s*$")
-# The beat-rate table's names for the lap sets the floor table names in full.
-_BEAT_SETS = {"D24 1 ch": "D24 1 chapter", "D24 3 ch": "D24 3 chapters", "Sandown ch 1": "Sandown chapter 1",
-              "Sandown 3 ch": "Sandown 3 chapters", "SD_30_08": "SD_30_08"}
 
 
 def _beat_rows() -> list[BeatRow]:
@@ -794,14 +801,15 @@ def test_the_beat_rate_verdict_is_derived_from_its_table():
     many r are negative — all recomputed from the cells."""
     rows = _beat_rows()
     text = _flatten(_read(_CORNER_MODEL))
-    words = {0: "None", 1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five"}
     _constant(_CORNER_MODEL, "POINT_SPAN_M")   # the method names it; it must still exist
-    m = _need(r"Re-measured on the owner's (\w+) recordings as the app opens them", text, "the method sentence")
-    assert m.group(1).lower() == words[len(rows)].lower(), (m.group(1), len(rows))
+    m = _need(r"Re-measured on (\w+) lap sets of the owner's (\w+) working-set recordings as the app opens "
+              r"them", text, "the method sentence")
+    recordings = {_LAP_SETS[_BEAT_SETS[r.name]][0] for r in rows}
+    assert (m.group(1), m.group(2)) == (_WORDS[len(rows)], _WORDS[len(recordings)]), (m.groups(), recordings)
     m = _need(r"(\w+) of the (\w+) is distinguishable from chance at p < (0\.\d+), and the strongest r "
               r"\(([^)]+)\) explains (\d+) % of the variance in beat rate", text, "the verdict sentence")
     alpha = float(m.group(3))
-    assert m.group(1) == words[sum(r.p < alpha for r in rows)] and m.group(2) == words[len(rows)].lower(), (
+    assert m.group(1) == _opening(sum(r.p < alpha for r in rows)) and m.group(2) == _WORDS[len(rows)], (
         m.groups(), rows)
     strongest = max(rows, key=lambda r: abs(r.r))
     assert m.group(4) == strongest.name, (m.group(4), strongest)
@@ -809,9 +817,12 @@ def test_the_beat_rate_verdict_is_derived_from_its_table():
     lo, hi = (abs(strongest.r) - 0.0005) ** 2 * 100, (abs(strongest.r) + 0.0005) ** 2 * 100
     assert math.floor(lo + 0.5) <= int(m.group(5)) <= math.floor(hi + 0.5), (m.group(5), strongest)
     m = _need(r"(\w+) of the (\w+) r are negative", text, "the sign sentence")
-    assert (m.group(1), m.group(2)) == (words[sum(r.r < 0 for r in rows)], words[len(rows)].lower()), (m.groups(), rows)
-    # D24 carries no saved line (floor table's rule): a † D24 row would claim a restore that cannot happen.
-    assert not [r for r in rows if r.saved and r.name.startswith("D24")], rows
+    assert (m.group(1), m.group(2)) == (_opening(sum(r.r < 0 for r in rows)), _WORDS[len(rows)]), (
+        m.groups(), rows)
+    # A † row restores a saved line, and the floor table says which lap sets have one: a † here that
+    # is not a † there claims a restore the other table says cannot happen.
+    floor_saved = {r.name for r in _floor_rows() if r.saved}
+    assert {_BEAT_SETS[r.name] for r in rows if r.saved} <= floor_saved, (rows, floor_saved)
     print(f"test_the_beat_rate_verdict_is_derived_from_its_table OK ({len(rows)} rows, "
           f"strongest r {strongest.r:+.3f} on {strongest.name})")
 
@@ -1152,8 +1163,9 @@ def _published() -> list[tuple]:
          "test_the_brake_hint_gate_table_matches_the_footage", unverified),
         # #339: the beat-rate, focus and floor checks failed after #335; the floor re-measure was
         # byte-identical before and after #339's own change, so the move is #335's.
+        # T16b re-measured it on the working set (four recordings, seven rows), 2026-09-23.
         ("corner_model.py's beat-rate table", _CORNER_MODEL, _BEAT_LINE,
-         lambda: [_BEAT_SETS[r.name] for r in _beat_rows()], "test_the_beat_rate_table_matches_the_footage", stale),
+         lambda: [_BEAT_SETS[r.name] for r in _beat_rows()], "test_the_beat_rate_table_matches_the_footage", None),
         # focus.py's two tables compare 0060 with 0062, which its prose names; the rows are corners.
         ("focus.py's cross-session tables", _FOCUS, _FOCUS_LINE, lambda: ["0060", "0062"],
          "test_the_focus_tables_match_the_footage", stale),
@@ -1165,7 +1177,7 @@ def _published() -> list[tuple]:
          "test_the_refusal_record_matches_the_footage", stale),
         # #339: the `all` cells are stale by 0.05–0.43 s on all five rows.
         ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
-         lambda: [_BEAT_SETS.get(r.name, r.name) for r in _ideal._rows()],
+         lambda: [_IDEAL_SETS.get(r.name, r.name) for r in _ideal._rows()],
          "test_the_table_still_matches_the_app", stale),
         # No footage check re-measures these two, but they are D24 tables of the same kind: how far
         # an interpolated corner cell is off. #335 moved which cells are interpolated (0060: 236 →
@@ -1209,6 +1221,10 @@ def _find_mark(lines: list[str], row: int, path: str) -> tuple[int, str] | None:
             return j, m.group(1)
     return None
 
+
+# IdealSample's short names for the lap sets its rows name, where they are not `_LAP_SETS` keys. Its
+# rows are T16b part B's to re-base; the beat-rate table used the same short names until part A.
+_IDEAL_SETS = {"Sandown ch 1": "Sandown chapter 1", "Sandown 3 ch": "Sandown 3 chapters"}
 
 # IdealSample marks each row it could not re-measure with ‡, and its own checks read that mark
 # (a quote of a ‡ row must not read as current), so a gone recording's row has to carry it too.
@@ -1259,7 +1275,7 @@ def _mark_problems(texts: dict[str, str]) -> list[str]:
         if path == _CORNER_MODEL and "IdealSample" in name:
             for line in lines[row:row + 8]:
                 m = _IDEAL_ROW.match(line)
-                if m and _LAP_SETS[_BEAT_SETS.get(m.group(1), m.group(1))][0] in _stale.GONE and not m.group(2):
+                if m and _LAP_SETS[_IDEAL_SETS.get(m.group(1), m.group(1))][0] in _stale.GONE and not m.group(2):
                     problems.append(f"{name}: the {m.group(1)} row needs a recording that is no longer "
                                     f"available and does not carry ‡")
     return problems
@@ -2254,7 +2270,7 @@ def test_the_beat_rate_table_matches_the_footage():
     root = _footage_root()
     rows = _beat_rows()
     problems, lines = [], []
-    with _Footage(root) as fx:
+    with _Footage(root, {_BEAT_SETS[r.name] for r in rows}) as fx:
         for row in rows:
             s = fx.load(_BEAT_SETS[row.name], saved_line=row.saved)
             if s is None:
@@ -2262,13 +2278,13 @@ def test_the_beat_rate_table_matches_the_footage():
                 continue
             n, r, rho, p = _beat_measure(s)
             label = row.name + (" †" if row.saved else "")
-            lines.append(f"        | {label:<14s} | {n:<2d} | {r:+.3f} | {rho:+.3f}   | {p:.3f} |".replace("-", "−"))
+            lines.append(f"        | {label:<15s} | {n:<2d} | {r:+.3f} | {rho:+.3f}   | {p:.3f} |".replace("-", "−"))
             if (n, f"{r:+.3f}", f"{rho:+.3f}", f"{p:.3f}") != (row.n, f"{row.r:+.3f}", f"{row.rho:+.3f}", f"{row.p:.3f}"):
                 problems.append(f"{row!r}: measured n {n}, r {r:+.4f}, ρ {rho:+.4f}, p {p:.4f}")
-    report = "\n".join(["  re-measured beat-rate table:"] + lines)
-    assert not problems, "corner_model's beat-rate table is not what the app computes:\n  " + \
-        "\n  ".join(problems) + "\n" + report
-    print(f"test_the_beat_rate_table_matches_the_footage OK\n{report}")
+    # The re-measured block, in the source's own syntax, BEFORE any comparison can stop the check.
+    print("\n".join(["  re-measured beat-rate table:"] + lines))
+    assert not problems, "corner_model's beat-rate table is not what the app computes:\n  " + "\n  ".join(problems)
+    print("test_the_beat_rate_table_matches_the_footage OK")
 
 
 def _focus_measure(s60, p60, s62, p62):

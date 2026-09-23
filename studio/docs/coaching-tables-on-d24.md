@@ -71,3 +71,44 @@ start line (−0.246 s on the one the owner saved), and 4.52 % of samples on San
 12.01 % on SD_30_08 are negative at all on the loader's own lines" (`Session.delta_to_ideal`,
 `CornerModel.ideal_elapsed`, `tests/test_session_pure.py`, `tests/test_contrast.py`,
 `tests/test_charts_header_budget.py`).
+
+## corner_model.py — the beat-rate correlation table (in `SegmentBests.beat_counts`)
+
+```text
+        The correlation this docstring used to lead with ("r = −0.04 … −0.50 against the same
+        durations") does not reproduce. Re-measured on the owner's FIVE recordings as the app opens
+        them (the owner's saved start line restored where there is one, †): subject = the best lap;
+        the segments longer than POINT_SPAN_M on the reference odometer; beat rate (beat / n)
+        against the segment's mean duration over the composite laps; Spearman with tied ranks
+        averaged; permutation p two-sided on Spearman, over 20,000 shuffles of the beat rates
+        (seed 0). tests/test_measured_figures.py derives the sentence under the table from its cells
+        and, given the footage, re-measures every cell.
+
+        ⚠ STALE — NOT RE-MEASURABLE (T16). The table was measured before #335 changed corner
+        matching, and #339 re-ran its footage check after #335: it no longer matched the app. The
+        D24 and Sandown_09_05_2026 rows cannot be re-measured, because those recordings are no
+        longer available. SD_30_08's row can, and re-measured on 2026-09-19 it is stale too: r
+        −0.297, Spearman −0.335, permutation p 0.218, still not distinguishable from chance. Every
+        cell and the verdict under the table are the record of that measurement, not what the app
+        computes today.
+
+        | recording      | n  | r      | Spearman | permutation p |
+        |----------------|----|--------|----------|---------------|
+        | D24 1 ch       | 23 | +0.058 | −0.021   | 0.926 |
+        | D24 3 ch       | 23 | −0.326 | −0.361   | 0.094 |
+        | Sandown ch 1 † | 15 | −0.056 | +0.082   | 0.772 |
+        | Sandown 3 ch † | 15 | −0.249 | −0.239   | 0.389 |
+        | SD_30_08 †     | 15 | −0.178 | −0.038   | 0.893 |
+
+        None of the five is distinguishable from chance at p < 0.05, and the strongest r (D24 3 ch)
+        explains 11 % of the variance in beat rate. The table this replaces (#213, before #300, on
+        the loader's start lines) found one of five under 0.05, and was not measured the way it
+        said: every row kept one POINT segment (a zero-width edge segment of the reference lap that
+        reads 0 s on some laps and a sliver on others), its Spearman broke tied beat rates in sort
+        order, and its SD_30_08 row was two corners of the 13 s pieces the loader cut from a 46 s
+        lap until T13. Four of the five r are negative, which is what a real track produces — a
+        short piece of road has less room to differ, so more laps land level with the subject — and
+        because the statistic is provably invariant to scale, that correlation is a fact about the
+        driving, not about the units. The rejected `hit_counts` had no such defence: its coupling
+        came from a tolerance measured in seconds against segments of unequal length.
+```
