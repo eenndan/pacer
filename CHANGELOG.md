@@ -388,6 +388,18 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **The map's video-position marker is no longer the colour of the line under it.** It was the
+  same red as the slow / behind / full-brake end of every line mode's colour scale, so wherever the
+  line was at that end the marker was the same colour as the line under it. That was 20-24 % of
+  the median lap under Pedal and 3-7 % under Speed, Δ, Δ rate and Elevation, on both present
+  recordings. It is magenta now, a colour neither palette's scale uses. Three more marks now show
+  up on any colour of line: the corner-apex dots and the ring that locates a corner have a dark
+  rim, and the compare ghost has a dark centre instead of showing the line through it.
+
+- **A "GPS poor" mark is red, like the strip under it.** Every GPS-degraded mark was the strip's
+  yellow "moderate" colour, even when its own text said "GPS poor" and the strip under it was red.
+  That was 5 of the 7 marks on the one present recording with poor GPS. A mark now takes the
+  colour of the worst class in its stretch, which is the class its text names.
 - **A lift is no longer read as a brake.** The brake detector kept a string of one-sample blips as a
   brake event whenever the blips were spread over its 0.25 s minimum, even though none of them lasted
   that long. On the four recordings on this machine that was 5–7 % of brake glyphs, and 70 of those

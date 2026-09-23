@@ -3,7 +3,7 @@
 The ghost is a second, hollow, lap-B-accent marker on the track map shown ONLY while compare
 mode is on: CompareController.tick() places it at lap B's trace position for the SAME t_b its
 "Δ vs other" badge used (the secondary pane's own clock == equal elapsed-into-lap), via the
-REAL session.index_at_time — the same lookup the red video marker's tick path resolves, so no
+REAL session.index_at_time — the same lookup the video marker's tick path resolves, so no
 second time-alignment exists. Driven on a bare Session (tests/_synthetic) + a real MapView +
 minimal fake video/plots/table recorders (the test_controllers idiom), checking:
   * tick places the ghost at exactly (tx[i], ty[i]) for i = index_at_time(t_b), across the lap;
@@ -12,8 +12,9 @@ minimal fake video/plots/table recorders (the test_controllers idiom), checking:
   * compare exit REMOVES the item: the plot's item list is byte-identical to pre-compare;
   * outside compare the tick paths do ZERO ghost work (`ghost_updates` == 0, no item ever
     created) — instrumented like the rainbow rebuild counter;
-  * the ghost is visually distinct from the video marker: hollow (NoBrush), smaller, not
-    movable, lap-B accent pen (theme.CHART_SERIES[1] == map_view.GHOST_COLOR).
+  * the ghost is visually distinct from the video marker: a ring on the map's dark label plate
+    (never a hue fill), smaller, not movable, lap-B accent pen (theme.CHART_SERIES[1] ==
+    map_view.GHOST_COLOR).
 Run: python tests/test_map_ghost.py
 """
 import os
@@ -221,14 +222,23 @@ def test_outside_compare_zero_ghost_work():
 
 # ===================================================================== visual distinctness
 def test_ghost_visually_distinct_from_marker():
-    """Hollow ring (NoBrush), smaller than the video marker, NOT movable (display-only), in the
-    lap-B accent (theme.CHART_SERIES[1]) — never confusable with the filled coral marker."""
+    """A lap-B-accent ring (theme.CHART_SERIES[1]) whose inside is the map's dark label plate,
+    smaller than the video marker, NOT movable (display-only) — never confusable with the
+    hue-filled video marker.
+
+    The inside used to be HOLLOW, so the painted line showed straight through it, and the ring
+    alone is 3.73 deuteranopic dE from the colour-blind ramp's bucket 11 (C6). The plate is what
+    keeps it a ring on any bucket; it is a NEUTRAL, so the ghost still carries no fill hue."""
+    from studio.map_view import GHOST_PLATE
     s, _a, _b = _session()
     mv = MapView(s)
     mv.set_ghost_index(5)
     g = mv._ghost
-    assert g.brush.style() == Qt.NoBrush, "ghost must be hollow"
+    assert g.brush.style() != Qt.NoBrush, "the ghost's inside is the dark plate, not the line"
+    assert g.brush.color().rgba() == GHOST_PLATE.rgba(), g.brush.color().name()
+    assert GHOST_PLATE.lightness() < 64, "the plate must be dark, or it is a second fill hue"
     assert mv.marker.brush.style() != Qt.NoBrush, "the video marker stays filled"
+    assert g.brush.color().name() != mv.marker.brush.color().name(), "two markers, one fill"
     assert g.scale < mv.marker.scale, (g.scale, mv.marker.scale)
     assert g.movable is False and mv.marker.movable is True
     assert GHOST_COLOR == theme.CHART_SERIES[1]

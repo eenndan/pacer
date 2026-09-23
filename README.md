@@ -164,7 +164,7 @@ than it is. So that is a rule with an owner in the code:
   before a September 2026 change to corner matching (not re-measured since).
 - **DATA TRUST** puts the accuracy story inside the product, not only on this page.
 - **a citable marker vocabulary on the way out.** In the app a caveat has hover, colour and weight
-  to carry it, so pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An
+  to carry it, so Pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An
   exported table has none of those, so `laps.csv` and the HTML report use the **UK Government
   Analysis Function's standard table symbols** instead — `[e]` estimated, `[p]` provisional, `[u]`
   low reliability, `[b]` break in series — each one decoded by a key in the same file. The choice is
