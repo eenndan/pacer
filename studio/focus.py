@@ -20,51 +20,58 @@ every verdict here is gated and a blocked verdict carries **no number at all** (
 is None whenever ``kind`` is ``OUTCOME_NO_VERDICT`` — the refusal is enforced in the model, not in
 the copy, so no surface can print a delta the evidence does not support).
 
-⚠ STALE — NOT RE-MEASURABLE (T16). The two tables below were measured on D24 before #335 changed
-corner matching. #339 re-ran their footage check after #335 and it no longer matched the app; its
-record does not say which cells moved. D24 is no longer available, so neither table can be
-re-measured. Every figure below, and every quote of one elsewhere in the tree, is the record of
-that measurement, not what the app computes today.
-
-MEASURED, on the two real D24 recordings — the same driver at the same track on CONSECUTIVE DAYS
-(0060: 2026-05-23, 38 laps; 0062: 2026-05-24, 65 laps), which is the input this feature takes.
-Promote 0060's top three ranked corners and measure them again on 0062 over the SAME windows.
+MEASURED (T16b, 2026-09-23) on the one pair of working-set sessions the focus list can compare in
+order at one track — 0064 then 0068, two Sandown sessions two months apart (0064: 2026-07-19, 62
+laps; 0068: 2026-09-19, 36 laps), which is the input this feature takes. 0064 is Sandown 3h 2026
+(GX010064 + GX020064 + GX030064) and 0068 is SD_19_09_26 (GX010068 + GX020068); the coaching tables
+list them the other way round, because there 0068 stands where D24's 0060 stood, and a focus list is
+promoted on the EARLIER session. D24's pair was one driver on consecutive days on a built-in track,
+so both its start lines were trusted; this pair's are not (below). The D24 edition, which #344
+marked stale after #335 changed corner matching, is kept in studio/docs/coaching-tables-on-d24.md.
+Promote 0064's top three ranked corners and measure them again on 0068 over the SAME windows.
 "promoted for" is the coaching row's time lost; the medians and interquartile ranges are the
 window's seconds over each session's clean laps; "bar" is ``SPREAD_MARGIN`` × the wider of the two
-IQRs, the test ``verdict`` applies. Re-measured after #300; tests/test_measured_figures.py derives
-the prose from these cells and, given the footage, re-measures every one:
+IQRs, the test ``verdict`` applies. tests/test_measured_figures.py derives the prose from these
+cells and, given the footage, re-measures every one:
 
-  corner  promoted for  0060 median  IQR    0062 median  IQR    change  bar    verdict
-  C12     +0.330 s      6.774 s      0.213  6.747 s      0.167  −0.026  0.107  unchanged
-  C4      +0.244 s      4.537 s      0.129  4.597 s      0.134  +0.061  0.067  unchanged
-  C2      +0.204 s      2.364 s      0.128  2.403 s      0.073  +0.039  0.064  unchanged
+  corner  promoted for  0064 median  IQR    0068 median  IQR    change  bar    verdict
+  C1      +0.252 s      10.235 s     0.556  10.419 s     0.257  +0.184  0.278  unchanged
+  C7      +0.173 s      4.116 s      0.265  3.980 s      0.084  −0.136  0.133  improved
+  C4      +0.161 s      5.265 s      0.245  5.051 s      0.145  −0.214  0.123  improved
 
-  * every one of the three changes is inside its bar. The honest verdict on the only real
-    cross-session pair this repo has is "no change you can act on", three times out of three —
-    which is why ``OUTCOME_UNCHANGED`` is a first-class answer here and not an error path. Only
-    the "promoted for" column moved when #300 warped the corner service; every window cell came
-    back identical, because ``window_times`` reads each lap's own clock, not that warp;
-  * neither recording has a session record (the owner's app-support dir has no
-    ``session_records.json`` at all), so the like-for-like gate blocks all three verdicts before the
-    spread test is even reached. What the feature says today, on real data, is "I can't tell you
-    whether these two sessions were comparable" — not a number.
+  * with no saved track — the check runs jailed, so it has none — neither recording's start line is
+    trusted: both are the loader's own fit, with no sidecar behind them. So the gate blocks all
+    three verdicts at `unverified`, before it reaches the session records, which neither recording
+    has either (the owner's app-support dir has no ``session_records.json`` at all). What the
+    feature says today, on real data, is "a start line is provisional" — not a number;
+  * the spread test's verdicts, reached only by forcing the start-line and session-record gates
+    open: unchanged on 1, improved on 2, slower on 0. Two "improved" over these windows is exactly
+    what the start-line gate exists to stop, because they are not the same stretch of track
+    (below). On D24, whose lines were trusted, all three came out "unchanged".
 
 AND THE WINDOW PROBLEM, which is the one this module exists to solve and the reason a focus item
 stores a WINDOW rather than a corner id. The corner partition is re-derived per session from that
-session's own trace, so "C8" is not the same measurement twice. Each recording's own window for the
-corner, the median time over it, and 0062's median over 0060's STORED window instead:
+session's own trace, so "C1" is not the same measurement twice. Each recording's own window for
+every corner, the median time over it, and 0068's median over 0064's STORED window instead:
 
-  corner  0060 window  0062 window  0060 own  0062 own  own change  0062 over 0060's  stored change
-  C8      45.0 m       56.3 m       2.110 s   2.660 s   +0.549 s    2.153 s           +0.042 s
-  C10     75.1 m       81.0 m       3.951 s   4.220 s   +0.268 s    4.014 s           +0.063 s
+  corner  0064 window  0068 window  0064 own  0068 own  own change  0068 over 0064's  stored change
+  C1      169.6 m      161.4 m      10.235 s  9.668 s   −0.567 s    10.419 s          +0.184 s
+  C2      50.3 m       51.8 m       4.269 s   4.266 s   −0.003 s    4.064 s           −0.206 s
+  C3      80.3 m       81.1 m       5.625 s   5.582 s   −0.043 s    5.805 s           +0.180 s
+  C4      71.3 m       74.3 m       5.265 s   5.366 s   +0.101 s    5.051 s           −0.214 s
+  C5      46.5 m       46.5 m       3.624 s   3.539 s   −0.085 s    3.751 s           +0.127 s
+  C6      43.5 m       44.3 m       3.257 s   3.195 s   −0.063 s    3.100 s           −0.157 s
+  C7      51.8 m       51.1 m       4.116 s   4.012 s   −0.104 s    3.980 s           −0.136 s
 
-Reported as a cross-session change, C8's own-window +0.549 s is "you got slower" and every
-millisecond of it is the detector drawing a longer window; over the stored window it is +0.042 s. So
-a focus item stores its window as a FRACTION of the lap odometer and both sides are measured by the
-same function over that fraction; the corner id is a label on it, never the identity. The
-partitions do line up that way: across the twelve corners the two sessions' apexes agree to
-−4.2..+0.2 m (0062's apex against 0060's scaled by the two lap totals), and the lap totals to
-0.65 % (1059.2 vs 1066.2 m).
+Reported as a cross-session change, C1's own-window −0.567 s is "you got faster", and more than all
+of it is the detector drawing a shorter window; over the stored window it is +0.184 s. So a focus
+item stores its window as a FRACTION of the lap odometer and both sides are measured by the same
+function over that fraction; the corner id is a label on it, never the identity. A fraction is the
+same stretch of track only when the two odometers start in the same place, and here they do not:
+across the seven corners 0068's apex sits −11.2..−8.5 m from 0064's (scaled by the two lap totals),
+a near-constant offset that is the two provisional start lines about 10 m apart — the reason the
+gate refuses a comparison when either line is provisional. Over the stored windows the seven corners
+read −0.214..+0.184 s, while the lap totals agree to 0.96 % (730.3 vs 737.3 m).
 
 Persistence follows ``library.py`` / ``session_record.py`` — schema version read + forward
 migration, a ``.bak`` before any un-round-trippable overwrite, atomic write, one bad list dropped
@@ -101,10 +108,11 @@ _FILENAME = "focus.json"
 MAX_ITEMS = 3
 
 # How far the two sessions' lap odometers may disagree before a fraction-mapped window stops being
-# the same stretch of track. MEASURED: the two D24 recordings' lap totals differ by 6.93 m on 1059 m
-# — 0.65 % — which displaces a corner boundary by at most ~0.3 m inside a 50 m window. 2 % is three
-# times that: comfortably past any re-fit of the same lap, and short of a genuinely different route
-# or a start line placed somewhere else.
+# the same stretch of track. MEASURED (T16b, the table at the top of this module): the working-set
+# pair's lap totals differ by 6.98 m on 730 m — 0.96 % — which displaces a corner boundary by at most
+# ~0.5 m inside a 50 m window. 2 % is twice that: comfortably past any re-fit of the same lap, and
+# short of a genuinely different route. (A start line placed somewhere else on the same loop leaves
+# the lap total where it was: that is BLOCK_UNVERIFIED's case, and the same pair shows it, ~10 m.)
 MAX_LAP_TOTAL_DRIFT = 0.02
 
 
@@ -135,7 +143,7 @@ class CornerSample:
     """One window's time over one session's clean laps — the only statistic this feature compares.
 
     ``iqr`` is the SAME measure ``coaching.Evidence.iqr`` is: the interquartile range of the
-    per-lap times, robust where σ is not (on 0062's C1 σ reads 0.227 s against a 0.109 s IQR)."""
+    per-lap times, robust where σ is not (on 0064's C4 σ reads 1.066 s against a 0.216 s IQR)."""
 
     median: float     # median time through the window (s)
     iqr: float        # interquartile range of the per-lap times (s)
@@ -562,8 +570,8 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # The SAME actionability test the coaching gate applies to a within-session claim, on the
         # same statistic (`coaching.SPREAD_MARGIN` × the interquartile spread) rather than a second
         # notion of significance invented here. The wider of the two sessions' spreads is the bar,
-        # because a change is only as aimable as the noisier side of the comparison. With 38 and 65
-        # laps the standard error of either median is ~0.01-0.03 s (the normal approximation,
+        # because a change is only as aimable as the noisier side of the comparison. With 62 and 36
+        # laps the standard error of either median is ~0.01-0.07 s (the normal approximation,
         # 1.2533 × IQR / 1.349 / √laps, over the six samples in the table at the top of this module)
         # and a significance test would pass almost anything: this asks whether a driver could aim
         # at the difference, not whether it is real.

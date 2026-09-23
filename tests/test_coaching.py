@@ -930,9 +930,9 @@ def test_brake_habit_is_the_same_number_the_braking_table_shows():
     table's "m later" column answer ONE question, so they must be ONE number.
 
     They were not: coaching read the BEST lap's single application and BRAKING the median over the
-    clean laps. Measured on the real recordings the pair disagreed by up to 12.6 m, and at 0062's
-    C1 the best lap braked within 3 m of its own optimum while the driver's habit over 62 laps was
-    12.2 m early — so one surface shrugged where the other said brake 12 m later. Both now medianize
+    clean laps. Measured on the working-set recordings the pair disagreed by up to 5.3 m, and at
+    0064's C7 the best lap braked 6.8 m before its own optimum while the driver's habit over 58 laps
+    was 12.0 m early — so one surface said about half what the other did. Both now medianize
     ONE per-lap list; this pins that they still do, over rows where the best lap is deliberately
     unrepresentative."""
     from studio import stats as stats_service
@@ -1470,8 +1470,9 @@ def test_a_claim_inside_the_corners_own_spread_abstains():
     aimed at with a 0.05 s median claim, however real that 0.05 s is — and the row says so instead
     of printing a lever.
 
-    Measured on the two D24 pairs: sigma >= time_lost on 16 of the 19 shown rows (worst 12.0x), and
-    this test's shape is the smallest reproduction of it."""
+    Measured on the two working-set recordings (coaching.py's evidence table, T16b): sigma >=
+    time_lost on 11 of the 12 shown rows (worst 16.8x), and this test's shape is the smallest
+    reproduction of it."""
     target = 5.0
     times = [target, target, target, target + 0.4, target + 0.4, target + 0.4]
     ev = _evidence_for(times, target, 0.05)
@@ -1497,10 +1498,10 @@ def test_an_unreplicated_target_and_a_thin_corner_both_abstain():
     """The other two evidence tests, and the honest note about one of them.
 
     ONE_OFF — nothing but the baseline itself ever reached the target — is the test the brief was
-    built around, and it fired on 0 of the 19 rows across both real D24 pairs: the ranking's
+    built around, and it fired on 0 of the 12 rows across both working-set recordings: the ranking's
     baseline is the BEST LAP's time through the corner, and on both recordings at least one OTHER
-    lap beats it on every shown row — at least two OTHER laps on all but 0060's C12 (1..24 of
-    them). It does fire on four of the five single chapters, and a short session can trivially
+    lap beats it on every shown row — at least two OTHER laps on all but 0068's C5 (1..17 of
+    them). It does fire on five of the five single chapters, and a short session can trivially
     produce it. FEW_LAPS guards the ragged case the session-level MIN_LAPS gate cannot see (a corner
     only some laps project onto)."""
     one_off = K.corner_evidence([5.0, 5.4, 5.5, 5.6, 5.7], 5.0, 0.5)
@@ -1610,8 +1611,8 @@ def test_the_session_theme_is_one_line_and_refuses_to_invent_one():
     """Part 3: cluster to ONE theme, on SHARE OF RANKED TIME (the ranking's own unit), and say
     "no single theme" rather than crowning a plurality.
 
-    Measured on the real recordings the two D24 pairs come out OPPOSITE — 0060 is 70 % execution and
-    0062 is 73 % pace — which is what makes the axis worth stating at all."""
+    Measured on the real recordings the two working-set recordings come out OPPOSITE — 0068 is 78 %
+    execution and 0064 is 78 % pace — which is what makes the axis worth stating at all."""
     execution = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE]))
     assert execution.kind == K.THEME_EXECUTION and execution.share == 0.75, execution
     assert "execution, not pace" in K.theme_sentence(execution)
@@ -1638,8 +1639,8 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does NOT generalize: braking holds 62 % of 0060's ranked time and 76 %
-    of 0062's (a theme on each), but three of the five single chapters name no single cause, so the
+    Measured, the cause axis does NOT generalize: line holds 50 % of 0068's ranked time and 100 % of
+    0064's (a cause on 0064 only), and two of the five single chapters name no single cause, so the
     "no single cause" branch is a common case on real recordings and is asserted here as a
     first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
