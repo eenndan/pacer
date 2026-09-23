@@ -1261,8 +1261,8 @@ def test_every_quote_of_the_floor_is_a_row_of_the_table():
 # below no longer matched the app. The ninth, the brake-hint gate, had just been re-measured and
 # did. Then D24 and Sandown_09_05_2026 left the owner's machine (tests/_stale.py), so none of the
 # nine could be re-measured where it stood. T16b (2026-09-23) re-based this file's seven on the
-# working set the owner chose; IdealSample's is its part B's, and the two stats tables have no
-# footage check at all.
+# working set the owner chose, and its part B re-based IdealSample's (its D24 edition stays beneath
+# it, marked, as the record); the two stats tables have no footage check at all.
 #
 # WHICH tables need a mark is DERIVED, not listed: a table needs one when one of its own rows names
 # a recording in `_stale.GONE`, read off the rows through `_LAP_SETS`. WHAT the mark says is
@@ -1500,9 +1500,10 @@ def test_the_mark_guard_fails_on_each_planted_defect():
     assert any(p.startswith(name) and "does not say ['D24']" in p for p in got), got
     row = next((i for i, line in enumerate(clean[_CORNER_MODEL].splitlines())
                 if line.lstrip().startswith("| D24 3") and "‡" in line), None)
-    if row is not None:     # IdealSample's own re-base (T16b part B) takes its ‡ rows away
-        got = _mark_problems(planted(_CORNER_MODEL, range(row, row + 1), "‡", ""))
-        assert any("D24 3 chapters row" in p and "does not carry ‡" in p for p in got), got
+    # IdealSample's re-base (T16b part B) kept its D24-era rows, each ‡, as the record beneath it.
+    assert row is not None, "IdealSample's record has no ‡ D24 3 chapters row to plant into"
+    got = _mark_problems(planted(_CORNER_MODEL, range(row, row + 1), "‡", ""))
+    assert any("D24 3 chapters row" in p and "does not carry ‡" in p for p in got), got
     # T16b: a table re-measured on the working set that still says "not re-measurable" is caught.
     for name, path, first_row, *_ in remeasured:
         lines = clean[path].splitlines()
