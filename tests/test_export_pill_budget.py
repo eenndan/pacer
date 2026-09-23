@@ -22,9 +22,10 @@ with itself no matter what.
 
 And F2, `build_encode_cmd` — a run-off clamped to the end of the footage delivered a clip ONE
 FRAME short while every indicator said otherwise. Not the decoder: measured on real D24, the loop
-requested 480 frames, WROTE 480, and the file held 479. `-shortest` ends the clip with the
+requested 480 frames, WROTE 480, and the file held 479. `-shortest` ended the clip with the
 shortest stream, and a GoPro chapter's audio can be shorter than its video (D24 chapter 3: video
-1590.005083 s vs audio 1589.994667 s), so the muxer dropped the last video frame.
+1590.005083 s vs audio 1589.994667 s), so the muxer dropped the last video frame. Since E4 the mux
+has no `-shortest` at all (it overflowed an ffmpeg queue), and the audio is padded to the clip.
 
 Run: QT_QPA_PLATFORM=offscreen python tests/test_export_pill_budget.py
 """
@@ -365,31 +366,36 @@ def test_no_run_paints_outside_its_pill():
 
 # ---------------------------------------------------------------- F2: the clip's promised length
 def test_the_mux_never_lets_the_audio_decide_the_clip_length():
-    """`build_encode_cmd` must pad the audio so the VIDEO is the shortest stream.
+    """`build_encode_cmd` must never let the AUDIO end the clip, and never feed ffmpeg an endless
+    stream to do it.
 
-    `-shortest` ends the output with whichever input runs out first, and at the end of a recording
-    that is the audio: D24 chapter 3's video is 1590.005083 s and its audio 1589.994667 s, so a
-    run-off clamped to `chapters.total_duration` asks for 10.4 ms of a track that does not exist.
-    Measured, real ffmpeg at 480p, before: requested 480 frames, WROTE 480, the file held 479
-    (15.989 s against a promised 16.000 s) — and the progress bar still reached 100 %, so nothing
-    said so. Reproduced at 483->482, 510->509 and 2100->2099. After: 480/480, 16.000000 s.
+    F2 (#205): `-shortest` ended the output with whichever input ran out first, and at the end of a
+    recording that is the audio (D24 chapter 3: video 1590.005083 s, audio 1589.994667 s), so the
+    file held 479 of 480 composited frames while the bar said 100 %. `-af apad` fixed that by
+    padding the audio WITHOUT END under `-shortest`.
 
-    The two flags are a pair — `apad` alone never ends, `-shortest` alone truncates to whatever ran
-    out — so this pins BOTH, and pins that they are output options (after the last `-i`)."""
-    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=1, t0=10.0, t1=26.0)
-    cmd = ev.build_encode_cmd(spec, 854, 480, 30.0)
-    assert "-shortest" in cmd, cmd
-    assert "-af" in cmd and cmd[cmd.index("-af") + 1] == "apad", cmd
-    # both must be OUTPUT options: after the last input, before the output path
-    last_i = max(i for i, a in enumerate(cmd) if a == "-i")
-    assert last_i < cmd.index("-af") < len(cmd) - 1, cmd
-    assert last_i < cmd.index("-shortest") < len(cmd) - 1, cmd
-    assert cmd[-1] == spec.out_path
-    # and it is on BOTH encoder paths (the audio filter is independent of -c:v)
-    vt = ev.build_encode_cmd(spec, 854, 480, 30.0, ev.VT_H264)
-    assert "apad" in vt and "-shortest" in vt, vt
+    E4: that pair overflowed ffmpeg's sync queue behind a slow VideoToolbox start, "No space left
+    on device" with the disk nearly empty (`build_encode_cmd`). So now there is no `-shortest` at
+    all — nothing can cut the video — and the pad is BOUNDED at the plan's own `clip_seconds`, so
+    the audio reaches the last frame and stops there. Both are OUTPUT options, after the last
+    `-i`, on BOTH encoder paths (the audio filter is independent of -c:v). The end-to-end halves
+    are in test_export_video: the recording's last frame and the audio both reach the file, and a
+    slow VideoToolbox start keeps its hardware encode."""
+    for t1 in (26.0, 26.0 + 0.45 / 30.0):     # a whole-frame window and a fractional one
+        spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=1, t0=10.0, t1=t1)
+        clip = ev.clip_seconds(spec.t0, spec.t1, 30.0)
+        for enc in (ev.SW_H264, ev.VT_H264):
+            cmd = ev.build_encode_cmd(spec, 854, 480, 30.0, enc)
+            assert "-shortest" not in cmd and not any("shortest" in a for a in cmd), (
+                f"{enc}: `-shortest` is back in the mux — it lets the audio end the clip and it "
+                f"is the queue a slow VideoToolbox start overflows: {cmd}")
+            assert "-af" in cmd and cmd[cmd.index("-af") + 1] == f"apad=whole_dur={clip:.6f}", (
+                f"{enc}: the audio pad must stop at the plan's {clip:.6f} s: {cmd}")
+            last_i = max(i for i, a in enumerate(cmd) if a == "-i")
+            assert last_i < cmd.index("-af") < len(cmd) - 1, cmd
+            assert cmd[-1] == spec.out_path
     print("test_the_mux_never_lets_the_audio_decide_the_clip_length OK "
-          "(-af apad -shortest, both encoders)")
+          "(no -shortest, apad bounded at the clip, both encoders)")
 
 
 # ------------------------------------------------- the honesty stamp: the one run with no pill

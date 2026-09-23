@@ -334,13 +334,15 @@ def test_the_worker_drives_the_renderer_it_was_handed():
 def test_audio_is_pane_as_alone():
     """One audio stream, from PANE A's source, over pane A's window. Pane B is time-warped by the
     lock, so its audio would have to be resampled by a varying factor (pitch-shifting the engine
-    note); two engine tracks a second apart is mush. The single-lap `-af apad -shortest` pairing
-    comes with it, so the clip's length is still the VIDEO's."""
+    note); two engine tracks a second apart is mush. The single-lap mux comes with it — no
+    `-shortest`, the audio padded to exactly pane A's clip — so the clip's length is still the
+    VIDEO's."""
     _s, spec = _spec_pair()
     enc = ev.build_encode_cmd(spec, 640, 720, 30.0, ev.SW_H264)
     assert enc.count("-map") == 2 and "0:v:0" in enc and "1:a:0?" in enc, enc
     assert "/a.MP4" in enc and "/b.MP4" not in enc, "pane B's audio must not be in the mux"
-    assert enc[enc.index("-af") + 1] == "apad" and "-shortest" in enc
+    clip = ev.clip_seconds(spec.t0, spec.t1, 30.0)
+    assert enc[enc.index("-af") + 1] == f"apad=whole_dur={clip:.6f}" and "-shortest" not in enc
     print("ok audio: pane A's, once, with the length still decided by the video")
 
 

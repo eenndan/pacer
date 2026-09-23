@@ -416,6 +416,15 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A slow-starting VideoToolbox export no longer falls back to software.** The mux used to pad
+  the audio with silence without end and let the shortest stream end the file. Behind a hardware
+  encode whose first second went in slowly, that silence overflowed a queue inside ffmpeg, and
+  the export was re-rendered from the start on the much slower libx264. Measured: two 4K exports
+  at once failed that way 2 times in 14. The audio is now padded to exactly the clip and nothing
+  cuts the video, so the queue cannot fill, however long the export. An ordinary export comes out
+  the same. At the end of a recording the audio now runs to the last frame instead of stopping up
+  to 20 ms short of it, and a slow start no longer leaves up to 0.3 s of audio past the last frame.
+
 - **A slow video export no longer says the disk is full when it isn't.** ffmpeg also prints "No
   space left on device" when a queue inside ffmpeg overflows. That happened on a VideoToolbox
   export whose first second of video went in slowly, as on a busy machine, with 94.5 GB free.

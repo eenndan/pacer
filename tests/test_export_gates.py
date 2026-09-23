@@ -1652,11 +1652,12 @@ def test_an_all_laps_batch_is_held_to_the_sum_of_its_files():
 
 # ======================================================= E3 — "no space left" is a claim, not a disk
 # ffmpeg 7.1 prints "No space left on device" when a queue INSIDE ffmpeg overflows, not only when
-# the disk does. When the first second of video reaches VideoToolbox slowly, `-shortest` + `apad`
-# floods ffmpeg's sync queue with padded silence until its 131,072-frame FIFO refuses a write with
-# AVERROR(ENOSPC). Measured on this Mac with 94.5 GB free: the real renderer, throttled to 4 fps
-# at 1080p on MK_18_09_26, failed 4/4 that way. On main that text alone skipped the working
-# libx264 retry and told the user their disk was full.
+# the disk does. When the first second of video reached VideoToolbox slowly, the old mux's
+# `-shortest` + endless `apad` flooded ffmpeg's sync queue with padded silence until its
+# 131,072-frame FIFO refused a write with AVERROR(ENOSPC). Measured on this Mac with 94.5 GB free:
+# the real renderer, throttled to 4 fps at 1080p on MK_18_09_26, failed 4/4 that way. On main that
+# text alone skipped the working libx264 retry and told the user their disk was full. (E4 took
+# `-shortest` out of the mux; the claim is still checked against the disk, for any queue.)
 #
 # These drive the REAL entry point, spec builders, `_run_video_export`, `VideoExportWorker.run`
 # AND the real `Renderer` — its run/retry/teardown, its `_finish` reading ffmpeg's exit code and

@@ -1139,58 +1139,80 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      encoder: str = SW_H264) -> list[str]:
     """MUX argv: input 0 = our rgb24 rawvideo on stdin; input 1 = the source audio over the SAME
     source-LOCAL window (mirrors the decode, so audio stays in sync across a seam). Map video+audio,
-    encode H.264 (`encoder`) + AAC, `-af apad -shortest`.
+    encode H.264 (`encoder`) + AAC, the audio padded to exactly the plan's `clip_seconds`
+    (`-af apad=whole_dur=<clip>`). There is NO `-shortest`, and that is the point of E4.
 
-    `-shortest` ENDS THE CLIP WITH THE SHORTEST STREAM, AND ON THE LAST FRAME OF A RECORDING THAT
-    IS THE AUDIO. A GoPro chapter's audio track can be a hair shorter than its video: measured on
-    D24 chapter 3, video 1590.005083 s vs audio 1589.994667 s — 10.4 ms, which is the
-    container duration `ChapterMap.total_duration` is built from minus the audio's own. So a
-    run-off clamped to the end of the footage asks for 16.000 s of a track that holds 15.989 s,
-    `-shortest` cuts the output there, and the muxer drops the last VIDEO frame we had already
-    composited and written. Measured, real ffmpeg, 480p: requested 480 frames, wrote 480, the file
-    held 479 (15.989 s, −0.011 s) — and reproduced identically at 483→482, 510→509 and
-    2100→2099, i.e. the loss is exactly one frame whenever `t1 == total_duration`, on the muxer's
-    side of the pipe rather than the decoder's.
+    NOTHING HERE MAY CUT THE VIDEO, BECAUSE THE VIDEO'S LENGTH IS THE ONE THIS EXPORT PROMISED
+    (`frame_times`, the progress bar's denominator and `RenderResult.frames` are all that count).
+    Without `-shortest` ffmpeg ends the file when BOTH inputs have ended: the video when we close
+    the pipe after the last composited frame, the audio when its input `-t` runs out. So each
+    stream is bounded by the plan and neither can shorten the other.
 
-    `apad` pads the audio with silence, which makes the VIDEO the shortest stream — and the video's
-    length is the one this export PROMISED (`frame_times`, the progress bar's denominator and
-    `RenderResult.frames` are all that count). The two flags belong together: `apad` alone would
-    run forever, `-shortest` alone truncates to whichever input ran out first. Measured after:
-    480/480 frames, 16.000000 s, on the same windows; an interior window is unchanged (720/720,
-    24.000000 s) and a source with NO audio stream is unaffected (the `-map 1:a:0?` is optional and
-    the filter has nothing to run on).
+    `-shortest` USED TO BE HERE, AND IT CUT THE LAST FRAME OF A RECORDING (#205, F2). A GoPro
+    chapter's audio track can be a hair shorter than its video: D24 chapter 3, video 1590.005083 s
+    vs audio 1589.994667 s; MK_18_09_26 chapter 2, 697.346650 s vs 697.344000 s. So a run-off
+    clamped to the end of the footage asked for audio that was not there, `-shortest` let the AUDIO
+    end the clip, and the muxer dropped the last video frame we had already composited and written
+    (480 -> 479, 483 -> 482, 510 -> 509, 2100 -> 2099 on D24). `-af apad` papered over that by
+    padding the audio with silence WITHOUT END, so that the video was always the shorter stream.
 
-    AND `apad` ONLY PADS WHAT IT IS STILL ALLOWED TO PAD, WHICH IS WHY `-t` MOVED IN FRONT OF THE
-    `-i`. Written AFTER the input it is an OUTPUT option: it caps the whole output file, so the
-    padded audio was cut back to the raw window's length and `-shortest` went on dropping the last
-    video frame whenever that frame ENDED past it — which a fractional window guarantees. That is
-    the interior-window case #205 said it had fixed, and the fix held only where `dur*fps` was
-    near-integral (its own 720/720 check). Measured on main, 360p, both D24 recordings, on
-    VideoToolbox and libx264 at 30 and 59.94 fps: six of six exports wrote every planned frame and
-    landed one frame short in the file — 0060 lap 17 planned 2047, muxed 2046 (video 68.200 s,
-    audio 68.229 s); 0060 lap 24 across a chapter seam 2098 -> 2097; at 59.94, 4090 -> 4089.
-    In front of the `-i` it bounds the audio INPUT instead, at the plan's own `clip_seconds`, and
-    nothing bounds the output but the video we wrote. Same six exports after: the file holds every
-    planned frame.
+    AND THAT ENDLESS PAD OVERFLOWED AN FFMPEG QUEUE (E4, root cause found by #365). `-shortest`
+    holds each stream in a sync queue until the others catch up. Behind a VideoToolbox encode whose
+    opening frames arrive slowly, the audio side is let loose into that queue and never released,
+    and endless silence fills it until its FIFO refuses a write (ffmpeg's debug log counted 131,071
+    audio frames queued, 11,128 s of them): ffmpeg 7.1 dies with "No space left on device", exit
+    228, with the disk nearly empty. Measured through the real renderer on MK_18_09_26 with the
+    opening frames throttled to 3 fps: laps 3 and 13 failed at frame 32, lap 5 passed (it is a
+    race). Un-throttled, no single export failed, but two 4K exports run at once failed 2 of 14
+    and four at once 4 of 4 (#365). libx264 never overflowed it, even fed at 0.5 fps. #365 made the
+    failure cost one libx264 re-render. Without `-shortest` no stream limits that queue, and
+    ffmpeg's debug log shows it handing each audio frame on the moment it arrives: nothing piles up.
+
+    BOUNDING THE PAD ALONE WOULD NOT HAVE HELD. With `-shortest` kept and `apad=whole_dur`, the same
+    throttled start passed on a 20 s lap and on a 2,000 s window of Sandown 3h 2026, and overflowed
+    at frame 53 on a 3,000 s one: the queue then fills with the export's REAL audio, and 131,072
+    AAC frames is only 2,796 s of it. A whole-session export runs 45 min on MK and three hours on
+    Sandown. Without `-shortest` the same 3,000 s window ran clean.
+
+    `whole_dur` IS WHAT KEEPS THE AUDIO TO THE LAST FRAME. The audio input stops where the source's
+    track stops, which at the end of a recording is a few ms before the picture; `apad=whole_dur`
+    pads it back to exactly `clip_seconds` and no further, so the file's audio ends on the last
+    frame. Before E4 it ended on the last WHOLE AAC frame instead: 16.320 s against a 16.333 s
+    picture on MK's last chapter. Everywhere else the output is unchanged: on libx264, at 360p, MK
+    lap 7 (interior) and lap 13 (across the chapter seam) came out packet-for-packet identical to
+    the `-shortest` command in both streams; on MK's last chapter every video packet and the first
+    764 of the old file's 766 audio packets were identical, and the new file's audio runs one
+    packet further, to the last frame.
+
+    AND `-t` IS AN INPUT OPTION, IN FRONT OF THE `-i` IT BOUNDS. Written after the input it is an
+    OUTPUT option that caps the whole file, and under `-shortest` it cut the padded audio back to
+    the raw window, which then dropped the last video frame of every fractional window (six of six
+    D24 exports, VideoToolbox and libx264, 30 and 59.94 fps: 0060 lap 17 planned 2047, muxed 2046;
+    lap 24 across a seam 2098 -> 2097). In front of the `-i` it bounds the audio INPUT at the
+    plan's own `clip_seconds`, which is now also what ends the audio stream. A source with NO audio
+    stream is unaffected: the `-map 1:a:0?` is optional and the filter has nothing to run on.
 
     An OVERLAY-ONLY spec hands straight over to `build_overlay_only_encode_cmd`, which has neither
     a source input nor an audio map — the dispatch lives here so the renderer asks one question."""
     if spec.config.overlay_only:
         return build_overlay_only_encode_cmd(spec, out_w, out_h, fps)
+    clip = clip_seconds(spec.t0, spec.t1, fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         # input 0: raw composited video from our pipe
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out_w}x{out_h}", "-r", f"{fps:.6f}",
         "-i", "pipe:0",
         # input 1: source audio, same source-LOCAL window (mirrors the decode's input + seek).
-        # `-t` is an INPUT option here — before the `-i` it belongs to — and that placement is the
-        # whole of the "one frame short" mux fix (see below).
-        "-ss", f"{spec.local_t0:.6f}", "-t", f"{clip_seconds(spec.t0, spec.t1, fps):.6f}",
+        # `-t` is an INPUT option here — before the `-i` it belongs to — and it is what ends the
+        # audio stream at the plan's length (see above).
+        "-ss", f"{spec.local_t0:.6f}", "-t", f"{clip:.6f}",
         *spec.source.input_args(),
         "-map", "0:v:0", "-map", "1:a:0?",
         *_video_codec_args(encoder, out_w, out_h, fps, spec.config.quality),
         "-c:a", "aac", "-b:a", "192k",
-        "-af", "apad", "-shortest",
+        # Padded to exactly the clip, and no `-shortest`: nothing may cut the video, and nothing
+        # unbounded may enter ffmpeg's sync queue (E4).
+        "-af", f"apad=whole_dur={clip:.6f}",
         spec.out_path,
     ]
 
@@ -2555,16 +2577,18 @@ def is_truncated_footage(message: str) -> bool:
 # and the OS each phrase it differently.
 #
 # THEY ARE WHAT FFMPEG SAYS, NOT WHAT HAPPENED. ffmpeg 7.1 prints the same strerror(28) when a
-# queue INSIDE ITSELF fills up. `build_encode_cmd` pairs `-shortest` with `apad`, so the audio is
-# endless silence held in the `-shortest` sync queue until the video catches up. When the first
-# second of video reaches VideoToolbox slowly, the audio side is let loose and floods that queue.
-# The queue is a FIFO that grows only to 1 MiB of pointers, 131,072 frames. When it is full its
-# write returns AVERROR(ENOSPC), and ffmpeg dies with
+# queue INSIDE ITSELF fills up. Until E4, `build_encode_cmd` paired `-shortest` with an endless
+# `apad`, so the audio was silence without end, held in the `-shortest` sync queue until the video
+# caught up. When the first second of video reached VideoToolbox slowly, the audio side was let
+# loose and flooded that queue. The queue is a FIFO that grows only to 1 MiB of pointers, 131,072
+# frames. When it is full its write returns AVERROR(ENOSPC), and ffmpeg dies with
 #     [af#0:1 @ …] Error sending frames to consumers: No space left on device
 # while the disk still has 94.5 GB free (measured 2026-09-23). The file written by then is under
 # 1 MB. That the limit is a frame count is measured: doubling apad's frame size doubled the
 # audio queued at the failure, 10,288 s -> 20,277 s.
-# So these words only decide that the DISK GETS ASKED (`Renderer._disk_full_sentence`). Only the
+# E4 took `-shortest` out of the mux, and with it the queue that overflowed. The words stay a
+# claim all the same — ffmpeg has other internal queues, and the rule costs nothing when they are
+# true — so they only decide that the DISK GETS ASKED (`Renderer._disk_full_sentence`). Only the
 # disk's answer makes a failure a full disk (`is_out_of_space`).
 _NO_SPACE_MARKERS = ("no space left on device", "enospc", "disk full", "not enough space")
 
