@@ -20,6 +20,13 @@ class VideoExportWorker(QThread):
     progress = Signal(int, int)              # (frames_done, frames_total)
     finished_export = Signal(bool, str)      # (ok, message)  message="cancelled" / an error text
 
+    # A check to run on THIS thread before the renderer is even built — the export controller sets
+    # it on the first worker of a queue to `export_video.guard_free_space` over the WHOLE queue. It
+    # is an attribute rather than a constructor argument so it is optional to every stand-in that
+    # builds this worker's shape, and it runs here rather than on the UI thread because it asks the
+    # disk and ffprobes the source, either of which can block on a slow or network volume.
+    preflight = None
+
     def __init__(self, session, spec, make_renderer=None):
         """`make_renderer(session, spec)` builds the renderer this worker drives; the default is the
         single-lap `export_video.Renderer`.
@@ -41,10 +48,17 @@ class VideoExportWorker(QThread):
 
     def run(self):
         try:
+            if self.preflight is not None:
+                self.preflight()
             renderer = self._make_renderer(self._session, self._spec)
             renderer.run(progress=lambda d, t: self.progress.emit(d, t),
                          cancel=lambda: self._cancelled)
             self.finished_export.emit(True, "")
+        except export_video.InsufficientSpaceError as exc:
+            # REFUSED BEFORE A FRAME WAS RENDERED, so there is no partial output to drop — and
+            # what IS at the output path (a previous export the user said to replace) must
+            # survive a refusal that wrote nothing.
+            self.finished_export.emit(False, str(exc))
         except export_video.CancelledError:
             self._cleanup_partial()
             self.finished_export.emit(False, "cancelled")

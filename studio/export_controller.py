@@ -269,6 +269,11 @@ class ExportController:
         Only cases that can be told apart RELIABLY get their own sentence; everything else falls
         through to an honest generic. A wrong specific sentence is worse than a right vague one."""
         low = (message or "").casefold()
+        if export_video.is_refused_for_space(message or ""):
+            # The guard's own sentence already names the three numbers — needed, free, and
+            # where — so it goes in front as written, followed by the way out.
+            return (f"{message.strip()} Nothing was written. Free some space, or choose a folder "
+                    f"on another disk, and export again.")
         if export_video.is_out_of_space(message or ""):
             folder = os.path.dirname(out_path) or "that folder"
             return (f"There's no room left on the disk holding {folder}. Free some space, or "
@@ -428,12 +433,12 @@ class ExportController:
     # MACHINE (a box where no VideoToolbox session opens falls back to libx264 and lands several
     # times larger for the same preset):
     #   * VideoToolbox is bitrate-targeted, so export_video.vt_target_bitrate IS the answer;
-    #   * libx264 is CRF-targeted and has no bitrate to read, so these are bits per pixel per frame
-    #     measured on real GoPro footage with the overlays burned in (CRF 20 -> 0.68 at 1080p,
-    #     CRF 23 -> 0.51 at 720p). A CRF stream's real size follows how much the picture MOVES, so
-    #     this is an order of magnitude, and the dialog says "about".
-    _X264_BPP = {20: 0.68, 23: 0.51}
-    _X264_BPP_FALLBACK = 0.60         # an unknown CRF sits between the two measured points
+    #   * libx264 is CRF-targeted and has no bitrate to read, so `export_video.X264_BPP` holds bits
+    #     per pixel per frame measured on real GoPro footage with the overlays burned in. A CRF
+    #     stream's real size follows how much the picture MOVES, so this is an order of magnitude,
+    #     and the dialog says "about".
+    # Both live in `export_video.estimate_output_bytes`, which the free-space guard reads too, so
+    # the size this dialog promises and the space the guard requires come from one model.
     # Assumed for the SOURCE shape's width; GoPro's landscape modes are 16:9. The two fixed
     # shapes state their own ratio, so this is only the fallback the estimate needs when it is not
     # allowed to run an ffprobe to ask the footage.
@@ -488,7 +493,7 @@ class ExportController:
                           aspect: str = export_video.ASPECT_SOURCE,
                           content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
-        it has to render, and WHICH encoder will do it. Derived (see _X264_BPP) — never a stored
+        it has to render, and WHICH encoder will do it. Derived (see X264_BPP) — never a stored
         megabyte figure, because the encoder is a property of the machine. "" when there is nothing
         honest to say: an unknown lap duration, or "Source", whose pixel count we can't know without
         an ffprobe this dialog deliberately does not run.
@@ -509,20 +514,13 @@ class ExportController:
         frames = int(math.ceil(dur * fps)) * files
         out_w, out_h = self._estimate_frame_size(out_height, aspect)
         if content == export_video.ALPHA_PRORES:
-            bits_per_s = out_w * out_h * fps * export_video.PRORES_4444_BPP
-            encoder = "ProRes 4444"
+            codec, encoder = content, "ProRes 4444"
         elif content == export_video.ALPHA_PNG:
-            bits_per_s = out_w * out_h * fps * export_video.PNG_SEQUENCE_BPP
-            encoder = "a PNG sequence"
+            codec, encoder = content, "a PNG sequence"
         else:
-            bpp, crf = export_video.quality_params(quality)
-            encoder = export_video.resolve_encoder("auto")
-            if encoder == export_video.VT_H264:
-                bits_per_s = export_video.vt_target_bitrate(out_w, out_h, fps, bpp)
-            else:  # libx264 is CRF-driven: no target bitrate exists, so use the measured bpp
-                bits_per_s = out_w * out_h * fps * self._X264_BPP.get(crf, self._X264_BPP_FALLBACK)
-        megabytes = bits_per_s * dur * files / 8 / 1e6
-        size = (f"{megabytes / 1000:.1f} GB" if megabytes >= 1000 else f"{megabytes:.0f} MB")
+            codec = encoder = export_video.resolve_encoder("auto")
+        size = export_video.fmt_bytes(
+            export_video.estimate_output_bytes(out_w, out_h, fps, dur, quality, codec) * files)
         return (f"About {size} — {frames} frames to render at {fps:g} fps "
                 f"with {encoder}. Real size follows how much the footage moves.")
     def _export_session_seconds(self) -> float:
@@ -1058,6 +1056,13 @@ class ExportController:
             # the bar restarts per file and so does the estimate.
             clock = {"t0": 0.0, "done0": 0}
             worker = VideoExportWorker(self.win.session, spec, make_renderer)
+            if i == 0:
+                # THE WHOLE QUEUE'S SPACE, ASKED ONCE, BEFORE ITS FIRST FRAME. Every spec rides
+                # along because an All-laps batch fits or does not fit as a batch: refusing its
+                # twentieth file after nineteen renders is the wait this exists to spare. It runs
+                # on the worker's thread (the probe and the disk query can block) while the
+                # dialog still says "Preparing…", and it refuses only what plainly cannot fit.
+                worker.preflight = lambda: export_video.guard_free_space(specs)
             state["worker"] = worker
             self.win._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
             # AND put it in the DRAINED set. It was held on that attribute and nowhere else, so
@@ -1113,8 +1118,12 @@ class ExportController:
                 # the load-failure table and the crash report. `message` is an ffmpeg stderr TAIL:
                 # pasting it as the body handed the user "[h264_videotoolbox @ 0x…] Error encoding
                 # frame: -12905" as the explanation of what to do next.
+                # A refusal never began, so "couldn't finish" would describe a render that did
+                # not happen.
+                what = ("didn't start" if export_video.is_refused_for_space(message)
+                        else "couldn't finish")
                 box = QMessageBox(QMessageBox.Warning, self._EXPORT_FAIL_TITLE,
-                                  f"{APP_NAME} couldn't finish the overlay video.\n\n"
+                                  f"{APP_NAME} {what} the overlay video.\n\n"
                                   f"{self._export_failure_message(message, spec.out_path)}")
                 box.setDetailedText(message)
                 box.addButton(QMessageBox.Close)

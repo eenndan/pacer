@@ -98,6 +98,7 @@ from studio import (  # noqa: E402
 )
 from studio.app import APP_NAME, StudioWindow  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
+from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: E402
 
 # The File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
 # "Copy stats summary" (N13) joined them: it publishes the same numbers the HTML report does, so
@@ -1480,6 +1481,174 @@ def test_a_png_sequence_is_asked_for_as_a_folder_and_a_mov_as_a_file():
     print("ok picker: a sequence asks for a folder, a .mov for a file")
 
 
+# ======================================================= E1 — refuse what the disk plainly can't hold
+# The owner's Mac ran out of disk on 2026-09-19, and the export defaults to saving beside
+# ~12 GB-a-chapter recordings on the Desktop. A disk that filled MID-render was already caught
+# (`is_out_of_space`, no doomed libx264 retry); nothing asked BEFORE decoding started, so the user
+# sat through a render that was never going to fit.
+#
+# These drive the REAL entry point (`export_overlay_video`), the REAL spec builders, the REAL
+# `_run_video_export` and the REAL `VideoExportWorker.run` — only the dialogs, the disk query
+# (`export_video.free_bytes`, the seam), the ffprobe of a source that does not exist, and the
+# renderer itself are stood in for. The worker never becomes a thread: the stubbed modal loop runs
+# each queued worker's `run()` itself, which is where the real worker's queued signals land.
+_E1_SOURCE = (3840, 2160, 60000 / 1001)     # the working set's GoPro frame: 4K at 59.94 fps
+_E1_LAP_S = 23.231                          # FakeSession's lap window
+
+
+def _e1_file_bytes() -> float:
+    """What ONE of FakeSession's laps costs at the default 1080p/High on VideoToolbox: the target
+    bitrate the module states, times the clip ffmpeg is asked for — both read off the module's own
+    long-standing public functions, so this is the stated rate and not a copy of the new model."""
+    bits = export_video.vt_target_bitrate(1920, 1080, 30.0, export_video.quality_params("high")[0])
+    return bits * export_video.clip_seconds(0.0, _E1_LAP_S, 30.0) / 8
+
+
+def _e1_export(win, td, *, free, scope=export_video.SCOPE_THIS_LAP):
+    """File ▸ Export overlay video… end to end into `td`, with the disk reporting `free` bytes
+    (None = a volume that cannot be asked). Returns what a user and the disk would see."""
+    src = os.path.join(td, "GX010099.MP4")
+    if not os.path.exists(src):
+        open(src, "wb").close()
+    out = os.path.join(td, "GX010099_overlay.mp4")
+    asked, built, modals, made = [], [], [], []
+
+    class _Renderer:
+        """Stands in for the render. Being BUILT is the event under test: the guard has to have
+        spoken before this is constructed, because construction is where a render begins."""
+
+        def __init__(self, _session, spec):
+            built.append(spec.out_path)
+            self._spec = spec
+
+        def run(self, progress=None, cancel=None):
+            with open(self._spec.out_path, "wb") as f:
+                f.write(b"rendered")
+
+    class _SyncWorker(_RealVideoExportWorker):
+        def start(self):            # the modal loop below runs it — see the section comment
+            made.append(self)
+
+    def _exec(dlg):
+        if not isinstance(dlg, QProgressDialog):
+            return QDialog.Accepted
+        while made:                 # the queue grows as each finished file starts the next
+            made.pop(0).run()
+        return QDialog.Accepted
+
+    def _box_exec(box, *_a, **_k):
+        modals.append({"icon": box.icon(), "body": box.text()})
+        return 0
+
+    choice = studio_app.ExportChoice(config=export_video.OverlayConfig(), lead=0.0, scope=scope)
+    saved = {
+        (export_video, "free_bytes"): getattr(export_video, "free_bytes", None),
+        (export_video, "probe_video_size"): export_video.probe_video_size,
+        (export_video, "probe_source_duration"): export_video.probe_source_duration,
+        (export_video, "resolve_encoder"): export_video.resolve_encoder,
+        (export_video, "ffmpeg_available"): export_video.ffmpeg_available,
+        (export_video, "Renderer"): export_video.Renderer,
+        (export_controller, "VideoExportWorker"): export_controller.VideoExportWorker,
+        (ExportController, "_ask_export_options"): ExportController._ask_export_options,
+        (ExportController, "_export_save_path"): ExportController._export_save_path,
+        (QDialog, "exec"): QDialog.exec,
+        (QMessageBox, "exec"): QMessageBox.exec,
+    }
+    export_video.free_bytes = lambda path: (asked.append(path), free)[1]
+    export_video.probe_video_size = lambda _path: _E1_SOURCE
+    export_video.probe_source_duration = lambda _source: None
+    export_video.resolve_encoder = lambda _choice: export_video.VT_H264
+    export_video.ffmpeg_available = lambda: True
+    export_video.Renderer = _Renderer
+    export_controller.VideoExportWorker = _SyncWorker
+    ExportController._ask_export_options = lambda _s, _lap: choice
+    ExportController._export_save_path = lambda _s, *_a, **_k: out
+    QDialog.exec = _exec
+    QMessageBox.exec = _box_exec
+    try:
+        win._paths = [src]
+        win.statusBar().clearMessage()
+        win.exports.export_overlay_video()
+    finally:
+        for (owner, name), value in saved.items():
+            if value is None:
+                delattr(owner, name)
+            else:
+                setattr(owner, name, value)
+    return SimpleNamespace(asked=asked, built=built, modals=modals, out=out, folder=td)
+
+
+def test_an_export_the_disk_plainly_cannot_hold_is_refused_before_a_frame():
+    """1 MB free against an ~18 MB lap. On main the render simply started: `_Renderer` was built
+    and the user waited for the encoder to hit the wall. Now nothing is built, the dialog says
+    it DIDN'T START (not "couldn't finish"), and it names the three numbers a user can act on —
+    how much, how much is free, and where.
+
+    And a refusal deletes nothing. The save dialog had already asked to replace the previous
+    export at that path; a refusal that then "cleaned up a partial output" would destroy the old
+    file for a render that never began."""
+    win = _window(FakeSession())
+    with tempfile.TemporaryDirectory() as td:
+        previous = os.path.join(td, "GX010099_overlay.mp4")
+        with open(previous, "wb") as f:
+            f.write(b"the export the user already has")
+        seen = _e1_export(win, td, free=1_000_000)
+        assert seen.built == [], f"a render began on a disk that cannot hold it: {seen.built}"
+        assert seen.asked == [td], f"the disk was not asked about the output's folder: {seen.asked}"
+        assert len(seen.modals) == 1, seen.modals
+        body = seen.modals[0]["body"]
+        assert seen.modals[0]["icon"] == QMessageBox.Warning, seen.modals[0]
+        assert f"{APP_NAME} didn't start the overlay video" in body, body
+        assert f"about {_e1_file_bytes() / 1e6:.0f} MB" in body, body     # needed
+        assert "has 1 MB free" in body, body                                # free
+        assert td in body, body                                             # where
+        assert "Free some space" in body and "another disk" in body, body   # the way out
+        with open(previous, "rb") as f:
+            assert f.read() == b"the export the user already has", \
+                "the refusal deleted the export the user already had"
+    win.hide()
+    print("ok E1: a lap the disk plainly cannot hold is refused before a frame, and deletes nothing")
+
+
+def test_an_export_that_fits_or_cannot_be_measured_is_not_refused():
+    """The failure this guard must never introduce is a FALSE refusal. Room to spare renders, and
+    so does a volume that cannot be asked at all (None) — an unknown is not a full disk. Both still
+    had to ASK: on main nothing did, which is the half of this that fails there."""
+    win = _window(FakeSession())
+    for free in (10_000_000_000, None):
+        with tempfile.TemporaryDirectory() as td:
+            seen = _e1_export(win, td, free=free)
+            assert seen.asked == [td], f"free={free}: the disk was never asked: {seen.asked}"
+            assert seen.built == [seen.out], f"free={free}: the render did not run: {seen.built}"
+            assert len(seen.modals) == 1 and seen.modals[0]["icon"] == QMessageBox.Information, \
+                (free, seen.modals)
+            assert "exported" in win.statusBar().currentMessage(), win.statusBar().currentMessage()
+    win.hide()
+    print("ok E1: room to spare, and an unknown volume, both render")
+
+
+def test_an_all_laps_batch_is_held_to_the_sum_of_its_files():
+    """Ten laps, one file each, into one folder, with room for TWO files' full estimate. Every
+    file fits on its own, so a guard that asked per file would let the first few through and
+    refuse the rest minutes later — or, asked per file before each one, run the disk dry on the
+    way. The batch is refused as a batch, before its first file, and says how many files that is.
+    With room for the whole batch it runs all ten."""
+    win = _window(FakeSession(laps=tuple(range(10))))
+    one = _e1_file_bytes()
+    with tempfile.TemporaryDirectory() as td:
+        seen = _e1_export(win, td, free=int(2 * one), scope=export_video.SCOPE_ALL_LAPS)
+        assert seen.built == [], f"the batch started a file it could not finish: {seen.built}"
+        assert len(seen.modals) == 1, seen.modals
+        body = seen.modals[0]["body"]
+        assert "These 10 files" in body and f"about {10 * one / 1e6:.0f} MB together" in body, body
+    with tempfile.TemporaryDirectory() as td:
+        seen = _e1_export(win, td, free=int(12 * one), scope=export_video.SCOPE_ALL_LAPS)
+        assert len(seen.built) == 10, f"the batch did not render every file: {seen.built}"
+        assert seen.asked == [td], f"the batch asked the disk more than once: {seen.asked}"
+    win.hide()
+    print("ok E1: an All-laps batch is refused as a batch, on the sum")
+
+
 def _run_all():
     test_a_zero_lap_recording_disables_every_data_export_with_a_reason()
     test_a_zero_lap_export_writes_nothing_and_says_why()
@@ -1513,6 +1682,9 @@ def _run_all():
     test_an_all_laps_batch_renders_every_file_behind_one_dialog()
     test_cancelling_a_batch_stops_the_queue_rather_than_the_current_file()
     test_a_png_sequence_is_asked_for_as_a_folder_and_a_mov_as_a_file()
+    test_an_export_the_disk_plainly_cannot_hold_is_refused_before_a_frame()
+    test_an_export_that_fits_or_cannot_be_measured_is_not_refused()
+    test_an_all_laps_batch_is_held_to_the_sum_of_its_files()
     print("ALL OK")
 
 

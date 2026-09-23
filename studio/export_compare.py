@@ -107,6 +107,7 @@ from .export_video import (
     overlay_unit,
     probe_video_size,
     readout_pill_width,
+    resolve_fps,
     resolve_video_source,
     single_file_source,
 )
@@ -405,6 +406,15 @@ class CompareSpec(ExportSpec):
         return ExportSpec(out_path="", lap_id=self.lap_b, t0=self.t_b0,
                           t1=self.t_b1 + max(0.0, float(tail)),
                           source=self.source_b, config=self.config)
+
+    def output_frame(self, probe) -> tuple[int, int, float]:
+        """(out_w, out_h, fps) of the TWO-PANE frame — what `CompareRenderer._resolve_geometry`
+        builds, so the free-space guard sizes a compare as the double-height (or double-width)
+        picture it is rather than as one pane."""
+        a_w, a_h, a_fps = probe(self.source.probe_path)
+        b_w, b_h, _ = probe(self.source_b.probe_path)
+        geo = compare_geometry((a_w, a_h), (b_w, b_h), self.config)
+        return geo.out_w, geo.out_h, resolve_fps(self.config, a_fps)
 
     def cleanup(self) -> None:
         """Free both panes' temp concat lists. Idempotent."""

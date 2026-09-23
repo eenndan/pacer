@@ -617,6 +617,14 @@ class ExportSpec:
         reports on the output has to ask."""
         return bool(self.config.overlay_only and self.config.alpha_codec == ALPHA_PNG)
 
+    def output_frame(self, probe) -> tuple[int, int, float]:
+        """(out_w, out_h, fps) this spec renders at, from the source's real frame as `probe`
+        (`probe_video_size`'s shape) reports it — the same `frame_geometry` / `resolve_fps` the
+        `Renderer` resolves, so a size estimate describes the frame that gets written."""
+        src_w, src_h, src_fps = probe(self.source.probe_path)
+        geo = frame_geometry(src_w, src_h, self.config)
+        return geo.out_w, geo.out_h, resolve_fps(self.config, src_fps)
+
 
 # --------------------------------------------------------------------------- clock conversion
 # EVERY TIME IN THIS MODULE IS A MEDIA TIME — ffmpeg seeks with it, `ChapterMap` resolves the source
@@ -1273,6 +1281,250 @@ def guard_validate_window(spec: ExportSpec) -> None:
             f"export window is past the end of the video source "
             f"(local seek {local:.1f}s >= source duration {dur:.1f}s) — the lap/window does not "
             f"map onto any footage in the resolved chapter(s); nothing would be rendered")
+
+
+# --------------------------------------------------------------------------- output size + free space
+# libx264 is CRF-driven, so unlike VideoToolbox it has no target bitrate to read off: these are
+# bits per pixel per frame MEASURED on this renderer's own output, per CRF the quality presets use.
+# They lived in the export dialog while the dialog was their only reader; the free-space guard
+# below reads them too, so they live here, where one table serves the size the picker PROMISES and
+# the size the guard REQUIRES.
+X264_BPP = {20: 0.68, 23: 0.51}
+X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured points
+FREE_SPACE_FLOOR_FRACTION = 0.5   # PROVISIONAL — set from the measured spread
+
+
+def output_codec(config: OverlayConfig) -> str:
+    """What will actually write this config's pixels: the alpha codec for an overlay-only render,
+    else the H.264 encoder `resolve_encoder` picks on THIS machine (which may probe VideoToolbox
+    once; the answer is cached)."""
+    if config.overlay_only:
+        return ALPHA_PNG if config.alpha_codec == ALPHA_PNG else ALPHA_PRORES
+    return resolve_encoder(config.encoder)
+
+
+def estimate_output_bytes(out_w: int, out_h: int, fps: float, seconds: float,
+                          quality: str | None, codec: str) -> int:
+    """About how many bytes a render of `seconds` at `out_w x out_h @ fps` writes with `codec`
+    (VT_H264 / SW_H264 / ALPHA_PRORES / ALPHA_PNG). The VIDEO stream only: the composited path also
+    carries ~24 KB/s of AAC, left out because it only ever makes the real file bigger.
+
+    A CENTRAL estimate, the number the picker prints after "About". How far real files land from
+    it, and why, is measured at `FREE_SPACE_FLOOR_FRACTION`. Zero for a degenerate window."""
+    if not (seconds > 0) or out_w <= 0 or out_h <= 0:
+        return 0
+    rate = max(float(fps), 1.0)
+    if codec == ALPHA_PRORES:
+        bits_per_s = out_w * out_h * rate * PRORES_4444_BPP
+    elif codec == ALPHA_PNG:
+        bits_per_s = out_w * out_h * rate * PNG_SEQUENCE_BPP
+    else:
+        bpp, crf = quality_params(quality)
+        if codec == VT_H264:
+            bits_per_s = vt_target_bitrate(out_w, out_h, rate, bpp)
+        else:
+            bits_per_s = out_w * out_h * rate * X264_BPP.get(crf, X264_BPP_FALLBACK)
+    return int(bits_per_s * seconds / 8)
+
+
+def estimate_spec_bytes(spec, probe=None) -> int | None:
+    """The central estimate for one queued render, from the spec and the SOURCE'S real frame
+    (`probe`, default an ffprobe), or None when the spec cannot say — a duck-typed stand-in, an
+    unreadable source. None contributes nothing to a requirement: an unknown is never a reason to
+    refuse."""
+    try:
+        out_w, out_h, fps = spec.output_frame(probe or probe_video_size)
+        seconds = clip_seconds(spec.t0, spec.t1, fps)
+        return estimate_output_bytes(out_w, out_h, fps, seconds, spec.config.quality,
+                                     output_codec(spec.config))
+    except Exception:  # noqa: BLE001 — an estimate that cannot be made is simply not made
+        return None
+
+
+def fmt_bytes(n: float) -> str:
+    """A byte count the way the export dialog and Finder say it: decimal units, MB below a
+    gigabyte, one decimal place above."""
+    mb = float(n) / 1e6
+    return f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb:.0f} MB"
+
+
+def _volume_capacity_for_important_usage(path: str) -> int | None:
+    """What macOS itself says can be written to `path`'s volume for something the user asked for:
+    the free space PLUS the purgeable space (caches, optimised iCloud copies, local snapshots) the
+    system gives back on demand. It is the "available" figure Finder shows. None anywhere this
+    cannot be asked (not macOS, no CoreFoundation, a volume that does not answer).
+
+    WHY NOT `statvfs` ALONE. It counts only the blocks free right now, and on APFS that is the
+    SMALLER number: measured on this Mac on 2026-09-23, 95.17 GB free by `statvfs` against
+    97.64 GB for important usage — 2.46 GB of purgeable space `statvfs` does not see. The gap is
+    largest exactly when the disk is nearly full, which is the only time this guard speaks, so a
+    guard reading `statvfs` alone would refuse exports the system would have made room for."""
+    import ctypes
+    try:
+        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        key = ctypes.c_void_p.in_dll(cf, "kCFURLVolumeAvailableCapacityForImportantUsageKey")
+    except (OSError, ValueError):
+        return None
+    cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+    cf.CFURLCreateFromFileSystemRepresentation.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
+    cf.CFURLCopyResourcePropertyForKey.restype = ctypes.c_bool
+    cf.CFURLCopyResourcePropertyForKey.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    cf.CFNumberGetValue.restype = ctypes.c_bool
+    cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+    raw = os.fsencode(path)
+    url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), True)
+    if not url:
+        return None
+    value = ctypes.c_void_p()
+    try:
+        if not cf.CFURLCopyResourcePropertyForKey(url, key, ctypes.byref(value), None) \
+                or not value.value:
+            return None
+        out = ctypes.c_int64()
+        ok = cf.CFNumberGetValue(value, 4, ctypes.byref(out))   # 4 = kCFNumberSInt64Type
+        cf.CFRelease(value)
+        return int(out.value) if ok and out.value >= 0 else None
+    finally:
+        cf.CFRelease(url)
+
+
+def free_bytes(path: str) -> int | None:
+    """Bytes that can be written to the volume that will hold `path` — asked of its nearest
+    EXISTING parent, because the output is not written yet and neither may its folder be. The
+    larger of `statvfs`'s free blocks and macOS's own capacity for important usage (see
+    `_volume_capacity_for_important_usage`).
+
+    None when the volume cannot be queried at all, and the caller must then refuse NOTHING: an
+    unknown is not a full disk, and a network or removable volume that does not answer `statvfs`
+    is still a perfectly good place to export to."""
+    probe = os.path.abspath(path)
+    while not os.path.isdir(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return None
+        probe = parent
+    try:
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        free = None
+    important = _volume_capacity_for_important_usage(probe)
+    known = [v for v in (free, important) if v is not None]
+    return max(known) if known else None
+
+
+def _reclaimable_bytes(spec, frames: int | None) -> int:
+    """Bytes this render will FREE by overwriting what is already at its output, which the free
+    space it needs does not have to cover.
+
+    The save dialog asks before replacing a file, and ffmpeg's `-y` truncates it the moment the
+    encode opens it, so re-exporting a lap over the previous export of it needs only the
+    DIFFERENCE. Leaving this out would refuse exactly the re-export a user tries first on a full
+    disk. A PNG sequence overwrites the frames of an earlier sequence that share its names
+    (`overlay_000001.png` onwards), so those count and nothing else in the folder does."""
+    out = getattr(spec, "out_path", "") or ""
+    try:
+        if getattr(spec, "is_png_sequence", False):
+            if not os.path.isdir(out) or not frames:
+                return 0
+            prefix, suffix = _PNG_PATTERN.split("%06d")
+            total = 0
+            with os.scandir(out) as it:
+                for entry in it:
+                    name = entry.name
+                    digits = name[len(prefix):-len(suffix)]
+                    if (name.startswith(prefix) and name.endswith(suffix) and len(digits) == 6
+                            and digits.isdigit() and 1 <= int(digits) <= frames
+                            and entry.is_file(follow_symlinks=False)):
+                        total += entry.stat(follow_symlinks=False).st_size
+            return total
+        if os.path.isfile(out) and not os.path.islink(out):
+            return os.path.getsize(out)
+    except OSError:
+        return 0
+    return 0
+
+
+class InsufficientSpaceError(RuntimeError):
+    """The destination plainly cannot hold this export, so it was REFUSED BEFORE A FRAME WAS
+    DECODED. Its own type because of what it promises: nothing was written — so the worker must
+    not "clean up a partial output", which here would be a previous export the user chose to
+    replace. A disk that fills MID-render is a different failure (`is_out_of_space`), and it does
+    leave a partial file to remove."""
+
+
+# What `is_refused_for_space` matches on, so the dialog's sentence and the error text cannot drift
+# apart (the same idiom as `_TRUNCATED_MARKER`). Deliberately none of `_NO_SPACE_MARKERS`: a
+# refusal is not a disk that ran out mid-render, and the dialog says different things for the two.
+_REFUSED_FOR_SPACE_MARKER = "not enough for even the smallest"
+
+
+def is_refused_for_space(message: str) -> bool:
+    """True when a failure is `guard_free_space`'s up-front refusal."""
+    return _REFUSED_FOR_SPACE_MARKER in (message or "").casefold()
+
+
+def guard_free_space(specs, probe=None) -> None:
+    """Refuse an export its destination PLAINLY cannot hold, before any frame is decoded.
+
+    The whole QUEUE, summed: an All-laps batch writes one file per lap into one folder, and a
+    check per file would let the first nineteen through and refuse the twentieth after twenty
+    minutes of rendering. Specs are grouped by the folder they write into and each group is held to
+    the free space of its own volume.
+
+    WHAT IT REQUIRES IS A FLOOR, NOT THE ESTIMATE. The failure this guard must never introduce is
+    refusing an export that would have fitted, so it asks only for `FREE_SPACE_FLOOR_FRACTION` of
+    the central estimate — below every real file measured against it — less whatever the render
+    reclaims by overwriting a previous one. Between the floor and the real size the render simply
+    runs, and a disk that fills anyway is caught mid-render by `is_out_of_space`, which stays the
+    backstop. `free_bytes` returning None (a volume that cannot be asked) refuses nothing.
+
+    Raises `InsufficientSpaceError` with a sentence naming how much is needed, how much is free,
+    and where."""
+    cache: dict[str, tuple[int, int, float]] = {}
+    ask = probe or probe_video_size
+
+    def cached(path: str):
+        if path not in cache:
+            cache[path] = ask(path)
+        return cache[path]
+
+    groups: dict[str, dict] = {}
+    for spec in specs:
+        est = estimate_spec_bytes(spec, cached)
+        if not est:
+            continue
+        out = os.path.abspath(spec.out_path)
+        folder = out if getattr(spec, "is_png_sequence", False) else os.path.dirname(out)
+        frames = None
+        try:
+            _w, _h, fps = spec.output_frame(cached)
+            frames = frame_count(spec.t0, spec.t1, fps)
+        except Exception:  # noqa: BLE001 — without a frame count a sequence reclaims nothing
+            pass
+        group = groups.setdefault(folder, {"est": 0, "floor": 0.0, "reclaim": 0, "files": 0})
+        group["est"] += est
+        group["floor"] += est * FREE_SPACE_FLOOR_FRACTION
+        group["reclaim"] += _reclaimable_bytes(spec, frames)
+        group["files"] += 1
+    for folder, group in groups.items():
+        need = int(group["floor"]) - group["reclaim"]
+        if need <= 0:
+            continue
+        free = free_bytes(folder)
+        if free is None or free >= need:
+            continue
+        what = (f"These {group['files']} files would take about {fmt_bytes(group['est'])} "
+                f"together" if group["files"] > 1
+                else f"This export would take about {fmt_bytes(group['est'])}")
+        have, floor = fmt_bytes(free), fmt_bytes(need)
+        if have == floor:     # "2.1 GB free — not enough for 2.1 GB" is a sentence nobody can use
+            have, floor = f"{free / 1e6:,.0f} MB", f"{need / 1e6:,.0f} MB"
+        raise InsufficientSpaceError(
+            f"{what}, and the disk holding {folder} has {have} free — "
+            f"{_REFUSED_FOR_SPACE_MARKER} it could come out at ({floor}).")
 
 
 # --------------------------------------------------------------------------- compositing
