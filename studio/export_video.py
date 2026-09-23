@@ -1165,7 +1165,8 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     opening frames throttled to 3 fps: laps 3 and 13 failed at frame 32, lap 5 passed (it is a
     race). Un-throttled, no single export failed, but two 4K exports run at once failed 2 of 14
     and four at once 4 of 4 (#365). libx264 never overflowed it, even fed at 0.5 fps. #365 made the
-    failure cost one libx264 re-render; with no `-shortest` there is no such queue to fill.
+    failure cost one libx264 re-render. Without `-shortest` no stream limits that queue, and
+    ffmpeg's debug log shows it handing each audio frame on the moment it arrives: nothing piles up.
 
     BOUNDING THE PAD ALONE WOULD NOT HAVE HELD. With `-shortest` kept and `apad=whole_dur`, the same
     throttled start passed on a 20 s lap and on a 2,000 s window of Sandown 3h 2026, and overflowed
