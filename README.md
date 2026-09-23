@@ -160,8 +160,8 @@ than it is. So that is a rule with an owner in the code:
   the UI does; the card refuses on provisional timing and the video warns before it burns a number
   into a file someone else will see.
 - **the ideal lap discloses its sample**, because a sum of per-segment minima falls the longer you
-  stay out. Same driving, same recording: 67.917 s over 5 laps, 66.709 s over 65, as measured
-  before a September 2026 change to corner matching (not re-measured since).
+  stay out. Same driving, same recording (Sandown 3h, three hours at Sandown Park):
+  46.797 s over 5 laps, 45.768 s over 62.
 - **DATA TRUST** puts the accuracy story inside the product, not only on this page.
 - **a citable marker vocabulary on the way out.** In the app a caveat has hover, colour and weight
   to carry it, so Pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An

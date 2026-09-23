@@ -3,10 +3,14 @@
 WHY THIS EXISTS. Nine tables in the tree were measured on real footage, and each has a check that
 re-measures it (tests/test_measured_figures.py, tests/test_ideal_sample_table.py). PR #339 ran
 those checks after #335 changed corner matching, and eight of the nine no longer matched the app.
-Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them can be re-measured. The
-owner has not chosen between restoring D24, re-basing the tables on other recordings, or
-disclosing. Disclosure is the default until he does, and it has one rule: no figure the app or the
-docs present may read as current when it is known stale or cannot be verified.
+Then D24 and Sandown_09_05_2026 left the owner's machine, so none of them could be re-measured, and
+#344 marked them. The rule is one: no figure the app or the docs present may read as current when
+it is known stale or cannot be verified.
+
+On 2026-09-23 the owner chose to RE-BASE them on the recordings on his Desktop, the working set
+(T16b). A table whose footage check re-measured every row on the working set is `CURRENT`: it
+names no `GONE` recording and must carry NO mark — a mark left on it would present a current table
+as unverifiable. What it replaced is kept beside it as a record that still carries its mark.
 
 This module is the vocabulary both test files share. It has no Qt, no pacer and no numpy:
 
@@ -36,12 +40,17 @@ import re
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The footage folders (as test_measured_figures._LAP_SETS names them) that are NOT on the owner's
-# machine. The owner removed both on or before 2026-09-19, in a Desktop reorganisation. SD_30_08_26
-# is still there, so SD_30_08 rows CAN be re-measured, and T16 did so on 2026-09-19.
+# machine. The owner moved both to an external drive on or before 2026-09-19 to free disk space;
+# they are not searched for there. SD_30_08_26 is still here, so SD_30_08 rows CAN be re-measured,
+# and T16 did so on 2026-09-19. Since 2026-09-23 the working set is `Sandown 3h 2026`,
+# `SD_19_09_26`, `SD_30_08_26` and `MK_18_09_26` (T16b).
 GONE = ("D24", "Sandown_09_05_2026")
 
 STALE = "STALE"
 UNVERIFIED = "UNVERIFIED"
+# Re-measured on the working set by its footage check (T16b). Not a mark: the status of a table
+# that must not carry one.
+CURRENT = "CURRENT"
 
 # "⚠ STALE — NOT RE-MEASURABLE (T16)." at the head of the paragraph that marks a table. Any
 # decoration around it (a comment's `#`, markdown's `>` or `**`) is ignored.
