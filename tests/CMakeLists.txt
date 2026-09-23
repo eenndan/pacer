@@ -1160,9 +1160,11 @@ add_test(NAME test_camera_support
 # FOUND BY SEARCH over git ls-files so the twelfth surface cannot be forgotten: the table falls
 # monotonically (the "no floor it settles on" claim the shipping tooltips make), its rate column
 # is recomputed from its own endpoint cells, every "per doubling of lap count" rate and every
-# "X s over 5 laps, Y s over N" pair is the table's, and every D24 gap the tree quotes is the one
-# the docstring publishes. A fifth, opt-in, loads a real recording named by PACER_IDEAL_TABLE_MP4
-# (comma-separated chapters), asserts the row's `all` cell IS Session.ideal_total() and re-runs
+# "X s over 5 laps, Y s over N" pair is the table's, and every gap the tree quotes is one the
+# docstring publishes — off the working-set table T16b re-based, or off the D24-era record kept
+# beneath it, which no in-app string may quote. A fifth, opt-in, loads a real recording named by
+# PACER_IDEAL_TABLE_MP4 (comma-separated chapters of one row, found by its chapter files in
+# ROW_RECORDINGS), asserts the row's `all` cell IS Session.ideal_total() and re-runs
 # the table's own Monte-Carlo over every rung; it is a footage registration, reported Skipped
 # without the footage, which is why the text checks cost nothing. A sixth check CONTROLS that
 # fifth one's stand-in for `CornerModel.segment_bests`' masking rule — the app never composites a

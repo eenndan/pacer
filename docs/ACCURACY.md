@@ -16,7 +16,11 @@ not the span of lap IDs they occupied in a 24-hour transponder log.
 ## The validated numbers
 
 Two GoPro recordings of the same kart, each holding one session, timed by Pacer's **default
-shipping pipeline** and compared lap-for-lap against the transponder. The residual is
+shipping pipeline** and compared lap-for-lap against the transponder. Both are **D24**: the
+Daytona 24-hour race at Milton Keynes, 23–24 May 2026 — recording A is `GX0*0060`, B is `GX0*0062`.
+The validation was run in June 2026 and the table is that measurement, as recorded. The Desktop
+recordings Pacer has been developed against since D24 left the development machine have no
+transponder log, so it has not been repeated on them. The residual is
 `pacer lap time − transponder lap time`, measured only on **clean** laps — racing laps (≤ 72 s on
 both clocks) with no GPS dropout.
 
@@ -59,12 +63,13 @@ does. Both are unbiased to well under a hundredth of a second.
   Pacer timed is provably the session the transponder timed. Three further signals bound the same
   window independently — the GPS9 wall clock, elapsed time since the green flag, and the long
   pit/driver-change laps that bracket the stint.
-- **Reproducible — on recording B.** The harness is
+- **Reproducible — on recording B, given its footage.** The harness is
   [`studio/dev/_validate_wallclock.py`](../studio/dev/_validate_wallclock.py). The transponder CSV
   is a private reference input and is **never committed** — the method is public; the ground-truth
   file stays out of the repo. Recording B's footage is intact and its row can be re-derived
-  end-to-end. Recording A's footage no longer exists (a tool overwrote it), so row A is a
-  historical measurement, reported here as it was recorded in
+  end-to-end, but since September 2026 it is kept off the development machine, so it is not
+  re-derived in routine work. Recording A's footage no longer exists (a tool overwrote it),
+  so row A is a historical measurement, reported here as it was recorded in
   [`studio/docs/`](../studio/docs/gps-accuracy-research.md) at the time.
 
 ## Three findings that show where the limit actually is

@@ -5,6 +5,16 @@ on top of the existing C++ `pacer` core (reused via its nanobind Python bindings
 for a single-language, LLM-editable codebase that still nails draggable map handles and
 frame-accurate video↔telemetry sync (all in Python — see [the spike](dev/spike_video_sync.py)).
 
+> **Which recording a figure here comes from.** The app was built and measured on **D24** — two
+> recordings of the Daytona 24-hour race, `GX0*0060` and `GX0*0062`, May 2026 — and most figures in
+> this map name it (D24, 0060, 0062), as a few name `Sandown_09_05_2026`. Both left the development
+> machine on 2026-09-19. Those figures are the measurements that set each design and are kept as
+> that record, not re-measured; a figure quoting a table marked `⚠ STALE` carries the mark's date.
+> Since 2026-09-23 the working set is the Desktop recordings `Sandown 3h 2026` (`GX0*0064`),
+> `SD_19_09_26` (`GX0*0068`), `SD_30_08_26` (`GX0*0065`) and `MK_18_09_26` (`GX0*0067`, the only
+> anticlockwise one — the same Daytona Milton Keynes circuit as D24), and a figure re-measured on it
+> names its recording (T16b; `corner_model.IdealSample` is the first table re-based).
+
 ## Run
 
 ```bash
@@ -76,7 +86,8 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
    is the #1 hazard.
 3. **Core-math is gated.** Any change to timing (the GPS9 clock) / geometry / delta / segmentation
    must preserve the golden equivalence — `pixi run golden` (synthetic, in CI) and `max|Δ|=0` on the
-   manual D24 dump (see [AGENTS.md](../AGENTS.md)).
+   manual real-footage dump, `PACER_GOLDEN_MP4` pointed at a working-set recording (see
+   [AGENTS.md](../AGENTS.md)).
 
 ### Common changes → files to touch
 
@@ -213,8 +224,8 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   (measured on all nine bundled GPS5-era clips). (A C++ Adam timestamp-fit path was tried here but **diverged**
   on long/noisy sessions and has since been removed — GPS9's true per-fix clock supersedes it.)
 - **GPS9 true-clock timing is unbiased — VALIDATED OUT-OF-SAMPLE, no calibration factor** (rate =
-  1.0). Validated against the kart's real lap-timing **transponder** on a SECOND, independent
-  recording (0062) by `studio/dev/_validate_wallclock.py`: clean-lap residual mean **+0.0015 s /
+  1.0). Validated in June 2026 (D24; the working set has no transponder log, so not repeated since)
+  against the kart's real lap-timing **transponder** on a SECOND, independent recording (0062) by `studio/dev/_validate_wallclock.py`: clean-lap residual mean **+0.0015 s /
   ±0.053 s over 59 clean laps** (0060: +0.0030 s / 0.087 s over 48), each recording's own best-fit
   rate ≈1.0 (−22 / −46 ppm). **`csv_lap_range` in the dump is an ID range, not a count** — the
   transponder log runs a 24 h race, so 0062's lock `856–920` is **65 aligned laps**, not 850+

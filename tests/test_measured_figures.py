@@ -1112,10 +1112,14 @@ def _published() -> list[tuple]:
         # #339: 0060's ideal is 65.864 s after it (65.637 after #335); the record publishes 65.464.
         ("the #272 recombination record", _REFUSED, re.compile(r"^\| \| 0060 \(38 laps\)"), lambda: list(_record_tables()[0]),
          "test_the_refusal_record_matches_the_footage", stale),
-        # #339: the `all` cells are stale by 0.05–0.43 s on all five rows.
-        ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
-         lambda: [_BEAT_SETS.get(r.name, r.name) for r in _ideal._rows()],
-         "test_the_table_still_matches_the_app", stale),
+        # T16b re-based it on the working set and its footage check re-measured every row, so it is
+        # CURRENT: it must carry no mark. What it replaced is kept below it as the record.
+        ("corner_model.IdealSample's table", _CORNER_MODEL, re.compile(r"^\s+\| Sandown 3h 1 chapter"),
+         lambda: list(_ideal.ROW_RECORDINGS), "test_the_table_still_matches_the_app", _stale.CURRENT),
+        # #339: the `all` cells were stale by 0.05–0.43 s on all five rows. No check re-measures the
+        # record: two of its three recordings are gone, and it is history, not a claim about the app.
+        ("corner_model.IdealSample's record", _CORNER_MODEL, re.compile(r"^\s+\| D24 1 chapter"),
+         lambda: [_BEAT_SETS.get(r.name, r.name) for r in _ideal._record_rows()], None, stale),
         # No footage check re-measures these two, but they are D24 tables of the same kind: how far
         # an interpolated corner cell is off. #335 moved which cells are interpolated (0060: 236 →
         # 34 of 456), so both describe cells the app no longer has.
@@ -1176,6 +1180,17 @@ def _mark_problems(texts: dict[str, str]) -> list[str]:
             problems.append(f"{name}: no row of it in {rel} — update this registry with the table")
             continue
         gone = sorted({_LAP_SETS[s][0] for s in lap_sets()} & set(_stale.GONE))
+        if status == _stale.CURRENT:
+            # Re-measured on footage that is here. A stale mark left on it would be the opposite lie:
+            # a current table presented as unverifiable.
+            if gone:
+                problems.append(f"{name} is registered {status}, but its rows need {' and '.join(gone)}, "
+                                f"which are no longer available")
+            found = _find_mark(lines, row, path)
+            if found:
+                problems.append(f"{name} ({rel}:{found[0] + 1}) was re-measured and is {status}, but "
+                                f"still carries a {found[1]} mark")
+            continue
         if not gone:
             continue        # every row's recording is here, so its footage check can answer
         found = _find_mark(lines, row, path)
@@ -1216,7 +1231,8 @@ def test_every_table_no_footage_can_re_measure_carries_its_mark():
         "\n  ".join(problems)
     print(f"test_every_table_no_footage_can_re_measure_carries_its_mark OK ({len(tables)} tables, "
           f"{sum(t[5] == _stale.STALE for t in tables)} stale, "
-          f"{sum(t[5] == _stale.UNVERIFIED for t in tables)} unverified)")
+          f"{sum(t[5] == _stale.UNVERIFIED for t in tables)} unverified, "
+          f"{sum(t[5] == _stale.CURRENT for t in tables)} re-measured and unmarked)")
 
 
 def test_the_mark_guard_fails_on_each_planted_defect():
@@ -1243,11 +1259,22 @@ def test_the_mark_guard_fails_on_each_planted_defect():
         j, _status = _find_mark(lines, row, t[1])
         return t[1], j, row
 
-    for name, *_ in tables:
+    for name, *_, status in tables:
+        if status == _stale.CURRENT:
+            continue        # nothing to strip: planted the other way round below
         path, j, _row = mark_of(name)
         tag = _stale.TABLE_MARK.search(clean[path].splitlines()[j]).group(0)
         got = _mark_problems(planted(path, range(j, j + 1), tag, "a note"))
         assert any(p.startswith(name) and "without its mark" in p for p in got), (name, got)
+    # T16b: a table re-measured on present footage must NOT carry a stale mark.
+    current = [t for t in tables if t[5] == _stale.CURRENT]
+    assert current, "no table is registered CURRENT, so the half of the guard below is untested"
+    for name, path, first_row, *_ in current:
+        lines = clean[path].splitlines()
+        row = next(i for i, line in enumerate(lines) if first_row.match(line))
+        got = _mark_problems(planted(path, range(row - 2, row - 1), lines[row - 2],
+                                     lines[row - 2] + " ⚠ STALE — NOT RE-MEASURABLE (T16)."))
+        assert any(p.startswith(name) and "still carries a STALE mark" in p for p in got), (name, got)
     path, j, _row = mark_of("theme.py's floor table")
     got = _mark_problems(planted(path, range(j, j + 1), "⚠ STALE", "⚠ UNVERIFIED"))
     assert any("marked UNVERIFIED" in p for p in got), got
@@ -1669,6 +1696,8 @@ _LAP_SETS = {
     "Sandown chapter 1": ("Sandown_09_05_2026", ["GX010059.MP4"]),
     "Sandown 3 chapters": ("Sandown_09_05_2026", ["GX010059.MP4", "GX020059.MP4", "GX030059.MP4"]),
     "SD_30_08": ("SD_30_08_26", ["GX010065.MP4"]),
+    # corner_model.IdealSample's rows since T16b, which name their own chapter files.
+    **{name: (folder, list(files)) for name, (folder, files) in _ideal.ROW_RECORDINGS.items()},
 }
 
 

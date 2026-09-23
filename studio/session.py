@@ -3369,8 +3369,8 @@ class Session:
 
         IT IS A FUNCTION OF HOW MANY LAPS YOU RECORDED, and a surface that prints it without
         `ideal_sample()` is inviting the reader to compare two numbers that are not comparable.
-        Measured over random subsets of the clean laps it falls 0.15 … 0.38 s per DOUBLING of lap
-        count on the owner's five recordings, with no plateau; the full table, the best-lap
+        Measured over random subsets of the clean laps it falls 0.17 … 0.74 s per DOUBLING of lap
+        count on the owner's five working-set recordings, with no plateau; the full table, the best-lap
         control and the partition sensitivity are in `corner_model.IdealSample`."""
         sb = self.ideal_segment_bests()
         return None if sb is None else sb.total
