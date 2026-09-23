@@ -26,8 +26,9 @@ laps; 0068: 2026-09-19, 36 laps), which is the input this feature takes. 0064 is
 (GX010064 + GX020064 + GX030064) and 0068 is SD_19_09_26 (GX010068 + GX020068); the coaching tables
 list them the other way round, because there 0068 stands where D24's 0060 stood, and a focus list is
 promoted on the EARLIER session. D24's pair was one driver on consecutive days on a built-in track,
-so both its start lines were trusted; this pair's are not (below). The D24 edition, which #344
-marked stale after #335 changed corner matching, is kept in studio/docs/coaching-tables-on-d24.md.
+so both its start lines were trusted; since Q2 (2026-09-23) so are this pair's, because Sandown Park
+is a built-in track too, on the owner's own saved line. The D24 edition, which #344 marked stale
+after #335 changed corner matching, is kept in studio/docs/coaching-tables-on-d24.md.
 Promote 0064's top three ranked corners and measure them again on 0068 over the SAME windows.
 "promoted for" is the coaching row's time lost; the medians and interquartile ranges are the
 window's seconds over each session's clean laps; "bar" is ``SPREAD_MARGIN`` × the wider of the two
@@ -35,19 +36,21 @@ IQRs, the test ``verdict`` applies. tests/test_measured_figures.py derives the p
 cells and, given the footage, re-measures every one:
 
   corner  promoted for  0064 median  IQR    0068 median  IQR    change  bar    verdict
-  C1      +0.252 s      10.235 s     0.556  10.419 s     0.257  +0.184  0.278  unchanged
-  C7      +0.173 s      4.116 s      0.265  3.980 s      0.084  −0.136  0.133  improved
-  C4      +0.161 s      5.265 s      0.245  5.051 s      0.145  −0.214  0.123  improved
+  C1      +0.229 s      10.395 s     0.557  10.256 s     0.240  −0.139  0.279  unchanged
+  C4      +0.193 s      5.223 s      0.249  5.169 s      0.108  −0.054  0.125  unchanged
+  C7      +0.178 s      4.065 s      0.268  4.042 s      0.080  −0.023  0.134  unchanged
 
-  * with no saved track — the check runs jailed, so it has none — neither recording's start line is
-    trusted: both are the loader's own fit, with no sidecar behind them. So the gate blocks all
-    three verdicts at `unverified`, before it reaches the session records, which neither recording
-    has either (the owner's app-support dir has no ``session_records.json`` at all). What the
-    feature says today, on real data, is "a start line is provisional" — not a number;
+  * both start lines are trusted, even in the jailed check, because both recordings detect the
+    built-in Sandown Park. So the gate passes the start line and blocks all three verdicts at
+    `no_record`: neither recording has a session record (the owner's app-support dir has no
+    ``session_records.json`` at all). What the feature says today, on real data, is "record the
+    conditions first" — not a number. Until Q2 it stopped a step earlier, at `unverified`: with no
+    Sandown Park to detect, both lines were the loader's own fit;
   * the spread test's verdicts, reached only by forcing the start-line and session-record gates
-    open: unchanged on 1, improved on 2, slower on 0. Two "improved" over these windows is exactly
-    what the start-line gate exists to stop, because they are not the same stretch of track
-    (below). On D24, whose lines were trusted, all three came out "unchanged".
+    open: unchanged on 3, improved on 0, slower on 0, as on D24, whose lines were trusted too.
+    Before Q2 the same test read two of the three "improved" (C7 −0.136 s, C4 −0.214 s), over
+    windows that were not the same stretch of track — exactly what the start-line gate exists to
+    stop, and it did (below).
 
 AND THE WINDOW PROBLEM, which is the one this module exists to solve and the reason a focus item
 stores a WINDOW rather than a corner id. The corner partition is re-derived per session from that
@@ -55,23 +58,24 @@ session's own trace, so "C1" is not the same measurement twice. Each recording's
 every corner, the median time over it, and 0068's median over 0064's STORED window instead:
 
   corner  0064 window  0068 window  0064 own  0068 own  own change  0068 over 0064's  stored change
-  C1      169.6 m      161.4 m      10.235 s  9.668 s   −0.567 s    10.419 s          +0.184 s
-  C2      50.3 m       51.8 m       4.269 s   4.266 s   −0.003 s    4.064 s           −0.206 s
-  C3      80.3 m       81.1 m       5.625 s   5.582 s   −0.043 s    5.805 s           +0.180 s
-  C4      71.3 m       74.3 m       5.265 s   5.366 s   +0.101 s    5.051 s           −0.214 s
-  C5      46.5 m       46.5 m       3.624 s   3.539 s   −0.085 s    3.751 s           +0.127 s
-  C6      43.5 m       44.3 m       3.257 s   3.195 s   −0.063 s    3.100 s           −0.157 s
-  C7      51.8 m       51.1 m       4.116 s   4.012 s   −0.104 s    3.980 s           −0.136 s
+  C1      173.4 m      179.5 m      10.395 s  10.458 s  +0.062 s    10.256 s          −0.139 s
+  C2      51.1 m       51.8 m       4.323 s   4.266 s   −0.056 s    4.250 s           −0.072 s
+  C3      79.6 m       81.1 m       5.595 s   5.579 s   −0.016 s    5.548 s           −0.046 s
+  C4      70.6 m       74.3 m       5.223 s   5.367 s   +0.144 s    5.169 s           −0.054 s
+  C5      45.8 m       47.3 m       3.571 s   3.585 s   +0.014 s    3.534 s           −0.037 s
+  C6      43.5 m       44.3 m       3.256 s   3.189 s   −0.068 s    3.156 s           −0.101 s
+  C7      51.1 m       51.1 m       4.065 s   4.011 s   −0.053 s    4.042 s           −0.023 s
 
-Reported as a cross-session change, C1's own-window −0.567 s is "you got faster", and more than all
-of it is the detector drawing a shorter window; over the stored window it is +0.184 s. So a focus
+Reported as a cross-session change, C1's own-window +0.062 s is "you got slower", and more than all
+of it is the detector drawing a longer window; over the stored window it is −0.139 s. So a focus
 item stores its window as a FRACTION of the lap odometer and both sides are measured by the same
 function over that fraction; the corner id is a label on it, never the identity. A fraction is the
-same stretch of track only when the two odometers start in the same place, and here they do not:
-across the seven corners 0068's apex sits −11.2..−8.5 m from 0064's (scaled by the two lap totals),
-a near-constant offset that is the two provisional start lines about 10 m apart — the reason the
-gate refuses a comparison when either line is provisional. Over the stored windows the seven corners
-read −0.214..+0.184 s, while the lap totals agree to 0.96 % (730.3 vs 737.3 m).
+same stretch of track only when the two odometers start in the same place, and since Q2 they do:
+both recordings are timed on the built-in Sandown Park line, and across the seven corners 0068's apex
+sits −1.0..+0.4 m from 0064's (scaled by the two lap totals). Before Q2 each was cut on the loader's
+own line, the two lines sat about 10 m apart, and every apex was offset by −11.2..−8.5 m — the reason
+the gate refuses a comparison when either line is provisional. Over the stored windows the seven
+corners read −0.139..−0.023 s, while the lap totals agree to 0.93 % (730.6 vs 737.3 m).
 
 Persistence follows ``library.py`` / ``session_record.py`` — schema version read + forward
 migration, a ``.bak`` before any un-round-trippable overwrite, atomic write, one bad list dropped
@@ -108,11 +112,12 @@ _FILENAME = "focus.json"
 MAX_ITEMS = 3
 
 # How far the two sessions' lap odometers may disagree before a fraction-mapped window stops being
-# the same stretch of track. MEASURED (T16b, the table at the top of this module): the working-set
-# pair's lap totals differ by 6.98 m on 730 m — 0.96 % — which displaces a corner boundary by at most
-# ~0.5 m inside a 50 m window. 2 % is twice that: comfortably past any re-fit of the same lap, and
-# short of a genuinely different route. (A start line placed somewhere else on the same loop leaves
-# the lap total where it was: that is BLOCK_UNVERIFIED's case, and the same pair shows it, ~10 m.)
+# the same stretch of track. MEASURED (T16b and Q2, the table at the top of this module): the
+# working-set pair's lap totals differ by 6.77 m on 730 m — 0.93 % — which displaces a corner boundary
+# by at most ~0.5 m inside a 50 m window. 2 % is twice that: comfortably past any re-fit of the same
+# lap, and short of a genuinely different route. (A start line placed somewhere else on the same loop
+# leaves the lap total where it was: that is BLOCK_UNVERIFIED's case, and the same pair showed it,
+# ~10 m, until Q2 put both on Sandown Park's built-in line.)
 MAX_LAP_TOTAL_DRIFT = 0.02
 
 
@@ -143,7 +148,7 @@ class CornerSample:
     """One window's time over one session's clean laps — the only statistic this feature compares.
 
     ``iqr`` is the SAME measure ``coaching.Evidence.iqr`` is: the interquartile range of the
-    per-lap times, robust where σ is not (on 0064's C4 σ reads 1.066 s against a 0.216 s IQR)."""
+    per-lap times, robust where σ is not (on 0064's C4 σ reads 1.051 s against a 0.231 s IQR)."""
 
     median: float     # median time through the window (s)
     iqr: float        # interquartile range of the per-lap times (s)

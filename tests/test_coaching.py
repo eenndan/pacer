@@ -930,9 +930,9 @@ def test_brake_habit_is_the_same_number_the_braking_table_shows():
     table's "m later" column answer ONE question, so they must be ONE number.
 
     They were not: coaching read the BEST lap's single application and BRAKING the median over the
-    clean laps. Measured on the working-set recordings the pair disagreed by up to 5.3 m, and at
-    0064's C7 the best lap braked 6.8 m before its own optimum while the driver's habit over 58 laps
-    was 12.0 m early — so one surface said about half what the other did. Both now medianize
+    clean laps. Measured on the working-set recordings the pair disagreed by up to 20.4 m, and at
+    0064's C4 the best lap braked 14.2 m past its own optimum while the driver's habit over 53 laps
+    was 6.3 m early — so one surface said "earlier" where the other said "later". Both now medianize
     ONE per-lap list; this pins that they still do, over rows where the best lap is deliberately
     unrepresentative."""
     from studio import stats as stats_service
@@ -1471,7 +1471,7 @@ def test_a_claim_inside_the_corners_own_spread_abstains():
     of printing a lever.
 
     Measured on the two working-set recordings (coaching.py's evidence table, T16b): sigma >=
-    time_lost on 11 of the 12 shown rows (worst 16.8x), and this test's shape is the smallest
+    time_lost on 11 of the 12 shown rows (worst 81.5x), and this test's shape is the smallest
     reproduction of it."""
     target = 5.0
     times = [target, target, target, target + 0.4, target + 0.4, target + 0.4]
@@ -1500,7 +1500,7 @@ def test_an_unreplicated_target_and_a_thin_corner_both_abstain():
     ONE_OFF — nothing but the baseline itself ever reached the target — is the test the brief was
     built around, and it fired on 0 of the 12 rows across both working-set recordings: the ranking's
     baseline is the BEST LAP's time through the corner, and on both recordings at least one OTHER
-    lap beats it on every shown row — at least two OTHER laps on all but 0068's C5 (1..17 of
+    lap beats it on every shown row — at least two OTHER laps on every one of them (2..25 of
     them). It does fire on five of the five single chapters, and a short session can trivially
     produce it. FEW_LAPS guards the ragged case the session-level MIN_LAPS gate cannot see (a corner
     only some laps project onto)."""
@@ -1612,7 +1612,7 @@ def test_the_session_theme_is_one_line_and_refuses_to_invent_one():
     "no single theme" rather than crowning a plurality.
 
     Measured on the real recordings the two working-set recordings come out OPPOSITE — 0068 is 78 %
-    execution and 0064 is 78 % pace — which is what makes the axis worth stating at all."""
+    execution and 0064 is 100 % pace — which is what makes the axis worth stating at all."""
     execution = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE]))
     assert execution.kind == K.THEME_EXECUTION and execution.share == 0.75, execution
     assert "execution, not pace" in K.theme_sentence(execution)
@@ -1639,7 +1639,7 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does NOT generalize: line holds 50 % of 0068's ranked time and 100 % of
+    Measured, the cause axis does NOT generalize: line holds 53 % of 0068's ranked time and 100 % of
     0064's (a cause on 0064 only), and two of the five single chapters name no single cause, so the
     "no single cause" branch is a common case on real recordings and is asserted here as a
     first-class output, not as a fallback."""

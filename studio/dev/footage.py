@@ -25,7 +25,8 @@ import os
 
 # THE WORKING SET (the owner's decision, 2026-09-23), each named by its first chapter; sibling
 # discovery (`studio.chapters.discover_siblings`) finds the rest. Every Sandown recording is
-# clockwise, and Sandown Park is not a built-in track, so a jailed load auto-fits its start line.
+# clockwise, and since Q2 Sandown Park is a built-in track (on the owner's own saved line), so a
+# jailed load times it on the line his app uses instead of auto-fitting one.
 # MK_18_09_26 is on the SAME circuit as D24 (Daytona Milton Keynes, 12 corners, ~1059 m) and is the
 # only anticlockwise one: where a figure depends on the TRACK, it is D24's like-for-like stand-in.
 DESKTOP = "~/Desktop"

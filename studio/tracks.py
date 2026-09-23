@@ -8,8 +8,8 @@ endpoints into `pacer.Segment`s in the LOCAL meters the laps/timing lines live i
 `cs.local`).
 
 The known tracks themselves live in the persisted database (studio/track_db.py): a built-in
-seed (Daytona MK, byte-identical to the old hardcoded entry) layered under a per-user JSON
-file in the app-support dir. This module is the pacer-touching adapter over that DB — it
+seed (Daytona MK, byte-identical to the old hardcoded entry, and Sandown Park, the owner's own
+saved line) layered under a per-user JSON file in the app-support dir. This module is the pacer-touching adapter over that DB — it
 turns a DB entry dict into a `Track`/`pacer.Segment`. So `track_db` stays pacer-free and
 this stays I/O-free.
 

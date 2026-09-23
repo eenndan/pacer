@@ -84,7 +84,7 @@ laps it was minimised over rather than letting you read it as a floor.
 *The screenshot is D24's three chapters, captured before a September 2026 change to how Pacer
 matches corners; that recording is no longer available, so its figures have not been re-measured.
 On the recording Pacer is developed against now (Sandown 3h, three chapters), the same page reads
-theoretical best 45.768 over 62 laps, −1.29 s on the table.*
+theoretical best 45.809 over 62 laps, −1.27 s on the table.*
 
 **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation. Brake
 points, corner apexes and draggable start/sector lines sit on it, and every mark is named in the
@@ -172,7 +172,7 @@ than it is. So that is a rule with an owner in the code:
   into a file someone else will see.
 - **the ideal lap discloses its sample**, because a sum of per-segment minima falls the longer you
   stay out. Same driving, same recording (Sandown 3h, three hours at Sandown Park):
-  46.797 s over 5 laps, 45.768 s over 62.
+  46.801 s over 5 laps, 45.809 s over 62.
 - **DATA TRUST** puts the accuracy story inside the product, not only on this page.
 - **a citable marker vocabulary on the way out.** In the app a caveat has hover, colour and weight
   to carry it, so Pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An

@@ -576,7 +576,7 @@ def test_every_five_lap_pair_is_the_table_s():
                                       f"IdealSample's {row.name} {_UNVERIFIED} row")
                     if p:
                         unmarked.append(p)
-        # "… chapter 1 (17 laps) and … chapters 1–3 (62 laps) are 0.84 s apart": two rows' `all`
+        # "… chapter 1 (17 laps) and … chapters 1–3 (62 laps) are 0.77 s apart": two rows' `all`
         # cells, subtracted — the Library's Ideal-lap header hover makes its whole case with it.
         for m in re.finditer(r"\((\d+) laps\) and [^()]{1,40}\((\d+) laps\) (?:are|were) "
                              r"(\d\.\d\d) s apart", flat):
@@ -926,8 +926,9 @@ def _re_measure_row(paths: list[str]) -> str:
     # AS THE APP OPENS IT: `StudioWindow._on_session_loaded` applies the start line the owner saved
     # beside the recording before anything is drawn, through this same seam. Without it, SD_30_08
     # was measured on a line the owner never sees (T13). A recording with no saved line is
-    # unchanged by the call. The library is EMPTY here (hermetic), so a track the owner saved in
-    # his own track list is not detected — IdealSample says what that moves.
+    # unchanged by the call. The library is EMPTY here (hermetic), so only the BUILT-IN tracks are
+    # detected — Daytona Milton Keynes, and since Q2 Sandown Park, on the owner's own saved line —
+    # which is every circuit a row names: the check and the owner's app time them on one line.
     s.restore_saved_timing_lines()
     sb = s.ideal_segment_bests()
     assert sb is not None, "no corner partition, so there is no ideal to check the table against"

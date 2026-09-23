@@ -975,9 +975,8 @@ def test_delta_to_ideal_is_non_negative_at_the_partition_edges():
     information, and the reason nothing here clamps or asserts pointwise ≥ 0.
 
     Measured on the real recordings at 25 ms of media clock (the table above
-    theme.format_ideal_run): the most negative value is −0.262 s, on SD_30_08 on the loader's own
-    start line, and at most 10.75 % of samples are negative on any recording, against end-of-lap
-    values of +0.50 … +43.12 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
+    theme.format_ideal_run): the most negative value is −0.255 s, on SD_30_08, and at most
+    8.32 % of samples are negative on any recording, against end-of-lap values of +0.50 … +43.82 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
     small in between — so a future change that makes the interior wander gets caught."""
     s, ids = make_ideal_session()
     sb = s.ideal_segment_bests()
@@ -1162,9 +1161,9 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
     the session was, and the number on its own is not comparable between sessions.
 
     Measured on the owner's five recordings over random subsets of the clean laps (20,000 draws
-    per N), `ideal_total` falls 0.166 / 0.178 / 0.283 / 0.490 / 0.740 s per DOUBLING of lap count
-    with no plateau — on Sandown 3h's three chapters the same driving reads a 0.59 s gap over 5 laps
-    and a 1.29 s gap over 62. That table is in corner_model.IdealSample; this is the property it rests
+    per N), `ideal_total` falls 0.160 / 0.178 / 0.273 / 0.490 / 0.742 s per DOUBLING of lap count
+    with no plateau — on Sandown 3h's three chapters the same driving reads a 0.61 s gap over 5 laps
+    and a 1.27 s gap over 62. That table is in corner_model.IdealSample; this is the property it rests
     on, in a form that fails if the composite ever stops being a minimum.
 
     Every proper subset here is checked, not one sample: with three crossing-pace laps that is all

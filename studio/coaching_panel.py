@@ -730,7 +730,10 @@ BRAKE_HINT_MIN_M = 2.0
 # MEASURED (T16b, 2026-09-23) on the evidence table's two working-set recordings (coaching.py: 0068
 # is SD_19_09_26, 0064 is Sandown 3h 2026), with D2 in — D2 stopped counting a string of brake blips
 # with no sustained brake as a brake event, which moves the brake points this table's optimum is
-# the median of. Its D24 edition (T15, measured after #335 and marked UNVERIFIED once D24 was gone
+# the median of — and re-measured the same day once Q2 made Sandown Park a built-in track, so both
+# are timed on the owner's own start/finish line. On the loader's line the odometer started at C1's
+# turn-in (0.0 m on both); on the real line C1's turn-in sits ~100 m on, every cell moved with it,
+# and no verdict changed. Its D24 edition (T15, measured after #335 and marked UNVERIFIED once D24 was gone
 # and D2 had moved it) and the figures before that ("3 of 11 ranked corners") are kept in
 # studio/docs/coaching-tables-on-d24.md. One row per RANKED coaching row that has a habit to print
 # (`coaching.MIN_BRAKE_LAPS` laps matched and at least BRAKE_HINT_MIN_M of metres — on both
@@ -739,23 +742,23 @@ BRAKE_HINT_MIN_M = 2.0
 # turn-in, so this gate's verdict is recomputable from the row's own two cells:
 #
 #   rec   corner  turn-in m   apex m  optimum m   hint
-#   0068  C1            0.0     95.4      118.2   suppressed
-#   0068  C2          163.7    186.4      183.5   shown
-#   0068  C3          256.8    311.6      300.8   suppressed
-#   0068  C5          452.7    480.2      470.7   shown
-#   0068  C7          547.3    571.1      564.3   shown
-#   0064  C1            0.0    102.9      126.3   suppressed
-#   0064  C4          346.8    377.4      363.2   shown
-#   0064  C6          507.4    527.4      521.8   shown
-#   0064  C7          553.2    576.7      568.6   shown
+#   0068  C1           97.6    208.4      232.9   suppressed
+#   0068  C2          278.6    301.6      297.7   shown
+#   0068  C3          371.7    426.7      416.0   suppressed
+#   0068  C5          567.6    595.5      586.0   shown
+#   0068  C7          663.0    686.4      679.2   shown
+#   0064  C1          100.6    207.0      230.6   suppressed
+#   0064  C4          451.2    481.9      467.7   shown
+#   0064  C6          611.9    631.8      626.0   shown
+#   0064  C7          657.7    681.1      672.7   shown
 #
 # (tests/test_measured_figures.py derives the sentence below from these cells and, given the
 # footage, re-measures every one.)
 #
 # The gate is narrow: 3 of the 9 ranked rows lose their metres — 0068's C1 and C3 and 0064's C1.
-# The 6 it keeps sit 14.4..19.8 m past turn-in, inside the approach the physics assumes; the 3 it
-# drops sit 44.1..126.3 m past it. Two of those three are past the APEX as well (0064 C1 by 23.4 m,
-# 0068 C1 by 22.7 m), which is the same objection in its sharpest form: a "latest sustainable brake
+# The 6 it keeps sit 14.1..19.1 m past turn-in, inside the approach the physics assumes; the 3 it
+# drops sit 44.3..135.3 m past it. Two of those three are past the APEX as well (0064 C1 by 23.6 m,
+# 0068 C1 by 24.5 m), which is the same objection in its sharpest form: a "latest sustainable brake
 # point" downstream of the slowest point of the corner is not a brake point.
 BRAKE_HINT_MAX_PAST_TURN_IN_M = coaching.BRAKE_APPROACH_M
 
@@ -868,7 +871,7 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
 
     THIS REPLACED THE ±σ COLUMN, deliberately. σ was the raw dispersion printed for the reader to
     interpret, and on the real recordings interpreting it was the whole job: σ ≥ the row's own
-    "Time lost" on 11 of the 12 shown rows across the two working-set recordings (worst 16.8x;
+    "Time lost" on 11 of the 12 shown rows across the two working-set recordings (worst 81.5x;
     coaching.py's evidence table, T16b), so the column
     that mattered most was the one asking for arithmetic. This states the conclusion instead —
     and states it as a COUNT OVER ITS DENOMINATOR, so it stays checkable. σ itself is not lost: the

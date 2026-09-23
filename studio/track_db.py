@@ -25,9 +25,9 @@ The two DELIBERATE destructive acts — ``rename_track`` and ``remove_track``, t
 exactly as ``library.clear``/``restore`` and ``session_record.remove_and_save``/``restore`` do for
 their own stores. Both REFUSE rather than write a silently wrong answer: a blank name (which would
 make the circuit vanish on the next read), a name already in use (the merged view is name-keyed, so
-one entry would swallow another), and a BUILT-IN the user's file does not hold — the seed is layered
-under that file, so "deleting" it would drop nothing and report success while the circuit came back
-on the next launch, and "renaming" it would fork one place into two circuits.
+one entry would swallow another), and a BUILT-IN — the seed is layered under that file, so
+"deleting" one the file does not hold would drop nothing and report success while the circuit came
+back on the next launch, and "renaming" one, refined or not, would fork one place into two circuits.
 
 WHAT A DELETE DOES NOT TOUCH: the recordings. A track NAME is an identity key in three other stores
 — the library index files a circuit's personal-best history under it, the focus list is keyed by it,
@@ -43,8 +43,9 @@ A track entry is location-anchored: its timing lines are stored in lat/lon so th
 recording of that circuit (via the recording's own CoordinateSystem), and it carries a detection
 centroid + bbox so a fresh recording auto-detects the track on load.
 
-The Daytona Milton Keynes line is a BUILT-IN SEED (``SEED``), so a first-ever run already
-auto-detects MK with its measured line — its timing is identical to the old hardcoded entry. The
+The Daytona Milton Keynes and Sandown Park lines are BUILT-IN SEEDS (``SEED``), so a first-ever run
+already auto-detects either circuit with its line — MK's timing is identical to the old hardcoded
+entry, and Sandown Park's line is the owner's own saved one (Q2). The
 user DB is merged ON TOP of the seed (a user entry of the same name overrides the seed), so
 ``Save as track…`` can refine a built-in too. Reusing a name for a DIFFERENT place is a different
 act — it destroys that circuit's stored lines — so it is REFUSED (``TrackNameTaken``) until the
@@ -90,12 +91,32 @@ EARTH_RADIUS_M = 6_371_000.0
 # Built-in seed: the measured Daytona MK line (was hardcoded in tracks.REGISTRY). Its start
 # endpoints are byte-identical to the old entry, so MK timing does not regress. No sectors / bbox
 # in the seed (the old entry had neither) — detection is centroid-only, exactly as before.
+#
+# Sandown Park (Q2, 2026-09-23) is the owner's own saved entry, copied field for field and bit for
+# bit: name, detection centroid, bbox, start/finish line and its (empty) sector list — the five
+# fields every entry carries, read once from his tracks.json with his permission and nothing else
+# of that file. Until it shipped, a fresh install (and every jailed test) auto-fitted a start line
+# at Sandown while his app used this one, so every published Sandown figure was measured on a line
+# he never sees, and his two Sandown sessions' auto-fitted lines sat ~10 m apart, which kept the
+# focus list from comparing them at all. It is a public circuit. Every Sandown recording the owner
+# has is driven CLOCKWISE (Daytona MK anticlockwise); nothing in detection or lap timing reads the
+# direction — detection is a centroid distance and a line crossing is sign-symmetric — and
+# tests/test_track_db.py drives the same line both ways round to hold that. His saved copy keeps
+# overriding it by NAME (`all_tracks`), so his app shows one "Sandown Park" and times it on his line
+# either way; with the two identical, the answer is also the same.
 SEED: list[dict] = [
     {
         "name": "Daytona Milton Keynes",
         "centroid": [52.0403, -0.7847],
         "bbox": None,
         "start": [[52.04031, -0.78487], [52.04020, -0.78460]],
+        "sectors": [],
+    },
+    {
+        "name": "Sandown Park",
+        "centroid": [51.37603659615385, -0.36095558076923084],
+        "bbox": [51.37544968461538, -0.3623875461538462, 51.376623507692315, -0.35952361538461547],
+        "start": [[51.37617427563954, -0.3616823772388991], [51.376337128483875, -0.3617820116787019]],
         "sectors": [],
     },
 ]
@@ -150,13 +171,16 @@ class BuiltInTrack(ValueError):
         kept the old one — two circuits for one place, detection choosing between them by distance.
 
     So the act is refused and named instead. Refining a built-in (``Save as track…`` at that
-    location) creates a user entry that CAN be renamed or deleted; deleting THAT one reverts to the
-    shipped line rather than removing the circuit — see ``reverts_to_builtin``."""
+    location) creates a user entry that CAN be deleted; deleting THAT one reverts to the shipped
+    line rather than removing the circuit — see ``reverts_to_builtin``. It cannot be RENAMED either:
+    the refined entry would move to the new name and the seed would come back under the old one, the
+    same two circuits for one place (Q2 — the owner's saved "Sandown Park" became exactly such a
+    refined built-in the day Sandown Park shipped, so the fork was one Rename… away)."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, act: str = "renamed or deleted"):
         self.name = str(name)
         super().__init__(
-            f"{self.name!r} is one of Pacer's built-in tracks, so it cannot be renamed or deleted")
+            f"{self.name!r} is one of Pacer's built-in tracks, so it cannot be {act}")
 
 
 def _app_support_dir() -> str:
@@ -577,8 +601,9 @@ def rename_track(old: str, new: str, path: str | None = None) -> dict:
         VANISH the next time the file is read;
       * a name ALREADY IN USE (``TrackNameInUse``) — the merged view is name-keyed, so the renamed
         entry would silently swallow the circuit already standing there;
-      * a BUILT-IN the user file does not hold (``BuiltInTrack``) — the seed would keep the old name
-        while this write added a second circuit at the same anchor;
+      * a BUILT-IN (``BuiltInTrack``), whether or not the user file holds a refined copy of it — the
+        seed would keep, or get back, the old name while this write left a second circuit at the
+        same anchor;
       * a circuit that is NOT THERE — renaming an absent track would invent one.
 
     THE NAME IS AN IDENTITY KEY ELSEWHERE, AND THIS FUNCTION DOES NOT OWN THOSE STORES. The library
@@ -597,8 +622,8 @@ def rename_track(old: str, new: str, path: str | None = None) -> dict:
     old = str(old)
     if new == old:
         return load(path)
-    if is_builtin(old) and old not in user_names(path):
-        raise BuiltInTrack(old)
+    if is_builtin(old):
+        raise BuiltInTrack(old, "renamed")
     if any(e["name"] == new for e in all_tracks(path)):
         raise TrackNameInUse(new)
     db = load(path)
