@@ -9,9 +9,10 @@ WHAT THAT COST. `tests/test_export_compare.py` wrote three such clips and delete
 lane's teardown REMOVED a clip the other lane's `ffprobe` was still decoding, so the second lane
 died inside `probe_video_size` with a failure that reads exactly like a real export defect and
 nothing like the Mac-sleep `Timeout` the usual triage knows. It was diagnosed twice, by two
-different agents (PRs #296 and #298), at the cost of a full diagnosis each time. ctest runs
-serially (no `-j`, no `CTEST_PARALLEL_LEVEL`), so this is strictly a BETWEEN-run collision —
-running the suite once, however many times, never reproduces it.
+different agents (PRs #296 and #298), at the cost of a full diagnosis each time. ctest now runs
+four tests at once (`CTEST_PARALLEL_LEVEL`, pyproject.toml), so two registrations of ONE run can
+collide as well as two runs — and it stays intermittent either way: a green run proves nothing
+about it, which is why this gate reads the source instead.
 
 WHAT THIS TEST PROVES, EXACTLY. That no scanned file joins the shared temp root with a name it
 chose itself, i.e. that two runs allocate DISTINCT PATHS. It does NOT prove the absence of a race:

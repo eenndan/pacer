@@ -30,7 +30,7 @@ configure = "cmake -S . -B build/Release -G Ninja"
 build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # WHY BOTH ctest TASKS ARE RUN UNDER `caffeinate -si`.
 #
-# A suite run is 4-45 minutes of no keyboard, no mouse, no display — exactly the shape of an idle
+# A suite run is minutes of no keyboard, no mouse, no display — exactly the shape of an idle
 # machine. If the Mac sleeps mid-run, the test that happens to be in flight is FROZEN, and ctest's
 # own timeout is measured on a clock that keeps counting through sleep: on the next wake ctest sees
 # an overdue deadline, kills the test immediately, and reports a duration equal to the SLEEP, not
@@ -64,7 +64,34 @@ build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # The `footage.*` registrations carry their own TIMEOUT (3600 s, tests/CMakeLists.txt), which
 # --timeout does not override. On the dev Mac they run here on the Desktop working set (G2); in CI
 # there is no footage and each is reported Skipped by name.
-test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 480", depends-on = ["build"] }
+#
+# BOTH ctest TASKS RUN FOUR TESTS AT ONCE (CTEST_PARALLEL_LEVEL in each task's env). Until
+# 2026-09-23 they ran one at a time — one core of an 8-core M1 Pro — while test-fast grew from 29 s
+# (early August) to ~420 s. Measured that day on test-fast, 135 tests, ctest's own totals:
+#
+#   serial 420 s    -j4 143 s    -j8 104 s (test_stats 104 s against the old --timeout 120)
+#   -j6 94 s, on the commit before
+#   two lanes at once:  -j4 227 / 242 s, green (about half of it under load ~20 from exports)
+#                       -j8 192 / 206 s, four ***Timeout (test_stats, test_pb_toast,
+#                           test_central_view_realqt)
+#
+# WHY FOUR, NOT EVERY CORE. The M1 Pro is 6 performance + 2 efficiency cores. Past ~6 busy processes
+# the long single-threaded suites land on an efficiency core and take twice as long — test_stats is
+# ~56 s of one core's CPU at any level (measured: it is not BLAS threading). And agent lanes
+# overlap: in September two suites ran at once for a quarter of all suite time. Four keeps one lane
+# on performance cores and two lanes at the eight processes one -j8 lane survives. CI's macos-14
+# runner has 3 cores, where four is a mild oversubscription, not a failure mode.
+#
+# WHY A VARIABLE, NOT -j. ctest 4 rejects a second -j ("'-j' given invalid value '4 -j2'"), so a -j
+# in the task would make `pixi run test-fast -j1` an error. The variable is only a default and one
+# appended -jN wins: `-j1` for a serial run when you need to rule an interaction out, `-j6` when you
+# know the machine is yours. tests/test_parallel_suite.py pins both halves.
+#
+# WHY IT IS SAFE. Every test process resolves its own app-support jail (studio/app_support.py), no
+# test builds a fixed path in the shared $TMPDIR (tests/test_temp_isolation.py), and the footage
+# checks share RESOURCE_LOCK footage (tests/CMakeLists.txt), so those ffmpeg-heavy checks still run
+# one at a time, beside the light suites.
+test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 480", depends-on = ["build"], env = { CTEST_PARALLEL_LEVEL = "4" } }
 # Fast inner loop for agents: the full suite minus the two slow tests. Run this while iterating,
 # `test` before a PR.
 #
@@ -86,7 +113,7 @@ test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failur
 # note above already says ~110 s and is the row that stayed true. Read every number here as a
 # measurement with a DATE on it, not as a standing fact.
 #
-# Be honest about what this buys: excluding both leaves 112 tests in ~307 s (one run, 307.0 s,
+# Be honest about what this buys: excluding both leaves 112 tests in ~307 s (serial run, 307.0 s,
 # 2026-09-16). That is about 42 % off, not the ~18 s the original comment promised — the remaining
 # time is spread thin across offscreen-Qt suites that each build a real StudioWindow, and there is
 # no single test left worth cutting. Do not add exclusions to chase a number; re-measure and update
@@ -101,16 +128,23 @@ test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failur
 #
 # THE `footage.*` REGISTRATIONS ARE REPORTED, NOT RUN, HERE (G2). Since their defaults name the
 # Desktop working set, on the dev Mac all fourteen really run, and measured 2026-09-23 they cost
-# 139-151 s on top of this loop's 372 s (+40 %), warm page cache: one alone re-encodes a whole lap
-# twice (`…_render_quality_levels…`, 67-80 s). So this task sets PACER_FOOTAGE_DEFAULTS=off, and
-# each is reported Skipped BY NAME with a reason that says where it runs — a gate report can quote
-# that list, and nothing reads as a pass.
+# 139-151 s on top of this loop's 372 s (+40 %, both serial), warm page cache: one alone
+# re-encodes a whole lap twice (`…_render_quality_levels…`, 67-80 s). So this task sets
+# PACER_FOOTAGE_DEFAULTS=off, and each is reported Skipped BY NAME with a reason that says where it
+# runs — a gate report can quote that list, and nothing reads as a pass.
 # They are not excluded with `-E`/`-LE`: an excluded test vanishes from the output, and a check
 # that cannot run has to say so (#341). A variable you SET (PACER_GOLDEN_MP4, …) still runs its
 # checks here, past --timeout on their own TIMEOUT property (tests/CMakeLists.txt). `test` above
 # runs them all with everything else — the pre-PR gate is where real footage belongs — and
 # `test-footage` below runs only them.
-test-fast ={ cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 120 -E 'test_export_video|test_compare_lifecycle'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off" } }
+#
+# --timeout 480, the same ceiling as `test`, not the 120 it had while serial. Measured 2026-09-23:
+# test_stats, 48 s on a quiet machine, took 136-144 s run ALONE while other lanes rendered footage
+# (load ~20) — past 120 s with no parallelism at all — 92-106 s in two -j4 lanes, and 265 s at -j4
+# under that same load. 480 s is ~1.8x the worst legitimate run. A hang costs no more than it did:
+# it holds one of four slots while the rest of the loop finishes, so a run that meets one ends at
+# ~8 min, where a serial run paid 2 min for the hang plus ~7 min for everything else.
+test-fast ={ cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 480 -E 'test_export_video|test_compare_lifecycle'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off", CTEST_PARALLEL_LEVEL = "4" } }
 # Just the real-footage checks (`LABELS footage`, tests/CMakeLists.txt), on their working-set
 # defaults or the recordings your variables name (tests/_footage.py). No --timeout: each carries
 # its own TIMEOUT. On a machine without the footage every one is reported Skipped, by name.
