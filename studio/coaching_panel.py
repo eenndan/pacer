@@ -730,7 +730,10 @@ BRAKE_HINT_MIN_M = 2.0
 # ⚠ UNVERIFIED — NOT RE-MEASURABLE (T16). Unlike coaching.py's tables, this one was measured AFTER
 # #335 changed corner matching: #339 measured it on D24 with #335 and its own change in, and its
 # footage check came back byte-identical. D24 is no longer available, so no change since #339 can
-# be checked against it. Read the table as of #339, not as re-verified.
+# be checked against it. Read the table as of #339, not as re-verified. D2 is one such change: it
+# stopped counting a string of brake blips with no sustained brake as a brake event, which moves
+# the brake points this table's optimum is the median of. On the four present recordings it
+# turned no hint on or off and moved the printed metres by at most 1 m; on D24 it is unmeasured.
 #
 # MEASURED (T15), on the owner's two D24 recordings. The figures this note used to carry —
 # "3 of 11 ranked corners", an optimum at 870.6 m, 19.4 m before its apex — predate #300's removal

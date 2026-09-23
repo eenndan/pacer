@@ -165,35 +165,43 @@ def test_seam_blip_does_not_anchor_merged_onset():
     print(f"ok M11: seam blip folded in but onset anchored on the real brake @ {e.onset_dist:.0f} m")
 
 
-def test_a_string_of_blips_with_no_sustained_brake_is_kept_not_dropped():
-    """What `merge_brake_maneuvers` does with a group that has NO sustained sub-fragment, pinned
-    because its docstring said the opposite until #349 measured it: "such a group is then dropped
-    by the merged-span test below anyway". MIN_BRAKE_S gates the MERGED span, blip to blip with
-    the coasts included, so four single-sample blips spread over 0.6 s are one event whose onset is
-    the first blip. On four real recordings that is 3.0-7.4 % of detected events. Keeping them is
-    the detector as it stands; a change to drop them has to change this test, on purpose.
+def test_a_string_of_blips_with_no_sustained_brake_is_not_a_brake_event():
+    """D2: a merged group with NO sustained sub-fragment (none of its own fragments lasts
+    MIN_BRAKE_S) is not a brake event, however far apart its blips are spread.
+
+    MIN_BRAKE_S used to gate only the MERGED span, blip to blip with the coasts included, so four
+    single-sample blips over 0.6 s were one event whose onset was the first blip. On four real
+    recordings that was 5.0-7.4 % of events, 70 of 73 in no independently defined braking zone,
+    and 61 of 1,121 per-corner brake points. When such a string came after the corner's real brake
+    it was the LAST onset in the corner's window, so `lap_brake_points` read the brake point off it.
 
     On the 10 Hz lap grid every recording has, so SMOOTH_S is the no-op it is in the app."""
     dist, elapsed = _lap_trace(n=300, dur=30.0, total_dist=1000.0)   # 0.1 s, 3.3 m a sample
+    blips = [122, 124, 126, 128]
     g = np.zeros(len(dist))
-    blips = [100, 102, 104, 106]
-    g[blips] = -0.40              # each one sample past -theta_b; the zeros between release it
+    g[100:110] = -0.40            # the real brake: 1.0 s, one sustained fragment, at 333 m
+    g[blips] = -0.40              # 43 m on, past MERGE_TROUGH_GAP_M: each blip one sample past -theta_b
     frags = D._brake_fragments(g, THETA_B)                       # the detector's own fragments
-    assert len(frags) == len(blips), frags
-    assert all(elapsed[j1] - elapsed[j0] < D.MIN_BRAKE_S for j0, j1 in frags), frags  # none sustained
-    assert elapsed[blips[-1]] - elapsed[blips[0]] >= D.MIN_BRAKE_S  # ...but the group's span is
+    assert len(frags) == 1 + len(blips), frags
+    assert all(elapsed[j1] - elapsed[j0] < D.MIN_BRAKE_S for j0, j1 in frags[1:]), frags
+    assert elapsed[blips[-1]] - elapsed[blips[0]] >= D.MIN_BRAKE_S   # ...but their SPAN is not short
+    assert dist[blips[0]] - dist[109] > D.MERGE_TROUGH_GAP_M        # ...and they do not merge back
     events = D.brake_events(dist, elapsed, g, THETA_B)
-    assert len(events) == 1, [(e.onset_dist, e.duration) for e in events]
-    e = events[0]
-    assert abs(e.onset_dist - dist[blips[0]]) < 1e-9, e.onset_dist   # the fallback: first blip
-    assert abs(e.duration - (elapsed[blips[-1]] - elapsed[blips[0]])) < 1e-9, e.duration
-    # The floor still bites where the docstring says it does: the same blips packed into less than
-    # MIN_BRAKE_S are dropped.
-    g_short = np.zeros(len(dist))
-    g_short[[100, 102]] = -0.40
-    assert D.brake_events(dist, elapsed, g_short, THETA_B) == []
-    print(f"ok blip string kept: 1 event @ {e.onset_dist:.0f} m over {e.duration:.2f} s, "
-          f"no fragment of it >= MIN_BRAKE_S")
+    assert [round(e.onset_dist, 1) for e in events] == [round(dist[100], 1)], (
+        f"a blip string after the real brake became an event of its own, and the LAST onset a "
+        f"corner's window holds: {[(round(e.onset_dist, 1), round(e.duration, 2)) for e in events]}")
+    # Alone, the same string is nothing at all.
+    g_alone = np.zeros(len(dist))
+    g_alone[blips] = -0.40
+    assert D.brake_events(dist, elapsed, g_alone, THETA_B) == []
+    # Blips INSIDE a real maneuver still fold into it: they extend its release, never its onset.
+    g_trail = g.copy()
+    g_trail[[112, 114]] = -0.40   # within MERGE_TROUGH_GAP_M of the brake's release
+    trail = D.brake_events(dist, elapsed, g_trail, THETA_B)
+    assert abs(trail[0].onset_dist - dist[100]) < 1e-9, trail
+    assert abs(trail[0].duration - (elapsed[114] - elapsed[100])) < 1e-9, trail
+    print(f"ok D2: blip string dropped; the real brake @ {events[0].onset_dist:.0f} m is the only "
+          f"event, and blips inside it still extend it to {trail[0].duration:.1f} s")
 
 
 def test_chicane_throttle_squirt_stays_two():
@@ -521,7 +529,12 @@ def test_pedal_band_holds_each_braking_zone_whole():
       * zone samples painted (recall)  83.6-86.2 %  | 91.9-94.6 %    -> at least 89 %
       * brake painted while the smoothed speed RISES  0.23-0.46 | 0.00-0.02 s a lap -> under 0.1 s
     and two hold by construction: every painted brake sample lies inside a detected brake event
-    (the glyphs'), and the brake half is binary."""
+    (the glyphs'), and the brake half is binary.
+
+    D2 adds the converse: every detected brake event (every glyph, and every event a brake point
+    can be read off) holds painted brake. Before D2, 25 / 17 / 15 / 16 events on those four
+    recordings held none — strings of blips with no fragment lasting MIN_BRAKE_S, 70 of the 73 in
+    no reference zone — and a corner's brake point was read off 61 of them."""
     from studio import chapters
     from studio.session import Session
 
@@ -539,7 +552,7 @@ def test_pedal_band_holds_each_braking_zone_whole():
     assert state() == before, f"a file in {folder} changed during the load"
     ids = session.valid_lap_ids()
     assert ids, "no valid laps"
-    pieces, tp, fn, rising_s, outside = [], 0.0, 0.0, 0.0, []
+    pieces, tp, fn, rising_s, outside, unpainted, n_events = [], 0.0, 0.0, 0.0, [], [], 0
     for lid in ids:
         dists, elapsed, band = session.driving.lap_brake_throttle(lid)
         assert band is not None, f"lap {lid}: no band"
@@ -551,7 +564,11 @@ def test_pedal_band_holds_each_braking_zone_whole():
             f"lap {lid}: brake levels {np.unique(band[brake])}")
         inside = np.zeros(n, bool)
         for e in session.driving.lap_brake_events(lid):
-            inside |= (elapsed >= e.onset_time - 1e-9) & (elapsed <= e.onset_time + e.duration + 1e-9)
+            span = (elapsed >= e.onset_time - 1e-9) & (elapsed <= e.onset_time + e.duration + 1e-9)
+            inside |= span
+            n_events += 1
+            if not brake[span].any():
+                unpainted.append((lid, round(e.onset_dist, 1)))
         outside += [(lid, round(float(d), 1)) for d in dists[brake & ~inside]]
         zmask, zones, g_ref = _reference_braking_zones(elapsed, ch["speed_kmh"][:n])
         runs = _runs(brake)
@@ -568,11 +585,14 @@ def test_pedal_band_holds_each_braking_zone_whole():
     summary = (f"{len(pieces)} zones over {len(ids)} laps of {os.path.basename(files[0])} "
                f"(+{len(files) - 1} chapters): {100 * frag:.1f} % in 2+ pieces, recall "
                f"{100 * recall:.1f} %, {rising:.3f} s a lap painted while accelerating, "
-               f"{len(outside)} brake samples outside every detected event")
+               f"{len(outside)} brake samples outside every detected event, {len(unpainted)} of "
+               f"{n_events} detected events holding no painted brake")
     assert frag < 0.20, f"the band breaks braking zones into pieces: {summary}"
     assert recall >= 0.89, f"the band leaves braking unpainted: {summary}"
     assert rising < 0.10, f"the band paints brake while the kart accelerates: {summary}"
     assert not outside, f"brake painted where no glyph's event is: {summary}; (lap, m) {outside[:8]}"
+    assert not unpainted, (f"brake events (glyphs, brake points) where the band paints no brake at "
+                           f"all: {summary}; (lap, onset m) {unpainted[:8]}")
     print(f"test_pedal_band_holds_each_braking_zone_whole: {summary}")
 
 

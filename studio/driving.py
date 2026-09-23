@@ -115,10 +115,10 @@ MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
 #     45.7-62.1 %); painting the whole fragment, tails included, costs 0.9-3.7 points of precision —
 #     its lead-in and release decelerate at 0.056-0.16 g, which is COAST_DRAG_MIN..theta_b, the
 #     coast channel's own band.
-#   * 3.0-7.4 % of detected events hold no fragment that lasts MIN_BRAKE_S (short blips the merge
-#     strings together into a span of MIN_BRAKE_S or more — `merge_brake_maneuvers` keeps such a
-#     group; its docstring says so). The band paints none of them: 70 of the 73 lie in no reference
-#     zone.
+#   * 5.0-7.4 % of detected events held no fragment that lasts MIN_BRAKE_S (short blips the merge
+#     strung together into a span of MIN_BRAKE_S or more). The band painted none of them: 70 of the
+#     73 lie in no reference zone. D2 then dropped them from the detector too — see
+#     `merge_brake_maneuvers` — so every glyph now sits on a stretch the band paints.
 # BINARY ON PURPOSE. Normalised at theta_b, any genuine brake saturates, as designed ("g ==
 # -theta_b reads full brake"). A graded level off this series would be half noise: inside the
 # reference zones the per-sample noise is sd 0.11-0.14 g against a signal spread of sd 0.12-0.15 g.
@@ -367,18 +367,33 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
     sub-fragment — one whose OWN onset->release span is >= MIN_BRAKE_S. A shorter lead-in blip (e.g.
     a single-sample S/F-seam graze where the smoothed long-g just kisses -theta_b) still folds into
     the maneuver (peak/release/duration), but it does NOT get to set the brake point: that would
-    yank the onset back onto the noise. The group keeps the EARLIEST onset overall only as a
-    fallback, when no sub-fragment reaches the floor. peak = max, duration = the true
-    onset->release span, and MIN_BRAKE_S gates that MERGED span.
+    yank the onset back onto the noise. peak = max, duration = the true onset->release span.
 
-    SUCH A GROUP IS NOT DROPPED. The merged span runs from the first blip's onset to the last
-    blip's release, coasts included, so a string of short blips spread over MIN_BRAKE_S or more
-    survives as an event whose onset is its first blip. Only a group whose whole span is shorter
-    goes. #349 measured it on four recordings (154 valid laps): 73 detected events, 3.0-7.4 % per
-    recording, hold no fragment that lasts MIN_BRAKE_S, and 70 of those 73 overlap no
-    independently defined braking zone. They are glyphs and inputs to coaching, the brake-habit
-    table and BRAKING; the D3 band paints none of them. Dropping them is a detector change, and
-    it has not been made."""
+    A GROUP WITH NO SUSTAINED SUB-FRAGMENT IS DROPPED (D2). MIN_BRAKE_S used to gate only the
+    MERGED span, blip to blip with the coasts between included, so a string of 1-3-sample blips
+    spread over 0.25 s or more survived as an event whose onset was its first blip. On the four
+    recordings measured (Sandown 3h 0064, SD 0068, SD 0065, MK 0067; 154 valid laps) that was 73
+    events, 5.0-7.4 % per recording, and 70 of them overlap no braking zone defined without the
+    detector (0.5 s-smoothed speed decelerating past 0.16 g for 0.3 s and 2 km/h; the D3 band
+    painted none of them either). They were 61 of the 1,121 per-corner brake points
+    (`DrivingChannels.lap_brake_points`), and not in the way first reported:
+      * 54 sat on a corner that lap did not brake for at all — no sustained event anywhere in the
+        corner's window, and the blip string near where the driver brakes for it on other laps.
+        Those now read N/A, as the laps that never touched the brakes there already did. None of
+        the 54 overlapped a reference zone, so no braked corner loses its brake point.
+      * 7 came after a sustained event in the same window, and the brake point takes the LAST
+        onset there. Five now move back 22.7-40.5 m to the corner's own brake. Two move 12.1 and
+        37.4 m onto an event the PREVIOUS corner also takes as its brake point: where two
+        corners' windows overlap, the last-onset rule lets both claim one event. That is the
+        matching rule's own limit, not this one's — it already held on 4 of the 1,121 points,
+        and holds on 6 of the 1,067 now.
+    Measured against the reference zones, brake-point precision (the event overlaps a zone) goes
+    80.9 -> 85.6 % and corners with a zone starting in their window that get a brake point on it
+    898 -> 904 of 963, with none lost. The cost is 3 of the 73 dropped events that DID touch a
+    zone, all on MK: real but brief brakes that the detector cannot tell from a lift at 10 Hz.
+    One was a brake point, and it moves 12.1 m to the sustained brake before it; the other two
+    were glyphs only. A sustained sub-fragment already spans MIN_BRAKE_S, so the old span test is
+    implied by this one."""
     def corner_of(d):
         if corner_windows is None:
             return None
@@ -417,8 +432,8 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
             groups.append(list(ev) + [sustained(ev)])
     out: list[BrakeEvent] = []
     for grp in groups:
-        span = float(elapsed[grp[1]] - elapsed[grp[0]])
-        if span >= MIN_BRAKE_S:
+        if grp[6]:  # a sustained sub-fragment set the onset (see the docstring: D2)
+            span = float(elapsed[grp[1]] - elapsed[grp[0]])
             out.append(BrakeEvent(onset_dist=grp[2], onset_time=grp[3],
                                   peak_decel=grp[4], duration=span))
     return out

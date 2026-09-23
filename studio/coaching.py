@@ -307,7 +307,10 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # ⚠ STALE — NOT RE-MEASURABLE (T16). The table below was measured on D24 before #335 changed corner
 # matching. #339 re-ran its footage check after #335 and it no longer matched the app. D24 is no
 # longer available, so the table cannot be re-measured. Its cells, the prose under it and
-# MIN_BRAKE_LAPS' note are the record of that measurement, not what the app computes today. THE
+# MIN_BRAKE_LAPS' note are the record of that measurement, not what the app computes today. D2
+# moved them again, unmeasurably here: a string of brake blips with no sustained brake is no
+# longer a brake event, so a lap that only lifted no longer counts toward "laps". On the four
+# present recordings that cut one corner from 20 to 9 laps and moved a habit by up to 1.5 m. THE
 # RULE at the end of this block does not rest on the cells: it is an argument about which
 # statistic to print.
 #

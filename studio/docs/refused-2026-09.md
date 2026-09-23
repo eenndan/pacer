@@ -775,18 +775,31 @@ noise**, while the signal it has to find — a kart's off-power drag — measure
 The thing to detect is smaller than the noise on the instrument detecting it.
 
 Measured on four present recordings (D24 is gone), through the app's own brake events and the
-shipped corner-match window; a brake attaches to 91–98 % of the (lap × corner) cells.
+shipped corner-match window; a brake attaches to 86–94 % of the (lap × corner) cells.
+
+> **Re-measured after D2** (the brake detector stopped counting a string of blips with no
+> sustained brake as a brake event, so 14 / 14 / 14 / 12 cells lost the brake they had attached
+> to). Every figure in this section is D2's, from the same probe on the same four recordings. The
+> verdict did not move, and one number that argued against it is gone: before D2 one of the
+> eight pooled tests below reached p < 0.05 (Sandown 3h, pace removed, +0.110, p 0.035); now none
+> does. The figures before D2: attachment 91–98 %; 0.50 s gap p90 0.350 / 0.151 / 0.250 / 0.510;
+> literal-reading median 5.5–6.4 s; planted-gap shares 1 / 6 / 21 / 76 / 94 %; shares over the
+> planted-zero p95 4 / 6 / 5 / 2 % and 14 / 3 / 6 / 16 %; pooled ρ +0.038 / +0.029 / +0.070 /
+> +0.023, pace removed +0.110 / −0.095 / +0.027 / +0.011; power 100 / 100 / 100 / 100 % and
+> 100 / 100 / 100 / 71 %, bare 14 / 14 / 22 / 8 %; selection control 3.3–6.7 % and 20.0–34.7 %;
+> split-half ρ +0.68 / +0.83 / +0.39 / +0.43. SD_19_09's "coast span ends within 0.5 s" cell read
+> 6 % here before D2, but the probe gives 0 % on the detector before D2 as well.
 
 | | Sandown 3h · 62×7 | SD_30_08 · 37×7 | SD_19_09 · 36×7 | MK_18_09 · 19×12 |
 |---|---|---|---|---|
 | gap on the brake detector's own series | **0.050 s** [p10 0.050, p90 0.150] | 0.050 [0.050, 0.150] | 0.050 [0.050, 0.150] | 0.050 [0.050, 0.150] |
-| gap on the coast channel's 0.50 s series | 0.150 [0.050, 0.350] | 0.150 [0.050, 0.151] | 0.150 [0.050, 0.250] | 0.150 [0.050, 0.510] |
-| a coast span ENDS within 0.5 s of the onset | 4 % | 1 % | 6 % | 6 % |
+| gap on the coast channel's 0.50 s series | 0.150 [0.050, 0.281] | 0.150 [0.050, 0.150] | 0.150 [0.050, 0.250] | 0.150 [0.050, 0.450] |
+| a coast span ENDS within 0.5 s of the onset | 4 % | 1 % | 0 % | 6 % |
 
 0.050 s is this estimator's floor — half a sample, returned when there is no off-power sample at
 all between the throttle and the brake. **That is the median on every recording.** The backlog's
 literal wording ("the end of the app's own coast span to the brake onset") is a different number
-again — median **5.5–6.4 s**, because the coast the app detects is almost never the one abutting
+again — median **5.5–6.7 s**, because the coast the app detects is almost never the one abutting
 the brake.
 
 ### The null: what the instrument reports when there is no hesitation at all
@@ -799,7 +812,7 @@ approaches per planted value).
 |---|---|---|---|---|---|
 | estimate, brake series (Sandown 3h) | 0.050 | 0.050 | 0.050 | 0.050 | **0.050** |
 | estimate, 0.50 s series (Sandown 3h) | 0.150 | 0.150 | 0.250 | 0.450 | 0.650 |
-| share clearing the planted-zero p95, 0.50 s series | 1 % | 6 % | 21 % | 76 % | 94 % |
+| share clearing the planted-zero p95, 0.50 s series | 1 % | 6 % | 19 % | 73 % | 89 % |
 
 **With the noise switched off the same estimator recovers the planted gap** (0.8 s → 0.75 s,
 0.5 → 0.45, 0.3 → 0.25) — the probe's own negative control, so what follows is the channel, not a
@@ -812,7 +825,7 @@ planted hesitation still reads 0.050 s. The coast channel's 0.50 s series **can*
 **And the measured data is the planted-zero distribution.** Observed median vs planted-zero median:
 0.050 / 0.050 s on the bare series and 0.150 / 0.150 s on the 0.50 s series, on all four
 recordings. The share of events above the planted-zero p95 — 5 % is what no hesitation looks like —
-is 4 / 6 / 5 / 2 % (bare) and 14 / 3 / 6 / 16 % (0.50 s). The typical approach on these recordings
+is 4 / 6 / 0 / 2 % (bare) and 13 / 3 / 7 / 15 % (0.50 s). The typical approach on these recordings
 goes from throttle to brake inside one sample.
 
 ### With the instrument that does work, the gap predicts nothing
@@ -822,22 +835,24 @@ selects no corner), 20,000 permutations:
 
 | | Sandown 3h | SD_30_08 | SD_19_09 | MK_18_09 |
 |---|---|---|---|---|
-| pooled ρ | +0.038 (p 0.48) | +0.029 (p 0.66) | +0.070 (p 0.37) | +0.023 (p 0.80) |
-| pooled ρ, lap pace removed | +0.110 (p 0.035) | **−0.095** (p 0.16) | +0.027 (p 0.72) | +0.011 (p 0.90) |
+| pooled ρ | −0.005 (p 0.93) | −0.002 (p 0.98) | +0.089 (p 0.26) | −0.005 (p 0.95) |
+| pooled ρ, lap pace removed | +0.045 (p 0.45) | **−0.110** (p 0.12) | +0.017 (p 0.83) | +0.058 (p 0.53) |
 
-One of eight reaches 0.05, and the same statistic on another recording of the same track has the
-**opposite sign**. The per-corner best is never family-wise significant.
+None of the eight reaches 0.05, and the same statistic on two recordings of the same track has
+**opposite signs**. With lap pace removed the per-corner best is never family-wise significant
+(p_fwer 0.12 at the lowest). On the raw series one Sandown 3h corner is (ρ +0.514, p_fwer 0.001;
++0.496, p_fwer 0.002 before D2), and with lap pace removed it is not (p_fwer 0.12).
 
 **Power, end to end.** A hesitation of 0.30 s ± 0.15 s lap to lap, costing the corner its own
 duration (β = 1.0 s per s — the physical ceiling), planted and then passed through the simulation's
 own measurement model before the test: on the 0.50 s series the pooled test fires **100 / 100 / 100 /
-100 %** (Sandown 3h, SD_30_08, SD_19_09, MK) and at β = 0.5 still **100 / 100 / 100 / 71 %**. On the
-bare series the same effect is found **14 / 14 / 22 / 8 %** of the time. So the silence above is a
+96 %** (Sandown 3h, SD_30_08, SD_19_09, MK) and at β = 0.5 still **97 / 100 / 100 / 58 %**. On the
+bare series the same effect is found **10 / 10 / 16 / 11 %** of the time. So the silence above is a
 measurement, not a shortage of laps — the test would have seen the effect, on the series that can
 carry it, had it been there.
 
-**Selection control** (nothing to find): "some corner at FWER 0.05" fires 3.3–6.7 %, "the TOP
-corner read off its own p" fires **20.0–34.7 %**, the #311 trap again.
+**Selection control** (nothing to find): "some corner at FWER 0.05" fires 3.0–6.3 %, "the TOP
+corner read off its own p" fires **20.0–33.7 %**, the #311 trap again.
 
 ### Why this is a refusal and not a smaller feature
 
@@ -845,7 +860,7 @@ A per-corner number whose median IS its instrument's floor cannot be published w
 on it. Quantised to 0.1 s, the whole distribution occupies two or three values, the two windows the
 app already ships over this signal disagree by a median 0.100 s about it, and the per-corner median
 does not repeat between the odd and even laps of one session on the series that can measure it
-(split-half ρ +0.68 / +0.83 / +0.39 / +0.43, but over per-corner medians that take only the values
+(split-half ρ +0.68 / +0.83 / +0.72 / +0.37, but over per-corner medians that take only the values
 0.05 and 0.15).
 
 The probe behind this section is `studio/dev/probes/p11_hesitation.py` (with the M5 set's shared
