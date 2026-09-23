@@ -1650,6 +1650,294 @@ def test_an_all_laps_batch_is_held_to_the_sum_of_its_files():
     print("ok E1: an All-laps batch is refused as a batch, on the sum")
 
 
+# ======================================================= E3 — "no space left" is a claim, not a disk
+# ffmpeg 7.1 prints "No space left on device" when a queue INSIDE ffmpeg overflows, not only when
+# the disk does. When the first second of video reaches VideoToolbox slowly, `-shortest` + `apad`
+# floods ffmpeg's sync queue with padded silence until its 131,072-frame FIFO refuses a write with
+# AVERROR(ENOSPC). Measured on this Mac with 94.5 GB free: the real renderer, throttled to 4 fps
+# at 1080p on MK_18_09_26, failed 4/4 that way. On main that text alone skipped the working
+# libx264 retry and told the user their disk was full.
+#
+# These drive the REAL entry point, spec builders, `_run_video_export`, `VideoExportWorker.run`
+# AND the real `Renderer` — its run/retry/teardown, its `_finish` reading ffmpeg's exit code and
+# stderr, its `_respawn`. Stood in for: ffmpeg itself (a fake Popen that fails the way ffmpeg
+# failed, with ffmpeg's own words), the disk (`export_video.free_bytes`), the encoder the machine
+# resolves (pinned, per test — this Mac opens VideoToolbox, the CI runner does not), and the two
+# painting seams (`_make_painter`/`_compose_frame`), which the fake session cannot feed and which
+# play no part in a failure.
+_E3_ENOSPC_TAIL = (
+    b"[af#0:1 @ 0x10de0a7d0] Error sending frames to consumers: No space left on device\n"
+    b"[af#0:1 @ 0x10de0a7d0] Task finished with error code: -28 (No space left on device)\n"
+    b"[af#0:1 @ 0x10de0a7d0] Terminating thread with return code -28 (No space left on device)\n")
+_E3_ROOM = 90_000_000_000       # what the disk had when ffmpeg said it had none (94.5 GB measured)
+_E3_FULL = 1_000_000            # a disk that really filled: 1 MB left
+
+
+class _E3Encoder:
+    """A fake ffmpeg ENCODE process. `fail_after` frames in it stops taking input and exits 228
+    (ffmpeg's -28 as an exit status) with the ENOSPC tail on stderr, exactly as the real one did;
+    otherwise it takes every frame and writes the file when its stdin closes."""
+
+    def __init__(self, out_path, fail_after=None):
+        import io
+        self._out, self._fail_after, self._n = out_path, fail_after, 0
+        self.returncode = None
+        self.stdout = None
+        self.stderr = io.BytesIO(_E3_ENOSPC_TAIL if fail_after is not None else b"")
+        self.stdin = SimpleNamespace(write=self._write, flush=lambda: None, close=self._close)
+
+    def _write(self, _frame):
+        if self._fail_after is not None and self._n >= self._fail_after:
+            self.returncode = 228
+            raise BrokenPipeError(32, "Broken pipe")
+        self._n += 1
+        if self._n == 1:
+            with open(self._out, "wb") as f:     # ffmpeg's -y truncates at open: a partial exists
+                f.write(b"partial")
+
+    def _close(self):
+        if self.returncode is None:
+            with open(self._out, "wb") as f:
+                f.write(b"rendered")
+            self.returncode = 0
+
+    def wait(self, *_a, **_k):
+        return self.returncode
+
+    def kill(self):
+        if self.returncode is None:
+            self.returncode = -9
+
+
+class _E3Decoder:
+    """A fake ffmpeg DECODE process: blank frames of whatever size the renderer asks for."""
+
+    def __init__(self):
+        self.returncode = 0
+        self.stdin = None
+        self.stderr = None
+        self._dead = False
+        self.stdout = SimpleNamespace(read=self._read, close=lambda: None)
+
+    def _read(self, n):
+        return b"" if self._dead else bytes(n)
+
+    def wait(self, *_a, **_k):
+        return 0
+
+    def kill(self):
+        self._dead = True
+
+
+def _e3_export(win, td, *, resolves, fail, free_after):
+    """File ▸ Export overlay video… end to end into `td`.
+
+    `resolves` = what this machine's "auto" resolves to: VT_H264 (this Mac) or SW_H264 (a Mac
+    without VideoToolbox, e.g. the CI runner) — pinned, never asked of the machine.
+    `fail` = the encoders whose encode dies with ffmpeg's ENOSPC tail, e.g. {VT_H264}.
+    `free_after` = what the disk answers AFTER a failure (the free blocks alone), one value per
+    question in order; None = a volume that cannot be asked. Before the render the pre-flight
+    guard is always told there is plenty, because the render has to start for any of this to
+    happen. Returns what the user, the renderer and the disk saw."""
+    src = os.path.join(td, "GX010099.MP4")
+    if not os.path.exists(src):
+        open(src, "wb").close()
+    out = os.path.join(td, "GX010099_overlay.mp4")
+    asked, encoders, modals, made = [], [], [], []
+    after = list(free_after)
+
+    def _free(path, purgeable=True):
+        asked.append((path, purgeable))
+        if purgeable:
+            return _E3_ROOM                        # the pre-flight guard's question
+        return after.pop(0) if after else _E3_ROOM
+
+    def _popen(cmd, **_kw):
+        if cmd[-1] == "pipe:1":
+            return _E3Decoder()
+        encoder = cmd[cmd.index("-c:v") + 1]
+        encoders.append(encoder)
+        return _E3Encoder(cmd[-1], fail_after=40 if encoder in fail else None)
+
+    class _Renderer(export_video.Renderer):
+        """The REAL renderer, minus its painter: the fake session has no telemetry to paint and a
+        failed encode never depends on the pixels. Everything else — run, the retry, `_finish`,
+        `_respawn` (which respawns THIS class) — is the production code under test."""
+
+        def _make_painter(self):
+            return None
+
+        def _compose_frame(self, raw):
+            return raw
+
+    class _SyncWorker(_RealVideoExportWorker):
+        def start(self):            # the modal loop below runs it — see the E1 section comment
+            made.append(self)
+
+    def _exec(dlg):
+        if not isinstance(dlg, QProgressDialog):
+            return QDialog.Accepted
+        while made:
+            made.pop(0).run()
+        return QDialog.Accepted
+
+    def _box_exec(box, *_a, **_k):
+        modals.append({"icon": box.icon(), "body": box.text(), "details": box.detailedText()})
+        return 0
+
+    choice = studio_app.ExportChoice(config=export_video.OverlayConfig(), lead=0.0,
+                                     scope=export_video.SCOPE_THIS_LAP)
+    saved = {
+        (export_video, "free_bytes"): export_video.free_bytes,
+        (export_video.subprocess, "Popen"): export_video.subprocess.Popen,
+        (export_video, "probe_video_size"): export_video.probe_video_size,
+        (export_video, "probe_source_duration"): export_video.probe_source_duration,
+        (export_video, "resolve_encoder"): export_video.resolve_encoder,
+        (export_video, "resolve_hwaccel_decode"): export_video.resolve_hwaccel_decode,
+        (export_video, "ffmpeg_available"): export_video.ffmpeg_available,
+        (export_video, "Renderer"): export_video.Renderer,
+        (export_controller, "VideoExportWorker"): export_controller.VideoExportWorker,
+        (ExportController, "_ask_export_options"): ExportController._ask_export_options,
+        (ExportController, "_export_save_path"): ExportController._export_save_path,
+        (QDialog, "exec"): QDialog.exec,
+        (QMessageBox, "exec"): QMessageBox.exec,
+    }
+    export_video.free_bytes = _free
+    export_video.subprocess.Popen = _popen
+    export_video.probe_video_size = lambda _path: _E1_SOURCE
+    export_video.probe_source_duration = lambda _source: None
+    export_video.resolve_encoder = (
+        lambda c: export_video.SW_H264 if c in ("libx264", "software", "sw", "x264", "cpu")
+        else resolves)
+    export_video.resolve_hwaccel_decode = lambda _choice, _encoder: False
+    export_video.ffmpeg_available = lambda: True
+    export_video.Renderer = _Renderer
+    export_controller.VideoExportWorker = _SyncWorker
+    ExportController._ask_export_options = lambda _s, _lap: choice
+    ExportController._export_save_path = lambda _s, *_a, **_k: out
+    QDialog.exec = _exec
+    QMessageBox.exec = _box_exec
+    try:
+        win._paths = [src]
+        win.statusBar().clearMessage()
+        win.exports.export_overlay_video()
+    finally:
+        for (owner, name), value in saved.items():
+            setattr(owner, name, value)
+    after_failure = [p for p, purgeable in asked if not purgeable]
+    return SimpleNamespace(encoders=encoders, modals=modals, out=out, folder=td,
+                           asked_after_failure=after_failure)
+
+
+def _e3_least(resolves) -> str:
+    """The least this lap can come out at on `resolves` (1080p30 "high", the default), as the
+    dialog prints it — from the module's size model, which is what the renderer holds a disk to."""
+    est = export_video.estimate_output_bytes(1920, 1080, 30.0,
+                                             export_video.clip_seconds(0.0, _E1_LAP_S, 30.0),
+                                             "high", resolves)
+    return export_video.fmt_bytes(export_video.floor_bytes(est, resolves))
+
+
+def test_a_false_no_space_takes_the_libx264_retry_and_never_says_disk_full():
+    """ffmpeg says "No space left on device"; the disk, asked at that moment, has 90 GB free — or
+    cannot be asked at all. Either way it is NOT a full disk, so the VideoToolbox failure takes the
+    libx264 retry it always had, the export FINISHES, and the user is never told their disk is
+    full.
+
+    On main the text alone decided: one encoder was spawned, the retry never ran, and the dialog
+    said "There's no room left on the disk holding …" with 90 GB free."""
+    win = _window(FakeSession())
+    for free_after in (_E3_ROOM, None):
+        with tempfile.TemporaryDirectory() as td:
+            seen = _e3_export(win, td, resolves=export_video.VT_H264,
+                              fail={export_video.VT_H264}, free_after=[free_after])
+            assert seen.encoders == [export_video.VT_H264, export_video.SW_H264], (
+                f"free={free_after}: the libx264 retry did not run after ffmpeg's false "
+                f"'no space': {seen.encoders}")
+            assert seen.asked_after_failure == [td], (
+                f"free={free_after}: the disk was not asked when ffmpeg said it was full: "
+                f"{seen.asked_after_failure}")
+            assert len(seen.modals) == 1, seen.modals
+            box = seen.modals[0]
+            assert box["icon"] == QMessageBox.Information, (
+                f"free={free_after}: the export did not finish: {box}")
+            assert "no room" not in (box["body"] + box["details"]).lower(), box
+            assert os.path.exists(seen.out), "the retry's file is not there"
+    win.hide()
+    print("ok E3: ffmpeg's false 'no space' with room (or an unknown volume) retries and finishes")
+
+
+def test_a_disk_that_really_filled_gets_no_retry_and_a_true_sentence():
+    """The disk really is full: 1 MB left when the encode stopped. No second render — the libx264
+    retry would re-render the whole clip and fail the same way — and the sentence names what the
+    disk said: the folder, the free space it measured and the least the export needs.
+
+    Both ways a full disk can end a render: the VideoToolbox encode itself, and a libx264 retry
+    whose false-alarm VideoToolbox attempt was followed by a disk that then really filled. On main
+    the first said "no room" without having asked (no figures), and the second never retried."""
+    win = _window(FakeSession())
+    cases = (
+        ("VideoToolbox stops, disk full", {export_video.VT_H264}, [_E3_FULL],
+         [export_video.VT_H264]),
+        ("false alarm, then the retry fills the disk",
+         {export_video.VT_H264, export_video.SW_H264}, [_E3_ROOM, _E3_FULL],
+         [export_video.VT_H264, export_video.SW_H264]),
+    )
+    for name, fail, free_after, want_encoders in cases:
+        with tempfile.TemporaryDirectory() as td:
+            seen = _e3_export(win, td, resolves=export_video.VT_H264, fail=fail,
+                              free_after=free_after)
+            assert seen.encoders == want_encoders, (name, seen.encoders)
+            assert len(seen.modals) == 1 and seen.modals[0]["icon"] == QMessageBox.Warning, (
+                name, seen.modals)
+            body = seen.modals[0]["body"]
+            assert f"There's no room left on the disk holding {td}" in body, (name, body)
+            assert "it had 1 MB free when the export stopped" in body, (
+                f"{name}: the sentence does not say what the disk said: {body!r}")
+            assert seen.asked_after_failure == [td] * len(free_after), (
+                f"{name}: the disk was not asked after each failure: {seen.asked_after_failure}")
+            least = _e3_least(seen.encoders[-1])
+            assert f"needs at least {least}" in body, (name, least, body)
+            assert "Free some space" in body, (name, body)
+            assert "No space left on device" not in body, (name, body)       # tail: Details only
+            assert "No space left on device" in seen.modals[0]["details"], (name, seen.modals)
+            assert not os.path.exists(seen.out), f"{name}: the partial file was left behind"
+    win.hide()
+    print("ok E3: a disk that really filled: no retry, and a sentence with what the disk said")
+
+
+def test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk():
+    """A Mac that cannot open VideoToolbox (the CI runner is one) renders on libx264 from the start,
+    so there is no retry to take — but the sentence is still the disk's to decide. Room, or a volume
+    that cannot be asked: the honest generic ("the encoder stopped partway", ffmpeg's words behind
+    Details), never "no room left". Full: the true sentence with its figures.
+
+    On main all three said "There's no room left on the disk holding …", from the text alone."""
+    win = _window(FakeSession())
+    for free_after in (_E3_ROOM, None, _E3_FULL):
+        with tempfile.TemporaryDirectory() as td:
+            seen = _e3_export(win, td, resolves=export_video.SW_H264,
+                              fail={export_video.SW_H264}, free_after=[free_after])
+            assert seen.encoders == [export_video.SW_H264], (free_after, seen.encoders)
+            assert len(seen.modals) == 1 and seen.modals[0]["icon"] == QMessageBox.Warning, (
+                free_after, seen.modals)
+            body = seen.modals[0]["body"]
+            assert "No space left on device" in seen.modals[0]["details"], seen.modals
+            if free_after == _E3_FULL:
+                assert f"There's no room left on the disk holding {td}" in body, body
+                assert "it had 1 MB free" in body, (
+                    f"the sentence does not say what the disk said: {body!r}")
+                assert f"needs at least {_e3_least(export_video.SW_H264)}" in body, body
+            else:
+                assert "no room" not in body.lower(), (
+                    f"free={free_after}: told the user the disk was full: {body!r}")
+                assert "encoder stopped partway" in body, body
+            assert seen.asked_after_failure == [td], (
+                f"free={free_after}: the disk was not asked: {seen.asked_after_failure}")
+    win.hide()
+    print("ok E3: without VideoToolbox the claim is still checked: generic with room, true when full")
+
+
 def _run_all():
     test_a_zero_lap_recording_disables_every_data_export_with_a_reason()
     test_a_zero_lap_export_writes_nothing_and_says_why()
@@ -1686,6 +1974,9 @@ def _run_all():
     test_an_export_the_disk_plainly_cannot_hold_is_refused_before_a_frame()
     test_an_export_that_fits_or_cannot_be_measured_is_not_refused()
     test_an_all_laps_batch_is_held_to_the_sum_of_its_files()
+    test_a_false_no_space_takes_the_libx264_retry_and_never_says_disk_full()
+    test_a_disk_that_really_filled_gets_no_retry_and_a_true_sentence()
+    test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk()
     print("ALL OK")
 
 

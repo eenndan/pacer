@@ -1435,11 +1435,17 @@ def _volume_capacity_for_important_usage(path: str) -> int | None:
         cf.CFRelease(url)
 
 
-def free_bytes(path: str) -> int | None:
+def free_bytes(path: str, purgeable: bool = True) -> int | None:
     """Bytes that can be written to the volume that will hold `path` — asked of its nearest
     EXISTING parent, because the output is not written yet and neither may its folder be. The
     larger of `statvfs`'s free blocks and macOS's own capacity for important usage (see
     `_volume_capacity_for_important_usage`).
+
+    `purgeable=False` asks for the free blocks alone. That is the question AFTER a write has
+    failed: purgeable space is what macOS gives back on demand, and a write that has just been
+    refused for lack of room is the proof that it had not been given back to that writer. Before
+    a render (`guard_free_space`) the larger figure is right, because refusing an export the
+    system would have made room for is the failure that guard must not add.
 
     None when the volume cannot be queried at all, and the caller must then refuse NOTHING: an
     unknown is not a full disk, and a network or removable volume that does not answer `statvfs`
@@ -1454,6 +1460,8 @@ def free_bytes(path: str) -> int | None:
         free = shutil.disk_usage(probe).free
     except OSError:
         free = None
+    if not purgeable:
+        return free
     important = _volume_capacity_for_important_usage(probe)
     known = [v for v in (free, important) if v is not None]
     return max(known) if known else None
@@ -1510,6 +1518,22 @@ def is_refused_for_space(message: str) -> bool:
     return _REFUSED_FOR_SPACE_MARKER in (message or "").casefold()
 
 
+def floor_bytes(est: int, codec: str) -> int:
+    """The least a render estimated at `est` bytes on `codec` can come out at: the floor below
+    every real file measured (`FREE_SPACE_FLOOR_FRACTION`). What the pre-flight guard requires,
+    and what the renderer holds a disk to when ffmpeg says it ran out."""
+    return int(est * FREE_SPACE_FLOOR_FRACTION.get(codec, min(FREE_SPACE_FLOOR_FRACTION.values())))
+
+
+def _fmt_have_and_need(free: int, need: int) -> tuple[str, str]:
+    """`free` and `need` for one sentence, never rounded to the same figure: "2.1 GB free — not
+    enough for 2.1 GB" is a sentence nobody can use."""
+    have, floor = fmt_bytes(free), fmt_bytes(need)
+    if have == floor:
+        have, floor = f"{free / 1e6:,.0f} MB", f"{need / 1e6:,.0f} MB"
+    return have, floor
+
+
 def guard_free_space(specs, probe=None) -> None:
     """Refuse an export its destination PLAINLY cannot hold, before any frame is decoded.
 
@@ -1558,9 +1582,7 @@ def guard_free_space(specs, probe=None) -> None:
         what = (f"These {group['files']} files would take about {fmt_bytes(group['est'])} "
                 f"together" if group["files"] > 1
                 else f"This export would take about {fmt_bytes(group['est'])}")
-        have, floor = fmt_bytes(free), fmt_bytes(need)
-        if have == floor:     # "2.1 GB free — not enough for 2.1 GB" is a sentence nobody can use
-            have, floor = f"{free / 1e6:,.0f} MB", f"{need / 1e6:,.0f} MB"
+        have, floor = _fmt_have_and_need(free, need)
         raise InsufficientSpaceError(
             f"{what}, and the disk holding {folder} has {have} free — "
             f"{_REFUSED_FOR_SPACE_MARKER} the export could come out at ({floor}).")
@@ -2529,20 +2551,66 @@ def is_truncated_footage(message: str) -> bool:
 
 
 # ffmpeg reports a full disk through its own writer, so what arrives here is a stderr tail, not an
-# errno. These are the spellings that mean "there is no room", and they are matched case-folded
-# because the encoder, the muxer and the OS each phrase it differently.
+# errno. These are the spellings of errno 28, matched case-folded because the encoder, the muxer
+# and the OS each phrase it differently.
+#
+# THEY ARE WHAT FFMPEG SAYS, NOT WHAT HAPPENED. ffmpeg 7.1 prints the same strerror(28) when a
+# queue INSIDE ITSELF fills up. `build_encode_cmd` pairs `-shortest` with `apad`, so the audio is
+# endless silence held in the `-shortest` sync queue until the video catches up. When the first
+# second of video reaches VideoToolbox slowly, the audio side is let loose and floods that queue.
+# The queue is a FIFO that grows only to 1 MiB of pointers, 131,072 frames. When it is full its
+# write returns AVERROR(ENOSPC), and ffmpeg dies with
+#     [af#0:1 @ …] Error sending frames to consumers: No space left on device
+# while the disk still has 94.5 GB free (measured 2026-09-23). The file written by then is under
+# 1 MB. That the limit is a frame count is measured: doubling apad's frame size doubled the
+# audio queued at the failure, 10,288 s -> 20,277 s.
+# So these words only decide that the DISK GETS ASKED (`Renderer._disk_full_sentence`). Only the
+# disk's answer makes a failure a full disk (`is_out_of_space`).
 _NO_SPACE_MARKERS = ("no space left on device", "enospc", "disk full", "not enough space")
 
 
+def reports_no_space(message: str) -> bool:
+    """True when an encoder's stderr tail CLAIMS the disk is out of room: errno 28, spelled out.
+
+    A claim, not a verdict (see `_NO_SPACE_MARKERS`). What it buys is a question to the disk, and
+    only the disk's answer (`is_out_of_space`) may stop the libx264 retry or tell the user their
+    disk is full."""
+    return any(m in (message or "").casefold() for m in _NO_SPACE_MARKERS)
+
+
+# What `is_out_of_space` matches on: the first words of the sentence `DiskFullError` carries, which
+# the renderer writes only AFTER the disk has been asked and was full. No ffmpeg message contains
+# it, so an encoder tail alone can never pass for a full disk again.
+_DISK_FULL_MARKER = "there's no room left on the disk holding"
+
+
+class DiskFullError(RuntimeError):
+    """An encode stopped saying there is no space, AND the disk holding its output, asked at that
+    moment, cannot hold the export. Its message is a sentence for the user. It names the folder,
+    the free space it measured and the least the export needs, and the encoder's own tail follows
+    it for Details."""
+
+
 def is_out_of_space(message: str) -> bool:
-    """True when an encode failure is a FULL DISK rather than an encoder problem.
+    """True when a failure is a FULL DISK: the renderer asked the disk and it had no room.
 
     This is the difference between one failed render and two. `run()` falls back from the hardware
     encoder to libx264 whenever a VideoToolbox encode fails — which is right for a codec/session
     problem and useless when the disk is full: the retry re-renders the WHOLE clip on the slower
     software encoder and then fails for exactly the same reason, minutes later. The user's disk
-    does not get emptier while they wait."""
-    return any(m in (message or "").casefold() for m in _NO_SPACE_MARKERS)
+    does not get emptier while they wait.
+
+    IT USED TO BE THE TEXT ALONE (`reports_no_space`), and the text lies: a slow VideoToolbox
+    render printed ffmpeg's "No space left on device" with 91 GB free, lost its working libx264
+    retry, and told the user their disk was full. Now it is keyed on `DiskFullError`'s sentence,
+    which exists only when the disk agreed."""
+    return _DISK_FULL_MARKER in (message or "").casefold()
+
+
+def disk_full_sentence(message: str) -> str:
+    """The user-facing sentence of a `DiskFullError` message, without the encoder tail that follows
+    it (which belongs behind Details). The renderer writes it as the first paragraph."""
+    return (message or "").strip().split("\n\n", 1)[0].strip()
 
 
 class _EncodeError(RuntimeError):
@@ -2926,11 +2994,10 @@ class Renderer:
         except (_EncodeError, RenderTimeoutError) as exc:
             is_encode_fail = isinstance(exc, _EncodeError) and exc.encoder == VT_H264
             is_vt_wedge = isinstance(exc, RenderTimeoutError) and self._encoder == VT_H264
-            if is_out_of_space(str(exc)):
-                # NEVER fall back on a full disk: the software retry is a whole second render that
-                # cannot succeed. Surface it now, while the failure is still cheap.
-                self.cancel()
-                raise RuntimeError(str(exc)) from exc
+            # NEVER fall back on a full disk: the software retry is a whole second render that
+            # cannot succeed. Surface it now, while the failure is still cheap. But a full disk is
+            # what the DISK says, not what ffmpeg's text says (see `_NO_SPACE_MARKERS`).
+            self._raise_if_disk_full(exc)
             if not (self._fallback_allowed and (is_encode_fail or is_vt_wedge)):
                 # Not a VT-recoverable case → surface a clear error (never a hang).
                 raise RuntimeError(str(exc)) from exc
@@ -2938,7 +3005,66 @@ class Renderer:
             self.cancel()
             sw_cfg = replace(self._spec.config, encoder="libx264")
             sw_spec = replace(self._spec, config=sw_cfg)
-            return self._respawn(sw_spec)._run_chunked(progress, cancel, chunk)
+            retry = self._respawn(sw_spec)
+            try:
+                return retry._run_chunked(progress, cancel, chunk)
+            except _EncodeError as exc2:
+                # The retry is the LAST attempt, so a disk that really filled during it still
+                # has to be named as one. The same question, asked about the retry's own file.
+                retry._raise_if_disk_full(exc2)
+                raise
+
+    def _raise_if_disk_full(self, exc: BaseException) -> None:
+        """Raise `DiskFullError` when `exc` says there was no space AND the disk agrees.
+
+        Otherwise return, and let the caller treat the failure like any other encoder failure: the
+        VideoToolbox one retries on libx264, and nothing downstream may call it a full disk. That
+        includes a volume that cannot be asked. An unknown is not a full disk, which is the rule
+        the pre-flight guard keeps too, and it costs at most one retry that fails the same way."""
+        if not reports_no_space(str(exc)):
+            return
+        sentence = self._disk_full_sentence()
+        if sentence is None:
+            print(f"studio: the encoder reported no space left, but the disk holding "
+                  f"{self._spec.out_path} has room or cannot be asked; not treating it as a "
+                  f"full disk.", flush=True)
+            return
+        self.cancel()
+        raise DiskFullError(f"{sentence}\n\n{exc}") from exc
+
+    def _disk_full_sentence(self) -> str | None:
+        """The sentence for a FULL disk, or None when the disk holding the output has room for this
+        export, or cannot be asked.
+
+        Asked at the moment of failure, before the worker removes the partial file. It uses the
+        free blocks alone (`free_bytes(purgeable=False)`): the write that just failed shows that
+        purgeable space had not been freed for it. "Room" means room for the least this whole
+        export can come out at (`floor_bytes`), not for its central estimate.
+        - Genuinely full: the free space is about zero, less than any export needs.
+        - ffmpeg's false alarm: the free space is what the pre-flight guard already accepted,
+          minus the under-a-megabyte partial file.
+        - The partial file is not credited back. It is what the disk DID hold before it ran out,
+          and a retry that truncated it would need all of that space again and more."""
+        spec = self._spec
+        out = os.path.abspath(spec.out_path)
+        png = bool(getattr(spec, "is_png_sequence", False))
+        folder = out if png else os.path.dirname(out)
+        free = free_bytes(folder, purgeable=False)
+        if free is None:
+            return None
+        if self._overlay_only:
+            codec = ALPHA_PNG if png else ALPHA_PRORES
+        else:
+            codec = self._encoder
+        est = estimate_output_bytes(self._out_w, self._out_h, self._fps,
+                                    clip_seconds(spec.t0, spec.t1, self._fps),
+                                    spec.config.quality, codec)
+        need = floor_bytes(est, codec)
+        if free >= need:
+            return None
+        have, least = _fmt_have_and_need(free, need)
+        return (f"There's no room left on the disk holding {folder}: it had {have} free when the "
+                f"export stopped, and this export needs at least {least}.")
 
     def _run_chunked(self, progress, cancel, chunk: int) -> RenderResult:
         """Pump `run_chunk` to completion under the supervisor (watchdog + cancel). Single-threaded:

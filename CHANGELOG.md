@@ -416,6 +416,14 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **A slow video export no longer says the disk is full when it isn't.** ffmpeg also prints "No
+  space left on device" when a queue inside ffmpeg overflows. That happened on a VideoToolbox
+  export whose first second of video went in slowly, as on a busy machine, with 94.5 GB free.
+  Pacer believed the words: it skipped the libx264 retry that would have finished the export, and
+  told the user their disk was full. Now it asks the disk. With room to spare, the retry runs and
+  the export finishes. A disk that really is full still gets no second render, and the message now
+  says how much space was free and the least the export needs.
+
 - **The map's video-position marker is no longer the colour of the line under it.** It was the
   same red as the slow / behind / full-brake end of every line mode's colour scale, so wherever the
   line was at that end the marker was the same colour as the line under it. That was 20-24 % of

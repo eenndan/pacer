@@ -275,9 +275,12 @@ class ExportController:
             return (f"{message.strip()} Nothing was written. Free some space, or choose a folder "
                     f"on another disk, and export again.")
         if export_video.is_out_of_space(message or ""):
-            folder = os.path.dirname(out_path) or "that folder"
-            return (f"There's no room left on the disk holding {folder}. Free some space, or "
-                    f"choose somewhere else, and export again.")
+            # Only a render that ASKED THE DISK gets here. ffmpeg's "No space left on device"
+            # alone is also printed by an overflowing queue inside ffmpeg with the disk nearly
+            # empty (`export_video._NO_SPACE_MARKERS`), so the sentence is the renderer's, and it
+            # carries what the disk said: the folder, its free space, the least the export needs.
+            return (f"{export_video.disk_full_sentence(message)} Free some space, or choose "
+                    f"somewhere else, and export again.")
         if "permission denied" in low or "operation not permitted" in low:
             return ("Pacer isn't allowed to write there. Choose a different folder — your Movies "
                     "or Desktop folder will work.")
