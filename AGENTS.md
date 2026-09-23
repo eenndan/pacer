@@ -182,8 +182,10 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
 (leaf-by-leaf compare):
 - **MANUAL, full-coverage half** — the dump loads one real recording, the chapter
   `PACER_GOLDEN_MP4` names, by default `MK_18_09_26/GX010067.MP4` (a working-set recording, below),
-  and compares at eps 0: 156,659 leaves on that default in ~4 s, 147,104 on
-  `Sandown 3h 2026/GX010064.MP4` and 153,134 on `SD_19_09_26/GX010068.MP4` (measured 2026-09-23).
+  and compares at eps 0: 156,659 leaves on that default in ~4 s, 147,184 on
+  `Sandown 3h 2026/GX010064.MP4` and 153,014 on `SD_19_09_26/GX010068.MP4` (measured 2026-09-23,
+  once Sandown Park became a built-in track; a Sandown dump taken before that is on the auto-fitted
+  line and will not compare with one taken after, while the MK default did not move a leaf).
   It is a dev-Desktop-only gate; it does NOT run in CI.
 - **CI half** — `test_golden_synthetic` automates the SAME machinery
   (`fingerprint(strict=False)` + `golden_compare.walk`, eps 1e-9) over the deterministic SYNTHETIC
