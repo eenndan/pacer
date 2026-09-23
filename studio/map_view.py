@@ -58,8 +58,8 @@ CURRENT_COLOR = C.accent            # highlighted current-lap trace (the racing 
 # context and drag target, never competing with the two laps that carry the analysis.
 TRACE_COLOR = C.text_muted
 TRACE_WIDTH = 1.0
-MARKER_COLOR = C.behind             # video position marker — warm coral, reads on the trace
-_MARKER_RGB = QColor(C.behind)      # for the translucent marker brush below
+MARKER_COLOR = C.position           # video position marker — the hue no data line mode paints
+_MARKER_RGB = QColor(C.position)    # for the translucent marker brush below
 # Compare ghost = lap-B accent (cyan), the canonical "other lap" colour.
 GHOST_COLOR = CHART_SERIES[1]
 # Inferred gap-fill segments are drawn dashed + dimmed so they read as distinct from measured GPS.
@@ -69,6 +69,16 @@ INFERRED_DARKEN = 0.55  # blend the lap colour toward black for the fill pen
 CORNER_LEFT_COLOR = theme.CHART_SERIES[1]    # cyan — left-handers
 CORNER_RIGHT_COLOR = theme.CHART_SERIES[4]   # coral — right-handers
 CORNER_DOT_ALPHA = 170                       # 0-255: subtle, under the text label
+# The apex dots sit ON the painted line, and their two identity hues each land on it: the coral
+# right-hand dot is 1.17 deuteranopic dE (3.67 normal) from the default ramp's bucket 2 once
+# composited at CORNER_DOT_ALPHA, and the cyan left-hand one 2.82 deuteranopic from the
+# colour-blind ramp's bucket 11. Measured where the apexes really are, 132 of 248 right-hand apex
+# placements at Sandown (62 laps) and 27 of 74 on MK_18_09_26 (19 laps) sit under Line: Speed on a
+# bucket within 10 dE (6.9 deuteranopic) of the dot's own hue — an apex is a lap's slow point,
+# which is the ramp's red end. Recolouring would only
+# move the collision to another bucket of one of the two ramps, so the dots take the brake glyphs'
+# answer instead: the same dark canvas rim, which clears every bucket of both ramps by >= 67 dE.
+CORNER_DOT_OUTLINE = C.canvas
 # Corner C# labels: near-primary text on a dark halo plate, nudged outward from the corner-cloud
 # centroid, then de-cluttered so labels don't stack on each other or on the start/finish crosshair
 # where corners bunch up near the start (see set_corners).
@@ -110,11 +120,23 @@ CORNER_MARKER_EPS_PX = 0.5      # sub-px moves aren't worth a setPos/repaint
 # "this corner, here" was invisible against the one thing it points at.
 #
 # CORNER_LABEL_COLOR ties the ring to the C# label it belongs to, and collides with nothing else
-# the map draws (apex dots cyan/coral, video marker coral, best-lap reference grey). It is not one
-# of the palette-swappable hues, so it cannot freeze a palette (tests/test_contrast.py).
+# the map draws (apex dots cyan/coral, video marker magenta, best-lap reference grey). It is not
+# one of the palette-swappable hues, so it cannot freeze a palette (tests/test_contrast.py).
+#
+# IT DOES COLLIDE WITH ONE THING: the colour-blind ramp's light middle. That ramp diverges through
+# a near-white neutral, and its bucket 9 is 4.80 dE (4.86 deuteranopic) from this near-white ring
+# — the Pedal line is sitting at exactly that neutral when a driver lifts for an apex. So the ring
+# is drawn over a wider dark rim of the canvas colour (CORNER_HIGHLIGHT_HALO_W), as two spots of
+# ONE item: the rim clears every bucket of both ramps, and the ring keeps its label's colour.
 CORNER_HIGHLIGHT_COLOR = CORNER_LABEL_COLOR
 CORNER_HIGHLIGHT_PEN_W = 2
+CORNER_HIGHLIGHT_HALO_W = CORNER_HIGHLIGHT_PEN_W + 2   # 1 px of canvas either side of the ring
 CORNER_HIGHLIGHT_SIZE = 18
+# The compare ghost is lap B's identity cyan (GHOST_COLOR), which is 3.73 deuteranopic dE from the
+# colour-blind ramp's bucket 11 — and it rides lap A's painted line. It used to be a HOLLOW ring,
+# so the line showed straight through it; the hole is now the map's dark label plate instead, so
+# the ring reads as a ring on any bucket and still never as the filled video marker.
+GHOST_PLATE = CORNER_LABEL_HALO
 # Brake glyphs (F5): a ▼ at each braking-zone onset; size ramps peak decel (g) via
 # theme.brake_glyph_size (shared with the speed chart).
 
@@ -447,7 +469,7 @@ class _MapLegend(QWidget):
     def set_brake_glyphs(self, glyphs):
         """Tell the key which brake glyphs the map is drawing right now, [(symbol, colour)].
 
-        The key used to paint one hard-coded ▼ in the VIDEO-MARKER's coral for "Brake point" — a
+        The key used to paint one hard-coded ▼ in the VIDEO-MARKER's then-coral for "Brake point" — a
         picture of no lap on the canvas. Since the glyphs carry lap identity in shape as well as
         hue (theme.SERIES_SYMBOL), a fixed drawing cannot describe them: in compare mode there are
         two, in two different shapes, in neither of those colours. So the key is fed the real
@@ -529,7 +551,7 @@ class _MapLegend(QWidget):
     def _paint_glyph(self, p: QPainter, kind: str, cell: QRectF):
         """Draw one key glyph centred in `cell`, mirroring the on-map marker for that kind."""
         cx, cy = cell.center().x(), cell.center().y()
-        if kind == "marker":  # filled coral ring — the video position marker
+        if kind == "marker":  # filled MARKER_COLOR ring — the video position marker
             mc = QColor(MARKER_COLOR)
             p.setPen(QPen(mc, 2))
             fill = QColor(MARKER_COLOR)
@@ -554,7 +576,7 @@ class _MapLegend(QWidget):
         elif kind == "corner":  # cyan apex dot (the left/right hues collapse to one in the key)
             qc = QColor(CORNER_LEFT_COLOR)
             qc.setAlpha(CORNER_DOT_ALPHA)
-            p.setPen(Qt.NoPen)
+            p.setPen(QPen(QColor(CORNER_DOT_OUTLINE), 1))   # the rim the canvas dots carry
             p.setBrush(QBrush(qc))
             p.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
         elif kind == "start":  # the draggable timing-line handles — BOTH of them
@@ -803,8 +825,11 @@ class _CornerMarkers:
                 continue
             qc = pg.mkColor(colour)
             qc.setAlpha(CORNER_DOT_ALPHA)
+            # The canvas rim is what separates a dot from the painted line under it — see
+            # CORNER_DOT_OUTLINE. Its width is the brake glyphs' own, for the same reason.
             dots = pg.ScatterPlotItem(
-                pos=pts, size=7, pen=None, brush=pg.mkBrush(qc), pxMode=True)
+                pos=pts, size=7, brush=pg.mkBrush(qc), pxMode=True,
+                pen=pg.mkPen(CORNER_DOT_OUTLINE, width=theme.line_width(1)))
             dots.setZValue(5)  # above lap traces, below the marker (z=10)
             self.plot.addItem(dots)
             self._items.append(dots)
@@ -960,11 +985,18 @@ class _CornerMarkers:
         for lbl, x, y, _d in self._markers:
             if lbl == label:
                 ring = pg.ScatterPlotItem(
-                    pos=[(float(x), float(y))], size=CORNER_HIGHLIGHT_SIZE,
-                    brush=pg.mkBrush(None),
+                    size=CORNER_HIGHLIGHT_SIZE, brush=pg.mkBrush(None),
                     pen=pg.mkPen(CORNER_HIGHLIGHT_COLOR,
                                  width=theme.line_width(CORNER_HIGHLIGHT_PEN_W)),
                     pxMode=True)
+                # Two spots, one place, painted in order: the wide canvas rim, then the ring on
+                # it (see CORNER_HIGHLIGHT_HALO_W). One item, so the ring and its rim are moved,
+                # hidden and removed as the one cue they are.
+                at = (float(x), float(y))
+                ring.addPoints([
+                    {"pos": at, "pen": pg.mkPen(
+                        C.canvas, width=theme.line_width(CORNER_HIGHLIGHT_HALO_W))},
+                    {"pos": at}])
                 ring.setZValue(7)  # above corner dots/labels, below the marker
                 self.plot.addItem(ring)
                 self._highlight_item = ring
@@ -1397,7 +1429,7 @@ class MapView(QWidget):
           * the "Map key" legend + the zero-lap empty-state placeholder + the Fit button + the
             transient action notice (Qt widgets — the Fit button and the notice are pure
             interaction chrome, and both are usually hidden anyway);
-          * the coral video-position ``marker`` (the amber "+" crosshair on the track);
+          * the video-position ``marker`` (the MARKER_COLOR ring on the track);
           * every timing line's segment + drag handles — the start line and each sector line — plus
             the compare ghost, all via each ``_TimingLine.chrome_items()`` so a future line type is
             hidden automatically.
@@ -1682,12 +1714,13 @@ class MapView(QWidget):
 
     def set_ghost_pos(self, x: float, y: float):
         """Place the ghost at explicit local (x,y) — used by F7 cross-recording compare where lap B
-        isn't a primary-trace index. Lazily creates the one hollow ghost item."""
+        isn't a primary-trace index. Lazily creates the one ghost item."""
         if self._ghost is None:
-            # Hollow ring (no fill), not movable — the marker stays the only drag-to-seek surface.
+            # A ring on the dark label plate (GHOST_PLATE), never a hue fill, and not movable — the
+            # marker stays the only filled, drag-to-seek surface.
             self._ghost = pg.TargetItem((0.0, 0.0), size=11, movable=False,
                                         pen=pg.mkPen(GHOST_COLOR, width=theme.line_width(2)),
-                                        brush=pg.mkBrush(None))
+                                        brush=pg.mkBrush(GHOST_PLATE))
             self._ghost.setZValue(9)  # below the marker (10)
             self.plot.addItem(self._ghost)
         self.ghost_updates += 1

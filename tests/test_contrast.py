@@ -13,7 +13,9 @@ Four guarantees, all measurable, none of them opinions:
      than the default ramp it replaces. Shipped, its lower half stepped 0.90-1.16 over dE 7.5 —
      a flat orange bar across half the speed range, and 5.4x worse than simply leaving the option
      off (40.3). And nothing the user SELECTED — the accent start line and the primary lap's
-     brake glyphs — may be the colour of the ramp it is drawn on (U5).
+     brake glyphs — may be the colour of the ramp it is drawn on (U5); nor may ANY map marker be
+     the colour of any line mode's data under it (C6), with both sides enumerated off the live
+     MapView so a new mode or a new marker is judged without being listed here.
 
   3. WCAG AA ON EVERY ENABLED TEXT STYLE (U1-01, L10-05). 4.5:1 at body/caption sizes. `text_muted`
      is allowed to stay below it ONLY on disabled chrome, which WCAG 1.4.3 explicitly exempts — and
@@ -148,19 +150,12 @@ def test_no_module_constant_freezes_a_palette_hue():
         deliberately palette-independent. C.best appears inside CHART_SERIES as a list ELEMENT, not
         as a bare binding, so it is not matched here anyway.
     """
+    # map_view.MARKER_COLOR used to be exempt here: it was C.behind, frozen, and pointing it at
+    # behind_colour() would have made it bucket 0 in BOTH palettes instead of one. It has its own
+    # token now (C.position), which is not a swappable hue at all — see
+    # test_no_map_marker_is_the_colour_of_any_line_mode for what that token is held to.
     EXEMPT = {
         ("theme.py", "_PALETTES"),
-        # map_view.MARKER_COLOR = C.behind — the video-position marker. The U10-01 audit flagged it
-        # as a third frozen constant, but MEASUREMENT says pointing it at behind_colour() would
-        # make it strictly WORSE, not better: it would then equal rainbow bucket 0 exactly, in
-        # BOTH palettes (CIE76 dE 0.0 to the nearest bucket). Frozen, the collision is in the
-        # DEFAULT palette only — dE 0.0 against bucket 0 there, against a minimum of 36.45 plain
-        # and 16.40 deuteranopic (JND 2.3) across all 16 colour-blind buckets. So the marker needs
-        # its OWN token, distinct from every ramp anchor, which is a map_view design change.
-        # Exempted here rather than half-fixed; handed to the map_view owner (QA batch B03/B04).
-        # (This block used to say "3.5 deuteranopic in the colour-blind one", contradicting the
-        # 16.40 the WIDE guard below states for the same colour. 16.40 is the measured one.)
-        ("map_view.py", "MARKER_COLOR"),
     }
     offenders = []
     for fn in sorted(os.listdir(_STUDIO)):
@@ -221,13 +216,8 @@ def test_no_bare_palette_hue_is_read_anywhere_in_studio():
         # ahead/behind meaning, and no ENABLED app text reads it. Left alone deliberately —
         # repointing it at behind_colour() would recolour OS chrome for no accessibility gain.
         ("theme.py", "_palette"),
-        # map_view.MARKER_COLOR / its _MARKER_RGB brush companion — the video-position marker. The
-        # U10-01 audit flagged the first as a frozen constant, but MEASUREMENT says pointing it at
-        # behind_colour() would be strictly WORSE: it would then equal rainbow bucket 0 exactly in
-        # BOTH palettes (dE 0.0). Frozen, its measured minimum separation across all 16 colour-blind
-        # buckets is 16.40 (JND 2.3). The marker needs its OWN token, which is a map_view design
-        # change, not a palette-accessor one. Both names are one decision, so both are exempt.
-        ("map_view.py", "MARKER_COLOR"), ("map_view.py", "_MARKER_RGB"),
+        # (map_view.MARKER_COLOR / _MARKER_RGB were exempt until the video-position marker got its
+        # own token, C.position — it no longer reads a swappable hue, so it needs no exemption.)
     }
     offenders = []
     for fn in sorted(os.listdir(_STUDIO)):
@@ -470,6 +460,292 @@ def test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it():
         theme.set_palette(theme.PALETTE_STANDARD)
     print("test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it OK "
           f"({'; '.join(worst)})")
+
+
+# ======================================================= 2b. no map marker is a line mode's colour
+# The guard above checks a HAND-LISTED pair (the start line, the slot-0 brake glyph) against the
+# ramp, and that is the shape that let the video-position marker through: map_view.MARKER_COLOR
+# was C.behind, which IS rainbow bucket 0 of the default palette — dE 0.00 in both visions, in
+# every data line mode the map has, not only the Pedal mode that made it frequent. Measured on
+# the two present recordings (Sandown 3h 2026 GX0*0064, 62 laps; MK_18_09_26 GX0*0067, 19), the
+# median lap spends 19.9 % / 24.3 % of its time in bucket 0 under Pedal (every braking zone),
+# 7.0 / 6.9 % under Δ, 5.0 / 3.6 % under Elevation, 3.8 / 2.9 % under Speed and 3.3 / 3.5 % under
+# Δ rate — so the "where the video is" dot sat on its own colour on every lap of every recording.
+# Each new mode had been checked only against the palette it came with, and each marker against
+# nothing at all.
+#
+# So both sides are ENUMERATED OFF THE LIVE WIDGET, not listed here:
+#   * the MODES are map_view._RAINBOW_ORDER minus "off" — a mode is judged the moment it exists,
+#     and its colours are the pens its line layer carries once THAT mode is painted, per palette;
+#   * the MARKERS are every item on the map's plot that is not a line layer — a new marker is
+#     judged the moment it is added, and an item type this file cannot read fails rather than
+#     passing unread.
+# The rule: in each vision, SOME ink of the marker — composited over the data colour at the ink's
+# own alpha — must clear the data colour by the U5 thresholds (10 dE normal, 3 JND deuteranopic).
+# An OUTLINE counts, because a dark rim is exactly what lets a glyph sit on a line of its own hue
+# and still read as a separate thing: the brake glyphs pass that way, and the best lap's glyphs
+# are the ramp's own top bucket, in both palettes.
+_MARKER_ON_DATA_MIN_DE = _SELECTION_ON_RAMP_MIN_DE
+_MARKER_ON_DATA_MIN_DE_DEUT = _SELECTION_ON_RAMP_MIN_DE_DEUT
+
+
+def _map_scene():
+    """A real MapView carrying one of every marker the map draws, over a stub whose current lap
+    paints in every line mode (tests/test_rainbow_map.py's stub, plus one sector line)."""
+    from types import SimpleNamespace
+
+    from test_rainbow_map import _stub_session
+
+    from studio.map_view import MapView
+    s = _stub_session()
+    s.laps.sectors.sector_lines = [SimpleNamespace(first=SimpleNamespace(x=40.0, y=-5.0),
+                                                   second=SimpleNamespace(x=60.0, y=-5.0))]
+    mv = MapView(s)
+    mv.resize(900, 600)
+    mv.show()
+    _APP.processEvents()
+    mv.set_current_lap(1)
+    mv.set_corners([("C1", 0.0, 30.0, 1), ("C2", 0.0, -30.0, -1)])
+    mv.highlight_corner(1)
+    mv.set_ghost_pos(25.0, 26.0)
+    return mv
+
+
+def _push_brake_glyphs(mv):
+    """Every glyph colour the map can be handed, read from the function that picks it: the map
+    shows at most two laps (k = 0, 1), and either may be the best lap."""
+    from types import SimpleNamespace
+
+    from studio.central_view import CentralView
+    view = SimpleNamespace(session=SimpleNamespace(best_lap_id=lambda: 0))
+    colours = sorted({CentralView._driving_lap_colour(view, lid, k)
+                      for lid, k in ((0, 0), (1, 0), (1, 1))})
+    mv.set_brake_markers([([(-50.0 + 10 * i, 0.0, 0.8)], c) for i, c in enumerate(colours)])
+    return colours
+
+
+def _item_names(mv):
+    """{id(item): 'attribute path'} for every graphics item MapView or its own helper objects
+    hold, so a failure names `marker` or `_corner_markers._items[1]` rather than a type."""
+    from PySide6.QtWidgets import QGraphicsItem
+    names = {}
+
+    def visit(obj, path, depth):
+        for k, v in vars(obj).items():
+            vals = list(enumerate(v)) if isinstance(v, (list, tuple)) else [(None, v)]
+            for i, x in vals:
+                where = f"{path}{k}" + ("" if i is None else f"[{i}]")
+                if isinstance(x, QGraphicsItem):
+                    names.setdefault(id(x), where)
+                elif (depth < 2 and type(x).__module__ == "studio.map_view"
+                      and hasattr(x, "__dict__")):
+                    visit(x, where + ".", depth + 1)
+
+    visit(mv, "", 0)
+    return names
+
+
+def _inks(item):
+    """[(QColor, role)] for every paint an item puts on the canvas (alpha kept). An item type this
+    does not know FAILS: a marker whose colours cannot be read is a marker nobody checked."""
+    import pyqtgraph as pg
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+    out = []
+
+    def pen(p, role):
+        if p is not None and pg.mkPen(p).style() != Qt.NoPen:
+            out.append((QColor(pg.mkPen(p).color()), role))
+
+    def brush(b, role):
+        if b is not None and pg.mkBrush(b).style() != Qt.NoBrush:
+            out.append((QColor(pg.mkBrush(b).color()), role))
+
+    if isinstance(item, pg.TextItem):
+        brush(item.fill, "plate")
+        pen(item.border, "border")
+        out.append((QColor(item.textItem.defaultTextColor()), "text"))
+    elif isinstance(item, pg.TargetItem):
+        pen(item.pen, "ring")
+        brush(item.brush, "fill")
+    elif isinstance(item, pg.ScatterPlotItem):
+        pen(item.opts["pen"], "outline")
+        brush(item.opts["brush"], "fill")
+        for p in item.data["pen"]:
+            pen(p, "spot outline")
+        for b in item.data["brush"]:
+            brush(b, "spot fill")
+    elif isinstance(item, (pg.PlotDataItem, pg.PlotCurveItem)):
+        pen(item.opts["pen"], "line")
+        if item.opts.get("symbol") is not None:
+            pen(item.opts.get("symbolPen"), "symbol outline")
+            brush(item.opts.get("symbolBrush"), "symbol fill")
+    else:
+        raise AssertionError(f"the marker guard cannot read the colours of a "
+                             f"{type(item).__name__} — teach _inks, don't skip it")
+    return [(c, role) for c, role in out if c.alpha() > 0]
+
+
+def _has_content(item):
+    import pyqtgraph as pg
+    if isinstance(item, pg.ScatterPlotItem):
+        return len(item.data) > 0
+    if isinstance(item, pg.PlotDataItem):
+        return item.xData is not None and len(item.xData) > 0
+    if isinstance(item, pg.PlotCurveItem):
+        return item.xData is not None and len(item.xData) > 0
+    return True
+
+
+def _line_layers(mv):
+    """The map's LINE layers (the data a marker sits on, and the grey context under it) — every
+    other item on the plot is a marker. Named here once; nothing else is."""
+    layers = [*(mv._rainbow._items or []), *mv._trace_overlay._items,
+              *mv._best_overlay._items, *mv._current_overlay._items]
+    return {id(it) for it in layers}
+
+
+def _data_modes():
+    from studio import map_view
+    return [m for m in map_view._RAINBOW_ORDER if m != "off"]
+
+
+def _mode_colours(mv, mode):
+    """The colours `mode` paints: the pen of every item of the map's data line once that mode is
+    painted (all of its buckets, not only the ones this stub lap happens to fill)."""
+    from PySide6.QtGui import QColor
+    mv.set_rainbow_mode(mode)
+    items = mv._rainbow._items or []
+    assert any(_has_content(it) for it in items), (
+        f"Line: {mode} painted nothing on the guard's scene, so its colours were never judged — "
+        "give _map_scene's stub what this mode reads")
+    return sorted({QColor(it.opts["pen"].color()).name().upper() for it in items})
+
+
+def _separation(ink, alpha, under, deut):
+    """dE between `under` and `ink` painted over it at `alpha` (sRGB-space source-over, as Qt
+    composites), in normal or deuteranopic vision."""
+    top = alpha * _hx(ink) + (1.0 - alpha) * _hx(under)
+    a, b = (top, _hx(under)) if not deut else (_deut(top), _deut(_hx(under)))
+    return _dE(a, b)
+
+
+def _marker_collisions(mv):
+    """Every (marker, mode, data colour, vision) that no ink of the marker separates, and the
+    worst separation each marker reached — over both palettes and every data mode."""
+    fails, worst = [], {}
+    for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+        theme.set_palette(pal)
+        mv.refresh_palette()
+        _push_brake_glyphs(mv)
+        for mode in _data_modes():
+            data = _mode_colours(mv, mode)
+            layers = _line_layers(mv)
+            names = _item_names(mv)
+            markers = [it for it in mv.plot.items
+                       if id(it) not in layers and it.isVisible() and _has_content(it)]
+            for it in markers:
+                name = names.get(id(it), f"unnamed {type(it).__name__}")
+                inks = _inks(it)
+                assert inks, f"{name} paints nothing the guard can see"
+                for under in data:
+                    for deut, floor in ((False, _MARKER_ON_DATA_MIN_DE),
+                                        (True, _MARKER_ON_DATA_MIN_DE_DEUT)):
+                        best, role = max((_separation(c.name(), c.alphaF(), under, deut), r)
+                                         for c, r in inks)
+                        key = (name, deut)
+                        if key not in worst or best < worst[key][0]:
+                            worst[key] = (best, f"{pal}/{mode} {under} via {role}")
+                        if best < floor:
+                            fails.append(
+                                f"{name} [{', '.join(f'{r} {c.name()}@{c.alpha()}' for c, r in inks)}]"
+                                f" on {pal} Line: {mode} bucket {under}: "
+                                f"{'deuteranopic ' if deut else ''}dE {best:.2f} < {floor:.1f}")
+    return fails, worst
+
+
+def test_no_map_marker_is_the_colour_of_any_line_mode():
+    """C6. Every marker the map draws, against every colour every data line mode paints, in both
+    palettes and both visions: some ink of the marker must clear the data under it by 10 dE
+    (6.9 deuteranopic). The video-position marker was C.behind — bucket 0 of the default ramp,
+    dE 0.00 — in every mode; see the block above for the measured coverage."""
+    from studio import map_view
+    mv = _map_scene()
+    try:
+        # The scene must really hold every marker class this guard claims to cover, or a class
+        # could leave the canvas and the guard would go on passing over nothing.
+        names = set(_item_names(mv).values())
+        for need in ("marker", "_ghost", "_start.h1", "_start.line", "_sectors[0].h1",
+                     "_provisional_line", "_provisional_label", "_corner_markers._highlight_item",
+                     "_corner_markers._items[0]", "_corner_markers._items[1]",
+                     "_corner_markers._items[2]"):
+            assert need in names, f"the guard's scene has no {need}: {sorted(names)}"
+        assert set(_data_modes()) >= {"speed", "delta", "delta_rate", "grip", "brake_throttle",
+                                      "elevation"}, map_view._RAINBOW_ORDER
+        fails, worst = _marker_collisions(mv)
+        assert len(mv._brake_markers._items) == 3, "the scene must carry all three glyph colours"
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        mv.refresh_palette()
+        mv.hide()
+        mv.deleteLater()
+    assert not fails, ("map markers the colour of the data they sit on:\n  "
+                       + "\n  ".join(fails[:40]) + (f"\n  … {len(fails) - 40} more"
+                                                     if len(fails) > 40 else ""))
+    table = "; ".join(f"{n}{' (deut)' if d else ''} {v[0]:.1f} [{v[1]}]"
+                      for (n, d), v in sorted(worst.items()))
+    print(f"test_no_map_marker_is_the_colour_of_any_line_mode OK — worst per marker: {table}")
+
+
+def test_the_marker_guard_fails_on_a_planted_collision():
+    """The negative controls for the guard above, each planted on the live scene:
+      1. a NEW marker nobody listed, in a ramp colour, is found and failed — enumeration, not a list;
+      2. the same marker with a dark outline passes — the rule the brake glyphs pass by;
+      3. the old defect — the video marker back in C.behind — fails in every data mode;
+      4. the DATA side is read off the widget: moving a ramp anchor onto the marker's own colour
+         fails the marker, with the marker untouched."""
+    import pyqtgraph as pg
+    mv = _map_scene()
+    try:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        mv.refresh_palette()
+        planted = pg.ScatterPlotItem(pos=[(0.0, 0.0)], size=7, pen=None,
+                                     brush=pg.mkBrush(theme.rainbow_colors()[5]))
+        mv.plot.addItem(planted)
+        fails, _ = _marker_collisions(mv)
+        assert any(f.startswith("unnamed ScatterPlotItem") for f in fails), (
+            "a planted ramp-coloured marker was not caught", fails[:5])
+        planted.setPen(pg.mkPen(C.canvas, width=1))
+        fails, _ = _marker_collisions(mv)
+        assert not any(f.startswith("unnamed ScatterPlotItem") for f in fails), (
+            "a dark outline must separate a glyph from a line of its own hue", fails[:5])
+        mv.plot.removeItem(planted)
+
+        good_pen, good_brush = mv.marker.pen, mv.marker.brush
+        mv.marker.setPen(pg.mkPen(C.behind, width=2))
+        mv.marker.setBrush(pg.mkBrush(theme.qcolor(C.behind, 110)))
+        fails, _ = _marker_collisions(mv)
+        hit = {f.split("Line: ")[1].split(" ")[0] for f in fails
+               if f.startswith("marker ") and "standard" in f}
+        assert hit == set(_data_modes()), f"the old C.behind marker must fail every mode: {hit}"
+        mv.marker.setPen(good_pen)
+        mv.marker.setBrush(good_brush)
+
+        std = theme._PALETTES[theme.PALETTE_STANDARD]
+        saved = std["ahead"]
+        try:
+            std["ahead"] = mv.marker.pen.color().name().upper()
+            fails, _ = _marker_collisions(mv)
+        finally:
+            std["ahead"] = saved
+        assert any(f.startswith("marker ") for f in fails), (
+            "a mode that starts painting the marker's colour was not caught", fails[:5])
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        mv.refresh_palette()
+        mv.hide()
+        mv.deleteLater()
+    print("test_the_marker_guard_fails_on_a_planted_collision OK")
 
 
 # =========================================================================== 3. WCAG AA on text
@@ -1019,6 +1295,8 @@ def _run_all():
     test_the_accessible_ramp_is_never_worse_than_the_default_one()
     test_default_map_ramp_ends_on_the_semantic_tokens_and_its_middle_is_the_data_hue()
     test_nothing_the_user_selected_is_the_colour_of_the_data_drawn_under_it()
+    test_no_map_marker_is_the_colour_of_any_line_mode()
+    test_the_marker_guard_fails_on_a_planted_collision()
     test_every_enabled_text_style_clears_wcag_aa()
     test_the_derived_inventory_covers_the_whole_stylesheet()
     test_text_muted_is_confined_to_wcag_exempt_disabled_chrome()

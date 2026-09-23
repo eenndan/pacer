@@ -83,6 +83,22 @@ class C:
     # measured balance. tests/test_contrast.py holds the separation and the steps.
     data_mid = "#EFE45A"
 
+    # --- the video position: WHERE THE PICTURE IS, drawn on top of the data ---
+    # The map's video-position marker was C.behind, and C.behind is the default ramp's bucket 0
+    # EXACTLY — so in every data line mode (Speed, Δ, Δ rate, Grip, Pedal, Elevation) the one dot
+    # that says "the video is here" was the colour of "slowest / most behind / full brake" under
+    # it. Measured on the present recordings (Sandown 3h 2026, MK_18_09_26), the median lap spends
+    # 20-24 % of its time in that bucket under Pedal and 3-7 % under Speed, Δ, Δ rate and
+    # Elevation. The ramps between them run red -> yellow -> green and orange -> light -> blue, so
+    # the one family NEITHER palette passes through is magenta, and this one was picked by
+    # measurement: >= 59.2 CIE76 dE (15.6 deuteranopic) from all 32 buckets of both palettes —
+    # 26.0 / 10.3 in CIEDE2000, so the margin is not a CIE76 chroma artefact — and >= 67.8 (11.9)
+    # from every other ink the map draws, at 4.6:1 on C.surface. Palette-INDEPENDENT on purpose: it
+    # clears both ramps as it is, so it needs no accessor and cannot freeze on a flip.
+    # tests/test_contrast.py::test_no_map_marker_is_the_colour_of_any_line_mode holds it — and
+    # every other map marker — against every mode's colours, off the live widget.
+    position = "#E650BE"
+
 
 # ====================================================================== spatial tokens
 # The DIMENSIONAL half of the design system, and the newer half. The colour tokens above were
