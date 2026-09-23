@@ -9,6 +9,11 @@ numbers instead of from the idea.
 evidence. What would be: a recording whose numbers come out differently from the ones below, or a
 different statistic that answers the same question without the defect named here.
 
+<!-- Numbered 1..N, and the first sentence spells N. tests/test_measured_figures.py fails on a
+doubled or skipped number, a count nobody bumped, and a citation of a section that moved. Take the
+next free number on your own base; if another PR takes it first, the later one renumbers on merge
+and moves its citations. -->
+
 ---
 
 ## 1. The mistake-hangover detector — refused (#265)
@@ -843,6 +848,9 @@ does not repeat between the odd and even laps of one session on the series that 
 (split-half ρ +0.68 / +0.83 / +0.39 / +0.43, but over per-corner medians that take only the values
 0.05 and 0.15).
 
+The probe behind this section is `studio/dev/probes/p11_hesitation.py` (with the M5 set's shared
+`_m5_cache` and `_m5_stats`).
+
 **What would be new evidence:** a throttle or brake-pressure channel (a real pedal input, not a
 speed derivative), or a GPS/IMU chain that puts the lift and the onset on a grid finer than 0.1 s
 with noise below the ~0.04 g drag step. Nothing on a GoPro's GPS9 does.
@@ -910,6 +918,9 @@ is marginal before anything else is said — and the sign is wrong for the story
 across that stint while C1 and C2 get faster (ρ −0.39, −0.41), which is a redistribution of one
 lap's time between corners, not a corner being learned. The same recording's third stint reads
 C5 ρ +0.23, global p 0.88.
+
+The probe behind this section is `studio/dev/probes/p12_median_polish.py` (with the M5 set's shared
+`_m5_cache` and `_m5_stats`).
 
 **What would be new evidence:** a session of 40+ laps where a corner-specific trend of ≥0.2 s
 survives the pre-specified global test AND repeats in the odd/even split of the same session — the

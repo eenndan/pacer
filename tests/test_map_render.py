@@ -388,7 +388,7 @@ def test_delta_rate_never_draws_across_a_gps_dropout():
 def test_rainbow_channel_grip_fixed_scale_and_negation():
     """Grip is NEGATED on a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale (not the lap's own max): a
     rising util ramp paints monotonically redder (more grip used = redder), the unused end is
-    greener than the on-limit end, and the legend is the fixed 'committed'/'unused (est.)' pair
+    greener than the on-limit end, and the legend is the fixed 'committed'/'unused (est)' pair
     (the ⚠ is the non-hue at-limit cue for colour-blind readers)."""
     t, xs, ys, speed, cum = _lap_arrays()
     util = np.linspace(0.1, 1.1, len(xs))         # unused → over the limit
@@ -397,7 +397,7 @@ def test_rainbow_channel_grip_fixed_scale_and_negation():
     assert seg[0] > seg[-1], (seg[0], seg[-1])    # unused greener than on-limit
     # "committed", not "⚠ on limit": ⚠ is the app's DISTRUST glyph, and this end of the grip
     # channel is the driver using the tyre he has — the good end. See map_render for the accent.
-    assert lo == "committed" and hi == "unused (est.)"
+    assert lo == "committed" and hi == "unused (est)", (lo, hi)   # the shared mark, not "(est.)"
     assert "⚠" not in lo, "the grip legend must not wear the distrust glyph"
     # The fixed scale is the contract: equal to bucketize(neg-util-seg, lo=-MAX, hi=0).
     vals = -util

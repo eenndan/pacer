@@ -500,8 +500,14 @@ LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s",
 #: column inserted before it moves the menu with it.
 _CORNER_BEST_COL = 1
 
+# ONE NAME FOR GRIP, the Corners tab's (`lap_table.CORNER_COLUMNS`) and the map's: it is the same
+# `driving.corner_grip` reading, and until #350's follow-up this column alone called it "Grip %".
+# The % moved to the section heading, the way the Corners tab puts it in its unit caption.
+# Measured on Sandown 3h and MK_18_09: the header's ink is 42 -> 57 px, the column 85 -> 101 px and
+# the table 718 -> 734 px. That costs no column at the 1260 / 1420 / 1900 px dashboard widths (same
+# composition, nothing hidden). In a quadrant this table already scrolls, and 16 px more of it does.
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
-                  "Grip %"]
+                  theme.estimated_label("Grip")]
 WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
 # ...and MARKED, not merely tinted. The cue used to be hue and nothing else — tinted and plain
 # cells were identical in size, weight, family, alignment and format, and carried the same tooltip
@@ -531,11 +537,12 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "time-in-corner, the median loss VS THE BEST ANYONE DID IN THAT CORNER "
                    "(this column's own Best cell — not your best lap's corner, which is what the "
                    "Coaching page measures against and why its numbers are smaller), apex speeds "
-                   "and median grip utilization. "
+                   "and median grip utilization (ESTIMATED, % of the session's grip envelope). "
                    # One row per corner, so this column is the one grip surface whose only on-screen
                    # comparison is the unsupported one — and it sorts. The shared sentence says so,
                    # and where the supported comparison lives (theme.GRIP_COMPARE_NOTE).
-                   f"Grip %: {theme.GRIP_COMPARE_NOTE} The Corners tab shows it lap by lap. "
+                   f"{CORNER_COLUMNS[-1]}: {theme.GRIP_COMPARE_NOTE} The Corners tab shows it lap "
+                   "by lap. "
                    "Every column counts only the laps whose corner was matched to your best lap's "
                    "line on track at entry AND exit: an interpolated corner can be tenths of a "
                    "second out, so it is left out (hover Best or Median for how many laps count), "
@@ -3959,7 +3966,9 @@ class StatsView(QWidget):
             self.corners_table.setRowCount(0)
             self.corners_note.setText("")
             return
-        self._corners_section.setText(f"CORNERS · speeds in {u_label}")
+        # The Grip column's % lives here, as it does in the Corners tab's unit caption: the header
+        # carries the name every grip surface shares (see CORNER_COLUMNS).
+        self._corners_section.setText(f"CORNERS · speeds in {u_label} · grip %")
         self.corners_note.setText(self._corners_note_text(session, report))
         # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
         # "behind" hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
@@ -4446,7 +4455,7 @@ class StatsView(QWidget):
             rows.append(("g-meter", value, bool(refusal)))
         else:
             # The card used to go SILENT about the g channel exactly when it is missing — while
-            # the peak-g tiles, the per-lap g columns and the corner Grip % all render em-dashes
+            # the peak-g tiles, the per-lap g columns and the corner Grip (est) all render em-dashes
             # with no stated reason anywhere on the window. Split on NO_GMETER_NOTE's own "term:
             # value" colon so the constant stays the single source of that sentence.
             term, _, value = NO_GMETER_NOTE.partition(": ")
