@@ -327,8 +327,9 @@ class LibraryController:
                             # driving?") and this dialog is already where the app answers it.
                             manage_tracks=self._open_track_manager)
         dlg.exec()
-        # The dialog may have written (or deleted) the OPEN recording's own record.
-        self.update_record_chip()
+        # Every record write in there already refreshed both readers (`_records_changed`); this
+        # re-read is for a callback that raised part-way, which the dialog swallows.
+        self._records_changed()
 
     # -------------------------------------------------------- privacy: restore / forget / clear
     def _restore_library(self) -> dict:
@@ -360,6 +361,7 @@ class LibraryController:
             print(f"studio: could not restore the marks ({exc!r}).", flush=True)
         if getattr(self.win, "view", None) is not None:
             self.win._refresh_marks()
+        self._records_changed()
         return library.load()
 
     def _forget_recording(self, entry: dict) -> dict:
@@ -413,6 +415,7 @@ class LibraryController:
             _log.exception("marks not forgotten")
         if getattr(self.win, "view", None) is not None:
             self.win._refresh_marks()
+        self._records_changed()
         return library.load()
 
     def _disable_sidecar_if_open(self, forgotten_side: str) -> None:
@@ -456,6 +459,7 @@ class LibraryController:
             print(f"studio: could not clear the marks ({exc!r}).", flush=True)
         if getattr(self.win, "view", None) is not None:
             self.win._refresh_marks()
+        self._records_changed()
         return library.load()
 
     # ------------------------------------------------------- data portability: reveal / back up
@@ -635,8 +639,22 @@ class LibraryController:
                 "could not save the session record — check permissions on "
                 "~/Library/Application Support/pacer", self._status_ms)
             return self._load_records()
-        self.update_record_chip(store)
+        self._records_changed(store)
         return store
+
+    def _records_changed(self, store: dict | None = None) -> None:
+        """Re-read the session-record store into BOTH surfaces that show it. Every write to the
+        store ends here: the editor (save, clear, delete — from File ▸ Session record… and from the
+        Library alike) and the Library's forget, clear and restore.
+
+        A write used to refresh only the lap panel's chip. The Coaching page's focus verdict reads
+        the same store — a record on each side of the comparison is one of its gates
+        (`focus._blocker`) — and nothing re-read it, so a driver who did exactly what its refusal
+        told him (File ▸ Session record… for today, then the Library's row for the other day)
+        still read "no session record for 30 Aug and today" until he re-opened the recording
+        (board review UX-5, measured on the working-set pair 0065 → 0068)."""
+        self.update_record_chip(store)
+        self.update_focus_list()
 
     @staticmethod
     def _load_records() -> dict:
@@ -827,7 +845,7 @@ class LibraryController:
                 self.win.session.track_name = new
             if getattr(self.win, "view", None) is not None:
                 self.win._apply_session_notice()
-                self.update_focus_list()
+                self._records_changed()      # the records were re-keyed above, the list with them
         except Exception as exc:  # noqa: BLE001 — a refresh must never undo a completed rename
             print(f"studio: surfaces not refreshed after renaming a track ({exc!r}).", flush=True)
         return self._track_rows()
