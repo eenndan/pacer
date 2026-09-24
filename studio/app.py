@@ -2210,7 +2210,7 @@ class StudioWindow(QMainWindow):
         self._opportunities_action.setToolTip(
             "Where to find time vs your own best lap: the Coaching page, full-window — every corner "
             "ranked by realistic time lost (median of your clean laps), each with the measured "
-            "reason, where in the corner it goes and a jump-to. Again (or ⤢) restores the grid.")
+            "reason, where in the corner it goes and a jump-to. Again restores the grid.")
         self._opportunities_action.triggered.connect(self._open_opportunities)
 
         # Left-column declutter (the "calm default"): fully show/hide the coaching panel and the

@@ -1075,7 +1075,8 @@ _SCOPE_TOOLTIP = (
     "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
     "lap you select; the Corners tab is the per-lap view. The total is your top "
     f"{PANEL_TOP_N} corners that cleared the evidence gate; corners that did not are listed "
-    "below with the reason. Coaching ▸ Opportunities (or ⤢) shows this page full-window, where "
+    "below with the reason. Coaching ▸ Opportunities (or the panel's maximize button) shows "
+    "this page full-window, where "
     "each row also carries where in the corner the time goes and a Jump to it.")
 
 
@@ -1084,7 +1085,7 @@ class OpportunitiesPanel(QWidget):
     opportunities (corner · time lost · done-it? · dominant reason) over a freshly computed
     ``coaching.Opportunities``, at the panel's FULL height — the full reason sentences get room to
     breathe (this replaced the old capped under-table strip whose whole drag range was 68 px).
-    Full-window (Coaching ▸ Opportunities, or ⤢) it is also where each row shows WHERE in the corner
+    Full-window (Coaching ▸ Opportunities, or the maximize button) each row also shows WHERE in the corner
     the time goes and a Jump to it — the two columns of the modal this page replaced.
 
     THEME FIRST, ROWS AS THE DRILL-DOWN (Part 3). ``ThemeBlock`` states one clustered story and at
@@ -1101,7 +1102,7 @@ class OpportunitiesPanel(QWidget):
     while the model had 11 corners ranked and the modal fitted all 11 in a third of the area.
     Narrow, the Entry·Apex·Exit bars, then the Jump buttons, then the "Done it?" column drop out
     before the reason prose is squeezed below ``REASON_MIN_PX`` (``_OPTIONAL_COLS``; a row click
-    still rings the corner on the map, and ⤢ brings them back) and the reason header elides into the
+    still rings the corner on the map, and maximizing brings them back) and the reason header elides into the
     width the style paints into, so
     the app's own minimum window no longer raises a horizontal scrollbar over a clipped header. The
     HEADLINE still sums the ``PANEL_TOP_N`` shortlist and names that count ("across your top 3

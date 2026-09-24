@@ -415,11 +415,11 @@ BAND_MAX_TICKS = 6        # x labels: a band per bar would be 20 labels in a 440
 # distribution and becomes a bar chart of thirteen things. SPACE_2XL is ~1.3x the widest tick label
 # this axis prints, so consecutive labels never touch at the cap.
 BAND_PX_PER_BAND = theme.SPACE_2XL
-BAND_SECTION = "DISTRIBUTIONS · s per lap"
 # THE WEIGHTING IS IN THE HEADING, not only in a tooltip: "s per lap" is what every bar on both
 # charts is, and it is the one fact that makes them comparable to each other and to the lap times
-# elsewhere on the page. The sibling headings already carry their unit the same way ("FRICTION
-# CIRCLE · g", "CORNERS · speeds in km/h").
+# elsewhere on the page. The sibling headings already carry their unit the same way ("SPEED · G",
+# "CORNERS · speeds in km/h").
+BAND_SECTION = "DISTRIBUTIONS · s per lap"
 BAND_SPEED_LABEL = "speed ({unit})"
 BAND_LAT_LABEL = "lateral g<br>− right · + left"   # the friction circle's own axis wording
 # The group's disclosure, in THREE clauses assembled per refresh (see _refresh_bands) rather than
@@ -2034,8 +2034,11 @@ class StatsView(QWidget):
         # --- the g-g friction circle
         # Named unit in the header, the convention its peers already follow ("CORNERS · speeds
         # in km/h") — the axes carry the detail, this carries the scan.
-        self._gg_section = self._section("FRICTION CIRCLE · g")
-        col.addWidget(self._gg_section)
+        # NO HEADING OF ITS OWN (R11 / PS-5): the friction circle's name was all its heading
+        # carried, and the plot names its axes and keys its rings itself (L4-09). It reads as
+        # part of the speed-and-g block above, whose "peak lateral g" and "peak braking g" tiles
+        # are this circle's extremes. (The DISTRIBUTIONS heading between them stays: it states the
+        # charts' weighting, "s per lap", and its hover answers best-vs-median.)
         self.gg = pg.PlotWidget()
         self.gg.setToolTip(GG_TOOLTIP)
         plot = self.gg.getPlotItem()
@@ -2154,12 +2157,14 @@ class StatsView(QWidget):
                      "coaching reasons use), medianed per corner, positive parts summed. "
                      "Seconds = what a typical lap gives away in that phase across the whole "
                      "track; hover a corner's loss cell for its own triple.")
-        self.t_phase_entry = Tile("lost on entry")
-        self.t_phase_apex = Tile("lost at apex")
-        self.t_phase_exit = Tile("lost on exit")
-        for t in (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit):
-            t.setToolTip(phase_tip)
-        col.addLayout(self._grid(self.t_phase_entry, self.t_phase_apex, self.t_phase_exit))
+        # ONE TILE, NOT THREE (R11 / PS-5). The three were one fact — how the corner loss splits —
+        # printed as three headline numbers, and their seconds summed to one more "time on the
+        # table" on a page that already had five (PS-2). The shares stay on the face in track
+        # order; the seconds behind them are on the hover.
+        self._phase_tip = phase_tip
+        self.t_phase = Tile("of corner loss · entry · apex · exit")
+        self.t_phase.setToolTip(phase_tip)
+        col.addLayout(self._grid(self.t_phase))
         self.corners_table = self._make_table(CORNER_COLUMNS)
         self.corners_table.setToolTip(CORNERS_TOOLTIP)
         # The corner-direction arrow in column 0 paints at the app's ICON_PX rather than at the
@@ -3424,7 +3429,6 @@ class StatsView(QWidget):
             plot.removeItem(ring)
         self._gg_rings = []
         has = cloud is not None and len(cloud[0]) > 0
-        self._gg_section.setVisible(has)
         self.gg.setVisible(has)
         self.gg_key.setVisible(has)
         if not has:
@@ -3975,21 +3979,20 @@ class StatsView(QWidget):
         self._fit_table(t)
 
     def _refresh_phase_tiles(self, phase):
-        """The where-the-time-goes headline tiles: percent of the lost corner time per phase
-        + the seconds behind it. Hidden when there is no phase data (no corners / no best /
-        nothing lost)."""
-        tiles = (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit)
+        """The where-the-time-goes headline tile: the percent of the lost corner time per phase,
+        entry · apex · exit, with the seconds behind each on the hover. Hidden when there is no
+        phase data (no corners / no best / nothing lost)."""
         share = getattr(phase, "share", None)
         fr = share.fracs() if share is not None else None
         if fr is None:
-            for t in tiles:
-                t.setVisible(False)
+            self.t_phase.setVisible(False)
             return
         secs = (share.entry_s, share.apex_s, share.exit_s)
-        caps = ("lost on entry", "lost at apex", "lost on exit")
-        for t, f, s, cap in zip(tiles, fr, secs, caps, strict=True):
-            t.setVisible(True)
-            t.set(f"{f * 100.0:.0f} %", f"{cap} · {s:.1f} s")
+        self.t_phase.setVisible(True)
+        self.t_phase.set(" · ".join(f"{f * 100.0:.0f}" for f in fr) + " %")
+        self.t_phase.setToolTip(
+            "Lost on entry {:.1f} s · at the apex {:.1f} s · on exit {:.1f} s.\n\n".format(*secs)
+            + self._phase_tip)
 
     def _refresh_braking(self, session):
         """The BRAKING table: one row per corner WITH a matched brake event (an unbraked

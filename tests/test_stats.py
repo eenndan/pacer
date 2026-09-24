@@ -1564,16 +1564,18 @@ def test_stats_view_phase_tiles_and_loss_tooltips():
     sess.phase_report = lambda: PhaseReport(
         cids=[1], rows=[(0.61, 0.24, 0.15)], share=PhaseShare(6.1, 2.4, 1.5))
     v = StatsView(sess)
-    assert not v.t_phase_entry.isHidden()
-    assert v.t_phase_entry.value.text() == "61 %"
-    assert "6.1 s" in v.t_phase_entry.caption.text()
-    assert v.t_phase_exit.value.text() == "15 %"
+    # R11: ONE tile — the shares on its face in track order, the seconds on its hover.
+    assert not hasattr(v, "t_phase_entry") and not hasattr(v, "t_phase_exit")
+    assert not v.t_phase.isHidden()
+    assert v.t_phase.value.text() == "61 · 24 · 15 %", v.t_phase.value.text()
+    assert "entry · apex · exit" in v.t_phase.caption.text()
+    assert "Lost on entry 6.1 s" in v.t_phase.toolTip() and "on exit 1.5 s" in v.t_phase.toolTip()
     tip = v.corners_table.item(0, 4).toolTip()
     assert "entry +0.61" in tip and "exit +0.15" in tip
-    # No phase data -> the tiles hide, the table stands alone.
+    # No phase data -> the tile hides, the table stands alone.
     sess.phase_report = lambda: None
     v.refresh()
-    assert v.t_phase_entry.isHidden() and v.t_phase_exit.isHidden()
+    assert v.t_phase.isHidden()
     print("test_stats_view_phase_tiles_and_loss_tooltips OK")
 
 
@@ -2010,7 +2012,9 @@ def test_friction_circle_names_its_axes_and_keys_its_rings():
     assert "lateral" in x_label and "g" in x_label
     assert "longitudinal" in y_label
     assert "braking" in y_label and "accelerating" in y_label   # the sign IS the direction
-    assert "g" in v._gg_section.text()                          # the peers' header convention
+    # R11: the circle has no heading of its own now — it sits in the SPEED · G block whose peak-g
+    # tiles are its extremes — so the unit convention is that block's heading.
+    assert not hasattr(v, "_gg_section") and "G" in v._speed_section.text()
     # The key names the dashed ring AND carries the envelope's own value (1.55 g in the fake).
     key = v.gg_key.text()
     assert "dashed" in key and "1.55 g" in key, key
@@ -4869,7 +4873,7 @@ def test_braking_coasting_and_the_phase_tiles_say_which_laps_they_count():
         assert "matched to your best lap's line on track" in braking, (
             f"BRAKING's n left out lap {lap + 1}'s C{cid} brake point and its hover does not say "
             f"why: {braking}")
-        phase = view.t_phase_entry.toolTip()
+        phase = view.t_phase.toolTip()
         assert not phase.startswith("Every clean lap's"), phase
         assert "matched on track" in phase, phase
     finally:
