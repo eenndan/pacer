@@ -1147,7 +1147,7 @@ def test_hero8s_refused_imu_is_disclosed_on_the_real_view():
         assert axis.refusal() in tip, tip
         assert "No usable accelerometer" not in tip, tip
         view.stats_view.refresh()
-        row = next(r for r in view.stats_view.trust_card.rows() if r[0] == "g-meter")
+        row = next(r for r in view.stats_view.trust.card.rows() if r[0] == "g-meter")
         assert row[2] and axis.refusal() in row[1], row
     finally:
         view.deleteLater()

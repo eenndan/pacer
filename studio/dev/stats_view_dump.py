@@ -192,7 +192,7 @@ def interact(view, app) -> dict:
                                for r in range(t.rowCount())])
         t.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         out["sorts"].append(orders)
-    from studio.stats_panel import TIMING_TERM
+    from studio.stats_trust import TIMING_TERM
     view.reveal_trust(TIMING_TERM)
     app.processEvents()
     focus = app.focusWidget()

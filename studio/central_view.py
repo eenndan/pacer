@@ -45,7 +45,8 @@ from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .scrub_controller import ScrubController
 from .session import fmt_time
-from .stats_panel import TIMING_TERM, StatsView
+from .stats_panel import StatsView
+from .stats_trust import TIMING_TERM
 from .video_view import VideoView
 from .widgets import (
     ActionChip,
