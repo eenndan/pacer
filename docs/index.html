@@ -15,14 +15,19 @@
 <meta property="og:type" content="article">
 <meta property="og:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
 <meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
-<meta property="og:image" content="media/og.png">
+<meta property="og:image" content="https://eenndan.github.io/pacer/media/og.png">
 <meta property="og:image:width" content="2560">
 <meta property="og:image:height" content="1280">
+<meta property="og:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
+<!-- The two image URLs are ABSOLUTE on purpose: link previews (Open Graph, X cards) need an
+     absolute URL, and a relative one left shares of this page without the image. -->
+
 <meta property="og:url" content="https://eenndan.github.io/pacer/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
 <meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
-<meta name="twitter:image" content="media/og.png">
+<meta name="twitter:image" content="https://eenndan.github.io/pacer/media/og.png">
+<meta name="twitter:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
 
 <style>
   /* ------------------------------------------------------------------ tokens
@@ -472,11 +477,15 @@
       </div>
       <div class="built-card wide">
         <h3>The real app, driven offscreen, on real footage</h3>
-        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>141 CTest registrations</strong> run on every change (the fourteen that need a real recording report themselves skipped, by name, where there is none, and so does one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens and its own images.</p>
+        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>140+ CTest registrations</strong> run on every change (the fourteen that need a real recording report themselves skipped, by name, where there is none, and so does one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens and its own images.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>
         <p>The implementation is handed to LLM coding agents under a strict protocol: one focused pull request per change, gated by the golden-equivalence check and the full suite before it merges. The rigour above is what makes that workflow safe — the guardrails do the trusting, so the agents can do the typing. The commit history is the honest record of it, including the parts that were measured and thrown away.</p>
+      </div>
+      <div class="built-card wide">
+        <h3>Built, measured, not shipped</h3>
+        <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it, so whoever proposes it next starts from the evidence. The longer investigations are kept the same way: <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gps-accuracy-research.md">GPS lap-timing accuracy</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/upstream-20ms-investigation.md">an upstream “~20&nbsp;ms vs transponder” claim</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/friction-circle-release-investigation.md">brake release from the friction circle</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/measured-channels-2026-09.md">sideslip, wheel hop and a bump map as channels</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gmeter-validation.md">the g-meter against GPS</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/grip-regrounding-2026-09.md">the grip column, re-grounded</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/corner-match-0060-2026-09.md">why one recording matched far fewer of its corners</a> and <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/start-line-verification.md">the start/finish line</a>. Most were measured on D24, which has since left the development machine; those say so at the top.</p>
       </div>
     </div>
   </div>
@@ -508,8 +517,8 @@
       <h2>A Mac with Apple Silicon, a GoPro file, and three commands.</h2>
       <p class="muted"><a href="https://pixi.sh">pixi</a> brings CMake, Ninja, Python, Qt, Catch2 and ffmpeg, pinned by a lockfile, so there is no manual toolchain step. The C++ compiler is the one already on the machine — Apple's Xcode command-line tools.</p>
     </div>
-<pre><code><span class="comment"># 3rdparty deps (gpmf-parser, nanobind)</span>
-git submodule update --init --recursive
+<pre><code><span class="comment"># the source, with its 3rdparty deps (gpmf-parser, nanobind)</span>
+git clone --recursive https://github.com/eenndan/pacer &amp;&amp; cd pacer
 
 <span class="comment"># environment + editable Python bindings</span>
 pixi install
@@ -518,6 +527,9 @@ pixi install
 pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
     <div class="callout">
       On a track Pacer doesn't know yet it places a sensible start/finish line and flags the timing as <strong>provisional</strong>; drag the line on the map to where a lap begins and it is remembered for that recording. <a href="https://github.com/eenndan/pacer/blob/main/docs/FIRST_LAP.md">Read your first lap</a> walks the rest.
+    </div>
+    <div class="callout">
+      <strong>No GoPro footage?</strong> <code>pixi run smoke</code> builds the real app headless on a bundled sample clip and ends in <code>SMOKE OK</code>. The clip holds no complete lap, so it proves the build and the load, not the analysis.
     </div>
   </div>
 </section>
