@@ -470,8 +470,7 @@ class LibraryController:
                 self._disable_sidecar_if_open(side)
                 if os.path.exists(side):
                     os.remove(side)
-                    print(f"studio: deleted timing-line sidecar {os.path.basename(side)}",
-                          flush=True)
+                    _log.info("deleted timing-line sidecar %s", os.path.basename(side))
             except OSError as exc:
                 _log.error("could not delete the sidecar (%r)", exc)
         # …and the session record written for it. "Forget this recording" has to mean the whole
@@ -514,7 +513,7 @@ class LibraryController:
         view = getattr(self.win, "view", None)
         if view is not None:
             view._sidecar_path = None
-        print("studio: cleared the open recording's sidecar link after forgetting it", flush=True)
+        _log.info("cleared the open recording's sidecar link after forgetting it")
 
     def _clear_library(self) -> dict:
         """Privacy "clear library": wipe the whole app-support index (only the library history of
@@ -862,11 +861,12 @@ class LibraryController:
                 return
             focus.save_for_track(track, items + added)
         except OSError as exc:
-            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})")
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
+                               logging.ERROR)
             return
         except Exception as exc:  # noqa: BLE001 — a promotion must never raise into the UI
             _log.exception("focus list not updated")
-            self._focus_failed(f"the focus list could not be updated ({exc!r})")
+            self._focus_failed(f"the focus list could not be updated ({exc!r})", logging.ERROR)
             return
         self.update_focus_list()
 
@@ -896,7 +896,8 @@ class LibraryController:
                 return []
             focus.save_for_track(track, items + added)
         except OSError as exc:
-            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})")
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
+                               logging.ERROR)
             return []
         except Exception:  # noqa: BLE001 — a default must never raise into the load
             _log.exception("focus list not pre-filled")
@@ -914,18 +915,21 @@ class LibraryController:
             items = [i for i in focus.for_track(self._load_focus(), track) if i.cid != int(cid)]
             focus.save_for_track(track, items)
         except OSError as exc:
-            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})")
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
+                               logging.ERROR)
             return
         except Exception as exc:  # noqa: BLE001
             _log.exception("focus list not updated")
-            self._focus_failed(f"the focus list could not be updated ({exc!r})")
+            self._focus_failed(f"the focus list could not be updated ({exc!r})", logging.ERROR)
             return
         self.update_focus_list()
 
-    def _focus_failed(self, why: str) -> None:
+    def _focus_failed(self, why: str, level: int = logging.WARNING) -> None:
         """Say why a focus-list gesture did nothing, on the status bar the app already uses for its
-        untimed notices — a button that silently does nothing is the worst of the three outcomes."""
-        print(f"studio: focus list — {why}.", flush=True)
+        untimed notices — a button that silently does nothing is the worst of the three outcomes —
+        and in the session log. A refusal is a WARNING; a list that could not be WRITTEN is the
+        user's own action lost, and its callers pass ERROR."""
+        _log.log(level, "focus list — %s.", why)
         bar = self.win.statusBar()
         if bar is not None:
             bar.showMessage(f"Focus list: {why}.", self._status_ms)

@@ -2257,8 +2257,8 @@ class CentralView(QWidget):
         if not path:
             return
         if not self.session.valid_lap_ids():
-            print("studio: timing lines NOT saved — that placement leaves no complete lap; "
-                  "the last saved lines are unchanged (Edit ▸ Undo reverts the edit)", flush=True)
+            _log.warning("timing lines NOT saved — that placement leaves no complete lap; the last "
+                         "saved lines are unchanged (Edit ▸ Undo reverts the edit)")
             return
         start, sectors = self.session.timing_lines_latlon()
         try:
