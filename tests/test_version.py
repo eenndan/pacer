@@ -146,6 +146,199 @@ def test_every_released_section_has_its_compare_link():
     print(f"test_every_released_section_has_its_compare_link OK ({len(defined)} links)")
 
 
+# ----------------------------------------------------- the changelog's shape, and its fragments
+# Board review 2026-09-23 (R7 / OPS-2 / ARCH-2b): `[Unreleased]` had grown to 108 entries of a
+# median 7 lines (0.1.0: 2; 0.2.0: 5), including a fourth group, Engineering, that the convention
+# never had, and 54 % of September's PRs edited CHANGELOG.md, which made it the commonest merge
+# collision. Nothing policed either. From 0.2.0 on, a PR writes `changes/<branch-slug>.md` and the
+# release folds them in (studio/dev/changelog.py, which owns the rules these tests apply).
+_CHANGES = _repo("changes")
+# The two defects the shape guard exists for: a 4-line entry, and a group the convention lacks.
+_PLANTED_SECTION = """
+### Fixed
+
+- A fixed thing that goes on
+  and on
+  and on
+  for four lines (#1)
+
+### Engineering
+
+- An internal refactor (#2)
+"""
+_GOOD_FRAGMENT = "### Fixed\n\n- A lift is no longer read as a brake\n"
+
+
+def _changelog_module():
+    from studio.dev import changelog
+    return changelog
+
+
+def test_changelog_sections_after_0_2_0_keep_the_short_shape():
+    """[Unreleased] and every release after 0.2.0: only Highlights / Added / Changed / Fixed, each
+    entry at most 3 lines of at most 100 characters, every Added/Changed/Fixed entry ending in its
+    `(#PR)`, an intro of at most 3 lines. 0.2.0 and 0.1.0 are history and stay as released."""
+    cl = _changelog_module()
+    text = _read("CHANGELOG.md")
+    problems = cl.changelog_problems(text)
+    assert not problems, (
+        "CHANGELOG.md sections after 0.2.0 must keep the short shape (the long form belongs in the "
+        "PR description; see studio/dev/changelog.py):\n  " + "\n  ".join(problems))
+    # Not a check over nothing: [Unreleased] is shaped and has entries, and 0.2.0 is not shaped.
+    shaped = [name for name, _h, _e in cl.sections(text) if cl.is_shaped(name)]
+    assert "Unreleased" in shaped and "0.2.0" not in shaped, shaped
+    lines = text.splitlines()
+    head, end = next((h, e) for name, h, e in cl.sections(text) if name == "Unreleased")
+    _intro, groups, _p = cl._parse(lines[head + 1:end], head + 2)
+    entries = sum(len(es) for _g, _n, es in groups)
+    assert entries >= 1, "[Unreleased] parsed to no entries — the parser no longer reads it"
+    # Both directions: the checker fails the two defects it exists for.
+    planted = cl.section_problems(_PLANTED_SECTION.splitlines())
+    assert any("an entry of 4 lines" in p for p in planted), planted
+    assert any("`### Engineering`" in p for p in planted), planted
+    print(f"test_changelog_sections_after_0_2_0_keep_the_short_shape OK ({shaped}, "
+          f"{entries} entries in [Unreleased], {end - head} lines)")
+
+
+def test_every_changelog_fragment_parses():
+    """Every `changes/*.md` is one or more Added / Changed / Fixed groups of bullets of at most 2
+    lines — what the fold can place. A malformed one would stop the release step, so it fails here,
+    in the PR that wrote it."""
+    cl = _changelog_module()
+    assert os.path.isdir(_CHANGES), "changes/ is gone: every PR's changelog fragment lives there"
+    paths = sorted(p for p in os.listdir(_CHANGES) if p.endswith(".md"))
+    bad = []
+    for name in paths:
+        try:
+            cl.parse_fragment(_read("changes", name), f"changes/{name}")
+        except ValueError as err:
+            bad.append(str(err))
+    assert not bad, "malformed changelog fragment(s):\n" + "\n".join(bad)
+    # Both directions: a good fragment parses, and each shape of a bad one is refused by name.
+    assert cl.parse_fragment(_GOOD_FRAGMENT) == {"Fixed": [["- A lift is no longer read as a brake"]]}
+    for broken, why in (("- a bullet with no group\n", "a bullet before any"),
+                        ("### Engineering\n\n- an internal refactor\n", "`### Engineering`"),
+                        ("### Fixed\n\n- one\n  two\n  three\n", "an entry of 3 lines"),
+                        ("### Fixed\n\nprose, not a bullet\n", "prose inside"),
+                        ("A heading-less intro\n\n### Added\n\n- x\n", "text before the first")):
+        try:
+            cl.parse_fragment(broken)
+        except ValueError as err:
+            assert why in str(err), (why, str(err))
+        else:
+            raise AssertionError(f"parse_fragment accepted a malformed fragment: {broken!r}")
+    print(f"test_every_changelog_fragment_parses OK ({len(paths)} fragment(s) in changes/)")
+
+
+def _write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def test_the_fold_round_trips_fragments_into_the_changelog():
+    """The release step, on a copy of the real changelog: fragments land at the top of their
+    groups, in the changelog's own shape, and are deleted; a release gets its heading, a fresh
+    [Unreleased] and its compare link; a malformed fragment or an entry with no PR writes nothing."""
+    import tempfile
+    cl = _changelog_module()
+    real = _read("CHANGELOG.md")
+    history = real[real.index("\n## [0.2.0]"):]
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(os.path.join(tmp, "CHANGELOG.md"), real)
+        _write(os.path.join(tmp, "changes", "a-fix.md"),
+               "### Fixed\n\n- A lift is no longer read as a brake: strings of one-sample blips\n"
+               "  counted as braking (#9001)\n")
+        _write(os.path.join(tmp, "changes", "b-feature.md"),
+               "### Changed\n\n- One name for grip (#9002)\n\n### Added\n\n- A new thing (#9002)\n")
+        text, _target, problems = cl.fold(tmp, write=True)
+        assert not problems, problems
+        assert _read_abs(tmp, "CHANGELOG.md") == text and not os.listdir(os.path.join(tmp, "changes"))
+        assert text.endswith(history), "the fold touched a section older than [Unreleased]"
+        before = real[real.index("## [Unreleased]"):real.index("\n## [0.2.0]")]
+        body = text[text.index("## [Unreleased]"):text.index("\n## [0.2.0]")]
+        added = {"Added": "- A new thing (#9002)", "Changed": "- One name for grip (#9002)",
+                 "Fixed": "- A lift is no longer read as a brake: strings of one-sample blips "
+                          "counted as braking (#9001)"}
+        for group, first in added.items():   # each at the top of its group, above the old top
+            old_top = before.split(f"### {group}\n\n", 1)[1].split("\n", 1)[0]
+            assert f"### {group}\n\n{first}\n{old_top}\n" in body, (group, first, old_top)
+        # ...and nothing else moved: taking the three lines out again gives back the section as it was.
+        assert [ln for ln in body.split("\n") if ln not in added.values()] == before.split("\n")
+
+        # A malformed fragment folds nothing, and neither does an entry whose PR is unknown (no git
+        # history in a temporary directory to find it from): both leave every file as it was.
+        _write(os.path.join(tmp, "changes", "c-bad.md"), "- a bullet with no group\n")
+        try:
+            cl.fold(tmp, write=True)
+        except ValueError as err:
+            assert "changes/c-bad.md" in str(err), str(err)
+        else:
+            raise AssertionError("the fold accepted a malformed fragment")
+        _write(os.path.join(tmp, "changes", "c-bad.md"), "### Fixed\n\n- No PR number here\n")
+        _t, _s, problems = cl.fold(tmp, write=True)
+        assert any("does not end in its PR number" in p for p in problems), problems
+        assert _read_abs(tmp, "CHANGELOG.md") == text and os.path.exists(
+            os.path.join(tmp, "changes", "c-bad.md")), "a refused fold wrote something"
+
+        # The release form: a new heading, a fresh [Unreleased] above it, and both compare links.
+        _write(os.path.join(tmp, "changes", "c-bad.md"), "### Fixed\n\n- Now with its PR (#9003)\n")
+        released, target, problems = cl.fold(tmp, release="9.9.9", date="2030-01-02", write=True)
+        assert not problems, problems
+        assert target.startswith("## [9.9.9] — 2030-01-02\n"), target[:40]
+        assert "\n## [Unreleased]\n\n## [9.9.9] — 2030-01-02\n" in released
+        assert "- Now with its PR (#9003)" in target and "- A new thing (#9002)" in target
+        links = re.findall(r"^\[(Unreleased|9\.9\.9)\]: (\S+)$", released, re.MULTILINE)
+        assert links == [("Unreleased", "https://github.com/eenndan/pacer/compare/v9.9.9...HEAD"),
+                         ("9.9.9", "https://github.com/eenndan/pacer/compare/v0.2.0...v9.9.9")], links
+        assert _RELEASED_HEADING.findall(released)[:2] == ["9.9.9", "0.2.0"]
+    print("test_the_fold_round_trips_fragments_into_the_changelog OK")
+
+
+def _read_abs(*parts):
+    with open(os.path.join(*parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_the_fold_finds_a_fragments_pr_from_the_merge_that_added_it():
+    """A fragment need not know its PR number: on `main` the first-parent commit that added it is
+    GitHub's "Merge pull request #N from …". Driven through a real merge in a scratch repository."""
+    import subprocess
+    import tempfile
+    cl = _changelog_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+
+        def git(*args):
+            subprocess.run(["git", "-C", tmp, "-c", "commit.gpgsign=false", *args], env=env,
+                           check=True, capture_output=True)
+
+        _write(os.path.join(tmp, "CHANGELOG.md"), _read("CHANGELOG.md"))
+        git("init", "-q", "-b", "main")
+        git("add", "CHANGELOG.md")
+        git("commit", "-q", "-m", "base")
+        git("checkout", "-q", "-b", "f1/some-fix")
+        _write(os.path.join(tmp, "changes", "f1-some-fix.md"), "### Fixed\n\n- A fix with no number\n")
+        git("add", "changes")
+        git("commit", "-q", "-m", "the fix, with its fragment")
+        # Off main, on the branch that wrote it, there is no merge to name the PR yet.
+        assert cl.merged_pr(tmp, os.path.join(tmp, "changes", "f1-some-fix.md")) is None
+        git("checkout", "-q", "main")
+        git("merge", "-q", "--no-ff", "-m", "Merge pull request #4242 from eenndan/f1/some-fix",
+            "f1/some-fix")
+        # A squash merge lands as one commit on main whose subject GitHub ends with "(#N)".
+        _write(os.path.join(tmp, "changes", "f2-squashed.md"), "### Added\n\n- A squashed feature\n")
+        git("add", "changes")
+        git("commit", "-q", "-m", "F2: a squashed feature (#4243)")
+        text, _target, problems = cl.fold(tmp, write=True)
+        assert not problems, problems
+        assert "### Fixed\n\n- A fix with no number (#4242)\n" in text
+        assert "### Added\n\n- A squashed feature (#4243)\n" in text
+    print("test_the_fold_finds_a_fragments_pr_from_the_merge_that_added_it OK")
+
+
 # ------------------------------------------------------------------------------ the product name
 # THE NAME CONVENTION (written down beside APP_NAME in studio/__init__.py): three forms, one job each.
 #   FORMAL   "Pacer Studio": APP_NAME, the macOS bundle, the .dmg, the application/display names,

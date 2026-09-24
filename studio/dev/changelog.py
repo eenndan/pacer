@@ -98,14 +98,14 @@ def _parse(lines, first_lineno):
     return intro, groups, problems
 
 
-def _shape_problems(groups, allowed, max_lines, need_ref):
+def _shape_problems(groups, allowed, max_lines, need_ref, ordered):
     problems, seen = [], []
     for name, n, entries in groups:
         if name not in allowed:
             problems.append(f"{n}: `### {name}` — the groups are {', '.join(allowed)}")
         elif name in seen:
             problems.append(f"{n}: a second `### {name}` group")
-        elif seen and allowed.index(name) < allowed.index(seen[-1]):
+        elif ordered and seen and allowed.index(name) < allowed.index(seen[-1]):
             problems.append(f"{n}: `### {name}` after `### {seen[-1]}` — keep {', '.join(allowed)}")
         seen.append(name)
         if not entries:
@@ -127,11 +127,13 @@ def parse_fragment(text, where="fragment"):
     """{group: [[line, ...], ...]} for one `changes/*.md` file; ValueError naming every problem."""
     intro, groups, problems = _parse(text.splitlines(), 1)
     problems += [f"{n}: text before the first `### ` group" for n, _line in intro]
-    problems += _shape_problems(groups, FRAGMENT_GROUPS, FRAGMENT_LINES, need_ref=False)
+    problems += _shape_problems(groups, FRAGMENT_GROUPS, FRAGMENT_LINES, need_ref=False,
+                                ordered=False)     # the fold places each group where it goes
     if not groups:
         problems.append("no `### Added` / `### Changed` / `### Fixed` group")
     if problems:
-        raise ValueError(f"{where}:\n  " + "\n  ".join(f"line {p}" for p in problems))
+        raise ValueError(f"{where}:\n  " + "\n  ".join(f"line {p}" if p[0].isdigit() else p
+                                                        for p in problems))
     return {name: [text for _n, text in entries] for name, _n, entries in groups}
 
 
@@ -158,7 +160,7 @@ def section_problems(lines, first_lineno=1):
         problems.append(f"{intro[0][0]}: an intro of {len(intro)} lines (at most {INTRO_LINES})")
     problems += [f"{n}: {len(line)} characters (at most {WIDTH})"
                  for n, line in intro if len(line) > WIDTH]
-    return problems + _shape_problems(groups, GROUPS, ENTRY_LINES, need_ref=True)
+    return problems + _shape_problems(groups, GROUPS, ENTRY_LINES, need_ref=True, ordered=True)
 
 
 def changelog_problems(text):
@@ -173,15 +175,17 @@ def changelog_problems(text):
 
 # ---------------------------------------------------------------------------------- folding
 def merged_pr(repo, path):
-    """The PR whose merge added `path` to this branch: on `main`, the first-parent commit that
-    added a fragment is its "Merge pull request #N from …". None off `main`, or without git."""
+    """The PR that added `path` to this branch: on `main`, the first-parent commit that added a
+    fragment is its "Merge pull request #N from …" (or, squash-merged, "Title (#N)"). None off
+    `main`, before the merge, or without git."""
     try:
         out = subprocess.run(
             ["git", "-C", repo, "log", "--first-parent", "--diff-filter=A", "--format=%s", "--",
              os.path.relpath(path, repo)], capture_output=True, text=True, timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
         return None
-    m = re.match(r"Merge pull request #(\d+)\b", out)
+    subject = out.split("\n", 1)[0].strip()
+    m = re.match(r"Merge pull request #(\d+)\b", subject) or re.search(r"\(#(\d+)\)$", subject)
     return int(m.group(1)) if m else None
 
 
@@ -216,20 +220,22 @@ def _regroup(body, new):
                      and GROUPS.index(b[0]) > GROUPS.index(name)]
             block = [name, []]
             blocks.insert(after[0] if after else len(blocks), block)
-        block[1] = [line for entry in new[name] for line in entry] + block[1]
+        block[1] = [line for entry in new[name] for line in entry] + _trim(block[1])
 
-    def trim(ls):
-        ls = list(ls)
-        while ls and not ls[0].strip():
-            ls.pop(0)
-        while ls and not ls[-1].strip():
-            ls.pop()
-        return ls
-
-    out = [""] + (trim(intro) + [""] if trim(intro) else [])
+    out = [""] + (_trim(intro) + [""] if _trim(intro) else [])
     for name, ls in blocks:
-        out += [f"### {name}", ""] + trim(ls) + [""]
+        out += [f"### {name}", ""] + _trim(ls) + [""]
     return out
+
+
+def _trim(lines):
+    """`lines` without its leading and trailing blank lines."""
+    lines = list(lines)
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
 
 
 def fold(repo=_REPO, release=None, date=None, write=False):
@@ -263,8 +269,12 @@ def fold(repo=_REPO, release=None, date=None, write=False):
     if "Unreleased" not in heads:
         raise ValueError("CHANGELOG.md has no `## [Unreleased]` section to fold into")
     head, end = heads["Unreleased"]
-    while end > head + 1 and (not lines[end - 1].strip() or _LINK_DEF.match(lines[end - 1])):
-        end -= 1                     # keep the foot's link definitions (and blanks) outside
+    last = end                       # just past the section's last line of content
+    while last > head + 1 and (not lines[last - 1].strip() or _LINK_DEF.match(lines[last - 1])):
+        last -= 1
+    # The body runs to the next heading, or to the foot's link definitions when this is the last
+    # section; its trailing blank lines are rewritten (to one) with it.
+    end = next((k for k in range(last, end) if _LINK_DEF.match(lines[k])), end)
     body = _regroup(lines[head + 1:end], new)
     lines[head + 1:end] = body
     target = [lines[head]] + body
@@ -316,6 +326,9 @@ def main(argv=None):
     for p in problems:
         print(f"PROBLEM {p}", file=sys.stderr)
     if problems:
+        if all("does not end in its PR number" in p for p in problems):
+            print("\nA fragment's PR number is found from the merge that adds it to main; before "
+                  "that, write `(#N)` at the end of the bullet yourself.", file=sys.stderr)
         print(f"\n{len(problems)} problem(s): nothing written.", file=sys.stderr)
         return 1
     print("\n" + (f"Folded; {n} fragment(s) left in changes/." if args.write else

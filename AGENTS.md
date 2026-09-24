@@ -99,14 +99,18 @@ locally first:
 - **Refused features stay refused** unless you bring NEW evidence. A new refusal is the next free
   section of `studio/docs/refused-2026-09.md` on your base; `tests/test_measured_figures.py`
   checks the numbering and every citation of it.
-- **Changelog:** a user-visible change (feature, fix, behaviour tweak) gets one line under
-  `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR, grouped Added/Changed/Fixed.
-  Internal refactors/tests/docs don't.
-- **Release:** the version lives in THREE places — `studio/__init__.py` `__version__` (canonical:
-  read by `packaging/pacer.spec` and the About card), `pyproject.toml` (names the `.dmg`) and
-  `bindings/pacer/pyproject.toml`. Bump all three, retitle `[Unreleased]` → `[x.y.z] — date` with
-  its compare link at the foot of the changelog, then tag. `tests/test_version.py` fails on any
-  step missed.
+- **Changelog:** a user-visible change (feature, fix, behaviour tweak) adds its own fragment,
+  `changes/<branch-slug>.md` (branch `f1/foo` → `changes/f1-foo.md`), and never edits
+  [CHANGELOG.md](CHANGELOG.md): a `### Added`, `### Changed` or `### Fixed` heading over `- `
+  bullets of at most 2 lines × 100 characters, ending in `(#PR)` if you know it (the fold finds it
+  otherwise). Internal refactors/tests/docs get none. `tests/test_version.py` parses every fragment
+  and holds each section after 0.2.0 to Highlights/Added/Changed/Fixed entries of at most 3 lines.
+- **Release:** `pixi run changelog` previews the fold; `pixi run changelog --write --release x.y.z`
+  folds every fragment under `## [x.y.z] — today` with its compare link and deletes them. Write its
+  Highlights (5–8 bullets), bump the version in its THREE places — `studio/__init__.py`
+  `__version__` (canonical: read by `packaging/pacer.spec` and the About card), `pyproject.toml`
+  (names the `.dmg`) and `bindings/pacer/pyproject.toml` — then tag. `tests/test_version.py` fails
+  on any step missed.
 
 ---
 
