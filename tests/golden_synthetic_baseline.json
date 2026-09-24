@@ -171,7 +171,6 @@
    ]
   ],
   "coaching_brake_direction": {},
-  "coaching_brake_points": {},
   "coaching_opportunities": "__unsupported__",
   "coast_report": {
    "lead_separable": false,
@@ -1460,26 +1459,6 @@
    ]
   ],
   "coaching_brake_direction": {},
-  "coaching_brake_points": {
-   "1": {
-    "actual_brake_dist": 173.48004168474102,
-    "cid": 1,
-    "metres_later": 23.71698335652195,
-    "n_laps": 1,
-    "optimal_brake_dist": 197.19702504126298,
-    "q25_m": 23.71698335652195,
-    "q75_m": 23.71698335652195
-   },
-   "2": {
-    "actual_brake_dist": 468.736257649978,
-    "cid": 2,
-    "metres_later": 61.534356614642604,
-    "n_laps": 1,
-    "optimal_brake_dist": 530.2706142646206,
-    "q25_m": 61.534356614642604,
-    "q75_m": 61.534356614642604
-   }
-  },
   "coaching_opportunities": {
    "enough": true,
    "median_lap_id": 1,
@@ -20807,26 +20786,6 @@
    ]
   ],
   "coaching_brake_direction": {},
-  "coaching_brake_points": {
-   "1": {
-    "actual_brake_dist": 179.28793303328456,
-    "cid": 1,
-    "metres_later": 46.040775786984,
-    "n_laps": 1,
-    "optimal_brake_dist": 225.32870882026856,
-    "q25_m": 46.040775786984,
-    "q75_m": 46.040775786984
-   },
-   "2": {
-    "actual_brake_dist": 462.6506738007207,
-    "cid": 2,
-    "metres_later": 14.490531536459798,
-    "n_laps": 1,
-    "optimal_brake_dist": 477.1412053371805,
-    "q25_m": 14.490531536459798,
-    "q75_m": 14.490531536459798
-   }
-  },
   "coaching_opportunities": {
    "enough": true,
    "median_lap_id": 1,
@@ -36524,17 +36483,6 @@
    ]
   ],
   "coaching_brake_direction": {},
-  "coaching_brake_points": {
-   "1": {
-    "actual_brake_dist": 175.4906206662098,
-    "cid": 1,
-    "metres_later": 40.015411896299696,
-    "n_laps": 1,
-    "optimal_brake_dist": 215.5060325625095,
-    "q25_m": 40.015411896299696,
-    "q75_m": 40.015411896299696
-   }
-  },
   "coaching_opportunities": {
    "enough": true,
    "median_lap_id": 2,
@@ -52355,71 +52303,6 @@
     "p": 0.0221977802219778,
     "p_holm": 0.1553844615538446,
     "rho": -0.6373626373626373
-   }
-  },
-  "coaching_brake_points": {
-   "1": {
-    "actual_brake_dist": 14.444931475457121,
-    "cid": 1,
-    "metres_later": 10.513384825547867,
-    "n_laps": 14,
-    "optimal_brake_dist": 24.794826547757854,
-    "q25_m": 8.467229675999452,
-    "q75_m": 15.3975232670615
-   },
-   "2": {
-    "actual_brake_dist": 117.17309817176785,
-    "cid": 2,
-    "metres_later": 7.2269191527147925,
-    "n_laps": 14,
-    "optimal_brake_dist": 124.61481612378608,
-    "q25_m": 5.663072237835991,
-    "q75_m": 9.494082768435092
-   },
-   "3": {
-    "actual_brake_dist": 280.5694979958529,
-    "cid": 3,
-    "metres_later": 7.109348959779169,
-    "n_laps": 14,
-    "optimal_brake_dist": 288.2425339373922,
-    "q25_m": 6.322509561964907,
-    "q75_m": 9.891380404716259
-   },
-   "4": {
-    "actual_brake_dist": 363.6544073573171,
-    "cid": 4,
-    "metres_later": 10.026164572988478,
-    "n_laps": 14,
-    "optimal_brake_dist": 374.1932808903384,
-    "q25_m": 6.7310962588220775,
-    "q75_m": 12.999352731853577
-   },
-   "5": {
-    "actual_brake_dist": 501.66982269750554,
-    "cid": 5,
-    "metres_later": 9.755276058534292,
-    "n_laps": 14,
-    "optimal_brake_dist": 510.72095134422943,
-    "q25_m": 7.52079075503228,
-    "q75_m": 13.003354062705654
-   },
-   "6": {
-    "actual_brake_dist": 621.0892819531668,
-    "cid": 6,
-    "metres_later": 12.674426430158974,
-    "n_laps": 13,
-    "optimal_brake_dist": 633.7378436304708,
-    "q25_m": 4.766990024565189,
-    "q75_m": 14.308462167488415
-   },
-   "7": {
-    "actual_brake_dist": 718.142219758674,
-    "cid": 7,
-    "metres_later": 18.114738424379198,
-    "n_laps": 13,
-    "optimal_brake_dist": 736.0691103724947,
-    "q25_m": 14.64420601583845,
-    "q75_m": 19.94619288589581
    }
   },
   "coaching_opportunities": {
@@ -86892,71 +86775,6 @@
     "p": 0.0221977802219778,
     "p_holm": 0.1553844615538446,
     "rho": -0.6373626373626373
-   }
-  },
-  "coaching_brake_points": {
-   "1": {
-    "actual_brake_dist": 14.444931860362484,
-    "cid": 1,
-    "metres_later": 10.51338482554787,
-    "n_laps": 14,
-    "optimal_brake_dist": 24.7948269341153,
-    "q25_m": 8.467229675999455,
-    "q75_m": 15.397523267061498
-   },
-   "2": {
-    "actual_brake_dist": 117.17309855719057,
-    "cid": 2,
-    "metres_later": 7.2269191527148,
-    "n_laps": 14,
-    "optimal_brake_dist": 124.61481650879273,
-    "q25_m": 5.663072237836012,
-    "q75_m": 9.494082768435085
-   },
-   "3": {
-    "actual_brake_dist": 280.5694983818987,
-    "cid": 3,
-    "metres_later": 7.109348959779169,
-    "n_laps": 14,
-    "optimal_brake_dist": 288.2425343232247,
-    "q25_m": 6.322509561964907,
-    "q75_m": 9.891380404716259
-   },
-   "4": {
-    "actual_brake_dist": 363.654407742569,
-    "cid": 4,
-    "metres_later": 10.026164572988478,
-    "n_laps": 14,
-    "optimal_brake_dist": 374.1932812758371,
-    "q25_m": 6.7310962588220775,
-    "q75_m": 12.999352731853577
-   },
-   "5": {
-    "actual_brake_dist": 501.6698230845283,
-    "cid": 5,
-    "metres_later": 9.755276058534292,
-    "n_laps": 14,
-    "optimal_brake_dist": 510.72095173014594,
-    "q25_m": 7.5207907550323085,
-    "q75_m": 13.003354062705554
-   },
-   "6": {
-    "actual_brake_dist": 621.0892823387097,
-    "cid": 6,
-    "metres_later": 12.674426430158974,
-    "n_laps": 13,
-    "optimal_brake_dist": 633.7378440168666,
-    "q25_m": 4.766990024565189,
-    "q75_m": 14.308462167488415
-   },
-   "7": {
-    "actual_brake_dist": 718.142220144312,
-    "cid": 7,
-    "metres_later": 18.114738424379198,
-    "n_laps": 13,
-    "optimal_brake_dist": 736.0691107606987,
-    "q25_m": 14.64420601583845,
-    "q75_m": 19.94619288589581
    }
   },
   "coaching_opportunities": {
@@ -121611,7 +121429,6 @@
    ]
   ],
   "coaching_brake_direction": {},
-  "coaching_brake_points": {},
   "coaching_opportunities": "__unsupported__",
   "coast_report": {
    "lead_separable": false,
@@ -122887,7 +122704,6 @@
    ]
   ],
   "coaching_brake_direction": {},
-  "coaching_brake_points": {},
   "coaching_opportunities": "__unsupported__",
   "coast_report": {
    "lead_separable": false,
