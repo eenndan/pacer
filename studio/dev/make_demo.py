@@ -16,8 +16,10 @@ WHAT IS IN THE FILE:
     the kart's TRUE position on it. The picture and the IMU share the media clock, so the video's
     dot and the marker on Pacer's map can be compared wherever you scrub — video sync against
     ground truth. Measured on the published file (2026-09-24, 1,784 moving probes): Pacer's marker
-    runs +125 ms ahead along track (p10 +79, p90 +171; 2.65 m median) — +75 ms of it the GPS-lag
-    correction's overshoot #371 predicted, the rest `index_at_time` taking the sample at or after t;
+    ran +125 ms ahead along track (p10 +79, p90 +171; 2.65 m median) — +75 ms of it the GPS-lag
+    correction's overshoot #371 predicted, the rest `index_at_time` taking the sample at or after t.
+    X2 fixed both (the nearest sample; a centred lag reference): the same probe reads +20 ms (p10
+    -24, p90 +65 — the 10 Hz samples; 0.87 m median), inside one frame;
   * a VERIFIED start/finish line — the circuit is the built-in track `DEMO_TRACK_NAME`
     (`studio/track_db.py` SEED), whose line sits square across the middle of the main straight. An
     unknown circuit would load with an auto-fitted, provisional line; and the unknown-track

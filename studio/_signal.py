@@ -259,6 +259,32 @@ def boxcar(a, w):
     return _boxcar_core(a, min(w, len(a)))
 
 
+def centred_boxcar(a, w):
+    """`boxcar`, but CENTRED for an even `w` as well: the smoother for any series whose TIMING is
+    the measurement. Same guards and clamp as `boxcar`; an odd `w` is `boxcar` exactly.
+
+    `_boxcar_core` convolves with `ones(w)` in numpy's "same" mode, and for an EVEN `w` that
+    averages samples [i - w/2, i + w/2 - 1]: a window centred on i - 1/2, so the smoothed series
+    runs HALF A SAMPLE LATE. Nothing notices that in a shape. `rotation.measure_lag` noticed it as
+    clock offset: the path reference's curvature window (8 m of arc, so 4 or 6 fixes whenever a
+    lap's median spacing is ~2 m or ~1.4 m) made the GPS trace look +50 ms later than it is at
+    10 Hz, and that went straight into the overlay correction. An even `w` gets the (w+1)-tap
+    kernel [1/2, 1, ..., 1, 1/2] here instead: centred, and the same total weight `w`."""
+    a = np.asarray(a, float)
+    if w < 2 or len(a) < 2:
+        return a
+    w = min(int(w), len(a))
+    if w % 2:
+        return _boxcar_core(a, w)
+    if w + 1 > len(a):            # the half-weight kernel would outgrow the array: step down to odd
+        return _boxcar_core(a, w - 1) if w - 1 >= 2 else a
+    kernel = np.ones(w + 1)
+    kernel[0] = kernel[-1] = 0.5
+    num = np.convolve(a, kernel, "same")
+    den = np.convolve(np.ones(len(a)), kernel, "same")
+    return num / den
+
+
 def speed_long_g(speed_kmh, t) -> np.ndarray:
     """Longitudinal g from the speed trace: clip((d|v|/dt)/G) — positive accelerating, negative
     braking. The clean, GPS-validated brake signal (the IMU forward axis is vibration-dominated,

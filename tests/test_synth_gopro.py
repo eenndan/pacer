@@ -151,7 +151,9 @@ def test_the_imu_is_one_rigid_motion_with_the_gps():
     print(f"  {axis.summary()}\n  {cross.summary()}\n  {rot.summary()}")
     assert rot.loop_exact == -1.0, rot.summary()                    # the circuit runs clockwise
     assert abs(rot.loop_ratio_gyro + 1.0) < 0.03, rot.loop_ratio_gyro
-    # The planted clock offset is found (measured +0.487 s for the planted 0.46 s).
+    # The planted clock offset is found (planted 0.46 s; the overlay needs ~0.41, because the stamp
+    # map files each fix ~50 ms early, and the reading is ~+20 ms over that — tests/test_sync_truth.py
+    # holds it to a frame. It read +0.487 s until X2 centred the reference's even windows).
     assert rot.gps_lag_s is not None and abs(rot.gps_lag_s - rec.truth.gps_lag_s) < 0.1, rot.gps_lag_s
 
 
