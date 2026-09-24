@@ -9,8 +9,8 @@ the check itself. This file pins what pyright cannot see about its own input:
   * every listed file exists. Pyright prints a note for an include that matches nothing and still
     exits 0 (measured on 1.1.414), so a renamed module would leave the gate without a word;
   * every listed module is in the Qt-free core: `studio/*.py` outside test_layering's QT_REACHING.
-    Over the whole of studio/ pyright reports 1,101 errors (2026-09-24), mostly PySide6/pyqtgraph
-    stub noise, and that is why the gate is scoped;
+    Over the whole of studio/ pyright reported 1,101 errors on main on 2026-09-24, mostly
+    PySide6/pyqtgraph stub noise, and that is why the gate is scoped;
   * every Qt-free core module is EITHER listed OR named in NOT_YET below, never both. That is the
     ratchet: a module moves from NOT_YET into the list in the PR that makes it clean, NOT_YET only
     shrinks, and a NEW Qt-free module must be classified. It joins the list in the PR that creates
@@ -36,8 +36,8 @@ _REPO = os.path.dirname(_TESTS)
 sys.path.insert(0, _TESTS)
 from test_layering import QT_REACHING, _modules  # the one definition of "Qt-free"
 
-# Qt-free core modules that pyright (basic) does not pass yet. This set only shrinks. 23 modules
-# with 161 errors between them when the gate landed (2026-09-24).
+# Qt-free core modules that pyright (basic) does not pass yet. This set only shrinks. 14 modules
+# with 146 errors between them when the gate landed (2026-09-24).
 NOT_YET = {
     "coaching", "corner_model", "corners", "driving_channels", "export_data", "focus", "gmeter",
     "library", "marks", "prefs", "session", "session_record", "stats", "track_db",

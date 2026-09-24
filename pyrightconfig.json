@@ -2,7 +2,7 @@
   // THE TYPE-CHECK GATE (ARCH-8): `pixi run typecheck`, pyright pinned in pixi.lock, basic mode.
   // It checks an explicit allow-list of Qt-free core modules (studio/*.py outside
   // tests/test_layering.py's QT_REACHING) that pass today. The whole of studio/ is not the target:
-  // 1,101 errors, most of them PySide6/pyqtgraph stub noise.
+  // most of its errors are PySide6/pyqtgraph stub noise.
   //
   // THE RATCHET: a module joins "include" in the PR that makes it clean, and the list only grows.
   // A NEW Qt-free module joins it in the PR that creates it. tests/test_typecheck_config.py pins
