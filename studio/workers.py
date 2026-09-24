@@ -8,7 +8,7 @@ import os
 
 from PySide6.QtCore import QThread, Signal
 
-from . import demo, export_video
+from . import demo, export_video, ingest
 from .session import Session
 
 
@@ -93,10 +93,19 @@ class SessionLoadWorker(QThread):
         super().__init__()
         self._token = token
         self._paths = list(paths)
+        self._cancelled = False
+
+    def cancel(self):
+        """Stop the read at its next GPS payload (`ingest.cancellable`) instead of waiting it out.
+        Only called once the result is unwanted — a newer open superseded it, its loading card's
+        Cancel, the window closing — so the token guard drops whatever it then emits; what it buys
+        is the single load slot, and the quit, back at once from a read that is slow or stuck."""
+        self._cancelled = True
 
     def run(self):
         try:
-            session = Session.load(self._paths)
+            with ingest.cancellable(lambda: self._cancelled):
+                session = Session.load(self._paths)
         except Exception as exc:  # noqa: BLE001 - surface ANY load failure to the GUI thread
             self.failed.emit(self._token, self._paths, exc)
             return

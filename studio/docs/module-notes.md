@@ -363,7 +363,7 @@ The **pure-numpy core of the track map** (extracted from `map_view.py`; every fu
 
 ## `library.py`
 
-**Session library (F8)** — pure path/JSON, pacer-free (the sidecar's twin): a versioned local index at `~/Library/Application Support/pacer/library.json` (atomic tmp+`os.replace`, app-support dir auto-created). One entry per **recording fingerprint** (`<first-chapter stem>|<total duration to 0.1s>`, so a single-chapter and a full chaptered open of the same recording share ONE entry — re-opening **updates in place**, no duplicate) carrying track / date (GPS9 wall clock) / lap count / best / theoretical / paths. `load` **self-heals to a safe empty index** on ANY corruption (same philosophy as the sidecar revert guard); `upsert_and_save` is the post-load call; `pb_series(track)` extracts the dated best-lap progression. `_app_support_dir` is the single seam the tests monkeypatch (never the real `~/Library`). The values are fed from **`Session.library_entry(paths)`** (pacer stays on the Session side).
+**Session library (F8)** — pure path/JSON, pacer-free (the sidecar's twin): a versioned local index at `~/Library/Application Support/pacer/library.json` (atomic tmp+`os.replace`, app-support dir auto-created). One entry per **recording fingerprint** (GoPro prefix + recording number, e.g. `GX0062`, so a single-chapter and a full chaptered open of the same recording share ONE entry — re-opening **updates in place**, no duplicate; the pre-2026-06-18 `<stem>|<duration>` rows are re-keyed and merged by the v4 migration). An open that covered **fewer of the recording's chapters** than the stored row never displaces it (File ▸ Open loads one chapter); the same chapters or more always replace it. Each entry carries track / date (GPS9 wall clock) / lap count / best / theoretical / paths. `load` **self-heals to a safe empty index** on ANY corruption (same philosophy as the sidecar revert guard); `upsert_and_save` is the post-load call; `pb_series(track)` extracts the dated best-lap progression. `_app_support_dir` is the single seam the tests monkeypatch (never the real `~/Library`). The values are fed from **`Session.library_entry(paths)`** (pacer stays on the Session side).
 
 ## `track_db.py`
 
@@ -387,7 +387,7 @@ The **session record** (pacer-free AND Qt-free): one record per recording — co
 
 ## `demo.py`
 
-**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves a SMALL real lapping clip (fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache → a release asset. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — the release asset was never published, so an ungated button could only apologise.
+**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache → the `demo-data-v1` release asset, kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — it was born while the asset was unpublished, and it still keeps the app off the network unless `--demo` asks.
 
 ## `playback_state.py`
 
