@@ -36,10 +36,12 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](../studi
 (leaf-by-leaf compare):
 - **MANUAL, full-coverage half** — the dump loads one real recording, the chapter
   `PACER_GOLDEN_MP4` names, by default `MK_18_09_26/GX010067.MP4` (a working-set recording, below),
-  and compares at eps 0: 156,659 leaves on that default in ~4 s, 147,184 on
-  `Sandown 3h 2026/GX010064.MP4` and 153,014 on `SD_19_09_26/GX010068.MP4` (measured 2026-09-23,
-  once Sandown Park became a built-in track; a Sandown dump taken before that is on the auto-fitted
-  line and will not compare with one taken after, while the MK default did not move a leaf).
+  and compares at eps 0: 182,422 leaves on that default in ~5 s, 171,343 on
+  `Sandown 3h 2026/GX010064.MP4` and 180,702 on `SD_19_09_26/GX010068.MP4` (measured 2026-09-24,
+  after B1b added the Stats tiles, the ideal-lap Δ family, BRAKING and the trust surfaces — a dump
+  taken before that has fewer keys and will not compare with one taken after; on the MK default the
+  156,659 leaves they share did not move). None of the three has a sector line, so the sector
+  paths are fingerprinted only by the CI half's `gopro_sectors` phase.
   It is a dev-Desktop-only gate; it does NOT run in CI.
 - **CI half** — `test_golden_synthetic` automates the SAME machinery
   (`fingerprint(strict=False)` + `golden_compare.walk`, eps 1e-9) over the deterministic SYNTHETIC
@@ -55,11 +57,18 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](../studi
   `tests/_synthetic.drift_band_session` (a LADDER of three laps at 0.118 / 0.289 / 0.460 %
   line-length drift — the band the removed 0.5 % drift gate governed, which no lap of any other
   fixture sits in, so #300's removal of that gate moved 0 of all 24,859 leaves; restoring it moves
-  68 of this phase's 15,451), vs a
+  68 of this phase's 15,451). Those are all SEEDED sessions (no GPMF, no `pacer.Laps`, 2-4 laps
+  under the 5-8-lap gates), so two more phases run the REAL loader: `gopro` loads the synthetic
+  GoPro recording below (generated once per run into a temp dir, fixed seed, jailed) and
+  fingerprints it strict — 14 valid laps, one across the chapter seam, ranked coaching rows, no
+  placeholder — and `gopro_sectors` places two sector lines on it. The recording's telemetry bytes
+  are pinned by SHA-256 in the baseline, so a red gate says first whether the generator or the
+  Session math moved. All of it is compared against a
   committed baseline (`golden_synthetic_baseline.json`). It runs with no big file, so it
-  gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
-  reviewed change: `python tests/test_golden_synthetic.py --write-baseline` — it prints the leaf /
-  `__unsupported__` / null / NaN counts before vs after and the leaves that moved.
+  gates every future Session-math change in CI (~8 s). Regenerate the baseline only after an
+  intentional, reviewed change: `python tests/test_golden_synthetic.py --write-baseline` — it
+  prints the leaf / `__unsupported__` / null / NaN counts before vs after, how many of the old
+  leaves moved or vanished and how many are new.
 
 Both halves count a leaf that is NaN on one side only as a difference, and the comparator's summary
 line gives each side's NaN-leaf count. NaN compares false with everything, so until 2026-09 a value

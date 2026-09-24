@@ -76,6 +76,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # recordings compares nothing). The variable and the default live in `studio.dev.footage`, which
 # the real-footage checks in tests/ read too: one variable points all of them at a recording.
 # A default that is not on the machine running the dump is refused by `preflight`, by name.
+from studio import stats as stats_service  # noqa: E402
+from studio import units  # noqa: E402
 from studio.dev import footage  # noqa: E402
 
 REAL = footage.recording_path()
@@ -108,6 +110,56 @@ def _round(v):
 # distinct, comparison-stable string so golden_compare still catches a supported->unsupported
 # regression, without one missing accessor aborting the whole dump.
 _UNSUPPORTED = "__unsupported__"
+
+
+def _sampled(a, n: int = 51):
+    """`n` evenly spaced values of a long per-sample series, BOTH ENDS KEPT (the end of a Δ curve
+    is its headline number). For the curves added by B1b only: their 400-point grids would add
+    ~10k leaves a phase for a shape that 51 points already pin — every interior sample of a
+    running total moves when any segment before it does."""
+    if a is None:
+        return None
+    a = np.asarray(a, float)
+    if a.ndim != 1 or len(a) <= n:
+        return _round(a)
+    return _round(a[np.linspace(0, len(a) - 1, n).round().astype(int)])
+
+
+def _curve(xy):
+    """An (x, dy) pair — `ideal_delta_to_best`'s shape and each value of `delta_to_ideal`."""
+    return None if xy is None else {"x": _sampled(xy[0]), "dy": _sampled(xy[1])}
+
+
+def _provenance(p):
+    """The numbers a provenance panel states: the value, its re-derivation, and the window and fix
+    quality it was measured over. Its tables (the lap's own fixes — `lap_channels_best` carries
+    them) and its prose (steps, notes) are left out, so a copy edit is not a golden diff."""
+    if p is None:
+        return None
+    return _round({"formatted": p.formatted, "value": p.value, "reconstructed": p.reconstructed,
+                   "reconstructed_formatted": p.reconstructed_formatted, "n": p.n,
+                   "window": p.window, "quality": p.quality})
+
+
+def _quality_strip(tl):
+    """The quality strip as the scrub bar paints it: each run of one class as [first cell, class],
+    plus the per-class counts. Lossless for the painted classes at ~1 % of the per-cell arrays."""
+    cls = np.asarray(tl.cls)
+    starts = np.flatnonzero(np.r_[True, cls[1:] != cls[:-1]]) if len(cls) else []
+    return {"cells": len(cls), "cell_s": _round(tl.cell_s), "reports_quality": bool(tl.reports_quality),
+            "counts": {str(k): int(v) for k, v in sorted(tl.counts().items())},
+            "runs": [[int(i), int(cls[i])] for i in starts]}
+
+
+def _split_matrix(s):
+    """The Stats page's SPLITS grid, composed exactly as `StatsPanel._split_matrix` composes it
+    (a staticmethod in a Qt module, so it is re-stated here rather than imported: this dump stays
+    headless). The math and the marks are `stats.split_matrix`'s."""
+    n_cols = s.effective_sector_count() + 1
+    if n_cols < 2:
+        return None
+    ids = s.consistency_lap_ids()
+    return stats_service.split_matrix(ids, [s.lap_sector_splits(i) for i in ids], columns=n_cols)
 
 
 def fingerprint(s, *, strict: bool = True) -> dict:
@@ -324,7 +376,137 @@ def fingerprint(s, *, strict: bool = True) -> dict:
                 [s.reference_delta_vs_lap(best, float(t)) for t in grid]))
             put("reference_overlay_index_at_progress", lambda: _round(
                 [s.reference_overlay_index_at_progress(float(t)) for t in grid]))
+
+    _surfaces(s, out, put, guard, laps, best, cids, sel)
     return out
+
+
+def _surfaces(s, out, put, guard, laps, best, cids, sel) -> None:
+    """THE USER-FACING NUMBERS NO LEAF ABOVE CARRIED (B1b; board review RISK-7): every SessionStats
+    tile, the ideal-lap Δ family, the BRAKING table and the coaching brake hint, the trust
+    surfaces (verified, quality strip, marks, provenance panels, the g-meter and gyro cross-checks),
+    the picture<->telemetry map, the focus list's window samples and the per-sample map channels.
+
+    Called AFTER every leaf above and in loops of its own, so the leaves above are computed in the
+    order they always were: adding these moves no existing leaf, and the re-cut that added them
+    proved it (tests/test_golden_synthetic.py). Left out on purpose, and why:
+      * numbers composed inside Qt panels — the coaching headline's total, the Stats digest, the
+        chart_stats readouts, the g-meter dial's filtering: this dump is headless and Session-level,
+        and each of those is a sum or format of leaves fingerprinted here (the SPLITS grid is the
+        exception worth re-stating — see `_split_matrix`);
+      * `library_entry` / `focus_items` / `focus_report`: keyed on the recording's paths and file
+        identity, which a fingerprint must not depend on — their numbers are `focus_samples` and
+        the coaching rows;
+      * `lap_elevation_channel` (its docstring declines it), `lap_trace_xy` for laps other than the
+        best (the best lap's x/y are in `lap_channels_best`), per-lap `lap_brake_points` (reduced
+        into `brake_report`), the quality strip's per-cell inputs, and `nearest_*` (picking)."""
+    st = guard(lambda: s.stats, default=None)
+    if st is None:
+        out["stats"] = _UNSUPPORTED
+    else:
+        mph = units.convert_speed(1.0, units.MPH)
+        tiles = {
+            "totals": st.totals, "lap_stats": st.lap_stats, "pace": st.pace,
+            "pace_trend": st.pace_trend, "race_pace": st.race_pace, "stints": st.stints,
+            "stint_break_s": st.stint_break_s, "stint_count": st.stint_count,
+            "pace_cov": st.pace_cov, "laps_within_1pct": lambda: st.laps_within_pct(1.0),
+            "longest_coast_s": st.longest_coast_s, "gg_envelope": st.gg_envelope,
+            "session_vmax": st.session_vmax, "speed_bands_kmh": st.speed_bands,
+            "speed_bands_mph": lambda: st.speed_bands(
+                scale=mph, width=stats_service.SPEED_BAND_MPH),
+            "lateral_g_bands": st.lateral_g_bands,
+        }
+        # Each tile its own guard: a bare session with no wall clock loses that tile, not the page.
+        out["stats"] = {k: guard(lambda f=f: _round(f())) for k, f in tiles.items()}
+
+        def cloud():
+            got = st.gg_cloud()
+            return None if got is None else {
+                "n": len(got[0]), "lat": _sampled(got[0], 101), "long": _sampled(got[1], 101)}
+        out["stats"]["gg_cloud"] = guard(cloud)
+
+    put("brake_report", lambda: _round(s.brake_report()))
+    put("coaching_brake_points", lambda: _round(s.coaching_brake_points()))
+    put("sector_medians", lambda: _round(s.sector_medians()))
+    put("effective_sector_count", lambda: s.effective_sector_count())
+    put("collapsed_sector_lines", lambda: _round(s.collapsed_sector_lines()))
+    put("split_matrix", lambda: _round(_split_matrix(s)))
+    put("excluded_lap_rows", lambda: _round(s.excluded_lap_rows()))
+    put("excluded_lap_reasons", lambda: _round(s.excluded_lap_reasons()))
+
+    # The ideal lap beyond its total (`theoretical_best` above): the composite every ideal number
+    # is a reduction of, its curve, the Δ curves drawn against it and the Stats decomposition.
+    put("ideal_sample", lambda: _round(s.ideal_sample()))
+    put("ideal_donor_lap_id", lambda: _round(s.ideal_donor_lap_id()))
+    put("ideal_segment_bests", lambda: _round(s.ideal_segment_bests()))
+    put("ideal_lap_elapsed", lambda: _sampled(s.ideal_lap_elapsed(), 101))
+    put("ideal_delta_to_best", lambda: {m: _curve(s.ideal_delta_to_best(m))
+                                        for m in ("distance", "time")})
+
+    def to_ideal(mode):
+        got = s.delta_to_ideal(sel, mode)
+        return None if got is None else {str(k): _curve(v) for k, v in sorted(got.items())}
+    put("delta_to_ideal", lambda: {m: to_ideal(m) for m in ("distance", "time")})
+
+    def decomposition():
+        sb = s.ideal_segment_bests()
+        return None if sb is None or best is None else _round(sb.decomposition(best))
+    put("ideal_decomposition_best", decomposition)
+
+    # Trust: what the page says about how far to believe the numbers above.
+    put("timing_verified", lambda: bool(s.timing_verified))
+    put("timing_user_confirmed", lambda: bool(s.timing_user_confirmed))
+    put("timing_quality", lambda: _round(s.timing_quality))
+    put("gps_lag_applied_s", lambda: _round(s.gps_lag_applied_s))
+    put("quality_strip", lambda: _quality_strip(s.quality_timeline))
+    put("auto_marks", lambda: _round(s.auto_marks()))
+    put("gmeter_long_source", lambda: _round(s.gmeter_long_source()))
+    put("gmeter_axis", lambda: _round(s.gmeter_axis()))
+    put("gmeter_cross", lambda: _round(s.gmeter_cross()))
+    put("rotation_cross", lambda: _round(s.rotation_cross()))
+    put("rotation_device", lambda: _round(s.rotation_device()))
+    put("has_rotation", lambda: bool(s.has_rotation))
+    put("corner_best_provenance", lambda: {
+        str(c): _provenance(s.corner_best_provenance(c)) for c in cids})
+
+    # Geometry the track DB, the sidecar and the "suggest sectors" action write.
+    put("timing_lines_latlon", lambda: _round(s.timing_lines_latlon()))
+    put("track_location", lambda: _round(s.track_location()))
+    put("suggest_sectors", lambda: _round([[g.x1, g.y1, g.x2, g.y2] for g in s.suggest_sectors(3)]))
+
+    def focus():
+        basis = s.corners.basis()
+        if basis is None:
+            return None
+        corner_list, total = basis
+        return _round(s.focus_samples([(c.enter / total, c.exit / total) for c in corner_list]))
+    put("focus_samples", focus)
+
+    for lid in laps:
+        row = out["per_lap"][str(lid)]
+        row["lap_quality"] = guard(lambda lid=lid: _round(s.lap_quality(lid)))
+        row["lap_time_provenance"] = guard(lambda lid=lid: _provenance(s.lap_time_provenance(lid)))
+
+    if best is not None:
+        put("sector_split_provenance_best", lambda: [
+            _provenance(s.sector_split_provenance(best, k))
+            for k in range(len(s.lap_sector_splits(best)))])
+        put("brake_throttle_best", lambda: [_sampled(a) for a in s.driving.lap_brake_throttle(best)])
+        put("grip_utilization_best", lambda: _sampled(s.driving.lap_grip_utilization(best)))
+        w = guard(lambda: s.lap_window(best), default=None)
+        if w is not None:
+            grid = np.linspace(w[0], w[1], 200)
+            # The picture<->telemetry map every seek and every burned overlay goes through.
+            put("media_time", lambda: _round([s.media_time(float(t)) for t in grid]))
+            put("telemetry_time", lambda: _round([s.telemetry_time(float(t)) for t in grid]))
+            put("yaw_rate_at_time", lambda: _round([s.yaw_rate_at_time(float(t)) for t in grid]))
+            put("delta_to_ideal_at_best", lambda: _round(
+                [s.delta_to_ideal_at(best, float(t)) for t in grid]))
+
+    if s.has_reference():
+        put("reference_lap_choices", lambda: _round(s.reference_lap_choices()))
+        put("reference_match_is_geometric", lambda: bool(s.reference_match_is_geometric()))
+        put("reference_is_own_recording", lambda: bool(s.reference_is_own_recording()))
 
 
 def _lap_clock_span(s, lap_id):
