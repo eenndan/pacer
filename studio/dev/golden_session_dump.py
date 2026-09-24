@@ -427,6 +427,7 @@ def _surfaces(s, out, put, guard, laps, best, cids, sel) -> None:
 
     put("brake_report", lambda: _round(s.brake_report()))
     put("coaching_brake_points", lambda: _round(s.coaching_brake_points()))
+    put("coaching_brake_direction", lambda: _round(s.coaching_brake_direction()))
     put("sector_medians", lambda: _round(s.sector_medians()))
     put("effective_sector_count", lambda: s.effective_sector_count())
     put("collapsed_sector_lines", lambda: _round(s.collapsed_sector_lines()))
