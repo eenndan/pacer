@@ -152,15 +152,15 @@ laps the reference ran half a GPS sample (50 ms) late and `measure_lag` read it 
 gyro's 60-sample low-pass ran 2.5 ms late the other way. Both are `_signal.centred_boxcar` now.
 Measured against TRUTH on the synthetic GoPro (`studio/dev/synth_gopro.py`: the lag it plants is
 known, and so is where the stamp map files each fix — ~50 ms before its true filing time, the
-naive payload spread): the reading overshot what the overlay needs by +73..+78 ms at every planted
-lag 0.0-0.6 s, every noise level 0-3, 1 or 2 chapters, either direction and three seeds. On the
-noise-free trace that +75.4 ms is +57.7 ms this window (every lap there is w = 4), +17.1 ms the
+naive payload spread): the reading overshot what the overlay needs by +73..+78 ms in all eleven
+cases tried — planted lags 0.0-0.6 s, noise 0-3, 1 or 2 chapters, either direction, three seeds. On
+the noise-free trace that +75.4 ms is +57.7 ms this window (every lap there is w = 4), +17.1 ms the
 load-time position boxcar (switch it off, `smooth_window=1`, and the reading is +3.2 ms off) and
--2.5 ms the gyro's. Centred, it overshoots by +19.4..+20.3 ms: the position boxcar's share, which
-is left in because nothing here can model it — it averages positions over 1.3 s of changing speed,
-which drags a braking kart's apparent position back along the track, and its size depends on how
-hard each recording brakes. On the owner's four recordings the installed figure moved by the
-share of laps whose window is even, as it must:
+-2.5 ms the gyro's. Centred, it overshoots by +16.5..+21.6 ms over the same eleven cases: the
+position boxcar's share, left in because nothing here can model it — it averages positions over
+1.3 s of changing speed, which drags a braking kart's apparent position back along the track, and
+its size depends on how hard each recording brakes. On the owner's four recordings the installed
+figure moved by the share of laps whose window is even, as it must:
 
     recording (whole recording)   even-window laps   before     after      moved
     Sandown 3h 2026 (0064)        55 / 62            +0.4977    +0.4578    -39.9 ms
