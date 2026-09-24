@@ -39,6 +39,7 @@ re-deciding the rule in a second place where the two could drift apart.
 from __future__ import annotations
 
 import datetime
+import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
@@ -58,7 +59,9 @@ from . import APP_NAME, theme
 from ._signal import plural
 from .widgets import WrapLabel
 
-NAME_ROLE = Qt.UserRole + 1        # the row's circuit name, raw
+_log = logging.getLogger(__name__)
+
+NAME_ROLE = Qt.UserRole + 1       # the row's circuit name, raw
 EDITABLE_ROLE = Qt.UserRole + 2    # whether a rename/delete can reach it
 
 # What the note under the header says. It leads with what a delete DOESN'T touch, because that is
@@ -184,8 +187,8 @@ class TrackManagerDialog(QDialog):
             return None
         try:
             info = self._backup_info()
-        except Exception as exc:  # noqa: BLE001 — a backup query must never break the dialog
-            print(f"studio: track backup not readable ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a backup query must never break the dialog
+            _log.warning("track backup not readable", exc_info=True)
             return None
         return info if isinstance(info, dict) and info.get("tracks") else None
 
@@ -287,8 +290,8 @@ class TrackManagerDialog(QDialog):
         if self._reverts_to_builtin is not None:
             try:
                 reverts = self._reverts_to_builtin(name)
-            except Exception as exc:  # noqa: BLE001 — a wording query must never block the act
-                print(f"studio: could not tell whether {name!r} reverts ({exc!r}).", flush=True)
+            except Exception:  # noqa: BLE001 — a wording query must never block the act
+                _log.warning("could not tell whether %r reverts", name, exc_info=True)
         if reverts is not None:
             body = (
                 f"Put the built-in “{name}” back?\n\n"

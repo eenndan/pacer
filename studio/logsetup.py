@@ -33,12 +33,28 @@ BOUNDED BY CONSTRUCTION. Three files of at most `MAX_BYTES` each, 1.5 MB in all.
 would let a file run past its cap, and both are closed here. `RotatingFileHandler` compares a
 record's length in CHARACTERS against a cap in BYTES, and this app's messages carry em dashes
 (3 bytes each in UTF-8). And a single record longer than the cap is written whole after the
-rollover. `tests/test_session_log.py` measures the total.
+rollover. `tests/test_session_log.py` measures the total. (A native crash's stack, below, is the
+one write the cap does not see: it is the last thing the process does, and the next run's first
+record rolls the file over.)
+
+A NATIVE CRASH LANDS HERE TOO. Everything above is `logging`, and a SIGSEGV or SIGABRT inside Qt
+or the C++ core never reaches it: the process is gone before any handler runs. The repo has
+post-mortemed at least six Qt-lifetime SIGSEGVs, and each left no Python stack anywhere.
+`configure` therefore points `faulthandler` at this same file, every thread's stack included, so
+the log the crash dialog names ends with the Python stack of the crash that killed the run.
+faulthandler writes from a signal handler, to a file descriptor, so it gets a stream of its own
+(`_crash_stream`): the handler's stream is closed by every rollover and by a failed write, and a
+closed descriptor can be reused by the next `open()` — the stack would land in whatever file got
+that number. And every rollover re-arms it onto the new live file, since a stream opened before
+it follows the renamed one to `pacer.log.1` and, two rollovers on, to a deleted file. A process
+that already enabled faulthandler itself (a developer's `PYTHONFAULTHANDLER`, a test harness that
+wants the stack in its own output) is left as it is.
 
 Stdlib only (no Qt, no pacer), so the layering contract holds and any module may import it.
 """
 from __future__ import annotations
 
+import faulthandler
 import logging
 import os
 import sys
@@ -72,6 +88,10 @@ _log = logging.getLogger(__name__)
 # it again, and without this each call would add a handler and every line would repeat.
 _configured = False
 _active_path: str | None = None
+# The stream faulthandler writes a native crash's stack into (`_arm_crash_stream`), or None while
+# this module has not armed it. Held here so it is never collected, and closed only once
+# faulthandler has been moved off it.
+_crash_stream = None
 
 
 def _app_support_dir() -> str:
@@ -112,12 +132,43 @@ class _FileFormatter(logging.Formatter):
         return text
 
 
+def _arm_crash_stream(path: str) -> bool:
+    """Point faulthandler at `path` (every thread's stack on a fatal signal), through an unbuffered
+    append stream of its own, and close the one it used before. False, with faulthandler left as
+    it was, when the file cannot be opened. Best effort, like the rest of this module: a missing
+    crash stack must never be what stops the app starting.
+
+    The order is the point: faulthandler is moved onto the new descriptor BEFORE the old one is
+    closed, so at no instant does it hold a descriptor that a concurrent `open()` could be given."""
+    global _crash_stream
+    try:
+        stream = open(path, "ab", buffering=0)
+    except OSError:
+        return False
+    try:
+        faulthandler.enable(file=stream, all_threads=True)
+    except (OSError, RuntimeError, ValueError):
+        stream.close()
+        return False
+    previous, _crash_stream = _crash_stream, stream
+    if previous is not None:
+        previous.close()
+    return True
+
+
 class _SessionLogHandler(RotatingFileHandler):
     """A RotatingFileHandler that measures in bytes and gives up quietly."""
 
     def __init__(self, path: str) -> None:
         super().__init__(path, maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8")
         self.failed = False
+
+    def doRollover(self) -> None:
+        """The stdlib's rollover, then faulthandler follows the live file (see the module doc):
+        its stream is still open on the file this just renamed to `pacer.log.1`."""
+        super().doRollover()
+        if _crash_stream is not None and self.stream is not None:
+            _arm_crash_stream(self.baseFilename)
 
     def shouldRollover(self, record: logging.LogRecord) -> bool:
         """The stdlib's rule, measured in the bytes the file will actually grow by. It compares
@@ -198,6 +249,10 @@ def configure(level: int = logging.INFO) -> str | None:
     handler.setFormatter(_FileFormatter(FILE_FORMAT))
     root.addHandler(handler)
     _active_path = path
+    # A native crash's Python stack goes to the same file (the module doc) — unless the process
+    # already enabled faulthandler itself, which is a choice of where that stack goes.
+    if _crash_stream is not None or not faulthandler.is_enabled():
+        _arm_crash_stream(path)
     # The first line of every run: which build wrote what follows, which is the first thing a bug
     # report needs, and where the file is, for the developer watching stderr.
     _log.info("%s %s (pid %d) — session log at %s", APP_NAME, __version__, os.getpid(),

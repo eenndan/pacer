@@ -22,10 +22,10 @@ TWO DELIBERATE SHAPES, both to keep the import one-way (app -> controller, never
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
-import traceback
 from typing import NamedTuple
 
 from PySide6.QtCore import QBuffer, QIODevice, Qt
@@ -47,6 +47,8 @@ from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
 from ._signal import fmt_hms, lap_label
 from .session import fmt_time
 from .workers import VideoExportWorker
+
+_log = logging.getLogger(__name__)
 
 
 class ExportChoice(NamedTuple):
@@ -253,8 +255,8 @@ class ExportController:
                 # "recording 0060 · 3 chapters" while the report beside it said 2.
                 title=self.win._loaded_label() or "")
             QApplication.clipboard().setText(text)
-        except Exception as exc:  # noqa: BLE001 — a clipboard failure must not disrupt the app
-            print(f"studio: stats summary not copied ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a clipboard failure must not disrupt the app
+            _log.exception("stats summary not copied")
             self.win.statusBar().showMessage("could not copy the stats summary", self._status_ms)
             return
         self.win.statusBar().showMessage("stats summary copied — paste it into a chat", self._status_ms)
@@ -313,7 +315,7 @@ class ExportController:
         is a thing the user can act on (wrong folder, full disk, unplugged drive); anything else is
         about the DATA, and promising a next action we cannot name would be a wrong specific
         sentence — the trap `_export_failure_message` exists to avoid. Either way the exception is
-        printed with its traceback, so a bug report can still reach what went wrong."""
+        logged with its traceback, so a bug report can still reach what went wrong."""
         try:
             write()
         except OSError as exc:
@@ -322,8 +324,7 @@ class ExportController:
             self.win.statusBar().showMessage(f"export failed: {exc}", self._status_ms)
             return False
         except Exception as exc:  # noqa: BLE001 — see the docstring: the alternative is a crash dialog
-            traceback.print_exc()
-            print(f"studio: export of {os.path.basename(path)} failed ({exc!r}).", flush=True)
+            _log.exception("export of %s failed", os.path.basename(path))
             box = QMessageBox(QMessageBox.Warning, "Export failed",
                               f"{APP_NAME} couldn't build {os.path.basename(path)} from this "
                               f"recording, so nothing was written.\n\nHelp ▸ Report a problem… if "
@@ -464,7 +465,7 @@ class ExportController:
             for key, index in indices.items():
                 prefs.set(key, int(index))
         except OSError as exc:
-            print(f"studio: export preset not remembered ({exc!r}).", flush=True)
+            _log.warning("export preset not remembered (%r)", exc)
     def _export_clip_seconds(self, lap: int, lead: float) -> float:
         """How long the exported CLIP is for `lap` with `lead` seconds of run-up and run-off —
         measured through `export_video.lap_window_for_export`, the same funnel the render resolves

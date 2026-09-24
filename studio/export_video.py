@@ -28,6 +28,7 @@ a frame has no key to decode one — and it does NOT block the export the way th
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -53,6 +54,8 @@ from PySide6.QtGui import (
 from . import data_quality, gmeter_overlay, theme, units
 from ._signal import fmt_time, lap_label
 from .export_palette import EXPORT
+
+_log = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- ffmpeg discovery
@@ -3051,9 +3054,8 @@ class Renderer:
             return
         sentence = self._disk_full_sentence()
         if sentence is None:
-            print(f"studio: the encoder reported no space left, but the disk holding "
-                  f"{self._spec.out_path} has room or cannot be asked; not treating it as a "
-                  f"full disk.", flush=True)
+            _log.warning("the encoder reported no space left, but the disk holding %s has room "
+                         "or cannot be asked; not treating it as a full disk", self._spec.out_path)
             return
         self.cancel()
         raise DiskFullError(f"{sentence}\n\n{exc}") from exc

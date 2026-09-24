@@ -66,6 +66,7 @@ injected callback, and this dialog still writes nothing.
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 from collections.abc import Callable
 
@@ -95,6 +96,8 @@ from ._signal import plural as _plural_shared
 from .theme import C
 from .widgets import NUM_ROLE, EmptyState, WrapLabel
 from .widgets import NumItem as _NumItem
+
+_log = logging.getLogger(__name__)
 
 # Column layout — index → header. Date/Best/Ideal sort numerically (a key in NUM_ROLE);
 # Track sorts as text.
@@ -875,7 +878,7 @@ class LibraryDialog(QDialog):
         try:
             remembered = prefs.library_size()
         except Exception as exc:  # noqa: BLE001 — an unreadable pref just means "use the default"
-            print(f"studio: library size not restored ({exc!r}).", flush=True)
+            _log.warning("library size not restored (%r)", exc)
             remembered = None
         width, height = remembered or _DEFAULT_SIZE
         height = max(height, _MIN_BROWSABLE_H)
@@ -1294,8 +1297,8 @@ class LibraryDialog(QDialog):
             return
         try:
             store = self._edit_record(entry)
-        except Exception as exc:  # noqa: BLE001 — a record write must never break the library
-            print(f"studio: session record not saved ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a record write must never break the library
+            _log.exception("session record not saved")
             store = None
         if isinstance(store, dict):
             self._records = store
@@ -1511,8 +1514,8 @@ class LibraryDialog(QDialog):
             return
         try:
             store = self._reload_records()
-        except Exception as exc:  # noqa: BLE001 — a record read must never break the library
-            print(f"studio: session records not re-read ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a record read must never break the library
+            _log.warning("session records not re-read", exc_info=True)
             return
         if isinstance(store, dict):
             self._records = store
@@ -1525,8 +1528,8 @@ class LibraryDialog(QDialog):
             return None
         try:
             info = self._backup_info()
-        except Exception as exc:  # noqa: BLE001 — a backup query must never break the library
-            print(f"studio: library backup not readable ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a backup query must never break the library
+            _log.warning("library backup not readable", exc_info=True)
             return None
         return info if isinstance(info, dict) and info.get("entries") else None
 
