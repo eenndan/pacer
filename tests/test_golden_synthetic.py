@@ -101,6 +101,14 @@ import tempfile
 
 import numpy as np
 
+# The fingerprint must not depend on the machine's timezone: SessionStats renders the first and last
+# fix as LOCAL wall-clock "HH:MM" (`stats.totals.start_clock`), so a baseline cut in BST read 11:00
+# where the CI runner (UTC) read 10:00 — four leaves that differed only by where the test ran.
+os.environ["TZ"] = "UTC"
+import time  # noqa: E402
+
+time.tzset()
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ — for the sibling fixture
