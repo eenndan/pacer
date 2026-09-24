@@ -163,7 +163,7 @@ def _other_picture(path, truth, first_payload, n_payloads, ffmpeg):
     reads the video — CI's ffmpeg need not encode what this Mac's did. Same frame count, rate and
     timescale as `synth_gopro._encode_video`, which is all the loader takes from the picture."""
     subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-                    "color=c=0x6a2d1f:s=320x180:r=30000/1001",
+                    "color=c=0x6a2d1f:s=64x36:r=30000/1001",
                     "-frames:v", str(n_payloads * sg.FRAMES_PER_PAYLOAD), "-c:v", "libx264",
                     "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
                     "-an", "-n", path], check=True, capture_output=True)
@@ -241,7 +241,7 @@ def _build_drift_band():
     return s
 
 
-def synthetic_fingerprint(recording=None) -> dict:
+def synthetic_fingerprint(recording=None, *, gopro: bool = True) -> dict:
     """The whole CI fingerprint: the seeded phases (base / ref / ref_cleared, the three drift
     fixtures) and the two real-loader GoPro phases — the CI-runnable analogue of
     golden_session_dump.main()'s multi-phase dump. The seeded phases have no ``reseg``
@@ -269,6 +269,8 @@ def synthetic_fingerprint(recording=None) -> dict:
     # so every lap the removed 0.5 % gate would have kept on the normalized projection is missing
     # from this fingerprint entirely, and a regression in that band moves no leaf of it.
     result["drift_band"] = fingerprint(_build_drift_band(), strict=False)
+    if not gopro:   # the seeded phases alone (test_reference_clear_reverts_to_base needs no more)
+        return result
     # The real loader, on a recording that laps (see the module docstring).
     result["gopro_telemetry_sha256"] = _gopro_telemetry_sha256()
     result.update(gopro_fingerprint(recording))
@@ -465,7 +467,7 @@ def test_gopro_phases_reach_what_the_seeded_phases_cannot():
 def test_reference_clear_reverts_to_base():
     """clear_reference() must revert the per-lap Δ baseline byte-for-byte — ref_cleared == base
     (the invalidate_stats() seam, pinned here at the fingerprint level)."""
-    fp = synthetic_fingerprint()
+    fp = synthetic_fingerprint(gopro=False)
     diffs, stats = _compare(fp["base"], fp["ref_cleared"])
     assert not diffs, f"ref_cleared drifted from base: {diffs[:5]}"
     assert stats["max"] <= EPS
@@ -716,11 +718,24 @@ def _write_baseline():
     print(f"  before: {'(none)' if old is None else _census_line(old)}")
     print(f"  after:  {_census_line(fp)}")
     if old is not None:
-        diffs, stats = _compare(old, fp)
-        print(f"  {len(diffs)} differing leaves vs the old baseline "
-              f"(max |Δ|={stats['max']:g} at {stats['max_path'] or '-'}; showing up to 40):")
+        # Compared on the OLD tree's keys, so a re-cut that only ADDS leaves reports 0 moved rather
+        # than one key mismatch at the root that hides whether anything under it changed.
+        kept = _project(fp, old)
+        diffs, stats = _compare(old, kept)
+        print(f"  {len(diffs)} of the old baseline's leaves moved or vanished (max |Δ|="
+              f"{stats['max']:g} at {stats['max_path'] or '-'}); "
+              f"{census(fp)['leaves'] - census(kept)['leaves']} leaves are new; showing up to 40:")
         for d in diffs[:40]:
             print("    " + d)
+
+
+def _project(new, old):
+    """`new` cut down to the keys `old` has, recursively — what a re-cut kept of the old tree."""
+    if isinstance(new, dict) and isinstance(old, dict):
+        return {k: _project(new[k], old[k]) for k in old if k in new}
+    if isinstance(new, list) and isinstance(old, list) and len(new) == len(old):
+        return [_project(n, o) for n, o in zip(new, old, strict=True)]
+    return new
 
 
 if __name__ == "__main__":
