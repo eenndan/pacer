@@ -1549,6 +1549,18 @@ class CentralView(QWidget):
         if self._maximized_panel is not self._table_panel:
             self._toggle_panel_maximized(self._table_panel)
 
+    def show_coaching_maximized(self):
+        """Coaching ▸ Opportunities: the Coaching page full-window, where every row also has room
+        for its Entry·Apex·Exit bars and its Jump — the page that replaced the modal copy of this
+        ranking. A toggle exactly like ``show_stats_maximized``: invoked again while showing it,
+        it restores the grid."""
+        if self.tab_bar.currentIndex() == 3 and self._maximized_panel is self._table_panel:
+            self._restore_splitter_sizes()
+            return
+        self.tab_bar.setCurrentIndex(3)
+        if self._maximized_panel is not self._table_panel:
+            self._toggle_panel_maximized(self._table_panel)
+
     def _set_corner_lap(self, lap_id: int | None):
         """Track the lap the Corners view describes — the PRIMARY selected/followed lap.
         Cheap when nothing changed; the table itself only refills on a real lap change.
