@@ -1687,6 +1687,17 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     v.refresh()
     note = v.straights_note.text()
     assert "The Coaching tab starts with C3: it ranks the time lost inside the corners" in note, note
+    # … and when Coaching's own theme cannot separate its top two ("Start with C3 or C1"), the line
+    # names both, as that page does — measured on Sandown 3h, where this corner is the second.
+    from studio import coaching
+    spread = coaching.Evidence(n_laps=12, reach_laps=4, reach=coaching.REACH_REPEAT, iqr=0.2,
+                               abstain=coaching.ABSTAIN_NONE)
+    tied = replace(elsewhere, rows=[replace(r, time_lost=t, evidence=spread)
+                                    for r, t in zip(elsewhere.rows, (0.40, 0.38), strict=True)])
+    sess.coaching_opportunities = lambda: tied
+    v.refresh()
+    note = v.straights_note.text()
+    assert note.endswith("The Coaching tab starts with C3 or C1 — this is one of them."), note
     fired = []
     v.corner_clicked.connect(fired.append)
     t.selectRow(0)

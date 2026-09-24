@@ -4202,9 +4202,11 @@ class StatsView(QWidget):
         start = self._coaching_start(session)
         if not start:
             return text
-        if top.ring_cid in start:
+        if start == [top.ring_cid]:
             return f"{text} C{top.ring_cid} is also where the Coaching tab starts."
         names = " or ".join(f"C{c}" for c in start)
+        if top.ring_cid in start:
+            return f"{text} The Coaching tab starts with {names} — this is one of them."
         return (f"{text} The Coaching tab starts with {names}: it ranks the time lost inside "
                 "the corners, and a straight is outside every corner.")
 
