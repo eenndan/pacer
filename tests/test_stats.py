@@ -1596,7 +1596,7 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     t = v.braking.table
     assert not t.isHidden() and t.rowCount() == 2       # the unbraked corner (n=0) is omitted
     assert t.item(0, 0).text() == "C1" and t.item(0, 2).text() == "2.1"
-    assert t.item(0, 4).text() == "88" and t.item(0, 5).text() == "+3.5"
+    assert t.item(0, 4).text() == "88" and t.item(0, 5).text() == "3.5"
     assert t.item(1, 2).text() == "—"                   # single-lap σ: dash, never 0
     assert t.item(1, 5).text() == "-1.2"
     fired = []
@@ -1608,6 +1608,40 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     v.refresh()
     assert v.braking.heading.isHidden() and v.braking.table.isHidden()
     print("test_stats_view_braking_table_filters_unbraked_and_emits_clicks OK")
+
+
+def test_the_braking_bound_is_labelled_a_models_bound_not_room_to_gain():
+    """L8. BRAKING's last column is the D4 model's BOUND: per lap, how far past the onset a stop
+    held at the session's demonstrated PEAK deceleration would start, medianized. It read as room to
+    gain — headed "m later", printed "+17.5", hovered "the ESTIMATED median metres you could brake
+    later" — yet a kart never holds its peak, so the bound sits past the driver's braking by
+    construction (positive at 33 of 33 working-set corners, refused-2026-09.md §16). Pinned on the
+    real page: the header is the shared (est) label and never says "later"; a positive cell has no
+    "+"; the hover says it is a model's bound, not room to gain; and it names the model's
+    deceleration as the SAME demonstrated maximum Commit % divides by (one quantity, one source)."""
+    _app()
+    from studio import theme
+    from studio.stats import BrakeConsistency
+    from studio.stats_braking import BOUND_COLUMN, BRAKE_COLUMNS, BRAKING_TOOLTIP
+    from studio.stats_panel import StatsView
+
+    assert BRAKE_COLUMNS[-1] == BOUND_COLUMN == theme.estimated_label("Bound m"), BRAKE_COLUMNS
+    assert not any("later" in h.lower() for h in BRAKE_COLUMNS), BRAKE_COLUMNS
+    assert "brake later" not in BRAKING_TOOLTIP.lower(), BRAKING_TOOLTIP
+    assert "NOT ROOM TO GAIN" in BRAKING_TOOLTIP and f"{BOUND_COLUMN} is, per lap," in BRAKING_TOOLTIP
+    assert "demonstrated maximum deceleration — the one Commit % divides by" in BRAKING_TOOLTIP
+    sess = _fake_view_session()
+    sess.brake_report = lambda: [
+        BrakeConsistency(cid=4, n=12, median_dist_m=250.0, sigma_m=3.0, span_m=9.0,
+                         commit_pct=81.0, metres_later_med=17.5)]
+    v = StatsView(sess)
+    t = v.braking.table
+    heads = [t.horizontalHeaderItem(c).text() for c in range(t.columnCount())]
+    assert heads == BRAKE_COLUMNS, heads
+    assert t.item(0, 5).text() == "17.5", "a bound is a distance: no '+' to read as metres to gain"
+    assert t.toolTip() == BRAKING_TOOLTIP
+    v.hide()
+    print(f"test_the_braking_bound_is_labelled_a_models_bound_not_room_to_gain OK ({heads[-1]!r})")
 
 
 def test_stats_view_straights_table_and_exit_leverage_note():

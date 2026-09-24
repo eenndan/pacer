@@ -333,8 +333,9 @@ class BrakeConsistency:
     sigma_m: float | None           # cross-lap σ of the onset (m); None with <2 laps
     span_m: float | None            # max − min onset spread (m)
     commit_pct: float | None        # median (event peak decel / session a_max) × 100
-    metres_later_med: float | None  # median metres-left-on-table (optimal − actual; + = can
-    #                                 brake later). ESTIMATED, from the D4 brake-point model.
+    metres_later_med: float | None  # median (model optimum − actual onset), m: the D4 model's
+    #                                 BOUND — past the onset by construction, never room to gain
+    #                                 (refused-2026-09.md §16); BRAKING's "Bound m (est)" column.
 
 
 @dataclass(frozen=True)
