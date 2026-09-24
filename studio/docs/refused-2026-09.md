@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Fourteen features were built far enough to **measure**, and the measurement said not to ship them. The
+Fifteen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1348,6 +1348,52 @@ neutralised stretch whose laps separate from the racing laps on some measured qu
 on both sides. Or a statistic that answers "how consistent is the driver?" without a threshold and
 without breaking when nearly half the laps are neutralised. The median band, the sparkline's fence
 and the Theil–Sen trend all break at chapter 1's 8 of 17.
+
+---
+
+## 15. Moving the unknown-track start line to mid-straight, or further back off the braking point — refused (X1)
+
+**The claim.** #371 measured, on the synthetic recording's known truth (`studio/dev/synth_gopro.py`),
+that the unknown-track heuristic put its line at the fastest fix, which is where laps start braking,
+and that the load-time position boxcar then costs up to 13.1 ms a lap there against 0.41 ms at a line
+across the middle of the main straight. So: place the auto-fitted line mid-straight, on the longest
+straight, or on the nearest constant-speed stretch.
+
+**How it was tested.** Twenty seeds of the synthetic recording at four GPS-noise levels, each loaded
+through the real `Session.load`; every lap timed at each candidate line through the loaded
+`pacer.Laps` and compared with the truth at that same line (14 laps a seed, 280 a cell, rms of
+the lap-time error in ms). "Held peak" is what X1 shipped: the maximum of the speed held over the
+11 fixes the heading is read from, instead of the fastest single fix.
+
+| line | noise-free | ½× noise | default noise | 2× noise |
+|---|---|---|---|---|
+| fastest single fix (before X1) | 4.27 | 7.20 | 11.98 | 23.32 |
+| **held peak (X1)** | **0.68** | **5.57** | **11.09** | **22.12** |
+| held peak, 5 fixes further back | 0.06 | 5.57 | 11.22 | 22.49 |
+| held peak, 10 fixes further back | 0.06 | 5.62 | 11.34 | 22.56 |
+| held peak, 20 fixes further back | 0.08 | 5.86 | 11.69 | 23.58 |
+| middle of the main (and longest) straight | 0.11–0.13 | 6.1–6.3 | 12.2–12.6 | 24.4–25.2 |
+
+- **The braking bias is real and small.** Noise-free, every rule off the braking point is within a
+  millisecond. With noise the lap-time error is σ/v at each crossing, so a slower line is a noisier
+  one: mid-straight is **worse than the old line** at default noise and above, and so is backing off
+  20 fixes at 2× noise.
+- **Real footage cannot see the difference, and official timing cannot rank a placement.** A
+  Doppler-only model of the boxcar (the along-track distance integrated from GPS speed and smoothed
+  like the positions; it reproduces the synthetic noise-free error at r = +0.997 over 2,729
+  lap-line pairs) puts the braking bias at the held peak at 1.6–4.4 ms rms on MK_18_09 and the three
+  Sandown recordings; backing off moves it by at most 2.6 ms while losing up to 4.6 km/h of
+  crossing speed. MK's residual against Club Speed is 24.7 ms at the built-in line: in quadrature
+  the bias change is worth at most 0.3 ms, the slower crossing can cost 1.5 ms, and σ over 14 laps
+  has a standard error near 5 ms. The same sheet reads
+  29 ms 10 m from that line, 41–50 ms 20 m away and 76 ms 60 m away, because a lap timed at another
+  line is a different lap: it measures driving between the two lines, not error.
+
+**What moves because of this refusal: nothing.** X1 ships the held peak only.
+
+**What would be new evidence:** a recording with official timing whose residual at the timing loop
+itself shows a braking-point bias above ~5 ms, or a position smoother whose noise does not grow as
+the crossing slows.
 
 ---
 

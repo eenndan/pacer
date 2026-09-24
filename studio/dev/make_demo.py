@@ -22,9 +22,9 @@ WHAT IS IN THE FILE:
     -24, p90 +65 — the 10 Hz samples; 0.87 m median), inside one frame;
   * a VERIFIED start/finish line — the circuit is the built-in track `DEMO_TRACK_NAME`
     (`studio/track_db.py` SEED), whose line sits square across the middle of the main straight. An
-    unknown circuit would load with an auto-fitted, provisional line; and the unknown-track
-    heuristic puts its line at the peak-speed point, where laps start braking, which #371 measured
-    costing up to 13 ms a lap on this very circuit.
+    unknown circuit would load with an auto-fitted, provisional line — which, until X1, the
+    unknown-track heuristic put at the peak-speed point, where laps start braking: #371 measured
+    that costing up to 13 ms a lap on this very circuit.
 
 WHERE (DEMO_ORIGIN). The open Atlantic, like `synth_gopro.ORIGIN`, but ~135 km from it: the built-in
 track detects within `track_db.DETECT_RADIUS_M` (1.5 km), so the test recording at ORIGIN stays an

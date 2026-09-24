@@ -64,6 +64,7 @@ from studio._signal import (  # noqa: E402
 from studio.corner_model import SegmentBests  # noqa: E402
 from studio.load import (  # noqa: E402
     _HEURISTIC_HALF_M,
+    _HEURISTIC_HEADING_SAMPLES,
     MIN_START_SPEED,
     _clean,
     _heuristic_start_base,
@@ -1742,25 +1743,52 @@ def test_best_excludes_dropout_lap_then_falls_back():
     print("test_best_excludes_dropout_lap_then_falls_back OK")
 
 
-def test_heuristic_start_base_perpendicular_at_peak_speed():
-    """The unknown-track heuristic places the start/finish line PERPENDICULAR to travel at the
-    peak-speed point (the main straight). A straight along +x with the peak in the middle → a
-    vertical (constant-x) line centred on the peak, spanning 2·_HEURISTIC_HALF_M."""
-    n = 41
-    xs = np.linspace(0.0, 100.0, n)
+def _straight_into_braking(n=201, peak=150):
+    """A straight along +x, 2.5 m a fix: the speed builds slowly to `peak` (engine-limited), then
+    falls fast (the braking zone) — the shape every real lap's fastest place has."""
+    xs = np.arange(n) * 2.5
     ys = np.zeros(n)
-    speeds = np.ones(n)
-    speeds[20] = 50.0                       # peak at the middle sample (x = 50)
+    i = np.arange(n, dtype=float)
+    speeds = np.where(i <= peak, 20.0 + 5.0 * i / peak, 25.0 - 0.4 * (i - peak))
+    return xs, ys, speeds
+
+
+def test_heuristic_start_base_perpendicular_at_peak_speed():
+    """The unknown-track heuristic places the start/finish line PERPENDICULAR to travel where the
+    speed stays highest (the main straight). A straight along +x → a vertical (constant-x) line,
+    spanning 2·_HEURISTIC_HALF_M, on the straight within the held window before the braking point."""
+    xs, ys, speeds = _straight_into_braking()
     seg = _heuristic_start_base(xs, ys, speeds)
     assert seg is not None
-    # Centred on the peak point (50, 0)…
-    assert abs((seg.first.x + seg.second.x) / 2 - 50.0) < 1e-6
+    cx = (seg.first.x + seg.second.x) / 2
+    # On the straight, no further back than the held window, and never past the braking point…
+    k = _HEURISTIC_HEADING_SAMPLES
+    assert xs[150 - k] - 1e-6 <= cx <= xs[150] + 1e-6, (cx, xs[150 - k], xs[150])
     assert abs((seg.first.y + seg.second.y) / 2 - 0.0) < 1e-6
-    # …perpendicular to the +x heading, so the line is vertical (both endpoints at x = 50)…
-    assert abs(seg.first.x - 50.0) < 1e-6 and abs(seg.second.x - 50.0) < 1e-6
+    # …perpendicular to the +x heading, so the line is vertical (both endpoints at the same x)…
+    assert abs(seg.first.x - cx) < 1e-6 and abs(seg.second.x - cx) < 1e-6
     # …and spans 2·half in y.
     assert abs(abs(seg.first.y - seg.second.y) - 2 * _HEURISTIC_HALF_M) < 1e-6
     print("test_heuristic_start_base_perpendicular_at_peak_speed OK")
+
+
+def test_heuristic_start_base_ignores_a_speed_glitch():
+    """X1: a GPS speed GLITCH must not place the line. MK_18_09 (0067) measured it: two fixes 12 s
+    into the trace read 93.3 and 106.0 km/h between 64 and 42 km/h — the session's real top speed is
+    88 km/h — so the single-fix argmax put the line there, 39 m off the racing line; it counted no
+    lap, the loader fell back to a random line, and that one cut the session into 30 pieces (15
+    valid laps where the track's own line counts 19). The line belongs where the speed STAYS high."""
+    xs, ys, speeds = _straight_into_braking()
+    speeds = speeds.copy()
+    speeds[30:32] = (40.0, 45.0)            # a two-fix Doppler spike, far above the real 25 m/s
+    seg = _heuristic_start_base(xs, ys, speeds)
+    assert seg is not None
+    cx = (seg.first.x + seg.second.x) / 2
+    k = _HEURISTIC_HEADING_SAMPLES
+    assert xs[150 - k] - 1e-6 <= cx <= xs[150] + 1e-6, (
+        f"the line sits at x={cx:.1f} m: the glitch at x={xs[30]:.1f}-{xs[31]:.1f} m placed it, "
+        f"not the sustained peak at x={xs[150]:.1f} m")
+    print("test_heuristic_start_base_ignores_a_speed_glitch OK")
 
 
 def test_heuristic_start_base_degenerate_returns_none():
