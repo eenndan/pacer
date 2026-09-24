@@ -217,12 +217,31 @@ def _heuristic_start_base(xs, ys, speeds):
     coordinates are LOCAL metres (match `tracks.make_segment` / `cs.local`). Returns None when the
     geometry is degenerate (too few samples / no local heading) so the caller falls back to
     `laps.pick_random_start()`. NOTE: the timing stays PROVISIONAL until the user confirms the line
-    (see Session.timing_verified) — this is a better DEFAULT placement, not a trusted fix."""
+    (see Session.timing_verified) — this is a better DEFAULT placement, not a trusted fix.
+
+    THE PEAK IS WHERE THE SPEED STAYS HIGHEST — the maximum of the speed held over the same 2k+1
+    fixes the heading is read from (a running median), not the fastest single fix (X1). A lone
+    Doppler fix is not a place. On MK_18_09 two fixes 12 s into the trace read 93.3 and 106.0 km/h
+    between 64 and 42 km/h (the session's real top speed is 88 km/h): the single-fix argmax put the
+    line 39 m off the racing line, it counted no lap, and the random fallback below cut the session
+    into 30 pieces — 15 valid laps where the track's own line counts 19. Held over the window, the
+    peak is the back straight's, where 19 are counted. On a clean peak the held maximum sits a few
+    fixes EARLIER than the fastest fix (`argmax` takes the first of equal values, and braking drags
+    the later windows down), which moves the line off the braking point it used to sit on: there the
+    load-time position boxcar times a lap that has begun braking differently from one that has not.
+    Measured on the synthetic recording's known truth (studio/dev/synth_gopro.py, 20 seeds x 14
+    laps): rms lap-time error 4.27 -> 0.68 ms noise-free, 11.98 -> 11.09 ms at its default noise,
+    23.32 -> 22.12 ms at twice it; on the three Sandown recordings (jailed, no track DB) the line
+    moves 9-16 m back up the straight and every lap count stays as it was. Moving it further back
+    was measured too and is refused: a slower crossing puts more GPS noise into the lap time than
+    the braking bias it removes (at 20 fixes back, 23.58 ms at twice the noise)."""
     n = len(speeds)
     if n < 2 * _HEURISTIC_HEADING_SAMPLES + 1:
         return None
-    i = int(np.argmax(speeds))
     k = _HEURISTIC_HEADING_SAMPLES
+    held = np.median(np.lib.stride_tricks.sliding_window_view(
+        np.pad(np.asarray(speeds, float), k, mode="edge"), 2 * k + 1), axis=1)
+    i = int(np.argmax(held))
     a, b = max(0, i - k), min(n - 1, i + k)
     dx, dy = float(xs[b] - xs[a]), float(ys[b] - ys[a])
     heading = math.hypot(dx, dy)
