@@ -58,11 +58,12 @@ DEMO_TRACK_NAME = "Synthetic demo circuit"
 # heuristic's own 15 m (load._HEURISTIC_HALF_M), so the line spans any GPS scatter across the straight.
 LINE_HALF_M = 15.0
 
-# The truth this demo was published with: every flying lap's true time (ms) at the built-in line.
-# If the generator changes, the published file does not — tests/test_demo_session.py fails here
-# until the demo is re-published (a new release tag, `studio/demo.py` re-pinned) or the change is
-# kept away from the demo's parameters.
-PUBLISHED_LAP_MS = ()  # filled in below, once measured
+# The truth the published demo (`demo-data-v1`) was generated with: every flying lap's true time, ms,
+# at the built-in line. If the generator changes, the published file does not — so
+# tests/test_demo_session.py fails here until the demo is re-published (a new release tag,
+# `studio/demo.py` re-pinned) or the change is kept away from the demo's parameters.
+PUBLISHED_LAP_MS = (45684, 45289, 45391, 44966, 45355, 50590, 45300, 45331, 45183, 45234, 45258,
+                    45161, 44956, 45253)
 
 # ------------------------------------------------------------------------------ the picture
 W, H = 960, 540

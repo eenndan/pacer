@@ -40,7 +40,7 @@ from . import app_support
 _DEMO_URL = (
     "https://github.com/eenndan/pacer/releases/download/demo-data-v1/pacer-demo.mp4"
 )
-_DEMO_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+_DEMO_SHA256 = "60a15d28a7085a8bd1c433c5c25a3c521563bd68008cb3cd76053b0c74b1b560"
 # The CACHE's name, which is what the window title shows for a non-GoPro file: it says what the
 # recording is, so the title bar keeps saying so while the video pane is collapsed.
 _DEMO_FILENAME = "pacer-synthetic-demo.mp4"
