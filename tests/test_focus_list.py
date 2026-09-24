@@ -22,10 +22,15 @@ What is asserted here, on inputs whose answer is known by construction:
     statistic rather than a second notion of significance;
   * the PANEL: the block is dormant until the app hands it a report, it names the corner its Add
     button would promote, the two gestures are signals (the window owns the store), and it yields
-    its height to the ranked list exactly as the theme block does.
+    its height to the ranked list exactly as the theme block does;
+  * the WINDOW: every write to the session-record store — the form's save and delete, from
+    File ▸ Session record… and from the Library, and the Library's forget, clear and restore —
+    re-reads the verdict on the real Coaching page, so writing the two records a refusal asks for
+    lifts it without re-opening the recording (board review UX-5).
 
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_focus_list.py
 """
+import contextlib
 import json
 import os
 import sys
@@ -496,6 +501,202 @@ def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
             {"track": "T", "items": [backwards, empty, off_lap, before, good]}]}, fh)
     assert [i.cid for i in F.for_track(F.load(path), "T")] == [2]
     print("ok store: a backwards, empty or off-lap window is dropped on its own account")
+
+
+# ------------------------------------------------------------------ the window: record writes
+# The session the list was promoted in, on "another day" — its fingerprint and date are all the
+# verdict reads of it; the numbers are this session's own, so every structural gate passes.
+_THEN_FP, _THEN_DATE = "GX0065", "2025-08-23"      # "23 Aug" in the refusal
+
+
+@contextlib.contextmanager
+def _own_stores():
+    """Every store a record gesture touches, in a directory of this test's own: the verdict reads
+    the focus list AND the records, and the Library's forget / clear / restore also write the index
+    and the marks. The seams are put back afterwards, so the module-level focus seam the other
+    tests share is left exactly as it was."""
+    from studio import library, marks
+    mods = (F, library, session_record, marks)
+    saved = [m._app_support_dir for m in mods]
+    with tempfile.TemporaryDirectory() as d:
+        for m in mods:
+            m._app_support_dir = lambda d=d: d
+        try:
+            yield d
+        finally:
+            for m, fn in zip(mods, saved, strict=True):
+                m._app_support_dir = fn
+
+
+def _window_with_a_corner_from_another_day():
+    """The REAL StudioWindow (its real `_build_ui`, so the real Coaching page and the real library
+    controller) over the synthetic stadium session, with one corner on this track's focus list
+    promoted on ANOTHER day. The item is measured on this session's own window and lap length, so
+    the like-for-like record gate is the one that decides — the SD_30_08 → SD_19_09 shape the
+    board review drove on real footage (UX-5)."""
+    import test_central_view_realqt as realqt
+    win, view = realqt._studiowindow_with_view()
+    entry = win.library_ctl._current_library_entry()
+    first = win.session.corners.corner_list()[0]
+    item = win.session.focus_items([first.cid], entry)[0]
+    F.save_for_track(entry["track"], [F.FocusItem(**{**vars(item), "fingerprint": _THEN_FP,
+                                                     "date": _THEN_DATE})])
+    win.library_ctl.update_focus_list()      # what the load does: `_build_ui` ends with this call
+    return win, view, entry, item.label
+
+
+def _then_entry(track: str, folder: str) -> dict:
+    """The other day's Library row — what the Library dialog hands the record editor for it. Its
+    file has to exist: the dialog greys out, and will not select, a row whose footage is gone."""
+    media = os.path.join(folder, "GX010065.MP4")
+    if not os.path.exists(media):
+        with open(media, "wb") as fh:
+            fh.write(b"not a video; the row only needs its file to exist")
+    return {"fingerprint": _THEN_FP, "stem": "GX010065", "track": track, "date": _THEN_DATE,
+            "lap_count": 37, "best": 47.1, "theoretical": 46.5, "verified": True,
+            "degraded": False, "dropout": False, "paths": [media]}
+
+
+def _focus_text(view) -> str:
+    _APP.processEvents()
+    return view.opportunities.focus_block.full_text()
+
+
+def _dispose(win, view):
+    win._tick_timer.stop()          # a leaked tick timer has hung a later test before
+    view.dispose()
+    win.deleteLater()
+    _APP.processEvents()
+
+
+@contextlib.contextmanager
+def _the_record_form_answers(*, delete: bool = False):
+    """`SessionRecordDialog.exec()` answered the way the driver answers it — pick Dry and press
+    Save, or press Delete record and confirm — on the REAL form, so what gets written is the real
+    `result_record()`. Only the modal loop an offscreen test cannot sit in is replaced."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio import session_record_dialog as srd
+
+    class _ConfirmYes:
+        Yes, No = QMessageBox.Yes, QMessageBox.No
+
+        @staticmethod
+        def question(*_a, **_k):
+            return QMessageBox.Yes
+
+    def _exec(dlg):
+        if delete:
+            dlg.delete_btn.click()
+        else:
+            dlg.conditions.setCurrentIndex(dlg.conditions.findData("dry"))
+            dlg.save_btn.click()
+        return dlg.result()
+
+    orig_exec, orig_box = srd.SessionRecordDialog.exec, srd.QMessageBox
+    srd.SessionRecordDialog.exec, srd.QMessageBox = _exec, _ConfirmYes
+    try:
+        yield
+    finally:
+        srd.SessionRecordDialog.exec, srd.QMessageBox = orig_exec, orig_box
+
+
+@contextlib.contextmanager
+def _the_library_edits_the_record_of(fingerprint: str):
+    """File ▸ Library… answered by selecting `fingerprint`'s row and pressing its Session record…
+    button (`_edit_selected_record`, the dialog's own handler), then closing — the board review's
+    second step, through the real dialog and its injected editor callback."""
+    from studio.library_dialog import LibraryDialog
+
+    def _exec(dlg):
+        for row in range(dlg.table.rowCount()):
+            dlg.table.selectRow(row)
+            chosen = dlg._selected_entry()
+            if chosen and chosen.get("fingerprint") == fingerprint:
+                dlg._edit_selected_record()
+                return LibraryDialog.Rejected
+        raise AssertionError(f"the Library has no row for {fingerprint}")
+
+    orig = LibraryDialog.exec
+    LibraryDialog.exec = _exec
+    try:
+        yield
+    finally:
+        LibraryDialog.exec = orig
+
+
+def test_writing_both_records_the_refusal_asks_for_lifts_it_without_a_reload():
+    """UX-5, the owner's own sequence. The Coaching page says "no session record for 23 Aug and
+    today … File ▸ Session record… writes one"; he writes today's through that menu item and the
+    other day's through the Library — and the page used to keep the refusal word for word until he
+    re-opened the recording, because nothing re-read the verdict after a record write (only the
+    lap panel's chip was refreshed). Each write must move the verdict at once: after today's the
+    refusal names only 23 Aug, after both it is gone."""
+    from studio import library
+    with _own_stores() as folder:
+        win, view, entry, label = _window_with_a_corner_from_another_day()
+        try:
+            library.upsert_and_save(_then_entry(entry["track"], folder))
+            before = _focus_text(view)
+            assert f"{label} — can't say. There's no session record for 23 Aug and today" \
+                in before, before
+
+            with _the_record_form_answers():
+                win.library_ctl.edit_current_record()                    # File ▸ Session record…
+            assert session_record.get(session_record.load(), entry["fingerprint"]), \
+                "today's record was not written — the test drove nothing"
+            after_today = _focus_text(view)
+            assert "no session record for 23 Aug," in after_today, (
+                f"after today's record the refusal must name only the other day: {after_today!r}")
+
+            with _the_record_form_answers(), _the_library_edits_the_record_of(_THEN_FP):
+                win.library_ctl.open_library()                          # File ▸ Library… ▸ row
+            assert session_record.get(session_record.load(), _THEN_FP), \
+                "the other day's record was not written — the test drove nothing"
+            after_both = _focus_text(view)
+            assert "no session record" not in after_both, (
+                f"both records are written and the page still refuses for want of one: "
+                f"{after_both!r}")
+            assert f"{label} — " in after_both, f"the corner fell off the list: {after_both!r}"
+        finally:
+            _dispose(win, view)
+    print(f"ok window: refusal → {after_today.splitlines()[-1][:60]!r} → "
+          f"{after_both.splitlines()[-1][:60]!r}")
+
+
+def test_every_other_write_to_the_record_store_moves_the_verdict_too():
+    """The same staleness through each of the store's other writers, all of which the verdict reads
+    through: the Library's Clear (records wiped, backed up), its Restore… (records back), Forget on
+    the other day's row (its record goes with it) and the form's Delete record. Driven through the
+    controller callbacks the Library dialog is handed, one assertion per write."""
+    from studio import library
+    with _own_stores() as folder:
+        win, view, entry, _label = _window_with_a_corner_from_another_day()
+        ctl = win.library_ctl
+        try:
+            library.upsert_and_save(_then_entry(entry["track"], folder))
+            with _the_record_form_answers():
+                ctl.edit_current_record()
+                ctl._edit_session_record(_then_entry(entry["track"], folder))
+            assert "no session record" not in _focus_text(view), _focus_text(view)
+
+            ctl._clear_library()
+            assert "no session record for 23 Aug and today" in _focus_text(view), \
+                f"Clear wiped both records and the page still reads: {_focus_text(view)!r}"
+            ctl._restore_library()
+            assert "no session record" not in _focus_text(view), \
+                f"Restore… put both records back and the page still reads: {_focus_text(view)!r}"
+            ctl._forget_recording(_then_entry(entry["track"], folder))
+            assert "no session record for 23 Aug," in _focus_text(view), \
+                f"Forget took 23 Aug's record and the page still reads: {_focus_text(view)!r}"
+            with _the_record_form_answers(delete=True):
+                ctl.edit_current_record()
+            assert session_record.get(session_record.load(), entry["fingerprint"]) is None
+            assert "no session record for 23 Aug and today" in _focus_text(view), \
+                f"today's record was deleted and the page still reads: {_focus_text(view)!r}"
+        finally:
+            _dispose(win, view)
+    print("ok window: clear, restore, forget and delete each re-read the verdict")
 
 
 if __name__ == "__main__":
