@@ -613,7 +613,7 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("read_cori_columns",
           &pacer::RawGPSSource::ReadCoriColumns)
       .def("device_name",
-          &pacer::RawGPSSource::DeviceName, " The recording camera's own name for itself — the GPMF `DVNM` field, e.g.\n \"HERO13 Black\". Empty when the container carries none. It is the only\n in-file statement of WHICH camera produced the streams, and the camera\n model decides what the data can mean at all: a HERO12 has no GPS receiver,\n and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload\n constant), never per sample. The base returns \"\".")
+          &pacer::RawGPSSource::DeviceName, " The recording camera's own name for itself — the GPMF `DVNM` field, e.g.\n \"HERO13 Black\". Empty when the container carries none. It is the only\n in-file statement of WHICH camera produced the streams, and the camera\n model decides what the data can mean at all: a HERO12 has no GPS receiver,\n and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload\n constant), never per sample. The base returns \"\". GPMFSource returns it as\n printable ASCII, a damaged byte as '?' (so it always decodes as text).")
       .def("read_imu_orientation",
           &pacer::RawGPSSource::ReadImuOrientation, " The ACCL/GYRO axis declaration this container carries (see ImuOrientation\n for what it means and why it is a diagnostic, not a transform). Like\n DeviceName it is a per-payload constant, so it is read once off the first\n payloads that have it; every field is \"\" on a camera that writes none. The\n base returns all-empty.")
       .def("seek",
@@ -627,7 +627,7 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("current_time_span",
           &pacer::RawGPSSource::CurrentTimeSpan, "Time span of the chunk under the cursor.")
       .def("get_total_duration",
-          &pacer::RawGPSSource::GetTotalDuration, " Total duration of the stream this source READS — for a GPMF source that is\n the metadata track, which is what the payload cursor is bounded by.")
+          &pacer::RawGPSSource::GetTotalDuration, " Total duration of the stream this source READS — for a GPMF source that is\n the metadata track, which bounds the payload cursor together with the\n track's payload count (a damaged moov can claim years; the count holds).")
       .def("get_video_duration",
           &pacer::RawGPSSource::GetVideoDuration, " Duration of the VIDEO track: where the NEXT chapter's picture begins, and\n therefore the only correct amount to shift a following chapter by.\n\n It is a SEPARATE question from GetTotalDuration() because the two tracks\n are separate tracks. GoPro's own contract is that a chapter's metadata\n length matches its video length EXCEPT in the last chapter of a recording,\n where the GPMF track ends on its own payload grid — measured on the ten\n GoPro sample clips in 3rdparty/gpmf-parser/samples, that exception runs\n from -0.701 s (hero7) to +0.934 s (karma), i.e. up to a whole payload. A\n chain that shifts by the metadata length therefore rides ~1 s of phantom\n offset the moment a chapter exercises it, and the shift belongs to the\n picture regardless. The default answers with GetTotalDuration() so a source\n with no video track of its own (a test double, a Python subclass) behaves\n exactly as it did before this existed.")
       ;

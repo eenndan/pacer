@@ -667,7 +667,8 @@ class RawGPSSource:
         in-file statement of WHICH camera produced the streams, and the camera
         model decides what the data can mean at all: a HERO12 has no GPS receiver,
         and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload
-        constant), never per sample. The base returns "".
+        constant), never per sample. The base returns "". GPMFSource returns it as
+        printable ASCII, a damaged byte as '?' (so it always decodes as text).
         """
         pass
 
@@ -698,7 +699,8 @@ class RawGPSSource:
 
     def get_total_duration(self) -> float:  # overridable (pure virtual)
         """Total duration of the stream this source READS — for a GPMF source that is
-        the metadata track, which is what the payload cursor is bounded by.
+        the metadata track, which bounds the payload cursor together with the
+        track's payload count (a damaged moov can claim years; the count holds).
         """
         pass
 
