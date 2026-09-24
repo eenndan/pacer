@@ -176,9 +176,10 @@ class WelcomeView(QWidget):
     `on_demo` IS OPTIONAL, AND None MEANS "THERE IS NO DEMO" — the same protocol PBToast already
     uses for its two actions (a None callback hides that action), because the alternative is a
     button that can only apologise. The demo clip resolves from `PACER_DEMO_MP4`, a local cache, or
-    a release asset that was never published (docs/FIRST_LAP.md), so on a machine with none of them
-    the second, lower-commitment, obvious-to-click CTA was a guaranteed dead end — and the FIRST
-    thing anyone who builds this from source ever sees. `StudioWindow._show_welcome` passes its
+    a release asset that had never been published (until the synthetic demo, demo-data-v1), so on
+    a machine with none of them the second, lower-commitment, obvious-to-click CTA was a guaranteed
+    dead end — and the FIRST thing anyone who builds this from source ever saw; offline, it still
+    would be. `StudioWindow._show_welcome` passes its
     handler only when `studio.demo.demo_available()` says a click could land somewhere; with no
     demo the card carries ONE action and `demo_btn` is None (never a disabled twin: a control that
     is disabled at every moment of the app's life, with no state the user can change to enable it,

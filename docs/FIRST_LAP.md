@@ -17,14 +17,15 @@ deliberately opens exactly the file you picked. Either way, if you end up lookin
 recording the window says so — *"1 of 3 chapters — File ▸ Load full recording to analyse the whole
 recording"* — and that menu item is live.
 
-> **About the "Open demo" button.** You will only see it if there is a demo clip on your machine to
-> open: Pacer looks for `PACER_DEMO_MP4` and then a local cache, and if neither resolves the button
-> is not shown at all. **The release asset it would otherwise download has never been published**
-> (distribution is a non-goal here), and a button whose only possible outcome is an apology is worse
-> than no button — so the welcome screen offers the one door that works: your own footage, opened or
-> dropped. To get the button, point `PACER_DEMO_MP4` at a recording you already have. `--demo` on
-> the command line still *attempts* the download (with `PACER_DEMO_URL` for a mirror) and says so
-> plainly if it can't.
+> **No footage of your own? Open the demo.** `pixi run studio -- --demo` downloads, once (about
+> 11 MB), and opens a **synthetic** session. **Nothing in it was filmed or driven:** a simulated kart
+> laps a fictional circuit placed in the open Atlantic, written by `studio/dev/make_demo.py` in the
+> same HERO13-shaped format a real recording has — GPS9, accelerometer, gyroscope, gravity and
+> orientation. No person, kart, place or camera footage is in it. Its video is a rendered slate that
+> says so on every frame, with a running timecode and a dot at the kart's true position, so you can
+> check Pacer's map against the picture yourself. The circuit is one Pacer ships, so step 2 below
+> is done for you and the timing opens verified. After that first run the welcome screen offers
+> **Open demo** too; offline, `--demo` says plainly that the download failed.
 
 ## 2 · Set where a lap begins (only on a new track)
 
@@ -37,7 +38,8 @@ unverified — drag the start/finish line on the map to where a lap begins."*
 snap to it, the banner clears, and the placement is **remembered for that recording**. Want it to
 auto-detect next time? **File ▸ Save as track…** turns your line into a named track.
 
-*(On the one track Pacer already ships — and any track you've saved — this step is done for you.)*
+*(On the tracks Pacer already ships — Daytona Milton Keynes, Sandown Park and the demo's synthetic
+circuit — and on any track you've saved, this step is done for you.)*
 
 ## 3 · Read the lap
 

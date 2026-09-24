@@ -88,10 +88,12 @@ The **load pipeline** behind `Session.load` (one of the four modules that may na
   on long/noisy sessions and has since been removed — GPS9's true per-fix clock supersedes it.)
 
 - **GPS9 true-clock timing is unbiased — VALIDATED OUT-OF-SAMPLE, no calibration factor** (rate =
-  1.0). Validated in June 2026 (D24; the working set has no transponder log, so not repeated since)
+  1.0). Validated in June 2026 (D24)
   against the kart's real lap-timing **transponder** on a SECOND, independent recording (0062) by `studio/dev/_validate_wallclock.py`: clean-lap residual mean **+0.0015 s /
   ±0.053 s over 59 clean laps** (0060: +0.0030 s / 0.087 s over 48), each recording's own best-fit
-  rate ≈1.0 (−22 / −46 ppm). **`csv_lap_range` in the dump is an ID range, not a count** — the
+  rate ≈1.0 (−22 / −46 ppm). Re-validated in September 2026 on the working set: MK_18_09_26's race
+  against the circuit's Club Speed timing (lock-only mode, no race start), **+0.0010 s / 0.0247 s
+  over 14 clean laps**, rate 0.999983 — docs/ACCURACY.md row C, re-measured by `footage.accuracy_mk`. **`csv_lap_range` in the dump is an ID range, not a count** — the
   transponder log runs a 24 h race, so 0062's lock `856–920` is **65 aligned laps**, not 850+
   (`csv_ids = [start + k for k in range(len(valid))]`, so its LENGTH is the aligned count).
   A previously-committed clock-rate factor (0.999514) was **REMOVED** as an overfit to dropout-tail
@@ -387,7 +389,7 @@ The **session record** (pacer-free AND Qt-free): one record per recording — co
 
 ## `demo.py`
 
-**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves a SMALL real lapping clip (fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache → a release asset. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — the release asset was never published, so an ungated button could only apologise.
+**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache → the `demo-data-v1` release asset, kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — it was born while the asset was unpublished, and it still keeps the app off the network unless `--demo` asks.
 
 ## `playback_state.py`
 

@@ -45,7 +45,8 @@ centroid + bbox so a fresh recording auto-detects the track on load.
 
 The Daytona Milton Keynes and Sandown Park lines are BUILT-IN SEEDS (``SEED``), so a first-ever run
 already auto-detects either circuit with its line — MK's timing is identical to the old hardcoded
-entry, and Sandown Park's line is the owner's own saved one (Q2). The
+entry, and Sandown Park's line is the owner's own saved one (Q2). A third seed is FICTIONAL: the
+circuit the synthetic ``--demo`` session is driven on (``studio/dev/make_demo.py``). The
 user DB is merged ON TOP of the seed (a user entry of the same name overrides the seed), so
 ``Save as track…`` can refine a built-in too. Reusing a name for a DIFFERENT place is a different
 act — it destroys that circuit's stored lines — so it is REFUSED (``TrackNameTaken``) until the
@@ -117,6 +118,19 @@ SEED: list[dict] = [
         "centroid": [51.37603659615385, -0.36095558076923084],
         "bbox": [51.37544968461538, -0.3623875461538462, 51.376623507692315, -0.35952361538461547],
         "start": [[51.37617427563954, -0.3616823772388991], [51.376337128483875, -0.3617820116787019]],
+        "sectors": [],
+    },
+    # The `--demo` recording's circuit (studio/dev/make_demo.py): FICTIONAL, generated, placed in the
+    # open Atlantic ~700 km north of the Azores, where no real circuit can sit inside DETECT_RADIUS_M.
+    # A built-in so the demo opens with VERIFIED timing on a line square across the middle of its main
+    # straight — not the unknown-track heuristic's line at the peak-speed point, where laps start
+    # braking. Every field is `make_demo.track_entry()`, and tests/test_demo_session.py holds the two
+    # equal, so this line cannot drift from the circuit it times.
+    {
+        "name": "Synthetic demo circuit",
+        "centroid": [45.9989659, -30.9991256],
+        "bbox": [45.9979319, -31.0014026, 46.0, -30.9968485],
+        "start": [[45.9998111, -30.9985263], [46.0000806, -30.9985057]],
         "sectors": [],
     },
 ]

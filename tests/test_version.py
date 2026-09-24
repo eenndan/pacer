@@ -20,7 +20,9 @@ Each site is read the way ITS OWN consumer reads it, not with one canonical pars
   * `bindings/pacer/pyproject.toml` — `tomllib`.
 
 Plus the two release-recipe steps that travel with a bump: the changelog's newest released section
-must BE this version, and every released section must have its compare link at the foot.
+must BE this version, and every released section must have its compare link at the foot. And what
+the .app would carry: the licence the packaging docs give ffmpeg is the family of the build
+pixi.lock pins, and THIRD_PARTY_NOTICES.md names everything the spec bundles whole.
 
 Pure stdlib — no Qt, no pacer, no telemetry file. Run:  python tests/test_version.py
 """
@@ -500,6 +502,159 @@ def test_the_published_prose_never_spells_the_product_lowercase():
     assert not bad, (f"the product is spelled lowercase in published prose — a sentence says "
                      f"{_SHORT!r}: {bad}")
     print(f"test_the_published_prose_never_spells_the_product_lowercase OK ({len(pages)} pages)")
+
+
+# --------------------------------------------------- what a redistributed .app carries (OPS-8)
+# Board review 2026-09-23 (OPS-8): the packaging docs called the bundled ffmpeg "an LGPL build" in
+# three places while pixi.lock pinned conda-forge's `gpl_*` variant (GPL v3+ by its own
+# `ffmpeg -L`, linking libx264, which is the export's software fallback), and THIRD_PARTY_NOTICES.md
+# left out qtawesome and the twelve icon fonts `collect_all("qtawesome")` puts in the .app. Nothing
+# compared a licence claim with the lock or the spec. Both checks are derived: the ffmpeg build from
+# pixi.lock, the components from the spec's collect_all calls, the fonts from qtawesome itself.
+_LICENCE_DOCS = ("THIRD_PARTY_NOTICES.md", os.path.join("docs", "PACKAGING.md"),
+                 os.path.join("packaging", "pacer.spec"))
+_LOCKED_FFMPEG = re.compile(r"/ffmpeg-(\d[\w.]*)-((l?gpl)_h[0-9a-f]+_\d+)\.conda")
+# A claim's family word ("GPL" not preceded by a letter, so LGPL is not read as GPL too), and the
+# conda-forge build-string prefix that says which VARIANT a sentence is about.
+_FAMILY_WORD = {"gpl": re.compile(r"(?<![A-Za-z])GPL"), "lgpl": re.compile(r"LGPL")}
+_VARIANT = {"gpl": re.compile(r"(?<![A-Za-z])gpl_"), "lgpl": re.compile(r"lgpl_")}
+_OTHER = {"gpl": "lgpl", "lgpl": "gpl"}
+_COLLECT_ALL = re.compile(r"""collect_all\(\s*["']([\w.-]+)["']\s*\)""")
+
+
+def locked_ffmpeg(lock_text):
+    """(version, build, family) of the one ffmpeg pixi.lock pins; family is "gpl" or "lgpl"."""
+    builds = sorted(set(_LOCKED_FFMPEG.findall(lock_text)))
+    assert len(builds) == 1, (
+        "pixi.lock should pin exactly one conda-forge ffmpeg-<version>-<gpl|lgpl>_<hash>_<n>.conda; "
+        f"found {builds}")
+    return builds[0]
+
+
+def _claim_units(text):
+    """The units a licence claim lives in: paragraphs, and within them each table row and each
+    list item, so a bullet about the ALTERNATIVE build is not read as part of the one stating the
+    locked build. Comment (`#`) and quote (`>`) markers are stripped first."""
+    units, cur = [], []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("#>").strip()
+        if not line or line.startswith("|") or re.match(r"([-*+]|\d+\.)\s", line):
+            if cur:
+                units.append(" ".join(cur))
+            cur = []
+            if line.startswith("|"):
+                units.append(line)
+                continue
+        if line:
+            cur.append(line)
+    return units + ([" ".join(cur)] if cur else [])
+
+
+def ffmpeg_licence_problems(lock_text, docs):
+    """What `docs` ({name: text}) get wrong about the licence of the ffmpeg `lock_text` pins.
+
+    Each doc must STATE it: one unit naming ffmpeg and the locked build string, with that build's
+    family and not the other. And no unit naming ffmpeg may give it the other family unless it
+    names the other variant's prefix too, which is the only way that family is true of an ffmpeg
+    here: as the alternative build, not the one the .app bundles."""
+    version, build, family = locked_ffmpeg(lock_text)
+    other = _OTHER[family]
+    exact = re.compile(rf"(?<![A-Za-z]){re.escape(build)}(?!\w)")
+    problems = []
+    for name, text in docs.items():
+        units = [u for u in _claim_units(text) if "ffmpeg" in u.lower()]
+        if not any(exact.search(u) and _FAMILY_WORD[family].search(u)
+                   and not _FAMILY_WORD[other].search(u) for u in units):
+            problems.append(
+                f"{name} never states the locked ffmpeg's licence: pixi.lock pins "
+                f"ffmpeg-{version}-{build}, and no one sentence names ffmpeg, `{build}` and "
+                f"{family.upper()} (and not {other.upper()}). A new build: read its licence with "
+                "`ffmpeg -L` before updating the string")
+        problems += [f"{name} calls ffmpeg {other.upper()}, but pixi.lock pins the `{family}_*` "
+                     f"build ffmpeg-{version}-{build}: {u[:160]!r}"
+                     for u in units if _FAMILY_WORD[other].search(u) and not _VARIANT[other].search(u)]
+    return problems
+
+
+def _qtawesome_fonts():
+    """The font files the installed qtawesome ships: what `collect_all("qtawesome")` copies into
+    the .app. Found without importing qtawesome (which imports Qt)."""
+    import importlib.util
+    spec = importlib.util.find_spec("qtawesome")
+    assert spec and spec.submodule_search_locations, (
+        "qtawesome is not importable: it is a declared dependency (pyproject.toml), so run this in "
+        "the pixi env")
+    fonts = os.path.join(spec.submodule_search_locations[0], "fonts")
+    return sorted(fn for fn in os.listdir(fonts) if fn.endswith((".ttf", ".otf")))
+
+
+def _component_cells(notices):
+    """The first cell of every BODY row of the notices' `Component` table. Header rows are not
+    names: the font table's header says "qtawesome" too, and once stood in for a deleted row."""
+    lines, cells, in_components = notices.splitlines(), [], False
+    for i, row in enumerate(lines):
+        if not row.startswith("|") or re.match(r"\|\s*:?-", row):
+            in_components = in_components and row.startswith("|")
+            continue
+        first = row.split("|")[1].strip().lower()
+        if i + 1 < len(lines) and re.match(r"\|\s*:?-", lines[i + 1]):   # a header row
+            in_components = first == "component"
+        elif in_components:
+            cells.append(first)
+    assert cells, "THIRD_PARTY_NOTICES.md has no `| Component |` table: this guard's parser rotted"
+    return cells
+
+
+def notice_problems(spec_text, notices, fonts):
+    """Every package the spec collects whole, and every font file qtawesome brings with it, that
+    THIRD_PARTY_NOTICES.md does not name (a package in the Component column of a body row)."""
+    packages = _COLLECT_ALL.findall(spec_text)
+    assert packages, "packaging/pacer.spec has no collect_all(\"…\") call: this guard's regex rotted"
+    cells = _component_cells(notices)
+    problems = [f"packaging/pacer.spec bundles {p} whole (collect_all) but THIRD_PARTY_NOTICES.md "
+                "has no table row naming it" for p in packages
+                if not any(re.search(rf"(?<![\w-]){re.escape(p.lower())}(?![\w-])", c) for c in cells)]
+    return problems + [f"qtawesome puts {fn} in the .app but THIRD_PARTY_NOTICES.md does not name it"
+                       for fn in fonts if fn not in notices]
+
+
+def test_the_licence_notices_match_what_the_app_bundles():
+    """OPS-8. The packaging docs name the licence family of the ffmpeg pixi.lock actually pins, and
+    THIRD_PARTY_NOTICES.md names every package the spec bundles whole and every qtawesome font."""
+    lock = _read("pixi.lock")
+    docs = {rel: _read(rel) for rel in _LICENCE_DOCS}
+    spec, notices = docs[_LICENCE_DOCS[2]], docs[_LICENCE_DOCS[0]]
+    fonts = _qtawesome_fonts()
+    problems = ffmpeg_licence_problems(lock, docs) + notice_problems(spec, notices, fonts)
+    assert not problems, ("the licence notices disagree with what the .app bundles:\n  "
+                          + "\n  ".join(problems))
+    # Both directions, on planted mismatches. The lock flipped to the other variant: every doc is
+    # now wrong. The false claim this guard exists for, planted back: caught by name.
+    version, build, family = locked_ffmpeg(lock)
+    flipped = lock.replace(f"ffmpeg-{version}-{build}", f"ffmpeg-{version}-{_OTHER[family]}"
+                           f"{build[len(family):]}")
+    assert locked_ffmpeg(flipped)[2] == _OTHER[family], "the planted flip did not flip"
+    caught = ffmpeg_licence_problems(flipped, docs)
+    assert all(any(p.startswith(rel) for p in caught) for rel in _LICENCE_DOCS), caught
+    planted = dict(docs)
+    planted[_LICENCE_DOCS[1]] += f"\n\nThe conda-forge ffmpeg is {_OTHER[family].upper()}.\n"
+    caught = ffmpeg_licence_problems(lock, planted)
+    assert len(caught) == 1 and caught[0].startswith(
+        f"{_LICENCE_DOCS[1]} calls ffmpeg {_OTHER[family].upper()}, "), caught
+    # A collect_all package's row deleted (and nothing else: the font table's header still says
+    # "qtawesome"), and one font file's name: each caught by name.
+    rows = notices.splitlines()
+    no_row = [ln for ln in rows if not ln.lower().startswith("| [qtawesome]")]
+    assert len(no_row) == len(rows) - 1, "the planted deletion found no `| [qtawesome]` row"
+    caught = notice_problems(spec, "\n".join(no_row), fonts)
+    assert caught == ["packaging/pacer.spec bundles qtawesome whole (collect_all) but "
+                      "THIRD_PARTY_NOTICES.md has no table row naming it"], caught
+    assert fonts, "qtawesome ships no font files: the font half of this check is over nothing"
+    caught = notice_problems(spec, notices.replace(fonts[0], ""), fonts)
+    assert caught == [f"qtawesome puts {fonts[0]} in the .app but THIRD_PARTY_NOTICES.md does "
+                      "not name it"], caught
+    print(f"test_the_licence_notices_match_what_the_app_bundles OK (ffmpeg-{version}-{build}, "
+          f"{family.upper()}; collect_all {_COLLECT_ALL.findall(spec)}; {len(fonts)} fonts)")
 
 
 # ------------------------------------------------------------------------------------- runner
