@@ -7,10 +7,14 @@ page — was a picture of the flat zero-Δ line the ideal-lap wave had since fix
 nobody can regenerate is a marketing image that eventually lies. So: one script, one command.
 
     QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer \\
-        pixi run python -m studio.dev.media_capture ~/Desktop/D24/GX010062.MP4 --out docs/media
+        pixi run python -m studio.dev.media_capture "$HOME/Desktop/Sandown 3h 2026/GX010064.MP4" \\
+        --out docs/media --only hero,ideal,trust,map,overlay,clip,og
 
 The POSITIONAL argument is the INPUT recording (chapter 1; siblings are discovered by the app's own
 `chapters.discover_siblings`). The OUTPUT directory is behind `--out`, and defaults to `docs/media`.
+The published set is that recording's — Sandown 3h, three hours at Sandown Park, the owner's
+primary recording since D24 left the machine. `accuracy` needs no recording (it is drawn from
+`ACCURACY` below), which is why the line above leaves it out.
 That order matters: a previous agent destroyed 11.9 GB of the owner's only copy of a race recording
 by passing a path positionally to a tool whose `argv[1]` was its output. Never open `GX010060.MP4`
 — that file is the destroyed 2.4 MB JSON stub (its intact siblings GX020060/GX030060 are fine;
@@ -29,6 +33,8 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
                                                on it is named"
   overlay.png     a frame of a real export     "the analysis leaves the app as something you can
                                                post"
+  best-lap.mp4    20 s of a real export, silent the same claim, moving: the best lap's own
+  + best-lap.jpg  + its poster frame           overlay export, cut for the landing page
   accuracy.png    the transponder chart        drawn here from `ACCURACY` below, so the numbers are
                                                auditable in code instead of burned into artwork
   og.png          the social card              composed from hero.png, so it can never again embed
@@ -69,7 +75,7 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PACER_NO_MEDIA", "1")
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import (  # noqa: E402
     QBrush,
     QColor,
@@ -110,6 +116,10 @@ WINDOW_TALL = (1440, 1500)
 # ~1500 px in that axis (2 % x 1500 = 30). It is a real, if small, app bug and it is not this lane's
 # file: the choice here is only WHICH label. Height-binding clips C8, at the bottom edge beside the
 # speed legend; width-binding clips C9, mid-frame on the right, which reads far worse.
+#
+# Both measurements are D24's, at the MK circuit. The published map is Sandown 3h's now, a track
+# about 1.6 wide-to-tall: this shape binds on WIDTH there, leaves canvas above and below the line,
+# and clips no label — C1 to C7 all read in the committed image.
 WINDOW_MAP = (1440, 1340)
 DPR = 2                       # retina; every PNG below is 2x its logical size
 PAD = theme.SPACE_M           # breathing room around a cropped section, in logical px
@@ -231,9 +241,10 @@ def open_window(app: QApplication, recording: str, size=WINDOW) -> StudioWindow:
     """Open the WHOLE recording in the REAL StudioWindow, laid out and settled at `size`.
 
     All chapters, not just the one named: `StudioWindow([path])` is the File ▸ Open path and loads
-    that chapter alone, which on this recording is 21 clean laps instead of 65 — and the copy these
-    images sit beside quotes 65. `discover_siblings` is the app's own File ▸ Load full recording
-    path, so the pixels and the prose agree."""
+    that chapter alone, which on Sandown 3h is 17 clean laps instead of 62 (on D24's 0062, 21
+    instead of 65) — and the copy these images sit beside quotes the whole recording.
+    `discover_siblings` is the app's own File ▸ Load full recording path, so the pixels and the
+    prose agree."""
     if _BANNED_RE.match(os.path.basename(recording)):
         raise SystemExit(f"REFUSED: {recording} is the destroyed 2.4 MB JSON stub, not footage — "
                          "name another chapter of the recording (GX020060.MP4).")
@@ -296,7 +307,15 @@ def region(w: StudioWindow, rect: QRect) -> QImage:
     Always the window, never the child: `QWidget.grab()` on a child lies about anything the
     stylesheet box paints, because QStyleSheetStyle writes the rule's colour into the palette even
     when nothing composites it. Coordinates are multiplied by the device pixel ratio because
-    `QPixmap.copy()` works in device pixels while every Qt geometry is logical."""
+    `QPixmap.copy()` works in device pixels while every Qt geometry is logical.
+
+    A crop that leaves the window is REFUSED, not clipped. `QPixmap.copy()` intersects the rect with
+    the pixmap and, when nothing is left, copies the WHOLE pixmap: once the Stats page composed
+    into columns and the friction circle moved below a 1500 px window, data-trust.png came out as
+    the entire 2880x3000 window under the DATA TRUST card, and the run still printed "wrote"."""
+    if not QRect(0, 0, w.width(), w.height()).contains(rect):
+        raise RuntimeError(f"crop {rect.x()},{rect.y()} {rect.width()}x{rect.height()} leaves the "
+                           f"{w.width()}x{w.height()} window; QPixmap.copy() would hand back all of it")
     r = w.devicePixelRatioF()
     dev = QRect(round(rect.x() * r), round(rect.y() * r),
                 round(rect.width() * r), round(rect.height() * r))
@@ -470,10 +489,31 @@ def _heading(stats, text: str) -> QLabel:
     raise LookupError(f"no Stats section heading {text!r}")
 
 
+def _scroll_to(app: QApplication, stats, heading: QLabel, last) -> None:
+    """Scroll the Stats page so the block from `heading` down to `last` sits in its viewport — the
+    move `StatsView.reveal_trust` makes for the data-quality chip.
+
+    A TALL WINDOW IS NOT ENOUGH ANY MORE. At dashboard width the page composes its sections into
+    columns (`stats_panel.PAGE_LAYOUTS`), and group 1 — the distributions and the friction circle
+    — stacks UNDER group 0 in the left column: on Sandown 3h the circle's heading sits past the
+    1500 px window's bottom edge. Scrolling puts each crop where a reader would see it."""
+    scroll = stats._scroll
+    QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+    top = heading.mapTo(scroll.widget(), QPoint(0, 0)).y()
+    scroll.verticalScrollBar().setValue(max(0, top - theme.SPACE_S))
+    settle(app)
+    viewport = scroll.viewport()
+    bottom = last.mapTo(viewport, QPoint(0, last.height())).y()
+    if bottom > viewport.height():
+        raise RuntimeError(f"{heading.text()!r} is {bottom - heading.mapTo(viewport, QPoint()).y()} "
+                           f"px tall, more than the {viewport.height()} px Stats viewport")
+
+
 def shot_ideal(app: QApplication, w: StudioWindow, out_dir: str) -> str:
     """IDEAL LAP: the heading, both tiles, the sample line, the segment table and the remainder
     note — the whole block, because the honesty IS the relationship between them."""
     stats = _stats_page(app, w)
+    _scroll_to(app, stats, _heading(stats, "IDEAL LAP"), stats.ideal_note)
     edge = right_edge(w, (stats.t_theoretical, stats.t_ideal_gap, stats.ideal_sample,
                           stats.ideal_table, stats.ideal_note))
     rect = span(w, _heading(stats, "IDEAL LAP"), stats.ideal_note, right=edge + PAD)
@@ -492,9 +532,13 @@ def shot_data_trust(app: QApplication, w: StudioWindow, out_dir: str) -> str:
     one page rather than a fabricated panel."""
     stats = _stats_page(app, w)
     edge = right_edge(w, [stats.gg, stats.gg_key, *stats.trust_card.findChildren(QLabel)]) + PAD
+    # One crop per scroll position: each half is grabbed where the page shows it.
+    _scroll_to(app, stats, _heading(stats, "DATA TRUST"), stats.trust_card)
     top = span(w, _heading(stats, "DATA TRUST"), stats.trust_card, right=edge)
+    a = region(w, top)
+    _scroll_to(app, stats, _heading(stats, "FRICTION CIRCLE · g"), stats.gg_key)
     bottom = span(w, _heading(stats, "FRICTION CIRCLE · g"), stats.gg_key, right=edge)
-    a, b = region(w, top), region(w, bottom)
+    b = region(w, bottom)
 
     gap = theme.SPACE_2XL * DPR
     img = QImage(max(a.width(), b.width()), a.height() + gap + b.height(), QImage.Format_RGB32)
@@ -572,6 +616,70 @@ def shot_overlay(w: StudioWindow, out_dir: str, work_dir: str) -> str:
     img = QImage(png)
     img.setDevicePixelRatio(1.0)
     return save(img, os.path.join(out_dir, "overlay.png"))
+
+
+# ====================================================================== 7 — the landing-page clip
+# The page's one moving image: the app's own overlay export of the session's BEST lap, cut for the
+# web. The best lap because that is the lap a driver exports, and its strip reads `★ BEST` where
+# another lap's reads a Δ (export_video's rule — a Δ to itself would be +0.00 for the whole clip).
+# 720p because it is one of the export dialog's own resolutions and the page never shows it wider
+# than 1080 px. From the start line, so the loop restarts where a lap does.
+#
+# NO AUDIO TRACK, not a muted one. The export carries the camera's sound — the engine, and anyone
+# talking near the camera — and a `muted` attribute is a request to a browser, while `-an` removes
+# the stream from the file. tests/test_landing_page.py reads the MP4's own track list and fails on
+# an audio track, whatever the page's markup says.
+CLIP_HEIGHT = 720
+# 20 s, not 25, and it is a size measurement: onboard kart footage is expensive to code (the whole
+# frame shakes), and on Sandown 3h's best lap 25 s fitted CLIP_MAX_BYTES only at CRF 29 (CRF 27 was
+# 8.83 MB), where 20 s fits at CRF 26 (7.92 MB). A sharper 20 s beat a softer 25.
+CLIP_SECONDS = 20.0
+CLIP_MAX_BYTES = 8_000_000
+# x264 CRFs tried in order until the cut fits CLIP_MAX_BYTES: the best quality that fits, rather
+# than a bitrate guessed ahead of the footage. Each try is ~35 s at `veryslow`, hence a short list.
+CLIP_CRF = (26, 27, 28, 29, 30)
+CLIP_POSTER_FRACTION = 0.40     # where in the cut the poster frame is taken: past the line, at speed
+CLIP_NAME, CLIP_POSTER = "best-lap.mp4", "best-lap.jpg"
+
+
+def shot_clip(w: StudioWindow, out_dir: str, work_dir: str) -> str:
+    """The session's best lap through `export_video.render_lap` at 720p, then its first
+    `CLIP_SECONDS` re-encoded as a silent, fast-start H.264 MP4 under `CLIP_MAX_BYTES`, plus a JPEG
+    poster — the same frame of footage is 105 KB as a JPEG against 1.17 MB as a PNG."""
+    session = w.session
+    lap = session.best_lap_id()
+    mp4 = os.path.join(work_dir, f"lap{lap}_overlay_{CLIP_HEIGHT}p.mp4")
+    cfg = export_video.OverlayConfig(speed_unit=w._speed_unit, palette=theme.active_palette(),
+                                     out_height=CLIP_HEIGHT)
+    t0 = time.time()
+    result = export_video.render_lap(session, src_path=None, out_path=mp4, lap_id=lap, config=cfg,
+                                     progress=None, cancel=None)
+    print(f"media_capture: exported best lap {lap} ({session.lap_time(lap):.3f} s) at "
+          f"{CLIP_HEIGHT}p -> {result.out_path} in {time.time() - t0:.1f} s")
+    ffmpeg = export_video._resolve_binary("ffmpeg", "PACER_FFMPEG")
+    out = os.path.join(out_dir, CLIP_NAME)
+    for crf in CLIP_CRF:
+        # `-an -sn -dn`: video only. `-map_metadata -1`: no creation time or encoder tags carried
+        # over from the export. `+faststart`: the index up front, so the page starts playing
+        # before the whole file has arrived.
+        subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", mp4,
+                        "-t", f"{CLIP_SECONDS:.3f}", "-an", "-sn", "-dn", "-map_metadata", "-1",
+                        "-c:v", "libx264", "-preset", "veryslow", "-crf", str(crf),
+                        "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart",
+                        out], check=True, capture_output=True)
+        size = os.path.getsize(out)
+        print(f"media_capture: clip at crf {crf} = {size:,} B")
+        if size <= CLIP_MAX_BYTES:
+            break
+    else:
+        raise RuntimeError(f"no CRF in {CLIP_CRF} brings {CLIP_SECONDS:.0f} s under "
+                           f"{CLIP_MAX_BYTES:,} B")
+    poster = os.path.join(out_dir, CLIP_POSTER)
+    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-ss", f"{CLIP_POSTER_FRACTION * CLIP_SECONDS:.3f}", "-i", out,
+                    "-frames:v", "1", "-q:v", "3", poster], check=True, capture_output=True)
+    print(f"wrote {out}  {size:,} B, poster {poster}  {os.path.getsize(poster):,} B")
+    return out
 
 
 # ====================================================================== 6 — the accuracy chart
@@ -756,7 +864,7 @@ def build_og(out_dir: str, hero_png: str) -> str:
 
 
 # ====================================================================== driver
-SHOTS = ("hero", "ideal", "trust", "map", "overlay", "accuracy", "og")
+SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og")
 
 
 def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
@@ -776,7 +884,7 @@ def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
     # is a bug, not a variant.
     _jail.divert_app_support("pacer-media-")
 
-    needs_app = only & {"hero", "ideal", "trust", "map", "overlay"}
+    needs_app = only & {"hero", "ideal", "trust", "map", "overlay", "clip"}
     hero_png = os.path.join(out_dir, "hero.png")
     if needs_app:
         w = open_window(app, recording, WINDOW)
@@ -793,6 +901,8 @@ def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
             hero_png = shot_hero(app, w, out_dir, work_dir, with_video=with_video)
         if "overlay" in only:
             shot_overlay(w, out_dir, work_dir)
+        if "clip" in only:
+            shot_clip(w, out_dir, work_dir)
     if "accuracy" in only:
         draw_accuracy(out_dir)
     if "og" in only:
