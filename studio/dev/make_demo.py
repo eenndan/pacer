@@ -160,25 +160,30 @@ def render_video(path: str, truth, first_payload: int, n_payloads: int, ffmpeg: 
                "-x264-params", f"keyint={_X264['keyint']}:min-keyint={_X264['keyint']}"
                                ":scenecut=0:bframes=0:threads=4",
                "-video_track_timescale", "30000", "-an", "-n", os.path.abspath(path)]
-        proc = subprocess.Popen(cmd, cwd=tmp, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        frame = bg.copy()
-        r = int(_KART_R_PX) + 2
-        try:
-            for i in range(n):
-                cx, cy = float(kx[i]), float(ky[i])
-                ya, yb, xa, xb = int(cy) - r, int(cy) + r + 1, int(cx) - r, int(cx) + r + 1
-                win = np.zeros((yb - ya, xb - xa), np.float32)
-                _disc(win, cx - xa, cy - ya, _KART_R_PX)
-                a = win[..., None]
-                frame[ya:yb, xa:xb] = np.round(bg[ya:yb, xa:xb] * (1 - a) + _KART * a)
-                proc.stdin.write(frame.data)
-                frame[ya:yb, xa:xb] = bg[ya:yb, xa:xb]      # restore for the next frame
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass
-        err = proc.stderr.read().decode(errors="replace")
-        if proc.wait() != 0:
-            raise RuntimeError(f"ffmpeg failed rendering the demo picture: {err.strip()}")
+        # stderr to a file, not a pipe: nothing drains a pipe while the frames stream in, so a chatty
+        # failure would fill it and block both processes.
+        log = os.path.join(tmp, "ffmpeg.log")
+        with open(log, "wb") as errf:
+            proc = subprocess.Popen(cmd, cwd=tmp, stdin=subprocess.PIPE, stderr=errf)
+            frame = bg.copy()
+            r = int(_KART_R_PX) + 2
+            try:
+                for i in range(n):
+                    cx, cy = float(kx[i]), float(ky[i])
+                    ya, yb, xa, xb = int(cy) - r, int(cy) + r + 1, int(cx) - r, int(cx) + r + 1
+                    win = np.zeros((yb - ya, xb - xa), np.float32)
+                    _disc(win, cx - xa, cy - ya, _KART_R_PX)
+                    a = win[..., None]
+                    frame[ya:yb, xa:xb] = np.round(bg[ya:yb, xa:xb] * (1 - a) + _KART * a)
+                    proc.stdin.write(frame.data)
+                    frame[ya:yb, xa:xb] = bg[ya:yb, xa:xb]      # restore for the next frame
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
+            rc = proc.wait()
+        if rc != 0:
+            with open(log, encoding="utf-8", errors="replace") as f:
+                raise RuntimeError(f"ffmpeg failed rendering the demo picture: {f.read().strip()}")
 
 
 # ------------------------------------------------------------------------------ the recording
