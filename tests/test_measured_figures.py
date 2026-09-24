@@ -790,21 +790,22 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
 
 # ─── coaching.py: the braking-direction table (L7) ───────────────────────────────────────────────
 class DirRow:
-    def __init__(self, rec, cid, laps, rho, p, line, row):
-        self.rec, self.cid, self.laps, self.rho, self.p, self.line, self.row = (
-            rec, cid, laps, rho, p, line, row)
+    def __init__(self, rec, cid, laps, rho, p, p_holm, line, row):
+        self.rec, self.cid, self.laps, self.rho, self.p, self.p_holm, self.line, self.row = (
+            rec, cid, laps, rho, p, p_holm, line, row)
 
     def __repr__(self):
-        return f"<{self.rec} C{self.cid} n {self.laps} ρ {self.rho:+.3f} p {self.p:.4f} {self.line} {self.row}>"
+        return (f"<{self.rec} C{self.cid} n {self.laps} ρ {self.rho:+.3f} p {self.p:.4f} "
+                f"p Holm {self.p_holm:.4f} {self.line} {self.row}>")
 
 
-_DIR_LINE = re.compile(r"^#\s+(00\d\d)\s+C(\d+)\s+(\d+)\s+(-?\d\.\d{3})\s+(\d\.\d{4})\s+(later|earlier)\s+"
-                       r"(ranked|unranked)\s*$")
+_DIR_LINE = re.compile(r"^#\s+(00\d\d)\s+C(\d+)\s+(\d+)\s+(-?\d\.\d{3})\s+(\d\.\d{4})\s+(\d\.\d{4})\s+"
+                       r"(later|earlier)\s+(ranked|unranked)\s*$")
 
 
 def _dir_rows() -> list[DirRow]:
     rows = [DirRow(m.group(1), int(m.group(2)), int(m.group(3)), float(m.group(4)), float(m.group(5)),
-                   m.group(6), m.group(7))
+                   float(m.group(6)), m.group(7), m.group(8))
             for m in map(_DIR_LINE.match, _read(_COACHING).splitlines()) if m]
     assert rows, "coaching.py's braking-direction table parsed to nothing"
     return rows
@@ -812,7 +813,7 @@ def _dir_rows() -> list[DirRow]:
 
 def _dir_counts(text: str) -> tuple[int, int, dict[str, tuple[int, int]], re.Match]:
     """The count sentence under the table: (fired, corners, rec -> (fired, corners), the match)."""
-    m = _need(r"The line fires at (\d+) of the (\d+) corners — (.+?) — and all (\d+) read \"(later|earlier)\"; "
+    m = _need(r"The line fires at (\d+) of the (\d+) corners — (.+?) — every one \"(later|earlier)\"; "
               r"no corner separates \"(later|earlier)\"\.", text, "the braking-direction count sentence")
     per = {rec: (int(k), int(n)) for k, n, rec in re.findall(r"(\d+) of (\d+) on (00\d\d)", m.group(3))}
     return int(m.group(1)), int(m.group(2)), per, m
@@ -820,29 +821,36 @@ def _dir_counts(text: str) -> tuple[int, int, dict[str, tuple[int, int]], re.Mat
 
 def test_the_braking_direction_prose_is_its_table_s_arithmetic():
     """L7 — coaching.py's braking-direction table against the rule the code applies and the prose
-    under it: every row fired (p under BRAKE_DIRECTION_ALPHA) with the word its sign picks, and every
-    count, the chance expectation and the closest corner to the α are the table's arithmetic."""
+    under it: every row fired (its HOLM p under BRAKE_DIRECTION_ALPHA — the correction over the
+    recording's tested corners, which the prose counts) with the word its sign picks, its Holm p
+    inside the bounds the correction allows, and every count and the draws note the table's."""
     rows = _dir_rows()
     text = _flatten(_read(_COACHING))
     alpha = _constant(_COACHING, "BRAKE_DIRECTION_ALPHA")
-    for r in rows:
-        assert r.p < alpha and r.line == ("later" if r.rho < 0 else "earlier"), (r, alpha)
+    draws = _constant(_COACHING, "BRAKE_DIRECTION_DRAWS")
+    # The note calls it the house α; a looser one here would buy lines the family cannot back.
+    _need(r"at BRAKE_DIRECTION_ALPHA, the house α \(`stats\.COAST_LEAD_ALPHA`\)", text, "the house-α claim")
+    assert alpha == _constant(_STATS, "COAST_LEAD_ALPHA"), (alpha, "is not the house α")
     fired, corners, per, m = _dir_counts(text)
-    assert fired == len(rows) == int(m.group(4)), (m.groups(), rows)
-    assert {rec: k for rec, (k, _n) in per.items()} == {rec: sum(r.rec == rec for r in rows)
-                                                        for rec in {r.rec for r in rows}}, (per, rows)
-    assert sum(n for _k, n in per.values()) == corners, per
-    assert all(r.line == m.group(5) for r in rows) and m.group(6) != m.group(5), (m.groups(), rows)
-    m = _need(r"All (\d+) sit on ranked rows, so all (\d+) are printed", text, "the ranked-rows clause")
-    assert int(m.group(1)) == int(m.group(2)) == sum(r.row == "ranked" for r in rows) == len(rows), m.groups()
-    # Chance alone: each corner fires one way at α/2 under the null.
-    m = _need(r"Chance alone, at this α over (\d+) corners, would fire about (\d\.\d) of them each way", text,
-              "the chance clause")
-    assert (int(m.group(1)), m.group(2)) == (corners, f"{corners * alpha / 2:.1f}"), m.groups()
-    top = max(rows, key=lambda r: r.p)
-    m = _need(r"the table's closest corner, (00\d\d) C(\d+), sits (\d\.\d{3}) under it", text,
-              "BRAKE_DIRECTION_DRAWS' closest-corner note")
-    assert (m.group(1), int(m.group(2)), m.group(3)) == (top.rec, top.cid, f"{alpha - top.p:.3f}"), m.groups()
+    for r in rows:
+        assert r.p_holm < alpha and r.line == ("later" if r.rho < 0 else "earlier"), (r, alpha)
+        # Holm scales the k-th smallest of m by (m − k + 1) under a running max: between p and m·p
+        # (the cells are rounded to 4 places, so m·p carries m half-units of the last one, and the
+        # Holm cell one more).
+        family = per[r.rec][1]
+        assert r.p <= r.p_holm <= min(1.0, family * r.p) + (family + 1) * 5e-5, (r, family)
+    assert fired == len(rows), (m.groups(), rows)
+    assert {rec: k for rec, (k, _n) in per.items() if k} == {rec: sum(r.rec == rec for r in rows)
+                                                             for rec in {r.rec for r in rows}}, (per, rows)
+    assert sum(k for k, _n in per.values()) == fired and sum(n for _k, n in per.values()) == corners, per
+    assert all(r.line == m.group(4) for r in rows) and m.group(5) != m.group(4), (m.groups(), rows)
+    _need(r"Every one sits on a ranked row, so every one is printed", text, "the ranked-rows clause")
+    assert all(r.row == "ranked" for r in rows), rows
+    m = _need(r"(\d+),(\d{3}) resolve a p down to 1/(\d+),(\d{3}), well under α/(\d+), the first threshold Holm "
+              r"sets on the (\d+)-corner track", text, "BRAKE_DIRECTION_DRAWS' resolution note")
+    widest = max(n for _k, n in per.values())
+    assert int(m.group(1) + m.group(2)) == draws and int(m.group(3) + m.group(4)) == draws + 1, m.groups()
+    assert int(m.group(5)) == int(m.group(6)) == widest and 1 / (draws + 1) < alpha / widest, m.groups()
     print(f"test_the_braking_direction_prose_is_its_table_s_arithmetic OK ({len(rows)} rows of {corners})")
 
 
@@ -2397,14 +2405,15 @@ def _dir_measure(s) -> tuple[list[tuple], int]:
     have a braking habit at all."""
     dirs = s.coaching_brake_direction()
     ranked = {r.cid for r in s.coaching_opportunities().rows if r.evidence.ranked}
-    rows = [(cid, d.n_laps, d.rho, d.p, d.verdict, "ranked" if cid in ranked else "unranked")
+    rows = [(cid, d.n_laps, d.rho, d.p, d.p_holm, d.verdict, "ranked" if cid in ranked else "unranked")
             for cid, d in sorted(dirs.items()) if d.verdict is not None]
     return rows, len(dirs)
 
 
 def test_the_braking_direction_table_matches_the_footage():
     """L7 — re-measure coaching.py's braking-direction table on the four working-set recordings:
-    every published row, that NO other corner fires, and each recording's corner count."""
+    every published row (Holm p included), that NO other corner fires once corrected, and each
+    recording's corner count — the family its correction runs over."""
     pub = _dir_rows()
     per = _dir_counts(_flatten(_read(_COACHING)))[2]
     recs = list(per)
@@ -2416,10 +2425,11 @@ def test_the_braking_direction_table_matches_the_footage():
                 problems.append(f"{rec}: footage missing under {fx.root}")
                 continue
             rows, corners = _dir_measure(s)
-            for cid, n, rho, p, line, row in rows:
-                lines.append(f"#   {rec}  C{cid:<6d}{n:>4d}  {rho:>6.3f}   {p:.4f}   {line:<7s} {row}")
-            got = [(c, n, f"{rho:.3f}", f"{p:.4f}", line, row) for c, n, rho, p, line, row in rows]
-            want = [(r.cid, r.laps, f"{r.rho:.3f}", f"{r.p:.4f}", r.line, r.row) for r in pub if r.rec == rec]
+            for cid, n, rho, p, ph, line, row in rows:
+                lines.append(f"#   {rec}  C{cid:<6d}{n:>4d}  {rho:>6.3f}   {p:.4f}   {ph:.4f}   {line:<7s} {row}")
+            got = [(c, n, f"{rho:.3f}", f"{p:.4f}", f"{ph:.4f}", line, row) for c, n, rho, p, ph, line, row in rows]
+            want = [(r.cid, r.laps, f"{r.rho:.3f}", f"{r.p:.4f}", f"{r.p_holm:.4f}", r.line, r.row)
+                    for r in pub if r.rec == rec]
             if got != want:
                 problems.append(f"braking direction {rec}: published {want}, measured {got}")
             if (len(rows), corners) != per[rec]:

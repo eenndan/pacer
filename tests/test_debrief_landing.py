@@ -110,7 +110,8 @@ def test_the_debrief_is_the_shortlist_and_keeps_the_braking_line_off_its_rows():
                                    phases=rows[0].phases, evidence=rows[0].evidence)
     line = "Braking later went with quicker passes here (16 laps)"
     p = layout._panel(rows, (1400, 800),
-                      directions={1: coaching.BrakeDirection(cid=1, n_laps=16, rho=-0.57, p=0.024)})
+                      directions={1: coaching.BrakeDirection(cid=1, n_laps=16, rho=-0.74, p=0.0011,
+                                                             family=12, p_holm=0.0132)})
     cell = lambda: p.table.item(0, _PANEL_COL_REASON).text()  # noqa: E731
     assert cell().endswith(line), cell()
     assert p.table.rowCount() > PANEL_TOP_N, "a tall page shows more than the shortlist"

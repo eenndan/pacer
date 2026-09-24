@@ -1466,10 +1466,12 @@ corners or any other.
 ordinary Coaching page is the owner's call; this section is its evidence.
 
 *Since then (L7, 2026-09-24):* that call was made on this evidence. The Coaching rows print no
-braking metres; where a corner's clean laps separate a direction, the row says which way braking
-went with quicker passes, with its lap count and never a distance (`coaching.BrakeDirection`,
-whose table in coaching.py re-measures the six corners above through the app). Stats ▸ BRAKING
-still prints the estimate.
+braking metres; where a corner's clean laps separate a direction once corrected for every corner
+the recording tested (Holm's step-down at α 0.05, the standard #311 set for a coaching claim), the
+row says which way braking went with quicker passes, with its lap count and never a distance
+(`coaching.BrakeDirection`). Of the six corners above, two survive the correction, 0064 C6 and
+0067 C8, and coaching.py's table re-measures them through the app; the other four are documented
+here, uncorrected, and print nothing. Stats ▸ BRAKING still prints the estimate.
 
 **What would be new evidence:** an outcome-grounded per-corner claim — "your quicker passes braked
 later here", from the rank correlation above — that survives a family-wise correction over the

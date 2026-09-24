@@ -933,8 +933,10 @@ def _habit(cid, metres_later, *, n_laps=12, actual=78.0, optimal=None, q25=None,
                         q75_m=metres_later + 3.0 if q75 is None else q75)
 
 
-def _direction(cid, rho, p=0.01, n_laps=20):
-    return K.BrakeDirection(cid=cid, n_laps=n_laps, rho=rho, p=p)
+def _direction(cid, rho, p=0.01, n_laps=20, family=1, p_holm=None):
+    """A coaching.BrakeDirection; a family of one by default, where Holm's p IS the raw p."""
+    return K.BrakeDirection(cid=cid, n_laps=n_laps, rho=rho, p=p, family=family,
+                            p_holm=p if p_holm is None else p_holm)
 
 
 def test_the_braking_direction_is_a_rank_test_over_the_laps():
@@ -958,18 +960,53 @@ def test_the_braking_direction_is_a_rank_test_over_the_laps():
     # Ties take their mean rank (Spearman's convention), and a constant side reads ρ 0, p 1.
     tied = K.brake_direction(3, [1.0, 1.0, 2.0, 3.0], [4.0, 3.0, 2.0, 1.0])
     assert abs(tied.rho - float(np.corrcoef([0.5, 0.5, 2.0, 3.0], [3.0, 2.0, 1.0, 0.0])[0, 1])) < 1e-12
-    assert K.brake_direction(3, onsets, np.full(n, 5.5)) == K.BrakeDirection(3, n, 0.0, 1.0)
-    # The braking habit's floor: a corner with fewer pairs is absent, not tested.
+    assert K.brake_direction(3, onsets, np.full(n, 5.5)) == K.BrakeDirection(3, n, 0.0, 1.0, 1, 1.0)
+    # The braking habit's floor: a corner with fewer pairs is absent, not tested — and not counted
+    # in the family either, so the one corner left is a family of one.
     pairs = {1: list(zip(onsets[:K.MIN_BRAKE_LAPS - 1], noise[:K.MIN_BRAKE_LAPS - 1], strict=True)),
              2: list(zip(onsets, 6.0 - 0.01 * onsets, strict=True))}
     got = K.brake_directions(pairs)
     assert set(got) == {2} and got[2].verdict == K.BRAKE_LATER, got
+    assert (got[2].family, got[2].p_holm) == (1, got[2].p), got[2]
     print(f"ok L7 rank test: ρ −1 -> later (p {quick.p:.5f}), ρ +1 -> earlier, noise p {a.p:.3f}")
+
+
+def test_the_line_is_corrected_for_every_corner_the_recording_tested():
+    """L7: choosing WHERE to speak is a search over the recording's corners, so a line needs its
+    corner to survive Holm's step-down over every corner tested there, at BRAKE_DIRECTION_ALPHA.
+    (refused-2026-09.md §16 lists the working-set corners that fire uncorrected; coaching.py's table
+    has the ones that survive.)"""
+    # Holm on a textbook family: all four raw p are under 0.05; two survive the correction.
+    got = K.holm_adjust([0.01, 0.04, 0.03, 0.005])
+    assert all(abs(g - w) < 1e-12 for g, w in zip(got, [0.03, 0.06, 0.06, 0.02], strict=True)), got
+    assert K.holm_adjust([0.6, 0.7]) == [1.0, 1.0] and K.holm_adjust([]) == []
+    # A corner whose laps separate a direction when tested ALONE ...
+    n = 20
+    on = np.arange(n, dtype=float)
+    moderate = list(zip(on, -on + np.random.default_rng(4).normal(0.0, 9.0, n), strict=True))
+    alone = K.brake_directions({2: moderate})[2]
+    assert alone.p < K.BRAKE_DIRECTION_ALPHA and alone.verdict == K.BRAKE_LATER, alone
+    # ... prints nothing among the seven a recording tested, while a decisive one still does.
+    family = {1: list(zip(on, -on, strict=True)), 2: moderate}
+    for c in range(3, 8):
+        family[c] = list(zip(on, np.random.default_rng(100 + c).permutation(n).astype(float),
+                             strict=True))
+    got = K.brake_directions(family)
+    assert all(d.family == 7 for d in got.values()), got
+    assert got[2].p == alone.p and got[2].p_holm >= K.BRAKE_DIRECTION_ALPHA, got[2]
+    assert got[2].verdict is None and K.brake_direction_line(got[2]) is None, got[2]
+    assert got[1].verdict == K.BRAKE_LATER and got[1].p_holm < K.BRAKE_DIRECTION_ALPHA, got[1]
+    assert [c for c, d in got.items() if d.verdict] == [1], got
+    # The verdict reads the CORRECTED p: an uncorrected pass alone prints nothing.
+    assert _direction(3, -0.40, p=0.016, family=7, p_holm=0.1113).verdict is None
+    print(f"ok L7 Holm: C2 alone p {alone.p:.4f} -> later; among 7, p Holm {got[2].p_holm:.4f} -> "
+          f"nothing; the decisive C1 still fires (p Holm {got[1].p_holm:.4f})")
 
 
 def test_the_braking_line_is_a_direction_and_a_count_never_metres():
     """L7: the row's braking line is words and a lap count, only where the laps separate a
-    direction at BRAKE_DIRECTION_ALPHA — and carries no metres and no (est) mark: it is measured."""
+    direction at BRAKE_DIRECTION_ALPHA once corrected for the recording's corners — and carries no
+    metres and no (est) mark: it is measured."""
     from studio import theme
     assert (K.brake_direction_line(_direction(3, -0.40, n_laps=36))
             == "Braking later went with quicker passes here (36 laps)")
@@ -977,6 +1014,7 @@ def test_the_braking_line_is_a_direction_and_a_count_never_metres():
             == "Braking earlier went with quicker passes here (17 laps)")
     # Not separated from chance, or no association at all: no line, rather than a default.
     assert K.brake_direction_line(_direction(3, -0.40, p=K.BRAKE_DIRECTION_ALPHA)) is None
+    assert K.brake_direction_line(_direction(3, -0.40, p=0.016, family=7, p_holm=0.11)) is None
     assert K.brake_direction_line(_direction(3, 0.0, p=0.0)) is None
     assert K.brake_direction_line(None) is None
     line = K.brake_direction_line(_direction(3, -0.9))
@@ -1032,18 +1070,21 @@ def test_the_page_prints_no_braking_metres_only_the_direction_where_it_holds():
     # _corners() puts the top corner's turn-in at 50 m, so this 6 m habit is one the retired hint
     # printed ("Brake ~6 m later into C1 (est)") — the regression this pins.
     habits = {c: _habit(c, 6.0, actual=50.0, optimal=56.0) for c in (top, other)}
-    directions = {top: _direction(top, -0.40, p=0.016, n_laps=36),
-                  other: _direction(other, -0.20, p=0.22, n_laps=34)}
+    # The top row has 0064 C6's numbers (it survives Holm among 7 corners), the other 0068 C3's
+    # (p 0.016 uncorrected, 0.111 once corrected) — which is exactly the line that must NOT print.
+    directions = {top: _direction(top, -0.419, p=0.0019, n_laps=57, family=7, p_holm=0.0133),
+                  other: _direction(other, -0.399, p=0.0159, n_laps=36, family=7, p_holm=0.1113)}
     page = _full_window_page(opp, directions, habits=habits)
     cells = [page.table.item(r, _PANEL_COL_REASON) for r in range(page.table.rowCount())]
     for cell in cells:
         text = cell.text()
         assert "Brake ~" not in text and " m later" not in text and "(est)" not in text, text
-    assert cells[0].text().endswith("\nBraking later went with quicker passes here (36 laps)"), \
+    assert cells[0].text().endswith("\nBraking later went with quicker passes here (57 laps)"), \
         cells[0].text()
     tip = cells[0].toolTip()
-    assert "over the 36 clean laps" in tip and "ρ −0.40" in tip and "p = 0.016" in tip, tip
-    assert "Braking" not in cells[1].text(), "a direction the laps do not separate prints nothing"
+    assert "over the 57 clean laps" in tip and "ρ −0.42" in tip and "p = 0.002" in tip, tip
+    assert "still p = 0.013 once corrected for all 7 corners tested on this recording" in tip, tip
+    assert "Braking" not in cells[1].text(), "an uncorrected pass the family does not keep prints nothing"
     page.set_debrief(True, None, [])
     _settle()
     assert not any("Braking" in page.table.item(r, _PANEL_COL_REASON).text()

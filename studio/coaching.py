@@ -20,7 +20,7 @@ See the "spread, reach and the evidence gate" block below for the measured numbe
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -414,33 +414,35 @@ def brake_habits(cids, rows_by_lap) -> dict[int, BrakeHabit]:
 # Stats ▸ BRAKING medianizes) and the time through [enter, exit] (`lap_corner_stats`, the time every
 # "Time lost" is a median of), over the clean laps that have both; a two-sided permutation p over
 # BRAKE_DIRECTION_DRAWS shuffles, seeded per corner so a session renders the same verdict every time
-# it opens; the line needs p < BRAKE_DIRECTION_ALPHA, the house α (`stats.COAST_LEAD_ALPHA`). Its
-# SIGN picks the word, so the line can say "earlier" as readily as "later": the defect it replaces
-# was a line that could only ever say one of them.
+# it opens. Its SIGN picks the word, so the line can say "earlier" as readily as "later": the
+# defect it replaces was a line that could only ever say one of them.
+#
+# CORRECTED FOR THE FAMILY, because choosing WHERE to speak is itself a search. Every corner of the
+# recording with a braking habit is tested, and a line is printed only where Holm's step-down
+# (`holm_adjust`) over that recording's tested corners keeps it at BRAKE_DIRECTION_ALPHA, the house
+# α (`stats.COAST_LEAD_ALPHA`): the chance that ANY line on a recording is noise stays under α. This
+# repo holds coaching claims to that standard (#311 refused an interval that did not correct for its
+# own search). Uncorrected, the same test fires at the six corners refused-2026-09.md §16 lists; at
+# four of them the association could be chance, and a line a driver reads as "brake later here" at a
+# chance corner is §16's problem again, in miniature.
 #
 # MEASURED (L7, 2026-09-24) on the four working-set recordings — 0068 (SD_19_09_26), 0064 (Sandown
 # 3h 2026) and 0065 (SD_30_08_26), clockwise at Sandown Park, and 0067 (MK_18_09_26), the
 # anticlockwise control on another track — over every corner with a braking habit. One row per
-# corner whose line fires; "row" is whether its Coaching row is ranked, the only rows that print it.
-# tests/test_measured_figures.py derives the prose below from these cells and, given the footage,
-# re-measures every one and that no other corner fires:
+# corner whose line fires; "p Holm" is its adjusted p, "row" whether its Coaching row is ranked,
+# the only rows that print it. tests/test_measured_figures.py derives the prose below from these
+# cells and, given the footage, re-measures every one and that no other corner fires:
 #
-#   rec   corner  laps       ρ        p   line    row
-#   0068  C3        36  -0.399   0.0159   later   ranked
-#   0068  C5        35  -0.340   0.0460   later   ranked
-#   0064  C6        57  -0.419   0.0019   later   ranked
-#   0065  C3        37  -0.359   0.0313   later   ranked
-#   0067  C2        16  -0.571   0.0240   later   ranked
-#   0067  C8        17  -0.740   0.0011   later   ranked
+#   rec   corner  laps       ρ        p   p Holm   line    row
+#   0064  C6        57  -0.419   0.0019   0.0133   later   ranked
+#   0067  C8        17  -0.740   0.0011   0.0132   later   ranked
 #
-# The line fires at 6 of the 33 corners — 2 of 7 on 0068, 1 of 7 on 0064, 1 of 7 on 0065 and 2 of
-# 12 on 0067 — and all 6 read "later"; no corner separates "earlier". All 6 sit on ranked rows, so
-# all 6 are printed. Chance alone, at this α over 33 corners, would fire about 0.8 of them each way.
-# These are the six refused-2026-09.md §16 found with its own reader and seeds.
+# The line fires at 2 of the 33 corners — 0 of 7 on 0068, 1 of 7 on 0064, 0 of 7 on 0065 and 1 of
+# 12 on 0067 — every one "later"; no corner separates "earlier". Every one sits on a ranked row, so
+# every one is printed.
 BRAKE_DIRECTION_ALPHA = 0.05
-# Shuffles per corner; the house figure (`stats.COAST_SIGNFLIP_DRAWS`). At 10,000 a p near the α
-# carries a Monte Carlo error of about ±0.002; the table's closest corner, 0068 C5, sits 0.004
-# under it.
+# Shuffles per corner; the house figure (`stats.COAST_SIGNFLIP_DRAWS`). 10,000 resolve a p down to
+# 1/10,001, well under α/12, the first threshold Holm sets on the 12-corner track.
 BRAKE_DIRECTION_DRAWS = 10_000
 
 BRAKE_LATER = "later"      # later onsets went with quicker passes
@@ -456,14 +458,31 @@ class BrakeDirection:
     n_laps: int   # clean laps with a matched brake onset AND a matched time through this corner
     rho: float    # Spearman ρ(onset on the reference odometer, time through the corner)
     p: float      # two-sided permutation p for rho (BRAKE_DIRECTION_DRAWS seeded shuffles)
+    family: int   # corners tested on this recording — the family `p_holm` is corrected over
+    p_holm: float  # Holm-adjusted p over that family (`holm_adjust`): what the verdict reads
 
     @property
     def verdict(self) -> str | None:
-        """BRAKE_LATER / BRAKE_EARLIER where the laps separate the two at BRAKE_DIRECTION_ALPHA,
-        else None. A NEGATIVE ρ is "later": a later onset (further along the lap) with less time."""
-        if self.p >= BRAKE_DIRECTION_ALPHA or self.rho == 0.0:
+        """BRAKE_LATER / BRAKE_EARLIER where the laps separate the two at BRAKE_DIRECTION_ALPHA
+        once corrected for every corner the recording tested, else None. A NEGATIVE ρ is "later":
+        a later onset (further along the lap) with less time."""
+        if self.p_holm >= BRAKE_DIRECTION_ALPHA or self.rho == 0.0:
             return None
         return BRAKE_LATER if self.rho < 0.0 else BRAKE_EARLIER
+
+
+def holm_adjust(ps) -> list[float]:
+    """Holm's step-down adjusted p-values, in the order given: the k-th smallest of m p-values is
+    scaled by (m − k + 1), then held to the running maximum and capped at 1. An adjusted p under α
+    is exactly Holm's rejection at α, which keeps the chance of ANY false rejection among the m
+    under α whatever the tests' dependence."""
+    m = len(ps)
+    out = [1.0] * m
+    running = 0.0
+    for k, i in enumerate(sorted(range(m), key=lambda j: ps[j])):
+        running = max(running, min(1.0, (m - k) * float(ps[i])))
+        out[i] = running
+    return out
 
 
 def _avg_ranks(x: np.ndarray) -> np.ndarray:
@@ -480,34 +499,38 @@ def _avg_ranks(x: np.ndarray) -> np.ndarray:
 def brake_direction(cid: int, onsets, times, *, draws: int = BRAKE_DIRECTION_DRAWS) -> BrakeDirection:
     """Spearman ρ of `onsets` against `times` (paired per lap) and its two-sided permutation p:
     the observed |ρ| ranked against `draws` shuffles of the time ranks, seeded by `cid`. A constant
-    side reads ρ 0, p 1."""
+    side reads ρ 0, p 1. Tested ALONE, a family of one: `brake_directions` corrects a recording's."""
     a = _avg_ranks(np.asarray(onsets, float))
     b = _avg_ranks(np.asarray(times, float))
     a -= a.mean()
     b -= b.mean()
     den = float(np.sqrt((a @ a) * (b @ b)))
     if den == 0.0:
-        return BrakeDirection(cid=int(cid), n_laps=len(a), rho=0.0, p=1.0)
+        return BrakeDirection(cid=int(cid), n_laps=len(a), rho=0.0, p=1.0, family=1, p_holm=1.0)
     rho = float(a @ b) / den
     shuffled = np.random.default_rng(int(cid)).permuted(np.tile(b, (draws, 1)), axis=1)
     null = np.abs(shuffled @ a) / den
     # A hair of tolerance so a shuffle reproducing the observed ρ counts as reaching it (the
     # `stats.paired_signflip_p` idiom), and the +1s so no finite test reads p = 0.
     hits = int(np.count_nonzero(null >= abs(rho) - 1e-12))
-    return BrakeDirection(cid=int(cid), n_laps=len(a), rho=rho, p=(1.0 + hits) / (draws + 1.0))
+    p = (1.0 + hits) / (draws + 1.0)
+    return BrakeDirection(cid=int(cid), n_laps=len(a), rho=rho, p=p, family=1, p_holm=p)
 
 
 def brake_directions(pairs_by_cid: dict) -> dict[int, BrakeDirection]:
-    """Per corner, `brake_direction` over its (onset, time) pairs. A corner with fewer than
-    MIN_BRAKE_LAPS pairs is absent — the braking habit's own floor — rather than tested on a sample
-    too small to rank."""
-    out: dict[int, BrakeDirection] = {}
+    """Per corner, `brake_direction` over its (onset, time) pairs, Holm-corrected over the corners
+    tested here — the family is the recording's own. A corner with fewer than MIN_BRAKE_LAPS pairs
+    is absent — the braking habit's own floor — rather than tested on a sample too small to rank,
+    and so is not counted in the family either."""
+    tested: dict[int, BrakeDirection] = {}
     for cid, pairs in pairs_by_cid.items():
         if len(pairs) < MIN_BRAKE_LAPS:
             continue
         onsets, times = zip(*pairs, strict=True)
-        out[int(cid)] = brake_direction(int(cid), onsets, times)
-    return out
+        tested[int(cid)] = brake_direction(int(cid), onsets, times)
+    adjusted = holm_adjust([d.p for d in tested.values()])
+    return {cid: replace(d, family=len(tested), p_holm=a)
+            for (cid, d), a in zip(tested.items(), adjusted, strict=True)}
 
 
 def brake_direction_line(d: BrakeDirection | None) -> str | None:

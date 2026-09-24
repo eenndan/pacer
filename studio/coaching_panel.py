@@ -1084,8 +1084,8 @@ def _p_phrase(p: float) -> str:
 def _reason_cell(opp: coaching.Opportunity, directions: dict,
                  speed_unit: str | None = None) -> QTableWidgetItem:
     """The 'How to find it' reason cell: the coaching sentence (apex deficit in `speed_unit`, km/h
-    default) + (where the laps separate one) the MEASURED braking-direction line, with the
-    per-reason tooltip.
+    default) + (where the laps separate one, corrected for every corner the recording tested)
+    the MEASURED braking-direction line, with the per-reason tooltip.
 
     NO BRAKING METRES (L7). This cell used to end in the ESTIMATED "Brake ~N m later into Cx": a
     constant-peak-deceleration optimum that sat past the driver's braking at 33 of 33 corners on the
@@ -1118,7 +1118,9 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
                "were matched on track at its entry and exit, the "
                f"{d.verdict} a lap began braking, the less time it took through the corner "
                f"(Spearman ρ {rho}, {_p_phrase(d.p)} against "
-               f"{coaching.BRAKE_DIRECTION_DRAWS:,} random pairings of the same laps).\n"
+               f"{coaching.BRAKE_DIRECTION_DRAWS:,} random pairings of the same laps, and still "
+               f"{_p_phrase(d.p_holm)} once corrected for all {d.family} "
+               f"corner{'' if d.family == 1 else 's'} tested on this recording).\n"
                "It says which way, not how far: no braking distance measured here holds up, so "
                "none is given.")
     item.setToolTip(tip)

@@ -545,7 +545,8 @@ def test_the_braking_line_row_holds_it_and_names_the_laps_it_counted():
                               reason=_reason(coaching.REASON_BRAKING), evidence=_evidence(1))
     other = coaching.Opportunity(cid=3, direction=-1, time_lost=0.030, entry_dist=300.0,
                                  reason=_reason(coaching.REASON_APEX), evidence=_evidence(0))
-    dirs = {12: coaching.BrakeDirection(cid=12, n_laps=16, rho=-0.571, p=0.024)}
+    dirs = {12: coaching.BrakeDirection(cid=12, n_laps=16, rho=-0.740, p=0.0011, family=12,
+                                        p_holm=0.0132)}
     for size in (MIN_PANEL, (900, 600)):
         p = _panel([ok, other], size, directions=dirs)
         cell = p.table.item(0, _PANEL_COL_REASON)
