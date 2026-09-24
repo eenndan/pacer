@@ -3692,7 +3692,11 @@ class Session:
 
     @property
     def has_rotation(self) -> bool:
-        """True if a measured yaw-rate channel was built (a camera with a GYRO stream)."""
+        """True if a measured yaw-rate channel was built (a camera with a GYRO stream).
+
+        No app caller: the DATA TRUST row reads `rotation_cross()`. The golden dump fingerprints
+        it (a leaf of both committed baselines), which is why a dead-code scan finds it and why it
+        stays."""
         rot = getattr(self, "_rotation", None)
         return bool(rot is not None and rot.has_data)
 
@@ -3702,8 +3706,11 @@ class Session:
 
         THE ODD ONE OUT ON THIS OBJECT, said plainly so it cannot bite: the gyro series carries
         the camera's media stamps, while every other public time on Session is telemetry. Nothing
-        in the app calls this today — it is an accessor with no caller — so nothing acts on the
-        mismatch; a future caller holding a Session time must cross `media_time` first.
+        in the app calls this today, so nothing acts on the mismatch; a future caller holding a
+        Session time must cross `media_time` first. Its one reader is the golden dump, which
+        samples it on the best lap's telemetry grid WITHOUT crossing: a fingerprint needs a
+        deterministic value, not the right instant. That leaf is the only one that pins the
+        channel's per-sample series (the cross-check leaves pin its statistics), so it stays.
 
         `media_time`, THE PICTURE MAP — and that is measured, not inherited from `g_at_time`, which
         crosses the OTHER map. The gyro's content rides the picture: against the path-derived yaw

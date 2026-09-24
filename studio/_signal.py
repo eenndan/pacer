@@ -589,13 +589,6 @@ def _band_lap_ids(laps) -> list[int]:
     return _classify_laps(laps)[0]
 
 
-def _excluded_lap_reasons(laps) -> dict[int, str]:
-    """``{lap_id: reason}`` for every substantial lap left out (`EXCLUDED_OPEN` /
-    `EXCLUDED_BAND` / `EXCLUDED_STOPPED`) — the WHY behind `_banded_out_lap_ids`, the same keys.
-    The single source for Session.excluded_lap_reasons."""
-    return _classify_laps(laps)[1]
-
-
 def exclusion_detail(reason: str, gap_m: float | None = None, turn_deg: float | None = None) -> str:
     """The per-lap WHY the ⊘ strip prints after an excluded lap ("Lap 2 — 0:23.231 · 320 m · ends
     22 m from its start, heading the other way"). An open lap names the measurement that failed —
@@ -640,7 +633,7 @@ def _banded_out_lap_ids(laps) -> list[int]:
     actually ran, not a brief start/end sliver) but did not end where they started (a piece cut by
     a line that reaches a second stretch of track), fell outside the median TIME or DISTANCE band
     in `_band_lap_ids`, or carried a stop of MAX_STOPPED_S or more — a mis-segmented short/long
-    lap, an out-lap, an in-lap, or a lap the driver stopped on. `_excluded_lap_reasons` says which.
+    lap, an out-lap, an in-lap, or a lap the driver stopped on. `_excluded_laps` says which.
 
     Returned so the UI can SHOW that a real-looking lap was left out of the times / bests instead
     of silently dropping it (the `_band_lap_ids` filter removes such a lap so it can't be crowned
@@ -651,9 +644,10 @@ def _banded_out_lap_ids(laps) -> list[int]:
 
 
 def _excluded_laps(laps) -> tuple[list[int], dict[int, str]]:
-    """``(_banded_out_lap_ids, _excluded_lap_reasons)`` from ONE classification pass — the single
-    source for Session.excluded_lap_ids and Session.excluded_lap_reasons, which fill their two
-    memos together so the list and its reasons can never come from different segmentations."""
+    """``(_banded_out_lap_ids, {lap_id: reason})`` from ONE classification pass, the reason one of
+    `EXCLUDED_OPEN` / `EXCLUDED_BAND` / `EXCLUDED_STOPPED` — the single source for
+    Session.excluded_lap_ids and Session.excluded_lap_reasons, which fill their two memos together
+    so the list and its reasons can never come from different segmentations."""
     substantial = [i for i in range(laps.laps_count())
                    if laps.sample_count(i) >= MIN_LAP_SAMPLES
                    and laps.lap_time(i) >= MIN_LAP_TIME]
