@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # ------------------------------------------------------------------------------ the fixed world
-ORIGIN = (47.0, -32.0)          # deg: open ocean, ~1,100 km from any shore — matches no real venue
+ORIGIN = (47.0, -32.0)          # deg: open Atlantic, ~850 km north of the Azores — no venue here
 START_UTC = dt.datetime(2026, 6, 1, 10, 0, 0, tzinfo=dt.UTC)
 DEVICE_NAME = "HERO13 Black"
 RECORDING_NUMBER = 9001         # -> GX019001.MP4, GX029001.MP4
@@ -248,6 +248,15 @@ class Truth:
     def lap_times(self, line_latlon) -> np.ndarray:
         return np.diff(self.crossings(line_latlon))
 
+    def line_at(self, s_lap: float, half_width: float = 15.0) -> list:
+        """A timing line square across the circuit at lap distance `s_lap`, as [[lat, lon], [lat,
+        lon]] — the form `Session.apply_timing_lines_latlon` takes."""
+        x, y, h, _ = self.circuit.at(s_lap)
+        px, py = -math.sin(float(h)), math.cos(float(h))
+        lat, lon = to_latlon(np.array([x - half_width * px, x + half_width * px]),
+                             np.array([y - half_width * py, y + half_width * py]))
+        return [[float(lat[0]), float(lon[0])], [float(lat[1]), float(lon[1])]]
+
     def to_json(self) -> dict:
         c = self.circuit
         return {"seed": self.seed, "laps": self.laps, "slow_lap": self.slow_lap,
@@ -273,7 +282,8 @@ def _driver(rng, circuit: Circuit, n_laps: int):
     return nearest, grip, brake
 
 
-def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False) -> Truth:
+def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
+             gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM) -> Truth:
     """The kart's motion: out of the pits, `laps` timed laps (one of them slow), an in-lap, a stop.
 
     Speed comes from the classic two-pass limit on a distance grid — the corner limit
@@ -284,12 +294,13 @@ def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False) -> 
     c = build_circuit(mirror)
     length = c.length
     s_start = sum(c.straights[PIT_STRAIGHT]) / 2.0
-    # Where the flying laps begin and end: late on the main straight, just before the braking for
-    # C1 — about where the app's unknown-track heuristic puts its line (the peak-speed point).
-    line_s = c.straights[0][1] - 40.0
     # Lap j counts lap distance from s=0 (the start of the main straight). The kart leaves the pit
-    # in lap 0 and parks there again in lap `laps + 1`, so it passes line_s in laps 1..laps+1: that
-    # is `laps` flying laps between an out-lap and an in-lap.
+    # in lap 0 and parks there again in lap `laps + 1`, so it passes any line on the main straight
+    # in laps 1..laps+1: `laps` flying laps between an out-lap and an in-lap. The in-lap's easing
+    # starts at the END of the main straight: were it earlier the kart would brake through the line
+    # of the last flying lap, and a crossing inside a braking zone is timed off by the load-time
+    # position boxcar (+22.5 ms measured, where every crossing at speed is within 0.2 ms).
+    main_end = c.straights[0][1]
     d_end = (laps + 1) * length
     n = int(round(d_end / DS)) + 1
     d = np.arange(n) * DS
@@ -304,7 +315,7 @@ def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False) -> 
     a_brk = BRAKE_G * G * brake[lap, corner]
     v_top = np.full(n, V_TOP)
     # The out-lap and in-lap are driven gently; the stop comes off the backward pass (v=0 at the end).
-    gentle = (lap == 0) | ((lap == 1) & (s_lap < line_s)) | ((lap == laps + 1) & (s_lap > line_s))
+    gentle = (lap == 0) | ((lap == laps + 1) & (s_lap > main_end))
     pace = np.where(gentle, 0.75, 1.0)
     g_lat = g_lat * pace
     v_top = v_top * np.where(pace < 1, 0.8, 1.0)
@@ -329,8 +340,8 @@ def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False) -> 
         v[i] = min(v[i], math.sqrt(v[i + 1] * v[i + 1] + 2.0 * a_brk[i] * DS))
     t = T_LEAD + np.concatenate([[0.0], np.cumsum(2.0 * DS / (v[:-1] + v[1:]))])
     return Truth(circuit=c, seed=seed, laps=laps, slow_lap=SLOW_LAP, s_start=s_start, d_nodes=d,
-                 t_nodes=t, v_nodes=v, t_end=float(t[-1] + T_TAIL), gps_lag_s=GPS_LAG_S,
-                 media_ppm=MEDIA_PPM)
+                 t_nodes=t, v_nodes=v, t_end=float(t[-1] + T_TAIL), gps_lag_s=gps_lag_s,
+                 media_ppm=media_ppm)
 
 
 def _kinematics(truth: Truth, tau):
@@ -466,8 +477,8 @@ def _gps_rows(truth: Truth, rng, gps_noise: float):
         ey[i] += jump[1]
     lat, lon = to_latlon(x + ex, y + ey)
     alt = 31.0 + ou(1.2) + rng.normal(0.0, 0.4, n)
-    v2 = np.maximum(v + rng.normal(0.0, 0.06, n), 0.0)
-    v3 = np.maximum(v + rng.normal(0.0, 0.08, n), 0.0)
+    v2 = np.maximum(v + rng.normal(0.0, 0.06, n) * gps_noise, 0.0)
+    v3 = np.maximum(v + rng.normal(0.0, 0.08, n) * gps_noise, 0.0)
     # Fix k is stamped START_UTC + 0.1 k: a receiver's epochs sit on the UTC 100 ms grid, and the
     # camera started recording `phase` before one of them.
     ms0 = round((START_UTC - dt.datetime(2000, 1, 1, tzinfo=dt.UTC)).total_seconds() * 1000.0)
@@ -639,10 +650,26 @@ class Recording:
     truth: Truth
 
 
+def build(seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2, gps_noise: float = 1.0,
+          mirror: bool = False, gps_lag_s: float = GPS_LAG_S,
+          media_ppm: float = MEDIA_PPM) -> tuple[Truth, list[list[bytes]]]:
+    """The recording's telemetry — one list of GPMF payloads per chapter — and its ground truth.
+    Pure and deterministic: no files, no ffmpeg; the same arguments give the same bytes."""
+    truth = simulate(seed, laps, mirror, gps_lag_s, media_ppm)
+    rng = np.random.default_rng([seed, 1])
+    total = math.ceil(truth.t_end * (1.0 + truth.media_ppm * 1e-6) / PAYLOAD_S)
+    gps = _gps_rows(truth, rng, gps_noise)
+    bounds = np.linspace(0, total, chapters + 1).round().astype(int)
+    truth.chapter_payloads = [int(b - a) for a, b in zip(bounds[:-1], bounds[1:], strict=True)]
+    return truth, [_payloads(truth, rng, int(b - a), int(a), gps, accl_noise=1.0)
+                   for a, b in zip(bounds[:-1], bounds[1:], strict=True)]
+
+
 def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2,
-             gps_noise: float = 1.0, mirror: bool = False, ffmpeg: str | None = None) -> Recording:
+             gps_noise: float = 1.0, mirror: bool = False, ffmpeg: str | None = None,
+             gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM) -> Recording:
     """Write the synthetic recording into `out_dir` (created; must not already hold files) and return
-    its chapter paths and ground truth. Deterministic: the same arguments give the same telemetry."""
+    its chapter paths and ground truth. Only the video bytes depend on the ffmpeg build."""
     # PATH first (a `pixi run` puts the env's bin there), then the running interpreter's own env.
     ffmpeg = (ffmpeg or os.environ.get("PACER_FFMPEG") or shutil.which("ffmpeg")
               or shutil.which("ffmpeg", path=os.path.join(sys.prefix, "bin")))
@@ -651,18 +678,12 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
     os.makedirs(out_dir, exist_ok=True)
     if os.listdir(out_dir):
         raise FileExistsError(f"{out_dir} is not empty; synth_gopro never writes over anything")
-    truth = simulate(seed, laps, mirror)
-    rng = np.random.default_rng([seed, 1])
-    total = math.ceil(truth.t_end * (1.0 + truth.media_ppm * 1e-6) / PAYLOAD_S)
-    gps = _gps_rows(truth, rng, gps_noise)
-    bounds = np.linspace(0, total, chapters + 1).round().astype(int)
-    truth.chapter_payloads = [int(b - a) for a, b in zip(bounds[:-1], bounds[1:], strict=True)]
+    truth, per_chapter = build(seed, laps, chapters, gps_noise, mirror, gps_lag_s, media_ppm)
     paths = []
     with tempfile.TemporaryDirectory(prefix="synth_gopro_") as tmp:
-        for ch, (a, b) in enumerate(zip(bounds[:-1], bounds[1:], strict=True), start=1):
+        for ch, payloads in enumerate(per_chapter, start=1):
             video = os.path.join(tmp, f"video{ch}.mp4")
-            _encode_video(video, int(b - a) * FRAMES_PER_PAYLOAD, ffmpeg)
-            payloads = _payloads(truth, rng, int(b - a), int(a), gps, accl_noise=1.0)
+            _encode_video(video, len(payloads) * FRAMES_PER_PAYLOAD, ffmpeg)
             path = os.path.join(out_dir, f"GX{ch:02d}{RECORDING_NUMBER:04d}.MP4")
             _write_mp4(path, payloads, video)
             paths.append(path)
