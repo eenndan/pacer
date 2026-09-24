@@ -121,7 +121,7 @@ def chain_sources(paths):
     its own payload grid, and on GoPro's own sample clips it misses the video length by anything
     from -0.701 s (hero7) to +0.934 s (karma). Their DIFFERENCE is what `ChapterMap` reports as a
     desynced chapter."""
-    owners = [pacer.GPMFSource(paths[0])]
+    owners: list[pacer.RawGPSSource] = [pacer.GPMFSource(paths[0])]
     durations = [owners[0].get_video_duration()]
     meta_durations = [owners[0].get_total_duration()]
     head = owners[0]
