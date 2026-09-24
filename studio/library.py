@@ -7,11 +7,13 @@ arrive as a plain dict from ``Session.library_entry()``).
 
 fingerprint = (GoPro prefix, recording number) so every chapter of a recording maps to one
 entry — neither the path list nor the media duration is stable across a single-chapter vs a full
-chaptered open of the SAME recording.
+chaptered open of the SAME recording. Because every chapter subset of a recording upserts that one
+row, a row is kept by the chapters its measurement COVERED: an open of fewer of them never
+displaces it (``upsert``).
 
-Schema (version 3) — one JSON object::
+Schema (version 4) — one JSON object::
 
-    {"version": 3,
+    {"version": 4,
      "entries": [
        {"fingerprint": "GX0062",            # the chapter-invariant identity key (see above)
         "stem":        "GX010062",          # first-chapter stem, for display
@@ -71,6 +73,8 @@ Load self-heals WITHOUT destroying durable history:
     first run after a future schema bump preserves every analyzed recording;
   * a NEWER on-disk ``version`` (a downgrade) is loaded BEST-EFFORT (keep the entries it can, ignore
     unknown fields) and the newer file is NOT destructively rewritten in place;
+  * an OLDER file whose migration re-keys or merges rows (v3 → v4, the one step that can drop a
+    row) is copied to ``library.json.bak`` before the first save rewrites it;
   * only genuine FILE-level corruption (unreadable / not JSON / not a dict / missing-or-bad version /
     non-list ``entries``) falls back to an empty index — and even then, before any write would
     overwrite the unparseable/newer file, ``save`` first copies it to a ``library.json.bak`` sidecar
@@ -84,6 +88,7 @@ the sidecar holds, for a confirm that can name both sides of the swap.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -95,7 +100,7 @@ from . import app_support
 
 _log = logging.getLogger(__name__)
 
-VERSION = 3
+VERSION = 4
 
 # v1→v2 back-compat default for the three trust flags on a LEGACY (pre-flags) entry. A schema-v1
 # library was written before per-entry trust existed, so its bests must NOT be retroactively
@@ -107,6 +112,9 @@ _TRUST_UNKNOWN = {"verified": True, "degraded": False, "dropout": False}
 
 # GoPro stem G[XHPL]<CC><NNNN>; the CC chapter index is stripped so every chapter shares one key.
 _GOPRO_STEM_RE = re.compile(r"^(G[XHPL])\d{2}(\d{4})$", re.IGNORECASE)
+
+# The key 8caab68 (2026-06-18) retired: "<first-chapter stem>|<total media duration, 0.1 s>".
+_LEGACY_KEY_RE = re.compile(r"^(?P<stem>.*)\|\d+\.\d$")
 
 _FILENAME = "library.json"
 
@@ -139,6 +147,39 @@ def fingerprint(stem: str) -> str:
     if m is None:
         return stem
     return f"{m.group(1).upper()}{m.group(2)}"
+
+
+def _legacy_stem(entry: dict) -> str | None:
+    """The stem a row keyed by the RETIRED scheme was keyed on, or None for any other key.
+
+    Until 8caab68 (2026-06-18) the key was ``"<first-chapter stem>|<total duration, 0.1 s>"``, and
+    the duration splits one recording into a row per chapter set (one chapter ~1730 s, the full
+    chain ~4655 s). It matches only when the part before the bar IS the row's own ``stem`` — the
+    shape that scheme always wrote — so a clip whose own name contains a bar keeps its key."""
+    fp, stem = entry.get("fingerprint"), entry.get("stem")
+    if not isinstance(fp, str) or not isinstance(stem, str) or not stem:
+        return None
+    m = _LEGACY_KEY_RE.match(fp)
+    return stem if m is not None and m.group("stem") == stem else None
+
+
+def _chapters(entry: dict) -> frozenset[str]:
+    """The chapter FILES a measurement covered, by name: ``paths`` are absolute, and a recording
+    whose folder moved between two opens still covers the same chapters."""
+    return frozenset(os.path.basename(p).casefold() for p in entry.get("paths") or [])
+
+
+def _keeps(stored: dict, new: dict) -> bool:
+    """True when `stored` must survive an upsert of `new` under the same fingerprint, i.e. `new`
+    measured LESS of that outing. Coverage decides, never the numbers measured — see ``upsert``."""
+    have, got = _chapters(stored), _chapters(new)
+    if got >= have:
+        return False          # the same chapters (a re-measurement) or more of them: new wins
+    if got < have:
+        return True           # a strict part of what is stored never displaces it
+    # Two partials that don't contain each other: the one covering more, then with more laps.
+    return ((len(have), int(stored.get("lap_count") or 0))
+            > (len(got), int(new.get("lap_count") or 0)))
 
 
 def _valid_entry(e) -> bool:
@@ -217,9 +258,18 @@ def _migrate(data: dict, from_version: int) -> dict:
     number is not convertible: nothing in the entry carries the segment times a composite needs.
     The honest move is therefore to RETIRE that one field rather than let one column print two
     definitions, so it is set to None; the dialog shows an em dash and says why on hover, and the
-    real value is written back the next time that recording is opened. This is the only migration
-    that drops a value, and it drops the value BECAUSE keeping it would be a lie — every entry, and
-    every other field on it (including ``best``, which the PB history runs on), survives untouched.
+    real value is written back the next time that recording is opened. It drops the value BECAUSE
+    keeping it would be a lie — every entry, and every other field on it (including ``best``, which
+    the PB history runs on), survives untouched.
+
+    v3 → v4 (one row per outing): 8caab68 retired the ``"<stem>|<duration>"`` key but never
+    re-keyed the rows it had written, so a recording opened both ways before 2026-06-18 is still
+    two rows — three with a later partial open under today's key; the owner's index holds one D24
+    afternoon three times, and its PB chart plots it three times on one date. Each such row is
+    re-keyed with ``fingerprint(stem)`` and rows that now share a key are folded through ``upsert``'s
+    own rule (``_rekey_and_merge``): the row that covered the most chapters survives WHOLE. This is
+    the one step that drops ROWS, so ``save`` keeps the older file as ``.bak`` first
+    (``_backup_unsafe``).
     """
     if from_version < 2:
         # entries may be a non-list here (a corrupt shape load() rejects AFTER migration); guard so
@@ -236,7 +286,49 @@ def _migrate(data: dict, from_version: int) -> dict:
             for e in entries:
                 if isinstance(e, dict) and e.get("theoretical") is not None:
                     e["theoretical"] = None
+    if from_version < 4:
+        entries = data.get("entries")
+        if isinstance(entries, list):
+            data["entries"] = _rekey_and_merge(entries)
+            if len(data["entries"]) < len(entries):
+                _log.warning("library: merged %d row(s) that were one recording under the "
+                             "retired stem|duration key", len(entries) - len(data["entries"]))
     return data
+
+
+def _rekey_and_merge(entries: list) -> list:
+    """The v3 → v4 step: re-key every row the retired scheme wrote, then fold rows sharing a key
+    through ``_keeps`` in file order — as if each had been upserted in turn — the merged row taking
+    the first one's position. A row that fails validation passes through untouched, for ``load`` to
+    drop and count as it always has."""
+    out: list = []
+    at: dict[str, int] = {}
+    for e in entries:
+        if not _valid_entry(e):
+            out.append(e)
+            continue
+        stem = _legacy_stem(e)
+        if stem is not None:
+            e["fingerprint"] = fingerprint(stem)
+        key = e["fingerprint"]
+        if key not in at:
+            at[key] = len(out)
+            out.append(e)
+        elif not _keeps(out[at[key]], e):
+            out[at[key]] = e
+    return out
+
+
+def _migration_rewrites_rows(data: dict) -> bool:
+    """Whether migrating this OLDER on-disk index re-keys or merges rows — the v3 → v4 step, the one
+    that can drop a row rather than fill or retire a field, and so the one whose input is kept."""
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return False
+    before = [e["fingerprint"] for e in entries if _valid_entry(e)]
+    after = [e["fingerprint"] for e in _rekey_and_merge(copy.deepcopy(entries))
+             if _valid_entry(e)]
+    return before != after
 
 
 def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
@@ -306,23 +398,22 @@ def backup_path(path: str | None = None) -> str:
 
 def _backup_unsafe(path: str) -> None:
     """Before ``save`` would OVERWRITE an existing on-disk library it could not safely round-trip
-    (genuine corruption, or a NEWER un-migratable file), copy it to a ``<path>.bak`` sidecar so the
-    user's original bytes are never silently lost. Called only for the un-round-trippable cases:
-    a healthy current/older file that ``load`` migrated is rewritten normally (no backup churn), and
-    a healthy file being WIPED is ``clear``'s business, not this hook's. The copy itself (best-effort,
-    same slot, never blocking the write) is ``_copy_to_backup``."""
+    (genuine corruption, a NEWER un-migratable file, or an OLDER one whose migration re-keys or
+    merges rows), copy it to a ``<path>.bak`` sidecar so the user's original bytes are never
+    silently lost. Called only for the un-round-trippable cases: a healthy current file, or an older
+    one ``load`` migrated without touching a row, is rewritten normally (no backup churn — the one
+    slot may be holding a cleared library), and a healthy file being WIPED is ``clear``'s business,
+    not this hook's. An older file is backed up at most once: the save it precedes re-stamps it. The
+    copy itself (best-effort, same slot, never blocking the write) is ``_copy_to_backup``."""
     if not os.path.exists(path):
         return
     ok, data = _is_loadable_dict(path)
-    unsafe = (not ok) or (
-        isinstance(data, dict)
-        and isinstance(data.get("version"), int)
-        and not isinstance(data.get("version"), bool)
-        and data["version"] > VERSION
-    )
-    if not unsafe:
-        return
-    _copy_to_backup(path, "an unreadable/newer index")
+    version = data.get("version") if ok else None
+    stamped = isinstance(version, int) and not isinstance(version, bool)
+    if not ok or (stamped and version > VERSION):
+        _copy_to_backup(path, "an unreadable/newer index")
+    elif stamped and version < VERSION and _migration_rewrites_rows(data):
+        _copy_to_backup(path, f"the version-{version} index its migration merges rows of")
 
 
 def _copy_to_backup(path: str, what: str) -> bool:
@@ -366,14 +457,44 @@ def save(index: dict, path: str | None = None) -> None:
 
 def upsert(index: dict, entry: dict) -> dict:
     """Insert `entry`, or REPLACE the existing entry with the same fingerprint — the no-duplicate
-    rule. Mutates and returns `index` (entries list). The replacement keeps the entry's POSITION
-    so a re-open doesn't reshuffle the library order; a new fingerprint appends. `entry` must be
-    a valid entry dict (built by ``Session.library_entry`` / a test); it is normalized on store."""
+    rule — unless `entry` measured LESS of that outing than the stored row did. Mutates and returns
+    `index` (entries list). The replacement keeps the entry's POSITION so a re-open doesn't
+    reshuffle the library order; a new fingerprint appends. `entry` must be a valid entry dict
+    (built by ``Session.library_entry`` / a test); it is normalized on store.
+
+    KEPT BY WHAT IT COVERED. The key is chapter-invariant on purpose, so every open of any subset of
+    a recording's chapters upserts this one row, and File ▸ Open loads only the file picked.
+    Replacing unconditionally made whichever chapter was opened LAST the outing — board review
+    UX-4, on SD_19_09: a full load (36 laps · 0:46.808), then chapter 2 alone, then chapter 1 alone
+    left "26 laps · 0:46.862", and the owner's Sandown PB was gone from the Library and its PB
+    chart. So (``_keeps``):
+
+      * a strict SUBSET of the stored chapters never displaces them;
+      * the SAME chapters always replace, whatever the lap count: a re-open, a start-line drag or
+        Save as track is a re-measurement, and the latest timing is the truth;
+      * a SUPERSET always replaces (Load full recording after a chapter);
+      * two partials that don't contain each other: more chapters, then more valid laps; a tie
+        goes to the newer.
+
+    Chapters, not laps, measure coverage because the valid-lap count is per load: Sandown 3h's
+    chapter 1 alone counts four ~85 s laps valid that the full 3-hour chain's band rejects. And a
+    WHOLE row survives, never a min across two: ``best`` and ``theoretical`` are minima over the
+    row's own laps (``lap_count`` is part of the answer, above), and a partial load's band can admit
+    a lap the full one rejects — the short-lap-crowned-best failure. Measured on all nine chapters of
+    the working set, no chapter alone beat its full chain's best or ideal; the full best sat inside
+    one chapter on the three Sandown recordings, and on MK it is the seam lap no chapter alone has.
+
+    The cost is deliberate: a drag or Save as track on a partial open leaves a fuller stored row as
+    it was, until the next open that covers at least its chapters rewrites it."""
     norm = _norm_entry(entry)
     entries = index.setdefault("entries", [])
     for i, e in enumerate(entries):
         if e.get("fingerprint") == norm["fingerprint"]:
-            entries[i] = norm
+            if _keeps(e, norm):
+                _log.info("library: kept %s's %d-chapter row over a %d-chapter measurement",
+                          norm["fingerprint"], len(_chapters(e)), len(_chapters(norm)))
+            else:
+                entries[i] = norm
             return index
     entries.append(norm)
     return index
