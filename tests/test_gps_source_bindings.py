@@ -370,6 +370,37 @@ def test_device_name_reads_the_camera_model_and_a_chain_reports_one():
     print("test_device_name_reads_the_camera_model_and_a_chain_reports_one OK")
 
 
+def test_a_damaged_camera_name_byte_no_longer_fails_the_load():
+    """One 0xFF inside DVNM — the one payload mutant of the board review's 200 that did not load —
+    used to fail the WHOLE load: the binding decodes the std::string as UTF-8, so
+    `ingest.read_recording` died with a UnicodeDecodeError on a name that selects nothing numeric,
+    with every GPS/IMU payload intact. The C++ reader now returns it as printable ASCII with '?'
+    for the damaged byte, and the load reads exactly what it reads off the intact clip."""
+    import re
+    import tempfile
+
+    from studio import ingest
+
+    data = bytearray(open(_HERO8, "rb").read())
+    at = [m.start() for m in re.finditer(rb"DVNMc", data)]  # KLV key + type 'c'; chars 8 bytes in
+    assert at, "hero8.mp4 carries no DVNM char field"
+    for i in at:
+        data[i + 9] = 0xFF   # the 2nd character of every payload's "HERO8 Black"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "dvnm-0xff.mp4")
+        with open(path, "wb") as f:
+            f.write(data)
+        assert pacer.GPMFSource(path).device_name() == "H?RO8 Black"
+        damaged = ingest.read_recording([path])
+    intact = ingest.read_recording([_HERO8])
+    assert damaged[-1] == "H?RO8 Black", damaged[-1]
+    assert intact[-1] == "HERO8 Black"
+    assert len(damaged[0]) == len(intact[0]) > 0, (len(damaged[0]), len(intact[0]))
+    assert [len(x) for x in damaged[5:9]] == [len(x) for x in intact[5:9]]  # ACCL/GRAV/CORI/GYRO
+    print(f"test_a_damaged_camera_name_byte_no_longer_fails_the_load OK ({len(at)} DVNM fields, "
+          f"{len(intact[0])} fixes)")
+
+
 def test_bulk_imu_columns_equal_per_sample_through_cpp_sequential_source():
     """Bulk-vs-per-sample equivalence ALSO holds through a C++ SequentialGPSSource chain (the
     chapter-offset path the studio uses for multi-clip recordings): the bulk readers go through
