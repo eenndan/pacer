@@ -18,16 +18,13 @@ Four findings, all on ``studio/coaching_panel.py``:
     both forms now meet on the shipped dialog (3 of 11 rows on the D24 three-chapter fixture). That
     column is now "Done it?" (a count over its denominator); the RULE it established — a table cell
     never states a number without the unit or sample that makes it checkable — is what is pinned.
-  * L5-10 — the ESTIMATED brake-point hint is derived from `apex − d` under CONSTANT-DECEL,
-    straight-line braking, which the friction circle only affords on the APPROACH. AS MEASURED AT
-    THE TIME: on D24's C10 the optimum landed at 870.6 m — 59 m inside an 811.6..891.1 m corner
-    window, 19.4 m before the apex — so the cell asked for "Brake ~50 m later" beside its own
-    measured "~0.36 s longer on the brakes". Those metres are a RECORD of the finding, not a live
-    figure: #300, #335 and C5 each moved them, and what the app computes today is
-    `coaching_panel.BRAKE_HINT_MAX_PAST_TURN_IN_M`'s own table, which
-    tests/test_measured_figures.py re-measures. (The sweep's headline arithmetic, "50.4 m is 2.1 s
-    of travel, 7x the 0.30 s", conflates travel time with time LOST and is deliberately not
-    repeated here — the evidence is geometric.)
+  * L5-10 — the ESTIMATED brake-point hint's optimum could land a whole brake zone INSIDE the
+    corner (D24's C10: "Brake ~50 m later" beside its own measured "~0.36 s longer on the
+    brakes"), so a geometry gate took the metres off those rows. L7 then took the metres off
+    every row — the hint said "later" at 33 of 33 working-set corners by construction
+    (studio/docs/refused-2026-09.md §16) — and the gate went with them. What is pinned here
+    now is the line that replaced it: a measured braking direction, whose row grows to hold it
+    and whose hover counts the laps it ran over.
 
 Every layout assertion here is on PIXELS (`rowHeight`, `columnWidth`, `sectionSize`, a real
 `fontMetrics` advance against the section's own chrome) — never on `strings().elided`, which models
@@ -59,11 +56,9 @@ from studio.coaching_panel import (  # noqa: E402
     _COL_LOST,
     _PANEL_COL_REACH,
     _PANEL_COL_REASON,
-    BRAKE_HINT_MAX_PAST_TURN_IN_M,
     PANEL_TOP_N,
     REASON_MIN_PX,
     OpportunitiesPanel,
-    _brake_point_hint,
     _fit_reason_rows,
     _header_chrome_px,
 )
@@ -78,11 +73,6 @@ theme.apply_theme(_APP)
 # STRICTER than anything a user can produce. That is the safe direction for a layout test, and
 # widening it to match would be loosening a pin for no gain.
 MIN_PANEL = (280, 196)
-
-# The D24 C10 geometry the finding rests on (best lap 19, single chapter). All metres are the
-# REFERENCE (best-lap) odometer, the frame BOTH Opportunity.entry_dist and BrakeHabit carry.
-C10_ENTER, C10_EXIT, C10_APEX = 811.6, 891.1, 890.0
-C10_ACTUAL, C10_OPTIMAL = 820.2, 870.6
 
 
 def _reason(kind=coaching.REASON_BRAKING, sigma=0.12):
@@ -115,27 +105,27 @@ def _rows(n: int) -> list[coaching.Opportunity]:
 class _Session:
     """The two accessors the panel reads, nothing else (it is a pacer-free view)."""
 
-    def __init__(self, rows, brake_points=None):
+    def __init__(self, rows, directions=None):
         # The theme rides on the summary in production (summarize computes it once), so build it
         # the same way here — a fixture with no theme never exercises the block above the table.
         self._opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=rows,
                                             theme=coaching.session_theme(rows))
-        self._bps = brake_points or {}
+        self._dirs = directions or {}
 
     def coaching_opportunities(self):
         return self._opps
 
-    def coaching_brake_points(self):
-        return self._bps
+    def coaching_brake_direction(self):
+        return self._dirs
 
 
-def _panel(rows, size, brake_points=None) -> OpportunitiesPanel:
+def _panel(rows, size, directions=None) -> OpportunitiesPanel:
     """A real OpportunitiesPanel laid out at `size`, settled.
 
     The explicit 1x1 minimums stand in for the grid splitter: in the app the Coaching page is a
     splitter child that really is squeezed to 280x196 at the window's own minimum, whereas a
     free-standing widget cannot shrink past the table's minimumSizeHint (376 px here)."""
-    p = OpportunitiesPanel(_Session(rows, brake_points))
+    p = OpportunitiesPanel(_Session(rows, directions))
     for w in (p, p.body, p.table):
         w.setMinimumSize(1, 1)
     p.resize(*size)
@@ -544,75 +534,35 @@ def test_reach_cell_never_states_a_count_without_its_denominator():
           f"({p.table.item(0, _PANEL_COL_REACH).text()!r}; unmeasured -> em-dash)")
 
 
-# ------------------------------------------------------------------------------- L5-10
-def _bp(cid=10, actual=C10_ACTUAL, optimal=C10_OPTIMAL, n_laps=38):
-    """The corner's braking HABIT over the clean laps (the cross-lap medians the hint reads)."""
-    return coaching.BrakeHabit(cid=cid, n_laps=n_laps, metres_later=optimal - actual,
-                               optimal_brake_dist=optimal, actual_brake_dist=actual,
-                               q25_m=optimal - actual - 4.0, q75_m=optimal - actual + 4.0)
-
-
-def test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner():
-    """L5-10: the constant-decel optimum is straight-line physics, which only holds on the APPROACH.
-
-    D24 C10: the "latest sustainable brake point" lands at 870.6 m — 59.0 m past an 811.6 m turn-in
-    in a 79.6 m corner window, 19.4 m before the apex — and the cell asked to brake 50.4 m later.
-    More than one brake zone (coaching.BRAKE_APPROACH_M) past turn-in, the estimate is outside its
-    own domain and shows no metres."""
-    assert BRAKE_HINT_MAX_PAST_TURN_IN_M == coaching.BRAKE_APPROACH_M
-    past = C10_OPTIMAL - C10_ENTER
-    assert past > BRAKE_HINT_MAX_PAST_TURN_IN_M, past
-    assert C10_ENTER < C10_OPTIMAL < C10_APEX < C10_EXIT, "the filed geometry, restated"
-    assert _brake_point_hint(_bp(), C10_ENTER) is None, "C10's 50 m hint must not be shown"
-
-    # ...while a brake point that is still on the approach keeps its hint (the gate must not delete
-    # the feature: measured on D24 it fires on 3 of the 11 ranked corners).
-    near = _bp(cid=12, actual=973.7, optimal=980.7)
-    assert _brake_point_hint(near, 972.4) == "Brake ~7 m later into C12 (est)"
-    # ...and the pre-existing noise floor and the no-geometry call both still behave.
-    assert _brake_point_hint(_bp(cid=1, actual=100.0, optimal=101.0), 95.0) is None
-    assert _brake_point_hint(_bp(), None) is not None, "no turn-in supplied -> the gate is skipped"
-    print(f"test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner OK "
-          f"(C10 optimum {past:.1f} m past turn-in > {BRAKE_HINT_MAX_PAST_TURN_IN_M:.0f} m)")
-
-
-def test_reason_cell_drops_the_metres_and_names_the_target():
-    """The cell-level consequence: the C10-shaped row shows its MEASURED reason sentence and no
-    metres, while a sane row keeps the hint AND names its target against the corner's turn-in
-    (the tooltip used to give two bare lap-odometer marks, "~871 m" / "~820 m")."""
-    deep = coaching.Opportunity(cid=10, direction=-1, time_lost=0.0706, entry_dist=C10_ENTER,
-                                reason=_reason(coaching.REASON_BRAKING))
+# ------------------------------------------------------------------------------- L7
+def test_the_braking_line_row_holds_it_and_names_the_laps_it_counted():
+    """L7: the measured braking-direction line is the reason cell's second line, and the row grows
+    to hold it at the app's own minimum page width, where it wraps most. Its hover counts the laps
+    the rank test ran over as they are — clean laps that braked into the corner AND were matched on
+    track there (since #339 `_brake_rows` drops the interpolated ones: MK_18_09 C2 counts 16 of the
+    18 clean laps that braked into it) — and no row prints braking metres."""
     ok = coaching.Opportunity(cid=12, direction=1, time_lost=0.034, entry_dist=972.4,
-                              reason=_reason(coaching.REASON_BRAKING))
-    p = _panel([deep, ok], (900, 600),
-               brake_points={10: _bp(), 12: _bp(cid=12, actual=973.7, optimal=980.7)})
-    deep_cell = p.table.item(0, _PANEL_COL_REASON)
-    ok_cell = p.table.item(1, _PANEL_COL_REASON)
-    assert "Brake ~" not in deep_cell.text(), deep_cell.text()
-    assert "longer on the brakes" in deep_cell.text(), deep_cell.text()
-    assert "Brake ~7 m later into C12" in ok_cell.text(), ok_cell.text()
-    assert "past the turn-in" in ok_cell.toolTip(), ok_cell.toolTip()
-    assert " m; you brake at ~" not in ok_cell.toolTip(), (
-        "the tooltip must name the target against the turn-in, not two raw odometer marks",
-        ok_cell.toolTip())
-    print("test_reason_cell_drops_the_metres_and_names_the_target OK")
-
-
-def test_the_brake_hint_names_the_laps_it_counted():
-    """Lane A. Since #339 `Session._brake_rows` — the list the hint's `BrakeHabit` medians — drops
-    a lap's brake point wherever that lap's corner was interpolated, so `n_laps` counts the clean
-    laps that braked into the corner AND were matched on track there. The hover still called them
-    "the N clean laps you braked into this corner": on MK_18_09_26's C2 it read 16 where 18 clean
-    laps braked into C2 (two were interpolated there, and the BRAKING table's n reads the same 16)."""
-    ok = coaching.Opportunity(cid=12, direction=1, time_lost=0.034, entry_dist=972.4,
-                              reason=_reason(coaching.REASON_BRAKING))
-    p = _panel([ok], (900, 600),
-               brake_points={12: _bp(cid=12, actual=973.7, optimal=980.7, n_laps=16)})
-    tip = p.table.item(0, _PANEL_COL_REASON).toolTip()
-    assert "Brake ~7 m later into C12" in p.table.item(0, _PANEL_COL_REASON).text()
-    assert "16 clean laps you braked into this corner," not in tip, tip
-    assert "16 clean laps that braked into this corner and were matched on track" in tip, tip
-    print("test_the_brake_hint_names_the_laps_it_counted OK")
+                              reason=_reason(coaching.REASON_BRAKING), evidence=_evidence(1))
+    other = coaching.Opportunity(cid=3, direction=-1, time_lost=0.030, entry_dist=300.0,
+                                 reason=_reason(coaching.REASON_APEX), evidence=_evidence(0))
+    dirs = {12: coaching.BrakeDirection(cid=12, n_laps=16, rho=-0.740, p=0.0011, family=12,
+                                        p_holm=0.0132)}
+    for size in (MIN_PANEL, (900, 600)):
+        p = _panel([ok, other], size, directions=dirs)
+        cell = p.table.item(0, _PANEL_COL_REASON)
+        assert cell.text().endswith("\nBraking later went with quicker passes here (16 laps)"), \
+            cell.text()
+        assert "Braking" not in p.table.item(1, _PANEL_COL_REASON).text()
+        # Tall enough for BOTH lines where the painter lays them out (L5-03's measure).
+        avail, pad_v = _painter_text_rect(p.table, _PANEL_COL_REASON)
+        need = p.table.fontMetrics().boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap,
+                                                  cell.text()).height() + pad_v
+        assert p.table.rowHeight(0) >= need, (size, p.table.rowHeight(0), need)
+        tip = cell.toolTip()
+        assert "16 clean laps that braked into this corner and were matched on track" in tip, tip
+        assert all(" m later" not in p.table.item(r, _PANEL_COL_REASON).text()
+                   for r in range(p.table.rowCount()))
+    print("test_the_braking_line_row_holds_it_and_names_the_laps_it_counted OK")
 
 
 def _run_all():
@@ -628,9 +578,7 @@ def _run_all():
     test_the_shortlist_budget_settles_and_never_clips_a_row()
     test_every_header_sits_over_its_own_column()
     test_reach_cell_never_states_a_count_without_its_denominator()
-    test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
-    test_reason_cell_drops_the_metres_and_names_the_target()
-    test_the_brake_hint_names_the_laps_it_counted()
+    test_the_braking_line_row_holds_it_and_names_the_laps_it_counted()
     test_the_pages_jump_buttons_are_never_clipped()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 

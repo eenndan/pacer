@@ -8,6 +8,7 @@
  "best_lap_total_distance": null,
  "best_rolling_lap": null,
  "brake_report": [],
+ "coaching_brake_direction": {},
  "coaching_brake_points": {},
  "coaching_opportunities": {
   "enough": false,

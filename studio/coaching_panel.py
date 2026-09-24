@@ -986,100 +986,11 @@ def _fit_reason_rows(table: QTableWidget, col: int):
         table.setProperty("_fitting_reason", False)
 
 
-# D4: below this many metres the brake-point delta is within the estimate's noise — show no hint.
+# D4's noise floor for a braking DISTANCE: below this many metres a brake-point delta is within the
+# estimate's own noise. No Coaching row prints braking metres since L7 (see `_reason_cell`); the
+# constant stays because the refusal of a relative distance states its reopening bar in it
+# (studio/docs/refused-2026-09.md §16) and that refusal's probe reads it.
 BRAKE_HINT_MIN_M = 2.0
-
-# L5-10: how far PAST a corner's own turn-in the estimated "latest sustainable brake point" may fall
-# before the hint stops describing a brake point at all.
-#
-# The D4 optimum is `apex − d` under CONSTANT-DECEL braking at the session's demonstrated peak —
-# straight-line physics, which the friction circle only affords on the APPROACH; the model says so
-# itself (coaching.BRAKE_APPROACH_M: "braking starts on the straight before turn-in, ~1 medium-kart
-# brake zone"). Past one brake zone beyond turn-in the estimate is outside its own domain, so those
-# rows show the measured reason sentence and no metres.
-#
-# MEASURED (T16b, 2026-09-23) on the evidence table's two working-set recordings (coaching.py: 0068
-# is SD_19_09_26, 0064 is Sandown 3h 2026), with D2 in — D2 stopped counting a string of brake blips
-# with no sustained brake as a brake event, which moves the brake points this table's optimum is
-# the median of — and re-measured the same day once Q2 made Sandown Park a built-in track, so both
-# are timed on the owner's own start/finish line. On the loader's line the odometer started at C1's
-# turn-in (0.0 m on both); on the real line C1's turn-in sits ~100 m on, every cell moved with it,
-# and no verdict changed. Its D24 edition (T15, measured after #335 and marked UNVERIFIED once D24 was gone
-# and D2 had moved it) and the figures before that ("3 of 11 ranked corners") are kept in
-# studio/docs/coaching-tables-on-d24.md. One row per RANKED coaching row that has a habit to print
-# (`coaching.MIN_BRAKE_LAPS` laps matched and at least BRAKE_HINT_MIN_M of metres — on both
-# recordings that is every ranked row), with the corner's turn-in and apex on the reference odometer
-# beside the MEDIAN optimum `Session.coaching_brake_points` prints. "past turn-in" is optimum −
-# turn-in, so this gate's verdict is recomputable from the row's own two cells:
-#
-#   rec   corner  turn-in m   apex m  optimum m   hint
-#   0068  C1           97.6    208.4      232.9   suppressed
-#   0068  C2          278.6    301.6      297.7   shown
-#   0068  C3          371.7    426.7      416.0   suppressed
-#   0068  C5          567.6    595.5      586.0   shown
-#   0068  C7          663.0    686.4      679.2   shown
-#   0064  C1          100.6    207.0      230.6   suppressed
-#   0064  C4          451.2    481.9      467.7   shown
-#   0064  C6          611.9    631.8      626.0   shown
-#   0064  C7          657.7    681.1      672.7   shown
-#
-# (tests/test_measured_figures.py derives the sentence below from these cells and, given the
-# footage, re-measures every one.)
-#
-# The gate is narrow: 3 of the 9 ranked rows lose their metres — 0068's C1 and C3 and 0064's C1.
-# The 6 it keeps sit 14.1..19.1 m past turn-in, inside the approach the physics assumes; the 3 it
-# drops sit 44.3..135.3 m past it. Two of those three are past the APEX as well (0064 C1 by 23.6 m,
-# 0068 C1 by 24.5 m), which is the same objection in its sharpest form: a "latest sustainable brake
-# point" downstream of the slowest point of the corner is not a brake point.
-BRAKE_HINT_MAX_PAST_TURN_IN_M = coaching.BRAKE_APPROACH_M
-
-
-def _past_turn_in_m(bp, entry_dist: float) -> float:
-    """How far past the corner's turn-in the ESTIMATED optimum sits (m; negative = still on the
-    approach). Both are the REFERENCE (best-lap) odometer — ``Opportunity.entry_dist`` is that
-    corner's enter boundary and ``BrakeHabit.optimal_brake_dist`` is the median apex − braking
-    distance, projected into the same frame by ``Session._brake_rows``."""
-    return float(bp.optimal_brake_dist) - float(entry_dist)
-
-
-def _turn_in_phrase(m: float) -> str:
-    """"~12 m past the turn-in" / "~12 m before the turn-in" — a brake point named against a
-    landmark the driver can see, instead of a bare lap-odometer metre mark (L5-10: the hint stated
-    a delta and the tooltip two raw odometer readings, so neither said where the target IS)."""
-    if abs(m) < 0.5:
-        return "right at the turn-in"
-    return f"~{abs(m):.0f} m {'past' if m > 0 else 'before'} the turn-in"
-
-
-def _brake_point_hint(bp, entry_dist: float | None = None) -> str | None:
-    """A short, ESTIMATED braking-point coaching line for a corner's ``coaching.BrakeHabit``, or
-    None.
-
-    The metres are the driver's HABIT — the median over the clean laps, and literally the number
-    the Stats ▸ BRAKING table's "m later" column shows for the same corner. It used to be the BEST
-    lap's single application, so the two surfaces answered "how much later can I brake here?" with
-    different metres and named neither (``coaching.BrakeHabit`` records what that measured).
-
-    Positive metres_later => "brake later"; negative => "brake earlier". Labelled ESTIMATED
-    (constant-decel assumption at the session's demonstrated peak braking). None when too few laps
-    braked into the corner to call it a habit (< coaching.MIN_BRAKE_LAPS), when the metres are
-    negligible (< BRAKE_HINT_MIN_M — within the estimate's noise) or, given the corner's turn-in
-    odometer `entry_dist`, when the recommended point falls more than
-    BRAKE_HINT_MAX_PAST_TURN_IN_M past it (L5-10). `entry_dist=None` skips that geometry gate."""
-    if int(bp.n_laps) < coaching.MIN_BRAKE_LAPS:
-        return None
-    m = float(bp.metres_later)
-    if abs(m) < BRAKE_HINT_MIN_M:
-        return None
-    if (entry_dist is not None
-            and _past_turn_in_m(bp, entry_dist) > BRAKE_HINT_MAX_PAST_TURN_IN_M):
-        return None
-    # theme.ESTIMATED_MARK is the ONE canonical inline "estimated" badge (was a stray "(EST)" here) —
-    # so the brake-point hint reads the same "(est)" as the grip column / brake-throttle legend.
-    mark = theme.ESTIMATED_MARK
-    if m > 0:
-        return f"Brake ~{m:.0f} m later into C{bp.cid} {mark}"
-    return f"Brake ~{abs(m):.0f} m earlier into C{bp.cid} {mark}"
 
 
 # --- shared per-row cell builders (the modal dialog AND the persistent panel render rows the SAME
@@ -1165,16 +1076,25 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
     return item
 
 
-def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
+def _p_phrase(p: float) -> str:
+    """"p = 0.016" — or "p < 0.001", which a permutation p this small honestly is."""
+    return "p < 0.001" if p < 0.001 else f"p = {p:.3f}"
+
+
+def _reason_cell(opp: coaching.Opportunity, directions: dict,
                  speed_unit: str | None = None) -> QTableWidgetItem:
     """The 'How to find it' reason cell: the coaching sentence (apex deficit in `speed_unit`, km/h
-    default) + (when a braking-point estimate is available for this corner) the ESTIMATED 'brake
-    ~N m' line, with the per-reason tooltip.
+    default) + (where the laps separate one, corrected for every corner the recording tested)
+    the MEASURED braking-direction line, with the per-reason tooltip.
+
+    NO BRAKING METRES (L7). This cell used to end in the ESTIMATED "Brake ~N m later into Cx": a
+    constant-peak-deceleration optimum that sat past the driver's braking at 33 of 33 corners on the
+    working set by construction (coaching.BrakeDirection has the measurement). Its replacement says
+    only which way braking went with quicker passes, with the lap count behind it, and says nothing
+    at a corner whose laps do not separate a direction — so a missing line is a finding, not a gap.
 
     An ABSTAINED row shows `coaching.abstain_sentence` (which `reason_sentence` returns for it) and
-    NO brake-point hint: the estimated "brake ~17 m later" line is exactly the collapse-to-a-default
-    this gate exists to prevent, and appending it to a row that just declined to make a claim would
-    hand the reader advice the model does not stand behind."""
+    no braking line: a row that has just declined to make a claim does not grow a lever under it."""
     sentence = coaching.reason_sentence(opp, speed_unit)
     if not opp.evidence.ranked:
         item = QTableWidgetItem(sentence)
@@ -1184,35 +1104,25 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
             "Not ranked. Coaching abstains on this corner rather than offering a default: see the "
             "sentence for which evidence test it failed. The measurement is still shown.")
         return item
-    bp = brake_points.get(opp.cid)
-    # L5-10: the corner's own turn-in gates the hint — a "latest sustainable brake point" more than
-    # one brake zone INSIDE the corner is not a brake point, and the metres are not shown for it.
-    hint = _brake_point_hint(bp, opp.entry_dist) if bp is not None else None
-    item = QTableWidgetItem(f"{sentence}\n{hint}" if hint else sentence)
+    d = directions.get(opp.cid)
+    line = coaching.brake_direction_line(d)
+    item = QTableWidgetItem(f"{sentence}\n{line}" if line else sentence)
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     tip = _REASON_TIP.get(opp.reason.kind, "")
-    if hint is not None:
-        # L5-10: state the TARGET, not two bare odometer marks — both points are named against the
-        # corner's turn-in, the landmark the driver is actually looking at.
-        #
-        # And state WHAT THE METRES ARE MEASURED OVER. "Brake later than what?" is the category's
-        # loudest complaint, and this app used to have two unlabelled answers to it (see
-        # coaching.BrakeHabit). The scope, the sample it came out of, the OBSERVED middle half of
-        # that sample — never a modelled margin — and the other surface showing the same number all
-        # live here rather than in the cell, because the cell has no vertical room to spare.
-        # "…AND WERE MATCHED ON TRACK": since #339 `_brake_rows` drops a lap's brake point where
-        # that lap's corner was interpolated, so n is not every clean lap that braked here (MK_18_09
-        # C2: 16 counted, 18 braked). Always true, so it needs no second count to be honest.
-        tip = (f"{tip}\n\n{hint}: over the {bp.n_laps} clean laps that braked into this corner and "
+    if line is not None and d is not None:
+        # The count is the laps the rank test ran over, and they are not every clean lap: since
+        # #339 `_brake_rows` drops a lap's brake point where that lap's corner was interpolated
+        # (MK_18_09 C2: 16 counted, 18 braked). The sentence says so rather than a second count.
+        rho = f"{d.rho:+.2f}".replace("-", "−")   # the true minus the reason sentences print
+        tip = (f"{tip}\n\n{line}: over the {d.n_laps} clean laps that braked into this corner and "
                "were matched on track at its entry and exit, the "
-               "apex-speed-matched latest sustainable brake point sits "
-               f"{_turn_in_phrase(_past_turn_in_m(bp, opp.entry_dist))}; you typically brake "
-               f"{_turn_in_phrase(float(bp.actual_brake_dist) - float(opp.entry_dist))}. "
-               f"The middle half of those laps read {bp.q25_m:+.0f} to {bp.q75_m:+.0f} m "
-               "(+ = could have braked later) — your observed spread, not a modelled margin.\n"
-               "This is the median, the same number the BRAKING table on the Stats page reports "
-               "in its \"m later\" column. ESTIMATED (constant decel at this session's "
-               "demonstrated peak braking).")
+               f"{d.verdict} a lap began braking, the less time it took through the corner "
+               f"(Spearman ρ {rho}, {_p_phrase(d.p)} against "
+               f"{coaching.BRAKE_DIRECTION_DRAWS:,} random pairings of the same laps, and still "
+               f"{_p_phrase(d.p_holm)} once corrected for all {d.family} "
+               f"corner{'' if d.family == 1 else 's'} tested on this recording).\n"
+               "It says which way, not how far: no braking distance measured here holds up, so "
+               "none is given.")
     item.setToolTip(tip)
     return item
 
@@ -1266,8 +1176,8 @@ class OpportunitiesPanel(QWidget):
 
     ABSTAINED ROWS ARE SHOWN, NOT DROPPED. ``summarize`` sinks the corners that failed the evidence
     gate below the ranked ones and they render muted, with the sentence saying which test they
-    failed and NO brake-point hint — the collapse-to-a-default ("brake 8 m later") is exactly what
-    the gate exists to prevent. Only the RANKED rows are summed into the headline total.
+    failed and no braking line — the collapse-to-a-default ("brake 8 m later") is exactly what the
+    gate exists to prevent. Only the RANKED rows are summed into the headline total.
 
     RESPONSIVE, in both directions (L5-06/L5-08). The page shows ``PANEL_TOP_N`` rows as its floor
     and then as many further ranked corners as the viewport can hold — maximized it used to be 3
@@ -1292,18 +1202,17 @@ class OpportunitiesPanel(QWidget):
     THE DEBRIEF IS THIS PAGE, NOT A SIXTH ONE (board review PS-B1, ``set_debrief``). A recording's
     first open lands here full-window with a lead above the focus list (``DebriefBlock``) and the
     table cut to the shortlist the headline sums — one time figure and its corners, each with its
-    Jump. The ESTIMATED brake-point line stays off the rows while the page is the debrief: it reads
-    "brake later" at 33 of 33 corners on the four working-set recordings (UX-2), no relative
-    figure that would say where survived measurement (refused-2026-09.md §16), and whatever a
-    landing leads with is read literally. The measured reason stays; the estimate is back on this
-    page the moment the debrief ends.
+    Jump. The rows carry their measured reason and nothing under it: the braking-direction line
+    joins them the moment the debrief ends. The ESTIMATED "brake ~N m later" line it replaced was
+    never on the debrief — it read "later" at 33 of 33 corners on the four working-set recordings
+    (UX-2), no relative figure that would say where survived measurement (refused-2026-09.md §16),
+    and whatever a landing leads with is read literally. L7 took it off the ordinary page too.
 
-    Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_points``) — no
+    Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_direction``) — no
     analysis here. Refreshed on load / re-segmentation / unit + palette change (never on the 30 Hz
     tick, never on selection — see the scope note).
     A row click emits ``corner_clicked(cid)`` so the app can ring the corner's apex on the map.
-    Honours the shared ESTIMATED labelling (the ``(est)`` brake-point lines via ``_reason_cell``,
-    from ``theme.ESTIMATED_MARK``) and the friendly "need more laps" state when there aren't
+    Carries no estimated figure, and shows the friendly "need more laps" state when there aren't
     enough clean laps."""
 
     # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
@@ -1327,13 +1236,14 @@ class OpportunitiesPanel(QWidget):
         self._num_font = theme.mono_font(theme.TABLE)
         self._cids: list[int] = []  # row -> corner cid, set in refresh()
         # L5-08: the WHOLE shown ranking (the table renders as many of these as it can hold) + the
-        # brake points its reason cells need, so a re-tune re-renders without re-reading the session.
+        # braking directions its reason cells need, so a re-tune re-renders without re-reading the
+        # session.
         self._all_rows: list[coaching.Opportunity] = []
         self._shortlist: list[coaching.Opportunity] = []   # what the headline sums (PANEL_TOP_N)
         self._debrief = False        # the page is the first-open debrief (set_debrief)
         # (PB line, the corners Pacer pre-promoted, whether the line offers the PB compare)
         self._debrief_lead: tuple = (None, [], False)
-        self._brake_points: dict = {}
+        self._brake_dirs: dict = {}  # cid -> coaching.BrakeDirection (refresh)
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
         self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
         self._tuning = False         # re-entrancy guard: a re-render fires resizeEvent
@@ -1482,8 +1392,8 @@ class OpportunitiesPanel(QWidget):
                     promoted: list[int] | None = None, compare: bool = False) -> None:
         """Make this page the first-open debrief (see the class note), or the ordinary page again.
         The view owns WHEN (``CentralView.show_debrief`` / ``_end_debrief``); this owns what the
-        page shows: the lead, the shortlist-only table, and no estimated brake line. `compare`
-        offers "Compare with your previous PB" beside the PB line (``compare_pb_requested``)."""
+        page shows: the lead, the shortlist-only table, and no braking line. `compare` offers
+        "Compare with your previous PB" beside the PB line (``compare_pb_requested``)."""
         self._debrief = bool(on)
         self._debrief_lead = ((pb_line, list(promoted or []), bool(compare)) if on
                               else (None, [], False))
@@ -1513,11 +1423,11 @@ class OpportunitiesPanel(QWidget):
         30 Hz tick, and never on a lap selection (the summary is session-scoped; see the class note).
         Clears any held row selection (a stale cid would mis-ring the map)."""
         opps = self.session.coaching_opportunities()
-        brake_points = self.session.coaching_brake_points()
+        directions = self.session.coaching_brake_direction()
         self.theme_block.set_theme(opps)
         # L2: only rows above the shown resolution count as opportunities (no "+0.00 s" rows).
         if opps.enough and _shown_rows(opps):
-            self._fill_rows(opps, brake_points)
+            self._fill_rows(opps, directions)
         else:
             self._show_excluded(opps)
         # A new theme is new prose of a new length, so re-run its height budget against the page
@@ -1533,12 +1443,12 @@ class OpportunitiesPanel(QWidget):
         self._speed_unit = unit
         self.refresh()
 
-    def _fill_rows(self, opps: coaching.Opportunities, brake_points: dict):
+    def _fill_rows(self, opps: coaching.Opportunities, directions: dict):
         """Populate the table from `opps.rows` (shared cell builders, so a row reads identically to
         the modal dialog) and the headline summary."""
         # L2: only shown-resolution rows are opportunities (drop the "+0.00 s" rows).
         self._all_rows = _shown_rows(opps)
-        self._brake_points = brake_points
+        self._brake_dirs = directions
         self._n_clean = opps.n_laps
         self._typical_lap = opps.median_lap_id
         self._tuned_key = None       # a new ranking: re-tune the row count against the viewport
@@ -1608,15 +1518,15 @@ class OpportunitiesPanel(QWidget):
             built = self.table.rowCount()   # rows already on the table keep their cells
             self.table.setRowCount(len(rows))
             self._cids = [opp.cid for opp in rows]
-            # The debrief leaves the ESTIMATED brake-point line off (see the class note).
-            brake_points = {} if self._debrief else self._brake_points
+            # The debrief leaves the braking-direction line off (see the class note).
+            directions = {} if self._debrief else self._brake_dirs
             for r in range(built, len(rows)):
                 opp = rows[r]
                 self.table.setItem(r, 0, _corner_cell(opp))
                 self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
                 self.table.setItem(r, 2, _reach_cell(opp, self._num_font,  # have you done it?
                                                      self._n_clean))
-                self.table.setItem(r, 3, _reason_cell(opp, brake_points, self._speed_unit))
+                self.table.setItem(r, 3, _reason_cell(opp, directions, self._speed_unit))
                 self.table.setCellWidget(r, _PANEL_COL_PHASES, PhaseBar(opp.phases))  # D2
                 self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp))
             if held is not None and held in self._cids:

@@ -63,8 +63,10 @@ _AT_G1 = (
     ("test_measured_figures.py", "test_the_floor_table_matches_the_footage"),
     ("test_measured_figures.py", "test_the_refusal_record_matches_the_footage"),
     ("test_measured_figures.py", "test_the_brake_habit_table_matches_the_footage"),
-    # #339 (C5), merged while this was in review, added a twelfth with the same print-and-return.
-    ("test_measured_figures.py", "test_the_brake_hint_gate_table_matches_the_footage"),
+    # #339 (C5), merged while this was in review, added a twelfth with the same print-and-return,
+    # the brake-hint gate table's. L7 deleted that check WITH its table, when the hint it gated left
+    # the Coaching rows, so it is no longer part of the floor; its successor re-measures the table
+    # that replaced it (test_the_braking_direction_table_matches_the_footage).
     ("test_measured_figures.py", "test_the_beat_rate_table_matches_the_footage"),
     ("test_measured_figures.py", "test_the_focus_tables_match_the_footage"),
 )

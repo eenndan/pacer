@@ -99,17 +99,21 @@ def _layout_fixtures():
     return layout
 
 
-def test_the_debrief_is_the_shortlist_and_keeps_the_estimate_off_its_rows():
+def test_the_debrief_is_the_shortlist_and_keeps_the_braking_line_off_its_rows():
     layout = _layout_fixtures()
     rows = layout._rows(8)
-    # C1 on the approach, so its ESTIMATED "Brake ~7 m later" line is shown on the ordinary page
+    # C1's laps separate a direction, so the ordinary page prints its braking line under the reason.
+    # (The ESTIMATED "Brake ~N m later" this line replaced never reached the debrief either; L7 took
+    # it off the ordinary page too.)
     rows[0] = coaching.Opportunity(cid=1, direction=1, time_lost=0.30, entry_dist=972.4,
                                    reason=layout._reason(coaching.REASON_BRAKING),
                                    phases=rows[0].phases, evidence=rows[0].evidence)
+    line = "Braking later went with quicker passes here (16 laps)"
     p = layout._panel(rows, (1400, 800),
-                      brake_points={1: layout._bp(cid=1, actual=973.7, optimal=980.7)})
+                      directions={1: coaching.BrakeDirection(cid=1, n_laps=16, rho=-0.74, p=0.0011,
+                                                             family=12, p_holm=0.0132)})
     cell = lambda: p.table.item(0, _PANEL_COL_REASON).text()  # noqa: E731
-    assert "Brake ~7 m later into C1" in cell(), cell()
+    assert cell().endswith(line), cell()
     assert p.table.rowCount() > PANEL_TOP_N, "a tall page shows more than the shortlist"
     assert p.shortlist_cids() == [1, 2, 3], p.shortlist_cids()
 
@@ -117,7 +121,8 @@ def test_the_debrief_is_the_shortlist_and_keeps_the_estimate_off_its_rows():
     for _ in range(4):
         _APP.processEvents()
     assert p.table.rowCount() == PANEL_TOP_N, p.table.rowCount()
-    assert "Brake ~" not in cell() and "longer on the brakes" in cell(), cell()
+    assert "Braking" not in cell() and "Brake ~" not in cell(), cell()
+    assert "longer on the brakes" in cell(), cell()
     assert not p.debrief_block.isHidden(), "the lead is the first thing on the debrief"
     assert "First session logged" in p.debrief_block.headline.text()
     assert p.debrief_block.full_text() in p.summary_label.toolTip(), "demoted, never deleted"
@@ -125,10 +130,10 @@ def test_the_debrief_is_the_shortlist_and_keeps_the_estimate_off_its_rows():
     p.set_debrief(False)
     for _ in range(4):
         _APP.processEvents()
-    assert "Brake ~7 m later into C1" in cell(), "the estimate is back once the debrief ends"
+    assert cell().endswith(line), "the braking line is back once the debrief ends"
     assert p.table.rowCount() > PANEL_TOP_N and p.debrief_block.isHidden()
-    print(f"ok page: debrief = {PANEL_TOP_N} rows, no estimate; after it the ranking and the "
-          "estimate are back")
+    print(f"ok page: debrief = {PANEL_TOP_N} rows, no braking line; after it the ranking and the "
+          "line are back")
 
 
 # ------------------------------------------------------------------------ 4. the journey
