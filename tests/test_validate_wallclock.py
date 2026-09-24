@@ -116,7 +116,7 @@ def test_parse_when_handles_z_and_naive():
 
 
 # ----------------------------------------------------------------------------- lock-only mode (B3)
-_TRUE = (90190, 11)
+_TRUE = (4242, 7)
 
 
 def _sprint_field(seed=5, drivers=25, laps=16):
@@ -128,8 +128,8 @@ def _sprint_field(seed=5, drivers=25, laps=16):
     common[0], common[[5, 6]] = 8.0, 2.5
     rows = {}
     for d in range(1, drivers + 1):
-        pace = 68.0 if (90190, d) == _TRUE else rng.uniform(67.5, 74.0)
-        rows[(90190, d)] = {k + 1: float(t) for k, t in
+        pace = 68.0 if (4242, d) == _TRUE else rng.uniform(67.5, 74.0)
+        rows[(4242, d)] = {k + 1: float(t) for k, t in
                             enumerate(pace + common + rng.normal(0.0, 0.6, laps))}
     return rows
 
@@ -175,7 +175,7 @@ def test_lock_only_is_ambiguous_when_a_twin_row_fits_as_well():
     rows = _sprint_field()
     app = _stint(rows)
     rng = np.random.default_rng(3)
-    rows[(90190, 99)] = {k: t + rng.normal(0.0, 0.02) for k, t in rows[_TRUE].items()}
+    rows[(4242, 99)] = {k: t + rng.normal(0.0, 0.02) for k, t in rows[_TRUE].items()}
     v = vw.lock_verdict(vw.lock_all(app, rows))
     assert v["lock"]["r"] > 0.99 and not v["locked"], (v["lock"], v.get("separation"))
     assert vw.lock_verdict([]) == {"locked": False, "why": "no candidate window fits this stint"}
@@ -196,7 +196,7 @@ def test_a_fingerprint_with_no_shape_does_not_lock():
     nearest rival is its own row one lap off — so the seed is chosen to sit in it, and the first
     assertion says so if a change ever moves it out."""
     rng = np.random.default_rng(17)
-    rows = {(90190, d): {k: 68.0 + 0.3 * d + rng.normal(0.0, 0.6) for k in range(1, 17)}
+    rows = {(4242, d): {k: 68.0 + 0.3 * d + rng.normal(0.0, 0.6) for k in range(1, 17)}
             for d in range(1, 13)}
     rows[_TRUE] = {k: 68.0 + rng.normal(0.0, 0.05) for k in range(1, 17)}
     v = vw.lock_verdict(vw.lock_all(_stint(rows, gps_sd=0.02), rows))
@@ -207,7 +207,7 @@ def test_a_fingerprint_with_no_shape_does_not_lock():
 
 
 _PAGE = """<html><body><form name="Form1" method="post" action="./HeatDetails.aspx?HeatNo=90123">
-<span id="lblDate" class="ItemTitle">18/09/2026 20:10</span>
+<span id="lblDate" class="ItemTitle">01/02/2026 16:40</span>
 <table class='RaceResults'><tr><td class="Racername"><a href="RacerHistory.aspx?CustID=1">Zebedee Quux</a></td></tr></table>
 <table class='LapTimesContainer'><tbody><tr><td><table class='LapTimes'><thead><tr><th colspan='2'>Zebedee Quux</th></tr></thead>
 <tbody><tr><td colspan='2'>(Penalties: 0)</td></tr>
@@ -221,7 +221,7 @@ _PAGE = """<html><body><form name="Form1" method="post" action="./HeatDetails.as
 
 def test_a_club_speed_page_becomes_laps_and_never_a_name():
     start, rows = clubspeed.parse_page(_PAGE)
-    assert start == "18/09/2026 20:10", start
+    assert start == "01/02/2026 16:40", start
     assert rows == [{1: 81.865, 2: 77.03, 3: 105.2}, {1: 83.5}], rows
     with tempfile.TemporaryDirectory(prefix="pacer-clubspeed-") as d:
         page, out = os.path.join(d, "saved.html"), os.path.join(d, "day.csv")
@@ -233,7 +233,7 @@ def test_a_club_speed_page_becomes_laps_and_never_a_name():
             assert word not in text, f"a driver's name reached the CSV: {word!r}"
         rows, starts = vw.load_rows(out)
         assert rows == {(90123, 1): {1: 81.865, 2: 77.03, 3: 105.2}, (90123, 2): {1: 83.5}}, rows
-        assert starts == {90123: "18/09/2026 20:10"}, starts
+        assert starts == {90123: "01/02/2026 16:40"}, starts
         transponder_csv = os.path.join(d, "race-results.csv")
         with open(transponder_csv, "w", encoding="utf-8") as f:
             f.write('Lap,Pos,Lap Time,Diff\n1,3,1:08.376,"2", laps\n2,3,1:9.030,x\n')

@@ -13,7 +13,7 @@ all, so a name cannot reach the CSV, a log line or a report. The pages and the C
 outside the repo — they are other people's lap times — exactly like the transponder CSV.
 
 Run (positional arguments are the INPUT pages; the OUTPUT is `--out`, a new `.csv`):
-  pixi run python -m studio.dev.clubspeed heat_90189.html heat_90190.html --out 18-09.csv
+  pixi run python -m studio.dev.clubspeed heat_4241.html heat_4242.html --out day.csv
 """
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ class _HeatPage(HTMLParser):
 
 
 def parse_page(html: str) -> tuple[str | None, list[dict[int, float]]]:
-    """(the heat's start label as printed, e.g. '18/09/2026 20:10'; one {lap: seconds} per driver
+    """(the heat's start label as printed, e.g. '01/02/2026 16:40'; one {lap: seconds} per driver
     table, in page order). A table with no timed lap is kept as an empty dict so `row` numbers stay
     the page's own order."""
     page = _HeatPage()
