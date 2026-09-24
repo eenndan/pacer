@@ -3065,7 +3065,7 @@ def test_the_peak_braking_tile_says_it_is_a_smoothed_peak():
     for line in src.splitlines():
         if literal in line and "LONG_SMOOTH_S" not in line:
             raise AssertionError(
-                f"stats_panel types the smoothing window as a literal — it must read the "
+                f"the Stats page (stats_*.py) types the smoothing window as a literal — it must read the "
                 f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
     print("ok brake-g: both g surfaces state the smoothing window, read from the constant")
 
@@ -3653,7 +3653,7 @@ def test_the_friction_circle_states_that_its_two_axes_are_not_on_one_window():
         for line in src.splitlines():
             if literal in line and const not in line:
                 raise AssertionError(
-                    f"stats_panel types the {const} window as a literal — it must read the "
+                    f"the Stats page (stats_*.py) types the {const} window as a literal — it must read the "
                     f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
     print("ok friction circle: both smoothing windows stated, composed from the constants")
 
@@ -4205,7 +4205,7 @@ def test_every_longitudinal_surface_names_which_filter_it_read():
         for line in src.splitlines():
             if literal in line and const not in line:
                 raise AssertionError(
-                    f"stats_panel types {literal!r} as a literal — it must read driving.{const}, "
+                    f"the Stats page (stats_*.py) types {literal!r} as a literal — it must read driving.{const}, "
                     f"or the copy rots the moment the detector changes: {line.strip()!r}")
     v.hide()
     print("ok longitudinal disclosure: peak tile, DRIVING tiles, PER LAP and commit % each name "
@@ -4261,7 +4261,7 @@ def test_the_coast_copy_states_the_window_the_coast_was_measured_on():
     for line in src.splitlines():
         if window in line and "COAST_SMOOTH_S" not in line and "LONG_SMOOTH_S" not in line:
             raise AssertionError(
-                f"stats_panel types {window!r} as a literal — it must read "
+                f"the Stats page (stats_*.py) types {window!r} as a literal — it must read "
                 f"driving.COAST_SMOOTH_S, or the copy rots the moment the window moves: "
                 f"{line.strip()!r}")
     print(f"ok coast disclosure: both surfaces state the {window} coast window, composed from "
