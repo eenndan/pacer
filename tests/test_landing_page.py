@@ -42,7 +42,8 @@ THE FIVE CHECKS
      on another host. The page's whole design is that it is one file plus its own images.
 
 Plus check 6, the one that would have caught the seven-week-broken image: every markdown image
-under docs/ resolves on disk.
+under docs/ resolves on disk. And check 7, the page's one clip: small, 720p, 20-30 s, still for a
+reader who asked for reduced motion, and with no audio track in the file (with its own control).
 
 Pure stdlib apart from importing `studio.theme` for the token values (Pacer-free, no QApplication,
 no telemetry file), so it needs neither the offscreen env nor the bindings PYTHONPATH.
@@ -50,6 +51,7 @@ no telemetry file), so it needs neither the offscreen env nor the bindings PYTHO
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import struct
@@ -482,6 +484,221 @@ def test_public_pages_quote_the_real_core_size():
     print(f"test_public_pages_quote_the_real_core_size OK ({want} lines, {checked} claims)")
 
 
+# ------------------------------------------------------------------ 7. the clip
+# The page's one video (board review 2026-09-23, bet B4): the app's own overlay export of a best
+# lap, cut by studio/dev/media_capture.py's `clip` shot. What can go wrong with it is what went
+# wrong with the images, plus three things a video adds: its weight (the budget is 8 MB), its
+# SOUND (the export carries the camera's audio; a `muted` attribute is only a request, so the file
+# must have no audio track at all), and MOTION for a reader who asked the system for less of it.
+# All of it is read off the files themselves — the MP4's own boxes, the JPEG's own frame header.
+_CLIP_BUDGET = 8_000_000
+_CLIP_SECONDS = (20.0, 30.0)
+_REDUCED_MOTION = "(prefers-reduced-motion: no-preference)"
+_SOF = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+
+
+def _jpeg_size(path: str) -> tuple[int, int]:
+    """(width, height) from a JPEG's start-of-frame segment, walking the markers before it."""
+    with open(path, "rb") as f:
+        data = f.read()
+    assert data[:2] == b"\xff\xd8", f"{path} is not a JPEG"
+    i = 2
+    while i + 4 <= len(data):
+        assert data[i] == 0xFF, f"{path}: lost the marker chain at byte {i}"
+        marker = data[i + 1]
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7:        # markers with no length
+            i += 2
+            continue
+        if marker in _SOF:
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return w, h
+        i += 2 + struct.unpack(">H", data[i + 2:i + 4])[0]
+    raise AssertionError(f"{path}: no start-of-frame marker")
+
+
+def _boxes(data: bytes, start: int, end: int):
+    """(type, payload start, end) for each ISO-BMFF box between `start` and `end`."""
+    i = start
+    while i + 8 <= end:
+        size, kind = struct.unpack(">I4s", data[i:i + 8])
+        head = 8
+        if size == 1:
+            size, head = struct.unpack(">Q", data[i + 8:i + 16])[0], 16
+        elif size == 0:
+            size = end - i
+        assert size >= head, f"a corrupt {kind!r} box at byte {i}"
+        yield kind.decode("latin-1"), i + head, i + size
+        i += size
+
+
+def _mp4(path: str) -> dict:
+    """What the page needs to know about an MP4, from its boxes: the top-level box order, the
+    movie's duration (moov/mvhd) and each track's handler and size (trak/mdia/hdlr, trak/tkhd)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    top = list(_boxes(data, 0, len(data)))
+    out = {"order": [k for k, _s, _e in top], "duration": None, "tracks": []}
+    for kind, s, e in top:
+        if kind != "moov":
+            continue
+        for k, s1, e1 in _boxes(data, s, e):
+            if k == "mvhd":
+                scale, dur = (struct.unpack(">IQ", data[s1 + 20:s1 + 32]) if data[s1] == 1
+                              else struct.unpack(">II", data[s1 + 12:s1 + 20]))
+                out["duration"] = dur / scale
+            elif k == "trak":
+                track = {"handler": None, "size": None}
+                for k2, s2, e2 in _boxes(data, s1, e1):
+                    if k2 == "tkhd":
+                        at = s2 + (88 if data[s2] == 1 else 76)     # 16.16 fixed-point w, h
+                        w, h = struct.unpack(">II", data[at:at + 8])
+                        track["size"] = (w >> 16, h >> 16)
+                    elif k2 == "mdia":
+                        for k3, s3, _e3 in _boxes(data, s2, e2):
+                            if k3 == "hdlr":
+                                track["handler"] = data[s3 + 8:s3 + 12].decode("latin-1")
+                out["tracks"].append(track)
+    return out
+
+
+def _clip_problems(html: str, docs: str) -> list[str]:
+    """Everything wrong with the page's clip: its markup, its poster, and the MP4 itself."""
+    videos = re.findall(r"<video\b[^>]*>.*?</video>", _without_comments(html), re.S)
+    if len(videos) != 1:
+        return [f"expected exactly one <video> on the page, found {len(videos)}"]
+    tag = re.match(r"<video\b[^>]*>", videos[0]).group(0)
+    problems = [f"<video> lacks `{a}`" for a in ("autoplay", "muted", "loop", "playsinline")
+                if not re.search(rf"\s{a}[\s>]", tag)]
+    if not re.search(r'aria-label="[^"]{40,}"', tag):
+        problems.append("<video> has no substantive aria-label — it is not decoration")
+    w, h = re.search(r'width="(\d+)"', tag), re.search(r'height="(\d+)"', tag)
+    if not (w and h):
+        return problems + ["<video> declares no width/height, so the page reflows when it loads"]
+    declared = (int(w.group(1)), int(h.group(1)))
+    poster = re.search(r'poster="([^"]+)"', tag)
+    if not poster or not os.path.exists(os.path.join(docs, poster.group(1))):
+        problems.append(f"missing poster: {poster and poster.group(1)!r}")
+    elif _jpeg_size(os.path.join(docs, poster.group(1))) != declared:
+        problems.append(f"the poster is {_jpeg_size(os.path.join(docs, poster.group(1)))}, "
+                        f"the page declares {declared}")
+    sources = re.findall(r"<source\b[^>]*>", videos[0])
+    if len(sources) != 1:
+        return problems + [f"expected one <source>, found {len(sources)}"]
+    if f'media="{_REDUCED_MOTION}"' not in sources[0]:
+        problems.append(f'the <source> lacks media="{_REDUCED_MOTION}": a reader who asked for '
+                        "reduced motion would get the loop instead of the poster")
+    src = re.search(r'src="([^"]+)"', sources[0])
+    path = src and os.path.join(docs, src.group(1))
+    if not path or not os.path.exists(path):
+        return problems + [f"missing clip: {src and src.group(1)!r}"]
+    size = os.path.getsize(path)
+    if size > _CLIP_BUDGET:
+        problems.append(f"the clip is {size:,} B, over the {_CLIP_BUDGET:,} B budget")
+    mp4 = _mp4(path)
+    if "moov" not in mp4["order"] or "mdat" not in mp4["order"] or (
+            mp4["order"].index("moov") > mp4["order"].index("mdat")):
+        problems.append(f"the MP4's index is not up front (boxes {mp4['order']}): a browser has to "
+                        "fetch the whole file before it can play a frame")
+    handlers = [t["handler"] for t in mp4["tracks"]]
+    if "soun" in handlers:
+        problems.append("the clip has an AUDIO track — `muted` is a request to the browser; the "
+                        "camera's sound must not be in the file at all")
+    if handlers.count("vide") != 1:
+        problems.append(f"expected one video track, found tracks {handlers}")
+    else:
+        frame = next(t["size"] for t in mp4["tracks"] if t["handler"] == "vide")
+        if frame != declared:
+            problems.append(f"the clip is {frame[0]}x{frame[1]}, the page declares {declared}")
+        if frame[1] != 720:
+            problems.append(f"the clip is {frame[1]}p, not the 720p it is cut to")
+    lo, hi = _CLIP_SECONDS
+    if not (mp4["duration"] and lo <= mp4["duration"] <= hi):
+        problems.append(f"the clip runs {mp4['duration']} s, outside {lo:.0f}–{hi:.0f} s")
+    return problems
+
+
+def test_the_clip_is_silent_small_and_still_on_request():
+    """The page's clip: one `<video>`, autoplaying muted in a loop, with a poster the page reserves
+    the right box for, a reduced-motion `media` query on its only source, and an MP4 that is under
+    budget, 720p, 20-30 s, indexed up front — and has NO audio track. The README links it too."""
+    problems = _clip_problems(_page(), _DOCS)
+    assert not problems, "docs/index.html's clip:\n  " + "\n  ".join(problems)
+    tree = ast.parse(open(os.path.join(_REPO, "studio", "dev", "media_capture.py"),
+                          encoding="utf-8").read())
+    consts = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign)
+              for t in n.targets if isinstance(t, ast.Name) and isinstance(n.value, ast.Constant)}
+    assert consts.get("CLIP_MAX_BYTES") == _CLIP_BUDGET, (
+        f"media_capture.CLIP_MAX_BYTES is {consts.get('CLIP_MAX_BYTES')}, the page's budget "
+        f"{_CLIP_BUDGET}: the tool that cuts the clip and the check on it must agree")
+    with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
+        assert "(docs/media/best-lap.mp4)" in f.read(), "README.md no longer links the clip"
+    print(f"test_the_clip_is_silent_small_and_still_on_request OK "
+          f"({os.path.getsize(os.path.join(_DOCS, 'media', 'best-lap.mp4')):,} B)")
+
+
+def _box(kind: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I4s", 8 + len(payload), kind) + payload
+
+
+def _planted_mp4(path: str, seconds: float, tracks, moov_first: bool = True) -> None:
+    """A structurally real MP4 that carries only what `_mp4` reads: mvhd, and per track a tkhd +
+    mdia/hdlr. Enough to plant each defect the check claims to catch without a video encoder."""
+    mvhd = _box(b"mvhd", b"\0\0\0\0" + struct.pack(">IIII", 0, 0, 1000, int(seconds * 1000))
+                + b"\0" * 80)
+    traks = b""
+    for handler, (w, h) in tracks:
+        tkhd = _box(b"tkhd", b"\0\0\0\x03" + b"\0" * 72 + struct.pack(">II", w << 16, h << 16))
+        hdlr = _box(b"hdlr", b"\0" * 8 + handler.encode() + b"\0" * 13)
+        traks += _box(b"trak", tkhd + _box(b"mdia", hdlr))
+    moov, mdat = _box(b"moov", mvhd + traks), _box(b"mdat", b"\0" * 64)
+    body = moov + mdat if moov_first else mdat + moov
+    with open(path, "wb") as f:
+        f.write(_box(b"ftyp", b"isom\0\0\x02\0isom") + body)
+
+
+def _planted_jpeg(path: str, w: int, h: int) -> None:
+    """SOI, one APP0 to walk past, then a baseline SOF0 carrying (w, h)."""
+    app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0"
+    sof0 = b"\xff\xc0" + struct.pack(">HBHHB", 17, 8, h, w, 3) + b"\x01\x22\0\x02\x11\x01\x03\x11\x01"
+    with open(path, "wb") as f:
+        f.write(b"\xff\xd8" + app0 + sof0 + b"\xff\xd9")
+
+
+def test_the_clip_check_fails_on_each_planted_defect():
+    """The control on the check above: a clean planted page passes, and each defect it names —
+    an audio track, the index at the end, the wrong length or frame, the missing reduced-motion
+    query, a poster of the wrong size, a clip over budget — is caught, by name."""
+    import tempfile
+
+    page = _page()
+    video = re.search(r"<video\b.*?</video>", _without_comments(page), re.S).group(0)
+    good = {"tracks": [("vide", (1280, 720))], "seconds": 20.0, "moov_first": True}
+    plants = {
+        "AUDIO track": (dict(good, tracks=[("vide", (1280, 720)), ("soun", (0, 0))]), video, 0),
+        "index is not up front": (dict(good, moov_first=False), video, 0),
+        "outside 20–30 s": (dict(good, seconds=45.0), video, 0),
+        "the page declares": (dict(good, tracks=[("vide", (1920, 1080))]), video, 0),
+        "reduced-motion": (good, video.replace(f' media="{_REDUCED_MOTION}"', ""), 0),
+        "the poster is": (good, video, 1),
+        "over the": (good, video, 2),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "media"))
+        clip, poster = (os.path.join(tmp, "media", n) for n in ("best-lap.mp4", "best-lap.jpg"))
+        for want, (mp4, markup, other) in [("", (good, video, 0))] + list(plants.items()):
+            _planted_mp4(clip, mp4["seconds"], mp4["tracks"], mp4["moov_first"])
+            if other == 2:
+                with open(clip, "ab") as f:
+                    f.write(b"\0" * (_CLIP_BUDGET + 1))
+            _planted_jpeg(poster, *((640, 360) if other == 1 else (1280, 720)))
+            got = _clip_problems(page.replace(video, markup) if markup != video else page, tmp)
+            if not want:
+                assert not got, f"the clean plant was flagged: {got}"
+            else:
+                assert any(want in p for p in got), f"planted {want!r}, got {got}"
+    print(f"test_the_clip_check_fails_on_each_planted_defect OK ({len(plants)} defects caught)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -491,4 +708,6 @@ if __name__ == "__main__":
     test_markdown_images_resolve()
     test_public_pages_quote_the_real_suite_size()
     test_public_pages_quote_the_real_core_size()
+    test_the_clip_is_silent_small_and_still_on_request()
+    test_the_clip_check_fails_on_each_planted_defect()
     print("ALL OK")
