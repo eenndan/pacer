@@ -21,8 +21,8 @@ At the end is a [15-minute code tour](#a-15-minute-code-tour): the five files th
 
 ## 1. The camera already knows the time
 
-**4.5× worse.** That is how a fitted clock timed laps against a real transponder, next to the
-clock the camera writes itself.
+**4.5×.** That is how much more widely a fitted clock's lap times scattered around a real
+transponder's than the times from the clock the camera writes itself.
 
 A GoPro stores GPS in payloads of about one second. The media timestamps say when a payload
 starts and ends, not when each fix inside it was taken. A tool that spreads the fixes evenly
@@ -32,10 +32,10 @@ port of that fit lived in this repo for a while.
 
 On a Hero 11 or a Hero 13, the GPS9 stream stamps every fix with the receiver's own time, so there
 is nothing to fit. Against the transponder log of a 24-hour race, the fitted clock matched GPS9 on
-the cleaner of two recordings. On the noisier one it diverged: its per-lap spread was 4.5 times
-GPS9's, and it turned a 68.9 s lap into 64.1 s. One recording would have called the two methods
-equivalent. The fit was deleted, and GPS9 is the timing path. A recording without it falls back to
-the video clock, and every duration derived from it is muted and labelled estimated.
+the cleaner of two recordings. On the noisier one it diverged, with a per-lap spread 4.5 times
+GPS9's, and it cut one lap nearly five seconds short. One recording would have called the two
+methods equivalent. The fit was deleted, and GPS9 is the timing path. A recording without it falls
+back to the video clock, and every duration derived from it is muted and labelled estimated.
 
 Receipt: [the investigation](../studio/docs/upstream-20ms-investigation.md) (June 2026, both
 recordings, against the transponder) · [how accuracy is measured](ACCURACY.md#how-its-measured) ·
@@ -48,9 +48,9 @@ time the driver could find.
 
 The ideal lap stitches each corner and straight from whichever lap drove it fastest. To compare
 laps, the reference lap's corner boundaries are projected onto every other lap. That projection
-chose its frame boundary by boundary. Where a spatial match succeeded it used the matched position. Where it
-failed it used a proportional one. A segment with one edge in each frame shrank or stretched by the
-local odometer offset, and one straight came out at under three-quarters of its length. The
+chose its frame boundary by boundary. Where a spatial match succeeded it used the matched position;
+where it failed, a proportional one. A segment with one edge in each frame shrank or stretched by
+the local odometer offset, and one straight came out at under three-quarters of its length. The
 per-segment minimum then collected every shrunken window and never paid for the stretched ones.
 
 Nothing downstream could see it, because a lap's segment times still summed exactly to its lap
@@ -95,10 +95,11 @@ itself.
 The offset was measured by correlating the gyroscope's yaw rate with the yaw rate implied by the
 GPS path. An estimator control delayed the real gyro stream by 0.4 s, and the answer moved by
 exactly that. Switching each filter off in turn showed that none of them was manufacturing the
-offset. To decide which clock was late, yaw was also read from the video frames themselves. The picture agreed with
-the gyroscope, so the GPS is the late channel. The lag held constant across chapter seams. Its
-apparent drift was the measurement's, not the channel's: the media clock runs a few tens of ppm
-fast, which is why lags are measured on the picture's clock and not the telemetry's.
+offset. To decide which clock was late, yaw was also read from the video frames themselves. The
+picture agreed with the gyroscope, so the GPS is the late channel. The lag held constant across
+chapter seams. Its apparent drift was the measurement's, not the channel's: the media clock runs a
+few tens of ppm fast, which is why lags are measured on the picture's clock and not the
+telemetry's.
 
 The first PR only disclosed the offset. The fix came next, at one seam, and the seam had a trap:
 shifting only the GPS would have pushed the g-meter's accelerometer axis ahead of the picture, so
@@ -129,8 +130,9 @@ an IMU on a misaligned mount. It goes through the real loader in CI, and the noi
 within 0.41 ms of the truth. Planted defects fail it by name: timing on the media clock, a 500 ppm
 clock error, a step at a chapter seam, a gravity axis left unpermuted.
 
-Receipt: [#286](https://github.com/eenndan/pacer/pull/286) · [#371](https://github.com/eenndan/pacer/pull/371) ·
-`tests/test_golden_synthetic.py` · `tests/test_synth_gopro.py`.
+Receipt: [#286](https://github.com/eenndan/pacer/pull/286) ·
+[#371](https://github.com/eenndan/pacer/pull/371) · `tests/test_golden_synthetic.py` ·
+`tests/test_synth_gopro.py`.
 
 ## 6. Fourteen features measured and refused
 
@@ -197,8 +199,9 @@ a tool that lets one slip clobber any path is the defect. The changes are struct
 - **Footage is read-only by rule and locked by the file system,** so a mistaken write fails before
   any code runs.
 
-Receipt: `studio/dev/golden_session_dump.py::_resolve_out_path` · `studio/chapters.py::split_non_mp4`
-· [#328](https://github.com/eenndan/pacer/pull/328) · `tests/test_app_support_jail.py`.
+Receipt: `studio/dev/golden_session_dump.py::_resolve_out_path` ·
+`studio/chapters.py::split_non_mp4` · [#328](https://github.com/eenndan/pacer/pull/328) ·
+`tests/test_app_support_jail.py`.
 
 ---
 
@@ -214,9 +217,9 @@ Five files, in reading order. They carry the load, and everything else is built 
    everything reads. It builds the GPS9 true-clock axis (`_gps9_times`), records which clock it
    actually built, and trims, cleans and smooths the fixes. The DATA TRUST card reports what it
    decided.
-3. **[`studio/media_clock.py`](../studio/media_clock.py)**: the second clock. It holds one affine map
-   per recording between the telemetry and the picture, and the crossing where the measured GPS lag
-   is taken out (story 4).
+3. **[`studio/media_clock.py`](../studio/media_clock.py)**: the second clock. It holds one affine
+   map per recording between the telemetry and the picture, and the crossing where the measured GPS
+   lag is taken out (story 4).
 4. **[`studio/corners.py`](../studio/corners.py)**: corners detected from pooled curvature, and
    `lap_alignment` / `project_boundaries`, the one-frame-per-lap warp from story 2. Every per-corner
    number in the app passes through here.
