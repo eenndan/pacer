@@ -39,9 +39,10 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | task | does |
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`), binding codegen included |
-| `pixi run test` | **the pre-PR gate**: every CTest registration — ~321 s on the dev Mac with the 14 real-footage checks, which CI reports Skipped |
-| `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage reported Skipped by name — ~143 s |
+| `pixi run test` | **the pre-PR gate**: every CTest registration — ~206 s on the dev Mac with the 14 real-footage checks, which CI reports Skipped; the crash soak is reported Skipped (see `test-soak`) |
+| `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name — ~143 s |
 | `pixi run test-footage` | only the 14 real-footage checks (`ctest -L footage`) — ~139 s |
+| `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak, ~146 s. CI runs it on pushes to main and tags |
 | `pixi run golden` | only the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample |
 | `pixi run studio [-- files]` | the app, on the recordings you name |
@@ -86,16 +87,18 @@ locally first:
 2. **Bindings drift** — any `pacer/**/*.hpp` edit (even a comment) regenerates
    `bindings/pacer/nanobind_pacer.cpp` + `bindings/pacer/pacer/__init__.pyi`: **commit BOTH**, or
    `git diff --exit-code -- bindings/` fails.
-3. `pixi run test` — green.
-4. `pixi run smoke`.
-5. `pixi run lint`.
-6. `pixi run fmt-check` (`pixi run fmt` fixes it).
+3. `pixi run lint`.
+4. `pixi run fmt-check` (`pixi run fmt` fixes it).
+5. `pixi run test` — green (on a push to main or a tag it includes the soak).
+6. `pixi run smoke`.
 
 - **One focused change per PR.** Match the surrounding comment density, naming and idiom; favour
   "why" comments over restating the code.
 - **Add or update a test for any behaviour change** — pure logic: a Qt-free module with a
   synthetic-data test ([tests/_synthetic.py](tests/_synthetic.py)); real-widget paths: an
-  offscreen-Qt test.
+  offscreen-Qt test. A new `tests/test_<name>.py` registers itself (offscreen Qt + the bindings
+  on PYTHONPATH) and its "why" goes in its module docstring; `tests/CMakeLists.txt` is edited
+  only for its exceptions table ([tests/README.md](tests/README.md)).
 - **Refused features stay refused** unless you bring NEW evidence. A new refusal is the next free
   section of `studio/docs/refused-2026-09.md` on your base; `tests/test_measured_figures.py`
   checks the numbering and every citation of it.
@@ -106,7 +109,7 @@ locally first:
   read by `packaging/pacer.spec` and the About card), `pyproject.toml` (names the `.dmg`) and
   `bindings/pacer/pyproject.toml`. Bump all three, retitle `[Unreleased]` → `[x.y.z] — date` with
   its compare link at the foot of the changelog, then tag. `tests/test_version.py` fails on any
-  step missed.
+  step missed. Run `pixi run test-soak` before tagging; CI runs it again on the tag.
 
 ---
 
