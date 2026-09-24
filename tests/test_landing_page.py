@@ -252,8 +252,22 @@ def test_images_resolve_and_declare_their_real_size():
 
     og = re.search(r'<meta property="og:image" content="([^"]+)"', html)
     assert og, "no og:image — a case study still wants to render when it is shared"
-    og_path = os.path.join(_DOCS, og.group(1))
-    assert os.path.exists(og_path), f"missing og:image: docs/{og.group(1)}"
+    # ABSOLUTE, on the page's own site. Open Graph and X cards want an absolute image URL: the page
+    # said "media/og.png", so a link to it shared on LinkedIn, X or Slack showed no image (board
+    # review 2026-09-23, CEO-4). The URL maps back onto docs/ to check the file behind it.
+    site = re.search(r'<meta property="og:url" content="([^"]+)"', html)
+    assert site and og.group(1).startswith(site.group(1)), (
+        f"og:image is {og.group(1)!r}: a link preview needs an absolute URL on the page's own site "
+        f"({site and site.group(1)!r})")
+    og_rel = og.group(1)[len(site.group(1)):]
+    og_path = os.path.join(_DOCS, og_rel)
+    assert os.path.exists(og_path), f"missing og:image: docs/{og_rel}"
+    tw = re.search(r'<meta name="twitter:image" content="([^"]+)"', html)
+    assert tw and tw.group(1) == og.group(1), (
+        f"twitter:image is {tw and tw.group(1)!r}, not og:image {og.group(1)!r}")
+    for alt_tag in ('property="og:image:alt"', 'name="twitter:image:alt"'):
+        alt = re.search(rf'<meta {alt_tag} content="([^"]+)"', html)
+        assert alt and len(alt.group(1)) > 20, f"the shared card has no substantive <meta {alt_tag}>"
     ow = re.search(r'<meta property="og:image:width" content="(\d+)"', html)
     oh = re.search(r'<meta property="og:image:height" content="(\d+)"', html)
     assert ow and oh, "og:image declares no width/height"
@@ -338,9 +352,9 @@ def test_markdown_images_resolve():
 # pinned where the fixture is.
 _CMAKE = os.path.join(_REPO, "tests", "CMakeLists.txt")
 _CORE = os.path.join(_REPO, "pacer")
-# The page may round the core's size; a suite count may not be rounded at all. 5 % is wide enough
-# that an ordinary core edit does not fail the build over a stale digit, and narrow enough that the
-# claim cannot quietly become a different order of thing.
+# The page may round the core's size (the suite count is a floor instead: _SUITE_FLOOR_SLACK).
+# 5 % is wide enough that an ordinary core edit does not fail the build over a stale digit, and
+# narrow enough that the claim cannot quietly become a different order of thing.
 _CORE_TOLERANCE = 0.05
 
 
@@ -379,29 +393,65 @@ def _core_lines() -> int:
     return total
 
 
+# A FLOOR, NOT A COUNT. The pages stated the exact number, so every pull request that added a test
+# edited both of them, and two such PRs from one base each wrote the same, wrong, number: once
+# tests registered themselves (#374), those two sentences were the only shared files a new test
+# still touched. They now say "N+", and N is held from both sides: never above what CTest
+# registers, and never so far below it that the floor stops describing the suite. Adding a test
+# edits no page until the suite outgrows its floor by more than this slack.
+_SUITE_FLOOR_SLACK = 25
+_SUITE_CLAIM = re.compile(r"([\d,]+)(\+?)\s+CTest registrations", re.I)
+
+
+def _suite_claim_problems(rel: str, text: str, registered: int) -> tuple[int, list[str]]:
+    """(how many claims `text` makes, what is wrong with them): a function of the text, so the
+    planted floors below exercise exactly the rule the real pages are held to."""
+    found, problems = _SUITE_CLAIM.findall(text), []
+    for got, plus in found:
+        floor = int(got.replace(",", ""))
+        if not plus:
+            problems.append(f"{rel} states an exact count, '{got} CTest registrations': write a "
+                            f"floor ('{got}+'), or every new test has to edit this page")
+        elif floor > registered:
+            problems.append(f"{rel} says {got}+ CTest registrations; tests/CMakeLists.txt "
+                            f"registers {registered}")
+        elif registered - floor > _SUITE_FLOOR_SLACK:
+            problems.append(f"{rel} says {got}+ CTest registrations, {registered - floor} below "
+                            f"the {registered} registered (at most {_SUITE_FLOOR_SLACK} is allowed): "
+                            f"raise the floor to a round number at or below {registered}")
+    return len(found), problems
+
+
 def test_public_pages_quote_the_real_suite_size():
-    """Every "N CTest registrations" in README.md and the landing page equals what CTest registers.
+    """Every "N+ CTest registrations" in README.md and the landing page is a true floor on what
+    CTest registers, and not a stale one.
 
     THE BUG: both said **96** while `ctest -N` reported **114**. The sentence was true when it was
     written and nothing in the repo connected it to the thing it counted, so eighteen suites were
-    added under it without a word changing. This derives the number instead."""
+    added under it without a word changing. The number is derived, and the claim is a floor (see
+    _SUITE_FLOOR_SLACK for why)."""
     want = _ctest_registrations()
-    pat = re.compile(r"([\d,]+)\s+CTest registrations", re.I)
-    checked = 0
+    checked, problems = 0, []
     for rel in ("README.md", os.path.join("docs", "index.html")):
         with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
-            text = f.read()
-        found = pat.findall(text)
-        assert found, (
+            n, found = _suite_claim_problems(rel, f.read(), want)
+        assert n, (
             f"{rel} no longer states a CTest registration count — if the claim was deliberately "
             "removed, remove it from this check's file list too, so the guard cannot go vacuous")
-        for got in found:
-            assert int(got.replace(",", "")) == want, (
-                f"{rel} says {got} CTest registrations; tests/CMakeLists.txt registers {want}")
-            checked += 1
+        checked, problems = checked + n, problems + found
+    assert not problems, "\n".join(problems)
     assert checked >= 2, f"only {checked} count claims found across both pages"
+    # Both directions, on planted claims: a stale floor, a floor above the suite, and the exact
+    # count this rule replaced each fail, and a floor one test below the suite passes.
+    stale = want - _SUITE_FLOOR_SLACK - 1
+    for text, why in ((f"{stale}+ CTest registrations", "below the"),
+                      (f"{want + 1}+ CTest registrations", "tests/CMakeLists.txt registers"),
+                      (f"{want} CTest registrations", "states an exact count")):
+        n, found = _suite_claim_problems("planted", text, want)
+        assert n == 1 and len(found) == 1 and why in found[0], (text, found)
+    assert _suite_claim_problems("planted", f"{want - 1}+ CTest registrations", want)[1] == []
     print(f"test_public_pages_quote_the_real_suite_size OK ({want} registrations, "
-          f"{checked} claims)")
+          f"{checked} floor claims within {_SUITE_FLOOR_SLACK})")
 
 
 def test_public_pages_quote_the_real_core_size():

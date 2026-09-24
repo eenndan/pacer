@@ -118,7 +118,7 @@ Knobs: `--seed`, `--laps` (14), `--chapters` (2), `--gps-noise` (1.0; 0 is noise
 
 ## Real-footage checks
 
-Fourteen checks re-measure something on a real recording, and each is its own CTest registration,
+Fifteen checks re-measure something on a real recording, and each is its own CTest registration,
 `footage.<check>`. Without its recording CTest lists it under *"The following tests did not run: …
 (Skipped)"* — a skip, never a pass, and never a failure (CI has no footage at all). **When you
 report gates, name every `footage.*` that skipped.** Until 2026-09-19 each of them printed a skip
@@ -131,7 +131,8 @@ check in the repo became a green no-op. [_footage.py](_footage.py) has the mecha
 | `PACER_GOLDEN_MP4` | THE recording (any real one) | the golden dump; `footage.test_real_render_smoke_if_ffmpeg_and_media`, `…_real_chaptered_non_first_chapter_render_if_media`, `…_real_render_quality_levels_if_media`; `footage.test_pedal_mode_paints_the_chart_band`, `footage.test_pedal_band_holds_each_braking_zone_whole`; the primary of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/MK_18_09_26/GX010067.MP4`: chaptered (the chaptered render needs a lap inside chapter 2), D24's own circuit (the dump covers what it covered on D24), and the smallest chaptered recording. The compare proof's primary defaults to `~/Desktop/SD_19_09_26/GX010068.MP4` instead: MK has no second recording of its track |
 | `PACER_GOLDEN_REF_MP4` | a second, DIFFERENT recording of the SAME track (a reference from another track is refused before pane B opens) | the reference of `footage.test_real_media_pane_b_is_reference_at_lap_start` | `~/Desktop/Sandown 3h 2026/GX010064.MP4`: SD_19_09 and Sandown 3h stand where D24 0060 and 0062 stood, and the three-chapter reference makes pane B resolve a later chapter |
 | `PACER_IDEAL_TABLE_MP4` | comma-separated chapters of ONE recording, re-measured alone (how a new row is written) | `footage.test_the_table_still_matches_the_app` | every row of the ideal-lap table, on exactly the chapter files `tests/test_ideal_sample_table.ROW_RECORDINGS` names, under `~/Desktop` — the whole table in one run (~10 s) |
-| `PACER_MEASURED_FIGURES_DIR` | a folder holding the working set's folders | the seven `footage.test_the_*_footage` in `test_measured_figures` | `~/Desktop`, where `_LAP_SETS` says each table's recordings are: each check loads exactly the lap sets its table names |
+| `PACER_MEASURED_FIGURES_DIR` | a folder holding the working set's folders | the seven `footage.test_the_*_footage` in `test_measured_figures`; `footage.accuracy_mk` in `test_validate_wallclock` | `~/Desktop`, where `_LAP_SETS` says each table's recordings are: each check loads exactly the lap sets its table names |
+| `PACER_TIMING_DIR` | a folder of official timing sheets (lap CSVs `studio/dev/clubspeed.py` writes from a circuit's heat pages) | `footage.accuracy_mk`: docs/ACCURACY.md's row C against `mk-2026-09-18.csv` | the main checkout's gitignored `.claude/reference/timing/`, found from any linked worktree: the sheets list other drivers, so they are never committed and no other machine has one |
 
 The recordings and the reasons live in [studio/dev/footage.py](../studio/dev/footage.py), shared by
 the dump and the tests; `_footage.py` does the lookup. The table checks keep their own variables
@@ -139,7 +140,7 @@ because their rows are named recordings (and chapter selections sibling discover
 not "a recording". A default that is absent is a skip — for a table, if ANY of its recordings is
 absent — and **a variable you set that names something absent is a failure.** Until G2
 (2026-09-23) every default still named D24, deliberately, so all fourteen skipped until T16b had
-re-measured the published tables on the working set; now all fourteen run and pass on this Mac.
+re-measured the published tables on the working set; now all of them run and pass on this Mac.
 
 Where they run: `pixi run test-footage` runs just these (by their `footage` CTest label);
 `pixi run test` runs them with everything else, one at a time under a shared `RESOURCE_LOCK`;
@@ -148,7 +149,7 @@ reason naming `test-footage`, rather than excluding them — an excluded test va
 report. A footage variable you set still runs its checks there. The recordings are the owner's and strictly read-only: record sizes and mtimes around a run.
 
 ```bash
-pixi run test-footage                                           # all fourteen, on the working set
+pixi run test-footage                                           # all fifteen, on the working set
 PACER_GOLDEN_MP4="$HOME/Desktop/SD_30_08_26/GX010065.MP4" \
   pixi run ctest --test-dir build/Release -R '^footage\.test_real_render' --output-on-failure
 ```

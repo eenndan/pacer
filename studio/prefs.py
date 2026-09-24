@@ -31,12 +31,11 @@ user every one of them:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
 
-from . import app_support, units
+from . import _jsonstore, app_support, units
 
 _log = logging.getLogger(__name__)
 
@@ -104,21 +103,6 @@ def prefs_path() -> str:
     return os.path.join(_app_support_dir(), _FILENAME)
 
 
-def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
-    """(readable_json_object, parsed) for `path`: True/parsed when the file exists and parses to a
-    JSON object, else (False, None). The seam ``load`` and ``save`` share so "genuine corruption" —
-    the only case that falls back to defaults, and the only one that triggers a backup — is decided
-    in ONE place (mirrors ``library._is_loadable_dict``)."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False, None
-    if not isinstance(data, dict):
-        return False, None
-    return True, data
-
-
 def _stored_version(data: dict) -> int:
     """The schema number an on-disk prefs dict carries, or 0 when it carries none. Unlike the
     library index — where a missing ``version`` means an untrustworthy top-level SHAPE, because the
@@ -158,7 +142,7 @@ def load(path: str | None = None) -> dict:
     `path` defaults to ``prefs_path()``."""
     if path is None:
         path = prefs_path()
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return {}
     version = _stored_version(data)
@@ -194,7 +178,7 @@ def _backup_unsafe(path: str) -> None:
     copy, and every write after that sees a healthy file and leaves the sidecar alone."""
     if not os.path.exists(path):
         return
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     unsafe = (not ok) or _stored_version(data or {}) > VERSION
     if not unsafe:
         return
@@ -207,8 +191,9 @@ def _backup_unsafe(path: str) -> None:
 
 
 def save(data: dict, path: str | None = None) -> None:
-    """Write the prefs dict atomically (temp file + ``os.replace``). Creates the app-support dir
-    if missing. `path` defaults to ``prefs_path()``. Raises OSError on an unwritable destination.
+    """Write the prefs dict atomically (a unique temp file + ``os.replace``,
+    ``_jsonstore.write_json``) under the store lock. Creates the app-support dir if missing. `path`
+    defaults to ``prefs_path()``. Raises OSError on an unwritable destination.
 
     DATA-SAFETY: before overwriting an existing file that could not be parsed or migrated, the
     original is first copied to a ``prefs.json.bak`` sidecar (``_backup_unsafe``) — since ``set`` is
@@ -217,14 +202,11 @@ def save(data: dict, path: str | None = None) -> None:
     if path is None:
         path = prefs_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _backup_unsafe(path)
     out = dict(data)
     out["version"] = VERSION
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    with _jsonstore.locked(path):
+        _backup_unsafe(path)
+        _jsonstore.write_json(path, out)
 
 
 def get(key: str, default=None, path: str | None = None):
@@ -236,10 +218,14 @@ def set(key: str, value, path: str | None = None) -> None:  # noqa: A001 — the
     """Set one preference and persist it (load-modify-save). A write failure propagates; callers
     that must never disrupt the app guard it. Load-modify-save is why an unreadable file matters
     here — it reads as ``{}``, so this one write also resets every OTHER stored choice; ``save``
-    copies the unreadable bytes to the ``.bak`` sidecar first so they survive the reset."""
-    data = load(path)
-    data[key] = value
-    save(data, path)
+    copies the unreadable bytes to the ``.bak`` sidecar first so they survive the reset. The whole
+    load-modify-save holds the store lock, so a choice another process stores meanwhile survives."""
+    if path is None:
+        path = prefs_path()
+    with _jsonstore.locked(path):
+        data = load(path)
+        data[key] = value
+        save(data, path)
 
 
 def speed_unit(path: str | None = None) -> str:

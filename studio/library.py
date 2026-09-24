@@ -89,14 +89,13 @@ the sidecar holds, for a confirm that can name both sides of the swap.
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import math
 import os
 import re
 import shutil
 
-from . import app_support
+from . import _jsonstore, app_support
 
 _log = logging.getLogger(__name__)
 
@@ -331,20 +330,6 @@ def _migration_rewrites_rows(data: dict) -> bool:
     return before != after
 
 
-def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
-    """(readable_json_dict, parsed) for `path`: True/parsed when the file exists and parses to a
-    JSON object, else (False, None). The seam ``load`` and ``save`` share so 'genuine corruption'
-    (the only case that ever falls back to empty / triggers a backup) is decided in one place."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False, None
-    if not isinstance(data, dict):
-        return False, None
-    return True, data
-
-
 def load(path: str | None = None) -> dict:
     """Load + validate the library index, returning the normalized dict. NEVER wipes durable
     history on a version mismatch:
@@ -359,12 +344,13 @@ def load(path: str | None = None) -> dict:
     ``library_path()``."""
     if path is None:
         path = library_path()
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return empty_index()
     version = data.get("version")
     # A missing / non-int version is untrustworthy shape (not a real schema number) -> corruption.
     if isinstance(version, bool) or not isinstance(version, int):
+        _jsonstore.report_unreadable(path, f"version {version!r} is not a schema number")
         return empty_index()
     if version < VERSION:
         # OLDER file: migrate forward, preserving every entry, then re-validate below.
@@ -377,6 +363,7 @@ def load(path: str | None = None) -> dict:
                      "best-effort (%s)", version, VERSION, path)
     raw = data.get("entries")
     if not isinstance(raw, list):
+        _jsonstore.report_unreadable(path, "its entries are not a list")
         return empty_index()
     entries = [e for e in raw if _valid_entry(e)]
     dropped = len(raw) - len(entries)
@@ -404,15 +391,19 @@ def _backup_unsafe(path: str) -> None:
     one ``load`` migrated without touching a row, is rewritten normally (no backup churn — the one
     slot may be holding a cleared library), and a healthy file being WIPED is ``clear``'s business,
     not this hook's. An older file is backed up at most once: the save it precedes re-stamps it. The
-    copy itself (best-effort, same slot, never blocking the write) is ``_copy_to_backup``."""
+    copy itself (best-effort, same slot, never blocking the write) is ``_copy_to_backup``.
+
+    "Unreadable" is everything ``load`` reads as EMPTY, not only what fails to parse: a string
+    ``version`` or a non-list ``entries`` is valid JSON too, and such a file used to be overwritten
+    with no copy at all (``marks._backup_unsafe`` names the same trap)."""
     if not os.path.exists(path):
         return
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     version = data.get("version") if ok else None
     stamped = isinstance(version, int) and not isinstance(version, bool)
-    if not ok or (stamped and version > VERSION):
+    if not ok or not stamped or version > VERSION or not isinstance(data.get("entries"), list):
         _copy_to_backup(path, "an unreadable/newer index")
-    elif stamped and version < VERSION and _migration_rewrites_rows(data):
+    elif version < VERSION and _migration_rewrites_rows(data):
         _copy_to_backup(path, f"the version-{version} index its migration merges rows of")
 
 
@@ -434,8 +425,9 @@ def _copy_to_backup(path: str, what: str) -> bool:
 
 
 def save(index: dict, path: str | None = None) -> None:
-    """Write the index atomically (temp file + ``os.replace``) so a crash mid-write can't leave a
-    truncated library. Creates the app-support dir if missing. `path` defaults to
+    """Write the index atomically (a unique temp file + ``os.replace``, ``_jsonstore.write_json``)
+    under the store lock, so neither a crash nor a second writer can leave a truncated or
+    interleaved library. Creates the app-support dir if missing. `path` defaults to
     ``library_path()``. Raises OSError on an unwritable destination.
 
     DATA-SAFETY: before overwriting an existing file that could not be parsed/migrated (genuine
@@ -445,14 +437,11 @@ def save(index: dict, path: str | None = None) -> None:
     if path is None:
         path = library_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _backup_unsafe(path)
-    # Re-normalize on the way out: store only the schema fields, in canonical shape/order.
-    out = {"version": VERSION, "entries": [_norm_entry(e) for e in index.get("entries", [])]}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    with _jsonstore.locked(path):
+        _backup_unsafe(path)
+        # Re-normalize on the way out: store only the schema fields, in canonical shape/order.
+        out = {"version": VERSION, "entries": [_norm_entry(e) for e in index.get("entries", [])]}
+        _jsonstore.write_json(path, out)
 
 
 def upsert(index: dict, entry: dict) -> dict:
@@ -502,11 +491,28 @@ def upsert(index: dict, entry: dict) -> dict:
 
 def upsert_and_save(entry: dict, path: str | None = None) -> dict:
     """Load the current index, upsert `entry`, write it back atomically, and return the new
-    index. The one call the app makes post-load. Any OSError from the write propagates to the
-    caller, which guards it (a library write must never disrupt the app)."""
-    index = load(path)
-    upsert(index, entry)
-    save(index, path)
+    index — all under the store lock, so a second writer's row can't be lost in between. The one
+    call the app makes post-load. Any OSError from the write propagates to the caller, which guards
+    it (a library write must never disrupt the app)."""
+    if path is None:
+        path = library_path()
+    with _jsonstore.locked(path):
+        index = load(path)
+        upsert(index, entry)
+        save(index, path)
+    return index
+
+
+def remove_and_save(fingerprint_key: str, path: str | None = None) -> dict:
+    """Drop `fingerprint_key`'s row under the store lock and write the index back, returning it —
+    the index half of "forget this recording". A no-op (no such row) writes nothing. Any OSError
+    from the write propagates to the caller, which guards it."""
+    if path is None:
+        path = library_path()
+    with _jsonstore.locked(path):
+        index = load(path)
+        if remove(index, fingerprint_key):
+            save(index, path)
     return index
 
 
@@ -550,10 +556,13 @@ def rename_track_and_save(old: str, new: str, path: str | None = None) -> tuple[
     reversible by renaming back, while the one backup slot holds the copy ``clear`` leaves — a
     whole wiped library — and spending it on a reversible rename would be the worse trade. Any
     OSError from the write propagates to the caller, which guards it."""
-    index = load(path)
-    moved = rename_track(index, old, new)
-    if moved:
-        save(index, path)
+    if path is None:
+        path = library_path()
+    with _jsonstore.locked(path):
+        index = load(path)
+        moved = rename_track(index, old, new)
+        if moved:
+            save(index, path)
     return index, moved
 
 
@@ -573,9 +582,10 @@ def clear(path: str | None = None) -> None:
     the wipe itself is about to fail on; refusing to clear would be the worse failure)."""
     if path is None:
         path = library_path()
-    if os.path.exists(path):
-        _copy_to_backup(path, "the library index before clearing it")
-    save(empty_index(), path)
+    with _jsonstore.locked(path):
+        if os.path.exists(path):
+            _copy_to_backup(path, "the library index before clearing it")
+        save(empty_index(), path)
 
 
 def backup_summary(path: str | None = None) -> dict | None:
@@ -619,26 +629,28 @@ def restore(path: str | None = None) -> dict:
     destination (the swap half is best-effort and only logs)."""
     if path is None:
         path = library_path()
-    index = load(backup_path(path))
-    if not index["entries"]:
+    with _jsonstore.locked(path):
+        index = load(backup_path(path))
+        if not index["entries"]:
+            return load(path)
+        # Keep the index we are about to replace, so the swap can put it back. Copied BEFORE the
+        # write and moved into the .bak slot after it, so a crash mid-restore leaves the backup.
+        swap = path + ".swap"
+        kept = False
+        if os.path.exists(path):
+            try:
+                shutil.copy2(path, swap)
+                kept = True
+            except OSError as exc:
+                _log.warning("library: could not keep the replaced index before restoring (%r)",
+                             exc)
+        save(index, path)
+        if kept:
+            try:
+                os.replace(swap, backup_path(path))
+            except OSError as exc:
+                _log.warning("library: restored the index but could not swap the backup (%r)", exc)
         return load(path)
-    # Keep the index we are about to replace, so the swap can put it back. Copied BEFORE the write
-    # and moved into the .bak slot after it, so a crash mid-restore leaves the backup intact.
-    swap = path + ".swap"
-    kept = False
-    if os.path.exists(path):
-        try:
-            shutil.copy2(path, swap)
-            kept = True
-        except OSError as exc:
-            _log.warning("library: could not keep the replaced index before restoring (%r)", exc)
-    save(index, path)
-    if kept:
-        try:
-            os.replace(swap, backup_path(path))
-        except OSError as exc:
-            _log.warning("library: restored the index but could not swap the backup (%r)", exc)
-    return load(path)
 
 
 def pb_moment(index: dict, track: str | None, best: float | None,
