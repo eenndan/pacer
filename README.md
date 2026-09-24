@@ -24,25 +24,30 @@ text says which recording it comes from.*
 
 ## Accuracy — the claim everything else rests on
 
-Pacer's lap times are validated **out-of-sample against a real transponder**, the ground truth a
-race series scores a session with. Over **107 clean laps** across two recordings:
+Pacer's lap times are validated **out-of-sample against official timing** — a real transponder log,
+the ground truth a race series scores a session with, and a circuit's own published timing sheet.
+Over **121 clean laps** across three recordings:
 
 - essentially **unbiased** — mean error within **±0.003 s**;
-- **σ 0.0527 s** on the cleaner-GPS recording, **0.0871 s** on the noisier one — about **0.13 %** of
-  a ~68 s kart lap, quoting the worse of the two on purpose;
-- 48 clean laps of 57 aligned, and 59 of 65. A modest sample, and the honest one.
+- **σ 0.0247 s**, **0.0527 s** and **0.0871 s** — the worst about **0.13 %** of a ~68 s kart lap,
+  quoting the worst of the three on purpose;
+- 14 clean laps of 15 aligned, 48 of 57, and 59 of 65. A modest sample, and the honest one.
 
-Both recordings are D24's, the footage the transponder log covers. The validation was run in June
-2026 and is reported here as it was recorded: the recordings Pacer is developed against now have no
-transponder log, so it has not been repeated on them.
+Two recordings are D24's, checked against the race's transponder log in June 2026 and reported as
+recorded — that footage has left the development machine. The third is a sprint race at the same
+circuit on 18 September 2026, re-validated in September 2026 against the circuit's Club Speed timing
+on footage that is on the machine, by one command a real-footage check re-runs. The Sandown
+recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.
 
-<img src="docs/media/accuracy.png" width="880" alt="Lap-time error against a transponder: recording A mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4">
+<img src="docs/media/accuracy.png" width="880" alt="Lap-time error against official timing: recording A (D24, transponder) mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B (D24, transponder) mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4; recording C (MK sprint, Club Speed, September 2026) mean +0.0010 s, σ 0.0247 s, 14 clean of 15 aligned, median DOP 1.25">
 
 No lap is hand-matched: the session's per-lap *duration* sequence is correlated against every
-candidate window of the transponder log. Because the winning offset is *chosen* to maximise `r`,
-that `r` is not an accuracy statistic — the **margin** is. The fingerprint matches at **r ≥ 0.99 at
-exactly one offset and below 0.29 at every other**. The session Pacer timed is provably the session
-the transponder timed.
+candidate window of the timing. Because the winning window is *chosen* to maximise `r`, that `r` is
+not an accuracy statistic — the **margin** is. Against the 24-hour transponder log the fingerprint
+matches at **r ≥ 0.99 at exactly one offset and below 0.29 at every other**. Against the sprint's
+sheet — every driver of every heat that day, 99 rows — it matches one window at r 0.9998, and every
+other window leaves a residual at least **44×** larger. The session Pacer timed is provably the
+session the official timing timed.
 
 Why it works: timing runs on the camera's own **GPS9 true clock**, not the video/sample clock that
 consumer tools use, which drifts on the order of 0.1 % — enough to quietly bias every lap in a
@@ -148,10 +153,10 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   and 0 of 12 grip cells rendered a readable value"* is the comment above the fix. A companion
   guard proves the app never writes into its own source tree, from a tripwire on every write path
   Python and Qt expose.
-- **141 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
+- **142 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
   widgets and measure them. The whole thing runs in about nine minutes; `pixi run golden`, the gate
   you actually run after every maths change, takes under a second. CI runs all of it plus an
-  end-to-end offscreen smoke on every pull request — except the fourteen `footage.*` checks, which
+  end-to-end offscreen smoke on every pull request — except the fifteen `footage.*` checks, which
   need a real recording CI does not have, and one crash soak that runs on every push to `main`
   instead; CTest lists those by name as *Skipped*.
 
