@@ -217,6 +217,7 @@ toolchain setup.
 git submodule update --init --recursive     # 3rdparty deps (gpmf-parser, nanobind)
 pixi install                                # environment + editable Python bindings
 pixi run studio -- /path/to/GX010062.MP4    # build + launch on a recording
+pixi run studio -- --demo                   # no footage? a synthetic session, generated not filmed
 ```
 
 Then drag any `.MP4` onto the window, or `File ▸ Open`. Chapter siblings (`GX01…`, `GX02…`) are
