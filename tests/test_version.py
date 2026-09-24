@@ -588,13 +588,29 @@ def _qtawesome_fonts():
     return sorted(fn for fn in os.listdir(fonts) if fn.endswith((".ttf", ".otf")))
 
 
+def _component_cells(notices):
+    """The first cell of every BODY row of the notices' `Component` table. Header rows are not
+    names: the font table's header says "qtawesome" too, and once stood in for a deleted row."""
+    lines, cells, in_components = notices.splitlines(), [], False
+    for i, row in enumerate(lines):
+        if not row.startswith("|") or re.match(r"\|\s*:?-", row):
+            in_components = in_components and row.startswith("|")
+            continue
+        first = row.split("|")[1].strip().lower()
+        if i + 1 < len(lines) and re.match(r"\|\s*:?-", lines[i + 1]):   # a header row
+            in_components = first == "component"
+        elif in_components:
+            cells.append(first)
+    assert cells, "THIRD_PARTY_NOTICES.md has no `| Component |` table: this guard's parser rotted"
+    return cells
+
+
 def notice_problems(spec_text, notices, fonts):
     """Every package the spec collects whole, and every font file qtawesome brings with it, that
-    THIRD_PARTY_NOTICES.md does not name (a package in a table row's first cell)."""
+    THIRD_PARTY_NOTICES.md does not name (a package in the Component column of a body row)."""
     packages = _COLLECT_ALL.findall(spec_text)
     assert packages, "packaging/pacer.spec has no collect_all(\"…\") call: this guard's regex rotted"
-    cells = [row.split("|")[1].lower() for row in notices.splitlines()
-             if row.startswith("|") and not re.match(r"\|\s*:?-", row)]
+    cells = _component_cells(notices)
     problems = [f"packaging/pacer.spec bundles {p} whole (collect_all) but THIRD_PARTY_NOTICES.md "
                 "has no table row naming it" for p in packages
                 if not any(re.search(rf"(?<![\w-]){re.escape(p.lower())}(?![\w-])", c) for c in cells)]
@@ -625,10 +641,14 @@ def test_the_licence_notices_match_what_the_app_bundles():
     caught = ffmpeg_licence_problems(lock, planted)
     assert len(caught) == 1 and caught[0].startswith(
         f"{_LICENCE_DOCS[1]} calls ffmpeg {_OTHER[family].upper()}, "), caught
-    # A collect_all package's row taken out, and one font file's name: each caught by name.
-    no_row = "\n".join(ln for ln in notices.splitlines()
-                       if not (ln.startswith("|") and "qtawesome" in ln.split("|")[1].lower()))
-    assert any("bundles qtawesome whole" in p for p in notice_problems(spec, no_row, fonts))
+    # A collect_all package's row deleted (and nothing else: the font table's header still says
+    # "qtawesome"), and one font file's name: each caught by name.
+    rows = notices.splitlines()
+    no_row = [ln for ln in rows if not ln.lower().startswith("| [qtawesome]")]
+    assert len(no_row) == len(rows) - 1, "the planted deletion found no `| [qtawesome]` row"
+    caught = notice_problems(spec, "\n".join(no_row), fonts)
+    assert caught == ["packaging/pacer.spec bundles qtawesome whole (collect_all) but "
+                      "THIRD_PARTY_NOTICES.md has no table row naming it"], caught
     assert fonts, "qtawesome ships no font files: the font half of this check is over nothing"
     caught = notice_problems(spec, notices.replace(fonts[0], ""), fonts)
     assert caught == [f"qtawesome puts {fonts[0]} in the .app but THIRD_PARTY_NOTICES.md does "
