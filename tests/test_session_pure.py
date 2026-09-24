@@ -1372,7 +1372,7 @@ def test_decomposition_gains_sum_to_the_headline_gap():
 
     This is what makes a top-N slice of the table safe to show: the remainder is computable, and
     the page states it. A decomposition that only approximately summed would make the table and
-    the tile above it disagree — the defect class `_set_digest`'s rounding note records."""
+    the tile above it disagree — the defect class the Coaching headline's B12 rounding note records."""
     s, ids = make_ideal_session()
     sb = s.ideal_segment_bests()
     best = s.best_lap_id()
