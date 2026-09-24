@@ -119,12 +119,15 @@ test = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failur
 # no single test left worth cutting. Do not add exclusions to chase a number; re-measure and update
 # this table instead.
 #
-# test_compare_lifecycle is expensive on purpose and must NOT be trimmed to fit here: it is the
-# regression guard for a SIGSEGV (a live widget half-moved between layouts), and a crash cannot be
+# test_compare_lifecycle's crash SOAK is expensive on purpose and must NOT be trimmed: it is the
+# probabilistic guard for a SIGSEGV (a live widget half-moved between layouts), and a crash cannot be
 # asserted in-process — it runs 3 subprocesses x 1500 enter/exit cycles, a count sized by
-# measurement (600 cycles killed 4 of 6 processes; 1500 killed 6 of 6). Shrinking it to save inner-
-# loop time would buy speed by weakening the only thing standing between that crash and `main`.
-# So it is excluded from the fast loop and runs in full `test` and in CI, where it belongs.
+# measurement (600 cycles killed 4 of 6 processes; 1500 killed 6 of 6). Since 2026-09-24 it is its
+# own registration, `soak.test_toggle_compare_repeatedly_does_not_crash`, which runs where
+# PACER_SOAK=1 (`test-soak` below, and CI on pushes to main and tags) and is reported Skipped by
+# name everywhere else, here included. What stays on every PR is the file's deterministic guard,
+# which fails in 22 ms when the root cause is put back. That registration is still excluded here as
+# it always was, though it now takes ~1 s: re-measure before changing the list, as above.
 #
 # THE `footage.*` REGISTRATIONS ARE REPORTED, NOT RUN, HERE (G2). Since their defaults name the
 # Desktop working set, on the dev Mac all fourteen really run, and measured 2026-09-23 they cost
@@ -149,6 +152,11 @@ test-fast ={ cmd = "caffeinate -si ctest --test-dir build/Release --output-on-fa
 # defaults or the recordings your variables name (tests/_footage.py). No --timeout: each carries
 # its own TIMEOUT. On a machine without the footage every one is reported Skipped, by name.
 test-footage = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure -L footage", depends-on = ["build"] }
+# Just the soaks (`LABELS soak`, tests/CMakeLists.txt): probabilistic checks too slow for every PR,
+# each beside a deterministic guard that does run there. PACER_SOAK=1 is what makes one run;
+# without it (`test`, `test-fast`, CI on a pull request) each is reported Skipped by name. CI sets
+# it on pushes to main and on tags (.github/workflows/ci.yml). No --timeout: each has a TIMEOUT.
+test-soak = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure -L soak", depends-on = ["build"], env = { PACER_SOAK = "1" } }
 # One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
