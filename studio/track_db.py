@@ -122,9 +122,10 @@ SEED: list[dict] = [
     # The `--demo` recording's circuit (studio/dev/make_demo.py): FICTIONAL, generated, placed in the
     # open Atlantic ~700 km north of the Azores, where no real circuit can sit inside DETECT_RADIUS_M.
     # A built-in so the demo opens with VERIFIED timing on a line square across the middle of its main
-    # straight — not the unknown-track heuristic's line at the peak-speed point, where laps start
-    # braking. Every field is `make_demo.track_entry()`, and tests/test_demo_session.py holds the two
-    # equal, so this line cannot drift from the circuit it times.
+    # straight — not the unknown-track heuristic's provisional line (which, until X1, sat at the
+    # peak-speed point, where laps start braking). Every field is `make_demo.track_entry()`, and
+    # tests/test_demo_session.py holds the two equal, so this line cannot drift from the circuit it
+    # times.
     {
         "name": "Synthetic demo circuit",
         "centroid": [45.9989659, -30.9991256],

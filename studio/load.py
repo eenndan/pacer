@@ -443,8 +443,8 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
             )
             laps.update()
     else:
-        # Unknown track: place a SENSIBLE default line perpendicular to travel at the peak-speed
-        # point (the main straight) instead of an arbitrary point, then validate/widen it. Fall back
+        # Unknown track: place a SENSIBLE default line perpendicular to travel where the speed stays
+        # highest (the main straight) instead of an arbitrary point, then validate/widen it. Fall back
         # to the old random pick if the heuristic is degenerate OR its line finds no laps. Either way
         # the timing is PROVISIONAL (muted + the "drag the start/finish line" banner) until confirmed.
         xs = np.fromiter((cs.local(s)[0] for s in samples), float, len(samples))
