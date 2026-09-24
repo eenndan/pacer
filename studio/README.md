@@ -66,8 +66,10 @@ A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`); opening one loads
    or its services; views and exports read it and never re-derive it, and a statistic whose
    signal is absent is `None`, never a fake 0.
 6. **Stores.** Every store under app-support resolves its directory through its `_app_support_dir`
-   seam → [`app_support.resolve()`](app_support.py), which jails tests, and every store writes
-   atomically (`os.replace`); a new one copies `library.py`'s discipline (schema version, `.bak`).
+   seam → [`app_support.resolve()`](app_support.py), which jails tests, and every store reads,
+   writes and locks through [`_jsonstore`](_jsonstore.py): a unique temp + `os.replace`, and every
+   load-modify-save under `_jsonstore.locked`. A new one copies `library.py`'s discipline (schema
+   version, `.bak`).
 
 ## Common changes → files to touch
 
@@ -150,6 +152,7 @@ algorithm; the service just caches + delegates.
 | Module | Responsibility | Imports | Test |
 |---|---|---|---|
 | [app_support.py](app_support.py) | Where every store and the log live, and the jail that keeps tests out | — | `test_app_support_jail` |
+| [_jsonstore.py](_jsonstore.py) | Every store's reader, atomic unique-temp write and cross-process lock | — | `test_jsonstore` |
 | [logsetup.py](logsetup.py) | The app log: stderr plus a rotating `logs/pacer.log` under app-support | — | `test_session_log` |
 | [library.py](library.py) | The session library `library.json`: one entry per recording fingerprint, PB series | — | `test_library` |
 | [track_db.py](track_db.py) | `tracks.json` + built-in circuits; rename/delete with refusals and a `.bak` | — | `test_track_db` |

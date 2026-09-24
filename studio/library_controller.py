@@ -370,10 +370,8 @@ class LibraryController:
         re-render). The media file is NEVER touched. Fully guarded — a failed index write or a
         missing/locked sidecar just logs; the deletion uses os.remove behind an existence check +
         try/except (never a shell rm)."""
-        index = library.load()
-        library.remove(index, entry.get("fingerprint"))
         try:
-            library.save(index)
+            library.remove_and_save(entry.get("fingerprint"))   # one locked read-modify-write
         except OSError as exc:
             print(f"studio: could not update the library index ({exc!r}).", flush=True)
         # Delete the recording's sidecar (resolved from the FIRST recorded chapter path — the same

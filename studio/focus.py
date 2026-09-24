@@ -87,7 +87,6 @@ discipline.
 from __future__ import annotations
 
 import datetime
-import json
 import logging
 import math
 import os
@@ -96,7 +95,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import app_support, session_record
+from . import _jsonstore, app_support, session_record
 from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
 
 _log = logging.getLogger(__name__)
@@ -309,19 +308,6 @@ def empty_store() -> dict:
     return {"version": VERSION, "lists": []}
 
 
-def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
-    """(readable_json_dict, parsed) — the seam ``load`` and ``save`` share, so "genuine corruption"
-    is decided in one place (``library.py``'s idiom)."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False, None
-    if not isinstance(data, dict):
-        return False, None
-    return True, data
-
-
 def _migrate(data: dict, from_version: int) -> dict:
     """Forward-migrate an OLDER store, PRESERVING every list. v1 is the first schema, so there is
     nothing to transform yet — the hook exists so the next bump has one obvious place to go and
@@ -335,11 +321,12 @@ def load(path: str | None = None) -> dict:
     back up, and one malformed list is dropped rather than the file. Only genuine FILE-level
     corruption falls back to ``empty_store()``."""
     path = focus_path(path)
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return empty_store()
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
+        _jsonstore.report_unreadable(path, f"version {version!r} is not a schema number")
         return empty_store()
     if version < VERSION:
         _log.warning("focus: migrating store from version %d to %d (%s)", version, VERSION, path)
@@ -349,6 +336,7 @@ def load(path: str | None = None) -> dict:
                      "best-effort (%s)", version, VERSION, path)
     raw = data.get("lists")
     if not isinstance(raw, list):
+        _jsonstore.report_unreadable(path, "its lists are not a list")
         return empty_store()
     lists = [e for e in raw if _valid_list(e)]
     dropped = len(raw) - len(lists)
@@ -364,16 +352,16 @@ def backup_path(path: str | None = None) -> str:
 
 
 def _backup_unsafe(path: str) -> None:
-    """Copy an un-round-trippable existing store (corrupt, or a NEWER schema) to its ``.bak``
-    sidecar before ``save`` would overwrite it — the user's bytes are never silently lost."""
+    """Copy an un-round-trippable existing store to its ``.bak`` sidecar before ``save`` would
+    overwrite it — the user's bytes are never silently lost. Un-round-trippable is everything
+    ``load`` reads as EMPTY (unparseable, a non-int ``version``, a non-list ``lists``) plus a NEWER
+    schema; the two valid-JSON shapes used to be overwritten with no copy at all."""
     if not os.path.exists(path):
         return
-    ok, data = _is_loadable_dict(path)
-    unsafe = (not ok) or (
-        isinstance(data, dict)
-        and isinstance(data.get("version"), int)
-        and not isinstance(data.get("version"), bool)
-        and data["version"] > VERSION)
+    ok, data = _jsonstore.read_object(path)
+    version = data.get("version") if ok else None
+    stamped = isinstance(version, int) and not isinstance(version, bool)
+    unsafe = not ok or not stamped or version > VERSION or not isinstance(data.get("lists"), list)
     if not unsafe:
         return
     try:
@@ -385,19 +373,16 @@ def _backup_unsafe(path: str) -> None:
 
 
 def save(store: dict, path: str | None = None) -> None:
-    """Write the store atomically (temp file + ``os.replace``). Creates the app-support dir if
-    missing; raises OSError on an unwritable destination (the caller guards it — a focus-list write
-    must never disrupt the app)."""
+    """Write the store atomically (a unique temp file + ``os.replace``, ``_jsonstore.write_json``)
+    under the store lock. Creates the app-support dir if missing; raises OSError on an unwritable
+    destination (the caller guards it — a focus-list write must never disrupt the app)."""
     path = focus_path(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _backup_unsafe(path)
     out = {"version": VERSION,
            "lists": [_norm_list(e) for e in store.get("lists", []) if _valid_list(e)]}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    with _jsonstore.locked(path):
+        _backup_unsafe(path)
+        _jsonstore.write_json(path, out)
 
 
 def for_track(store: dict, track: str | None) -> list[FocusItem]:
@@ -453,19 +438,24 @@ def rename_track(store: dict, old: str, new: str) -> bool:
 def rename_track_and_save(old: str, new: str, path: str | None = None) -> bool:
     """Load, move `old`'s focus list onto `new`, write back atomically. True when one moved — and
     only then is anything written, so renaming a circuit with no focus list cannot churn the file."""
-    store = load(path)
-    moved = rename_track(store, old, new)
-    if moved:
-        save(store, path)
+    path = focus_path(path)
+    with _jsonstore.locked(path):
+        store = load(path)
+        moved = rename_track(store, old, new)
+        if moved:
+            save(store, path)
     return moved
 
 
 def save_for_track(track: str, items: list[FocusItem], path: str | None = None) -> dict:
-    """Load, replace `track`'s list, write back atomically, return the new store — the one call the
-    app makes when the driver promotes or drops a corner."""
-    store = load(path)
-    set_for_track(store, track, items)
-    save(store, path)
+    """Load, replace `track`'s list, write back atomically, return the new store — under the store
+    lock, so another writer's list cannot be lost in between. The one call the app makes when the
+    driver promotes or drops a corner."""
+    path = focus_path(path)
+    with _jsonstore.locked(path):
+        store = load(path)
+        set_for_track(store, track, items)
+        save(store, path)
     return store
 
 

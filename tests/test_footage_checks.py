@@ -72,7 +72,7 @@ _AT_G1 = (
 # Every variable that points a check at footage. Unset in the negative control, so what it measures
 # is "no footage", not "whatever the developer running it happens to have exported".
 _FOOTAGE_ENVS = (dev_footage.RECORDING_ENV, dev_footage.REFERENCE_ENV,
-                 "PACER_IDEAL_TABLE_MP4", "PACER_MEASURED_FIGURES_DIR")
+                 "PACER_IDEAL_TABLE_MP4", "PACER_MEASURED_FIGURES_DIR", dev_footage.TIMING_ENV)
 # The variables the consolidation retired. A test reading one would be pointed nowhere.
 _RETIRED_ENVS = ("PACER_REAL_MP4", "PACER_D24_MEDIA")
 
@@ -519,6 +519,58 @@ def test_the_fast_loop_reports_a_present_default_skipped_and_still_runs_a_named_
           f"({len(_LOOKUPS)} lookups, {len(checks)} registrations)")
 
 
+def test_a_timing_sheet_is_found_like_footage():
+    """`_footage.timing_sheet` (B3) keeps these rules for the one input that is not a recording, the
+    official timing sheet an accuracy row was locked to: a default that is not here is a SKIP naming
+    it, `PACER_FOOTAGE_DEFAULTS=off` skips it towards test-footage, a sheet in a folder the operator
+    NAMED must be there. And its default reaches the MAIN checkout's gitignored folder from a linked
+    worktree — whose `.git` is a one-line pointer file — or a check reading one would skip in every
+    agent's worktree on the very Mac that holds the sheet."""
+    names = (dev_footage.TIMING_ENV, _footage.DEFAULTS_ENV)
+    saved = {k: os.environ.get(k) for k in names}
+    try:
+        with tempfile.TemporaryDirectory(prefix="pacer-b3-timing-") as d:
+            for k in names:
+                os.environ.pop(k, None)
+            main = os.path.join(d, "main")
+            tree = os.path.join(main, ".claude", "worktrees", "agent-x")
+            os.makedirs(os.path.join(main, ".git", "worktrees", "agent-x"))
+            os.makedirs(tree)
+            with open(os.path.join(tree, ".git"), "w", encoding="utf-8") as f:
+                f.write(f"gitdir: {main}/.git/worktrees/agent-x\n")
+            want = os.path.join(main, ".claude", "reference", "timing")
+            got = (dev_footage.timing_dir(tree), dev_footage.timing_dir(main))
+            assert got == (want, want), f"worktree and main checkout resolve {got}, not {want}"
+
+            for env, value, needle in ((None, None, "no-such-sheet.csv"),
+                                       (_footage.DEFAULTS_ENV, "off", "test-footage")):
+                if env:
+                    os.environ[env] = value
+                try:
+                    _footage.timing_sheet("no-such-sheet.csv")
+                except _footage.FootageMissing as exc:
+                    assert needle in exc.reason, exc.reason
+                else:
+                    raise AssertionError(f"an absent default sheet was not a skip ({env}={value})")
+
+            os.environ[dev_footage.TIMING_ENV] = d          # NAMED — the defaults' being off is moot
+            try:
+                _footage.timing_sheet("no-such-sheet.csv")
+            except AssertionError as exc:
+                assert "no-such-sheet.csv" in str(exc), exc
+            else:
+                raise AssertionError("a sheet missing from a NAMED folder skipped instead of failing")
+            open(os.path.join(d, "day.csv"), "w").close()
+            assert _footage.timing_sheet("day.csv") == os.path.join(d, "day.csv")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("test_a_timing_sheet_is_found_like_footage OK")
+
+
 def test_the_fast_loop_reports_footage_and_the_footage_task_runs_it():
     """Where the checks run, read off pyproject.toml the way pixi reads it. `test-fast` turns the
     defaults off and EXCLUDES no footage registration — an excluded test vanishes from ctest's
@@ -559,6 +611,7 @@ def _run_all():
     test_the_golden_dump_reads_the_same_variable_and_default()
     test_every_default_names_a_recording_still_on_the_machine()
     test_the_fast_loop_reports_a_present_default_skipped_and_still_runs_a_named_one()
+    test_a_timing_sheet_is_found_like_footage()
     test_the_fast_loop_reports_footage_and_the_footage_task_runs_it()
     print("\nfootage-check tests passed")
 

@@ -29,10 +29,14 @@ apply→export→apply is stable.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
+import shutil
 
-from . import chapters
+from . import _jsonstore, chapters
+
+_log = logging.getLogger(__name__)
 
 VERSION = 1
 SUFFIX = ".pacer.json"
@@ -138,17 +142,44 @@ def load(path: str) -> dict | None:
             "start": _norm_line(start), "sectors": [_norm_line(s) for s in sectors]}
 
 
+def backup_path(path: str) -> str:
+    """Where ``save`` keeps the bytes of a sidecar it could not read before replacing it:
+    ``<stem>.pacer.json.bak``, beside it."""
+    return path + ".bak"
+
+
+def _backup_unreadable(path: str) -> None:
+    """Before ``save`` replaces a sidecar that ``load`` rejects (``SidecarUnreadable``: not JSON,
+    another version, a broken line), copy its bytes to ``backup_path`` — the rule the six
+    app-support stores keep, which this one alone lacked: the app said the file could not be read,
+    and the next drag of the start line overwrote it with no copy. Best-effort; a failed copy only
+    logs, because the lines being saved are the ones the user just placed."""
+    try:
+        load(path)
+        return                               # absent or healthy: nothing to keep
+    except SidecarUnreadable as exc:
+        reason = exc.reason
+    try:
+        shutil.copy2(path, backup_path(path))
+    except OSError as exc:
+        _log.warning("sidecar: could not back up unreadable %s (%s) before overwriting it (%r)",
+                     path, reason, exc)
+        return
+    _log.warning("sidecar: backed up unreadable %s (%s) to %s before overwriting it", path, reason,
+                 os.path.basename(backup_path(path)))
+
+
 def save(path: str, track: str | None, start, sectors, confirmed: bool = True) -> None:
     """Write the sidecar for a recording: the user's current timing lines as absolute
     (lat, lon) endpoint pairs (`start` = one line, `sectors` = a list of lines), plus the
     detected track name (or None) and whether the start line is user-``confirmed`` (the
-    timing-trust marker). Written via a same-directory temp file + ``os.replace`` so a crash
-    mid-write can never leave a truncated sidecar. Raises OSError on an unwritable destination
-    — the caller decides how to surface that."""
+    timing-trust marker). Written through ``_jsonstore.write_json`` — a UNIQUE same-directory temp
+    file, fsync-ed, then ``os.replace`` — so neither a crash mid-write nor a second writer can leave
+    a truncated or interleaved sidecar. No lock: this is a whole-file write, not a read-modify-write,
+    so the last writer's complete lines win, and a lock file would sit beside the user's footage.
+    An existing sidecar ``load`` rejects is copied to ``backup_path`` first. Raises OSError on an
+    unwritable destination — the caller decides how to surface that."""
     data = {"version": VERSION, "track": track, "confirmed": bool(confirmed),
             "start": _norm_line(start), "sectors": [_norm_line(s) for s in sectors]}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    _backup_unreadable(path)
+    _jsonstore.write_json(path, data)
