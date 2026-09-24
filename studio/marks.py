@@ -108,14 +108,13 @@ the list is `studio/marks_panel.py`.
 from __future__ import annotations
 
 import datetime
-import json
 import logging
 import math
 import os
 import shutil
 import uuid
 
-from . import app_support, data_quality
+from . import _jsonstore, app_support, data_quality
 
 _log = logging.getLogger(__name__)
 
@@ -348,20 +347,6 @@ def new_mark(chapter: str, t: float, *, t_end: float | None = None, type: str = 
 
 
 # ---------------------------------------------------------------- file I/O
-def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
-    """(readable_json_object, parsed) for `path`. The seam `load` and `save` share, so "genuine
-    corruption" — the only case that falls back to empty, and the only one that triggers a backup —
-    is decided in ONE place (mirrors ``session_record._is_loadable_dict``)."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False, None
-    if not isinstance(data, dict):
-        return False, None
-    return True, data
-
-
 def _migrate(data: dict, from_version: int) -> dict:
     """Forward-migrate an OLDER on-disk store (`from_version` < ``VERSION``) to the current schema,
     PRESERVING EVERY MARK. Per-version transforms run in ascending order and each MUST keep every
@@ -392,13 +377,14 @@ def load(path: str | None = None) -> dict:
     bytes up before overwriting them. `path` defaults to ``marks_path()``."""
     if path is None:
         path = marks_path()
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return empty_store()
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
         # A missing / non-int version is untrustworthy SHAPE (the marks under it have a schema to
         # be wrong about), so — unlike the flat prefs store — it is corruption, not a legacy file.
+        _jsonstore.report_unreadable(path, f"version {version!r} is not a schema number")
         return empty_store()
     if version < VERSION:
         _log.warning("marks: migrating store from version %d to %d (%s)", version, VERSION, path)
@@ -408,6 +394,7 @@ def load(path: str | None = None) -> dict:
                      "best-effort, unknown fields preserved (%s)", version, VERSION, path)
     raw = data.get("recordings")
     if not isinstance(raw, dict):
+        _jsonstore.report_unreadable(path, "its recordings are not an object")
         return empty_store()
     recordings, dropped = {}, 0
     for key, rec in raw.items():
@@ -474,7 +461,7 @@ def _backup_unsafe(path: str) -> None:
     ``tests/test_marks.py``, which asserts the ``.bak`` for all five corrupt payloads."""
     if not os.path.exists(path):
         return
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         _copy_to_backup(path, "an unreadable marks store")
         return
@@ -485,9 +472,10 @@ def _backup_unsafe(path: str) -> None:
 
 
 def save(store: dict, path: str | None = None) -> None:
-    """Write the store atomically (temp file + ``os.replace``) so a crash mid-write can't leave a
-    truncated notebook. Creates the app-support dir if missing. `path` defaults to ``marks_path()``.
-    Raises OSError on an unwritable destination.
+    """Write the store atomically (a unique temp file + ``os.replace``, ``_jsonstore.write_json``)
+    under the store lock, so neither a crash nor a second writer can leave a truncated or
+    interleaved notebook. Creates the app-support dir if missing. `path` defaults to
+    ``marks_path()``. Raises OSError on an unwritable destination.
 
     A recording whose mark list has gone EMPTY is dropped from the file rather than written as an
     empty shell — an empty list is the same fact as no entry, and one of the two would then have to
@@ -499,7 +487,6 @@ def save(store: dict, path: str | None = None) -> None:
     if path is None:
         path = marks_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _backup_unsafe(path)
     out_recordings = {}
     for key, rec in sorted((store or {}).get("recordings", {}).items()):
         marks = [_norm_mark(m) for m in rec.get("marks", []) if isinstance(m, dict)]
@@ -508,12 +495,9 @@ def save(store: dict, path: str | None = None) -> None:
         entry = {k: v for k, v in rec.items() if k != "marks"}
         entry["marks"] = sorted(marks, key=lambda m: (m["chapter"], m["t"], m["id"]))
         out_recordings[key] = entry
-    out = {"version": VERSION, "recordings": out_recordings}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    with _jsonstore.locked(path):
+        _backup_unsafe(path)
+        _jsonstore.write_json(path, {"version": VERSION, "recordings": out_recordings})
 
 
 # ---------------------------------------------------------------- record access
@@ -551,11 +535,15 @@ def remove(store: dict, fingerprint: str, mark_id: str) -> bool:
 
 
 def put_and_save(fingerprint: str, mark: dict, path: str | None = None) -> dict:
-    """Load, insert-or-replace, write back atomically, and return the new store. The one call the
-    mark editor's OK button makes. Any OSError from the write propagates to the caller."""
-    store = load(path)
-    put(store, fingerprint, mark)
-    save(store, path)
+    """Load, insert-or-replace, write back atomically, and return the new store — under the store
+    lock, so another writer's mark cannot be lost in between. The one call the mark editor's OK
+    button makes. Any OSError from the write propagates to the caller."""
+    if path is None:
+        path = marks_path()
+    with _jsonstore.locked(path):
+        store = load(path)
+        put(store, fingerprint, mark)
+        save(store, path)
     return store
 
 
@@ -568,13 +556,14 @@ def remove_and_save(fingerprint: str, mark_id: str, path: str | None = None) -> 
     churn the one backup slot out from under the marks that are still there."""
     if path is None:
         path = marks_path()
-    store = load(path)
-    if not any(m.get("id") == mark_id for m in get(store, fingerprint)):
-        return store
-    if os.path.exists(path):
-        _copy_to_backup(path, "the marks before deleting one")
-    remove(store, fingerprint, mark_id)
-    save(store, path)
+    with _jsonstore.locked(path):
+        store = load(path)
+        if not any(m.get("id") == mark_id for m in get(store, fingerprint)):
+            return store
+        if os.path.exists(path):
+            _copy_to_backup(path, "the marks before deleting one")
+        remove(store, fingerprint, mark_id)
+        save(store, path)
     return store
 
 
@@ -584,13 +573,14 @@ def forget_and_save(fingerprint: str, path: str | None = None) -> dict:
     already drops."""
     if path is None:
         path = marks_path()
-    store = load(path)
-    if not get(store, fingerprint):
-        return store
-    if os.path.exists(path):
-        _copy_to_backup(path, "the marks before forgetting one recording")
-    store.get("recordings", {}).pop(fingerprint, None)
-    save(store, path)
+    with _jsonstore.locked(path):
+        store = load(path)
+        if not get(store, fingerprint):
+            return store
+        if os.path.exists(path):
+            _copy_to_backup(path, "the marks before forgetting one recording")
+        store.get("recordings", {}).pop(fingerprint, None)
+        save(store, path)
     return store
 
 
@@ -600,10 +590,11 @@ def clear(path: str | None = None) -> dict:
     every other backup here — a failed copy logs and the wipe still proceeds."""
     if path is None:
         path = marks_path()
-    if os.path.exists(path):
-        _copy_to_backup(path, "the marks before clearing them")
-    save(empty_store(), path)
-    return load(path)
+    with _jsonstore.locked(path):
+        if os.path.exists(path):
+            _copy_to_backup(path, "the marks before clearing them")
+        save(empty_store(), path)
+        return load(path)
 
 
 def count(store: dict) -> int:
@@ -641,24 +632,25 @@ def restore(path: str | None = None) -> dict:
     destination (the swap half is best-effort and only logs)."""
     if path is None:
         path = marks_path()
-    store = load(backup_path(path))
-    if not count(store):
+    with _jsonstore.locked(path):
+        store = load(backup_path(path))
+        if not count(store):
+            return load(path)
+        swap = path + ".swap"
+        kept = False
+        if os.path.exists(path):
+            try:
+                shutil.copy2(path, swap)
+                kept = True
+            except OSError as exc:
+                _log.warning("marks: could not keep the replaced store before restoring (%r)", exc)
+        save(store, path)
+        if kept:
+            try:
+                os.replace(swap, backup_path(path))
+            except OSError as exc:
+                _log.warning("marks: restored the store but could not swap the backup (%r)", exc)
         return load(path)
-    swap = path + ".swap"
-    kept = False
-    if os.path.exists(path):
-        try:
-            shutil.copy2(path, swap)
-            kept = True
-        except OSError as exc:
-            _log.warning("marks: could not keep the replaced store before restoring (%r)", exc)
-    save(store, path)
-    if kept:
-        try:
-            os.replace(swap, backup_path(path))
-        except OSError as exc:
-            _log.warning("marks: restored the store but could not swap the backup (%r)", exc)
-    return load(path)
 
 
 # ---------------------------------------------------------------- the anchor
