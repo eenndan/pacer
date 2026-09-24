@@ -14,7 +14,7 @@ Everything merged since v0.2.0, from #222 on. Each line names its pull request
 - **The picture and the numbers agree.** Every GPS-derived overlay sat ~0.46 s (14 frames) behind
   the frame it describes; the lag is now measured per recording and taken out (#266, #301, #312)
 - **Every number can show its work.** Right-click a lap time, split or corner best for the raw GPS
-  fixes behind it, re-derived; DATA TRUST grades the GPS second by second (#261, #263)
+  fixes behind it, re-derived; a strip under the scrub bar grades the GPS each second (#261, #263)
 - **Coaching that abstains.** It says whether you have driven a corner at that pace before, stays
   quiet inside your own lap-to-lap spread, and carries a focus list to the next session (#255, #268)
 - **Corner analysis you can trust.** The ideal lap was ~44 % projection artifact; corners are now
@@ -32,7 +32,7 @@ Everything merged since v0.2.0, from #222 on. Each line names its pull request
 - An export the disk plainly cannot hold is refused before it renders, never one that fits (#364)
 - Sandown Park is a built-in track, timed on the owner's own start/finish line (#362)
 - Map line mode **Pedal (est)**: the chart's brake/throttle band, painted on the racing line (#347)
-- Corners are matched once each lap's GPS drift is removed (D24 0060: 422 of 456, was 220) (#335)
+- Corners are matched after removing each lap's GPS drift: 422 of 456 D24 0060 cells, not 220 (#335)
 - Stats ▸ **CORNERS BY LAP**: which laps lost time in which corner, marked only where matched (#329)
 - Stats ▸ **COASTING**: where you coast, by place, and whether that ranking separates at all (#327)
 - The GPS-quality chip opens the DATA TRUST row that explains it (#333)
