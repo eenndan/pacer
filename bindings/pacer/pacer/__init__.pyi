@@ -49,8 +49,13 @@ class PointInTime_GPSSample:  # Python specialization for PointInTime<GPSSample>
 
     point: GPSSample
     time: float
-    def __init__(self, point: GPSSample = GPSSample(), time: float = float()) -> None:
-        """Auto-generated default constructor with named params"""
+    def __init__(self, point: GPSSample | None = None, time: float = float()) -> None:
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If point is None, then its default value will be: GPSSample()
+        """
         pass
 
 #      </template specializations for class PointInTime>
@@ -185,8 +190,15 @@ class Segment:
     def __eq__(self, other: object) -> bool:
         pass
 
-    def __init__(self, first: Point = Point(), second: Point = Point()) -> None:
-        """Auto-generated default constructor with named params"""
+    def __init__(self, first: Point | None = None, second: Point | None = None) -> None:
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If any of the params below is None, then its default value below will be used:
+                * first: Point()
+                * second: Point()
+        """
         pass
 
 class CoordinateSystem:
@@ -253,10 +265,17 @@ class Lap:
 
     def __init__(
         self,
-        points: List[PointInTime[GPSSample]] = List[PointInTime < GPSSample] > (),
-        cum_distances: List[float] = List[float](),
+        points: List[PointInTime[GPSSample]] | None = None,
+        cum_distances: List[float] | None = None,
     ) -> None:
-        """Auto-generated default constructor with named params"""
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If any of the params below is None, then its default value below will be used:
+                * points: List[PointInTime<GPSSample]>()
+                * cum_distances: List[float]()
+        """
         pass
 
 class Sectors:
@@ -272,10 +291,17 @@ class Sectors:
     sector_lines: List[Segment]
     def __init__(
         self,
-        start_line: Segment = Segment(),
-        sector_lines: List[Segment] = List[Segment](),
+        start_line: Segment | None = None,
+        sector_lines: List[Segment] | None = None,
     ) -> None:
-        """Auto-generated default constructor with named params"""
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If any of the params below is None, then its default value below will be used:
+                * start_line: Segment()
+                * sector_lines: List[Segment]()
+        """
         pass
 
 class LapArrays:
@@ -308,13 +334,23 @@ class LapArrays:
     cum_distances: List[float]
     def __init__(
         self,
-        times: List[float] = List[float](),
-        xs: List[float] = List[float](),
-        ys: List[float] = List[float](),
-        full_speed: List[float] = List[float](),
-        cum_distances: List[float] = List[float](),
+        times: List[float] | None = None,
+        xs: List[float] | None = None,
+        ys: List[float] | None = None,
+        full_speed: List[float] | None = None,
+        cum_distances: List[float] | None = None,
     ) -> None:
-        """Auto-generated default constructor with named params"""
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If any of the params below is None, then its default value below will be used:
+                * times: List[float]()
+                * xs: List[float]()
+                * ys: List[float]()
+                * full_speed: List[float]()
+                * cum_distances: List[float]()
+        """
         pass
 
 class Laps:
@@ -428,8 +464,13 @@ class Laps:
         """
         pass
 
-    def __init__(self, sectors: Sectors = Sectors()) -> None:
-        """Auto-generated default constructor with named params"""
+    def __init__(self, sectors: Sectors | None = None) -> None:
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If sectors is None, then its default value will be: Sectors()
+        """
         pass
 
 ####################    </generated_from:laps.hpp>    ####################
@@ -457,13 +498,23 @@ class ImuArrays:
     zs: List[float]
     def __init__(
         self,
-        times: List[float] = List[float](),
-        ws: List[float] = List[float](),
-        xs: List[float] = List[float](),
-        ys: List[float] = List[float](),
-        zs: List[float] = List[float](),
+        times: List[float] | None = None,
+        ws: List[float] | None = None,
+        xs: List[float] | None = None,
+        ys: List[float] | None = None,
+        zs: List[float] | None = None,
     ) -> None:
-        """Auto-generated default constructor with named params"""
+        """Auto-generated default constructor with named params
+
+
+        Python bindings defaults:
+            If any of the params below is None, then its default value below will be used:
+                * times: List[float]()
+                * ws: List[float]()
+                * xs: List[float]()
+                * ys: List[float]()
+                * zs: List[float]()
+        """
         pass
 
 class ImuOrientation:

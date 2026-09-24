@@ -199,14 +199,17 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassPointInTime_GPSSample =
       nb::class_<pacer::PointInTime<GPSSample>>
           (m, "PointInTime_GPSSample", " A spatial value tagged with the time it was observed (seconds). `P` is the\n spatial type, so one template covers both the GPS trace (P = GPSSample) and\n the local-metres crossing interpolation (P = Point).")
-      .def("__init__", [](pacer::PointInTime<GPSSample> * self, pacer::GPSSample point = pacer::GPSSample(), double time = double())
+      .def("__init__", [](pacer::PointInTime<GPSSample> * self, const std::optional<const pacer::GPSSample> & point = std::nullopt, double time = double())
       {
           new (self) pacer::PointInTime<GPSSample>();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->point = point;
+          if (point.has_value())
+              r_ctor_->point = point.value();
+          else
+              r_ctor_->point = pacer::GPSSample();
           r_ctor_->time = time;
       },
-      nb::arg("point") = pacer::GPSSample(), nb::arg("time") = double()
+      nb::arg("point").none() = nb::none(), nb::arg("time") = double()
       )
       .def_rw("point", &pacer::PointInTime<GPSSample>::point, "")
       .def_rw("time", &pacer::PointInTime<GPSSample>::time, "")
@@ -301,14 +304,20 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassSegment =
       nb::class_<pacer::Segment>
           (m, "Segment", "")
-      .def("__init__", [](pacer::Segment * self, pacer::Point first = pacer::Point(), pacer::Point second = pacer::Point())
+      .def("__init__", [](pacer::Segment * self, const std::optional<const pacer::Point> & first = std::nullopt, const std::optional<const pacer::Point> & second = std::nullopt)
       {
           new (self) pacer::Segment();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->first = first;
-          r_ctor_->second = second;
+          if (first.has_value())
+              r_ctor_->first = first.value();
+          else
+              r_ctor_->first = pacer::Point();
+          if (second.has_value())
+              r_ctor_->second = second.value();
+          else
+              r_ctor_->second = pacer::Point();
       },
-      nb::arg("first") = pacer::Point(), nb::arg("second") = pacer::Point()
+      nb::arg("first").none() = nb::none(), nb::arg("second").none() = nb::none()
       )
       .def_rw("first", &pacer::Segment::first, "")
       .def_rw("second", &pacer::Segment::second, "")
@@ -345,14 +354,20 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassLap =
       nb::class_<pacer::Lap>
           (m, "Lap", " One materialised lap: the GPS points it covers (interpolated start crossing +\n interior track points + interpolated finish crossing) and the matching\n per-point cumulative odometer.")
-      .def("__init__", [](pacer::Lap * self, std::vector<PointInTime<GPSSample>> points = std::vector<PointInTime<GPSSample>>(), std::vector<double> cum_distances = std::vector<double>())
+      .def("__init__", [](pacer::Lap * self, const std::optional<const std::vector<PointInTime<GPSSample>>> & points = std::nullopt, const std::optional<const std::vector<double>> & cum_distances = std::nullopt)
       {
           new (self) pacer::Lap();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->points = points;
-          r_ctor_->cum_distances = cum_distances;
+          if (points.has_value())
+              r_ctor_->points = points.value();
+          else
+              r_ctor_->points = std::vector<PointInTime<GPSSample>>();
+          if (cum_distances.has_value())
+              r_ctor_->cum_distances = cum_distances.value();
+          else
+              r_ctor_->cum_distances = std::vector<double>();
       },
-      nb::arg("points") = std::vector<PointInTime<GPSSample>>(), nb::arg("cum_distances") = std::vector<double>()
+      nb::arg("points").none() = nb::none(), nb::arg("cum_distances").none() = nb::none()
       )
       .def_rw("points", &pacer::Lap::points, "")
       .def_rw("cum_distances", &pacer::Lap::cum_distances, "")
@@ -368,14 +383,20 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassSectors =
       nb::class_<pacer::Sectors>
           (m, "Sectors", " The INPUT timing geometry in local metres: the start line plus the\n intermediate sector lines. Confusion trap: the studio does NOT take per-lap\n sector splits from the C++ crossing list these produce — it projects each\n sector line onto a lap's odometer by DISTANCE in Python (studio/session.py,\n lap_sector_splits), because a short line can geometrically miss a crossing on\n some laps.")
-      .def("__init__", [](pacer::Sectors * self, Segment start_line = Segment(), std::vector<Segment> sector_lines = std::vector<Segment>())
+      .def("__init__", [](pacer::Sectors * self, const std::optional<const Segment> & start_line = std::nullopt, const std::optional<const std::vector<Segment>> & sector_lines = std::nullopt)
       {
           new (self) pacer::Sectors();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->start_line = start_line;
-          r_ctor_->sector_lines = sector_lines;
+          if (start_line.has_value())
+              r_ctor_->start_line = start_line.value();
+          else
+              r_ctor_->start_line = Segment();
+          if (sector_lines.has_value())
+              r_ctor_->sector_lines = sector_lines.value();
+          else
+              r_ctor_->sector_lines = std::vector<Segment>();
       },
-      nb::arg("start_line") = Segment(), nb::arg("sector_lines") = std::vector<Segment>()
+      nb::arg("start_line").none() = nb::none(), nb::arg("sector_lines").none() = nb::none()
       )
       .def_rw("start_line", &pacer::Sectors::start_line, "")
       .def_rw("sector_lines", &pacer::Sectors::sector_lines, "")
@@ -385,17 +406,32 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassLapArrays =
       nb::class_<pacer::LapArrays>
           (m, "LapArrays", " A lap's per-point data as parallel columns, so the studio layer crosses the\n binding ONCE per lap instead of once per point (it used to call cs.local /\n read full_speed / time / cum_distances in loops over hundreds of points).\n Every column has the same length as the materialised lap (Lap::Count(): start\n crossing + interior points + finish crossing) and they are mutually index-\n aligned:\n   times          the clock the CALLER fed AddPoint, echoed back unchanged —\n                  this core converts nothing (== Lap::points[i].time). The\n                  studio feeds the GPS9 TRUE-clock (telemetry) axis built by\n                  studio/load.py, which is NOT the media clock the video\n                  plays on: measured on both D24 recordings the media clock\n                  runs +26.7 / +27.1 ppm fast, so one instant is numbered up\n                  to 0.097 / 0.167 s apart on the two axes. The map between\n                  them is studio/media_clock.py, and nothing here crosses it.\n   xs, ys         LOCAL metres — CoordinateSystem::Local(point).x|y in the\n   laps'\n                  own coordinate system (the one set via SetCoordinateSystem)\n   full_speed     raw 3D GPS speed m/s (the studio scales to km/h)\n   cum_distances  the lap's gap-aware per-point odometer (==\n   Lap::cum_distances)")
-      .def("__init__", [](pacer::LapArrays * self, std::vector<double> times = std::vector<double>(), std::vector<double> xs = std::vector<double>(), std::vector<double> ys = std::vector<double>(), std::vector<double> full_speed = std::vector<double>(), std::vector<double> cum_distances = std::vector<double>())
+      .def("__init__", [](pacer::LapArrays * self, const std::optional<const std::vector<double>> & times = std::nullopt, const std::optional<const std::vector<double>> & xs = std::nullopt, const std::optional<const std::vector<double>> & ys = std::nullopt, const std::optional<const std::vector<double>> & full_speed = std::nullopt, const std::optional<const std::vector<double>> & cum_distances = std::nullopt)
       {
           new (self) pacer::LapArrays();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->times = times;
-          r_ctor_->xs = xs;
-          r_ctor_->ys = ys;
-          r_ctor_->full_speed = full_speed;
-          r_ctor_->cum_distances = cum_distances;
+          if (times.has_value())
+              r_ctor_->times = times.value();
+          else
+              r_ctor_->times = std::vector<double>();
+          if (xs.has_value())
+              r_ctor_->xs = xs.value();
+          else
+              r_ctor_->xs = std::vector<double>();
+          if (ys.has_value())
+              r_ctor_->ys = ys.value();
+          else
+              r_ctor_->ys = std::vector<double>();
+          if (full_speed.has_value())
+              r_ctor_->full_speed = full_speed.value();
+          else
+              r_ctor_->full_speed = std::vector<double>();
+          if (cum_distances.has_value())
+              r_ctor_->cum_distances = cum_distances.value();
+          else
+              r_ctor_->cum_distances = std::vector<double>();
       },
-      nb::arg("times") = std::vector<double>(), nb::arg("xs") = std::vector<double>(), nb::arg("ys") = std::vector<double>(), nb::arg("full_speed") = std::vector<double>(), nb::arg("cum_distances") = std::vector<double>()
+      nb::arg("times").none() = nb::none(), nb::arg("xs").none() = nb::none(), nb::arg("ys").none() = nb::none(), nb::arg("full_speed").none() = nb::none(), nb::arg("cum_distances").none() = nb::none()
       )
       .def_rw("times", &pacer::LapArrays::times, "")
       .def_rw("xs", &pacer::LapArrays::xs, "")
@@ -408,13 +444,16 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassLaps =
       nb::class_<pacer::Laps>
           (m, "Laps", "")
-      .def("__init__", [](pacer::Laps * self, pacer::Sectors sectors = pacer::Sectors())
+      .def("__init__", [](pacer::Laps * self, const std::optional<const pacer::Sectors> & sectors = std::nullopt)
       {
           new (self) pacer::Laps();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->sectors = sectors;
+          if (sectors.has_value())
+              r_ctor_->sectors = sectors.value();
+          else
+              r_ctor_->sectors = pacer::Sectors();
       },
-      nb::arg("sectors") = pacer::Sectors()
+      nb::arg("sectors").none() = nb::none()
       )
       .def("update",
           &pacer::Laps::Update, "/ Re-segment the trace against the current start_line / sector_lines.")
@@ -489,17 +528,32 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassImuArrays =
       nb::class_<pacer::ImuArrays>
           (m, "ImuArrays", " One IMU stream (ACCL / GYRO / GRAV / CORI) collected as parallel columns, so\n the studio layer crosses the binding ONCE per stream instead of once per\n sample (the old path ran a per-sample C++->Python trampoline callback — ~1.5M\n round-trips per load). The columns are the SAME samples the per-sample\n ReadAccl/ReadGyro/ReadGrav/ReadCori callbacks yield, in the same order, so\n the bulk output is byte-for-byte identical to collecting those callbacks.\n\n `times`, `xs`, `ys`, `zs` are populated for all four streams; `ws` carries\n the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GYRO/GRAV\n leave it empty). Every populated column has the same length (the sample\n count).")
-      .def("__init__", [](pacer::ImuArrays * self, std::vector<double> times = std::vector<double>(), std::vector<double> ws = std::vector<double>(), std::vector<double> xs = std::vector<double>(), std::vector<double> ys = std::vector<double>(), std::vector<double> zs = std::vector<double>())
+      .def("__init__", [](pacer::ImuArrays * self, const std::optional<const std::vector<double>> & times = std::nullopt, const std::optional<const std::vector<double>> & ws = std::nullopt, const std::optional<const std::vector<double>> & xs = std::nullopt, const std::optional<const std::vector<double>> & ys = std::nullopt, const std::optional<const std::vector<double>> & zs = std::nullopt)
       {
           new (self) pacer::ImuArrays();  // placement new
           auto r_ctor_ = self;
-          r_ctor_->times = times;
-          r_ctor_->ws = ws;
-          r_ctor_->xs = xs;
-          r_ctor_->ys = ys;
-          r_ctor_->zs = zs;
+          if (times.has_value())
+              r_ctor_->times = times.value();
+          else
+              r_ctor_->times = std::vector<double>();
+          if (ws.has_value())
+              r_ctor_->ws = ws.value();
+          else
+              r_ctor_->ws = std::vector<double>();
+          if (xs.has_value())
+              r_ctor_->xs = xs.value();
+          else
+              r_ctor_->xs = std::vector<double>();
+          if (ys.has_value())
+              r_ctor_->ys = ys.value();
+          else
+              r_ctor_->ys = std::vector<double>();
+          if (zs.has_value())
+              r_ctor_->zs = zs.value();
+          else
+              r_ctor_->zs = std::vector<double>();
       },
-      nb::arg("times") = std::vector<double>(), nb::arg("ws") = std::vector<double>(), nb::arg("xs") = std::vector<double>(), nb::arg("ys") = std::vector<double>(), nb::arg("zs") = std::vector<double>()
+      nb::arg("times").none() = nb::none(), nb::arg("ws").none() = nb::none(), nb::arg("xs").none() = nb::none(), nb::arg("ys").none() = nb::none(), nb::arg("zs").none() = nb::none()
       )
       .def_rw("times", &pacer::ImuArrays::times, "")
       .def_rw("ws", &pacer::ImuArrays::ws, "")
