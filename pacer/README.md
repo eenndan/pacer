@@ -61,6 +61,11 @@ C++ headers → `bindings/<pkg>/generate-bindings.py` runs **litgen** (srcML) �
   Change the header (and litgen options), then regenerate via `pixi run gen-bindings` and rebuild.
 - The C++ build runs the codegen target itself and deploys the compiled `.so`, so any header edit —
   even a comment — changes both generated files, and CI's drift gate wants BOTH committed.
+- **A struct-field read is a copy or a view, field by field.** `sectors.start_line`,
+  `sectors.sector_lines` and `lap.points` return copies (`_COPY_ON_READ` in `generate-bindings.py`,
+  X5: a kept line used to move with the next edit, and a kept list element could read freed memory).
+  Every other struct field is nanobind's default view into its owner, so `laps.sectors.start_line =
+  seg` writes into the laps and a kept `laps.sectors` follows later edits. Assign whole lines.
 - `CMAKE_EXPORT_COMPILE_COMMANDS` is on; [.clangd](../.clangd) expects
   `build/Release/compile_commands.json`.
 
