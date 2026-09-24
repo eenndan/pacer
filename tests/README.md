@@ -48,7 +48,12 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](../studi
   68 of this phase's 15,451), vs a
   committed baseline (`golden_synthetic_baseline.json`). It runs with no big file, so it
   gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
-  reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.
+  reviewed change: `python tests/test_golden_synthetic.py --write-baseline` — it prints the leaf /
+  `__unsupported__` / null / NaN counts before vs after and the leaves that moved.
+
+Both halves count a leaf that is NaN on one side only as a difference, and the comparator's summary
+line gives each side's NaN-leaf count. NaN compares false with everything, so until 2026-09 a value
+that turned into NaN (0/0, the mean of an empty slice) passed the gate as equal.
 
 Run the **manual real-footage gate** around a core-math change, on the **working set**: the
 recordings on the dev Desktop the owner chose on 2026-09-23 (T16b) — `Sandown 3h 2026` (`GX0*0064`,
