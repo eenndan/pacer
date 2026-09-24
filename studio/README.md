@@ -58,15 +58,16 @@ A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`); opening one loads
    `MK_18_09_26`, D24's own circuit (see [tests/README.md](../tests/README.md)).
 4. **Perf invariants.** UI sync runs on a ~30 Hz `QTimer` (`CentralView.tick`) off the video's
    present path, and each tick is a cheap lookup on cached arrays: nothing is recomputed or
-   re-plotted per frame. Derived views rebuild on load / re-segment / lap change only (a hidden
-   Stats page defers its render); scrub seeks coalesce to ≤ 1 per tick; plot curves are
+   re-plotted per frame. Derived views rebuild on an event (load, re-segment, a lap or mode
+   change), never per tick, and a hidden Stats page defers its render; scrub seeks coalesce to
+   ≤ 1 per tick; plot curves are
    downsampled + clipped with antialias off and autorange frozen; the map draws ≤ 2 laps.
 5. **One quantity, one source.** A number two surfaces show comes from one accessor on `Session`
    or its services; views and exports read it and never re-derive it, and a statistic whose
    signal is absent is `None`, never a fake 0.
-6. **Stores.** Every store resolves its directory through `_app_support_dir` →
-   [`app_support.resolve()`](app_support.py) (tests are jailed) and writes atomically; copy
-   `library.py`'s discipline (schema version, `.bak`, atomic write) for a new one.
+6. **Stores.** Every store under app-support resolves its directory through its `_app_support_dir`
+   seam → [`app_support.resolve()`](app_support.py), which jails tests, and every store writes
+   atomically (`os.replace`); a new one copies `library.py`'s discipline (schema version, `.bak`).
 
 ## Common changes → files to touch
 
@@ -135,7 +136,7 @@ algorithm; the service just caches + delegates.
 | [track_match.py](track_match.py) | Same-circuit test from two GPS footprints: the cross-recording gate | — | `test_track_match` |
 | [gmeter.py](gmeter.py) | Kart-frame g from ACCL/GRAV/CORI (de-drifted yaw fit): IMU lateral, GPS longitudinal | — | `test_gmeter` |
 | [rotation.py](rotation.py) | Measured yaw rate from GYRO, its check against the path, the GPS-behind-gyro lag | — | `test_rotation` |
-| [media_clock.py](media_clock.py) | One affine telemetry→media clock map per recording, applied where the app seeks | — | `test_media_clock` |
+| [media_clock.py](media_clock.py) | One affine telemetry→media clock map per recording, applied where the app seeks and exports | — | `test_media_clock` |
 | [chapters.py](chapters.py) | Chapter names, sibling discovery, the not-video guard, `ChapterMap` global ↔ chapter time | — | `test_chapters` |
 | [data_quality.py](data_quality.py) | Timing-accuracy verdict, per-second `QualityTimeline`, the export quality markers | — | `test_data_quality` |
 | [provenance.py](provenance.py) | What produced a displayed number: window, raw fixes, method, the re-derived value | — | `test_provenance` |
