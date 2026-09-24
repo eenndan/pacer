@@ -339,8 +339,8 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     it immediately surfaced seven call sites in FOUR files this lane does not own, so each is
     exempted BY NAME below rather than fixed in a PR whose pixel proof does not cover them.
 
-    All six left are the same shape and the shape is argued in the `_CALLS` preamble above: a
-    DIALOG'S MEASURE (400 / 720 / 560 / 380 / 460 px) and a button's 88 px floor are extents, and
+    All five left are the same shape and the shape is argued in the `_CALLS` preamble above: a
+    DIALOG'S MEASURE (400 / 560 / 380 / 460 px) and a button's 88 px floor are extents, and
     the SPACE scale has nothing to say about them. They are listed here because the check cannot
     tell an extent from a gap, not because anyone thinks they are wrong.
 
@@ -356,8 +356,9 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         # one are built in the same `_export_dialog` shell at the same 460 px measure, instead of
         # two copies of the same fourteen lines drifting apart.
         ("export_controller.py", "ExportController._export_dialog"),  # 460 px dialog measure
-        ("coaching_panel.py", "OpportunitiesDialog.__init__"),  # 720 px dialog measure
-        ("coaching_panel.py", "OpportunitiesDialog._go_button"),  # 88 px button floor
+        # The Jump button's floor, moved with the button when the modal became the Coaching page
+        # (R11) — which also retired that modal's 720 px dialog measure from this list.
+        ("coaching_panel.py", "OpportunitiesPanel._go_button"),  # 88 px button floor
         ("help_dialog.py", "ShortcutsDialog.__init__"),        # 560 px reading measure
         ("help_dialog.py", "AboutDialog.__init__"),            # 380 px card measure
         ("help_dialog.py", "PrivacyDialog.__init__"),          # 460 px reading measure
@@ -386,7 +387,7 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     # literal still has to be argued in this file's prose, or written as a derivation of the scale
     # the way theme.focus_pad, theme.pill_radius, widgets.space_at_least and
     # lap_table.GRID_TEXT_INSET already are.
-    assert len(EXEMPT) <= 6, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
+    assert len(EXEMPT) <= 5, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
     print(f"test_no_studio_module_hand_picks_a_layout_dimension OK "
           f"({onscale}/{total} literal calls on the scale, {len(EXEMPT)} exempted surfaces)")
 

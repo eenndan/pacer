@@ -254,7 +254,7 @@ def matches(all_entries: list[Entry], query: str) -> list[Entry]:
 class CommandPalette(QDialog):
     """⌘K. Type to filter, Return to run, Esc to close.
 
-    Built fresh per open (like `OpportunitiesDialog`) so the enablement it paints is the live one —
+    Built fresh per open so the enablement it paints is the live one —
     `_menu_entries` primes each menu's `aboutToShow` as it walks, which is what refreshes Open
     Recent and the File ▸ Export enablement for a surface that never shows either menu."""
 

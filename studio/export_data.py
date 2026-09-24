@@ -542,10 +542,10 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
 
     DELIBERATELY NOT MIRRORED, both because a copy is the drift this function exists to prevent:
 
-      * the "median lap · top N fixed" coaching digest — its arithmetic (`_shown_rows`,
+      * the "median lap · top N fixed" coaching digest — retired from the page as well (R11): the
+        Coaching tab is the one answer to where the time is, and its arithmetic (`_shown_rows`,
         `PANEL_TOP_N`, the sum of the ROUNDED cells) lives in `coaching_panel`, a Qt module this
-        one cannot import. Reproducing it here would be the second implementation whose penny of
-        rounding disagrees with the page, which is the exact defect `_set_digest` records.
+        one cannot import.
       * the DATA TRUST card's provenance rows — built inline in `stats_panel._refresh_trust`, so
         they would have to be re-worded here. The two TRUST facts that qualify the exported
         NUMBERS travel instead as the report's own `Timing` meta row (`write_report_html`), off

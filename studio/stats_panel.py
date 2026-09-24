@@ -61,8 +61,8 @@ from . import (
 from . import stats as stats_service
 from ._signal import exclusion_summary, fmt_hms, fmt_time, plural
 
-# The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
-# and the coaching headline can never state different totals for the same three corners — L5-02.
+# The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so this page quotes
+# the Coaching tab's ranking and totals (the CORNERS note, the STRAIGHTS note) exactly — L5-02.
 from .coaching_panel import PANEL_TOP_N, _ranked_shown
 from .consistency import pb_mask
 from .lap_table import (
@@ -415,11 +415,11 @@ BAND_MAX_TICKS = 6        # x labels: a band per bar would be 20 labels in a 440
 # distribution and becomes a bar chart of thirteen things. SPACE_2XL is ~1.3x the widest tick label
 # this axis prints, so consecutive labels never touch at the cap.
 BAND_PX_PER_BAND = theme.SPACE_2XL
-BAND_SECTION = "DISTRIBUTIONS · s per lap"
 # THE WEIGHTING IS IN THE HEADING, not only in a tooltip: "s per lap" is what every bar on both
 # charts is, and it is the one fact that makes them comparable to each other and to the lap times
-# elsewhere on the page. The sibling headings already carry their unit the same way ("FRICTION
-# CIRCLE · g", "CORNERS · speeds in km/h").
+# elsewhere on the page. The sibling headings already carry their unit the same way ("SPEED · G",
+# "CORNERS · speeds in km/h").
+BAND_SECTION = "DISTRIBUTIONS · s per lap"
 BAND_SPEED_LABEL = "speed ({unit})"
 BAND_LAT_LABEL = "lateral g<br>− right · + left"   # the friction circle's own axis wording
 # The group's disclosure, in THREE clauses assembled per refresh (see _refresh_bands) rather than
@@ -637,16 +637,6 @@ BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the c
 # qualifies: the exported report and the clipboard summary print the same verdict off the same
 # slope, and export_data is Qt-free by contract so it cannot reach into this module.
 SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
-# What a session with no sector lines sees WHERE the per-sector tables would be. The page used to
-# hide the whole SECTORS group on `sector_count() == 0`, which is the state of every recording the
-# owner has (D24 1ch and 3ch, Sandown 1ch and 3ch, SD_30_08) — so the two surfaces that depend on
-# sector lines were invisible on 100 % of the data, and nothing anywhere said they existed or how
-# to unlock them. The table still hides (it has no rows to show); the HEADING stays, with the one
-# line that turns a blank into an action. Named after the control the reader has to press, which
-# lives in the map's own header.
-SECTORS_EMPTY = ("No sector lines on this track yet. Press “Add sector” above the map to split "
-                 "the lap — every lap is then timed through each sector, and this page gains the "
-                 "per-sector best/median/σ table and the lap × sector split grid below it.")
 STINT_COLUMNS = ["Run", "Laps", "Best", "Median", "σ (s)", "Pace/lap", "Min", "Min/lap"]
 STINTS_TOOLTIP = (
     "Each RUN on track and how it went. A run ends where the recording holds time that was not "
@@ -1822,26 +1812,25 @@ class StatsView(QWidget):
             "the single glory lap.")
         self.t_rolling = Tile("best rolling")
         self.t_rolling.setToolTip(ROLLING_TOOLTIP)
-        # IA-04: the caption names the BASE. This tile is the median lap rebased, so it routinely
-        # reads slower than the "best lap" tile two cells away — uncaptioned that looks like a
-        # target you have already beaten. L4-08: no "→" — the tile is not clickable (the Coaching
-        # tab is a tab away, and a painted arrow that does nothing is a broken affordance); the
-        # tooltip points there in words instead.
-        self.t_digest = Tile(f"median lap · top {PANEL_TOP_N} fixed")
         self.t_sigma = Tile("σ lap")
-        self.t_spread = Tile("median − best")
-        self.t_cov = Tile("consistency · σ/median")
-        self.t_cov.setToolTip(
-            "Coefficient of variation: sample σ of the clean lap times over the median, as "
-            "a percent. Scale-free, so it is comparable across tracks — lower is steadier.")
-        self.t_within = Tile("within 1% of best")
         self.t_trend = Tile("trend")
         self.t_trend.setToolTip(
             "Robust lap-time trend over the session (Theil–Sen median slope — one traffic "
             "lap can't fake it). Negative = getting faster. Shown from 6 clean laps up.")
+        # SIX TILES, NOT TEN (R11 / PS-5: the page had 17 sections and 31 tiles). The four cut, and
+        # why each was not worth its place:
+        #   * "median − best" — the subtraction of the two tiles at the head of this same row;
+        #   * "consistency · σ/median" — the σ tile divided by the median tile beside it, a
+        #     scale-free ratio for comparing tracks, which this one-session page never does;
+        #   * "within 1% of best" — a count at an arbitrary threshold, telling the σ tile's story
+        #     again; the sparkline under the grid shows every lap against the best;
+        #   * "median lap · top 3 fixed" — the Coaching tab's headline total re-stated as a lap
+        #     time: a second "time on the table" on the page whose own tabs already had five, when
+        #     Coaching is the one answer to where the time is.
+        # The exported report still carries the first three (export_data.session_summary): a
+        # report is read at leisure, and its rows are not this page's to cut.
         col.addLayout(self._grid(self.t_best, self.t_median, self.t_race_pace, self.t_rolling,
-                                 self.t_digest, self.t_sigma, self.t_spread, self.t_cov,
-                                 self.t_within, self.t_trend))
+                                 self.t_sigma, self.t_trend))
         # The lap-time trend sparkline (PB dots + session-best baseline) — absorbed from the
         # retired ConsistencyPanel strip; hidden with <2 clean laps.
         self.spark = pg.PlotWidget()
@@ -1903,12 +1892,9 @@ class StatsView(QWidget):
 
         # --- the IDEAL LAP, and where it lives
         #
-        # IT SITS HERE, DIRECTLY UNDER PACE, because the two numbers it must not contradict are
-        # in the row above it: "best lap" (which it is derived from) and "median lap · top 3
-        # fixed" (the OTHER synthesized target on this page). Measured on all five of the owner's
-        # recordings the three are strictly ordered — ideal < best < projected — because they
-        # answer different questions from different anchors, and the tooltips now say which is
-        # which rather than leaving a reader to guess why one target reads slower than the other.
+        # IT SITS HERE, DIRECTLY UNDER PACE, because the number it must not contradict is in the
+        # row above it: "best lap", which it is derived from. (A second synthesized target, the
+        # "median lap · top 3 fixed" digest, sat in that row until R11 retired it — see PACE.)
         #
         # It also moved OUT of the SECTORS group, where the tile used to inherit that section's
         # 0-sector hide. The ideal is no longer a sum of sector splits, so that gate was hiding
@@ -2048,8 +2034,11 @@ class StatsView(QWidget):
         # --- the g-g friction circle
         # Named unit in the header, the convention its peers already follow ("CORNERS · speeds
         # in km/h") — the axes carry the detail, this carries the scan.
-        self._gg_section = self._section("FRICTION CIRCLE · g")
-        col.addWidget(self._gg_section)
+        # NO HEADING OF ITS OWN (R11 / PS-5): the friction circle's name was all its heading
+        # carried, and the plot names its axes and keys its rings itself (L4-09). It reads as
+        # part of the speed-and-g block above, whose "peak lateral g" and "peak braking g" tiles
+        # are this circle's extremes. (The DISTRIBUTIONS heading between them stays: it states the
+        # charts' weighting, "s per lap", and its hover answers best-vs-median.)
         self.gg = pg.PlotWidget()
         self.gg.setToolTip(GG_TOOLTIP)
         plot = self.gg.getPlotItem()
@@ -2122,15 +2111,12 @@ class StatsView(QWidget):
         # inheriting its 0-sector hide. It is neither of those things now — see the IDEAL LAP
         # block above for where it went and why.)
         #
-        # THE HEADING NOW SURVIVES A SESSION WITH NO SECTOR LINES, and that is the feature rather
-        # than a fallback: sector_count() is 0 on all five of the owner's recordings, so hiding
-        # the group outright meant two whole surfaces existed and were never once seen or
-        # mentioned. The TABLE still hides — it has nothing to put in a row — and this one line
-        # takes its place, naming the control that fills it (see SECTORS_EMPTY).
-        self.sectors_empty = WrapLabel(SECTORS_EMPTY)
-        self.sectors_empty.setProperty("role", "EmptyBody")
-        self.sectors_empty.setMaximumWidth(theme.EMPTY_MEASURE_PX)
-        col.addWidget(self.sectors_empty)
+        # HIDDEN WITHOUT SECTOR LINES, heading and all (R11). It stood on every session for a
+        # while, with a line pointing at "Add sector", because hiding it made the capability
+        # invisible. But both of the owner's saved tracks hold `sectors: []`, so on every recording
+        # he has opened this was a heading and an instruction about a feature he does not use,
+        # above CORNERS BY LAP — the corner-keyed split grid the corner partition fills on its own.
+        # The way in is where it always was: the "Add sector" button in the map's own header.
         self.sector_table = self._make_table(SECTOR_COLUMNS)
         col.addWidget(self.sector_table)
 
@@ -2171,12 +2157,14 @@ class StatsView(QWidget):
                      "coaching reasons use), medianed per corner, positive parts summed. "
                      "Seconds = what a typical lap gives away in that phase across the whole "
                      "track; hover a corner's loss cell for its own triple.")
-        self.t_phase_entry = Tile("lost on entry")
-        self.t_phase_apex = Tile("lost at apex")
-        self.t_phase_exit = Tile("lost on exit")
-        for t in (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit):
-            t.setToolTip(phase_tip)
-        col.addLayout(self._grid(self.t_phase_entry, self.t_phase_apex, self.t_phase_exit))
+        # ONE TILE, NOT THREE (R11 / PS-5). The three were one fact — how the corner loss splits —
+        # printed as three headline numbers, and their seconds summed to one more "time on the
+        # table" on a page that already had five (PS-2). The shares stay on the face in track
+        # order; the seconds behind them are on the hover.
+        self._phase_tip = phase_tip
+        self.t_phase = Tile("of corner loss · entry · apex · exit")
+        self.t_phase.setToolTip(phase_tip)
+        col.addLayout(self._grid(self.t_phase))
         self.corners_table = self._make_table(CORNER_COLUMNS)
         self.corners_table.setToolTip(CORNERS_TOOLTIP)
         # The corner-direction arrow in column 0 paints at the app's ICON_PX rather than at the
@@ -2954,27 +2942,17 @@ class StatsView(QWidget):
             self.t_median.set(fmt_time(pace.median),
                               f"median · {pace.n} clean lap{'' if pace.n == 1 else 's'}")
             self.t_sigma.set(f"{pace.sigma:.2f} s" if pace.sigma is not None else None)
-            # spread and the within-1% count carry σ's minimum-sample gate in the DATA layer
-            # (stats.MIN_DIST_LAPS), so all three dash together instead of two of them printing
-            # "+0.00 s" and "1 / 1" off the same single lap.
-            self.t_spread.set(f"+{pace.spread:.2f} s" if pace.spread is not None else None)
             rp = st.race_pace()
             self.t_race_pace.set(fmt_time(rp) if rp is not None else None)
-            cov = st.pace_cov()
-            self.t_cov.set(f"{cov:.1f} %" if cov is not None else None)
-            count, n = st.laps_within_pct(1.0)
-            self.t_within.set(f"{count} / {n}" if count is not None else None)
             self._set_trend(st.pace_trend())
         else:
-            for t in (self.t_best, self.t_median, self.t_sigma, self.t_spread,
-                      self.t_race_pace, self.t_cov, self.t_within, self.t_trend):
+            for t in (self.t_best, self.t_median, self.t_sigma, self.t_race_pace, self.t_trend):
                 t.set(None)
         # The rolling best is a stitched target, not a measured lap — it reads straight off
         # Session (never the pace summary) so it survives a session with no clean-lap stats.
         rolling = (session.best_rolling_lap()
                    if hasattr(session, "best_rolling_lap") else None)
         self._set_target_tile(self.t_rolling, rolling, ROLLING_TOOLTIP)
-        self._set_digest(session, pace)
         self._refresh_spark(session)
         # The runs count is a SESSION total and set here, with the pace group it is derived from
         # (the clean laps), rather than up with the other four: it needs `st`, and a recording with
@@ -3134,54 +3112,6 @@ class StatsView(QWidget):
             return
         self.t_trend.set(stats_service.fmt_trend(slope), f"trend · {verdict}")
 
-    def _set_digest(self, session, pace):
-        """The coaching digest tile: the projected lap if the top-N corner losses were fixed,
-        anchored to the MEDIAN lap (the honesty rule — the best lap already banks some of
-        those corners, so best − losses would overclaim). Dash without enough clean laps /
-        no coaching data.
-
-        L5-02 — the saving is the Coaching panel's ARITHMETIC, not a parallel one: its rows
-        (`_ranked_shown`: sub-resolution losses dropped, abstained corners excluded), its count
-        (`PANEL_TOP_N`) and its
-        rounding (the 2-dp cells the user can add up by eye, summed and re-rounded). Summing the
-        raw floats instead made the two surfaces disagree by a rounding penny for the same three
-        corners — 0.31 s here against 0.32 s on the Coaching page — and made this tile disagree
-        with its OWN tooltip, which printed 0.31 while subtracting 0.3134."""
-        opp_fn = getattr(session, "coaching_opportunities", None)
-        opp = opp_fn() if opp_fn is not None else None
-        has_rows = getattr(opp, "enough", False) and getattr(opp, "rows", None)
-        # RANKED rows, the same shortlist the Coaching headline totals — the per-corner evidence
-        # gate sinks the corners whose claim is inside their own lap-to-lap spread, and a tile that
-        # summed those would state a saving the page beside it refuses to.
-        rows = _ranked_shown(opp)[:PANEL_TOP_N] if has_rows else []
-        if pace is None or not rows:
-            self.t_digest.set(None)
-            self.t_digest.setToolTip("")
-            return
-        saved = round(sum(round(r.time_lost, 2) for r in rows), 2)
-        projected = pace.median - saved
-        # THE RANGE THAT USED TO BE TYPED HERE ("measured on the owner's recordings the ideal is
-        # 0.33 to 2.67 s the faster of the two") was right on the recordings it was measured on and
-        # silent about every other one — on the reviewed screen the two tiles were 5.0 s apart while
-        # this sentence promised at most 2.67. An empirical constant baked into honesty copy rots
-        # the moment the data moves; this reads the two numbers it is comparing.
-        ideal = getattr(session, "ideal_total", lambda: None)()
-        spread = ""
-        if ideal is not None:
-            d = projected - float(ideal)
-            spread = (f" — here the ideal is {abs(d):.2f} s "
-                      f"{'faster' if d > 0 else 'slower'} than this projection")
-        self.t_digest.set(fmt_time(projected), f"median lap · top {len(rows)} fixed")
-        self.t_digest.setToolTip(
-            f"Projected from your MEDIAN lap ({fmt_time(pace.median)}) minus the top-"
-            f"{len(rows)} corner losses ({saved:.2f} s, measured vs your best lap's "
-            "corners). Anchored to the typical lap, not best-minus-losses: your best lap "
-            "already banks some of those corners — so this target can read SLOWER than your "
-            "best lap and still be the honest one. The Coaching tab lists the corners.\n\n"
-            "It is not the IDEAL LAP below and cannot be compared with it directly: this one is "
-            "a TYPICAL lap with three corners fixed, that one is your quickest time through "
-            f"every segment stitched together. Different anchors, different questions{spread}.")
-
     def _refresh_ideal(self, session):
         """The IDEAL LAP block: the theoretical best, what it says is on the table, and the
         DECOMPOSITION — which segments that gap lives in, on which lap you drove each one, and
@@ -3285,11 +3215,11 @@ class StatsView(QWidget):
         self._fit_table(t)
         # The remainder, always — the tile above states the WHOLE gap and the table shows part of
         # it, so without this line the page would print a total and a list that do not add up
-        # (the same class of defect the digest tile's rounding note records at _set_digest).
+        # (the same class of defect the Coaching headline's B12 rounding note records).
         #
-        # AND IT ADDS UP IN THE READER'S OWN NUMBERS, which is the rule `_set_digest` (L5-02)
-        # already writes down 190 lines above and this line was breaking. The cells are printed at
-        # 2 dp; summing the RAW floats made the note disagree with the column above it on 4 of 4
+        # AND IT ADDS UP IN THE READER'S OWN NUMBERS, which is the rule the Coaching headline
+        # (B12) and the retired digest tile (L5-02) wrote down and this line was breaking. The
+        # cells are printed at 2 dp; summing the RAW floats made the note disagree with the column above it on 4 of 4
         # real recordings — D24 3 chapters printed 0.21 0.21 0.13 0.12 0.08 0.17 0.13 0.10 0.11
         # 0.14 (= 1.40) over a sentence saying 1.39, so a reader adding the visible cells and the
         # stated remainder got 1.65 under a tile printing -1.64 s. Sandown chapter 1 was off the
@@ -3391,9 +3321,8 @@ class StatsView(QWidget):
         self._show_no_laps_prose(not has_laps)
         for section in (self._pace_section, self._speed_section):
             section.setVisible(has_laps)
-        for t in (self.t_best, self.t_median, self.t_race_pace, self.t_rolling, self.t_digest,
-                  self.t_sigma, self.t_spread, self.t_cov, self.t_within, self.t_trend,
-                  self.t_vmax, self.t_vmin, self.t_peak_lat, self.t_peak_brake):
+        for t in (self.t_best, self.t_median, self.t_race_pace, self.t_rolling, self.t_sigma,
+                  self.t_trend, self.t_vmax, self.t_vmin, self.t_peak_lat, self.t_peak_brake):
             t.setVisible(has_laps)
 
     def _refresh_g_provenance(self, session):
@@ -3500,7 +3429,6 @@ class StatsView(QWidget):
             plot.removeItem(ring)
         self._gg_rings = []
         has = cloud is not None and len(cloud[0]) > 0
-        self._gg_section.setVisible(has)
         self.gg.setVisible(has)
         self.gg_key.setVisible(has)
         if not has:
@@ -3569,13 +3497,8 @@ class StatsView(QWidget):
     def _refresh_sectors(self, session, has_laps: bool):
         sigmas = session.sector_sigmas() if hasattr(session, "sector_sigmas") else []
         has = bool(sigmas)
-        # The heading now stands on a session with laps but no sector lines, carrying the one line
-        # that says what is missing and which control supplies it (SECTORS_EMPTY). It still goes
-        # with a LAPLESS recording: the page's own empty-state block already owns that story, and
-        # a second "add sector lines" instruction under it would be advice about a recording that
-        # has no laps to time.
-        self._sector_section.setVisible(has or has_laps)
-        self.sectors_empty.setVisible(has_laps and not has)
+        # No sector lines, no section (R11 — see the note where it is built).
+        self._sector_section.setVisible(has)
         self.sector_table.setVisible(has)
         if not has:
             self.sector_table.setRowCount(0)
@@ -3902,7 +3825,7 @@ class StatsView(QWidget):
     def _corners_note_text(self, session, report) -> str:
         """The one line that connects this page's answers to each other, live.
 
-        Every number here is READ, never baked: the same fix as the digest tile's, for the same
+        Every number here is READ, never baked: the same fix the digest tile had, for the same
         reason — an empirical range typed into shipping copy is right on the recording it was
         measured on and quietly wrong on the next one. The Coaching total costs one
         `coaching_opportunities()` (~3-6 ms on the 38-lap D24 pair, on a refresh path that runs on
@@ -4056,21 +3979,20 @@ class StatsView(QWidget):
         self._fit_table(t)
 
     def _refresh_phase_tiles(self, phase):
-        """The where-the-time-goes headline tiles: percent of the lost corner time per phase
-        + the seconds behind it. Hidden when there is no phase data (no corners / no best /
-        nothing lost)."""
-        tiles = (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit)
+        """The where-the-time-goes headline tile: the percent of the lost corner time per phase,
+        entry · apex · exit, with the seconds behind each on the hover. Hidden when there is no
+        phase data (no corners / no best / nothing lost)."""
         share = getattr(phase, "share", None)
         fr = share.fracs() if share is not None else None
         if fr is None:
-            for t in tiles:
-                t.setVisible(False)
+            self.t_phase.setVisible(False)
             return
         secs = (share.entry_s, share.apex_s, share.exit_s)
-        caps = ("lost on entry", "lost at apex", "lost on exit")
-        for t, f, s, cap in zip(tiles, fr, secs, caps, strict=True):
-            t.setVisible(True)
-            t.set(f"{f * 100.0:.0f} %", f"{cap} · {s:.1f} s")
+        self.t_phase.setVisible(True)
+        self.t_phase.set(" · ".join(f"{f * 100.0:.0f}" for f in fr) + " %")
+        self.t_phase.setToolTip(
+            "Lost on entry {:.1f} s · at the apex {:.1f} s · on exit {:.1f} s.\n\n".format(*secs)
+            + self._phase_tip)
 
     def _refresh_braking(self, session):
         """The BRAKING table: one row per corner WITH a matched brake event (an unbraked
