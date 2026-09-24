@@ -211,11 +211,31 @@ def _kendall(a, b) -> float:
     return float(np.mean([np.sign(a[i] - a[j]) * np.sign(b[i] - b[j]) for i, j in pairs]))
 
 
+def _report(label: str, runs: list[dict]) -> None:
+    """One line per kernel over `runs` (one dict per recording, per kernel)."""
+    ws = [w for r in runs for w in r["current"]["windows"]]
+    print(f"  {label}: {len(runs)} recordings; curvature windows {sorted(set(ws))}, "
+          f"{sum(w % 2 == 0 for w in ws)}/{len(ws)} clean laps even")
+    for name in KERNELS:
+        apex = [v for r in runs for v in r[name]["apex"]]
+        mid = [v for r in runs for v in r[name]["mid"]]
+        case_mid = [float(np.mean(r[name]["mid"])) for r in runs]
+        t, vmin, ent, ext = np.array([c for r in runs for c in r[name]["cells"]]).T
+        lm, lt = np.array([q for r in runs for q in r[name]["loss"]]).T
+        tau = np.mean([_kendall(*np.array(r[name]["loss"]).T) for r in runs])
+        print(f"    {name:>8}: apex {np.mean(apex):+.2f} m (rms {_rms(apex):.2f}) | window midpoint "
+              f"{np.mean(mid):+.2f} m (rms {_rms(mid):.2f}; per recording {min(case_mid):+.2f} … "
+              f"{max(case_mid):+.2f}) | corner time {np.mean(t) * 1e3:+.1f} ms (rms "
+              f"{_rms(t) * 1e3:.1f}) | min / entry / exit speed rms {_rms(vmin):.2f} / "
+              f"{_rms(ent):.2f} / {_rms(ext):.2f} km/h | loss to best rms {_rms(lm - lt) * 1e3:.1f} ms,"
+              f" ranking tau {tau:.2f} (n = {len(t)} cells)")
+
+
 def _synthetic_set(label: str, seeds, noises, smooth: int = 13, vscale: float = 1.0,
                    const_v: float = 0.0) -> None:
     keep = {k: getattr(sg, k) for k in ("V_TOP", "LAT_G", "BRAKE_G", "ACCEL0")}
-    acc = {name: {"apex": [], "mid": [], "cells": [], "loss": [], "tau": [], "windows": []}
-           for name in KERNELS}
+    runs: dict[float, list[dict]] = {noise: [] for noise in noises}
+    print(f"{label}: seeds {list(seeds)}, GPS noise {list(noises)}, both directions")
     for seed in seeds:
         for noise in noises:
             for mirror in (False, True):
@@ -230,28 +250,15 @@ def _synthetic_set(label: str, seeds, noises, smooth: int = 13, vscale: float = 
                                           gps_noise=noise, mirror=mirror)
                         for k, v in keep.items():
                             setattr(sg, k, v)
-                        for name in KERNELS:
-                            r = _synthetic_case(rec, name, smooth)
-                            for q in ("apex", "mid", "cells", "loss", "windows"):
-                                acc[name][q] += r[q]
-                            lm, lt = np.array(r["loss"]).T
-                            acc[name]["tau"].append(_kendall(lm, lt))
+                        runs[noise].append({name: _synthetic_case(rec, name, smooth)
+                                            for name in KERNELS})
                 finally:
                     for k, v in keep.items():
                         setattr(sg, k, v)
-    ws = acc["current"]["windows"]
-    print(f"{label}: {len(seeds)} seed(s) x noise {list(noises)} x both directions; curvature "
-          f"windows {sorted(set(ws))}, {sum(w % 2 == 0 for w in ws)}/{len(ws)} even")
-    for name in KERNELS:
-        a = acc[name]
-        t, vmin, ent, ext = np.array(a["cells"]).T
-        lm, lt = np.array(a["loss"]).T
-        print(f"  {name:>8}: apex {np.mean(a['apex']):+.2f} m (rms {_rms(a['apex']):.2f}) | window "
-              f"midpoint {np.mean(a['mid']):+.2f} m (rms {_rms(a['mid']):.2f}) | corner time "
-              f"{np.mean(t) * 1e3:+.1f} ms (rms {_rms(t) * 1e3:.1f}) | min / entry / exit speed rms "
-              f"{_rms(vmin):.2f} / {_rms(ent):.2f} / {_rms(ext):.2f} km/h | loss to best rms "
-              f"{_rms(lm - lt) * 1e3:.1f} ms, ranking tau {np.mean(a['tau']):.2f} "
-              f"(n = {len(t)} cells)")
+    for noise in noises:
+        _report(f"GPS noise {noise:g}", runs[noise])
+    if len(noises) > 1:
+        _report("pooled", [r for noise in noises for r in runs[noise]])
 
 
 def synthetic(quick: bool, controls: bool) -> None:
