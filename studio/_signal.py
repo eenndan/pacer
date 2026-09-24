@@ -9,10 +9,13 @@ gmeter.py — names and signatures match the originals so call sites are unchang
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -408,9 +411,10 @@ def _gate_quality(samples, spans, naive, moving_speed: float = 0.0):
     keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
     dropped = len(samples) - len(keep)
     if dropped:
-        pct = 100.0 * dropped / max(len(samples), 1)
-        print(f"studio: quality gate dropped {dropped}/{len(samples)} fixes ({pct:.1f}%) "
-              f"(fix<{MIN_FIX} or dop>{MAX_DOP})", flush=True)
+        # INFO, not a warning: the GPS warm-up drops fixes on an ordinary recording. Whether the
+        # MOVING trace lost too many is `moving_dropped_fraction`'s verdict, which the app states.
+        _log.info("quality gate dropped %d/%d fixes (%.1f%%) (fix<%d or dop>%s)",
+                  dropped, len(samples), 100.0 * dropped / max(len(samples), 1), MIN_FIX, MAX_DOP)
     # Judge GPS quality over the MOVING trace only (exclude the stationary lead-in from BOTH the
     # dropped numerator and the denominator). A dropped MOVING fix = rejected AND full_speed above
     # the threshold; the finite-position guard in _quality_ok means a NaN-speed fix can't count as

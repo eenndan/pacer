@@ -316,13 +316,13 @@ class Session:
         A path that could not be READ is NOT skipped (see `chapters.split_non_mp4`): unreadable is
         not a verdict on the contents, and dropping a locked / still-copying / moved chapter would
         analyse a silent subset of the user's recording. Those go to the loader and fail loudly,
-        exactly as before. Skipping is never silent either — it prints, and the app names the file
-        in its session notice. If NOTHING is loadable there is no session to build, so that raises
-        rather than returning a mysteriously empty one."""
+        exactly as before. Skipping is never silent either — it is logged, and the app names the
+        file in its session notice. If NOTHING is loadable there is no session to build, so that
+        raises rather than returning a mysteriously empty one."""
         paths, skipped = chapters.split_non_mp4(list(paths))
         if skipped:
-            print(f"studio: skipping {len(skipped)} file(s) that are not readable video: "
-                  f"{', '.join(os.path.basename(p) for p in skipped)}", flush=True)
+            _log.warning("skipping %d file(s) that are not readable video: %s", len(skipped),
+                         ", ".join(os.path.basename(p) for p in skipped))
         if skipped and not paths:
             raise ValueError(
                 "none of these files is a readable video: "
@@ -372,18 +372,17 @@ class Session:
             return
         gm = self._gmeter
         if gm.cross is not None:
-            print(f"studio: {gm.cross.summary()}", flush=True)
+            _log.info("%s", gm.cross.summary())
             if gm.source == "gps":
-                print("studio: ACCL g looked unreliable — using GPS-derived g for the meter.",
-                      flush=True)
+                _log.warning("ACCL g looked unreliable — using GPS-derived g for the meter.")
         elif gm.has_data:
-            print(f"studio: g-meter using {gm.source}-derived g "
-                  f"({len(gm)} samples, no cross-check).", flush=True)
+            _log.info("g-meter using %s-derived g (%d samples, no cross-check).", gm.source,
+                      len(gm))
         # Report the driving-channel thresholds derived from this session's g distribution.
         try:
             th = self.driving.thresholds()
             if th is not None:
-                print(f"studio: {th.describe()}", flush=True)
+                _log.info("%s", th.describe())
         except Exception:  # noqa: BLE001 — additive diagnostics only
             _log.warning("driving-channel thresholds unavailable", exc_info=True)
 
@@ -417,18 +416,18 @@ class Session:
             return
         rot = self._rotation
         if rot.cross is not None:
-            print(f"studio: {rot.cross.summary()}", flush=True)
+            _log.info("%s", rot.cross.summary())
         elif rot.has_data:
-            print(f"studio: rotation channel from GYRO ({len(rot)} samples, no cross-check).",
-                  flush=True)
+            _log.info("rotation channel from GYRO (%d samples, no cross-check).", len(rot))
         else:
             # BOTH causes are named because both occur and the camera model does not tell them
             # apart: a pre-HERO5 camera writes no GYRO, while hero8-era clips exist whose GRAV is
             # all zeros — a stream that is present but carries no direction to project on
-            # (`rotation.MIN_GRAV_NORM`). Naming only the first would be a false reason.
-            print(f"studio: no measured rotation channel for this recording "
-                  f"({device or 'unknown camera'}): it carries no GYRO stream, or no usable "
-                  "GRAV direction to project one on.", flush=True)
+            # (`rotation.MIN_GRAV_NORM`). Naming only the first would be a false reason. INFO: the
+            # channel is additive, and an older camera without one is working as designed.
+            _log.info("no measured rotation channel for this recording (%s): it carries no GYRO "
+                      "stream, or no usable GRAV direction to project one on.",
+                      device or "unknown camera")
 
     def _install_gps_lag(self) -> None:
         """Fold the MEASURED GPS-timestamp latency into this recording's picture<->trace map.
@@ -464,14 +463,13 @@ class Session:
         clock = media_clock.clock_of(cmap)
         installed = clock.with_gps_lag(lag)
         if installed.gps_lag == 0.0:
-            print(f"studio: the measured GPS lag ({lag:+.3f} s) is past "
-                  f"{media_clock.MAX_GPS_LAG_S:.1f} s and was NOT applied — the overlay keeps the "
-                  f"uncorrected mapping.", flush=True)
+            _log.warning("the measured GPS lag (%+.3f s) is past %.1f s and was NOT applied — the "
+                         "overlay keeps the uncorrected mapping.", lag, media_clock.MAX_GPS_LAG_S)
             return
         cmap.media_clock = installed
-        print(f"studio: the GPS trace's {lag:+.3f} s timestamp lag is corrected where the picture "
-              f"meets the telemetry, so the overlay and the export draw each frame's own values "
-              f"(lap times are differences on one clock and are unchanged).", flush=True)
+        _log.info("the GPS trace's %+.3f s timestamp lag is corrected where the picture meets the "
+                  "telemetry, so the overlay and the export draw each frame's own values (lap "
+                  "times are differences on one clock and are unchanged).", lag)
 
     # ----------------------------------------- cross-recording reference lap (F7)
     # A lap from another recording that replaces the local best as the Δ baseline everywhere a
@@ -3659,8 +3657,8 @@ class Session:
     def gmeter_cross(self):
         """The IMU↔GPS g cross-check computed at load (gmeter.CrossCheck: per-channel
         correlation + RMS + the mount-calibration fit + the trust verdict), or None (no IMU,
-        or no GPS trajectory to check against). Printed to stdout since the g-meter shipped;
-        the Stats page's DATA TRUST card is its first in-app surface. getattr-guarded for
+        or no GPS trajectory to check against). Written to the session log at load; the
+        Stats page's DATA TRUST card is its first in-app surface. getattr-guarded for
         the bare-Session (no-__init__) test path — see _ref."""
         gm = getattr(self, "_gmeter", None)
         return None if gm is None else gm.cross

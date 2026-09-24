@@ -1116,8 +1116,8 @@ class StudioWindow(QMainWindow):
         # and _paths pointing at the still-good recording (every _paths consumer stays in sync).
         self._paths = list(paths)
         n_ch = len(self.session.chapters) if self.session.chapters else 1
-        print(f"studio: {self.session.point_count()} points, "
-              f"{self.session.lap_count()} laps, {n_ch} chapter(s).", flush=True)
+        _log.info("%d points, %d laps, %d chapter(s).", self.session.point_count(),
+                  self.session.lap_count(), n_ch)
 
         # Restore the user's saved start/sector lines (written only on a user edit) before the UI
         # is built, so every panel is constructed against the restored segmentation. Applied first
@@ -1130,25 +1130,23 @@ class StudioWindow(QMainWindow):
         self._timing_restore_unreadable = False
         restored = session.restore_saved_timing_lines(self._sidecar_path)
         if restored is True:
-            print(f"studio: restored saved timing lines from "
-                  f"{os.path.basename(self._sidecar_path)}", flush=True)
+            _log.info("restored saved timing lines from %s", os.path.basename(self._sidecar_path))
         elif restored is False:  # the revert guard rejected them; the fitted lines still stand
             self._timing_restore_failed = True
         elif restored == sidecar.UNREADABLE:
             # The sidecar EXISTS and could not be used. Absent (restored is None) stays silent —
             # that is the ordinary case and a notice for it would be noise — but this one is the
             # user's own placed line being dropped, so it goes into the same untimed notice channel
-            # the revert guard already uses, and onto the console beside the success line.
+            # the revert guard already uses, and into the session log beside the success line.
             self._timing_restore_unreadable = True
-            print(f"studio: could not read the saved timing lines in "
-                  f"{os.path.basename(self._sidecar_path)} — keeping the fitted start line",
-                  flush=True)
+            _log.warning("could not read the saved timing lines in %s — keeping the fitted start "
+                         "line", os.path.basename(self._sidecar_path))
         # Whether the user's saved CIRCUITS are readable is a per-load fact too (the DB is read
         # during Session.load's track detection), cached here so _session_notice can be re-decided
         # on every timing edit without re-reading the file each time.
         self._tracks_unreadable = track_db.unreadable()
         if self._tracks_unreadable:
-            print(f"studio: {TRACKS_UNREADABLE_NOTICE}", flush=True)
+            _log.warning("%s", TRACKS_UNREADABLE_NOTICE)
 
         # Re-opening the SAME recording carries its timing-line undo history across the new Session.
         # Without this, File ▸ Open on the recording you had just mis-dragged greyed out the one
@@ -1199,10 +1197,10 @@ class StudioWindow(QMainWindow):
         # app-support dir — the clause was in `_session_notice()` and still not on the status bar,
         # because the only call that would have shown it had already run.
         moment = self.library_ctl.update_library(paths)
-        # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
+        # One-line, non-fatal: on the status bar, and in the session log, which outlives the bar.
         notice = self._apply_session_notice()
         if notice:
-            print(f"studio: {notice}", flush=True)
+            _log.warning("session notice: %s", notice)
         # A recording's first open lands on its debrief, which states the PB itself: the card is
         # raised only when there is no debrief to carry it (replace, not add — PS-B1).
         if not self._land_on_debrief() and moment is not None:
@@ -3033,7 +3031,7 @@ class StudioWindow(QMainWindow):
         if QDesktopServices.openUrl(QUrl.fromLocalFile(directory)):
             self.statusBar().showMessage(f"revealed {directory} in Finder", STATUS_MS)
             return True
-        print(f"studio: the system declined to open {directory!r}.", flush=True)
+        _log.warning("the system declined to open %r", directory)
         self.statusBar().showMessage(f"could not open {directory} in Finder", STATUS_MS)
         return False
 
@@ -3316,7 +3314,7 @@ class StudioWindow(QMainWindow):
         verb = "replaced" if at_risk is not None else "saved"
         self.statusBar().showMessage(
             f"{verb} track '{name}' — future recordings here auto-detect it", STATUS_MS)
-        print(f"studio: {verb} track {name!r} in the track database", flush=True)
+        _log.info("%s track %r in the track database", verb, name)
 
     def _confirm_replace_track(self, name: str, at_risk: dict, centroid) -> bool:
         """Ask before a Save-as-track OVERWRITES a different circuit stored under the same name
@@ -3678,7 +3676,7 @@ class StudioWindow(QMainWindow):
         if getattr(self, "_loading_token", None) is not None:
             reason = ("a new recording was opened while the reference was loading, so the reference "
                       "was discarded — load it again once the new recording is open")
-            print(f"studio: reference not loaded — {reason}", flush=True)
+            _log.warning("reference not loaded — %s", reason)
             self.statusBar().clearMessage()
             QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
             return
@@ -3688,7 +3686,7 @@ class StudioWindow(QMainWindow):
         reason = self.session.set_reference_session(
             ref, source_label=self._label_for(ref, paths))
         if reason is not None:
-            print(f"studio: reference not loaded — {reason}", flush=True)
+            _log.warning("reference not loaded — %s", reason)
             self.statusBar().clearMessage()
             QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
             return
