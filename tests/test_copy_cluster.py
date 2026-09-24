@@ -125,7 +125,12 @@ def test_the_cluster_on_a_real_window():
                        "beat next time.", body
         strip = v.table.excluded_strip()
         strip.setVisible(True)   # this recording has no excluded lap; where a card goes doesn't care
+        # Nothing selected, so the strip alone decides: here the ★ row sits right above the strip
+        # and its own keep-out would lift the card clear of both, hiding a card that ignores it.
+        v.table.table.clearSelection()
         _settle(0.2)
+        assert win.library_ctl._pb_card_keepout() == [
+            QRect(strip.mapTo(win, QPoint(0, 0)), strip.size())], win.library_ctl._pb_card_keepout()
         card = _card(win, first)
         assert card.title_label.text() == title and card.share_btn is None, \
             "a first session has nothing to beat: no 'Share your PB'"
