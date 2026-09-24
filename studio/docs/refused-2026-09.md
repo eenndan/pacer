@@ -1465,6 +1465,12 @@ corners or any other.
 (#391). Whether a figure that is positive at 33 of 33 corners by construction should stay on the
 ordinary Coaching page is the owner's call; this section is its evidence.
 
+*Since then (L7, 2026-09-24):* that call was made on this evidence. The Coaching rows print no
+braking metres; where a corner's clean laps separate a direction, the row says which way braking
+went with quicker passes, with its lap count and never a distance (`coaching.BrakeDirection`,
+whose table in coaching.py re-measures the six corners above through the app). Stats ▸ BRAKING
+still prints the estimate.
+
 **What would be new evidence:** an outcome-grounded per-corner claim — "your quicker passes braked
 later here", from the rank correlation above — that survives a family-wise correction over the
 recording's corners and replicates on a second recording of the same track, with a distance whose

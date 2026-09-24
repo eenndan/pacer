@@ -2737,7 +2737,9 @@ class Session:
         table and the coaching row's "Brake ~N m later" hint answer the SAME question and used to
         read different laps for it — the table a median over these rows, the hint the best lap's
         single application — so the app printed two numbers for one corner (see
-        coaching.BrakeHabit for what that measured). Both now medianize this one list.
+        coaching.BrakeHabit for what that measured). Both now medianize this one list, and since
+        L7 took that hint off the Coaching rows, the braking-direction line that replaced it reads
+        its onsets from this list too (`_brake_rows_by_lap`).
 
         Onsets and optima are projected into the reference odometer (× ref_total/lap_total, the
         house normalized projection) so cross-lap spread measures driver scatter, not lap-length
