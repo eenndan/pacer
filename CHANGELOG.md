@@ -6,965 +6,144 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
-Everything merged since v0.2.0 — 82 pull requests (#222–#305), 292 commits — beginning with the
-2026-09-07 CTO × CPO critical review and continuing through the market-research and QA waves after
-it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, and the range stopped
-40 PRs short of what the section already described.)
+Everything merged since v0.2.0, from #222 on. Each line names its pull request
+(`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+
+### Highlights
+
+- **The picture and the numbers agree.** Every GPS-derived overlay sat ~0.46 s (14 frames) behind
+  the frame it describes; the lag is now measured per recording and taken out (#266, #301, #312)
+- **Every number can show its work.** Right-click a lap time, split or corner best for the raw GPS
+  fixes behind it, re-derived; DATA TRUST grades the GPS second by second (#261, #263)
+- **Coaching that abstains.** It says whether you have driven a corner at that pace before, stays
+  quiet inside your own lap-to-lap spread, and carries a focus list to the next session (#255, #268)
+- **Corner analysis you can trust.** The ideal lap was ~44 % projection artifact; corners are now
+  matched after each lap's GPS drift is removed; interpolated cells never count (#228, #331, #335)
+- **Laps and driving signals re-measured.** A lap must close where it started and a stop excludes
+  it; coasting read 5.9 % of the real figure; a lift is no longer a brake (#271, #275, #325, #357)
+- **Exports worth sharing.** Any lap, every lap or the whole session, 9:16 or 1:1, an alpha
+  overlay, a two-lap comparison locked to track position, a disk check first (#262, #273, #364)
+- **New tools.** Marks, session records, a ⌘K palette, slow motion, a datum cursor, a built-in
+  Sandown Park and a log file for problem reports (#256, #257, #258, #269, #362, #368)
 
 ### Added
 
-- **Pacer keeps a log file.** Every warning the app raises, Qt's own, and the full traceback of an
-  unexpected error now also go to `~/Library/Application Support/pacer/logs/pacer.log` (three
-  files of at most 512 KB, rotated), so a Pacer launched from Finder, whose console output goes
-  nowhere, still leaves something to attach to a problem report. The "something went wrong" dialog
-  names the file. If the log cannot be written, Pacer starts anyway and says so once on the
-  console. The file stays on this Mac; nothing sends it anywhere.
-
-- **A video export the disk plainly cannot hold is refused before it renders.** The overlay export
-  used to find out about a full disk only when ffmpeg hit it mid-render. It now asks the output's
-  volume first — off the UI thread, before a frame is decoded — and an All-laps batch is judged by
-  the sum of its files. It refuses only below a floor every one of 60 measured real exports landed
-  above (60 % of the estimate on the hardware encoder, which lands at 71-80 %), so it never turns
-  away an export that would have fitted, and it counts the purgeable space macOS gives back on
-  demand, and the file being replaced. The refusal says how much the export needs, how much is
-  free, and where, and deletes nothing.
-
-- **Sandown Park is a built-in track.** A recording at Sandown now detects the circuit on a fresh
-  install and is timed on the owner's own saved start/finish line, copied into Pacer bit for bit —
-  so its lap times are trusted rather than provisional, two Sandown sessions share one lap odometer,
-  and the focus list can compare them. Before, Pacer auto-fitted a line there that sat at C1's
-  turn-in, about 100 m from the real start/finish, and differently placed on every recording. A
-  Sandown Park you saved yourself still wins, and is listed once, as a built-in you refined.
-
-- **Line: Pedal (est) — the brake/throttle band, painted on the racing line.** The speed chart's
-  Brake/Throttle band now has a map view: red where you brake, green where you are accelerating,
-  the ramp's middle colour for a lift or a steady speed. It is the band's own values, not a second
-  estimate, so the chart and the map cannot disagree about where a brake zone is — on the three
-  present recordings every valid lap paints exactly the band's array (62/62, 36/36, 19/19). It
-  answers something the Speed line does not: only 25-31 % of the Speed line's three reddest
-  buckets are braking (they are the apexes you have already slowed for), and the Speed colour at a
-  point carries 10-13 % of the information in the Pedal colour there. Labelled `(est)` in the
-  dropdown and on both ends of its legend; Pacer has no pedal sensors.
-
-- **Corner windows are placed after the receiver's own drift is taken out.** A consumer GNSS
-  receiver's position error is nearly constant over one 90-second lap, so each lap's whole trace sits
-  displaced by one vector — measured on the owner's D24 0060 recording at a median 1.34 m and up to
-  3.66 m, persisting from lap to lap, with an altitude witness no racing line can move scattering
-  3.9x as far as on 0062. The 3 m gate that decides whether a corner edge was matched on track was
-  being spent on that instead of on the driving, and 38 % of 0060's interior boundaries failed it.
-  The session now fits that rigid shift per lap and removes it before the match, and moves the match
-  anchor sideways onto the line the session actually drove where the fastest lap is the displaced one
-  (0060's is, ranking 33rd of 38 from it). **0060 goes from 220 to 422 of 456 corner cells carrying a
-  real measurement instead of an explained dash**, 0062 from 776 to 780 of 780 — at the same 3 m
-  threshold, which is unchanged. The separation from a racing line is geometric, not statistical: a
-  fixed vector shows up as a perpendicular offset that changes sign twice around a closed lap, and
-  driving wider does not. A 3 m parallel curve planted on a real D24 lap is read as 0.02 m of drift.
-
-- **Where you coast, by place — and whether the order means anything.** The coast number has been
-  real since #275, but the page only ever said how much (a median tile, a longest-coast tile, a
-  Coast s column), never where. Stats ▸ **COASTING** splits every clean lap's coasting over the
-  corner/straight partition the STRAIGHTS table is cut from, ranks the places by seconds per lap
-  and rings the selected place on the map. A table sorted by a column always has a first row, so
-  each row says **top**, **tied** or **less** against it — a paired sign-flip test over the laps —
-  and a line under the table says what that order is worth. On both D24 recordings the laps cannot
-  separate the leader from 10 and 7 other places (and the two recordings crown different corners);
-  on all three Sandown recordings C1 holds about twice the next place's coasting and separates.
-  Zones grown from where the laps coast were built first and refused: their leader changed with
-  the coverage threshold and merge gap chosen.
-- **Stats ▸ CORNERS BY LAP: which laps lost time in which corner.** Every lap-by-lap corner view was
-  one lap at a time, and the laps × sectors grid needs sector lines no recording here carries. The new
-  grid marks a lap ▼ where it gave away notably more than your typical lap through that corner — the
-  SPLITS grid's own rule — and only where the corner was matched on track at both edges: an
-  interpolated edge was measured a median 0.22 s off an independent gate-crossing time (0.004 s for a
-  matched one), which on the 38-lap D24 recording is 236 of 456 cells. Those are shown muted and never
-  marked or counted in the typical.
-- **The Stats page says whether what is drawn over a frame is that frame's own.** Pacer crosses one
-  seam between the picture and the telemetry, and two corrections ride on it: the two clocks'
-  ~27 ppm rate difference, and the GPS timestamps' own measured lag. Whether the second one landed
-  is a **per-recording verdict** — a camera with no gyroscope, a gyro that never tracks the racing
-  line, or a measurement past a second all leave it uninstalled — and the only place that was ever
-  stated was the rotation row's tooltip, which exists only where there IS a gyro. Driven over D24's
-  0060 pair with the lag estimator forced to its own refusing branch, every GPS-derived overlay sat
-  **~0.46 s (14 frames at 30 fps) behind the picture** while the DATA TRUST card read
-  `Timing: GPS9 true clock · 0% of moving fixes rejected` and nothing on the window said otherwise.
-  The card now carries a **Video sync** row: *corrected*, with the rate difference, the drift it
-  removes across this recording (0.08 s on 0060, 0.14 s on 0062) and the lag that was taken out
-  (0.48 s / 0.46 s); or a ⚠ caveat when the lag could not be measured or the map could not be
-  fitted at all. A GPS5-era camera — **eight of the ten bundled samples** — says instead that its
-  telemetry and its picture are already on one clock and nothing is converted, and a recording with
-  no GPS in it gets **no row**, because the Timing row above already says nothing in it can be
-  lap-timed. The **±0.05 s floor** no correction can remove (where a fix sat inside its 1.001 s
-  GPMF payload is recorded nowhere) is stated once, in the card's tooltip, and the rotation tooltip
-  now points at the row instead of restating it.
-- **Export the two-lap comparison — locked to the same point on TRACK, not the same time on the
-  clock.** Compare mode has always been on screen only; **File ▸ Export comparison video…** now
-  renders the pair you are comparing into one MP4, stacked or side by side. Both panes are held at
-  the same track position, so as the faster lap pulls ahead the two frames stay at the same corner
-  and the visible gap between the two running clocks *is* the delta — the pane B stream is
-  resampled onto pane A's frames, not offset by a constant. Measured on a real session (best lap
-  vs a lap 1.64 s slower, 5.5 m longer round): the two panes' normalized track positions agree to
-  2e-15, and the karts stay a mean 3.4 m apart along the track for the whole lap, where starting
-  both clips together drifts to 22.8 m by the finish. It works across recordings too (each pane
-  converts on its own camera clock), and the clip carries the first lap's audio alone — the second
-  pane is time-warped, so its sound would be too.
-- **A documented quality-marker vocabulary, and the exports now use it.** Pacer has always marked a
-  number it cannot fully stand behind, in a house style: `(est)`, the muted-italic provisional
-  demotion, ⚠ for a GPS dropout, ⊘ for a lap left out. Those stay exactly where they are in the app,
-  where a cell has hover, colour and weight to carry the meaning. What leaves the app is a table
-  with none of that, so **laps.csv and the HTML report now carry the UK Government Analysis
-  Function's standard table symbols** — `[e]` estimated, `[p]` provisional, `[u]` low reliability,
-  `[b]` break in series — in a new `quality` column, each one decoded by a key written into the same
-  file. The decision is **per marker and written down** in `studio/data_quality.py`: `[x]`, `[z]`,
-  `[r]`, `[f]` and `[c]` are refused with reasons (the app already prints one em-dash for a value it
-  does not have, and omits a statistic that does not apply rather than coding it), and ⊘ EXCLUDED is
-  named as having **no** standard equivalent — a lap that was measured, is shown, and is
-  deliberately not counted is neither "not available" nor "not applicable".
-  - This closes a real hole rather than relabelling one: `laps.csv`'s only marker was the GPS
-    dropout, so a file exported from a session whose start/finish line was auto-fitted and never
-    confirmed — every time in it measured from an arbitrary point — carried a blank flag on every
-    row and said so nowhere, while the app greys the share card out entirely on that same flag.
-  - The old `flag` column is **byte-identical**; `quality` is appended last, where nothing that
-    reads the file by header name can be disturbed.
-- **`[b]` break in series — a condition pacer detected and had no name for.** A chapter that could
-  not be read and was left out, or a chapter whose telemetry stops covering its video: either way
-  the recording closes over a gap and times on the two sides are not on the same footing. It now
-  gets a row in the Stats **DATA TRUST** card and a named reason in both exports. A plain chapter
-  seam is deliberately **not** one — measured, a seam does not break a GPS9 run and steps the axis
-  by 0.000127 s, so marking every chaptered recording would fire on both reference recordings and
-  mean nothing.
-
-- **Marks — write down what you concluded, where it happened.** Every other surface in pacer
-  measures; nothing could hold the sentence you say out loud watching your own footage. Press **B**
-  and a mark lands at the playhead with a type, a colour and your own note ("baulked out of 4",
-  "kerb", "that was the one"); **,** and **.** jump between them, and a new **Marks** page (**5**)
-  lists, searches and filters them beside the recording. Marks are drawn as pins above the scrub
-  bar, opposite the GPS-quality strip. pacer adds its own, for the things it already detects — GPS
-  dropouts, laps it left out of your times, and stretches where the GPS went bad — and each one
-  agrees exactly with the surface that reports it, because it is derived from the same detector
-  every time you open the recording rather than saved. Your marks are saved, in
-  `marks.json`, against the *recording* rather than the file: a mark made with the whole
-  recording open is in the same place when you open one chapter of it on its own.
-
-- **The Stats page counts your runs on track, and breaks the pace down per run when there is more
-  than one.** A run ends where the recording holds time no lap was analysed over — a pit stop, a
-  spin, laps a GPS dropout flagged — thresholded at three median laps' worth of it, so it means the
-  same thing on a 25 s kart circuit as on a 4-minute one. Each run gets its lap count, best,
-  median, σ and two trends side by side: how the LAP TIME is going, and how the SLOWEST CORNER
-  SPEED is going. Read together those are the answer to "is it me or the tyres?" — and the pair is
-  reported with no verdict attached, because neither of the owner's own recordings has a fade in it
-  to check a verdict against. Both recordings measure as ONE continuous run at every threshold from
-  15 s to 600 s, so the new SESSION "runs" tile says `1 · one continuous` and the table stays
-  hidden rather than repeating the PACE tiles inside a one-row grid.
-- **The split-time matrix — every clean lap down the page, every sector across it.** The paddock
-  view, over splits pacer already computed: ★ and the session-best purple on each sector's quickest
-  cell, the behind hue and a ▼ where a lap gave away more than this session's own 90th-percentile
-  gap, and the exact deficit plus the lap that owns the best on hover. It states what it is over
-  and how fine it really is: a sector boundary is read at the nearest GPS fix, so the interior
-  sectors step in whole 10 Hz samples (measured: 17–18 distinct values across 38 and 65 laps) while
-  the first and last run continuously. Hidden under five laps — a heat grid over three laps is
-  decoration.
-- **A recording with no sector lines is now told so, where the sector tables would be.** Sector
-  count is zero on every recording the owner has, and the Stats page used to answer that by hiding
-  the whole SECTORS group — so two surfaces existed and were never once seen or named. The heading
-  now stands with one line saying what sector lines unlock and which control places them.
-- **A focus list that carries across sessions — and refuses to grade itself when it cannot.** Pick
-  up to three corners off the coaching page and pacer keeps them per track; next time you load a
-  session at that track it measures the same stretch of tarmac again and says whether it moved:
-  *"C4 — 0.30 s faster than 23 May (4.54 s on 23 May over 38 laps, 4.24 s today over 65)."* The
-  corner it re-measures is a stored stretch of the lap, not a corner number, because the corner
-  detector redraws its windows every session — on the two recordings this was built against, one
-  corner's window grew 11 m between them and would have reported half a second of slowness nobody
-  drove. And the verdict is gated on the same evidence the rest of the app uses: a change smaller
-  than the corner's own lap-to-lap spread reads *"no change you can act on"*, and if either session
-  has no session record — or the two records say the days were not alike — you get the reason
-  instead of a number, because a coach will put up to four seconds a lap on conditions alone. On
-  the only two real sessions available (the same driver, the same track, a day apart) the honest
-  answer for all three corners is that there is not enough evidence to say, and that is what it
-  says.
-
-- **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
-  the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
-  opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the
-  exact window in seconds or metres, the fix-quality distribution over that window — 3D locks,
-  DOP, fix spacing, dropouts, and which clock the times were built on — the arithmetic with its
-  numbers substituted, and the value **re-derived from those rows alone**, next to the one on
-  screen. Copy as CSV takes the lot at full precision. A sector split and a corner best re-derive
-  bit for bit; a lap time re-derives to the last digit shown and the panel states the residual in
-  units of the last bit rather than rounding the disagreement away. Read-only: pacer shows you
-  where a number came from, it does not offer to compute you a different one.
-
-- **The video export renders what you choose: this lap, the best lap, every lap as its own file, or
-  the whole session.** It used to be "the selected lap" and nothing else. Rendering ninety seconds
-  instead of half an hour is the single largest thing that can be done about export time, and the
-  run-up/run-off picker now says in words that padding puts the previous lap at the head of the
-  file and the next one at its tail. A full-session clip's overlay follows the laps — the strip
-  names the lap each frame is in and the ★ BEST mark moves with it.
-- **9:16 and 1:1 exports, with the overlay reflowing rather than being letterboxed.** The frame's
-  shape is a choice, and the source frame can either fill it (cropped) or fit inside it (with
-  bars). Every overlay dimension is now a fraction of the output's SHORT side, so the g-meter is
-  the same size on a vertical clip as on a landscape one instead of taking 46 % of the picture.
-  The 16:9 composition is unchanged to the pixel at 720p, 1080p and 1440p.
-- **Overlay-only export with a real alpha channel — ProRes 4444 or a PNG sequence.** The overlay on
-  a transparent background, no footage and no audio, for compositing over the original in Resolve
-  or Premiere. It renders no source at all, which makes it faster than the burned-in export
-  (measured over the same 20 s window at 1080p: 7.7 s for PNG and 16.3 s for ProRes against 20.8 s
-  composited), and the picker states the size before you start.
-- **The scrub bar says WHERE the GPS went bad, not just that it did.** A thin always-visible band
-  under the seek bar grades every second of the recording — green where the receiver had a 3D lock
-  and a DOP inside the GNSS good band, amber where it was degrading, red where the fixes were
-  thrown away, and a gap where none arrived at all. Hover any point for the exact numbers behind
-  the class. Until now the app had one verdict for a whole recording, and one verdict cannot tell
-  a receiver acquiring a lock from a receiver failing: on the owner's own 0062 recording every
-  single rejected fix falls in the first 48 seconds, before the kart has moved, and the card
-  printed the same "1% of fixes rejected" it would have printed for 48 seconds scattered through
-  the session. A pixel column shows the WORST second under it, never the average, so a one-second
-  dropout in a fifty-minute recording still paints — and a lap inherits its worst second by the
-  same rule. A camera that reports no per-sample GPS quality at all (the GPS5 era) gets a neutral
-  band saying so rather than a confident green.
-- **DATA TRUST reads the gyroscope's closed-lap check — the first number on that card with an
-  exact answer.** The two cross-checks already there compare one estimate against another, so
-  their correlation and gain describe agreement and nothing more. A lap is a closed loop, so the
-  yaw integrated over one is exactly 2π whatever the racing line: the new row prints what the
-  measured gyroscope channel and the path-derived rate each integrate to against that target, over
-  the clean laps. It is also the check that catches what a correlation cannot — halving the
-  channel leaves its r bit-identical and moves this ratio to 0.5.
-- **A session record, so comparing two sessions means something.** Each recording can now carry
-  what pacer cannot know: the conditions and temperatures, the tyre set and its age in laps, cold
-  and hot pressures, chassis, gearing, axle, seat and notes — typed by you, never looked up online.
-  A new record opens pre-filled from your last session (the kart did not change overnight) with the
-  tyre laps already advanced, every field optional, and an empty form stored as no record at all.
-  The Library gains sortable **Conditions** and **Tyres** columns beside the lap times, a
-  conditions filter, and a line that says whether the row you are looking at and the row holding
-  the track's best lap were even the same kind of day; the lap panel carries the same in a chip
-  over the times it qualifies. File ▸ Session record….
-- **The charts are an instrument: a datum cursor, window statistics and a tour of your losses.**
-  `D` drops a second cursor and a readout under the charts reports the interval between the two —
-  elapsed time, distance, the speed at each end, their difference, the mean, min, max, the rate of
-  change and the Δ given away across it. A selector beside the x-axis reports each channel's
-  value / min / max / mean / range / delta over whatever x-range is currently visible, following
-  every zoom and pan. `N` jumps to the biggest local loss in the Δ trace, zooms to it and takes the
-  video and the map with it; press again to walk to the next-biggest, and once more to come back
-  out to the whole lap. **The slope is refused rather than guessed** under 1.0 s between the
-  cursors: the GPS is 10 Hz with ±0.62 km/h of speed noise, so a shorter interval reports mostly
-  that noise — 10% of the value at 1.0 s, 20% at 0.5 s, over half of it one sample apart — and the
-  readout says so instead of printing a confident number.
-- **Slow motion.** The video transport has a speed picker (0.25× / 0.5× / 1× / 2×) with `[` and `]`
-  to step it — inputs happen faster than they can be read at real time, which is most of what you
-  open your own footage to look at. The map marker, the chart cursors and the readout stay locked
-  to the frame at every rate (they are driven by the decoder's own reported position, not a clock),
-  and in compare mode both videos take the rate together.
-- **A command palette (⌘K).** Type a few letters and run any of the app's commands: every menu item
-  — with the shortcut it carries and greyed out when it is not available yet — plus the
-  keyboard-only ones the shortcut card documents. The card (`?` / F1) and the palette are now
-  generated from one registry, so they cannot disagree.
-- **Coaching tells "you have not done this yet" from "you did not do it that lap", and abstains
-  when the evidence is thin.** Every corner now says how many of your clean laps already matched
-  your best lap's time through it ("Yes · 9/38" / "Rarely · 2/65"), and the sentence changes with
-  it — repeat what you already drove, or find pace you have not established. A corner whose claim
-  is smaller than its own lap-to-lap spread is no longer ranked at all: it keeps its number, says
-  which test it failed, and drops out of every total (measured on the two D24 recordings, σ was
-  larger than the "time lost" on 17 of the 20 shown rows, up to 10.8× — and 6 of them now abstain,
-  including one that was third on its page). The page and the modal lead with one session theme
-  and at most two actions instead of twelve findings — and say "no single theme" when there
-  is not one.
-- **The Stats page has distributions: where a lap's time actually goes.** A DISTRIBUTIONS group
-  between the SPEED · G peaks and the friction circle draws time at speed and time at lateral g as
-  seconds *per lap*, time-weighted, with your fastest and slowest quartiles laid over the average
-  clean lap. It compares POOLED groups rather than your best lap against your median lap, because
-  the pair was measured and does not separate — on both D24 recordings those two laps differ by no
-  more than two laps picked at random do, while the quartile split clears a shuffled-label null on
-  each. The group states its weighting, each channel's rate and the g-meter's filter on its face;
-  there is no braking-g distribution because that channel separated fastest from slowest the most
-  weakly of the four measured and its shape is largely its own smoother's.
-- **The track map can show where time is going RIGHT HERE, not only how far behind you already
-  were.** A new "Δ rate" line channel paints the Δ-vs-best curve's slope — seconds lost per second
-  of driving, smoothed over 0.4 s of travel — on a scale centred on zero, so amber means matching
-  the baseline, red is losing time in this corner and green is taking it back. The existing
-  cumulative "Δ to best" is unchanged and answers the other question: on a lap that is 8.9 s down
-  it paints the whole track red, while the rate channel narrows the loss to the one stretch it
-  happened in.
-- **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
-  Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
-  1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against
-  each corner's own best and the other against your best lap. A caption under the CORNERS table
-  now names both and connects the page's three answers, with every number read live; the Coaching
-  headline carries "vs your best lap" on its face.
-- **The surfaces that leave the app carry the sample disclosure the in-app ones always had.** The
-  share card, the laps CSV trailer and the new stats HTML report state what the ideal lap is a
-  minimum over ("your best corners and straights over 24 laps"), and "Copy stats summary" puts the
-  same numbers on the clipboard.
-- **A themed report for a crash that happens twice.** The unhandled-exception dialog is shown once
-  per distinct failure; repeats, and anything raised off the GUI thread, are logged instead.
-- **⌘L opens the Session Library.** The front door to every recording you have analysed was the one
-  top-level surface with no key at all. It is documented on the ? card and reachable from ⌘K,
-  because all three read the same registry.
-- **Saved tracks can be renamed and deleted.** A track you named once was permanent: a typo, or a
-  track you never wanted, stayed in the list forever. Both operations carry every store a track
-  NAME keys — the focus list, the session records and the personal-best history move with the
-  rename rather than being orphaned by it.
+- A log file for problem reports, `<app-support>/logs/pacer.log`, named by the error dialog (#368)
+- An export the disk plainly cannot hold is refused before it renders, never one that fits (#364)
+- Sandown Park is a built-in track, timed on the owner's own start/finish line (#362)
+- Map line mode **Pedal (est)**: the chart's brake/throttle band, painted on the racing line (#347)
+- Corners are matched once each lap's GPS drift is removed (D24 0060: 422 of 456, was 220) (#335)
+- Stats ▸ **CORNERS BY LAP**: which laps lost time in which corner, marked only where matched (#329)
+- Stats ▸ **COASTING**: where you coast, by place, and whether that ranking separates at all (#327)
+- The GPS-quality chip opens the DATA TRUST row that explains it (#333)
+- Cross-recording compare can play any comparable lap of the reference, not only its best (#316)
+- The window reopens at the size and place you left it, never on a display that is gone (#313)
+- DATA TRUST's **Video sync** row says whether the picture/telemetry corrections landed (#312)
+- Saved tracks can be renamed and deleted, taking their focus lists, records and PBs along (#295)
+- ⌘L opens the Session Library (#293)
+- **Export comparison video…**: two laps in one MP4, held at the same point on track (#273)
+- laps.csv and the HTML report carry standard quality symbols ([e] [p] [u] [b]) with a key; a break
+  in series also gets a DATA TRUST row (#272)
+- **Marks** (B): notes at the playhead, a Marks page, and auto marks for dropouts, excluded laps and
+  bad GPS (#269)
+- A **focus list** of up to three corners, re-measured on the same stretch next session (#268)
+- Stats counts your runs on track with per-run pace, adds a split-time matrix, and says what sector
+  lines unlock when a recording has none (#267)
+- **Inspect this number…**: a lap time, split or corner best re-derived from its raw fixes (#263)
+- Export any lap, every lap or the whole session; 9:16 and 1:1; overlay-only with alpha (#262)
+- A per-second GPS-quality strip under the scrub bar, and DATA TRUST's gyro closed-lap check (#261)
+- A **session record** per recording: conditions, tyres, pressures, setup; Library columns (#258)
+- Chart tools: a datum cursor (D), window statistics, and N to tour the lap's biggest losses (#257)
+- Slow motion (0.25×–2×), with map and charts locked to the frame; a ⌘K command palette (#256)
+- Coaching says if you have driven a corner at pace before, and abstains inside its spread (#255)
+- Stats ▸ **DISTRIBUTIONS**: time at speed and at lateral g, fastest vs slowest quartile (#254)
+- Map line mode **Δ rate**: where time is being lost or gained right here (#253)
+- The camera's 200 Hz gyroscope is read for the first time, as a measured yaw-rate channel (#250)
+- A themed error report, shown once per distinct failure; repeats are logged instead (#238)
+- Stats names the baseline each "loss" is measured against, and reconciles its three answers (#237)
+- The share card, laps CSV and a new stats HTML report state the ideal lap's sample (#230)
 
 ### Changed
 
-- **A built-in track you refined can be deleted, not renamed.** Renaming it moved your line to the
-  new name and brought Pacer's own line back under the old one — two circuits for one place. The
-  saved-tracks manager no longer offers Rename… on it; Delete… still puts Pacer's line back.
-
-- **The ideal lap's hovers quote figures measured on recordings Pacer can still open.** The hero
-  chip, the Stats ideal tiles and the Library's Ideal-lap and Best-lap headers explained the ideal's
-  sample effect with D24 figures marked "measured before a September 2026 change to corner
-  matching". They now quote the table re-measured on the Desktop working set: the ideal falls
-  0.16–0.74 s per doubling of lap count, the best lap 0.08–0.79 s, and Sandown 3h's first chapter
-  and whole recording are 0.77 s apart on the same driving. The Library no longer says the ideal
-  always falls faster than the best lap: on that first chapter it does not.
-
-- **The map's colour ramp has its own middle, so what you selected no longer dissolves into it.**
-  The start/finish line and the primary lap's brake glyphs are the amber accent and are drawn *on*
-  the speed / Δ / grip ramp, whose middle was that same amber: one bucket sat 2.62 dE from the start
-  line's own colour. On the owner's recordings, the start line crossed a bucket within 10 dE of
-  itself on 35 of 37 laps (SD_30_08_26), 43 of 62 (Sandown 3h 2026) and 30 of 36 (SD_19_09_26), and
-  14-26 % of the amber brake glyphs sat on one. The default ramp now runs red → **yellow** → green
-  through a new data token, `C.data_mid` (`#EFE45A`), which also becomes the GPS-quality strip's
-  "moderate" band and the derived "warn" marks. Every bucket clears the accent by at least 23.8 dE
-  (14.6 under deuteranopia), and the ramp's weakest step gets better in both views. **Visible
-  outside the app:** a saved share card carries the new ramp in its map.
-- **The app's own sentences spell the product "Pacer".** 34 of them said "pacer" in lower
-  case ("Show pacer full screen", "What pacer stores on this Mac", "Found by pacer"). The name now
-  follows one written convention (beside `APP_NAME` in `studio/__init__.py`, enforced by
-  `tests/test_version.py`). The formal name **"Pacer Studio"** is unchanged; it covers the `.app`,
-  the `.dmg`, window and About titles, the landing page and exported file headers. **"Pacer"** is
-  the name in a sentence. **"pacer"** is the share card's lowercase logotype only.
-- **The library's privacy note is set at a readable width.** It ran the full width of the dialog,
-  166 characters to a line at the default size. It is now capped at the app's prose measure,
-  83 characters to a line, at the cost of about two rows of the list at the default size (the
-  dialog's minimum opening height moved from 710 to 750 px so it still shows at least five).
-- **Dragging the start/finish line is twice as quick, because the Stats page stops redrawing itself
-  where nobody can see it.** Every edit that re-segments a session — a start-line drag, a sector
-  edit, ⌘Z, loading a reference — rebuilds each session-derived surface, and the Stats dashboard is
-  one of five pages in the lap panel, four of which are hidden at any moment. Measured on the real
-  three-chapter load of D24's 65-lap recording, that rebuild is **396 ms** and the Stats page is
-  **200 ms of it — 50.5 %**; skipping it while another tab is showing leaves **196 ms**, and drag
-  ten times on the Laps tab and the page now renders once, when you open it. What makes that safe
-  is that the deferral cannot be observed: the page pays its debt before Qt can paint a pixel of
-  it, and before it is handed to anything that asks for it — the GPS chip's jump to DATA TRUST, the
-  docs-image harness, the tests. A figure on this page never predates the edit that changed it.
-
-- **Coaching stops crowning one corner when two of them are the same number.** The plan's second
-  line has always named a single corner to start with — "Start with C3: +0.15 s". Measured on both
-  of the owner's recordings, that crown is not something the data supports: the top two corners are
-  0.086 s and **0.005 s** apart, a paired permutation test over the lap-by-lap corner times cannot
-  tell them apart (p = 0.125 and p = 0.837), and resampling the laps hands the crown to the
-  runner-up in 14 % and **46 %** of draws. Split one session into its odd and its even laps and the
-  crown changes on both recordings. The line now reads "Start with C3 or C12: +0.15 s and +0.14 s
-  sit closer together than your own lap-to-lap spread, so either is the same call." A lead the
-  measurement *does* separate is unchanged, word for word — and the ranking underneath is unchanged
-  too: 17 of its 30 ranked corner pairs do separate.
-  - **What was refused on the way, and why:** a seconds interval beside each recommendation. The
-    three things such an interval could mean — the corner's lap-to-lap spread, the uncertainty on
-    its median, and the benefit measured on the laps that already did the recommended thing —
-    disagree by 4× on the same corner, and the third one's **sign flips** between recordings and is
-    confounded by lap pace. The numbers are in `studio/docs/refused-2026-09.md` §3.
-
-- **Every lap's corners are now measured in the same frame — which moves the ideal lap and
-  reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not
-  by assuming the lap is a uniformly stretched copy of the best one. That spatial match used to run
-  only on laps whose total line length differed from the best lap's by more than 0.5 %; every other
-  lap kept the cheaper assumption. The cut-off was inherited, not measured, and measuring it showed
-  it does not separate well-aligned laps from badly aligned ones: a lap 0.41 % longer carried
-  **14.7 m** of boundary error while one 1.55 % longer carried 7.6 m. On the laps it skipped — 22 of
-  38 on one of the owner's recordings, 54 of 65 on the other — the corner boundaries sat a median
-  **1.96 m and 0.90 m** from where the corner actually starts, which the match cuts to **0.10 m and
-  0.01 m**. So two laps of one session were being measured by different machinery on either side of
-  an arbitrary line.
-  - **What you will see move.** The ideal lap reads **+0.316 s** on the first recording and
-    **−0.071 s** on the second, and the corner ranking in coaching reorders on both — a corner whose
-    time was measured in a window metres off the real one can be ranked too high or too low, and the
-    brake/coast evidence attached to it is matched in that same window. Corner times, corner Δ
-    columns, the ideal-lap composite and the coaching plan all shift accordingly.
-  - **What does not move: the best lap itself.** It is matched against its own trace, so every
-    boundary lands on itself — measured at 7e-15 m and 0 m on the two recordings. The reference the
-    other laps are compared against is unchanged, and so are lap times, which never went through
-    this projection at all.
-- **The g-meter overlay is a dot, a trail and one number.** Eleven text items became two, and the
-  dial radius at the minimum size grew 36.5 → 51.5 px. A recording with no accelerometer gets no
-  dial at all instead of a complete instrument reading 0.0.
-- **⚠ means "don't trust this", everywhere.** The corner report's three biggest available gains
-  wore the same glyph the lap grid hangs on a GPS-dropout lap; they wear ▲ now. The grip map's
-  low end — the driver using the tyre he has — reads "committed" rather than "⚠ on limit".
-- **The welcome screen offers one door that works.** "Open demo" is hidden rather than dead when no
-  demo clip can be resolved offline, the primary action is the larger of the two at every size, and
-  the drop zone wears the app's own chevron instead of a stock download glyph.
-- **Honesty copy reads its numbers instead of quoting a range someone measured once.** The digest
-  tooltip said "the ideal is 0.33 to 2.67 s the faster of the two" on a screen where the two tiles
-  were 5.0 s apart; it now states the gap in front of it.
-- **The friction circle says that its two axes are not on one window.** Lateral g is the
-  accelerometer smoothed over 0.15 s and longitudinal the GPS derivative over 0.35 s, so the cloud
-  is smoothed more in height than in width — measured on two recordings, matching the windows
-  leaves the width untouched and grows the braking extent 9–13 % and the acceleration extent
-  22–26 %. The tooltip named only the longitudinal window, which read as though the whole picture
-  were on it. The windows themselves are unchanged: matching them moves the grip-envelope ring by
-  about 1 % and costs 12–20 % of the peak lateral g the app measures best.
-- **The DATA TRUST rotation row says the two channels are on different clocks, and by how much.**
-  The gyroscope is timestamped on the camera's media clock — the one the picture plays on — and the
-  GPS trace on its receiver's own. On the owner's two recordings an event's GPS timestamp lands
-  **0.48 s / 0.46 s** after its gyro timestamp. The row printed a correlation measured with that
-  offset left in and said nothing about it; it now states the offset, and the tooltip gives the
-  correlation both ways (+0.92 against +0.85, and +0.88 against +0.83). **Nothing is shifted to
-  match** — this is a disclosure, not a correction — and lap times, which are differences taken on
-  one clock, are untouched either way. It is measured per recording, so a camera whose two streams
-  agree says so instead, and a channel that never tracks the path reports no offset rather than
-  0.00 s. Earlier figures of ~0.35–0.40 s in this repo were measured against raw telemetry time,
-  which slides by 0.10–0.17 s across a session because the two clocks also differ by ~27 ppm;
-  which stream is late was settled against the picture itself.
-- **Grip has one name.** Stats ▸ CORNERS called the per-corner grip reading "Grip %", while the
-  Corners tab and the map called the same number "Grip (est)". All three now say **Grip (est)**.
-  The % moved into the section heading ("CORNERS · speeds in km/h · grip %"), as the Corners tab
-  already shows it in its unit line. The map's grip legend now reads "unused (est)" rather than
-  "unused (est.)". No export changes: the CSV and HTML reports have no per-corner grip column.
+- A built-in track you refined can be deleted, restoring Pacer's line, but not renamed (#362)
+- The ideal lap's hovers quote figures re-measured on recordings Pacer can still open (#358)
+- One name for grip, **Grip (est)**, on every surface (#353)
+- Every grip surface says it compares laps of one corner, not corners with each other (#350)
+- The map's colour ramp runs red → yellow → green, clear of the amber start line and glyphs (#340)
+- Sentences spell the product "Pacer"; the formal name "Pacer Studio" is unchanged (#340, #355)
+- The Library's privacy note is set at a readable 83-character measure (#340)
+- Dragging the start/finish line is about twice as fast: Stats renders only when shown (#337)
+- Coaching names both corners when it cannot separate its top two (#311)
+- Every lap's corners are located by spatial match, which moves the ideal lap and coaching order,
+  never lap times (#300)
+- DATA TRUST states each recording's gyro-vs-GPS clock offset (0.48 / 0.46 s on D24) (#291)
+- The friction circle states its two smoothing windows (0.15 s lateral, 0.35 s longitudinal) (#264)
+- Honesty copy reads its numbers live; ⚠ means "don't trust this" everywhere, gains wear ▲ (#237)
+- The welcome screen hides Open demo when no demo clip resolves offline (#232)
+- The g-meter overlay is a dot, a trail and one number, and absent without an accelerometer (#231)
 
 ### Fixed
 
-- **A slow-starting VideoToolbox export no longer falls back to software.** The mux used to pad
-  the audio with silence without end and let the shortest stream end the file. Behind a hardware
-  encode whose first second went in slowly, that silence overflowed a queue inside ffmpeg, and
-  the export was re-rendered from the start on the much slower libx264. Measured: two 4K exports
-  at once failed that way 2 times in 14. The audio is now padded to exactly the clip and nothing
-  cuts the video, so the queue cannot fill, however long the export. An ordinary export comes out
-  the same. At the end of a recording the audio now runs to the last frame instead of stopping up
-  to 20 ms short of it, and a slow start no longer leaves up to 0.3 s of audio past the last frame.
-
-- **A slow video export no longer says the disk is full when it isn't.** ffmpeg also prints "No
-  space left on device" when a queue inside ffmpeg overflows. That happened on a VideoToolbox
-  export whose first second of video went in slowly, as on a busy machine, with 94.5 GB free.
-  Pacer believed the words: it skipped the libx264 retry that would have finished the export, and
-  told the user their disk was full. Now it asks the disk. With room to spare, the retry runs and
-  the export finishes. A disk that really is full still gets no second render, and the message now
-  says how much space was free and the least the export needs.
-
-- **The map's video-position marker is no longer the colour of the line under it.** It was the
-  same red as the slow / behind / full-brake end of every line mode's colour scale, so wherever the
-  line was at that end the marker was the same colour as the line under it. That was 20-24 % of
-  the median lap under Pedal and 3-7 % under Speed, Δ, Δ rate and Elevation, on both present
-  recordings. It is magenta now, a colour neither palette's scale uses. Three more marks now show
-  up on any colour of line: the corner-apex dots and the ring that locates a corner have a dark
-  rim, and the compare ghost has a dark centre instead of showing the line through it.
-
-- **A "GPS poor" mark is red, like the strip under it.** Every GPS-degraded mark was the strip's
-  yellow "moderate" colour, even when its own text said "GPS poor" and the strip under it was red.
-  That was 5 of the 7 marks on the one present recording with poor GPS. A mark now takes the
-  colour of the worst class in its stretch, which is the class its text names.
-- **A lift is no longer read as a brake.** The brake detector kept a string of one-sample blips as a
-  brake event whenever the blips were spread over its 0.25 s minimum, even though none of them lasted
-  that long. On the four recordings on this machine that was 5–7 % of brake glyphs, and 70 of those
-  73 lay in no braking zone defined without the detector; the Brake/Throttle band painted none of
-  them. 61 of the 1,121 per-corner brake points were read off one. 54 of those were corners that lap
-  never braked for, and they now read "no brake" like the laps that did not touch the brakes there.
-  7 came after the corner's real brake; 5 of those move back 23–41 m onto it. In Stats ▸ BRAKING a
-  corner that was often only lifted for now counts fewer laps (one fell from 20 to 9), the "m later"
-  medians move by at most 1.5 m, and braking per lap falls by 0.3–1.2 s. No coaching hint appears or
-  disappears; a few move by 1 m.
-- **laps.csv is pure ASCII again.** The `corners_interpolated` legend row added in C5 carried an
-  em dash, so every laps.csv with an interpolated corner cell stopped being ASCII. That is every
-  export from the three recordings present today. A spreadsheet that guesses MacRoman shows the
-  dash as junk. The test that guards this wrote a session with no interpolated cell, so the row was
-  never written there. It now drives every row the trailer can carry.
-
-- **The report and the copied summary name a degraded clock the way the chip does.** Their Timing
-  line started with "ESTIMATED —" for every degraded state. On a true-clock recording with rejected
-  fixes that called the times estimated, beside a chip saying GPS LOW. On a recording with no GPS it
-  read "ESTIMATED — No GPS fixes survived", beside a chip saying NO GPS. Both now use the chip's
-  word.
-
-- **A recording with no GPS stops asking for a start/finish line.** With no trace there is no line
-  to confirm. The map's trust strip still asked the reader to drag one, directly above "no lap can
-  be timed". The map drew its dashed cue on the placeholder line. The DATA TRUST card blamed the
-  track database, and the report said the line "was auto-fitted". None of the four appears on such
-  a recording any more.
-
-- **The Brake/Throttle band paints a braking zone as one piece.** Its brake half used to be a second,
-  cruder detector: every 10 Hz sample decelerating past 0.18 g, with no hysteresis. The speed
-  derivative carries about 0.1 g of noise, so a zone broke wherever one sample dipped, and the floor
-  sat above the brake detector's own 0.16 g threshold. Measured on the four recordings on this machine
-  against braking zones defined without the band, **36.5–50 % of zones painted as two or more pieces**
-  and the band drew 21–38 separate red runs a lap. It now paints the brake detector's own braking:
-  each fragment that lasts the detector's 0.25 s minimum, full from its first sample past the
-  threshold to its last. Fragmented zones fall to 5.8–12.9 %. Recall rises from 84–86 % to 92–95 %,
-  precision from 74–84 % to 82–89 %, and red painted while the kart accelerates drops from 0.23–0.46 s
-  a lap to 0.00–0.02 s. The brake points, coaching and the brake-habit table do not move: the
-  detector is unchanged, and its events are byte-identical on all 154 laps. The brake half stays
-  on/off on purpose: inside a braking zone the per-sample noise is as large as the braking's own
-  variation. The map's **Line: Pedal (est)** paints this same array, so it changes with it.
-
-- **The corner match is described the way it now works, on the Stats page and in the panel that
-  explains a corner Best.** Both said an edge counts when it is "matched to your best lap's line"
-  (the CORNERS BY LAP grid: "within 3 m"). That is still true, but since the receiver's drift is
-  taken out before the match, it read as 3 m of raw GPS position, which let a reader blame their
-  line for the receiver's scatter. One sentence, written once and quoted by the CORNERS, STRAIGHTS
-  and CORNERS BY LAP tooltips and the corner-best method, now says that each lap's trace is shifted
-  as one piece to cancel that lap's drift, and that the best lap's corner edges move sideways onto
-  the laps' typical line. The fastest lap is still the reference. A muted grid cell's hover says its
-  3 m is judged with the drift taken out. The CORNERS caption also stopped saying that Coaching
-  counts "interpolated corners too". That has been false since Coaching moved onto the CORNERS
-  table's rule, and the caption now says Coaching leaves out the same interpolated times. COASTING
-  still counts every cell by design, and laps.csv still flags interpolated cells without dropping
-  them. Neither is described by this caption.
-
-- **Dropping a folder no longer counts Pacer's own exports as recordings you should go and open.**
-  A multi-file drop groups by filename, so every stray `.MP4` beside the footage came back as its
-  own recording — and the app saves its overlay clips exactly there, next to the recording they came
-  from. On the owner's four footage folders, five of the recordings that message offered beyond the
-  one it opened were really one: the other four carry no telemetry and the loader refuses them in
-  0.00 s, two of them being overlay clips Pacer had rendered from the recording it had just opened.
-  The drop now counts only what it could actually offer, using the loader's own first gate rather
-  than a name heuristic — 0.4–5.2 ms per candidate, including 5.23 ms on an 11.9 GB chapter — and a
-  file it could not read still counts, because that says nothing about what is in it. A background
-  batch-import queue for those extra recordings was measured and refused in the same pass
-  (`studio/docs/refused-2026-09.md` §7).
-- **A corner time or speed pacer had to interpolate is no longer published as a measurement.** A
-  corner edge a lap does not match to the best lap's line on track is interpolated, and on the 38-lap
-  D24 recording that put 236 of 456 corner times a median 0.22 s (up to 0.96 s) and the speeds read at
-  those edges a median 1.1-1.6 km/h (up to 11.5 km/h) off an independent line-crossing reading —
-  against 0.004 s and 0.015 km/h for matched ones. The CORNERS table's Best sat on such a cell in C2,
-  C6 and C8, and its Median moved by up to 0.35 s. Now one rule decides what counts, at the
-  granularity each value is read at (a window needs both edges, a speed its own): the CORNERS table,
-  the Corners page ★, a Best's provenance panel, the STRAIGHTS times, trap speeds and exit Δ, and the
-  where-the-time-goes phase split count only matched cells, say how many laps they counted, and show
-  a dash where no lap matched. The Corners page still shows each lap's reading, muted with the reason.
-
-- **…and the coaching rows, the ideal lap and the brake points now count by the same rule.** Those
-  three still counted every cell. The **ideal lap** is a per-segment minimum, which is the statistic
-  that error favours: on the 38-lap D24 recording the composite's winning donor sat on an
-  unmatched boundary in 5 of its 25 segments, and the theoretical best read **65.637 s where the
-  matched cells say 65.864 s** — 0.226 s of ideal nobody drove, 0.133 s of it in one corner exit.
-  (The four recordings the published sample table covers do not move by a millisecond; they match
-  96 %–100 % of their cells.) **Coaching** now measures a corner's time lost only where this lap and
-  your best lap both matched it, which moves the losses by up to 0.045 s and reorders two rows on
-  that recording — and its "how repeatable is this corner?" σ is now the same number the CORNERS
-  table prints beside it, where the two disagreed on 12 of 12 corners by up to 0.038 s. The **Stats ▸
-  BRAKING** table's brake points drop a lap whose corner window was interpolated, which moves the
-  metres by at most 0.7 m — under the 2 m the hint itself calls noise, applied so one rule stays one
-  rule. **Stats ▸ COASTING is deliberately left alone**: masking its cells would break that table's
-  own stated sum and reshuffle places it already prints as tied, and the leader does not change on
-  either recording.
-
-- **The exported laps.csv and the HTML report say which corner cells are interpolated.** The file is
-  an external format, so nothing is dropped and no cell is blanked — a new **`corners_interpolated`**
-  column names the corners whose window that lap did not match on track, with a legend under the
-  table explaining what it means and emitted only on a file that carries one. **This changes the
-  column set**: the column is appended after `quality`, so a reader that goes by header name is
-  unaffected and one that counts columns is not. On the owner's recordings it marks 34 of 456
-  exported corner cells on one and 0 of 780 on the other.
-- **A piece of a lap is no longer counted as a lap, and every excluded lap now says why.** A
-  start/finish line long enough to reach a second stretch of track cuts each pass it reaches in
-  two, and when the pieces outnumber the laps the median bands count the pieces: Sandown chapter 3
-  opened on its own counted a **23.2 s / 320 m piece of the 740 m circuit** as its one lap. A lap
-  now has to end where it started, going the same way — its two start-line crossings no more than
-  15 m apart, and its direction of travel turned by no more than 120° — and this is checked before
-  the median is taken. Neither number alone is enough: measured over all four recordings on this
-  machine, every chapter alone and chained, on every line the app places and 60 lines a user could
-  drag per recording (18,899 real laps, 23,631 pieces), real laps end up to 8.45 m from where they
-  started while a D24 hairpin piece ends 6.48 m from its start — but that piece has turned round,
-  and no real lap turns by more than 97°. Together they count none of the pieces, and call only
-  three real laps open — laps of 86-200 s, which the time band excludes anyway. On the lines the app
-  places by itself only Sandown chapter 3 changes: it now has no laps, which is also what the
-  owner's own saved line finds in that chapter. The ⊘ strip lists the reason
-  beside each excluded lap ("ends 21 m from its start, heading the other way", "off the session
-  median", "the kart stopped during it"), and the DATA TRUST card, the exported summary and the
-  auto marks, which said every excluded lap's distance was off the median, count the reasons
-  instead.
-- **A recording on an unknown track no longer opens as quarter-laps when a wider start line would
-  have cut every lap in two.** With no saved start/finish line, SD_30_08 opened as **25 laps of
-  13.3 s / 203 m** — best 13.073 s, ideal 12.886 s, written to the library that way — when the
-  circuit is a 46 s, 740 m Sandown Park lap. The loader had found the real laps and thrown them
-  away: its line at the fastest point counted 23 laps of 47.6 s, and its ×1.5 widening reached a
-  second stretch of track, cut each lap into a 13 s and a 34 s piece, and won on count (25 > 23).
-  The ±10 % lap-length band (#68) could not see it, because it bands against the median piece and
-  here the median piece was the fragment. A wider line is now taken only when it counts more laps
-  **and** more driving: recovering a pass the short line stepped over does both, cutting counted
-  laps into pieces cannot. SD_30_08 opens as 23 laps (best 46.922 s, ideal 46.420 s, against
-  46.912 / 46.430 on the owner's own saved line), and so do both of its chapters together (37);
-  no other recording on the owner's machine chooses a different line. The figures that had been
-  measured on those pieces are re-measured: the ideal lap's sample table (all three rows #319
-  marked unverifiable — the footage was on the same machine — now re-measured as the app opens
-  each recording), the best-lap control beside it (one claim did not survive: no recording has
-  the best lap moving more than the ideal), the tooltips' range of 0.15–0.38 s per doubling of
-  lap count (was 0.07–0.38), the Δ-to-ideal floor (−0.280 s on SD_30_08's loader line), and the
-  notes that used SD_30_08's pieces as a real-lap example.
-- **Three more published measurements predated #300, and every cell of each had moved.** The
-  coaching THEME shares now read 70 % execution on 0060 and 73 % pace on 0062 (was 73 % / 65 %),
-  and braking holds the majority of ranked time on both recordings (was 61 % / 44 %, "not a
-  theme" on 0062). The evidence figures behind them moved too: σ exceeds the claimed loss on 16 of
-  19 shown rows (was 17 of 20), and 7 abstain (was 6). The pointwise Δ-to-ideal floor table is
-  re-measured on all five recordings. Sandown chapter 1's floor is −0.164 s on 4.52 % of samples
-  (was −0.159 s on 2.09 %). On the start line the owner saved beside SD_30_08 the floor is −0.246 s;
-  without that line the loader cut its 46 s lap into 12.9 s pieces (fixed above). The
-  #272 dotplot record keeps its verdict on the new numbers (0 of 20 dots at or left of the best
-  lap, spread 0.60× the laps driven, on both recordings), and #272's own table stays beside it.
-  Each table is now written as a table. `tests/test_measured_figures.py` derives every figure
-  quoted beside it from its cells and from the constants the code applies, finds every other quote
-  by search (25 stale figures in 9 other files), and re-measures every cell from the footage when pointed
-  at it.
-- **Three more tables from before #300: the brake-habit comparison, the focus list's cross-session
-  figures, and the beat-rate correlations.** The coaching hint used to read the best lap's single
-  brake application where Stats ▸ BRAKING read the median. Re-measured, the two disagreed by up to
-  **12.6 m** (0062 C6), not 9.3 m, and at 0062's C1 the best lap's "~3 m later" against the 62-lap
-  habit's 12.2 m is a shrug against a real instruction, not "opposite advice": both say later. The
-  focus list's three promoted corners are still C12, C4 and C2 on 0060, now for +0.330 / +0.244 /
-  +0.204 s (was +0.259 / +0.221 / +0.110); every re-measured window figure came back identical.
-  Two statements about the spread test were wrong in themselves: it compares against **the wider
-  of the two sessions'** interquartile ranges, not the corner's own, and C8's +0.549 s of
-  window growth was called "a whole second". `SegmentBests.beat_counts`' correlation table does not
-  survive: re-measured as the app opens each recording, **none of the five** rows is
-  distinguishable from chance (was one), and the table it replaces had kept a zero-width point
-  segment in every row, broken tied ranks in sort order, and measured SD_30_08's 13 s pieces.
-  `tests/test_measured_figures.py` now derives the prose around all three from their cells, finds
-  every quote elsewhere, and re-measures each cell from the footage.
-- **The channels CSV's time column said "media" and was a third of a second off the footage.**
-  The per-lap channels export headed its time column `t_media_s`, and the values were the GPS9
-  true-clock (telemetry) seconds the lap was timed on. Lined up against the video by that name,
-  every row sat **0.415 s (0060) / 0.353 s (0062)** after the frame that shows it — 12 and 11
-  frames at 30 fps — because the footage runs on its own clock and the GPS timestamps are late
-  against it. The file now carries both, named for what they are: `t_telemetry_s` (the same values
-  as before) and `t_video_s`, the position in the footage whose frame shows that sample, through
-  the same map the player and the burned-in export use. `elapsed_s` and every other column are
-  unchanged.
-- **The ideal lap's published sample table was stale on both D24 rows, and the figures derived
-  from it were stale in seventeen other files.** Since #300 warped every lap, the app's ideal on D24's
-  three chapters is 66.709 s, not 66.781, and on chapter 1 alone it is 67.403 s, not 67.831. Every
-  rung below those cells had moved as well, by 0.10 to 0.42 s. Both rows were re-measured through
-  `Session.load` on the footage. Several things moved with them: the headline gap (−1.49 s over
-  65 laps, −0.95 s over 5), the ideal's range per doubling of lap count (0.07–0.38 s in three
-  shipping tooltips, which said 0.33), the per-doubling decrement (which now shrinks from 0.413 s
-  to 0.233 s rather than "a fifth"), and the ideal-lap and hero screenshots with their alt text.
-  The Sandown and SD_30_08 rows could not be re-measured, because that footage is not on this
-  machine. They now carry a ‡ saying so, and the Library's Ideal-lap hover, which quoted two of
-  them as current, now uses the two D24 rows instead. `tests/test_ideal_sample_table.py` has new
-  checks, each found by search: the 5-lap/whole-recording pairs, every D24 gap in the tree, the
-  screenshots' alt text, and range endpoints. Its opt-in footage half now re-runs the table's
-  Monte-Carlo over every rung, not only the last cell.
-- **The provenance panel named the wrong clock for every lap time it explained.** Right-clicking a
-  lap time opens a panel that states the window the number was measured over; its axis line read
-  `media-clock seconds`, and the window is not on the media clock — it is the GPS9 true-clock
-  (telemetry) axis the lap was timed on, which is what `docs/ACCURACY.md`'s transponder validation
-  covers. The two run ~27 ppm apart, so the stated window was off by up to 0.095 s (recording
-  0060) and 0.166 s (0062), growing through a session: 5 frames at 30 fps, at the end of the
-  84-minute recording. The line now reads `telemetry seconds (GPS9 true clock)`. Nothing moved but
-  the label — the window's numbers were always right, only their name was wrong.
-  - The same false claim was repeated in **sixteen comments and docstrings** across the C++ core
-    and the studio (`pacer/laps/laps.hpp`, `Session._lap_columns` and its whole family), and every
-    one is corrected. Measured before changing anything: the lap columns' interior times are
-    bit-exact members of the telemetry axis on **all 26,486 (0060) and 45,313 (0062)** samples, so
-    the code was right and only the comments were wrong. The two places that cross the two clocks
-    by label — a lap's inherited GPS-quality class, and a mark's chapter anchor — were measured
-    rather than assumed: the class changes for **0 of 38 and 0 of 65** laps, and the mark round
-    trip is **exact**. Both now carry the numbers instead of the claim. That "harmless" is a
-    LAP'S: over a window under ~10 s the same crossing decides over 1 % of below-good verdicts, and
-    such a consumer crosses `media_clock.without_gps_lag()`, never `media_time` — measured in
-    `studio/dev/probes/p5_clock_crossing_scale.py`.
-
-- **A missing corner alignment was documented as "below the drift gate" long after there was any
-  drift gate.** The per-lap warp that maps the corner windows onto a lap
-  (`CornerModel.lap_alignment`) may come back as "none"; its docstring said that meant the lap had
-  drifted too little to be worth warping. `corners.NORMALIZED_DRIFT_MAX` was deleted when every lap
-  started being warped, so that has been untrue since. Measured before changing anything: **no lap
-  on either of the owner's recordings reaches it at all** — 0 of 38 (D24 0060 pair) and 0 of 65
-  (0062), with 4-22 and 20-22 of the 24 corner boundaries carrying a directly matched interior
-  knot — and the three things that really do produce it are "there was nothing to build a warp out
-  of": no corner basis, no usable trace pair (a cross-recording reference lap has none), or no
-  spatial match surviving anywhere on the lap. **No caller acted on the old meaning**: the one
-  branch on it returns the normalized projection, which is right under either reading, so the code
-  was right and the comments were wrong — **29 lines across 12 files**, including the note the
-  provenance panel prints under a corner time, which named a gate the app no longer has. Both
-  halves are now guarded (`tests/test_corner_alignment_memo.py`): the three causes are driven
-  through the real service, and the wording is checked in both directions so a target that
-  disappears fails too.
-
-- **Every GPS-derived number drawn over the video was half a second late, and now it is not.** The
-  camera's accelerometer and gyroscope are timestamped on the clock the picture plays on; its GPS
-  receiver stamps a fix on its own, and that stamp lands **0.476 s (0060) / 0.459 s (0062)** after
-  the instant the frame shows — the whole-recording figure, which is the one applied; per chapter
-  and per lap it sits within an IQR 0.04–0.06 s wide, with no step at a chapter seam larger than
-  that. So the speed, the Δ, the map dot, the dial's
-  longitudinal axis and the lap clock's zero were all painted against a frame roughly **14 of them
-  late at 30 fps**, in the app and in every exported clip. Pacer now folds the measured lag into
-  the one mapping that crosses between the picture and the telemetry, so the live view and a burned
-  export are corrected by the same number or neither is. **Lap times cannot move** — they are
-  differences taken on one clock — and no stored analysis number changes: this shifts what a frame
-  is matched with, not what anything is measured to be. The correction is refused, out loud, on a
-  recording whose gyroscope cannot measure it (a camera with no GYRO, a helmet cam whose gyro never
-  tracks the racing line) or whose measurement lands past a second, and those recordings keep the
-  behaviour they had. The DATA TRUST rotation row now states both facts separately: what was
-  measured, and what was done with it.
-- **The g-meter dial was asking the accelerometer for the wrong instant too — and the first
-  correction for it went the wrong way.** The g series is *stamped* on the camera's media clock, so
-  it was indexed with a telemetry time and trailed the picture by the two clocks' own drift (up to
-  0.169 s by the end of the 84-minute recording). The first fix therefore made the dial cross the
-  same full mapping as the speed. That assumed the accelerometer's *content* is on the picture's
-  clock, and **measured against the gyroscope — the one channel settled against yaw taken from the
-  frames themselves — it is not**: the lateral g sits **+0.399 s (0060) / +0.406 s (0062)** behind
-  the picture on its own labels, i.e. the accelerometer's content arrives carrying very nearly the
-  same delay the GPS timestamps carry, even though the two streams are stamped together. So undoing
-  the GPS lag at the dial pushed it the wrong way, and left the dial's lateral **+0.386 s / +0.393 s
-  behind the speed painted beside it** — with the speed itself correct to +0.004 s / −0.001 s over
-  the same frames. The lookup now crosses the **rate fit alone**: the two clocks' 27 ppm difference
-  is still corrected, the GPS lag is not undone, because the g series carries it too. The dial's
-  lateral lands at −0.078 s / −0.052 s and its longitudinal at −0.051 s / −0.178 s, against +0.411 s
-  / +0.282 s before. That residual is the amount by which the accelerometer's own delay differs from
-  the GPS timestamps' own; it is not zero and is not claimed to be. Worth a mean **0.286 g** on the
-  dial's lateral (p95 0.950 g) on 0060. The same measurement is why the per-lap grip analysis joins
-  the g series **by label** and refuses this conversion — two different seams, measured separately.
-- **A recording with no GPS in it was sold as the app's most accurate timing.** The DATA TRUST
-  card's `Timing` row had a two-way label — the video-clock fallback, else "GPS9 true clock" — and
-  the loader builds its quality verdict *before* it knows whether the GPS trace survives. When the
-  quality gate and the stationary trim left nothing, it returned that verdict untouched, and its
-  default clock is the validated GPS9 path. Driven end to end over the bundled `karma.mp4`, which
-  carries **0 GPS fixes**, the card printed `Timing: GPS9 true clock · 0% of moving fixes rejected`
-  — the app vouching for its best clock on a file with not one satellite fix in it, and reporting a
-  reassuring 0 % over a population of nothing. There is now a third clock provenance for "no time
-  axis was built at all"; the row states it as a caveat, so it sorts to the top of the card with
-  the other trust-breaking facts, and it carries the only action there is (check the camera's GPS
-  setting; some models carry no receiver). The two real clocks are untouched — both D24 recordings
-  still read `GPS9 true clock`, and a GPS5-era clip still reads `video clock (estimated)`.
-  - The same absence also reached the per-second quality bar, which explained it with the wrong
-    cause: `karma.mp4`'s strip said *"this camera writes no per-sample GPS quality — the GPS5-era
-    stream carries neither a fix type nor a DOP"*, attributing the silence to a stream that is not
-    in the file. A recording where **no fix arrived at all** now says so, and the genuine GPS5-era
-    wording stays where it belongs — on the clips that do write fixes without quality fields.
-  - `load._used_gps9_trueclock`'s docstring claimed a GPS5-only camera "reports ts==0 on every
-    sample". Measured, that is false on **every one of the nine bundled GPS5-era clips**:
-    `hero6.mp4` reports a non-zero stamp on 417 of 417 fixes — but only **23 distinct values**,
-    because the GPS5 era carries one GPSU stamp per ~1 s payload, repeated onto each fix inside it.
-    The rule survives on the *spacing* (0 s inside a payload, ~1.0 s across one — both outside the
-    GPS9 step band), not on the test the docstring described, so anyone simplifying it to
-    `any(ts > 0)` would have promoted every HERO5-8, Max and Fusion recording to true-clock timing.
-- **A greyed-out menu item now says why, where macOS lets you read it.** Twenty of the items
-  disabled on the welcome screen explained themselves in a Qt tooltip — and on macOS that tooltip
-  is shown to nobody: measured on the real screen, this app's menu bar is the native one
-  (`isNativeMenuBar()` is true, its in-window height is 0 px), so its rows are NSMenuItems, and
-  Qt's own menu-tooltip path is switched off on all eight menus anyway (a live tooltip event
-  produced nothing at `toolTipsVisible=False` and the full sentence at `True`). Eleven of those
-  items had a real reason nobody could read; the other nine had no reason written at all, only a
-  description of a feature you cannot have. Every gated item now carries the reason's condition on
-  its own label — "Library… — no recordings analysed yet", "Save as track… — needs a complete lap
-  and a GPS position" — and the whole sentence, remedy included, on its ⌘K palette row, which is a
-  real Qt view and does answer a hover even on a greyed row. The clause comes off again the moment
-  the gate opens.
-- **One ellipsis fixed, and the copy that points at it.** Coaching ▸ "Opportunities…" asks the user
-  for nothing, so under the app's own rule (a trailing "…" means the command needs more
-  information) it should never have carried one. The item and the in-app sentence that names it
-  were renamed together, and the test now reads that sentence against the action's own text.
-- **The ★ that means "session best" was decided three different ways, so two pages marked
-  different cells of the same grid.** The Stats page's SPLITS grid compares what it *prints* —
-  an interior sector split is the difference of two GPS sample times on a 0.1 s grid, so a
-  column's minimum is routinely tied at two decimals, and singling out the copy whose underlying
-  double happens to be a thousandth quicker draws a distinction the measurement cannot support.
-  The Laps tab printed the same splits to the same two decimals and compared the raw doubles; so
-  did the Corners page with its corner times. Measured on the owner's own recording (65 laps,
-  five sector lines): **the Stats grid starred 18 cells and the Laps tab 13** — five cells whose
-  printed text is identical to a starred neighbour's wore the mark on one page and nothing on the
-  other. With three lines it was 8 against 6. The Corners page did the same thing lap by lap:
-  three laps all print 2.75 s through C1 and only one was starred. All three surfaces now share
-  one rule, and on both reference recordings the two grids now star exactly the same cells. A
-  ⚠ GPS-dropout lap still cannot take a session-best split — that exclusion is disclosed on the
-  row, which is what the thousandth-of-a-second one never was.
-- **The Laps panel and the Stats page counted the same laps out of different totals.** Both state
-  how many laps were left out of the statistics, and the Stats page's DATA TRUST card divided by
-  the laps the segmenter *found* while the Laps panel divided by the ones it had rows for —
-  totals that differ by the start/finish crossings too brief to count as laps at all. Measured by
-  dragging the start line round one recording (the app's own suggested fix when laps go missing):
-  at one placement the card read "33 of the 81 laps found" while the strip beside it read "36
-  excluded of 69 laps". **Every placement that produced an excluded lap disagreed, on both
-  recordings.** The strip now counts out of the same total, and names the leftover brief
-  crossings instead of leaving them as a gap between two numbers.
-- **The exported report asserted a best lap the app itself refuses to name.** When the start line
-  has been auto-fitted and never confirmed — the state every unrecognised circuit loads in — a
-  "best lap" is measured from an arbitrary point, and Pacer says so by withholding the claim: no
-  green row, no ★, and the share card refuses to render at all. The HTML report painted the green
-  row anyway and named the lap in its meta table, in the one document that travels furthest from
-  those caveats. It now follows the same gate. The lap *time* still prints, as it does on the
-  Stats page — what goes is the claim that a particular lap owns it.
-- **Your coasting time was measuring the GPS noise floor, and it was out by about six times.**
-  Pacer calls it coasting when the kart is off both pedals — slowing from drag, not from the brake
-  — and it looks for that in a narrow band of deceleration held for at least a quarter of a second.
-  The band is about 0.13 g wide. The raw 10 Hz speed derivative it was being tested against carries
-  about 0.11 g of noise, so a moment genuinely *in* the band was thrown back out of it by noise
-  alone about half the time: the runs lasted two samples where the test needs four, and what
-  reached the Stats page was **5.9 % and 4.5 % of the time actually spent coasting** on the two
-  reference recordings. The band test now runs on the same signal smoothed over half a second,
-  which is wide enough for the measurement to mean something and narrow enough not to turn a
-  brake-to-throttle transition into a coast — both bounds measured, not chosen. Coasting now reads
-  **2.8 seconds per lap on both recordings**, where the old number disagreed with itself by 26 %
-  between them (0.44 s and 0.34 s) for the same driver on the same track. Every coasting figure
-  that leaves the app now states the window, the minimum duration and the band that produced it.
-  - **Braking is untouched, on purpose.** It runs on the same longitudinal g with no window at all,
-    because a brake application is a step and smoothing a step moves it — measured, and left
-    alone.
-  - **One thing you may notice:** at one corner in eleven, the coaching row's reason changes from
-    "line" or "apex" to "back to throttle sooner". The corners it ranks, their order and the time
-    it says they cost are all identical; the *cause* it names is now allowed to be coasting,
-    because the coasting signal finally has something in it.
-- **The exported overlay video said nothing about timing it could not stand behind — the app's own
-  warning even said so.** The burned-in clip is the most public thing Pacer makes and the one least
-  able to explain itself: it lands in a group chat, watched by people who have never seen the app,
-  with a lap time painted across it. On a recording whose start/finish line was auto-fitted and
-  never confirmed, that number is measured from an arbitrary point, and the frame carried no hint
-  of it — the dialog that warns before such an export literally read "with nothing in the frame to
-  say so". Now the frame says it: a line under the lap strip, in the app's own words —
-  **PROVISIONAL**, **ESTIMATED** or **GPS LOW**, the same vocabulary the lap panel's quality chip
-  uses — for as long as the clip runs, including a single frame grabbed out of it.
-  - **No `[e]`/`[p]`/`[u]`/`[b]` codes.** Those belong to `laps.csv` and the HTML report, which can
-    print a key under the table; a letter in the corner of a video is one the viewer cannot decode
-    and the file cannot explain. A break in series and a single lap's GPS dropout are deliberately
-    left off the frame too, with reasons written down beside the rest of the vocabulary.
-  - **It still exports.** Unlike the shareable lap card, which refuses to render at all on
-    provisional timing, a clip of your own driving is useful whether or not the line is confirmed —
-    so the warning stays a warning, and now names the mark the clip will carry. A clean recording
-    burns nothing at all: no badge, no empty box, no reserved space.
-- **Two numbers on the Stats page disagreed about how hard you braked, and neither said why.** A
-  lap row prints a "peak braking g" and a count of braking events, and they come off the same
-  physical axis through two different filters: the peak is smoothed, so it is the *sustained*
-  deceleration, while brake and coast are detected on the unsmoothed derivative, because a brake
-  onset is a step and a smoothing window smears exactly that. The consequence was visible in one
-  row and explained nowhere — measured on the two reference recordings, an individual brake event's
-  own peak deceleration exceeds the "peak braking g" printed beside it on **37 of 38 laps** and
-  **65 of 65**, by a median of about a quarter. Nothing changed about either number; every surface
-  that prints one now says which series it read. The **DRIVING** tiles — the four numbers on the
-  page built from the detection series, and the only tiles that had no hover text at all — now
-  carry the detector's own band and minimum duration; the peak-braking tile points at the channel
-  the brake counts come from; the **PER LAP** grid names both filters where its columns sit side by
-  side; and the **BRAKING** table's Commit % states that both halves of that ratio come from the
-  same unsmoothed channel, so it is not a percentage of the tile above it.
-- **A lap you stopped on could count as one of your clean laps.** A lap was judged real by its
-  total time — anything from half to 1.6x the session median — and by its distance. A stop defeats
-  both: it adds time without adding a metre, and on a ~69 s kart lap that band leaves **41 seconds
-  of room**, so a lap you spun on, crawled round or pulled up during could set your median, be
-  crowned your best, and feed the ideal lap, the coaching and every statistic with nothing to show
-  for it. Pacer now looks at the speed trace instead of the clock: a lap carrying a stationary
-  stretch of 3 seconds or more is left out, and appears in the ⊘ excluded strip with the rest, so
-  you can see it went. Tightening the time band was the other option and the recordings ruled it
-  out — the bound needed to catch a stop also throws away ordinary slow laps. **This changes
-  nothing on a clean session:** across the 103 clean laps of the two reference recordings the
-  longest stretch below the threshold is 0.000 s, and every lap time, best and derived number is
-  bit-for-bit what it was.
-- **Video seeks drifted further from the picture the longer the recording ran.** Pacer times laps
-  on the camera's GPS clock and the video plays on the camera's media clock; those are two clocks,
-  and the media one runs about 27 ppm fast. Every seek — jump to the best lap, drag the scrub, or
-  export a lap — handed the video a GPS time as though it were a media time, so the picture arrived
-  progressively early: measured on the two D24 recordings, ~0.03 s at the first lap and up to
-  0.17 s at the last, which is five frames at the export's default 30 fps and ten at the GoPro's
-  59.94. The two clocks are now converted between at the seek, so a lap starts on the frame it
-  starts on wherever it sits in the recording. **Lap times themselves are untouched** — they are
-  still measured on the GPS clock the transponder validated, bit for bit.
-- **Two different answers to "how much later can I brake here?"** The coaching row's "Brake ~N m
-  later" read your BEST lap's single brake application; the Stats ▸ BRAKING table's "m later"
-  column read the median over all your clean laps — and neither said which. On the D24 recordings
-  the pair disagreed by up to 9.3 m, and at one corner the two gave opposite advice: the best lap
-  happened to brake within 3 m of its own optimum, so coaching shrugged with "~3 m" while the
-  habit over 62 laps was 12.2 m early. Both surfaces now read one number, the median over the
-  clean laps, because a coaching instruction is about your habit and not about one lap — the same
-  basis as the row's "Time lost" and "Done it?" beside it. A corner your best lap never braked
-  into now gets the hint its other 44 laps earned, and the hint's tooltip names the sample, your
-  observed middle-half spread and the table showing the same figure.
-- **A chapter was placed at the end of the previous chapter's *telemetry*, not its picture.** Those
-  are two different tracks: on GoPro's own sample clips a chapter's GPMF track misses its video
-  length by anything from −0.70 s (hero7) to +0.93 s (karma), so every offset after such a chapter
-  — the video seek, the export's concat span, the footage bound — rode up to ~1 s of phantom
-  timeline. The chapter axis is now the video track's, to the tick, and a chapter whose telemetry
-  genuinely does not cover its video is named in the session notice instead of shifting everything
-  after it in silence. (The D24 recordings' non-last chapters were already exact to 27 µs, so their
-  numbers are unchanged — verified leaf-by-leaf.)
-- **The ideal lap's headline was ~44% projection artifact.** Corner boundaries were being projected
-  in a mix of frames; one alignment frame per lap fixed it.
-- **The coaching phase bars were an `∫ds/v` estimate sitting beside a true-clock loss.** Measured on
-  the best lap, where there is no drift and nothing to compare, the same corner's own time differed
-  by up to +0.493 s between the two (r = −0.46 against apex speed: 1/v amplifies error exactly where
-  the kart is slowest). Four of eleven coaching rows listed a loss whose own breakdown said the
-  driver was faster. The thirds are read off the lap's own clock now and telescope exactly to the
-  corner time the Corners table shows.
-- **A recording could be its own previous best**, and the personal-best toast only ever fired once
-  per window.
-- **A second File ▸ Open that succeeded could strand the window**, and the reference-load guards
-  described in the docstring did not exist.
-- **One bad byte plus any write silently wiped every preference.**
-- **A sibling file that isn't video no longer kills the whole recording.**
-- **The video export built a top-level QWidget on the worker thread** — undefined behaviour in Qt.
-- **A full disk cost a second complete render.** A VideoToolbox failure retries on libx264, which is
-  right for an encoder problem and useless when there is no room: the retry re-rendered the whole
-  clip and failed for the same reason minutes later. It surfaces immediately now, and the failure
-  dialog says what to do instead of pasting ffmpeg's stderr as the explanation.
-- **A library or timing-line write that failed said so to a console, and to nobody else.** On an
-  unwritable app-support directory every session silently never entered the Library or the PB
-  history; a failed start-line save was indistinguishable from a good one. Both now say so on the
-  status bar, for as long as it is true.
-- **The ⌘⇧S stats dashboard composes at width**, and chart axis titles are legible (they painted at
-  1.19:1 against 5.7:1 for the tick labels beside them).
-- **The g-meter reads the camera's own axis declaration instead of assuming one.** Pacer had one
-  hard-coded idea of which way a GoPro's accelerometer points. Cameras declare their orientation in
-  the stream, and they do not all agree — so on a non-canonical camera every g the app drew was on
-  the wrong axis. It now reads the declaration. And a recording whose gravity vector disagrees with
-  its own accelerometer is **refused out loud** rather than silently mis-oriented: a meter that is
-  confidently sideways is worse than no meter.
-- **The Stats page named an accelerometer it did not have, and a braking window that did not
-  exist.** The DRIVING copy stated the IMU contrast and the brake-approach window unconditionally,
-  including on recordings whose g-meter is GPS-derived and on pages with no g-meter at all. Each
-  sentence now appears only where the thing it describes does.
-- **The map key painted one of the two timing lines it names**, and a highlighted corner's ring
-  wore the colour of the lap it rings rather than the accent that means "this one".
-
-### Engineering
-
-- **A real-footage check without its recording is reported SKIPPED, by name — no longer as a
-  pass.** Twelve checks re-measure something on a real recording (three real renders, the
-  cross-recording compare proof, the ideal-lap table and seven measured-figure tables). Each printed a
-  skip line and returned when its recording was missing, and its file then reported `Passed`:
-  when `~/Desktop/D24` left the dev machine on 2026-09-19, every one of them became a green no-op
-  and nothing in any gate's output said so. Each is now its own CTest registration,
-  `footage.<check>`, with `SKIP_RETURN_CODE`, so CTest lists it by name under "did not run …
-  (Skipped)" — CI, which has no footage, stays green. One variable, `PACER_GOLDEN_MP4`, points the
-  golden dump and every recording-agnostic check at a recording (`PACER_REAL_MP4` and
-  `PACER_D24_MEDIA` are retired; the compare proof's second recording is `PACER_GOLDEN_REF_MP4`,
-  and its primary no longer defaults to the chapter a tool overwrote). Defaults still name D24:
-  which recording the published figures move to is an open decision. A variable you set that names
-  a missing file fails instead of skipping. `tests/test_footage_checks.py` holds all of it,
-  including the negative control: each check, run as CTest runs it under a HOME with no footage,
-  exits 77 naming itself — where before the same command exited 0 with "ALL 84 export-video tests
-  passed".
-- **The ideal lap's published sample table was re-measured, and a guard now holds it to the app.**
-  Fixing the boundary projection moved the ideal on D24's three chapters from 66.563 s to 66.781,
-  and the measured table in `corner_model.IdealSample` — plus the README, both Stats tooltips, the
-  hero chip, two Library hovers, the CSV writer and the landing page's screenshot — went on
-  quoting the old number. All five recordings were measured again (20,000 subsets per lap count,
-  the method now stated), the headline gap on that recording is −1.42 s rather than −1.64, and two
-  claims the table carried did not survive: the per-doubling decrement **shrinks** slowly with lap
-  count rather than growing, and the best lap is the less sample-dependent of the two columns on
-  all five recordings rather than the more on two of them. The screenshots on the README and the
-  landing page were regenerated from the recording they claim to show.
-  `tests/test_ideal_sample_table.py` recomputes the table's own arithmetic, checks every sentence
-  in the tree that quotes it (found by search, not by a list), and — when pointed at real footage
-  through `PACER_IDEAL_TABLE_MP4` — asserts the published number IS `Session.ideal_total()`.
-- The visual-QA harnesses jail every app-support seam, not just the library: `ui_capture` read the
-  operator's preferences (all six shots differed operator to operator) and `media_capture` *wrote*
-  one. `studio/dev/_jail.py` is the single seam list, pinned by `test_golden_hermetic`.
-- The Qt-free data core is enforced in both directions (`test_layering`), the golden dump
-  fingerprints `phase_report`, and the compare-strip width sweeps settle to a fixed point instead
-  of betting on a turn count.
-- `stats_view.refresh` builds each lap's corner alignment once rather than nine times.
-- Qt's own C++ warnings go through `logging` instead of a stderr a frozen `.app` cannot print to.
-- `StudioWindow`'s export cluster moved to its own `ExportController` (app.py 4,166 → 3,557 lines,
-  142 → 121 methods) — the same one-object-one-cluster shape as the scrub and compare controllers.
-- …and its library cluster to `LibraryController` (app.py 4,563 → 3,807 lines, 169 → 136
-  methods): the library index and its PB moment, Library… and its privacy controls, Open Recent,
-  session records, the focus list and the saved-track manager. The boundary was measured with an
-  AST call graph — those pieces call each other in a cycle, so the library/PB methods alone could
-  not move without splitting it — and a before/after drive of the real window over both D24
-  recordings dumps byte-identical stores, status lines, menus, dialogs and PB cards.
-- **No test can reach the owner's app-support directory any more, in-process or in a child.** A
-  `ctest` run wrote a `stadium` row from the synthetic fixture into a real `library.json`:
-  `test_load_failure` patched no seam, and its library write had been dead only while a test double
-  raised first. Every jail was an in-process attribute patch, opt-in per file and invisible to a
-  child process. The seven store seams now resolve through `studio/app_support.py`, which jails any
-  process CTest starts (a flag on every registration), any test file run by hand, and every child of
-  either, and `studio/dev/_jail.py` exports its jail too. The app itself resolves exactly as before.
-  `tests/test_app_support_jail.py` checks each form a test process takes, plus that control.
+- A VideoToolbox export that starts slowly no longer falls back to libx264 (#367)
+- A slow export no longer says the disk is full: ffmpeg's "No space left" is checked on it (#365)
+- A lift is no longer read as a brake: strings of one-sample blips were 5–7 % of brake glyphs (#357)
+- The map's video marker is magenta, a hue no line mode paints; a "GPS poor" mark is red (#356)
+- laps.csv is ASCII again; exports name a degraded clock in the chip's word; a no-GPS recording
+  stops asking for a start line (#354)
+- The Brake/Throttle band paints each braking zone whole; 36.5–50 % of zones were split (#349)
+- The corner-match copy says each lap's drift is removed before the 3 m test, and stops saying
+  Coaching counts interpolated corners (#342)
+- Dropping a folder no longer offers Pacer's own exports as recordings to open (#338)
+- An interpolated corner time or speed never counts as a measurement: Stats, Corners, the ideal
+  lap, coaching and brake points count matched cells only (#331, #339, #352)
+- laps.csv and the report list each lap's interpolated corners in `corners_interpolated` (#339)
+- The rotation cross-check no longer says DISAGREES on every clockwise recording (#334)
+- A piece of a lap no longer counts as a lap, and every excluded lap says why (#325)
+- An unknown track no longer opens as quarter-laps (SD_30_08: 25 × 13 s pieces, not 23 laps) (#322)
+- Published tables that code changes had moved are re-measured, and tests derive the prose from
+  them (#274, #319, #321, #324)
+- The channels CSV's `t_media_s` held telemetry time; now `t_telemetry_s` and `t_video_s` (#320)
+- The note under a corner time no longer names a drift gate the app no longer has (#310)
+- The g-meter dial reads the accelerometer on its content's own clock, no longer ~0.39 s behind the
+  speed beside it (#301, #309)
+- Every GPS-derived overlay was ~0.46 s late against the picture, in the app and in exports (#301)
+- The provenance panel labels a lap time's window in telemetry seconds, not media; a shorter window
+  crosses `without_gps_lag()`, per `p5_clock_crossing_scale` (#306, #318)
+- A recording with no GPS no longer claims the GPS9 true clock (#296, #304)
+- A greyed-out menu item says why on its own label and in ⌘K, where macOS shows it; a stray
+  ellipsis is gone (#293)
+- An exported clip holds every frame it planned, and a render that runs dry is refused (#292)
+- The export progress bar no longer freezes short of the end (#305)
+- The map key paints both timing lines it names, and a corner's ring wears the accent (#294)
+- A coaching row's reason and its phase split are measured in the same corner window (#289)
+- The Stats page no longer names an accelerometer or a braking window a recording lacks (#288, #297)
+- Degenerate states say what removed the laps; five number-story frictions are fixed (#247, #287)
+- A recording whose gravity disagrees with its accelerometer is refused, and says why (#277, #283)
+- One rule for the "session best" ★ on every surface; excluded laps count out of one total; the
+  report names no best on an unconfirmed line (#281)
+- An overlay export on provisional timing says so in the frame (#276)
+- The Stats page says which filter each braking number reads (#276)
+- Coasting read 5.9 % / 4.5 % of the real figure (GPS noise); it now reads 2.8 s a lap (#275)
+- A lap with a stop of 3 s or more no longer counts as a clean lap (#271)
+- A corrupt session-record store that still parses as JSON is backed up before it is replaced (#270)
+- Video seeks convert GPS time to the media clock; the two drift up to 0.17 s apart (#266)
+- Coaching and Stats ▸ BRAKING give one "brake later" figure, the clean-lap median (#265)
+- The inferred rotation channel no longer divides by one distance and multiplies by another (#259)
+- A chapter starts at the end of the previous chapter's video, not its telemetry (#252)
+- The exported map inset fits the track; 40 % of its box was empty (#246)
+- The PB chart's empty state no longer covers its one point; Jump buttons are not clipped; the hero
+  Δ stops resizing (#244, #245, #290)
+- A GPS-dropout lap can no longer win a corner's session best (#242)
+- A full disk fails an export at once instead of re-rendering it first (#240)
+- A failed library or timing-line write says so on the status bar (#239)
+- Coaching's phase bars are read off the lap's own clock and add up to the corner time (#236)
+- The ideal lap's headline was ~44 % projection artifact (#228)
+- The ⌘⇧S stats dashboard composes at width, and chart axis titles are legible (#227)
+- A recording could be its own previous best, and the PB toast fired only once (#226)
+- A second successful File ▸ Open could strand the window (#225)
+- The video export no longer builds a widget on its worker thread (#224)
+- A sibling file that isn't video no longer kills the whole recording (#223)
+- One bad byte plus any write no longer wipes every preference (#222)
 
 ## [0.2.0] — 2026-09-06
 
