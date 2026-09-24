@@ -1,21 +1,25 @@
-"""The auto coaching "Opportunities" dialog (F10): where to find time vs your own best lap.
+"""The Coaching page (F10): where to find time vs your own best lap.
 
-A read-only QDialog over a precomputed ``coaching.Opportunities`` (no analysis here). PACER-FREE:
-only the ``coaching`` dataclasses + ``coaching.reason_sentence``. Each row's Jump button calls the
-injected ``jump_to(cid, entry_dist)`` (the app selects the corner + seeks the best lap to its
-entry). When ``opportunities.enough`` is False the table is a friendly "need more laps" message.
+A read-only page over a precomputed ``coaching.Opportunities`` (no analysis here). PACER-FREE:
+only the ``coaching`` dataclasses + ``coaching.reason_sentence``. Each row's Jump button emits
+``jump_requested(cid, entry_dist)`` (the app selects the corner + seeks the best lap to its entry).
+When ``opportunities.enough`` is False the page is a friendly "need more laps" state.
+
+ONE RANKING, ONE PLACE (board review R11 / PS-5). There used to be a modal Opportunities dialog
+rendering the same ranking as this page, kept "for the full ranking + jump-to". This page already
+shows as much of the ranking as its viewport holds; its Entry·Apex·Exit bars and Jump buttons now
+appear whenever the page is wide enough for them, and Coaching ▸ Opportunities opens this page
+full-window instead of a second copy of it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -30,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, coaching, data_quality, focus, theme, units
+from . import coaching, data_quality, focus, theme, units
 from ._signal import DASH, lap_label
 from .lap_table import set_corner_direction
 from .theme import C
@@ -39,15 +43,15 @@ from .widgets import EmptyState, PanelHeader, WrapLabel
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
 
-# column indices — the modal dialog's six, then the panel's reach + reason columns (it drops the
-# dialog's PhaseBar + Jump columns, so its "How to find it" sits at 3, not 4).
-_COL_CORNER, _COL_LOST, _COL_REACH, _COL_PHASES, _COL_REASON, _COL_GO = range(6)
-_PANEL_COL_REACH, _PANEL_COL_REASON = 2, 3
+# column indices. The Entry·Apex·Exit bars and the Jump buttons (the retired modal's two extra
+# columns) come AFTER the reason, so the four the page always had keep their places.
+_COL_CORNER, _COL_LOST = 0, 1
+_PANEL_COL_REACH, _PANEL_COL_REASON, _PANEL_COL_PHASES, _PANEL_COL_GO = 2, 3, 4, 5
 # NB (M4): "Time lost" is the cross-lap MEDIAN per-corner delta; the Entry·Apex·Exit column is a
 # DIFFERENT statistic — the typical lap's Δt profile across the corner (where in the corner it wins
 # or loses), which does NOT sum to "Time lost" and can even net faster. Its header must not also
 # claim to be "time lost", or the two columns read as self-contradictory.
-_HEADERS = ["Corner", "Time lost", "Done it?", "Entry · Apex · Exit Δt", "How to find it", ""]
+PHASE_COL_PX = 150   # the proportional bar's stable width (its segments are shares of it)
 
 # L5-06/L5-08: how a header sits over its own column, and what it says on hover.
 #
@@ -329,6 +333,14 @@ FOCUS_MAX_FRACTION = 0.30
 # after the focus block, so the table keeps at least 45 % of the page whatever the two want.
 BLOCKS_MAX_FRACTION = 0.55
 
+# UX-3: the EMPTY list's whole face — one line beside the Add button. The sentence that used to be
+# a second block under it (what the list is for) is the line's hover and rides on the header strip's
+# tooltip, so nothing is deleted; it stopped costing two rows of the ranking it points at.
+FOCUS_EMPTY_LINE = f"Focus list · empty — pick up to {focus.MAX_ITEMS} corners below"
+FOCUS_EMPTY_INVITE = (f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at this "
+                      "track, Pacer measures the same corners again and says whether they moved — "
+                      "or why it can't tell.")
+
 
 class FocusBlock(QWidget):
     """The training loop's face: the corners the driver put on their focus list, and what THIS
@@ -344,6 +356,12 @@ class FocusBlock(QWidget):
     It yields vertically exactly as ``ThemeBlock`` does (shed the last line, then the one above it,
     then the whole block), and the lines it sheds stay on the header strip's tooltip.
 
+    AN EMPTY LIST IS ONE LINE (UX-3). Measured on the real window at the 1440x900 default, the
+    invitation — a headline, a two-line sentence and two buttons, one of which can never be enabled
+    on an empty list — was 98 of the page's 417 px, and with the theme above the table it left the
+    ranking a 146-162 px viewport: two of its top three rows on SD_19_09, one on SD_30_08. So the
+    empty state is the line and the Add button beside it; the sentence is the line's hover.
+
     Read-only over a ``focus.Report`` plus a selection: the promote / drop gestures are SIGNALS the
     app acts on (it owns the app-support stores — the same split ``set_session_record`` uses)."""
 
@@ -355,6 +373,7 @@ class FocusBlock(QWidget):
         super().__init__(parent)
         self._lines: list[str] = []
         self._headline = ""
+        self._empty = False             # the one-line invitation (an active track, no corners yet)
         self._cids: list[int] = []      # cids currently on the list, in list order
         self._selected: int | None = None
         lay = QVBoxLayout(self)
@@ -370,6 +389,13 @@ class FocusBlock(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(theme.SPACE_S)
+        # The empty state's one line, in the BUTTON row rather than above it: the headline label
+        # and this one are never shown together (see _apply), so no widget ever changes layout.
+        self.empty_line = WrapLabel(FOCUS_EMPTY_LINE)
+        self.empty_line.setProperty("role", "BarLabel")
+        self.empty_line.setToolTip(FOCUS_EMPTY_INVITE)
+        self.empty_line.setVisible(False)
+        row.addWidget(self.empty_line, 1)
         self.add_button = QPushButton("Add to focus list")
         self.add_button.setAutoDefault(False)
         self.add_button.setDefault(False)
@@ -380,6 +406,7 @@ class FocusBlock(QWidget):
         self.drop_button.clicked.connect(self._emit_remove)
         row.addWidget(self.add_button)
         row.addWidget(self.drop_button)
+        self._row_stretch = row.count()
         row.addStretch(1)
         self._buttons = QWidget()
         self._buttons.setLayout(row)
@@ -400,11 +427,12 @@ class FocusBlock(QWidget):
         # same 200-character explanation bury the one thing the driver can act on.
         self._lines = focus.report_lines(report) if report is not None else []
         self._headline = focus.report_headline(report) if report is not None else ""
-        if report is not None and not report.active:
-            self._headline = "Focus list · empty"
-            self._lines = [f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at "
-                           "this track, Pacer measures the same corners again and says whether "
-                           "they moved — or why it can't tell."]
+        self._empty = report is not None and not report.active
+        if self._empty:
+            self._headline, self._lines = FOCUS_EMPTY_LINE, []
+        # On an empty list the trailing stretch gives way, so the line takes the row's slack and
+        # the Add button sits at its right edge.
+        self._buttons.layout().setStretch(self._row_stretch, 0 if self._empty else 1)
         self.headline.setText(self._headline)
         for label, text in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS, strict=False):
             label.setText(text)
@@ -418,8 +446,9 @@ class FocusBlock(QWidget):
 
     def full_text(self) -> str:
         """The whole block as one string — what the header tooltip carries, so a line the height
-        budget sheds is demoted rather than deleted."""
-        return "\n".join([self._headline, *self._lines]).strip()
+        budget sheds is demoted rather than deleted (and the empty list's invitation with it)."""
+        invite = [FOCUS_EMPTY_INVITE] if self._empty else []
+        return "\n".join([self._headline, *self._lines, *invite]).strip()
 
     def _sync_buttons(self):
         """Label + enablement from the selection and the list. The button SAYS which corner it
@@ -460,6 +489,14 @@ class FocusBlock(QWidget):
         lay = self.layout()
         m = lay.contentsMargins()
         inner = max(width - m.left() - m.right(), 1)
+        if self._empty:
+            # One row: the line wraps into what the Add button leaves it, and the row is as tall
+            # as the taller of the two.
+            button = self.add_button.sizeHint()
+            beside = max(inner - button.width() - self._buttons.layout().spacing(), 1)
+            line = QFontMetrics(self.empty_line.font()).boundingRect(
+                QRect(0, 0, beside, 0), Qt.TextWordWrap, self._headline).height()
+            return m.top() + m.bottom() + max(line, button.height())
         texts = [self._headline] + self._lines[:n_lines]
         fonts = [self.headline.font()] + [lb.font() for lb in self.lines[:n_lines]]
         need = m.top() + m.bottom() + lay.spacing() * max(len(texts), 1)
@@ -490,6 +527,12 @@ class FocusBlock(QWidget):
             want = visible and i < n_lines and bool(self._lines[i:i + 1])
             if label.isHidden() == want:
                 label.setVisible(want)
+        # The empty list shows its one line in place of the headline, and no Remove button — on an
+        # empty list there is nothing it could ever remove.
+        for widget, want in ((self.headline, not self._empty), (self.empty_line, self._empty),
+                             (self.drop_button, not self._empty)):
+            if widget.isHidden() == want:
+                widget.setVisible(want)
         if self._buttons.isHidden() == visible:
             self._buttons.setVisible(visible)
         if self.isHidden() == visible:
@@ -664,19 +707,15 @@ def _wire_reason_fit(table: QTableWidget, col: int):
     timer.start(0)
 
 
-def _fit_reason_rows(table: QTableWidget, col: int):
-    """Re-height every wrapped reason cell in `col` from the rect the delegate paints into, then
-    re-fit the rows. Idempotent — safe to call on every resize."""
-    # Re-entrancy guard: re-fitting rows can toggle the vertical scrollbar, which re-stretches the
-    # header, which calls back in here. One pass at a time; the next width change refits anyway.
-    if table.property("_fitting_reason"):
-        return
+def _reason_text_box(table: QTableWidget, col: int, column_px: int) -> tuple[int, int]:
+    """(width the glyphs are laid out in, vertical padding) for a `col` cell `column_px` wide —
+    the rect the delegate PAINTS into, not the section's."""
     opt = QStyleOptionViewItem()
     opt.initFrom(table)
     opt.features = QStyleOptionViewItem.HasDisplay
     # The painter's own cell width, not the section's: the grid line lives inside the section and
     # is not paintable text (QTableView::visualRect is a pixel narrower than columnWidth for it).
-    cell_w = table.columnWidth(col) - (1 if table.showGrid() else 0)
+    cell_w = column_px - (1 if table.showGrid() else 0)
     opt.rect = QRect(0, 0, cell_w, 100)
     text_rect = table.style().subElementRect(QStyle.SE_ItemViewItemText, opt, table)
     # ...and SE_ItemViewItemText is still NOT where the glyphs land. QCommonStyle's own
@@ -688,7 +727,31 @@ def _fit_reason_rows(table: QTableWidget, col: int):
     # line as "…", eating the sentence's last word with no user action at all. Same family as the
     # QSS-padding error the block above this function documents, one layer further in.
     inset = 2 * (table.style().pixelMetric(QStyle.PM_FocusFrameHMargin, opt, table) + 1)
-    avail, pad_v = text_rect.width() - inset, 100 - text_rect.height()
+    return text_rect.width() - inset, 100 - text_rect.height()
+
+
+def _narrow_column_px(table: QTableWidget, col: int) -> int:
+    """The width the stretching `col` has once the vertical scrollbar is showing: the viewport as if
+    the bar were there, less every other visible column. Read this way, not off the section,
+    because the section lags — Qt re-stretches it on its NEXT pass, so a fit run from the
+    viewport's own resize read the width of the state just left, pinned rows for it, and toggled the
+    bar back (measured: rows pinned for 250 px under a 262 px column and the reverse, alternating,
+    for as long as the page was open). Pinned at the narrow width a row is at worst one line roomy
+    while the bar is off, and never depends on whether it is."""
+    bar = table.verticalScrollBar()
+    others = sum(table.columnWidth(c) for c in range(table.columnCount())
+                 if c != col and not table.isColumnHidden(c))
+    return table.viewport().width() - (0 if bar.isVisible() else bar.sizeHint().width()) - others
+
+
+def _fit_reason_rows(table: QTableWidget, col: int):
+    """Re-height every wrapped reason cell in `col` from the rect the delegate paints into, then
+    re-fit the rows. Idempotent — safe to call on every resize."""
+    # Re-entrancy guard: re-fitting rows can toggle the vertical scrollbar, which re-stretches the
+    # header, which calls back in here. One pass at a time; the next width change refits anyway.
+    if table.property("_fitting_reason"):
+        return
+    avail, pad_v = _reason_text_box(table, col, _narrow_column_px(table, col))
     if avail <= 0:  # a collapsed column: leave Qt's own heights alone rather than pin nonsense
         return
     fm = table.fontMetrics()
@@ -699,17 +762,25 @@ def _fit_reason_rows(table: QTableWidget, col: int):
         # the column widens). We only ever GROW past it — the fix is the dropped line, not a
         # re-invention of the row metrics, and the pin must stay harmless where there is no
         # stylesheet padding to mis-measure.
+        #
+        # ASKED, NOT APPLIED. This read Qt's answer by applying it (a resizeRowsToContents between
+        # clearing the pins and setting them again), and Qt under-measures these cells — so for a
+        # moment the rows were shorter than they paint, which could hide the vertical scrollbar,
+        # widen the column the `avail` above was measured at, and have the pins it then set shown
+        # the bar again: one fit per toggle, forever, at a page height between the two totals. The
+        # Coaching page's R11 columns (cell widgets built and dropped as the row count is tuned)
+        # kept that ping-pong fed; sizeHintForRow is the same number without the transient.
         for r in rows:
             table.item(r, col).setData(Qt.SizeHintRole, None)
-        table.resizeRowsToContents()
+        floor = table.verticalHeader().minimumSectionSize()
+        own = {r: max(table.sizeHintForRow(r), floor) for r in rows}
         for r in rows:
             item = table.item(r, col)
             wrapped = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, item.text()).height()
             # The width must be a REAL one: setSizeHint DISCARDS an invalid QSize (a -1 "don't care"
             # width clears the role instead of pinning the height). The section stretches, so the
             # width we pass never drives the layout.
-            item.setSizeHint(QSize(table.columnWidth(col),
-                                   max(wrapped + pad_v, table.rowHeight(r))))
+            item.setSizeHint(QSize(table.columnWidth(col), max(wrapped + pad_v, own[r])))
         table.resizeRowsToContents()
     finally:
         table.setProperty("_fitting_reason", False)
@@ -946,187 +1017,10 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
     return item
 
 
-def _budget_action_column(table, col: int) -> None:
-    """Widen `col` until the BUTTON inside it fits, not merely its own size hint (§6.4).
-
-    `ResizeToContents` sizes a column from the cell widget's hint and knows nothing about the inset
-    the view then paints that widget INSIDE. Measured on the shipped default (920x380, D24's nine
-    opportunities): the column came out 89 px, the last cell's `visualRect` was x=791 w=88, and the
-    button was placed at x=799 keeping its 88 px minimum — so it ran to 887 against a viewport of
-    880. Every Jump button in the dialog was flat-cut on its right edge, the amber rounding sliced
-    off into the scrollbar gutter.
-
-    Rather than guess the inset from a style metric, ASK THE PAINTER: compare the widget's geometry
-    with the cell it was painted into and add the difference. Self-correcting across styles and DPRs,
-    and a no-op when the column already fits. (The same "the budget asks the painter" move the
-    export pill budget made for the same class of defect.)"""
-    if table.rowCount() < 1:
-        return
-    widget = table.cellWidget(0, col)
-    if widget is None:
-        return
-    cell = table.visualRect(table.model().index(0, col))
-    over = (widget.geometry().right() + 1) - (cell.right() + 1)
-    if over > 0:
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(col, QHeaderView.Fixed)
-        table.setColumnWidth(col, header.sectionSize(col) + over)
-
-
-class OpportunitiesDialog(QDialog):
-    """Coaching ▸ Opportunities dialog over a freshly-computed ``coaching.Opportunities``.
-    jump_to(cid, entry_dist) fires on a row's Jump button; None disables them (headless layout
-    tests). `brake_points` (optional, cid -> coaching.BrakeHabit over the clean laps) appends a
-    light ESTIMATED "brake ~N m later" line to a row's reason (D4)."""
-
-    def __init__(self, opportunities: coaching.Opportunities,
-                 jump_to: Callable[[int, float], None] | None = None,
-                 brake_points: dict | None = None,
-                 parent=None, speed_unit: str | None = None, session=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"{APP_NAME} — opportunities")
-        # The lap account the empty state reads (`empty_state_copy`), so the modal names the same
-        # reason the Coaching page does. None keeps the count-only copy.
-        self._session = session
-        # A wider default than the persistent panel: the modal carries two extra columns the panel
-        # doesn't (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button), which
-        # squeeze the stretch reason column into a sliver that truncates ("brake …", "find tim…").
-        # Give the reason real room so it reads as 1–2 wrapped lines, and keep the modal resizable.
-        self.resize(920, 380)
-        self.setMinimumWidth(720)
-        self._opps = opportunities
-        self._jump_to = jump_to
-        self._brake_points = brake_points or {}
-        # Speed display unit (km/h default) for the reason sentence's apex deficit; opened fresh
-        # per view so it's fixed at construction (no live flip needed on a modal).
-        self._speed_unit = speed_unit
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
-
-        # L2: drop rows whose loss rounds to +0.00 s at the shown 2-dp resolution so no
-        # informationless "+0.00 s" row (with a live Jump button) is listed as an opportunity.
-        shown = _shown_rows(opportunities)
-        if opportunities.enough and shown:
-            lap = opportunities.median_lap_id
-            # `n_laps` is a COUNT (stays as-is); `lap` is a lap ID, so it renders 1-based
-            # (lap_label). IA-01: name the SCOPE here too — this ranking is the whole session's, not
-            # the selected lap's, and the panel it mirrors now says so.
-            title = QLabel(f"Biggest gains vs your best lap — {_SCOPE_PREFIX.lower()}, "
-                           f"{_clean_laps_phrase(opportunities.n_laps)}"
-                           + (f" (typical lap {lap_label(lap)})" if lap is not None else ""))
-        else:
-            title = QLabel("Opportunities")
-        title.setProperty("role", "PanelHeader")
-        title.setWordWrap(True)
-        root.addWidget(title)
-
-        # Part 3: the theme leads here too, so the modal and the page tell one story. It hides
-        # itself when nothing is ranked, so the empty states below are unaffected.
-        self.theme_block = ThemeBlock()
-        self.theme_block.set_theme(opportunities)
-        root.addWidget(self.theme_block)
-
-        if not (opportunities.enough and shown):
-            root.addWidget(self._empty_state(opportunities), 1)
-        else:
-            root.addWidget(self._build_table(shown), 1)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.reject)
-        buttons.addWidget(close_btn)
-        root.addLayout(buttons)
-
-    # ------------------------------------------------------------------ states
-    def _empty_state(self, opps: coaching.Opportunities) -> QWidget:
-        """The two no-table cases, from the SAME pair of constants the panel uses.
-
-        `owns_pane=False`: this is a dialog, so the state sits on the window's own canvas rather
-        than painting a card inside a card."""
-        return EmptyState(*empty_state_copy(opps, self._session), owns_pane=False)
-
-    def _build_table(self, rows: list[coaching.Opportunity]) -> QWidget:
-        table = QTableWidget(len(rows), len(_HEADERS))
-        table.setHorizontalHeaderLabels(_HEADERS)
-        table.verticalHeader().setVisible(False)
-        table.setSelectionMode(QAbstractItemView.NoSelection)  # read-only; Jump is the only action
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setFocusPolicy(Qt.NoFocus)
-        table.setAlternatingRowColors(True)
-        # The corner-direction arrow paints at the app's ICON_PX, not the style's PM_SmallIconSize.
-        table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
-        # Word-wrap the reason cell + let each row grow to its wrapped content instead of a fixed
-        # 40-px section that clips a 2nd line (the modal's extra PhaseBar + Jump columns squeeze the
-        # stretch reason column, so the "How to find it" sentence wraps and MUST get the height for
-        # it). Mirrors the persistent OpportunitiesPanel's now-untruncated behaviour (#66) so the two
-        # coaching surfaces read consistently.
-        table.setWordWrap(True)
-        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        hdr = table.horizontalHeader()
-        hdr.setSectionResizeMode(_COL_REASON, QHeaderView.Stretch)
-        for col in (_COL_CORNER, _COL_LOST, _COL_REACH, _COL_GO):
-            hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        # The D2 phase breakdown bar wants a stable width (the segments are proportional).
-        hdr.setSectionResizeMode(_COL_PHASES, QHeaderView.Fixed)
-        table.setColumnWidth(_COL_PHASES, 150)
-        # L5-08: every header over its own column's cells (the numbers right, the prose left) with
-        # the tooltip it never carried — the modal stretches the reason column to ~500 px, so a
-        # centred "How to find it" drifts as far from its sentences as the panel's did.
-        _style_headers(table, _HEADERS)
-        num_font = theme.mono_font(theme.TABLE)
-
-        for r, opp in enumerate(rows):
-            table.setItem(r, _COL_CORNER, _corner_cell(opp))
-            table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
-            # have you already done it? (out of the session's clean laps: see _reach_tip)
-            table.setItem(r, _COL_REACH, _reach_cell(opp, num_font, self._opps.n_laps))
-            table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
-            table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points, self._speed_unit))
-            table.setCellWidget(r, _COL_GO, self._go_button(opp))
-        # Fit each row to its wrapped-reason height at the current column widths (the reason is the
-        # stretch column, so a 2-line sentence needs the extra height — same as the panel's fill),
-        # measured at the width the delegate PAINTS into so no line is dropped, and re-fitted every
-        # time the header re-stretches the column (L5-03).
-        _wire_reason_fit(table, _COL_REASON)
-        _budget_action_column(table, _COL_GO)
-        self.table = table  # exposed for the tests
-        return table
-
-    def _go_button(self, opp: coaching.Opportunity) -> QPushButton:
-        """Per-row jump-to button; captures (cid, entry_dist) and calls the injected `jump_to`.
-        Disabled when no callback was injected (headless layout tests)."""
-        # Phosphor arrow icon + "Jump" (the Unicode arrow didn't render); primary CTA styling.
-        btn = QPushButton(theme.icon("ph.arrow-right", color=C.on_accent), "Jump")
-        btn.setProperty("variant", "primary")
-        btn.setMinimumWidth(88)
-        btn.setToolTip(f"Select C{opp.cid} on the map and jump the video to your best lap's "
-                       "entry to this corner")
-        # B10 (belt+braces with the theme.icon color_active fix): never the focused-default
-        # styling that repainted the arrow amber-on-amber.
-        btn.setAutoDefault(False)
-        btn.setDefault(False)
-        if self._jump_to is None:
-            btn.setEnabled(False)
-        else:
-            cid, entry = opp.cid, opp.entry_dist
-            # C8: close the modal FIRST, then jump — the ApplicationModal dialog otherwise
-            # stays centred over exactly the map/corner state the jump just changed, making
-            # the CTA read as doing nothing.
-            def _jump(_checked=False, c=cid, d=entry):
-                self.accept()
-                self._jump_to(c, d)
-            btn.clicked.connect(_jump)
-        return btn
-
-
 # The actionable SHORTLIST: the rows the page's headline sums (and the Stats page's coaching digest
 # tile mirrors — stats_panel._set_digest reads this constant so the two surfaces state one total),
 # and the FLOOR on how many rows the page shows. L5-08: it is not a ceiling any more — the page
-# renders as much of the ranking as its viewport can hold (see OpportunitiesPanel._tune_rows). The
-# per-row jump-to still lives only in the modal dialog.
+# renders as much of the ranking as its viewport can hold (see OpportunitiesPanel._tune_rows).
 PANEL_TOP_N = 3
 
 # L5-06: the width below which the page stops paying for the "Done it?" column.
@@ -1141,6 +1035,12 @@ PANEL_TOP_N = 3
 # could not show one whole row.
 REASON_MIN_PX = 180
 
+# The columns the page gives up as it narrows, first to last. The bars are a detail of the row (the
+# reason sentence already names the dominant phase), Jump an action a row click half-does (it rings
+# the corner), "Done it?" a count the sentence also states — see _apply_column_budget.
+_OPTIONAL_COLS = (_PANEL_COL_PHASES, _PANEL_COL_GO, _PANEL_COL_REACH)
+JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's button padding
+
 # What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
 # quotes it; the live theme + actions are prepended to it (see _refresh_summary_label).
 _SCOPE_TOOLTIP = (
@@ -1148,15 +1048,18 @@ _SCOPE_TOOLTIP = (
     "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
     "lap you select; the Corners tab is the per-lap view. The total is your top "
     f"{PANEL_TOP_N} corners that cleared the evidence gate; corners that did not are listed "
-    "below with the reason. Open Coaching ▸ Opportunities for the full ranking + jump-to.")
+    "below with the reason. Coaching ▸ Opportunities (or the panel's maximize button) shows "
+    "this page full-window, where "
+    "each row also carries where in the corner the time goes and a Jump to it.")
 
 
 class OpportunitiesPanel(QWidget):
     """The Coaching page of the lap panel's tab stack: the session THEME, then the ranked
     opportunities (corner · time lost · done-it? · dominant reason) over a freshly computed
     ``coaching.Opportunities``, at the panel's FULL height — the full reason sentences get room to
-    breathe (this replaced the old capped under-table strip whose whole drag range was 68 px). The
-    modal ``OpportunitiesDialog`` stays available for the full ranking + jump-to.
+    breathe (this replaced the old capped under-table strip whose whole drag range was 68 px).
+    Full-window (Coaching ▸ Opportunities, or the maximize button) each row also shows WHERE in the corner
+    the time goes and a Jump to it — the two columns of the modal this page replaced.
 
     THEME FIRST, ROWS AS THE DRILL-DOWN (Part 3). ``ThemeBlock`` states one clustered story and at
     most two actions above the table; the per-corner list under it is the detail behind them.
@@ -1170,8 +1073,10 @@ class OpportunitiesPanel(QWidget):
     and then as many further ranked corners as the viewport can hold — maximized it used to be 3
     rows in 808 px (78 % dead canvas re-measured after #B23 grew the rows; the sweep filed 83 %)
     while the model had 11 corners ranked and the modal fitted all 11 in a third of the area.
-    Narrow, the "Done it?" column drops out before the reason prose is squeezed
-    below ``REASON_MIN_PX`` and the reason header elides into the width the style paints into, so
+    Narrow, the Entry·Apex·Exit bars, then the Jump buttons, then the "Done it?" column drop out
+    before the reason prose is squeezed below ``REASON_MIN_PX`` (``_OPTIONAL_COLS``; a row click
+    still rings the corner on the map, and maximizing brings them back) and the reason header elides into the
+    width the style paints into, so
     the app's own minimum window no longer raises a horizontal scrollbar over a clipped header. The
     HEADLINE still sums the ``PANEL_TOP_N`` shortlist and names that count ("across your top 3
     corners"), because the Stats page's digest tile states the same total from the same constant.
@@ -1198,8 +1103,11 @@ class OpportunitiesPanel(QWidget):
     # asks rather than writes (the same split `CentralView.set_session_record` uses).
     focus_add_requested = Signal(int)
     focus_remove_requested = Signal(int)
+    # A row's Jump: (cid, the corner's entry odometer on the best lap). The app selects the corner
+    # and seeks the video to the best lap's entry to it (StudioWindow._jump_to_opportunity).
+    jump_requested = Signal(int, float)
 
-    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it"]
+    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", "Entry · Apex · Exit Δt", ""]
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1211,11 +1119,15 @@ class OpportunitiesPanel(QWidget):
         self._all_rows: list[coaching.Opportunity] = []
         self._brake_points: dict = {}
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
+        self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
         self._tuning = False         # re-entrancy guard: a re-render fires resizeEvent
         self._tuned_key: tuple | None = None   # the viewport the current row count was tuned for
         self._budgeting = False        # re-entrancy guard: hiding a column fires resizeEvent
         self._theme_budgeting = False  # ditto: shedding a theme line re-lays the page out
-        self._reach_px = 0             # last "Done it?" width, so the budget can cost it while hidden
+        # The last width each optional column had, so the budget can cost one while it is hidden.
+        # The bars and the Jump column are fixed widths; "Done it?" sizes to its content.
+        self._col_px = {_PANEL_COL_PHASES: PHASE_COL_PX, _PANEL_COL_REACH: 0,
+                        _PANEL_COL_GO: self._go_column_px()}
         # The headline (e.g. "0.60 s across your top 3 corners") — the page's one-line framing.
         self._headline = ""
         # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
@@ -1252,9 +1164,19 @@ class OpportunitiesPanel(QWidget):
         # dragged very short.
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr = self.table.horizontalHeader()
-        hdr.setStretchLastSection(True)  # the reason column takes the slack
-        for col in (0, 1, 2):  # corner · time-lost · done-it? to content; reason (last) stretches
+        # The reason takes the slack; corner · time-lost · done-it? · Jump size to their content and
+        # the bars keep a stable width (their segments are shares of it).
+        hdr.setSectionResizeMode(_PANEL_COL_REASON, QHeaderView.Stretch)
+        for col in (_COL_CORNER, _COL_LOST, _PANEL_COL_REACH):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # §6.4, carried over from the modal: ResizeToContents sizes a column from the cell widget's
+        # HINT and knows nothing about the inset the view then paints the widget INSIDE, so every
+        # Jump was flat-cut on its right edge. The modal asked the painter once, at build; the page
+        # re-budgets on every resize, where asking again would ADD the inset again. So the column
+        # is a fixed width: the button's own floor plus that inset on each side.
+        for col, px in ((_PANEL_COL_PHASES, PHASE_COL_PX), (_PANEL_COL_GO, self._go_column_px())):
+            hdr.setSectionResizeMode(col, QHeaderView.Fixed)
+            self.table.setColumnWidth(col, px)
         # L5-06/L5-08: headers over their own columns, with tooltips, and the padding budget the
         # reason header is elided against (measured now, while it still carries its full label).
         _style_headers(self.table, self._COLUMNS)
@@ -1264,6 +1186,15 @@ class OpportunitiesPanel(QWidget):
         # L5-03: keep the wrapped reason rows fitted to the width the delegate really paints into,
         # re-measured whenever the header re-stretches the column.
         _wire_reason_fit(self.table, _PANEL_COL_REASON)
+        # Showing or hiding a column re-stretches the reason section only on Qt's NEXT pass, after
+        # the pass that toggled it has fitted rows to the old width and counted how many fit.
+        # Measured: the first full-window pass saw 105-px rows (the reason squeezed by bars not yet
+        # re-stretched around) and stopped at 6 of 11 rows that settle at 48 px. So a pass that
+        # changes a column's visibility lays the page out once more, next pass, when the width is
+        # real (_apply_column_budget). Only a CHANGE schedules it, so it cannot feed itself.
+        self._restretch = QTimer(self)
+        self._restretch.setSingleShot(True)
+        self._restretch.timeout.connect(self._retune)
         # L5-06/L5-08: re-budget and re-tune off the TABLE VIEWPORT's own resize, not the panel's.
         # `QWidget.resize` delivers our resizeEvent before the child layout has been applied, so a
         # budget computed there measures the width the table is about to stop having (measured: the
@@ -1346,6 +1277,7 @@ class OpportunitiesPanel(QWidget):
         self._all_rows = _shown_rows(opps)
         self._brake_points = brake_points
         self._n_clean = opps.n_laps
+        self._typical_lap = opps.median_lap_id
         self._tuned_key = None       # a new ranking: re-tune the row count against the viewport
         # The headline shortlist is the top RANKED rows, not the top rows: an abstained corner is
         # displayed but its number is not a claim, so summing it into "time available" would put
@@ -1418,6 +1350,8 @@ class OpportunitiesPanel(QWidget):
                 self.table.setItem(r, 2, _reach_cell(opp, self._num_font,  # have you done it?
                                                      self._n_clean))
                 self.table.setItem(r, 3, _reason_cell(opp, self._brake_points, self._speed_unit))
+                self.table.setCellWidget(r, _PANEL_COL_PHASES, PhaseBar(opp.phases))  # D2
+                self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
         finally:
@@ -1440,30 +1374,68 @@ class OpportunitiesPanel(QWidget):
     def _apply_column_budget(self):
         """Spend the panel's width on the column that carries the prose (L5-06).
 
-        Drops "Done it?" before the reason cell falls below ``REASON_MIN_PX``, then elides the
-        reason header into the width the style really paints into. At the app's own minimum this
-        takes the reason column from its header's 100-px fallback to the 128 px actually left over,
-        retires the horizontal scrollbar the overflow raised, and stops "How to find it" painting as
-        a clipped "How to find". Nothing is lost when the column goes: the reason sentence in the
-        column it pays for spells the same fact out ("You have already done this — 9 of your 38
-        laps matched it")."""
+        Shows the optional columns, most essential first ("Done it?", then Jump, then the
+        Entry·Apex·Exit bars — ``_OPTIONAL_COLS`` read backwards), while the reason cell keeps at
+        least ``REASON_MIN_PX``; then elides the reason header into the width the style really paints
+        into. At the app's own minimum this takes the reason column from its header's 100-px fallback
+        to the 128 px actually left over, retires the horizontal scrollbar the overflow raised, and
+        stops "How to find it" painting as a clipped "How to find". Nothing is lost when a column
+        goes: the reason sentence spells "Done it?" out ("You have already done this — 9 of 38
+        laps"), a row click still rings the corner on the map, and full-window every column is back.
+
+        The room is measured as if the vertical scrollbar were showing, for the reason
+        ``_shortlist_px`` gives: a threshold the bar's own 12 px can cross toggles a column every
+        time the bar does."""
         if self._budgeting:
             return
         t = self.table
         self._budgeting = True
         try:
-            if not t.isColumnHidden(_PANEL_COL_REACH):
-                # Remember what "Done it?" costs, so the budget can price it while it is hidden.
-                self._reach_px = t.columnWidth(_PANEL_COL_REACH) or self._reach_px
-            room = (t.viewport().width() - t.columnWidth(_COL_CORNER)
-                    - t.columnWidth(_COL_LOST) - self._reach_px)
-            hide = room < REASON_MIN_PX
-            if hide != t.isColumnHidden(_PANEL_COL_REACH):
-                t.setColumnHidden(_PANEL_COL_REACH, hide)
+            for col in _OPTIONAL_COLS:
+                if not t.isColumnHidden(col) and t.columnWidth(col):
+                    # Remember what each column costs, so the budget can price it while hidden.
+                    self._col_px[col] = t.columnWidth(col)
+            bar = t.verticalScrollBar()
+            room = (t.viewport().width() - (0 if bar.isVisible() else bar.sizeHint().width())
+                    - t.columnWidth(_COL_CORNER) - t.columnWidth(_COL_LOST))
+            shown = set()
+            for col in reversed(_OPTIONAL_COLS):
+                if room - self._col_px[col] < REASON_MIN_PX:
+                    break           # strict priority: never a lesser column in a greater one's place
+                shown.add(col)
+                room -= self._col_px[col]
+            for col in _OPTIONAL_COLS:
+                if (col not in shown) != t.isColumnHidden(col):
+                    t.setColumnHidden(col, col not in shown)
+                    self._restretch.start(0)
             _elide_header(t, _PANEL_COL_REASON, self._COLUMNS[_PANEL_COL_REASON],
                           self._reason_chrome)
         finally:
             self._budgeting = False
+
+    def _go_column_px(self) -> int:
+        """The Jump column's width: the button's own width (never under its floor) and the cell's
+        inset on both sides — `theme.SPACE_S`, the gap a cell keeps around its content."""
+        return max(self._go_button(None).sizeHint().width(), JUMP_MIN_PX) + 2 * theme.SPACE_S
+
+    def _go_button(self, opp: coaching.Opportunity | None) -> QPushButton:
+        """One row's Jump: emits ``jump_requested(cid, entry_dist)``. With no row it is the template
+        the column budget measures before any row exists."""
+        # Phosphor arrow icon + "Jump" (the Unicode arrow didn't render); primary CTA styling.
+        btn = QPushButton(theme.icon("ph.arrow-right", color=C.on_accent), "Jump")
+        btn.setProperty("variant", "primary")
+        btn.setMinimumWidth(JUMP_MIN_PX)
+        # B10 (belt+braces with the theme.icon color_active fix): never the focused-default
+        # styling that repainted the arrow amber-on-amber.
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
+        if opp is not None:
+            btn.setToolTip(f"Select C{opp.cid} on the map and jump the video to your best lap's "
+                           "entry to this corner")
+            cid, entry = opp.cid, float(opp.entry_dist)
+            btn.clicked.connect(lambda _checked=False, c=cid, d=entry:
+                                self.jump_requested.emit(c, d))
+        return btn
 
     def _tune_rows(self):
         """Show as many of the ranking as the viewport can actually hold (L5-08).
@@ -1480,8 +1452,14 @@ class OpportunitiesPanel(QWidget):
         nothing free."""
         if self._tuning or self.body.currentIndex() != 0 or not self._all_rows:
             return
-        key = (self.table.viewport().width(), self.table.viewport().height(),
-               len(self._all_rows), self.table.isColumnHidden(_PANEL_COL_REACH))
+        # The width is keyed as if the vertical scrollbar were showing (the column budget and the
+        # shortlist reserve read it the same way): the trial row below can toggle the bar, and a
+        # key that moved with it never matched again — measured, one page re-tuned ~70 times a
+        # second between two widths 12 px apart, for as long as it was on screen.
+        bar = self.table.verticalScrollBar()
+        key = (self.table.viewport().width() - (0 if bar.isVisible() else bar.sizeHint().width()),
+               self.table.viewport().height(), len(self._all_rows),
+               tuple(self.table.isColumnHidden(c) for c in _OPTIONAL_COLS))
         if key == self._tuned_key:
             return
         n_all = len(self._all_rows)
@@ -1554,6 +1532,12 @@ class OpportunitiesPanel(QWidget):
         _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self._tune_rows()
 
+    def _retune(self):
+        """Lay the page out again with the row count re-counted: the columns changed under the
+        count the last pass settled on (see the ``_restretch`` note in __init__)."""
+        self._tuned_key = None
+        self._relayout()
+
     def _apply_theme_budget(self):
         """Let the focus list and the theme lead, but never displace the ranking they are about.
 
@@ -1565,26 +1549,63 @@ class OpportunitiesPanel(QWidget):
         The FOCUS block is budgeted first and the theme takes what is left under
         ``BLOCKS_MAX_FRACTION``: two blocks that each yield only against the PAGE still add up to
         two thirds of it, and the answer to the driver's own focus list outranks a fresh reading of
-        today. A page with no focus report is unchanged — the block returns 0 px."""
+        today. A page with no focus report is unchanged — the block returns 0 px.
+
+        AND THE SHORTLIST IS RESERVED BEFORE EITHER (UX-3). Fractions of the page are not a promise
+        to the table: at the 1440x900 default the page is 417 px, the two blocks were entitled to
+        55 % of it, and the three ranked rows those blocks summarize need ~190-230 px there — so the
+        real window showed two of them (one on SD_30_08) and the answer sat below the fold of the
+        page that exists to give it. The blocks now share only what is left once the table's header
+        and its ``PANEL_TOP_N`` rows, measured at the current width, are whole."""
         if self._theme_budgeting:
             return
         self._theme_budgeting = True
         try:
             height = self.height()
-            used = self.focus_block.fit_into(self.width(), int(height * FOCUS_MAX_FRACTION))
+            room = max(height - self._header.height() - self._shortlist_px(), 0)
+            used = self.focus_block.fit_into(self.width(),
+                                             min(int(height * FOCUS_MAX_FRACTION), room))
             self.theme_block.fit_into(
                 self.width(),
                 min(int(height * THEME_MAX_FRACTION),
-                    max(int(height * BLOCKS_MAX_FRACTION) - used, 0)))
+                    max(int(height * BLOCKS_MAX_FRACTION) - used, 0),
+                    max(room - used, 0)))
             self._refresh_summary_label()
         finally:
             self._theme_budgeting = False
 
+    def _shortlist_px(self) -> int:
+        """The height the table needs to show its first ``PANEL_TOP_N`` rows whole: its frame, its
+        header and those rows. 0 while the page shows its empty state — there is no ranking to make
+        room for.
+
+        EACH ROW AT ITS NARROW HEIGHT — wrapped as if the vertical scrollbar were showing, whether
+        or not it is. Reserving the rows at the width they happen to have made a knife-edge, and
+        the real window sat on it: on SD_30_08 the three rows fit without the scrollbar (190 px in
+        200) and not with it (204 px), so each fit toggled the bar, narrowed or widened the reason
+        column by its 12 px, and pinned rows for the width it had just left — the page flipped
+        between the two every ~0.4 s, half the time with C7's brake-point line cut to "…". Sized
+        for the narrow width, the shortlist fits either way and the bar never has to appear."""
+        t = self.table
+        if self.body.currentIndex() != 0 or t.rowCount() == 0:
+            return 0
+        col = _PANEL_COL_REASON
+        avail, pad_v = _reason_text_box(t, col, _narrow_column_px(t, col))
+        fm = t.fontMetrics()
+        rows = 0
+        for r in range(min(PANEL_TOP_N, t.rowCount())):
+            item = t.item(r, col)
+            wrapped = (fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, item.text()).height()
+                       if item is not None and avail > 0 else 0)
+            rows += max(t.rowHeight(r), wrapped + pad_v)
+        hdr = t.horizontalHeader()
+        return rows + max(hdr.height(), hdr.sizeHint().height()) + 2 * t.frameWidth()
+
     # ------------------------------------------------------------- interaction
     def _on_row_selected(self):
         """Emit the clicked row's corner cid (None on deselect). The map apex-ring is the only
-        consumer — read-only panel, no seek/lap-selection side effects (the Jump-to-corner detail
-        action lives in the modal dialog). The focus block also follows the selection, because its
+        consumer — no seek/lap-selection side effects here (that is the row's Jump button, shown
+        whenever the page is wide enough for it). The focus block also follows the selection, because its
         Add button names the corner it would promote."""
         cid = self._selected_cid()
         self.focus_block.set_selected_corner(cid)
@@ -1600,4 +1621,9 @@ class OpportunitiesPanel(QWidget):
         self.summary_label.setText(self._headline)
         story = "\n\n".join(t for t in (self.focus_block.full_text(),
                                         self.theme_block.full_text()) if t)
-        self.summary_label.setToolTip(f"{story}\n\n{_SCOPE_TOOLTIP}" if story else _SCOPE_TOOLTIP)
+        # The retired modal's title named the typical lap; it is said here now.
+        typical = (f" The reasons and the Entry·Apex·Exit bars read your typical lap, lap "
+                   f"{lap_label(self._typical_lap)}." if self._typical_lap is not None
+                   and self._headline else "")
+        scope = _SCOPE_TOOLTIP + typical
+        self.summary_label.setToolTip(f"{story}\n\n{scope}" if story else scope)

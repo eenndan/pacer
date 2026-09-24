@@ -361,6 +361,145 @@ def test_the_theme_block_never_squeezes_out_the_ranking():
           f"(minimum: block hidden, table {p.table.rowCount()} rows; roomy: 2 actions back)")
 
 
+# The Coaching page at the app's own 1440x900 default window: 515x417, measured on the real themed
+# StudioWindow (jailed) on all four working-set recordings — the same panel on each.
+DEFAULT_PANEL = (515, 417)
+
+
+def _whole_rows(t) -> int:
+    """Rows whose whole height is inside the table's viewport with nothing scrolled."""
+    vp = t.viewport().height()
+    return sum(1 for r in range(t.rowCount())
+               if t.rowViewportPosition(r) >= 0 and t.rowViewportPosition(r) + t.rowHeight(r) <= vp)
+
+
+def test_the_default_window_shows_the_top_three_whole():
+    """UX-3: the page exists to answer "what do I work on", and at the default window its answer
+    was below the fold.
+
+    MEASURED on the real window at 1440x900 before the fix: an empty focus list (headline, a
+    two-line invitation and two buttons — 98 px) and the theme (88-104 px) above the table left
+    the ranking a 146-162 px viewport, so two of the top three rows were whole on SD_19_09,
+    Sandown 3h and MK and ONE on SD_30_08. The empty list is one line now, and the table's
+    shortlist is reserved before either block takes any height. This fixture is the owner's
+    state — a known track, an empty focus list, a theme with both actions."""
+    from studio import focus as F
+
+    p = _panel(_rows(6), DEFAULT_PANEL)
+    p.set_focus_report(F.Report(track="Stadium", outcomes=[]))
+    for _ in range(6):
+        _APP.processEvents()
+    assert p.theme_block.full_text(), "this fixture must actually produce a theme"
+    assert not p.focus_block.isHidden(), "the empty list keeps its one line at the default size"
+    whole = _whole_rows(p.table)
+    assert whole >= PANEL_TOP_N, (
+        f"only {whole} of the top {PANEL_TOP_N} ranked rows are whole at the default window",
+        p.table.viewport().height(), [p.table.rowHeight(r) for r in range(p.table.rowCount())],
+        p.focus_block.height(), p.theme_block.height())
+    # ONE line: the row is as tall as the Add button (plus the block's own margins), no taller.
+    m = p.focus_block.layout().contentsMargins()
+    one_line = max(p.focus_block.add_button.sizeHint().height(),
+                   p.focus_block.empty_line.sizeHint().height()) + m.top() + m.bottom()
+    assert p.focus_block.height() <= one_line, (p.focus_block.height(), one_line)
+    assert p.focus_block.drop_button.isHidden(), "an empty list has nothing to remove"
+    assert "Pick up to" in p.summary_label.toolTip(), "the invitation is demoted, not deleted"
+    print(f"test_the_default_window_shows_the_top_three_whole OK ({whole} whole rows in a "
+          f"{p.table.viewport().height()} px viewport; focus {p.focus_block.height()} px, "
+          f"theme {0 if p.theme_block.isHidden() else p.theme_block.height()} px)")
+
+
+def _page_state(p) -> tuple:
+    """Everything the height budget and the row fit decide, as one comparable value."""
+    t = p.table
+    return (t.verticalScrollBar().isVisible(), t.columnWidth(_PANEL_COL_REASON), t.rowCount(),
+            tuple(t.rowHeight(r) for r in range(t.rowCount())),
+            tuple(not a.isHidden() for a in p.theme_block.actions), p.theme_block.isHidden())
+
+
+def _clipped_rows(t) -> list[tuple[int, int, int]]:
+    """(row, pinned px, px its wrapped reason needs at the column's CURRENT width) for every row
+    painted shorter than its text — the row whose last line paints as "…"."""
+    from studio.coaching_panel import _reason_text_box
+    avail, pad_v = _reason_text_box(t, _PANEL_COL_REASON, t.columnWidth(_PANEL_COL_REASON))
+    fm = t.fontMetrics()
+    out = []
+    for r in range(t.rowCount()):
+        need = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap,
+                               t.item(r, _PANEL_COL_REASON).text()).height() + pad_v
+        if t.rowHeight(r) < need:
+            out.append((r, t.rowHeight(r), need))
+    return out
+
+
+def test_the_shortlist_budget_settles_and_never_clips_a_row():
+    """The shortlist reserve must converge, at every page height near the default.
+
+    MEASURED on the real window (SD_30_08, 1440x900) with the reserve taken at the rows' CURRENT
+    width: the three rows fit without the vertical scrollbar (190 px in 200) and not with it
+    (204 px), so every fit toggled the bar, moved the reason column 12 px and pinned the rows for
+    the width it had just left. The page flipped between the two states every ~0.4 s, and in one
+    of them C7's "(est)" brake line painted as "…". The reserve is taken at the NARROW width now.
+
+    The knife-edge only exists at a page width where the scrollbar's 12 px changes how a top row
+    wraps, so the test FINDS those widths for this fixture first (and fails if there are none — a
+    sweep that never reaches the edge proves nothing), then sweeps the page height across them.
+
+    What it pins is the GEOMETRY that removes the edge, not the flip itself: this fixture settles
+    either way when nothing re-lays it out, while the real window's periodic relayouts kept the
+    lagging fit running. So: whenever the focus or theme block holds any height, the top rows fit
+    even at the NARROW width — the blocks never take the pixels the scrollbar would need."""
+    from studio import focus as F
+    from studio.coaching_panel import _reason_text_box
+
+    p = _panel(_rows(6), DEFAULT_PANEL)
+    p.set_focus_report(F.Report(track="Stadium", outcomes=[]))
+    t, fm = p.table, p.table.fontMetrics()
+    bar = t.verticalScrollBar().sizeHint().width()
+
+    def wraps(column_px):
+        avail, _ = _reason_text_box(t, _PANEL_COL_REASON, column_px)
+        return [fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap,
+                                t.item(r, _PANEL_COL_REASON).text()).height()
+                for r in range(min(PANEL_TOP_N, t.rowCount()))]
+
+    edges = []
+    for w in range(470, 600, 4):
+        p.resize(w, DEFAULT_PANEL[1])
+        for _ in range(8):
+            _APP.processEvents()
+        wide = t.columnWidth(_PANEL_COL_REASON) + (bar if t.verticalScrollBar().isVisible() else 0)
+        if wraps(wide) != wraps(wide - bar):
+            edges.append(w)
+    assert edges, "no width where the scrollbar changes a top row's wrap: this sweep proves nothing"
+    _, pad_v = _reason_text_box(t, _PANEL_COL_REASON, 300)
+    unsettled, clipped, edge = [], [], []
+    for w in edges[:4]:
+        for h in range(340, 481, 4):
+            p.resize(w, h)
+            for _ in range(12):
+                _APP.processEvents()
+            first = _page_state(p)
+            for _ in range(12):
+                _APP.processEvents()
+            if _page_state(p) != first:
+                unsettled.append((w, h))
+            if _whole_rows(t) >= PANEL_TOP_N and _clipped_rows(t):
+                clipped.append((w, h, _clipped_rows(t)))
+            blocks = not (p.focus_block.isHidden() and p.theme_block.isHidden())
+            if blocks and not t.verticalScrollBar().isVisible():
+                wide = t.columnWidth(_PANEL_COL_REASON)
+                narrow = sum(max(t.rowHeight(r), n + pad_v)
+                             for r, n in enumerate(wraps(wide - bar)))
+                if narrow > t.viewport().height():
+                    edge.append((w, h, narrow, t.viewport().height()))
+    assert not unsettled, f"the page never settled at (width, height) {unsettled}"
+    assert not clipped, f"a row paints shorter than its reason: {clipped}"
+    assert not edge, ("the blocks took pixels the top rows need once the scrollbar shows "
+                      f"(width, height, rows px at the narrow width, viewport): {edge}")
+    print(f"test_the_shortlist_budget_settles_and_never_clips_a_row OK (widths {edges[:4]} × "
+          "36 heights, 340-480 px)")
+
+
 def test_every_header_sits_over_its_own_column():
     """L5-08: `defaultAlignment` centres every header. At a maximized 1220 px reason column that put
     "How to find it" 611 px from the left-aligned sentence it labels. Each header must take its own
@@ -484,54 +623,50 @@ def _run_all():
     test_short_page_never_drops_below_the_shortlist()
     test_a_reason_row_is_tall_enough_for_where_the_glyphs_actually_land()
     test_the_theme_block_never_squeezes_out_the_ranking()
+    test_the_default_window_shows_the_top_three_whole()
+    test_the_shortlist_budget_settles_and_never_clips_a_row()
     test_every_header_sits_over_its_own_column()
     test_reach_cell_never_states_a_count_without_its_denominator()
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
     test_reason_cell_drops_the_metres_and_names_the_target()
     test_the_brake_hint_names_the_laps_it_counted()
-    test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size()
+    test_the_pages_jump_buttons_are_never_clipped()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 
 
-def test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size():
-    """§6.4: at the size the dialog opens itself at (920x380), every amber Jump button was
-    flat-cut on its right edge — the rounding sliced off into the scrollbar gutter.
+def test_the_pages_jump_buttons_are_never_clipped():
+    """§6.4, carried from the modal to the page that replaced it (R11): at the size the modal
+    opened at, every amber Jump button was flat-cut on its right edge — `ResizeToContents` sizes a
+    column from the cell widget's HINT and knows nothing about the inset the view then paints that
+    widget inside, so a column of 89 px held an 88 px button placed 8 px in. The page's column is a
+    fixed width with that inset on both sides (`OpportunitiesPanel._go_column_px`) — asking the
+    painter on every resize, as the modal did once, would have added the inset again each pass.
+    Without the inset this sweep fails at once: "row 0's Jump overhangs its cell by 9 px".
 
-    Measured on the real dialog with D24's nine opportunities: the GO column came out 89 px from
-    `ResizeToContents`, the last cell's visualRect was x=791 w=88, and the button was painted at
-    x=799 keeping its 88 px minimum — running to 887 against an 880 px viewport. `ResizeToContents`
-    sizes a column from the cell widget's HINT and knows nothing about the inset the view then
-    paints that widget inside.
+    The page shows the column only when it can afford it, so the risk is highest just past that
+    threshold: swept from full-window down, every width that shows a Jump must show it whole."""
+    from studio.coaching_panel import _PANEL_COL_GO
 
-    `_budget_action_column` asks the painter instead of guessing a style metric: it compares the
-    widget's geometry with the cell it landed in and adds the difference. This test drives the real
-    dialog at the real default and asserts no button crosses its own cell."""
-    from studio.coaching_panel import OpportunitiesDialog
-
-    opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=_rows(9))
-    dlg = OpportunitiesDialog(opps, jump_to=lambda *a: None, brake_points={}, speed_unit="kmh")
-    dlg.show()
-    for _ in range(8):
-        _APP.processEvents()
-    try:
-        t = dlg.table
-        last = t.columnCount() - 1
+    p = _panel(_rows(9), (1432, 808))
+    t = p.table
+    seen = 0
+    for w in range(1432, 640, -48):
+        p.resize(w, 808)
+        for _ in range(8):
+            _APP.processEvents()
+        if t.isColumnHidden(_PANEL_COL_GO):
+            continue
+        seen += 1
         vp = t.viewport().width()
-        worst = 0
         for r in range(t.rowCount()):
-            btn = t.cellWidget(r, last)
-            if btn is None:
-                continue
-            cell = t.visualRect(t.model().index(r, last))
-            worst = max(worst, (btn.geometry().right() + 1) - (cell.right() + 1))
+            btn = t.cellWidget(r, _PANEL_COL_GO)
+            cell = t.visualRect(t.model().index(r, _PANEL_COL_GO))
+            over = (btn.geometry().right() + 1) - (cell.right() + 1)
+            assert over <= 0, f"width {w}: row {r}'s Jump overhangs its cell by {over} px"
             assert btn.geometry().right() + 1 <= vp, (
-                f"row {r}: the Jump button runs {btn.geometry().right() + 1 - vp} px past the "
-                f"viewport — it is being painted into the scrollbar gutter")
-        assert worst <= 0, (f"a Jump button overhangs its own cell by {worst} px", worst)
-    finally:
-        dlg.deleteLater()
-        _APP.processEvents()
-    print(f"ok jump-clip: no button crosses its cell at {dlg.width()}x{dlg.height()}")
+                f"width {w}: row {r}'s Jump runs past the {vp} px viewport into the gutter")
+    assert seen, "no width showed the Jump column: this sweep proves nothing"
+    print(f"ok jump-clip: no Jump button crosses its cell at {seen} widths from 1432 px down")
 
 
 if __name__ == "__main__":

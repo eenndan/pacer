@@ -64,7 +64,6 @@ from . import (
 )
 from ._signal import fmt_hms, lap_label
 from .central_view import CentralView, undo_summary
-from .coaching_panel import OpportunitiesDialog
 from .command_palette import CommandPalette
 
 # ExportChoice is RE-EXPORTED, not used here: it moved to the controller with the picker that
@@ -1884,6 +1883,7 @@ class StudioWindow(QMainWindow):
         if panel is not None:
             panel.focus_add_requested.connect(self.library_ctl.focus_add)
             panel.focus_remove_requested.connect(self.library_ctl.focus_remove)
+            panel.jump_requested.connect(self._jump_to_opportunity)
         self.library_ctl.update_focus_list()
 
     def _build_ui_guarded(self, stage: str) -> Exception | None:
@@ -2202,13 +2202,15 @@ class StudioWindow(QMainWindow):
             "(right), each playing its own footage. Load a reference recording first.")
         self._cross_compare_action.triggered.connect(self._enter_cross_compare)
         self._gate_action(self._cross_compare_action, False, self._NO_REFERENCE_REASON)
-        # F10 Opportunities: every corner ranked by time lost vs your own best lap (recomputed
-        # per open; the Coaching TAB carries the top-3 shortlist).
+        # F10 Opportunities: the Coaching page full-window — every corner ranked by time lost vs
+        # your own best lap. It opened a modal copy of that ranking until R11 (one ranking, one
+        # place); the page now carries the modal's bars and Jump buttons wherever it has the room.
         coaching_menu.addSeparator()
         self._opportunities_action = coaching_menu.addAction("Opportunities")
         self._opportunities_action.setToolTip(
-            "Where to find time vs your own best lap: every corner ranked by realistic time lost "
-            "(median of your clean laps), each with the measured reason and a jump-to.")
+            "Where to find time vs your own best lap: the Coaching page, full-window — every corner "
+            "ranked by realistic time lost (median of your clean laps), each with the measured "
+            "reason, where in the corner it goes and a jump-to. Again restores the grid.")
         self._opportunities_action.triggered.connect(self._open_opportunities)
 
         # Left-column declutter (the "calm default"): fully show/hide the coaching panel and the
@@ -2973,23 +2975,14 @@ class StudioWindow(QMainWindow):
 
     # -------------------------------------------------- auto coaching summary (F10)
     def _open_opportunities(self):
-        """Coaching ▸ Opportunities: open the read-only opportunities dialog, built from a
-        FRESH session.coaching_opportunities() (recomputed each open — zero per-tick cost; the
-        per-lap inputs it composes are already cached). The dialog handles its own friendly
-        excluded state when there are too few clean laps. Each row's Go button routes to
-        `_jump_to_opportunity` (corner select + best-lap entry seek). No-op if the FIRST load
-        failed (no session yet) — defensive, like the export actions' enabled-state gate."""
-        if getattr(self, "session", None) is None:
+        """Coaching ▸ Opportunities: the Coaching page full-window (CentralView
+        .show_coaching_maximized — a second trigger restores the grid). It opened a modal copy of the
+        same ranking until R11; the page is recomputed on load / re-segment / unit change, so there
+        is nothing to recompute here. No-op if the FIRST load failed (no session view yet)."""
+        view = getattr(self, "view", None)
+        if getattr(self, "session", None) is None or not hasattr(view, "show_coaching_maximized"):
             return
-        opps = self.session.coaching_opportunities()
-        # D4: the best lap's per-corner braking-point comparison, keyed by cid so the dialog can
-        # append the ESTIMATED "brake ~N m later" line to a corner's reason. Empty when no g signal.
-        # Shared with the persistent panel via session.coaching_brake_points (one source).
-        brake_points = self.session.coaching_brake_points()
-        dlg = OpportunitiesDialog(opps, jump_to=self._jump_to_opportunity,
-                                  brake_points=brake_points, parent=self,
-                                  speed_unit=self._speed_unit, session=self.session)
-        dlg.exec()
+        view.show_coaching_maximized()
 
     def _jump_to_opportunity(self, cid: int, _entry_dist: float):
         """Jump-to for an opportunity row: select corner `cid` on the best lap (map apex ring +
@@ -2999,6 +2992,11 @@ class StudioWindow(QMainWindow):
         if best is None:
             return
         view = self.view
+        # A Jump from the full-window Coaching page lands on the map and the video, which that page
+        # covers — put the grid back first (the modal it replaced closed itself first, for the same
+        # reason: C8).
+        if getattr(view, "_maximized_panel", None) is not None:
+            view._restore_splitter_sizes()
         # Programmatic select (not a user-select) so it doesn't re-enter the seek-on-select path —
         # we own the seek below, to the corner entry rather than the lap start.
         view.table.select([best])

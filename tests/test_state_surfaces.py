@@ -162,22 +162,6 @@ def _coaching_panel():
     return _keep(OpportunitiesPanel(_gate_session()))
 
 
-def _coaching_modal():
-    from test_coaching import _gate_session
-
-    from studio.coaching_panel import OpportunitiesDialog
-    session = _gate_session()
-    dlg = _keep(OpportunitiesDialog(session.coaching_opportunities(), jump_to=None,
-                                    brake_points=session.coaching_brake_points()))
-    dlg.resize(920, 380)
-    # SHOWN, not merely built: a stylesheet reaches a widget on polish, and an unshown dialog's
-    # labels still carry the app-wide default font — which is a test measuring a surface the user
-    # never sees (the trap _qtapp.themed_app's docstring exists for, from the other end).
-    dlg.show()
-    _settle(8)
-    return dlg
-
-
 def _states():
     """(label, EmptyState, owns_pane_expected) for every site this file can build for real.
 
@@ -207,7 +191,6 @@ def _states():
         ("LibraryDialog._show_empty_note (empty index)", empty_lib._empty_note, True),
         ("LibraryDialog._show_empty_note (filter)", filtered._empty_note, True),
         ("OpportunitiesPanel.__init__", panel.empty_state, True),
-        ("OpportunitiesDialog._empty_state", _coaching_modal().findChild(EmptyState), False),
     ]
 
 
@@ -240,7 +223,6 @@ def test_every_empty_state_in_the_app_is_the_one_object():
     line somebody adds here — the same reason test_design_system.py's EXEMPT entries name a
     constructor rather than a line number."""
     LEDGER = {
-        ("coaching_panel.py", "OpportunitiesDialog._empty_state"),
         ("coaching_panel.py", "OpportunitiesPanel.__init__"),
         ("lap_table.py", "CornerTable.__init__"),
         ("lap_table.py", "LapTable.__init__"),

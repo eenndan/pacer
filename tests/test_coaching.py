@@ -1,4 +1,4 @@
-"""Synthetic unit tests for studio.coaching + the OpportunitiesDialog (F10).
+"""Synthetic unit tests for studio.coaching + the Coaching page (F10).
 
 The coaching summary must be DETERMINISTIC and EXPLAINABLE — numbers only, no ML/randomness.
 The tests assert, on engineered inputs where the answer is known by construction:
@@ -858,43 +858,66 @@ def _populated_opps():
                        best_coast_spans=[], median_apex_deltas=[-5.0, 0.0, 0.0, 0.0])
 
 
-def test_dialog_populates_and_go_calls_jump_to():
+_FULL_WINDOW = (1432, 808)   # the lap panel maximized on the 1440x900 default window
+_PAGES: list = []            # built pages stay alive for the whole run (a dropped one is deleted)
+
+
+def _full_window_page(opp, brake_points=None, size=_FULL_WINDOW):
+    """The Coaching page over `opp`, shown and settled at `size` (default: full-window, where the
+    width budget gives every optional column its room)."""
+    from studio.coaching_panel import OpportunitiesPanel
+
+    class _S:
+        def coaching_opportunities(self):
+            return opp
+
+        def coaching_brake_points(self):
+            return brake_points or {}
+
+    page = OpportunitiesPanel(_S())
+    _PAGES.append(page)
+    page.resize(*size)
+    page.show()
+    _settle()
+    return page
+
+
+def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
+    """R11: the Coaching page replaced the modal that rendered its ranking a second time. Full-window
+    it carries that modal's two extra columns — the D2 Entry·Apex·Exit bar and a Jump per row — and
+    a Jump emits (cid, entry_dist) for the app to act on. The header's hover names the typical lap
+    the modal's title used to, as the 1-based lap NUMBER (M9), not the raw id."""
     _qapp()
-    from studio.coaching_panel import OpportunitiesDialog
+    from studio.coaching_panel import (
+        _PANEL_COL_GO,
+        _PANEL_COL_PHASES,
+        _PANEL_COL_REACH,
+        _PANEL_COL_REASON,
+        PhaseBar,
+    )
     opp = _populated_opps()
-    calls = []
-    dlg = OpportunitiesDialog(opp, jump_to=lambda c, d: calls.append((c, d)))
-    assert dlg.table.rowCount() == len(opp.rows)
-    # M9: the header's "typical lap N" is the 1-based lap NUMBER (median_lap_id + 1), while the
-    # "median of N clean laps" count stays the raw n_laps (a quantity, NOT a lap id). Find the
-    # PanelHeader title label and check both.
-    from PySide6.QtWidgets import QLabel
-    title = next(w for w in dlg.findChildren(QLabel) if w.property("role") == "PanelHeader")
-    assert opp.median_lap_id is not None
-    assert f"typical lap {opp.median_lap_id + 1}" in title.text(), title.text()
-    assert f"median of {opp.n_laps} clean laps" in title.text(), title.text()
-    # columns: 0 Corner, 1 Time-lost, 2 Done-it?, 3 Phases (D2 cell widget), 4 Reason, 5 Go.
-    # row 0: the biggest-loss corner (C1), with the apex sentence + the time-lost format
-    assert dlg.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
-    assert dlg.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # column 2 answers "have you already done this?" as a word AND the count over its denominator
-    # (the L5-09 rule the ±σ cell it replaced established: never a bare number with no unit/sample).
+    page = _full_window_page(opp)
+    t = page.table
+    assert t.rowCount() == len(opp.rows)
+    assert not any(t.isColumnHidden(c) for c in (_PANEL_COL_REACH, _PANEL_COL_PHASES,
+                                                  _PANEL_COL_GO)), "full-window shows every column"
+    assert t.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
+    assert t.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
     ev = opp.rows[0].evidence
-    assert dlg.table.item(0, 2).text() == f"Yes · {ev.reach_laps}/{ev.n_laps}", \
-        dlg.table.item(0, 2).text()
-    # column 3 is the D2 entry/apex/exit breakdown widget (no text item there)
-    from studio.coaching_panel import PhaseBar
-    assert isinstance(dlg.table.cellWidget(0, 3), PhaseBar)
-    assert "apex speed" in dlg.table.item(0, 4).text()
-    # the Go button routes to jump_to(cid, entry_dist) AND closes the modal (C8: the dialog
-    # otherwise sits over exactly the map/corner state the jump just changed).
-    go = dlg.table.cellWidget(0, 5)
+    assert t.item(0, _PANEL_COL_REACH).text() == f"Yes · {ev.reach_laps}/{ev.n_laps}", \
+        t.item(0, _PANEL_COL_REACH).text()
+    assert isinstance(t.cellWidget(0, _PANEL_COL_PHASES), PhaseBar)
+    assert "apex speed" in t.item(0, _PANEL_COL_REASON).text()
+    assert opp.median_lap_id is not None
+    tip = page.summary_label.toolTip()
+    assert f"typical lap, lap {opp.median_lap_id + 1}." in tip, tip
+    calls = []
+    page.jump_requested.connect(lambda c, d: calls.append((c, d)))
+    go = t.cellWidget(0, _PANEL_COL_GO)
     assert not go.autoDefault(), "B10: focused-default styling repainted the arrow amber-on-amber"
     go.click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
-    assert not dlg.isVisible(), "C8: Jump must close the dialog it acts behind"
-    assert dlg.result() == dlg.DialogCode.Accepted
-    print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]} + dialog closed")
+    print(f"ok page: {t.rowCount()} rows full-window, bars + Jump shown, Jump -> {calls[0]}")
 
 
 def _habit(cid, metres_later, *, n_laps=12, actual=78.0, optimal=None, q25=None, q75=None):
@@ -959,79 +982,43 @@ def test_brake_habit_is_the_same_number_the_braking_table_shows():
           f"(best lap said 30.0), C2 measured on {habits[2].n_laps} laps the best lap missed")
 
 
-def test_dialog_shows_brake_point_hint():
-    """D4: the OpportunitiesDialog appends the ESTIMATED brake-point line to a row's reason when a
-    BrakePoint is supplied for that corner, and leaves rows without one untouched."""
+def test_the_page_shows_the_brake_point_hint():
+    """D4: the page appends the ESTIMATED brake-point line to a row's reason when a BrakeHabit is
+    supplied for that corner, and leaves rows without one untouched."""
     _qapp()
-    from studio.coaching_panel import OpportunitiesDialog
+    from studio.coaching_panel import _PANEL_COL_REASON
     opp = _populated_opps()
     top_cid = opp.rows[0].cid
     # _corners() puts this corner's turn-in at 50 m, so an optimum at 56 m is 6 m past it — inside
     # the estimate's domain (L5-10 suppresses one that lands a whole brake zone into the corner).
     brake_points = {top_cid: _habit(top_cid, 6.0, actual=50.0, optimal=56.0)}
-    dlg = OpportunitiesDialog(opp, jump_to=None, brake_points=brake_points)
-    reason_text = dlg.table.item(0, 4).text()
+    page = _full_window_page(opp, brake_points)
+    reason_text = page.table.item(0, _PANEL_COL_REASON).text()
     assert "Brake ~6 m later" in reason_text and "(est)" in reason_text, reason_text
     # a row WITHOUT a brake point keeps just the reason sentence (no hint appended).
-    if dlg.table.rowCount() > 1:
-        assert "Brake ~" not in dlg.table.item(1, 4).text()
-    print("ok D4 dialog: brake-point hint appended to the matched corner's reason")
+    if page.table.rowCount() > 1:
+        assert "Brake ~" not in page.table.item(1, _PANEL_COL_REASON).text()
+    print("ok D4 page: brake-point hint appended to the matched corner's reason")
 
 
-def test_dialog_reason_cell_is_not_truncated():
-    """The MODAL OpportunitiesDialog's "How to find it" reason cell must show its FULL text (no
-    ellipsis clip) at the dialog's default size — the modal carries two extra columns the panel
-    lacks (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button) which squeeze the
-    stretch reason column. Mirror the panel's #66 test: word-wrap on + the vertical header sizes
-    rows to their content, and the dialog default width leaves the reason column real room (a
-    genuinely long, 2-line reason grows the row past the old fixed 40-px section).
-
-    W10-03 — this used to measure a dialog that was never shown and never pumped, so the stretch
-    section had not been laid out: it read 216 px where the shipped dialog gives 431, and tested
-    that artefact against a hand-picked 200 px floor. A real 2x regression in the shipped column
-    would have left the artefact above the floor and this test green. It now show()s the dialog and
-    asserts the reason column's SHARE of the viewport, which is the property the design actually
-    claims (a stretch column that outweighs the fixed ones) and which no font change can move."""
+def test_full_window_reason_column_outweighs_the_bars_and_jump():
+    """Full-window the page carries the retired modal's two extra columns (the fixed 150-px
+    Entry·Apex·Exit bar + the per-row Jump), and the stretch reason column must still be the widest
+    and hold real room — asserted as its SHARE of the viewport, which no font change can move (the
+    W10-03 lesson from the modal's own version of this test: measure a SHOWN, laid-out table)."""
     _qapp()
-    from PySide6.QtWidgets import QHeaderView
-
-    from studio.coaching_panel import _COL_REASON, OpportunitiesDialog
-    opp = _populated_opps()
-    dlg = OpportunitiesDialog(opp, jump_to=None)
-    assert dlg.table.wordWrap() is True, "the reason cell must word-wrap, not elide"
-    assert (dlg.table.verticalHeader().sectionResizeMode(0)
-            == QHeaderView.ResizeToContents), "rows must auto-fit their wrapped content, not clip"
-    # At the dialog's default size the stretch reason column must have real room — not a sliver
-    # squeezed by the phase bar + Jump button.
-    dlg.resize(920, 380)
-    dlg.show()                           # LOAD-BEARING: the stretch section is laid out on show
-    _settle()
-    dlg.table.resizeColumnsToContents()  # settle the content columns; reason keeps the slack
-    _settle()
-    reason_px = dlg.table.columnWidth(_COL_REASON)
-    viewport_px = dlg.table.viewport().width()
-    others_px = sum(dlg.table.columnWidth(c) for c in range(dlg.table.columnCount())
-                    if c != _COL_REASON)
-    assert reason_px > 200, f"the reason column must have real width, got {reason_px}px"
-    # The share, not a pixel count: the prose column must be the widest in the table and hold
-    # something near half the viewport. Both survive a font change; a 200-px floor did not.
-    assert reason_px == max(dlg.table.columnWidth(c) for c in range(dlg.table.columnCount())), (
-        f"the prose column must be the widest one, got {reason_px}px against "
-        f"{[dlg.table.columnWidth(c) for c in range(dlg.table.columnCount())]}")
+    from studio.coaching_panel import _PANEL_COL_GO, _PANEL_COL_PHASES, _PANEL_COL_REASON
+    page = _full_window_page(_populated_opps())
+    t = page.table
+    assert not t.isColumnHidden(_PANEL_COL_PHASES) and not t.isColumnHidden(_PANEL_COL_GO)
+    widths = [0 if t.isColumnHidden(c) else t.columnWidth(c) for c in range(t.columnCount())]
+    reason_px, viewport_px = widths[_PANEL_COL_REASON], t.viewport().width()
+    assert reason_px == max(widths), f"the prose column must be the widest one: {widths}"
     assert reason_px >= 0.4 * viewport_px, (
         f"the reason column holds only {reason_px}px of a {viewport_px}px viewport")
-    # A genuinely long, two-line reason MUST grow the row past the old fixed 40-px section (which
-    # clipped the 2nd line). Set the text directly so the assertion is deterministic.
-    long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
-                   "best through the slowest point.\nBrake ~4 m later into C2 (est)")
-    dlg.table.item(0, _COL_REASON).setText(long_reason)
-    dlg.table.resizeRowsToContents()
-    assert dlg.table.rowHeight(0) > 40, (
-        f"a wrapped 2-line reason must grow the row, not clip: {dlg.table.rowHeight(0)}px")
-    dlg.hide()
-    print(f"ok dialog: reason cell not truncated (reason col w={reason_px}px of a {viewport_px}px "
-          f"viewport vs {others_px}px of fixed columns, row0 h={dlg.table.rowHeight(0)}px, "
-          "wrap+auto-height)")
+    assert not t.horizontalScrollBar().isVisible(), "the full-window columns must fit the viewport"
+    print(f"ok page: reason column {reason_px}px of a {viewport_px}px viewport beside the bars + "
+          "Jump")
 
 
 def test_m4_phasebar_tooltip_does_not_claim_time_lost_and_guards_sign_flip():
@@ -1070,7 +1057,6 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
     _qapp()
     from studio.coaching_panel import (
         DISPLAY_MIN_LOST_S,
-        OpportunitiesDialog,
         OpportunitiesPanel,
         _shown_rows,
     )
@@ -1090,12 +1076,6 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
     shown = _shown_rows(opp)
     assert [r.cid for r in shown] == [1, 3], [r.cid for r in shown]
     assert all(r.time_lost >= DISPLAY_MIN_LOST_S for r in shown)
-    # DIALOG: only the two real rows are built, and none renders "+0.00 s".
-    dlg = OpportunitiesDialog(opp, jump_to=None)
-    assert dlg.table.rowCount() == 2, dlg.table.rowCount()
-    lost_texts = [dlg.table.item(r, 1).text() for r in range(dlg.table.rowCount())]
-    assert all(t != "+0.00 s" for t in lost_texts), lost_texts
-
     # PANEL: same filter — the "+0.00 s" corners never appear, and the summary counts only shown rows.
     class _S:
         def coaching_opportunities(self):
@@ -1149,15 +1129,6 @@ def test_p1_summary_grammar_by_count():
     many = p3.summary_label.text()
     assert "across your top 3 corners" in many, many
     print(f"ok P1: 1-corner => '{one}'; many => '{many}'")
-
-
-def test_dialog_excluded_state_has_no_table():
-    _qapp()
-    from studio.coaching_panel import OpportunitiesDialog
-    excluded = K.Opportunities(enough=False, n_laps=2, median_lap_id=None, rows=[])
-    dlg = OpportunitiesDialog(excluded, jump_to=None)
-    assert not hasattr(dlg, "table"), "excluded state must not build the table (friendly message)"
-    print("ok dialog: excluded state shows the friendly message, no table, no crash")
 
 
 # ------------------------------------------- the PERSISTENT top-3 panel (the coaching front-door)
@@ -1713,14 +1684,14 @@ def test_t4_a_lead_that_clears_the_spread_still_reads_exactly_as_before():
     print(f"ok T4 clear lead: {acts[-1]!r}")
 
 
-def test_both_coaching_surfaces_lead_with_the_same_theme():
-    """The theme block is the first thing on the page AND on the modal, and it is the same
-    sentence on both — one story, stated once, in one place in the model.
+def test_the_page_leads_with_the_theme():
+    """The theme block is the first thing on the page — one story, stated once, in one place in
+    the model (the modal that restated it was retired in R11).
 
     It also has to DISAPPEAR when there is nothing to state, or the "not enough clean laps" empty
     state would sit under a headline claiming a theme."""
     _qapp()
-    from studio.coaching_panel import OpportunitiesDialog, OpportunitiesPanel
+    from studio.coaching_panel import OpportunitiesPanel
     rows = _themed([K.REACH_RARE] * 3 + [K.REACH_REPEAT])
     opp = K.Opportunities(enough=True, n_laps=20, median_lap_id=4, rows=rows,
                           theme=K.session_theme(rows))
@@ -1735,9 +1706,7 @@ def test_both_coaching_surfaces_lead_with_the_same_theme():
             return {}
 
     panel = OpportunitiesPanel(_S())
-    dlg = OpportunitiesDialog(opp, jump_to=None)
     assert panel.theme_block.headline.text() == sentence, panel.theme_block.headline.text()
-    assert dlg.theme_block.headline.text() == sentence, dlg.theme_block.headline.text()
     shown = [lb.text() for lb in panel.theme_block.actions if lb.text()]
     assert 1 <= len(shown) <= 2, shown
     # nothing ranked -> no theme block at all (the empty state owns the page)
@@ -1753,7 +1722,7 @@ def test_both_coaching_surfaces_lead_with_the_same_theme():
     p2 = OpportunitiesPanel(_E())
     assert p2.theme_block.headline.text() == ""
     assert p2.body.currentIndex() == 1, "the friendly excluded state still owns the body"
-    print(f"ok theme block: panel + modal both lead with {sentence!r}")
+    print(f"ok theme block: the page leads with {sentence!r}")
 
 
 def test_the_share_card_never_publishes_an_abstained_opportunity():
@@ -1814,17 +1783,6 @@ def _panel_state_text(s) -> str:
     return panel.empty_state.text()
 
 
-def _dialog_state_text(s) -> str:
-    """The Coaching ▸ Opportunities modal's state, built the way StudioWindow builds it."""
-    from studio.coaching_panel import OpportunitiesDialog
-    from studio.widgets import EmptyState
-    dlg = OpportunitiesDialog(s.coaching_opportunities(), jump_to=None, session=s)
-    _U2_ALIVE.append(dlg)
-    states = dlg.findChildren(EmptyState)
-    assert len(states) == 1, states
-    return states[0].text()
-
-
 def test_u2_zero_lap_coaching_states_the_same_fact_as_every_other_panel():
     """hero6.mp4 / hero8.mp4, measured in the real StudioWindow: the Laps page, the map, the charts
     and the status bar all said "No complete laps in this recording." with the GPS-lock / drag-the-
@@ -1837,8 +1795,7 @@ def test_u2_zero_lap_coaching_states_the_same_fact_as_every_other_panel():
     want = f"{data_quality.NO_LAPS_HEADLINE}\n\n{data_quality.no_laps_body()}"
     got = _panel_state_text(s)
     assert got == want, got
-    assert _dialog_state_text(s) == want
-    print("ok U2: zero-lap coaching copy is the app's one no-laps sentence (panel + modal)")
+    print("ok U2: zero-lap coaching copy is the app's one no-laps sentence (the page)")
 
 
 def test_u2_dropout_decided_coaching_copy_does_not_tell_the_driver_to_drive_more():
@@ -1851,7 +1808,6 @@ def test_u2_dropout_decided_coaching_copy_does_not_tell_the_driver_to_drive_more
     assert "Drive a few more laps" not in got, got
     assert "3 of its 5 laps had a GPS dropout" in got, got
     assert "this session has 2" in got, got           # the clean denominator is still stated
-    assert _dialog_state_text(s) == got
     print("ok U2: dropout-decided copy names the GPS, not the driver")
 
 

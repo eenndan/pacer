@@ -1018,13 +1018,13 @@ def test_stats_view_renders_every_group():
     assert v.t_peak_lat.value.text() == "1.60 g"             # max over the laps
     # v1.1 pace-quality tiles
     assert v.t_race_pace.value.text() == "1:08.900"
-    assert v.t_cov.value.text() == "1.8 %"
-    assert v.t_within.value.text() == "2 / 2"
     assert v.t_trend.value.text() == "-0.05 s/lap"
     assert "improving" in v.t_trend.caption.text()
-    # The coaching digest: MEDIAN-anchored (69.1 - top-3 losses 0.9 = 68.2), honesty in tip.
-    assert v.t_digest.value.text() == "1:08.200"
-    assert "MEDIAN" in v.t_digest.toolTip()
+    # R11: PACE is six tiles. The four cut (median − best, σ/median, within 1 %, the coaching
+    # digest) and why are written where the grid is built; the report export keeps its own rows.
+    for gone in ("t_spread", "t_cov", "t_within", "t_digest"):
+        assert not hasattr(v, gone), gone
+    assert len(v._tile_grids[1][1]) == 6, [t.caption.text() for t in v._tile_grids[1][1]]
     assert v.t_longest_coast.value.text() == "1.4 s"
     assert v.t_grip_ceiling.value.text() == "1.55 g"
     assert not v._driving_section.isHidden() and not v.gg.isHidden()
@@ -1063,15 +1063,13 @@ def test_stats_view_hides_signal_absent_sections():
     from studio.stats_panel import StatsView
     v = StatsView(_fake_view_session(has_g=False, sectors=False))
     assert v._driving_section.isHidden() and v.gg.isHidden()     # no g -> no g sections
-    # NO SECTOR LINES: the TABLES go and the HEADING stays, carrying the one line that says what
-    # is missing and which control supplies it. This assertion used to read
-    # `v._sector_section.isHidden()`, and that was the defect rather than the contract:
-    # `sector_count()` is 0 on all five of the owner's recordings, so hiding the group outright
-    # meant the per-sector table and the split grid existed and were never once seen or named.
+    # NO SECTOR LINES, NO SECTION (R11). The heading used to stay with an "Add sector" line,
+    # because hiding it had made the capability invisible; but both of the owner's saved tracks
+    # hold `sectors: []`, so it was a heading about a feature he does not use on every recording
+    # he opens. The way in stays the map's own "Add sector" button.
     assert v.sector_table.isHidden() and v.splits_table.isHidden()
-    assert v._splits_section.isHidden()
-    assert not v._sector_section.isHidden() and not v.sectors_empty.isHidden()
-    assert "Add sector" in v.sectors_empty.text()
+    assert v._splits_section.isHidden() and v._sector_section.isHidden()
+    assert not hasattr(v, "sectors_empty")
     # THE THEORETICAL BEST NO LONGER HIDES WITH SECTORS, and this assertion is the gate fix.
     # It used to inherit this section's 0-sector hide, which was right while it was a sum of best
     # SECTOR splits (one sector = one lap = the best lap time). It is a corner/straight composite
@@ -1404,29 +1402,6 @@ def test_ideal_targets_mute_with_the_timing_they_borrow_authority_from():
     print("test_ideal_targets_mute_with_the_timing_they_borrow_authority_from OK")
 
 
-def test_the_two_synthesized_targets_do_not_contradict_each_other():
-    """The page now carries TWO synthesized lap times, and `_set_digest`'s own comment records
-    that a rounding-level disagreement between two such surfaces was already treated as a defect.
-
-    They are reconcilable because they are anchored differently, and each tooltip now says so:
-    the digest is a TYPICAL lap with its top-3 corners fixed, the ideal is your quickest time
-    through every segment stitched together. Measured on the owner's five recordings the ideal is
-    the faster of the two by 0.33 to 2.67 s and the order ideal < best < projected never breaks —
-    so neither tile can be read as a target the other has already beaten."""
-    _app()
-    from studio.stats_panel import StatsView
-    v = StatsView(_fake_view_session())
-    digest_tip, ideal_tip = v.t_digest.toolTip(), v.t_theoretical.toolTip()
-    # Each names its own ANCHOR (IA-04: the caption names the base, the tooltip names the maths).
-    assert "MEDIAN" in digest_tip and "median lap" in v.t_digest.caption.text()
-    assert "each corner and each straight" in ideal_tip, ideal_tip
-    # …and the digest points at the other one rather than leaving a reader to guess why two
-    # synthesized targets on one page disagree.
-    assert "IDEAL LAP" in digest_tip, digest_tip
-    assert "Different anchors" in digest_tip, digest_tip
-    print("test_the_two_synthesized_targets_do_not_contradict_each_other OK")
-
-
 def test_stats_tiles_paint_a_value_over_a_smaller_caption():
     """W10-01: the page's whole type hierarchy, measured as PAINTED — the tile value at
     theme.EMPHASIS semibold over a CAPTION-sized caption, and the page-level captions
@@ -1589,16 +1564,18 @@ def test_stats_view_phase_tiles_and_loss_tooltips():
     sess.phase_report = lambda: PhaseReport(
         cids=[1], rows=[(0.61, 0.24, 0.15)], share=PhaseShare(6.1, 2.4, 1.5))
     v = StatsView(sess)
-    assert not v.t_phase_entry.isHidden()
-    assert v.t_phase_entry.value.text() == "61 %"
-    assert "6.1 s" in v.t_phase_entry.caption.text()
-    assert v.t_phase_exit.value.text() == "15 %"
+    # R11: ONE tile — the shares on its face in track order, the seconds on its hover.
+    assert not hasattr(v, "t_phase_entry") and not hasattr(v, "t_phase_exit")
+    assert not v.t_phase.isHidden()
+    assert v.t_phase.value.text() == "61 · 24 · 15 %", v.t_phase.value.text()
+    assert "entry · apex · exit" in v.t_phase.caption.text()
+    assert "Lost on entry 6.1 s" in v.t_phase.toolTip() and "on exit 1.5 s" in v.t_phase.toolTip()
     tip = v.corners_table.item(0, 4).toolTip()
     assert "entry +0.61" in tip and "exit +0.15" in tip
-    # No phase data -> the tiles hide, the table stands alone.
+    # No phase data -> the tile hides, the table stands alone.
     sess.phase_report = lambda: None
     v.refresh()
-    assert v.t_phase_entry.isHidden() and v.t_phase_exit.isHidden()
+    assert v.t_phase.isHidden()
     print("test_stats_view_phase_tiles_and_loss_tooltips OK")
 
 
@@ -1633,8 +1610,18 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     print("test_stats_view_braking_table_filters_unbraked_and_emits_clicks OK")
 
 
-def test_stats_view_straights_table_and_fix_first_tile():
+def test_stats_view_straights_table_and_exit_leverage_note():
+    """The STRAIGHTS table, and the one line under it naming its top exit-leverage straight.
+
+    PS-2: that line was a "fix first" TILE and, measured on the real window, it named a different
+    corner from the Coaching tab's #1 on 3 of the 4 working-set recordings (SD_19_09 C2 vs C1). It
+    now says what it measures and, where Coaching starts elsewhere, where and why — never a second
+    instruction."""
     _app()
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QLabel
+
     from studio.stats import StraightStat
     from studio.stats_panel import RING_ROLE, StatsView
     sess = _fake_view_session()
@@ -1657,18 +1644,54 @@ def test_stats_view_straights_table_and_fix_first_tile():
     assert t.item(0, 6).text() == "—"                      # k=0 exit delta: no double-count
     assert t.item(1, 6).text() == "-2.0"
     assert t.item(1, 0).data(RING_ROLE) == 1
-    assert not v.t_fix_first.isHidden()
-    assert v.t_fix_first.value.text() == "C1"              # the top-leverage corner
-    assert "-2.0 km/h" in v.t_fix_first.caption.text()
+    assert not hasattr(v, "t_fix_first"), "the imperative tile is gone"
+    note = v.straights_note.text()
+    assert not v.straights_note.isHidden() and note.startswith("Most exit leverage: C1 — "), note
+    assert "2.0 km/h under your best lap's" in note and "C1 → C2" in note and "+0.30 s" in note
+    assert "Coaching" not in note, "this stub has no corner ids, so no Coaching clause"
+    labels = [lb.text().lower() for lb in v.findChildren(QLabel)]
+    assert not any("fix first" in t for t in labels), [t for t in labels if "fix" in t]
+    # Coaching starts at the same corner: the line says so …
+    sess.coaching_opportunities = lambda: _digest_opportunities([0.4, 0.2], n_laps=12)
+    v.refresh()
+    note = v.straights_note.text()
+    assert "The Coaching tab starts with C1" not in note and "C1 is also where" in note, note
+    # … and when it starts elsewhere, the line names where and why the two differ.
+    elsewhere = _digest_opportunities([0.4, 0.2], n_laps=12)
+    elsewhere = replace(elsewhere, rows=[replace(r, cid=c)
+                                         for r, c in zip(elsewhere.rows, (3, 1), strict=True)])
+    sess.coaching_opportunities = lambda: elsewhere
+    v.refresh()
+    note = v.straights_note.text()
+    assert "The Coaching tab starts with C3: it ranks the time lost inside the corners" in note, note
+    # … and when Coaching's own theme cannot separate its top two ("Start with C3 or C1"), the line
+    # names both, as that page does — measured on Sandown 3h, where this corner is the second.
+    from studio import coaching
+    spread = coaching.Evidence(n_laps=12, reach_laps=4, reach=coaching.REACH_REPEAT, iqr=0.2,
+                               abstain=coaching.ABSTAIN_NONE)
+    tied = replace(elsewhere, rows=[replace(r, time_lost=t, evidence=spread)
+                                    for r, t in zip(elsewhere.rows, (0.40, 0.38), strict=True)])
+    sess.coaching_opportunities = lambda: tied
+    v.refresh()
+    note = v.straights_note.text()
+    assert note.endswith("The Coaching tab starts with C3 or C1 — this is one of them."), note
+    # A tie wider than three is named as Coaching names it: three corners and a count.
+    wide = replace(tied, rows=[replace(r, cid=c, time_lost=t) for r, c, t in zip(
+        tied.rows * 2, (3, 1, 4, 5), (0.40, 0.39, 0.38, 0.37), strict=True)])
+    sess.coaching_opportunities = lambda: wide
+    v.refresh()
+    note = v.straights_note.text()
+    assert note.endswith("The Coaching tab starts with C3, C1, C4 or 1 more — this is one of "
+                         "them."), note
     fired = []
     v.corner_clicked.connect(fired.append)
     t.selectRow(0)
     assert fired and fired[-1] == 2                        # the wrap straight rings C2
-    # No straights data -> section + tile hidden.
+    # No straights data -> section + note hidden.
     sess.straights_report = lambda: []
     v.refresh()
-    assert v._straights_section.isHidden() and v.t_fix_first.isHidden()
-    print("test_stats_view_straights_table_and_fix_first_tile OK")
+    assert v._straights_section.isHidden() and v.straights_note.isHidden()
+    print("test_stats_view_straights_table_and_exit_leverage_note OK")
 
 
 def test_stats_view_straights_say_how_many_laps_each_column_counted():
@@ -1832,11 +1855,11 @@ def test_stats_view_tiles_reflow_with_pane_width():
     v.resize(420, 800)
     _pump()
     assert v._tile_cols == 2, v._tile_cols
-    # The digest tile sits within the first two columns now (row-major re-place).
+    # The last PACE tile sits within the first two columns now (row-major re-place).
     g, tiles, _group = v._tile_grids[1]            # the PACE grid
-    idx = tiles.index(v.t_digest)
+    idx = tiles.index(v.t_trend)
     r, c = idx // 2, idx % 2
-    assert g.itemAtPosition(r, c) is not None and g.itemAtPosition(r, c).widget() is v.t_digest
+    assert g.itemAtPosition(r, c) is not None and g.itemAtPosition(r, c).widget() is v.t_trend
     v.hide()
     print("test_stats_view_tiles_reflow_with_pane_width OK")
 
@@ -1911,8 +1934,8 @@ def test_stats_view_wide_pane_raises_the_tile_ceiling():
     quadrant; the ceiling still exists, for a single column that is dashboard-width on its own.
 
     So the two assertions that moved are the tile cap and the circle's ceiling at a 1600 px pane,
-    and the three that did not are the ones this test was really for: the same ten PACE tiles take
-    strictly fewer rows, reach strictly further right, and go back when the pane does."""
+    and the three that did not are the ones this test was really for: the same PACE tiles take no
+    more rows, reach strictly further right, and go back when the pane does."""
     _app()
     from studio.stats_panel import (
         GG_HEIGHT,
@@ -1940,10 +1963,12 @@ def test_stats_view_wide_pane_raises_the_tile_ceiling():
     assert v._column_count() == 3
     assert v._tile_cols == TILES_PER_ROW, v._tile_cols
     assert v.gg.height() == GG_HEIGHT_WIDE
-    # Measured on the real laid-out geometry, not on the column count: the same ten PACE tiles
-    # occupy strictly fewer rows and reach further right, which is the whole point.
+    # Measured on the real laid-out geometry, not on the column count: the same PACE tiles
+    # occupy no more rows and reach further right, which is the whole point. (Strictly FEWER rows
+    # while PACE had ten tiles, 4 -> 3; at six (R11) both panes need two, 3 + 3 and 4 + 2, and the
+    # reach to the right is what still tells the two layouts apart.)
     wide_rows, wide_right = _pace_layout(v)
-    assert wide_rows < narrow_rows, (wide_rows, narrow_rows)
+    assert wide_rows <= narrow_rows, (wide_rows, narrow_rows)
     assert wide_right > narrow_right, (wide_right, narrow_right)
 
     # The tile ceiling is still REACHABLE — on a single column that is dashboard-width by itself,
@@ -1987,7 +2012,9 @@ def test_friction_circle_names_its_axes_and_keys_its_rings():
     assert "lateral" in x_label and "g" in x_label
     assert "longitudinal" in y_label
     assert "braking" in y_label and "accelerating" in y_label   # the sign IS the direction
-    assert "g" in v._gg_section.text()                          # the peers' header convention
+    # R11: the circle has no heading of its own now — it sits in the SPEED · G block whose peak-g
+    # tiles are its extremes — so the unit convention is that block's heading.
+    assert not hasattr(v, "_gg_section") and "G" in v._speed_section.text()
     # The key names the dashed ring AND carries the envelope's own value (1.55 g in the fake).
     key = v.gg_key.text()
     assert "dashed" in key and "1.55 g" in key, key
@@ -2137,8 +2164,6 @@ def test_single_lap_dashes_every_distribution_tile():
     session.stats.laps_within_pct = lambda pct=1.0: (within_pct_of_best([70.0], pct), 1)
     v = StatsView(session)
     assert v.t_sigma.value.text() == DASH
-    assert v.t_spread.value.text() == DASH, v.t_spread.value.text()
-    assert v.t_within.value.text() == DASH, v.t_within.value.text()
     assert v.t_median.caption.text() == "median · 1 clean lap"   # singular, and it is one lap
     print("test_single_lap_dashes_every_distribution_tile OK")
 
@@ -2460,8 +2485,8 @@ def test_stats_view_zero_lap_page_explains_itself():
     note = f"{v.no_laps_note.text()} {v.no_laps_prose.text()}".lower()
     assert "no complete laps" in note and "start/finish line" in note   # reason + next action
     assert not v._pace_section.isVisibleTo(v) and not v._speed_section.isVisibleTo(v)
-    tiles = ("t_best", "t_median", "t_race_pace", "t_rolling", "t_digest", "t_sigma", "t_spread",
-             "t_cov", "t_within", "t_trend", "t_vmax", "t_vmin", "t_peak_lat", "t_peak_brake")
+    tiles = ("t_best", "t_median", "t_race_pace", "t_rolling", "t_sigma", "t_trend",
+             "t_vmax", "t_vmin", "t_peak_lat", "t_peak_brake")
     dashed = [n for n in tiles
               if getattr(v, n).isVisibleTo(v) and getattr(v, n).value.text() == "—"]
     assert dashed == [], f"dash-only tiles still visible: {dashed}"
@@ -2499,16 +2524,10 @@ def test_stats_view_trust_card_is_above_the_fold():
     print("test_stats_view_trust_card_is_above_the_fold OK")
 
 
-# ------------------------------------------------------- the coaching digest tile (L5-02/IA-04/L4-08)
-# The three corners the 3-chapter D24 fixture ranks first (cids 5, 3, 12). Their 2-dp cells read
-# +0.13 +0.11 +0.08 = 0.32 s on the Coaching page; the raw floats sum to 0.3134 -> "0.31 s". The
-# rounding penny between the two surfaces IS the defect these tests pin.
-_D24_TOP3 = [0.12596491489577843, 0.10903147805383018, 0.07835681696116126]
-
-
+# ------------------------------------------------ real coaching rows for the notes' tests
 def _digest_opportunities(losses, n_laps=65):
-    """Real `coaching` dataclasses for `losses` (s, already ranked) — the exact shape BOTH the
-    Stats digest tile and the Coaching panel consume, so the two can be compared side by side."""
+    """Real `coaching` dataclasses for `losses` (s, already ranked) — the shape the Coaching tab
+    consumes and the Stats page's notes quote."""
     from studio import coaching
     rows = [coaching.Opportunity(
                 cid=i + 1, direction=1 if i % 2 == 0 else -1, time_lost=t,
@@ -2518,103 +2537,6 @@ def _digest_opportunities(losses, n_laps=65):
                                        coast_extra_s=0.0, sigma=0.05))
             for i, t in enumerate(losses)]
     return coaching.Opportunities(enough=True, n_laps=n_laps, median_lap_id=3, rows=rows)
-
-
-class _CoachSession:
-    """The two calls OpportunitiesPanel makes on a session — nothing else."""
-
-    def __init__(self, opp):
-        self._opp = opp
-
-    def coaching_opportunities(self):
-        return self._opp
-
-    def coaching_brake_points(self):
-        return {}
-
-
-def _digest_views(opp):
-    """The same opportunities rendered by both surfaces: (StatsView, OpportunitiesPanel)."""
-    from studio.coaching_panel import OpportunitiesPanel
-    from studio.stats_panel import StatsView
-    sess = _fake_view_session()
-    sess.coaching_opportunities = lambda: opp
-    return StatsView(sess), OpportunitiesPanel(_CoachSession(opp))
-
-
-def test_stats_digest_total_equals_the_coaching_headline():
-    """L5-02: the two surfaces must state the SAME total for the same corners.
-
-    Stats summed the raw floats (0.3134 -> "0.31 s") while the Coaching headline sums the 2-dp
-    cells the user can add up by eye (0.13+0.11+0.08 -> "0.32 s"), and the tile then subtracted
-    0.3134 while printing 0.31 — disagreeing with the coaching page AND with its own tooltip.
-    The digest now runs the panel's own arithmetic: its rows (`_shown_rows`), its count
-    (`PANEL_TOP_N`) and its rounding."""
-    _app()
-    from studio._signal import fmt_time
-
-    opp = _digest_opportunities(_D24_TOP3)
-    v, panel = _digest_views(opp)
-    tip, headline = v.t_digest.toolTip(), panel.summary_label.text()
-    stats_total = re.search(r"\(([0-9]+\.[0-9]{2}) s", tip)
-    coach_total = re.search(r"([0-9]+\.[0-9]{2}) s (?:across|in)", headline)
-    assert stats_total and coach_total, (tip, headline)
-    assert stats_total.group(1) == coach_total.group(1) == "0.32", (tip, headline)
-    # ...and the tile's OWN number is that same total: printed == subtracted, no 3 ms slip.
-    median = v.session.stats.pace().median
-    assert v.t_digest.value.text() == fmt_time(median - 0.32) == "1:08.780", \
-        v.t_digest.value.text()
-
-    # The latent second bug: sub-resolution rows (< 0.005 s, rendered "+0.00 s") are ranked by
-    # summarize but never SHOWN, so they must not be spent either. Here only one corner is real.
-    opp = _digest_opportunities([0.30, 0.003, 0.002])
-    v, panel = _digest_views(opp)
-    assert "in your worst corner" in panel.summary_label.text(), panel.summary_label.text()
-    assert v.t_digest.value.text() == fmt_time(69.1 - 0.30) == "1:08.800", v.t_digest.value.text()
-    assert "top-1 corner losses" in v.t_digest.toolTip(), v.t_digest.toolTip()
-    assert "top 1 fixed" in v.t_digest.caption.text(), v.t_digest.caption.text()
-    print("test_stats_digest_total_equals_the_coaching_headline OK")
-
-
-def test_stats_digest_tile_captions_its_base_and_paints_no_dead_link():
-    """IA-04 + L4-08, one tile.
-
-    IA-04: the digest is the MEDIAN lap rebased, so it routinely reads slower than the "best lap"
-    tile a row away — the caption has to say which lap it started from, or a target you have
-    already beaten looks like a contradiction. The anchor itself is deliberate and stays: best −
-    losses would overclaim (the best lap already banks some of those corners).
-
-    L4-08: the caption used to paint a "→" on a tile with no click handler, no PointingHandCursor
-    and no focus — a navigation affordance that navigates nowhere. Either it is clickable or it
-    does not paint the arrow."""
-    _app()
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QWidget
-
-    from studio._signal import fmt_time
-
-    v, _panel = _digest_views(_digest_opportunities(_D24_TOP3))
-    tile = v.t_digest
-    cap = tile.caption.text()
-
-    # IA-04 — the base is named on the tile face, not just in the tooltip.
-    assert "median" in cap.lower(), cap
-    # ...and the anchor is UNCHANGED: still median − losses, never best − losses.
-    pace = v.session.stats.pace()
-    assert tile.value.text() == fmt_time(pace.median - 0.32) != fmt_time(pace.best - 0.32)
-    assert "MEDIAN" in tile.toolTip()
-    assert "slower" in tile.toolTip().lower(), \
-        "the tooltip must say why a target can read slower than your best lap"
-
-    # L4-08 — no arrow unless the tile can actually be pressed.
-    clickable = (type(tile).mousePressEvent is not QWidget.mousePressEvent
-                 or tile.cursor().shape() == Qt.PointingHandCursor
-                 or tile.focusPolicy() != Qt.NoFocus)
-    assert "→" not in cap and not clickable, \
-        f"inert tile still paints a navigation arrow: {cap!r}"
-    # It points at the Coaching tab in WORDS instead.
-    assert "Coaching" in tile.toolTip(), tile.toolTip()
-    print("test_stats_digest_tile_captions_its_base_and_paints_no_dead_link OK")
 
 
 # ------------------------------------------------------------- Phase 4: the page fits its pane
@@ -3422,22 +3344,6 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     view.hide()
     print("ok CORNERS: partial counts disclosed on the cell, an unmatched corner dashed and named, "
           "and the coaching sentence says it leaves out the same cells")
-
-
-def test_digest_tooltip_reads_the_ideal_delta_instead_of_a_baked_range():
-    """The digest tile's tooltip used to promise "measured on the owner's recordings the ideal is
-    0.33 to 2.67 s the faster of the two" — an empirical range typed into shipping copy. On the
-    reviewed screen the two tiles were 5.0 s apart, i.e. the sentence was already false on the
-    owner's own data. It now reads the two numbers it is comparing."""
-    _APP  # noqa: B018
-    from studio.stats_panel import StatsView
-
-    view = StatsView(_fake_view_session())
-    tip = view.t_digest.toolTip()
-    assert tip, "the digest tile must still explain itself"
-    assert "0.33" not in tip and "2.67" not in tip, ("a baked empirical range came back", tip)
-    assert "here the ideal is" in tip, tip
-    print("ok digest-tooltip: the ideal delta is read, not baked")
 
 
 # ------------------------------------------------------- the band distributions (histograms)
@@ -4868,7 +4774,7 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
         coaching.MIN_LAPS, so since #339 that abstain fires ONLY because corners went unmatched —
         the sentence is false every time it is shown.
 
-    Driven on the REAL panel and dialog over the real Session: the drift fixture's own interpolated
+    Driven on the REAL Coaching page over the real Session: the drift fixture's own interpolated
     C1 exit (lap 1) is the MK shape in miniature."""
     from studio import coaching, coaching_panel
 
@@ -4887,10 +4793,8 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
     _APP.processEvents()
     panel.refresh()
     _APP.processEvents()
-    dialog = coaching_panel.OpportunitiesDialog(opps, brake_points={}, session=s)
     try:
-        for where, table, col in (("panel", panel.table, coaching_panel._PANEL_COL_REACH),
-                                  ("dialog", dialog.table, coaching_panel._COL_REACH)):
+        for where, table, col in (("page", panel.table, coaching_panel._PANEL_COL_REACH),):
             tips = {int(table.item(r, 0).text()[1:]): table.item(r, col).toolTip()
                     for r in range(table.rowCount())}
             for cid, n in short.items():
@@ -4904,7 +4808,6 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
                     assert f"of your {n} clean laps" in tips[cid], (where, cid, tips[cid])
     finally:
         panel.close()
-        dialog.close()
 
     # FEW_LAPS: C2's entry planted as interpolated on every lap but the best and one other, so two
     # cells count and the corner abstains for want of laps it could MATCH, not laps it drove. That
@@ -4970,7 +4873,7 @@ def test_braking_coasting_and_the_phase_tiles_say_which_laps_they_count():
         assert "matched to your best lap's line on track" in braking, (
             f"BRAKING's n left out lap {lap + 1}'s C{cid} brake point and its hover does not say "
             f"why: {braking}")
-        phase = view.t_phase_entry.toolTip()
+        phase = view.t_phase.toolTip()
         assert not phase.startswith("Every clean lap's"), phase
         assert "matched on track" in phase, phase
     finally:

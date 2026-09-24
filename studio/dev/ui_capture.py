@@ -48,7 +48,6 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from studio import theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
-from studio.coaching_panel import OpportunitiesDialog  # noqa: E402
 from studio.dev import _jail  # noqa: E402
 
 # The bundled sample: a real GPMF clip so the tool runs with no user-supplied file.
@@ -119,18 +118,14 @@ def capture(recording: str, out_dir: str, prefs_file: str | None = None) -> None
     _grab(view.table, os.path.join(out_dir, "table.png"))
     _grab(view.opportunities, os.path.join(out_dir, "opportunities_panel.png"))
 
-    # The coaching MODAL: build + show() + grab it directly. Do NOT call the app's
-    # _open_opportunities() — it calls dlg.exec(), which BLOCKS forever offscreen (no one closes the
-    # modal). show() renders it non-blocking so we can grab the laid-out table.
-    opps = w.session.coaching_opportunities()
-    brake_points = w.session.coaching_brake_points()
-    dlg = OpportunitiesDialog(opps, jump_to=None, brake_points=brake_points,
-                              speed_unit=w._speed_unit)
-    dlg.resize(920, 380)
-    dlg.show()
+    # Coaching ▸ Opportunities: the Coaching page full-window (it replaced the modal copy of the
+    # ranking — R11), where each row also carries its Entry·Apex·Exit bars and a Jump. The app's own
+    # slot is safe to call here: it no longer opens anything modal. A second call restores the grid.
+    w._open_opportunities()
     app.processEvents()
-    _grab(dlg, os.path.join(out_dir, "opportunities_dialog.png"))
-    dlg.close()
+    _grab(w, os.path.join(out_dir, "opportunities_maximized.png"))
+    w._open_opportunities()
+    app.processEvents()
 
     print(f"UI capture OK — {out_dir}")
 
