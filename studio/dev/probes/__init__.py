@@ -102,4 +102,15 @@ candidate to its own noise bar and to the lap outcome (do later onsets go with q
 verdict is `studio/docs/refused-2026-09.md` §16.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p17_braking_room
+
+`p18_corner_kernel` asks whether the corner model's curvature window should be centred, as #383
+centred the GPS-lag reference's. It swaps the kernel only inside `corners.pooled_curvature` and
+measures it three ways: a uniformly sampled symmetric corner, the synthetic GoPro's known corner
+geometry through the real loader (with an odd-window, a constant-speed and a no-boxcar control),
+and the four working-set recordings, jailed and tripwired. Its verdict is
+`studio/docs/refused-2026-09.md` §17.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel synthetic --controls
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel real
 """

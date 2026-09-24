@@ -605,8 +605,18 @@ def lap_curvature(xs, ys, dists, centred: bool = False) -> np.ndarray:
 
     `centred=True` smooths with `_signal.centred_boxcar`. The default window is NOT centred when
     it comes out even (w = round(8 m / median spacing) is 4 or 6 at ~2 m or ~1.4 m between fixes):
-    the profile then sits half a sample late. A shape does not care, and the corner model keeps
-    the default; a TIMING does — `rotation`'s clock-offset reference asks for the centred one."""
+    the profile then sits half a sample late. `rotation`'s clock-offset reference asks for the
+    centred one, because there the TIMING is the measurement.
+
+    THE CORNER MODEL KEEPS THE DEFAULT ON PURPOSE, and the half sample is not harmless: it moves
+    every corner boundary 0.7-1 m down the lap. It cancels a bias that runs the other way. This
+    smoothing and the load-time position boxcar count FIXES, and a kart brakes into a corner far
+    harder than it accelerates out, so the fixes sit further apart on the entry and the window
+    opens early: -0.88 m on the synthetic GoPro's truth where the window is odd and nothing
+    cancels it. Where the window is even, the late half fix brings the window midpoint to within
+    0.08 m of truth, noise-free. Centring it would move every window ~1 m early and every corner
+    time further from truth. The apex (a centroid) would come right, but only the map's corner
+    labels read it. The measurement is `studio/docs/refused-2026-09.md` §17."""
     xs = np.asarray(xs, float)
     ys = np.asarray(ys, float)
     dists = np.asarray(dists, float)
