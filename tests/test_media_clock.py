@@ -32,6 +32,7 @@ _APP = QApplication.instance() or QApplication([])
 from studio import chapters, media_clock  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 from studio.player_pane import PlayerPane  # noqa: E402
+from studio.timeline import nearest_sample  # noqa: E402
 
 # The measured D24 numbers this module exists for: the media clock runs ~27 ppm fast, so over an
 # 84-minute recording the picture and the telemetry drift ~0.17 s apart at the last lap.
@@ -193,7 +194,7 @@ class _ClockedSession:
 
     def index_at_time(self, t):
         self.asked.append(t)
-        return int(np.clip(np.searchsorted(self.tt, t), 0, len(self.tt) - 1))
+        return nearest_sample(self.tt, t)   # the real Session's rule, not a copy of it
 
     def delta_at_lap(self, lap_id, t):
         self.asked.append(t)

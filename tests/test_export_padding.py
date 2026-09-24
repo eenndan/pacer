@@ -45,6 +45,7 @@ from PySide6.QtGui import QImage, QPainter  # noqa: E402
 
 from studio import chapters, theme  # noqa: E402
 from studio import export_video as ev  # noqa: E402
+from studio.timeline import nearest_sample  # noqa: E402
 
 # A temp directory PRIVATE TO THIS PROCESS — `pad_src.mp4` in the shared $TMPDIR is the same path
 # in every run on the machine, and a concurrent lane's teardown removing it mid-render fails here
@@ -96,8 +97,7 @@ class PadStub:
 
     # --- time-indexed lookups: clamped, never None (like the real Session's)
     def index_at_time(self, t):
-        i = int(np.searchsorted(self.tt, t))
-        return min(max(i, 0), len(self.tt) - 1)
+        return nearest_sample(self.tt, t)   # the real Session's rule, not a copy of it
 
     def g_at_time(self, t):
         """Big in the RUN-UP, small inside lap 1, big again in the RUN-OFF — so an envelope that

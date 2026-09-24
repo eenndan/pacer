@@ -53,6 +53,7 @@ from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from studio import export_video as ev  # noqa: E402
 from studio import gmeter_overlay, player_pane, workers  # noqa: E402
+from studio.timeline import nearest_sample  # noqa: E402
 
 
 # ------------------------------------------------------------------ the structural guard
@@ -182,7 +183,7 @@ class _Stub:
         return self._lap if self._w[0] <= t < self._w[1] else None
 
     def index_at_time(self, t):
-        return int(min(max(np.searchsorted(self.tt, t), 0), len(self.tt) - 1))
+        return nearest_sample(self.tt, t)   # the real Session's rule, not a copy of it
 
     def delta_at_lap(self, lap_id, t):
         return 0.25 if lap_id == self._lap else None
