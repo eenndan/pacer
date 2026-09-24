@@ -415,7 +415,13 @@ def test_the_panel_states_the_refusal_rather_than_a_number():
 
 def test_the_add_button_names_the_corner_and_the_gestures_are_signals():
     p = _panel_with(_report())
-    assert "Focus list · empty" in p.focus_block.headline.text()
+    # UX-3: the empty list is ONE line beside its Add button — no headline row, no invitation
+    # paragraph (it is the line's hover), and no Remove button, which an empty list can never use.
+    fb = p.focus_block
+    assert fb.empty_line.isVisible() and "Focus list · empty" in fb.empty_line.text()
+    assert fb.headline.isHidden() and fb.drop_button.isHidden()
+    assert not [lb for lb in fb.lines if not lb.isHidden()], "the invitation is not a second row"
+    assert "Pick up to 3 corners" in fb.empty_line.toolTip()
     assert not p.focus_block.add_button.isEnabled(), "nothing selected yet"
     p.table.selectRow(0)
     for _ in range(4):
@@ -434,7 +440,8 @@ def test_the_add_button_names_the_corner_and_the_gestures_are_signals():
     for _ in range(4):
         _APP.processEvents()
     assert not p.focus_block.add_button.isEnabled()
-    assert p.focus_block.drop_button.isEnabled()
+    assert p.focus_block.drop_button.isEnabled() and not p.focus_block.drop_button.isHidden()
+    assert p.focus_block.empty_line.isHidden() and not p.focus_block.headline.isHidden()
     dropped = []
     p.focus_remove_requested.connect(dropped.append)
     p.focus_block.drop_button.click()
