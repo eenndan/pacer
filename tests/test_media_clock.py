@@ -610,6 +610,11 @@ CROSSINGS = {
     ("studio/dev/probes/p14_rpm_audio.py", "extract", "without_gps_lag"):
         (_S, "the speed's own stamps: the probe MEASURES the audio's lag against them"),
     ("studio/dev/probes/p14_rpm_audio.py", "extract", "to_media"): (_S, "the call on that map"),
+    # --- the golden dump fingerprints the picture map itself (B1b)
+    ("studio/dev/golden_session_dump.py", "_surfaces", "media_time"):
+        (_P, "pins THE picture map every seek and burned overlay goes through"),
+    ("studio/dev/golden_session_dump.py", "_surfaces", "telemetry_time"):
+        (_P, "and its inverse, over the same grid"),
 }
 # Callees whose NAME fixes the map, checked against the declaration so the table cannot drift
 # from the code it describes.

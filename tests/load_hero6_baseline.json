@@ -1,8 +1,14 @@
 {
  "active_baseline_total_distance": null,
+ "auto_marks": [
+  [],
+  1
+ ],
  "best_lap_id": null,
  "best_lap_total_distance": null,
  "best_rolling_lap": null,
+ "brake_report": [],
+ "coaching_brake_points": {},
  "coaching_opportunities": {
   "enough": false,
   "median_lap_id": null,
@@ -22,7 +28,9 @@
   }
  },
  "coast_report": null,
+ "collapsed_sector_lines": [],
  "consistency_lap_ids": [],
+ "corner_best_provenance": {},
  "corner_consistency": [],
  "corner_map_markers": [],
  "corner_matrix": null,
@@ -30,6 +38,10 @@
  "corner_session_bests": [],
  "corners": [],
  "delta": {
+  "distance": null,
+  "time": null
+ },
+ "delta_to_ideal": {
   "distance": null,
   "time": null
  },
@@ -41,20 +53,60 @@
   "theta_b": 0.3
  },
  "dropout_lap_ids": [],
+ "effective_sector_count": 0,
+ "excluded_lap_reasons": {},
+ "excluded_lap_rows": [],
+ "focus_samples": null,
+ "gmeter_axis": null,
+ "gmeter_cross": null,
+ "gmeter_long_source": "gps",
  "gmeter_source": "gps",
+ "gps_lag_applied_s": null,
  "has_gmeter": true,
  "has_reference": false,
+ "has_rotation": false,
+ "ideal_decomposition_best": null,
+ "ideal_delta_to_best": {
+  "distance": null,
+  "time": null
+ },
+ "ideal_donor_lap_id": null,
+ "ideal_lap_elapsed": null,
+ "ideal_sample": null,
+ "ideal_segment_bests": null,
  "lap_count": 1,
  "lap_rows": [],
  "lap_time_trend": [],
  "per_lap": {},
  "phase_report": null,
  "point_count": 175,
+ "quality_strip": {
+  "cell_s": 1.0,
+  "cells": 24,
+  "counts": {
+   "0": 1,
+   "4": 23
+  },
+  "reports_quality": false,
+  "runs": [
+   [
+    0,
+    4
+   ],
+   [
+    23,
+    0
+   ]
+  ]
+ },
  "reference_label": null,
  "reference_lap_id": null,
  "reference_lap_time": null,
  "reference_overlay_xy_shape": null,
+ "rotation_cross": null,
+ "rotation_device": "Hero6 Black",
  "sector_count": 0,
+ "sector_medians": [],
  "sector_plot_positions_distance": [],
  "sector_plot_positions_time": [],
  "sector_sigmas": [],
@@ -62,8 +114,89 @@
   null
  ],
  "session_date": "2018-01-24",
+ "split_matrix": null,
+ "stats": {
+  "gg_cloud": null,
+  "gg_envelope": null,
+  "lap_stats": [],
+  "laps_within_1pct": [
+   0,
+   0
+  ],
+  "lateral_g_bands": null,
+  "longest_coast_s": 0.0,
+  "pace": null,
+  "pace_cov": null,
+  "pace_trend": null,
+  "race_pace": null,
+  "session_vmax": null,
+  "speed_bands_kmh": null,
+  "speed_bands_mph": null,
+  "stint_break_s": 90.0,
+  "stint_count": 0,
+  "stints": [],
+  "totals": {
+   "distance_kept_frac": 0.0034593187089861886,
+   "distance_m": null,
+   "duration_s": 9.620722222222222,
+   "end_clock": "19:28",
+   "moving_s": 0.5004999999999988,
+   "start_clock": "19:28"
+  }
+ },
  "straights_report": [],
+ "suggest_sectors": [
+  [
+   -1087.896756279926,
+   -236.92871995332055,
+   -1091.3024283110879,
+   -266.7347830616239
+  ],
+  [
+   -1081.2275245277335,
+   -248.49768733799434,
+   -1111.0498283933964,
+   -251.75808488186547
+  ],
+  [
+   -1084.3385859205089,
+   -241.01436495447848,
+   -1111.1649455157938,
+   -254.44367732944687
+  ]
+ ],
  "theoretical_best": null,
+ "timing_lines_latlon": [
+  [
+   [
+    33.12665669601131,
+    -117.32714738796037
+   ],
+   [
+    33.12645386986624,
+    -117.32735992610736
+   ]
+  ],
+  []
+ ],
+ "timing_quality": {
+  "clock": "media_clock_fallback",
+  "dropped_fraction": 0.0
+ },
+ "timing_user_confirmed": false,
+ "timing_verified": false,
+ "track_location": [
+  [
+   33.12880381593406,
+   -117.31548987857141
+  ],
+  [
+   33.126534946153846,
+   -117.32729738571427,
+   33.13107268571429,
+   -117.30368237142856
+  ]
+ ],
  "track_name": null,
  "valid_lap_ids": []
 }
