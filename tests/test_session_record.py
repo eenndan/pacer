@@ -681,11 +681,20 @@ def test_a_library_with_no_records_at_all_renders_cleanly():
 
 def test_the_privacy_note_names_the_records_file_and_says_it_is_never_fetched():
     """The disclosure has to name every file the app keeps, and this feature added one. It also
-    states the non-goal the whole design rests on: conditions are typed, never looked up."""
-    note = libdlg.PRIVACY_NOTE
-    assert "session_records.json" in note
-    assert "never looked up online" in note
-    assert "session_records.json.bak" in note
+    states the non-goal the whole design rests on: conditions are typed, never looked up. Since
+    board review UX-9d the Library's note is one line and a link to Help ▸ Your data & privacy,
+    so the file and the promise are named THERE, and the backup on "Clear library", which makes
+    it."""
+    from studio.help_dialog import PRIVACY_PARAGRAPHS
+    card = " ".join(PRIVACY_PARAGRAPHS)
+    assert "session_records.json" in card
+    assert "never looked up online" in card
+    dlg = libdlg.LibraryDialog({"version": 3, "entries": []}, lambda paths: None,
+                               clear_library=lambda: {"entries": []})
+    try:
+        assert "session_records.json.bak" in dlg.clear_btn.toolTip(), dlg.clear_btn.toolTip()
+    finally:
+        dlg.deleteLater()
     print("test_the_privacy_note_names_the_records_file_and_says_it_is_never_fetched OK")
 
 

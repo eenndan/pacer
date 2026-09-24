@@ -79,7 +79,7 @@ A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`); opening one loads
 | Rename / delete a saved track | `track_db.py` + `track_dialog.py` + `LibraryController._rename_track` (a rename re-keys library, focus and records; a delete, none) | `test_track_db` |
 | Tune GPS smoothing | `_signal.SMOOTH_WINDOW` + `load._smooth_track`; measure with `dev/denoise_check.py` | `test_session_pure` |
 | Add / tune a driving channel | `driving.py` → `driving_channels.py` → overlays in `plots_view.py` / `map_view.py` | `test_driving` |
-| Add a Stats-page statistic | `stats.py` (reducer + `SessionStats`) → `stats_panel.py` | `test_stats` |
+| Add a Stats-page statistic | `stats.py` (reducer + `SessionStats`) → its section's `stats_*.py` | `test_stats` |
 | Show the ideal lap somewhere new | read `session.ideal_total` / `delta_to_ideal`, gate on `ideal_donor_lap_id() is None`, caption with `IdealSample.caption()` | `test_session_pure`, `test_export_disclosures` |
 | Change what coaching says or claims | `coaching.py` (`reason_sentence`, `corner_evidence`, `session_theme`); surfaces never re-derive | `test_coaching` |
 | Change a cross-session verdict | `focus.verdict` (a refusal carries `delta=None`) | `test_focus_list` |
@@ -183,7 +183,11 @@ algorithm; the service just caches + delegates.
 | [map_view.py](map_view.py) | Track map: laps, draggable timing lines, marker, corner/brake glyphs, rainbow, ghost | Qt | `test_rainbow_map` |
 | [plots_view.py](plots_view.py) | Speed + Δ charts on one linked x-axis: scrub cursor, ideal and driving overlays, instruments | Qt | `test_charts_panel` |
 | [lap_table.py](lap_table.py) | The sortable Laps table (splits, ⚠ dropout) and the Corners table | Qt | `test_lap_table_columns` |
-| [stats_panel.py](stats_panel.py) | `StatsView`, the Stats page: tiles, IDEAL LAP, DATA TRUST, tables, distributions, grids | Qt | `test_stats` |
+| [stats_panel.py](stats_panel.py) | `StatsView`, the Stats page shell: layout, tiles, charts, the unsplit sections | Qt | `test_stats` |
+| [stats_common.py](stats_common.py) | What Stats-page sections share: `ReportTable`, headings, cells | Qt | `test_stats` |
+| [stats_trust.py](stats_trust.py) | Stats-page DATA TRUST card | Qt | `test_quality_chip_trust` |
+| [stats_braking.py](stats_braking.py) | Stats-page BRAKING table | Qt | `test_stats` |
+| [stats_straights.py](stats_straights.py) | Stats-page STRAIGHTS table + exit-leverage note | Qt | `test_stats` |
 | [coaching_panel.py](coaching_panel.py) | Coaching page + Opportunities dialog: theme and focus blocks, per-corner rows | Qt | `test_coaching` |
 | [marks_panel.py](marks_panel.py) | The Marks page and mark editor; emits intents, owns no store | Qt | `test_marks` |
 | [provenance_panel.py](provenance_panel.py) | The read-only "inspect this number" panel over one `Provenance` | Qt | `test_provenance_panel` |

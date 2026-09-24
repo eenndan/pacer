@@ -20,7 +20,12 @@ never the measured tiles beside them, which ARE laps you drove. A statistic that
 (no accelerometer, no complete lap) says so in words next to the em-dash.
 
 Pacer-free; refreshed on load / re-segmentation, never on the 30 Hz tick. Numbers render in
-the mono stack (tabular figures); a signal-absent statistic shows an em-dash, never a fake 0."""
+the mono stack (tabular figures); a signal-absent statistic shows an em-dash, never a fake 0.
+
+THIS MODULE IS THE PAGE SHELL, AND IT IS BEING SPLIT (ARCH-3). Layout, reflow and orchestration
+stay here; a section that has moved out builds, refreshes and words itself in its own module —
+DATA TRUST in `stats_trust`, BRAKING in `stats_braking`, STRAIGHTS in `stats_straights` — and
+what sections share is in `stats_common` (see its docstring for the contract)."""
 
 from __future__ import annotations
 
@@ -39,7 +44,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QScrollArea,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -47,22 +51,21 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    coaching,
     corners,
     data_quality,
     driving,
     gmeter,
-    media_clock,
     provenance,
     provenance_panel,
     theme,
     units,
 )
 from . import stats as stats_service
-from ._signal import exclusion_summary, fmt_hms, fmt_time, plural
+from ._signal import fmt_hms, fmt_time, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so this page quotes
-# the Coaching tab's ranking and totals (the CORNERS note, the STRAIGHTS note) exactly — L5-02.
+# the Coaching tab's ranking and totals (the CORNERS note; `stats_straights` for its note) exactly —
+# L5-02.
 from .coaching_panel import PANEL_TOP_N, _ranked_shown
 from .consistency import pb_mask
 from .lap_table import (
@@ -73,14 +76,24 @@ from .lap_table import (
     DROPOUT_TOOLTIP,
     EXCLUDED_MARK,
     NUM_ROLE,
-    NUMERIC_COL_START,
     PROVISIONAL_COLOR,
     PROVISIONAL_TOOLTIP,
     _NumItem,
-    align_headers_over_their_columns,
     estimated_timing_tooltip,
     set_corner_direction,
 )
+from .stats_braking import BrakingSection
+from .stats_common import (
+    NO_GMETER_NOTE,
+    RING_ROLE,
+    ROW_HEIGHT,
+    ReportTable,
+    keep_blanks_last,
+    num_item,
+    section_heading,
+)
+from .stats_straights import StraightsSection
+from .stats_trust import TrustSection
 from .theme import C
 from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters
 
@@ -120,12 +133,9 @@ NO_LAPS_TEXT = (f"{data_quality.NO_LAPS_HEADLINE} {NO_LAPS_STATS_CLAUSE} "
 # surface to.
 NO_LAPS_BANNER = f"{data_quality.NO_LAPS_HEADLINE} {NO_LAPS_STATS_CLAUSE}"
 NO_LAPS_PROSE = data_quality.no_laps_body()
-# The absent-accelerometer sentence — used BOTH in the DATA TRUST card and under the SPEED · G
-# tiles, so the dashes and the trust card explain themselves in the same words.
-NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
-                  "are unavailable.")
-#: ...and the same sentence without its "g-meter: " term, for the surfaces that have to explain an
-#: EMPTY g column in prose. Composed from the note rather than retyped, so the page cannot come to
+#: `NO_GMETER_NOTE` (in stats_common: DATA TRUST and the SPEED · G note share it) without its
+#: "g-meter: " term, for the surfaces that have to explain an EMPTY g column in prose.
+#: Composed from the note rather than retyped, so the page cannot come to
 #: state one fact two ways — which is exactly how the defect this fixes survived #288: the note
 #: said "no accelerometer in this recording" while the grid beside it said "Lat g is the
 #: accelerometer". (The DATA TRUST row partitions the same constant the same way.)
@@ -160,102 +170,6 @@ def gps_lateral_clause(session) -> str | None:
             else "no usable accelerometer")
 
 
-#: The DATA TRUST term for the picture↔telemetry fact. Named once so the row, its test and the
-#: docs cannot drift into three spellings of one thing.
-VIDEO_SYNC_TERM = "Video sync"
-
-#: The DATA TRUST term for the timing-quality fact — the row the lap panel's data-quality chip
-#: (ESTIMATED / GPS LOW / NO GPS) opens. Named once so the row, the chip's destination and their
-#: test cannot disagree about which row that is.
-TIMING_TERM = "Timing"
-
-#: WHAT NO CORRECTION REMOVES, stated once beside the row that states what the corrections did.
-#: `studio/media_clock.py` measures it: a GPMF payload spans 1.001 s and carries 9, 10 or 11 fixes
-#: laid evenly across it, so where a fix really sat inside its payload is recorded nowhere. It is a
-#: FLOOR — the part that does NOT grow through a recording, which is exactly what distinguishes it
-#: from the two clock errors the app now takes out.
-VIDEO_SYNC_TIP = (
-    "Where a GPS fix sits inside its 1.001 s GPMF payload is recorded nowhere, so no method can "
-    "place a telemetry instant on the picture better than about ±0.05 s — 1.5 frames at 30 fps. "
-    "That floor sits under whatever this row says, and unlike a clock difference it does not grow "
-    "through a recording. Lap times are differences taken on one clock, so none of this moves "
-    "them.")
-
-
-def video_sync_row(session):
-    """Is what is drawn over a frame that frame's own? — as a (term, value, caveat) row, or None.
-
-    THE FACT THE CARD COULD NOT STATE. The app crosses ONE seam between the picture and the
-    telemetry (`Session.media_time`), and two corrections ride on it: the two clocks' ~27 ppm rate
-    difference, and the GPS timestamps' own measured lag. The second one is a PER-RECORDING
-    VERDICT — `Session.gps_lag_applied_s` is None for a camera with no gyro, for a gyro that never
-    tracks the racing line, and for a measurement past `media_clock.MAX_GPS_LAG_S` — and until this
-    row the only place it was stated was the ROTATION row's tooltip, which exists only when there
-    is a gyro to measure an offset with. So the disclosure was absent on all ten bundled samples,
-    and absent on precisely the recordings where the correction had FAILED.
-
-    Measured on the real StudioWindow with `rotation.measure_lag` forced to its own refusing branch
-    over D24's 0060 pair (the #283 idiom — the real gate driven to the branch the owner's files
-    never reach): `gps_lag_applied_s` None, every GPS-derived overlay ~0.46 s — 14 frames at
-    30 fps — behind the picture, and the card read `Timing: GPS9 true clock · 0% of moving fixes
-    rejected` with the rotation row silently dropping its clause. Nothing on the window said so.
-
-    FOUR STATES, and all four occur. Both D24 recordings are the first (fitted map, +26.73 /
-    +27.11 ppm, lag +0.4764 / +0.4589 s installed). Eight of the ten bundled samples are the third
-    — a GPS5 camera never leaves the media clock, so `media_clock.fit` returns IDENTITY because
-    there is genuinely nothing to convert, which must not read as a failed fit. `karma.mp4` is the
-    fifth: no GPS trace at all, so there is nothing to place on the picture and the Timing row
-    above already says nothing here can be lap-timed — no row rather than a fifth sentence.
-
-    ACCESSORS ONLY, and it returns None for a session that models no clock at all. Every other
-    suite in this repo builds a duck-typed stand-in; "this object knows nothing about a map" is not
-    "this recording's map could not be fitted", and reporting the first as the second is the
-    failure mode `track_name`'s `""` default already exists to avoid."""
-    clock = getattr(session, "media_clock", None)
-    quality = getattr(session, "timing_quality", None)
-    if not isinstance(clock, media_clock.MediaClock) or quality is None:
-        return None
-    if getattr(quality, "no_gps", False):
-        return None
-    applied = getattr(session, "gps_lag_applied_s", None)
-    # The RATE FIT alone — `gps_lag` is a separate installation and would otherwise make every
-    # corrected recording look like a fitted one even where the fit was refused.
-    fitted = not clock.without_gps_lag().is_identity
-    ppm = abs(clock.rate - 1.0) * 1e6
-    # The recording's own length, off the object the clock rides on. Absent (a stand-in, a session
-    # with no chapter map) means the seconds figure is omitted, never invented.
-    span = getattr(getattr(session, "chapters", None), "total_duration", None)
-    drift = (f", {ppm * 1e-6 * float(span):.2f} s across this recording"
-             if isinstance(span, (int, float)) and not isinstance(span, bool) and span > 0
-             else "")
-    if applied:
-        basis = (f"the trace is placed on the picture's own clock (the two run {ppm:.1f} ppm "
-                 f"apart{drift}) and " if fitted else "")
-        return (VIDEO_SYNC_TERM,
-                f"corrected — {basis}the GPS timestamps' measured {abs(applied):.2f} s lag is "
-                f"taken out, so the speed, Δ and map dot beside a frame are that frame's own, in "
-                f"the app and in an exported clip alike", False)
-    if fitted:
-        # The forced case above, and the honest half-correction: the drift is out, the lag is not.
-        # "around half a second" is what it measured wherever it COULD be measured (+0.476 /
-        # +0.459 s on the two D24 recordings) — this recording's own is unknown, which is the
-        # whole point of the row, so the figure is offered as a scale and not as this file's.
-        return (VIDEO_SYNC_TERM,
-                f"the two clocks' {ppm:.1f} ppm drift is taken out{drift}, but this recording's "
-                f"GPS-timestamp lag could not be measured — so the speed, Δ and map dot drawn "
-                f"over the video may trail the picture by the receiver's own fix latency, which "
-                f"measures around half a second on the recordings where it can be measured. Lap "
-                f"times are differences taken on one clock and are unaffected.", True)
-    if getattr(quality, "media_clock", False):
-        return (VIDEO_SYNC_TERM,
-                "this camera writes no GPS clock of its own, so the telemetry and the picture are "
-                "already on one clock — there is nothing to convert, and nothing is shifted.",
-                False)
-    return (VIDEO_SYNC_TERM,
-            "the picture↔telemetry map could not be fitted on this recording, so everything drawn "
-            "over the video keeps the uncorrected mapping — which drifts from the picture by up "
-            "to about 0.2 s by the end of a long session. Lap times are differences taken on one "
-            "clock and are unaffected.", True)
 # (The local TILE_VALUE_PT alias is gone: the step it named is theme.EMPHASIS, the tile that used
 # it is widgets.Tile, and the two call sites left in this file read the token directly.)
 TILES_PER_ROW = 4         # tile-grid max columns in a normal (quadrant-width) pane
@@ -285,7 +199,7 @@ WIDE_PANE_PX = 1200       # column width from which a tile grid may run to TILES
 #
 # IT IS A FLOOR AND NOT THE ANSWER, and that distinction is this page's P1. A column that holds a
 # REPORT TABLE cannot be set at a prose measure: the tables are content-sized and do not reflow —
-# they scroll (see _ReportTable) — so a column narrower than one of them does not wrap it, it HIDES
+# they scroll (see ReportTable) — so a column narrower than one of them does not wrap it, it HIDES
 # its rightmost columns behind an inner scrollbar. Measured on D24 the five tables want
 # 345 / 532 / 541 / 610 / 718 px, against the 440 this constant declares. Composing on this number
 # alone lost `Apex best · Apex med · Grip %` off CORNERS, `Trap med · Exit Δ` off STRAIGHTS,
@@ -480,14 +394,6 @@ BAND_TOOLTIP = (
     "vibration-inflated), so its shape is largely the smoother's; it also separated fastest from "
     "slowest more weakly than either chart here. The friction circle below shows that axis "
     "against this one.")
-# Every report table's row height. It was a bare 22, documented here as "the consistency-table
-# convention" — a convention inherited from the ConsistencyPanel, which PR #111 DELETED, so the
-# number outlived its only argument. Three of the five tables below are genuine row click targets
-# (SelectRows + SingleSelection + ClickFocus → corner_clicked → the map's apex ring), and 35 of
-# their rows therefore shipped two pixels under the pointer-target floor theme.py declares. This is
-# that floor, spelled as the token: a report grid may be denser than a control, never denser than
-# the floor. See theme.GRID_ROW_DENSE_H for why this is not a new density scale.
-ROW_HEIGHT = theme.GRID_ROW_DENSE_H
 # Speed units live in the PER-LAP section label (one place), keeping the columns narrow
 # enough that the whole table fits the quadrant with no clipped column.
 LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s", "Coast s"]
@@ -575,64 +481,6 @@ def _corner_count_tip(report) -> str:
             "put its time tenths of a second out, so they are left out of this whole row.")
 
 
-def _straight_count_tip(n: int, of: int | None, what: str) -> str:
-    """One STRAIGHTS column's hover when not every lap counted (C4), or "" when all did / the
-    report never counted. `what` names the edges that column reads, e.g. "both ends of this
-    straight"."""
-    if of is None or n >= of:
-        return ""
-    if n == 0:
-        return (f"No value: on none of the {of} clean laps was {what} matched to your best lap's "
-                "line on track, and an interpolated edge can put it well out.")
-    return (f"Over the {n} of {of} clean laps matched on track at {what}. On the other {of - n} "
-            "that edge was interpolated between neighbouring corners, which can put a time tenths "
-            "of a second and a speed several km/h out, so they are left out.")
-
-
-BRAKE_COLUMNS = ["Corner", "n", "Onset σ m", "Span m", "Commit %", "m later"]
-STRAIGHT_COLUMNS = ["Straight", "Best", "Median", "σ (s)", "Trap best", "Trap med", "Exit Δ"]
-RING_ROLE = NUM_ROLE + 1   # the map-ring corner cid stored on a straight row's label item
-STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/straight "
-                     "partition — segments sum to the lap time exactly): best/median/σ "
-                     "time, the trap speed at the straight's END, and Exit Δ — the "
-                     "preceding corner's median exit speed vs your best lap's (+ is "
-                     "faster). A slow exit costs time down the straight after it, which no "
-                     "corner's own time contains: the note under the table names the straight "
-                     "where exit deficit × time spread is largest. Trap speed doubles as a "
-                     "gearing/engine-health proxy. "
-                     "Each column counts only the laps whose corner edges IT reads were matched "
-                     "to your best lap's line on track — the time both ends of the straight, the "
-                     "trap speed its end, Exit Δ the corner before it — because an interpolated "
-                     "edge can put a time tenths of a second and a speed several km/h out (hover "
-                     "a cell for how many laps count). "
-                     + provenance.CORNER_MATCH_DRIFT + " "
-                     "Click a row to ring the corner feeding that straight.")
-STRAIGHTS_NOTE_TOOLTIP = (
-    "The straight whose preceding corner's exit deficit × the straight's median − best time is "
-    "largest — measured, not modelled. It is time down the STRAIGHT after a slow exit, which the "
-    "Coaching tab's ranking does not contain: Coaching ranks the time lost inside each corner "
-    "against your best lap, and the corner/straight partition keeps the two apart (together they "
-    "sum to the lap). So the two can name different corners without either being wrong; Coaching "
-    "is the list of what to work on.")
-BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the cross-lap "
-                   "scatter of your brake-onset POINT (σ and max−min span, metres, compared "
-                   "in the reference lap's odometer) plus commitment — the median event's "
-                   "peak decel as a % of the session's demonstrated maximum — and the "
-                   "ESTIMATED median metres you could brake later (the D4 brake-point "
-                   "model). Corners with no matched brake event are omitted. A lap counts at a "
-                   "corner only where it was matched to your best lap's line on track at the "
-                   "corner's entry and exit — the rule the CORNERS table counts by — because a "
-                   "brake point is read inside that window; so n can be fewer than the clean laps "
-                   "that braked there. Honesty floor: "
-                   "10 Hz GPS quantizes the onset by ~1.5 m — a σ at or below that is "
-                   "measurement, not driving. Click a row to ring the corner on the map.\n\n"
-                   "COMMIT % IS A RATIO INSIDE ONE CHANNEL. Both halves of it — the event's peak "
-                   "and the \"demonstrated maximum\" it is divided by, the "
-                   f"{driving.AMAX_PCT:g}th percentile of every event peak in the session — are "
-                   "measured on the UNWINDOWED detection series. That is NOT the smoothed "
-                   "\"peak braking g\" tile in SPEED · G, which is a different filter of the same "
-                   "axis and reads lower; dividing by that one instead would inflate every "
-                   "number in this column.")
 # The pace-trend verdict band moved to `stats.TREND_STEADY_BAND`, beside the statistic it
 # qualifies: the exported report and the clipboard summary print the same verdict off the same
 # slope, and export_data is Qt-free by contract so it cannot reach into this module.
@@ -1230,158 +1078,6 @@ def _repen(item, logical_px: float = 1.0):
     item.setPen(pg.mkPen(pen.color(), width=theme.line_width(logical_px), style=pen.style()))
 
 
-def _set_highlight(label: QLabel, value: str) -> None:
-    """Set a label's `highlight` property and re-polish it, only when it actually changes — a
-    property in a QSS selector is re-read on a polish alone (see widgets.set_tone), and this runs
-    for every row on every refresh."""
-    if (label.property("highlight") or "") == value:
-        return
-    label.setProperty("highlight", value)
-    label.style().unpolish(label)
-    label.style().polish(label)
-
-
-class _TrustCard(QWidget):
-    """DATA TRUST as a list of FACTS — one labelled row each — instead of a paragraph.
-
-    WHAT IT REPLACES, and why the shape had to change. The card shipped as a single word-wrapping
-    QLabel holding up to seven `·`-separated sentences joined by newlines. Three things were wrong
-    with that, and only one of them was the clipping:
-
-      * it CLIPPED. The label wrapped at the scroll BODY's width — which the content-sized report
-        tables had pushed to 742 px inside a 503 px quadrant — so the longest line ran 61 px past
-        the right edge of the viewport and stopped mid-number ("…longitudinal r=+0.82 · 3468").
-        Measured at 1280x800 it was 119 px. Nothing about the label was wrong; it was being asked
-        to lay out at a width nobody could see.
-      * it read as PROSE in a page made of tiles. Every other group on this page is a value with a
-        name under it; the densest, most technical block on the surface was the one thing with no
-        structure at all, and the `·` separators made a fact list look like a sentence.
-      * it could not be SCANNED. "Is the timing verified? what is the g source?" are lookups, and a
-        lookup wants a column of terms, not three lines of running text.
-
-    So each fact is a ROW: a dim CAPTION term on the left, its value on the right. That is the
-    tile's own type pair — the dim name and the value it names — turned through ninety degrees,
-    which is what makes it survive a ~500 px quadrant where a tile grid of seven captions would not.
-    The value WRAPS (WrapLabel, so the layout is actually told the height it needs), so no fact can
-    ever be cut again however long it gets.
-
-    THE CAVEATS LEAD. The trust-BREAKING facts — an unconfirmed start line, an unknown track, laps
-    left out of every statistic, in-lap GPS dropouts — appear only when they apply, and appear
-    FIRST, marked `⚠`, so the card cannot read the same on a session where three of them are wrong
-    and one where none are. That ordering was already the shipped behaviour; a row of its own and a
-    marked term is what makes it visible at a glance rather than on a careful read.
-
-    WHY THE CAVEATS ARE NOT PAINTED AMBER. The app's amber call-to-action treatment
-    (`#ProvisionalBanner`) is already on this page, as its own strip, ~100 px above this card and
-    stating the first of these caveats in the same words. A second amber block for the same fact is
-    noise rather than emphasis, and the other three caveats have no single action to offer. So the
-    alarm here is carried by MARKING and by ORDER; the amber is spent once, where the action is.
-
-    `text()` is the whole card as one string, and it is not a test affordance: a composite widget
-    announces as nothing to assistive tech, so it is also the card's accessible description.
-    Deliberately `f"{term}: {value}"` per row — the same sentences the paragraph printed, so this
-    change is provably presentational."""
-
-    #: What marks a caveat row's term. The glyph the Laps tab already uses for a flagged lap.
-    CAVEAT_MARK = "⚠ "
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        # The one name a screen reader gives the card when the data-quality chip moves focus here.
-        self.setAccessibleName("DATA TRUST")
-        self._rows: list[tuple[str, str, bool]] = []
-        # The term of the row a reader was SENT to (see `set_highlight`); None when nobody was.
-        self._highlight: str | None = None
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setHorizontalSpacing(theme.SPACE_M)
-        self._grid.setVerticalSpacing(theme.SPACE_XS)
-        # The TERM column takes exactly what its longest term needs; the VALUE column takes
-        # everything else and wraps inside it. A stretch on the value column (and none on the term)
-        # is what stops a long value from widening the card past its pane — the defect that put the
-        # old paragraph 61 px off-screen.
-        self._grid.setColumnStretch(0, 0)
-        self._grid.setColumnStretch(1, 1)
-        self._widgets: list[tuple[QLabel, WrapLabel]] = []
-
-    def rows(self) -> list[tuple[str, str, bool]]:
-        """The facts currently shown, as (term, value, is_caveat)."""
-        return list(self._rows)
-
-    def text(self) -> str:
-        """The card as text: one "term: value" line per fact (also its accessible description)."""
-        return "\n".join(f"{term}: {value}" for term, value, _caveat in self._rows)
-
-    def set_rows(self, rows) -> None:
-        """Re-render the card from (term, value, is_caveat) triples.
-
-        Widgets are REUSED and only the surplus is hidden, rather than deleted and rebuilt: this
-        runs on every refresh() — a unit flip, a palette flip, a re-segmentation — and tearing down
-        QLabels inside a live QGridLayout on every one of those is the same re-entrancy the tile
-        reflow had to be taught to avoid (see _place_tiles)."""
-        self._rows = [(str(t), str(v), bool(c)) for t, v, c in rows]
-        while len(self._widgets) < len(self._rows):
-            term = QLabel()
-            term.setFont(theme.ui_font(theme.CAPTION))
-            term.setProperty("role", "Note")
-            # Top-aligned: a one-word term must sit level with the FIRST line of a value that
-            # wraps to three, not float in the middle of it.
-            term.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-            value = WrapLabel()
-            value.setProperty("role", "Note")
-            value.setFont(theme.ui_font(theme.CAPTION))
-            r = len(self._widgets)
-            self._grid.addWidget(term, r, 0)
-            self._grid.addWidget(value, r, 1)
-            self._widgets.append((term, value))
-        for i, (term_w, value_w) in enumerate(self._widgets):
-            if i >= len(self._rows):
-                term_w.setVisible(False)
-                value_w.setVisible(False)
-                continue
-            term, value, caveat = self._rows[i]
-            term_w.setText(f"{self.CAVEAT_MARK}{term}" if caveat else term)
-            value_w.setText(value)
-            term_w.setVisible(True)
-            value_w.setVisible(True)
-        self._apply_highlight()
-        self.setAccessibleDescription(self.text())
-
-    # ------------------------------------------------------------ the row a reader was sent to
-    def row_widgets(self, term: str):
-        """The (term label, value label) pair currently showing `term`'s fact; None if no row does."""
-        for i, (t, _v, _c) in enumerate(self._rows):
-            if t == term:
-                return self._widgets[i]
-        return None
-
-    def highlighted(self) -> str | None:
-        """The term of the row marked by `set_highlight`, if that row is on the card right now."""
-        return self._highlight if self.row_widgets(self._highlight or "") is not None else None
-
-    def set_highlight(self, term: str | None) -> None:
-        """Mark `term`'s row as the one the reader was sent here to read — or clear the mark (None).
-
-        WHY A MARK AT ALL. The lap panel's data-quality chip opens this card, and the card is a list
-        of up to ten facts; landing on it without saying which one answers "why is that chip lit"
-        leaves the reader to work out that "Timing" is the row about an ESTIMATED clock. The mark is
-        that answer and nothing more, so the Stats page clears it as soon as it is left.
-
-        TYPE, NOT A BOX. The term takes the amber the chip is drawn in and the value steps up from
-        the dim Note ink to the primary text, both through QSS (`[highlight=…]`), so nothing is
-        resized and nothing moves: a tinted band would either touch the text at its left edge or
-        need padding the other nine rows do not have. Held by TERM rather than by row index, so a
-        refresh that reorders the caveats keeps it on the same fact."""
-        self._highlight = term
-        self._apply_highlight()
-
-    def _apply_highlight(self) -> None:
-        for i, (term_w, value_w) in enumerate(self._widgets):
-            on = i < len(self._rows) and self._rows[i][0] == self._highlight
-            _set_highlight(term_w, "term" if on else "")
-            _set_highlight(value_w, "value" if on else "")
-
-
 class _BandChart(pg.PlotWidget):
     """ONE time-weighted distribution: bars for the average clean lap, two step outlines for the
     fastest and slowest groups (see stats.BandReport).
@@ -1506,127 +1202,6 @@ class _BandChart(pg.PlotWidget):
         if self._fast.opts.get("pen") is not None:
             self._fast.setPen(_band_fast_pen())
             self._slow.setPen(_band_slow_pen())
-
-
-class _ReportTable(QTableWidget):
-    """A content-sized statistics table that SCROLLS ITSELF when the pane is too narrow for it.
-
-    THE PAGE'S HORIZONTAL SCROLLBAR WAS THIS WIDGET. Each report table pinned itself to the exact
-    width of its own columns (`_fit_table`), and the widest of them — PER LAP, nine columns — asks
-    for 730 px. In the 503 px quadrant that is the app's default the table's fixed width became the
-    scroll body's minimum, so the WHOLE page was laid out 742 px wide and then scrolled sideways
-    inside a 503 px viewport: every section heading, every tile row and the DATA TRUST card were
-    being wrapped at a width 239 px larger than anything the reader could see. The one widget that
-    genuinely did not fit made the eight that did fit stop fitting.
-
-    The honesty rule that put the scrollbar there in the first place still holds — a statistics
-    table must never silently clip its rightmost column — so the scrolling is not removed, it is
-    MOVED to the widget that actually overflows. The table takes `min(pane, its content)`: at
-    dashboard width it is exactly as wide as its columns and reads left-packed as before; in a
-    quadrant it takes the pane and grows its own horizontal scrollbar. The page never scrolls
-    sideways again, and no column is ever hidden without a bar saying so.
-
-    The HEIGHT has to follow, which is why this is a class and not two more lines in `_fit_table`:
-    the outer column owns vertical scrolling, so each table is pinned to its content height — and
-    the moment an in-table scrollbar appears it would eat the last row out of that pinned height.
-    `_apply_height` re-pays for the bar when it is showing and takes the pixels back when it is
-    not, on every resize."""
-
-    def __init__(self, columns: list[str], row_height: int):
-        super().__init__(0, len(columns))
-        self._row_height = row_height
-        self._content_w = 0
-        self.setHorizontalHeaderLabels(columns)
-        # ...and then give every header the SIDE of the column it labels. Qt's
-        # QHeaderView.defaultAlignment is AlignCenter, these five tables never overrode it, and
-        # every cell from NUMERIC_COL_START on is AlignRight — so each label floated over the
-        # middle of a column whose digits sit at its right edge, by up to 34 px of ink-centre drift
-        # on the widest column (BRAKING "Commit %", 108 px, measured on the window composite at
-        # 1440x900). The rule is the app's, already written down for the lap / corner / coaching
-        # grids; these tables were simply never brought to it, and the guard that exists for
-        # exactly this defect (tests/test_design_system.py::test_no_table_header_floats_off_its_data)
-        # enumerated four tables and not these five.
-        #
-        # Applied HERE, in the shared table, rather than at the five call sites, because unlike the
-        # lap and corner grids all five build their headers the same way — through this one
-        # constructor — so a SIXTH report table cannot arrive without it. The boundary is the same
-        # NUMERIC_COL_START the cells use (column 0 is the row's identity: "C7" / "S2" / a lap
-        # number, left; everything after it is a number, right), which is what stops a new column
-        # arriving with its header and its values disagreeing.
-        align_headers_over_their_columns(self, NUMERIC_COL_START)
-        self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(row_height)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionMode(QAbstractItemView.NoSelection)
-        self.setAlternatingRowColors(True)
-        self.setFocusPolicy(Qt.NoFocus)
-        # Vertical scrolling belongs to the outer page (each table is pinned to its content
-        # height); horizontal scrolling belongs HERE, and only when the pane is too narrow.
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        # Preferred (not Fixed) horizontally: the table may shrink to the pane. Its MAXIMUM is its
-        # content width, so a wide pane never stretches it — the left-packed reading is unchanged.
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        # ...and its layout MINIMUM must not be its content: a QTableWidget's minimumSizeHint is
-        # generous enough to re-create the very overflow this class exists to remove.
-        self.setMinimumWidth(0)
-
-    def fit(self) -> None:
-        """Re-measure after a refill: columns to their content, width capped there, height pinned."""
-        self.resizeColumnsToContents()
-        self._content_w = (sum(self.columnWidth(c) for c in range(self.columnCount()))
-                           + 2 * self.frameWidth() + 2)
-        self.setMaximumWidth(self._content_w)
-        self._apply_height()
-
-    def set_columns(self, columns: list[str]) -> None:
-        """Re-label the header for a table whose COLUMN COUNT is a property of the session.
-
-        Only the SPLITS grid needs it (one column per sub-sector, and the user adds and removes
-        sector lines live). A no-op when the labels already match, so the ordinary refresh of a
-        fixed-column table costs nothing; `align_headers_over_their_columns` is re-applied because
-        Qt builds fresh header items and they arrive centred."""
-        current = [self.horizontalHeaderItem(c).text() if self.horizontalHeaderItem(c) else ""
-                   for c in range(self.columnCount())]
-        if current == columns:
-            return
-        self.setRowCount(0)
-        self.setColumnCount(len(columns))
-        self.setHorizontalHeaderLabels(columns)
-        align_headers_over_their_columns(self, NUMERIC_COL_START)
-
-    def content_width(self) -> int:
-        """The width at which this table shows every column — what it would LIKE to be.
-
-        Its layout minimum is deliberately 0 (below) and its maximum is this, so between the two it
-        takes whatever the pane gives and scrolls the difference. That is right for a quadrant and
-        wrong for a page CHOOSING its own columns: the chooser has to know the number before it
-        commits, or it composes a column that hides three of CORNERS' eight columns. `fit()` has
-        always computed it; this is the read the page's packer needs (see _group_min_width)."""
-        return self._content_w
-
-    def minimumSizeHint(self):
-        """Zero-width, full-height. Qt's own hint for a scroll area is wide enough to reserve room
-        for content that this table is explicitly willing to scroll instead."""
-        hint = super().minimumSizeHint()
-        hint.setWidth(0)
-        return hint
-
-    def _needs_bar(self) -> bool:
-        return self.viewport().width() < self._content_w - 2 * self.frameWidth() - 2
-
-    def _apply_height(self) -> None:
-        h = (self.horizontalHeader().height() + self._row_height * self.rowCount()
-             + 2 * self.frameWidth())
-        if self._needs_bar():
-            h += self.horizontalScrollBar().sizeHint().height()
-        if h != self.height() or self.minimumHeight() != h:
-            self.setFixedHeight(h)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._apply_height()
 
 
 class StatsView(QWidget):
@@ -1768,7 +1343,7 @@ class StatsView(QWidget):
         col, col_mid, col_right = (c.layout() for c in self._columns)
 
         # --- SESSION totals
-        col.addWidget(self._section("SESSION"))
+        col.addWidget(section_heading("SESSION"))
         self.t_laps = Tile("laps")
         self.t_laps.setToolTip(f"Valid laps · {EXCLUDED_MARK} band-excluded · "
                                f"{DROPOUT_MARK} laps with a GPS dropout")
@@ -1795,13 +1370,10 @@ class StatsView(QWidget):
         # totals: at the foot of the page it was ~1200px down — below the fold of even a
         # 1728x1117 maximized dashboard — so the caveats that say how much every number below is
         # worth were only reachable by scrolling past all of them.
-        self._trust_section = self._section("DATA TRUST")
-        col.addWidget(self._trust_section)
-        self.trust_card = _TrustCard()
-        col.addWidget(self.trust_card)
+        self.trust = self._mount(col, TrustSection())
 
         # --- PACE distribution
-        self._pace_section = self._section("PACE")
+        self._pace_section = section_heading("PACE")
         self._pace_section.setToolTip(PACE_TOOLTIP)
         col.addWidget(self._pace_section)
         self.t_best = Tile("best lap")
@@ -1881,7 +1453,7 @@ class StatsView(QWidget):
         # It sits under the sparkline because that is the other surface on this page with a time
         # axis: the spark shows every clean lap in order, and this says where the order was
         # interrupted and how the pace differed either side of it.
-        self._stints_section = self._section("STINTS")
+        self._stints_section = section_heading("STINTS")
         col.addWidget(self._stints_section)
         self.stints_table = self._make_table(STINT_COLUMNS)
         self.stints_table.setToolTip(STINTS_TOOLTIP)
@@ -1902,7 +1474,7 @@ class StatsView(QWidget):
         # on ALL FIVE (D24 1ch and 3ch, Sandown 1ch and 3ch, SD_30_08), so the corrected ideal —
         # 1.37 s on D24 one chapter and 1.49 s on three under the best lap — was invisible everywhere
         # it had been fixed.
-        self._ideal_section = self._section("IDEAL LAP")
+        self._ideal_section = section_heading("IDEAL LAP")
         col.addWidget(self._ideal_section)
         self.t_theoretical = Tile("theoretical best")
         self.t_theoretical.setToolTip(THEORETICAL_TOOLTIP)
@@ -1972,7 +1544,7 @@ class StatsView(QWidget):
         col, self._group = col_mid, 1
 
         # --- SPEED & G peaks
-        self._speed_section = self._section("SPEED · G")
+        self._speed_section = section_heading("SPEED · G")
         col.addWidget(self._speed_section)
         self.t_vmax = Tile("top speed")
         self.t_vmax.setToolTip("Max 3D GPS speed across the valid laps (10 Hz).")
@@ -2008,7 +1580,7 @@ class StatsView(QWidget):
         # question neither answers and the one every serious analysis tool ships a chart for: how
         # much of the lap is spent at each speed, and at each cornering load. Read down, the column
         # goes peak -> distribution -> the two axes together -> the per-lap reductions.
-        self._bands_section = self._section(BAND_SECTION)
+        self._bands_section = section_heading(BAND_SECTION)
         self._bands_section.setToolTip(BAND_TOOLTIP)
         col.addWidget(self._bands_section)
         self.speed_bands = _BandChart(BAND_SPEED_LABEL)
@@ -2085,7 +1657,7 @@ class StatsView(QWidget):
         # to ask "what is this group", a tile is what they hover to ask about a number, and the
         # answer is the same sentence either way. (`grip envelope · p98` keeps its own — it is the
         # one tile here that is NOT an event count; it is the combined-g percentile.)
-        self._driving_section = self._section("DRIVING")
+        self._driving_section = section_heading("DRIVING")
         self._driving_section.setToolTip(DRIVING_TOOLTIP)
         col.addWidget(self._driving_section)
         self.t_brake = Tile("braking / lap · median")
@@ -2105,7 +1677,7 @@ class StatsView(QWidget):
         col.addLayout(self._driving_grid)
 
         # --- per-SECTOR best/median/σ (hidden without sector lines)
-        self._sector_section = self._section("SECTORS")
+        self._sector_section = section_heading("SECTORS")
         col.addWidget(self._sector_section)
         # (The "theoretical best" tile used to live here, summing this section's best splits and
         # inheriting its 0-sector hide. It is neither of those things now — see the IDEAL LAP
@@ -2132,7 +1704,7 @@ class StatsView(QWidget):
         # (PER LAP), so a second lap-length grid there makes the balanced 2-column form band and
         # fall through. Placed in group 1 the two 2-column forms stay balanced, and form #3 —
         # which stacks 1 and 2 together — is unaffected either way.
-        self._splits_section = self._section("SPLITS")
+        self._splits_section = section_heading("SPLITS")
         col.addWidget(self._splits_section)
         self.splits_table = self._make_table(SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS)
         self.splits_table.setToolTip(SPLITS_TOOLTIP)
@@ -2142,7 +1714,7 @@ class StatsView(QWidget):
         col.addWidget(self.splits_note)
 
         # --- the corner-by-corner session report (hidden without detected corners)
-        self._corners_section = self._section("CORNERS")
+        self._corners_section = section_heading("CORNERS")
         col.addWidget(self._corners_section)
         # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
         # from the per-lap aligned thirds decomposition — coach-grade, and computed, not
@@ -2180,7 +1752,7 @@ class StatsView(QWidget):
         self.corners_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.corners_table.customContextMenuRequested.connect(self._on_corner_context_menu)
         self.corners_table.horizontalHeader().sortIndicatorChanged.connect(
-            self._on_corner_sort)
+            keep_blanks_last)
         # Explicit initial indicator: TRACK ORDER (corner id ascending). Without this, Qt's
         # untouched default indicator is column-0 DESCENDING and the first fill's
         # setSortingEnabled(True) would silently reverse the track.
@@ -2209,18 +1781,7 @@ class StatsView(QWidget):
         col, self._group = col_right, 2
 
         # --- braking repeatability + commitment (hidden without corners / a g signal)
-        self._braking_section = self._section("BRAKING")
-        col.addWidget(self._braking_section)
-        self.braking_table = self._make_table(BRAKE_COLUMNS)
-        self.braking_table.setToolTip(BRAKING_TOOLTIP)
-        self.braking_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.braking_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.braking_table.setFocusPolicy(Qt.ClickFocus)
-        self.braking_table.itemSelectionChanged.connect(self._on_brake_row_selected)
-        self.braking_table.horizontalHeader().sortIndicatorChanged.connect(
-            self._on_corner_sort)
-        self.braking_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
-        col.addWidget(self.braking_table)
+        self.braking = self._mount(col, BrakingSection(self.corner_clicked.emit))
 
         # --- where the coasting is, by place (hidden without corners / a g signal / clean laps).
         # Beside BRAKING because the two are the off-power half and the on-brake half of one
@@ -2228,7 +1789,7 @@ class StatsView(QWidget):
         # question this table answers is "where", and its "vs top" column and the note under it say
         # what that order is worth. (Opening on a numeric column instead would put Qt's indicator
         # over a right-aligned header label.)
-        self._coasting_section = self._section("COASTING")
+        self._coasting_section = section_heading("COASTING")
         self._coasting_section.setToolTip(COASTING_TOOLTIP)
         col.addWidget(self._coasting_section)
         self.coasting_table = self._make_table(COAST_COLUMNS)
@@ -2238,37 +1799,18 @@ class StatsView(QWidget):
         self.coasting_table.setFocusPolicy(Qt.ClickFocus)
         self.coasting_table.itemSelectionChanged.connect(self._on_coast_row_selected)
         self.coasting_table.horizontalHeader().sortIndicatorChanged.connect(
-            self._on_corner_sort)
+            keep_blanks_last)
         self.coasting_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.coasting_table)
         self.coasting_note = WrapLabel()
         self.coasting_note.setProperty("role", "TableNote")
         col.addWidget(self.coasting_note)
 
-        # --- the straight-line report (hidden without corners / a best lap)
-        self._straights_section = self._section("STRAIGHTS")
-        col.addWidget(self._straights_section)
-        self.straights_table = self._make_table(STRAIGHT_COLUMNS)
-        self.straights_table.setToolTip(STRAIGHTS_TOOLTIP)
-        self.straights_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.straights_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.straights_table.setFocusPolicy(Qt.ClickFocus)
-        self.straights_table.itemSelectionChanged.connect(self._on_straight_row_selected)
-        self.straights_table.horizontalHeader().sortIndicatorChanged.connect(
-            self._on_corner_sort)
-        self.straights_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
-        col.addWidget(self.straights_table)
-        # PS-2: the exit-leverage straight, said as what it measures under the table it summarizes
-        # (COASTING's note does the same for its top place) — it was a "fix first" TILE, the most
-        # imperative label in the app, naming a different corner from the Coaching tab's #1 on 3
-        # of the 4 working-set recordings. See _straights_note_text.
-        self.straights_note = WrapLabel()
-        self.straights_note.setProperty("role", "TableNote")
-        self.straights_note.setToolTip(STRAIGHTS_NOTE_TOOLTIP)
-        col.addWidget(self.straights_note)
+        # --- the straight-line report + its exit-leverage note (hidden without corners / a best lap)
+        self.straights = self._mount(col, StraightsSection(self.corner_clicked.emit))
 
         # --- per-lap statistics table
-        self._laps_section = self._section("PER LAP")
+        self._laps_section = section_heading("PER LAP")
         col.addWidget(self._laps_section)
         self.lap_table = self._make_table(LAP_COLUMNS)
         self.lap_table.setToolTip(LAP_TABLE_TOOLTIP)
@@ -2300,9 +1842,9 @@ class StatsView(QWidget):
         band = QVBoxLayout(self._corner_grid_band)
         band.setContentsMargins(0, 0, 0, 0)
         band.setSpacing(theme.SPACE_XS)
-        self._corner_grid_section = self._section("CORNERS BY LAP")
+        self._corner_grid_section = section_heading("CORNERS BY LAP")
         band.addWidget(self._corner_grid_section)
-        self.corner_grid_table = _ReportTable(SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS, ROW_HEIGHT)
+        self.corner_grid_table = ReportTable(SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS, ROW_HEIGHT)
         self.corner_grid_table.setToolTip(CORNER_GRID_TOOLTIP)
         band.addWidget(self.corner_grid_table)
         self.corner_grid_note = WrapLabel()
@@ -2324,7 +1866,7 @@ class StatsView(QWidget):
         # viewport and then had to be scrolled to. Two widgets that did not fit stopped eight that
         # did.
         #
-        # Both now size themselves from the pane (_ReportTable, which grows its OWN horizontal bar
+        # Both now size themselves from the pane (ReportTable, which grows its OWN horizontal bar
         # instead; _set_gg_size, which shrinks the circle), so the body's minimum is the viewport
         # and this bar has nothing to show. AsNeeded is kept rather than turned off because the
         # rule behind it still holds — a statistics page must h-scroll rather than silently clip —
@@ -2339,12 +1881,6 @@ class StatsView(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------------ scaffolding
-    @staticmethod
-    def _section(title: str) -> QLabel:
-        lab = QLabel(title)
-        lab.setProperty("role", "BarLabel")
-        return lab
-
     def _grid(self, *tiles: Tile) -> QGridLayout:
         g = QGridLayout()
         # The tile grid, on the scale. It was `0,0,0,4` / 18 / 8 — one step, one nudge and one
@@ -2400,7 +1936,7 @@ class StatsView(QWidget):
 
         Everything else on this page yields to its column: prose wraps, tiles re-place, the
         friction circle shrinks, the sparkline caps. A REPORT TABLE does neither — it is
-        content-sized and scrolls (see _ReportTable) — so it, and only it, can turn a narrow column
+        content-sized and scrolls (see ReportTable) — so it, and only it, can turn a narrow column
         into hidden data. Hidden tables are excluded: a session with no corners has no CORNERS
         table and must not be laid out around one."""
         need = PAGE_COL_MIN_PX
@@ -2640,7 +2176,7 @@ class StatsView(QWidget):
         hide (the window minimised) is not leaving the page, so it keeps the mark."""
         super().hideEvent(event)
         if not event.spontaneous():
-            self.trust_card.set_highlight(None)
+            self.trust.card.set_highlight(None)
 
     def reveal_trust(self, term: str) -> None:
         """Bring the DATA TRUST card into view with `term`'s row marked, and put keyboard focus on
@@ -2657,19 +2193,19 @@ class StatsView(QWidget):
         from the header chip three panels away, and assistive tech announces the card's name and
         its facts (`_TrustCard` sets both). The card stays out of the Tab ring — setFocus reaches a
         NoFocus widget, the Tab key does not — so no stop is added to the page."""
-        self.trust_card.set_highlight(term)
+        self.trust.card.set_highlight(term)
         scroll = self._scroll
         if scroll is not None:
             # The page may have been shown by the same call that brought us here, and a layout
             # request is a POSTED event: without flushing it the heading still reports where it sat
             # before the page's first layout pass, and the scroll lands on a stale position.
             QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
-            heading_y = self._trust_section.mapTo(scroll.widget(), QPoint(0, 0)).y()
+            heading_y = self.trust.heading.mapTo(scroll.widget(), QPoint(0, 0)).y()
             scroll.verticalScrollBar().setValue(max(0, heading_y - theme.SPACE_S))
-            row = self.trust_card.row_widgets(term)
+            row = self.trust.card.row_widgets(term)
             if row is not None:
                 scroll.ensureWidgetVisible(row[1], 0, theme.SPACE_S)
-        self.trust_card.setFocus(Qt.OtherFocusReason)
+        self.trust.card.setFocus(Qt.OtherFocusReason)
 
     def event(self, ev):
         """Re-pen when the window moves to a screen with a different device-pixel ratio.
@@ -2775,26 +2311,30 @@ class StatsView(QWidget):
             self._place_tiles(g, tiles, cols_by_group[group])
 
     def _make_table(self, columns: list[str]) -> QTableWidget:
-        """One report table (see _ReportTable): content-sized, scrolling itself when it must.
+        """One report table (see ReportTable): content-sized, scrolling itself when it must.
 
         Registered against the section group being built, because a table is the one thing on this
         page that cannot yield to a narrow column — so the packer has to be able to ask a group
         what its tables need before it composes (_group_min_width)."""
-        table = _ReportTable(columns, ROW_HEIGHT)
+        table = ReportTable(columns, ROW_HEIGHT)
         self._column_tables[self._group].append(table)
         return table
+
+    def _mount(self, col: QVBoxLayout, section):
+        """Place a section built in its own module (see stats_common): its widgets straight into
+        column `col` in reading order — no wrapper widget, so the page's tree is what it was when
+        the section was built inline — and its report tables registered against the group being
+        built, exactly as `_make_table` registers the page's own."""
+        for widget in section.widgets():
+            col.addWidget(widget)
+        self._column_tables[self._group].extend(section.tables())
+        return section
 
     @staticmethod
     def _fit_table(t: QTableWidget):
         """Re-measure a table after a refill — columns to content, width capped there, height
         pinned so the OUTER column keeps owning the vertical scroll."""
         t.fit()
-
-    def _num_item(self, text: str) -> QTableWidgetItem:
-        item = QTableWidgetItem(text)
-        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        item.setFont(theme.mono_font(theme.TABLE))
-        return item
 
     def _set_target_tile(self, tile: Tile, value, tip: str, text: str | None = None,
                          caption: str | None = None):
@@ -2987,10 +2527,10 @@ class StatsView(QWidget):
         self._refresh_splits(session, self._split_matrix(session))
         self._refresh_corners(session, unit, u_label)
         self._refresh_corner_grid(session)
-        self._refresh_braking(session)
+        self.braking.refresh(session)
         self._refresh_coasting(session)
-        self._refresh_straights(session, unit, u_label)
-        self._refresh_trust(session)
+        self.straights.refresh(session, unit, u_label)
+        self.trust.refresh(session)
         self._refresh_g_provenance(session)
         self._refresh_lap_table(session, rows, unit, u_label)
         # RE-PACK, because the packer's inputs are what this method just changed. A composition is
@@ -3512,7 +3052,7 @@ class StatsView(QWidget):
             name = QTableWidgetItem(f"S{k + 1}")
             self.sector_table.setItem(k, 0, name)
             best = bests[k] if k < len(bests) else None
-            best_item = self._num_item(fmt_time(best) if best is not None else DASH)
+            best_item = num_item(fmt_time(best) if best is not None else DASH)
             if best is not None:
                 # The purple session-best hue — and DELIBERATELY WITHOUT the ★ the same meaning
                 # carries elsewhere (lap_table's best-lap cell and best-split cells, and this
@@ -3535,10 +3075,10 @@ class StatsView(QWidget):
             self.sector_table.setItem(k, 1, best_item)
             med = medians[k] if k < len(medians) else None
             self.sector_table.setItem(
-                k, 2, self._num_item(fmt_time(med) if med is not None else DASH))
+                k, 2, num_item(fmt_time(med) if med is not None else DASH))
             sig = sigmas[k]
             self.sector_table.setItem(
-                k, 3, self._num_item(f"{sig:.2f}" if sig is not None else DASH))
+                k, 3, num_item(f"{sig:.2f}" if sig is not None else DASH))
         self._fit_table(self.sector_table)
 
     def _refresh_stints(self, st, unit, u_label):
@@ -3728,7 +3268,7 @@ class StatsView(QWidget):
             complete = True
             for c, cid in enumerate(matrix.cids):
                 val = matrix.cells[r][c]
-                item = self._num_item(DASH if val is None else f"{val:.{d}f}")
+                item = num_item(DASH if val is None else f"{val:.{d}f}")
                 if val is None:
                     complete = False
                 else:
@@ -3764,7 +3304,7 @@ class StatsView(QWidget):
                             "it).")
                 t.setItem(r, c + 1, item)
             lt = lap_time(lap_id) if (complete and lap_time is not None) else None
-            tail = self._num_item(fmt_time(lt) if lt is not None else DASH)
+            tail = num_item(fmt_time(lt) if lt is not None else DASH)
             if timing_note and lt is not None:
                 tail.setForeground(PROVISIONAL_COLOR)
                 theme.apply_provisional_style(tail)
@@ -3994,43 +3534,6 @@ class StatsView(QWidget):
             "Lost on entry {:.1f} s · at the apex {:.1f} s · on exit {:.1f} s.\n\n".format(*secs)
             + self._phase_tip)
 
-    def _refresh_braking(self, session):
-        """The BRAKING table: one row per corner WITH a matched brake event (an unbraked
-        kink adds noise, not signal). Same sort/click idiom as the CORNERS table."""
-        report = [r for r in (getattr(session, "brake_report", list)() or []) if r.n > 0]
-        has = bool(report)
-        self._braking_section.setVisible(has)
-        self.braking_table.setVisible(has)
-        if not has:
-            self.braking_table.setRowCount(0)
-            return
-        mono = theme.mono_font(theme.TABLE)
-
-        def cell(val, fmtstr):
-            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
-            item.setData(NUM_ROLE, val)
-            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            item.setFont(mono)
-            return item
-
-        t = self.braking_table
-        t.setSortingEnabled(False)
-        t.blockSignals(True)
-        t.clearSelection()
-        t.setRowCount(len(report))
-        for r, bc in enumerate(report):
-            name = _NumItem(f"C{bc.cid}")
-            name.setData(NUM_ROLE, bc.cid)
-            t.setItem(r, 0, name)
-            t.setItem(r, 1, cell(bc.n, "{:d}"))
-            t.setItem(r, 2, cell(bc.sigma_m, "{:.1f}"))
-            t.setItem(r, 3, cell(bc.span_m, "{:.1f}"))
-            t.setItem(r, 4, cell(bc.commit_pct, "{:.0f}"))
-            t.setItem(r, 5, cell(bc.metres_later_med, "{:+.1f}"))
-        t.blockSignals(False)
-        t.setSortingEnabled(True)
-        self._fit_table(t)
-
     def _refresh_coasting(self, session):
         """The COASTING table + its note. Hidden outright without a report (no corners, no clean
         lap, or no g signal — no coasting instrument to report on); a session that simply did not
@@ -4091,145 +3594,6 @@ class StatsView(QWidget):
         else:
             self.corner_clicked.emit(None)
 
-    @staticmethod
-    def _coaching_start(session) -> list[int]:
-        """The corner(s) the Coaching tab starts with: its first ranked row, plus any ranked row
-        its own theme cannot separate from it (`coaching.lead_ties` — "Start with C7 or C5"), so
-        a sentence here names exactly what that page names. [] without a ranked row."""
-        opp_fn = getattr(session, "coaching_opportunities", None)
-        opp = opp_fn() if opp_fn is not None else None
-        rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
-        lead = getattr(rows[0], "cid", None) if rows else None
-        if lead is None:
-            return []
-        return [r.cid for r in coaching.lead_ties(list(opp.rows), lead)] or [lead]
-
-    def _straights_note_text(self, session, top, unit, u_label) -> str:
-        """The STRAIGHTS table's top exit-leverage row, said as what it measures, and whether it is
-        where the Coaching tab starts. "" when no straight has any leverage.
-
-        PS-2 (board review 2026-09-23): this was a tile captioned "fix first" — the most imperative
-        label in the app — and measured on the real window it named a different corner from the
-        Coaching tab's #1 on 3 of the 4 working-set recordings (SD_19_09: C2 vs C1, Sandown 3h: C4
-        vs C1, MK: C7 vs C5; SD_30_08 agreed on C7). Neither is wrong: this is time down the
-        straight after a slow exit, which Coaching's corner windows do not contain. So it names
-        its own quantity, and the corner Coaching starts with, instead of a second instruction."""
-        if top.leverage <= 0 or top.exit_delta_kmh is None:
-            return ""
-        exit_gap = abs(units.convert_speed(top.exit_delta_kmh, unit))
-        text = (f"Most exit leverage: C{top.ring_cid} — your median exit is {exit_gap:.1f} "
-                f"{u_label} under your best lap's, onto the {top.label} straight, which runs "
-                f"+{top.median_s - top.best_s:.2f} s over its best (leverage is the one times "
-                "the other).")
-        start = self._coaching_start(session)
-        if not start:
-            return text
-        if start == [top.ring_cid]:
-            return f"{text} C{top.ring_cid} is also where the Coaching tab starts."
-        # Named the way Coaching's own start-here line names a tie ("C1, C4, C7 or 1 more").
-        named = [f"C{c}" for c in start[:coaching._TIE_NAME_CAP]]
-        extra = len(start) - len(named)
-        names = (f"{', '.join(named)} or {extra} more" if extra
-                 else f"{', '.join(named[:-1])} or {named[-1]}" if len(named) > 1 else named[0])
-        if top.ring_cid in start:
-            return f"{text} The Coaching tab starts with {names} — this is one of them."
-        return (f"{text} The Coaching tab starts with {names}: it ranks the time lost inside "
-                "the corners, and a straight is outside every corner.")
-
-    def _refresh_straights(self, session, unit, u_label):
-        report = getattr(session, "straights_report", list)() or []
-        # B8: a start line inside a corner section produces ~0-duration S/F stubs — noise
-        # rows with no driving content (BRAKING already omits unmatched corners the same way).
-        full_n = len(report)
-        # C4: a straight NO lap matched at both ends has no time at all, which is not the same as
-        # a ~0-duration one — it stays, as a row of dashes that says why.
-        report = [st for st in report
-                  if (st.n == 0 and st.n_laps)
-                  or max(st.best_s or 0.0, st.median_s or 0.0) >= 0.05]
-        stubs = full_n - len(report)
-        has = bool(report)
-        self._straights_section.setVisible(has)
-        self.straights_table.setVisible(has)
-        if not has:
-            self.straights_note.setText("")
-            self.straights_note.setVisible(False)
-            self.straights_table.setRowCount(0)
-            return
-        # SAY HOW MANY ARE NOT LISTED (§5.6). The ideal-lap disclosure on this same page counts
-        # the PARTITION ("across the 12 corners and 13 straights pacer found here") while this
-        # table silently drops the ~0-duration S/F stubs a start line inside a corner section
-        # produces — so one page said 13 and showed 11, with nothing anywhere reconciling them.
-        # The count is derived from the same list, so the two can never drift apart again.
-        dropped = f" · {stubs} too short to list" if stubs else ""
-        self._straights_section.setText(f"STRAIGHTS · speeds in {u_label}{dropped}")
-        note = self._straights_note_text(session, max(report, key=lambda s: s.leverage),
-                                         unit, u_label)
-        self.straights_note.setText(note)
-        self.straights_note.setVisible(bool(note))
-        mono = theme.mono_font(theme.TABLE)
-
-        def cell(val, fmtstr):
-            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
-            item.setData(NUM_ROLE, val)
-            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            item.setFont(mono)
-            return item
-
-        t = self.straights_table
-        t.setSortingEnabled(False)
-        t.blockSignals(True)
-        t.clearSelection()
-        t.setRowCount(len(report))
-        for r, st in enumerate(report):
-            name = _NumItem(st.label)
-            name.setData(NUM_ROLE, st.index)      # sort key: track order
-            name.setData(RING_ROLE, st.ring_cid)  # the corner feeding this straight
-            t.setItem(r, 0, name)
-            cells = [
-                cell(st.best_s, "{:.2f}"), cell(st.median_s, "{:.2f}"),
-                cell(st.sigma_s, "{:.2f}"),
-                cell(units.convert_speed(st.trap_best_kmh, unit)
-                     if st.trap_best_kmh is not None else None, "{:.1f}"),
-                cell(units.convert_speed(st.trap_median_kmh, unit)
-                     if st.trap_median_kmh is not None else None, "{:.1f}"),
-                cell(units.convert_speed(st.exit_delta_kmh, unit)
-                     if st.exit_delta_kmh is not None else None, "{:+.1f}"),
-            ]
-            # How many laps each column counted, where that is not all of them (C4).
-            of = getattr(st, "n_laps", None)
-            tips = [_straight_count_tip(st.n, of, "both ends of this straight")] * 3 + [
-                _straight_count_tip(st.n_trap if st.n_trap is not None else 0, of,
-                                    "this straight's end")] * 2
-            tips.append(_straight_count_tip(st.n_exit, of, f"C{st.ring_cid}'s exit")
-                        if st.n_exit is not None else "")
-            for col, (item, tip) in enumerate(zip(cells, tips, strict=True), start=1):
-                if tip:
-                    item.setToolTip(tip)
-                t.setItem(r, col, item)
-        t.blockSignals(False)
-        t.setSortingEnabled(True)
-        self._fit_table(t)
-
-    def _on_straight_row_selected(self):
-        """A straight row rings the CORNER FEEDING it (its exit sets the straight's story);
-        same corner_clicked pathway as the other tables."""
-        rows = self.straights_table.selectionModel().selectedRows()
-        if rows:
-            item = self.straights_table.item(rows[0].row(), 0)
-            self.corner_clicked.emit(item.data(RING_ROLE) if item else None)
-        else:
-            self.corner_clicked.emit(None)
-
-    def _on_brake_row_selected(self):
-        """A BRAKING-table row is a corner too — emit the same corner_clicked the CORNERS
-        table does (one map-ring pathway, maximize-aware in CentralView)."""
-        rows = self.braking_table.selectionModel().selectedRows()
-        if rows:
-            item = self.braking_table.item(rows[0].row(), 0)
-            self.corner_clicked.emit(item.data(NUM_ROLE) if item else None)
-        else:
-            self.corner_clicked.emit(None)
-
     def _on_corner_context_menu(self, pos):
         """Right-click the CORNERS table's Best cell → "Inspect this number…".
 
@@ -4262,275 +3626,6 @@ class StatsView(QWidget):
             self.corner_clicked.emit(item.data(NUM_ROLE) if item else None)
         else:
             self.corner_clicked.emit(None)
-
-    @staticmethod
-    def _on_corner_sort(_index, order):
-        """Keep _NumItem's blanks-last convention through descending sorts (the lap-table
-        idiom: the class flag flips before Qt reverses the order)."""
-        _NumItem._descending = order == Qt.DescendingOrder
-
-    def _refresh_trust(self, session):
-        """The DATA TRUST card: what the numbers on this page are worth, one labelled FACT per row.
-
-        The TRUST-BREAKING facts LEAD — an unconfirmed start line, an unknown track, laps left
-        out of every statistic, in-lap GPS dropouts. Without them the card printed provenance only,
-        and read identically on a session where all three were wrong and one where all three were
-        fine. The provenance facts (clock, g source, cross-check) follow.
-
-        EVERY SENTENCE HERE IS THE SHIPPED ONE. Each row is a (term, value) split of a line the
-        card already printed — at the line's own colon where it had one, and at its verb where it
-        did not ("Statistics use | 21 of the 22 laps found …") — so `_TrustCard.text()` re-joins
-        into what the paragraph said. This change is the card's SHAPE, never its claims. Nothing
-        was moved into a tooltip, and in particular the lateral GAIN stays on the surface — r is
-        scale-invariant, so halving the g channel left the old card byte-identical while every g
-        the app shows halved, and the gain is the number that moves."""
-        rows: list[tuple[str, str, bool]] = []
-        tips: list[str] = []
-        valid = session.valid_lap_ids() if hasattr(session, "valid_lap_ids") else []
-        # Gated on having laps, like the banner: with none, "every lap time below" refers to
-        # nothing, and the empty-state block already makes placing the line the next action.
-        if valid and not getattr(session, "timing_verified", True):
-            rows.append(("Start/finish line",
-                         "auto-fitted, not confirmed — every lap time and split below is "
-                         "measured from an arbitrary point. Drag it on the map.", True))
-        # "" (not None) as the getattr default: a test double that models no track at all must
-        # not be reported as a recording whose track lookup FAILED. And not on a recording with
-        # no GPS trace: there was no location to look up, and the Timing row below already says
-        # why there is no line — blaming the track database beside it was a second, wrong cause.
-        if (getattr(session, "track_name", "") is None
-                and not data_quality.no_start_line(session)):
-            rows.append(("Track",
-                         "unknown — not in the track database, so the start/finish line "
-                         "could not be placed for you.", True))
-        excluded = getattr(session, "excluded_lap_ids", list)() or []
-        if excluded:
-            # Denominator = the laps the segmenter FOUND, not valid+excluded: a recording can
-            # also carry slivers that never reached the ⊘ band at all, and "24 of 49" would be
-            # arithmetic invented to make the two numbers meet. State both true counts instead.
-            count = getattr(session, "lap_count", None)
-            total = count() if callable(count) else len(valid) + len(excluded)
-            # WHY, per reason — it used to say "their distance off the session median" for every
-            # excluded lap, which was already false for a lap with a stop and is false again for a
-            # piece that does not end where it started. getattr-guarded for the lighter doubles.
-            why = exclusion_summary(getattr(session, "excluded_lap_reasons", dict)() or {})
-            rows.append(("Statistics use",
-                         f"{len(valid)} of the {total} laps found — "
-                         f"{len(excluded)} {EXCLUDED_MARK} excluded"
-                         + (f": {why}" if why else "") + " (see the Laps tab).", True))
-        # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
-        # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
-        # the other three caveats: it is one, and it was the only one printed among the provenance.
-        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
-        if dropouts:
-            rows.append(("GPS dropout",
-                         f"inside {len(dropouts)} of {len(valid)} laps — "
-                         f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
-        # BREAK IN SERIES — the fourth trust-breaking fact, and the one the card had no name for.
-        # A skipped chapter or a chapter whose telemetry stops covering its video means the times
-        # either side are not on the same footing; both were already detected and both were only
-        # ever mentioned in the transient load notice, which is gone by the time anyone reads this
-        # page. Stated here in the card's own prose voice, NOT as the exported `[b]` code: a code
-        # needs a key and this card is a list of sentences (studio/data_quality.py's vocabulary
-        # note says why the letters stop at the app's edge).
-        broke = data_quality.break_in_series(session)
-        if broke:
-            rows.append(("Break in series",
-                         f"{broke} — compare times across it with that in mind", True))
-        quality = getattr(session, "timing_quality", None)  # a Session @property
-        if quality is not None and getattr(quality, "no_gps", False):
-            # A THIRD clock state, and the row below could not say it: its label was a two-way
-            # choice — the media-clock fallback, else "GPS9 true clock" — so a verdict that was
-            # NEITHER fell through to the flattering branch. Measured on the bundled `karma.mp4`
-            # (0 GPS fixes) this card printed "GPS9 true clock · 0% of moving fixes rejected",
-            # vouching for the app's best timing on a file with no satellite fix in it, and
-            # reporting a reassuring 0 % over a population of nothing. It is a CAVEAT, so it
-            # sorts up with the other trust-breaking facts, and it carries the action: the
-            # cause is a camera setting or a camera without a receiver, and the strip row
-            # beside it says which of the two this recording was.
-            rows.append((TIMING_TERM,
-                         "no GPS fixes survived in this recording — nothing here can be "
-                         "lap-timed, and no time axis was built from satellite fixes. Check "
-                         "that the camera's GPS was switched on; some models carry no "
-                         "receiver at all.", True))
-            tips.append(quality.detail())
-        elif quality is not None:
-            clock = ("video clock (estimated)" if quality.media_clock
-                     else "GPS9 true clock")
-            # "of MOVING fixes" is not padding: the fraction is judged over the RETAINED MOVING
-            # trace, deliberately (load.py:266-272 — the raw count includes the stationary
-            # GPS-acquisition lead-in the pipeline trims, which flagged clean footage as
-            # degraded purely on how many chapters were opened). Naming the population is the
-            # fix; the number itself is the shipped one.
-            #
-            # ON A DEGRADED CLOCK THE ROW SAYS WHAT IT COSTS, AND IS A CAVEAT. It is the row the
-            # lap panel's amber ESTIMATED / GPS LOW chip opens, and it used to read exactly like a
-            # clean recording's — "video clock (estimated) · 0% of moving fixes rejected" names the
-            # clock and never says what estimated means; "GPS9 true clock · 12% of moving fixes
-            # rejected" is the clean row with a bigger number in it. A reader sent here to find out
-            # why the chip was lit found nothing that said so, and an amber chip landing on an
-            # unmarked row is two surfaces disagreeing about one fact. The clause is
-            # TimingQuality's own (`cost`), so it says what the banner and the chip's hover say.
-            value = f"{clock} · {quality.dropped_pct()}% of moving fixes rejected"
-            cost = quality.cost()
-            rows.append((TIMING_TERM, f"{value} — {cost}" if cost else value,
-                         bool(quality.degraded)))
-            tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING. "
-                        "The stationary lead-in before you drive off is trimmed by the loader "
-                        "and left out of the verdict, so opening one chapter or all of them "
-                        "gives the same answer.")
-            if quality.degraded:
-                tips.append(quality.detail())
-        # …and what that clock is worth AGAINST THE PICTURE, which is the other half of the same
-        # question and the half a viewer can check for themselves. The row above names the axis the
-        # times are measured on; this one says whether the numbers painted beside a frame belong to
-        # that frame. It sits here because it qualifies the row above, and it is a CAVEAT when the
-        # correction did not land — see `video_sync_row` for the state that made it necessary.
-        sync = video_sync_row(session)
-        if sync is not None:
-            rows.append(sync)
-            tips.append(VIDEO_SYNC_TIP)
-        # …and the SAME fact per second, which is a different verdict often enough to be worth its
-        # own row. Measured on the owner's two recordings, the two rows come out INVERTED: 0060
-        # rejects not one fix (the row above reads 0 %) and yet 17 of its 38 clean laps contain a
-        # second whose DOP left the GNSS good band, while 0062 rejects 1 % and every one of those
-        # rejections is in the 48 seconds before the kart moves, so not a single lap inherits
-        # anything but good. A percentage cannot say that; a bar can, and this row says which laps
-        # it is about and points at the bar for where.
-        strip = getattr(session, "quality_timeline", None)
-        if strip is not None and len(strip):
-            # One pass over the laps, not two: `lap_quality` resolves a lap window and folds its
-            # cells, and this runs on every refresh (a unit flip, a palette flip, a re-segment).
-            # UNREPORTED sorts ABOVE good on purpose, so an ungraded recording reports no degraded
-            # lap rather than every lap — "not measured" is not a finding.
-            lap_cls = [q for lid in valid if (q := session.lap_quality(lid)) is not None]
-            degraded = [q for q in lap_cls if q < data_quality.GOOD]
-            holed = [q for q in degraded if q <= data_quality.POOR]
-            note = (f" · {len(degraded)} of {len(valid)} laps contain a second below good"
-                    if degraded and valid else "")
-            rows.append(("GPS quality over time",
-                         f"{strip.summary()}{note} — the bar under the scrubber shows where",
-                         bool(holed)))
-            tips.append("The strip under the scrub bar grades every second of the recording, and "
-                        "a lap inherits the WORST second inside it. That is the distinction this "
-                        "page's percentage cannot draw: a receiver acquiring a lock before you "
-                        "drive off and a receiver failing mid-session are the same percentage and "
-                        "completely different recordings.")
-        # A REFUSED accelerometer (`gmeter.axis_check`) is stated in the row that states the g
-        # source, because that is the row it changes. Without it a refused IMU read exactly like a
-        # camera that never had a usable one — GPS on both axes, unmarked — and a refused IMU is
-        # never cross-checked, so the DISAGREE row below cannot say it either. Measured on the real
-        # window over hero8.mp4 and over a D24 recording forced through the real gate: the refusal
-        # was on stdout and nowhere else. The reason is AxisCheck's own clause, the same one the
-        # g-meter toggle's tooltip finishes its sentence with.
-        axis = session.gmeter_axis() if hasattr(session, "gmeter_axis") else None
-        refusal = axis.refusal() if axis is not None else None
-        if refusal:
-            tips.append(axis.summary())
-        if getattr(session, "has_gmeter", False):
-            src = {"accl": "IMU", "gps": "GPS"}
-            lat_src = src.get(session.gmeter_source(), session.gmeter_source())
-            long_src = src.get(session.gmeter_long_source(), session.gmeter_long_source())
-            value = f"{lat_src} lateral · {long_src}-derived longitudinal"
-            if refusal:
-                value += f" — the accelerometer was not used: {refusal}"
-            rows.append(("g-meter", value, bool(refusal)))
-        else:
-            # The card used to go SILENT about the g channel exactly when it is missing — while
-            # the peak-g tiles, the per-lap g columns and the corner Grip (est) all render em-dashes
-            # with no stated reason anywhere on the window. Split on NO_GMETER_NOTE's own "term:
-            # value" colon so the constant stays the single source of that sentence.
-            term, _, value = NO_GMETER_NOTE.partition(": ")
-            if refusal:
-                # ...except that a refused IMU with no GPS trace to fall back on DID have an
-                # accelerometer, so "no accelerometer in this recording" would be the wrong reason.
-                value = (f"the accelerometer was not used: {refusal}, and there is no GPS "
-                         "trajectory to derive g from — lateral g, braking g and grip are "
-                         "unavailable.")
-            rows.append((term, value, True))
-        cross = session.gmeter_cross() if hasattr(session, "gmeter_cross") else None
-        if cross is not None:
-            verdict = "agree" if cross.ok else "DISAGREE"
-            gain = getattr(cross, "lat_gain", None)
-            gain_bit = f" · lateral gain ×{gain:.2f}" if gain is not None else ""
-            rows.append(("IMU↔GPS cross-check",
-                         f"{verdict} · lateral r={cross.lat_corr:+.2f}{gain_bit} · "
-                         # Grouped: the cross-check's sample count is the only six-figure number
-                         # the app prints, and "346713" is read digit by digit where "346,713" is
-                         # read at a glance — the same reason every number on this page is set in
-                         # the tabular stack.
-                         f"longitudinal r={cross.long_corr:+.2f} · {cross.n:,} samples",
-                         not cross.ok))
-            tips.append(cross.summary())
-            tips.append("Lateral gain is the IMU's lateral magnitude over the GPS-derived one: "
-                        "×1 means the g you read is scaled right. The correlation beside it "
-                        "cannot tell you that — Pearson r is unchanged by a scale error, so a "
-                        "channel reading half would still correlate perfectly.")
-        # The THIRD cross-check row, and the strongest of the three, because it is the only one on
-        # this card whose target is EXACT. The two above compare one estimate against another, so
-        # their r and gain describe agreement and nothing more; a lap is a closed loop, so the yaw
-        # integrated over one is 2π whatever the racing line and whatever the smoothing.
-        #
-        # The row states what the MEASURED channel reads against that target, and prints the
-        # inferred channel's own ratio beside it — both live off `RotationCheck`, so neither can
-        # go stale. It does NOT editorialise about the gap between them: that gap was 6.5-10 % of
-        # the lap when this channel landed, is ~0.1 % since the curvature basis was fixed, and a
-        # sentence characterising it would have been wrong within the week. Two numbers against
-        # one exact target say it without a verdict attached.
-        rot = session.rotation_cross() if hasattr(session, "rotation_cross") else None
-        if rot is not None:
-            verdict = "agrees" if rot.ok else "DISAGREES"
-            # The CLOCK OFFSET belongs in this row and not in a footnote, because the correlation
-            # printed beside it is measured with that offset LEFT IN: the gyroscope is timed on the
-            # camera's media clock and the GPS trace on its receiver's, and on the owner's own
-            # recordings an event's GPS timestamp lands ~0.46 s after its gyro timestamp. Stating
-            # the r without the offset would read as how well the two channels agree, when a good
-            # part of the gap between them is just the two clocks. `lag_clause` is RotationCheck's
-            # own sentence, so this row and the load-time log say it in the same words — and it is
-            # EMPTY when the offset could not be measured, which is why the clause is appended
-            # rather than formatted in: a row that has no measurement says nothing instead of 0.00.
-            lag = f" · {rot.lag_clause}" if rot.lag_clause else ""
-            rows.append(("Rotation cross-check",
-                         f"{verdict} · over {rot.loop_n} closed laps the gyroscope's measured yaw "
-                         f"integrates to {rot.loop_ratio_gyro:.3f}×2π and the path-derived rate to "
-                         f"{rot.loop_ratio_path:.3f}×2π, against an exact "
-                         f"{rot.loop_exact:+.3f} · "
-                         f"r={rot.corner_corr:+.2f} between them through the corners{lag}",
-                         not rot.ok))
-            tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
-                        "the only quantity on this card with a ground truth rather than a second "
-                        "estimate to agree with. That is why the headline here is the closed-lap "
-                        "ratio and not the correlation: halving the channel leaves r bit-identical "
-                        "and moves this ratio to 0.5. The exact target beside it carries this "
-                        "circuit's own direction — a clockwise lap closes at −1.000×2π, which is "
-                        "just as exact — and a gyroscope read through the wrong gravity axis lands "
-                        "on the opposite side of zero from the path.")
-            if rot.lag_clause:
-                # WHAT WAS MEASURED AND WHAT WAS DONE WITH IT ARE TWO SENTENCES, from two sources
-                # — and since the Video sync row they are two SURFACES, which is the fix for the
-                # hole this tooltip had. The clause here is the MEASUREMENT (`RotationCheck`);
-                # whether the overlay is corrected by it is the SESSION's answer
-                # (`gps_lag_applied_s`), and that answer is true of every recording — including
-                # the ones with no gyro, where this tooltip does not exist at all and the
-                # correction is exactly as likely to have been refused. So the action is stated
-                # once, in the row, and pointed at from here rather than restated.
-                tips.append(
-                    f"The two channels are not on the same clock. The gyroscope is timestamped on "
-                    f"the camera's media clock — the one the picture plays on — and the GPS trace "
-                    f"on its receiver's own. Measured on this recording, {rot.lag_clause}: the "
-                    f"correlation above is what they score with that offset still in "
-                    f"(r={rot.lag_corr:+.2f} at the offset, {rot.lag_corr_at_zero:+.2f} without "
-                    f"it). The figures above are not shifted; they describe the two channels as "
-                    f"recorded, and what the app did with the offset is the Video sync row above. "
-                    f"Lap times are differences taken on one clock, so none of this moves them.")
-            tips.append(f"The measured channel is the {session.rotation_device() or 'camera'}'s "
-                        f"gyroscope (GPMF GYRO, ~200 Hz), projected onto gravity so it reads a "
-                        f"road-plane yaw rate however the camera is tilted on its mount. The "
-                        f"path-derived rate is the racing line's own turning, from the GPS trace. "
-                        f"They are independent, and they are checked over {rot.n:,} samples.")
-        self.trust_card.set_rows(rows or [(DASH, DASH, False)])
-        # Set unconditionally (both ways): a stale cross-check summary must not survive a
-        # re-render onto a session that has none.
-        self.trust_card.setToolTip("\n\n".join(tips))
 
     def _refresh_lap_table(self, session, rows, unit, u_label):
         has = bool(rows)
@@ -4566,8 +3661,8 @@ class StatsView(QWidget):
             self.lap_table.setItem(r, 0, lap_item)
 
             def num(v, fmtstr):
-                return self._num_item(fmtstr.format(v) if v is not None else DASH)
-            time_item = self._num_item(fmt_time(s.time))
+                return num_item(fmtstr.format(v) if v is not None else DASH)
+            time_item = num_item(fmt_time(s.time))
             if timing_note:
                 time_item.setForeground(PROVISIONAL_COLOR)
                 theme.apply_provisional_style(time_item)

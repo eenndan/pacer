@@ -336,15 +336,17 @@ class PBToast(QWidget):
     the LAP panel's body, see `show_for` / `anchor_region` — when a freshly-analysed session beats
     its track's prior PB on verified timing. Tasteful, not modal: an
     amber-accented card that auto-dismisses after a few seconds, holding that clock while the
-    pointer is on it so it never vanishes mid-click. At the peak-pride moment it turns
-    into a SHARE loop: the PRIMARY "Share your PB →" button saves the shareable lap card (image),
-    and a secondary "See your progress →" link opens the per-track PB-progression chart (retention),
-    plus a × to dismiss now.
+    pointer is on it so it never vanishes mid-click. Its PRIMARY action is the question a new PB
+    raises — "Compare with your previous PB →", both best laps side by side (board review PS-B4) —
+    when the caller can answer it (`on_compare`); "Share your PB →" (the lap card, an image) and
+    "See your progress →" (the per-track PB-progression chart) are secondary links, plus a × to
+    dismiss now. Without `on_compare` the share button is the primary, as it always was.
 
     Purely presentational — the caller decides WHEN to show it (library.pb_moment) and passes the
-    formatted `title`/`body` + the `on_progress` / `on_share` callbacks (either may be None to hide
-    that action). Exposed attributes (title_label / body_label / link_btn / share_btn / close_btn)
-    let the suite assert the wording + that each button routes to its injected callback."""
+    formatted `title`/`body` + the `on_progress` / `on_share` / `on_compare` callbacks (the last
+    two may be None to hide that action). Exposed attributes (title_label / body_label / link_btn /
+    share_btn / compare_btn / close_btn) let the suite assert the wording + that each button routes
+    to its injected callback."""
 
     AUTO_DISMISS_MS = 6000  # generous but transient — long enough to read, short enough to not nag
     # How long after show_for() the card re-asks where it belongs. Deliberately the SAME 120 ms
@@ -364,7 +366,8 @@ class PBToast(QWidget):
     # tests/test_pb_toast.py reads it.
     MIN_HIT_PX = theme.HIT_MIN
 
-    def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None):
+    def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None,
+                 on_compare=None):
         super().__init__(parent)
         self.setObjectName("PBToast")
         # THE CARD HAS TO BE TOLD TO PAINT ITSELF. theme.py has drawn this toast a background, an
@@ -378,6 +381,7 @@ class PBToast(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._on_progress = on_progress
         self._on_share = on_share
+        self._on_compare = on_compare
         # The widget show_for() was given, i.e. the one this card is placed inside and follows.
         # None until then, and None again after dismiss(), which is what makes _place a no-op for
         # a card that is on its way out.
@@ -415,27 +419,34 @@ class PBToast(QWidget):
         self.body_label.setWordWrap(True)
         lay.addWidget(self.body_label)
 
-        # The action row: the PRIMARY "Share your PB →" (one tap to the lap card) then the
-        # secondary progression link. Each is created only when its callback is injected.
+        # The actions, each created only when its callback is injected. The PRIMARY one is the
+        # compare when there is one, on its own row, and otherwise "Share your PB →" as it always
+        # was; the rest are flat links on the row below. Two rows, because three actions abreast
+        # would roughly double the card's width over a lap panel that is ~700 px across.
         self.share_btn = None
+        self.compare_btn = None
         self.link_btn = None
+        if on_compare is not None:
+            self.compare_btn = self._action(
+                "Compare with your previous PB →",
+                "Load the recording that held your previous best as the reference, and play the "
+                "two best laps side by side", self._on_compare_clicked, primary=True)
+            compare_row = QHBoxLayout()
+            compare_row.setContentsMargins(0, 0, 0, 0)
+            compare_row.addStretch(1)
+            compare_row.addWidget(self.compare_btn)
+            lay.addLayout(compare_row)
         link_row = QHBoxLayout()
         link_row.setContentsMargins(0, 0, 0, 0)
         link_row.addStretch(1)
         if on_share is not None:
-            self.share_btn = QPushButton("Share your PB →")
-            self.share_btn.setObjectName("PBToastShare")
-            self.share_btn.setProperty("variant", "primary")
-            self.share_btn.setCursor(Qt.PointingHandCursor)
-            self.share_btn.setToolTip("Save a shareable lap card (image) of this personal best")
-            self.share_btn.clicked.connect(self._on_share_clicked)
+            self.share_btn = self._action(
+                "Share your PB →", "Save a shareable lap card (image) of this personal best",
+                self._on_share_clicked, primary=on_compare is None)
             link_row.addWidget(self.share_btn)
-        self.link_btn = QPushButton("See your progress →")
-        self.link_btn.setObjectName("PBToastLink")
-        self.link_btn.setMinimumHeight(self.MIN_HIT_PX)
-        self.link_btn.setCursor(Qt.PointingHandCursor)
-        self.link_btn.setToolTip("Open this track's personal-best progression chart")
-        self.link_btn.clicked.connect(self._on_link)
+        self.link_btn = self._action(
+            "See your progress →", "Open this track's personal-best progression chart",
+            self._on_link, primary=False)
         link_row.addWidget(self.link_btn)
         lay.addLayout(link_row)
 
@@ -443,6 +454,22 @@ class PBToast(QWidget):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.dismiss)
+
+    def _action(self, text: str, tip: str, slot, primary: bool) -> QPushButton:
+        """One of the card's actions: the amber `#PBToastPrimary` or a flat `#PBToastLink`, which
+        takes the pointer floor explicitly (see MIN_HIT_PX; the primary stands taller on its own
+        padding and an explicit minimum would replace that)."""
+        btn = QPushButton(text)
+        if primary:
+            btn.setObjectName("PBToastPrimary")
+            btn.setProperty("variant", "primary")
+        else:
+            btn.setObjectName("PBToastLink")
+            btn.setMinimumHeight(self.MIN_HIT_PX)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip(tip)
+        btn.clicked.connect(slot)
+        return btn
 
     def anchor_region(self, parent: QWidget) -> QRect:
         """The rectangle of `parent` this card may sit in, in `parent`'s own coordinates.
@@ -509,7 +536,7 @@ class PBToast(QWidget):
         """Show the toast over `parent` and keep it on its anchor for as long as it lives.
 
         `keepout` is an optional CALLABLE returning a QRect in `parent`'s coordinates that this
-        card must not cover, or None. A callable and not a rect, because the card is placed three
+        card must not cover — or a list of them — or None. A callable and not a rect, because the card is placed three
         times over 120 ms and the thing being protected moves under it during that (`_place`).
         The caller supplies it — this module stays Qt-only and knows nothing about laps or grids —
         and see `_place` for what it is for.
@@ -636,20 +663,26 @@ class PBToast(QWidget):
         return settled
 
     def _clear_of_keepout(self, region: QRect, x: int, y: int) -> int:
-        """`y`, raised to sit SPACE_M above the caller's keep-out rectangle when the card at
-        (x, y) would overlap it — and left exactly as it was when it would not, when the caller
-        named nothing, or when lifting it would push the card out of its own anchor region.
+        """`y`, raised to sit SPACE_M above each of the caller's keep-out rectangles the card at
+        (x, y) would overlap — the callable may return one QRect or several, taken lowest first,
+        so a card lifted clear of the excluded-laps strip is then checked against the selected row
+        above it — and left exactly as it was when it overlaps none, when the caller named
+        nothing, or when a lift would push the card out of its own anchor region.
 
         The last clause is why this returns a y rather than moving the card: a region too short to
         hold both keeps today's placement, so the worst case is the behaviour that shipped rather
         than a card half outside the panel it belongs to."""
         avoid = self._keepout() if callable(self._keepout) else None
-        if avoid is None or avoid.isEmpty():
-            return y
-        if not QRect(x, y, self.width(), self.height()).intersects(avoid):
-            return y
-        lifted = avoid.top() - theme.SPACE_M - self.height()
-        return lifted if lifted >= region.top() + theme.SPACE_M else y
+        rects = [avoid] if isinstance(avoid, QRect) else list(avoid or [])
+        for rect in sorted((r for r in rects if r is not None and not r.isEmpty()),
+                           key=lambda r: r.bottom(), reverse=True):
+            if not QRect(x, y, self.width(), self.height()).intersects(rect):
+                continue
+            lifted = rect.top() - theme.SPACE_M - self.height()
+            if lifted < region.top() + theme.SPACE_M:
+                break   # no room above this one: keep the placement so far
+            y = lifted
+        return y
 
     @staticmethod
     def _dismiss_icon(hover: bool) -> QIcon:
@@ -710,6 +743,12 @@ class PBToast(QWidget):
         self.dismiss()
         if self._on_share is not None:
             self._on_share()
+
+    def _on_compare_clicked(self):
+        """Route to the injected compare (load the previous PB as the reference), then dismiss."""
+        self.dismiss()
+        if self._on_compare is not None:
+            self._on_compare()
 
     def dismiss(self):
         self._timer.stop()

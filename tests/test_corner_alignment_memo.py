@@ -434,6 +434,11 @@ ALIGNMENT_TEXT = [
     "studio/coaching.py",
     "studio/stats.py",
     "studio/stats_panel.py",
+    # ...and the Stats-page sections split out of it since (ARCH-3), which carried its text.
+    "studio/stats_common.py",
+    "studio/stats_trust.py",
+    "studio/stats_braking.py",
+    "studio/stats_straights.py",
     "studio/provenance.py",
     "studio/driving_channels.py",
     "tests/test_studio_features.py",

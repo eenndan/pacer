@@ -72,7 +72,7 @@ from collections.abc import Callable
 
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QBrush, QColor, QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -247,28 +247,14 @@ EMPTY_LIBRARY_ICON = "ph.folder-open"
 # the search box, and the label the unknown-track filter bucket stands for.
 _UNKNOWN_LABEL = "unknown track"
 
-# Privacy disclosure — a calm, factual note of what Pacer stores locally and where. Surfaced in the
-# Library dialog (this is where a user browsing their recorded history would look) and by
-# Help ▸ Your data & privacy. Everything is on-disk and offline; nothing is uploaded — say so.
-PRIVACY_NOTE = (
-    "Everything Pacer analyzes stays on this Mac — nothing is uploaded or shared, and the "
-    "conditions in a session record are typed by you, never looked up online. "
-    "It stores your start/finish + sector lines in a small \"<name>.pacer.json\" file next to "
-    "each video, and under ~/Library/Application Support/pacer it keeps this library index (file "
-    # THE THIRD STORE COSTS A CLAUSE, NOT A LINE. This note is a WrapLabel inside the dialog, so
-    # every extra wrapped line comes off the ROW BUDGET of the list below it: naming marks the long
-    # way took the re-opened dialog from 5.0 to 4.82 visible rows and failed
-    # tests/test_library.py::test_dialog_never_reopens_too_small_to_show_the_list. The two clauses
-    # that used to enumerate the stores by name ("that takes its session record with it", "the
-    # whole index and every session record with it") pay for it.
-    "paths, track names and GPS dates), your session records (session_records.json — the setup "
-    "and conditions you write up), your marks (marks.json — your own notes on a recording) and "
-    "your saved tracks (tracks.json — each circuit's name and coordinates). Right-click a "
-    "recording to forget it — its record and marks go too — or use \"Clear library\" to wipe all "
-    "three. A copy of each is kept beside it (library.json.bak, session_records.json.bak, "
-    "marks.json.bak), so \"Restore…\" puts them back. Your saved tracks are separate: "
-    "\"Clear library\" leaves tracks.json untouched, and \"Back up…\" does not copy it."
-)
+# Privacy disclosure — the promise in ONE LINE, and the whole account one click away (the dialog's
+# "Your data & privacy…" button opens Help ▸ Your data & privacy). It was the full account here:
+# ~1,000 characters, 12 wrapped lines at the app's prose measure — a third of the dialog's height —
+# on every open (board review UX-9d). What it said that the Help card did not now lives where it is
+# acted on: what "Clear library", "Restore…" and "Back up…" cover is on those buttons, and the
+# session-records file (typed by you, never looked up online) is named on the Help card.
+PRIVACY_NOTE = "Everything Pacer analyzes stays on this Mac — nothing is uploaded or shared."
+PRIVACY_LINK = "Your data & privacy…"
 
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).
 # The pens are ACCESSORS, not constants: a pyqtgraph pen width is in DEVICE pixels
@@ -308,7 +294,8 @@ _TREND_WORD = {"improving": "improving", "stalled": "off your PB"}
 # UNCLAMPED on the smallest Mac this app targets (a 13" Air has ~931 px of available height;
 # _SCREEN_MARGIN leaves 871). Anything smaller than that — an old
 # 1280x800 panel, a half-height external display — is handled by _fit_to_screen rather than by
-# opening a dialog taller than the screen.
+# opening a dialog taller than the screen. Since the privacy note became one line (board review
+# UX-9d) the default shows 12.82 rows, re-measured; the size itself did not need to move.
 _DEFAULT_SIZE = (880, 860)
 # The PB chart's ceiling (its floor is setMinimumHeight(150) at the widget). It reads a handful of
 # best-vs-date points and one empty-state sentence, so it has no use for more; without a ceiling it
@@ -333,6 +320,9 @@ _PB_PLOT_MAX_H = 200
 # 4.6-row default as too little: the library should never OPEN showing less list than the size that
 # was called broken. The screen still overrules it (_fit_to_screen runs after), and it is applied to
 # the size being OPENED, never to the size being stored — see _apply_geometry.
+# RE-MEASURED when the privacy note became one line and a button (board review UX-9d): 750 at 581 px
+# now shows 8.71 rows, and the layout's own minimum is 490 px. The floor stays where it is — it is a
+# floor under the opening height, not a target, and nothing asked for a smaller library.
 _MIN_BROWSABLE_H = 750
 # The width _MIN_BROWSABLE_H was measured at — and therefore the premise the height floor RESTS on:
 # height alone cannot buy rows at a width where the privacy note (a WrapLabel, so its wrapped height
@@ -392,6 +382,38 @@ class _LapTimeAxis(pg.AxisItem):
 
     def tickStrings(self, values, scale, spacing):  # noqa: N802 (pyqtgraph hook)
         return [fmt_time(v) for v in values]
+
+
+class _SessionDateAxis(pg.DateAxisItem):
+    """The PB chart's date axis, minus the labels that would print over each other.
+
+    pyqtgraph draws a date axis in levels — months ("Aug", "Sep") and, finer, days ("26", "31",
+    "05") — and thins each level by how much of the axis its own labels fill, never one level's
+    labels against another's. Measured on the three present Sandown rows (19 Jul, 30 Aug, 19 Sep)
+    at the dialog's opening size: the 31 Jul day tick sat one day from the "Aug" month label and the
+    two printed as "31Aug" (board review UX-9c). So a finer level's tick is dropped when its label
+    would come within one SPACE_S of a coarser level's; the coarse label, the one that says which
+    month, is the one kept."""
+
+    def tickValues(self, minVal, maxVal, size):  # noqa: N802 (pyqtgraph hook)
+        levels = super().tickValues(minVal, maxVal, size)
+        if len(levels) < 2 or maxVal <= minVal or size <= 0:
+            return levels
+        px = size / (maxVal - minVal)
+        metrics = QFontMetrics(self.style.get("tickFont") or self.font())
+        placed: list[tuple[float, float]] = []   # (centre px, half width px), coarser levels
+        out = []
+        for spacing, values in levels:
+            kept, mine = [], []
+            for value, text in zip(values, self.tickStrings(values, self.scale, spacing),
+                                   strict=True):
+                x, half = (value - minVal) * px, metrics.horizontalAdvance(text) / 2
+                if all(abs(x - x0) >= half + half0 + theme.SPACE_S for x0, half0 in placed):
+                    kept.append(value)
+                    mine.append((x, half))
+            out.append((spacing, kept))
+            placed += mine
+        return out
 
 
 def _entry_missing(entry: dict) -> bool:
@@ -532,7 +554,8 @@ class LibraryDialog(QDialog):
                  records: dict | None = None,
                  edit_record: Callable[[dict], dict] | None = None,
                  reload_records: Callable[[], dict] | None = None,
-                 manage_tracks: Callable[..., None] | None = None):
+                 manage_tracks: Callable[..., None] | None = None,
+                 show_privacy: Callable[[], None] | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — session library")
         self._index = index
@@ -572,6 +595,9 @@ class LibraryDialog(QDialog):
         # Track column and filter are read off these names. Injected like every other act, so this
         # dialog neither opens the manager's store nor knows its rules.
         self._manage_tracks = manage_tracks
+        # Help ▸ Your data & privacy, opened from beside the one-line note (injected: the card
+        # belongs to the window's Help menu, not to this dialog).
+        self._show_privacy = show_privacy
         self._backup = self._read_backup_info()
         self._entries = list(index.get("entries", []))
 
@@ -709,7 +735,7 @@ class LibraryDialog(QDialog):
         self._pb_title.setProperty("role", "PanelHeader")
         root.addWidget(self._pb_title)
         self.pb_plot = pg.PlotWidget(axisItems={
-            "bottom": pg.DateAxisItem(orientation="bottom"),
+            "bottom": _SessionDateAxis(orientation="bottom"),
             # Lap times, not decimal seconds — the same formatter the Best lap column uses, so the
             # axis and the table two rows above it read the same way. Hence no "(s)" in the label.
             "left": _LapTimeAxis(orientation="left")})
@@ -766,6 +792,9 @@ class LibraryDialog(QDialog):
         # measured rather than waved through: the note is part of the layout's minimum, so the
         # six extra lines come off the list above it — 10.82 -> 8.50 visible rows at the default
         # size — and _MIN_BROWSABLE_H moved with it (see there) so the 5-row floor still holds.
+        # That paragraph is ONE LINE now (UX-9d, see PRIVACY_NOTE), with the whole account behind
+        # the "Your data & privacy…" button at the row's end: 12.82 rows at the default size. The
+        # wrapper and the measure stay — they are what keep a longer line honest.
         #
         # THE CAP IS THE LABEL'S MAXIMUM IN A ROW WITH A TRAILING STRETCH, the stats page's
         # zero-lap-prose idiom: an UN-ALIGNED item would be centred under a left-aligned table
@@ -781,6 +810,15 @@ class LibraryDialog(QDialog):
         root.addLayout(self._privacy_row)
         self._privacy_row.addWidget(privacy, 1)
         self._privacy_row.addStretch(0)
+        if self._show_privacy is not None:
+            # `&&`: a button's `&` marks its mnemonic, so "data & privacy" drew as "data _privacy".
+            self.privacy_btn = QPushButton(PRIVACY_LINK.replace("&", "&&"))
+            self.privacy_btn.setAutoDefault(False)
+            self.privacy_btn.setToolTip(
+                "What Pacer keeps on this Mac, where, and how to remove it (Help ▸ Your data & "
+                "privacy)")
+            self.privacy_btn.clicked.connect(self._show_privacy)
+            self._privacy_row.addWidget(self.privacy_btn)
 
         # ----- buttons
         buttons = QHBoxLayout()
@@ -789,9 +827,11 @@ class LibraryDialog(QDialog):
         if self._clear_library is not None:
             self.clear_btn = QPushButton("Clear library")
             self.clear_btn.setToolTip(
-                "Forget every recording in this list (wipes the app-support index only; your video "
-                "files and their .pacer.json sidecars are left untouched). A copy of the index is "
-                "kept as library.json.bak first")
+                "Forget every recording in this list — the index, your session records and your "
+                "marks. A copy of each is kept first (library.json.bak, session_records.json.bak, "
+                "marks.json.bak), so \"Restore…\" puts them back. Your videos, their .pacer.json "
+                "sidecars and your saved tracks are separate: \"Clear library\" leaves tracks.json "
+                "untouched")
             self.clear_btn.clicked.connect(self._on_clear_library)
             self.clear_btn.setEnabled(bool(self._entries))
             buttons.addWidget(self.clear_btn)
@@ -814,7 +854,9 @@ class LibraryDialog(QDialog):
             buttons.addWidget(self.reveal_btn)
         if self._backup_library is not None:
             self.backup_btn = QPushButton("Back up…")
-            self.backup_btn.setToolTip("Save a copy of your library index to a location you choose")
+            self.backup_btn.setToolTip(
+                "Save a copy of your library index (library.json) to a location you choose. Your "
+                "saved tracks are separate — \"Back up…\" does not copy tracks.json")
             self.backup_btn.clicked.connect(lambda: self._backup_library())
             buttons.addWidget(self.backup_btn)
         # The saved CIRCUITS behind the Track column: rename one that was mistyped, delete one that

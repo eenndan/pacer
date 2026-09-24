@@ -979,7 +979,7 @@ def test_no_table_header_floats_off_its_data():
               "COACHING": coach.table, "LIBRARY": dlg.table,
               "STATS/IDEAL LAP": stats.ideal_table,
               "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
-              "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
+              "STATS/BRAKING": stats.braking.table, "STATS/STRAIGHTS": stats.straights.table,
               "STATS/PER LAP": stats.lap_table,
               # F5's COASTING table: a sixth report grid, its "vs top" column a WORD, right-aligned
               # like the numbers it sits beside.
@@ -989,7 +989,7 @@ def test_no_table_header_floats_off_its_data():
               # STINTS fills whenever the synthetic session's laps do not tile the clock, and a
               # column of it is exactly as capable of floating off its data as the nine above.
               "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table,
-              # F7's laps x corners grid: full width under the columns, same _ReportTable.
+              # F7's laps x corners grid: full width under the columns, same ReportTable.
               "STATS/CORNERS BY LAP": stats.corner_grid_table}
     # ...and the dict really is every table the view ships: anything with cells that is not in it
     # would be a tenth surface nobody brought to the rule.
@@ -1106,7 +1106,7 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
     stats = view.stats_view
     named = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
              "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
-             "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
+             "STATS/BRAKING": stats.braking.table, "STATS/STRAIGHTS": stats.straights.table,
              "STATS/COASTING": stats.coasting_table,
              "STATS/PER LAP": stats.lap_table, "COACHING": coach.table, "LIBRARY": dlg.table,
              "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table,

@@ -103,7 +103,10 @@ _STUDIO = os.path.join(_REPO, "studio")
 # The modules this guard covers. Not "every module": the walk is only honest where the surfaces
 # have actually been migrated, and a guard that starts green everywhere it looks is worth more than
 # one carrying a backlog of exemptions (see SCOPE in the docstring for the two open hand-offs).
-_GUARDED = ("lap_table", "stats_panel", "coaching_panel", "help_dialog", "library", "overlays")
+# The Stats page counts as ONE surface however many modules it is split across (ARCH-3): a
+# section that moves out of `stats_panel` keeps the guard it had there.
+_GUARDED = ("lap_table", "stats_panel", "stats_common", "stats_trust", "stats_braking",
+            "stats_straights", "coaching_panel", "help_dialog", "library", "overlays")
 
 # (module, owning scope, character, why it is allowed to fall out of the face).
 #

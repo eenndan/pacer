@@ -725,6 +725,22 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     return None
 
 
+def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = None) -> dict | None:
+    """The library ROW a new personal best beat — the entry holding `track`'s fastest trustworthy
+    best among the OTHER recordings (board review PS-B4: "compare with your previous PB").
+
+    ``pb_moment`` answers with the number (its ``prior``); this answers with the row, because the
+    row is what carries the footage's paths. Same partition by `fingerprint_key` and the same
+    trustworthy subset (``best_entry``), so the row and the number the PB line quotes are one
+    fact: a recording can no more be its own previous PB here than there. None when there is no
+    such row (no track, or no other trustworthy best)."""
+    if not track:
+        return None
+    others = [e for e in index.get("entries", [])
+              if not (fingerprint_key and e.get("fingerprint") == fingerprint_key)]
+    return best_entry({"entries": others}, track)
+
+
 def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | None,
                   degraded: bool = False, fingerprint_key: str | None = None) -> dict | None:
     """``pb_moment`` gated on BOTH timing axes: returns None (never celebrates) when either
@@ -767,9 +783,12 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
             f"{track} — {best}, {gap:.2f} s faster than your previous best "
             f"({fmt_time(moment['prior'])}).",
         )
+    # A SESSION, not a lap: the title said "First lap logged here" over a body that said "your
+    # first session on this track" (board review UX-9a). The words are the debrief's own first-open
+    # line (pb_standing_text), so the card and the debrief say one thing one way.
     return (
-        "First lap logged here",
-        f"{track} — {best}. Your first session on this track; beat it next time.",
+        "First session logged here",
+        f"{track} — best lap {best}, the time to beat next time.",
     )
 
 

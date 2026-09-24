@@ -339,6 +339,8 @@ FOCUS_EMPTY_LINE = f"Focus list · empty — pick up to {focus.MAX_ITEMS} corner
 FOCUS_EMPTY_INVITE = (f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at this "
                       "track, Pacer measures the same corners again and says whether they moved — "
                       "or why it can't tell.")
+# Why nothing can be added when the block is dormant: a focus list is kept per track.
+FOCUS_DORMANT_REASON = "No focus list here — Pacer keeps one per track, and this one isn't known"
 
 
 class FocusBlock(QWidget):
@@ -520,6 +522,17 @@ class FocusBlock(QWidget):
             f"Work on C{cid}: Pacer will measure this exact stretch of track again next time "
             "you're here")
 
+    def add_state(self) -> tuple[bool, str]:
+        """Whether the Add button would put a corner on the list now, and the button's own words
+        for why not — for the same gesture made from outside the page (Coaching ▸ Add selected
+        corner to focus list, and so ⌘K). A dormant block (no track: nowhere to keep a list) adds
+        nothing."""
+        if not self._headline:
+            return False, FOCUS_DORMANT_REASON
+        if self._selected is None:   # the button's "in the table below" is the page's own words
+            return False, "Select a corner on the Coaching page first — then add it from here"
+        return self.add_button.isEnabled(), self.add_button.toolTip()
+
     def _emit_add(self):
         if self._selected is not None:
             self.add_requested.emit(int(self._selected))
@@ -625,31 +638,58 @@ def debrief_note(promoted: list[int]) -> str:
 DEBRIEF_MAX_FRACTION = 0.15
 
 
+DEBRIEF_COMPARE = "Compare with your previous PB"
+
+
 class DebriefBlock(QWidget):
     """The debrief's lead (board review PS-B1): the session's personal-best standing
     (``library.pb_standing_text``) and ``debrief_note``, above the focus list. Shown only while
     the page is the debrief — the Coaching page maximized on a recording's first open — and hidden
     otherwise, so the page everyone else sees is unchanged. It yields height the way
-    ``ThemeBlock`` does (the note first, then the whole block)."""
+    ``ThemeBlock`` does (the note first, then the whole block).
+
+    A NEW PB's line carries its question beside it (board review PS-B4): "where did the time come
+    from?" was File ▸ Open, Coaching ▸ Load reference…, Coaching ▸ Compare vs reference — every
+    piece shipped, three menus apart. ``compare_btn`` is that one gesture (``compare_requested``;
+    the window loads the previous PB's recording and opens the compare on the two best laps). It
+    goes with the PB line, never with the note, so it is shed only with the line it answers."""
+
+    compare_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._texts: list[str] = []
+        self._compare = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XS)
         self.headline = WrapLabel("")          # the PB line, in the page's primary tone
+        self.compare_btn = QPushButton(DEBRIEF_COMPARE)
+        self.compare_btn.setAutoDefault(False)
+        self.compare_btn.setDefault(False)
+        self.compare_btn.setToolTip(
+            "Load the recording that held your previous best as the reference, and play the two "
+            "best laps side by side")
+        self.compare_btn.clicked.connect(self.compare_requested)
+        self.compare_btn.setVisible(False)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(theme.SPACE_S)
+        top.addWidget(self.headline, 1)
+        top.addWidget(self.compare_btn, 0, Qt.AlignTop)
+        self._top = top
         self.note = WrapLabel("")
         self.note.setProperty("role", "Note")
-        lay.addWidget(self.headline)
+        lay.addLayout(top)
         lay.addWidget(self.note)
         self.setVisible(False)
 
-    def set_lines(self, pb_line: str | None, note: str | None) -> None:
-        """Fill the block (None for both clears it)."""
+    def set_lines(self, pb_line: str | None, note: str | None, compare: bool = False) -> None:
+        """Fill the block (None for both clears it); `compare` offers the compare beside a PB line."""
         self.headline.setText(pb_line or "")
         self.note.setText(note or "")
         self._texts = [t for t in (pb_line, note) if t]
+        self._compare = bool(compare and pb_line)
         self._apply(len(self._texts))
 
     def full_text(self) -> str:
@@ -667,8 +707,13 @@ class DebriefBlock(QWidget):
         labels = self._labels()[:n]
         need = m.top() + m.bottom() + lay.spacing() * max(len(labels) - 1, 0)
         for label in labels:
-            need += QFontMetrics(label.font()).boundingRect(
-                QRect(0, 0, inner, 0), Qt.TextWordWrap, label.text()).height()
+            beside = self._compare and label is self.headline
+            # The PB line wraps into what the compare button leaves it, and its row is as tall as
+            # the taller of the two (FocusBlock's empty state measures the same shape).
+            button = self.compare_btn.sizeHint() if beside else QSize(0, 0)
+            wrap = max(inner - (button.width() + self._top.spacing() if beside else 0), 1)
+            need += max(QFontMetrics(label.font()).boundingRect(
+                QRect(0, 0, wrap, 0), Qt.TextWordWrap, label.text()).height(), button.height())
         return need
 
     def fit_into(self, width: int, budget_px: int) -> int:
@@ -687,6 +732,9 @@ class DebriefBlock(QWidget):
             want = label in shown
             if label.isHidden() == want:
                 label.setVisible(want)
+        want = self._compare and self.headline in shown
+        if self.compare_btn.isHidden() == want:
+            self.compare_btn.setVisible(want)
         if self.isHidden() == bool(shown):
             self.setVisible(bool(shown))
 
@@ -1175,6 +1223,8 @@ class OpportunitiesPanel(QWidget):
     # A row's Jump: (cid, the corner's entry odometer on the best lap). The app selects the corner
     # and seeks the video to the best lap's entry to it (StudioWindow._jump_to_opportunity).
     jump_requested = Signal(int, float)
+    # The debrief's "Compare with your previous PB" (DebriefBlock); the window does the loading.
+    compare_pb_requested = Signal()
 
     _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", "Entry · Apex · Exit Δt", ""]
 
@@ -1189,7 +1239,8 @@ class OpportunitiesPanel(QWidget):
         self._all_rows: list[coaching.Opportunity] = []
         self._shortlist: list[coaching.Opportunity] = []   # what the headline sums (PANEL_TOP_N)
         self._debrief = False        # the page is the first-open debrief (set_debrief)
-        self._debrief_lead: tuple = (None, [])   # (PB line, the corners Pacer pre-promoted)
+        # (PB line, the corners Pacer pre-promoted, whether the line offers the PB compare)
+        self._debrief_lead: tuple = (None, [], False)
         self._brake_dirs: dict = {}  # cid -> coaching.BrakeDirection (refresh)
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
         self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
@@ -1300,6 +1351,7 @@ class OpportunitiesPanel(QWidget):
         self.focus_block.mark_dry_requested.connect(self.focus_mark_dry_requested)
         # The debrief's lead, above everything it introduces; hidden unless the page IS the debrief.
         self.debrief_block = DebriefBlock()
+        self.debrief_block.compare_requested.connect(self.compare_pb_requested)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -1325,9 +1377,9 @@ class OpportunitiesPanel(QWidget):
         """The lead names only the pre-promoted corners STILL on the list: a Remove below it must
         not leave it saying Pacer put a corner there that is gone."""
         if self._debrief:
-            pb_line, promoted = self._debrief_lead
+            pb_line, promoted, compare = self._debrief_lead
             kept = [c for c in promoted if c in self.focus_block.cids()]
-            self.debrief_block.set_lines(pb_line, debrief_note(kept))
+            self.debrief_block.set_lines(pb_line, debrief_note(kept), compare)
 
     def shortlist_cids(self) -> list[int]:
         """The corners the headline sums, in rank order — what the debrief pre-promotes, so the
@@ -1335,12 +1387,14 @@ class OpportunitiesPanel(QWidget):
         return [r.cid for r in self._shortlist]
 
     def set_debrief(self, on: bool, pb_line: str | None = None,
-                    promoted: list[int] | None = None) -> None:
+                    promoted: list[int] | None = None, compare: bool = False) -> None:
         """Make this page the first-open debrief (see the class note), or the ordinary page again.
         The view owns WHEN (``CentralView.show_debrief`` / ``_end_debrief``); this owns what the
-        page shows: the lead, the shortlist-only table, and no braking line."""
+        page shows: the lead, the shortlist-only table, and no braking line. `compare` offers
+        "Compare with your previous PB" beside the PB line (``compare_pb_requested``)."""
         self._debrief = bool(on)
-        self._debrief_lead = (pb_line, list(promoted or [])) if on else (None, [])
+        self._debrief_lead = ((pb_line, list(promoted or []), bool(compare)) if on
+                              else (None, [], False))
         if on:
             self._sync_debrief_lead()
         else:

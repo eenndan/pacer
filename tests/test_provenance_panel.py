@@ -308,7 +308,7 @@ def test_every_surface_that_explains_the_corner_match_says_the_drift_is_taken_ou
     view = StatsView(s)
     view.refresh()
     tips = {"CORNERS": view.corners_table.toolTip(),
-            "STRAIGHTS": view.straights_table.toolTip(),
+            "STRAIGHTS": view.straights.table.toolTip(),
             "CORNERS BY LAP": view.corner_grid_table.toolTip()}
     cid = int(view.corners_table.item(0, 0).data(NUM_ROLE))
     prov = s.corner_best_provenance(cid)
