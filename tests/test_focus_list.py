@@ -421,7 +421,7 @@ def test_the_add_button_names_the_corner_and_the_gestures_are_signals():
     # paragraph (it is the line's hover), and no Remove button, which an empty list can never use.
     fb = p.focus_block
     assert fb.empty_line.isVisible() and "Focus list · empty" in fb.empty_line.text()
-    assert fb.headline.isHidden() and fb.drop_button.isHidden()
+    assert fb.headline.isHidden() and all(b.isHidden() for b in fb.drop_buttons)
     assert not [lb for lb in fb.lines if not lb.isHidden()], "the invitation is not a second row"
     assert "Pick up to 3 corners" in fb.empty_line.toolTip()
     assert not p.focus_block.add_button.isEnabled(), "nothing selected yet"
@@ -435,20 +435,26 @@ def test_the_add_button_names_the_corner_and_the_gestures_are_signals():
     p.focus_add_requested.connect(seen.append)
     p.focus_block.add_button.click()
     assert seen == [cid], seen
-    # …and once it is on the list the button flips to the remove gesture
+    # …and once it is on the list it has its OWN Remove (PS-B1: one click per corner), which needs
+    # no selection — a corner kept from another day need not be anywhere near today's top rows.
     p.set_focus_report(_report(F.Outcome(item=_item(cid=cid), kind=F.OUTCOME_SET_HERE,
                                          now=None, delta=None)))
     p.table.selectRow(0)
     for _ in range(4):
         _APP.processEvents()
     assert not p.focus_block.add_button.isEnabled()
-    assert p.focus_block.drop_button.isEnabled() and not p.focus_block.drop_button.isHidden()
     assert p.focus_block.empty_line.isHidden() and not p.focus_block.headline.isHidden()
+    p.table.clearSelection()
+    for _ in range(4):
+        _APP.processEvents()
+    shown = [b for b in p.focus_block.drop_buttons if not b.isHidden()]
+    assert [b.text() for b in shown] == [f"Remove C{cid}"] and shown[0].isEnabled(), \
+        [b.text() for b in shown]
     dropped = []
     p.focus_remove_requested.connect(dropped.append)
-    p.focus_block.drop_button.click()
+    shown[0].click()
     assert dropped == [cid], dropped
-    print(f"ok panel: Add C{cid} → signal, then Remove C{cid} → signal")
+    print(f"ok panel: Add C{cid} → signal, then its own Remove C{cid} → signal")
 
 
 def test_the_focus_block_yields_its_height_to_the_ranking():
@@ -897,13 +903,15 @@ def _folder_state(folders) -> dict:
             for d in sorted(folders) for f in sorted(os.listdir(d)) if not f.startswith(".")}
 
 
-def test_two_sandown_sessions_reach_a_verdict_in_two_clicks():
-    """UX-6/UX-7 on real footage: the loop the owner has never run, run the way he would. A FRESH
-    library; the earlier Sandown session opened in the real window and Coaching's top three
-    promoted; the later one opened in the SAME window; the driver on the Laps tab. From there the
-    Coaching tab and "Mark both dry" — two clicks — must put a VERDICT on every promoted corner,
-    without the record form ever opening. The pair is `_footage.pair()` (default 0068 now, Sandown
-    3h 0064 then — focus.py's measured pair, both on the built-in Sandown Park line)."""
+def test_two_sandown_sessions_reach_a_verdict_from_the_debrief():
+    """UX-6/UX-7 + PS-B1 on real footage: the loop the owner has never run, run the way he now
+    would. A FRESH library; the earlier Sandown session opened in the real window lands on its
+    debrief with Coaching's top three already on the focus list — no click; the later one opened in
+    the SAME window lands on its debrief too, with the refusal and "Mark both dry" on it. ONE click
+    must put a VERDICT on every promoted corner, on the debrief, without the record form ever
+    opening. (Before the debrief it was two clicks after three manual promotions: the Coaching tab,
+    then the button.) The pair is `_footage.pair()` (default 0068 now, Sandown 3h 0064 then —
+    focus.py's measured pair, both on the built-in Sandown Park line)."""
     from PySide6.QtWidgets import QMessageBox
 
     from studio.app import StudioWindow
@@ -925,18 +933,16 @@ def test_two_sandown_sessions_reach_a_verdict_in_two_clicks():
             try:
                 _open_and_wait(win, then_path)
                 then_entry = win.library_ctl._current_library_entry()
-                top = [r.cid for r in win.session.coaching_opportunities().ranked_rows()[:3]]
-                for cid in top:
-                    win.library_ctl.focus_add(cid)
+                top = win.view.opportunities.shortlist_cids()
+                assert win.view.is_debrief() and len(top) == 3, (win.view.is_debrief(), top)
                 assert "baselines measured on this session" in _focus_text(win.view), \
                     _focus_text(win.view)
 
                 _open_and_wait(win, now_path)
                 view = win.view
-                view.tab_bar.setCurrentIndex(0)
+                assert view.is_debrief(), "the later session's first open is its debrief too"
                 hands = _Hands(view)
                 with _no_record_form() as forms:
-                    hands.open_tab("Coaching")
                     refusal = _focus_text(view)
                     assert f"no session record for {F._when(then_entry['date'])} and today" \
                         in refusal, refusal
@@ -945,6 +951,7 @@ def test_two_sandown_sessions_reach_a_verdict_in_two_clicks():
                         [b.text() for b in hands.buttons()])
                     hands.click(mark)
                 verdict = _focus_text(view)
+                on_debrief = view.is_debrief()
             finally:
                 win.close()
                 win.deleteLater()
@@ -953,7 +960,7 @@ def test_two_sandown_sessions_reach_a_verdict_in_two_clicks():
         for k, fn in boxes.items():
             setattr(QMessageBox, k, fn)
     assert _folder_state(folders) == before_files, "a file beside the footage changed"
-    assert hands.clicks <= 2 and not forms, (hands.clicks, forms)
+    assert hands.clicks == 1 and not forms and on_debrief, (hands.clicks, forms, on_debrief)
     assert "can't say" not in verdict, f"two clicks and still no verdict: {verdict!r}"
     lines = verdict.splitlines()
     for cid in top:
@@ -965,7 +972,7 @@ def test_two_sandown_sessions_reach_a_verdict_in_two_clicks():
 
 # Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name without
 # its recordings, and left out of the ordinary run below.
-FOOTAGE_CHECKS = (test_two_sandown_sessions_reach_a_verdict_in_two_clicks,)
+FOOTAGE_CHECKS = (test_two_sandown_sessions_reach_a_verdict_from_the_debrief,)
 
 
 if __name__ == "__main__":

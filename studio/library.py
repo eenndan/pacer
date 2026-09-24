@@ -773,6 +773,47 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     )
 
 
+def pb_standing_for(verified: bool, index: dict, track: str | None, best: float | None,
+                    degraded: bool = False, fingerprint_key: str | None = None) -> dict | None:
+    """Where a session's best lap stands against its track's personal best — the debrief's one
+    PB line (board review PS-B1). ``pb_moment_for``'s answer when there is one (``beat`` /
+    ``first``), and otherwise, for a recording the index does NOT hold yet, ``{"kind": "behind",
+    "track", "best", "prior", "gap"}`` against the fastest trustworthy best of the OTHER
+    recordings. Same trust gates, so an unverified or ESTIMATED session gets no PB line at all.
+
+    A best lap against the best lap, never a median against the last session: that comparison
+    was measured and refused (studio/docs/refused-2026-09.md §8). A recording already in the index
+    gets only its moment — its own row may be the PB, and "behind" would then be false."""
+    moment = pb_moment_for(verified, index, track, best, degraded, fingerprint_key)
+    if moment is not None or not verified or degraded or not track:
+        return moment
+    if best is None or not math.isfinite(best):
+        return None
+    entries = index.get("entries", [])
+    if fingerprint_key and any(e.get("fingerprint") == fingerprint_key for e in entries):
+        return None
+    prior = prior_best(index, track)
+    if prior is None or best < prior:
+        return None
+    return {"kind": "behind", "track": track, "best": float(best), "prior": float(prior),
+            "gap": float(best) - float(prior)}
+
+
+def pb_standing_text(standing: dict, fmt_time) -> str:
+    """The debrief's PB sentence for a ``pb_standing_for`` result — ``pb_moment_text``'s facts in
+    one line, since the debrief replaces the card rather than repeating it."""
+    track, best = standing["track"], fmt_time(standing["best"])
+    if standing["kind"] == "beat":
+        return (f"New personal best at {track}: {best}, {standing['improvement']:.2f} s faster "
+                f"than your previous best ({fmt_time(standing['prior'])}).")
+    if standing["kind"] == "behind":
+        if round(standing["gap"], 2) == 0:     # a tie is not a beat (pb_moment), nor "0.00 s off"
+            return f"Best lap {best} at {track}, level with your personal best there."
+        return (f"Best lap {best} at {track}, {standing['gap']:.2f} s off your personal best "
+                f"there ({fmt_time(standing['prior'])}).")
+    return f"First session logged at {track}: best lap {best}, the time to beat next time."
+
+
 def is_trustworthy(entry: dict) -> bool:
     """Whether an entry's ``best`` may set / beat a personal best. False (EXCLUDED from the PB set)
     when the entry is:
