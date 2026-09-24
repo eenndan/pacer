@@ -20,6 +20,7 @@ same surface.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -742,7 +743,7 @@ def break_in_series(session) -> str | None:
     ASCII for the same reason `MARK_MEANING` is: it reaches laps.csv."""
     skipped = list(getattr(session, "skipped_chapters", None) or [])
     chapter_map = getattr(session, "chapters", None)
-    ask = getattr(chapter_map, "desynced_chapters", None)
+    ask: Callable[[], Iterable[object]] | None = getattr(chapter_map, "desynced_chapters", None)
     try:
         desynced = list(ask()) if callable(ask) else []
     except Exception:  # noqa: BLE001 — a stand-in chapter object must never fail an export

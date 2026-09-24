@@ -49,6 +49,7 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | `pixi run studio [-- files]` | the app, on the recordings you name |
 | `pixi run gen-bindings` | regenerate the bindings |
 | `pixi run lint` · `fmt` · `fmt-check` | `ruff check .` · clang-format in place · its non-mutating CI check (both skip the generated `nanobind_pacer.cpp`) |
+| `pixi run typecheck` | pyright (basic) over the allow-listed Qt-free core modules in `pyrightconfig.json` — ~4 s, no build needed. A module joins the list in the PR that makes it clean, a new Qt-free module in the PR that creates it; `pixi run typecheck studio/<m>.py` lists one module's errors |
 
 - **`test` and `test-fast` run four tests at once** (`CTEST_PARALLEL_LEVEL=4` in the task env).
   Append `-j1` for a serial run to rule an interaction between tests in or out; never put a `-j`
@@ -90,8 +91,9 @@ locally first:
    `git diff --exit-code -- bindings/` fails.
 3. `pixi run lint`.
 4. `pixi run fmt-check` (`pixi run fmt` fixes it).
-5. `pixi run test` — green (on a push to main or a tag it includes the soak).
-6. `pixi run smoke`.
+5. `pixi run typecheck`.
+6. `pixi run test` — green (on a push to main or a tag it includes the soak).
+7. `pixi run smoke`.
 
 - **One focused change per PR.** Match the surrounding comment density, naming and idiom; favour
   "why" comments over restating the code.

@@ -20,6 +20,8 @@ media axis; the player does that at its own boundary (`player_pane.seek` / `_on_
 """
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 
 
@@ -217,5 +219,6 @@ class Timeline:
         i = self.nearest_index_in_lap(lap_id, x, y)
         if i is None:
             return None
-        _, _, ts = self._lap_xy_t(lap_id)
+        # not None: nearest_index_in_lap just found a point in this same (cached) lap
+        _, _, ts = cast(tuple, self._lap_xy_t(lap_id))
         return float(min(max(ts[i], ts[0]), ts[-1]))
