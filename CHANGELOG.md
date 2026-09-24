@@ -8,25 +8,35 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.3.0] — 2026-09-24
 
-Everything merged since v0.2.0, from #222 on. Each line names its pull request
+Everything merged since v0.2.0: 165 pull requests, #222 to #388. Each line names its pull request
 (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
 
 ### Highlights
 
-- **The picture and the numbers agree.** Every GPS-derived overlay sat ~0.46 s (14 frames) behind
-  the frame it describes; the lag is now measured per recording and taken out (#266, #301, #312)
+- **Try it without footage of your own.** `pixi run studio -- --demo` fetches an 11 MB synthetic
+  session once (generated, not filmed) and opens it with 14 laps, 7 corners, ranked coaching and
+  verified timing (#377)
+- **Lap timing re-proven on current footage.** A Milton Keynes sprint (18 Sep 2026) locks to the
+  circuit's own Club Speed timing without hand-matching: σ 0.0247 s over 14 clean laps, mean error
+  +0.001 s (#382)
+- **Synced to the frame, checked against truth.** The ~0.4 s GPS lag is measured per recording and
+  taken out; on a synthetic GoPro with known truth, run through the real loader in CI, the map dot
+  now leads its frame by 18 ms, not 122 ms (#301, #371, #383)
+- **Your data survives.** Opening one chapter no longer replaces a recording's Library row or its
+  PB, and every JSON store writes atomically and locks its read-modify-writes: two racing writers
+  kept every row in 10 of 10 trials, 0 of 10 before (#375, #380)
+- **Damaged recordings fail safe.** A corrupt duration no longer hangs the load (300 fuzzed files: 9
+  timeouts, now 0), opening another file or quitting stops a slow load, and a native crash leaves
+  its Python stack in the session log (#378, #387)
+- **One answer, then a verdict.** Coaching owns the ranking and the Stats page shed 7 of its 31
+  tiles; a rental-kart driver reaches a two-session focus verdict in two clicks, and a change of
+  kart is named, not refused (#381, #384, #386)
 - **Every number can show its work.** Right-click a lap time, split or corner best for the raw GPS
-  fixes behind it, re-derived; a strip under the scrub bar grades the GPS each second (#261, #263)
-- **Coaching that abstains.** It says whether you have driven a corner at that pace before, stays
-  quiet inside your own lap-to-lap spread, and carries a focus list to the next session (#255, #268)
-- **Corner analysis you can trust.** The ideal lap was ~44 % projection artifact; corners are now
-  matched after each lap's GPS drift is removed; interpolated cells never count (#228, #331, #335)
-- **Laps and driving signals re-measured.** A lap must close where it started and a stop excludes
-  it; coasting read 5.9 % of the real figure; a lift is no longer a brake (#271, #275, #325, #357)
-- **Exports worth sharing.** Any lap, every lap or the whole session, 9:16 or 1:1, an alpha
-  overlay, a two-lap comparison locked to track position, a disk check first (#262, #273, #364)
-- **New tools.** Marks, session records, a ⌘K palette, slow motion, a datum cursor, a built-in
-  Sandown Park and a log file for problem reports (#256, #257, #258, #269, #362, #368)
+  fixes behind it; the ideal lap shed a 44 % projection artifact, and an interpolated corner never
+  counts (#228, #263, #331)
+- **Exports worth sharing.** Any lap, every lap or the whole session, 9:16 or 1:1, an alpha overlay
+  and a two-lap video locked to track position; plus marks, session records, ⌘K and slow motion
+  (#256, #258, #262, #269, #273)
 
 ### Added
 
