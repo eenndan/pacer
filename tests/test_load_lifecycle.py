@@ -80,8 +80,9 @@ prefs._app_support_dir = lambda: _SANDBOX.name
 
 import test_central_view_realqt as _realqt  # noqa: E402
 
+import pacer  # noqa: E402
 from studio import app as app_mod
-from studio import export_controller  # noqa: E402
+from studio import export_controller, ingest  # noqa: E402
 from studio import sidecar as sidecar_mod  # noqa: E402
 from studio import workers as workers_mod  # noqa: E402
 from studio.overlays import WelcomeView  # noqa: E402
@@ -809,6 +810,100 @@ def test_opening_b_while_a_is_loading_actually_loads_b():
     finally:
         _teardown(win)
     print("test_opening_b_while_a_is_loading_actually_loads_b OK")
+
+
+class _EndlessHead(pacer.RawGPSSource):
+    """A GPS payload cursor that never ends: the walk a damaged moov produced (a metadata track
+    claiming 10^9 s, ~800k empty payloads a second) before the C++ cursor was bounded by its
+    payload count, and the shape of any read that is merely very slow. It gives up by itself after
+    `give_up_s`, so a regression FAILS the assertions below instead of hanging the suite."""
+
+    def __init__(self, give_up_s):
+        super().__init__()
+        self._deadline = time.monotonic() + give_up_s
+        self.payloads = 0
+
+    def seek(self, _target):
+        return 0
+
+    def next(self):
+        self.payloads += 1
+
+    def is_end(self):
+        return time.monotonic() > self._deadline
+
+    def current_time_span(self):
+        return (float(self.payloads), float(self.payloads + 1))
+
+    def read_samples(self, _on_sample):
+        return 1  # nothing at this index, like every payload past the damaged file's last
+
+    def get_total_duration(self):
+        return 1e9
+
+
+def test_a_stuck_read_is_cancelled_by_the_next_open_and_by_quit():
+    """One damaged recording (the board review's mutant: a moov whose metadata track claims ~10^9 s)
+    kept its GPS walk going for hours, and the window around it wedged: single-flight QUEUED every
+    later open behind it for good, and closing waited the drain's full 60 s and then destroyed the
+    still-running QThread (exit 134). The C++ cursor now stops at the payload count; this pins the
+    other half — no read, however slow, holds the window. The next open and quit CANCEL it.
+
+    The stuck read is the REAL pipeline — SessionLoadWorker, Session.load, load_recording,
+    read_recording and its payload walk — over a head that never ends; only `chain_sources`, which
+    opens the file, hands that head over. The recording opened after it loads a stub session."""
+    stuck, after = "/tmp/pacer-lifecycle-stuck.MP4", "/tmp/pacer-lifecycle-after-stuck.MP4"
+    heads = []
+    real_chain, real_session = ingest.chain_sources, workers_mod.Session
+
+    def chain(paths):
+        if paths != [stuck]:
+            return real_chain(paths)
+        heads.append(_EndlessHead(give_up_s=30.0))
+        return heads[-1], [heads[-1]], [12.6], [1e9]
+
+    class _Route:
+        @staticmethod
+        def load(paths, *a, **k):
+            return real_session.load(paths, *a, **k) if paths == [stuck] else _stub_session()
+
+    def walking(n):
+        return lambda: len(heads) == n and heads[-1].payloads > 1000
+
+    win, _view = _window()
+    ingest.chain_sources, workers_mod.Session = chain, _Route
+    ended = []   # which stuck reads have finished — read off `finished`, not the released QThread
+    try:
+        with _SwapView(_StubView):
+            win._load([stuck])
+            win._load_worker.finished.connect(lambda: ended.append("first"))
+            assert _pump(10.0, walking(1)), "the stuck read never started its walk"
+            opened = time.monotonic()
+            win._load([after])
+            assert _pump(10.0, lambda: list(win._paths) == [after]), (
+                f"the open after a stuck read never loaded: pending={win._pending_load}, "
+                f"finished={ended}, {heads[0].payloads} payloads walked")
+            took = time.monotonic() - opened
+            assert ended == ["first"], "the superseded read was never stopped"
+
+            win._load([stuck])                 # stuck again, then quit mid-read
+            win._load_worker.finished.connect(lambda: ended.append("second"))
+            assert _pump(10.0, walking(2)), "the second stuck read never started its walk"
+            quitting = time.monotonic()
+            win.close()
+            closing = time.monotonic() - quitting
+            assert closing < 5.0, f"close() waited {closing:.1f} s on a stuck read"
+            # `finished` is queued to this thread, so let it land before reading the record.
+            assert _pump(2.0, lambda: ended == ["first", "second"]), \
+                f"close() left the stuck read running: finished={ended}"
+    finally:
+        ingest.chain_sources, workers_mod.Session = real_chain, real_session
+        win.close()                            # a no-op once closed; joins a leftover read
+        _APP.processEvents()
+        win.deleteLater()
+        _APP.processEvents()
+    print(f"test_a_stuck_read_is_cancelled_by_the_next_open_and_by_quit OK (next open loaded in "
+          f"{took:.2f} s, close took {closing:.2f} s)")
 
 
 # ==================================================== §3.7.5 · the ideal-lap row selection
