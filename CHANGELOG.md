@@ -423,6 +423,10 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **Writing the session records the focus list asks for now lifts its refusal at once.** It kept
+  saying "no session record for 30 Aug and today" until the recording was re-opened. Saving,
+  deleting, forgetting, clearing or restoring a record now updates the Coaching page straight away.
+
 - **A slow-starting VideoToolbox export no longer falls back to software.** The mux used to pad
   the audio with silence without end and let the shortest stream end the file. Behind a hardware
   encode whose first second went in slowly, that silence overflowed a queue inside ffmpeg, and
