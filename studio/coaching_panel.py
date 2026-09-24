@@ -195,15 +195,14 @@ def empty_state_copy(opps: coaching.Opportunities, session=None) -> tuple[str, s
             "consistent. Nice driving.")
 
 
-def _shown_rows(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
+def _shown_rows(opps: coaching.Opportunities) -> list[coaching.Opportunity]:
     """The opportunity rows worth SHOWING: those whose time_lost does not round to +0.00 s at the
     2-dp display resolution (L2). Ranking/order is preserved (summarize already sinks the abstained
-    rows below the ranked ones); only sub-resolution rows are dropped. Takes an ``Opportunities``
-    (typed loosely to avoid a runtime import cycle)."""
+    rows below the ranked ones); only sub-resolution rows are dropped."""
     return [r for r in opps.rows if r.time_lost >= DISPLAY_MIN_LOST_S]
 
 
-def _ranked_shown(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
+def _ranked_shown(opps: coaching.Opportunities) -> list[coaching.Opportunity]:
     """The shown rows that carry a CLAIM — the shortlist the headline totals and the digest tile
     mirrors. An abstained row is displayed (with its reason) but must never be summed into a
     "time available" figure: that is the number the evidence gate exists to keep honest.

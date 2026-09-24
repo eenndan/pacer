@@ -10,8 +10,20 @@ gmeter.py — names and signatures match the originals so call sites are unchang
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from typing import Protocol
+
+    class _LapColumns(Protocol):
+        """What the stop test reads off `laps.lap_columns(i)`: pacer's LapArrays or a test
+        double. This module stays pacer-free, so it names the shape, not the type."""
+
+        times: Sequence[float]
+        full_speed: Sequence[float]
 
 # --- GPS denoising (originally derived from the upstream interpolation/noise notebooks) ---
 SMOOTH_WINDOW = 13  # boxcar width in samples; 1 disables smoothing
@@ -509,7 +521,7 @@ def _classify_laps(laps) -> tuple[list[int], dict[int, str]]:
     # calls this up to five times per load; all 66 laps of the 0062 recording cost a few ms. Same
     # getattr discipline as the distance band — a `laps` double without the columns surface skips it.
     get_cols = getattr(laps, "lap_columns", None)
-    cols: dict[int, object] = {}
+    cols: dict[int, _LapColumns] = {}
     if get_cols is not None:
         closed = []
         for i, t in basic:

@@ -28,8 +28,9 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
 ## 2. Running things
 
 - **Every gate is its own command, and you read its exit code:** `pixi run build`,
-  `pixi run test-fast`, `pixi run golden`, `pixi run lint`, `pixi run fmt-check`. Add
-  `pixi run test-footage` when a change can move a published figure, a render or the map band.
+  `pixi run test-fast`, `pixi run golden`, `pixi run lint`, `pixi run fmt-check`,
+  `pixi run typecheck`. Add `pixi run test-footage` when a change can move a published figure, a
+  render or the map band.
   **Never pipe a gate into `tail` or `head`.** A pipeline returns its last command's status, so a
   failed build followed by `| tail` exits 0 (or use `set -o pipefail`).
 - **One test:** `pixi run ctest --test-dir build/Release -R '^test_x$' --output-on-failure`. CTest

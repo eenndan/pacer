@@ -7,7 +7,7 @@ name = "pacer"
 requires-python = ">= 3.11"
 # Keep in lockstep with studio/__init__.py __version__ (canonical) and bindings/pacer/pyproject.toml
 # — packaging/build_macos.sh names the .dmg from THIS line. Pinned by tests/test_version.py.
-version = "0.2.0"
+version = "0.3.0"
 
 [build-system]
 requires = ["scikit-build-core >=0.10", "nanobind >=1.3.2", "litgen"]
@@ -181,6 +181,11 @@ make-demo = "python -m studio.dev.make_demo"
 fmt = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' ':!bindings/pacer/nanobind_pacer.cpp' | xargs clang-format -i"
 fmt-check = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' ':!bindings/pacer/nanobind_pacer.cpp' | xargs clang-format --dry-run --Werror"
 lint = "ruff check ."
+# pyright over the allow-list in pyrightconfig.json (the Qt-free core modules that pass; the ratchet
+# is written there). No build needed: it reads the committed binding stubs. The env variable stops
+# the conda `pyright` wrapper asking pypi.org for a newer version on every run: a gate makes no
+# network call. Its pyright JS is bundled, and node comes from this env.
+typecheck = { cmd = "pyright", env = { PYRIGHT_PYTHON_IGNORE_WARNINGS = "1" } }
 # The release step's changelog fold (studio/dev/changelog.py). A dry run unless `--write`, which folds
 # every changes/*.md into [Unreleased] and deletes them; `--write --release x.y.z` folds them under a
 # new `## [x.y.z] — date` heading instead. Pure stdlib, so it needs no build.
@@ -195,3 +200,7 @@ ninja = ">=1.13.2,<2"
 ruff = ">=0.15.16,<0.16"
 clang-format = ">=22.1.7,<23"
 ffmpeg = ">=7.1,<8"
+# `pixi run typecheck`. Pinned EXACTLY: each pyright release adds checks, so a floating version
+# could turn the gate red in a PR that changed no Python. Bump it in a PR of its own. It brings
+# nodejs, nodeenv and setuptools into the env; nothing the .app bundles imports any of them.
+pyright = "==1.1.414"

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import cast
 
 import numpy as np
 
@@ -186,7 +187,7 @@ def fit_loop_to_loop(ref_xy, loop_xy, n=_N_FIT, icp_iters=8):
             rms = float(np.sqrt((res ** 2).sum(1).mean()))
             if best is None or rms < best[0]:
                 best = (rms, scale, R, t, k, rev)
-    _, scale, R, t, k, rev = best
+    _, scale, R, t, k, rev = cast(tuple, best)  # set: the loop tries n >= 1 rotations
 
     # The transform was solved on the rolled/reversed resampling; it applies to the
     # reference as a SET, so carry it over to the canonical resampled reference directly.

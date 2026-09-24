@@ -1,0 +1,51 @@
+{
+  // THE TYPE-CHECK GATE (ARCH-8): `pixi run typecheck`, pyright pinned in pixi.lock, basic mode.
+  // It checks an explicit allow-list of Qt-free core modules (studio/*.py outside
+  // tests/test_layering.py's QT_REACHING) that pass today. The whole of studio/ is not the target:
+  // most of its errors are PySide6/pyqtgraph stub noise.
+  //
+  // THE RATCHET: a module joins "include" in the PR that makes it clean, and the list only grows.
+  // A NEW Qt-free module joins it in the PR that creates it. tests/test_typecheck_config.py pins
+  // the list (sorted, every file exists, Qt-free core only) and its complement, NOT_YET, which can
+  // only shrink. Only full-line // comments here: that test reads this file with json.
+  "include": [
+    "studio/__init__.py",
+    "studio/_jsonstore.py",
+    "studio/_signal.py",
+    "studio/app_support.py",
+    "studio/bests.py",
+    "studio/chapters.py",
+    "studio/chart_stats.py",
+    "studio/consistency.py",
+    "studio/cross_reference.py",
+    "studio/data_quality.py",
+    "studio/demo.py",
+    "studio/driving.py",
+    "studio/export_palette.py",
+    "studio/gapfill.py",
+    "studio/gearing.py",
+    "studio/ingest.py",
+    "studio/load.py",
+    "studio/logsetup.py",
+    "studio/media_clock.py",
+    "studio/playback_state.py",
+    "studio/provenance.py",
+    "studio/reference.py",
+    "studio/render_cache.py",
+    "studio/rotation.py",
+    "studio/scrub_controller.py",
+    "studio/sidecar.py",
+    "studio/timeline.py",
+    "studio/track_match.py",
+    "studio/tracks.py",
+    "studio/units.py"
+  ],
+  // The binding stubs (bindings/pacer/pacer/__init__.pyi) and the locked env's site-packages, so
+  // the result does not depend on which python is first on PATH.
+  "extraPaths": ["bindings/pacer"],
+  "venvPath": ".pixi/envs",
+  "venv": "default",
+  "pythonVersion": "3.13",
+  "pythonPlatform": "Darwin",
+  "typeCheckingMode": "basic"
+}

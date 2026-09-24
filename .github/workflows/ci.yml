@@ -78,6 +78,12 @@ jobs:
         # regen-drift gate above).
         run: pixi run fmt-check
 
+      - name: Type check (pyright on the Qt-free core allow-list via pixi)
+        # A few seconds, like lint. pyrightconfig.json holds the module list and its ratchet
+        # (tests/test_typecheck_config.py pins both). It reads the committed binding stubs, which
+        # the drift gate above has just matched to the headers.
+        run: pixi run typecheck
+
       - name: Test (ctest via pixi)
         env:
           # The compare-toggle crash soak (`soak.*`, LABELS soak) runs on pushes to main, tags and
