@@ -169,6 +169,10 @@ studio = { cmd = "python -m studio", depends-on = ["build"] }
 fmt = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' ':!bindings/pacer/nanobind_pacer.cpp' | xargs clang-format -i"
 fmt-check = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' ':!bindings/pacer/nanobind_pacer.cpp' | xargs clang-format --dry-run --Werror"
 lint = "ruff check ."
+# The release step's changelog fold (studio/dev/changelog.py). A dry run unless `--write`, which folds
+# every changes/*.md into [Unreleased] and deletes them; `--write --release x.y.z` folds them under a
+# new `## [x.y.z] — date` heading instead. Pure stdlib, so it needs no build.
+changelog = "python -m studio.dev.changelog"
 
 [tool.pixi.dependencies]
 cmake = ">=4.0.2,<5"
