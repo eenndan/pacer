@@ -39,9 +39,11 @@ import tempfile
 import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("PACER_NO_MEDIA", "1")      # the real window's player pane, inert
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import _footage  # noqa: E402
 from _qtapp import themed_app  # noqa: E402
 
 from studio import coaching as K  # noqa: E402
@@ -510,6 +512,73 @@ def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
     print("ok store: a backwards, empty or off-lap window is dropped on its own account")
 
 
+# ------------------------------------------------------------ UX-6: the offer, and the kart
+def test_a_refusal_for_want_of_a_record_names_exactly_the_sessions_it_waits_on():
+    """`Report.unrecorded` is what "Mark both dry" may write: the sessions a no_record refusal waits
+    on — the earlier day(s) first, today last, each once — and never one that has a record, nor
+    any when the refusal is about something a record cannot fix."""
+    items, samples = [_item(cid=4), _item(cid=7)], [_sample(4.5)] * 2
+    none = F.verdict(items, _now(), samples, session_record.empty_store())
+    assert none.unrecorded == (("GX0060", "23 May"), ("GX0062", "today")), none.unrecorded
+    assert F.mark_dry_prompt(none)[:2] == ("Both dry?", "Mark both dry")
+    assert "for 23 May and today saying the conditions were Dry" in F.mark_dry_prompt(none)[2]
+    then_only = F.verdict(items, _now(), samples, _records(("GX0060", _record())))
+    assert then_only.unrecorded == (("GX0062", "today"),)
+    assert F.mark_dry_prompt(then_only)[:2] == ("Dry today?", "Mark today dry")
+    now_only = F.verdict(items, _now(), samples, _records(("GX0062", _record())))
+    assert F.mark_dry_prompt(now_only)[:2] == ("Dry on 23 May?", "Mark 23 May dry")
+    mixed = F.verdict([_item(cid=4), _item(cid=7, fp="GX0058", date="2026-04-11")], _now(),
+                      samples, session_record.empty_store())
+    assert [label for _fp, label in mixed.unrecorded] == ["23 May", "11 Apr", "today"]
+    assert F.mark_dry_prompt(mixed)[:2] == ("All 3 dry?", "Mark all 3 dry")
+    both = F.verdict(items, _now(), samples, _records(("GX0060", _record()),
+                                                      ("GX0062", _record())))
+    assert both.unrecorded == () and F.mark_dry_prompt(both) is None
+    unverified = F.verdict(items, _now(verified=False), samples, session_record.empty_store())
+    assert unverified.unrecorded == () and F.mark_dry_prompt(unverified) is None, \
+        "a record cannot lift a provisional start line, so none may be offered"
+    print("ok offer: names exactly the unrecorded sessions, and only for a record refusal")
+
+
+def test_the_offer_sits_under_the_refusal_and_its_click_is_a_signal():
+    """The block shows the offer only while a record refusal stands, and the click writes nothing
+    itself: it emits the fingerprints the button named, for the app (which owns the store)."""
+    p = _panel_with(F.verdict([_item()], _now(), [_sample(4.5)], session_record.empty_store()))
+    blk = p.focus_block
+    assert not blk._mark_row.isHidden(), "a record refusal with no offer beside it"
+    assert (blk.mark_question.text(), blk.mark_button.text()) == ("Both dry?", "Mark both dry")
+    got = []
+    p.focus_mark_dry_requested.connect(got.append)
+    blk.mark_button.click()
+    assert got == [["GX0060", "GX0062"]], got
+    p.set_focus_report(F.verdict([_item()], _now(), [_sample(4.5)],
+                                 _records(("GX0060", _record()), ("GX0062", _record()))))
+    _APP.processEvents()
+    assert blk._mark_row.isHidden(), "nothing waits on a record any more — the offer must go"
+    p.set_focus_report(_report())
+    _APP.processEvents()
+    assert blk._mark_row.isHidden(), "an empty list has nothing to mark"
+    print("ok panel: the offer comes and goes with the refusal; its click is a signal")
+
+
+def test_a_verdict_across_two_karts_says_so_and_is_still_a_verdict():
+    """UX-6 (4): two sessions on different fleet karts are compared — refusing would refuse every
+    pair an arrive-and-drive driver has — but not silently: the verdict names both karts, in the
+    then → now grammar of its other two pairs. Same kart, or one unrecorded: nothing is said."""
+    then, now = {**_record(), "kart_no": "12"}, {**_record(), "kart_no": "7"}
+    r = F.verdict([_item()], _now(), [_sample(4.1, n=36)],
+                  _records(("GX0060", then), ("GX0062", now)))
+    o = r.outcomes[0]
+    assert o.has_verdict and o.delta is not None and o.karts == ("12", "7"), o
+    line = F.report_lines(r)[0]
+    assert line == "C4 — 0.40 s faster than 23 May (4.50 → 4.10 s, 38 → 36 laps, kart 12 → 7).", line
+    for other in ({**now, "kart_no": "12"}, _record()):
+        same = F.verdict([_item()], _now(), [_sample(4.1, n=36)],
+                         _records(("GX0060", then), ("GX0062", other)))
+        assert same.outcomes[0].karts is None and "kart" not in F.report_lines(same)[0]
+    print(f"ok kart: {line}")
+
+
 # ------------------------------------------------------------------ the window: record writes
 # The session the list was promoted in, on "another day" — its fingerprint and date are all the
 # verdict reads of it; the numbers are this session's own, so every structural gate passes.
@@ -706,8 +775,204 @@ def test_every_other_write_to_the_record_store_moves_the_verdict_too():
     print("ok window: clear, restore, forget and delete each re-read the verdict")
 
 
+# ------------------------------------------------------- the window: two clicks, no form (UX-6)
+@contextlib.contextmanager
+def _no_record_form():
+    """Every `SessionRecordDialog` the journey opens, by title — answered Cancel, so a form that did
+    open cannot hang an offscreen test in its modal loop. The journey's claim is that it stays []."""
+    from studio import session_record_dialog as srd
+    opened: list[str] = []
+    orig = srd.SessionRecordDialog.exec
+
+    def _exec(dlg):
+        opened.append(dlg.windowTitle())
+        return srd.SessionRecordDialog.Rejected
+
+    srd.SessionRecordDialog.exec = _exec
+    try:
+        yield opened
+    finally:
+        srd.SessionRecordDialog.exec = orig
+
+
+class _Hands:
+    """The driver's hands on the real window. A click lands only on a widget that is ON SCREEN and
+    ENABLED, through QTest (a real mouse press and release), and every click is counted — the
+    journey's cost is this count, not a claim about it."""
+
+    def __init__(self, view):
+        self.view, self.clicks = view, 0
+
+    def click(self, widget, pos=None) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        _APP.processEvents()
+        assert widget.isVisible() and widget.isEnabled(), f"not on screen to click: {widget!r}"
+        QTest.mouseClick(widget, Qt.LeftButton, Qt.NoModifier,
+                         widget.rect().center() if pos is None else pos)
+        self.clicks += 1
+        _APP.processEvents()
+
+    def open_tab(self, name: str) -> None:
+        bar = self.view.tab_bar
+        idx = next((i for i in range(bar.count()) if name in bar.tabText(i)), None)
+        assert idx is not None, [bar.tabText(i) for i in range(bar.count())]
+        self.click(bar, bar.tabRect(idx).center())
+        assert bar.currentIndex() == idx, f"the {name} tab did not open"
+
+    def buttons(self) -> list:
+        """Every button the driver can see and press on the Coaching page."""
+        from PySide6.QtWidgets import QAbstractButton
+        _APP.processEvents()
+        return [b for b in self.view.opportunities.findChildren(QAbstractButton)
+                if b.isVisible() and b.isEnabled()]
+
+    def button(self, prefix: str):
+        hits = [b for b in self.buttons() if b.text().startswith(prefix)]
+        return hits[0] if len(hits) == 1 else None
+
+
+_NO_INLINE_ACTION = (
+    "the Coaching page refuses for want of two session records and offers no way to write them "
+    "from here: the only route is File ▸ Session record… for today, then File ▸ Library… ▸ the "
+    "other day's row ▸ Session record… — the record form, twice. On-screen buttons: {}")
+
+
+def test_two_clicks_from_the_coaching_page_lift_the_record_refusal_without_the_form():
+    """UX-6 on the real window, CI half. The driver lands on the Laps tab (the owner's remembered
+    one); the Coaching page refuses for want of a record on either day; ONE click on the page's own
+    "Mark both dry" writes the two minimal records the refusal asks for — conditions Dry, nothing
+    else — and the refusal lifts. Two clicks in all (the tab, the button), and the record form
+    never opens. The synthetic session has two laps, so what speaks next is the lap-count gate (the
+    footage check below reaches a verdict on two real Sandown sessions)."""
+    from studio import library
+    with _own_stores() as folder:
+        win, view, entry, label = _window_with_a_corner_from_another_day()
+        try:
+            library.upsert_and_save(_then_entry(entry["track"], folder))
+            win.resize(1440, 900)
+            win.show()
+            view.tab_bar.setCurrentIndex(0)
+            hands = _Hands(view)
+            with _no_record_form() as forms:
+                hands.open_tab("Coaching")
+                before = _focus_text(view)
+                assert "no session record for 23 Aug and today" in before, before
+                mark = hands.button("Mark ")
+                assert mark is not None, _NO_INLINE_ACTION.format(
+                    [b.text() for b in hands.buttons()])
+                hands.click(mark)
+            after = _focus_text(view)
+            store = session_record.load()
+        finally:
+            _dispose(win, view)
+    assert hands.clicks <= 2 and not forms, (hands.clicks, forms)
+    assert "no session record" not in after, f"the refusal survived the click: {after!r}"
+    assert f"{label} — " in after, f"the corner fell off the list: {after!r}"
+    assert sorted(store["records"]) == sorted([_THEN_FP, entry["fingerprint"]]), store["records"]
+    for fp, rec in store["records"].items():
+        assert rec["conditions"] == "dry" and session_record.filled_fields(rec) == 1, (fp, rec)
+    print(f"ok window: {hands.clicks} clicks, no form → {after.splitlines()[-1][:70]!r}")
+
+
+def _open_and_wait(win, path: str, timeout: float = 300.0) -> None:
+    """Drop `path` on the real window (chapters expanded, as a drop does) and pump until it lands."""
+    import time
+    done = {"v": False}
+    win.loadFinished.connect(lambda: done.__setitem__("v", True))
+    win._open_recordings([path])
+    deadline = time.time() + timeout
+    while not done["v"] and time.time() < deadline:
+        _APP.processEvents()
+        time.sleep(0.01)
+    assert done["v"], f"{path} did not finish loading within {timeout:.0f} s"
+    for _ in range(20):
+        _APP.processEvents()
+
+
+def _folder_state(folders) -> dict:
+    """(size, mtime) of every file beside the footage — the Desktop is read-only for a test."""
+    return {os.path.join(d, f): (os.stat(os.path.join(d, f)).st_size,
+                                 os.stat(os.path.join(d, f)).st_mtime_ns)
+            for d in sorted(folders) for f in sorted(os.listdir(d)) if not f.startswith(".")}
+
+
+def test_two_sandown_sessions_reach_a_verdict_in_two_clicks():
+    """UX-6/UX-7 on real footage: the loop the owner has never run, run the way he would. A FRESH
+    library; the earlier Sandown session opened in the real window and Coaching's top three
+    promoted; the later one opened in the SAME window; the driver on the Laps tab. From there the
+    Coaching tab and "Mark both dry" — two clicks — must put a VERDICT on every promoted corner,
+    without the record form ever opening. The pair is `_footage.pair()` (default 0068 now, Sandown
+    3h 0064 then — focus.py's measured pair, both on the built-in Sandown Park line)."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio.app import StudioWindow
+    now_path, then_path = _footage.pair()
+    folders = {os.path.dirname(os.path.abspath(p)) for p in (now_path, then_path)}
+    before_files = _folder_state(folders)
+
+    def _no_modal(*args, **_kwargs):
+        raise AssertionError(f"a modal opened during the journey: {args[1:3]}")
+
+    boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information", "question")}
+    for k in boxes:
+        setattr(QMessageBox, k, staticmethod(_no_modal))
+    try:
+        with _own_stores():
+            win = StudioWindow([])
+            win.resize(1440, 900)
+            win.show()
+            try:
+                _open_and_wait(win, then_path)
+                then_entry = win.library_ctl._current_library_entry()
+                top = [r.cid for r in win.session.coaching_opportunities().ranked_rows()[:3]]
+                for cid in top:
+                    win.library_ctl.focus_add(cid)
+                assert "baselines measured on this session" in _focus_text(win.view), \
+                    _focus_text(win.view)
+
+                _open_and_wait(win, now_path)
+                view = win.view
+                view.tab_bar.setCurrentIndex(0)
+                hands = _Hands(view)
+                with _no_record_form() as forms:
+                    hands.open_tab("Coaching")
+                    refusal = _focus_text(view)
+                    assert f"no session record for {F._when(then_entry['date'])} and today" \
+                        in refusal, refusal
+                    mark = hands.button("Mark ")
+                    assert mark is not None, _NO_INLINE_ACTION.format(
+                        [b.text() for b in hands.buttons()])
+                    hands.click(mark)
+                verdict = _focus_text(view)
+            finally:
+                win.close()
+                win.deleteLater()
+                _APP.processEvents()
+    finally:
+        for k, fn in boxes.items():
+            setattr(QMessageBox, k, fn)
+    assert _folder_state(folders) == before_files, "a file beside the footage changed"
+    assert hands.clicks <= 2 and not forms, (hands.clicks, forms)
+    assert "can't say" not in verdict, f"two clicks and still no verdict: {verdict!r}"
+    lines = verdict.splitlines()
+    for cid in top:
+        line = next((ln for ln in lines if ln.startswith(f"C{cid} — ")), "")
+        assert any(w in line for w in ("no change you can act on", " faster than ",
+                                       " slower than ")), f"C{cid} has no verdict: {verdict!r}"
+    print(f"ok footage: {len(top)} corners, {hands.clicks} clicks, no form:\n{verdict}")
+
+
+# Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name without
+# its recordings, and left out of the ordinary run below.
+FOOTAGE_CHECKS = (test_two_sandown_sessions_reach_a_verdict_in_two_clicks,)
+
+
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    if _footage.requested():
+        sys.exit(_footage.run(FOOTAGE_CHECKS))
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and v not in FOOTAGE_CHECKS]
     for t in tests:
         t()
     print(f"\nALL {len(tests)} FOCUS-LIST TESTS PASSED")

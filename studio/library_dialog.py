@@ -450,8 +450,9 @@ def _record_cell_tip(record: dict | None) -> str:
     more; a hover that repeated the cell would be the column saying its own name twice."""
     if not record:
         return _NO_RECORD_TIP
-    lines = [line for line in (_records.conditions_text(record), _records.tyre_text(record),
-                               _records.pressure_text(record), _records.kart_text(record)) if line]
+    lines = [line for line in (_records.conditions_text(record), _records.kart_no_text(record),
+                               _records.tyre_text(record), _records.pressure_text(record),
+                               _records.kart_text(record)) if line]
     notes = (record.get("notes") or "").strip()
     if notes:
         lines.append(notes)
@@ -1274,8 +1275,17 @@ class LibraryDialog(QDialog):
             return ""
         when = f" ({best['date']})" if best.get("date") else ""
         diffs = _records.comparable(record, other)
+        # A different fleet kart is SAID, never counted as "not like-for-like" (session_record
+        # .kart_pair): it is every session for an arrive-and-drive driver. Left out, though, the
+        # sentence below would call two different karts "comparable on everything you recorded".
+        karts = _records.kart_pair(record, other)
+        kart = f"kart {karts[0]} vs {karts[1]}" if karts else ""
         if diffs:
-            return f"Not like-for-like vs your best here{when}:  " + "  ·  ".join(diffs)
+            return (f"Not like-for-like vs your best here{when}:  "
+                    + "  ·  ".join(diffs + ([kart] if kart else [])))
+        if kart:
+            return (f"Comparable with your best here{when} on everything you recorded but the "
+                    f"kart: {kart}.")
         return f"Comparable with your best here{when} on everything you recorded."
 
     def _edit_selected_record(self) -> None:

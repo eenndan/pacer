@@ -20,15 +20,17 @@ automatically and it is an explicit non-goal: the app's headline promise is that
 the machine (README non-goals, ``Help ▸ Your data & privacy``). Conditions are TYPED BY THE
 DRIVER. Nothing in this module, or in the dialog over it, opens a socket.
 
-Schema (version 1) — one JSON object, records keyed by the LIBRARY FINGERPRINT so a record
+Schema (version 2) — one JSON object, records keyed by the LIBRARY FINGERPRINT so a record
 follows the recording, not the file (a single-chapter and a full chaptered open share one key,
 exactly as they share one library entry)::
 
-    {"version": 1,
+    {"version": 2,
      "records": {
        "GX0062": {
          # conditions — typed, never fetched
          "conditions":     "dry" | "damp" | "wet" | "mixed" | "",
+         # which kart (v2) — the number on it; for an arrive-and-drive driver, the one kart fact
+         "kart_no":        "<free text, e.g. 12>",
          "air_temp_c":     <float | null>,
          "track_temp_c":   <float | null>,
          "humidity_pct":   <float | null>,
@@ -96,7 +98,9 @@ from . import _jsonstore, app_support
 
 _log = logging.getLogger(__name__)
 
-VERSION = 1
+# v2 (2026-09-24) added `kart_no`. v1 records carry no kart number, and `_norm_record` reads its
+# absence as "" (not recorded) — so every v1 record is already a valid v2 one (see `_migrate`).
+VERSION = 2
 
 _FILENAME = "session_records.json"
 
@@ -115,7 +119,15 @@ DEFAULT_PRESSURE_UNIT = "psi"
 
 # The field groups, by normalizer. Order here IS the stored key order (see `_norm_record`), which
 # is also the order the form asks for them in — one list, so the dialog cannot drift from the file.
-TEXT_FIELDS = ("tyre_set", "chassis", "axle", "seat", "notes")
+TEXT_FIELDS = ("kart_no", "tyre_set", "chassis", "axle", "seat", "notes")
+
+# What an OWNED kart adds to a record: the tyre set and its age, the pressures, and the chassis and
+# its setup. At an arrive-and-drive session every one of these is the operator's, not the driver's —
+# which is why the form folds them away (`session_record_dialog`, "Own kart…") and leads with the
+# conditions and the kart number instead. `pressure_unit` is a default rather than an entry, so it
+# is not here: a unit alone never makes these fields "filled".
+OWN_KART_FIELDS = ("tyre_set", "tyre_laps", "cold_front", "cold_rear", "hot_front", "hot_rear",
+                   "chassis", "sprocket_front", "sprocket_rear", "axle", "seat")
 NUM_FIELDS = ("air_temp_c", "track_temp_c", "humidity_pct",
               "cold_front", "cold_rear", "hot_front", "hot_rear")
 INT_FIELDS = ("tyre_laps", "sprocket_front", "sprocket_rear")
@@ -133,6 +145,9 @@ AUTO_FIELDS = ("date", "track", "lap_count", "updated")
 # this store exists precisely because a false record of the conditions is worse than none.
 STICKY_FIELDS = ("tyre_set", "pressure_unit", "chassis", "sprocket_front", "sprocket_rear",
                  "axle", "seat")
+# NOT `kart_no`: the kart number is the opposite of sticky. The driver it exists for is handed a
+# different fleet kart each session (the owner's 30 Aug and 19 Sep exports show two different karts),
+# so carrying last session's number forward would pre-fill a fact that is usually false.
 
 
 def _app_support_dir() -> str:
@@ -195,6 +210,13 @@ def _count(v) -> int | None:
     return None
 
 
+def _kart_no(v) -> str:
+    """The kart number as typed, stripped, with a leading "#" dropped — "#12" and "12" are one kart
+    and must not read as two in a comparison. Kept as TEXT, not an int: fleet karts carry letters
+    ("DMAX 7") and a leading zero is part of some numbers."""
+    return _text(v).lstrip("#").strip()
+
+
 def _tag(v) -> str:
     """The conditions tag, lower-cased and held to ``CONDITIONS``; anything else is untagged. A
     closed vocabulary is what makes the Library's conditions filter a filter rather than a
@@ -229,6 +251,7 @@ def _norm_record(rec: dict) -> dict:
     wins, since it is the one every reader validates against)."""
     out: dict = {
         "conditions": _tag(rec.get("conditions")),
+        "kart_no": _kart_no(rec.get("kart_no")),
         "air_temp_c": _num(rec.get("air_temp_c")),
         "track_temp_c": _num(rec.get("track_temp_c")),
         "humidity_pct": _num(rec.get("humidity_pct")),
@@ -283,6 +306,15 @@ def filled_fields(rec: dict | None) -> int:
     return n
 
 
+def own_kart_filled(rec: dict | None) -> bool:
+    """True when `rec` holds any owned-kart field (``OWN_KART_FIELDS``) — what keeps the form's
+    "Own kart…" fold open, so a folded form never hides a value the record carries."""
+    if not isinstance(rec, dict):
+        return False
+    rec = _norm_record(rec)
+    return any(rec.get(k) not in (None, "") for k in OWN_KART_FIELDS)
+
+
 # ------------------------------------------------------------------ file I/O
 def _migrate(data: dict, from_version: int) -> dict:
     """Forward-migrate an OLDER on-disk store (`from_version` < ``VERSION``) to the current schema,
@@ -290,15 +322,20 @@ def _migrate(data: dict, from_version: int) -> dict:
     record it does not explicitly retire — the rule ``library._migrate`` follows. Returns `data`
     (mutated in place); the caller re-stamps the version and re-validates after this runs.
 
-    There is no transform yet and that is not the same as there being no hook: v1 is the first
-    schema, and `from_version` is 0 only for an unstamped file (which a hand-edit is the only way
-    to produce), whose records are already v1-shaped — so the identity IS the correct v0→v1
-    migration. The point of writing it now is that the FIRST real bump — say pressures growing to
-    four corners, or the tyre set gaining a first-used date — adds its ``if from_version < 2:``
-    block HERE, beside the load path that calls it, instead of the schema change arriving with
-    nowhere to put its transform and a choice between reinterpreting a stale value and wiping a
-    season of notes. ``studio/prefs.py`` shipped without this hook and PR #222 is what that cost.
-    """
+    `from_version` is 0 only for an unstamped file (which a hand-edit is the only way to produce),
+    whose records are already v1-shaped — so the identity is the correct v0→v1 migration.
+
+    v1 → v2 added ``kart_no``. It is an ADDITIVE, optional field, so the transform is deliberately
+    the identity too: a v1 record simply has no kart number, which ``_norm_record`` reads as ""
+    ("not recorded") — never a guessed one. In particular nothing is inferred from ``chassis`` or
+    ``notes``, even where a v1 driver may have typed a kart number there: reinterpreting a stored
+    value is the one thing a migration of hand-typed data must not do. Loading does not rewrite the
+    file; the next save writes it back as v2 with every v1 value unchanged.
+
+    The block exists so the NEXT bump has an obvious place to go, beside the load path that calls
+    it — ``studio/prefs.py`` shipped without this hook and PR #222 is what that cost."""
+    if from_version < 2:
+        pass  # v1 → v2: additive (`kart_no`); every v1 record is already a valid v2 record
     return data
 
 
@@ -508,6 +545,31 @@ def put_and_save(fingerprint: str, rec: dict, path: str | None = None) -> dict:
         put(store, fingerprint, rec)
         save(store, path)
     return store
+
+
+def put_if_blank_and_save(records: dict[str, dict],
+                          path: str | None = None) -> tuple[dict, list[str]]:
+    """Store each ``{fingerprint: record}`` ONLY where that recording has no record yet, in one
+    locked load-write, and return ``(store, the fingerprints written)``.
+
+    The write behind the focus list's one-click "Mark both dry": the driver is asked about sessions
+    that have NO record, and this is the guarantee that the click cannot touch one that does —
+    including one another window wrote between the page showing its question and the click.
+    Nothing is written when nothing was blank (the backup slot is never churned), and an empty
+    record is never stored (``put``'s rule)."""
+    if path is None:
+        path = records_path()
+    written: list[str] = []
+    with _jsonstore.locked(path):
+        store = load(path)
+        for fp, rec in records.items():
+            if not fp or not is_empty(get(store, fp)) or is_empty(rec):
+                continue
+            put(store, fp, rec)
+            written.append(fp)
+        if written:
+            save(store, path)
+    return store, written
 
 
 def remove_and_save(fingerprint: str, path: str | None = None) -> dict:
@@ -724,13 +786,40 @@ def kart_text(rec: dict | None) -> str:
     return "  ·  ".join(parts)
 
 
+def kart_no_text(rec: dict | None) -> str:
+    """The kart-number clause: ``"kart 12"``, or "" when none was recorded."""
+    if not isinstance(rec, dict):
+        return ""
+    number = _norm_record(rec)["kart_no"]
+    return f"kart {number}" if number else ""
+
+
 def summary_line(rec: dict | None) -> str:
-    """The one-line read of a whole record — conditions, then tyres, then pressures, then the kart
-    — for a table cell's hover and the Library's selected-row line. "" when there is no record or
-    it says nothing, which is the signal every caller uses to show its empty state instead."""
-    clauses = [c for c in (conditions_text(rec), tyre_text(rec), pressure_text(rec),
-                           kart_text(rec)) if c]
+    """The one-line read of a whole record — conditions, the kart number, then tyres, pressures and
+    the kart's setup — for a table cell's hover and the Library's selected-row line. "" when there
+    is no record or it says nothing, which is the signal every caller uses to show its empty state
+    instead."""
+    clauses = [c for c in (conditions_text(rec), kart_no_text(rec), tyre_text(rec),
+                           pressure_text(rec), kart_text(rec)) if c]
     return "  ·  ".join(clauses)
+
+
+def kart_pair(a: dict | None, b: dict | None) -> tuple[str, str] | None:
+    """(kart then, kart now) when BOTH records name a kart and the two differ (compared without
+    case, so "dmax 7" is "DMAX 7"); None otherwise — an unrecorded number is unknown, not different.
+
+    DELIBERATELY NOT A CLAUSE OF ``comparable``, whose every clause refuses a focus verdict
+    (``focus._blocker``). The driver this field is for is handed a different fleet kart every
+    session, so a kart that differs is his NORMAL case: refusing on it would refuse every pair of
+    sessions he has, and the loop would never run for its one user. So a different kart is SAID —
+    beside the verdict and the Library's comparison — rather than refused or passed over."""
+    a = _norm_record(a) if isinstance(a, dict) else None
+    b = _norm_record(b) if isinstance(b, dict) else None
+    if not a or not b or not a["kart_no"] or not b["kart_no"]:
+        return None
+    if a["kart_no"].casefold() == b["kart_no"].casefold():
+        return None
+    return a["kart_no"], b["kart_no"]
 
 
 def comparable(a: dict | None, b: dict | None) -> list[str]:
@@ -746,7 +835,10 @@ def comparable(a: dict | None, b: dict | None) -> list[str]:
     The temperature thresholds are the ones the coach's own answer names: he puts up to 4 seconds
     on "different temperature and humidity conditions", so a difference worth flagging is one big
     enough to move a lap time rather than one big enough to measure. 3 °C of air, 5 °C of track and
-    10 points of humidity are deliberately coarse."""
+    10 points of humidity are deliberately coarse.
+
+    The kart NUMBER is not compared here: a fleet kart changes every session, so it is stated beside
+    a comparison rather than allowed to refuse one (``kart_pair``)."""
     a, b = (_norm_record(a) if isinstance(a, dict) else None,
             _norm_record(b) if isinstance(b, dict) else None)
     if not a or not b:

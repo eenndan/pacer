@@ -639,6 +639,40 @@ class LibraryController:
         self._records_changed(store)
         return store
 
+    def mark_sessions_dry(self, fingerprints: list) -> None:
+        """The focus block's one-click answer to "no session record for 19 Jul and today": write a
+        record saying the conditions were Dry — and nothing else — for each recording its button
+        NAMED (``focus.Report.unrecorded``), then re-read both surfaces that show the store.
+
+        Only a recording with NO record gets one (``session_record.put_if_blank_and_save``), so the
+        click cannot overwrite anything the driver typed, even a record another window wrote after
+        the page asked. Each record carries the same provenance a form save stamps (date, track and
+        lap count off the recording's library row), so it reads the same standalone. Guarded like
+        every other record write: a failure is reported on the status bar, never raised."""
+        fps = [str(fp) for fp in fingerprints or [] if fp]
+        if not fps:
+            return
+        try:
+            rows = {e.get("fingerprint"): e for e in library.load().get("entries", [])}
+            current = self._current_library_entry()
+            if current:
+                rows[current.get("fingerprint")] = current
+            dry = {**session_record.blank_record(), "conditions": "dry"}
+            store, written = session_record.put_if_blank_and_save(
+                {fp: session_record.stamp_context(dry, rows.get(fp)) for fp in fps})
+        except OSError:
+            _log.exception("session records not saved")
+            self.win.statusBar().showMessage(
+                "could not save the session records — check permissions on "
+                "~/Library/Application Support/pacer", self._status_ms)
+            return
+        n = len(written)
+        self.win.statusBar().showMessage(
+            f"{n} session record{'' if n == 1 else 's'} saved: Dry — File ▸ Session record… adds "
+            "the rest" if n else "those sessions already have a record — nothing was changed",
+            self._status_ms)
+        self._records_changed(store)
+
     def _records_changed(self, store: dict | None = None) -> None:
         """Re-read the session-record store into BOTH surfaces that show it. Every write to the
         store ends here: the editor (save, clear, delete — from File ▸ Session record… and from the

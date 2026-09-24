@@ -2079,7 +2079,10 @@ class CentralView(QWidget):
         # Imported here rather than at module scope: this view has no other business with the
         # persistence layer, and the chip is a display of what it is handed.
         from . import session_record
+        # …and the kart number between them: for an arrive-and-drive driver it is the kart fact
+        # that changes from one session to the next (UX-6).
         headline = "  ·  ".join(c for c in (session_record.conditions_text(record),
+                                            session_record.kart_no_text(record),
                                             session_record.tyre_text(record)) if c)
         full = session_record.summary_line(record)
         if not full:

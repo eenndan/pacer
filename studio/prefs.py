@@ -73,6 +73,11 @@ GRID_SIZES = "grid_sizes"
 # canvas's height at 1440x900, so that is the one layout choice on the map worth remembering.
 # Coerced to bool, like EXCLUDED_VISIBLE.
 MAP_KEY_COLLAPSED = "map_key_collapsed"
+# Whether the session-record form opens with its "Own kart…" groups (tyres, pressures, gearing,
+# axle, seat) shown. Default False = folded: the driver the form was re-led for runs arrive-and-drive
+# fleet karts, where those are the operator's, and answers only Conditions and Kart no. A driver who
+# runs his own kart opens it once and it stays open. Coerced to bool, like MAP_KEY_COLLAPSED.
+RECORD_OWN_KART_OPEN = "record_own_kart_open"
 # The Library dialog's size as [width, height] in logical px, or absent until the user actually
 # resizes it (so a later change to the dialog's own default still reaches everyone who never
 # touched it). Shape-guarded on read; the dialog additionally clamps whatever comes back to the
@@ -307,6 +312,22 @@ def set_map_key_collapsed(collapsed: bool, path: str | None = None) -> None:
     ``set_last_dir`` / ``set_library_size``). MapView calls this from the plate's own click."""
     try:
         set(MAP_KEY_COLLAPSED, bool(collapsed), path)
+    except OSError:
+        pass
+
+
+def record_own_kart_open(path: str | None = None) -> bool:
+    """Whether the session-record form opens with its "Own kart…" groups shown (default False =
+    folded). Coerced to bool so a corrupt file never crashes the form."""
+    return bool(get(RECORD_OWN_KART_OPEN, False, path))
+
+
+def set_record_own_kart_open(on: bool, path: str | None = None) -> None:
+    """Persist the form's "Own kart…" disclosure. Fully guarded — remembering a fold must never be
+    the reason a record is not saved — so an unwritable prefs file is swallowed (mirrors
+    ``set_map_key_collapsed``)."""
+    try:
+        set(RECORD_OWN_KART_OPEN, bool(on), path)
     except OSError:
         pass
 
