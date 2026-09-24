@@ -361,6 +361,53 @@ def test_the_theme_block_never_squeezes_out_the_ranking():
           f"(minimum: block hidden, table {p.table.rowCount()} rows; roomy: 2 actions back)")
 
 
+# The Coaching page at the app's own 1440x900 default window: 515x417, measured on the real themed
+# StudioWindow (jailed) on all four working-set recordings — the same panel on each.
+DEFAULT_PANEL = (515, 417)
+
+
+def _whole_rows(t) -> int:
+    """Rows whose whole height is inside the table's viewport with nothing scrolled."""
+    vp = t.viewport().height()
+    return sum(1 for r in range(t.rowCount())
+               if t.rowViewportPosition(r) >= 0 and t.rowViewportPosition(r) + t.rowHeight(r) <= vp)
+
+
+def test_the_default_window_shows_the_top_three_whole():
+    """UX-3: the page exists to answer "what do I work on", and at the default window its answer
+    was below the fold.
+
+    MEASURED on the real window at 1440x900 before the fix: an empty focus list (headline, a
+    two-line invitation and two buttons — 98 px) and the theme (88-104 px) above the table left
+    the ranking a 146-162 px viewport, so two of the top three rows were whole on SD_19_09,
+    Sandown 3h and MK and ONE on SD_30_08. The empty list is one line now, and the table's
+    shortlist is reserved before either block takes any height. This fixture is the owner's
+    state — a known track, an empty focus list, a theme with both actions."""
+    from studio import focus as F
+
+    p = _panel(_rows(6), DEFAULT_PANEL)
+    p.set_focus_report(F.Report(track="Stadium", outcomes=[]))
+    for _ in range(6):
+        _APP.processEvents()
+    assert p.theme_block.full_text(), "this fixture must actually produce a theme"
+    assert not p.focus_block.isHidden(), "the empty list keeps its one line at the default size"
+    whole = _whole_rows(p.table)
+    assert whole >= PANEL_TOP_N, (
+        f"only {whole} of the top {PANEL_TOP_N} ranked rows are whole at the default window",
+        p.table.viewport().height(), [p.table.rowHeight(r) for r in range(p.table.rowCount())],
+        p.focus_block.height(), p.theme_block.height())
+    # ONE line: the row is as tall as the Add button (plus the block's own margins), no taller.
+    m = p.focus_block.layout().contentsMargins()
+    one_line = max(p.focus_block.add_button.sizeHint().height(),
+                   p.focus_block.empty_line.sizeHint().height()) + m.top() + m.bottom()
+    assert p.focus_block.height() <= one_line, (p.focus_block.height(), one_line)
+    assert p.focus_block.drop_button.isHidden(), "an empty list has nothing to remove"
+    assert "Pick up to" in p.summary_label.toolTip(), "the invitation is demoted, not deleted"
+    print(f"test_the_default_window_shows_the_top_three_whole OK ({whole} whole rows in a "
+          f"{p.table.viewport().height()} px viewport; focus {p.focus_block.height()} px, "
+          f"theme {0 if p.theme_block.isHidden() else p.theme_block.height()} px)")
+
+
 def test_every_header_sits_over_its_own_column():
     """L5-08: `defaultAlignment` centres every header. At a maximized 1220 px reason column that put
     "How to find it" 611 px from the left-aligned sentence it labels. Each header must take its own
@@ -484,6 +531,7 @@ def _run_all():
     test_short_page_never_drops_below_the_shortlist()
     test_a_reason_row_is_tall_enough_for_where_the_glyphs_actually_land()
     test_the_theme_block_never_squeezes_out_the_ranking()
+    test_the_default_window_shows_the_top_three_whole()
     test_every_header_sits_over_its_own_column()
     test_reach_cell_never_states_a_count_without_its_denominator()
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()

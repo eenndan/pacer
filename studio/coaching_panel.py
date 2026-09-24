@@ -329,6 +329,14 @@ FOCUS_MAX_FRACTION = 0.30
 # after the focus block, so the table keeps at least 45 % of the page whatever the two want.
 BLOCKS_MAX_FRACTION = 0.55
 
+# UX-3: the EMPTY list's whole face — one line beside the Add button. The sentence that used to be
+# a second block under it (what the list is for) is the line's hover and rides on the header strip's
+# tooltip, so nothing is deleted; it stopped costing two rows of the ranking it points at.
+FOCUS_EMPTY_LINE = f"Focus list · empty — pick up to {focus.MAX_ITEMS} corners below"
+FOCUS_EMPTY_INVITE = (f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at this "
+                      "track, Pacer measures the same corners again and says whether they moved — "
+                      "or why it can't tell.")
+
 
 class FocusBlock(QWidget):
     """The training loop's face: the corners the driver put on their focus list, and what THIS
@@ -344,6 +352,12 @@ class FocusBlock(QWidget):
     It yields vertically exactly as ``ThemeBlock`` does (shed the last line, then the one above it,
     then the whole block), and the lines it sheds stay on the header strip's tooltip.
 
+    AN EMPTY LIST IS ONE LINE (UX-3). Measured on the real window at the 1440x900 default, the
+    invitation — a headline, a two-line sentence and two buttons, one of which can never be enabled
+    on an empty list — was 98 of the page's 417 px, and with the theme above the table it left the
+    ranking a 146-162 px viewport: two of its top three rows on SD_19_09, one on SD_30_08. So the
+    empty state is the line and the Add button beside it; the sentence is the line's hover.
+
     Read-only over a ``focus.Report`` plus a selection: the promote / drop gestures are SIGNALS the
     app acts on (it owns the app-support stores — the same split ``set_session_record`` uses)."""
 
@@ -355,6 +369,7 @@ class FocusBlock(QWidget):
         super().__init__(parent)
         self._lines: list[str] = []
         self._headline = ""
+        self._empty = False             # the one-line invitation (an active track, no corners yet)
         self._cids: list[int] = []      # cids currently on the list, in list order
         self._selected: int | None = None
         lay = QVBoxLayout(self)
@@ -370,6 +385,13 @@ class FocusBlock(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(theme.SPACE_S)
+        # The empty state's one line, in the BUTTON row rather than above it: the headline label
+        # and this one are never shown together (see _apply), so no widget ever changes layout.
+        self.empty_line = WrapLabel(FOCUS_EMPTY_LINE)
+        self.empty_line.setProperty("role", "BarLabel")
+        self.empty_line.setToolTip(FOCUS_EMPTY_INVITE)
+        self.empty_line.setVisible(False)
+        row.addWidget(self.empty_line, 1)
         self.add_button = QPushButton("Add to focus list")
         self.add_button.setAutoDefault(False)
         self.add_button.setDefault(False)
@@ -380,6 +402,7 @@ class FocusBlock(QWidget):
         self.drop_button.clicked.connect(self._emit_remove)
         row.addWidget(self.add_button)
         row.addWidget(self.drop_button)
+        self._row_stretch = row.count()
         row.addStretch(1)
         self._buttons = QWidget()
         self._buttons.setLayout(row)
@@ -400,11 +423,12 @@ class FocusBlock(QWidget):
         # same 200-character explanation bury the one thing the driver can act on.
         self._lines = focus.report_lines(report) if report is not None else []
         self._headline = focus.report_headline(report) if report is not None else ""
-        if report is not None and not report.active:
-            self._headline = "Focus list · empty"
-            self._lines = [f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at "
-                           "this track, Pacer measures the same corners again and says whether "
-                           "they moved — or why it can't tell."]
+        self._empty = report is not None and not report.active
+        if self._empty:
+            self._headline, self._lines = FOCUS_EMPTY_LINE, []
+        # On an empty list the trailing stretch gives way, so the line takes the row's slack and
+        # the Add button sits at its right edge.
+        self._buttons.layout().setStretch(self._row_stretch, 0 if self._empty else 1)
         self.headline.setText(self._headline)
         for label, text in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS, strict=False):
             label.setText(text)
@@ -418,8 +442,9 @@ class FocusBlock(QWidget):
 
     def full_text(self) -> str:
         """The whole block as one string — what the header tooltip carries, so a line the height
-        budget sheds is demoted rather than deleted."""
-        return "\n".join([self._headline, *self._lines]).strip()
+        budget sheds is demoted rather than deleted (and the empty list's invitation with it)."""
+        invite = [FOCUS_EMPTY_INVITE] if self._empty else []
+        return "\n".join([self._headline, *self._lines, *invite]).strip()
 
     def _sync_buttons(self):
         """Label + enablement from the selection and the list. The button SAYS which corner it
@@ -460,6 +485,14 @@ class FocusBlock(QWidget):
         lay = self.layout()
         m = lay.contentsMargins()
         inner = max(width - m.left() - m.right(), 1)
+        if self._empty:
+            # One row: the line wraps into what the Add button leaves it, and the row is as tall
+            # as the taller of the two.
+            button = self.add_button.sizeHint()
+            beside = max(inner - button.width() - self._buttons.layout().spacing(), 1)
+            line = QFontMetrics(self.empty_line.font()).boundingRect(
+                QRect(0, 0, beside, 0), Qt.TextWordWrap, self._headline).height()
+            return m.top() + m.bottom() + max(line, button.height())
         texts = [self._headline] + self._lines[:n_lines]
         fonts = [self.headline.font()] + [lb.font() for lb in self.lines[:n_lines]]
         need = m.top() + m.bottom() + lay.spacing() * max(len(texts), 1)
@@ -490,6 +523,12 @@ class FocusBlock(QWidget):
             want = visible and i < n_lines and bool(self._lines[i:i + 1])
             if label.isHidden() == want:
                 label.setVisible(want)
+        # The empty list shows its one line in place of the headline, and no Remove button — on an
+        # empty list there is nothing it could ever remove.
+        for widget, want in ((self.headline, not self._empty), (self.empty_line, self._empty),
+                             (self.drop_button, not self._empty)):
+            if widget.isHidden() == want:
+                widget.setVisible(want)
         if self._buttons.isHidden() == visible:
             self._buttons.setVisible(visible)
         if self.isHidden() == visible:
@@ -1565,20 +1604,41 @@ class OpportunitiesPanel(QWidget):
         The FOCUS block is budgeted first and the theme takes what is left under
         ``BLOCKS_MAX_FRACTION``: two blocks that each yield only against the PAGE still add up to
         two thirds of it, and the answer to the driver's own focus list outranks a fresh reading of
-        today. A page with no focus report is unchanged — the block returns 0 px."""
+        today. A page with no focus report is unchanged — the block returns 0 px.
+
+        AND THE SHORTLIST IS RESERVED BEFORE EITHER (UX-3). Fractions of the page are not a promise
+        to the table: at the 1440x900 default the page is 417 px, the two blocks were entitled to
+        55 % of it, and the three ranked rows those blocks summarize need ~190-230 px there — so the
+        real window showed two of them (one on SD_30_08) and the answer sat below the fold of the
+        page that exists to give it. The blocks now share only what is left once the table's header
+        and its ``PANEL_TOP_N`` rows, measured at the current width, are whole."""
         if self._theme_budgeting:
             return
         self._theme_budgeting = True
         try:
             height = self.height()
-            used = self.focus_block.fit_into(self.width(), int(height * FOCUS_MAX_FRACTION))
+            room = max(height - self._header.height() - self._shortlist_px(), 0)
+            used = self.focus_block.fit_into(self.width(),
+                                             min(int(height * FOCUS_MAX_FRACTION), room))
             self.theme_block.fit_into(
                 self.width(),
                 min(int(height * THEME_MAX_FRACTION),
-                    max(int(height * BLOCKS_MAX_FRACTION) - used, 0)))
+                    max(int(height * BLOCKS_MAX_FRACTION) - used, 0),
+                    max(room - used, 0)))
             self._refresh_summary_label()
         finally:
             self._theme_budgeting = False
+
+    def _shortlist_px(self) -> int:
+        """The height the table needs to show its first ``PANEL_TOP_N`` rows whole: its frame, its
+        header and those rows at the widths they have now. 0 while the page shows its empty state —
+        there is no ranking to make room for."""
+        t = self.table
+        if self.body.currentIndex() != 0 or t.rowCount() == 0:
+            return 0
+        hdr = t.horizontalHeader()
+        rows = sum(t.rowHeight(r) for r in range(min(PANEL_TOP_N, t.rowCount())))
+        return rows + max(hdr.height(), hdr.sizeHint().height()) + 2 * t.frameWidth()
 
     # ------------------------------------------------------------- interaction
     def _on_row_selected(self):
