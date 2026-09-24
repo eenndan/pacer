@@ -192,6 +192,11 @@ prefs.load(); library.load(); track_db.load(); marks.load(); focus.load(); sessi
 # is under test here, and the records they emit go through the same root handlers.
 logging.getLogger("studio.library_controller").warning("E2-PROBE library_controller family")
 logging.getLogger("studio.central_view").warning("E2-PROBE central_view family")
+# A failure that used to be a print() in its except handler (RISK-6), through the real handler: a
+# demo fetch that fails (a file:// URL to nothing — no network).
+from studio import demo
+demo._try_download_demo(os.path.join(os.environ["PACER_APP_SUPPORT_DIR"], "demo", "e2.mp4"),
+                        url="file:///nonexistent-e2-probe/demo.mp4")
 # A REAL Qt C++ warning (Qt's own "QPainter::end: Painter not active" from qpainter.cpp), through
 # the qInstallMessageHandler install_excepthook installed.
 QPainter().end()
@@ -223,6 +228,7 @@ _FAMILIES = [
     ("studio.session_record", "session records: store is version 99, newer than this build's"),
     ("studio.library_controller", "E2-PROBE library_controller family"),
     ("studio.central_view", "E2-PROBE central_view family"),
+    ("studio.demo", "demo download failed"),
 ]
 
 
