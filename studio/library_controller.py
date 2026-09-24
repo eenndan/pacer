@@ -29,9 +29,10 @@ records call back into `_library_excludes` — a cycle, and the focus list and t
 sit on it too. Cutting at the five would have moved the coupling into two files. The smallest
 strongly-connected set containing them is exactly the list above. What still crosses the
 boundary is the window SHELL's own services — `_load`, `_apply_session_notice`, `_gate_action`,
-the share-card pair, `_refresh_marks` and `_reveal_in_finder` — and none of them calls back into
-this cluster (a `_load` reaches `update_library` again only when its worker finishes, on a later
-turn of the event loop).
+the share-card pair, `_refresh_marks`, `_reveal_in_finder` and the reference load behind "Compare
+with your previous PB" (`_compare_with_previous_pb`, which reads `previous_pb` back and calls
+nothing here) — and none of them calls back into this cluster (a `_load` reaches `update_library`
+again only when its worker finishes, on a later turn of the event loop).
 
 WHAT IT DOES NOT OWN, and each is deliberate:
   * the MARKS (`_refresh_marks` and the rest). The privacy gestures call `self.win._refresh_marks()`
@@ -53,6 +54,7 @@ so moving the code did not rename a single log line.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 
@@ -72,6 +74,23 @@ from .session_record_dialog import SessionRecordDialog
 _log = logging.getLogger("studio.app")
 
 
+def previous_pb_missing_text(entry: dict, missing_path: str | None) -> str:
+    """What "Compare with your previous PB" says when that PB's footage is not on disk any more —
+    plainly, naming the file and where it was, instead of a load failing on it (4 of the owner's 8
+    library rows point at footage moved or deleted since). `missing_path` is the first recorded
+    path that is gone, or None when the row recorded none. Here rather than in `library`, which
+    is a data module: the ▸ menu path is window chrome."""
+    track = entry.get("track") or "this track"
+    best = entry.get("best")
+    lap = f"Your previous best at {track}" + (f" ({fmt_time(float(best))})" if best is not None
+                                              else "")
+    if not missing_path:
+        return f"{lap} has no footage on record, so there is nothing to compare it with."
+    return (f"{lap} was recorded on footage that is no longer where Pacer saw it: "
+            f"{os.path.basename(missing_path)} is missing from {os.path.dirname(missing_path)}. "
+            "If you moved it, load it with Coaching ▸ Load reference recording… to compare.")
+
+
 class LibraryController:
     """Owns the library / records / focus / saved-tracks cluster for ONE `StudioWindow`. Built once,
     in the window's constructor, BEFORE `_build_menu` (which wires File ▸ Library…, Open Recent,
@@ -86,6 +105,10 @@ class LibraryController:
         # stands against the track's PB (`library.pb_standing_for`). Reset on every call.
         self.opened_new = False
         self.pb_standing: dict | None = None
+        # The library row the last `update_library`'s NEW personal best beat (`library.previous_pb`)
+        # — what "Compare with your previous PB" loads as the reference (board review PS-B4). None
+        # unless that load celebrated a beat. Reset on every call.
+        self.previous_pb: dict | None = None
 
     # --------------------------------------------------------------- session library index (F8)
     def update_library(self, paths: list[str]) -> dict | None:
@@ -111,7 +134,7 @@ class LibraryController:
         the OTHER recordings — so the same outing can no longer be the bar, while a full chain that
         genuinely beats a DIFFERENT recording on that track still celebrates (see there for why
         suppressing on mere presence would swallow exactly that)."""
-        self.opened_new, self.pb_standing = False, None
+        self.opened_new, self.pb_standing, self.previous_pb = False, None, None
         if self._library_excludes(paths):
             return None
         moment = None
@@ -129,6 +152,11 @@ class LibraryController:
             degraded = self.win.session.timing_quality.degraded
             moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key)
             standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key)
+            # The row that beat was measured against, from the same PRIOR index: after the upsert
+            # this recording's own row is the track's best. Kept even if the write below fails,
+            # like the moment it belongs to.
+            if (moment or {}).get("kind") == "beat":
+                self.previous_pb = library.previous_pb(prior_index, entry.get("track"), key)
             new = not any(e.get("fingerprint") == key for e in prior_index.get("entries", []))
             library.upsert_and_save(entry)
             # Only once the row is WRITTEN: a recording whose row could not be saved would land on
@@ -152,6 +180,16 @@ class LibraryController:
     def debrief_pb_line(self) -> str | None:
         """The debrief's PB sentence for the last `update_library` (None when it has none)."""
         return library.pb_standing_text(self.pb_standing, fmt_time) if self.pb_standing else None
+
+    def offers_pb_compare(self, moment: dict | None) -> bool:
+        """Whether a PB surface showing `moment` (a ``pb_moment`` or ``pb_standing`` dict) may offer
+        "Compare with your previous PB": it is a BEAT, and the row the last `update_library`
+        remembered is the one whose best that moment quotes as the previous best — the button
+        loads the lap the sentence beside it names, or it is not offered."""
+        row = self.previous_pb
+        if not moment or moment.get("kind") != "beat" or row is None or row.get("best") is None:
+            return False
+        return abs(float(row["best"]) - float(moment.get("prior", math.nan))) < 1e-9
 
     def _library_excludes(self, paths: list[str]) -> bool:
         """True when this recording must stay OUT of the session library: the bundled DEFAULT_SAMPLE
@@ -229,8 +267,12 @@ class LibraryController:
             # Offer the one-tap share only when the card is actually shareable (verified lap) —
             # a PB moment is verified timing by construction, but stay honest via the same verdict.
             on_share = None if self.win._share_card_blocked() else self.win._share_pb_card
+            # A beat offers the ANALYSIS gesture as the card's primary action (board review
+            # PS-B4); the share card stays, as a secondary link.
+            on_compare = (self.win._compare_with_previous_pb if self.offers_pb_compare(moment)
+                          else None)
             toast = PBToast(title, body, on_progress=self.open_library,
-                             on_share=on_share, parent=self.win)
+                             on_share=on_share, on_compare=on_compare, parent=self.win)
             self.win._pb_toast = toast
             # Let the reference die with the object it names, so this window never holds the wrapper
             # of a deleted card — the state the defect above was made of, and the one every OTHER

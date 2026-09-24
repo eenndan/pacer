@@ -66,12 +66,13 @@ _TITLE = "New personal best at Daytona MK!"
 _BODY = "1:02.418 — 0.317 s faster than your previous best (12 Aug 2026)."
 
 
-def _shown_toast(on_share=None):
+def _shown_toast(on_share=None, on_compare=None):
     """A real PBToast laid out over a real 1440x900 host, positioned by its own show_for()."""
     host = QWidget()
     host.resize(1440, 900)
     host.show()
-    toast = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=on_share, parent=host)
+    toast = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=on_share, parent=host,
+                    on_compare=on_compare)
     toast.show_for(host)
     _APP.processEvents()
     return host, toast
@@ -79,16 +80,20 @@ def _shown_toast(on_share=None):
 
 def _controls(toast):
     """(name, widget) for every button on the card — the set qa.interactives() measures."""
-    return [(w.objectName(), w) for w in (toast.close_btn, toast.share_btn, toast.link_btn)
+    return [(w.objectName(), w)
+            for w in (toast.close_btn, toast.compare_btn, toast.share_btn, toast.link_btn)
             if w is not None]
 
 
 def test_every_toast_control_clears_the_hit_floor():
     """The 24x24 pointer-target floor, on the card that deletes itself: ✕ was 20x19 and
     "See your progress →" 133x19 (both under it) while the primary share button passed at 130x30 —
-    an accident of ONE button's variant. All three now clear it in both shapes of the card."""
-    for label, share in (("with share", lambda: None), ("without share", None)):
-        host, toast = _shown_toast(on_share=share)
+    an accident of ONE button's variant. All three now clear it in both shapes of the card — and
+    in the third, where "Compare with your previous PB →" is the primary and share is a link."""
+    for label, share, compare in (("with share", lambda: None, None),
+                                  ("without share", None, None),
+                                  ("with compare", lambda: None, lambda: None)):
+        host, toast = _shown_toast(on_share=share, on_compare=compare)
         for name, w in _controls(toast):
             assert w.width() >= _MIN_HIT and w.height() >= _MIN_HIT, (
                 f"{label}: {name} is {w.width()}x{w.height()}, under {_MIN_HIT}x{_MIN_HIT}")
