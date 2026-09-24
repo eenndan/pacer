@@ -28,6 +28,28 @@ jobs:
         with:
           # gpmf-parser and nanobind are git submodules the C++ build needs.
           submodules: recursive
+          # 2, not 1: a pull request checks out its merge commit, and the changelog rule below
+          # diffs that against its first parent (the base branch it merges into).
+          fetch-depth: 2
+
+      - name: "Changelog: a PR adds a changes/ fragment; only a release PR edits CHANGELOG.md (title starts with 'release', or it deletes the changes/ fragments it folds)"
+        # Fragments exist so parallel PRs stop colliding in CHANGELOG.md (F1). Fails in seconds,
+        # before any build. The title reaches the script through env, never spliced into it.
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- CHANGELOG.md; then
+            echo "CHANGELOG.md untouched"; exit 0
+          fi
+          case "$(printf '%s' "$TITLE" | tr '[:upper:]' '[:lower:]')" in
+            release*) echo "release PR (title): CHANGELOG.md may change"; exit 0 ;;
+          esac
+          if [ -n "$(git diff --name-only --diff-filter=D HEAD^1 HEAD -- changes/)" ]; then
+            echo "folds changes/ fragments: CHANGELOG.md may change"; exit 0
+          fi
+          echo "::error file=CHANGELOG.md::This PR edits CHANGELOG.md directly. Add a changes/ fragment instead; only a release PR (title starting 'release', or one that deletes the changes/ fragments it folds in) edits CHANGELOG.md."
+          exit 1
 
       - name: Set up pixi
         uses: prefix-dev/setup-pixi@v0.9.6
