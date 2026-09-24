@@ -471,6 +471,9 @@ class Outcome:
                                     #   the verdict is refused — the refusal is structural.
     blocker: str = BLOCK_NONE       # BLOCK_* — why, when kind is OUTCOME_NO_VERDICT
     detail: str = ""                # the specifics a blocker needs (the differing clauses, …)
+    karts: tuple[str, str] | None = None  # (then, now) kart numbers when a VERDICT crossed two
+                                    #   different karts (`session_record.kart_pair`) — said, not
+                                    #   refused: a fleet kart changes every session
 
     @property
     def has_verdict(self) -> bool:
@@ -483,6 +486,10 @@ class Report:
 
     track: str | None
     outcomes: list[Outcome] = field(default_factory=list)
+    # The sessions a BLOCK_NO_RECORD refusal is waiting on, as (fingerprint, "19 Jul" | "today"):
+    # the earlier days first in list order, today last, each once. Exactly what the focus block's
+    # one-click "Mark both dry" offers to write — and nothing it may not (`mark_dry_prompt`).
+    unrecorded: tuple[tuple[str, str], ...] = ()
 
     @property
     def active(self) -> bool:
@@ -543,16 +550,20 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
     An item promoted from THIS recording reports ``OUTCOME_SET_HERE`` — there is nothing to compare
     a session with itself against, and saying "no change" would be dressing that up as a result."""
     store = records or {}
-    rec_now = session_record.get(store, str(now_ctx.get("fingerprint") or ""))
+    now_fp = str(now_ctx.get("fingerprint") or "")
+    rec_now = session_record.get(store, now_fp)
     outcomes: list[Outcome] = []
+    unrecorded: dict[str, str] = {}
     for i, item in enumerate(items):
         now = samples[i] if i < len(samples) else None
-        if item.fingerprint and item.fingerprint == (now_ctx.get("fingerprint") or ""):
+        if item.fingerprint and item.fingerprint == now_fp:
             outcomes.append(Outcome(item=item, kind=OUTCOME_SET_HERE, now=now, delta=None))
             continue
-        block, detail = _blocker(item, now_ctx, session_record.get(store, item.fingerprint),
-                                 rec_now)
+        rec_then = session_record.get(store, item.fingerprint)
+        block, detail = _blocker(item, now_ctx, rec_then, rec_now)
         if block:
+            if block == BLOCK_NO_RECORD and item.fingerprint and session_record.is_empty(rec_then):
+                unrecorded.setdefault(item.fingerprint, _when(item.date))
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
                                     blocker=block, detail=detail))
             continue
@@ -575,8 +586,13 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
             kind = OUTCOME_UNCHANGED
         else:
             kind = OUTCOME_IMPROVED if delta < 0 else OUTCOME_SLOWER
-        outcomes.append(Outcome(item=item, kind=kind, now=now, delta=float(delta)))
-    return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes)
+        outcomes.append(Outcome(item=item, kind=kind, now=now, delta=float(delta),
+                                karts=session_record.kart_pair(rec_then, rec_now)))
+    if any(o.blocker == BLOCK_NO_RECORD for o in outcomes) and now_fp \
+            and session_record.is_empty(rec_now):
+        unrecorded.setdefault(now_fp, "today")
+    return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes,
+                  unrecorded=tuple(unrecorded.items()))
 
 
 # ------------------------------------------------------------------------------------- the words
@@ -638,11 +654,41 @@ def outcome_sentence(o: Outcome) -> str:
     # from: a verdict that states only its difference cannot be checked by the person reading it.
     body = (f"{o.item.median_s:.2f} → {o.now.median:.2f} s, "
             f"{o.item.n_laps} → {o.now.n_laps} laps")
+    if o.karts:
+        # Not silently like-for-like: the kart changed under the comparison, and the line says so
+        # in the same then → now grammar as the two pairs before it (session_record.kart_pair).
+        body += f", kart {o.karts[0]} → {o.karts[1]}"
     if o.kind == OUTCOME_UNCHANGED:
         return (f"{label} — no change you can act on: {abs(o.delta):.2f} s apart, inside the "
                 f"corner's own {max(o.item.iqr_s, o.now.iqr):.2f} s spread ({body}).")
     word = "faster" if o.kind == OUTCOME_IMPROVED else "slower"
     return f"{label} — {abs(o.delta):.2f} s {word} than {when} ({body})."
+
+
+def mark_dry_prompt(report: Report | None) -> tuple[str, str, str] | None:
+    """(question, button, hover) for the focus block's one-click answer to a BLOCK_NO_RECORD
+    refusal — ``("Both dry?", "Mark both dry", …)`` — or None when nothing is waiting on a record.
+
+    It is an OFFER, never an assumption (conditions are typed by the driver, never fetched or
+    guessed — ``session_record``'s docstring): nothing is written until the click, the button names
+    exactly which sessions it writes, and the hover says what goes in them — conditions Dry and
+    nothing else. Only a session with NO record is offered; one that has any record is never
+    touched (``session_record.put_if_blank_and_save`` enforces it at the write)."""
+    names = [label for _fp, label in (report.unrecorded if report is not None else ())]
+    if not names:
+        return None
+    if len(names) == 1:
+        name = names[0]
+        question = "Dry today?" if name == "today" else f"Dry on {name}?"
+        button = f"Mark {name} dry"
+    elif len(names) == 2:
+        question, button = "Both dry?", "Mark both dry"
+    else:
+        question, button = f"All {len(names)} dry?", f"Mark all {len(names)} dry"
+    whom = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f" and {names[-1]}"
+    hover = (f"Writes a session record for {whom} saying the conditions were Dry — and nothing "
+             f"else. File ▸ Session record… adds the rest, or corrects it.")
+    return question, button, hover
 
 
 def _corner_list(outcomes: list[Outcome]) -> str:

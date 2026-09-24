@@ -362,12 +362,23 @@ class FocusBlock(QWidget):
     ranking a 146-162 px viewport: two of its top three rows on SD_19_09, one on SD_30_08. So the
     empty state is the line and the Add button beside it; the sentence is the line's hover.
 
-    Read-only over a ``focus.Report`` plus a selection: the promote / drop gestures are SIGNALS the
-    app acts on (it owns the app-support stores — the same split ``set_session_record`` uses)."""
+    A REFUSAL FOR WANT OF A RECORD CARRIES ITS OWN ANSWER (UX-6). The record gate needs one field
+    per session, and the owner — who has never written a record — was sent to a 17-input form,
+    twice (today's through the File menu, the other day's through the Library). So when the only
+    thing missing is a record, the block asks the question a driver can answer at a glance ("Both
+    dry?") beside a button that writes exactly that and nothing else. It is an offer, not an
+    assumption: nothing is written until the click (``focus.mark_dry_prompt``).
+
+    Read-only over a ``focus.Report`` plus a selection: the promote / drop / mark gestures are
+    SIGNALS the app acts on (it owns the app-support stores — the same split ``set_session_record``
+    uses)."""
 
     # The corner the driver wants added to / dropped from the focus list (a corner cid).
     add_requested = Signal(int)
     remove_requested = Signal(int)
+    # The recordings (library fingerprints) the driver just marked Dry — exactly the ones the
+    # button named, so the app writes what was offered and nothing more.
+    mark_dry_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -376,6 +387,7 @@ class FocusBlock(QWidget):
         self._empty = False             # the one-line invitation (an active track, no corners yet)
         self._cids: list[int] = []      # cids currently on the list, in list order
         self._selected: int | None = None
+        self._mark_fps: list[str] = []  # the unrecorded sessions the Mark button would write
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XS)
@@ -386,6 +398,23 @@ class FocusBlock(QWidget):
         for label in self.lines:
             label.setProperty("role", "Note")
             lay.addWidget(label)
+        # The answer to a refusal for want of a record, directly under the line that asks for it.
+        mark = QHBoxLayout()
+        mark.setContentsMargins(0, 0, 0, 0)
+        mark.setSpacing(theme.SPACE_S)
+        self.mark_question = QLabel("")
+        self.mark_question.setProperty("role", "BarLabel")
+        self.mark_button = QPushButton("")
+        self.mark_button.setAutoDefault(False)
+        self.mark_button.setDefault(False)
+        self.mark_button.clicked.connect(self._emit_mark)
+        mark.addWidget(self.mark_question)
+        mark.addWidget(self.mark_button)
+        mark.addStretch(1)
+        self._mark_row = QWidget()
+        self._mark_row.setLayout(mark)
+        self._mark_row.setVisible(False)
+        lay.addWidget(self._mark_row)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(theme.SPACE_S)
@@ -430,6 +459,12 @@ class FocusBlock(QWidget):
         self._empty = report is not None and not report.active
         if self._empty:
             self._headline, self._lines = FOCUS_EMPTY_LINE, []
+        prompt = None if self._empty else focus.mark_dry_prompt(report)
+        self._mark_fps = [fp for fp, _when in report.unrecorded] if prompt else []
+        if prompt:
+            self.mark_question.setText(prompt[0])
+            self.mark_button.setText(prompt[1])
+            self.mark_button.setToolTip(prompt[2])
         # On an empty list the trailing stretch gives way, so the line takes the row's slack and
         # the Add button sits at its right edge.
         self._buttons.layout().setStretch(self._row_stretch, 0 if self._empty else 1)
@@ -480,6 +515,10 @@ class FocusBlock(QWidget):
         if self._selected is not None and self._selected in self._cids:
             self.remove_requested.emit(int(self._selected))
 
+    def _emit_mark(self):
+        if self._mark_fps:
+            self.mark_dry_requested.emit(list(self._mark_fps))
+
     # --------------------------------------------------------------- the fit
     def _needed_px(self, width: int, n_lines: int) -> int:
         """The height the headline plus `n_lines` outcome lines plus the button row would need at
@@ -501,6 +540,11 @@ class FocusBlock(QWidget):
         fonts = [self.headline.font()] + [lb.font() for lb in self.lines[:n_lines]]
         need = m.top() + m.bottom() + lay.spacing() * max(len(texts), 1)
         need += self.add_button.sizeHint().height()
+        if self._mark_fps:
+            # The mark row goes with the buttons, never with the lines: it is the answer to the
+            # headline's "no record" as much as to any line, so it stays while lines are shed.
+            need += lay.spacing() + max(self.mark_button.sizeHint().height(),
+                                        QFontMetrics(self.mark_question.font()).height())
         for font, text in zip(fonts, texts, strict=True):
             need += QFontMetrics(font).boundingRect(
                 QRect(0, 0, inner, 0), Qt.TextWordWrap, text).height()
@@ -535,6 +579,9 @@ class FocusBlock(QWidget):
                 widget.setVisible(want)
         if self._buttons.isHidden() == visible:
             self._buttons.setVisible(visible)
+        mark = visible and bool(self._mark_fps)
+        if self._mark_row.isHidden() == mark:
+            self._mark_row.setVisible(mark)
         if self.isHidden() == visible:
             self.setVisible(visible)
 
@@ -1103,6 +1150,7 @@ class OpportunitiesPanel(QWidget):
     # asks rather than writes (the same split `CentralView.set_session_record` uses).
     focus_add_requested = Signal(int)
     focus_remove_requested = Signal(int)
+    focus_mark_dry_requested = Signal(list)
     # A row's Jump: (cid, the corner's entry odometer on the best lap). The app selects the corner
     # and seeks the video to the best lap's entry to it (StudioWindow._jump_to_opportunity).
     jump_requested = Signal(int, float)
@@ -1224,6 +1272,7 @@ class OpportunitiesPanel(QWidget):
         self.focus_block = FocusBlock()
         self.focus_block.add_requested.connect(self.focus_add_requested)
         self.focus_block.remove_requested.connect(self.focus_remove_requested)
+        self.focus_block.mark_dry_requested.connect(self.focus_mark_dry_requested)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

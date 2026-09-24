@@ -1882,6 +1882,7 @@ class StudioWindow(QMainWindow):
         if panel is not None:
             panel.focus_add_requested.connect(self.library_ctl.focus_add)
             panel.focus_remove_requested.connect(self.library_ctl.focus_remove)
+            panel.focus_mark_dry_requested.connect(self.library_ctl.mark_sessions_dry)
             panel.jump_requested.connect(self._jump_to_opportunity)
         self.library_ctl.update_focus_list()
 
