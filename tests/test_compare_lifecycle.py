@@ -32,9 +32,19 @@ The test is therefore two things:
     before it is mounted — plus the Qt behaviour that rule exists for, pinned as a measurement;
   * a PROBABILISTIC crash guard — a subprocess that toggles compare and must exit 0.
 
+They run in different places. The source guard runs in every run of this file, and it is the
+per-PR guard: re-introduce the defect (fill `_PaneCell`'s row before mounting it) and it fails in
+22 ms, naming the line (measured 2026-09-24). The crash SOAK is its own CTest registration,
+`soak.test_toggle_compare_repeatedly_does_not_crash` (`--soak <name>`, LABELS soak), because it
+was the slowest registration in the suite — 107 s on the dev Mac, 184 s in CI, where it finished
+last — for a fault the guard already names. It runs where `PACER_SOAK=1`: `pixi run test-soak`,
+and CI on every push to main and every tag. Everywhere else CTest reports it SKIPPED by name
+(exit 77), so it is never silently dropped and never counted as a pass.
+
 `PACER_NO_MEDIA=1` gives the production widget tree with an inert media triplet, so this needs no
 footage and no session: the crash is in the widget lifecycle, not in playback.
 Run: QT_QPA_PLATFORM=offscreen python tests/test_compare_lifecycle.py
+The soak alone: pixi run test-soak (which is this file with `--soak <name>` and PACER_SOAK=1).
 """
 import ast
 import os
@@ -228,6 +238,43 @@ def test_toggle_compare_repeatedly_does_not_crash():
         for i, rc, out, err in bad)
 
 
+# ------------------------------------------------------------------ where the soak runs
+#: Each is its own CTest registration, `soak.<name>` (tests/CMakeLists.txt): not in this file's
+#: ordinary run or its count, and run only where SOAK_ENV is "1" (see the module docstring).
+SOAK_CHECKS = (test_toggle_compare_repeatedly_does_not_crash,)
+SOAK_FLAG = "--soak"
+SOAK_ENV = "PACER_SOAK"
+#: The code CTest's SKIP_RETURN_CODE reads as "did not run" — the same 77 the footage checks use.
+SKIP_RETURN_CODE = 77
+
+
+def _run_soak(argv) -> int:
+    """Run the ONE soak `--soak <name>` names; return the exit code. 0 passed, 1 failed, 77
+    skipped (SOAK_ENV unset or empty), 2 for a name this file does not have or a SOAK_ENV value
+    other than "1" — a misspelt `PACER_SOAK=yes` must not quietly skip what it asked to run."""
+    by_name = {fn.__name__: fn for fn in SOAK_CHECKS}
+    i = argv.index(SOAK_FLAG)
+    name = argv[i + 1] if i + 1 < len(argv) else ""
+    if name not in by_name:
+        print(f"FAIL {SOAK_FLAG} {name!r}: not a soak of this file (it has {sorted(by_name)})")
+        return 2
+    value = os.environ.get(SOAK_ENV, "").strip()
+    if value != "1":
+        if value:
+            print(f"FAIL {name}: {SOAK_ENV}={value!r} — the one value it takes is '1'")
+            return 2
+        print(f"SKIPPED {name}: the soak runs where {SOAK_ENV}=1 — `pixi run test-soak`, and CI "
+              "on pushes to main and tags; the deterministic guard in this file runs everywhere")
+        return SKIP_RETURN_CODE
+    try:
+        by_name[name]()
+    except AssertionError as exc:
+        print(f"FAIL {name}: {exc}")
+        return 1
+    print(f"PASS {name}")
+    return 0
+
+
 # ------------------------------------------------------------------ the tree is still right
 def test_compare_cell_leaves_the_primary_pane_in_its_cell():
     """The mounting order change must not move the pane anywhere else: entering compare puts the
@@ -261,9 +308,11 @@ def test_compare_cell_leaves_the_primary_pane_in_its_cell():
 
 
 if __name__ == "__main__":
+    if SOAK_FLAG in sys.argv:
+        sys.exit(_run_soak(sys.argv))
     failures = 0
     for name, fn in sorted(list(globals().items())):
-        if name.startswith("test_") and callable(fn):
+        if name.startswith("test_") and callable(fn) and fn not in SOAK_CHECKS:
             try:
                 fn()
                 print(f"PASS {name}")

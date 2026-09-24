@@ -345,20 +345,26 @@ _CORE_TOLERANCE = 0.05
 
 
 def _ctest_registrations() -> int:
-    """How many tests `ctest -N` would list, derived from tests/CMakeLists.txt.
+    """How many tests `ctest -N` would list, derived from tests/CMakeLists.txt and what it globs.
 
-    Three registration forms: the `add_pacer_test` macro (one Catch2 executable each), a literal
-    `add_test(NAME …)` per Python suite, and `add_footage_test` (one real-footage check each, which
-    CTest reports Skipped wherever its recording is absent — CI included). Derived rather than
-    pinned, so ADDING A TEST updates the expected number by itself and only the PROSE has to catch
-    up."""
+    Four registration forms: the `add_pacer_test` macro (one Catch2 executable each), every
+    `tests/test_*.py` (registered by the file's glob, one each), `add_footage_test` (one real-footage
+    check each, which CTest reports Skipped wherever its recording is absent — CI included) and
+    `add_soak_test` (one soak each, reported Skipped wherever PACER_SOAK is not 1). Derived rather
+    than pinned, so ADDING A TEST updates the expected number by itself and only the PROSE has to
+    catch up."""
     with open(_CMAKE, encoding="utf-8") as f:
         text = f.read()
+    assert re.search(r"file\(GLOB \w+ CONFIGURE_DEPENDS \S*/test_\*\.py\)", text), (
+        "tests/CMakeLists.txt no longer registers tests/test_*.py by its glob — count the Python "
+        "suites the way it registers them now")
     catch2 = len(re.findall(r"^add_pacer_test\(", text, re.M))
-    python = len(re.findall(r"^add_test\(NAME\b", text, re.M))
+    python = len([n for n in os.listdir(os.path.dirname(_CMAKE))
+                  if n.startswith("test_") and n.endswith(".py")])
     footage = len(re.findall(r"^add_footage_test\(", text, re.M))
+    soak = len(re.findall(r"^add_soak_test\(", text, re.M))
     assert catch2 and python and footage, "a registration form found nothing — this check has gone vacuous"
-    return catch2 + python + footage
+    return catch2 + python + footage + soak
 
 
 def _core_lines() -> int:
