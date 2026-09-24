@@ -1,5 +1,7 @@
 # Pacer
 
+*The case study as a web page: [eenndan.github.io/pacer](https://eenndan.github.io/pacer/)*
+
 **A macOS race-telemetry workstation built from a single GoPro file, with its lap timing validated
 against a real transponder — and the engineering case study behind it.**
 
@@ -24,25 +26,30 @@ text says which recording it comes from.*
 
 ## Accuracy — the claim everything else rests on
 
-Pacer's lap times are validated **out-of-sample against a real transponder**, the ground truth a
-race series scores a session with. Over **107 clean laps** across two recordings:
+Pacer's lap times are validated **out-of-sample against official timing** — a real transponder log,
+the ground truth a race series scores a session with, and a circuit's own published timing sheet.
+Over **121 clean laps** across three recordings:
 
 - essentially **unbiased** — mean error within **±0.003 s**;
-- **σ 0.0527 s** on the cleaner-GPS recording, **0.0871 s** on the noisier one — about **0.13 %** of
-  a ~68 s kart lap, quoting the worse of the two on purpose;
-- 48 clean laps of 57 aligned, and 59 of 65. A modest sample, and the honest one.
+- **σ 0.0247 s**, **0.0527 s** and **0.0871 s** — the worst about **0.13 %** of a ~68 s kart lap,
+  quoting the worst of the three on purpose;
+- 14 clean laps of 15 aligned, 48 of 57, and 59 of 65. A modest sample, and the honest one.
 
-Both recordings are D24's, the footage the transponder log covers. The validation was run in June
-2026 and is reported here as it was recorded: the recordings Pacer is developed against now have no
-transponder log, so it has not been repeated on them.
+Two recordings are D24's, checked against the race's transponder log in June 2026 and reported as
+recorded — that footage has left the development machine. The third is a sprint race at the same
+circuit on 18 September 2026, re-validated in September 2026 against the circuit's Club Speed timing
+on footage that is on the machine, by one command a real-footage check re-runs. The Sandown
+recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.
 
-<img src="docs/media/accuracy.png" width="880" alt="Lap-time error against a transponder: recording A mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4">
+<img src="docs/media/accuracy.png" width="880" alt="Lap-time error against official timing: recording A (D24, transponder) mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B (D24, transponder) mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4; recording C (MK sprint, Club Speed, September 2026) mean +0.0010 s, σ 0.0247 s, 14 clean of 15 aligned, median DOP 1.25">
 
 No lap is hand-matched: the session's per-lap *duration* sequence is correlated against every
-candidate window of the transponder log. Because the winning offset is *chosen* to maximise `r`,
-that `r` is not an accuracy statistic — the **margin** is. The fingerprint matches at **r ≥ 0.99 at
-exactly one offset and below 0.29 at every other**. The session Pacer timed is provably the session
-the transponder timed.
+candidate window of the timing. Because the winning window is *chosen* to maximise `r`, that `r` is
+not an accuracy statistic — the **margin** is. Against the 24-hour transponder log the fingerprint
+matches at **r ≥ 0.99 at exactly one offset and below 0.29 at every other**. Against the sprint's
+sheet — every driver of every heat that day, 99 rows — it matches one window at r 0.9998, and every
+other window leaves a residual at least **44×** larger. The session Pacer timed is provably the
+session the official timing timed.
 
 Why it works: timing runs on the camera's own **GPS9 true clock**, not the video/sample clock that
 consumer tools use, which drifts on the order of 0.1 % — enough to quietly bias every lap in a
@@ -148,12 +155,13 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   and 0 of 12 grip cells rendered a readable value"* is the comment above the fix. A companion
   guard proves the app never writes into its own source tree, from a tripwire on every write path
   Python and Qt expose.
-- **142 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
-  widgets and measure them. The whole thing runs in about nine minutes; `pixi run golden`, the gate
-  you actually run after every maths change, takes under a second. CI runs all of it plus an
-  end-to-end offscreen smoke on every pull request — except the fourteen `footage.*` checks, which
-  need a real recording CI does not have, and one crash soak that runs on every push to `main`
-  instead; CTest lists those by name as *Skipped*.
+- **140+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
+  widgets and measure them. CI runs all of it on every pull request, four tests at a time, in about
+  six minutes (its test step on the last three `main` runs, September 2026: 322–370 s), plus an
+  end-to-end offscreen smoke — except the fifteen `footage.*` checks, which need a real recording
+  CI does not have, and one crash soak that runs on every push to `main` instead; CTest lists those
+  by name as *Skipped*. `pixi run golden`, the gate you actually run after every maths change,
+  takes about a second.
 
 Depth: **[AGENTS.md](AGENTS.md)** (the authoritative developer reference) and
 **[studio/README.md](studio/README.md)** (the module map).
@@ -194,6 +202,24 @@ footage and the full suite before it merges. The rigour above is what makes that
 the guardrails do the trusting so the agents can do the typing. 203 merged pull requests went into
 the v0.2.0 cycle alone.
 
+## Built, measured, not shipped
+
+An idea here gets built far enough to measure, and the measurement is allowed to say no.
+**[Features measured and refused](studio/docs/refused-2026-09.md)** is the record of every one
+that said no, each with the number that killed it, so whoever proposes it next starts from the
+evidence. The longer investigations are kept the same way:
+
+- [GPS lap-timing accuracy: research and an empirical evaluation](studio/docs/gps-accuracy-research.md)
+- [An upstream "~20 ms vs transponder" claim, investigated](studio/docs/upstream-20ms-investigation.md)
+- [Brake-release detection from the friction circle: measured, not shipped](studio/docs/friction-circle-release-investigation.md)
+- [Sideslip rate, wheel hop and a track bump map, probed as channels](studio/docs/measured-channels-2026-09.md)
+- [The g-meter: camera-to-kart frame, and the accelerometer against GPS](studio/docs/gmeter-validation.md)
+- [The Grip (est) column, re-grounded](studio/docs/grip-regrounding-2026-09.md)
+- [Why one recording matched far fewer of its corners on track](studio/docs/corner-match-0060-2026-09.md)
+- [Start/finish line verification](studio/docs/start-line-verification.md)
+
+Most were measured on D24, which has since left the development machine; those say so at the top.
+
 ## Non-goals
 
 Stating what Pacer deliberately *isn't* is part of the design.
@@ -210,20 +236,29 @@ Stating what Pacer deliberately *isn't* is part of the design.
 ## Run it from source
 
 A Mac (Apple Silicon) and a GoPro recording. [pixi](https://pixi.sh) manages every external
-dependency — `cmake`, `ninja`, `catch2`, and `ffmpeg` for video export — so there is no manual
-toolchain setup.
+dependency — `cmake`, `ninja`, `catch2`, and `ffmpeg` for video export — pinned by its lockfile.
+The C++ compiler is the one Apple's Xcode command-line tools provide, the same install that
+provides `git`.
 
 ```bash
-git submodule update --init --recursive     # 3rdparty deps (gpmf-parser, nanobind)
+git clone --recursive https://github.com/eenndan/pacer && cd pacer
 pixi install                                # environment + editable Python bindings
 pixi run studio -- /path/to/GX010062.MP4    # build + launch on a recording
 pixi run studio -- --demo                   # no footage? a synthetic session, generated not filmed
 ```
 
+Cloned without `--recursive`? `git submodule update --init --recursive` fetches `3rdparty/`.
+
 Then drag any `.MP4` onto the window, or `File ▸ Open`. Chapter siblings (`GX01…`, `GX02…`) are
 chained on request via `--full` or `File ▸ Load full recording`. The
 **[first-lap walkthrough](docs/FIRST_LAP.md)** is the 30-second path from footage to "where am I
 losing time?"; for a code change, start at [AGENTS.md](AGENTS.md).
+
+**No GoPro footage?** `pixi run studio -- --demo` (above) downloads a synthetic session once and
+opens it: generated, not filmed, on a circuit Pacer ships, so its laps open with verified timing.
+`pixi run smoke` needs no download: it builds the real app headless on a bundled sample clip and
+ends in `SMOKE OK`. That clip holds no complete lap, so it proves the build and the load, not the
+analysis.
 
 ## Acknowledgements
 

@@ -129,13 +129,13 @@ def _atomic_write(path: str, body: Callable[[object], None], *, newline: str | N
     within a filesystem, and the temp is created in the DESTINATION'S OWN DIRECTORY so it always is
     one — a temp in $TMPDIR would degrade to a cross-device copy and lose the guarantee.
 
-    THE TEMP NAME IS UNIQUE (`mkstemp`), NOT `path + ".tmp"`, and unlike the four persistence
-    stores this one has to be. They write inside an app-support directory the app owns, where a
-    predictable `<file>.tmp` can only ever collide with itself. This writes wherever the user
+    THE TEMP NAME IS UNIQUE (`mkstemp`), NOT `path + ".tmp"`. This writes wherever the user
     pointed a save dialog — so a fixed name would open, TRUNCATE and then delete (or worse,
     `os.replace` away) a file of the user's called `laps.csv.tmp` that happened to be sitting
     there. `mkstemp` also refuses to clobber, so two exports racing in one folder cannot interleave
-    into each other's file.
+    into each other's file. (The persistence stores once argued a fixed `<file>.tmp` could only
+    collide with itself; a second writer of the same store is exactly that, and it wiped whole
+    stores — RISK-4. They now write through `_jsonstore.write_json` for this reason.)
 
     On ANY exit that did not consume the temp (an exception from `body`, an ENOSPC in the flush on
     close, a KeyboardInterrupt) the partial file is removed, so a failed export leaves neither a

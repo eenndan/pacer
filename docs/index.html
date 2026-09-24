@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pacer Studio — a race-telemetry workstation validated against a transponder</title>
-<meta name="description" content="Case study: a macOS desktop app that turns one GoPro recording into transponder-validated lap timing, a racing line, deltas and synced video. Lap times unbiased to ±0.003 s over 107 clean laps. Built as an engineering showcase; source is the only distribution.">
+<meta name="description" content="Case study: a macOS desktop app that turns one GoPro recording into validated lap times, a racing line, deltas and synced video. Lap times unbiased to ±0.003 s against official timing over 121 clean laps. Built as an engineering showcase; source is the only distribution.">
 
 <!-- The mark is the app's own icon (studio/assets/pacer.icns, drawn by studio/dev/make_icon.py):
      two right-pointing chevrons, the darker accent_press one BEHIND, the accent one in front.
@@ -14,15 +14,20 @@
 <!-- Open Graph / Twitter — a case study still wants to render when it is shared. -->
 <meta property="og:type" content="article">
 <meta property="og:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
-<meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
-<meta property="og:image" content="media/og.png">
+<meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against official timing over 121 clean laps. An engineering case study.">
+<meta property="og:image" content="https://eenndan.github.io/pacer/media/og.png">
 <meta property="og:image:width" content="2560">
 <meta property="og:image:height" content="1280">
+<meta property="og:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
+<!-- The two image URLs are ABSOLUTE on purpose: link previews (Open Graph, X cards) need an
+     absolute URL, and a relative one left shares of this page without the image. -->
+
 <meta property="og:url" content="https://eenndan.github.io/pacer/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
-<meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
-<meta name="twitter:image" content="media/og.png">
+<meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against official timing over 121 clean laps. An engineering case study.">
+<meta name="twitter:image" content="https://eenndan.github.io/pacer/media/og.png">
+<meta name="twitter:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
 
 <style>
   /* ------------------------------------------------------------------ tokens
@@ -342,30 +347,31 @@
   <div class="wrap">
     <div class="section-head">
       <p class="eyebrow">The claim, and the receipt</p>
-      <h2>Lap timing, validated out-of-sample against a transponder.</h2>
+      <h2>Lap timing, validated out-of-sample against official timing.</h2>
       <p class="muted">Most consumer and phone tools time laps off the video or sample clock, which drifts on the order of 0.1% — enough to quietly bias every lap in a session. Pacer times on the camera's own <strong>GPS true-clock</strong>, where every GPS sample carries its own timestamp, and interpolates each start/finish crossing along the chord between the two real fixes that straddle the line.</p>
     </div>
 
     <div class="split">
       <div>
         <ul class="stat-list">
-          <li><span class="stat-val">±0.003 s</span><span class="stat-label">mean error against transponder ground truth — essentially unbiased</span></li>
-          <li><span class="stat-val">σ 0.0527 s</span><span class="stat-label">per-lap spread on the cleaner-GPS recording (median DOP 1.4)</span></li>
-          <li><span class="stat-val">σ 0.0871 s</span><span class="stat-label">and on the noisier one (median DOP 2.4) — the hardware sets the floor, not the algorithm</span></li>
-          <li><span class="stat-val">0.13 %</span><span class="stat-label">that worse σ, as a fraction of a ~68 s kart lap</span></li>
-          <li><span class="stat-val">107 clean laps</span><span class="stat-label">48 and 59, from 57 and 65 aligned laps, across two recordings</span></li>
+          <li><span class="stat-val">±0.003 s</span><span class="stat-label">mean error against official timing — essentially unbiased</span></li>
+          <li><span class="stat-val">σ 0.0247 s</span><span class="stat-label">per-lap spread on a September 2026 sprint, against the circuit's Club Speed timing (median DOP 1.25)</span></li>
+          <li><span class="stat-val">σ 0.0527 s</span><span class="stat-label">on D24's cleaner-GPS recording, against its transponder log (median DOP 1.4)</span></li>
+          <li><span class="stat-val">σ 0.0871 s</span><span class="stat-label">and on its noisier one (median DOP 2.4) — the hardware sets the floor, not the algorithm</span></li>
+          <li><span class="stat-val">0.13 %</span><span class="stat-label">that worst σ, as a fraction of a ~68 s kart lap</span></li>
+          <li><span class="stat-val">121 clean laps</span><span class="stat-label">14, 48 and 59, from 15, 57 and 65 aligned laps, across three recordings</span></li>
         </ul>
-        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 107 is the number of laps actually compared, not the span of lap IDs they occupied in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction. Both recordings are D24's, the footage that log covers; the validation was run in June 2026 and is reported as recorded — the recordings Pacer is developed against now have no transponder log, so it has not been repeated on them.</p>
+        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 121 is the number of laps actually compared, not the span of lap IDs they occupied in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction. Two recordings are D24's, checked against that log in June 2026 and reported as recorded — that footage has left the development machine. The third, a sprint at the same circuit on 18 September 2026, was re-validated in September 2026 against the circuit's published Club Speed timing, and a real-footage check re-measures it. The Sandown recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.</p>
       </div>
       <figure class="figure">
         <img src="media/accuracy.png" width="2400" height="1080" loading="lazy" decoding="async"
-             alt="Error bars of Pacer's lap time minus the transponder's, for two recordings: Recording A (higher-noise GPS) mean +0.0030 s, σ 0.0871 s over 48 clean of 57 aligned laps; Recording B (cleaner GPS) mean +0.0015 s, σ 0.0527 s over 59 clean of 65 aligned laps.">
-        <figcaption>Both rows are the <strong>shipping</strong> pipeline — GPS9 true clock, clock rate 1.0, boxcar w=13 — not a tuned-for-the-benchmark variant. The chart is drawn from the numbers in code, so it cannot go stale independently of them.</figcaption>
+             alt="Error bars of Pacer's lap time minus the official lap time, for three recordings: Recording A (D24, transponder, noisier GPS) mean +0.0030 s, σ 0.0871 s over 48 clean of 57 aligned laps; Recording B (D24, transponder, cleaner GPS) mean +0.0015 s, σ 0.0527 s over 59 clean of 65 aligned laps; Recording C (MK sprint, Club Speed, September 2026) mean +0.0010 s, σ 0.0247 s over 14 clean of 15 aligned laps.">
+        <figcaption>All three rows are the <strong>shipping</strong> pipeline — GPS9 true clock, clock rate 1.0, boxcar w=13 — not a tuned-for-the-benchmark variant. The chart is drawn from the numbers in code, so it cannot go stale independently of them.</figcaption>
       </figure>
     </div>
 
     <div class="callout">
-      <strong>The pairing is automatic, and it is not circular.</strong> No lap is hand-matched: Pacer's per-lap <em>duration</em> sequence is correlated against every candidate window of the transponder log and the alignment taken at the maximum. Because that offset is <em>chosen</em> to maximise r, the r at the winner is an argmax, not an accuracy statistic — so the number worth quoting is the <strong>margin</strong>. The fingerprint matches at <strong>r ≥ 0.99 at exactly one offset and below 0.29 at every other</strong>. The session Pacer timed is provably the session the transponder timed.
+      <strong>The pairing is automatic, and it is not circular.</strong> No lap is hand-matched: Pacer's per-lap <em>duration</em> sequence is correlated against every candidate window of the official timing and the alignment taken at the maximum. Because that window is <em>chosen</em> to maximise r, the r at the winner is an argmax, not an accuracy statistic — so the number worth quoting is the <strong>margin</strong>. Against the 24-hour transponder log the fingerprint matches at <strong>r ≥ 0.99 at exactly one offset and below 0.29 at every other</strong>. Against the sprint's sheet — every driver of every heat that day, 99 rows — it matches one window at r 0.9998, and every other window leaves a residual at least <strong>44×</strong> larger. The session Pacer timed is provably the session the official timing timed.
     </div>
 
     <p style="margin-top: var(--space-xl)">
@@ -472,11 +478,15 @@
       </div>
       <div class="built-card wide">
         <h3>The real app, driven offscreen, on real footage</h3>
-        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>142 CTest registrations</strong> run on every change (the fourteen that need a real recording report themselves skipped, by name, where there is none, and so does one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens and its own images.</p>
+        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>140+ CTest registrations</strong> run on every change (the fifteen that need a real recording report themselves skipped, by name, where there is none, and so does one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens and its own images.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>
         <p>The implementation is handed to LLM coding agents under a strict protocol: one focused pull request per change, gated by the golden-equivalence check and the full suite before it merges. The rigour above is what makes that workflow safe — the guardrails do the trusting, so the agents can do the typing. The commit history is the honest record of it, including the parts that were measured and thrown away.</p>
+      </div>
+      <div class="built-card wide">
+        <h3>Built, measured, not shipped</h3>
+        <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it, so whoever proposes it next starts from the evidence. The longer investigations are kept the same way: <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gps-accuracy-research.md">GPS lap-timing accuracy</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/upstream-20ms-investigation.md">an upstream “~20&nbsp;ms vs transponder” claim</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/friction-circle-release-investigation.md">brake release from the friction circle</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/measured-channels-2026-09.md">sideslip, wheel hop and a bump map as channels</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gmeter-validation.md">the g-meter against GPS</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/grip-regrounding-2026-09.md">the grip column, re-grounded</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/corner-match-0060-2026-09.md">why one recording matched far fewer of its corners</a> and <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/start-line-verification.md">the start/finish line</a>. Most were measured on D24, which has since left the development machine; those say so at the top.</p>
       </div>
     </div>
   </div>
@@ -508,8 +518,8 @@
       <h2>A Mac with Apple Silicon, a GoPro file, and three commands.</h2>
       <p class="muted"><a href="https://pixi.sh">pixi</a> brings CMake, Ninja, Python, Qt, Catch2 and ffmpeg, pinned by a lockfile, so there is no manual toolchain step. The C++ compiler is the one already on the machine — Apple's Xcode command-line tools.</p>
     </div>
-<pre><code><span class="comment"># 3rdparty deps (gpmf-parser, nanobind)</span>
-git submodule update --init --recursive
+<pre><code><span class="comment"># the source, with its 3rdparty deps (gpmf-parser, nanobind)</span>
+git clone --recursive https://github.com/eenndan/pacer &amp;&amp; cd pacer
 
 <span class="comment"># environment + editable Python bindings</span>
 pixi install
@@ -518,6 +528,9 @@ pixi install
 pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
     <div class="callout">
       On a track Pacer doesn't know yet it places a sensible start/finish line and flags the timing as <strong>provisional</strong>; drag the line on the map to where a lap begins and it is remembered for that recording. <a href="https://github.com/eenndan/pacer/blob/main/docs/FIRST_LAP.md">Read your first lap</a> walks the rest.
+    </div>
+    <div class="callout">
+      <strong>No GoPro footage?</strong> <code>pixi run studio -- --demo</code> downloads a synthetic session once and opens it: generated, not filmed, on a circuit Pacer ships, so its laps open with verified timing. <code>pixi run smoke</code> needs no download: it builds the real app headless on a bundled sample clip and ends in <code>SMOKE OK</code>. That clip holds no complete lap, so it proves the build and the load, not the analysis.
     </div>
   </div>
 </section>

@@ -167,18 +167,26 @@ OVERLAY_WIDTH = 1440
 # UNIQUENESS: every non-locked offset scores below 0.29, a margin of about +0.70
 # (`start-line-verification.md:89`). That is what the caption says instead.
 #
-# σ-as-a-percentage deliberately quotes the WORSE recording.
+# σ-as-a-percentage deliberately quotes the WORST recording.
+#
+# Rows A and B are D24's, recorded in June 2026 and not re-measurable (the footage has left the
+# machine). Row C is RE-MEASURED: the MK sprint of 18 Sep 2026, locked by the lock-only mode of
+# `_validate_wallclock.py` against the circuit's Club Speed sheet for the day. `footage.accuracy_mk`
+# (tests/test_validate_wallclock.py) re-runs it and fails if this row, docs/ACCURACY.md's row C or
+# its lock line stops being what the footage and the sheet give.
 LAP_S = 68.0                  # a representative kart lap at this circuit, for the σ-as-% claim
 ACCURACY = [
-    {"name": "Recording A", "note": "higher-noise GPS",
+    {"name": "Recording A", "note": "D24 · transponder · noisier GPS",
      "mean": 0.0030, "sigma": 0.0871, "clean": 48, "aligned": 57, "dop": 2.4},
-    {"name": "Recording B", "note": "cleaner GPS",
+    {"name": "Recording B", "note": "D24 · transponder · cleaner GPS",
      "mean": 0.0015, "sigma": 0.0527, "clean": 59, "aligned": 65, "dop": 1.4},
+    {"name": "Recording C", "note": "MK sprint · Club Speed · Sep 2026",
+     "mean": 0.0010, "sigma": 0.0247, "clean": 14, "aligned": 15, "dop": 1.25},
 ]
-ACCURACY_TITLE = "Lap timing, validated against a transponder"
-ACCURACY_SUB = ("Pacer lap time − transponder ground truth · out-of-sample · "
+ACCURACY_TITLE = "Lap timing, validated against official timing"
+ACCURACY_SUB = ("Pacer lap time − official lap time (transponder log, Club Speed) · out-of-sample · "
                 "GPS9 true clock, default pipeline")
-ACCURACY_AXIS = "difference from transponder lap time  (seconds)"
+ACCURACY_AXIS = "difference from the official lap time  (seconds)"
 
 OG_TAGLINE = "Race telemetry from your GoPro"
 OG_BODY = ("Transponder-validated true-clock lap timing, a synthesised ideal lap,\n"
@@ -580,7 +588,7 @@ def _text(p: QPainter, x: float, y: float, s: str, font: QFont, colour: str,
 
 
 def draw_accuracy(out_dir: str) -> str:
-    """The transponder chart: two intervals (mean ± σ) against a zero line.
+    """The accuracy chart: one interval (mean ± σ) per recording, against a zero line.
 
     A RANGE PLOT, not a categorical chart — one measure, one hue. The accent belongs to the
     MEASUREMENT and to nothing else: the zero reference is a neutral `text_muted` rule, the grid and
@@ -620,10 +628,10 @@ def draw_accuracy(out_dir: str) -> str:
     # title (it did, the first time the lap counts were corrected and the caption ran to two lines).
     worst = max(ACCURACY, key=lambda r: r["sigma"])
     total = sum(r["clean"] for r in ACCURACY)
-    claim = (f"Unbiased to within ±0.003 s. σ {worst['sigma']:.4f} s on the worse recording is "
+    claim = (f"Unbiased to within ±0.003 s. σ {worst['sigma']:.4f} s on the worst recording is "
              f"{worst['sigma'] / LAP_S * 100.0:.2f} % of a ~{LAP_S:.0f} s kart lap — the noise "
              f"floor of 10 Hz GPS. {total} clean laps, paired lap-for-lap by a per-lap duration "
-             f"fingerprint that locks at exactly one offset.")
+             f"fingerprint that locks at exactly one alignment.")
     inner_w = W - 2 * m - 2 * theme.SPACE_L
     flags = int(Qt.TextWordWrap | Qt.AlignLeft | Qt.AlignVCenter)
     text_h = fm_cap.boundingRect(QRect(0, 0, int(inner_w), 400), flags, claim).height()

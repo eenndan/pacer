@@ -87,13 +87,12 @@ display-agnostic text helpers. The dialog over it is ``studio/session_record_dia
 from __future__ import annotations
 
 import datetime
-import json
 import logging
 import math
 import os
 import shutil
 
-from . import app_support
+from . import _jsonstore, app_support
 
 _log = logging.getLogger(__name__)
 
@@ -285,21 +284,6 @@ def filled_fields(rec: dict | None) -> int:
 
 
 # ------------------------------------------------------------------ file I/O
-def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
-    """(readable_json_object, parsed) for `path`: True/parsed when the file exists and parses to a
-    JSON object, else (False, None). The seam ``load`` and ``save`` share so "genuine corruption" —
-    the only case that falls back to empty, and the only one that triggers a backup — is decided in
-    ONE place (mirrors ``library._is_loadable_dict``)."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False, None
-    if not isinstance(data, dict):
-        return False, None
-    return True, data
-
-
 def _migrate(data: dict, from_version: int) -> dict:
     """Forward-migrate an OLDER on-disk store (`from_version` < ``VERSION``) to the current schema,
     PRESERVING EVERY RECORD. Per-version transforms run in ascending order and each MUST keep every
@@ -332,13 +316,14 @@ def load(path: str | None = None) -> dict:
     before overwriting them. `path` defaults to ``records_path()``."""
     if path is None:
         path = records_path()
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return empty_store()
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
         # A missing / non-int version is untrustworthy SHAPE (the records under it have a schema to
         # be wrong about), so — unlike the flat prefs store — it is corruption, not a legacy file.
+        _jsonstore.report_unreadable(path, f"version {version!r} is not a schema number")
         return empty_store()
     if version < VERSION:
         _log.warning("session records: migrating store from version %d to %d (%s)",
@@ -349,6 +334,7 @@ def load(path: str | None = None) -> dict:
                      "best-effort, unknown fields preserved (%s)", version, VERSION, path)
     raw = data.get("records")
     if not isinstance(raw, dict):
+        _jsonstore.report_unreadable(path, "its records are not an object")
         return empty_store()
     records, dropped = {}, 0
     for key, rec in raw.items():
@@ -396,13 +382,13 @@ def _backup_unsafe(path: str) -> None:
     rewritten normally (no backup churn); a healthy store being WIPED is ``clear``'s business."""
     if not os.path.exists(path):
         return
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         _copy_to_backup(path, "an unreadable session-record store")
         return
     # ENUMERATE AGAINST `load`'s OWN FALL-BACKS, not a shorter list. `load` returns `empty_store()`
     # for a non-int/bool `version` and for a non-object `records` — and BOTH of those parse as
-    # perfectly good JSON objects, so `_is_loadable_dict` says yes and the old guard said "safe".
+    # perfectly good JSON objects, so `read_object` says yes and the old guard said "safe".
     # The file then got overwritten with no backup at all, silently losing a notebook that cannot
     # be rebuilt from the footage. The docstring on `load` already promised this backup; only the
     # predicate was short.
@@ -415,8 +401,9 @@ def _backup_unsafe(path: str) -> None:
 
 
 def save(store: dict, path: str | None = None) -> None:
-    """Write the store atomically (temp file + ``os.replace``) so a crash mid-write can't leave a
-    truncated notebook. Creates the app-support dir if missing. `path` defaults to
+    """Write the store atomically (a unique temp file + ``os.replace``, ``_jsonstore.write_json``)
+    under the store lock, so neither a crash nor a second writer can leave a truncated or
+    interleaved notebook. Creates the app-support dir if missing. `path` defaults to
     ``records_path()``. Raises OSError on an unwritable destination.
 
     DATA-SAFETY: before overwriting an existing file that could not be parsed or migrated (genuine
@@ -425,15 +412,12 @@ def save(store: dict, path: str | None = None) -> None:
     if path is None:
         path = records_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _backup_unsafe(path)
     out = {"version": VERSION,
            "records": {k: _norm_record(v)
                        for k, v in sorted((store or {}).get("records", {}).items())}}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    with _jsonstore.locked(path):
+        _backup_unsafe(path)
+        _jsonstore.write_json(path, out)
 
 
 # ------------------------------------------------------------------ record access
@@ -487,10 +471,13 @@ def rename_track(store: dict, old: str, new: str) -> int:
 def rename_track_and_save(old: str, new: str, path: str | None = None) -> int:
     """Load, re-stamp `old` → `new`, write back atomically; returns how many records moved. Writes
     nothing when none did, so this cannot churn the backup slot that holds a cleared notebook."""
-    store = load(path)
-    moved = rename_track(store, old, new)
-    if moved:
-        save(store, path)
+    if path is None:
+        path = records_path()
+    with _jsonstore.locked(path):
+        store = load(path)
+        moved = rename_track(store, old, new)
+        if moved:
+            save(store, path)
     return moved
 
 
@@ -511,11 +498,15 @@ def stamp_context(rec: dict, entry: dict | None) -> dict:
 
 def put_and_save(fingerprint: str, rec: dict, path: str | None = None) -> dict:
     """Load, store (or remove, when the record is empty — see ``put``), write back atomically, and
-    return the new store. The one call a save button makes. Any OSError from the write propagates
-    to the caller, which guards it."""
-    store = load(path)
-    put(store, fingerprint, rec)
-    save(store, path)
+    return the new store — under the store lock, so another writer's record cannot be lost in
+    between. The one call a save button makes. Any OSError from the write propagates to the caller,
+    which guards it."""
+    if path is None:
+        path = records_path()
+    with _jsonstore.locked(path):
+        store = load(path)
+        put(store, fingerprint, rec)
+        save(store, path)
     return store
 
 
@@ -529,13 +520,14 @@ def remove_and_save(fingerprint: str, path: str | None = None) -> dict:
     out from under a record that was."""
     if path is None:
         path = records_path()
-    store = load(path)
-    if fingerprint not in store.get("records", {}):
-        return store
-    if os.path.exists(path):
-        _copy_to_backup(path, "the session records before forgetting one")
-    remove(store, fingerprint)
-    save(store, path)
+    with _jsonstore.locked(path):
+        store = load(path)
+        if fingerprint not in store.get("records", {}):
+            return store
+        if os.path.exists(path):
+            _copy_to_backup(path, "the session records before forgetting one")
+        remove(store, fingerprint)
+        save(store, path)
     return store
 
 
@@ -545,10 +537,11 @@ def clear(path: str | None = None) -> dict:
     best-effort like every other backup here — a failed copy logs and the wipe still proceeds."""
     if path is None:
         path = records_path()
-    if os.path.exists(path):
-        _copy_to_backup(path, "the session records before clearing them")
-    save(empty_store(), path)
-    return load(path)
+    with _jsonstore.locked(path):
+        if os.path.exists(path):
+            _copy_to_backup(path, "the session records before clearing them")
+        save(empty_store(), path)
+        return load(path)
 
 
 def backup_summary(path: str | None = None) -> dict | None:
@@ -581,26 +574,27 @@ def restore(path: str | None = None) -> dict:
     unwritable destination (the swap half is best-effort and only logs)."""
     if path is None:
         path = records_path()
-    store = load(backup_path(path))
-    if not store["records"]:
+    with _jsonstore.locked(path):
+        store = load(backup_path(path))
+        if not store["records"]:
+            return load(path)
+        swap = path + ".swap"
+        kept = False
+        if os.path.exists(path):
+            try:
+                shutil.copy2(path, swap)
+                kept = True
+            except OSError as exc:
+                _log.warning("session records: could not keep the replaced store before restoring "
+                             "(%r)", exc)
+        save(store, path)
+        if kept:
+            try:
+                os.replace(swap, backup_path(path))
+            except OSError as exc:
+                _log.warning("session records: restored the store but could not swap the backup "
+                             "(%r)", exc)
         return load(path)
-    swap = path + ".swap"
-    kept = False
-    if os.path.exists(path):
-        try:
-            shutil.copy2(path, swap)
-            kept = True
-        except OSError as exc:
-            _log.warning("session records: could not keep the replaced store before restoring "
-                         "(%r)", exc)
-    save(store, path)
-    if kept:
-        try:
-            os.replace(swap, backup_path(path))
-        except OSError as exc:
-            _log.warning("session records: restored the store but could not swap the backup (%r)",
-                         exc)
-    return load(path)
 
 
 # ------------------------------------------------------------------ the fast-to-fill half
