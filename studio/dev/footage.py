@@ -17,11 +17,15 @@ check NEEDS; `tests/_footage.py` says which check needs what. Every recording he
 strictly read-only, and opened for reading only. A variable still overrides its default, and a
 variable naming a file that is not there fails rather than skips.
 
-Stdlib only; it resolves paths and opens nothing.
+`PACER_TIMING_DIR` names where the official TIMING SHEETS are, the ground truth of the accuracy table's
+re-measured rows (`timing_dir`).
+
+Stdlib only; it resolves paths and opens nothing but a linked worktree's one-line `.git` pointer.
 """
 from __future__ import annotations
 
 import os
+import re
 
 # THE WORKING SET (the owner's decision, 2026-09-23), each named by its first chapter; sibling
 # discovery (`studio.chapters.discover_siblings`) finds the rest. Every Sandown recording is
@@ -70,3 +74,24 @@ def recording_path() -> str:
 def reference_path() -> str:
     """The second recording `PACER_GOLDEN_REF_MP4` names, or its working-set default."""
     return resolve(REFERENCE_ENV, REFERENCE_DEFAULT)[0]
+
+
+TIMING_ENV = "PACER_TIMING_DIR"
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def timing_dir(repo: str | None = None) -> str:
+    """Where the official timing sheets are by default: `.claude/reference/timing/` of the MAIN
+    checkout, gitignored. The sheets are lap CSVs `studio.dev.clubspeed` writes from a circuit's
+    public heat pages — other drivers' lap times, so never committed, exactly like the D24
+    transponder CSV. A linked worktree (every agent's) finds the main checkout through the
+    `gitdir: <main>/.git/worktrees/<name>` line of its `.git` FILE, so a check reading a sheet runs
+    from any checkout on the dev Mac and skips on a machine without one, CI included."""
+    root = repo or _REPO
+    gitfile = os.path.join(root, ".git")
+    if os.path.isfile(gitfile):
+        with open(gitfile, encoding="utf-8") as f:
+            m = re.match(r"gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/]", f.read().strip())
+        if m:
+            root = m.group(1)
+    return os.path.join(root, ".claude", "reference", "timing")
