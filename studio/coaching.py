@@ -393,6 +393,109 @@ def brake_habits(cids, rows_by_lap) -> dict[int, BrakeHabit]:
     return out
 
 
+# ------------------------------------------- the braking DIRECTION: which way, never how far (L7)
+#
+# WHY THIS EXISTS. The Coaching rows used to end in an ESTIMATED "Brake ~N m later into Cx" line:
+# `BrakeHabit.metres_later`, the distance from the driver's median brake onset to the latest point
+# at which the session's PEAK deceleration, held constant from the onset, still stops at the apex
+# speed. A kart ramps into and trails off the brake and never holds its peak, so that point lies
+# past the driver's braking by construction: the line said "later" at 33 of 33 corners on the four
+# working-set recordings, and at 15 of them no clean lap ever braked as late as it asked. It was a
+# bound of the model, not advice, and every relative restatement of it failed its own test
+# (studio/docs/refused-2026-09.md §16). No Coaching row prints braking metres any more.
+#
+# What the laps DO say, at some corners, is a DIRECTION: rank each clean lap's brake onset against
+# its own time through the corner, and where the two move together beyond chance the row says so, in
+# words and with its lap count. Never with metres — at those same corners the fastest quarter of the
+# passes brakes where a random quarter does (§16), so no distance is measured to print.
+#
+# THE TEST. Spearman ρ between the onset on the reference odometer (`Session._brake_rows`, the list
+# Stats ▸ BRAKING medianizes) and the time through [enter, exit] (`lap_corner_stats`, the time every
+# "Time lost" is a median of), over the clean laps that have both; a two-sided permutation p over
+# BRAKE_DIRECTION_DRAWS shuffles, seeded per corner so a session renders the same verdict every time
+# it opens; the line needs p < BRAKE_DIRECTION_ALPHA, the house α (`stats.COAST_LEAD_ALPHA`). Its
+# SIGN picks the word, so the line can say "earlier" as readily as "later": the defect it replaces
+# was a line that could only ever say one of them.
+BRAKE_DIRECTION_ALPHA = 0.05
+# Shuffles per corner; the house figure (`stats.COAST_SIGNFLIP_DRAWS`). At 10,000 a p near the α is
+# resolved to about ±0.002, which the measured table's closest corner clears by more than twice.
+BRAKE_DIRECTION_DRAWS = 10_000
+
+BRAKE_LATER = "later"      # later onsets went with quicker passes
+BRAKE_EARLIER = "earlier"  # earlier onsets went with quicker passes
+
+
+@dataclass(frozen=True)
+class BrakeDirection:
+    """One corner's brake onset against its time through the corner, over the clean laps that have
+    both. MEASURED: nothing here is modelled, so nothing here is labelled (est)."""
+
+    cid: int
+    n_laps: int   # clean laps with a matched brake onset AND a matched time through this corner
+    rho: float    # Spearman ρ(onset on the reference odometer, time through the corner)
+    p: float      # two-sided permutation p for rho (BRAKE_DIRECTION_DRAWS seeded shuffles)
+
+    @property
+    def verdict(self) -> str | None:
+        """BRAKE_LATER / BRAKE_EARLIER where the laps separate the two at BRAKE_DIRECTION_ALPHA,
+        else None. A NEGATIVE ρ is "later": a later onset (further along the lap) with less time."""
+        if self.p >= BRAKE_DIRECTION_ALPHA or self.rho == 0.0:
+            return None
+        return BRAKE_LATER if self.rho < 0.0 else BRAKE_EARLIER
+
+
+def _avg_ranks(x: np.ndarray) -> np.ndarray:
+    """0-based ranks, a tie given the mean of the ranks it spans (Spearman's convention)."""
+    order = np.argsort(x, kind="mergesort")
+    xs = x[order]
+    starts = np.r_[0, np.flatnonzero(xs[1:] != xs[:-1]) + 1]
+    ends = np.r_[starts[1:], len(xs)]
+    ranks = np.empty(len(x))
+    ranks[order] = np.repeat((starts + ends - 1) / 2.0, ends - starts)
+    return ranks
+
+
+def brake_direction(cid: int, onsets, times, *, draws: int = BRAKE_DIRECTION_DRAWS) -> BrakeDirection:
+    """Spearman ρ of `onsets` against `times` (paired per lap) and its two-sided permutation p:
+    the observed |ρ| ranked against `draws` shuffles of the time ranks, seeded by `cid`. A constant
+    side reads ρ 0, p 1."""
+    a = _avg_ranks(np.asarray(onsets, float))
+    b = _avg_ranks(np.asarray(times, float))
+    a -= a.mean()
+    b -= b.mean()
+    den = float(np.sqrt((a @ a) * (b @ b)))
+    if den == 0.0:
+        return BrakeDirection(cid=int(cid), n_laps=len(a), rho=0.0, p=1.0)
+    rho = float(a @ b) / den
+    shuffled = np.random.default_rng(int(cid)).permuted(np.tile(b, (draws, 1)), axis=1)
+    null = np.abs(shuffled @ a) / den
+    # A hair of tolerance so a shuffle reproducing the observed ρ counts as reaching it (the
+    # `stats.paired_signflip_p` idiom), and the +1s so no finite test reads p = 0.
+    hits = int(np.count_nonzero(null >= abs(rho) - 1e-12))
+    return BrakeDirection(cid=int(cid), n_laps=len(a), rho=rho, p=(1.0 + hits) / (draws + 1.0))
+
+
+def brake_directions(pairs_by_cid: dict) -> dict[int, BrakeDirection]:
+    """Per corner, `brake_direction` over its (onset, time) pairs. A corner with fewer than
+    MIN_BRAKE_LAPS pairs is absent — the braking habit's own floor — rather than tested on a sample
+    too small to rank."""
+    out: dict[int, BrakeDirection] = {}
+    for cid, pairs in pairs_by_cid.items():
+        if len(pairs) < MIN_BRAKE_LAPS:
+            continue
+        onsets, times = zip(*pairs, strict=True)
+        out[int(cid)] = brake_direction(int(cid), onsets, times)
+    return out
+
+
+def brake_direction_line(d: BrakeDirection | None) -> str | None:
+    """The row's braking line, or None where the laps do not separate a direction: "Braking later
+    went with quicker passes here (36 laps)". Words and a count — never metres (see above)."""
+    if d is None or d.verdict is None:
+        return None
+    return f"Braking {d.verdict} went with quicker passes here ({d.n_laps} laps)"
+
+
 @dataclass(frozen=True)
 class Opportunity:
     """One corner's coaching row: how much time is realistically available and why."""

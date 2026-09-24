@@ -2755,6 +2755,12 @@ class Session:
         (`coaching_panel.BRAKE_HINT_MIN_M`), and 0062 does not move at all. It is applied anyway
         because it is one line, because the same window's grip column has counted this way since
         C4, and because both surfaces medianize THIS list, so they stay one answer."""
+        return [row for _lap, row in self._brake_rows_by_lap()]
+
+    def _brake_rows_by_lap(self) -> list[tuple[int, dict]]:
+        """`_brake_rows`, each row with the lap id it was read off — the one list, for the reader
+        that pairs a lap's brake onset with that lap's own time through the corner
+        (`coaching_brake_direction`)."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
         basis = self.corners.basis()
@@ -2762,7 +2768,7 @@ class Session:
             return []
         ref_total = float(basis[1])
         index = {int(c.cid): k for k, c in enumerate(corner_list)}
-        rows: list[dict] = []
+        rows: list[tuple[int, dict]] = []
         for i in ids:
             bps = self.driving.lap_brake_points(i)
             if not bps:
@@ -2786,7 +2792,7 @@ class Session:
             # A lap that matched no corner contributes no row at all, exactly as a lap with no
             # detected brake event does — it lowers n, it never fakes a value.
             if row:
-                rows.append(row)
+                rows.append((i, row))
         return rows
 
     def brake_report(self) -> list[stats_service.BrakeConsistency]:
@@ -3034,11 +3040,33 @@ class Session:
             best_resolved=self.corners.lap_corner_resolved(best),
         )
 
+    def coaching_brake_direction(self) -> dict:
+        """Per corner, which way the clean laps' brake onset went with their time through the
+        corner, keyed by cid → coaching.BrakeDirection: the MEASURED braking line on the Coaching
+        rows since L7 retired the estimated "brake ~N m later" there (see coaching.BrakeDirection).
+        Empty {} without corners / a g signal / clean laps; a corner with too few pairs is absent.
+
+        Both halves are the app's own: the onset is `_brake_rows`' (the list Stats ▸ BRAKING
+        medianizes — clean laps, a corner matched on track, the reference odometer) and the time is
+        that SAME lap's `lap_corner_stats` time, the one every coaching "Time lost" is a median
+        of. Not cached (read on load / re-segment / a unit or palette change only)."""
+        corner_list = self.corners.corner_list()
+        index = {int(c.cid): k for k, c in enumerate(corner_list)}
+        pairs: dict[int, list[tuple[float, float]]] = {}
+        for lap, row in self._brake_rows_by_lap():
+            st = self.corners.lap_corner_stats(lap)
+            for cid, entry in row.items():
+                k = index.get(int(cid))
+                if k is None or k >= len(st) or not np.isfinite(st[k].time):
+                    continue
+                pairs.setdefault(int(cid), []).append((float(entry[0]), float(st[k].time)))
+        return coaching.brake_directions(pairs)
+
     def coaching_brake_points(self) -> dict:
-        """The per-corner BRAKING HABIT over the clean laps, keyed by cid → coaching.BrakeHabit,
-        for the coaching surfaces' ESTIMATED "brake ~N m later" hint (D4). Empty {} without
-        corners / a g signal / clean laps. One source so the modal dialog AND the persistent panel
-        append the SAME hint.
+        """The per-corner BRAKING HABIT over the clean laps, keyed by cid → coaching.BrakeHabit —
+        the ESTIMATED "brake ~N m later" figure (D4). No surface prints it since L7 took it off the
+        Coaching rows (`coaching_brake_direction` is their braking line now); Stats ▸ BRAKING prints
+        the same median through `brake_report`. Empty {} without corners / a g signal / clean laps.
 
         It reads `_brake_rows` — the SAME per-lap list `brake_report` aggregates for the Stats ▸
         BRAKING table — so the metres this prints are the metres that table prints. It used to be
