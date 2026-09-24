@@ -1,6 +1,7 @@
 # Pacer
 
-*The case study as a web page: [eenndan.github.io/pacer](https://eenndan.github.io/pacer/)*
+*The case study as a web page: [eenndan.github.io/pacer](https://eenndan.github.io/pacer/) · how
+it was built, in eight measured stories: [docs/ENGINEERING.md](docs/ENGINEERING.md)*
 
 **A macOS race-telemetry workstation built from a single GoPro file, with its lap timing validated
 against a real transponder — and the engineering case study behind it.**
@@ -197,6 +198,10 @@ discipline: one focused pull request per change, gated by the golden-equivalence
 footage and the full suite before it merges. The rigour above is what makes that workflow safe —
 the guardrails do the trusting so the agents can do the typing. 203 merged pull requests went into
 the v0.2.0 cycle alone.
+
+What that looks like in practice, as eight times a measurement overturned the plan, is in
+**[docs/ENGINEERING.md](docs/ENGINEERING.md)**. The rules the agents work by are in
+[docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md).
 
 ## Built, measured, not shipped
 

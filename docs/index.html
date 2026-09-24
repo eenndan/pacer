@@ -294,6 +294,9 @@
     .split { grid-template-columns: 1fr; gap: var(--space-xl); }
     .grid-2 { grid-template-columns: 1fr; }
     .feature-list { grid-template-columns: 1fr; }
+    /* The fourth nav item only fits beside the brand on a wide bar: at 565 px it wrapped the
+       other links onto two lines and the button onto three. The section is still one scroll away. */
+    .nav-links a.wide { display: none; }
   }
   @media (max-width: 560px) {
     section { padding: var(--space-2xl) 0; }
@@ -318,6 +321,7 @@
     <div class="nav-links">
       <a class="long" href="#accuracy">Accuracy</a>
       <a class="long" href="#built">How it's built</a>
+      <a class="long wide" href="#engineering">Engineering notes</a>
       <a class="btn" href="https://github.com/eenndan/pacer">Source on GitHub</a>
     </div>
   </div>
@@ -508,6 +512,30 @@
         <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it, so whoever proposes it next starts from the evidence. The longer investigations are kept the same way: <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gps-accuracy-research.md">GPS lap-timing accuracy</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/upstream-20ms-investigation.md">an upstream “~20&nbsp;ms vs transponder” claim</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/friction-circle-release-investigation.md">brake release from the friction circle</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/measured-channels-2026-09.md">sideslip, wheel hop and a bump map as channels</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gmeter-validation.md">the g-meter against GPS</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/grip-regrounding-2026-09.md">the grip column, re-grounded</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/corner-match-0060-2026-09.md">why one recording matched far fewer of its corners</a> and <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/start-line-verification.md">the start/finish line</a>. Most were measured on D24 and say so at the top.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ===================== ENGINEERING NOTES ===================== -->
+<section id="engineering">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Engineering notes</p>
+      <h2>Eight times a measurement overturned the plan.</h2>
+      <p class="muted">A design, a review or a published figure, each proved wrong by a number, and each written up with the pull request, test or document that holds it.</p>
+    </div>
+    <ul class="feature-list">
+      <li><strong>4.5×</strong> the per-lap spread of a fitted clock against a transponder, next to the clock the camera writes itself. The fit was deleted.</li>
+      <li><strong>44 %</strong> of the ideal lap's headline gap was an artefact of how laps were aligned. One alignment frame per lap removed it.</li>
+      <li><strong>+0.493 s</strong> was the worst of twelve corner phase bars that integrated speed instead of reading the clock.</li>
+      <li><strong>0.46 s</strong> is how late the GPS lands against the picture. The gyroscope found it, and the fix takes it out at one seam.</li>
+      <li><strong>0.41 ms</strong> is the lap-time error on a synthetic GoPro recording with known truth, built after the equivalence gate was caught passing two reverted fixes.</li>
+      <li><strong>14</strong> features were built far enough to measure, then refused on the number.</li>
+      <li><strong>σ 0.0247 s</strong> re-proves the accuracy claim on current footage, against a circuit's published timing.</li>
+      <li><strong>11.9 GB</strong> of recording was lost to an output path read as an input. The structural guards that followed are listed.</li>
+    </ul>
+    <p style="margin-top: var(--space-xl)">
+      <a href="https://github.com/eenndan/pacer/blob/main/docs/ENGINEERING.md">Read the engineering notes, and a 15-minute tour of the five files that matter&nbsp;→</a>
+    </p>
   </div>
 </section>
 
