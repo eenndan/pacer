@@ -156,7 +156,7 @@ algorithm; the service just caches + delegates.
 | [logsetup.py](logsetup.py) | The app log: stderr plus a rotating `logs/pacer.log` under app-support | — | `test_session_log` |
 | [library.py](library.py) | The session library `library.json`: one entry per recording fingerprint, PB series | — | `test_library` |
 | [track_db.py](track_db.py) | `tracks.json` + built-in circuits; rename/delete with refusals and a `.bak` | — | `test_track_db` |
-| [session_record.py](session_record.py) | Per-recording conditions, tyres and setup (`session_records.json`), `prefill` | — | `test_session_record` |
+| [session_record.py](session_record.py) | Per-recording conditions, kart no., tyres and setup (`session_records.json`), `prefill` | — | `test_session_record` |
 | [marks.py](marks.py) | Manual marks (`marks.json`) and derived auto marks, anchored to chapter time | — | `test_marks` |
 | [sidecar.py](sidecar.py) | Timing lines beside the MP4 (`<stem>.pacer.json`), in absolute lat/lon | — | `test_sidecar` |
 | [prefs.py](prefs.py) | UI preferences `prefs.json`: units, palette, active tab, splitter sizes | — | `test_prefs` |
@@ -192,7 +192,7 @@ algorithm; the service just caches + delegates.
 | [help_dialog.py](help_dialog.py) | `COMMANDS`, the one command registry, and the Help-menu dialogs | Qt | `test_help_dialog` |
 | [command_palette.py](command_palette.py) | ⌘K, generated from the live menu bar and `COMMANDS` | Qt | `test_command_palette` |
 | [library_dialog.py](library_dialog.py) | File ▸ Library…: sessions, PB chart, session records; writes nothing | Qt | `test_library` |
-| [session_record_dialog.py](session_record_dialog.py) | The session-record form; no file I/O | Qt | `test_session_record` |
+| [session_record_dialog.py](session_record_dialog.py) | The session-record form; no store I/O (remembers its "Own kart…" fold in prefs) | Qt | `test_session_record` |
 | [track_dialog.py](track_dialog.py) | Saved-tracks manager: rename/delete through injected callbacks | Qt | `test_track_db` |
 | [widgets.py](widgets.py) | Shared Qt primitives: `PanelHeader`, `PanelToolbar`, `WrapLabel` | Qt | `test_design_system` |
 | [theme.py](theme.py) | The design system: tokens `C`, fonts, palette + QSS, icons, brand mark | Qt | `test_design_system` |

@@ -1,10 +1,11 @@
 """The session-record editor: the form that makes cross-session comparison mean anything.
 
-A self-contained QDialog over ONE ``studio.session_record`` record dict. It does no file I/O of
+A self-contained QDialog over ONE ``studio.session_record`` record dict. It does no store I/O of
 its own — the caller loads the store, hands in the record (or ``session_record.prefill``'s
 pre-populated blank) and takes the edited record back from ``result_record()`` — so the dialog
-stays hermetic in tests and the app owns every write, the same dependency-injected split
-``library_dialog`` uses.
+stays hermetic in tests and the app owns every record write, the same dependency-injected split
+``library_dialog`` uses. The one thing it keeps itself is a UI choice, whether "Own kart…" is open
+(``studio.prefs``), exactly as the Library dialog keeps its own size.
 
     ┌────────────────────────────────────────────────┐
     │  Daytona MK · 2026-06-14 · 22 laps · 1:08.201  │ ← AUTO-STAMPED: what the app already knows
