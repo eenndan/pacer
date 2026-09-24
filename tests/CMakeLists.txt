@@ -54,7 +54,7 @@ set(_no_bindings
 set(_no_media
     test_chart_instruments test_command_palette test_load_lifecycle test_marks test_media_clock
     test_playback_rate test_provenance_panel test_quality_chip_trust test_quality_strip
-    test_session_log test_welcome_first_touch)
+    test_session_log test_synth_gopro test_welcome_first_touch)
 # + PACER_CTEST_COMMAND / PACER_CTEST_DIR, for a test that lists this build's own registrations:
 set(_ctest test_app_support_jail test_footage_checks)
 #

@@ -236,6 +236,17 @@ committed baseline (eps 1e-9) + determinism + the media-clock invariants. COMPLE
 GPS9 gate (hero6 is media-clock-fallback). Imports Session -> Qt, so run offscreen.
 ```
 
+## test_synth_gopro
+
+```text
+The real loader on a recording WITH LAPS (B1a, board review RISK-7): studio/dev/synth_gopro.py
+writes a synthetic HERO13-shaped two-chapter .MP4 (GPS9 + ACCL/GYRO/GRAV/CORI, a fictional
+7-corner circuit, 14 laps) into a temp dir with its ground truth, and Session.load reads it back:
+GPS9 true clock, lap count, lap times vs truth (0.41 ms noise-free at a mid-straight line, 23 ms
+with the default noise at the app's own line), corners, Stats tiles, ranked coaching, IMU checks,
+same seed -> same bytes. ~9 s; the video trak needs the pixi env's ffmpeg.
+```
+
 ## test_unreadable_chapter
 
 ```text

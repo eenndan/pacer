@@ -89,6 +89,28 @@ what it measured — missing, unreadable, not an MP4 container, not parseable as
 that are not importable in this run — and never guesses at a cause
 (`studio.dev.golden_session_dump.preflight`, held by `test_golden_hermetic.py`).
 
+## The synthetic GoPro recording (real loader, known truth)
+
+[studio/dev/synth_gopro.py](../studio/dev/synth_gopro.py) writes a HERO13-shaped chaptered
+recording (`GX019001.MP4`, `GX029001.MP4`) of a fictional ~971 m, 7-corner clockwise circuit in the
+open Atlantic: an ffmpeg H.264 video trak plus a `GoPro MET` gpmd trak carrying GPS9 (10 Hz, UTC
+clock, DOP/fix, noise, two teleport glitches), ACCL/GYRO (ZXY) and GRAV/CORI (XZY) from one
+rigid-body motion, the 0.46 s GPS lag and 27 ppm media clock measured on the owner's cameras. No
+person, kart or real place is in it. It returns the `Truth` it was built from: `Truth.lap_times(line)`
+times the laps at ANY line (pass the app's own, `Session.timing_lines_latlon()[0]`),
+`Truth.line_at(s)` makes one, and `build()` gives the telemetry bytes without writing files.
+[test_synth_gopro.py](test_synth_gopro.py) (~9 s) generates it into a temp dir and runs the real
+`Session.load` on it — the only CI fixture where the real loader segments laps (hero6 has none).
+Measured on the fixed seed: noise-free at a mid-straight line every lap is within **0.41 ms** of
+truth; with the default noise at the app's own line, max **23.4 ms**, mean +2.6 ms.
+
+```bash
+pixi run python -m studio.dev.synth_gopro --out /path/to/new-dir   # refuses a non-empty dir
+```
+
+Knobs: `--seed`, `--laps` (14), `--chapters` (2), `--gps-noise` (1.0; 0 is noise-free),
+`--mirror` (anticlockwise); from Python also `gps_lag_s` and `media_ppm`.
+
 ## Real-footage checks
 
 Fourteen checks re-measure something on a real recording, and each is its own CTest registration,
