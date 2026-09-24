@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Fifteen features were built far enough to **measure**, and the measurement said not to ship them. The
+Sixteen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1394,6 +1394,82 @@ the lap-time error in ms). "Held peak" is what X1 shipped: the maximum of the sp
 **What would be new evidence:** a recording with official timing whose residual at the timing loop
 itself shows a braking-point bias above ~5 ms, or a position smoother whose noise does not grow as
 the crossing slows.
+
+---
+
+## 16. A relative braking-room hint in place of the absolute "brake ~N m later" — refused (L6)
+
+**The claim.** Board review UX-2: the estimated brake-point hint — "Brake ~11 m later into C7 (est)"
+on a coaching row, and the "m later" column of Stats ▸ BRAKING, one number since #349 — is positive
+at every corner, so the one figure a driver would act on literally cannot say *where*. Its optimum
+is the apex-speed stop at the session's demonstrated **peak** deceleration held constant from the
+onset; a kart that ramps into and trails off the brake never sustains its peak, so the optimum lands
+past the driver's brake point by construction. Present the room *relative* instead: the driver's own
+best-quartile onset against his median onset, or the hint minus the session's across-corner median.
+Success: the sign or size varies across corners beyond its own noise, and at least one corner reads
+"already on your best braking".
+
+**How it was tested.** `studio/dev/probes/p17_braking_room.py` loads all four working-set
+recordings — SD_19_09 (0068), Sandown 3h (0064) and SD_30_08 (0065), clockwise, 7 corners, and
+MK_18_09 (0067), the anticlockwise control on another track, 12 corners — rebuilds the per-lap list
+both braking surfaces medianize and asserts it equal to the app's (`Session._brake_rows`), and reads
+three candidates per corner. **R3** is the review's first option read literally: the latest-braking
+quarter's onset minus the median onset. **R2** is its second: the hint minus the recording's
+across-corner median of it. **R1** reads the first the way the coaching rows read "Done it?": the
+median onset of the corner's *fastest* quarter of passes minus everyone's. Each is held to its own
+noise bar — half the corner's IQR (`coaching.SPREAD_MARGIN`), or for R1 a seeded permutation null of
+random quarters — and to the lap outcome: Spearman ρ of the onset against the time through
+[enter, exit], [enter − 60 m, exit] and [enter − 100 m, exit], with a permutation p, and whether the
+latest-braking quarter is quicker than a random quarter.
+
+**The premise holds, and its cause shows.** The hint is positive at **33 of 33** corners (+1.8 …
++47.2 m), and at **15 of 33** no clean lap ever braked at or past the optimum it names. The driver's
+own mean deceleration from onset to apex is **0.36–0.44 × a_max** (the four recordings' medians;
+IQR 0.25–0.57), and across corners the hint follows the braking zone's energy drop
+(v_onset² − v_apex²)/2 — Spearman ρ **+0.50, +0.89, +0.93, +0.80** on 0068, 0064, 0065 and 0067. It
+mostly says how much speed each corner takes off.
+
+**Each relative candidate fails a different test.**
+
+| candidate | (a) sign / size varies | (b) beyond its noise bar | (c) reads "already on your best" | (d) the lap outcome |
+|---|---|---|---|---|
+| R3: latest quarter − median onset | size only, never negative | it *is* the onset scatter: BRAKING's σ and span, restated | 16/33 (under 2 m) | the latest-braking quarter is quicker than a random quarter at **0/33**, slower at **2/33** |
+| R2: hint − across-corner median | sign, by construction | 5/21 Sandown and 7/12 MK corners clear ½ IQR | no such reading | wrong sign at 2 of the 6 corners where the outcome speaks |
+| R1: fastest quarter − median onset | −9.0 … +6.1 m | outside its permutation null at **0/33** (0068 C5 on the edge) | all 33 | built from the outcome, which says "where you usually brake" at every corner |
+
+- **R3 would ask for the braking that cost time.** Its largest Sandown values are 0064's C6
+  (11.6 m) and C4 (10.1 m). At C4 the latest-braking quarter's median pass was **0.42 s slower**
+  through the corner than the median of all passes (0.51 s from 60 m out), outside the band a random
+  quarter reaches; C2 on the same recording, +0.17 s. Nor is R3 new: a corner's latest quarter
+  minus its median is its onset scatter, which the BRAKING table already prints as σ and span.
+- **R2 ranks the track, not the driver.** With the hint following the energy drop, subtracting a
+  median only moves the uniform sign onto the corners that take off the least speed. The three
+  Sandown days agree on R2's sign at 3 of 7 corners: C4 and C6, the two lightest applications
+  (26–29 and 14–25 J/kg), always negative, and C5 always positive. Where the outcome does speak
+  (the six corners below), R2 has the wrong sign at two, one of them 0064 C6 (ρ −0.42, p 0.001),
+  where it reads −6.3 m, the least room on that recording.
+- **R1 is the defect's mirror image.** The fastest quarter brakes where the driver usually brakes
+  at every corner of every recording, so it would print "already on your best braking" 33 times,
+  as uniform as "brake later" and just as silent about where.
+
+**The one signal there is, and why it is still not a distance.** Later onsets go with quicker
+passes at **6 of 33** corners (p < 0.05 on the corner time: 0068 C3 and C5, 0064 C6, 0065 C3,
+0067 C2 and C8) and with slower ones at **none**. Sandown's C3 reads that way on 0068 and 0065, and
+0064 has the same sign (ρ −0.40, −0.36, −0.22). But even at those six the fastest quarter's median
+onset sits 0.8–1.4 m from everyone's (3.4 m at MK's C8), inside its permutation null at all six. The
+footage backs a direction there, not a distance, and no R1 value clears its noise bar at these
+corners or any other.
+
+**What moves because of this refusal: nothing.** The absolute estimate stays where #349 put it
+(the Coaching rows and Stats ▸ BRAKING, labelled `(est)`) and stays off the first-open debrief
+(#391). Whether a figure that is positive at 33 of 33 corners by construction should stay on the
+ordinary Coaching page is the owner's call; this section is its evidence.
+
+**What would be new evidence:** an outcome-grounded per-corner claim — "your quicker passes braked
+later here", from the rank correlation above — that survives a family-wise correction over the
+recording's corners and replicates on a second recording of the same track, with a distance whose
+noise bar clears `BRAKE_HINT_MIN_M`; or a braking model fitted to the deceleration profile a kart
+actually produces (ramp-in and trail-off, not a constant peak) whose optimum some clean laps reach.
 
 ---
 
