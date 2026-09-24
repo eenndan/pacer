@@ -169,6 +169,26 @@ def directory(env: str, what: str, needs) -> str:
     return path
 
 
+def timing_sheet(name: str) -> str:
+    """The official timing sheet `name` (a lap CSV) that a re-measured row of docs/ACCURACY.md was
+    validated against: in the folder `PACER_TIMING_DIR` names, else its default, the main checkout's
+    gitignored `.claude/reference/timing/` (`studio/dev/footage.py`). The sheets list other drivers,
+    so no machine but the dev Mac has one. From a NAMED folder a missing sheet FAILS; from the
+    default it is a SKIP naming what is missing."""
+    folder, named = _dev.resolve(_dev.TIMING_ENV, _dev.timing_dir())
+    path = os.path.join(folder, name)
+    if named:
+        assert os.path.isfile(path), (
+            f"{_dev.TIMING_ENV}={os.environ.get(_dev.TIMING_ENV)!r}: there is no {name} in {folder}")
+        return path
+    _defaults_in_use(f"the timing sheet {name} under {folder}")
+    if os.path.isfile(path):
+        return path
+    raise FootageMissing(f"{_dev.TIMING_ENV} is unset, and its default — the timing sheet {name} "
+                         f"under {folder} — is not on this machine (sheets are never committed; "
+                         f"studio/dev/clubspeed.py makes one from the circuit's heat pages)")
+
+
 def requested(argv: list[str] | None = None) -> bool:
     """Whether this process was started as one footage registration (`--footage <check>`)."""
     return FLAG in (sys.argv if argv is None else argv)
