@@ -7,11 +7,43 @@ pacer-touching modules (see AGENTS.md).
 
 from __future__ import annotations
 
+import contextlib
+import threading
+
 import numpy as np
 
 import pacer
 
 from . import chapters
+
+
+class LoadCancelled(Exception):
+    """The payload walk stopped because the load it belongs to was abandoned (see `cancellable`)."""
+
+
+# The cancel check installed for reads on THIS thread (see `cancellable`). Thread-local, so the check
+# a load worker installs for its own read can never stop a read another thread is doing.
+_cancel = threading.local()
+
+
+@contextlib.contextmanager
+def cancellable(is_cancelled):
+    """Run the reads this thread makes inside the block under `is_cancelled`: the GPS payload walk
+    asks it once per payload and raises `LoadCancelled` as soon as it answers True.
+
+    The walk is the one stage of a load whose length the FILE decides — one payload a second of
+    footage, through a Python loop — so it is where a load can run for as long as a file says.
+    A damaged moov once made it walk empty payload indices for hours, queueing every later open
+    behind it and turning quit into a 60 s wait and an abort; the C++ cursor is bounded by the
+    payload count now, and this is what lets an open or a quit stop any read that is merely slow.
+    The check is a Python call in a loop that already crosses the binding several times per
+    payload, so it costs nothing measurable."""
+    previous = getattr(_cancel, "check", None)
+    _cancel.check = is_cancelled
+    try:
+        yield
+    finally:
+        _cancel.check = previous
 
 # `carries_telemetry`'s three answers. THREE, and the third is the point, exactly as in
 # `chapters.probe_mp4`: "I opened this file and pacer found no GoPro telemetry in it" and "I could
@@ -105,10 +137,14 @@ def chain_sources(paths):
 
 def _read_gps_over(head):
     """Walk an already-built `head` -> (samples, spans, naive): seek(0) then iterate the payload
-    cursor to the end."""
+    cursor to the end — or raise `LoadCancelled` at the first payload after this thread's
+    `cancellable` check answers True."""
     samples, spans, naive = [], [], []
+    is_cancelled = getattr(_cancel, "check", None)
     head.seek(0)
     while not head.is_end():
+        if is_cancelled is not None and is_cancelled():
+            raise LoadCancelled("the load was abandoned during its GPS read")
         a, b = head.current_time_span()
         chunk = []
         head.read_samples(lambda s, i, n, _c=chunk: _c.append((s, i, n)))

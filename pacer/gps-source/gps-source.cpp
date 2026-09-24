@@ -69,6 +69,15 @@ uint32_t GPMFSource::Seek(double target) {
 void GPMFSource::Next() { ++index_; }
 
 bool GPMFSource::IsEnd() {
+  // The payload COUNT ends the walk, not only the metadata track's time.
+  // GetPayloadTime computes a span for ANY index, clamped only by the track's
+  // stated duration, and never checks the index against the payload count; a
+  // damaged moov whose GPMF track claims 10^9 s (its video trak still saying
+  // 12.6 s) walked ~800k empty indices a second for hours, wedging the load.
+  // ReadStream already iterates by count, so both cursors now agree.
+  if (index_ >= GetNumberPayloads(mp4handle_)) {
+    return true;
+  }
   double span_in = 0, span_out = 0;
   if (GetPayloadTime(mp4handle_, index_, &span_in, &span_out) != GPMF_OK) {
     return true;
@@ -376,6 +385,33 @@ void GPMFSource::ReadCori(std::function<void(QuatSample)> on_sample) {
   });
 }
 
+namespace {
+
+// A fixed-width GPMF char field (DVNM / ORIN / ORIO) as text: the NUL / space
+// padding it is written with trimmed off the end, and every byte outside
+// printable ASCII replaced by '?'. GPMF declares these fields ASCII, but a
+// damaged payload can hold any byte, and the binding hands a std::string to
+// Python as UTF-8: one 0xFF in DVNM failed a whole load with a
+// UnicodeDecodeError, although the name selects nothing numeric. "" when only
+// padding remains.
+std::string FieldText(const char *raw, uint32_t nbytes) {
+  std::string out(raw, nbytes);
+  size_t end = out.find_last_not_of(std::string("\0 \t\r\n", 5));
+  if (end == std::string::npos) {
+    return {};
+  }
+  out.resize(end + 1);
+  for (char &c : out) {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte < 0x20 || byte > 0x7E) {
+      c = '?';
+    }
+  }
+  return out;
+}
+
+} // namespace
+
 std::string GPMFSource::DeviceName() const {
   // DVNM is a per-PAYLOAD constant written inside every DEVC container, so the
   // first payload that has one answers for the whole file. Bounding the scan
@@ -410,12 +446,10 @@ std::string GPMFSource::DeviceName() const {
     // The field is a fixed-width char run, so it is NUL- (and sometimes
     // space-) padded to the struct width; trim rather than hand the padding
     // back to the caller.
-    std::string name(raw, nbytes);
-    size_t end = name.find_last_not_of(std::string("\0 \t\r\n", 5));
-    if (end == std::string::npos) {
+    std::string name = FieldText(raw, nbytes);
+    if (name.empty()) {
       continue;
     }
-    name.resize(end + 1);
     return name;
   }
   return {};
@@ -444,13 +478,7 @@ std::string ReadStreamCharField(const GPMF_stream &sm, uint32_t fourcc) {
   if (raw == nullptr || nbytes == 0) {
     return {};
   }
-  std::string out(raw, nbytes);
-  size_t end = out.find_last_not_of(std::string("\0 \t\r\n", 5));
-  if (end == std::string::npos) {
-    return {};
-  }
-  out.resize(end + 1);
-  return out;
+  return FieldText(raw, nbytes);
 }
 
 } // namespace

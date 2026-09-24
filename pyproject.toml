@@ -171,6 +171,10 @@ golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --outp
 smoke = { cmd = "python -m studio.dev._smoke --no-video", depends-on = ["build"], env = { PYTHONPATH = "bindings/pacer" } }
 gen-bindings = "python bindings/pacer/generate-bindings.py"
 studio = { cmd = "python -m studio", depends-on = ["build"] }
+# The `--demo` recording (studio/dev/make_demo.py): a SYNTHETIC session — generated, not filmed —
+# written to the new file named by `pixi run make-demo -- --out <file.mp4>`. numpy + the env's
+# ffmpeg, so it needs no build; the release asset studio/demo.py pins is this command's output.
+make-demo = "python -m studio.dev.make_demo"
 # fmt excludes the litgen-GENERATED nanobind_pacer.cpp: the CI regen-drift gate
 # requires it to match the generator's raw output byte-for-byte, so it must
 # never be reformatted. fmt-check is the same file set, non-mutating (CI gate).

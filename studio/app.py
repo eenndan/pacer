@@ -148,14 +148,14 @@ VIEW_BUILD_FAILURE_MESSAGE = (
 # that can reach this state (the CLI flag at startup and a resolve that came back None), because
 # they are the same sentence and they had drifted into two copies of it.
 #
-# IT NO LONGER OFFERS A RETRY, and that is the point of the copy edit: it used to say "check your
-# connection and retry", which was true only of a download of an asset that was never published
-# (docs/FIRST_LAP.md). Retrying could not work, and the button to retry WITH is not on the welcome
-# screen any more (studio.demo.demo_available gates it), so the sentence would have named a control
-# that is not there. It states what is true — this build has no demo — and the one door that is.
+# IT OFFERS NO RETRY BUTTON: the one to retry WITH is not on the welcome screen (studio.demo.
+# demo_available gates it), so the sentence must not name a control that is not there. It used to
+# say "Pacer doesn't ship one", true while the asset had never been published; since the synthetic
+# demo was (demo-data-v1), the only way here is a download that failed — offline, or not the pinned
+# file — so it names that, and the one door that is on screen.
 DEMO_UNAVAILABLE_MESSAGE = (
-    "No demo recording is available on this machine — Pacer doesn't ship one. Use Open recording… "
-    "below, or drop a GoPro .mp4 on this window, to get your laps.")
+    "The demo session couldn't be downloaded — it is fetched once, the first time. Use Open "
+    "recording… below, or drop a GoPro .mp4 on this window, to get your laps.")
 
 
 _log = logging.getLogger("studio.app")
@@ -537,7 +537,7 @@ class StudioWindow(QMainWindow):
             self._load(paths)
         elif demo_unavailable:
             # `--demo` was requested but the demo couldn't be resolved (no env var, no cache, and
-            # the download — of an asset that was never published — failed): show the welcome state
+            # the download failed — offline, or not the pinned file): show the welcome state
             # with an honest message rather than silently launching the lapless bundled sample
             # (which reads as a broken app).
             self._show_welcome(error=DEMO_UNAVAILABLE_MESSAGE)
@@ -727,10 +727,11 @@ class StudioWindow(QMainWindow):
         THE SECOND CTA IS OFFERED ONLY IF IT CAN LAND SOMEWHERE. `demo.demo_available()` is the
         offline half of the resolver (env var or cache — no network), and passing None instead of
         the handler is what leaves the demo button off the card entirely. The button used to be
-        unconditional, so on any machine without the env var or a cache — i.e. every machine, since
-        the release asset it would otherwise download was never published — the obvious
-        low-commitment click on a first run produced an apology (§6.7). Asked for at the CLI with
-        `--demo` it is still ATTEMPTED, download and all; this decides only what the UI offers."""
+        unconditional, so on any machine without the env var or a cache — i.e. every machine, while
+        the release asset it would otherwise download was unpublished — the obvious low-commitment
+        click on a first run produced an apology (§6.7). Asked for at the CLI with `--demo` it is
+        ATTEMPTED, download and all, and caches the demo for every later launch; this decides only
+        what the UI offers."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
         on_demo = self._open_demo if demo.demo_available() else None
@@ -867,8 +868,10 @@ class StudioWindow(QMainWindow):
         shows immediately and the window stays responsive. SINGLE-FLIGHT: only ONE load runs at a
         time — a superseding _load (e.g. a second drag-drop) is QUEUED rather than run concurrently
         (no point loading two recordings at once, and serializing keeps the supersede ordering
-        clean). It shows the placeholder, bumps the token, and starts when the current worker
-        finishes; the older in-flight result is ignored by token (see the completion slots)."""
+        clean). It shows the placeholder, bumps the token, CANCELS the running read (its result is
+        stale either way) and starts when that worker finishes; the older in-flight result is
+        ignored by token (see the completion slots). Queued without the cancel, one damaged
+        recording whose read ran for hours held every later open behind it."""
         print("studio: loading telemetry…", flush=True)
         self._drop_notice = drop_notice
         # Bump the token: any in-flight worker started by a previous _load is now stale and its
@@ -882,9 +885,10 @@ class StudioWindow(QMainWindow):
         self._arm_loading_placeholder(token, paths)
         # Single-flight: if a worker is already running, remember only the LATEST request and start
         # it when the current one finishes — no point running two loads at once, and queuing keeps
-        # the supersede ordering clean.
+        # the supersede ordering clean. Its result is stale now, so stop its read rather than wait.
         if self._load_worker is not None and self._load_worker.isRunning():
             self._pending_load = (token, list(paths))
+            self._load_worker.cancel()
             return
         self._start_load_worker(token, paths)
 
@@ -937,11 +941,11 @@ class StudioWindow(QMainWindow):
 
         WHOSE LIFETIME — this belongs to the worker's own `finished` signal and NOWHERE else. The
         two paths that abandon a load, the loading card's Cancel (_cancel_load) and a superseding
-        _load, deliberately do not stop the thread: Session.load is one uninterruptible synchronous
-        call inside run(), so the worker always runs to completion and only its RESULT is discarded,
-        by the token guard. Releasing it from either of those would free a QThread that is still
-        running — turning a benign leak into a crash. `finished` is emitted after run() has
-        returned, so the only worker this can ever see is a stopped one.
+        _load, only ASK the worker to stop (`SessionLoadWorker.cancel`, honoured at the next GPS
+        payload): run() still returns in its own time and its RESULT is discarded by the token
+        guard. Releasing it from either of those would free a QThread that is still running —
+        turning a benign leak into a crash. `finished` is emitted after run() has returned, so the
+        only worker this can ever see is a stopped one.
 
         deleteLater(), not del: we are inside the emission of the very signal that called us, so the
         destruction is deferred to the next event-loop turn. Destroying the QThread is also what
@@ -1081,6 +1085,12 @@ class StudioWindow(QMainWindow):
         # finishes mid-teardown is ignored (its set_reference_session apply is dropped by the token
         # guard) — matching how the primary load's token already supersedes any in-flight worker.
         self._ref_load_token += 1
+        # Both results are now unwanted, so stop both reads at their next GPS payload rather than
+        # wait them out: a read stuck on a damaged file held quit for the drain's full 60 s and then
+        # destroyed the still-running QThread — an abort (exit 134) instead of a quit.
+        for loader in (getattr(self, "_load_worker", None), getattr(self, "_ref_load_worker", None)):
+            if loader is not None:
+                loader.cancel()
         self._drain_load_workers()
         super().closeEvent(event)
 
@@ -1580,17 +1590,19 @@ class StudioWindow(QMainWindow):
     def _cancel_load(self, token: int):
         """Cancel on the loading card: stop WAITING for load `token` and hand the window back.
 
-        The read is not interrupted — Session.load is one synchronous call inside the worker with
-        no cooperative checkpoint — so the worker runs to completion and its result is dropped by
-        the token guard, exactly as a superseding _load's result already is. What the user gets back
-        immediately is the session they had (rebuilt through the same path a failed reload uses), or
-        the welcome state when there was nothing loaded yet. Ignores a stale click: the card on
-        screen belongs to a load that has already settled or been superseded."""
+        The worker is asked to stop its read at the next GPS payload (the one checkpoint a load
+        has); whatever it still emits is dropped by the token guard, exactly as a superseding
+        _load's result already is. What the user gets back immediately is the session they had
+        (rebuilt through the same path a failed reload uses), or the welcome state when there was
+        nothing loaded yet. Ignores a stale click: the card on screen belongs to a load that has
+        already settled or been superseded."""
         if token != self._load_token:
             return
         self._load_token += 1        # the in-flight result is now stale and will be dropped
         self._loading_token = None
         self._pending_load = None    # and nothing queued behind it starts either
+        if self._load_worker is not None:
+            self._load_worker.cancel()
         self._cancel_placeholder_timer()
         # Keyed off the SESSION, not self.view: the loading card disposes the outgoing view and
         # sets self.view to None, so a view test here would send a cancelled reload to the welcome
@@ -3549,6 +3561,7 @@ class StudioWindow(QMainWindow):
         token = self._ref_load_token
         if self._ref_load_worker is not None and self._ref_load_worker.isRunning():
             self._pending_reference_load = (token, list(paths))
+            self._ref_load_worker.cancel()  # its result is stale now: stop the read, as _load does
             return
         self._start_reference_worker(token, paths)
 
