@@ -49,22 +49,39 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       restoring the 0.5 % gate moves 68 of this phase's 15,451 leaves (coaching
                       rows, per-lap corner stats and segment times; max |Δ| 5.84 on an entry
                       speed) and 0 of the five phases above it.
+  * ``gopro``       — THE REAL LOADER (B1b; board review RISK-7). Every phase above is a SEEDED
+                      Session: no GPMF, no ``pacer.Laps`` crossing interpolation, no valid-lap band,
+                      2-4 laps against lap-count gates of 5-8 (`MATRIX_MIN_LAPS`, `TREND_MIN_LAPS`,
+                      `MIN_SPLIT_LAPS`, `corners.ANCHOR_MIN_LAPS`), so 116 of their leaves were the
+                      placeholder and coaching was fingerprinted as two abstaining rows. This phase
+                      writes the synthetic GoPro recording (studio/dev/synth_gopro.py: a HERO13-shaped
+                      two-chapter .MP4, GPS9 with noise/glitches/an acquisition period, IMU, the
+                      measured clock offsets; fixed seed) into a temp dir and loads it through
+                      ``chapters.discover_siblings`` -> ``Session.load``, jailed, then fingerprints it
+                      STRICT: 14 valid laps, one across the chapter seam, every gate crossed, ranked
+                      coaching rows, a stitched ideal lap — and not one placeholder.
+  * ``gopro_sectors``— the same session after the user places two sector lines (mid-straight, via
+                      the sidecar path ``apply_timing_lines_latlon``): a real re-segmentation, and the
+                      lap table's S-columns, session-best splits, the SPLITS grid and the sector
+                      provenance, which a session with no sector line prints none of.
 
 It then compares the whole fingerprint against a COMMITTED baseline
 (tests/golden_synthetic_baseline.json, generated on main in the pixi env) via golden_compare.walk
 at eps 1e-9 — so ANY drift in a Session-math leaf FAILS the build. This is the CI-runnable
 equivalence gate for every future Session refactor.
 
-Scope note: this COMPLEMENTS, it does NOT replace, the manual D24 gate. The synthetic session has
-no pacer ``Laps`` object, so the C++ Laps passthroughs (lap_count, sector geometry, session_date,
-lap_rows, ...) fall to the sentinel here; the full, higher-coverage fingerprint over the real
-recording (``python -m studio.dev.golden_session_dump`` + ``golden_compare``) stays the canonical,
-byte-identical (eps 0) gate and is UNCHANGED by this PR.
+Scope note: this COMPLEMENTS, it does NOT replace, the manual real-footage gate. The seeded phases
+have no pacer ``Laps`` object, so the C++ Laps passthroughs (lap_count, sector geometry,
+session_date, lap_rows, ...) fall to the sentinel there and only the two ``gopro`` phases carry
+them; the dump over a real recording (``python -m studio.dev.golden_session_dump`` +
+``golden_compare``) stays the canonical, eps-0 gate on real receiver noise.
 
 Tolerance: eps 1e-9 (not exact 0) — the synthetic delta/cross-lap math produces last-bit float
 noise (e.g. |Δ| ~1e-14 on a self-referential lap); 1e-9 tolerates that while catching any real
-regression. Determinism: the fixture is pure numpy (seeded g-meter, no timestamps / RNG / clock),
-so two builds must produce an identical fingerprint — asserted below before the baseline compare.
+regression. Determinism: the seeded fixtures are pure numpy, and the GoPro recording is generated
+from a fixed seed (its telemetry bytes are pinned by digest in the baseline, and ffmpeg's picture
+reaches no fingerprinted value), so two builds must produce an identical fingerprint — asserted
+below before the baseline compare, the GoPro phases byte for byte across two generations.
 
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_golden_synthetic.py
 Regenerate the baseline (only after an INTENTIONAL, reviewed Session-math change):
@@ -74,9 +91,11 @@ a leaf that became NaN or fell to a placeholder shows there, not only in a diff 
 """
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -97,12 +116,99 @@ from _synthetic import (  # noqa: E402  (the drift + noise fixtures)
 )
 from test_session_services import _synthetic_session  # noqa: E402  (the shared stadium fixture)
 
-from studio import coaching, corners  # noqa: E402
+from studio import chapters, coaching, corners, data_quality  # noqa: E402
+from studio import stats as stats_service  # noqa: E402
 from studio.dev import golden_compare, golden_session_dump  # noqa: E402
+from studio.dev import synth_gopro as sg  # noqa: E402
+from studio.dev._jail import divert_app_support  # noqa: E402
 from studio.dev.golden_compare import EPS, census, walk  # noqa: E402
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
+from studio.session import Session  # noqa: E402
 
 BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden_synthetic_baseline.json")
+
+# The real-loader phases' recording: studio/dev/synth_gopro.py's default, with the seed spelled out
+# so a change of the generator's default cannot quietly re-cut this gate — it would show up as
+# `gopro_telemetry_sha256` first (test_gopro_recording_is_the_baselined_one).
+GOPRO_ARGS = {"seed": 20260924, "laps": 14, "chapters": 2}
+GOPRO_PHASES = ("gopro", "gopro_sectors")
+# `gopro_sectors` places a sector line across the middle of these two straights (indices into the
+# generator's `Circuit.straights`): 150 m and 80 m of straight, so every lap crosses each line once,
+# at speed, and the app's own start line near the end of the main straight makes three sectors of
+# 212 / 370 / 389 m.
+GOPRO_SECTOR_STRAIGHTS = (2, 5)
+# The recordings this process wrote, each with the TemporaryDirectory it lives in (kept alive here).
+_RECORDINGS: dict = {}
+
+
+def _gopro_recording(video=None):
+    """(chapter paths, truth) of the synthetic GoPro recording, written into a TemporaryDirectory
+    and found back through `discover_siblings`, as the app opens a chapter. The default recording
+    is written ONCE per process (3.4 MB, ~1.7 s of ffmpeg); passing `video` writes another,
+    independent one with that picture."""
+    if video is None and "default" in _RECORDINGS:
+        return _RECORDINGS["default"][1]
+    tmp = tempfile.TemporaryDirectory(prefix="golden_gopro_")
+    rec = sg.generate(os.path.join(tmp.name, "rec"), video=video, **GOPRO_ARGS)
+    paths = chapters.discover_siblings(rec.paths[0])
+    assert paths == rec.paths, f"sibling discovery found {paths}, generated {rec.paths}"
+    got = (paths, rec.truth)
+    _RECORDINGS["default" if video is None else f"other{len(_RECORDINGS)}"] = (tmp, got)
+    return got
+
+
+def _other_picture(path, truth, first_payload, n_payloads, ffmpeg):
+    """A DIFFERENT picture for the same telemetry (another colour, so other H.264 bytes): the
+    determinism test writes its second recording with it, which also proves no fingerprinted value
+    reads the video — CI's ffmpeg need not encode what this Mac's did. Same frame count, rate and
+    timescale as `synth_gopro._encode_video`, which is all the loader takes from the picture."""
+    subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "color=c=0x6a2d1f:s=320x180:r=30000/1001",
+                    "-frames:v", str(n_payloads * sg.FRAMES_PER_PAYLOAD), "-c:v", "libx264",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
+                    "-an", "-n", path], check=True, capture_output=True)
+
+
+def _gopro_session(paths):
+    """The recording through the REAL loader. Jailed first: the load reads the track DB, and this
+    must never be the owner's (a test file is jailed already; this also covers an importer)."""
+    divert_app_support("pacer-golden-gopro-")
+    return Session.load(paths)
+
+
+def _gopro_sector_lines(truth) -> list:
+    return [truth.line_at(sum(truth.circuit.straights[j]) / 2.0) for j in GOPRO_SECTOR_STRAIGHTS]
+
+
+def _place_sectors(s, truth) -> bool:
+    """The user places two sector lines, keeping the app's own start line — through the sidecar
+    path (`apply_timing_lines_latlon`), which re-segments and marks the timing confirmed."""
+    start, _ = s.timing_lines_latlon()
+    return s.apply_timing_lines_latlon(start, _gopro_sector_lines(truth), confirmed=True)
+
+
+def gopro_fingerprint(recording=None) -> dict:
+    """The two real-loader phases, STRICT (an accessor that raises fails the gate by name rather
+    than leaving a placeholder), plus whether the sector lines took."""
+    paths, truth = recording or _gopro_recording()
+    s = _gopro_session(paths)
+    out = {"gopro": fingerprint(s, strict=True)}
+    out["gopro_sectors_applied"] = _place_sectors(s, truth)
+    out["gopro_sectors"] = fingerprint(s, strict=True)
+    return out
+
+
+_DIGEST: list = []
+
+
+def _gopro_telemetry_sha256() -> str:
+    """SHA-256 of the recording's GPMF payloads (`synth_gopro.build`, the bytes `generate` writes
+    beside the picture). Pinned in the baseline, so a gate that goes red on the GoPro phases says
+    first whether the GENERATOR moved (numpy, synth_gopro) or the Session math did."""
+    if not _DIGEST:
+        _truth, per_chapter = sg.build(**GOPRO_ARGS)
+        _DIGEST.append(hashlib.sha256(b"".join(b"".join(ch) for ch in per_chapter)).hexdigest())
+    return _DIGEST[0]
 
 
 def _build():
@@ -135,12 +241,13 @@ def _build_drift_band():
     return s
 
 
-def synthetic_fingerprint() -> dict:
-    """The three-phase synthetic fingerprint (base / ref / ref_cleared) — the CI-runnable analogue
-    of golden_session_dump.main()'s multi-phase dump, minus the D24 load and the ``reseg`` phase
-    (``set_timing_lines`` clears the seeded _cols_cache/_dist_cache that ARE the fixture's only data,
-    so a re-segment degrades rather than re-derives on a bare session — the reference seam below
-    already exercises the invalidate path)."""
+def synthetic_fingerprint(recording=None) -> dict:
+    """The whole CI fingerprint: the seeded phases (base / ref / ref_cleared, the three drift
+    fixtures) and the two real-loader GoPro phases — the CI-runnable analogue of
+    golden_session_dump.main()'s multi-phase dump. The seeded phases have no ``reseg``
+    (``set_timing_lines`` clears the seeded _cols_cache/_dist_cache that ARE their only data, so a
+    re-segment degrades rather than re-derives on a bare session); ``gopro_sectors`` is that phase
+    on a real one. `recording` is a `_gopro_recording()` pair (default: this process's)."""
     s = _build()
     result: dict = {}
     result["base"] = fingerprint(s, strict=False)
@@ -162,6 +269,9 @@ def synthetic_fingerprint() -> dict:
     # so every lap the removed 0.5 % gate would have kept on the normalized projection is missing
     # from this fingerprint entirely, and a regression in that band moves no leaf of it.
     result["drift_band"] = fingerprint(_build_drift_band(), strict=False)
+    # The real loader, on a recording that laps (see the module docstring).
+    result["gopro_telemetry_sha256"] = _gopro_telemetry_sha256()
+    result.update(gopro_fingerprint(recording))
     return result
 
 
@@ -247,12 +357,109 @@ def test_nan_leaf_is_a_mismatch():
 
 
 def test_synthetic_fingerprint_is_deterministic():
-    """The fixture is pure (no RNG/clock), so two independent builds must fingerprint identically
-    (well within eps) — a flaky gate is worse than none."""
-    diffs, stats = _compare(synthetic_fingerprint(), synthetic_fingerprint())
+    """The fixtures are pure (no clock; the one RNG is seeded), so two independent builds must
+    fingerprint identically (well within eps) — a flaky gate is worse than none. The second build
+    loads a SECOND GoPro recording, generated afresh into its own directory with a different
+    picture: its two phases must then match byte for byte, which also proves no fingerprinted
+    value depends on where the files were written or on what ffmpeg encoded."""
+    one = synthetic_fingerprint()
+    two = synthetic_fingerprint(_gopro_recording(video=_other_picture))
+    diffs, stat = _compare(one, two)
     assert not diffs, f"non-deterministic synthetic fingerprint: {diffs[:5]}"
-    assert stats["max"] <= EPS, f"two builds drifted by {stats['max']:g} at {stats['max_path']}"
-    print(f"ok determinism: two builds match ({stats['n']} leaves, max |Δ|={stats['max']:g})")
+    assert stat["max"] <= EPS, f"two builds drifted by {stat['max']:g} at {stat['max_path']}"
+    for phase in GOPRO_PHASES:
+        a, b = (json.dumps(fp[phase], sort_keys=True) for fp in (one, two))
+        assert a == b, f"{phase}: two generations of the recording are not byte-identical"
+    print(f"ok determinism: two builds match ({stat['n']} leaves, max |Δ|={stat['max']:g}); the "
+          f"GoPro phases byte-identical across two generations with different pictures")
+
+
+def test_gopro_recording_is_the_baselined_one():
+    """The GoPro phases fingerprint a recording this test GENERATES, so a red gate there has two
+    possible causes, and this names the first: the generator's telemetry bytes (synth_gopro, or a
+    numpy that rounds differently) are not the ones the baseline was cut on. If this passes and the
+    baseline compare fails, the recording is the same and the Session math moved."""
+    with open(BASELINE) as f:
+        pinned = json.load(f).get("gopro_telemetry_sha256")
+    now = _gopro_telemetry_sha256()
+    assert pinned == now, (
+        f"the synthetic GoPro telemetry changed: sha256 {now} vs the baseline's {pinned}. Every "
+        f"leaf of the gopro phases will move with it — this is the GENERATOR, not Session math.")
+    print(f"ok recording: GPMF payload sha256 {now[:16]}… matches the baseline's")
+
+
+def test_gopro_phases_reach_what_the_seeded_phases_cannot():
+    """A golden phase is only as good as its fixture (the drift tests above pin theirs), so pin
+    what makes the real-loader phases able to fail where the seeded ones cannot — each is a
+    property a plausible change to the generator or to the loader would quietly remove:
+
+      1. the REAL loader built it: a `pacer.Laps` segmentation on the GPS9 true clock, two
+         chapters, and a valid lap whose window spans the seam between them;
+      2. every lap-count gate is crossed, and the value it gates exists: the corners-by-lap grid
+         (`MATRIX_MIN_LAPS`), the pace trend (`TREND_MIN_LAPS`), the fast/slow band split
+         (`MIN_SPLIT_LAPS`) and the consensus-line anchor (`corners.ANCHOR_MIN_LAPS`);
+      3. coaching RANKS corners (the seeded phases' two rows both abstain), the ideal lap is
+         stitched from more than one lap and beats the best one;
+      4. `gopro_sectors` has three sectors on every valid lap, each split finite and summing to
+         its lap time, and a SPLITS grid;
+      5. neither phase holds a placeholder — while the seeded phases hold them at exactly the
+         leaves the board review named (lap rows, session-best splits, sector σ, the best lap's
+         channels, the sector count), which here are numbers."""
+    paths, truth = _gopro_recording()
+    s = _gopro_session(paths)
+    assert hasattr(s.laps, "lap_columns"), "no pacer.Laps behind this session"
+    assert s.timing_quality.clock == data_quality.GPS9_TRUECLOCK, s.timing_quality.clock
+    cmap = s.chapters
+    assert len(cmap.chapters) == 2, [c.path for c in cmap.chapters]
+    seam = s.telemetry_time(cmap.chapters[0].duration)
+    windows = {i: s.lap_window(i) for i in s.valid_lap_ids()}
+    across = [i for i, w in windows.items() if w[0] < seam < w[1]]
+    assert len(across) == 1, f"no valid lap spans the chapter seam at {seam:.2f} s: {windows}"
+
+    clean = s.consistency_lap_ids()
+    gates = {"MATRIX_MIN_LAPS": stats_service.MATRIX_MIN_LAPS,
+             "TREND_MIN_LAPS": stats_service.TREND_MIN_LAPS,
+             "MIN_SPLIT_LAPS": stats_service.MIN_SPLIT_LAPS, "ANCHOR_MIN_LAPS": corners.ANCHOR_MIN_LAPS}
+    assert len(clean) >= max(gates.values()), f"{len(clean)} clean laps vs the gates {gates}"
+    assert s.corner_matrix() is not None, "no corners-by-lap grid"
+    assert s.stats.pace_trend() is not None, "no pace trend"
+    assert s.stats.speed_bands().fast is not None, "no fast/slow split of the speed bands"
+    geometry = s.corners.geometry()
+    assert geometry is not None and geometry.n_laps >= corners.ANCHOR_MIN_LAPS, geometry
+
+    ops = s.coaching_opportunities()
+    ranked = ops.ranked_rows()
+    assert ops.enough and ranked and ranked[0].time_lost > 0, (
+        f"coaching ranked {len(ranked)} of {len(ops.rows)} rows")
+    best = s.best_lap_id()
+    assert s.ideal_donor_lap_id() is None and s.ideal_total() < s.lap_time(best), (
+        s.ideal_sample(), s.ideal_total(), s.lap_time(best))
+
+    assert _place_sectors(s, truth), "the sector lines left no valid lap"
+    assert s.effective_sector_count() == 2, s.effective_sector_count()
+    for i in s.valid_lap_ids():
+        splits = s.lap_sector_splits(i)
+        assert len(splits) == 3 and all(np.isfinite(splits)) and min(splits) > 0, (i, splits)
+        assert abs(sum(splits) - s.lap_time(i)) < 1e-3, (i, splits, s.lap_time(i))
+    assert golden_session_dump._split_matrix(s) is not None, "no SPLITS grid"
+
+    fp = gopro_fingerprint()
+    named = ("lap_rows", "session_best_splits", "sector_sigmas", "lap_channels_best",
+             "sector_count")
+    with open(BASELINE) as f:
+        seeded = json.load(f)["base"]
+    for phase in GOPRO_PHASES:
+        c = census(fp[phase])
+        assert c["unsupported"] == 0 and c["nan"] == 0, f"{phase}: {c}"
+    held = [k for k in named if seeded[k] == golden_session_dump._UNSUPPORTED]
+    assert held == list(named), f"the seeded base phase now serves {set(named) - set(held)}"
+    assert all(fp["gopro_sectors"][k] not in (None, [], 0) for k in named), (
+        {k: fp["gopro_sectors"][k] for k in named if fp["gopro_sectors"][k] in (None, [], 0)})
+    print(f"ok gopro fixture: {len(clean)} clean laps (gates {max(gates.values())}), lap "
+          f"{across[0]} spans the seam, {len(ranked)} ranked coaching rows, ideal "
+          f"{s.ideal_total():.3f} s vs best {s.lap_time(best):.3f} s, 3 sectors on every lap, "
+          f"{census(fp['gopro'])['leaves']} + {census(fp['gopro_sectors'])['leaves']} leaves, "
+          f"no placeholder")
 
 
 def test_reference_clear_reverts_to_base():
@@ -527,9 +734,12 @@ if __name__ == "__main__":
         test_drift_noise_fixture_reaches_the_paths_it_exists_for,
         test_drift_median_fixture_puts_the_drift_where_coaching_reads,
         test_drift_band_fixture_covers_the_sub_gate_band,
+        test_gopro_recording_is_the_baselined_one,
+        test_gopro_phases_reach_what_the_seeded_phases_cannot,
         test_synthetic_fingerprint_matches_baseline,
     ]
     for t in tests:
         t()
-    print(f"\nALL {len(tests)} SYNTHETIC-GOLDEN TESTS PASSED "
-          f"({census(synthetic_fingerprint())['leaves']} fingerprint leaves)")
+    with open(BASELINE) as f:   # the fingerprint matched it leaf for leaf just above
+        leaves = census(json.load(f))["leaves"]
+    print(f"\nALL {len(tests)} SYNTHETIC-GOLDEN TESTS PASSED ({leaves} fingerprint leaves)")
