@@ -1864,7 +1864,7 @@ QLabel[role="Hint"] {{
     color: {C.text_dim};
     font-size: {CAPTION}px;
 }}
-/* The DATA TRUST row a reader was SENT to (stats_panel._TrustCard.set_highlight — the lap panel's
+/* The DATA TRUST row a reader was SENT to (stats_trust._TrustCard.set_highlight — the lap panel's
    data-quality chip opens it). Type only, no box: the term takes the chip's own amber so the row
    visibly answers the chip that was clicked, and the value steps up from the Note's dim ink to the
    primary text. Nothing here changes a size, so marking a row cannot move the card. */

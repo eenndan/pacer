@@ -1053,8 +1053,8 @@ def test_stats_view_renders_every_group():
     # sum of sector splits, and the tile is no longer gated on sector lines at all.
     for dead in ("best sector", "sector splits", "Shown only with sector lines"):
         assert dead not in v.t_theoretical.toolTip(), dead
-    assert "agree" in v.trust_card.text()                   # the cross-check's first UI surface
-    assert "GPS9 true clock" in v.trust_card.text()
+    assert "agree" in v.trust.card.text()                   # the cross-check's first UI surface
+    assert "GPS9 true clock" in v.trust.card.text()
     print("test_stats_view_renders_every_group OK")
 
 
@@ -1439,7 +1439,7 @@ def test_stats_tiles_paint_a_value_over_a_smaller_caption():
         assert lab.fontInfo().pixelSize() == theme.CAPTION, lab.fontInfo().pixelSize()
     # ...and so does every half of every DATA TRUST row (the card is a definition list now, so
     # there are two labels per fact rather than one paragraph).
-    for term, value in v.trust_card._widgets:
+    for term, value in v.trust.card._widgets:
         for lab in (term, value):
             assert lab.fontInfo().pixelSize() == theme.CAPTION, lab.fontInfo().pixelSize()
     v.hide()
@@ -1593,7 +1593,7 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
                          commit_pct=None, metres_later_med=-1.2),
     ]
     v = StatsView(sess)
-    t = v.braking_table
+    t = v.braking.table
     assert not t.isHidden() and t.rowCount() == 2       # the unbraked corner (n=0) is omitted
     assert t.item(0, 0).text() == "C1" and t.item(0, 2).text() == "2.1"
     assert t.item(0, 4).text() == "88" and t.item(0, 5).text() == "+3.5"
@@ -1606,7 +1606,7 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     # No braking data at all -> section hidden.
     sess.brake_report = lambda: []
     v.refresh()
-    assert v._braking_section.isHidden() and v.braking_table.isHidden()
+    assert v.braking.heading.isHidden() and v.braking.table.isHidden()
     print("test_stats_view_braking_table_filters_unbraked_and_emits_clicks OK")
 
 
@@ -1638,15 +1638,15 @@ def test_stats_view_straights_table_and_exit_leverage_note():
                      exit_delta_kmh=0.5, leverage=0.0),
     ]
     v = StatsView(sess)
-    t = v.straights_table
+    t = v.straights.table
     assert not t.isHidden() and t.rowCount() == 2            # the ~0s stub is omitted (B8)
     assert t.item(0, 0).text() == "S/F → C1"
     assert t.item(0, 6).text() == "—"                      # k=0 exit delta: no double-count
     assert t.item(1, 6).text() == "-2.0"
     assert t.item(1, 0).data(RING_ROLE) == 1
     assert not hasattr(v, "t_fix_first"), "the imperative tile is gone"
-    note = v.straights_note.text()
-    assert not v.straights_note.isHidden() and note.startswith("Most exit leverage: C1 — "), note
+    note = v.straights.note.text()
+    assert not v.straights.note.isHidden() and note.startswith("Most exit leverage: C1 — "), note
     assert "2.0 km/h under your best lap's" in note and "C1 → C2" in note and "+0.30 s" in note
     assert "Coaching" not in note, "this stub has no corner ids, so no Coaching clause"
     labels = [lb.text().lower() for lb in v.findChildren(QLabel)]
@@ -1654,7 +1654,7 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     # Coaching starts at the same corner: the line says so …
     sess.coaching_opportunities = lambda: _digest_opportunities([0.4, 0.2], n_laps=12)
     v.refresh()
-    note = v.straights_note.text()
+    note = v.straights.note.text()
     assert "The Coaching tab starts with C1" not in note and "C1 is also where" in note, note
     # … and when it starts elsewhere, the line names where and why the two differ.
     elsewhere = _digest_opportunities([0.4, 0.2], n_laps=12)
@@ -1662,7 +1662,7 @@ def test_stats_view_straights_table_and_exit_leverage_note():
                                          for r, c in zip(elsewhere.rows, (3, 1), strict=True)])
     sess.coaching_opportunities = lambda: elsewhere
     v.refresh()
-    note = v.straights_note.text()
+    note = v.straights.note.text()
     assert "The Coaching tab starts with C3: it ranks the time lost inside the corners" in note, note
     # … and when Coaching's own theme cannot separate its top two ("Start with C3 or C1"), the line
     # names both, as that page does — measured on Sandown 3h, where this corner is the second.
@@ -1673,14 +1673,14 @@ def test_stats_view_straights_table_and_exit_leverage_note():
                                     for r, t in zip(elsewhere.rows, (0.40, 0.38), strict=True)])
     sess.coaching_opportunities = lambda: tied
     v.refresh()
-    note = v.straights_note.text()
+    note = v.straights.note.text()
     assert note.endswith("The Coaching tab starts with C3 or C1 — this is one of them."), note
     # A tie wider than three is named as Coaching names it: three corners and a count.
     wide = replace(tied, rows=[replace(r, cid=c, time_lost=t) for r, c, t in zip(
         tied.rows * 2, (3, 1, 4, 5), (0.40, 0.39, 0.38, 0.37), strict=True)])
     sess.coaching_opportunities = lambda: wide
     v.refresh()
-    note = v.straights_note.text()
+    note = v.straights.note.text()
     assert note.endswith("The Coaching tab starts with C3, C1, C4 or 1 more — this is one of "
                          "them."), note
     fired = []
@@ -1690,7 +1690,7 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     # No straights data -> section + note hidden.
     sess.straights_report = lambda: []
     v.refresh()
-    assert v._straights_section.isHidden() and v.straights_note.isHidden()
+    assert v.straights.heading.isHidden() and v.straights.note.isHidden()
     print("test_stats_view_straights_table_and_exit_leverage_note OK")
 
 
@@ -1711,7 +1711,7 @@ def test_stats_view_straights_say_how_many_laps_each_column_counted():
                      exit_delta_kmh=-1.0, leverage=0.0, n_laps=38, n_trap=10, n_exit=8),
     ]
     v = StatsView(sess)
-    t = v.straights_table
+    t = v.straights.table
     assert t.rowCount() == 2, "a straight with no matched time was dropped as a stub"
     rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
     full, part = rows["C1 → C2"], rows["C8 → C9"]
@@ -2214,10 +2214,10 @@ def test_trust_card_states_the_lateral_gain():
     session = _fake_view_session()
     session.gmeter_cross = lambda: good
     v_good = StatsView(session)
-    text_good = v_good.trust_card.text()
+    text_good = v_good.trust.card.text()
     session.gmeter_cross = lambda: halved
     v_bad = StatsView(session)
-    text_bad = v_bad.trust_card.text()
+    text_bad = v_bad.trust.card.text()
     assert "gain ×1.11" in text_good, text_good
     assert "gain ×0.56" in text_bad, text_bad
     assert "agree" in text_good and "DISAGREE" in text_bad
@@ -2307,7 +2307,7 @@ def test_stats_view_trust_card_names_the_sessions_own_problems():
     sess.timing_verified = False
     sess.track_name = None
     v = StatsView(sess)   # bound, not inlined: a dropped StatsView deletes its own QLabels
-    text = v.trust_card.text().lower()
+    text = v.trust.card.text().lower()
     assert "auto-fitted, not confirmed" in text
     assert "track: unknown" in text
     # Both counts stated, and the denominator is the laps FOUND (lap_count) — not valid+excluded,
@@ -2316,21 +2316,21 @@ def test_stats_view_trust_card_names_the_sessions_own_problems():
     # ...and each of those is its OWN row, marked as a caveat — that is what the card being a fact
     # list rather than a paragraph buys, and it is what makes the alarms scannable. The caveats
     # lead: no provenance row may sort above one.
-    caveats = [t for t, _v, c in v.trust_card.rows() if c]
+    caveats = [t for t, _v, c in v.trust.card.rows() if c]
     assert {"Start/finish line", "Track", "Statistics use"} <= set(caveats), caveats
-    marks = [c for _t, _v, c in v.trust_card.rows()]
+    marks = [c for _t, _v, c in v.trust.card.rows()]
     assert marks == sorted(marks, reverse=True), f"caveats must lead the card: {marks}"
 
     clean = StatsView(_fake_view_session(excluded=()))  # verified, named track, nothing dropped
-    text = clean.trust_card.text().lower()
+    text = clean.trust.card.text().lower()
     for phrase in ("auto-fitted", "track: unknown", "excluded"):
         assert phrase not in text, f"clean session must not claim {phrase!r}"
     # (the fixture does carry a ⚠ dropout lap, so "no caveats at all" is not the claim — the claim
     # is that the three the session does not have are absent, and that the caveats still lead)
-    clean_marks = [c for _t, _v, c in clean.trust_card.rows()]
+    clean_marks = [c for _t, _v, c in clean.trust.card.rows()]
     assert clean_marks == sorted(clean_marks, reverse=True), clean_marks
     assert {"Start/finish line", "Track", "Statistics use"}.isdisjoint(
-        {t for t, _v, c in clean.trust_card.rows() if c}), clean.trust_card.rows()
+        {t for t, _v, c in clean.trust.card.rows() if c}), clean.trust.card.rows()
     print("test_stats_view_trust_card_names_the_sessions_own_problems OK")
 
 
@@ -2360,23 +2360,23 @@ def test_stats_view_trust_card_names_a_break_in_series():
 
     plain = _fake_view_session()
     plain.chapters = _Map()                       # chaptered, in sync
-    assert "break in series" not in StatsView(plain).trust_card.text().lower()
+    assert "break in series" not in StatsView(plain).trust.card.text().lower()
 
     sess = _fake_view_session()
     sess.skipped_chapters = ["GX010060.MP4"]
     v = StatsView(sess)
-    text = v.trust_card.text().lower()
+    text = v.trust.card.text().lower()
     assert "break in series" in text, text
     assert "could not be read" in text and "closes over the gap" in text, text
     # It is a CAVEAT row, so it sorts with the other trust-breaking facts and above provenance.
-    caveats = [t for t, _val, c in v.trust_card.rows() if c]
-    assert "Break in series" in caveats, v.trust_card.rows()
-    marks = [c for _t, _val, c in v.trust_card.rows()]
+    caveats = [t for t, _val, c in v.trust.card.rows() if c]
+    assert "Break in series" in caveats, v.trust.card.rows()
+    marks = [c for _t, _val, c in v.trust.card.rows()]
     assert marks == sorted(marks, reverse=True), f"caveats must lead the card: {marks}"
 
     desync = _fake_view_session()
     desync.chapters = _Map([("GX020060.MP4", 4.2)])
-    assert "telemetry than video" in StatsView(desync).trust_card.text().lower()
+    assert "telemetry than video" in StatsView(desync).trust.card.text().lower()
     print("test_stats_view_trust_card_names_a_break_in_series OK")
 
 
@@ -2392,9 +2392,9 @@ def test_stats_view_trust_card_names_the_moving_fix_population():
     sess = _fake_view_session()
     sess.timing_quality = TimingQuality(dropped_fraction=0.0)   # the raw gate DID drop fixes
     v = StatsView(sess)
-    line = next(ln for ln in v.trust_card.text().split("\n") if ln.startswith("Timing:"))
+    line = next(ln for ln in v.trust.card.text().split("\n") if ln.startswith("Timing:"))
     assert line == "Timing: GPS9 true clock · 0% of moving fixes rejected", line
-    assert "WHILE MOVING" in v.trust_card.toolTip()
+    assert "WHILE MOVING" in v.trust.card.toolTip()
     # The measured value is the shipped one — the fix was the sentence, not the maths.
     assert sess.timing_quality.dropped_pct() == 0
     print("test_stats_view_trust_card_names_the_moving_fix_population OK")
@@ -2407,13 +2407,13 @@ def test_stats_view_states_the_missing_accelerometer():
     from studio.stats_panel import NO_GMETER_NOTE, StatsView
 
     v = StatsView(_fake_view_session(has_g=False))
-    assert NO_GMETER_NOTE in v.trust_card.text()
+    assert NO_GMETER_NOTE in v.trust.card.text()
     assert v.no_gmeter_note.isVisibleTo(v)                  # said again beside the dashes
     assert v.t_peak_lat.value.text() == "—"                 # the dash it explains
     v = StatsView(_fake_view_session(has_g=True))
-    assert NO_GMETER_NOTE not in v.trust_card.text()
+    assert NO_GMETER_NOTE not in v.trust.card.text()
     assert not v.no_gmeter_note.isVisibleTo(v)
-    assert "IMU lateral" in v.trust_card.text()
+    assert "IMU lateral" in v.trust.card.text()
     print("test_stats_view_states_the_missing_accelerometer OK")
 
 
@@ -2431,7 +2431,7 @@ def test_stats_view_trust_card_states_why_the_imu_was_not_used():
     from studio.stats_panel import NO_GMETER_NOTE, StatsView
 
     def _g_row(view):
-        return next(r for r in view.trust_card.rows() if r[0] == "g-meter")
+        return next(r for r in view.trust.card.rows() if r[0] == "g-meter")
 
     tilted = AxisCheck(n=5000, tilt_deg=34.2, measurable=True, ok=False)
     blind = AxisCheck(n=0, tilt_deg=float("nan"), measurable=True, ok=False, has_direction=False)
@@ -2445,13 +2445,13 @@ def test_stats_view_trust_card_states_why_the_imu_was_not_used():
         assert caveat, f"a refused IMU must be a caveat row: {_g_row(v)}"
         assert value.startswith("GPS lateral · GPS-derived longitudinal"), value
         assert axis.refusal() in value, value
-        assert axis.summary() in v.trust_card.toolTip(), v.trust_card.toolTip()
+        assert axis.summary() in v.trust.card.toolTip(), v.trust.card.toolTip()
 
     # A refused IMU with no GPS trajectory to fall back on has no meter at all — and it is still not
     # "no accelerometer in this recording": the recording had one, and it was refused.
     sess = _fake_view_session(has_g=False)
     sess.gmeter_axis = lambda: blind
-    text = StatsView(sess).trust_card.text()
+    text = StatsView(sess).trust.card.text()
     assert NO_GMETER_NOTE not in text and blind.refusal() in text, text
 
     # An ALIGNED check changes nothing on the card.
@@ -2476,7 +2476,7 @@ def test_stats_view_zero_lap_page_explains_itself():
     # No provisional banner and no "every lap time BELOW" line when there is nothing below —
     # the empty-state block already names placing the start line as the next action.
     assert not v.provisional_banner.isVisibleTo(v)
-    assert "below" not in v.trust_card.text().lower()
+    assert "below" not in v.trust.card.text().lower()
     # THE BLOCK IS TWO LABELS, so the copy is read as the block. `#ProvisionalBanner` is an 11 px
     # semibold amber call-to-action LINE and it was carrying all 308 characters; the statement
     # stays in the strip and the why/what-next moved into the app's prose step at the app's prose
@@ -2491,7 +2491,7 @@ def test_stats_view_zero_lap_page_explains_itself():
               if getattr(v, n).isVisibleTo(v) and getattr(v, n).value.text() == "—"]
     assert dashed == [], f"dash-only tiles still visible: {dashed}"
     assert v.t_duration.isVisibleTo(v) and v.t_duration.value.text() == "1:01"  # real recording
-    assert v.trust_card.text() != "—"                       # the diagnostic stays on the page
+    assert v.trust.card.text() != "—"                       # the diagnostic stays on the page
     # Reversible: a re-segmentation that finds laps restores every group.
     v.session = _fake_view_session()
     v.refresh()
@@ -2515,7 +2515,7 @@ def test_stats_view_trust_card_is_above_the_fold():
     v.resize(1728, 1025)
     v.show()
     app.processEvents()
-    lab = v.trust_card
+    lab = v.trust.card
     y = lab.mapTo(v._scroll.widget(), lab.rect().topLeft()).y()
     viewport = v._scroll.viewport().height()
     assert 0 < y < viewport, f"trust card at y={y} is outside the first {viewport}px viewport"
@@ -2612,7 +2612,7 @@ def test_the_data_trust_card_fits_the_pane_it_is_given():
         v.session.track_name = None
         v.refresh()
         _settle(8)
-        card = getattr(v, "trust_card", None) or v.trust_label
+        card = v.trust.card
         viewport = v._scroll.viewport()
         # Every text-bearing half of the card, painted at the width the layout gave it.
         labels = ([w for pair in card._widgets for w in pair if w.isVisible()]
@@ -2766,9 +2766,9 @@ def _hidden_columns(v):
     and two spare pixels, so a raw content-minus-viewport reads +4 px on a table that fits
     perfectly, and a guard written that way is either always red or tuned to a constant nobody
     can explain."""
-    from studio.stats_panel import _ReportTable
+    from studio.stats_common import ReportTable
     out = []
-    for t in v.findChildren(_ReportTable):
+    for t in v.findChildren(ReportTable):
         if t.isHidden() or not t._needs_bar():
             continue
         head = t.horizontalHeaderItem(0)
@@ -2781,7 +2781,7 @@ def test_no_composed_column_hides_a_report_table_column():
     """THE ASSERTION WHOSE ABSENCE LET A P1 SHIP GREEN.
 
     Composing the page into columns narrower than its report tables does not wrap them — the
-    tables are content-sized and scroll (see _ReportTable) — it HIDES their rightmost columns
+    tables are content-sized and scroll (see stats_common.ReportTable) — it HIDES their rightmost columns
     behind an inner scrollbar. Measured on D24 before the packer learned to ask: at the app's own
     default 1440x900 window, maximized, `Apex best · Apex med · Grip %` were gone from CORNERS,
     `Trap med · Exit Δ` from STRAIGHTS, `Brake s · Coast s` from PER LAP and `m later` from
@@ -2790,7 +2790,7 @@ def test_no_composed_column_hides_a_report_table_column():
 
     The outer page-level check below is NOT this check, and believing it was is how the defect got
     through: the page fit its pane perfectly the whole time. The scroll had moved INSIDE the
-    tables, which is the one place `_ReportTable` is designed to put it and the one place nothing
+    tables, which is the one place `ReportTable` is designed to put it and the one place nothing
     was looking."""
     for width in DASHBOARD_WIDTHS:
         v = _laid_out(width)
@@ -3005,7 +3005,7 @@ def test_every_data_trust_row_fits_on_one_line_once_it_can():
     from PySide6.QtGui import QFontMetrics
 
     v = _laid_out(1900)
-    rows = [(t, val) for t, val in v.trust_card._widgets if val.isVisible()]
+    rows = [(t, val) for t, val in v.trust.card._widgets if val.isVisible()]
     assert len(rows) >= 3, "setup: the stub must produce a multi-row trust card"
     for term, value in rows:
         fm = QFontMetrics(value.font())
@@ -3022,7 +3022,7 @@ def test_every_data_trust_row_fits_on_one_line_once_it_can():
 def test_the_cross_check_sample_count_is_grouped():
     """"346713 samples" is read digit by digit; "346,713" is read at a glance."""
     v = _laid_out(1900)
-    values = [val for _term, val, _caveat in v.trust_card.rows()]
+    values = [val for _term, val, _caveat in v.trust.card.rows()]
     line = next(t for t in values if "samples" in t)
     assert "1,000 samples" in line, line
     v.hide()
@@ -3045,11 +3045,9 @@ def test_the_peak_braking_tile_says_it_is_a_smoothed_peak():
     The window is READ from `gmeter.LONG_SMOOTH_S`, never retyped, so the copy cannot drift from the
     signal it describes (the §5.5 lesson: a constant typed into honesty copy rots)."""
     _APP  # noqa: B018
-    import pathlib
 
     from studio import gmeter
     from studio.stats_panel import GG_TOOLTIP, StatsView
-    from studio.stats_panel import __file__ as SP_FILE
 
     view = StatsView(_fake_view_session())
     tip = view.t_peak_brake.toolTip()
@@ -3062,14 +3060,26 @@ def test_the_peak_braking_tile_says_it_is_a_smoothed_peak():
     # reload rebinds StatsView, and every later test in this process holding the old class would
     # then be comparing two different types. The window may appear in this file only through the
     # constant.
-    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    src = _stats_page_source()
     literal = f"{gmeter.LONG_SMOOTH_S:g} s"
     for line in src.splitlines():
         if literal in line and "LONG_SMOOTH_S" not in line:
             raise AssertionError(
-                f"stats_panel types the smoothing window as a literal — it must read the "
+                f"the Stats page (stats_*.py) types the smoothing window as a literal — it must read the "
                 f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
     print("ok brake-g: both g surfaces state the smoothing window, read from the constant")
+
+
+def _stats_page_source() -> str:
+    """The Stats page's whole source — the shell and every section split out of it (ARCH-3,
+    `studio/stats_*.py`). The copy guards below read the page's SOURCE for a typed literal, and one
+    that read `stats_panel.py` alone would stop covering a section, green, the day it moved out."""
+    import pathlib
+
+    from studio.stats_panel import __file__ as sp_file
+    files = sorted(pathlib.Path(sp_file).parent.glob("stats_*.py"))
+    assert len(files) >= 5, files      # the shell, stats_common and three sections at least
+    return "\n".join(f.read_text(encoding="utf-8") for f in files)
 
 
 def test_race_pace_and_trend_do_not_treat_a_gap_as_consecutive():
@@ -3621,11 +3631,9 @@ def test_the_friction_circle_states_that_its_two_axes_are_not_on_one_window():
     say so. Both windows are COMPOSED from the constants for the same reason the peak-braking tile's
     is: a window typed into honesty copy rots the moment the signal changes (§5.5)."""
     _APP  # noqa: B018
-    import pathlib
 
     from studio import gmeter
     from studio.stats_panel import GG_TOOLTIP, StatsView
-    from studio.stats_panel import __file__ as SP_FILE
 
     lat_w = f"{gmeter.LAT_SMOOTH_S:g} s"
     long_w = f"{gmeter.LONG_SMOOTH_S:g} s"
@@ -3640,12 +3648,12 @@ def test_the_friction_circle_states_that_its_two_axes_are_not_on_one_window():
     # INTERPOLATED, NOT TYPED — on the source, for the reason the peak-braking test gives (a module
     # reload would rebind StatsView under every later test in this process). NEITHER window may
     # appear in this file except through its constant.
-    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    src = _stats_page_source()
     for literal, const in ((lat_w, "LAT_SMOOTH_S"), (long_w, "LONG_SMOOTH_S")):
         for line in src.splitlines():
             if literal in line and const not in line:
                 raise AssertionError(
-                    f"stats_panel types the {const} window as a literal — it must read the "
+                    f"the Stats page (stats_*.py) types the {const} window as a literal — it must read the "
                     f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
     print("ok friction circle: both smoothing windows stated, composed from the constants")
 
@@ -4162,11 +4170,10 @@ def test_every_longitudinal_surface_names_which_filter_it_read():
     merge after this copy was written, and the "no smoothing window" claim went stale on a green
     suite. `test_the_coast_copy_states_the_window_the_coast_was_measured_on` is the guard."""
     _app()
-    import pathlib
 
     from studio import driving, gmeter
-    from studio.stats_panel import BRAKING_TOOLTIP, DRIVING_TOOLTIP, LAP_TABLE_TOOLTIP, StatsView
-    from studio.stats_panel import __file__ as SP_FILE
+    from studio.stats_braking import BRAKING_TOOLTIP
+    from studio.stats_panel import DRIVING_TOOLTIP, LAP_TABLE_TOOLTIP, StatsView
 
     v = StatsView(_fake_view_session())
     # The peak-braking tile points AT the other channel rather than only describing its own.
@@ -4191,14 +4198,14 @@ def test_every_longitudinal_surface_names_which_filter_it_read():
     assert f"{driving.MIN_COAST_S:g} s" in DRIVING_TOOLTIP
     # ...and NOT typed. Checked on the source (a reload would rebind StatsView for every later
     # test in this process), the way the LONG_SMOOTH_S check above it already is.
-    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    src = _stats_page_source()
     for literal, const in ((f"{driving.COAST_DRAG_MIN:g} g", "COAST_DRAG_MIN"),
                            (f"{driving.MIN_COAST_S:g} s", "MIN_COAST_S"),
                            (f"{driving.AMAX_PCT:g}th percentile", "AMAX_PCT")):
         for line in src.splitlines():
             if literal in line and const not in line:
                 raise AssertionError(
-                    f"stats_panel types {literal!r} as a literal — it must read driving.{const}, "
+                    f"the Stats page (stats_*.py) types {literal!r} as a literal — it must read driving.{const}, "
                     f"or the copy rots the moment the detector changes: {line.strip()!r}")
     v.hide()
     print("ok longitudinal disclosure: peak tile, DRIVING tiles, PER LAP and commit % each name "
@@ -4226,12 +4233,10 @@ def test_the_coast_copy_states_the_window_the_coast_was_measured_on():
     constant like the band and the minimum duration already are, and no sentence that mentions a
     coast may claim it is unwindowed."""
     _app()
-    import pathlib
     import re
 
     from studio import driving
     from studio.stats_panel import DRIVING_TOOLTIP, LAP_TABLE_TOOLTIP
-    from studio.stats_panel import __file__ as SP_FILE
 
     window = f"{driving.COAST_SMOOTH_S:g} s"
     surfaces = (("DRIVING_TOOLTIP", DRIVING_TOOLTIP), ("LAP_TABLE_TOOLTIP", LAP_TABLE_TOOLTIP))
@@ -4252,11 +4257,11 @@ def test_the_coast_copy_states_the_window_the_coast_was_measured_on():
 
     # The window is READ from the constant, never typed — the same rot guard the band and the
     # minimum duration already carry, checked on the source for the same reason.
-    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    src = _stats_page_source()
     for line in src.splitlines():
         if window in line and "COAST_SMOOTH_S" not in line and "LONG_SMOOTH_S" not in line:
             raise AssertionError(
-                f"stats_panel types {window!r} as a literal — it must read "
+                f"the Stats page (stats_*.py) types {window!r} as a literal — it must read "
                 f"driving.COAST_SMOOTH_S, or the copy rots the moment the window moves: "
                 f"{line.strip()!r}")
     print(f"ok coast disclosure: both surfaces state the {window} coast window, composed from "
@@ -4869,7 +4874,7 @@ def test_braking_coasting_and_the_phase_tiles_say_which_laps_they_count():
         coast = view.coasting_table.toolTip()
         assert "interpolated" in coast and "STRAIGHTS" in coast and "keeps every clean lap" in coast, (
             "COASTING counts the laps STRAIGHTS leaves out and does not say so", coast)
-        braking = view.braking_table.toolTip()
+        braking = view.braking.table.toolTip()
         assert "matched to your best lap's line on track" in braking, (
             f"BRAKING's n left out lap {lap + 1}'s C{cid} brake point and its hover does not say "
             f"why: {braking}")

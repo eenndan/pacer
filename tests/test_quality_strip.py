@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.join(_REPO, "tests"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PACER_NO_MEDIA", "1")
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -325,7 +325,7 @@ class _Check:
 
 def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quality=None,
                 applied_lag=None, clock=None):
-    from studio.stats_panel import StatsView
+    from studio.stats_trust import TrustSection
 
     class _S:
         def valid_lap_ids(self):
@@ -364,18 +364,17 @@ def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None, quali
         # could not be fitted".
         media_clock = clock
 
-    view = StatsView.__new__(StatsView)
-    view.trust_card = QWidget()   # only set_rows / setToolTip are called on it
-    captured = {}
-    view.trust_card.set_rows = lambda rows: captured.setdefault("rows", list(rows))
-    StatsView._refresh_trust(view, _S())
-    return captured["rows"], view.trust_card.toolTip()
+    # The REAL section (a heading and the facts card, nothing else of the page): `refresh` fills
+    # the card, and the card's rows are what the page shows.
+    section = TrustSection()
+    section.refresh(_S())
+    return section.card.rows(), section.card.toolTip()
 
 
 def test_a_recording_with_no_gps_is_not_sold_as_the_true_clock():
     """The card's Timing row, on a recording that carries no GPS at all.
 
-    Driven through the REAL `_refresh_trust`, because the defect was in the row it builds: the
+    Driven through the REAL `TrustSection.refresh`, because the defect was in the row it builds: the
     clock label was a two-way choice — media-clock fallback, else "GPS9 true clock" — so a verdict
     that was NEITHER fell through to the flattering branch. Measured end to end on the bundled
     `karma.mp4` (0 GPS fixes) before the fix, the card printed:
@@ -486,7 +485,7 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
     # recording whose overlay is uncorrected. It is now the Video sync ROW, and this tooltip
     # points at it rather than restating it (one fact, one wording).
     from studio.media_clock import MediaClock
-    from studio.stats_panel import VIDEO_SYNC_TERM
+    from studio.stats_trust import VIDEO_SYNC_TERM
 
     assert "Video sync row" in tip, tip
     assert "overlay IS corrected" not in tip, tip
@@ -597,7 +596,7 @@ def test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own():
     out of sync with — and it is a CAVEAT when the correction did not land."""
     from studio import data_quality as dq
     from studio.media_clock import MediaClock
-    from studio.stats_panel import VIDEO_SYNC_TERM, video_sync_row
+    from studio.stats_trust import VIDEO_SYNC_TERM, video_sync_row
 
     gps9 = dq.TimingQuality()
     gps5 = dq.TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK)
@@ -656,7 +655,7 @@ def test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own():
     assert not [r for r in rows if r[0] == VIDEO_SYNC_TERM], rows
 
     # …and it DOES reach the real card when the session carries a map (driven through the real
-    # `_refresh_trust`, which is where the row has to appear).
+    # `TrustSection.refresh`, which is where the row has to appear).
     rows, tip = _trust_rows(None, quality=gps9, clock=corrected, applied_lag=0.47637)
     row = next((r for r in rows if r[0] == VIDEO_SYNC_TERM), None)
     assert row is not None, [r[0] for r in rows]
