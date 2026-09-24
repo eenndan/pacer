@@ -862,17 +862,21 @@ _FULL_WINDOW = (1432, 808)   # the lap panel maximized on the 1440x900 default w
 _PAGES: list = []            # built pages stay alive for the whole run (a dropped one is deleted)
 
 
-def _full_window_page(opp, brake_points=None, size=_FULL_WINDOW):
+def _full_window_page(opp, directions=None, size=_FULL_WINDOW, habits=None):
     """The Coaching page over `opp`, shown and settled at `size` (default: full-window, where the
-    width budget gives every optional column its room)."""
+    width budget gives every optional column its room). `habits` stands in for the session's
+    `coaching_brake_points`, which no Coaching row may print since L7."""
     from studio.coaching_panel import OpportunitiesPanel
 
     class _S:
         def coaching_opportunities(self):
             return opp
 
+        def coaching_brake_direction(self):
+            return directions or {}
+
         def coaching_brake_points(self):
-            return brake_points or {}
+            return habits or {}
 
     page = OpportunitiesPanel(_S())
     _PAGES.append(page)
@@ -929,28 +933,61 @@ def _habit(cid, metres_later, *, n_laps=12, actual=78.0, optimal=None, q25=None,
                         q75_m=metres_later + 3.0 if q75 is None else q75)
 
 
-def test_brake_point_hint_text():
-    """D4: the brake-point hint helper reads a BrakeHabit's median metres_later -> a labelled
-    ESTIMATED line; a negligible delta (< BRAKE_HINT_MIN_M) -> None (within the estimate's noise),
-    and too few matched applications to be a habit -> None."""
+def _direction(cid, rho, p=0.01, n_laps=20):
+    return K.BrakeDirection(cid=cid, n_laps=n_laps, rho=rho, p=p)
+
+
+def test_the_braking_direction_is_a_rank_test_over_the_laps():
+    """L7: `brake_direction` is Spearman ρ of the onset against the time through the corner, with
+    a seeded two-sided permutation p. Pinned on laps whose answer is known by construction."""
+    rng = np.random.default_rng(7)
+    n = 24
+    onsets = np.sort(rng.uniform(80.0, 110.0, n))
+    # Later onset -> quicker pass, monotone: ρ is exactly −1 and no shuffle of 24 laps reaches it.
+    quick = K.brake_direction(3, onsets, 6.0 - 0.01 * onsets)
+    assert quick.rho == -1.0 and quick.n_laps == n, quick
+    assert quick.p == 1.0 / (K.BRAKE_DIRECTION_DRAWS + 1.0), quick.p
+    assert quick.verdict == K.BRAKE_LATER
+    # The mirror image says "earlier": the line can point either way.
+    slow = K.brake_direction(3, onsets, 5.0 + 0.01 * onsets)
+    assert slow.rho == 1.0 and slow.verdict == K.BRAKE_EARLIER, slow
+    # Unrelated times: no verdict, and the same call renders the same p (seeded per corner).
+    noise = rng.permutation(np.linspace(5.0, 6.0, n))
+    a, b = K.brake_direction(3, onsets, noise), K.brake_direction(3, onsets, noise)
+    assert a == b and a.p > K.BRAKE_DIRECTION_ALPHA and a.verdict is None, a
+    # Ties take their mean rank (Spearman's convention), and a constant side reads ρ 0, p 1.
+    tied = K.brake_direction(3, [1.0, 1.0, 2.0, 3.0], [4.0, 3.0, 2.0, 1.0])
+    assert abs(tied.rho - float(np.corrcoef([0.5, 0.5, 2.0, 3.0], [3.0, 2.0, 1.0, 0.0])[0, 1])) < 1e-12
+    assert K.brake_direction(3, onsets, np.full(n, 5.5)) == K.BrakeDirection(3, n, 0.0, 1.0)
+    # The braking habit's floor: a corner with fewer pairs is absent, not tested.
+    pairs = {1: list(zip(onsets[:K.MIN_BRAKE_LAPS - 1], noise[:K.MIN_BRAKE_LAPS - 1], strict=True)),
+             2: list(zip(onsets, 6.0 - 0.01 * onsets, strict=True))}
+    got = K.brake_directions(pairs)
+    assert set(got) == {2} and got[2].verdict == K.BRAKE_LATER, got
+    print(f"ok L7 rank test: ρ −1 -> later (p {quick.p:.5f}), ρ +1 -> earlier, noise p {a.p:.3f}")
+
+
+def test_the_braking_line_is_a_direction_and_a_count_never_metres():
+    """L7: the row's braking line is words and a lap count, only where the laps separate a
+    direction at BRAKE_DIRECTION_ALPHA — and carries no metres and no (est) mark: it is measured."""
     from studio import theme
-    from studio.coaching_panel import BRAKE_HINT_MIN_M, _brake_point_hint
-    # The hint carries the shared canonical "(est)" marker (theme.ESTIMATED_MARK) — was a stray
-    # "(EST)"; the whole app now spells "estimated" one way for inline chips.
-    assert theme.ESTIMATED_MARK == "(est)"
-    assert _brake_point_hint(_habit(3, 6.4)) == "Brake ~6 m later into C3 (est)"
-    assert _brake_point_hint(_habit(2, -5.0)) == "Brake ~5 m earlier into C2 (est)"
-    assert abs(0.5) < BRAKE_HINT_MIN_M and _brake_point_hint(_habit(1, 0.5)) is None
-    # A "habit" measured on one or two applications is not a habit, whatever the metres say.
-    assert K.MIN_BRAKE_LAPS >= 2
-    assert _brake_point_hint(_habit(4, 12.0, n_laps=K.MIN_BRAKE_LAPS - 1)) is None
-    assert _brake_point_hint(_habit(4, 12.0, n_laps=K.MIN_BRAKE_LAPS)) is not None
-    print("ok D4 hint: 'brake ~N m later/earlier (est)'; negligible / too-few-laps -> None")
+    assert (K.brake_direction_line(_direction(3, -0.40, n_laps=36))
+            == "Braking later went with quicker passes here (36 laps)")
+    assert (K.brake_direction_line(_direction(3, 0.40, n_laps=17))
+            == "Braking earlier went with quicker passes here (17 laps)")
+    # Not separated from chance, or no association at all: no line, rather than a default.
+    assert K.brake_direction_line(_direction(3, -0.40, p=K.BRAKE_DIRECTION_ALPHA)) is None
+    assert K.brake_direction_line(_direction(3, 0.0, p=0.0)) is None
+    assert K.brake_direction_line(None) is None
+    line = K.brake_direction_line(_direction(3, -0.9))
+    assert line is not None and theme.ESTIMATED_MARK not in line and " m " not in line, line
+    print("ok L7 line: 'Braking later/earlier went with quicker passes here (N laps)', else None")
 
 
 def test_brake_habit_is_the_same_number_the_braking_table_shows():
-    """THE TWO-NUMBERS REGRESSION. The coaching row's "Brake ~N m later" and the Stats ▸ BRAKING
-    table's "m later" column answer ONE question, so they must be ONE number.
+    """THE TWO-NUMBERS REGRESSION. The coaching habit ("Brake ~N m later", off the rows since L7)
+    and the Stats ▸ BRAKING table's "m later" column answer ONE question, so they must be ONE
+    number.
 
     They were not: coaching read the BEST lap's single application and BRAKING the median over the
     clean laps. Measured on the working-set recordings the pair disagreed by up to 20.4 m, and at
@@ -982,23 +1019,36 @@ def test_brake_habit_is_the_same_number_the_braking_table_shows():
           f"(best lap said 30.0), C2 measured on {habits[2].n_laps} laps the best lap missed")
 
 
-def test_the_page_shows_the_brake_point_hint():
-    """D4: the page appends the ESTIMATED brake-point line to a row's reason when a BrakeHabit is
-    supplied for that corner, and leaves rows without one untouched."""
+def test_the_page_prints_no_braking_metres_only_the_direction_where_it_holds():
+    """L7: no Coaching row prints the ESTIMATED "Brake ~N m later" any more, even with the session's
+    braking habit on hand — it said "later" at 33 of 33 working-set corners by construction. A row
+    whose laps separate a direction says so with its count; a row whose laps do not says nothing;
+    and the first-open debrief carries neither line."""
     _qapp()
     from studio.coaching_panel import _PANEL_COL_REASON
     opp = _populated_opps()
-    top_cid = opp.rows[0].cid
-    # _corners() puts this corner's turn-in at 50 m, so an optimum at 56 m is 6 m past it — inside
-    # the estimate's domain (L5-10 suppresses one that lands a whole brake zone into the corner).
-    brake_points = {top_cid: _habit(top_cid, 6.0, actual=50.0, optimal=56.0)}
-    page = _full_window_page(opp, brake_points)
-    reason_text = page.table.item(0, _PANEL_COL_REASON).text()
-    assert "Brake ~6 m later" in reason_text and "(est)" in reason_text, reason_text
-    # a row WITHOUT a brake point keeps just the reason sentence (no hint appended).
-    if page.table.rowCount() > 1:
-        assert "Brake ~" not in page.table.item(1, _PANEL_COL_REASON).text()
-    print("ok D4 page: brake-point hint appended to the matched corner's reason")
+    assert opp.rows[0].evidence.ranked and len(opp.rows) > 1, opp.rows
+    top, other = opp.rows[0].cid, opp.rows[1].cid
+    # _corners() puts the top corner's turn-in at 50 m, so this 6 m habit is one the retired hint
+    # printed ("Brake ~6 m later into C1 (est)") — the regression this pins.
+    habits = {c: _habit(c, 6.0, actual=50.0, optimal=56.0) for c in (top, other)}
+    directions = {top: _direction(top, -0.40, p=0.016, n_laps=36),
+                  other: _direction(other, -0.20, p=0.22, n_laps=34)}
+    page = _full_window_page(opp, directions, habits=habits)
+    cells = [page.table.item(r, _PANEL_COL_REASON) for r in range(page.table.rowCount())]
+    for cell in cells:
+        text = cell.text()
+        assert "Brake ~" not in text and " m later" not in text and "(est)" not in text, text
+    assert cells[0].text().endswith("\nBraking later went with quicker passes here (36 laps)"), \
+        cells[0].text()
+    tip = cells[0].toolTip()
+    assert "over the 36 clean laps" in tip and "ρ −0.40" in tip and "p = 0.016" in tip, tip
+    assert "Braking" not in cells[1].text(), "a direction the laps do not separate prints nothing"
+    page.set_debrief(True, None, [])
+    _settle()
+    assert not any("Braking" in page.table.item(r, _PANEL_COL_REASON).text()
+                   for r in range(page.table.rowCount())), "the debrief carries no braking line"
+    print("ok L7 page: no metres on any row; the direction line where the laps hold it, with n")
 
 
 def test_full_window_reason_column_outweighs_the_bars_and_jump():
@@ -1081,7 +1131,7 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
         def coaching_opportunities(self):
             return opp
 
-        def coaching_brake_points(self):
+        def coaching_brake_direction(self):
             return {}
 
     panel = OpportunitiesPanel(_S())
@@ -1115,7 +1165,7 @@ def test_p1_summary_grammar_by_count():
             def coaching_opportunities(self):
                 return o
 
-            def coaching_brake_points(self):
+            def coaching_brake_direction(self):
                 return {}
 
         return OpportunitiesPanel(_S())
@@ -1188,7 +1238,8 @@ def test_panel_reason_cell_is_not_truncated():
     # deterministic regardless of the fixture's exact reason wording.
     panel.resize(360, panel.height())
     long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
-                   "best through the slowest point.\nBrake ~4 m later into C2 (est)")
+                   "best through the slowest point.\n"
+                   "Braking later went with quicker passes here (36 laps)")
     panel.table.item(0, 3).setText(long_reason)
     # L5-03: row heights come from the panel's own fit pass now (it measures the width the delegate
     # PAINTS into, which a bare resizeRowsToContents does not) — drive the same call the panel does.
@@ -1316,7 +1367,7 @@ def test_l5_03_reason_row_is_tall_enough_for_the_painted_wrap():
     fm = t.fontMetrics()
 
     # Craft the defect: a first sentence that FITS the width Qt MEASURES but not the one it PAINTS,
-    # plus the "(est)" line that used to disappear. Search for that band rather than assume its
+    # plus the braking line that used to disappear. Search for that band rather than assume its
     # width — Qt's own measuring inset is a style detail, the 2-16 px gap is the point.
     head = "brake later / shorter"
     while fm.horizontalAdvance(head) <= paint_w:
@@ -1324,7 +1375,7 @@ def test_l5_03_reason_row_is_tall_enough_for_the_painted_wrap():
     naive = need = 0
     while len(head) > 24:
         head = head[:-1]
-        text = f"{head}\nBrake ~7 m later into C12 (est)"
+        text = f"{head}\nBraking later went with quicker passes here (17 laps)"
         t.item(0, col).setText(text)
         t.item(0, col).setData(Qt.SizeHintRole, None)   # Qt's own answer, unpinned
         t.resizeRowsToContents()
@@ -1543,6 +1594,9 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
         def coaching_opportunities(self):
             return opp
 
+        def coaching_brake_direction(self):
+            return {2: _direction(2, -0.9, p=0.001, n_laps=6)}
+
         def coaching_brake_points(self):
             return {2: K.BrakeHabit(cid=2, n_laps=6, metres_later=40.0,
                                     optimal_brake_dist=140.0, actual_brake_dist=100.0,
@@ -1554,7 +1608,7 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
     assert f"{opp.rows[0].time_lost:.2f} s" in panel.summary_label.text(), \
         panel.summary_label.text()
     assert f"{opp.rows[1].time_lost:.2f}" not in panel.summary_label.text()
-    # the abstained row: muted number, "Not ranked" sentence, and NO estimated brake-point line
+    # the abstained row: muted number, "Not ranked" sentence, and no braking line of either kind
     from PySide6.QtGui import QColor
 
     from studio.theme import C
@@ -1562,6 +1616,7 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
             == QColor(C.text_dim).name().upper()), "an abstained loss must not read as a claim"
     reason = panel.table.item(1, 3).text()
     assert reason.startswith("Not ranked:") and "Brake ~" not in reason, reason
+    assert "Braking" not in reason, "an abstained row grows no lever under it"
     print(f"ok abstain rows: shown but demoted; headline totals {panel.summary_label.text()!r}")
 
 
@@ -1702,7 +1757,7 @@ def test_the_page_leads_with_the_theme():
         def coaching_opportunities(self):
             return opp
 
-        def coaching_brake_points(self):
+        def coaching_brake_direction(self):
             return {}
 
     panel = OpportunitiesPanel(_S())
@@ -1716,7 +1771,7 @@ def test_the_page_leads_with_the_theme():
         def coaching_opportunities(self):
             return empty
 
-        def coaching_brake_points(self):
+        def coaching_brake_direction(self):
             return {}
 
     p2 = OpportunitiesPanel(_E())
@@ -1762,7 +1817,7 @@ class _LapAccountSession:
     def coaching_opportunities(self):
         return self._opps
 
-    def coaching_brake_points(self):
+    def coaching_brake_direction(self):
         return {}
 
     def valid_lap_ids(self):

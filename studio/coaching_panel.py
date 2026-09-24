@@ -1065,10 +1065,11 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
         # The count is the laps the rank test ran over, and they are not every clean lap: since
         # #339 `_brake_rows` drops a lap's brake point where that lap's corner was interpolated
         # (MK_18_09 C2: 16 counted, 18 braked). The sentence says so rather than a second count.
+        rho = f"{d.rho:+.2f}".replace("-", "−")   # the true minus the reason sentences print
         tip = (f"{tip}\n\n{line}: over the {d.n_laps} clean laps that braked into this corner and "
                "were matched on track at its entry and exit, the "
                f"{d.verdict} a lap began braking, the less time it took through the corner "
-               f"(Spearman ρ {d.rho:+.2f}, {_p_phrase(d.p)} against "
+               f"(Spearman ρ {rho}, {_p_phrase(d.p)} against "
                f"{coaching.BRAKE_DIRECTION_DRAWS:,} random pairings of the same laps).\n"
                "It says which way, not how far: no braking distance measured here holds up, so "
                "none is given.")

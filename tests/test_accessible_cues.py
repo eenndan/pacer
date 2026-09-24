@@ -647,7 +647,7 @@ def test_opportunities_panel_rerenders_on_palette_flip():
         def coaching_opportunities(self):
             return opps
 
-        def coaching_brake_points(self):
+        def coaching_brake_direction(self):
             return {}
 
     try:
@@ -672,20 +672,13 @@ def test_opportunities_panel_rerenders_on_palette_flip():
 # ============================================ B. unified "estimated" labelling + the ESTIMATED chip
 def test_estimated_short_label_is_one_canonical_form():
     """The inline "estimated" marker is spelled ONE way everywhere: theme.ESTIMATED_MARK == "(est)",
-    and estimated_label appends exactly that. The brake-point coaching hint (was a stray "(EST)") and
-    the grip column both read it, so the app no longer spells estimated four ways."""
+    and estimated_label appends exactly that, so the app no longer spells estimated four ways. (The
+    Coaching rows' brake-point hint, once a stray "(EST)", read it too until L7 retired the hint;
+    the grip column still does.)"""
     from studio import theme as th
-    from studio.coaching_panel import _brake_point_hint
     assert th.ESTIMATED_MARK == "(est)"
     assert th.ESTIMATED_SUFFIX == " (est)"
     assert th.estimated_label("Grip") == "Grip (est)"
-    # The brake-point hint uses the canonical mark (no more "(EST)").
-    from studio import coaching
-    bp = coaching.BrakeHabit(cid=3, n_laps=20, metres_later=6.4, optimal_brake_dist=84.4,
-                             actual_brake_dist=78.0, q25_m=3.1, q75_m=9.8)
-    hint = _brake_point_hint(bp)
-    assert hint == "Brake ~6 m later into C3 (est)", hint
-    assert "(EST)" not in hint and "(est.)" not in hint
     print("test_estimated_short_label_is_one_canonical_form OK")
 
 
