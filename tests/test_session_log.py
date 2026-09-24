@@ -383,7 +383,7 @@ def test_after_a_rollover_the_crash_stack_still_lands_in_the_live_log():
     home = tempfile.mkdtemp(prefix="pacer-e2-home-")
     jail = tempfile.mkdtemp(prefix="pacer-e2-jail-")
     try:
-        proc = _run_crash_child(_ROTATED_CRASH_CHILD, jail, home)
+        _run_crash_child(_ROTATED_CRASH_CHILD, jail, home)
         logs = os.path.join(jail, "logs")
         files = sorted(os.listdir(logs))
         assert files == ["pacer.log", "pacer.log.1", "pacer.log.2"], (

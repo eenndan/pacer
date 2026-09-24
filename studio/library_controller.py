@@ -222,8 +222,8 @@ class LibraryController:
             # would hit.
             toast.destroyed.connect(lambda *_: self._forget_pb_toast(toast))
             toast.show_for(self.win, keepout=self._pb_card_keepout)
-        except Exception as exc:  # noqa: BLE001 — a celebration must never break a load
-            print(f"studio: personal-best moment not shown ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a celebration must never break a load
+            _log.warning("personal-best moment not shown", exc_info=True)
 
     def _forget_pb_toast(self, toast):
         """Drop a destroyed celebration card from `_pb_toast` — but only while it is still the one
@@ -255,8 +255,8 @@ class LibraryController:
             return
         try:
             old.dismiss()
-        except Exception as exc:  # noqa: BLE001 — see above: this must never reach the load path
-            print(f"studio: previous personal-best card not dismissed ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — see above: this must never reach the load path
+            _log.warning("previous personal-best card not dismissed", exc_info=True)
 
     def _pb_card_keepout(self):
         """The band the PB card must not cover, in this window's coordinates: the lap grid's
@@ -291,8 +291,8 @@ class LibraryController:
             if band.isEmpty():
                 return None
             return QRect(viewport.mapTo(self.win, band.topLeft()), band.size())
-        except Exception as exc:  # noqa: BLE001 — placement is best-effort; never fail a load
-            print(f"studio: personal-best card keep-out not resolved ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — placement is best-effort; never fail a load
+            _log.warning("personal-best card keep-out not resolved", exc_info=True)
             return None
 
     # -------------------------------------------------------------------------- File ▸ Library…
@@ -343,7 +343,7 @@ class LibraryController:
         try:
             library.restore()
         except OSError as exc:
-            print(f"studio: could not restore the library index ({exc!r}).", flush=True)
+            _log.error("could not restore the library index (%r)", exc)
         # The records' own backup is swapped back with it — the same gesture undid the same wipe,
         # so it has to undo both halves or "Restore…" would put the rows back without the notes.
         # session_record.restore refuses an empty/missing backup the same way library.restore does,
@@ -351,14 +351,14 @@ class LibraryController:
         try:
             session_record.restore()
         except OSError as exc:
-            print(f"studio: could not restore the session records ({exc!r}).", flush=True)
+            _log.error("could not restore the session records (%r)", exc)
         # The marks' backup comes back with them — one gesture, one undo. `marks.restore` refuses an
         # empty/missing backup the same way the other two do, so a library whose marks were never
         # backed up is left alone rather than emptied.
         try:
             marks_model.restore()
         except OSError as exc:
-            print(f"studio: could not restore the marks ({exc!r}).", flush=True)
+            _log.error("could not restore the marks (%r)", exc)
         if getattr(self.win, "view", None) is not None:
             self.win._refresh_marks()
         self._records_changed()
@@ -373,7 +373,7 @@ class LibraryController:
         try:
             library.remove_and_save(entry.get("fingerprint"))   # one locked read-modify-write
         except OSError as exc:
-            print(f"studio: could not update the library index ({exc!r}).", flush=True)
+            _log.error("could not update the library index (%r)", exc)
         # Delete the recording's sidecar (resolved from the FIRST recorded chapter path — the same
         # stem the sidecar was written under). Guarded end-to-end.
         paths = entry.get("paths") or []
@@ -389,7 +389,7 @@ class LibraryController:
                     print(f"studio: deleted timing-line sidecar {os.path.basename(side)}",
                           flush=True)
             except OSError as exc:
-                print(f"studio: could not delete the sidecar ({exc!r}).", flush=True)
+                _log.error("could not delete the sidecar (%r)", exc)
         # …and the session record written for it. "Forget this recording" has to mean the whole
         # recording: leaving the setup + conditions behind would keep a note about a session the
         # user just asked to be rid of, in a file the Library no longer shows a row for.
@@ -398,7 +398,7 @@ class LibraryController:
         try:
             session_record.remove_and_save(entry.get("fingerprint") or "")
         except OSError as exc:
-            print(f"studio: could not forget the session record ({exc!r}).", flush=True)
+            _log.error("could not forget the session record (%r)", exc)
         except Exception:  # noqa: BLE001 — forgetting a record must never break the forget
             _log.exception("session record not forgotten")
         # …and the MARKS written against it, for exactly the same reason and with the same .bak
@@ -408,7 +408,7 @@ class LibraryController:
         try:
             marks_model.forget_and_save(entry.get("fingerprint") or "")
         except OSError as exc:
-            print(f"studio: could not forget the marks ({exc!r}).", flush=True)
+            _log.error("could not forget the marks (%r)", exc)
         except Exception:  # noqa: BLE001 — forgetting marks must never break the forget
             _log.exception("marks not forgotten")
         if getattr(self.win, "view", None) is not None:
@@ -440,7 +440,7 @@ class LibraryController:
         try:
             library.clear()
         except OSError as exc:
-            print(f"studio: could not clear the library index ({exc!r}).", flush=True)
+            _log.error("could not clear the library index (%r)", exc)
         # The session records go with it: they ARE the personal history this control wipes, and a
         # user clearing the library for privacy would not expect their setup notes to survive it.
         # Backed up to session_records.json.bak first (session_record.clear), so Restore… below can
@@ -448,13 +448,13 @@ class LibraryController:
         try:
             session_record.clear()
         except OSError as exc:
-            print(f"studio: could not clear the session records ({exc!r}).", flush=True)
+            _log.error("could not clear the session records (%r)", exc)
         # …and the marks, on the same argument and with the same marks.json.bak copy first. The
         # dialog's confirm names all three files and the Restore… beside it puts all three back.
         try:
             marks_model.clear()
         except OSError as exc:
-            print(f"studio: could not clear the marks ({exc!r}).", flush=True)
+            _log.error("could not clear the marks (%r)", exc)
         if getattr(self.win, "view", None) is not None:
             self.win._refresh_marks()
         self._records_changed()
@@ -470,7 +470,7 @@ class LibraryController:
         try:
             os.makedirs(directory, exist_ok=True)
         except OSError as exc:
-            print(f"studio: could not open the library folder ({exc!r}).", flush=True)
+            _log.error("could not open the library folder (%r)", exc)
             self.win.statusBar().showMessage(f"could not open {directory}: {exc}",
                                              self._status_ms)
             return
@@ -494,7 +494,7 @@ class LibraryController:
         try:
             shutil.copy2(src, dest)
         except OSError as exc:
-            print(f"studio: could not back up the library ({exc!r}).", flush=True)
+            _log.error("could not back up the library (%r)", exc)
             self.win.statusBar().showMessage(f"could not back up the library: {exc}",
                                              self._status_ms)
             return
@@ -512,8 +512,8 @@ class LibraryController:
         `_recent_label` already names it "unknown track") — matching library_dialog._entry_junk."""
         try:
             entries = library.load().get("entries", [])
-        except Exception as exc:  # noqa: BLE001 — the recents list is additive; never break the menu
-            print(f"studio: Open Recent unavailable ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — the recents list is additive; never break the menu
+            _log.warning("Open Recent unavailable", exc_info=True)
             return []
         usable = [
             e for e in entries
@@ -630,8 +630,7 @@ class LibraryController:
                 self.win.statusBar().showMessage(
                     "session record saved" if not session_record.is_empty(result)
                     else "session record cleared", self._status_ms)
-        except OSError as exc:
-            print(f"studio: could not save the session record ({exc!r}).", flush=True)
+        except OSError:
             _log.exception("session record not saved")
             self.win.statusBar().showMessage(
                 "could not save the session record — check permissions on "
@@ -681,8 +680,8 @@ class LibraryController:
             record = session_record.get(store if store is not None else self._load_records(),
                                         (entry or {}).get("fingerprint") or "")
             view.set_session_record(record)
-        except Exception as exc:  # noqa: BLE001 — never let the chip break a load
-            print(f"studio: session-record chip not updated ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — never let the chip break a load
+            _log.warning("session-record chip not updated", exc_info=True)
 
     # ------------------------------------------------------- the focus list (the training loop)
     @staticmethod
@@ -716,8 +715,8 @@ class LibraryController:
             items = focus.for_track(self._load_focus(), track)
             panel.set_focus_report(
                 self.win.session.focus_report(items, entry, self._load_records(), track))
-        except Exception as exc:  # noqa: BLE001 — never let the focus block break a load
-            print(f"studio: focus list not updated ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — never let the focus block break a load
+            _log.warning("focus list not updated", exc_info=True)
 
     def focus_add(self, cid: int) -> None:
         """Promote corner `cid` of the loaded recording onto this track's focus list.
@@ -796,7 +795,7 @@ class LibraryController:
                      "sectors": len(e.get("sectors") or [])}
                     for e in track_db.all_tracks()]
         except (OSError, ValueError) as exc:
-            print(f"studio: saved tracks not readable ({exc!r}).", flush=True)
+            _log.warning("saved tracks not readable (%r)", exc)
             return []
 
     def _open_track_manager(self, parent=None) -> None:
@@ -832,7 +831,7 @@ class LibraryController:
             try:
                 call()
             except (OSError, ValueError) as exc:
-                print(f"studio: {label} not re-keyed to {new!r} ({exc!r}).", flush=True)
+                _log.error("%s not re-keyed to %r (%r)", label, new, exc)
         try:
             # The LIVE session, if it is the renamed circuit. A bare assignment is right here and
             # nowhere else: `adopt_track` exists to record which lines a name vouches for, and a
@@ -844,8 +843,8 @@ class LibraryController:
             if getattr(self.win, "view", None) is not None:
                 self.win._apply_session_notice()
                 self._records_changed()      # the records were re-keyed above, the list with them
-        except Exception as exc:  # noqa: BLE001 — a refresh must never undo a completed rename
-            print(f"studio: surfaces not refreshed after renaming a track ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a refresh must never undo a completed rename
+            _log.warning("surfaces not refreshed after renaming a track", exc_info=True)
         return self._track_rows()
 
     def _delete_track(self, name: str) -> list[dict]:
@@ -867,5 +866,5 @@ class LibraryController:
         try:
             track_db.restore()
         except OSError as exc:
-            print(f"studio: could not restore the saved tracks ({exc!r}).", flush=True)
+            _log.error("could not restore the saved tracks (%r)", exc)
         return self._track_rows()

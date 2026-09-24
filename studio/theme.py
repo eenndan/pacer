@@ -7,6 +7,7 @@ tokens), register_fonts, apply_theme, ui_font, mono_font, delta_colour, LAP_SEEK
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 
@@ -25,6 +26,8 @@ from PySide6.QtGui import (
 )
 
 from . import units
+
+_log = logging.getLogger(__name__)
 
 
 # ====================================================================== tokens
@@ -1026,8 +1029,8 @@ def icon(name: str, color: str | None = None) -> QIcon:
     try:
         import qtawesome as qta
     except Exception as exc:  # missing dep / font load failure — degrade, don't crash
-        print(f"theme: qtawesome unavailable ({exc}); icon '{name}' will be blank. "
-              "Install it via `pixi install` (the qtawesome pypi dependency).", flush=True)
+        _log.warning("qtawesome unavailable (%s); icon '%s' will be blank. Install it via "
+                     "`pixi install` (the qtawesome pypi dependency)", exc, name)
         return QIcon()
     return qta.icon(name, color=color or C.text, color_active=color or C.accent)
 
@@ -1159,8 +1162,7 @@ def _caret_down_asset() -> str | None:
         if not px.save(path, "PNG"):
             return None
     except Exception as exc:  # missing dep / render / IO — degrade to the native arrow
-        print(f"theme: caret-down asset unavailable ({exc}); using native combo arrow.",
-              flush=True)
+        _log.warning("caret-down asset unavailable (%s); using native combo arrow", exc)
         return None
     _caret_asset_path = path
     return path
@@ -2213,4 +2215,4 @@ def apply_theme(app) -> None:
         pg.setConfigOption("background", C.surface)
         pg.setConfigOption("foreground", C.text_dim)
     except Exception as exc:
-        print(f"theme: pyqtgraph config skipped ({exc}).", flush=True)
+        _log.warning("pyqtgraph config skipped (%s)", exc)

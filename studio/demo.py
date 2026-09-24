@@ -28,9 +28,12 @@ testable with the network stubbed.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 
 from . import app_support
+
+_log = logging.getLogger(__name__)
 
 # The pinned demo asset: `pixi run make-demo`'s single-chapter synthetic session, attached to the
 # `demo-data-v1` pre-release — kept OUT of the git tree on purpose (see docs/PACKAGING.md "Demo
@@ -87,7 +90,7 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
             raise ValueError(f"not the published demo (sha256 {digest.hexdigest()}, expected {want})")
         os.replace(tmp, dest)
     except Exception as exc:  # network / IO / timeout — degrade gracefully to the empty welcome state
-        print(f"demo: download failed ({exc}); launching the empty welcome state.", flush=True)
+        _log.warning("demo download failed (%s); launching the empty welcome state", exc)
         if os.path.exists(tmp):
             os.remove(tmp)
         return False

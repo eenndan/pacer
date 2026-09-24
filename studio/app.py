@@ -1031,8 +1031,8 @@ class StudioWindow(QMainWindow):
             fitted = _fit_window_to_screens(stored, screens)
             if fitted is not None:
                 self.setGeometry(*fitted)
-        except Exception as exc:  # noqa: BLE001 — a stored size must never stop the app opening
-            print(f"studio: window geometry not restored ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a stored size must never stop the app opening
+            _log.warning("window geometry not restored", exc_info=True)
 
     def persist_window_geometry(self) -> None:
         """Remember where the window is, for the next launch. Stores ``normalGeometry`` — the frame
@@ -1056,7 +1056,7 @@ class StudioWindow(QMainWindow):
                 return  # never shown, or already torn down — no real frame to remember
             prefs.set_window_geometry(rect.x(), rect.y(), rect.width(), rect.height())
         except Exception as exc:  # noqa: BLE001 — incl. a deleted C++ object at aboutToQuit
-            print(f"studio: could not persist the window geometry ({exc!r}).", flush=True)
+            _log.warning("could not persist the window geometry (%r)", exc)
 
     def closeEvent(self, event):
         """Drain every in-flight worker so a QThread isn't destroyed mid-run on window close (Qt
@@ -1398,7 +1398,7 @@ class StudioWindow(QMainWindow):
         try:
             view.dispose()
         except RuntimeError as exc:  # already deleted by a setCentralWidget somewhere
-            print(f"studio: view already torn down at dispose ({exc})", flush=True)
+            _log.info("view already torn down at dispose (%s)", exc)
 
     def _show_loading_placeholder(self, paths: list[str], title: str | None = None,
                                   on_cancel=None):
@@ -1642,7 +1642,8 @@ class StudioWindow(QMainWindow):
         offending = self._offending_path(paths) or "(no file)"
         detail = f"{type(exc).__name__}: {exc}"
         message = self._load_failure_message(paths, exc)
-        print(f"studio: failed to load {offending}: {detail}", flush=True)
+        # With the worker's traceback: the exception object carries it across the thread.
+        _log.warning("failed to load %s: %s", offending, detail, exc_info=exc)
         reload_failed = hasattr(self, "session")
         # "The loading card is up over a still-good session" — tested against the CENTRAL WIDGET,
         # because installing that card is what disposes the view and clears self.view. A fast
@@ -1898,14 +1899,12 @@ class StudioWindow(QMainWindow):
 
         Broad by design. This does not catch a KNOWN failure mode; it catches the unknown one, in
         the one place where an unknown one strands the app. The exception is logged in full (the
-        console keeps the traceback for a bug report) and handed back, never swallowed."""
+        session log keeps the traceback for a bug report) and handed back, never swallowed."""
         try:
             self._build_ui()
         except Exception as exc:  # noqa: BLE001 — see the docstring: this is the anti-strand net
-            import traceback
-            print(f"studio: could not build the session view ({stage}): "
-                  f"{type(exc).__name__}: {exc}", flush=True)
-            traceback.print_exc()
+            _log.exception("could not build the session view (%s): %s: %s",
+                           stage, type(exc).__name__, exc)
             return exc
         return None
 
@@ -1967,7 +1966,8 @@ class StudioWindow(QMainWindow):
         dialog states: the reassurance is only shown where it is TRUE and verifiable behind it."""
         offending = paths[0] if paths else "(no file)"
         detail = f"{type(exc).__name__}: {exc}"
-        print(f"studio: could not open {offending}: {detail}", flush=True)
+        # One line: `_build_ui_guarded` has already logged this exception with its traceback.
+        _log.warning("could not open %s: %s", offending, detail)
         restored = False
         if prev_commit["session"] is not None:
             self.session = prev_commit["session"]
@@ -2794,8 +2794,7 @@ class StudioWindow(QMainWindow):
                     mark["lap"] = self.session.lap_at_time(mark["t"])
             self._marks = merged
             view.set_marks(merged, suppressed)
-        except Exception as exc:  # noqa: BLE001 — never let the marks surface break a load
-            print(f"studio: marks not refreshed ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — never let the marks surface break a load
             _log.exception("marks not refreshed")
 
     def _playhead_time(self) -> float | None:
@@ -2848,8 +2847,7 @@ class StudioWindow(QMainWindow):
         believing a note was kept."""
         try:
             store = marks_model.put_and_save(self._marks_key(), mark)
-        except OSError as exc:
-            print(f"studio: could not save the mark ({exc!r}).", flush=True)
+        except OSError:
             _log.exception("mark not saved")
             self.statusBar().showMessage(
                 "could not save the mark — check permissions on "
@@ -2921,7 +2919,7 @@ class StudioWindow(QMainWindow):
         try:
             store = marks_model.remove_and_save(self._marks_key(), mark_id)
         except OSError as exc:
-            print(f"studio: could not delete the mark ({exc!r}).", flush=True)
+            _log.error("could not delete the mark (%r)", exc)
             self.statusBar().showMessage("could not delete the mark — check permissions on "
                                          "~/Library/Application Support/pacer", STATUS_MS)
             return
@@ -3061,7 +3059,7 @@ class StudioWindow(QMainWindow):
         try:
             prefs.set_lap_panel_tab(self._lap_panel_tab)
         except OSError as exc:
-            print(f"studio: could not persist the lap-panel tab ({exc!r}).", flush=True)
+            _log.warning("could not persist the lap-panel tab (%r)", exc)
 
     def _on_grid_sizes_changed(self, sizes: list):
         """A grid splitter was dragged (debounced in the view): remember + persist (guarded)
@@ -3070,7 +3068,7 @@ class StudioWindow(QMainWindow):
         try:
             prefs.set_grid_sizes(sizes)
         except OSError as exc:
-            print(f"studio: could not persist the grid layout ({exc!r}).", flush=True)
+            _log.warning("could not persist the grid layout (%r)", exc)
 
     def _on_excluded_toggled(self, on: bool):
         """View ▸ Show excluded laps: remember + persist (guarded) the choice, and delegate the
@@ -3079,7 +3077,7 @@ class StudioWindow(QMainWindow):
         try:
             prefs.set_excluded_visible(self._excluded_visible)
         except OSError as exc:
-            print(f"studio: could not persist excluded-strip visibility ({exc!r}).", flush=True)
+            _log.warning("could not persist excluded-strip visibility (%r)", exc)
         view = getattr(self, "view", None)
         if view is not None:
             view.set_excluded_visible(self._excluded_visible)
@@ -3095,7 +3093,7 @@ class StudioWindow(QMainWindow):
         try:
             prefs.set_speed_unit(unit)
         except OSError as exc:
-            print(f"studio: could not persist speed unit ({exc!r}).", flush=True)
+            _log.warning("could not persist speed unit (%r)", exc)
         view = getattr(self, "view", None)
         if view is not None:
             view.set_speed_unit(unit)
@@ -3110,7 +3108,7 @@ class StudioWindow(QMainWindow):
         try:
             prefs.set_colorblind_palette(self._colorblind)
         except OSError as exc:
-            print(f"studio: could not persist colour-blind palette ({exc!r}).", flush=True)
+            _log.warning("could not persist colour-blind palette (%r)", exc)
         view = getattr(self, "view", None)
         if view is not None:
             view.refresh_palette()
@@ -3230,7 +3228,7 @@ class StudioWindow(QMainWindow):
             if rescued:
                 self._warn_track_db_rescued(rescued)
         except (OSError, ValueError) as exc:
-            print(f"studio: could not save track {name!r}: {exc}", flush=True)
+            _log.warning("could not save track %r: %s", name, exc)
             self.statusBar().showMessage(f"could not save track: {exc}", STATUS_MS)
             return
         # The freshly-saved track now wins detection for THIS session's name on the next load —
@@ -3363,8 +3361,8 @@ class StudioWindow(QMainWindow):
             return None
         try:
             map_png = self._grab_clean_map_png(self.view.map)
-        except Exception as exc:  # noqa: BLE001 — the thumbnail is optional; never fail the card
-            print(f"studio: lap-card map thumbnail not grabbed ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — the thumbnail is optional; never fail the card
+            _log.warning("lap-card map thumbnail not grabbed", exc_info=True)
             map_png = None
         return share_card.render_card(data, map_png, palette=theme.active_palette())
 
@@ -3432,8 +3430,8 @@ class StudioWindow(QMainWindow):
                     key._relayout()
                     map_view._reposition_key()  # re-derives _fits from the real canvas height
                     key.show()
-            except Exception as exc:  # noqa: BLE001 — a legend tweak never fails an export
-                print(f"studio: report map key not adjusted ({exc!r}).", flush=True)
+            except Exception:  # noqa: BLE001 — a legend tweak never fails an export
+                _log.warning("report map key not adjusted", exc_info=True)
             try:
                 return self.exports.grab_png(map_view)
             finally:
@@ -3462,8 +3460,8 @@ class StudioWindow(QMainWindow):
             return
         try:
             QApplication.clipboard().setImage(image)
-        except Exception as exc:  # noqa: BLE001 — a clipboard failure must not disrupt the app
-            print(f"studio: lap card not copied ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — a clipboard failure must not disrupt the app
+            _log.exception("lap card not copied")
             self.statusBar().showMessage("could not copy the lap card", STATUS_MS)
             return
         self.statusBar().showMessage("lap card copied — paste it into a chat", STATUS_MS)
@@ -3636,7 +3634,7 @@ class StudioWindow(QMainWindow):
         if token != self._ref_load_token:
             return  # superseded by a newer reference load; drop this result
         reason = f"could not load the reference recording ({type(exc).__name__}: {exc})"
-        print(f"studio: reference not loaded — {reason}", flush=True)
+        _log.warning("reference not loaded — %s", reason, exc_info=exc)
         self.statusBar().clearMessage()
         QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
 

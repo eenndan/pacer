@@ -43,7 +43,7 @@ never reads or writes the user's real app-support dir.
 Run: python tests/test_pb_moment_lifecycle.py
 """
 import contextlib
-import io
+import logging
 import os
 import sys
 import tempfile
@@ -425,6 +425,25 @@ def _pump(predicate, seconds=2.0):
 
 
 @contextlib.contextmanager
+def _logged():
+    """Every record a `studio.*` logger emits inside the block, formatted (message + traceback).
+    The PB path reports its failures through the library controller's logger — into the session
+    log, not onto stdout, where a check that nothing failed would now pass whatever happened."""
+    lines: list[str] = []
+
+    class _Catch(logging.Handler):
+        def emit(self, record):
+            lines.append(self.format(record))
+
+    handler, studio_log = _Catch(), logging.getLogger("studio")
+    studio_log.addHandler(handler)
+    try:
+        yield lines
+    finally:
+        studio_log.removeHandler(handler)
+
+
+@contextlib.contextmanager
 def _real_window():
     """A REAL, SHOWN StudioWindow with no central view — `StudioWindow.__new__` +
     `QMainWindow.__init__`, the idiom tests/test_studio_features.py uses to drive real window
@@ -483,10 +502,9 @@ def test_a_second_personal_best_still_shows_after_the_first_card_is_gone():
         assert not shiboken6.isValid(first), "the first card's C++ half was not collected"
         assert win._pb_toast is None, "the destroyed card left its wrapper on the window"
 
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with _logged() as logged:
             win.library_ctl.show_pb_moment(_M_BEAT)
-        assert "not shown" not in out.getvalue(), out.getvalue()
+        assert not any("not shown" in r for r in logged), logged
         assert _pump(lambda: len(_live_toasts(win)) == 1), \
             "the genuine PB after a dismissed card was swallowed"
         second = win._pb_toast
@@ -509,10 +527,9 @@ def test_a_stale_wrapper_cannot_swallow_the_next_celebration():
         shiboken6.delete(corpse)                 # the C++ half goes, the Python wrapper stays
         win._pb_toast = corpse                   # …and the window is holding it (main's state)
 
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with _logged() as logged:
             win.library_ctl.show_pb_moment(_M_BEAT)
-        assert "not shown" not in out.getvalue(), out.getvalue()
+        assert not any("not shown" in r for r in logged), logged
         assert _pump(lambda: len(_live_toasts(win)) == 1), "a dead wrapper swallowed the next PB"
         assert win._pb_toast is not corpse and shiboken6.isValid(win._pb_toast)
     print("test_a_stale_wrapper_cannot_swallow_the_next_celebration OK")
@@ -535,10 +552,9 @@ def test_a_failing_dismiss_cannot_strand_the_load():
         first = win._pb_toast
         first.dismiss = lambda: (_ for _ in ()).throw(ValueError("dismiss blew up"))
 
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with _logged() as logged:
             win.library_ctl.show_pb_moment(_M_BEAT)          # must not raise
-        assert "not dismissed" in out.getvalue(), out.getvalue()
+        assert any("not dismissed" in r and "dismiss blew up" in r for r in logged), logged
         assert _pump(lambda: len(_live_toasts(win)) >= 1), "the new card was never built"
         assert win._pb_toast is not first and shiboken6.isValid(win._pb_toast)
     print("test_a_failing_dismiss_cannot_strand_the_load OK")

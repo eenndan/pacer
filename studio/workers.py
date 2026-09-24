@@ -4,12 +4,15 @@ no reach into StudioWindow internals."""
 
 from __future__ import annotations
 
+import logging
 import os
 
 from PySide6.QtCore import QThread, Signal
 
 from . import demo, export_video, ingest
 from .session import Session
+
+_log = logging.getLogger(__name__)
 
 
 class VideoExportWorker(QThread):
@@ -135,7 +138,7 @@ class DemoResolveWorker(QThread):
     def run(self):
         try:
             path = demo.resolve_demo_recording()
-        except Exception as exc:  # noqa: BLE001 — a demo fetch must never take the app down
-            print(f"demo: resolve failed ({exc!r}); showing the welcome state.", flush=True)
+        except Exception:  # noqa: BLE001 — a demo fetch must never take the app down
+            _log.warning("demo resolve failed; showing the welcome state", exc_info=True)
             path = None
         self.resolved.emit(self._token, path)
