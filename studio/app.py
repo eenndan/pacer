@@ -70,7 +70,7 @@ from .command_palette import CommandPalette
 # returns it, and `studio.app.ExportChoice` is the name the export tests already reach for.
 from .export_controller import ExportChoice, ExportController  # noqa: F401
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
-from .library_controller import LibraryController
+from .library_controller import LibraryController, previous_pb_missing_text
 from .marks_panel import MarkDialog
 from .overlays import (
     BUSY_DEMO_LABEL,
@@ -484,6 +484,10 @@ class StudioWindow(QMainWindow):
         self._ref_load_token = 0
         self._ref_load_worker = None
         self._pending_reference_load = None  # the latest QUEUED (token, paths) while one is running
+        # The reference load "Compare with your previous PB" started, by token: when THAT load is
+        # adopted, the compare opens on the two best laps (_compare_with_previous_pb). Any other
+        # reference pick bumps the token past it, and so cancels the compare with the load.
+        self._pb_compare_token = None
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted lap-panel state, loaded from prefs so the choices survive a relaunch and
         # passed into each fresh CentralView: the active tab (Laps/Corners/Stats/Coaching), the
@@ -1226,7 +1230,8 @@ class StudioWindow(QMainWindow):
             if not cids:
                 return False
             promoted = self.library_ctl.pre_promote_focus(cids)
-            view.show_debrief(self.library_ctl.debrief_pb_line(), promoted)
+            view.show_debrief(self.library_ctl.debrief_pb_line(), promoted,
+                              self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing))
             return True
         except Exception:  # noqa: BLE001 — see the docstring
             _log.warning("debrief not shown", exc_info=True)
@@ -1914,6 +1919,7 @@ class StudioWindow(QMainWindow):
             panel.focus_remove_requested.connect(self.library_ctl.focus_remove)
             panel.focus_mark_dry_requested.connect(self.library_ctl.mark_sessions_dry)
             panel.jump_requested.connect(self._jump_to_opportunity)
+            panel.compare_pb_requested.connect(self._compare_with_previous_pb)
         self.library_ctl.update_focus_list()
 
     def _build_ui_guarded(self, stage: str) -> Exception | None:
@@ -2242,6 +2248,18 @@ class StudioWindow(QMainWindow):
             "ranked by realistic time lost (median of your clean laps), each with the measured "
             "reason, where in the corner it goes and a jump-to. Again restores the grid.")
         self._opportunities_action.triggered.connect(self._open_opportunities)
+        # The focus list had no name outside the Coaching page's own buttons, so ⌘K "focus" found
+        # nothing (board review UX-9e). Two menu rows the palette harvests: go to the list, and the
+        # page's Add button made from anywhere — gated on that button's own state and words.
+        self._focus_show_action = coaching_menu.addAction("Show focus list")
+        self._focus_show_action.setToolTip(
+            "The corners you chose to work on at this track, and whether they moved: the top of "
+            "the Coaching page")
+        self._focus_show_action.triggered.connect(self.show_coaching_tab)
+        self._focus_add_action = coaching_menu.addAction("Add selected corner to focus list")
+        self._focus_add_action.setToolTip(
+            "Put the corner selected on the Coaching page on this track's focus list")
+        self._focus_add_action.triggered.connect(self._focus_add_selected)
 
         # Left-column declutter (the "calm default"): fully show/hide the coaching panel and the
         # excluded strip. Mirrors the consistency toggle EXACTLY — a checkable QAction whose state is
@@ -2379,10 +2397,26 @@ class StudioWindow(QMainWindow):
         session, so they are already off here."""
         has = hasattr(self, "session")
         for name, reason in (("_ref_action", self._NO_SESSION_REFERENCE_REASON),
-                             ("_opportunities_action", self._NO_SESSION_COACHING_REASON)):
+                             ("_opportunities_action", self._NO_SESSION_COACHING_REASON),
+                             ("_focus_show_action", self._NO_SESSION_COACHING_REASON)):
             action = getattr(self, name, None)
             if action is not None:
                 self._gate_action(action, has, reason)
+        add = getattr(self, "_focus_add_action", None)
+        if add is not None:
+            block = getattr(getattr(getattr(self, "view", None), "opportunities", None),
+                            "focus_block", None)
+            ok, why = block.add_state() if block is not None else \
+                (False, self._NO_SESSION_COACHING_REASON)
+            self._gate_action(add, ok, why)
+
+    def _focus_add_selected(self):
+        """Coaching ▸ Add selected corner to focus list: exactly the Coaching page's Add button,
+        which does nothing while it is disabled."""
+        block = getattr(getattr(getattr(self, "view", None), "opportunities", None),
+                        "focus_block", None)
+        if block is not None:
+            block.add_button.click()
 
     def _sync_view_menu(self):
         """Grey View's session-only items out until a view exists (the View menu's aboutToShow).
@@ -3633,6 +3667,12 @@ class StudioWindow(QMainWindow):
         can pick it again against the recording they actually end up looking at."""
         if token != self._ref_load_token:
             return  # superseded by a newer reference load; drop this result
+        # This result settles the "Compare with your previous PB" that asked for it, whatever it
+        # says: only an ADOPTED reference goes on to the compare (at the end).
+        # (Read defensively, like _pending_reference_load: a bare StudioWindow.__new__ fixture
+        # never ran the constructor that sets it.)
+        pb_compare = token == getattr(self, "_pb_compare_token", None)
+        self._pb_compare_token = None
         if not hasattr(self, "session"):
             return  # the primary session went away while the reference loaded — nothing to attach to
         if getattr(self, "_loading_token", None) is not None:
@@ -3654,6 +3694,8 @@ class StudioWindow(QMainWindow):
             return
         self.statusBar().clearMessage()
         self._apply_reference_change()
+        if pb_compare:
+            self._enter_pb_compare()
 
     def _on_reference_load_failed(self, token: int, paths: list[str], exc: Exception):
         """Reference load failed (UI thread, queued signal): drop a STALE result, else surface the
@@ -3661,6 +3703,7 @@ class StudioWindow(QMainWindow):
         load_reference's own could-not-load message, just off-thread."""
         if token != self._ref_load_token:
             return  # superseded by a newer reference load; drop this result
+        self._pb_compare_token = None  # the compare that asked for it ends with it
         reason = f"could not load the reference recording ({type(exc).__name__}: {exc})"
         _log.warning("reference not loaded — %s", reason, exc_info=exc)
         self.statusBar().clearMessage()
@@ -3696,6 +3739,56 @@ class StudioWindow(QMainWindow):
         # "the compare could not be set up" is exactly what a window mid-swap means.
         view = getattr(self, "view", None)
         if view is None or not view.compare.enter_cross():
+            QMessageBox.information(
+                self, f"{APP_NAME} — cross-recording compare unavailable",
+                "The reference recording's lap could not be set up for compare.")
+
+    def _compare_with_previous_pb(self):
+        """"Compare with your previous PB": the PB moment's one gesture, on the card and beside the
+        debrief's PB line (board review PS-B4). "Where did the time come from?" was four steps in
+        three menus — File ▸ Open, Coaching ▸ Load reference…, Coaching ▸ Compare vs reference,
+        then the export — though every piece had shipped. This loads the library row the new PB
+        beat (`LibraryController.previous_pb`) as the reference, through the same guarded,
+        off-thread, single-flight path the menu uses, and opens the compare on the two BEST laps
+        once it is adopted (`_enter_pb_compare`); File ▸ Export comparison video… is then one click
+        further. An analysis gesture, not a share loop: nothing here writes or sends anything.
+
+        THE FOOTAGE MAY BE GONE: 4 of the owner's 8 library rows point at files that were moved or
+        deleted since. That is checked first and said plainly — which file, missing from where —
+        instead of a load failing on it. A refusal by the reference guards (another track, a lap of
+        a different length) arrives through the notice every reference pick gets."""
+        row = getattr(self.library_ctl, "previous_pb", None)
+        if row is None or not hasattr(self, "session"):
+            return
+        paths = [p for p in row.get("paths") or [] if p]
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing or not paths:
+            QMessageBox.information(
+                self, f"{APP_NAME} — previous PB not found",
+                previous_pb_missing_text(row, missing[0] if missing else None))
+            return
+        running = getattr(self, "_pb_compare_token", None)
+        if running is not None and running == self._ref_load_token:
+            return  # this gesture's load is already running; a second click would only restart it
+        # The row's own paths, not their siblings: the recording as it was when it set that best.
+        self._start_reference_load(paths)
+        self._pb_compare_token = self._ref_load_token
+
+    def _enter_pb_compare(self):
+        """The compare "Compare with your previous PB" asked for, now its reference is adopted:
+        pane A this session's best lap, pane B the reference's (the lap a reference adopts IS its
+        best). A maximized panel — the debrief is one — gives the grid back first: the compare
+        plays in the video panel, which the maximize has collapsed to nothing, and restoring ends
+        the debrief on the tab the driver left."""
+        view = getattr(self, "view", None)
+        if view is None:
+            return
+        if getattr(view, "is_video_focused", lambda: False)():
+            view.set_video_focus(False)
+        maximized = getattr(view, "_maximized_panel", None)
+        if maximized is not None and maximized is not getattr(view, "_video_panel", None):
+            view._restore_splitter_sizes()   # the inverse of the ⛶ collapse, as Esc does it
+        if not view.compare.enter_cross(lap_a=self.session.best_lap_id()):
             QMessageBox.information(
                 self, f"{APP_NAME} — cross-recording compare unavailable",
                 "The reference recording's lap could not be set up for compare.")

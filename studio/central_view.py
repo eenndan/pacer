@@ -115,12 +115,23 @@ _HERO_WIDEST_SPEED_KMH = 188.0
 # gesture that makes this readout stop moving, so the note names the action that does work.
 #
 # What is deliberately NOT done here: swapping the readout for the selected lap's TIME while the
-# playhead has not moved. It would put a headline on the arrival frame and take it away on the
-# first pixel of scrub, and it would make the app's largest surface change what it MEANS on an
-# incidental gesture. It is also not "one branch in the same label": #DiffBox has a single QSS
+# playhead has not moved. It is not "one branch in the same label": #DiffBox has a single QSS
 # `font-size`, and its layout floor (_hero_min_width below) is the label's own sizeHint over the
 # formatters' widest plain-text output, so a second type step inside it means rich text, a second
 # template set and a re-derived floor.
+#
+# What IS done, since board review UX-9b, is the same template read at the lap's END while the
+# playhead still sits where the poster seek parked it (`_hero_delta_time`): the arrival frame's
+# `Δideal +0.00 s` became the lap's total (+0.69 s on SD_30_08), the number the Δ trace climbs to.
+# The objection this note used to make — a headline that changes what it MEANS on the first pixel
+# of scrub — is answered on the surface that can: the tooltip says it is the whole lap and that it
+# follows the playhead from the first move (_HERO_AT_REST_NOTE).
+_HERO_AT_REST_NOTE = (
+    "\nThis is your whole lap's total: the playhead has not moved yet. Play, scrub or pick a "
+    "moment and it follows the playhead.")
+# How far the playhead may sit from the poster seek's time and still be "at rest": the player's
+# echo of a seek comes back millisecond-quantized; anything a person does moves it further.
+HERO_REST_SLACK_S = 0.1
 _BEST_LAP_BEST_NOTE = (
     "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
     "zero for the whole lap. Pick another lap for a number that moves.")
@@ -1521,6 +1532,7 @@ class CentralView(QWidget):
         self.video.seek(target)          # paused decode → presents the best lap's start frame
         self._playback.latest_t = target
         self._playback.applied_t = target
+        self._hero_rest_t = target       # the hero reads the lap's total until this moves
         # Drive the playhead/readout/marker directly so the t=0 state matches the shown frame
         # without waiting for a positionChanged the seek may not emit synchronously.
         self._apply_position(target)
@@ -1594,10 +1606,12 @@ class CentralView(QWidget):
             self._toggle_panel_maximized(self._table_panel)
 
     # ----------------------------------------------------- the first-open debrief (PS-B1)
-    def show_debrief(self, pb_line: str | None, promoted: list[int]) -> None:
+    def show_debrief(self, pb_line: str | None, promoted: list[int],
+                     compare: bool = False) -> None:
         """Land on the debrief: the Coaching page, maximized the way ``show_coaching_maximized``
-        does it, with its lead and shortlist (``OpportunitiesPanel.set_debrief``). The window calls
-        this on a recording's FIRST open only (``StudioWindow._land_on_debrief``).
+        does it, with its lead and shortlist (``OpportunitiesPanel.set_debrief``; `compare` offers
+        "Compare with your previous PB" beside a new PB's line). The window calls this on a
+        recording's FIRST open only (``StudioWindow._land_on_debrief``).
 
         It is a landing, not a choice, so none of it is remembered: the tab flips are quiet (the
         persisted lap-panel tab stays the driver's), and every way back to the grid returns to the
@@ -1607,7 +1621,7 @@ class CentralView(QWidget):
         self._debrief_return_tab = self.tab_bar.currentIndex()
         self._debrief = True
         self._quiet_tab(3)
-        self.opportunities.set_debrief(True, pb_line, promoted)
+        self.opportunities.set_debrief(True, pb_line, promoted, compare)
         if self.isVisible():
             self._maximize_debrief()
         else:
@@ -1889,8 +1903,9 @@ class CentralView(QWidget):
         on the app's largest surface on a recording where the ideal is a lap the driver drove."""
         # Stash the moment so a toggle can re-render without a tick (see _on_ideal_readout_toggled).
         self._last_diff_speed, self._last_diff_lap = sp, lap_id
-        d_best = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
-        d_ideal = self.session.delta_to_ideal_at(lap_id, t) if lap_id is not None else None
+        t_delta = self._hero_delta_time(t, lap_id)
+        d_best = self.session.delta_at_lap(lap_id, t_delta) if lap_id is not None else None
+        d_ideal = self.session.delta_to_ideal_at(lap_id, t_delta) if lap_id is not None else None
         on_best = lap_id is not None and lap_id == self.session.best_lap_id()
         stitched = self._ideal_state == "stitched"
         if stitched and self.ideal_readout_btn.isChecked():
@@ -1914,6 +1929,8 @@ class CentralView(QWidget):
             # best lap is not "near" zero, it is zero: this lap IS the reference. See the note.
             if on_best:
                 tip += _BEST_LAP_BEST_NOTE
+        if t_delta != t:
+            tip += _HERO_AT_REST_NOTE
         colour = sem_colour or theme.C.text
         self.diff_box.setText(text)
         self.diff_box.setToolTip(tip)
@@ -1921,6 +1938,25 @@ class CentralView(QWidget):
         if colour != getattr(self, "_diff_colour", None):
             self._diff_colour = colour
             self.diff_box.setStyleSheet(f"QLabel#DiffBox {{ color: {colour}; }}")
+
+    def _hero_delta_time(self, t: float, lap_id: int | None) -> float:
+        """When the hero's deltas are read: `t`, or — while the playhead is still where the
+        poster seek parked it — the END of the lap, so the hero reads the lap's total.
+
+        The poster seek puts the playhead on the best lap's first frame, so the largest number on
+        the default screen read `Δideal +0.00 s` on every load, and the lap's answer (+0.69 s to
+        the ideal on SD_30_08) was readable only off the end of the Δ trace (board review UX-9b).
+        The first real move — a play, a seek, a scrub, a lap click elsewhere — ends the rest for
+        good. "Moved" allows HERO_REST_SLACK_S for the millisecond the player's echo of the seek
+        can come back off by."""
+        rest = getattr(self, "_hero_rest_t", None)
+        if rest is None:
+            return t
+        if abs(t - rest) > HERO_REST_SLACK_S:
+            self._hero_rest_t = None
+            return t
+        window = self.session.lap_window(lap_id) if lap_id is not None else None
+        return window[1] if window is not None else t
 
     # ------------------------------------------------------------- compare-state access
     def _comparing(self) -> bool:
