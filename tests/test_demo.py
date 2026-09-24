@@ -88,7 +88,7 @@ def test_a_download_that_is_not_the_published_demo_is_refused():
     try:
         with tempfile.TemporaryDirectory() as d:
             dest = os.path.join(d, "demo", "clip.mp4")
-            for kw in ({"sha256": hashlib.sha256(b"MP4-BYTES").hexdigest()}, {}):
+            for kw in ({}, {"sha256": hashlib.sha256(b"MP4-BYTES").hexdigest()}):
                 assert demo._try_download_demo(dest, url="http://example/clip.mp4", **kw) is False, kw
                 assert not os.path.exists(dest) and not os.path.exists(dest + ".part"), kw
     finally:
