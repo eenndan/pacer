@@ -294,7 +294,8 @@ _TREND_WORD = {"improving": "improving", "stalled": "off your PB"}
 # UNCLAMPED on the smallest Mac this app targets (a 13" Air has ~931 px of available height;
 # _SCREEN_MARGIN leaves 871). Anything smaller than that — an old
 # 1280x800 panel, a half-height external display — is handled by _fit_to_screen rather than by
-# opening a dialog taller than the screen.
+# opening a dialog taller than the screen. Since the privacy note became one line (board review
+# UX-9d) the default shows 12.82 rows, re-measured; the size itself did not need to move.
 _DEFAULT_SIZE = (880, 860)
 # The PB chart's ceiling (its floor is setMinimumHeight(150) at the widget). It reads a handful of
 # best-vs-date points and one empty-state sentence, so it has no use for more; without a ceiling it
@@ -319,6 +320,9 @@ _PB_PLOT_MAX_H = 200
 # 4.6-row default as too little: the library should never OPEN showing less list than the size that
 # was called broken. The screen still overrules it (_fit_to_screen runs after), and it is applied to
 # the size being OPENED, never to the size being stored — see _apply_geometry.
+# RE-MEASURED when the privacy note became one line and a button (board review UX-9d): 750 at 581 px
+# now shows 8.71 rows, and the layout's own minimum is 490 px. The floor stays where it is — it is a
+# floor under the opening height, not a target, and nothing asked for a smaller library.
 _MIN_BROWSABLE_H = 750
 # The width _MIN_BROWSABLE_H was measured at — and therefore the premise the height floor RESTS on:
 # height alone cannot buy rows at a width where the privacy note (a WrapLabel, so its wrapped height
@@ -788,6 +792,9 @@ class LibraryDialog(QDialog):
         # measured rather than waved through: the note is part of the layout's minimum, so the
         # six extra lines come off the list above it — 10.82 -> 8.50 visible rows at the default
         # size — and _MIN_BROWSABLE_H moved with it (see there) so the 5-row floor still holds.
+        # That paragraph is ONE LINE now (UX-9d, see PRIVACY_NOTE), with the whole account behind
+        # the "Your data & privacy…" button at the row's end: 12.82 rows at the default size. The
+        # wrapper and the measure stay — they are what keep a longer line honest.
         #
         # THE CAP IS THE LABEL'S MAXIMUM IN A ROW WITH A TRAILING STRETCH, the stats page's
         # zero-lap-prose idiom: an UN-ALIGNED item would be centred under a left-aligned table
