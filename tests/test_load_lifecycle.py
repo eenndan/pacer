@@ -82,8 +82,7 @@ import test_central_view_realqt as _realqt  # noqa: E402
 
 import pacer  # noqa: E402
 from studio import app as app_mod
-from studio import export_controller  # noqa: E402
-from studio import ingest  # noqa: E402
+from studio import export_controller, ingest  # noqa: E402
 from studio import sidecar as sidecar_mod  # noqa: E402
 from studio import workers as workers_mod  # noqa: E402
 from studio.overlays import WelcomeView  # noqa: E402
