@@ -804,7 +804,8 @@ class LibraryDialog(QDialog):
         self._privacy_row.addWidget(privacy, 1)
         self._privacy_row.addStretch(0)
         if self._show_privacy is not None:
-            self.privacy_btn = QPushButton(PRIVACY_LINK)
+            # `&&`: a button's `&` marks its mnemonic, so "data & privacy" drew as "data _privacy".
+            self.privacy_btn = QPushButton(PRIVACY_LINK.replace("&", "&&"))
             self.privacy_btn.setAutoDefault(False)
             self.privacy_btn.setToolTip(
                 "What Pacer keeps on this Mac, where, and how to remove it (Help ▸ Your data & "
