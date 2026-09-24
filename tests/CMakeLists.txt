@@ -174,6 +174,16 @@ add_test(NAME test_load_pipeline
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_pipeline.py)
 set_tests_properties(test_load_pipeline PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The real loader on a recording WITH LAPS (B1a, board review RISK-7): studio/dev/synth_gopro.py
+# writes a synthetic HERO13-shaped two-chapter .MP4 (GPS9 + ACCL/GYRO/GRAV/CORI, a fictional
+# 7-corner circuit, 14 laps) into a temp dir with its ground truth, and Session.load reads it back:
+# GPS9 true clock, lap count, lap times vs truth (0.41 ms noise-free at a mid-straight line, 23 ms
+# with the default noise at the app's own line), corners, Stats tiles, ranked coaching, IMU checks,
+# same seed -> same bytes. ~9 s; the video trak needs the pixi env's ffmpeg.
+add_test(NAME test_synth_gopro
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_synth_gopro.py)
+set_tests_properties(test_synth_gopro PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 # A sibling chapter that is NOT VIDEO (fix/destroyed-fixture-hazards): chapters.discover_siblings
 # groups on FILENAMES, so a file wearing a chapter's name while holding something else was handed
 # to GPMFSource and failed the WHOLE recording — measured on the owner's own ~/Desktop/D24, where
