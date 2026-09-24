@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import media_clock as media_clock_mod
@@ -222,6 +223,7 @@ def desync_notice(chapter_map, *, where: str = "") -> str | None:
     # Duck-typed like every other clause of the session notice: `session.chapters` is a stand-in
     # object in a dozen tests (and a bare string in one), and a session notice must never be the
     # thing that raises.
+    ask: Callable[[], list[tuple[str, float]]] | None  # ChapterMap.desynced_chapters
     ask = getattr(chapter_map, "desynced_chapters", None)
     bad = ask() if callable(ask) else []
     if not bad:

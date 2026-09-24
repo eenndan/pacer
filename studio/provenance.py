@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import cast
 
 import numpy as np
 
@@ -325,7 +326,7 @@ class Provenance:
         shown = f"re-derived from the rows above: {self.reconstructed_formatted}"
         if self.exact:
             return f"{shown} — exact, bit for bit ({self.reconstructed!r})"
-        r = self.residual
+        r = cast(float, self.residual)  # None only when `reconstructed` is, handled above
         clock = max(abs(self.window.hi), abs(self.value)) if self.window.kind == TIME \
             else abs(self.value)
         agree = "same to the last digit shown" if self.matches_display else "DISAGREES ON SCREEN"

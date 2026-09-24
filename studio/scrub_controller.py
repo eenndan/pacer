@@ -10,7 +10,7 @@ this keeps the tick cheap and breaks the drag<->positionChanged feedback loop. P
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
     from .compare_controller import CompareController
@@ -91,7 +91,8 @@ class ScrubController:
         while dragging — that gating breaks the feedback loop. Caller gates on `is_active`."""
         if self._scrub_pending:
             self._scrub_pending = False
-            self.video.seek(self._scrub_target)
+            # pending is only ever set together with a target (on_moved), never alone
+            self.video.seek(cast(float, self._scrub_target))
         # fan the coalesced seek to the secondary pane (compare distance-lock)
         if self._is_comparing and self._scrub_pending_b:
             self._scrub_pending_b = False

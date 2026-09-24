@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from typing import cast
 
 import numpy as np
 
@@ -99,7 +100,7 @@ class Bests:
         valid_lap_ids; cleared on re-segment) — resolved several times per tick."""
         cached = self._best_cache_get()
         if cached is not self._unset:
-            return cached
+            return cast("int | None", cached)  # not the sentinel, so the memoized id
         candidates = self.best_candidate_ids()
         best = min(candidates, key=self._lap_time) if candidates else None
         self._best_cache_set(best)
