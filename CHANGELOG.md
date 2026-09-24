@@ -6,6 +6,8 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-24
+
 Everything merged since v0.2.0, from #222 on. Each line names its pull request
 (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
 
@@ -28,6 +30,12 @@ Everything merged since v0.2.0, from #222 on. Each line names its pull request
 
 ### Added
 
+- When the focus list can't compare two sessions for want of a record, the Coaching page offers
+  "Both dry? Mark both dry": one click writes those two records, conditions only (#386)
+- The session record has a Kart no.; a focus verdict or Library comparison across two karts names
+  both instead of passing over it (#386)
+- `pixi run studio -- --demo` opens a synthetic session — generated, not filmed — with laps,
+  corners, a ranked Coaching page and verified timing on a built-in fictional circuit (#377)
 - A log file for problem reports, `<app-support>/logs/pacer.log`, named by the error dialog (#368)
 - An export the disk plainly cannot hold is refused before it renders, never one that fits (#364)
 - Sandown Park is a built-in track, timed on the owner's own start/finish line (#362)
@@ -65,6 +73,18 @@ Everything merged since v0.2.0, from #222 on. Each line names its pull request
 
 ### Changed
 
+- The session-record form leads with Conditions and Kart no.; tyres, pressures and setup fold under
+  "Own kart…", remembered once opened and always open when the record holds them (#386)
+- Coaching ▸ Opportunities opens the Coaching tab full-window instead of a second copy of its
+  ranking; the tab carries each row's entry/apex/exit bars and Jump wherever it has room (#384)
+- The Stats page shows 6 PACE tiles instead of 10, one phase tile instead of three, and no SECTORS
+  heading on a track with no sector lines; the friction circle sits under SPEED · G (#384)
+- Accuracy re-proven on current footage: a Milton Keynes sprint (18 Sep 2026) locks to the circuit's
+  Club Speed timing at σ 0.0247 s over 14 clean laps; the D24 rows stay, labelled June 2026 (#382)
+- The Coaching tab shows its top three corners whole at the default window: an empty focus list is
+  one line, and the summary above the table gives way before the ranking does (#381)
+- The Stats "fix first" tile is now a line under STRAIGHTS that says what it measures (exit
+  leverage) and names the corner the Coaching tab starts with, or agrees with it (#381)
 - A built-in track you refined can be deleted, restoring Pacer's line, but not renamed (#362)
 - The ideal lap's hovers quote figures re-measured on recordings Pacer can still open (#358)
 - One name for grip, **Grip (est)**, on every surface (#353)
@@ -84,6 +104,19 @@ Everything merged since v0.2.0, from #222 on. Each line names its pull request
 
 ### Fixed
 
+- The session log now keeps the Python stack of a native crash, and 58 failure reports that only
+  reached a terminal — which a Pacer opened from Finder does not have (#387)
+- The map dot, speed readout and exported overlay no longer run up to ~0.1 s ahead of the video:
+  they show the GPS sample nearest each frame, and the GPS delay is no longer overstated (#383)
+- Two Pacer windows (or Pacer and a tool) saving at once can no longer wipe the Library, marks,
+  session records, tracks, focus list or prefs; an unreadable one is logged and kept as .bak (#380)
+- A damaged recording whose metadata claims to last for years no longer loads for hours, and opening
+  another recording or quitting now stops a slow load instead of waiting for it (#378)
+- One damaged byte in the camera's name no longer stops an otherwise intact recording opening (#378)
+- Opening one chapter no longer replaces the whole recording's Library row, or its PB; rows from
+  before 18 June that split one recording in up to three are merged into one (#375)
+- Saving, deleting, forgetting, clearing or restoring a session record now updates the Coaching
+  page's focus verdict at once, not only after the recording is re-opened (#373)
 - A VideoToolbox export that starts slowly no longer falls back to libx264 (#367)
 - A slow export no longer says the disk is full: ffmpeg's "No space left" is checked on it (#365)
 - A lift is no longer read as a brake: strings of one-sample blips were 5–7 % of brake glyphs (#357)
@@ -1294,6 +1327,7 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/eenndan/pacer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/eenndan/pacer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/eenndan/pacer/releases/tag/v0.1.0
