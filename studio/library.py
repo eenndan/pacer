@@ -807,6 +807,8 @@ def pb_standing_text(standing: dict, fmt_time) -> str:
         return (f"New personal best at {track}: {best}, {standing['improvement']:.2f} s faster "
                 f"than your previous best ({fmt_time(standing['prior'])}).")
     if standing["kind"] == "behind":
+        if round(standing["gap"], 2) == 0:     # a tie is not a beat (pb_moment), nor "0.00 s off"
+            return f"Best lap {best} at {track}, level with your personal best there."
         return (f"Best lap {best} at {track}, {standing['gap']:.2f} s off your personal best "
                 f"there ({fmt_time(standing['prior'])}).")
     return f"First session logged at {track}: best lap {best}, the time to beat next time."

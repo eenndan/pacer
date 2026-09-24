@@ -489,6 +489,10 @@ class FocusBlock(QWidget):
         self._sync_buttons()
         self._apply(len(self._lines), bool(self._headline))
 
+    def cids(self) -> list[int]:
+        """The corners on the list, in list order."""
+        return list(self._cids)
+
     def set_selected_corner(self, cid: int | None) -> None:
         """The table's selected corner — what the Add button would promote."""
         self._selected = cid if isinstance(cid, int) else None
@@ -1277,6 +1281,7 @@ class OpportunitiesPanel(QWidget):
         self._all_rows: list[coaching.Opportunity] = []
         self._shortlist: list[coaching.Opportunity] = []   # what the headline sums (PANEL_TOP_N)
         self._debrief = False        # the page is the first-open debrief (set_debrief)
+        self._debrief_lead: tuple = (None, [])   # (PB line, the corners Pacer pre-promoted)
         self._brake_points: dict = {}
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
         self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
@@ -1404,8 +1409,17 @@ class OpportunitiesPanel(QWidget):
         never calling this at all leaves the page exactly as it was before the feature."""
         self.focus_block.set_report(report)
         self.focus_block.set_selected_corner(self._selected_cid())
+        self._sync_debrief_lead()
         self._relayout()
         self._refresh_summary_label()
+
+    def _sync_debrief_lead(self) -> None:
+        """The lead names only the pre-promoted corners STILL on the list: a Remove below it must
+        not leave it saying Pacer put a corner there that is gone."""
+        if self._debrief:
+            pb_line, promoted = self._debrief_lead
+            kept = [c for c in promoted if c in self.focus_block.cids()]
+            self.debrief_block.set_lines(pb_line, debrief_note(kept))
 
     def shortlist_cids(self) -> list[int]:
         """The corners the headline sums, in rank order — what the debrief pre-promotes, so the
@@ -1418,8 +1432,9 @@ class OpportunitiesPanel(QWidget):
         The view owns WHEN (``CentralView.show_debrief`` / ``_end_debrief``); this owns what the
         page shows: the lead, the shortlist-only table, and no estimated brake line."""
         self._debrief = bool(on)
+        self._debrief_lead = (pb_line, list(promoted or [])) if on else (None, [])
         if on:
-            self.debrief_block.set_lines(pb_line, debrief_note(list(promoted or [])))
+            self._sync_debrief_lead()
         else:
             self.debrief_block.set_lines(None, None)
         if self._all_rows:

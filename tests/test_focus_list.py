@@ -421,7 +421,7 @@ def test_the_add_button_names_the_corner_and_the_gestures_are_signals():
     # paragraph (it is the line's hover), and no Remove button, which an empty list can never use.
     fb = p.focus_block
     assert fb.empty_line.isVisible() and "Focus list · empty" in fb.empty_line.text()
-    assert fb.headline.isHidden() and fb.drop_button.isHidden()
+    assert fb.headline.isHidden() and all(b.isHidden() for b in fb.drop_buttons)
     assert not [lb for lb in fb.lines if not lb.isHidden()], "the invitation is not a second row"
     assert "Pick up to 3 corners" in fb.empty_line.toolTip()
     assert not p.focus_block.add_button.isEnabled(), "nothing selected yet"
@@ -435,20 +435,26 @@ def test_the_add_button_names_the_corner_and_the_gestures_are_signals():
     p.focus_add_requested.connect(seen.append)
     p.focus_block.add_button.click()
     assert seen == [cid], seen
-    # …and once it is on the list the button flips to the remove gesture
+    # …and once it is on the list it has its OWN Remove (PS-B1: one click per corner), which needs
+    # no selection — a corner kept from another day need not be anywhere near today's top rows.
     p.set_focus_report(_report(F.Outcome(item=_item(cid=cid), kind=F.OUTCOME_SET_HERE,
                                          now=None, delta=None)))
     p.table.selectRow(0)
     for _ in range(4):
         _APP.processEvents()
     assert not p.focus_block.add_button.isEnabled()
-    assert p.focus_block.drop_button.isEnabled() and not p.focus_block.drop_button.isHidden()
     assert p.focus_block.empty_line.isHidden() and not p.focus_block.headline.isHidden()
+    p.table.clearSelection()
+    for _ in range(4):
+        _APP.processEvents()
+    shown = [b for b in p.focus_block.drop_buttons if not b.isHidden()]
+    assert [b.text() for b in shown] == [f"Remove C{cid}"] and shown[0].isEnabled(), \
+        [b.text() for b in shown]
     dropped = []
     p.focus_remove_requested.connect(dropped.append)
-    p.focus_block.drop_button.click()
+    shown[0].click()
     assert dropped == [cid], dropped
-    print(f"ok panel: Add C{cid} → signal, then Remove C{cid} → signal")
+    print(f"ok panel: Add C{cid} → signal, then its own Remove C{cid} → signal")
 
 
 def test_the_focus_block_yields_its_height_to_the_ranking():
