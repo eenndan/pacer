@@ -3641,7 +3641,9 @@ class StudioWindow(QMainWindow):
             return  # superseded by a newer reference load; drop this result
         # This result settles the "Compare with your previous PB" that asked for it, whatever it
         # says: only an ADOPTED reference goes on to the compare (at the end).
-        pb_compare = token == self._pb_compare_token
+        # (Read defensively, like _pending_reference_load: a bare StudioWindow.__new__ fixture
+        # never ran the constructor that sets it.)
+        pb_compare = token == getattr(self, "_pb_compare_token", None)
         self._pb_compare_token = None
         if not hasattr(self, "session"):
             return  # the primary session went away while the reference loaded — nothing to attach to
@@ -3737,7 +3739,8 @@ class StudioWindow(QMainWindow):
                 self, f"{APP_NAME} — previous PB not found",
                 previous_pb_missing_text(row, missing[0] if missing else None))
             return
-        if self._pb_compare_token is not None and self._pb_compare_token == self._ref_load_token:
+        running = getattr(self, "_pb_compare_token", None)
+        if running is not None and running == self._ref_load_token:
             return  # this gesture's load is already running; a second click would only restart it
         # The row's own paths, not their siblings: the recording as it was when it set that best.
         self._start_reference_load(paths)
