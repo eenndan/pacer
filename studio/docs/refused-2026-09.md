@@ -1062,6 +1062,9 @@ changes. At that lag, the constant under braking and under acceleration differ b
 the installed GPS lag (+0.39 to +0.50 s, measured from gyro against the GPS *positions*) they differ
 by **3.5–4.2 %** on all four recordings. Either the receiver's speed field has less latency than its
 positions, or the audio sits behind the picture. This probe cannot tell which. Only the picture can.
+(X2, 2026-09-24: that installed figure was overstated by half a GPS sample on every lap whose
+curvature window came out even; centred, it is +0.38 to +0.46 s on the same four recordings. The gap
+to the audio narrows by 5–40 ms and stays open.)
 
 **What would be new evidence:** session records on the present recordings that carry the
 sprockets, a measured tyre circumference and the engine type. p14's gearing check would then print
