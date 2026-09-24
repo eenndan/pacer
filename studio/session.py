@@ -11,6 +11,7 @@ Coordinate ordering: the trace and timing lines live in LOCAL meters (cs.local),
 from __future__ import annotations
 
 import datetime
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -65,6 +66,8 @@ from ._signal import (
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
 )
 from .load import load_recording
+
+_log = logging.getLogger(__name__)
 
 
 def _default_sample_path() -> str:
@@ -364,8 +367,8 @@ class Session:
                 accl, grav, cori,
                 gps_t=self.tt, gps_x=self.tx, gps_y=self.ty, gps_speed=self.tv / 3.6,
                 segment_bounds=seg_bounds)
-        except Exception as e:  # noqa: BLE001 — IMU is additive; never break a load over it
-            print(f"studio: g-meter build failed ({e!r}); g-meter disabled.", flush=True)
+        except Exception:  # noqa: BLE001 — IMU is additive; never break a load over it
+            _log.warning("g-meter build failed; g-meter disabled", exc_info=True)
             return
         gm = self._gmeter
         if gm.cross is not None:
@@ -381,8 +384,8 @@ class Session:
             th = self.driving.thresholds()
             if th is not None:
                 print(f"studio: {th.describe()}", flush=True)
-        except Exception as e:  # noqa: BLE001 — additive diagnostics only
-            print(f"studio: driving-channel thresholds unavailable ({e!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — additive diagnostics only
+            _log.warning("driving-channel thresholds unavailable", exc_info=True)
 
     def _build_rotation(self, gyro, grav, device: str) -> None:
         """Precompute the MEASURED body yaw rate from the GoPro gyroscope + its cross-check.
@@ -409,8 +412,8 @@ class Session:
             # the pure two-clock fit, whatever has been installed since.
             self._rotation = rotation.compute(gyro, grav, traces or None, device=device,
                                               to_media=self.media_clock.without_gps_lag().to_media)
-        except Exception as e:  # noqa: BLE001 — the rotation channel is additive; never break a load
-            print(f"studio: rotation channel build failed ({e!r}); rotation disabled.", flush=True)
+        except Exception:  # noqa: BLE001 — the rotation channel is additive; never break a load
+            _log.warning("rotation channel build failed; rotation disabled", exc_info=True)
             return
         rot = self._rotation
         if rot.cross is not None:
@@ -1506,7 +1509,7 @@ class Session:
             data = sidecar.load(path)
         except sidecar.SidecarUnreadable as exc:
             # Reported, never fatal: a damaged sidecar must not stop a recording from opening.
-            print(f"studio: {exc}", flush=True)
+            _log.warning("timing-line sidecar unreadable: %s", exc)
             return sidecar.UNREADABLE
         if data is None:
             return None
