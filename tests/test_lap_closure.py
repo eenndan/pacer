@@ -248,7 +248,7 @@ def test_every_surface_names_the_same_reason():
     lines = table._excluded_body.text().split("\n")
     assert len(lines) == 10 and all(line.endswith(f"· {why}") for line in lines), lines
 
-    card = dict((t, v) for t, v, _c in StatsView(s).trust_card.rows())
+    card = dict((t, v) for t, v, _c in StatsView(s).trust.card.rows())
     assert "10 ⊘ excluded: 10 don't end where they started" in card["Statistics use"], card
 
     laps_row = dict(next(sec for sec in export_data.stats_summary(s) if sec.title == "SESSION").rows)

@@ -1615,7 +1615,8 @@ QPushButton#PBToastLink:focus, QPushButton#PBToastClose:focus {{
 
    An ID selector is (1,0,0) in Qt's stylesheet cascade; `QPushButton[variant="primary"]:focus`
    above is (0,2,1). Specificity beats everything else, so the moment `QPushButton#PBToastShare`
-   (added later, to make this button the same height as the two flat links beside it) declared a
+   (added later, to make this button the same height as the two flat links beside it; the rule is
+   `#PBToastPrimary` now, whichever action is the card's primary) declared a
    `border`, it out-ranked the primary ring and the ring stopped being painted — measured at ZERO
    changed pixels on focus, against 656 and 36 for its two siblings in the same row. A keyboard
    user could see they had landed on the ✕ and on the progression link but not on the button the
@@ -1628,7 +1629,7 @@ QPushButton#PBToastLink:focus, QPushButton#PBToastClose:focus {{
    tests/test_focus_cues.py::test_every_id_rule_that_borders_a_control_also_rings_it is the
    general form: any `#Name` rule that sets a border on a focusable control must carry its own
    `:focus`, because the shared ring can never reach it. */
-QPushButton#PBToastShare:focus {{
+QPushButton#PBToastPrimary:focus {{
     border: {FOCUS_RING_PX}px solid {C.on_accent};
     padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_S)}px;
 }}
@@ -1863,7 +1864,7 @@ QLabel[role="Hint"] {{
     color: {C.text_dim};
     font-size: {CAPTION}px;
 }}
-/* The DATA TRUST row a reader was SENT to (stats_panel._TrustCard.set_highlight — the lap panel's
+/* The DATA TRUST row a reader was SENT to (stats_trust._TrustCard.set_highlight — the lap panel's
    data-quality chip opens it). Type only, no box: the term takes the chip's own amber so the row
    visibly answers the chip that was clicked, and the value steps up from the Note's dim ink to the
    primary text. Nothing here changes a size, so marking a row cannot move the card. */
@@ -2129,7 +2130,7 @@ QPushButton#LoadingCancel:hover {{
     border-color: {C.border_strong};
     background-color: {C.surface};
 }}
-/* ...and its ring, for the same reason #PBToastShare needs one: the `border` above is an ID-level
+/* ...and its ring, for the same reason #PBToastPrimary needs one: the `border` above is an ID-level
    declaration, so it beats the shared `QPushButton:focus` ring on specificity and the ring is
    never painted (measured: 0 changed pixels of 186x28 on focus). This card has exactly ONE
    control, so a keyboard user had nothing on screen to see at all. Padding traded against the
@@ -2177,13 +2178,14 @@ QLabel#MapNotice {{
     font-size: {CAPTION}px;
 }}
 
-/* the PB toast's PRIMARY action, the third button in an action row whose other two are HIT_MIN
-   flat links. It had an objectName and no rule, so it took the base QPushButton's CTRL_H and stood
-   4 px taller than the two buttons beside it in a 3-button row. Same floor, same caption type; the
-   amber fill is still the [variant="primary"] rule's, which is what makes it read as primary.
-   THE `border` HERE IS WHY #PBToastShare:focus EXISTS — an ID selector out-specifies the shared
+/* the PB toast's PRIMARY action — "Compare with your previous PB →" when the card offers it, else
+   "Share your PB →" — beside or above HIT_MIN flat links. As `#PBToastShare` it had an objectName
+   and no rule, so it took the base QPushButton's CTRL_H and stood 4 px taller than the two buttons
+   beside it in a 3-button row. Same floor, same caption type; the amber fill is still the
+   [variant="primary"] rule's, which is what makes it read as primary.
+   THE `border` HERE IS WHY #PBToastPrimary:focus EXISTS — an ID selector out-specifies the shared
    [variant="primary"]:focus ring, so this rule silently deleted it. See the focus-ring section. */
-QPushButton#PBToastShare {{
+QPushButton#PBToastPrimary {{
     font-size: {CAPTION}px;
     font-weight: 600;
     padding: {SPACE_XS}px {SPACE_S}px;

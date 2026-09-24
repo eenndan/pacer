@@ -304,10 +304,13 @@ class CompareController:
         self._compare_last_t = None  # force the next tick() to recompute for the new pair
         self._on_pair_changed()  # refresh the brake glyphs for the compared pair
 
-    def enter_cross(self) -> bool:
+    def enter_cross(self, lap_a: int | None = None) -> bool:
         """Enter cross-recording compare: pane A = this recording's lap, pane B = the reference
         recording's lap with its own footage/telemetry. Returns False (no-op) if no reference is
         loaded or the windows are degenerate.
+
+        `lap_a` pins pane A to that valid lap — "Compare with your previous PB" opens on this
+        session's BEST lap, wherever the playhead is. None keeps the lap the playhead is in.
 
         F1: pane B's picker lists EVERY comparable lap of the reference recording
         (`session.reference_lap_choices()`), not just the adopted one. It opens on the adopted lap,
@@ -322,8 +325,9 @@ class CompareController:
         if not valid:
             return False
         best = self.session.best_lap_id()
-        # Pane A = the lap the playhead is in, else the primary table selection, else best/first.
-        a = self.session.lap_at_time(self.playback.applied_t or 0.0)
+        # Pane A = the pinned lap, else the lap the playhead is in, else the primary table
+        # selection, else best/first.
+        a = lap_a if lap_a in valid else self.session.lap_at_time(self.playback.applied_t or 0.0)
         if a is None or a not in valid:
             sel = [lid for lid in self.plots.selected_lap_ids() if lid in valid]
             a = sel[0] if sel else (best if best is not None and best in valid else valid[0])

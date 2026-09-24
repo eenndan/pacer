@@ -535,10 +535,10 @@ def shot_data_trust(app: QApplication, w: StudioWindow, out_dir: str) -> str:
     restraint pass (#384: the plot names its axes and keys its rings itself), so the lower crop
     starts at the plot, exactly as the page shows it."""
     stats = _stats_page(app, w)
-    edge = right_edge(w, [stats.gg, stats.gg_key, *stats.trust_card.findChildren(QLabel)]) + PAD
+    edge = right_edge(w, [stats.gg, stats.gg_key, *stats.trust.card.findChildren(QLabel)]) + PAD
     # One crop per scroll position: each half is grabbed where the page shows it.
-    _scroll_to(app, stats, _heading(stats, "DATA TRUST"), stats.trust_card)
-    top = span(w, _heading(stats, "DATA TRUST"), stats.trust_card, right=edge)
+    _scroll_to(app, stats, _heading(stats, "DATA TRUST"), stats.trust.card)
+    top = span(w, _heading(stats, "DATA TRUST"), stats.trust.card, right=edge)
     a = region(w, top)
     _scroll_to(app, stats, stats.gg, stats.gg_key)
     bottom = span(w, stats.gg, stats.gg_key, right=edge)

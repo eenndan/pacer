@@ -226,9 +226,13 @@ PRIVACY_PARAGRAPHS = [
     "•  Timing-line sidecar — when you place or drag a start/finish or sector line, Pacer saves "
     "those lines next to your video as a small \"<name>.pacer.json\" file, so your lap timing "
     "survives a restart. It holds those lines' coordinates and the track name — no video.",
-    "•  Session library — each analyzed recording is indexed in "
-    "\"~/Library/Application Support/pacer/library.json\": the file path(s), track name, GPS date "
-    "and lap times. This is what powers the Library list and per-track PB progression.",
+    # THE TWO STORES THIS CARD NEVER NAMED ride in this bullet (board review UX-9d moved the
+    # Library's own paragraph here as a link): session_records.json and focus.json. It costs no
+    # line — measured, the card's body stays 667 px of its 680 px cap on the 800 px harness display
+    # — because the sentence about what the index powers made room for them.
+    "•  Session library — \"~/Library/Application Support/pacer/library.json\": each recording's "
+    "file path(s), track name, GPS date and lap times. Beside it: session_records.json (the "
+    "conditions you type — never looked up online) and focus.json (your focus list).",
     "•  Preferences — \"~/Library/Application Support/pacer/prefs.json\" remembers your speed "
     "unit, palette, window size and panel layout, plus the last folder you opened a recording "
     "from (a path into your filesystem).",
@@ -544,8 +548,8 @@ class AboutDialog(QDialog):
 
 class PrivacyDialog(QDialog):
     """Help ▸ Your data & privacy. A read-only, themed card disclosing what Pacer stores locally
-    (the per-video .pacer.json sidecar + all three app-support files — library.json, prefs.json,
-    tracks.json) and how to remove it. All copy is single-sourced from PRIVACY_PARAGRAPHS.
+    (the per-video .pacer.json sidecar and every app-support store — tests/test_help_dialog.py
+    names them) and how to remove it. All copy is single-sourced from PRIVACY_PARAGRAPHS.
     Self-contained / app-state-free (headless-safe)."""
 
     def __init__(self, parent=None):

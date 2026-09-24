@@ -85,8 +85,11 @@ def _view():
         v.resize(1440, 860)
         v.show()
         _settle(6)
+        # With the compare, the card's fullest shape: the primary "Compare with your previous PB →"
+        # and "Share your PB →" demoted to a link are both tab stops to measure.
         toast = PBToast("New personal best!", "1:02.418 — 0.317 s faster than your previous best.",
-                        on_progress=lambda: None, on_share=lambda: None, parent=v)
+                        on_progress=lambda: None, on_share=lambda: None, parent=v,
+                        on_compare=lambda: None)
         toast.show_for(v)
         toast._timer.stop()
         _settle(4)

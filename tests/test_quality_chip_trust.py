@@ -171,7 +171,7 @@ def test_every_state_the_chip_shows_names_the_same_fact_as_the_row_it_opens():
             chip = view.quality_badge
             assert chip.isVisibleTo(view), f"{name}: the chip is hidden on a degraded recording"
             assert chip.text() == word, f"{name}: the chip reads {chip.text()!r}, not {word!r}"
-            rows = {t: (v, c) for t, v, c in view.stats_view.trust_card.rows()}
+            rows = {t: (v, c) for t, v, c in view.stats_view.trust.card.rows()}
             assert "Timing" in rows, f"{name}: no Timing row on the card: {sorted(rows)}"
             value, caveat = rows["Timing"]
             for phrase in must:
@@ -194,7 +194,7 @@ def test_a_clean_recording_keeps_its_timing_row_and_hides_the_chip():
     try:
         assert not session.timing_quality.degraded
         assert not view.quality_badge.isVisibleTo(view)
-        row = next(r for r in view.stats_view.trust_card.rows() if r[0] == "Timing")
+        row = next(r for r in view.stats_view.trust.card.rows() if r[0] == "Timing")
         assert row == ("Timing", "GPS9 true clock · 0% of moving fixes rejected", False), row
     finally:
         _close(win)
@@ -289,7 +289,7 @@ def test_the_shown_chip_keeps_its_amber_pill_and_rings_on_focus_without_moving()
 
 # ======================================================================= what the chip DOES
 def _assert_landed(name, view, word, was, hidden):
-    from studio.stats_panel import TIMING_TERM
+    from studio.stats_trust import TIMING_TERM
     stats = view.stats_view
     assert view.tab_bar.currentIndex() == _STATS_TAB, f"{name}: {word} did not open the Stats page"
     assert view.table_stack.currentWidget() is stats, name
@@ -303,7 +303,7 @@ def _assert_landed(name, view, word, was, hidden):
             f"{name}: the card was off screen and the page never scrolled (left at {was})")
         assert _trust_heading(stats).mapTo(scroll.viewport(), QPoint(0, 0)).y() <= theme.SPACE_S, (
             f"{name}: the card was scrolled to, but not to the top of the page view")
-    card = stats.trust_card
+    card = stats.trust.card
     assert card.highlighted() == TIMING_TERM, (
         f"{name}: the row that explains {word} is not the one marked: {card.highlighted()!r}")
     term_w, value_w = card.row_widgets(TIMING_TERM)
@@ -362,7 +362,7 @@ def test_leaving_the_stats_page_clears_the_mark():
     try:
         QTest.mouseClick(view.quality_badge, Qt.LeftButton)
         _settle()
-        card = view.stats_view.trust_card
+        card = view.stats_view.trust.card
         assert card.highlighted() == "Timing"
         view.select_lap_tab(0)
         _settle()
@@ -403,7 +403,7 @@ def test_a_recording_with_no_gps_asks_for_no_start_line():
             wrong.append(f"strip: {view.provisional_banner.text()!r}")
         if not view.quality_banner.isVisibleTo(view):
             wrong.append("strip: the NO GPS line itself is gone")
-        card = {t: v for t, v, _c in view.stats_view.trust_card.rows()}
+        card = {t: v for t, v, _c in view.stats_view.trust.card.rows()}
         if "Track" in card:
             wrong.append(f"card: Track: {card['Track']!r}")
         if "Timing" not in card:

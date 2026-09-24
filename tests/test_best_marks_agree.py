@@ -354,7 +354,7 @@ def test_both_surfaces_count_the_excluded_laps_out_of_the_same_total():
     _APP.processEvents()
     headline = table._excluded_header.text()
     assert str(sess.N_EXCLUDED) in headline, headline
-    # The card's denominator, verbatim from stats_panel._refresh_trust.
+    # The card's denominator, verbatim from stats_trust.TrustSection.refresh.
     assert str(sess.N_FOUND) in headline, (
         f"the Laps strip says {headline!r}; the DATA TRUST card says "
         f"'{sess.N_VALID} of the {sess.N_FOUND} laps found'")

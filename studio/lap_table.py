@@ -1133,6 +1133,11 @@ class LapTable(QWidget):
         parts.append("If a real lap was dropped, drag the start/finish line on the map.")
         return " ".join(p for p in parts if p)
 
+    def excluded_strip(self) -> QWidget:
+        """The excluded-laps strip under the grid — for an overlay that must not cover it (the PB
+        card, `LibraryController._pb_card_keepout`)."""
+        return self._excluded_strip
+
     def _refresh_excluded(self, kept: list | None = None):
         """Populate / hide the excluded-laps strip from Session.excluded_lap_rows (getattr-guarded
         so the lighter test doubles, which don't expose it, simply show no strip). COLLAPSED (the
