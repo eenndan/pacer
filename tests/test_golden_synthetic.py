@@ -69,10 +69,16 @@ so two builds must produce an identical fingerprint — asserted below before th
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_golden_synthetic.py
 Regenerate the baseline (only after an INTENTIONAL, reviewed Session-math change):
       python tests/test_golden_synthetic.py --write-baseline
+It prints the leaf / __unsupported__ / null / NaN counts before vs after and how many leaves moved:
+a leaf that became NaN or fell to a placeholder shows there, not only in a diff nobody runs.
 """
+import contextlib
+import copy
+import io
 import json
 import os
 import sys
+import tempfile
 
 import numpy as np
 
@@ -92,7 +98,8 @@ from _synthetic import (  # noqa: E402  (the drift + noise fixtures)
 from test_session_services import _synthetic_session  # noqa: E402  (the shared stadium fixture)
 
 from studio import coaching, corners  # noqa: E402
-from studio.dev.golden_compare import EPS, walk  # noqa: E402
+from studio.dev import golden_compare, golden_session_dump  # noqa: E402
+from studio.dev.golden_compare import EPS, census, walk  # noqa: E402
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
 
 BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden_synthetic_baseline.json")
@@ -158,19 +165,85 @@ def synthetic_fingerprint() -> dict:
     return result
 
 
-def _leaf_count(o) -> int:
-    if isinstance(o, dict):
-        return sum(_leaf_count(v) for v in o.values())
-    if isinstance(o, list):
-        return sum(_leaf_count(v) for v in o)
-    return 1
-
-
 def _compare(a: dict, b: dict) -> tuple[list[str], dict]:
     diffs: list[str] = []
     stats = {"n": 0, "max": 0.0, "max_path": ""}
     walk(a, b, "root", diffs, stats)
     return diffs, stats
+
+
+def _census_line(tree) -> str:
+    c = census(tree)
+    return (f"{c['leaves']} leaves, {c['unsupported']} {golden_compare.UNSUPPORTED}, "
+            f"{c['null']} null, {c['nan']} NaN")
+
+
+def _float_leaves(o, keys=()):
+    """Key paths to every float leaf of a fingerprint tree, in the order `walk` visits them."""
+    if isinstance(o, dict):
+        for k in sorted(o):
+            yield from _float_leaves(o[k], (*keys, k))
+    elif isinstance(o, list):
+        for i, v in enumerate(o):
+            yield from _float_leaves(v, (*keys, i))
+    elif isinstance(o, float):
+        yield keys
+
+
+def test_nan_leaf_is_a_mismatch():
+    """NaN compares False with everything, so the comparator's `|a - b| > EPS` let a leaf that
+    TURNED INTO NaN — 0/0, the mean of an empty slice, the commonest numeric regression — pass as
+    EQUIVALENT: here, in test_load_pipeline, and in the manual real-footage dump. Put one NaN into
+    the committed baseline at leaves spread across every phase and expect exactly that leaf back,
+    from either side; NaN on both sides stays a match. Reads the baseline file only."""
+    nan = float("nan")
+    assert golden_compare.UNSUPPORTED == golden_session_dump._UNSUPPORTED
+    for a, b, n_diffs in (({"x": 1.0}, {"x": nan}, 1), ({"x": nan}, {"x": 2.5}, 1),
+                          ({"x": [nan, 3]}, {"x": [nan, 3]}, 0)):
+        diffs, _ = _compare(a, b)
+        assert len(diffs) == n_diffs, f"{a} vs {b}: {diffs}"
+
+    with open(BASELINE) as f:
+        baseline = json.load(f)
+    # A NaN baked into the baseline is a regression a re-cut accepted: a comparison cannot see it.
+    assert census(baseline)["nan"] == 0, f"the baseline carries NaN: {_census_line(baseline)}"
+    broken = copy.deepcopy(baseline)
+    leaves = list(_float_leaves(broken))
+    targets = leaves[::max(1, len(leaves) // 5)]
+    for keys in targets:
+        *parents, last = keys
+        holder = broken
+        for k in parents:
+            holder = holder[k]
+        was, holder[last] = holder[last], nan
+        leaf = "root" + "".join(f"[{k}]" if isinstance(k, int) else f".{k}" for k in keys)
+        for a, b in ((baseline, broken), (broken, baseline)):
+            diffs, _ = _compare(a, b)
+            assert len(diffs) == 1 and diffs[0].startswith(leaf + ":"), (
+                f"one NaN at {leaf} should be exactly one differing leaf, got {diffs[:3]}")
+        diffs, _ = _compare(broken, copy.deepcopy(broken))
+        assert not diffs, f"NaN on both sides of {leaf} should match, got {diffs[:3]}"
+        holder[last] = was
+
+    # The CLI the manual real-footage gate runs: exit 1, and the NaN is counted in its summary.
+    holder[last] = nan
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = [os.path.join(tmp, "golden.json"), os.path.join(tmp, "candidate.json")]
+        for path, tree in zip(paths, (baseline, broken), strict=True):
+            with open(path, "w") as f:
+                json.dump(tree, f)
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                golden_compare.main(paths)
+            code = 0
+        except SystemExit as e:
+            code = e.code
+    text = out.getvalue()
+    assert code == 1 and "MISMATCH: 1 differing leaves" in text, f"exit {code}:\n{text}"
+    assert "NaN leaves: golden 0, candidate 1" in text, text
+    print(f"ok NaN: one leaf turned NaN is one MISMATCH either way round at {len(targets)} leaves "
+          f"across the phases; NaN on both sides matches; baseline {_census_line(baseline)}")
 
 
 def test_synthetic_fingerprint_is_deterministic():
@@ -417,15 +490,30 @@ def test_synthetic_fingerprint_matches_baseline():
             f"(max |Δ|={stats['max']:g} at {stats['max_path']}):\n{msg}\n"
             f"If this is an INTENTIONAL Session-math change, regenerate the baseline with "
             f"`python tests/test_golden_synthetic.py --write-baseline` and review the diff.")
-    print(f"ok baseline: {stats['n']} leaves match within eps {EPS} (max |Δ|={stats['max']:g})")
+    print(f"ok baseline: {stats['n']} leaves match within eps {EPS} (max |Δ|={stats['max']:g}); "
+          f"{_census_line(fp)}")
 
 
 def _write_baseline():
+    """Re-cut the baseline and say what moved. It used to rewrite silently, so a leaf that had
+    turned NaN or fallen to a placeholder could be accepted by a re-cut without anyone seeing it."""
+    old = None
+    if os.path.exists(BASELINE):
+        with open(BASELINE) as f:
+            old = json.load(f)
     fp = synthetic_fingerprint()
     with open(BASELINE, "w") as f:
         json.dump(fp, f, sort_keys=True, indent=1)
         f.write("\n")
-    print(f"wrote {BASELINE} ({_leaf_count(fp)} leaf values)")
+    print(f"wrote {BASELINE}")
+    print(f"  before: {'(none)' if old is None else _census_line(old)}")
+    print(f"  after:  {_census_line(fp)}")
+    if old is not None:
+        diffs, stats = _compare(old, fp)
+        print(f"  {len(diffs)} differing leaves vs the old baseline "
+              f"(max |Δ|={stats['max']:g} at {stats['max_path'] or '-'}; showing up to 40):")
+        for d in diffs[:40]:
+            print("    " + d)
 
 
 if __name__ == "__main__":
@@ -433,6 +521,7 @@ if __name__ == "__main__":
         _write_baseline()
         sys.exit(0)
     tests = [
+        test_nan_leaf_is_a_mismatch,
         test_synthetic_fingerprint_is_deterministic,
         test_reference_clear_reverts_to_base,
         test_drift_noise_fixture_reaches_the_paths_it_exists_for,
@@ -443,4 +532,4 @@ if __name__ == "__main__":
     for t in tests:
         t()
     print(f"\nALL {len(tests)} SYNTHETIC-GOLDEN TESTS PASSED "
-          f"({_leaf_count(synthetic_fingerprint())} fingerprint leaves)")
+          f"({census(synthetic_fingerprint())['leaves']} fingerprint leaves)")
