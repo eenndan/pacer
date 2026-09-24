@@ -23,7 +23,7 @@ recording"* — and that menu item is live.
 > same HERO13-shaped format a real recording has — GPS9, accelerometer, gyroscope, gravity and
 > orientation. No person, kart, place or camera footage is in it. Its video is a rendered slate that
 > says so on every frame, with a running timecode and a dot at the kart's true position, so you can
-> watch the picture stay in step with the telemetry. The circuit is one Pacer ships, so step 2 below
+> check Pacer's map against the picture yourself. The circuit is one Pacer ships, so step 2 below
 > is done for you and the timing opens verified. After that first run the welcome screen offers
 > **Open demo** too; offline, `--demo` says plainly that the download failed.
 

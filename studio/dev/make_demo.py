@@ -13,8 +13,11 @@ WHAT IS IN THE FILE:
     release asset is one file;
   * a picture — RENDERED, and labelled on every frame "SYNTHETIC DEMO SESSION — Generated, not
     filmed.", with a running timecode (the video's own clock) and a top-down map of the circuit with
-    the kart's TRUE position on it. The picture and the IMU share the media clock, so the dot on the
-    video and the cursor on Pacer's map should meet wherever you scrub: video sync you can see;
+    the kart's TRUE position on it. The picture and the IMU share the media clock, so the video's
+    dot and the marker on Pacer's map can be compared wherever you scrub — video sync against
+    ground truth. Measured on the published file (2026-09-24, 1,784 moving probes): Pacer's marker
+    runs +125 ms ahead along track (p10 +79, p90 +171; 2.65 m median) — +75 ms of it the GPS-lag
+    correction's overshoot #371 predicted, the rest `index_at_time` taking the sample at or after t;
   * a VERIFIED start/finish line — the circuit is the built-in track `DEMO_TRACK_NAME`
     (`studio/track_db.py` SEED), whose line sits square across the middle of the main straight. An
     unknown circuit would load with an auto-fitted, provisional line; and the unknown-track

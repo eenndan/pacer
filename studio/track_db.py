@@ -45,7 +45,8 @@ centroid + bbox so a fresh recording auto-detects the track on load.
 
 The Daytona Milton Keynes and Sandown Park lines are BUILT-IN SEEDS (``SEED``), so a first-ever run
 already auto-detects either circuit with its line — MK's timing is identical to the old hardcoded
-entry, and Sandown Park's line is the owner's own saved one (Q2). The
+entry, and Sandown Park's line is the owner's own saved one (Q2). A third seed is FICTIONAL: the
+circuit the synthetic ``--demo`` session is driven on (``studio/dev/make_demo.py``). The
 user DB is merged ON TOP of the seed (a user entry of the same name overrides the seed), so
 ``Save as track…`` can refine a built-in too. Reusing a name for a DIFFERENT place is a different
 act — it destroys that circuit's stored lines — so it is REFUSED (``TrackNameTaken``) until the
