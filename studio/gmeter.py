@@ -35,11 +35,14 @@ All of this runs once at load; GMeter.at_time is a cheap searchsorted lookup for
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 
 from ._signal import G, boxcar, speed_long_g
+
+_log = logging.getLogger(__name__)
 
 # Empirically resolved GoPro stream-frame conventions (see module docstring + validation doc).
 # GRAV/CORI element order is a permutation of ACCL's native (Z,X,Y on a HERO13) element order.
@@ -551,8 +554,8 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
     # is measured on the two raw streams and refused here rather than fitted around.
     axis = axis_check(accl, grav)
     if axis is not None and not axis.ok:
-        print(f"studio: {axis.summary()} IMU g refused; "
-              f"{'using GPS-derived g' if long_gps is not None else 'no g-meter'}.", flush=True)
+        _log.warning("%s IMU g refused; %s.", axis.summary(),
+                     "using GPS-derived g" if long_gps is not None else "no g-meter")
         if long_gps is None:
             gm = _empty()
             gm.axis = axis

@@ -9,10 +9,13 @@ gmeter.py — names and signatures match the originals so call sites are unchang
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -408,9 +411,10 @@ def _gate_quality(samples, spans, naive, moving_speed: float = 0.0):
     keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
     dropped = len(samples) - len(keep)
     if dropped:
-        pct = 100.0 * dropped / max(len(samples), 1)
-        print(f"studio: quality gate dropped {dropped}/{len(samples)} fixes ({pct:.1f}%) "
-              f"(fix<{MIN_FIX} or dop>{MAX_DOP})", flush=True)
+        # INFO, not a warning: the GPS warm-up drops fixes on an ordinary recording. Whether the
+        # MOVING trace lost too many is `moving_dropped_fraction`'s verdict, which the app states.
+        _log.info("quality gate dropped %d/%d fixes (%.1f%%) (fix<%d or dop>%s)",
+                  dropped, len(samples), 100.0 * dropped / max(len(samples), 1), MIN_FIX, MAX_DOP)
     # Judge GPS quality over the MOVING trace only (exclude the stationary lead-in from BOTH the
     # dropped numerator and the denominator). A dropped MOVING fix = rejected AND full_speed above
     # the threshold; the finite-position guard in _quality_ok means a NaN-speed fix can't count as
@@ -585,13 +589,6 @@ def _band_lap_ids(laps) -> list[int]:
     return _classify_laps(laps)[0]
 
 
-def _excluded_lap_reasons(laps) -> dict[int, str]:
-    """``{lap_id: reason}`` for every substantial lap left out (`EXCLUDED_OPEN` /
-    `EXCLUDED_BAND` / `EXCLUDED_STOPPED`) — the WHY behind `_banded_out_lap_ids`, the same keys.
-    The single source for Session.excluded_lap_reasons."""
-    return _classify_laps(laps)[1]
-
-
 def exclusion_detail(reason: str, gap_m: float | None = None, turn_deg: float | None = None) -> str:
     """The per-lap WHY the ⊘ strip prints after an excluded lap ("Lap 2 — 0:23.231 · 320 m · ends
     22 m from its start, heading the other way"). An open lap names the measurement that failed —
@@ -636,7 +633,7 @@ def _banded_out_lap_ids(laps) -> list[int]:
     actually ran, not a brief start/end sliver) but did not end where they started (a piece cut by
     a line that reaches a second stretch of track), fell outside the median TIME or DISTANCE band
     in `_band_lap_ids`, or carried a stop of MAX_STOPPED_S or more — a mis-segmented short/long
-    lap, an out-lap, an in-lap, or a lap the driver stopped on. `_excluded_lap_reasons` says which.
+    lap, an out-lap, an in-lap, or a lap the driver stopped on. `_excluded_laps` says which.
 
     Returned so the UI can SHOW that a real-looking lap was left out of the times / bests instead
     of silently dropping it (the `_band_lap_ids` filter removes such a lap so it can't be crowned
@@ -647,9 +644,10 @@ def _banded_out_lap_ids(laps) -> list[int]:
 
 
 def _excluded_laps(laps) -> tuple[list[int], dict[int, str]]:
-    """``(_banded_out_lap_ids, _excluded_lap_reasons)`` from ONE classification pass — the single
-    source for Session.excluded_lap_ids and Session.excluded_lap_reasons, which fill their two
-    memos together so the list and its reasons can never come from different segmentations."""
+    """``(_banded_out_lap_ids, {lap_id: reason})`` from ONE classification pass, the reason one of
+    `EXCLUDED_OPEN` / `EXCLUDED_BAND` / `EXCLUDED_STOPPED` — the single source for
+    Session.excluded_lap_ids and Session.excluded_lap_reasons, which fill their two memos together
+    so the list and its reasons can never come from different segmentations."""
     substantial = [i for i in range(laps.laps_count())
                    if laps.sample_count(i) >= MIN_LAP_SAMPLES
                    and laps.lap_time(i) >= MIN_LAP_TIME]

@@ -158,7 +158,7 @@ class Thresholds:
 
     theta_b: float       # brake decel threshold: a brake event is long_g < -theta_b
     n_moving: int        # moving samples the distribution was measured over
-    # The measured braking-decel percentiles that motivate the value (for the load-time print).
+    # The measured braking-decel percentiles that motivate the value (for the load-time log line).
     brake_p75: float
     brake_p90: float
     brake_max: float
