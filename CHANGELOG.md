@@ -423,6 +423,12 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
 
 ### Fixed
 
+- **Opening one chapter no longer overwrites the whole recording in the Library.** Opening chapter 2
+  and then chapter 1 of SD_19_09 had replaced its 36-lap row (best 0:46.808) with chapter 1's
+  26 laps (0:46.862), so the track PB dropped out of the Library and its PB chart. An open that
+  covers fewer chapters now leaves the fuller row alone. Recordings first opened before 18 June,
+  which appeared as up to three rows, now appear as one (the old file is kept as `library.json.bak`).
+
 - **A slow-starting VideoToolbox export no longer falls back to software.** The mux used to pad
   the audio with silence without end and let the shortest stream end the file. Behind a hardware
   encode whose first second went in slowly, that silence overflowed a queue inside ffmpeg, and

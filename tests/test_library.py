@@ -11,7 +11,9 @@ CRITICAL: every test here points the index at a TEMP directory by monkeypatching
 
 Covered:
   * pure index (no Qt): schema round-trip + float-repr bit-exactness; the fingerprint identity
-    + upsert-replaces-not-duplicates rule; corrupt/invalid index → a safe empty index (self-heal),
+    + upsert-replaces-not-duplicates rule, and its one exception — a measurement that covered
+    fewer of a recording's chapters never displaces a fuller row (UX-4); the v4 migration that
+    re-keys and merges the retired stem|duration rows; corrupt/invalid index → a safe empty index (self-heal),
     then a clean write heals it; atomic write creates the app-support dir; pb_series extraction
     (per-track, dated bests, sorted) and its drop-undated/no-best filtering;
   * the dialog (offscreen Qt, synthetic index dicts — the dialog is pacer-free): lists every
@@ -204,6 +206,64 @@ def test_upsert_and_save_no_duplicate_across_loads():
         idx = library.load(p)
         assert len(idx["entries"]) == 1
         assert idx["entries"][0]["best"] == 68.0
+
+
+# SD_19_09_26 (GX0068), measured per load: the full chain and each chapter alone, as the app opens
+# them (Session.load + the recording's sidecar). The best lap is in chapter 2; chapter 1 alone is
+# slower; the one seam lap is in neither chapter alone.
+_FULL_68 = dict(laps=36, best=46.808, theo=46.196, paths=["/m/GX010068.MP4", "/m/GX020068.MP4"])
+_CH1_68 = dict(laps=26, best=46.862, theo=46.224, paths=["/m/GX010068.MP4"])
+_CH2_68 = dict(laps=9, best=46.808, theo=46.426, paths=["/m/GX020068.MP4"])
+
+
+def test_upsert_keeps_the_fuller_measurement_of_one_outing():
+    """UX-4. The fingerprint is chapter-invariant on purpose (one outing, one row), so opening any
+    subset of a recording's chapters upserts that SAME row — and upsert used to replace it
+    unconditionally, so whichever chapter was opened last became the outing. The row is now kept by
+    what a measurement COVERED, never by what it measured:
+
+      * a strict subset of the stored chapters never displaces them (the owner's case);
+      * the SAME chapter set always replaces, whatever its lap count — that is a re-measurement (a
+        re-open, a start-line drag, Save as track), and the latest timing is the truth. Lap count
+        cannot stand in for coverage: Sandown 3h's chapter 1 alone counts four ~85 s laps valid
+        that the full chain's band rejects, so a part can out-count its own share of the whole;
+      * a superset always replaces (Load full recording after a chapter);
+      * two partials that don't contain each other (chapter 1 alone, chapter 2 alone): more
+        chapters, then more laps; a tie goes to the newer."""
+    def row(**kw):
+        return library._norm_entry(_entry("GX010068", track="Sandown Park", **kw))
+
+    idx = library.empty_index()
+    for step in (_FULL_68, _CH2_68, _CH1_68):           # the board review's sequence
+        library.upsert(idx, _entry("GX010068", track="Sandown Park", **step))
+    assert idx["entries"] == [row(**_FULL_68)], idx["entries"]
+
+    # The same chapters, re-measured with a lap fewer after a start-line drag, from a moved folder:
+    # a re-measurement, so it replaces — by chapter NAME, not by absolute path.
+    moved = dict(_FULL_68, laps=35, best=46.9,
+                 paths=["/elsewhere/GX010068.MP4", "/elsewhere/GX020068.MP4"])
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **moved))
+    assert idx["entries"] == [row(**moved)], idx["entries"]
+
+    # Partials that don't contain each other: more laps wins, and a later equal one replaces.
+    idx = library.empty_index()
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **_CH2_68))
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **_CH1_68))
+    assert idx["entries"] == [row(**_CH1_68)], "chapter 1's 26 laps outrank chapter 2's 9"
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **_CH2_68))
+    assert idx["entries"] == [row(**_CH1_68)], "…and chapter 2 opened again does not undo that"
+    same_size = dict(_CH2_68, laps=26)
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **same_size))
+    assert idx["entries"] == [row(**same_size)], "a tie goes to the newer measurement"
+
+    # A superset replaces; and a stored row that names no chapter at all never blocks anything.
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **_FULL_68))
+    assert idx["entries"] == [row(**_FULL_68)]
+    idx = {"version": library.VERSION,
+           "entries": [row(**dict(_FULL_68, paths=[]))]}
+    library.upsert(idx, _entry("GX010068", track="Sandown Park", **_CH2_68))
+    assert idx["entries"] == [row(**_CH2_68)], "unknown coverage must not outrank a real one"
+    print("ok upsert: a partial keeps out, a re-measure and a superset replace, partials rank")
 
 
 def test_load_missing_is_empty_index():
@@ -638,7 +698,7 @@ def test_v2_theoretical_is_retired_not_reinterpreted():
             json.dump({"version": 2, "entries": [dict(e) for e in v2]}, f)
         idx = library.load(p)
 
-        assert idx["version"] == library.VERSION == 3
+        assert idx["version"] == library.VERSION == 4
         assert len(idx["entries"]) == 2, "a migration may never lose an entry"
         for before, after in zip(v2, idx["entries"], strict=True):
             assert after["theoretical"] is None, after
@@ -660,6 +720,101 @@ def test_v2_theoretical_is_retired_not_reinterpreted():
                  "lap_count": 8, "best": 68.4, "theoretical": 68.4, "paths": []}]}, f)
         e = library.load(p)["entries"][0]
         assert e["theoretical"] is None and e["verified"] is True and e["best"] == 68.4
+
+
+def _v3_row(fp, stem, laps, best, theo, chapters, track="MK", date="2026-05-23"):
+    return {"fingerprint": fp, "stem": stem, "track": track, "date": date, "lap_count": laps,
+            "best": best, "theoretical": theo, "verified": True, "degraded": False,
+            "dropout": False, "paths": [f"/media/{c}.MP4" for c in chapters]}
+
+
+# The owner's index, as it stands (2026-09-23), with neutral track names and paths: ONE D24 outing
+# as three rows — two keyed by the retired "<stem>|<duration>" scheme, one by today's key after a
+# chapter-2-alone open — beside five recordings that were only ever written under today's key.
+_OWNER_SHAPED_V3 = [
+    _v3_row("GX010060|4654.7", "GX010060", 57, 68.228, None, ["GX010060", "GX020060", "GX030060"]),
+    _v3_row("GX010060|1729.7", "GX010060", 18, 68.44, None, ["GX010060"]),
+    _v3_row("GX0060", "GX010060", 24, 68.228, 66.102, ["GX020060"]),
+    _v3_row("GX0059", "GX010059", 59, 48.552, 47.365, ["GX010059", "GX020059", "GX030059"],
+            track="Sandown Park", date="2026-05-09"),
+    _v3_row("GX0064", "GX010064", 62, 47.076, 45.805, ["GX010064", "GX020064", "GX030064"],
+            track="Sandown Park", date="2026-07-19"),
+    _v3_row("GX0065", "GX010065", 37, 46.912, 46.201, ["GX010065", "GX020065"],
+            track="Sandown Park", date="2026-08-30"),
+    _v3_row("GX0067", "GX010067", 19, 67.479, 66.058, ["GX010067", "GX020067"],
+            date="2026-09-18"),
+    _v3_row("GX0068", "GX010068", 36, 46.808, 46.063, ["GX010068", "GX020068"],
+            track="Sandown Park", date="2026-09-19"),
+]
+
+
+def test_v4_rekeys_the_retired_stem_duration_rows_and_keeps_the_fullest():
+    """UX-4 (b). Until 8caab68 (2026-06-18) a row was keyed "<first-chapter stem>|<total duration
+    to 0.1 s>", so a one-chapter open and a full open of one recording were two rows. The key was
+    fixed; the rows it had already written were never re-keyed, so the owner's index still holds
+    one D24 afternoon three times and the track's PB chart plots it three times on one date.
+
+    v4 re-keys each retired row with ``fingerprint(stem)`` and folds rows that share a key through
+    the rule ``upsert`` applies, in file order: the 3-chapter row wins, and it is kept WHOLE — its
+    own lap count, best and (retired) ideal together. The 24-lap chapter-2 row's ideal is a minimum
+    over 24 laps; printing it beside 57 would mislabel the sample, so it is not borrowed. Every
+    other row, its position and its every field, is untouched. The rewrite drops rows, so the
+    older file is copied to ``library.json.bak`` before the first save replaces it — once."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        original = json.dumps({"version": 3, "entries": _OWNER_SHAPED_V3}, indent=2).encode()
+        with open(p, "wb") as f:
+            f.write(original)
+        assert library.pb_series({"entries": _OWNER_SHAPED_V3}, "MK")[:3] == [
+            ("2026-05-23", 68.228), ("2026-05-23", 68.228), ("2026-05-23", 68.44)], \
+            "the fixture must reproduce the symptom: one afternoon, three chart points"
+
+        idx = library.load(p)
+        d24 = [e for e in idx["entries"] if e["stem"] == "GX010060"]
+        assert len(d24) == 1, f"one outing, one row — got {[e['fingerprint'] for e in d24]}"
+        assert d24[0] == library._norm_entry({**_OWNER_SHAPED_V3[0], "fingerprint": "GX0060"}), \
+            d24[0]
+        assert idx["entries"][0] is d24[0], "the merged row keeps the outing's first position"
+        assert idx["entries"][1:] == [library._norm_entry(e) for e in _OWNER_SHAPED_V3[3:]], \
+            "every other row must come through untouched and in order"
+        assert idx["version"] == library.VERSION == 4
+        assert library.pb_series(idx, "MK") == [("2026-05-23", 68.228), ("2026-09-18", 67.479)]
+
+        library.save(idx, p)                                   # the first write after upgrading
+        with open(p + ".bak", "rb") as f:
+            assert f.read() == original, "the pre-migration index must be kept, verbatim"
+        assert library.load(p)["entries"] == idx["entries"]
+        mtime = os.path.getmtime(p + ".bak")
+        library.save(library.load(p), p)                        # …and never again
+        assert os.path.getmtime(p + ".bak") == mtime
+    print("ok v4: 3 D24 rows -> 1 (57 laps, 3 chapters), 5 rows untouched, v3 file kept as .bak")
+
+
+def test_v4_leaves_current_keys_alone_and_backs_up_nothing_it_does_not_change():
+    """The retired key is recognised exactly: ``"<the row's own stem>|<digits>.<digit>"`` — so a
+    clip whose OWN name contains a bar keeps its key. A legacy row and a today's-key row of the
+    same chapters are one re-measurement: the later one in the file (written after the key
+    changed) wins, as a re-open would. And a v3 index the migration does not change is rewritten
+    without taking the backup slot, which may be holding a cleared library."""
+    rows = [_v3_row("GX010062|4654.7", "GX010062", 57, 68.3, None,
+                    ["GX010062", "GX020062", "GX030062"]),
+            {**_v3_row("lap|12.5", "lap|12.5", 3, 40.0, None, []), "track": None},
+            _v3_row("hero6|123.4", "hero6", 2, 50.0, None, ["hero6"]),
+            _v3_row("GX0062", "GX010062", 58, 68.2, 67.0, ["GX010062", "GX020062", "GX030062"])]
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        with open(p, "w") as f:
+            json.dump({"version": 3, "entries": rows}, f)
+        got = {e["fingerprint"]: e for e in library.load(p)["entries"]}
+        assert sorted(got) == ["GX0062", "hero6", "lap|12.5"], sorted(got)
+        assert got["GX0062"]["lap_count"] == 58 and got["GX0062"]["theoretical"] == 67.0
+
+        q = os.path.join(d, "clean.json")
+        with open(q, "w") as f:
+            json.dump({"version": 3, "entries": _OWNER_SHAPED_V3[3:]}, f)
+        library.save(library.load(q), q)
+        assert not os.path.exists(q + ".bak"), "a lossless migration must not spend the .bak"
+    print("ok v4: a bar in a clip's own name is not a legacy key; a no-op migration keeps no copy")
 
 
 def test_upsert_writes_v2_trust_flags():
@@ -1698,6 +1853,55 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
         })()
         ctl.update_library(["/m/GX010060.MP4"])
         assert len(upserts) == 1 and upserts[0]["fingerprint"] == "GX0060"
+
+
+def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
+    """UX-4, the board review's sequence through the app's own load-time path: SD_19_09 opened in
+    full (36 laps · 0:46.808), then File ▸ Open on chapter 2 alone (9 laps), then on chapter 1
+    alone (26 laps · 0:46.862). Each open runs the REAL `LibraryController.update_library` over the
+    REAL `Session.library_entry` (chapter files on disk, so the fingerprint is derived exactly as
+    shipped). It used to end with the Library reading "Sandown Park · best 0:46.862": the owner's
+    track PB gone from the only season surface, by opening one file."""
+    if not _pacer_available():
+        print("skip test_partial_opens_never_displace_the_full_recordings_row (no pacer)")
+        return
+    from studio import app as studio_app
+    from studio.library_controller import LibraryController
+    from studio.session import Session
+
+    def _open(paths, laps, best, theo):
+        s = Session.__new__(Session)          # bare; seed only what library_entry reads
+        s._valid_cache = list(range(laps))
+        s._best_cache = 0
+        s.track_name = "Sandown Park"
+        s.laps = type("L", (), {"lap_time": staticmethod(lambda i: best)})()
+        s.session_date = lambda: "2026-09-19"
+        s.theoretical_best = lambda: theo
+        s.dropout_lap_ids = lambda: set()
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        win.session = SimpleNamespace(
+            valid_lap_ids=lambda: list(range(laps)), timing_verified=True,
+            timing_quality=SimpleNamespace(degraded=False),
+            library_entry=lambda p: Session.library_entry(s, p))
+        LibraryController(win, studio_app.STATUS_MS).update_library(paths)
+
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        ch1, ch2 = (os.path.join(d, f"GX0{i}0068.MP4") for i in (1, 2))
+        for c in (ch1, ch2):
+            with open(c, "wb"):
+                pass
+        _open([ch1, ch2], 36, 46.808, 46.196)                # the full drop-load
+        _open([ch2], 9, 46.808, 46.426)                      # File ▸ Open, chapter 2
+        _open([ch1], 26, 46.862, 46.224)                     # File ▸ Open, chapter 1
+        idx = library.load()
+        assert len(idx["entries"]) == 1, idx["entries"]
+        e = idx["entries"][0]
+        assert (e["lap_count"], e["best"], e["theoretical"], len(e["paths"])) == \
+            (36, 46.808, 46.196, 2), f"a partial open displaced the full recording's row: {e}"
+        summary = library.track_summary(idx, "Sandown Park")
+        assert summary["best"] == 46.808, summary
+    print("ok app path: full -> ch2 -> ch1 leaves 36 laps · 0:46.808 · ideal 0:46.196")
 
 
 # ---------------------------------------------------- the entry must not freeze at load time (W7-02)
