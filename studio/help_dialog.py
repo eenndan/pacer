@@ -548,8 +548,8 @@ class AboutDialog(QDialog):
 
 class PrivacyDialog(QDialog):
     """Help ▸ Your data & privacy. A read-only, themed card disclosing what Pacer stores locally
-    (the per-video .pacer.json sidecar + all three app-support files — library.json, prefs.json,
-    tracks.json) and how to remove it. All copy is single-sourced from PRIVACY_PARAGRAPHS.
+    (the per-video .pacer.json sidecar and every app-support store — tests/test_help_dialog.py
+    names them) and how to remove it. All copy is single-sourced from PRIVACY_PARAGRAPHS.
     Self-contained / app-state-free (headless-safe)."""
 
     def __init__(self, parent=None):
