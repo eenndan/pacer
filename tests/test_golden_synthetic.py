@@ -413,7 +413,9 @@ def test_gopro_phases_reach_what_the_seeded_phases_cannot():
     assert s.timing_quality.clock == data_quality.GPS9_TRUECLOCK, s.timing_quality.clock
     cmap = s.chapters
     assert len(cmap.chapters) == 2, [c.path for c in cmap.chapters]
-    seam = s.telemetry_time(cmap.chapters[0].duration)
+    # A chapter boundary is a footage STAMP, not an event in the picture: the stamp map, no lag
+    # (the rule tests/test_media_clock.py::CROSSINGS holds studio/ to).
+    seam = s.media_clock.without_gps_lag().to_telemetry(cmap.chapters[0].duration)
     windows = {i: s.lap_window(i) for i in s.valid_lap_ids()}
     across = [i for i, w in windows.items() if w[0] < seam < w[1]]
     assert len(across) == 1, f"no valid lap spans the chapter seam at {seam:.2f} s: {windows}"
