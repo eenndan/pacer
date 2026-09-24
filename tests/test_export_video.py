@@ -49,6 +49,7 @@ import _footage  # noqa: E402
 
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
+from studio.timeline import nearest_sample  # noqa: E402
 
 
 def _real_media(label: str) -> str:
@@ -135,10 +136,7 @@ class StubSession:
         return self._lap if self._t0 <= t < self._t1 else None
 
     def index_at_time(self, t):
-        if len(self.tt) == 0:
-            return None
-        i = int(np.searchsorted(self.tt, t))
-        return min(max(i, 0), len(self.tt) - 1)
+        return nearest_sample(self.tt, t)   # the real Session's rule, not a copy of it
 
     def lap_window(self, lap_id):
         return (self._t0, self._t1) if lap_id == self._lap else None

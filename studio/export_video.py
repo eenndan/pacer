@@ -2180,13 +2180,15 @@ def _burned_runs(session, spec: ExportSpec, fps: float) -> tuple[list[str], list
 
     It replaced four estimators, and two of them were wrong at the edges of the window:
 
-      * the speed budget masked `tt < spec.t1` while the per-frame lookup is
-        `session.index_at_time` — `np.searchsorted`, a CEILING. Every frame past the last in-window
-        sample reads the first sample AT OR AFTER `t1`, which the mask excluded: at 10 Hz GPS /
-        30 fps, the last ~2-3 frames of every clip. Constructed (99.4 km/h inside `[0, 10)`,
+      * the speed budget masked `tt < spec.t1` while the per-frame lookup was
+        `session.index_at_time` — then `np.searchsorted`, a CEILING. Every frame past the last
+        in-window sample read the first sample AT OR AFTER `t1`, which the mask excluded: at 10 Hz
+        GPS / 30 fps, the last ~2-3 frames of every clip. Constructed (99.4 km/h inside `[0, 10)`,
         142 km/h from the sample at `t = 10.0`): the budget said `('99',)` and 2 frames burned
         `142`, painting +9.57 px of ink right of the readout pill's right edge, measured on the
-        composite.
+        composite. (The lookup is the NEAREST sample now, `timeline.nearest_sample`; the frames
+        within half a GPS period of `t1` still read the sample at `t1`, so the mask would still
+        miss them.)
       * the Δ budget sampled `np.linspace(lap_t0, lap_t1, 128, endpoint=False)` and so never asked
         about `lap_t1 - _LAP_CLOCK_EPS` — the exact instant a lead-out FREEZES the clock and the Δ
         on. Constructed (Δ reaching 9.9995 s at the flag): the budget fitted `Δ ±9.92` and the

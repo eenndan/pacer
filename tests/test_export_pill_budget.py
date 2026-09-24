@@ -6,10 +6,11 @@ EXACT: worst `need - pill` = +0.00 px across every frame of all 21 valid D24 lap
 before — but it makes the WIDTH BUDGET load-bearing, and the budget was an estimate re-derived
 from the same series the painter reads, under different conventions:
 
-  * F4, `_speed_text_candidates` — masked `tt < spec.t1` while the per-frame lookup is
-    `Session.index_at_time`, i.e. `np.searchsorted`, a CEILING. Every frame past the last
-    in-window sample reads the first sample AT OR AFTER `t1`, which the mask excluded. At 10 Hz
-    GPS / 30 fps that is the last 2-3 frames of every clip.
+  * F4, `_speed_text_candidates` — masked `tt < spec.t1` while the per-frame lookup was
+    `Session.index_at_time`, then `np.searchsorted`, a CEILING. Every frame past the last
+    in-window sample read the first sample AT OR AFTER `t1`, which the mask excluded. At 10 Hz
+    GPS / 30 fps that was the last 2-3 frames of every clip (the nearest-sample lookup that
+    replaced the ceiling leaves the frames within half a GPS period of `t1`: still missed).
   * F3, `_peak_abs_delta` — sampled `np.linspace(lap_t0, lap_t1, 128, endpoint=False)`, so it
     never asked about `lap_t1 - _LAP_CLOCK_EPS`: the exact instant a lead-out FREEZES the clock
     and the Δ on, and holds for the whole run-off.
@@ -46,6 +47,7 @@ from PySide6.QtGui import QImage  # noqa: E402
 
 from studio import export_video as ev  # noqa: E402
 from studio import theme  # noqa: E402
+from studio.timeline import nearest_sample  # noqa: E402
 
 FPS = 30.0
 # A flat frame colour nothing in the overlay uses, so "differs from the background" == "ink".
@@ -77,9 +79,7 @@ class Stub:
         return self._lap if self._w[0] <= t < self._w[1] else None
 
     def index_at_time(self, t):
-        if not len(self.tt):
-            return None
-        return int(min(max(np.searchsorted(self.tt, t), 0), len(self.tt) - 1))
+        return nearest_sample(self.tt, t)   # the real Session's rule, not a copy of it
 
     def delta_at_lap(self, lap_id, t):
         return self._delta(float(t)) if lap_id == self._lap else None
@@ -217,7 +217,9 @@ def _worst_over(session, spec, out_w, out_h, painter):
 # ------------------------------------------------------------------- F4: the readout's speed set
 def _f4_session():
     """99.4 km/h ("99") everywhere inside [0, 10), 142 km/h ("142") from the sample AT t = 10.0 —
-    the first sample the CEILING lookup hands the closing frames and the `tt < t1` mask dropped."""
+    the sample the lookup hands the closing frame(s) and the `tt < t1` mask dropped. (Under the
+    old CEILING lookup that was the last two frames; the nearest-sample rule leaves the last one,
+    t = 9.967, which is nearer 10.0 than 9.9. Either way the mask missed it.)"""
     tt = np.round(np.arange(0.0, 20.001, 0.1), 6)
     tv = np.where(tt < 10.0 - 1e-9, 99.4, 142.0)
     return Stub(tt, tv, 0.0, 10.0, lambda t: 0.0)
@@ -227,11 +229,13 @@ def test_the_readout_budget_reads_the_sample_the_render_reads():
     """`_burned_runs` (and so `readout_pill_width`) must budget for the sample the CLOSING FRAMES
     resolve to, not for the last sample strictly inside the window.
 
-    The old `_speed_text_candidates` masked `tt >= t0 & tt < t1`; `Session.index_at_time` is
+    The old `_speed_text_candidates` masked `tt >= t0 & tt < t1`; `Session.index_at_time` was then
     `np.searchsorted`, a ceiling. Constructed above, at 1080p/30 fps: the mask said `('99',)`,
     2 frames burned `142`, and the composite carried +9.57 px of ink right of the readout pill's
     right edge — one full digit cell at a 44 px pill (measured +21.34 px of ADVANCE in the sweep's
-    own construction)."""
+    own construction). The lookup is the NEAREST sample now (`timeline.nearest_sample`), so one
+    frame burns `142`; a mask on `t < t1` would still miss it, which is why the budget asks the
+    render's own lookup instead of re-deriving one."""
     s = _f4_session()
     out_h, out_w = 1080, 1920
     spec = _spec(s, out_h)
@@ -239,7 +243,7 @@ def test_the_readout_budget_reads_the_sample_the_render_reads():
     burned = sorted(set(speeds))
     assert burned == ["142", "99"], burned
     n142 = speeds.count("142")
-    assert n142 == 2, n142                       # the last 2 frames of the clip, at 30 fps / 10 Hz
+    assert n142 == 1, n142                       # the clip's last frame, nearest the sample at t1
     painter = ev.OverlayPainter(s, spec, out_w, out_h, FPS)
     times = ev.frame_times(spec.t0, spec.t1, FPS)
     worst_t = max(times, key=lambda t: ev.overlay_values_at(s, float(t), spec).speed_kmh or 0.0)

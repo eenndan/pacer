@@ -30,7 +30,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import _smooth
+from ._signal import _smooth, centred_boxcar
 
 # --- per-corner alignment ---------------------------------------------------------------
 # The corner-window projection (lap_corner_stats / segment_times / coaching.corner_phase_losses)
@@ -598,10 +598,15 @@ class CornerStat:
 
 
 # ------------------------------------------------------------------- curvature profile
-def lap_curvature(xs, ys, dists) -> np.ndarray:
+def lap_curvature(xs, ys, dists, centred: bool = False) -> np.ndarray:
     """Signed curvature kappa(s) (1/m, + = left) of one lap's local-frame trace: unwrapped
     heading differentiated vs arc length, boxcar-smoothed over KAPPA_SMOOTH_M of arc.
-    `dists` must be strictly increasing (dedupe stationary samples first)."""
+    `dists` must be strictly increasing (dedupe stationary samples first).
+
+    `centred=True` smooths with `_signal.centred_boxcar`. The default window is NOT centred when
+    it comes out even (w = round(8 m / median spacing) is 4 or 6 at ~2 m or ~1.4 m between fixes):
+    the profile then sits half a sample late. A shape does not care, and the corner model keeps
+    the default; a TIMING does — `rotation`'s clock-offset reference asks for the centred one."""
     xs = np.asarray(xs, float)
     ys = np.asarray(ys, float)
     dists = np.asarray(dists, float)
@@ -609,6 +614,8 @@ def lap_curvature(xs, ys, dists) -> np.ndarray:
     kappa = np.gradient(heading, dists)
     ds = float(np.median(np.diff(dists)))
     w = max(int(round(KAPPA_SMOOTH_M / max(ds, 1e-9))), 1)
+    if centred:
+        return centred_boxcar(kappa, w) if len(kappa) >= w else kappa   # `_smooth`'s own guard
     return _smooth(kappa, w)
 
 

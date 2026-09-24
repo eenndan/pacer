@@ -137,13 +137,39 @@ telemetry-axis figure trends +38.9 / +37.4 ppm, i.e. the rate itself; mapped thr
 -2.2 / -0.1 ppm. THE DRIFT WAS THE MEASUREMENT, NOT THE CHANNEL.
 
 IT IS NOT AN ARTIFACT OF THE FILTERS, and the filters are the first thing to suspect: two signals
-put through different windows can manufacture a lag. Every window here is centred, so none of them
-can move a peak, and switching them off says so. Whole-recording, media-mapped, in seconds of GPS
-lag, through #291's per-sample harness (which is why the first pair reads 0.483 where `measure_lag`
-reads 0.476): app filters 0.483/0.459; the gyro low-pass off 0.529/0.479; the curvature boxcar off
-0.475/0.454; both off 0.433/0.479; the 13-sample load-time POSITION boxcar off (`smooth_window=1`,
-a second full load) 0.471/0.465. The estimator itself was checked by delaying the real gyro
-stream 0.400 s: it recovered 0.400 s on both recordings, to the millisecond.
+put through different windows can manufacture a lag. Whole-recording, media-mapped, in seconds of
+GPS lag, through #291's per-sample harness (which is why the first pair reads 0.483 where
+`measure_lag` reads 0.476): app filters 0.483/0.459; the gyro low-pass off 0.529/0.479; the
+curvature boxcar off 0.475/0.454; both off 0.433/0.479; the 13-sample load-time POSITION boxcar
+off (`smooth_window=1`, a second full load) 0.471/0.465. The estimator itself was checked by
+delaying the real gyro stream 0.400 s: it recovered 0.400 s on both recordings, to the millisecond.
+
+...BUT TWO OF THOSE WINDOWS WERE NOT CENTRED, and this block used to say they all were (X2,
+2026-09-24). A boxcar of an EVEN width, as `_boxcar_core` convolves it, averages [i - w/2,
+i + w/2 - 1]: it runs half a sample late. The path's curvature window is 8 m of arc, i.e.
+round(8 / spacing) fixes — 4 or 6 whenever a lap's fixes sit ~2 m or ~1.4 m apart — so on those
+laps the reference ran half a GPS sample (50 ms) late and `measure_lag` read it as GPS lag; the
+gyro's 60-sample low-pass ran 2.5 ms late the other way. Both are `_signal.centred_boxcar` now.
+Measured against TRUTH on the synthetic GoPro (`studio/dev/synth_gopro.py`: the lag it plants is
+known, and so is where the stamp map files each fix — ~50 ms before its true filing time, the
+naive payload spread): the reading overshot what the overlay needs by +73..+78 ms in all eleven
+cases tried — planted lags 0.0-0.6 s, noise 0-3, 1 or 2 chapters, either direction, three seeds. On
+the noise-free trace that +75.4 ms is +57.7 ms this window (every lap there is w = 4), +17.1 ms the
+load-time position boxcar (switch it off, `smooth_window=1`, and the reading is +3.2 ms off) and
+-2.5 ms the gyro's. Centred, it overshoots by +16.5..+21.6 ms over the same eleven cases: the
+position boxcar's share, left in because nothing here can model it — it averages positions over
+1.3 s of changing speed, which drags a braking kart's apparent position back along the track, and
+its size depends on how hard each recording brakes. On the owner's four recordings the installed
+figure moved by the share of laps whose window is even, as it must:
+
+    recording (whole recording)   even-window laps   before     after      moved
+    Sandown 3h 2026 (0064)        55 / 62            +0.4977    +0.4578    -39.9 ms
+    SD_30_08_26 (0065)            23 / 37            +0.4394    +0.4178    -21.6 ms
+    SD_19_09_26 (0068)            23 / 36            +0.3935    +0.3781    -15.4 ms
+    MK_18_09_26 (0067)             4 / 19            +0.4333    +0.4286     -4.7 ms
+
+The D24 figures in the table above were measured before this and are not re-measured (D24 is
+off-machine); D24 was driven at MK, where the shift was the smallest.
 
 WHICH CLOCK IS LATE — SETTLED AGAINST THE PICTURE. The video is the one reference outside both
 channels, and the user watches it. Yaw taken from the FRAMES themselves (phase correlation
@@ -169,7 +195,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import boxcar
+from ._signal import centred_boxcar
 from .corners import derive_threshold, lap_curvature, lap_yaw_rate
 from .gmeter import GRAV_PERM, MIN_GRAV_NORM
 
@@ -541,7 +567,11 @@ def yaw_rate_series(gyro, grav, lowpass_s: float = LOWPASS_S):
     yaw = np.sum(gyro[:, 1:4] * up, axis=1)
     span = float(t[-1] - t[0])
     if lowpass_s > 0 and span > 0:
-        yaw = boxcar(yaw, max(int(round(lowpass_s * len(t) / span)), 1))
+        # CENTRED, because this series' timing is measured against the path's: at 200 Hz the
+        # 0.30 s window is 60 samples, and a plain boxcar of an even width runs half a sample
+        # (2.5 ms) late — small, but the module doc's claim that no window here can move a peak
+        # has to be true of every window (see `_signal.centred_boxcar`).
+        yaw = centred_boxcar(yaw, max(int(round(lowpass_s * len(t) / span)), 1))
     return t, yaw
 
 
@@ -571,7 +601,10 @@ def _path_reference(lap_traces):
         t, x, y, d = t[keep], x[keep], y[keep], d[keep]
         if len(d) < _MIN_LAP_SAMPLES or d[-1] <= 0:
             continue
-        k = lap_curvature(x, y, d)
+        # `centred=True`: this reference is what `measure_lag` times the GPS clock against, and
+        # the corner model's default curvature window runs half a GPS sample LATE whenever it
+        # comes out even — which read as +50 ms of GPS lag on those laps (module doc).
+        k = lap_curvature(x, y, d, centred=True)
         w = lap_yaw_rate(x, y, d, t, kappa=k)
         if not (np.all(np.isfinite(k)) and np.all(np.isfinite(w))):
             continue

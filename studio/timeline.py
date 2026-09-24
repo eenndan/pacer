@@ -11,7 +11,8 @@ Coordinate spaces:
     'distance'/'delta' = the shared normalized-distance × baseline_total axis delta() draws on, so
     the cursors coincide). best_distance is caller-supplied (the active baseline total stays on
     Session). Two of these are NAMED "media time" and are not; see `media_time_at_plot_x`.
-  * telemetry time -> trace index / lap (full-trace searchsorted + the O(log n) lap-window search).
+  * telemetry time -> trace index / lap (the NEAREST trace sample, `nearest_sample`, + the O(log n)
+    lap-window search).
   * map (x, y) -> trace (whole-trace argmin + the lap-scoped variant for the draggable marker).
 
 Every time in and out of this module is on the GPS9 TELEMETRY clock. Nothing here crosses to the
@@ -20,6 +21,35 @@ media axis; the player does that at its own boundary (`player_pane.seek` / `_on_
 from __future__ import annotations
 
 import numpy as np
+
+
+def nearest_sample(times, t: float) -> int | None:
+    """The index of the sample of `times` (ascending) NEAREST to `t`, clamped to the trace; None
+    for an empty one. A tie goes to the later sample, the rule `GMeter.at_time` and
+    `Rotation.at_time` already use.
+
+    THE ONE TIME -> SAMPLE RULE FOR EVERYTHING DRAWN OVER THE VIDEO. The map dot, the hero speed
+    readout, the compare ghost and the burned-in export overlay all read the sample this returns
+    (via `Timeline.index_at_time`), and the test stand-ins for a Session call it too, so none of
+    them carries a private copy of the rule.
+
+    IT USED TO BE A CEILING, AND THAT PUT THE OVERLAY 50 ms AHEAD OF THE PICTURE. A bare
+    `np.searchsorted(times, t)` returns the first sample AT OR AFTER `t`, i.e. a moment the frame
+    has not reached yet: on average half a GPS period, +50 ms at 10 Hz (anywhere in [0, +100) ms
+    per frame). Measured on the synthetic recording, whose picture shows the kart's TRUE position
+    (`studio/dev/make_demo.py`): the lookup alone put the map dot +50.0 ms ahead (mean over 6,922
+    moving frames, at every planted GPS lag); the nearest sample reads 0 on average (within
+    +-50 ms per frame). The Δ, the chart cursor and the lap clock interpolate, so they never had
+    it — which is also why the two surfaces disagreed with each other by that much."""
+    n = len(times)
+    if n == 0:
+        return None
+    i = int(np.searchsorted(times, t))
+    if i >= n:
+        return n - 1
+    if i > 0 and t - times[i - 1] < times[i] - t:
+        return i - 1
+    return i
 
 
 class Timeline:
@@ -107,12 +137,9 @@ class Timeline:
 
     # -------------------------------------------------- telemetry time -> trace index / lap
     def index_at_time(self, t: float) -> int | None:
-        tt = self._trace_times()
-        n = len(tt)
-        if n == 0:
-            return None
-        i = int(np.searchsorted(tt, t))
-        return min(max(i, 0), n - 1)
+        """The trace sample nearest TELEMETRY time `t` (clamped; None for an empty trace) — see
+        `nearest_sample`, which is the rule."""
+        return nearest_sample(self._trace_times(), t)
 
     def _lap_window_table(self):
         """Cached parallel arrays (starts, ends, lap_ids) over the VALID laps, sorted by start

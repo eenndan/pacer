@@ -69,13 +69,38 @@ def test_invalidate_rebuilds_window_table():
 
 
 def test_index_at_time_clamps():
-    """index_at_time is a clamped searchsorted into the full media-time trace (22 samples)."""
+    """index_at_time is a clamped nearest-sample lookup into the full telemetry trace (22 samples)."""
     tl = _timeline()
     assert tl.index_at_time(50.0) == 0           # before the trace -> first
     assert tl.index_at_time(1e6) == 21           # after -> last index
     i = tl.index_at_time(110.0)
     assert 0 <= i <= 21 and abs(tl._trace_times()[i] - 110.0) < 1.0
     print("test_index_at_time_clamps OK")
+
+
+def test_index_at_time_takes_the_nearest_sample_not_the_next():
+    """The map dot, the speed readout, the compare ghost and the export overlay all show the
+    sample `index_at_time` returns, so it must be the sample NEAREST the frame's instant.
+
+    It was `np.searchsorted` — a ceiling, the first sample AT OR AFTER `t` — which drew the
+    overlay half a GPS period ahead of the picture on average: +50.0 ms at 10 Hz, measured end to
+    end on the synthetic recording whose picture shows the kart's true position
+    (`timeline.nearest_sample`). Here the fixture's samples are 1 s apart, so the ceiling is off by
+    +0.5 s on average and the nearest sample by ~0."""
+    tl = _timeline()
+    tt = tl._trace_times()
+    assert tl.index_at_time(101.2) == 1, "101.0 is nearer than 102.0 (the ceiling answered 2)"
+    assert tl.index_at_time(101.7) == 2
+    assert tl.index_at_time(101.5) == 2, "a tie goes to the later sample, as GMeter.at_time's"
+    assert tl.index_at_time(101.0) == 1, "an exact hit is the sample itself"
+    # The lap seam duplicates an instant (110.0 ends lap 0 and starts lap 1): still that instant.
+    assert tt[tl.index_at_time(109.9)] == 110.0 and tt[tl.index_at_time(110.2)] == 110.0
+    # Over a uniform sweep the shown sample is unbiased and never more than half a period away.
+    sweep = np.linspace(100.0, 120.0, 20_001)
+    err = np.array([tt[tl.index_at_time(float(t))] - t for t in sweep])
+    assert abs(err.mean()) < 0.01, f"shown sample biased by {err.mean():+.3f} s (a ceiling: +0.5)"
+    assert np.abs(err).max() <= 0.5 + 1e-9, np.abs(err).max()
+    print(f"test_index_at_time_takes_the_nearest_sample_not_the_next OK (mean {err.mean():+.4f} s)")
 
 
 def test_plot_x_media_time_roundtrip_both_modes():

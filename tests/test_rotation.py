@@ -20,7 +20,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from studio import corners, gmeter, rotation  # noqa: E402
+from studio import _signal, corners, gmeter, rotation  # noqa: E402
 
 # A camera bolted on at an arbitrary tilt. Deliberately asymmetric in elements 0 and 1 so that
 # GRAV_PERM (which swaps exactly those two) is not accidentally the identity for this fixture —
@@ -113,19 +113,20 @@ _OVAL_PHASE = 0.25                      # fraction of the lap: the oval's least-
 
 
 def _build(laps=3, up=_UP, scale=1.0, wobble=0.0, grav_elements=None,
-           path=_stadium, per=_STADIUM_PER, phase=_STADIUM_PHASE):
+           path=_stadium, per=_STADIUM_PER, phase=_STADIUM_PHASE, v=_V):
     """(gyro, grav, lap_traces) for `laps` clean laps of `path`.
 
     `scale` multiplies the gyro vector (the mis-scale fault a correlation cannot see); `wobble`
     adds a large sinusoidal rate about an axis PERPENDICULAR to `up` (roll/pitch content that
     must not leak into the yaw projection); `grav_elements` overrides the GRAV stream (used to
-    inject the wrong axis permutation)."""
-    lap_dur = per / _V
+    inject the wrong axis permutation); `v` is the speed, which sets the GPS fix spacing and so
+    the curvature window's width (15 m/s: 1.5 m apart, an ODD 5-sample window)."""
+    lap_dur = per / v
 
     # --- GYRO on its own dense grid, across the whole recording
     t = np.arange(0.0, laps * lap_dur, 1.0 / _GYRO_HZ)
-    _x, _y, k = path(_V * t + phase)
-    omega = _V * k                                    # rad/s, + = left
+    _x, _y, k = path(v * t + phase)
+    omega = v * k                                     # rad/s, + = left
     vec = omega[:, None] * up[None, :] * scale
     if wobble:
         perp = np.cross(up, [1.0, 0.0, 0.0])
@@ -141,9 +142,9 @@ def _build(laps=3, up=_UP, scale=1.0, wobble=0.0, grav_elements=None,
     traces = []
     for i in range(laps):
         lt = np.arange(0.0, lap_dur + 1e-9, 1.0 / _GPS_HZ) + i * lap_dur
-        s = _V * (lt - i * lap_dur)
+        s = v * (lt - i * lap_dur)
         x, y, _k = path(s + phase)
-        traces.append((lt, x, y, np.full(len(lt), _V), s))
+        traces.append((lt, x, y, np.full(len(lt), v), s))
     return gyro, grav, traces
 
 
@@ -507,6 +508,66 @@ def test_an_injected_clock_offset_is_recovered_in_size_and_in_sign():
     assert "measured with that offset left in" in c2.lag_clause, c2.lag_clause
     assert c2.lag_clause in c2.summary(), "the load-time log states it in the same words"
     print(f"ok injected offset recovered both ways: {c.gps_lag_s:+.3f} / {c2.gps_lag_s:+.3f} s")
+
+
+def test_an_even_curvature_window_does_not_read_as_gps_lag():
+    """The fixture above laps at 15 m/s, 1.5 m between 10 Hz fixes, so the path reference's 8 m
+    curvature window is 5 samples — ODD, and centred either way. At 20 m/s it is 4 and at
+    13.5 m/s it is 6: EVEN, and a plain boxcar of an even width averages [i - w/2, i + w/2 - 1],
+    i.e. it is centred half a sample LATE. `measure_lag` read that as clock offset — +0.047 s of
+    GPS lag on these offset-free fixtures, and on the owner's recordings the installed figure
+    carried it on every even-window lap (55 of 62 laps on Sandown 3h). Measured end to end on the
+    synthetic GoPro, whose truth is known, it was +57.7 ms of the +75.4 ms the installed correction
+    overshot."""
+    for v in (20.0, 13.5):
+        gyro, grav, traces = _build_oval(laps=4, v=v)
+        spacing = float(np.median(np.diff(traces[0][4])))
+        w = int(round(corners.KAPPA_SMOOTH_M / spacing))
+        assert w % 2 == 0, f"at {v} m/s the fixture must exercise an EVEN window, got w={w}"
+        c = rotation.compute(gyro, grav, traces).cross
+        assert c.gps_lag_s is not None, "a clean synthetic fixture is measurable"
+        assert abs(c.gps_lag_s) < 0.01, (
+            f"{v} m/s (w={w}): an offset-free fixture reads {c.gps_lag_s:+.4f} s of GPS lag")
+        print(f"ok w={w} at {v} m/s reads {c.gps_lag_s:+.4f} s on a fixture with no offset")
+
+
+def test_every_window_the_lag_is_measured_through_is_centred():
+    """A centred smoother leaves a straight line where it is; one that is not moves it by its own
+    delay. The plain boxcar of an EVEN width moves it half a sample, which is the defect above;
+    `_signal.centred_boxcar` does not at either parity — and both of the measurement's windows use
+    it: the gyro's 0.30 s low-pass (60 samples at 200 Hz, even: 2.5 ms late before) and the
+    path's curvature window."""
+    ramp = np.arange(300.0)
+    for w in (2, 4, 5, 6, 60, 61):
+        out = _signal.centred_boxcar(ramp, w)
+        assert np.allclose(out[w:-w], ramp[w:-w], atol=1e-9), f"w={w} moved a straight line"
+    assert np.allclose(_signal.boxcar(ramp, 4)[8:-8], ramp[8:-8] - 0.5), (
+        "the plain even-width boxcar is no longer half a sample late: this test's premise is gone")
+    # The gyro channel: a yaw rate rising linearly in time comes back exactly, not 2.5 ms late.
+    t = np.arange(0.0, 20.0, 1.0 / _GYRO_HZ)
+    rate = 0.05 * t
+    gyro = np.column_stack([t, rate[:, None] * _UP[None, :]])
+    tg = np.arange(0.0, 20.0, 1.0 / 50.0)
+    grav = np.column_stack([tg, np.repeat(_grav_elements(_UP)[None, :], len(tg), axis=0)])
+    tt, yaw = rotation.yaw_rate_series(gyro, grav)
+    inner = (tt > 1.0) & (tt < 19.0)
+    assert np.allclose(yaw[inner], rate[inner], atol=1e-9), (
+        f"the gyro low-pass delays a ramp by {float(np.mean(rate[inner] - yaw[inner]) / 0.05) * 1e3:+.2f} ms")
+    # The path reference: a clothoid's curvature rises linearly in arc length, 2 m between fixes
+    # (w = 4). Centred, the profile sits on it; the corner model's default sits half a sample back.
+    ds, c = 2.0, 1e-4
+    s = np.arange(0.0, 600.0 + 1e-9, ds)
+    heading = 0.5 * c * s ** 2
+    x = np.concatenate([[0.0], np.cumsum(np.cos(heading[:-1] + 0.5 * c * ds * (s[:-1] + ds / 2)) * ds)])
+    y = np.concatenate([[0.0], np.cumsum(np.sin(heading[:-1] + 0.5 * c * ds * (s[:-1] + ds / 2)) * ds)])
+    d = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(y)))])
+    inner = slice(10, -10)
+    centred = corners.lap_curvature(x, y, d, centred=True)[inner] - c * d[inner]
+    default = corners.lap_curvature(x, y, d)[inner] - c * d[inner]
+    half = c * ds / 2
+    assert abs(float(np.mean(centred))) < 0.1 * half, (float(np.mean(centred)), half)
+    assert abs(float(np.mean(default)) + half) < 0.1 * half, (float(np.mean(default)), half)
+    print("ok both measurement windows are centred; the default curvature window is half a fix late")
 
 
 def test_the_offset_is_measured_on_one_clock_or_the_two_clocks_rate_reads_as_a_drift():
