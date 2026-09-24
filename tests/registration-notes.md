@@ -1,0 +1,1479 @@
+# Test registration notes (history, to 2026-09-24)
+
+Until 2026-09-24 every Python test was registered by hand in [CMakeLists.txt](CMakeLists.txt), each
+under a comment saying why the test exists and why its environment was what it was. That file now
+registers every `tests/test_*.py` by itself, and names a test only in its exceptions table. **A
+test's "why" belongs in its own module docstring** — the file an agent editing it actually reads.
+
+These are the comments that file carried, verbatim and in their old order. They were not moved
+into the docstrings because, where that was checked, the docstrings already said it: the eight
+tests whose comment the docstring covered least (by shared distinctive words) were read side by
+side with their comment, and all eight docstrings stated the rationale, most in more depth. What
+the comments added was mostly provenance (branch names, QA ids, PR numbers) and the environment
+reasoning the exceptions table now carries per flag. Spreading that across a hundred docstrings
+would have touched every test file for no new information; keeping it here loses nothing.
+
+**Nobody adding a test edits this file.** It is not a registry: a test renamed or removed keeps
+its note here, as history. Figures quoted below are still read by the tree-wide quote scans
+(`test_measured_figures.py`, `test_ideal_sample_table.py`), exactly as they were read in
+`CMakeLists.txt` — so a re-measurement that moves one of them names this file too.
+
+## The Catch2 helper, `add_pacer_test`
+
+```text
+Helper: one Catch2 executable per test file, registered with CTest.
+```
+
+## test_gps_source (Catch2)
+
+```text
+SequentialGPSSource chapter-seam chaining (no payload dropped at the boundary) + the
+Seek-before-first-payload clamp, driven through in-memory stub RawGPSSources.
+```
+
+## `find_package(Python REQUIRED …)`
+
+```text
+Pure-Python tests for the studio app (no telemetry file / no pacer build dependency for the
+logic they cover — scrub-conversion math + the F1/F3/F5 UI-feature logic). Registered with
+CTest so `pixi run test` runs them alongside the C++ suite.
+REQUIRED, not optional: the build needs the interpreter anyway (bindings codegen; the root
+CMakeLists pins it to the pixi env), so a machine where find_package fails should fail the
+configure loudly instead of silently dropping the 109 Python tests from the suite.
+```
+
+## `add_footage_test`: the real-footage registrations
+
+```text
+REAL-FOOTAGE CHECKS (G1): one registration per check, `footage.<check>`, running
+`<file>.py --footage <check>`. Without its recording the check exits 77 and CTest lists it BY NAME
+under "The following tests did not run: ... (Skipped)" — it does not pass, and it does not fail
+(CI has no footage at all). Before this, each one printed a skip line inside its file and the file
+reported Passed, so when ~/Desktop/D24 went every real-footage check became a silent no-op. Each
+finds its recording through tests/_footage.py: by default the Desktop working set (G2), overridden
+by PACER_GOLDEN_MP4 and the other variables it lists. A file's FOOTAGE_CHECKS and these lines are
+held one-to-one by test_footage_checks. LABELS footage: `pixi run test-footage` runs exactly these
+(`ctest -L footage`); `pixi run test-fast` reports them SKIPPED by name instead of running them
+(PACER_FOOTAGE_DEFAULTS=off), and `pixi run test` runs them with everything else. TIMEOUT: with
+footage present one check loads several multi-GB recordings, far past the suite's --timeout.
+RESOURCE_LOCK footage: the suite runs four tests at once (CTEST_PARALLEL_LEVEL, pyproject.toml),
+and these are the ffmpeg-heavy ones — one re-encodes a whole lap twice — so they run one at a
+time, as they always have, beside the light suites rather than beside each other.
+test_footage_checks pins it.
+```
+
+## test_lap_time_axis
+
+```text
+The lap-time AXIS (docs/t6-lap-time-axis): lap times are GPS9 true-clock (telemetry) seconds,
+not the media seconds sixteen comments claimed. Guards the fact (the core echoes the studio's
+clock; the load axis measurably leaves the media one) and the comment family itself.
+```
+
+## test_media_clock
+
+```text
+The telemetry->media clock conversion (fix/telemetry-media-clock): the affine fit + its guards,
+and the two consumer seams that apply it (the export window / per-frame lookups, and PlayerPane's
+seek + position). Builds real panes -> run offscreen with the inert media triplet.
+```
+
+## test_import_ergonomics
+
+```text
+Import ergonomics (fix/import-ergonomics): the last-opened-folder pref round-trip (prefs.LAST_DIR)
++ File ▸ Open starting there and recording the picked folder, and the multi-recording drop guard
+(chapters.group_into_recordings groups distinct recordings; _open_recordings loads only the FIRST
+and never merges unrelated ones onto one clock). Builds a StudioWindow via __new__ so it imports
+Qt -> run offscreen. No telemetry file.
+```
+
+## test_layering
+
+```text
+Layering contract, BOTH directions (test/layering-contract, test/layering-qt-direction): ONLY
+session/load/ingest/tracks may import the pacer core — every view/controller/helper stays
+pacer-free; and only the view/Qt-infrastructure modules may import Qt (directly OR through a
+studio import), so the data core stays headless. A pure `ast` walk of studio/*.py: no pacer,
+no Qt, no telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block below.
+```
+
+## test_gapfill
+
+```text
+MAP-ONLY GPS-gap reconstruction (studio.gapfill): pure Python + numpy, no telemetry file.
+```
+
+## test_timeline
+
+```text
+Timeline (E2): the cursor/plot/video-sync coordinate conversions extracted off Session into the
+Qt-free studio.timeline.Timeline — plot-x<->media-time (both modes), index/lap_at_time (half-open
+windows + invalidate), map nearest (whole-trace vs lap-scoped). Pure numpy on injected stubs.
+```
+
+## test_data_quality
+
+```text
+Data-quality signal: studio.data_quality.TimingQuality classifies the per-sample clock provenance
+(GPS9 true clock vs media-clock fallback) + the gate's dropped-fix fraction into the degraded
+verdict + banner concern lines. Pure value object — no Qt, no pacer.
+```
+
+## test_demo
+
+```text
+Demo-download resolution (fix/demo-download-timeout): the fetch passes a finite timeout (a stalled
+TCP must not hang the UI thread) + is atomic (stream to .part, rename; no leftover on failure).
+studio.demo is pacer-free AND Qt-free (urlopen stubbed) — no pacer, no Qt, no network.
+```
+
+## test_reference
+
+```text
+Reference-centerline closed-loop fit (studio.reference): pure Python + numpy, synthetic
+loops with known similarity transforms (incl. cyclic offset / reversal / reflection).
+```
+
+## test_gps_source_bindings
+
+```text
+RawGPSSource binding surface: Python<->C++ trampoline (read_accl/grav/cori) + the
+SequentialGPSSource chapter-offset chaining. Imports pacer only (no Qt).
+```
+
+## test_imu_orientation
+
+```text
+The IMU AXIS DECLARATION (GPMF ORIN/ORIO) each bundled camera generation carries, pinned. The
+studio transform reads the field and deliberately does NOT reorder by it — the measurement that
+settled that is in studio/docs/gmeter-validation.md — so this guard keeps the declarations
+themselves honest: a new camera that declares something new fails here instead of quietly
+widening an assumption. Skips when the gpmf-parser submodule is absent.
+```
+
+## test_laps_bindings
+
+```text
+Laps bound-accessor bounds checks (P1.2): a bad index raises IndexError in Python
+(std::out_of_range translated by nanobind); the get_lap/sample_count/lap_columns
+empty-return trio is unchanged. Imports pacer only (no Qt, no telemetry file).
+```
+
+## test_geometry_bindings
+
+```text
+The CROSSING test as Python sees it (H4). `Segment::Intersects` answers through a
+`double *ratio` out-parameter, which litgen bound as a by-value float: the call type-checked,
+returned the right bool, and dropped the fraction into a temporary. Python now gets
+`intersection_ratio(fst, snd) -> float | None` and `intersects` is excluded — both pinned here,
+because the binding is GENERATED and a regen that lost either half would restore the lossy call
+silently. Also checks `studio.provenance.crossing_fraction` — the Qt-free, pacer-free Python
+transcription the provenance panel re-derives with — against the core value for value, which
+was not possible from Python before. Imports pacer + studio.provenance (no Qt, no telemetry).
+```
+
+## test_ingest_equivalence
+
+```text
+Single-pass ingest (PR #40): read_recording's shared chain == the pre-#40 two-fresh-chains
+reads (bundled GoPro samples), + IMU-after-GPS-drain invariance on a Python stub source.
+Imports pacer + studio.ingest only (no Qt).
+```
+
+## test_sidecar
+
+```text
+Timing-line sidecar persistence: path resolution + JSON schema round-trip are pure
+Python; the lat/lon<->local export/apply + revert guard run on a synthetic pacer.Laps
+(imports pacer only — Session's chain has no Qt — and needs no telemetry file).
+```
+
+## test_track_db
+
+```text
+Track database (E3): the named-track JSON store (schema round-trip / name-keyed upsert /
+corrupt-file self-heal / built-in Daytona MK seed) is pure Python; the detect→Track→segment
+adapter + precedence + MK no-regression + the Save-as-track guard run on a synthetic pacer.Laps
+(imports pacer; offscreen Qt for the guard half) and self-skip without the bindings.
+```
+
+## test_session_pure
+
+```text
+Pure-fake session analysis pack (PLAN §5): _signal._band_lap_ids on a local fake,
+load._clean on synthetic GPSSample traces, and the sector-splits / sector-plot-positions /
+delta()-endpoint invariants on bare Sessions seeded via tests/_synthetic. Imports pacer
+only (session/load chain has no Qt, verified), no telemetry file.
+```
+
+## test_sector_integrity
+
+```text
+Sector-boundary integrity (QA MAP-08-ESC / MAP-11): the collapse decision is SESSION-wide, so
+sweeping a second sector line across the tolerance can never leave two laps with a different
+number of boundaries (the state where an S column meant a different stretch of track per row and
+session_best_splits/theoretical_best summed incomparable pieces); plus suggest_sectors(n)'s even
+subdivision. Bare Sessions seeded via tests/_synthetic — no Qt, no telemetry file.
+```
+
+## test_load_internals
+
+```text
+Load-pipeline internals (test/load-pipeline-coverage): the clock-provenance decision
+(load._used_gps9_trueclock, behind the degraded-timing banner) and the no-average-across-a-gap
+smoothing contract (_signal._gap_segments / _smooth_segments) — pure functions that ran only
+through the manual D24 dump before. Imports pacer via studio.load; no Qt, no telemetry file.
+```
+
+## test_load_pipeline
+
+```text
+End-to-end load-pipeline integration (test/load-pipeline-integration): runs the assembled
+load_recording (read->gate->clean->gps9->smooth->segment->start-line) via Session.load on the
+committed 3rdparty/gpmf-parser/samples/hero6.mp4 and pins the whole Session fingerprint to a
+committed baseline (eps 1e-9) + determinism + the media-clock invariants. COMPLEMENTS the D24
+GPS9 gate (hero6 is media-clock-fallback). Imports Session -> Qt, so run offscreen.
+```
+
+## test_synth_gopro
+
+```text
+The real loader on a recording WITH LAPS (B1a, board review RISK-7): studio/dev/synth_gopro.py
+writes a synthetic HERO13-shaped two-chapter .MP4 (GPS9 + ACCL/GYRO/GRAV/CORI, a fictional
+7-corner circuit, 14 laps) into a temp dir with its ground truth, and Session.load reads it back:
+GPS9 true clock, lap count, lap times vs truth (0.41 ms noise-free at a mid-straight line, 23 ms
+with the default noise at the app's own line), corners, Stats tiles, ranked coaching, IMU checks,
+same seed -> same bytes. ~9 s; the video trak needs the pixi env's ffmpeg.
+```
+
+## test_unreadable_chapter
+
+```text
+A sibling chapter that is NOT VIDEO (fix/destroyed-fixture-hazards): chapters.discover_siblings
+groups on FILENAMES, so a file wearing a chapter's name while holding something else was handed
+to GPMFSource and failed the WHOLE recording — measured on the owner's own ~/Desktop/D24, where
+GX010060.MP4 is 2.4 MB of JSON a dev tool wrote over 11.9 GB of footage, so File ▸ Load full
+recording on 0060 was dead. Pins the is_mp4_container probe, the split + the notice that NAMES
+what was left out, that discovery is deliberately NOT filtered (sidecar/library key on [0]'s
+stem), the Session.load skip on a synthetic recording built from the committed hero6 clip, and
+the all-junk raise. Real Session.load + a StudioWindow -> Qt offscreen.
+```
+
+## test_fit_start_line
+
+```text
+Start-line widen decision (test/fit-start-line-widen): load._fit_start_line keeps a sufficient
+line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line missed —
+it sets lap segmentation on known AND unknown tracks. A wider line must count more laps AND more
+driving (T13): on SD_30_08 the x1.5 line reached a second stretch of track and counted 25 13 s
+pieces over 23 real 46 s laps. Keep, widen-from-nothing, widen-to-recover-one-pass and
+refuse-the-pieces are pinned on synthetic circle and hairpin Laps. Imports pacer (no Qt).
+```
+
+## test_lap_closure
+
+```text
+A lap ends where it started, going the same way (L3): a start line that reaches a second stretch
+of track cuts passes into pieces, and when the pieces outnumber the laps the median bands count
+them (Sandown chapter 3 alone counted a 23 s / 320 m piece of a 740 m lap). Real pacer.Laps on a
+synthetic hairpin through the real Session, the thresholds against the owner's measured
+populations, and the reason on all four ⊘ surfaces (strip, DATA TRUST, export, auto mark).
+```
+
+## test_session_services
+
+```text
+F1 god-object decomposition (studio.corner_model.CornerModel + studio.driving_channels.
+DrivingChannels): Session composes + DELEGATES to the per-domain services, and the cache
+invalidation (set_timing_lines drives both invalidate()s; the reference set/clear drives the
+narrower CornerModel.invalidate_stats()) clears exactly what the old hand-clearing did. Pins
+the delegation + caching + invalidate-actually-clears contracts on a deterministic synthetic
+session (stadium loop + seeded g-meter). Imports Session -> Qt, so run offscreen.
+```
+
+## test_golden_synthetic
+
+```text
+CI half of the Session equivalence gate (test/synthetic-golden-gate): automates the F1/E2/#50
+byte-identity machinery (studio.dev.golden_session_dump.fingerprint + golden_compare.walk, eps
+1e-9) over the DETERMINISTIC synthetic session (test_session_services._synthetic_session — stadium
+loop + seeded g-meter, REAL corner/driving/delta/bests/consistency, no media file), across
+base/ref/ref_cleared phases, vs a committed baseline (golden_synthetic_baseline.json). Any
+Session-math leaf drift fails the build — with NO ~11.9 GB D24 load, so it runs in CI. The full,
+higher-coverage D24 golden dump stays the (unchanged) MANUAL gate. Imports Session -> Qt, offscreen.
+```
+
+## test_golden_hermetic
+
+```text
+The OTHER half of the golden gate's credibility: the manual D24 dump must be a pure function of
+the recording. It redirects every studio _app_support_dir seam; this fails the build if a new
+seam appears and is not redirected (track_db was missed for months, and made the gate report a
+45% leaf diff for no code change). AST-only + one live seam check, no recording needed.
+```
+
+## test_rainbow_map
+
+```text
+F3 rainbow track map: pure-numpy bucketization / NaN-break / Δ-resampling helpers + the
+MapView toggle invariants (OFF restores byte-identical items; zero rebuilds on the tick
+path) on a stub session. Imports map_view -> Qt, so run offscreen.
+```
+
+## footage.test_pedal_mode_paints_the_chart_band (`test_rainbow_map.py --footage`)
+
+```text
+F6: on a real recording, every valid lap's Line: Pedal is exactly the speed chart's
+brake/throttle band array, painted.
+```
+
+## test_map_render
+
+```text
+map_render (E2): the pure-numpy track-map math extracted from map_view — bucketize /
+bucket_polylines / resample_grid_to_points + the rainbow_channel per-channel value/bucket math
+(speed/Δ/grip, the Δ+grip negation, the grip fixed scale, the GPS-dropout NaN-mask, the None
+gates). Imports studio.theme -> Qt, so run offscreen; no telemetry file.
+```
+
+## test_map_fit
+
+```text
+Track-map view fit + the always-on session trace (QA MAP-01/03/04): real QWheelEvent + drag on
+the plot viewport and back via the app's Fit button / canvas double-click, the zero-lap state
+drawing the trace its placeholder tells you to drag onto, the fit taken over trace UNION laps
+(so the video marker stays on canvas), and the A16/#126 guard that the pyqtgraph "A" button and
+right-click menu stay gone. Real MapView widgets, offscreen; no telemetry file.
+```
+
+## test_map_chrome
+
+```text
+Track-map chrome (QA MAP-05/07/09/10 + MAP-11): the provisional callout clamped inside the plot
+at either edge, the colour ramp hidden when a channel has no gradient to label, the Elevation
+legend stated relative to the lap (absolute GPS altitude drifts between laps), the on-canvas
+notice the sector buttons post (and that grab_clean hides it), and Add sector re-spacing the
+whole set while — and only while — the user has not dragged a line. Real MapView widgets,
+offscreen; no telemetry file.
+```
+
+## test_compare
+
+```text
+Compare-video Δ-badge math: session.delta_between (vs an arbitrary lap, cross-checked
+against the hardcoded-vs-best delta_at_time). Imports Session -> Qt, so run offscreen.
+```
+
+## test_video_view_compare
+
+```text
+Cross-recording compare + layout fixes (f7 phase B): REAL VideoView / PlayerPane widgets (the
+PR-#80 fakes hid the bugs) — the toggle-re-entrancy that put pane B on the primary source, the
+equal+draggable compare splitter, and the file-matched deferred-seek gate. PACER_NO_MEDIA builds
+the inert media triplet. The real-media proof on two recordings (PACER_GOLDEN_MP4 +
+PACER_GOLDEN_REF_MP4) is its own footage registration. Offscreen.
+```
+
+## test_map_ghost
+
+```text
+F4 compare-mode map ghost: CompareController places lap B's kart on a REAL MapView at
+index_at_time(t_b) per tick (setPos-only, one lazy item); exit restores the item state
+byte-identically; zero ghost work outside compare. Imports map_view -> Qt, so run offscreen.
+```
+
+## test_cross_reference
+
+```text
+Cross-recording reference lap (F7, studio.cross_reference + Session.load_reference seam):
+the Δ endpoint with a reference == cross-recording laptime diff (normalized-distance aligned),
+the track-mismatch / no-valid-laps guards, clear-reverts, the dormant byte-identity, and the
+map-overlay fit gate. Bare Sessions + synthetic loops; imports Session -> Qt, so run offscreen.
+```
+
+## test_track_match
+
+```text
+Geometry track-match (studio.track_match): the haversine primitive + the two-check
+(location + footprint size) same/not-same verdict that admits an UNKNOWN-track reference by
+GPS geometry ("race a friend's GoPro off an unknown track"). Pure numpy/math — no pacer, no Qt.
+```
+
+## test_delta_engine
+
+```text
+F2 Δ-engine dedup (studio.session LapCurve + project): pins the one alignment primitive the
+whole delta family now shares + the reference-baseline collapse (the reference and a local lap
+flow through ONE project()), from first principles on a synthetic session. No telemetry file;
+imports Session -> Qt, so run offscreen.
+```
+
+## test_controllers
+
+```text
+The extracted StudioWindow collaborators (studio.scrub_controller / studio.compare_controller):
+drive the scrub-coalescing + compare per-tick logic DIRECTLY on a bare Session + fake views
+(no full window / event loop). Imports Session -> Qt, so run offscreen.
+```
+
+## test_central_view_realqt
+
+```text
+Controller<->view fan-out on the REAL CentralView (C3, the PR#80/#81 blind spot): builds the real
+CentralView + ScrubController/CompareController/PlaybackState as StudioWindow does, drives the
+production SIGNALS (compare_btn.click->compareToggled, plots.scrub*, video.positionChanged), lets the
+REAL ~30 Hz QTimer fire, and asserts no signal re-entrancy + consistent cross-widget state (C4
+single-source-of-truth). PACER_NO_MEDIA builds the inert media triplet; the two-lap session is the
+stadium-loop synthetic (no media file). Imports the studio widget tree -> Qt, so run offscreen.
+```
+
+## test_load_failure
+
+```text
+The load ERROR paths (QA 2026-09-01: L10-01/L10-02/L10-04/L10-06/MAP-06): the failure-message
+classification table over five real malformed inputs (pure staticmethod, real Session.load
+exceptions), a failed RELOAD leaving the working session on screen instead of an endless loading
+card (real window + real worker QThread), drop-order/multi-drop-warning survival, and the untimed
+load notice being RE-decided when a timing edit changes the state it describes. Real Qt + a real
+worker thread, so run offscreen (reuses test_central_view_realqt's synthetic window fixture).
+```
+
+## test_load_affordances
+
+```text
+What the app OFFERS while it loads (QA 2026-09-01: L10-03/L10-06/L10-08/L10-10): the demo fetch
+keeping the event loop alive + saying it is working (a slow resolver, a counted 16 ms heartbeat),
+the loading card's Cancel handing the session back with the in-flight result dropped, the
+zero-lap sentence matching ACROSS the status bar and the lap table's own empty state, and a
+dropped FOLDER of chapters being expanded and accepted. Real Qt + a real worker QThread.
+```
+
+## test_load_lifecycle
+
+```text
+The load / reference LIFECYCLE (2026-09-07 review §3.4/§3.5/§3.7/§3.8): the load-SUCCESS path's
+strand (a raising CentralView.__init__ leaving the loading card up forever with loadFinished
+never emitted) and the same guard on the two other rebuilds that ARE a recovery (_cancel_load,
+_on_load_failed); the reference load's single-flight + view guards (its docstring promised both,
+the body had neither); and the five riskiest previously-untested paths — closeEvent mid-load AND
+mid-EXPORT (the render QThread was held on an attribute the drain never saw), Load full recording,
+the REAL _forget_recording ordering, the queued second open actually opening B, and the ideal-lap
+row selection. Real Qt + real worker QThreads, so run offscreen; both persistence stores are
+diverted to a temp dir inside the module.
+```
+
+## test_corners
+
+```text
+Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
+positions/directions vs construction), distribution-derived threshold (+ noise
+stability), the corner/straight partition identity, and the CornerTable + map
+corner-marker overlay (offscreen Qt on stubs). Session wiring on a bare Session.
+```
+
+## test_corner_alignment_memo
+
+```text
+Corner-warp MEMO + its INVALIDATION (perf/stats-refresh-memo). Every corner-window projection is
+a read of one per-lap monotone warp; nine call paths derived it separately (144 spatial matches
+in ONE stats_view.refresh on the D24 0060 pair), so it is now memoized on the corner service.
+The risk is not the speed-up, it is a warp surviving a start-line drag and silently re-framing
+every corner Δ. Drives drag → sector edit → undo → reference load against a from-scratch oracle,
+with an explicit assertion that every fixture lap carries a real warp (a None warp would make
+the file assert nothing). Bare Session via tests/_synthetic — no Qt
+widgets, no telemetry file; imports pacer transitively through studio.session.
+```
+
+## test_corner_drift
+
+```text
+The session GEOMETRY model (M7): the consensus line of a session's clean laps + each lap's rigid
+receiver shift against it, and what CornerModel.lap_alignment does with them. The control that
+decides whether it may ship at all lives here — a rigid translation and a wider racing line are
+PLANTED on the same synthetic loop and the fit must recover one and refuse the other.
+```
+
+## test_export_data
+
+```text
+Data-export writers (studio.export_data, F11): laps/channels CSV schema + the
+float-repr round-trip exactness + the self-contained HTML report (XML-parsed, embedded
+PNGs decoded), on bare Sessions seeded via tests/_synthetic with a FakeLaps duck-type.
+Imports pacer transitively (the session chain), no Qt, no telemetry file.
+```
+
+## test_export_disclosures
+
+```text
+THE DISCLOSURE THAT LEAVES THE APP (critical review §5.4 + roadmap N13), and the ATOMICITY of the
+three writers (§7.5, second half). The exported surfaces were the only ones exempt from the rule
+every in-app surface follows: the share card printed "+4.56 s vs your ideal lap" with no lap
+count and the laps.csv trailer printed "Theoretical best,62.869" bare, while the Stats tile the
+number comes from is captioned `theoretical best · 24 laps` — and the ideal is an order statistic
+that moves 67.917 -> 66.709 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
+exported TEXT against `theoretical_best()` / `ideal_sample()` directly (not "looks similar") on
+the CSV, the HTML report, the clipboard summary and the card at once, plus every value
+`stats_summary` publishes against the accessor the Stats page reads — "the report cannot drift
+from the page" is a claim, and this is its test. The atomic half drives each writer twice, the
+second time through a handle that dies MID-WRITE (the first draft poisoned the writer's data
+source instead, which raises before the file is opened and let a deliberately non-atomic writer
+pass). Bare Sessions via _synthetic; no Qt event loop, no telemetry file.
+```
+
+## test_consistency
+
+```text
+Consistency stats (studio.consistency, F6): σ / median-loss / ranking exactness vs direct
+numpy, the ⚠ dropout-lap exclusion on a bare Session, and the map corner-ring highlight
+(offscreen Qt). The old ConsistencyPanel UI moved into the Stats page — see test_stats.
+```
+
+## test_driving
+
+```text
+Driving channels (studio.driving, F5): synthetic-g-trace brake-pulse detection (+ hysteresis
+/ short-blip rejection / flat-throttle zero false positives), coasting classification, the
+per-corner grip math, the distribution-derived thresholds, the Session accessors + caching
+(bare Session with a seeded g-meter), and the CornerTable Grip % column + map/plots brake
+overlays (offscreen Qt on stubs).
+```
+
+## footage.test_pedal_band_holds_each_braking_zone_whole (`test_driving.py --footage`)
+
+```text
+D1: on a real recording, the brake/throttle band (the chart's, and the map's Line: Pedal) holds
+each braking zone whole against zones defined without it, and paints no brake outside a glyph's event.
+```
+
+## test_coaching
+
+```text
+Auto coaching summary (studio.coaching / coaching_panel, F10): the per-corner median-time-loss
+ranking + the DETERMINISTIC dominant-reason selection (a planted apex-speed deficit ⇒ apex; a
+planted late-throttle coast the best lap lacks ⇒ coasting; an earlier/longer brake ⇒ braking;
+pure cross-lap spread ⇒ line), DETERMINISM (identical across calls / cache recomputes), the
+<MIN_LAPS friendly-excluded gate, the Session wiring on a bare Session (ranking + corner-entry
+projection onto the best lap + dropout exclusion), and the offscreen Opportunities dialog
+(populate, Go→jump_to(cid, entry), excluded state). Imports coaching_panel -> Qt, so run
+offscreen. No telemetry file.
+```
+
+## test_focus_list
+
+```text
+The FOCUS LIST (studio.focus) — the cross-session training loop and, mostly, the gate that
+decides whether it may say anything: the lap-FRACTION window (so two sessions whose corner
+partitions differ still compare the same stretch of track — the working-set pair's C1 window
+grew 6.1 m and with it +0.062 s of imaginary slowing), the refusals (no session record on either side,
+records that disagree, a provisional start line, ESTIMATED timing, mismatched lap lengths, too
+few clean laps) each carrying delta=None so no surface can print an unsupported number, the
+spread test reusing coaching.SPREAD_MARGIN and its IQR, the store's persistence discipline
+(cap, self-heal, .bak, the _app_support_dir seam), and the panel block (dormant until the app
+hands it a report, the naming Add button, both gestures as signals, and the height budget it
+shares with the theme block). Builds real widgets under the real theme -> run offscreen.
+```
+
+## test_export_video
+
+```text
+Video-overlay export PURE LOGIC (studio.export_video, F9): the lap-window trim math, the
+per-frame overlay-value lookup against a synthetic Session (same accessors the live readout
+reads), the ffmpeg decode/encode command construction, and the Renderer pump + cancel with the
+subprocess + ffprobe MOCKED — so NO ffmpeg is needed to run. The three real renders need ffmpeg +
+the recording PACER_GOLDEN_MP4 names, and are footage registrations of their own (reported
+Skipped, not Passed, on CI). Builds a QImage + a headless g-meter dial, so run offscreen.
+```
+
+## test_export_compare
+
+```text
+The DISTANCE-LOCKED two-lap compare export (studio.export_compare): the lock's math against the
+app's own `Session.delta_between` on a real (synthetic-data) Session, the proof that it is a
+RESAMPLE and not an offset, the per-recording media-clock crossing, the audio decision, the pill
+budget, and the drive loop with the subprocess mocked. Plus the end-to-end check that matters:
+two tiny synthetic clips whose frames carry their own index as a bar POSITION are really rendered
+through ffmpeg, decoded back, and each pane's source frame read off the picture and compared with
+an independently recomputed lock — so "both panes are at the same track position" is an integer
+comparison rather than a claim. No 11 GB media file; ~4 s.
+```
+
+## test_gmeter
+
+```text
+g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
+```
+
+## test_rotation
+
+```text
+Measured yaw rate from the GoPro GYRO stream (studio.rotation): the gravity projection through
+an arbitrary camera tilt, rejection of roll/pitch, and the CLOSED-LAP scale test — a lap is a
+closed loop, so the integrated yaw is exactly 2*pi, which is the one statistic here with a
+ground truth. It is what catches a halved channel; the correlation is bit-identical under a
+x0.5 fault, and that is asserted. Two synthetic track shapes, no media file.
+```
+
+## test_gmeter_overlay
+
+```text
+g-meter OVERLAY display-layer tests (felt-force convention, shake filter, per-lap envelope).
+```
+
+## test_library
+
+```text
+Session library (F8, studio.library + studio.library_dialog): the pacer-free index — schema
+round-trip / float-repr exactness, the fingerprint upsert-not-duplicate rule, corruption →
+safe-empty self-heal, pb_series extraction — plus the offscreen Library dialog (list/sort,
+Open routes through a spy callback, missing-file greying, the PB best-vs-date mini-chart) on
+synthetic index dicts. Imports library_dialog -> Qt, so run offscreen. No telemetry file.
+```
+
+## test_prefs
+
+```text
+Preferences store (studio.prefs) — the library's discipline applied to the OTHER app-support JSON
+file, which had none: `set` is load-modify-save over a `load` that returns {} on corruption, so one
+bad byte plus any preference write silently persisted the wipe of all ten stored choices. Covers
+the .bak taken before that first overwrite (corrupt bytes preserved verbatim, later writes still
+heal the file and leave the sidecar alone, a healthy write churns no backup), the `version` field
+now being READ (unstamped/older migrates forward keeping every key; a newer file is best-effort +
+backed up before the downgrade), the per-key fallbacks under corruption, and the round-trips for
+the two accessors that had none (excluded_visible / map_key_collapsed). studio.prefs imports
+studio.units only — no Qt, no pacer, no telemetry file, so no env block.
+```
+
+## test_data_safety
+
+```text
+Data safety (data-safety-undo-privacy): the timing-line UNDO history (Session pushes the prior
+lines before each edit + restores the latest through apply_timing_lines_latlon — segmentation +
+PB baseline recompute identically; no-op with no history; confirmed-state preserved; bounded
+stack) on a REAL pacer.Laps, and the library privacy controls (library.remove/clear + the guarded
+sidecar unlink + the offscreen LibraryDialog forget/clear DI wiring). Imports pacer + the dialog
+-> Qt, so run offscreen.
+```
+
+## test_units
+
+```text
+Speed-units toggle (studio.units / prefs, BUILD 5): the pure km/h↔mph conversion/label/format
+helpers, the persisted-choice round-trip + safe default, the theme readout formatters honouring
+the unit (km/h default byte-identical), coaching.reason_sentence + map_render's speed legend +
+the export OverlayConfig/readout using it, and the LapTable Entry header/value + CornerTable speed
+cells flipping to mph. Imports the studio widgets (LapTable/export) -> Qt, so run offscreen.
+```
+
+## test_accessible_cues
+
+```text
+Accessible cues + the "new personal best!" moment (feat/accessible-cues-pb-moment): the
+non-colour Δ arrow (▲/▼) + lap-table ★ best marks, theme's colour-blind PALETTE selector (one
+source: delta_colour / best_lap/best_sector colours / rainbow endpoints flip, default byte-
+identical) + its prefs round-trip, the LapTable best-cell recolour through the selector, and the
+library.pb_moment/pb_moment_for/pb_moment_text decision (beats prior PB on verified timing; NOT
+on provisional / first-ever / tie / slower) + the PBToast wording & progression-link routing.
+Imports the LapTable + the app toast -> Qt, so run offscreen. No telemetry file.
+```
+
+## test_contrast
+
+```text
+Theme colour SEMANTICS + legibility (fix/qa-theme-colour-semantics): an AST guard that no module
+constant in studio/ freezes a palette-swappable hue (the SERIES_BEST class of bug — the accessors
+are a CALL-TIME contract), the colour-blind map ramp clearing the CIE76 JND under a Machado-2009
+deuteranopia simulation and never scoring worse than the default ramp it replaces, WCAG AA on all
+33 enabled text styles with C.text_muted confined to the WCAG-1.4.3-exempt disabled chrome, the
+failed-load message outranking the marketing subtitle (colour + size + ⚠), and the Δ dead-band
+clamp that stops '-0.00' reaching the screen or an exported frame. numpy + the CVD/Lab maths
+inline; builds the WelcomeView -> Qt, so run offscreen. No telemetry file.
+```
+
+## test_design_system
+
+```text
+The DIMENSIONAL half of the same guard (feat/design-tokens): every padding / margin /
+border-radius / min-height in theme._build_qss() is a SPACE_*/RADIUS_* step or a stated
+derivation of one (focus_pad for the ring compensation that produced `5px 11px`,
+ctrl_content_h for a min-height, which is checked by reconstructing the outer box it paints);
+an AST walk over studio/ for literal setContentsMargins/setSpacing/setFixedHeight/setFixedSize
+arguments, labelled by the class+method that owns each, with the not-yet-migrated view surfaces
+in a prose-justified EXEMPT list whose size is the progress metric; and the tokens' own
+consistency, including a LIVE check that a real button, combo and tab bar all paint at CTRL_H;
+and (feat/panel-header-toolbar) THE measurement the system exists to move — the four panel
+headers, on the real CentralView, at one declared PANEL_HDR_H instead of the shipped 32/38/43/43.
+Qt (offscreen), and that last check builds the production view over the synthetic session, so it
+IS in the PYTHONPATH foreach block at the bottom of this file (it was not while checks 1-3 were
+all it had).
+```
+
+## test_inline_styles
+
+```text
+The CONTROL half of the same guard (feat/control-vocabulary), i.e. what the app is BUILT from
+rather than what it measures: an AST walk over studio/ for setStyleSheet calls, labelled by the
+class+method that owns each, so that the only survivors are the per-datum colour merges a
+stylesheet cannot express (34 sites -> 7, each named in prose) and no new bare `color:` can creep
+back; every objectName and role property really having a rule in theme._build_qss (four had names
+and no rule at all); a LIVE check on the real CentralView that all eight icon buttons are one
+theme.ICON_BTN with one theme.ICON_PX glyph (two families shipped, neither painting its declared
+size); and setCheckable(True) belonging to widgets.ToggleButton alone (it was re-implemented at
+seven call sites, six of which disagreed). Qt (offscreen); the icon-button check builds the
+production view over the synthetic session, so it is in the PYTHONPATH foreach block below.
+```
+
+## test_focus_cues
+
+```text
+Keyboard focus cues (fix/qa-theme-focus-cues): every one of the 15 tab stops must change PIXELS
+when it takes focus — four of them (the lap table, any CHECKED toggle, and the two pyqtgraph
+canvases) used to change none — the lap table's ring must paint on all FOUR edges rather than the
+189px left-edge sliver a naive `:focus { border }` over a `border: none` base produces, and no
+control may change geometry / size hint / viewport / style contents rect between the two states
+(the ring is RESERVED, not added on focus). Real CentralView over the stadium synthetic, RGB
+frame diffs; needs the real theme QSS, so run offscreen. No telemetry file.
+```
+
+## test_charts_panel
+
+```text
+Charts-panel honesty + legibility (fix/qa-charts-panel): the "Ideal lap" toggle live only where a
+click can draw (it was a 0-pixel no-op in the app's own default state), a dash pattern per identity
+slot so the legend still maps to a curve under deuteranopia WITHOUT recolouring the deliberately
+palette-independent CHART_SERIES, no km/h tick inside the ESTIMATED pedal strip (plus its on-chart
+caption), the legend anchored to the measured-emptiest corner with a stated drag affordance and a
+reachable hide threshold, and an empty state that names the next action while the three inert chart
+controls go dead. Real PlotsView + real pyqtgraph draw over a narrow stub Session; needs the real
+theme QSS, so run offscreen. No telemetry file.
+```
+
+## test_app_chrome
+
+```text
+Window chrome / menus (fix/qa-app-chrome): Escape must restore a MAXIMIZED PANEL — the state four
+surfaces promise it restores and whose Escape branch was gated on isFullScreen() — at three window
+sizes × four panels, asserted on the splitter sizes, while still leaving video focus and window
+fullscreen; the welcome screen must not offer the four actions whose handlers early-return with no
+session (their menus had ZERO aboutToShow receivers) and must re-enable them at _build_ui, not on
+the next pull-down; a coaching Jump must mark + scroll to the corner row it landed on and must not
+persist its navigation as the user's tab preference; and the crash dialog must name APP_NAME
+(macOS gives it no window title). Real StudioWindow over the stadium synthetic; run offscreen.
+```
+
+## test_share_card
+
+```text
+Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
+Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
+unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;
+degraded ⇒ stamped, not blocked); render_card → a non-empty CARD_W×CARD_H QImage on both
+palettes, with/without a map thumbnail; and the app DI wiring (Export ▸ Lap card save through a
+monkeypatched QFileDialog, Copy lap card onto a monkeypatched clipboard, blocked-session greying,
+and the PBToast "Share your PB →" routing). Builds QImages, so run offscreen. No telemetry file.
+```
+
+## test_stats
+
+```text
+Session statistics (studio/stats.py, the Stats page): the pure reducers (moving time with
+the dropout-gap skip, path distance, wall-clock rendering, pace distribution, peak-g
+conventions, the half-open lap-window mask, sector medians) + the SessionStats service over
+fake DI callables (totals caching, per-lap speed/g/brake-coast reductions with the None-not-0
+no-signal rule, session Vmax, the g-g cloud's window restriction + stride cap, invalidate()
+dropping exactly the lap-level caches) + the Session.stats property wiring on a bare Session.
+Pure numpy on stubs; offscreen for the (future) panel tests' shared registration.
+```
+
+## test_lap_table_columns
+
+```text
+LapTable COLUMN LAYOUT (fix/lap-table-columns, P5): the data columns are content-tight and one
+blank trailing SPACER column absorbs the panel's leftover width (the old stretched last section
+left a dead band with the Entry column pinned far right). Pins the sizing modes, the wide/narrow
+widths, the Lap column fitting its ▶/★/⚠ markers, the spacer staying LAST across sector-line
+adds/removes (holding no cell) and the unit flip, and sorting being untouched (both directions +
+the blank spacer header refusing to sort). Builds a real LapTable -> Qt, so run offscreen.
+```
+
+## test_best_marks_agree
+
+```text
+ONE "session best" rule, on every surface that marks one (fix/best-marks-agree): the Laps tab's
+split ★, the Corners page's corner-time ★ and the Stats SPLITS grid's ★ are the same glyph on the
+same kind of quantity, printed to the same two decimals — so they decide it with one predicate
+(_signal.is_best_at_print) instead of two surfaces comparing raw doubles at 1e-9; and the ⊘
+strip counts excluded laps out of the same total the DATA TRUST card does. Real LapTable /
+CornerTable widgets -> Qt, so run offscreen.
+```
+
+## test_lap_table_empty_states
+
+```text
+LapTable / CornerTable EMPTY + BASELINE + EXCLUDED states (fix/qa-lap-table-empty-states, QA
+sweep B11): the Corners page dashes the two Δ columns and names the lap when it is showing the Δ
+BASELINE itself (the model's documented ref=None self-zeros, not measurements — and a loaded
+cross-recording reference keeps every local Δ); a recording with no valid lap gets the Laps
+grid's wording instead of an unfollowable "Select a lap", both placeholders ending on one next
+action; the ⊘ excluded strip escalates to a warning voice above EXCLUDED_WARN_RATIO with the
+ratio in the words and both median distances on screen, reconciles its count against lap_count(),
+and expands to the COMPLETE list in a height-bounded scroll instead of 6 laps and a dead
+"+N more". Builds real LapTable/CornerTable widgets -> Qt, so run offscreen.
+```
+
+## test_lap_table_affordances
+
+```text
+Lap-panel AFFORDANCES (fix/qa-lap-table-affordances, QA sweep B12): sorting is reachable from the
+KEYBOARD — the header is a tab stop that rings the section Space would sort by, claims Space back
+from the window's play/pause shortcut while focused, and never walks onto the blank spacer, with
+the mouse route intact through the replaced header; the ★ carries its one convention as a tooltip
+on every cell and header that can wear it, without overwriting the dropout/provisional note
+underneath; the Corners rows declare the click that rings a corner on the map (pointing hand +
+a ROW-wide hover fill); and the Corners units are named on screen by a caption that costs the
+already-exhausted column budget nothing — the rejected in-cell "%" is measured here too. Real
+LapTable/CornerTable widgets under the REAL theme (the ring and the fill are pixels) -> Qt, so
+run offscreen.
+```
+
+## test_grid_and_timing_guards
+
+```text
+Grid + timing-line write guards (fix/qa-grid-splitter-collapse, QA sweep B01): no splitter DRAG
+can collapse a panel to 0 px and no persisted zero can resurrect one, while the maximize gesture
+still collapses for real (it opts back in via _collapse_sizes — without that, non-collapsible
+splitters silently clamp setSizes([full, 0]) and a "maximized" panel keeps sharing the window);
+a timing-line placement that leaves no valid lap is written to NEITHER the sidecar (the loader's
+revert guard always rejects it, so the write only destroyed the last good line) NOR the undo
+stack (undo_timing_lines refuses to consume such a snapshot, which made Cmd+Z a permanent no-op);
+and a persisted mph preference reaches the Corners header tooltips through the CONSTRUCTOR seam,
+the one path where no unit-changed signal fires. Real CentralView -> Qt, so run offscreen.
+```
+
+## test_charts_header_budget
+
+```text
+CHARTS/MAP header width budget (fix/qa-charts-header-budget, QA sweep B02): the bar must name
+the baseline the LOWER CHART draws at the app's own 1440x900 (the #125 regression hid it at every
+shipped width), no control may be centre-clipped at 1280x800 or at the column minimum (measured
+from the real QStyle content rects, never a padding estimate), the header's children may never
+overlap — the chip painting through the hero readout is the trap the naive fix walks into — the
+⛶ buttons must clear 24x24, the map's sector buttons must name themselves on hover, and the hero
+must explain the Δideal zero it is structurally pinned to on the best lap. Real themed CentralView
+-> Qt (the QSS supplies the fonts every number depends on), so run offscreen.
+```
+
+## test_coaching_panel_layout
+
+```text
+Coaching page layout + units (fix/qa-coaching-panel-layout, batch B24): the column budget at the
+app's own minimum (±σ yields before the prose column starves; the columns must FIT, so no
+horizontal scrollbar; the reason header must not paint hard-clipped — its QSS padding lives INSIDE
+the section, so a naive advance-vs-section test passes it), the row count as a viewport-driven
+floor rather than a literal 3 (the maximized page was 3 rows in 786 px against 11 ranked), every
+header aligned over its own column instead of centred 611 px away, the ±σ cell's missing unit, and
+the geometric gate on the ESTIMATED brake-point hint (an optimum a whole brake zone past turn-in
+is not a brake point). Real offscreen OpportunitiesPanel on the REAL theme — the QSS supplies the
+font metrics every width here is measured in. No pacer, no telemetry file.
+```
+
+## test_help_dialog
+
+```text
+Help-menu dialogs (fix/qa-help-dialogs): the shortcut card's wrapping rows must get the height
+their text needs at ANY card width (the #119 regression painted a wrapped row's second line
+outside the row), every live binding on the window must have a card row (⌘O had none) with the
+glyphs Qt itself paints (⇧⌘S, not ⌘⇧S — asserted against the live QAction, so ⌃⌘F-vs-F11 is
+platform-agnostic), the About / Privacy cards must refuse to shrink below their own copy, and
+the privacy card must name every store the app writes. Real offscreen widgets on the REAL theme
+(font metrics decide the wrapped heights); no pacer, no telemetry file.
+```
+
+## test_pb_toast
+
+```text
+PB-toast hit targets + dismiss clock (fix/qa-toast-and-trackdb, QA sweep L10-07): every control
+on the "new personal best!" card must clear the 24x24 pointer-target floor — the ✕ stood 20x19
+and the progression link 19px tall, on the one card in the app that deletes itself while you aim
+at it — and the 6 s auto-dismiss must HOLD while the pointer is on the card. Real PBToast widgets
+on the REAL theme (the QSS padding is what every measured pixel comes from), so run offscreen.
+```
+
+## test_pb_moment_lifecycle
+
+```text
+The PB celebration's IDENTITY + LIFETIME (critical review 2026-09-07 §3.2/§3.3): a recording must
+not be its own previous best — opening one chapter and then this window's own "Load full
+recording" announced the same outing beating itself, 0.57 s, under a Share button — and the card
+must fire more than once per window (dismiss() ends in deleteLater(), the stale wrapper raised
+inside the blanket except and every later celebration was swallowed). Drives the real
+update_library over real chapter files on disk and the real show_pb_moment on a real
+StudioWindow, so run offscreen; the library index is redirected to a temp dir inside the test.
+```
+
+## test_export_gates
+
+```text
+Export + library entry points (fix/qa-app-export-plumbing, QA sweep L12-02/L1-03/L12-04/L12-07/
+L12-08/L11-08): the overlay MP4 obeys the same timing-trust verdict as the lap card, a 0-valid-lap
+recording can no longer write a header-only CSV and reports success, the report's map grab keeps
+its key and loses the editing chrome, the options dialog quantifies both combos and persists them,
+Reveal-in-Finder reports either outcome, and Save-as-track asks before replacing another circuit.
+Real StudioWindow menus on the real theme (the tooltips are the assertion), so run offscreen; the
+prefs / library / track-DB / sidecar seams are redirected to a temp tree inside the test.
+```
+
+## test_first_run_path
+
+```text
+The first-run path (design wave 2, D4-01/02/03/05/10, D2-04/09/13/16): the two front doors'
+44-lap disagreement and the notice that names it, the busy card naming the stage that blocks the
+UI thread, the drag-over affordance PROVEN FROM THE WINDOW COMPOSITE (a child grab reads the QSS
+colour out of the palette and lies), the silently-discarded sidecar, and the welcome screen's
+failure frame matching its first-run frame. Real StudioWindow + real theme, so run offscreen; the
+prefs / library / track-DB seams are redirected to a temp tree inside the test and the recordings
+it resolves chapters and sidecars against are 16-byte files in another.
+```
+
+## test_map_key
+
+```text
+The map's floating key (design wave 2, D5-03/D5-06/D1-10): one ordinary splitter drag took the
+map canvas to 72 px and Qt clipped 42 px off the TOP of the fixed 196x106 plate — the title row
+and the caret that are the only sign it collapses. The plate falls back to its title-only form
+and its corner is clamped now; the collapse is a preference rather than per-MapView state; and a
+labelled control in a panel toolbar carries a Phosphor glyph (chips exempt by name). The height
+claims are SWEPT 1 px at a time, real MapView + real CentralView on the real theme, so run
+offscreen; the prefs seam is redirected to a temp dir inside the test.
+```
+
+## test_export_typography
+
+```text
+The burned-in overlay's DIGITS (design wave 2, SW1-02). #196/#197 gave every column-aligning
+surface in the app tabular figures; export_video._font stayed a bare QFont() with zero feature
+tags, so the one output the user cannot re-render kept nine digit advances — and _paint_readout
+places everything after the hero speed by that advance, sliding the unit label and the Δ cue
+147 px past the digit box at 1080p (296 at 4K) between two 3-digit speeds. Read from the
+COMPOSITED pixels (what _paint_packed_frame hands the encoder), swept over every output height
+the export offers, in the SHIPPED face via _qtapp.themed_app. Offscreen: it paints QImages.
+```
+
+## test_glyph_vocabulary
+
+```text
+The GLYPH guard (feat/icon-vocabulary, design wave 2 D1) — the third vocabulary, beside
+test_design_system's dimensions and test_contrast's colour. The app had FOUR ways to draw a mark
+and only theme.icon()'s Phosphor layer was designed: a literal Unicode character in a label falls
+back PER CHARACTER to whatever the OS supplies, which put eight marks into .AppleSystemUIFont /
+Apple Symbols / STIX Two Math / Menlo / .Apple Color Emoji UI at sizes from 4 px of ink to 16, in
+one case inside a single 14 px label. An AST walk over the guarded modules' string literals —
+each hit labelled by the class+method that owns it, so an exemption names a decision — asserts
+that every painted character is drawn by the face the app declares, resolved LIVE through
+_qtapp.themed_app(); the ledger of what Inter does and does not carry is measured here rather
+than assumed; and the four surfaces the PR fixed (the excluded strip's ⊘ + caret, the three
+corner tables' turn-sense arrow, the Shortcuts card's two Layout keycaps, and the emoji-free PB
+moment) are pinned, with the card's glyphs read out of central_view/video_view by AST so the
+documentation cannot drift from the buttons. Builds real widgets under the real theme -> Qt, so
+run offscreen.
+```
+
+## The PYTHONPATH loop
+
+```text
+The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
+where the build drops the compiled module) WITHOUT relying on a pip/editable install of
+`pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
+`import pacer` silently falls back to the C++ source dir pacer/ as an EMPTY namespace
+package (the tests sys.path.insert the repo root to reach `studio`), failing with
+AttributeError. PYTHONPATH makes the deployed package win deterministically in every
+install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
+```
+
+## test_state_surfaces
+
+```text
+COMPOSITION guard (QA D2 / D4-12) — the fourth vocabulary, after dimensions (test_design_system),
+colour (test_contrast) and marks (test_glyph_vocabulary): what a surface with NOTHING TO SHOW is
+made of. Sixteen such states shared exactly one property, the 13 px body size. This pins the
+contract that replaced that: one object (the ledger of adopting sites is enumerated by owning
+FUNCTION), one measure (checked against the 45-75 character band in the LIVE face), one title and
+one body size, the declared gaps carried by the slot that can vanish, the card/canvas rule read
+from the WINDOW COMPOSITE (a child grab reads the rule's colour out of the palette and would pass
+against a widget that painted nothing), and no surface stating one next action without its
+sibling. Plus the two size-dependent residuals, swept rather than sampled: the Stats tile's ⊘
+against its box, and the lap grid's trailing spacer against HIT_MIN at every width 360..1440.
+Builds real widgets under the real theme -> Qt, so run offscreen; PYTHONPATH for the same reason
+the foreach above sets it (map_view/plots_view/coaching reach studio.session, which needs the
+cmake-deployed bindings package).
+```
+
+## test_compare_lifecycle
+
+```text
+COMPARE LIFECYCLE guard (S5-01) — the compare toggle SIGSEGVd after a few dozen enter/exit
+cycles, because _PaneCell filled a free-standing QHBoxLayout with the LIVE primary pane before
+mounting that row: QLayout::addChildWidget then does half a move (drops the widget from its
+current layout, cannot reparent it — a free-standing layout has no parentWidget). Two guards:
+a deterministic AST pass over studio/video_view.py (no layout is filled before it is mounted)
+plus the Qt behaviour it exists for, and a subprocess loop asserting a clean exit code, because
+the fault is a SIGSEGV that no in-process assertion could survive. ~45 s: three subprocesses of
+600 enter/exit cycles each, which killed 5 of 6 processes on the broken build.
+Real widgets under the real theme -> run offscreen; PACER_NO_MEDIA is set by the test itself, so
+no footage and no session are needed.
+```
+
+## test_export_thread_safety
+
+```text
+EXPORT THREAD-SAFETY guard — the same GUI-thread rule as the lifecycle guard above, on the other
+surface that breaks it. Every video export ran `Renderer` on VideoExportWorker's QThread, and
+`OverlayPainter.__init__` built a `GMeterOverlay` there: a frameless translucent Qt.Tool TOP-LEVEL
+widget, constructed AND destroyed off the GUI thread, twice when a VideoToolbox encode fell back
+to libx264. It never crashed only because the dial is never show()n. The dial's bookkeeping now
+lives in a Qt-free `gmeter_overlay.DialFilter`; this pins that. Structural half: walk the call
+graph from VideoExportWorker.run / Renderer / OverlayPainter through every studio class-or-
+function they construct, and require no QWidget subclass (with player_pane.PlayerPane as a
+positive control, so the walk cannot pass by resolving nothing). Behavioural half: build and
+drive an OverlayPainter on a real QThread and require the process's widget census to be
+unchanged. Both halves fail on the pre-fix build (census 0 -> 1; the walk names export_video.py's
+GMeterOverlay line). Seconds, no footage; real theme + fonts -> run offscreen.
+```
+
+## test_measure_floors
+
+```text
+A MEASURE BOUNDS CONTENT — it may not become the minimum of the thing carrying it. The design
+wave spent two per-instance measurements on dimensions a widget SHARES: EmptyState's measure
+pinned the pane's own minimum (a one-way ratchet — one zero-lap recording had three window
+minimums, 929/1018/1049, decided by resize history), and Tile claimed its ink height per STRING,
+so the one tile printing a ⊘ stood 2 px taller than its row-mates and dropped its caption below
+theirs. Also holds the Stats zero-lap block, whose paragraph moved out of an 11 px one-line
+banner role into the app's prose step at the app's prose measure. Swept at 1 px in BOTH
+directions: a one-size check is what let the ratchet through.
+```
+
+## test_corner_grid_budget
+
+```text
+The corner grid's cell floors as a DIGIT BUDGET. #196's tabular figures widened them by 12 px
+and nothing went red; the horizontal-scrollbar band moved 58 px of window across the wave. This
+proves from the WINDOW COMPOSITE that the floors hold no slack (a pixel below any of them elides
+that column's widest VALUE), and pins what they want on a 2-digit circuit and on a CONSTRUCTED
+3-digit one — the faster circuit no fixture on this machine produces, and the case that inverted
+when `1` went from the narrowest digit to the widest.
+```
+
+## test_export_padding
+
+```text
+LEAD-IN / LEAD-OUT (0 / 5 / 10 s) on the overlay export. The feature is one combo and four ways
+to ship a wrong clip, so this file is organised as those four: the WINDOW and its clamps (a
+negative t0 asks for footage from before the recording and stamps every frame early —
+guard_validate_window refuses it on the GLOBAL t0, the check that holds whatever a source's
+time_offset is, asserted here as a measurement rather than as prose; and nothing
+bounded t1 at all, so an over-long window produced a short clip and a bar stuck below 100 %); the
+LAP through the run-up (laps are contiguous, so lap_at_time answers lap N-1 for all of it); the
+LIVE values (speed and g are time-indexed, and gating them on lap membership would burn "— km/h"
+over footage doing 88); and the G-ENVELOPE, which must be the exported lap's whatever padding the
+clip carries. Pixel assertions go through the shipped font stack; one real ffmpeg round trip
+checks a padded clip's muxed duration (~2 s).
+```
+
+## test_repo_write_safety
+
+```text
+THE APP MAY NOT WRITE INTO ITS OWN SOURCE TREE. theme.apply_theme rendered the QComboBox chevron
+straight into the TRACKED studio/assets/caret-down.png on every boot, so running pacer — or any
+test that themes a QApplication — left `git status` dirty. It hid because the render is
+DETERMINISTIC PER ENVIRONMENT and the suite runs in the one environment whose bytes match the
+committed file (offscreen at 96 dpi): cocoa writes a different pHYs chunk and DPR 2 writes a
+different image entirely. So this file boots the theme in a SUBPROCESS at QT_SCALE_FACTOR 1 AND
+2 (a QApplication reads the scale once, at construction), asserts the DPR it got, tripwires
+every write path Python and Qt expose, and diffs `git status` across the boot. The chevron must
+still PAINT — read from the window composite and diffed against the rule-stripped fallback —
+because "wrote nothing" is also true of a render that failed.
+```
+
+## test_temp_isolation
+
+```text
+...and the other direction: a test may not write a FIXED name into the shared $TMPDIR. $TMPDIR is
+/tmp/claude-501, keyed on the uid and shared by every concurrent agent lane, and ctest now runs
+four tests at once, so two registrations of ONE run can collide as well as two runs.
+test_export_compare's teardown deleted a clip another lane's ffprobe was still decoding. That
+failure looks like a real export defect and cost two separate agents a full diagnosis (#296,
+#298). AST-only: no Qt, no bindings, no temp files of its own, milliseconds.
+```
+
+## test_parallel_suite
+
+```text
+THE SUITE RUNS IN PARALLEL BY DEFAULT, AND A RUN CAN STILL BE MADE SERIAL: `pixi run test` and
+`test-fast` set CTEST_PARALLEL_LEVEL (a task that loses it silently goes back to one core) and
+carry no -j of their own (ctest 4 rejects a second one, so `pixi run test-fast -j1` would fail).
+The measurements behind the level are in pyproject.toml. Pure tomllib, milliseconds.
+```
+
+## test_export_seam
+
+```text
+THE SEAM-CROSSING branch of the overlay export's source resolution. A lap window that spans a
+GoPro chapter boundary decodes through the concat demuxer, and its first frame out has to BE the
+frame at t0 — frame_times stamps every burned-in overlay from t0, so a miss desyncs the numbers
+from the picture for the whole clip. It missed: the span trimmed its first chapter with a concat
+`inpoint` and seeked -ss 0, and `inpoint` is keyframe-granular, so the picture began up to a GOP
+early (measured -0.956 s on D24 lap 22, at any padding, with the audio -0.977 s with it). The span now
+declares each file's `duration` — the ONLY thing that makes a concat input seekable at all, worth
+1.2 s against 663 s for the same half-second of D24 picture — and takes the first chapter's
+offset, so ffmpeg's accurate -ss lands where the single-chapter branch lands. Two synthetic 4 s
+chapters with a 1.000 s GOP, driven through real ffmpeg: the first frame and the seam handover as
+exact pixels, the audio start by cross-correlation, and the pre-fix `inpoint` list decoded
+alongside as a control so the test cannot pass vacuously (~3 s).
+```
+
+## test_export_pill_budget
+
+```text
+The PILL BUDGET and the clip's promised LENGTH (design wave 2, sw-export F2/F3/F4). #202/#203
+fitted both HUD pills to their own ink with ZERO slack — measured worst `need - pill` = +0.00 px
+across every frame of 21 D24 laps — which makes the width budget load-bearing, and the budget was
+an ESTIMATE re-derived from the same series the painter reads under different conventions: the
+speed budget masked `tt < t1` where the per-frame lookup is a CEILING searchsorted (+9.57 px of
+ink outside the readout pill on the last 2 frames of a clip), and the Δ budget sampled
+`endpoint=False` and so never asked about the instant a lead-out FREEZES on (+6.59 px outside the
+strip pill, held for 10.00 s). `_burned_runs` now walks the render's own frame times through its
+own lookup and the painters' own run builders. Pinned on COMPOSITED pixels against a CHROME-ONLY
+control render (so the pill's own antialiased stroke is subtracted rather than guessed at), over
+the sweep's own 720 samples — 5 heights x 2 units x 2 palettes x 6 contents x 3 frames x 2 pills
+— on ALL FOUR edges, the vertical one included because nothing in the wave had measured it. Plus
+F2: `-shortest` let a chapter's AUDIO decide the clip length (D24 ch3 video 1590.005083 s vs
+audio 1589.994667 s), so a run-off clamped to the footage bound delivered 479 of 480 composited
+frames with the progress bar at 100 %; since E4 the mux has no `-shortest` (it overflowed an
+ffmpeg queue) and pads the audio to exactly the clip. Offscreen: it paints QImages; no ffmpeg
+needed (the argv is built, not run).
+```
+
+## test_version
+
+```text
+THE RELEASE VERSION, pinned across the three files that carry it. `studio/__init__.py` is
+canonical (About card; `packaging/pacer.spec` regex-reads it into CFBundleVersion), but
+`pyproject.toml` — which `packaging/build_macos.sh` names the .dmg from — and
+`bindings/pacer/pyproject.toml` repeat it and cannot import it. AGENTS.md's release recipe named
+only the first two until v0.2.0, and nothing in CI compared any of them, so a partial bump would
+have produced a Pacer-Studio-<a>.dmg holding an app whose About card read <b>. Each site is read
+the way its OWN consumer reads it (the spec's literal regex; build_macos.sh's grep|sed pipeline;
+tomllib), plus the two changelog steps that travel with a bump. Pure stdlib: no Qt, no pacer, no
+telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block above.
+```
+
+## test_landing_page
+
+```text
+THE PUBLIC PAGES (docs/index.html + the markdown beside it) — the one surface nothing checked.
+It went 458 commits carrying a lap count wrong by 10x, two `<img>`s whose files had been deleted,
+two more pinned to intrinsic sizes their files no longer had, a palette hand-copied out of
+theme.py, and — found while fixing those — a `*/` inside comment PROSE that closed its comment
+early and made CSS error recovery swallow the whole `:root` block, so the page shipped with no
+tokens at all. Imports `studio.theme` for the token values (Pacer-free, no QApplication) and is
+otherwise stdlib, so like test_version it needs neither the offscreen env nor the PYTHONPATH.
+```
+
+## test_welcome_first_touch
+
+```text
+THE FIRST TOUCH (review §6.7) — what the welcome screen OFFERS before anything is loaded, in all
+three demo-availability states. The second CTA used to be unconditional while the clip it resolves
+comes from an env var, a cache, or a release asset that was never published, so on any machine
+without the first two the obvious low-commitment click produced an apology as the first experience
+of the app. Pins: the button exists iff studio.demo.demo_available(); PACER_DEMO_MP4 (the
+demo-recording path) and a cached clip both light it up AND open that exact file end to end
+through the production slots; `--demo` still tries the network even when the UI offers nothing;
+the amber PRIMARY is never the smaller twin (resting and busy, both sizes); and the drop glyph is
+the app's OWN mark, asserted from the window composite in named theme colours and against the
+icon generator's geometry. Real StudioWindow + real theme -> offscreen; PYTHONPATH for the
+cmake-deployed bindings (studio.app reaches studio.session); every persistence seam INCLUDING the
+demo cache is redirected inside the test, so a developer with a cached clip measures what CI does.
+```
+
+## test_chart_axis_legibility
+
+```text
+AN AXIS TITLE IS TEXT, measured on painted pixels (fix/stats-dashboard-composition). The charts
+panel's three axis titles shipped at 1.19:1 on the plot background — against 5.7:1 for the tick
+labels beside them — because pyqtgraph lets THREE calls own one colour: `labelString` bakes
+`labelStyle` into the label HTML, and both `setPen` (the axis LINE) and `setTextPen` (the tick
+TEXT) end by writing `labelStyle['color']` from their own pen and re-rendering. The hairline pen
+ran last, and re-ran on every device-pixel-ratio change, so passing a colour at `setLabel` is
+only half the fix. Asserted on a RENDERED frame (a source check passes on the shipped build) at
+both window sizes, through the unit / palette / DPR re-pen paths, on the Stats friction circle
+whose titles went the same way via `_apply_pen_scale`, and with a NEGATIVE CONTROL that re-opens
+the defect on a live widget (5.90:1 -> 1.59:1 -> 5.90:1). Also holds widgets.WrapLabel measuring
+itself from a CLEARED minimum — QLabel.heightForWidth is clamped by the widget's own minimum, so
+the old code ratcheted a two-line height into every later width (the DATA TRUST row-3 defect).
+Real PlotsView + real StatsView + real pyqtgraph draws; needs the shipped theme, so run
+offscreen. No telemetry file.
+```
+
+## test_session_record
+
+```text
+THE SESSION RECORD (feat/session-record) — studio.session_record + its editor + the two surfaces
+that read it. The store is the app's most IRREPLACEABLE data: a library row comes back the moment
+the footage is re-opened, a hand-typed tyre pressure never does, so the persistence half is
+asserted rather than assumed — corrupt bytes preserved verbatim in the .bak before the first
+overwrite, a NEWER file's unknown per-record fields surviving a v1 round-trip (this store keeps
+them where library.py drops them, and the test is why), an older/unstamped file migrated with
+every record kept, one malformed record dropped and the rest kept, an atomic write leaving no
+.tmp, and clear / forget / restore each taking their copy first. Then the fast-to-fill half
+(prefill carries the KART forward and advances the tyre laps, and carries nothing about the day),
+the comparability verdict, the real form's round-trip, and the record showing up where the
+comparison happens: the Library's two columns + conditions filter + like-for-like line, and the
+lap panel header chip — asserted MOUNTED on the real CentralView, not merely constructed. Imports
+the dialogs -> Qt, so run offscreen; PYTHONPATH because the real-view test reaches studio.session.
+```
+
+## test_gearing
+
+```text
+GEARING ARITHMETIC (M3): engine RPM from road speed for a single-speed kart, hand-worked cases,
+and the STRUCTURAL class gate — a shifter or an unstated class gets no drivetrain object, so no
+number at all. Not wired to a surface (the owner has no session record; refused-2026-09.md).
+Pure: no Qt, no pacer core, no files.
+```
+
+## test_playback_rate
+
+```text
+PLAYBACK RATE (slow motion) + the telemetry lock it must not cost (feat/playback-rate). Two
+halves: the rate itself — one ladder, one rate across the shell, both compare panes seeded and
+fanned out, and the rate re-applied at a chapter seam (a new media source carries none) — and the
+LOCK, which is the reason this needed a guard at all. The lock is asserted structurally (no
+module in the sync path names a rate, swept by AST) and behaviourally (the same media positions
+produce byte-identical marker / cursor / applied-time state at 0.25x, 1x and 2x, driven through
+the production signal path on the real CentralView). PACER_NO_MEDIA=1: the real widget tree over
+an inert media triplet; PYTHONPATH for the cmake-deployed bindings (the CentralView half reaches
+studio.session).
+```
+
+## test_command_palette
+
+```text
+COMMAND PALETTE (⌘K) — the anti-drift contract, in the spirit of test_help_dialog's "every live
+binding has a card row": every menu action must be reachable from the palette, every `run` string
+in help_dialog.COMMANDS must resolve on a real window, the ? card must be a VIEW of that same
+registry, and each command's key must read the same on both surfaces. Plus the hazard this
+feature nearly shipped: a QMenu built by addMenu is Python-owned in this binding and
+QAction.menu() hands that ownership away, so the obvious menu-bar walk DELETES the menus it
+descends into — the palette is opened three times and the whole bar re-read. Real offscreen
+StudioWindow (no session); library + prefs diverted inside the test; PYTHONPATH for the bindings.
+```
+
+## test_camera_support
+
+```text
+THE CAMERA-SUPPORT GUARD: no public document may promise GPS9 true-clock timing to a camera
+GoPro's own vendored metadata spec (3rdparty/gpmf-parser/README.md) says has no GPS9. Four
+surfaces said "GPS9 camera (Hero 9 and newer)" when GPS9 means a Hero 11 or a Hero 13 — the
+Hero 12 has no GPS receiver at all. Derives the truth table FROM the vendored spec when the
+submodule is checked out (CI does; a bare worktree skips that one check and the pinned table
+stands). Pure stdlib text reading — no Qt, no pacer, no telemetry file.
+```
+
+## test_ideal_sample_table
+
+```text
+THE IDEAL-LAP SAMPLE TABLE, which is a published measurement and had nothing checking it. #228
+moved the app's ideal on D24's three chapters by +0.218 s and the table in
+corner_model.IdealSample — plus the README, both Stats tooltips, the hero chip, two Library
+hovers, Session.ideal_total, the laps.csv writer and the landing page's screenshot — all went on
+quoting the old value, and after #300 both D24 rows went stale again. Four text checks, all
+FOUND BY SEARCH over git ls-files so the twelfth surface cannot be forgotten: the table falls
+monotonically (the "no floor it settles on" claim the shipping tooltips make), its rate column
+is recomputed from its own endpoint cells, every "per doubling of lap count" rate and every
+"X s over 5 laps, Y s over N" pair is the table's, and every gap the tree quotes is one the
+docstring publishes — off the working-set table T16b re-based, or off the D24-era record kept
+beneath it, which no in-app string may quote. A fifth loads every row's recording (its chapter
+files in ROW_RECORDINGS, on the Desktop; PACER_IDEAL_TABLE_MP4 names one instead), asserts each
+row's `all` cell IS Session.ideal_total() and re-runs
+the table's own Monte-Carlo over every rung; it is a footage registration, reported Skipped
+without the footage, which is why the text checks cost nothing. A sixth check CONTROLS that
+fifth one's stand-in for `CornerModel.segment_bests`' masking rule — the app never composites a
+subset, so the check has to carry a copy of the rule, and the copy had been left on the pre-#339
+mask (H9). It drives the real rule on the synthetic drift fixtures and ships wrong shapes it has
+to classify; it needs no footage, and it is the only one here that imports numpy and pacer.
+```
+
+## test_measured_figures
+
+```text
+THREE MORE TABLES MEASURED ON FOOTAGE (T8/T12): coaching.py's evidence + THEME tables,
+theme.py's pointwise-Δ floor table and the #272 recombination record in
+studio/docs/refused-2026-09.md — all measured before #300 warped every lap, all stale after it.
+The text checks derive every figure quoted beside each table from its cells and from the
+constants the code applies (read with ast), and search the tree for every other quote of them.
+A footage half re-measures every cell on the owner's working set, found on the Desktop (or under
+PACER_MEASURED_FIGURES_DIR): seven footage registrations, each reported Skipped without the lap
+sets it loads.
+```
+
+## test_footage_checks
+
+```text
+EVERY REAL-FOOTAGE CHECK IS REPORTED SKIPPED WITHOUT ITS RECORDING, BY NAME (G1). The day
+~/Desktop/D24 went, twelve real-footage checks in four files each printed a skip line and let
+their file report Passed — a green gate claiming coverage nothing on the machine could provide.
+Holds the mechanism above in place: the runner's three exit codes, a FLOOR of those checks,
+FOOTAGE_CHECKS <-> footage.* registrations one-to-one with SKIP_RETURN_CODE (read from
+`ctest --show-only=json-v1`), and THE NEGATIVE CONTROL — each check run as CTest runs it, under a
+HOME with no footage, must exit 77 naming itself (before: exit 0, "ALL 84 ... passed"). Plus: a
+NAMED recording that is missing fails, and footage is found only through tests/_footage.py.
+```
+
+## test_chart_instruments
+
+```text
+THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
+its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two
+halves: Qt-free `studio/chart_stats.py` over hand-built arrays — including the SLOPE FLOOR
+reproduced by injecting the D24-measured 0.62 km/h speed noise into synthetic 10 Hz data, where a
+slope one GPS sample wide is more than half noise and the app refuses to print one — and a real
+offscreen PlotsView driven through the same public methods the window's D / N shortcuts call,
+with every readout line measured against the label it has to fit at three panel widths. No
+telemetry file; needs the shipped theme, so run offscreen.
+```
+
+## test_chapter_timeline
+
+```text
+THE CHAPTER TIME AXIS: the number the NEXT chapter is placed at (fix/chapter-seam-timeline).
+`ChapterMap` offsets, the concat span's declared durations, the export's footage bound and the
+C++ chain's own telemetry shift were all built from each chapter's **GPMF metadata track**
+duration. That is a different track from the video: GoPro's contract is that the two match in
+every chapter except the last, and every one of the ten GoPro clips committed in
+3rdparty/gpmf-parser/samples exercises that exception — from -0.701 s (hero7) to +0.934 s
+(karma). test_export_seam cannot see it, because it hands its own ChapterMap the container
+duration and then measures everything downstream against the same clock. Measured on real media
+from ten camera generations: the loader's chapter duration is now the video track's, to the tick,
+and chaining hero7 in front of karma puts the second chapter's telemetry where the first
+chapter's PICTURE ends rather than 0.700700 s earlier. Plus the load-time sync check
+(ChapterMap.desynced_chapters / chapters.desync_notice), which names a non-last chapter whose
+telemetry does not cover its video and exempts the last one. Needs ffprobe as the independent
+witness; no Qt, no telemetry file (~1 s).
+```
+
+## test_provenance
+
+```text
+PROVENANCE — "inspect this number" (feat/provenance-inspector). The contract is that every
+inspectable number RE-DERIVES from the rows its own panel shows, so the test is written as that
+claim over a REAL pacer.Laps: a sector split and a corner best come back BIT FOR BIT (both are
+np.interp on a lap's (odometer, elapsed) curve, and the shown rows bracket both boundaries),
+while a lap time comes back within ONE ULP PER CROSSING — the core evaluates `t0*(1-f) + f*t1`
+and the compiler may fuse that multiply-add where the Python transcription cannot. The ulp bound
+is asserted, not tolerated: a transcription that drifted further would make the panel's own
+sentence false. Also pins that load._smooth_track carries `dop`/`fix` across (it rebuilt samples
+field by field and named neither, so per-fix quality died one step after the gate that read it),
+and that METHODS is exact in both directions. No Qt, no telemetry file.
+```
+
+## test_provenance_panel
+
+```text
+...and its PANEL. Two halves matching the feature's own split: the renderer over a hand-built
+Provenance with no Session and no pacer (if that half needed a recording, the panel would be
+reaching for data it has no business knowing), and the MENUS on the real widgets — the lap
+table offers inspection on exactly the Time and S-split columns and the CORNERS table on exactly
+the Best cell, because "three numbers, honestly" is either true in the context menu or a slogan.
+Offscreen Qt; PYTHONPATH because the menu half builds the real tables over a real Session.
+```
+
+## test_quality_strip
+
+```text
+THE TWO DATA-TRUST SURFACES (feat/data-trust-surfaces): the per-second GPS quality STRIP under
+the scrub bar, and the ROTATION cross-check row in the Stats DATA TRUST card. The strip's whole
+claim is that a bad stretch is LOCATABLE, and the way that claim dies is a ~500 px bar averaging
+a one-second dropout into the five clean seconds beside it — so the pin is a single POOR second
+inside 3,000 clean ones still painting a column, at the right fraction of the bar, read off the
+real widget's real slider geometry. Also: the classifier grades POOR exactly where the loader's
+own `_quality_ok` rejects (it takes that verdict as an input rather than copying the thresholds);
+a GPS5 camera with no per-sample DOP grades UNREPORTED and is NEVER painted green; the three
+verdict colours clear WCAG 1.4.11's 3:1 and the CIE76 JND under a deuteranopia simulation in BOTH
+palettes (measured with test_contrast's own maths); and the rotation row prints RotationCheck's
+closed-lap ratios through the accessors with nothing baked in. Offscreen Qt; no pacer, no
+telemetry file.
+```
+
+## test_marks
+
+```text
+MARKS (feat/marks) — the app's one surface that records a CONCLUSION rather than a measurement.
+Four halves. THE STORE: a mark is the most irreplaceable thing pacer holds (a library row comes
+back on the next open; "I was baulked there" existed only in the driver's head), so every
+corruption, version and destructive path is asserted — corrupt bytes preserved verbatim in the
+.bak before the first overwrite, a NEWER file's unknown fields surviving a v1 round-trip, an
+older/unstamped file migrated with every mark kept, one malformed mark dropped and the rest kept,
+the atomic write leaving no .tmp, and delete/forget/clear each copying first with restore
+swapping back. THE ANCHOR: a mark stores a CHAPTER-RELATIVE time, so one instant has one anchor
+whether a single chapter or the whole chaptered recording is open — the store is keyed by the
+chapter-invariant library fingerprint, so those two opens share one key while their global clocks
+differ by whole chapters. THE HONESTY RULE: a lap carries a dropout mark iff
+Session.lap_has_dropout is True for it, the excluded marks ARE excluded_lap_ids, no degraded mark
+covers a second the quality strip grades GOOD, and the short stretches that are suppressed are
+COUNTED rather than silently dropped. THE SURFACES: the scrub band placing its ink off the
+slider's own travel geometry (and re-scaling with the range, so compare mode is free), and the
+Marks page's filter / search / empty states / verb gating. Offscreen Qt; no telemetry file.
+```
+
+## test_quality_chip_trust
+
+```text
+The lap panel's data-quality chip OPENS the DATA TRUST row that explains it (N15). Measured over
+the real Session.load of every bundled sample and all five of the owner's recordings, the chip has
+three states and the card explained none of them well: the media-clock and low-GPS Timing rows
+were the clean row's own shape ("video clock (estimated) · 0% of moving fixes rejected"), and the
+no-GPS recording wore a chip reading "GPS LOW" over a row saying no fix survived. Drives REAL
+CentralViews — hero6.mp4 (media clock) and karma.mp4 (no GPS) through the real loader, plus the
+stadium synthetic forced to 12 % rejected fixes, which no real recording reaches — inside a real
+StudioWindow shell with the app's own shortcuts, because Space is play/pause there and a
+QShortcut outranks a focused button. Asserts the chip's word against the row it opens, the tab
+ring with the chip hidden and shown, its amber pill and focus ring as painted, pointer AND
+keyboard activation landing on the scrolled-to, marked row with focus on the card, and the mark
+clearing when the page is left. Offscreen Qt + PACER_NO_MEDIA; the two real samples are bundled.
+```
+
+## test_session_log
+
+```text
+THE SESSION LOG (E2): every record the app logs reaches stderr (unchanged) AND a rotating
+<app-support>/logs/pacer.log — the only one of the two a Finder-launched .app keeps. Drives the
+real startup call (app.install_excepthook) in a jailed child that ends by SIGKILLing itself, and
+reads back a warning from every logger family, a real Qt C++ warning and an unhandled thread
+exception's traceback; an unwritable log dir and a mid-session write failure (RLIMIT_FSIZE) each
+degrade to stderr and say so once; configure() is idempotent; three files of at most 512 KB; the
+crash dialog names the log. Offscreen Qt; the bindings because it imports studio.app.
+```
+
+## test_app_support_jail
+
+```text
+NO TEST MAY REACH THE OWNER'S REAL APP-SUPPORT DIRECTORY (H8). On 2026-09-17 a ctest run wrote a
+`stadium` row from the synthetic fixture into the owner's real library.json: test_load_failure
+patched no seam, and its library write had been dead only while a test double raised first.
+Every jail was an in-process patch, opt-in per file and invisible to child processes. This file
+pins the environmental rule in studio/app_support.py in every form a test process takes — this
+process, a `python -c` child, a test file run by hand, a jailed harness's child — plus the
+negative control that the app itself still resolves the real directory, and that EVERY
+registration below carries the jail flag. Children get a throwaway HOME. No Qt, no telemetry.
+```
+
+## The jail loop, kept last
+
+```text
+KEEP THIS LAST. Every registration above runs with PACER_APP_SUPPORT_JAIL=1: the first store path
+any process in the test's tree resolves is a fresh temp dir (exported to its children, removed at
+exit), never ~/Library/Application Support/pacer — whether or not the test patched a seam. A test
+registered BELOW this loop misses it, and test_app_support_jail fails the build naming it.
+```
