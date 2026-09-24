@@ -68,13 +68,12 @@ save->load returns bit-identical endpoints.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
 import shutil
 
-from . import app_support
+from . import _jsonstore, app_support
 
 _log = logging.getLogger(__name__)
 
@@ -293,22 +292,6 @@ def _norm_entry(e: dict) -> dict:
     }
 
 
-def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
-    """(readable_json_object, parsed) for `path`: True/parsed when the file exists and parses to a
-    JSON object, else (False, None). The seam ``load`` and ``_lossy_to_overwrite`` share, so
-    "genuine file-level corruption" is decided in exactly ONE place — the two must never disagree
-    about whether a file was readable, or a save would skip the backup for a file it then wipes.
-    Mirrors ``library._is_loadable_dict``."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False, None
-    if not isinstance(data, dict):
-        return False, None
-    return True, data
-
-
 def _schema_version(data: dict) -> int | None:
     """The file's ``version`` when it is a real schema number (a plain int), else None. A missing
     or non-int version is untrustworthy SHAPE, not a version, so the caller treats it as
@@ -337,11 +320,12 @@ def load(path: str | None = None) -> dict:
     longer become permanent loss. `path` defaults to ``db_path()``."""
     if path is None:
         path = db_path()
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return empty_db()
     version = _schema_version(data)
     if version is None:
+        _jsonstore.report_unreadable(path, f"version {data.get('version')!r} is not a schema number")
         return empty_db()
     if version != VERSION:
         _log.warning("track_db: %s is schema version %d, not this build's %d — reading it "
@@ -349,6 +333,7 @@ def load(path: str | None = None) -> dict:
                      path, version, VERSION)
     raw = data.get("tracks")
     if not isinstance(raw, list):
+        _jsonstore.report_unreadable(path, "its tracks are not a list")
         return empty_db()
     tracks = [e for e in raw if _valid_entry(e)]
     dropped = len(raw) - len(tracks)
@@ -381,7 +366,7 @@ def unreadable(path: str | None = None) -> bool:
         path = db_path()
     if not os.path.exists(path):
         return False
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return True
     if _schema_version(data) is None:
@@ -403,7 +388,7 @@ def _lossy_to_overwrite(path: str) -> bool:
       * one or more entries fail validation — ``load`` keeps the rest and the save persists only
         the survivors. Healing the file is defensible; doing it without keeping the original
         is not."""
-    ok, data = _is_loadable_dict(path)
+    ok, data = _jsonstore.read_object(path)
     if not ok:
         return True
     if _schema_version(data) != VERSION:
@@ -476,8 +461,9 @@ def _backup_unsafe(path: str) -> str | None:
 
 
 def save(db: dict, path: str | None = None) -> None:
-    """Write the DB atomically (temp file + ``os.replace``) so a crash mid-write can't leave a
-    truncated DB. Creates the app-support dir if missing. `path` defaults to ``db_path()``.
+    """Write the DB atomically (a unique temp file + ``os.replace``, ``_jsonstore.write_json``)
+    under the store lock, so neither a crash nor a second writer can leave a truncated or
+    interleaved DB. Creates the app-support dir if missing. `path` defaults to ``db_path()``.
     Raises OSError on an unwritable destination.
 
     DATA-SAFETY: before overwriting an existing file this build could not round-trip (unreadable,
@@ -488,13 +474,10 @@ def save(db: dict, path: str | None = None) -> None:
     if path is None:
         path = db_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _backup_unsafe(path)
     out = {"version": VERSION, "tracks": [_norm_entry(e) for e in db.get("tracks", [])]}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    with _jsonstore.locked(path):
+        _backup_unsafe(path)
+        _jsonstore.write_json(path, out)
 
 
 def upsert(db: dict, entry: dict) -> dict:
@@ -569,14 +552,15 @@ def remove_track(name: str, path: str | None = None) -> dict:
     that matters. Raises OSError on an unwritable destination."""
     if path is None:
         path = db_path()
-    if is_builtin(name) and name not in user_names(path):
-        raise BuiltInTrack(name)
-    db = load(path)
-    if not remove(db, name):
-        return db
-    if os.path.exists(path):
-        _copy_to_backup(path, "the track database before deleting a circuit")
-    save(db, path)
+    with _jsonstore.locked(path):
+        if is_builtin(name) and name not in user_names(path):
+            raise BuiltInTrack(name)
+        db = load(path)
+        if not remove(db, name):
+            return db
+        if os.path.exists(path):
+            _copy_to_backup(path, "the track database before deleting a circuit")
+        save(db, path)
     return db
 
 
@@ -624,14 +608,15 @@ def rename_track(old: str, new: str, path: str | None = None) -> dict:
         return load(path)
     if is_builtin(old):
         raise BuiltInTrack(old, "renamed")
-    if any(e["name"] == new for e in all_tracks(path)):
-        raise TrackNameInUse(new)
-    db = load(path)
-    if not rename(db, old, new):
-        raise ValueError(f"no saved track called {old!r}")
-    if os.path.exists(path):
-        _copy_to_backup(path, "the track database before renaming a circuit")
-    save(db, path)
+    with _jsonstore.locked(path):
+        if any(e["name"] == new for e in all_tracks(path)):
+            raise TrackNameInUse(new)
+        db = load(path)
+        if not rename(db, old, new):
+            raise ValueError(f"no saved track called {old!r}")
+        if os.path.exists(path):
+            _copy_to_backup(path, "the track database before renaming a circuit")
+        save(db, path)
     return db
 
 
@@ -668,24 +653,25 @@ def restore(path: str | None = None) -> dict:
     half is best-effort and only logs). Mirrors ``library.restore`` / ``session_record.restore``."""
     if path is None:
         path = db_path()
-    db = load(backup_path(path))
-    if not db["tracks"]:
+    with _jsonstore.locked(path):
+        db = load(backup_path(path))
+        if not db["tracks"]:
+            return load(path)
+        swap = path + ".swap"
+        kept = False
+        if os.path.exists(path):
+            try:
+                shutil.copy2(path, swap)
+                kept = True
+            except OSError as exc:
+                _log.warning("track_db: could not keep the replaced DB before restoring (%r)", exc)
+        save(db, path)
+        if kept:
+            try:
+                os.replace(swap, backup_path(path))
+            except OSError as exc:
+                _log.warning("track_db: restored the DB but could not swap the backup (%r)", exc)
         return load(path)
-    swap = path + ".swap"
-    kept = False
-    if os.path.exists(path):
-        try:
-            shutil.copy2(path, swap)
-            kept = True
-        except OSError as exc:
-            _log.warning("track_db: could not keep the replaced DB before restoring (%r)", exc)
-    save(db, path)
-    if kept:
-        try:
-            os.replace(swap, backup_path(path))
-        except OSError as exc:
-            _log.warning("track_db: restored the DB but could not swap the backup (%r)", exc)
-    return load(path)
 
 
 def make_entry(name: str, centroid, start, sectors, bbox=None) -> dict:
@@ -767,13 +753,18 @@ def save_track(entry: dict, path: str | None = None, *, replace: bool = False) -
     Where the name clash is REFUSED (the caller can name what is at risk), a DB the build could
     not read is instead written THROUGH — refusing there would leave the user unable to save any
     track at all until they hand-repaired a file the app never shows them. ``save`` keeps their
-    original bytes as ``tracks.json.bak`` instead; ``backup_pending()`` says so beforehand."""
-    db = load(path)
+    original bytes as ``tracks.json.bak`` instead; ``backup_pending()`` says so beforehand. The
+    whole load-check-save holds the store lock, so a circuit another writer saves meanwhile is
+    neither lost nor silently clashed with."""
+    if path is None:
+        path = db_path()
     norm = _norm_entry(entry)
-    if not replace:
-        clash = _clash(all_tracks(path), norm)
-        if clash is not None:
-            raise TrackNameTaken(*clash)
-    upsert(db, norm)
-    save(db, path)
+    with _jsonstore.locked(path):
+        db = load(path)
+        if not replace:
+            clash = _clash(all_tracks(path), norm)
+            if clash is not None:
+                raise TrackNameTaken(*clash)
+        upsert(db, norm)
+        save(db, path)
     return db
