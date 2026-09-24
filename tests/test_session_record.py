@@ -904,8 +904,10 @@ def test_the_form_leads_with_conditions_and_kart_no_and_folds_the_owned_kart():
     dlg.show()
     _APP.processEvents()
     form = dlg._form
+    # The LABELLED rows, in order (a spanning row — a section rule, the fold — has no label, and
+    # Qt 6 answers FieldRole for it too, so the label is what marks an input row).
     fields = [form.itemAt(r, QFormLayout.FieldRole).widget() for r in range(form.rowCount())
-              if form.itemAt(r, QFormLayout.FieldRole) is not None]
+              if form.itemAt(r, QFormLayout.LabelRole) is not None]
     assert fields[:2] == [dlg.conditions, dlg.kart_no], "Conditions and Kart no. must lead"
     owned = (dlg.tyre_set, dlg.tyre_laps, dlg.cold_front, dlg.hot_rear, dlg.unit, dlg.chassis,
              dlg.sprocket_front, dlg.axle, dlg.seat)
