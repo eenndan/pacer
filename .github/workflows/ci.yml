@@ -28,6 +28,28 @@ jobs:
         with:
           # gpmf-parser and nanobind are git submodules the C++ build needs.
           submodules: recursive
+          # 2, not 1: a pull request checks out its merge commit, and the changelog rule below
+          # diffs that against its first parent (the base branch it merges into).
+          fetch-depth: 2
+
+      - name: "Changelog: a PR adds a changes/ fragment; only a release PR edits CHANGELOG.md (title starts with 'release', or it deletes the changes/ fragments it folds)"
+        # Fragments exist so parallel PRs stop colliding in CHANGELOG.md (F1). Fails in seconds,
+        # before any build. The title reaches the script through env, never spliced into it.
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- CHANGELOG.md; then
+            echo "CHANGELOG.md untouched"; exit 0
+          fi
+          case "$(printf '%s' "$TITLE" | tr '[:upper:]' '[:lower:]')" in
+            release*) echo "release PR (title): CHANGELOG.md may change"; exit 0 ;;
+          esac
+          if [ -n "$(git diff --name-only --diff-filter=D HEAD^1 HEAD -- changes/)" ]; then
+            echo "folds changes/ fragments: CHANGELOG.md may change"; exit 0
+          fi
+          echo "::error file=CHANGELOG.md::This PR edits CHANGELOG.md directly. Add a changes/ fragment instead; only a release PR (title starting 'release', or one that deletes the changes/ fragments it folds in) edits CHANGELOG.md."
+          exit 1
 
       - name: Set up pixi
         uses: prefix-dev/setup-pixi@v0.9.6
@@ -45,7 +67,24 @@ jobs:
         # so the committed generated files must match what the locked litgen/black produce.
         run: git diff --exit-code -- bindings/
 
+      # Lint and format run BEFORE the tests: each takes about a second, while the test step takes
+      # minutes, so a lint error fails the run in about a minute instead of after the whole suite.
+      - name: Lint (ruff check via pixi)
+        run: pixi run lint
+
+      - name: Format check (clang-format --dry-run --Werror via pixi)
+        # Non-mutating gate over the hand-maintained C/C++ files with the env-pinned
+        # clang-format (the generated nanobind_pacer.cpp is excluded — owned by the
+        # regen-drift gate above).
+        run: pixi run fmt-check
+
       - name: Test (ctest via pixi)
+        env:
+          # The compare-toggle crash soak (`soak.*`, LABELS soak) runs on pushes to main, tags and
+          # manual runs, inside this same step: started first by its COST, it runs beside the rest
+          # of the suite. On a pull request it is reported Skipped by name, and the deterministic
+          # guard for its root cause runs instead (tests/test_compare_lifecycle.py).
+          PACER_SOAK: ${{ github.event_name != 'pull_request' && '1' || '' }}
         run: pixi run test
 
       - name: E2E smoke (full StudioWindow offscreen on the bundled GoPro sample)
@@ -65,15 +104,6 @@ jobs:
           # interpreter at the cmake-deployed bindings package explicitly.
           PYTHONPATH: ${{ github.workspace }}/bindings/pacer
         run: QT_QPA_PLATFORM=offscreen pixi run python -m studio.dev._smoke --no-video
-
-      - name: Lint (ruff check via pixi)
-        run: pixi run lint
-
-      - name: Format check (clang-format --dry-run --Werror via pixi)
-        # Non-mutating gate over the hand-maintained C/C++ files with the env-pinned
-        # clang-format (the generated nanobind_pacer.cpp is excluded — owned by the
-        # regen-drift gate above).
-        run: pixi run fmt-check
 
       - name: Demo asset reachable (non-blocking)
         # The "Open demo" CTA + `--demo` fetch this clip (studio/demo.py `_DEMO_URL`). It isn't
