@@ -419,9 +419,10 @@ def test_the_lock_is_reentrant_excludes_another_thread_and_is_released_on_error(
     from studio import _jsonstore
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "store.json")
-        entered = threading.Event()
+        asking, entered = threading.Event(), threading.Event()
 
         def other():
+            asking.set()                                   # about to ask for the lock
             with _jsonstore.locked(path):
                 entered.set()
 
@@ -429,6 +430,7 @@ def test_the_lock_is_reentrant_excludes_another_thread_and_is_released_on_error(
             with _jsonstore.locked(path):                  # re-entrant: no self-deadlock
                 t = threading.Thread(target=other, daemon=True)
                 t.start()
+                assert asking.wait(10), "the other thread never started"
                 assert not entered.wait(0.3), "another thread entered while the lock was held"
         assert entered.wait(10), "the other thread never got the lock after it was released"
         t.join(10)
@@ -448,25 +450,32 @@ def test_the_lock_is_reentrant_excludes_another_thread_and_is_released_on_error(
 
 def test_the_lock_holds_off_another_process_until_released():
     """Across PROCESSES, deterministically: while this process holds the library's lock, a child
-    running ``library.upsert_and_save`` must still be waiting (its row not on disk); once released,
-    it must finish and its row must be there alongside ours."""
+    that has reached ``library.upsert_and_save`` must still be waiting (its row not on disk); once
+    released, it must finish and its row must be there alongside ours."""
     from studio import _jsonstore
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "library.json")
         library.upsert_and_save(_lib_row("PARENT"), path)
         code = ("import sys; sys.path.insert(0, sys.argv[1]); from studio import library; "
+                "print('asking', flush=True); "
                 "library.upsert_and_save({'fingerprint': 'CHILD', 'stem': 'CHILD', 'track': None, "
                 "'date': None, 'lap_count': 1, 'best': None, 'theoretical': None, "
                 "'verified': True, 'degraded': False, 'dropout': False, 'paths': []}, sys.argv[2])")
         repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with _jsonstore.locked(path):
-            child = subprocess.Popen([sys.executable, "-c", code, repo, path])
-            deadline = time.monotonic() + 1.0
-            while time.monotonic() < deadline and child.poll() is None:
-                time.sleep(0.05)
-            assert child.poll() is None, "the child finished its write while the lock was held"
-            assert STORES["library"][2](path) == {"PARENT"}, "the child wrote under our lock"
+            child = subprocess.Popen([sys.executable, "-c", code, repo, path],
+                                     stdout=subprocess.PIPE, text=True)
+            watchdog = threading.Timer(60, child.kill)
+            watchdog.start()
+            try:
+                assert child.stdout.readline().strip() == "asking", "the child never started"
+                time.sleep(0.5)                            # it is inside upsert_and_save now
+                assert child.poll() is None, "the child finished its write while the lock was held"
+                assert STORES["library"][2](path) == {"PARENT"}, "the child wrote under our lock"
+            finally:
+                watchdog.cancel()
         assert child.wait(timeout=30) == 0, "the child failed after the lock was released"
+        child.stdout.close()
         assert STORES["library"][2](path) == {"PARENT", "CHILD"}
     print("test_the_lock_holds_off_another_process_until_released OK")
 
