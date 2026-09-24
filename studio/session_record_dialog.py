@@ -9,21 +9,31 @@ stays hermetic in tests and the app owns every write, the same dependency-inject
     ┌────────────────────────────────────────────────┐
     │  Daytona MK · 2026-06-14 · 22 laps · 1:08.201  │ ← AUTO-STAMPED: what the app already knows
     │  Carried over from your last session…          │ ← only when prefill actually filled something
-    │  CONDITIONS                                    │
-    │    Conditions   [Dry ▾]                        │
+    │  SESSION                                       │
+    │    Conditions   [Dry ▾]                        │ ← the two a fleet-kart driver can answer in
+    │    Kart no.     [12                      ]     │   five seconds: they lead
     │    Air / track  [24 ] [38 ] °C                 │
     │    Humidity     [41 ] %                        │
-    │  TYRES                                         │
-    │    Set          [MG Yellow #3            ]     │
-    │    Laps on them [42 ]  → 64 after this session │ ← the app does the arithmetic, not the driver
-    │    Cold F / R   [10 ] [10.5]  [psi ▾]          │
-    │    Hot  F / R   [13 ] [13.5]                   │
-    │  KART                                          │
-    │    Chassis / Sprockets / Axle / Seat           │
+    │  [> Own kart…]                                 │ ← folded by default, remembered once opened
+    │    TYRES                                       │
+    │      Set          [MG Yellow #3          ]     │
+    │      Laps on them [42 ]  → 64 after this sess. │ ← the app does the arithmetic, not the driver
+    │      Cold F / R   [10 ] [10.5]  [psi ▾]        │
+    │      Hot  F / R   [13 ] [13.5]                 │
+    │    KART                                        │
+    │      Chassis / Sprockets / Axle / Seat         │
     │  NOTES                                         │
     │    [                                    ]      │
     │  [Delete record]          [Cancel] [ Save ]    │
     └────────────────────────────────────────────────┘
+
+TWO DRIVERS, ONE FORM (board review UX-6). The form was written for a driver who owns his kart —
+17 inputs, 11 of them tyres, pressures and setup. The one driver the app has races arrive-and-drive
+fleet karts (a different kart each session: his 30 Aug and 19 Sep exports show two), where all 11
+are the operator's and the one thing that does change, WHICH kart, had no field. So the form leads
+with Conditions and Kart no., and the owned-kart groups fold under "Own kart…": closed by default,
+open for good once a driver opens it (``prefs.record_own_kart_open``), and ALWAYS open when the
+record already holds any of them — a fold never hides a value the record carries.
 
 FAST TO FILL IN IS THE WHOLE TEST — a form nobody completes is worse than nothing, because a
 half-kept notebook makes "were these two sessions comparable?" unanswerable in a NEW way. Four
@@ -39,7 +49,8 @@ things are spent on that and nothing else:
     all-dashes row that would claim the session was documented.
   * THE CONDITIONS COME FIRST AND TAKE THE FOCUS. They are the fields that decay — the coach's
     whole point is that nobody remembers the weather 18 months later — and the ones the Library
-    filters on.
+    filters on. The kart number is right under them and is never carried over: a fleet kart is
+    rarely the same one twice.
   * RETURN SAVES, ESCAPE CANCELS (Qt's default/reject buttons; no new app shortcut, so nothing is
     added to the ``help_dialog`` reference). The notes box takes its own Return, so a paragraph
     cannot be cut short by the save key.
@@ -66,8 +77,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, session_record, theme
+from . import APP_NAME, prefs, session_record, theme
 from ._signal import fmt_time, plural
+from .widgets import ToggleButton
 
 # The conditions combo's first row: no tag. A record with no conditions tag is the normal state of
 # a record that documents the KART and not the day, so "—" is a legal answer, not a prompt.
@@ -240,9 +252,16 @@ class SessionRecordDialog(QDialog):
         # other one and no column of it is allowed to set the window's width on its own.
         form.setRowWrapPolicy(QFormLayout.DontWrapRows)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._form = form
         self._build_conditions(form)
+        self._build_own_kart_toggle(form)
+        first = form.rowCount()
         self._build_tyres(form)
         self._build_kart(form)
+        # One form, so the folded rows keep the label column the open ones share; folding HIDES
+        # rows (their widgets keep their values, which `result_record` still reads).
+        self._own_kart_rows = range(first, form.rowCount())
+        self._show_own_kart(self.own_kart.isChecked())
         root.addLayout(form)
 
         notes_header = QLabel("NOTES")
@@ -299,8 +318,9 @@ class SessionRecordDialog(QDialog):
         form.addRow(label)
 
     def _build_conditions(self, form: QFormLayout) -> None:
-        """The day. First, because it is the half that cannot be recovered later."""
-        self._section(form, "CONDITIONS")
+        """The session: the day, and which kart. First, because the day is the half that cannot be
+        recovered later and the kart number is the one kart fact a fleet driver has."""
+        self._section(form, "SESSION")
         self.conditions = QComboBox()
         self.conditions.addItem(_NO_CONDITION, "")
         for tag in session_record.CONDITIONS:
@@ -312,6 +332,14 @@ class SessionRecordDialog(QDialog):
             "same measurement")
         form.addRow("Conditions", self.conditions)
 
+        self.kart_no = QLineEdit(self._record.get("kart_no") or "")
+        self.kart_no.setPlaceholderText("e.g. 12")
+        self.kart_no.setClearButtonEnabled(True)
+        self.kart_no.setToolTip(
+            "The number on the kart you drove. At an arrive-and-drive session it is the one thing "
+            "about the kart that changes — and a comparison across two karts says so.")
+        form.addRow("Kart no.", self.kart_no)
+
         self.air = _num_edit(*_TEMP_RANGE, "air")
         self.track_temp = _num_edit(*_TEMP_RANGE, "track")
         _write_num(self.air, self._record.get("air_temp_c"))
@@ -321,6 +349,34 @@ class SessionRecordDialog(QDialog):
         self.humidity = _num_edit(*_HUMIDITY_RANGE, "%")
         _write_num(self.humidity, self._record.get("humidity_pct"))
         form.addRow("Humidity %", self.humidity)
+
+    def _build_own_kart_toggle(self, form: QFormLayout) -> None:
+        """The "Own kart…" disclosure over the tyre and kart groups. Open when the driver last left
+        it open, or when this record already holds any of those fields (a carried-over setup
+        included) — folding must never hide a value the record carries."""
+        start_open = prefs.record_own_kart_open() or session_record.own_kart_filled(self._record)
+        self.own_kart = ToggleButton(
+            "Own kart…", glyph="ph.caret-right", glyph_on="ph.caret-down",
+            on_colour=theme.C.text, checked=start_open,
+            tooltip="Tyres, pressures, gearing, axle and seat — for a kart you run yourself. At an "
+                    "arrive-and-drive session they are the operator's; nothing needs them.")
+        self.own_kart.toggled.connect(self._on_own_kart_toggled)
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.own_kart)
+        row.addStretch(1)
+        form.addRow(holder)
+
+    def _show_own_kart(self, on: bool) -> None:
+        for r in self._own_kart_rows:
+            self._form.setRowVisible(r, on)
+
+    def _on_own_kart_toggled(self, on: bool) -> None:
+        """A driver's own click: show or fold the groups, and remember it for the next record."""
+        self._show_own_kart(on)
+        prefs.set_record_own_kart_open(on)
+        self.adjustSize()
 
     def _build_tyres(self, form: QFormLayout) -> None:
         """The tyres — identity AND age, the two the coach's answer turns on."""
@@ -406,6 +462,7 @@ class SessionRecordDialog(QDialog):
         rec = dict(self._record)
         rec.update({
             "conditions": self.conditions.currentData() or "",
+            "kart_no": self.kart_no.text(),
             "air_temp_c": _read_num(self.air),
             "track_temp_c": _read_num(self.track_temp),
             "humidity_pct": _read_num(self.humidity),

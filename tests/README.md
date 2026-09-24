@@ -149,7 +149,7 @@ reason naming `test-footage`, rather than excluding them — an excluded test va
 report. A footage variable you set still runs its checks there. The recordings are the owner's and strictly read-only: record sizes and mtimes around a run.
 
 ```bash
-pixi run test-footage                                           # all fifteen, on the working set
+pixi run test-footage                                           # all sixteen, on the working set
 PACER_GOLDEN_MP4="$HOME/Desktop/SD_30_08_26/GX010065.MP4" \
   pixi run ctest --test-dir build/Release -R '^footage\.test_real_render' --output-on-failure
 ```

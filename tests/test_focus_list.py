@@ -512,6 +512,73 @@ def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
     print("ok store: a backwards, empty or off-lap window is dropped on its own account")
 
 
+# ------------------------------------------------------------ UX-6: the offer, and the kart
+def test_a_refusal_for_want_of_a_record_names_exactly_the_sessions_it_waits_on():
+    """`Report.unrecorded` is what "Mark both dry" may write: the sessions a no_record refusal waits
+    on — the earlier day(s) first, today last, each once — and never one that has a record, nor
+    any when the refusal is about something a record cannot fix."""
+    items, samples = [_item(cid=4), _item(cid=7)], [_sample(4.5)] * 2
+    none = F.verdict(items, _now(), samples, session_record.empty_store())
+    assert none.unrecorded == (("GX0060", "23 May"), ("GX0062", "today")), none.unrecorded
+    assert F.mark_dry_prompt(none)[:2] == ("Both dry?", "Mark both dry")
+    assert "for 23 May and today saying the conditions were Dry" in F.mark_dry_prompt(none)[2]
+    then_only = F.verdict(items, _now(), samples, _records(("GX0060", _record())))
+    assert then_only.unrecorded == (("GX0062", "today"),)
+    assert F.mark_dry_prompt(then_only)[:2] == ("Dry today?", "Mark today dry")
+    now_only = F.verdict(items, _now(), samples, _records(("GX0062", _record())))
+    assert F.mark_dry_prompt(now_only)[:2] == ("Dry on 23 May?", "Mark 23 May dry")
+    mixed = F.verdict([_item(cid=4), _item(cid=7, fp="GX0058", date="2026-04-11")], _now(),
+                      samples, session_record.empty_store())
+    assert [label for _fp, label in mixed.unrecorded] == ["23 May", "11 Apr", "today"]
+    assert F.mark_dry_prompt(mixed)[:2] == ("All 3 dry?", "Mark all 3 dry")
+    both = F.verdict(items, _now(), samples, _records(("GX0060", _record()),
+                                                      ("GX0062", _record())))
+    assert both.unrecorded == () and F.mark_dry_prompt(both) is None
+    unverified = F.verdict(items, _now(verified=False), samples, session_record.empty_store())
+    assert unverified.unrecorded == () and F.mark_dry_prompt(unverified) is None, \
+        "a record cannot lift a provisional start line, so none may be offered"
+    print("ok offer: names exactly the unrecorded sessions, and only for a record refusal")
+
+
+def test_the_offer_sits_under_the_refusal_and_its_click_is_a_signal():
+    """The block shows the offer only while a record refusal stands, and the click writes nothing
+    itself: it emits the fingerprints the button named, for the app (which owns the store)."""
+    p = _panel_with(F.verdict([_item()], _now(), [_sample(4.5)], session_record.empty_store()))
+    blk = p.focus_block
+    assert not blk._mark_row.isHidden(), "a record refusal with no offer beside it"
+    assert (blk.mark_question.text(), blk.mark_button.text()) == ("Both dry?", "Mark both dry")
+    got = []
+    p.focus_mark_dry_requested.connect(got.append)
+    blk.mark_button.click()
+    assert got == [["GX0060", "GX0062"]], got
+    p.set_focus_report(F.verdict([_item()], _now(), [_sample(4.5)],
+                                 _records(("GX0060", _record()), ("GX0062", _record()))))
+    _APP.processEvents()
+    assert blk._mark_row.isHidden(), "nothing waits on a record any more — the offer must go"
+    p.set_focus_report(_report())
+    _APP.processEvents()
+    assert blk._mark_row.isHidden(), "an empty list has nothing to mark"
+    print("ok panel: the offer comes and goes with the refusal; its click is a signal")
+
+
+def test_a_verdict_across_two_karts_says_so_and_is_still_a_verdict():
+    """UX-6 (4): two sessions on different fleet karts are compared — refusing would refuse every
+    pair an arrive-and-drive driver has — but not silently: the verdict names both karts, in the
+    then → now grammar of its other two pairs. Same kart, or one unrecorded: nothing is said."""
+    then, now = {**_record(), "kart_no": "12"}, {**_record(), "kart_no": "7"}
+    r = F.verdict([_item()], _now(), [_sample(4.1, n=36)],
+                  _records(("GX0060", then), ("GX0062", now)))
+    o = r.outcomes[0]
+    assert o.has_verdict and o.delta is not None and o.karts == ("12", "7"), o
+    line = F.report_lines(r)[0]
+    assert line == "C4 — 0.40 s faster than 23 May (4.50 → 4.10 s, 38 → 36 laps, kart 12 → 7).", line
+    for other in ({**now, "kart_no": "12"}, _record()):
+        same = F.verdict([_item()], _now(), [_sample(4.1, n=36)],
+                         _records(("GX0060", then), ("GX0062", other)))
+        assert same.outcomes[0].karts is None and "kart" not in F.report_lines(same)[0]
+    print(f"ok kart: {line}")
+
+
 # ------------------------------------------------------------------ the window: record writes
 # The session the list was promoted in, on "another day" — its fingerprint and date are all the
 # verdict reads of it; the numbers are this session's own, so every structural gate passes.

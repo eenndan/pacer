@@ -306,6 +306,15 @@ def filled_fields(rec: dict | None) -> int:
     return n
 
 
+def own_kart_filled(rec: dict | None) -> bool:
+    """True when `rec` holds any owned-kart field (``OWN_KART_FIELDS``) — what keeps the form's
+    "Own kart…" fold open, so a folded form never hides a value the record carries."""
+    if not isinstance(rec, dict):
+        return False
+    rec = _norm_record(rec)
+    return any(rec.get(k) not in (None, "") for k in OWN_KART_FIELDS)
+
+
 # ------------------------------------------------------------------ file I/O
 def _migrate(data: dict, from_version: int) -> dict:
     """Forward-migrate an OLDER on-disk store (`from_version` < ``VERSION``) to the current schema,

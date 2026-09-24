@@ -799,6 +799,158 @@ def test_a_half_typed_number_the_validator_lets_through_saves_as_blank():
     print("test_a_half_typed_number_the_validator_lets_through_saves_as_blank OK")
 
 
+# ============================================================================ UX-6: the rental kart
+def test_a_kart_number_is_its_own_field_and_is_never_carried_over():
+    """The one kart fact an arrive-and-drive driver has. It round-trips, "#12" is "12", it alone is
+    a record (so it is never silently dropped as empty), it leads the summary after the conditions —
+    and it is NOT sticky: the next session's form opens blank, because a fleet kart is rarely the
+    same one twice (the owner's 30 Aug and 19 Sep exports show two different karts)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _tmp_store(tmp)
+        sr.put_and_save("GX0065", {**sr.blank_record(), "conditions": "dry", "kart_no": " #12 "})
+        rec = sr.get(sr.load(), "GX0065")
+        assert rec["kart_no"] == "12", rec
+        only = {**sr.blank_record(), "kart_no": "DMAX 7"}
+        assert not sr.is_empty(only) and sr.filled_fields(only) == 1
+        assert sr.summary_line({**_record(), "kart_no": "12"}).startswith(
+            "Dry  ·  air 24°  ·  track 38°  ·  41% RH  ·  kart 12  ·  MG Yellow #3"), \
+            sr.summary_line({**_record(), "kart_no": "12"})
+        nxt = sr.prefill(sr.load(), exclude="GX0068")
+        assert nxt["kart_no"] == "", f"last session's kart number was carried over: {nxt}"
+        assert "kart_no" not in sr.STICKY_FIELDS
+    print("test_a_kart_number_is_its_own_field_and_is_never_carried_over OK")
+
+
+def test_a_v1_store_is_read_unchanged_and_written_back_as_v2():
+    """The v2 bump MIGRATES: every v1 value survives, nothing is inferred into `kart_no` (not even
+    from a chassis or a note that reads like a kart number — reinterpreting hand-typed data is the
+    one thing a migration must not do), and LOADING writes nothing: the file's bytes are untouched
+    until the next save, which stamps v2 and changes no v1 value."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _tmp_store(tmp)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        v1 = {k: v for k, v in _record(chassis="kart 7", notes="kart 12 again").items()
+              if k != "kart_no"}
+        with open(path, "w") as fh:
+            json.dump({"version": 1, "records": {"GX0062": v1}}, fh)
+        raw = open(path, "rb").read()
+        loaded = sr.load()
+        assert open(path, "rb").read() == raw, "loading a v1 store rewrote it"
+        got = loaded["records"]["GX0062"]
+        assert got["kart_no"] == "", f"a kart number was inferred on migration: {got['kart_no']!r}"
+        assert {k: got[k] for k in v1} == v1, "a v1 value changed on migration"
+        sr.save(loaded)
+        on_disk = json.load(open(path))
+        assert on_disk["version"] == sr.VERSION == 2
+        assert {k: on_disk["records"]["GX0062"][k] for k in v1} == v1
+        assert not os.path.exists(sr.backup_path(path)), "a migrated v1 file must not churn the .bak"
+    print("test_a_v1_store_is_read_unchanged_and_written_back_as_v2 OK")
+
+
+def test_a_different_kart_is_said_but_never_makes_two_sessions_unlike():
+    """`kart_pair` names two different karts (case-blind, unknown ≠ different); `comparable` — every
+    clause of which refuses a focus verdict — never does, or every pair of fleet-kart sessions would
+    be refused. The Library says it instead of calling two karts "comparable on everything"."""
+    a, b = {**_record(), "kart_no": "12"}, {**_record(), "kart_no": "7"}
+    assert sr.kart_pair(a, b) == ("12", "7")
+    assert sr.kart_pair(a, {**b, "kart_no": "12"}) is None
+    assert sr.kart_pair({**a, "kart_no": "dmax 7"}, {**b, "kart_no": "DMAX 7"}) is None
+    assert sr.kart_pair(a, {**b, "kart_no": ""}) is None, "an unrecorded kart is not a different one"
+    assert sr.comparable(a, b) == [], sr.comparable(a, b)
+
+    best, other = _entry("GX010064", best=46.8), _entry("GX010068", best=47.2)
+    with tempfile.TemporaryDirectory() as tmp:
+        _tmp_store(tmp)
+        store = sr.put(sr.put(sr.empty_store(), best["fingerprint"], a), other["fingerprint"], b)
+        dlg = _library_dialog([best, other], store)
+        line = dlg._comparability_text(other, sr.get(store, other["fingerprint"]))
+        assert line.endswith("on everything you recorded but the kart: kart 7 vs 12."), line
+        wet = sr.put(store, other["fingerprint"], {**b, "conditions": "wet"})
+        line = dlg._comparability_text(other, sr.get(wet, other["fingerprint"]))
+        assert line.startswith("Not like-for-like") and line.endswith("kart 7 vs 12"), line
+        dlg.close()
+    print("test_a_different_kart_is_said_but_never_makes_two_sessions_unlike OK")
+
+
+def test_marking_dry_writes_only_the_sessions_that_have_no_record():
+    """The write behind the focus list's "Mark both dry": a recording that already has ANY record is
+    never touched (not even one written after the page asked), an empty record is never stored,
+    and when nothing was blank nothing is written at all."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _tmp_store(tmp)
+        sr.put_and_save("GX0064", {**sr.blank_record(), "tyre_set": "hire"})
+        kept = json.load(open(path))["records"]["GX0064"]
+        dry = {**sr.blank_record(), "conditions": "dry"}
+        store, written = sr.put_if_blank_and_save({"GX0064": dry, "GX0068": dry, "": dry,
+                                                   "GX0065": sr.blank_record()})
+        assert written == ["GX0068"], written
+        assert json.load(open(path))["records"]["GX0064"] == kept, "an existing record was touched"
+        assert sr.get(store, "GX0068")["conditions"] == "dry"
+        assert sr.get(store, "GX0065") is None, "an empty record was stored"
+        before = os.stat(path).st_mtime_ns, open(path, "rb").read()
+        _store, again = sr.put_if_blank_and_save({"GX0064": dry, "GX0068": dry})
+        assert again == [] and (os.stat(path).st_mtime_ns, open(path, "rb").read()) == before
+    print("test_marking_dry_writes_only_the_sessions_that_have_no_record OK")
+
+
+def test_the_form_leads_with_conditions_and_kart_no_and_folds_the_owned_kart():
+    """UX-6: the two fields a fleet-kart driver can answer lead the form; the 11 owned-kart inputs
+    sit under "Own kart…", folded by default, remembered once opened — and never folded over a
+    value the record carries. Folded fields keep their values."""
+    from PySide6.QtWidgets import QFormLayout, QLineEdit
+
+    prefs.set_record_own_kart_open(False)
+    dlg = SessionRecordDialog(sr.blank_record(), entry=_entry())
+    dlg.show()
+    _APP.processEvents()
+    form = dlg._form
+    fields = [form.itemAt(r, QFormLayout.FieldRole).widget() for r in range(form.rowCount())
+              if form.itemAt(r, QFormLayout.FieldRole) is not None]
+    assert fields[:2] == [dlg.conditions, dlg.kart_no], "Conditions and Kart no. must lead"
+    owned = (dlg.tyre_set, dlg.tyre_laps, dlg.cold_front, dlg.hot_rear, dlg.unit, dlg.chassis,
+             dlg.sprocket_front, dlg.axle, dlg.seat)
+    assert not dlg.own_kart.isChecked() and not any(w.isVisible() for w in owned)
+    visible = [w for w in dlg.findChildren(QLineEdit) if w.isVisible()]
+    assert visible == [dlg.kart_no, dlg.air, dlg.track_temp, dlg.humidity], \
+        [w.placeholderText() for w in visible]
+    dlg.own_kart.click()
+    _APP.processEvents()
+    assert all(w.isVisible() for w in owned) and prefs.record_own_kart_open()
+    dlg.tyre_set.setText("hire")
+    dlg.kart_no.setText("12")
+    dlg.own_kart.click()                    # fold again: the value stays in the record
+    rec = dlg.result_record()
+    assert rec["tyre_set"] == "hire" and rec["kart_no"] == "12", rec
+    assert not prefs.record_own_kart_open()
+    dlg.close()
+
+    again = SessionRecordDialog(rec, entry=_entry(), is_new=False)
+    assert again.own_kart.isChecked(), "a record holding a tyre set must open unfolded"
+    again.close()
+    prefs.set_record_own_kart_open(True)
+    remembered = SessionRecordDialog(sr.blank_record(), entry=_entry())
+    assert remembered.own_kart.isChecked(), "a driver who opened it once keeps it open"
+    remembered.close()
+    prefs.set_record_own_kart_open(False)
+    print("test_the_form_leads_with_conditions_and_kart_no_and_folds_the_owned_kart OK")
+
+
+def test_the_chip_and_the_library_hover_name_the_kart():
+    """Two more surfaces that show a record: the lap-panel chip leads with the conditions and the
+    kart number, and the Library's record hover carries the kart number too."""
+    from types import SimpleNamespace
+
+    from studio.central_view import CentralView
+    from studio.widgets import chip
+
+    view = SimpleNamespace(record_chip=chip(""))
+    CentralView.set_session_record(view, {**sr.blank_record(), "conditions": "dry",
+                                          "kart_no": "12"})
+    assert view.record_chip.text() == "Dry  ·  kart 12", view.record_chip.text()
+    assert "kart 12" in libdlg._record_cell_tip({**_record(), "kart_no": "12"})
+    print("test_the_chip_and_the_library_hover_name_the_kart OK")
+
+
 def _run_all():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
