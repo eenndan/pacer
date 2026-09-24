@@ -1633,8 +1633,18 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     print("test_stats_view_braking_table_filters_unbraked_and_emits_clicks OK")
 
 
-def test_stats_view_straights_table_and_fix_first_tile():
+def test_stats_view_straights_table_and_exit_leverage_note():
+    """The STRAIGHTS table, and the one line under it naming its top exit-leverage straight.
+
+    PS-2: that line was a "fix first" TILE and, measured on the real window, it named a different
+    corner from the Coaching tab's #1 on 3 of the 4 working-set recordings (SD_19_09 C2 vs C1). It
+    now says what it measures and, where Coaching starts elsewhere, where and why — never a second
+    instruction."""
     _app()
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QLabel
+
     from studio.stats import StraightStat
     from studio.stats_panel import RING_ROLE, StatsView
     sess = _fake_view_session()
@@ -1657,18 +1667,54 @@ def test_stats_view_straights_table_and_fix_first_tile():
     assert t.item(0, 6).text() == "—"                      # k=0 exit delta: no double-count
     assert t.item(1, 6).text() == "-2.0"
     assert t.item(1, 0).data(RING_ROLE) == 1
-    assert not v.t_fix_first.isHidden()
-    assert v.t_fix_first.value.text() == "C1"              # the top-leverage corner
-    assert "-2.0 km/h" in v.t_fix_first.caption.text()
+    assert not hasattr(v, "t_fix_first"), "the imperative tile is gone"
+    note = v.straights_note.text()
+    assert not v.straights_note.isHidden() and note.startswith("Most exit leverage: C1 — "), note
+    assert "2.0 km/h under your best lap's" in note and "C1 → C2" in note and "+0.30 s" in note
+    assert "Coaching" not in note, "this stub has no corner ids, so no Coaching clause"
+    labels = [lb.text().lower() for lb in v.findChildren(QLabel)]
+    assert not any("fix first" in t for t in labels), [t for t in labels if "fix" in t]
+    # Coaching starts at the same corner: the line says so …
+    sess.coaching_opportunities = lambda: _digest_opportunities([0.4, 0.2], n_laps=12)
+    v.refresh()
+    note = v.straights_note.text()
+    assert "The Coaching tab starts with C1" not in note and "C1 is also where" in note, note
+    # … and when it starts elsewhere, the line names where and why the two differ.
+    elsewhere = _digest_opportunities([0.4, 0.2], n_laps=12)
+    elsewhere = replace(elsewhere, rows=[replace(r, cid=c)
+                                         for r, c in zip(elsewhere.rows, (3, 1), strict=True)])
+    sess.coaching_opportunities = lambda: elsewhere
+    v.refresh()
+    note = v.straights_note.text()
+    assert "The Coaching tab starts with C3: it ranks the time lost inside the corners" in note, note
+    # … and when Coaching's own theme cannot separate its top two ("Start with C3 or C1"), the line
+    # names both, as that page does — measured on Sandown 3h, where this corner is the second.
+    from studio import coaching
+    spread = coaching.Evidence(n_laps=12, reach_laps=4, reach=coaching.REACH_REPEAT, iqr=0.2,
+                               abstain=coaching.ABSTAIN_NONE)
+    tied = replace(elsewhere, rows=[replace(r, time_lost=t, evidence=spread)
+                                    for r, t in zip(elsewhere.rows, (0.40, 0.38), strict=True)])
+    sess.coaching_opportunities = lambda: tied
+    v.refresh()
+    note = v.straights_note.text()
+    assert note.endswith("The Coaching tab starts with C3 or C1 — this is one of them."), note
+    # A tie wider than three is named as Coaching names it: three corners and a count.
+    wide = replace(tied, rows=[replace(r, cid=c, time_lost=t) for r, c, t in zip(
+        tied.rows * 2, (3, 1, 4, 5), (0.40, 0.39, 0.38, 0.37), strict=True)])
+    sess.coaching_opportunities = lambda: wide
+    v.refresh()
+    note = v.straights_note.text()
+    assert note.endswith("The Coaching tab starts with C3, C1, C4 or 1 more — this is one of "
+                         "them."), note
     fired = []
     v.corner_clicked.connect(fired.append)
     t.selectRow(0)
     assert fired and fired[-1] == 2                        # the wrap straight rings C2
-    # No straights data -> section + tile hidden.
+    # No straights data -> section + note hidden.
     sess.straights_report = lambda: []
     v.refresh()
-    assert v._straights_section.isHidden() and v.t_fix_first.isHidden()
-    print("test_stats_view_straights_table_and_fix_first_tile OK")
+    assert v._straights_section.isHidden() and v.straights_note.isHidden()
+    print("test_stats_view_straights_table_and_exit_leverage_note OK")
 
 
 def test_stats_view_straights_say_how_many_laps_each_column_counted():

@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
+    coaching,
     corners,
     data_quality,
     driving,
@@ -551,8 +552,10 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    f"The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
                    "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
                    "cells are not simply this column's three largest numbers; hover one for its "
-                   "own score. That's where practice pays first. Click a row to ring "
-                   "the corner's apex on the map; click a column header to sort.")
+                   "own score. It is a consistency ranking, not the Coaching tab's list of what "
+                   "to work on (time lost against your best lap), so the two need not agree. "
+                   "Click a row to ring the corner's apex on the map; click a column header to "
+                   "sort.")
 
 
 def _corner_count_tip(report) -> str:
@@ -593,9 +596,10 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "partition — segments sum to the lap time exactly): best/median/σ "
                      "time, the trap speed at the straight's END, and Exit Δ — the "
                      "preceding corner's median exit speed vs your best lap's (+ is "
-                     "faster). A slow exit ahead of a long straight is the costliest "
-                     "mistake on track: the FIX FIRST tile ranks exit deficit × straight "
-                     "time spread. Trap speed doubles as a gearing/engine-health proxy. "
+                     "faster). A slow exit costs time down the straight after it, which no "
+                     "corner's own time contains: the note under the table names the straight "
+                     "where exit deficit × time spread is largest. Trap speed doubles as a "
+                     "gearing/engine-health proxy. "
                      "Each column counts only the laps whose corner edges IT reads were matched "
                      "to your best lap's line on track — the time both ends of the straight, the "
                      "trap speed its end, Exit Δ the corner before it — because an interpolated "
@@ -603,6 +607,13 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "a cell for how many laps count). "
                      + provenance.CORNER_MATCH_DRIFT + " "
                      "Click a row to ring the corner feeding that straight.")
+STRAIGHTS_NOTE_TOOLTIP = (
+    "The straight whose preceding corner's exit deficit × the straight's median − best time is "
+    "largest — measured, not modelled. It is time down the STRAIGHT after a slow exit, which the "
+    "Coaching tab's ranking does not contain: Coaching ranks the time lost inside each corner "
+    "against your best lap, and the corner/straight partition keeps the two apart (together they "
+    "sum to the lap). So the two can name different corners without either being wrong; Coaching "
+    "is the list of what to work on.")
 BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the cross-lap "
                    "scatter of your brake-onset POINT (σ and max−min span, metres, compared "
                    "in the reference lap's odometer) plus commitment — the median event's "
@@ -2249,12 +2260,6 @@ class StatsView(QWidget):
         # --- the straight-line report (hidden without corners / a best lap)
         self._straights_section = self._section("STRAIGHTS")
         col.addWidget(self._straights_section)
-        self.t_fix_first = Tile("fix first")
-        self.t_fix_first.setToolTip(
-            "The corner whose exit deficit costs the most down the following straight "
-            "(exit-speed deficit × the straight's median−best time spread) — measured, "
-            "not modeled. Fix this one before chasing apex speed elsewhere.")
-        col.addLayout(self._grid(self.t_fix_first))
         self.straights_table = self._make_table(STRAIGHT_COLUMNS)
         self.straights_table.setToolTip(STRAIGHTS_TOOLTIP)
         self.straights_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -2265,6 +2270,14 @@ class StatsView(QWidget):
             self._on_corner_sort)
         self.straights_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.straights_table)
+        # PS-2: the exit-leverage straight, said as what it measures under the table it summarizes
+        # (COASTING's note does the same for its top place) — it was a "fix first" TILE, the most
+        # imperative label in the app, naming a different corner from the Coaching tab's #1 on 3
+        # of the 4 working-set recordings. See _straights_note_text.
+        self.straights_note = WrapLabel()
+        self.straights_note.setProperty("role", "TableNote")
+        self.straights_note.setToolTip(STRAIGHTS_NOTE_TOOLTIP)
+        col.addWidget(self.straights_note)
 
         # --- per-lap statistics table
         self._laps_section = self._section("PER LAP")
@@ -3973,8 +3986,8 @@ class StatsView(QWidget):
         self._corners_section.setText(f"CORNERS · speeds in {u_label} · grip %")
         self.corners_note.setText(self._corners_note_text(session, report))
         # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
-        # "behind" hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
-        # at half the field: a tint that covers every row highlights nothing.
+        # "behind" hue — erratic AND slow, a consistency ranking and not Coaching's. Capped at
+        # WORST_TINT_N and at half the field: a tint that covers every row highlights nothing.
         k = min(WORST_TINT_N, max(1, len(report) // 2))
         ranked = sorted(report, key=lambda r: -r.score)[:k]
         worst = {r.cid: r for r in ranked if r.score > 0}
@@ -4019,9 +4032,10 @@ class StatsView(QWidget):
                 loss.setForeground(behind)
                 loss.setText(WORST_LOSS_MARK + loss.text())
                 tips.append(
-                    f"One of the {len(worst)} worst corners to practise — ranked by "
+                    f"One of the {len(worst)} most erratic-and-slow corners — ranked by "
                     f"σ × median loss = {wr.sigma_s:.2f} × {wr.median_loss_s:.2f} = "
-                    f"{wr.score:.3f} s², not by this column alone.")
+                    f"{wr.score:.3f} s², not by this column alone, and not the Coaching tab's "
+                    "ranking (time lost against your best lap).")
             tri = phase_rows.get(cr.cid)
             if tri is not None:
                 # The corner's own phase matrix, on hover — where INSIDE this corner the
@@ -4155,6 +4169,51 @@ class StatsView(QWidget):
         else:
             self.corner_clicked.emit(None)
 
+    @staticmethod
+    def _coaching_start(session) -> list[int]:
+        """The corner(s) the Coaching tab starts with: its first ranked row, plus any ranked row
+        its own theme cannot separate from it (`coaching.lead_ties` — "Start with C7 or C5"), so
+        a sentence here names exactly what that page names. [] without a ranked row."""
+        opp_fn = getattr(session, "coaching_opportunities", None)
+        opp = opp_fn() if opp_fn is not None else None
+        rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
+        lead = getattr(rows[0], "cid", None) if rows else None
+        if lead is None:
+            return []
+        return [r.cid for r in coaching.lead_ties(list(opp.rows), lead)] or [lead]
+
+    def _straights_note_text(self, session, top, unit, u_label) -> str:
+        """The STRAIGHTS table's top exit-leverage row, said as what it measures, and whether it is
+        where the Coaching tab starts. "" when no straight has any leverage.
+
+        PS-2 (board review 2026-09-23): this was a tile captioned "fix first" — the most imperative
+        label in the app — and measured on the real window it named a different corner from the
+        Coaching tab's #1 on 3 of the 4 working-set recordings (SD_19_09: C2 vs C1, Sandown 3h: C4
+        vs C1, MK: C7 vs C5; SD_30_08 agreed on C7). Neither is wrong: this is time down the
+        straight after a slow exit, which Coaching's corner windows do not contain. So it names
+        its own quantity, and the corner Coaching starts with, instead of a second instruction."""
+        if top.leverage <= 0 or top.exit_delta_kmh is None:
+            return ""
+        exit_gap = abs(units.convert_speed(top.exit_delta_kmh, unit))
+        text = (f"Most exit leverage: C{top.ring_cid} — your median exit is {exit_gap:.1f} "
+                f"{u_label} under your best lap's, onto the {top.label} straight, which runs "
+                f"+{top.median_s - top.best_s:.2f} s over its best (leverage is the one times "
+                "the other).")
+        start = self._coaching_start(session)
+        if not start:
+            return text
+        if start == [top.ring_cid]:
+            return f"{text} C{top.ring_cid} is also where the Coaching tab starts."
+        # Named the way Coaching's own start-here line names a tie ("C1, C4, C7 or 1 more").
+        named = [f"C{c}" for c in start[:coaching._TIE_NAME_CAP]]
+        extra = len(start) - len(named)
+        names = (f"{', '.join(named)} or {extra} more" if extra
+                 else f"{', '.join(named[:-1])} or {named[-1]}" if len(named) > 1 else named[0])
+        if top.ring_cid in start:
+            return f"{text} The Coaching tab starts with {names} — this is one of them."
+        return (f"{text} The Coaching tab starts with {names}: it ranks the time lost inside "
+                "the corners, and a straight is outside every corner.")
+
     def _refresh_straights(self, session, unit, u_label):
         report = getattr(session, "straights_report", list)() or []
         # B8: a start line inside a corner section produces ~0-duration S/F stubs — noise
@@ -4170,7 +4229,8 @@ class StatsView(QWidget):
         self._straights_section.setVisible(has)
         self.straights_table.setVisible(has)
         if not has:
-            self.t_fix_first.setVisible(False)
+            self.straights_note.setText("")
+            self.straights_note.setVisible(False)
             self.straights_table.setRowCount(0)
             return
         # SAY HOW MANY ARE NOT LISTED (§5.6). The ideal-lap disclosure on this same page counts
@@ -4180,16 +4240,10 @@ class StatsView(QWidget):
         # The count is derived from the same list, so the two can never drift apart again.
         dropped = f" · {stubs} too short to list" if stubs else ""
         self._straights_section.setText(f"STRAIGHTS · speeds in {u_label}{dropped}")
-        # The FIX FIRST tile: the biggest exit-deficit × straight-spread product.
-        top = max(report, key=lambda s: s.leverage)
-        if top.leverage > 0:
-            self.t_fix_first.setVisible(True)
-            self.t_fix_first.set(
-                f"C{top.ring_cid}",
-                f"fix first · exit {units.convert_speed(top.exit_delta_kmh, unit):+.1f} "
-                f"{u_label} → +{top.median_s - top.best_s:.2f} s straight")
-        else:
-            self.t_fix_first.setVisible(False)
+        note = self._straights_note_text(session, max(report, key=lambda s: s.leverage),
+                                         unit, u_label)
+        self.straights_note.setText(note)
+        self.straights_note.setVisible(bool(note))
         mono = theme.mono_font(theme.TABLE)
 
         def cell(val, fmtstr):
