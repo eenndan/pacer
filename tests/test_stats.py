@@ -4914,7 +4914,7 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
         coaching.MIN_LAPS, so since #339 that abstain fires ONLY because corners went unmatched —
         the sentence is false every time it is shown.
 
-    Driven on the REAL panel and dialog over the real Session: the drift fixture's own interpolated
+    Driven on the REAL Coaching page over the real Session: the drift fixture's own interpolated
     C1 exit (lap 1) is the MK shape in miniature."""
     from studio import coaching, coaching_panel
 
@@ -4933,10 +4933,8 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
     _APP.processEvents()
     panel.refresh()
     _APP.processEvents()
-    dialog = coaching_panel.OpportunitiesDialog(opps, brake_points={}, session=s)
     try:
-        for where, table, col in (("panel", panel.table, coaching_panel._PANEL_COL_REACH),
-                                  ("dialog", dialog.table, coaching_panel._COL_REACH)):
+        for where, table, col in (("page", panel.table, coaching_panel._PANEL_COL_REACH),):
             tips = {int(table.item(r, 0).text()[1:]): table.item(r, col).toolTip()
                     for r in range(table.rowCount())}
             for cid, n in short.items():
@@ -4950,7 +4948,6 @@ def test_coaching_names_the_laps_a_corner_counted_when_it_is_not_all_of_them():
                     assert f"of your {n} clean laps" in tips[cid], (where, cid, tips[cid])
     finally:
         panel.close()
-        dialog.close()
 
     # FEW_LAPS: C2's entry planted as interpolated on every lap but the best and one other, so two
     # cells count and the corner abstains for want of laps it could MATCH, not laps it drove. That

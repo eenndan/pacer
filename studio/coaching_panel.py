@@ -730,6 +730,20 @@ def _reason_text_box(table: QTableWidget, col: int, column_px: int) -> tuple[int
     return text_rect.width() - inset, 100 - text_rect.height()
 
 
+def _narrow_column_px(table: QTableWidget, col: int) -> int:
+    """The width the stretching `col` has once the vertical scrollbar is showing: the viewport as if
+    the bar were there, less every other visible column. Read this way, not off the section,
+    because the section lags — Qt re-stretches it on its NEXT pass, so a fit run from the
+    viewport's own resize read the width of the state just left, pinned rows for it, and toggled the
+    bar back (measured: rows pinned for 250 px under a 262 px column and the reverse, alternating,
+    for as long as the page was open). Pinned at the narrow width a row is at worst one line roomy
+    while the bar is off, and never depends on whether it is."""
+    bar = table.verticalScrollBar()
+    others = sum(table.columnWidth(c) for c in range(table.columnCount())
+                 if c != col and not table.isColumnHidden(c))
+    return table.viewport().width() - (0 if bar.isVisible() else bar.sizeHint().width()) - others
+
+
 def _fit_reason_rows(table: QTableWidget, col: int):
     """Re-height every wrapped reason cell in `col` from the rect the delegate paints into, then
     re-fit the rows. Idempotent — safe to call on every resize."""
@@ -737,7 +751,7 @@ def _fit_reason_rows(table: QTableWidget, col: int):
     # header, which calls back in here. One pass at a time; the next width change refits anyway.
     if table.property("_fitting_reason"):
         return
-    avail, pad_v = _reason_text_box(table, col, table.columnWidth(col))
+    avail, pad_v = _reason_text_box(table, col, _narrow_column_px(table, col))
     if avail <= 0:  # a collapsed column: leave Qt's own heights alone rather than pin nonsense
         return
     fm = table.fontMetrics()
@@ -748,17 +762,25 @@ def _fit_reason_rows(table: QTableWidget, col: int):
         # the column widens). We only ever GROW past it — the fix is the dropped line, not a
         # re-invention of the row metrics, and the pin must stay harmless where there is no
         # stylesheet padding to mis-measure.
+        #
+        # ASKED, NOT APPLIED. This read Qt's answer by applying it (a resizeRowsToContents between
+        # clearing the pins and setting them again), and Qt under-measures these cells — so for a
+        # moment the rows were shorter than they paint, which could hide the vertical scrollbar,
+        # widen the column the `avail` above was measured at, and have the pins it then set shown
+        # the bar again: one fit per toggle, forever, at a page height between the two totals. The
+        # Coaching page's R11 columns (cell widgets built and dropped as the row count is tuned)
+        # kept that ping-pong fed; sizeHintForRow is the same number without the transient.
         for r in rows:
             table.item(r, col).setData(Qt.SizeHintRole, None)
-        table.resizeRowsToContents()
+        floor = table.verticalHeader().minimumSectionSize()
+        own = {r: max(table.sizeHintForRow(r), floor) for r in rows}
         for r in rows:
             item = table.item(r, col)
             wrapped = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, item.text()).height()
             # The width must be a REAL one: setSizeHint DISCARDS an invalid QSize (a -1 "don't care"
             # width clears the role instead of pinning the height). The section stretches, so the
             # width we pass never drives the layout.
-            item.setSizeHint(QSize(table.columnWidth(col),
-                                   max(wrapped + pad_v, table.rowHeight(r))))
+            item.setSizeHint(QSize(table.columnWidth(col), max(wrapped + pad_v, own[r])))
         table.resizeRowsToContents()
     finally:
         table.setProperty("_fitting_reason", False)
@@ -1185,6 +1207,15 @@ class OpportunitiesPanel(QWidget):
         # L5-03: keep the wrapped reason rows fitted to the width the delegate really paints into,
         # re-measured whenever the header re-stretches the column.
         _wire_reason_fit(self.table, _PANEL_COL_REASON)
+        # Showing or hiding a column re-stretches the reason section only on Qt's NEXT pass, after
+        # the pass that toggled it has fitted rows to the old width and counted how many fit.
+        # Measured: the first full-window pass saw 105-px rows (the reason squeezed by bars not yet
+        # re-stretched around) and stopped at 6 of 11 rows that settle at 48 px. So a pass that
+        # changes a column's visibility lays the page out once more, next pass, when the width is
+        # real (_apply_column_budget). Only a CHANGE schedules it, so it cannot feed itself.
+        self._restretch = QTimer(self)
+        self._restretch.setSingleShot(True)
+        self._restretch.timeout.connect(self._retune)
         # L5-06/L5-08: re-budget and re-tune off the TABLE VIEWPORT's own resize, not the panel's.
         # `QWidget.resize` delivers our resizeEvent before the child layout has been applied, so a
         # budget computed there measures the width the table is about to stop having (measured: the
@@ -1397,6 +1428,7 @@ class OpportunitiesPanel(QWidget):
             for col in _OPTIONAL_COLS:
                 if (col not in shown) != t.isColumnHidden(col):
                     t.setColumnHidden(col, col not in shown)
+                    self._restretch.start(0)
             if _PANEL_COL_GO in shown:
                 _budget_action_column(t, _PANEL_COL_GO)
             _elide_header(t, _PANEL_COL_REASON, self._COLUMNS[_PANEL_COL_REASON],
@@ -1438,8 +1470,14 @@ class OpportunitiesPanel(QWidget):
         nothing free."""
         if self._tuning or self.body.currentIndex() != 0 or not self._all_rows:
             return
-        key = (self.table.viewport().width(), self.table.viewport().height(),
-               len(self._all_rows), tuple(self.table.isColumnHidden(c) for c in _OPTIONAL_COLS))
+        # The width is keyed as if the vertical scrollbar were showing (the column budget and the
+        # shortlist reserve read it the same way): the trial row below can toggle the bar, and a
+        # key that moved with it never matched again — measured, one page re-tuned ~70 times a
+        # second between two widths 12 px apart, for as long as it was on screen.
+        bar = self.table.verticalScrollBar()
+        key = (self.table.viewport().width() - (0 if bar.isVisible() else bar.sizeHint().width()),
+               self.table.viewport().height(), len(self._all_rows),
+               tuple(self.table.isColumnHidden(c) for c in _OPTIONAL_COLS))
         if key == self._tuned_key:
             return
         n_all = len(self._all_rows)
@@ -1512,6 +1550,12 @@ class OpportunitiesPanel(QWidget):
         _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self._tune_rows()
 
+    def _retune(self):
+        """Lay the page out again with the row count re-counted: the columns changed under the
+        count the last pass settled on (see the ``_restretch`` note in __init__)."""
+        self._tuned_key = None
+        self._relayout()
+
     def _apply_theme_budget(self):
         """Let the focus list and the theme lead, but never displace the ranking they are about.
 
@@ -1564,9 +1608,7 @@ class OpportunitiesPanel(QWidget):
         if self.body.currentIndex() != 0 or t.rowCount() == 0:
             return 0
         col = _PANEL_COL_REASON
-        bar = t.verticalScrollBar()
-        narrow = t.columnWidth(col) - (0 if bar.isVisible() else bar.sizeHint().width())
-        avail, pad_v = _reason_text_box(t, col, narrow)
+        avail, pad_v = _reason_text_box(t, col, _narrow_column_px(t, col))
         fm = t.fontMetrics()
         rows = 0
         for r in range(min(PANEL_TOP_N, t.rowCount())):

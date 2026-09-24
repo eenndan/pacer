@@ -630,49 +630,41 @@ def _run_all():
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
     test_reason_cell_drops_the_metres_and_names_the_target()
     test_the_brake_hint_names_the_laps_it_counted()
-    test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size()
+    test_the_pages_jump_buttons_are_never_clipped()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 
 
-def test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size():
-    """§6.4: at the size the dialog opens itself at (920x380), every amber Jump button was
-    flat-cut on its right edge — the rounding sliced off into the scrollbar gutter.
+def test_the_pages_jump_buttons_are_never_clipped():
+    """§6.4, carried from the modal to the page that replaced it (R11): at the size the modal
+    opened at, every amber Jump button was flat-cut on its right edge — `ResizeToContents` sizes a
+    column from the cell widget's HINT and knows nothing about the inset the view then paints that
+    widget inside, so a column of 89 px held an 88 px button placed 8 px in. `_budget_action_column`
+    asks the painter instead.
 
-    Measured on the real dialog with D24's nine opportunities: the GO column came out 89 px from
-    `ResizeToContents`, the last cell's visualRect was x=791 w=88, and the button was painted at
-    x=799 keeping its 88 px minimum — running to 887 against an 880 px viewport. `ResizeToContents`
-    sizes a column from the cell widget's HINT and knows nothing about the inset the view then
-    paints that widget inside.
+    The page shows the column only when it can afford it, so the risk is highest just past that
+    threshold: swept from full-window down, every width that shows a Jump must show it whole."""
+    from studio.coaching_panel import _PANEL_COL_GO
 
-    `_budget_action_column` asks the painter instead of guessing a style metric: it compares the
-    widget's geometry with the cell it landed in and adds the difference. This test drives the real
-    dialog at the real default and asserts no button crosses its own cell."""
-    from studio.coaching_panel import OpportunitiesDialog
-
-    opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=_rows(9))
-    dlg = OpportunitiesDialog(opps, jump_to=lambda *a: None, brake_points={}, speed_unit="kmh")
-    dlg.show()
-    for _ in range(8):
-        _APP.processEvents()
-    try:
-        t = dlg.table
-        last = t.columnCount() - 1
+    p = _panel(_rows(9), (1432, 808))
+    t = p.table
+    seen = 0
+    for w in range(1432, 640, -48):
+        p.resize(w, 808)
+        for _ in range(8):
+            _APP.processEvents()
+        if t.isColumnHidden(_PANEL_COL_GO):
+            continue
+        seen += 1
         vp = t.viewport().width()
-        worst = 0
         for r in range(t.rowCount()):
-            btn = t.cellWidget(r, last)
-            if btn is None:
-                continue
-            cell = t.visualRect(t.model().index(r, last))
-            worst = max(worst, (btn.geometry().right() + 1) - (cell.right() + 1))
+            btn = t.cellWidget(r, _PANEL_COL_GO)
+            cell = t.visualRect(t.model().index(r, _PANEL_COL_GO))
+            over = (btn.geometry().right() + 1) - (cell.right() + 1)
+            assert over <= 0, f"width {w}: row {r}'s Jump overhangs its cell by {over} px"
             assert btn.geometry().right() + 1 <= vp, (
-                f"row {r}: the Jump button runs {btn.geometry().right() + 1 - vp} px past the "
-                f"viewport — it is being painted into the scrollbar gutter")
-        assert worst <= 0, (f"a Jump button overhangs its own cell by {worst} px", worst)
-    finally:
-        dlg.deleteLater()
-        _APP.processEvents()
-    print(f"ok jump-clip: no button crosses its cell at {dlg.width()}x{dlg.height()}")
+                f"width {w}: row {r}'s Jump runs past the {vp} px viewport into the gutter")
+    assert seen, "no width showed the Jump column: this sweep proves nothing"
+    print(f"ok jump-clip: no Jump button crosses its cell at {seen} widths from 1432 px down")
 
 
 if __name__ == "__main__":
