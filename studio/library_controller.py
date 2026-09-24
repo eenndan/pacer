@@ -80,6 +80,12 @@ class LibraryController:
     def __init__(self, win, status_ms: int):
         self.win = win
         self._status_ms = status_ms
+        # What the last `update_library` learned for the debrief landing (board review PS-B1):
+        # whether the index had NO row for this recording before the upsert — a first open, as
+        # opposed to a reload, a second chapter or Load full recording — and where its best lap
+        # stands against the track's PB (`library.pb_standing_for`). Reset on every call.
+        self.opened_new = False
+        self.pb_standing: dict | None = None
 
     # --------------------------------------------------------------- session library index (F8)
     def update_library(self, paths: list[str]) -> dict | None:
@@ -105,6 +111,7 @@ class LibraryController:
         the OTHER recordings — so the same outing can no longer be the bar, while a full chain that
         genuinely beats a DIFFERENT recording on that track still celebrates (see there for why
         suppressing on mere presence would swallow exactly that)."""
+        self.opened_new, self.pb_standing = False, None
         if self._library_excludes(paths):
             return None
         moment = None
@@ -116,12 +123,17 @@ class LibraryController:
             # (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
             # which is what keeps the chapter it just chained from being its "previous best".
             prior_index = library.load()
-            moment = library.pb_moment_for(
-                self.win.session.timing_verified, prior_index, entry.get("track"),
-                entry.get("best"),
-                degraded=self.win.session.timing_quality.degraded,
-                fingerprint_key=entry.get("fingerprint"))
+            trust = (self.win.session.timing_verified, prior_index, entry.get("track"),
+                     entry.get("best"))
+            key = entry.get("fingerprint")
+            degraded = self.win.session.timing_quality.degraded
+            moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key)
+            standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key)
+            new = not any(e.get("fingerprint") == key for e in prior_index.get("entries", []))
             library.upsert_and_save(entry)
+            # Only once the row is WRITTEN: a recording whose row could not be saved would land on
+            # the debrief again on every open.
+            self.opened_new, self.pb_standing = new, standing
             self.win._library_unwritable = False
         except OSError:
             # The DISK said no. That is the one library failure the user can act on, so it is the
@@ -785,6 +797,40 @@ class LibraryController:
             self._focus_failed(f"the focus list could not be updated ({exc!r})")
             return
         self.update_focus_list()
+
+    def pre_promote_focus(self, cids: list[int]) -> list[int]:
+        """The debrief's explicit default (board review PS-B1): put `cids` — the Coaching
+        headline's shortlist, in rank order — on this track's focus list, into its FREE slots only.
+        Returns the corners actually added (the debrief says so, and each is one click from gone).
+
+        Free slots only, because an item already on the list carries the baseline of the session it
+        was promoted on, and that baseline is what the verdict above the ranking is measured
+        against: replacing it with today's would delete the "did it move?" answer on the very
+        screen that shows it, and overrule a corner the driver kept or chose. Nothing is promoted
+        where the verdict could never speak — no track (nowhere to keep a list), a provisional
+        start line or ESTIMATED timing (`focus._blocker` refuses every comparison with such a
+        baseline, so an auto-made list would refuse forever)."""
+        entry = self._current_library_entry() or {}
+        track = entry.get("track")
+        if not track or not entry.get("verified") or entry.get("degraded"):
+            return []
+        try:
+            items = focus.for_track(self._load_focus(), track)
+            taken = {i.cid for i in items}
+            free = focus.MAX_ITEMS - len(items)
+            wanted = [int(c) for c in cids if int(c) not in taken][:max(free, 0)]
+            added = self.win.session.focus_items(wanted, entry) if wanted else []
+            if not added:
+                return []
+            focus.save_for_track(track, items + added)
+        except OSError as exc:
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})")
+            return []
+        except Exception:  # noqa: BLE001 — a default must never raise into the load
+            _log.exception("focus list not pre-filled")
+            return []
+        self.update_focus_list()
+        return [i.cid for i in added]
 
     def focus_remove(self, cid: int) -> None:
         """Drop corner `cid` from this track's focus list (and the row entirely when it empties)."""
