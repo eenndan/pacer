@@ -1593,10 +1593,12 @@ class CentralView(QWidget):
             self._toggle_panel_maximized(self._table_panel)
 
     # ----------------------------------------------------- the first-open debrief (PS-B1)
-    def show_debrief(self, pb_line: str | None, promoted: list[int]) -> None:
+    def show_debrief(self, pb_line: str | None, promoted: list[int],
+                     compare: bool = False) -> None:
         """Land on the debrief: the Coaching page, maximized the way ``show_coaching_maximized``
-        does it, with its lead and shortlist (``OpportunitiesPanel.set_debrief``). The window calls
-        this on a recording's FIRST open only (``StudioWindow._land_on_debrief``).
+        does it, with its lead and shortlist (``OpportunitiesPanel.set_debrief``; `compare` offers
+        "Compare with your previous PB" beside a new PB's line). The window calls this on a
+        recording's FIRST open only (``StudioWindow._land_on_debrief``).
 
         It is a landing, not a choice, so none of it is remembered: the tab flips are quiet (the
         persisted lap-panel tab stays the driver's), and every way back to the grid returns to the
@@ -1606,7 +1608,7 @@ class CentralView(QWidget):
         self._debrief_return_tab = self.tab_bar.currentIndex()
         self._debrief = True
         self._quiet_tab(3)
-        self.opportunities.set_debrief(True, pb_line, promoted)
+        self.opportunities.set_debrief(True, pb_line, promoted, compare)
         if self.isVisible():
             self._maximize_debrief()
         else:
