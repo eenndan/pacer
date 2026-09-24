@@ -11,8 +11,10 @@
   "include": [
     "studio/__init__.py",
     "studio/_jsonstore.py",
+    "studio/_signal.py",
     "studio/app_support.py",
     "studio/bests.py",
+    "studio/chapters.py",
     "studio/chart_stats.py",
     "studio/consistency.py",
     "studio/cross_reference.py",
