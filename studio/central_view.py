@@ -484,6 +484,11 @@ class CentralView(QWidget):
                 t.timeout.connect(lambda p=pending: self._apply_grid_sizes(p))
                 t.start(delay)
                 self._grid_restore_timers.append(t)
+        # The debrief's maximize waits for THIS moment (show_debrief), after the synchronous
+        # restore: only now do the splitters hold the layout Esc must return to.
+        if getattr(self, "_debrief_pending", False):
+            self._debrief_pending = False
+            self._maximize_debrief()
 
     def _apply_grid_sizes(self, stored: list):
         """Apply persisted [main, left, right] splitter sizes. Each list is applied only if it
@@ -494,13 +499,26 @@ class CentralView(QWidget):
         collapse a column (see _layout_panels) from RESURRECTING the deleted panel on every
         relaunch: a stored [1432, 0] used to pass the old count/non-negative/sum>0 guard and
         reopen the window with MAP and CHARTS off screen. Rejecting the one bad list leaves the
-        other two splitters free to restore, so a user only loses the layout that was unusable."""
-        for splitter, sizes in zip(
-                (self._main_splitter, self._left_splitter, self._right_splitter),
-                stored, strict=False):
+        other two splitters free to restore, so a user only loses the layout that was unusable.
+
+        WHILE A PANEL IS MAXIMIZED the restore goes into the grid it will return to, not onto the
+        splitters. The debrief maximizes the lap panel at first show, and the two deferred passes
+        above land after that; applied to the splitters they put the grid back on screen under a
+        panel still marked maximized (measured with the maximize one step earlier, at the load's
+        tail: this pass took the main splitter from [1432, 0] to [700, 732])."""
+        splitters = (self._main_splitter, self._left_splitter, self._right_splitter)
+        saved = getattr(self, "_saved_splitter_sizes", None)
+        into = list(saved) if (getattr(self, "_maximized_panel", None) is not None
+                               and saved is not None) else None
+        for i, (splitter, sizes) in enumerate(zip(splitters, stored, strict=False)):
             if (isinstance(sizes, (list, tuple)) and len(sizes) == splitter.count()
                     and all(isinstance(v, (int, float)) and v > 0 for v in sizes)):
-                splitter.setSizes([int(v) for v in sizes])
+                if into is not None:
+                    into[i] = [int(v) for v in sizes]
+                else:
+                    splitter.setSizes([int(v) for v in sizes])
+        if into is not None:
+            self._saved_splitter_sizes = tuple(into)
 
     def dispose(self):
         """Stop decoder(s) + close the g-meter overlay before this view is dropped on reload. Called
@@ -1066,6 +1084,12 @@ class CentralView(QWidget):
         self._right_splitter = right
         self._maximized_panel = None          # the currently-maximized panel, or None
         self._saved_splitter_sizes = None     # (main, left, right) sizes captured at maximize
+        # The first-open debrief (show_debrief): on, waiting for the first show to maximize, and
+        # the tab it returns to. `_tab_quiet` keeps its tab flips out of the persisted preference.
+        self._debrief = False
+        self._debrief_pending = False
+        self._debrief_return_tab = None
+        self._tab_quiet = False
         self._header_routes = {}
         self._install_header_dblclick(video_panel, left, main)
         self._install_header_dblclick(table_panel, left, main)
@@ -1288,6 +1312,10 @@ class CentralView(QWidget):
         self._maximized_panel = None
         self._saved_splitter_sizes = None
         self._sync_maximize_buttons()  # every button reverts to the maximize glyph
+        # Every way back to the grid (Esc, ⛶, a header double-click, a Jump, another maximize)
+        # ends the debrief the same way: the page is ordinary again, on the remembered tab.
+        if getattr(self, "_debrief", False):
+            self._end_debrief(restore_tab=True)
 
     # ----------------------------------------------------- video focus ("fullscreen video")
     def toggle_video_focus(self):
@@ -1509,7 +1537,10 @@ class CentralView(QWidget):
         if index == 1:
             self.corner_table.set_lap(self._corner_lap)
         self._update_table_header()
-        self.lapTabChanged.emit(index)
+        if getattr(self, "_debrief", False) and index != 3:
+            self._end_debrief(restore_tab=False)   # the driver chose another page
+        if not getattr(self, "_tab_quiet", False):  # the debrief's own flips are not a choice
+            self.lapTabChanged.emit(index)
 
     def select_lap_tab(self, index: int):
         """Select a lap-panel tab by index (Laps 0 / Corners 1 / Stats 2 / Coaching 3) — the
@@ -1560,6 +1591,51 @@ class CentralView(QWidget):
         self.tab_bar.setCurrentIndex(3)
         if self._maximized_panel is not self._table_panel:
             self._toggle_panel_maximized(self._table_panel)
+
+    # ----------------------------------------------------- the first-open debrief (PS-B1)
+    def show_debrief(self, pb_line: str | None, promoted: list[int]) -> None:
+        """Land on the debrief: the Coaching page, maximized the way ``show_coaching_maximized``
+        does it, with its lead and shortlist (``OpportunitiesPanel.set_debrief``). The window calls
+        this on a recording's FIRST open only (``StudioWindow._land_on_debrief``).
+
+        It is a landing, not a choice, so none of it is remembered: the tab flips are quiet (the
+        persisted lap-panel tab stays the driver's), and every way back to the grid returns to the
+        tab the view opened on (``_end_debrief``). The maximize waits for the view's first show
+        when it has not had one — the window calls this at the load's tail, ~80 ms before it,
+        when the splitters are still 100x30 placeholders a snapshot would make Esc restore."""
+        self._debrief_return_tab = self.tab_bar.currentIndex()
+        self._debrief = True
+        self._quiet_tab(3)
+        self.opportunities.set_debrief(True, pb_line, promoted)
+        if self.isVisible():
+            self._maximize_debrief()
+        else:
+            self._debrief_pending = True
+
+    def is_debrief(self) -> bool:
+        return getattr(self, "_debrief", False)
+
+    def _maximize_debrief(self) -> None:
+        if self._debrief and self._maximized_panel is not self._table_panel:
+            self._toggle_panel_maximized(self._table_panel)
+
+    def _end_debrief(self, restore_tab: bool) -> None:
+        """The page is ordinary again; `restore_tab` puts the lap panel back on the tab the view
+        opened on, unless the driver has already moved it."""
+        self._debrief = False
+        self._debrief_pending = False
+        self.opportunities.set_debrief(False)
+        back = self._debrief_return_tab
+        if restore_tab and back is not None and back != 3 and self.tab_bar.currentIndex() == 3:
+            self._quiet_tab(back)
+
+    def _quiet_tab(self, index: int) -> None:
+        """Select a lap-panel tab without telling the window to persist it."""
+        self._tab_quiet = True
+        try:
+            self.tab_bar.setCurrentIndex(index)
+        finally:
+            self._tab_quiet = False
 
     def _set_corner_lap(self, lap_id: int | None):
         """Track the lap the Corners view describes — the PRIMARY selected/followed lap.

@@ -401,7 +401,8 @@ def test_the_default_window_shows_the_top_three_whole():
     one_line = max(p.focus_block.add_button.sizeHint().height(),
                    p.focus_block.empty_line.sizeHint().height()) + m.top() + m.bottom()
     assert p.focus_block.height() <= one_line, (p.focus_block.height(), one_line)
-    assert p.focus_block.drop_button.isHidden(), "an empty list has nothing to remove"
+    assert all(b.isHidden() for b in p.focus_block.drop_buttons), \
+        "an empty list has nothing to remove"
     assert "Pick up to" in p.summary_label.toolTip(), "the invitation is demoted, not deleted"
     print(f"test_the_default_window_shows_the_top_three_whole OK ({whole} whole rows in a "
           f"{p.table.viewport().height()} px viewport; focus {p.focus_block.height()} px, "

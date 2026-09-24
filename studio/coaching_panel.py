@@ -368,6 +368,12 @@ class FocusBlock(QWidget):
     dry?") beside a button that writes exactly that and nothing else. It is an offer, not an
     assumption: nothing is written until the click (``focus.mark_dry_prompt``).
 
+    EVERY CORNER ON THE LIST HAS ITS OWN REMOVE (board review PS-B1). The debrief pre-promotes the
+    top corners, and a default is only honest if undoing it is one click per corner. The one Remove
+    button there acted on the table's SELECTION, so a corner had to be found and selected in
+    today's ranking first — and a corner promoted on another day need not be near its top: 19 Sep
+    ranks the 30 Aug list's C3 fifth, and an abstained or sub-resolution corner not at all.
+
     Read-only over a ``focus.Report`` plus a selection: the promote / drop / mark gestures are
     SIGNALS the app acts on (it owns the app-support stores — the same split ``set_session_record``
     uses)."""
@@ -424,16 +430,21 @@ class FocusBlock(QWidget):
         self.empty_line.setToolTip(FOCUS_EMPTY_INVITE)
         self.empty_line.setVisible(False)
         row.addWidget(self.empty_line, 1)
+        # One Remove per corner on the list, in list order (see the class note); hidden when unused.
+        self.drop_buttons: list[QPushButton] = []
+        for _ in range(focus.MAX_ITEMS):
+            button = QPushButton("")
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            button.clicked.connect(lambda _checked=False, b=button: self._emit_remove(b))
+            button.setVisible(False)
+            row.addWidget(button)
+            self.drop_buttons.append(button)
         self.add_button = QPushButton("Add to focus list")
         self.add_button.setAutoDefault(False)
         self.add_button.setDefault(False)
         self.add_button.clicked.connect(self._emit_add)
-        self.drop_button = QPushButton("Remove from focus list")
-        self.drop_button.setAutoDefault(False)
-        self.drop_button.setDefault(False)
-        self.drop_button.clicked.connect(self._emit_remove)
         row.addWidget(self.add_button)
-        row.addWidget(self.drop_button)
         self._row_stretch = row.count()
         row.addStretch(1)
         self._buttons = QWidget()
@@ -470,8 +481,16 @@ class FocusBlock(QWidget):
         self.headline.setText(self._headline)
         for label, text in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS, strict=False):
             label.setText(text)
+        for button, cid in zip(self.drop_buttons, self._cids + [None] * focus.MAX_ITEMS,
+                               strict=False):
+            button.setText(f"Remove C{cid}" if cid is not None else "")
+            button.setToolTip(f"Take C{cid} off your focus list" if cid is not None else "")
         self._sync_buttons()
         self._apply(len(self._lines), bool(self._headline))
+
+    def cids(self) -> list[int]:
+        """The corners on the list, in list order."""
+        return list(self._cids)
 
     def set_selected_corner(self, cid: int | None) -> None:
         """The table's selected corner — what the Add button would promote."""
@@ -500,19 +519,17 @@ class FocusBlock(QWidget):
             f"C{cid} is already on your focus list" if on_list else
             f"Work on C{cid}: Pacer will measure this exact stretch of track again next time "
             "you're here")
-        self.drop_button.setText(f"Remove C{cid}" if on_list else "Remove from focus list")
-        self.drop_button.setEnabled(on_list)
-        self.drop_button.setToolTip(
-            f"Take C{cid} off your focus list" if on_list
-            else "Select a corner that is on your focus list")
 
     def _emit_add(self):
         if self._selected is not None:
             self.add_requested.emit(int(self._selected))
 
-    def _emit_remove(self):
-        if self._selected is not None and self._selected in self._cids:
-            self.remove_requested.emit(int(self._selected))
+    def _emit_remove(self, button: QPushButton):
+        """The corner `button` stands for — by its place in the list, never by the table's
+        selection (see the class note)."""
+        i = self.drop_buttons.index(button)
+        if i < len(self._cids):
+            self.remove_requested.emit(int(self._cids[i]))
 
     def _emit_mark(self):
         if self._mark_fps:
@@ -570,10 +587,11 @@ class FocusBlock(QWidget):
             want = visible and i < n_lines and bool(self._lines[i:i + 1])
             if label.isHidden() == want:
                 label.setVisible(want)
-        # The empty list shows its one line in place of the headline, and no Remove button — on an
-        # empty list there is nothing it could ever remove.
-        for widget, want in ((self.headline, not self._empty), (self.empty_line, self._empty),
-                             (self.drop_button, not self._empty)):
+        # The empty list shows its one line in place of the headline, and a Remove per corner the
+        # list holds — none on an empty one.
+        pairs = [(self.headline, not self._empty), (self.empty_line, self._empty)]
+        pairs += [(b, i < len(self._cids)) for i, b in enumerate(self.drop_buttons)]
+        for widget, want in pairs:
             if widget.isHidden() == want:
                 widget.setVisible(want)
         if self._buttons.isHidden() == visible:
@@ -583,6 +601,94 @@ class FocusBlock(QWidget):
             self._mark_row.setVisible(mark)
         if self.isHidden() == visible:
             self.setVisible(visible)
+
+
+DEBRIEF_ESC = "Esc returns to your usual layout."
+
+
+def debrief_note(promoted: list[int]) -> str:
+    """The debrief's second line: what Pacer just did to the focus list, said as the default it is
+    and how to undo it (board review PS-B1: "an explicit, reversible default — say so on screen"),
+    then the way out."""
+    if not promoted:
+        return DEBRIEF_ESC
+    labels = [f"C{c}" for c in promoted]
+    who = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + f" and {labels[-1]}"
+    undo = "remove it if you won't work on it" if len(labels) == 1 else \
+        "remove any you won't work on"
+    return (f"Pacer put {who}, from today's top corners, on your focus list for next time — "
+            f"a default, not a decision: {undo}. {DEBRIEF_ESC}")
+
+
+# The debrief lead's share of the page before it sheds its note, then itself — budgeted FIRST
+# (it is what the landing leads with), and small, because what it leads into is the ranking.
+DEBRIEF_MAX_FRACTION = 0.15
+
+
+class DebriefBlock(QWidget):
+    """The debrief's lead (board review PS-B1): the session's personal-best standing
+    (``library.pb_standing_text``) and ``debrief_note``, above the focus list. Shown only while
+    the page is the debrief — the Coaching page maximized on a recording's first open — and hidden
+    otherwise, so the page everyone else sees is unchanged. It yields height the way
+    ``ThemeBlock`` does (the note first, then the whole block)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._texts: list[str] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
+        lay.setSpacing(theme.SPACE_XS)
+        self.headline = WrapLabel("")          # the PB line, in the page's primary tone
+        self.note = WrapLabel("")
+        self.note.setProperty("role", "Note")
+        lay.addWidget(self.headline)
+        lay.addWidget(self.note)
+        self.setVisible(False)
+
+    def set_lines(self, pb_line: str | None, note: str | None) -> None:
+        """Fill the block (None for both clears it)."""
+        self.headline.setText(pb_line or "")
+        self.note.setText(note or "")
+        self._texts = [t for t in (pb_line, note) if t]
+        self._apply(len(self._texts))
+
+    def full_text(self) -> str:
+        return "\n".join(self._texts)
+
+    def _labels(self) -> list[QLabel]:
+        return [lb for lb in (self.headline, self.note) if lb.text()]
+
+    def _needed_px(self, width: int, n: int) -> int:
+        """Height of the first `n` lines at `width`, from the text and fonts (see
+        ``ThemeBlock._needed_px`` for why never from the widgets' current state)."""
+        lay = self.layout()
+        m = lay.contentsMargins()
+        inner = max(width - m.left() - m.right(), 1)
+        labels = self._labels()[:n]
+        need = m.top() + m.bottom() + lay.spacing() * max(len(labels) - 1, 0)
+        for label in labels:
+            need += QFontMetrics(label.font()).boundingRect(
+                QRect(0, 0, inner, 0), Qt.TextWordWrap, label.text()).height()
+        return need
+
+    def fit_into(self, width: int, budget_px: int) -> int:
+        """Show as many lines as fit `budget_px`; returns the height used (0 when hidden)."""
+        for n in range(len(self._texts), 0, -1):
+            need = self._needed_px(width, n)
+            if need <= budget_px:
+                self._apply(n)
+                return need
+        self._apply(0)
+        return 0
+
+    def _apply(self, n: int) -> None:
+        shown = self._labels()[:n]
+        for label in (self.headline, self.note):
+            want = label in shown
+            if label.isHidden() == want:
+                label.setVisible(want)
+        if self.isHidden() == bool(shown):
+            self.setVisible(bool(shown))
 
 
 # Human label per coaching.PHASE_* id, in track order (for the breakdown bar segments + tooltip).
@@ -1135,6 +1241,14 @@ class OpportunitiesPanel(QWidget):
     the tab tooltip names it. Do not wire this to ``laps_selected`` — ``refresh()`` recomputes the
     identical session statistic, so that would repaint the same pixels and change nothing.
 
+    THE DEBRIEF IS THIS PAGE, NOT A SIXTH ONE (board review PS-B1, ``set_debrief``). A recording's
+    first open lands here full-window with a lead above the focus list (``DebriefBlock``) and the
+    table cut to the shortlist the headline sums — one time figure and its corners, each with its
+    Jump. The ESTIMATED brake-point line stays off the rows while the page is the debrief: it reads
+    "brake later" on 7 of 7 corners on two recordings (UX-2, not yet settled), and whatever a
+    landing leads with is read literally. The measured reason stays; the estimate is back on this
+    page the moment the debrief ends.
+
     Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_points``) — no
     analysis here. Refreshed on load / re-segmentation / unit + palette change (never on the 30 Hz
     tick, never on selection — see the scope note).
@@ -1164,6 +1278,9 @@ class OpportunitiesPanel(QWidget):
         # L5-08: the WHOLE shown ranking (the table renders as many of these as it can hold) + the
         # brake points its reason cells need, so a re-tune re-renders without re-reading the session.
         self._all_rows: list[coaching.Opportunity] = []
+        self._shortlist: list[coaching.Opportunity] = []   # what the headline sums (PANEL_TOP_N)
+        self._debrief = False        # the page is the first-open debrief (set_debrief)
+        self._debrief_lead: tuple = (None, [])   # (PB line, the corners Pacer pre-promoted)
         self._brake_points: dict = {}
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
         self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
@@ -1272,11 +1389,14 @@ class OpportunitiesPanel(QWidget):
         self.focus_block.add_requested.connect(self.focus_add_requested)
         self.focus_block.remove_requested.connect(self.focus_remove_requested)
         self.focus_block.mark_dry_requested.connect(self.focus_mark_dry_requested)
+        # The debrief's lead, above everything it introduces; hidden unless the page IS the debrief.
+        self.debrief_block = DebriefBlock()
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(header)
+        lay.addWidget(self.debrief_block)
         lay.addWidget(self.focus_block)
         lay.addWidget(self.theme_block)
         lay.addWidget(self.body, 1)  # the rows take the page's full height
@@ -1288,8 +1408,48 @@ class OpportunitiesPanel(QWidget):
         never calling this at all leaves the page exactly as it was before the feature."""
         self.focus_block.set_report(report)
         self.focus_block.set_selected_corner(self._selected_cid())
+        self._sync_debrief_lead()
         self._relayout()
         self._refresh_summary_label()
+
+    def _sync_debrief_lead(self) -> None:
+        """The lead names only the pre-promoted corners STILL on the list: a Remove below it must
+        not leave it saying Pacer put a corner there that is gone."""
+        if self._debrief:
+            pb_line, promoted = self._debrief_lead
+            kept = [c for c in promoted if c in self.focus_block.cids()]
+            self.debrief_block.set_lines(pb_line, debrief_note(kept))
+
+    def shortlist_cids(self) -> list[int]:
+        """The corners the headline sums, in rank order — what the debrief pre-promotes, so the
+        focus list it fills is exactly the "top N" the page names. Empty when nothing is ranked."""
+        return [r.cid for r in self._shortlist]
+
+    def set_debrief(self, on: bool, pb_line: str | None = None,
+                    promoted: list[int] | None = None) -> None:
+        """Make this page the first-open debrief (see the class note), or the ordinary page again.
+        The view owns WHEN (``CentralView.show_debrief`` / ``_end_debrief``); this owns what the
+        page shows: the lead, the shortlist-only table, and no estimated brake line."""
+        self._debrief = bool(on)
+        self._debrief_lead = (pb_line, list(promoted or [])) if on else (None, [])
+        if on:
+            self._sync_debrief_lead()
+        else:
+            self.debrief_block.set_lines(None, None)
+        if self._all_rows:
+            self._tuned_key = None
+            self._render_rows(min(PANEL_TOP_N, self._row_limit()), keep_selection=False,
+                              rebuild=True)
+        self._relayout()
+        self._refresh_summary_label()
+
+    def is_debrief(self) -> bool:
+        return self._debrief
+
+    def _row_limit(self) -> int:
+        """How many rows the table may grow to: the whole shown ranking, or, on the debrief, the
+        shortlist the headline sums (ranked rows lead the order, so it is the first rows)."""
+        return len(self._shortlist) if self._debrief else len(self._all_rows)
 
     # ------------------------------------------------------------------ build
     def refresh(self):
@@ -1332,6 +1492,7 @@ class OpportunitiesPanel(QWidget):
         # back exactly the noise the evidence gate just took out. (summarize orders ranked-first, so
         # this is normally `[:PANEL_TOP_N]` — the filter matters when fewer than N rows are ranked.)
         rows = _ranked_shown(opps)[:PANEL_TOP_N]
+        self._shortlist = rows
         # B12: sum the 2-dp DISPLAYED values, not the raw floats — the headline ("0.56 s")
         # and the visible rows (+0.26 +0.20 +0.11 = 0.57) must never disagree by a rounding
         # penny; the header is an aggregate of what the user can check by eye.
@@ -1365,8 +1526,9 @@ class OpportunitiesPanel(QWidget):
 
         # A refresh is new data / a new unit / a new palette, so every cell is rebuilt. The row
         # COUNT is the page's floor (the tune loop below grows it to the viewport); it is NOT the
-        # headline shortlist's length, which counts only ranked rows.
-        self._render_rows(min(PANEL_TOP_N, len(self._all_rows)),
+        # headline shortlist's length, which counts only ranked rows (except on the debrief, whose
+        # table IS that shortlist — _row_limit).
+        self._render_rows(min(PANEL_TOP_N, self._row_limit()),
                           keep_selection=False, rebuild=True)
         self._apply_column_budget()
         self._tune_rows()
@@ -1391,13 +1553,15 @@ class OpportunitiesPanel(QWidget):
             built = self.table.rowCount()   # rows already on the table keep their cells
             self.table.setRowCount(len(rows))
             self._cids = [opp.cid for opp in rows]
+            # The debrief leaves the ESTIMATED brake-point line off (see the class note).
+            brake_points = {} if self._debrief else self._brake_points
             for r in range(built, len(rows)):
                 opp = rows[r]
                 self.table.setItem(r, 0, _corner_cell(opp))
                 self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
                 self.table.setItem(r, 2, _reach_cell(opp, self._num_font,  # have you done it?
                                                      self._n_clean))
-                self.table.setItem(r, 3, _reason_cell(opp, self._brake_points, self._speed_unit))
+                self.table.setItem(r, 3, _reason_cell(opp, brake_points, self._speed_unit))
                 self.table.setCellWidget(r, _PANEL_COL_PHASES, PhaseBar(opp.phases))  # D2
                 self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp))
             if held is not None and held in self._cids:
@@ -1505,12 +1669,12 @@ class OpportunitiesPanel(QWidget):
         # key that moved with it never matched again — measured, one page re-tuned ~70 times a
         # second between two widths 12 px apart, for as long as it was on screen.
         bar = self.table.verticalScrollBar()
+        n_all = self._row_limit()
         key = (self.table.viewport().width() - (0 if bar.isVisible() else bar.sizeHint().width()),
-               self.table.viewport().height(), len(self._all_rows),
+               self.table.viewport().height(), n_all,
                tuple(self.table.isColumnHidden(c) for c in _OPTIONAL_COLS))
         if key == self._tuned_key:
             return
-        n_all = len(self._all_rows)
         self._tuning = True
         try:
             n, used, avail = self.table.rowCount(), self._rows_px(), self._viewport_px()
@@ -1546,6 +1710,7 @@ class OpportunitiesPanel(QWidget):
         the modal's carried a next action (QA D2-08)."""
         self._cids = []
         self._all_rows = []
+        self._shortlist = []
         self._tuned_key = None
         self._headline = ""
         self._refresh_summary_label()
@@ -1611,8 +1776,12 @@ class OpportunitiesPanel(QWidget):
         try:
             height = self.height()
             room = max(height - self._header.height() - self._shortlist_px(), 0)
-            used = self.focus_block.fit_into(self.width(),
-                                             min(int(height * FOCUS_MAX_FRACTION), room))
+            # The debrief's lead first (0 px and hidden on the ordinary page), then the focus block.
+            used = self.debrief_block.fit_into(self.width(),
+                                               min(int(height * DEBRIEF_MAX_FRACTION), room))
+            used += self.focus_block.fit_into(self.width(),
+                                              min(int(height * FOCUS_MAX_FRACTION),
+                                                  max(room - used, 0)))
             self.theme_block.fit_into(
                 self.width(),
                 min(int(height * THEME_MAX_FRACTION),
@@ -1667,7 +1836,8 @@ class OpportunitiesPanel(QWidget):
         show the theme block (see `_apply_theme_budget`) still has the story one hover away — the
         block sheds lines, it never deletes them."""
         self.summary_label.setText(self._headline)
-        story = "\n\n".join(t for t in (self.focus_block.full_text(),
+        story = "\n\n".join(t for t in (self.debrief_block.full_text(),
+                                        self.focus_block.full_text(),
                                         self.theme_block.full_text()) if t)
         # The retired modal's title named the typical lap; it is said here now.
         typical = (f" The reasons and the Entry·Apex·Exit bars read your typical lap, lap "

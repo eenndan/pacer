@@ -1199,9 +1199,38 @@ class StudioWindow(QMainWindow):
         notice = self._apply_session_notice()
         if notice:
             print(f"studio: {notice}", flush=True)
-        if moment is not None:
+        # A recording's first open lands on its debrief, which states the PB itself: the card is
+        # raised only when there is no debrief to carry it (replace, not add — PS-B1).
+        if not self._land_on_debrief() and moment is not None:
             self.library_ctl.show_pb_moment(moment)
         self.loadFinished.emit()
+
+    def _land_on_debrief(self) -> bool:
+        """Land a recording's FIRST open on its debrief (board review PS-B1, R10); True if it did.
+
+        The loop this app was built around — load, see where the time went, pick one to three
+        corners, next session, did they move? — had never run for its one real user: 0 focus items,
+        because the panel reopened on his remembered tab (Laps), the verdict lived on tab 4, and
+        promoting a corner was an extra click nobody made. So a recording the library had no row
+        for opens on the Coaching page full-window (``CentralView.show_debrief``), with its PB
+        standing, its one ranked total and top corners, and those corners already on the focus
+        list where it has room (``LibraryController.pre_promote_focus``) — each one click from
+        gone. A reload, a second chapter or Load full recording is not a first open and changes
+        nothing. No debrief when nothing is ranked: its page would be an empty state. Fully
+        guarded — a landing must never break the load it ends."""
+        view = getattr(self, "view", None)
+        if not getattr(self.library_ctl, "opened_new", False) or not hasattr(view, "show_debrief"):
+            return False
+        try:
+            cids = view.opportunities.shortlist_cids()
+            if not cids:
+                return False
+            promoted = self.library_ctl.pre_promote_focus(cids)
+            view.show_debrief(self.library_ctl.debrief_pb_line(), promoted)
+            return True
+        except Exception:  # noqa: BLE001 — see the docstring
+            _log.warning("debrief not shown", exc_info=True)
+            return False
 
     def _announce_stage(self, headline: str) -> bool:
         """Rename the loading card's headline to the stage that is ABOUT to run, and force one
