@@ -128,7 +128,9 @@ def test_no_module_styles_itself_from_a_string():
         # load-bearing ORDERING (the sheet must be set before setFont or the repolish drops the
         # italic bit) that a mechanical migration would be very likely to break. Left exactly as it
         # is, deliberately; it is the one exemption here that is a deferral rather than a decision.
-        ("stats_panel.py", "StatsView._set_target_tile"),
+        # (It moved, verbatim, from a StatsView method to stats_common when the IDEAL LAP section
+        # split out of the page and became its second caller — ARCH-3.)
+        ("stats_common.py", "set_target_tile"),
     }
     offenders, found = [], []
     total = 0
@@ -180,7 +182,7 @@ def test_no_bare_colour_declaration_creeps_back_in():
     # The exempt merges, and what each is allowed to say. A qualified selector is checked by name;
     # the two unqualified ones are both leaf QLabels with no children to cascade onto.
     LEAF = {("coaching_panel.py", "PhaseBar.__init__"),
-            ("stats_panel.py", "StatsView._set_target_tile")}
+            ("stats_common.py", "set_target_tile")}
     offenders, found = [], []
     hits = 0
     for fn in _modules():
