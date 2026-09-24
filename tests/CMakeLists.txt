@@ -11,8 +11,12 @@ add_pacer_test(test_ops             pacer::geometry)
 add_pacer_test(test_geometry        pacer::geometry)
 add_pacer_test(test_laps            pacer::laps)
 # SequentialGPSSource chapter-seam chaining (no payload dropped at the boundary) + the
-# Seek-before-first-payload clamp, driven through in-memory stub RawGPSSources.
+# Seek-before-first-payload clamp, driven through in-memory stub RawGPSSources. Its hostile-input
+# cases (a metadata track claiming decades, a damaged camera-name byte) mutate a COPY of a bundled
+# clip at run time, so they get the samples directory.
 add_pacer_test(test_gps_source      pacer::gps-source)
+target_compile_definitions(test_gps_source PRIVATE
+    PACER_GPMF_SAMPLES="${CMAKE_SOURCE_DIR}/3rdparty/gpmf-parser/samples")
 
 # Pure-Python tests for the studio app (no telemetry file / no pacer build dependency for the
 # logic they cover — scrub-conversion math + the F1/F3/F5 UI-feature logic). Registered with

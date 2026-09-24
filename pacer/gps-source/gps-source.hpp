@@ -151,7 +151,8 @@ public:
   // in-file statement of WHICH camera produced the streams, and the camera
   // model decides what the data can mean at all: a HERO12 has no GPS receiver,
   // and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload
-  // constant), never per sample. The base returns "".
+  // constant), never per sample. The base returns "". GPMFSource returns it as
+  // printable ASCII, a damaged byte as '?' (so it always decodes as text).
   virtual std::string DeviceName() const { return {}; }
 
   // The ACCL/GYRO axis declaration this container carries (see ImuOrientation
@@ -174,7 +175,8 @@ public:
   virtual auto CurrentTimeSpan() const -> std::pair<double, double> = 0;
 
   // Total duration of the stream this source READS — for a GPMF source that is
-  // the metadata track, which is what the payload cursor is bounded by.
+  // the metadata track, which bounds the payload cursor together with the
+  // track's payload count (a damaged moov can claim years; the count holds).
   virtual double GetTotalDuration() const = 0;
 
   // Duration of the VIDEO track: where the NEXT chapter's picture begins, and
