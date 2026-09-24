@@ -3,10 +3,20 @@
 Every test here is a CTest registration in [CMakeLists.txt](CMakeLists.txt); the pixi tasks that
 run them, and the measurements behind their levels, exclusions and timeouts, are in
 [pyproject.toml](../pyproject.toml). [AGENTS.md](../AGENTS.md) has the everyday commands. Its
-timings were each measured once, on 2026-09-23 on the M1 Pro dev Mac: `test` 320.9 s with all 14
-footage checks running (under load ~20 from another session), `test-fast` 142.9 s (quiet machine;
-420 s serial on the same commit) and `test-footage` 139.1 s (warm page cache;
-`footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s).
+timings were each measured once on the M1 Pro dev Mac: `test` 206.0 s with all 14 footage checks
+running (2026-09-24, load ~5, no cost data yet — as in CI; 254.1 s the same way on the commit
+before COST ordering and the soak split), `test-fast` 142.9 s (2026-09-23, quiet machine; 420 s
+serial on the same commit), `test-footage` 139.1 s (2026-09-23, warm page cache;
+`footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s) and `test-soak` 146.1 s.
+
+**Adding a test** edits no shared file. Write `tests/test_<name>.py` as a plain script whose
+`__main__` runs its tests (nothing runs under pytest; `test_layering` fails a `def test_…` no
+runner calls), and put its "why" in the module docstring. CMake registers every `tests/test_*.py`
+by itself, as `python tests/<file>.py` with `QT_QPA_PLATFORM=offscreen` and the bindings on
+`PYTHONPATH`. Edit [CMakeLists.txt](CMakeLists.txt) only to name the test in its exceptions table
+(another environment, or a `COST` so a slow suite starts first), or to add a footage or soak
+registration. The per-test notes that file carried until 2026-09-24 are history, kept verbatim in
+[registration-notes.md](registration-notes.md).
 
 - **C++ Catch2 (5):** `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`,
   `test_gps_source`.
@@ -79,6 +89,28 @@ what it measured — missing, unreadable, not an MP4 container, not parseable as
 that are not importable in this run — and never guesses at a cause
 (`studio.dev.golden_session_dump.preflight`, held by `test_golden_hermetic.py`).
 
+## The synthetic GoPro recording (real loader, known truth)
+
+[studio/dev/synth_gopro.py](../studio/dev/synth_gopro.py) writes a HERO13-shaped chaptered
+recording (`GX019001.MP4`, `GX029001.MP4`) of a fictional ~971 m, 7-corner clockwise circuit in the
+open Atlantic: an ffmpeg H.264 video trak plus a `GoPro MET` gpmd trak carrying GPS9 (10 Hz, UTC
+clock, DOP/fix, noise, two teleport glitches), ACCL/GYRO (ZXY) and GRAV/CORI (XZY) from one
+rigid-body motion, the 0.46 s GPS lag and 27 ppm media clock measured on the owner's cameras. No
+person, kart or real place is in it. It returns the `Truth` it was built from: `Truth.lap_times(line)`
+times the laps at ANY line (pass the app's own, `Session.timing_lines_latlon()[0]`),
+`Truth.line_at(s)` makes one, and `build()` gives the telemetry bytes without writing files.
+[test_synth_gopro.py](test_synth_gopro.py) (~9 s) generates it into a temp dir and runs the real
+`Session.load` on it — the only CI fixture where the real loader segments laps (hero6 has none).
+Measured on the fixed seed: noise-free at a mid-straight line every lap is within **0.41 ms** of
+truth; with the default noise at the app's own line, max **23.4 ms**, mean +2.6 ms.
+
+```bash
+pixi run python -m studio.dev.synth_gopro --out /path/to/new-dir   # refuses a non-empty dir
+```
+
+Knobs: `--seed`, `--laps` (14), `--chapters` (2), `--gps-noise` (1.0; 0 is noise-free),
+`--mirror` (anticlockwise); from Python also `gps_lag_s` and `media_ppm`.
+
 ## Real-footage checks
 
 Fourteen checks re-measure something on a real recording, and each is its own CTest registration,
@@ -117,7 +149,18 @@ PACER_GOLDEN_MP4="$HOME/Desktop/SD_30_08_26/GX010065.MP4" \
 ```
 
 A new real-footage check goes in its file's `FOOTAGE_CHECKS`, finds its recording through
-`_footage.py` (which raises `FootageMissing` rather than printing a skip), and gets
-`add_footage_test(<file> <check>)` beside the file's registration. `test_footage_checks` fails the
-build when a declaration and a registration disagree or a declared check passes without its
-recording, and a check left in its file's ordinary run fails that run with `FootageMissing`.
+`_footage.py` (which raises `FootageMissing` rather than printing a skip), and gets an
+`add_footage_test(<file> <check>)` line in [CMakeLists.txt](CMakeLists.txt)'s footage block.
+`test_footage_checks` fails the build when a declaration and a registration disagree or a declared
+check passes without its recording, and a check left in its file's ordinary run fails that run
+with `FootageMissing`.
+
+## Soaks
+
+A soak is a probabilistic check too slow for every pull request, kept beside a fast deterministic
+guard that does run there. It is its own registration, `soak.<check>` (`<file>.py --soak <check>`,
+`add_soak_test` in [CMakeLists.txt](CMakeLists.txt), `LABELS soak`), and it runs only where
+`PACER_SOAK=1`: `pixi run test-soak`, and CI on every push to main and every tag. Everywhere else
+it is reported *Skipped* by name. There is one: the compare-toggle crash soak in
+[test_compare_lifecycle.py](test_compare_lifecycle.py) — 107 s on the dev Mac and 184 s in CI
+(2026-09-23/24), for a SIGSEGV whose root cause that file's AST guard catches in 22 ms.

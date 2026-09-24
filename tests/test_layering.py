@@ -27,11 +27,18 @@ being true fails too and the sets stay honest.
 This test walks the source with `ast` (no import side-effects, no Qt, no pacer, no telemetry file,
 sub-100 ms). `studio/dev/` tools are standalone scripts, not part of the app, and are intentionally
 out of scope for both directions — they are Qt/pacer harnesses by nature (6 of them import Qt:
-`_smoke`, `denoise_check`, `make_icon`, `media_capture`, `spike_video_sync`, `ui_capture`). Run:
+`_smoke`, `denoise_check`, `make_icon`, `media_capture`, `spike_video_sync`, `ui_capture`).
+
+**The map.** `studio/README.md` is the module map AGENTS.md sends every agent to, and it states
+this contract per module (its Imports column), so it is held to the same sets: one row per
+`studio/*.py`, the layer each row claims is the one pinned here, the test it names exists, and the
+map stays a map — it had grown to 130,636 characters of measurement history before ARCH-9 moved
+that to `studio/docs/module-notes.md`. Run:
     python tests/test_layering.py
 """
 import ast
 import os
+import re
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _STUDIO = os.path.join(_REPO, "studio")
@@ -320,8 +327,8 @@ def _stranded_tests(path) -> list[str]:
 def test_every_declared_test_is_actually_reachable_from_its_runner():
     """A TEST NOBODY CALLS IS NOT A PASSING TEST, AND THE SUITE CANNOT TELL THE DIFFERENCE.
 
-    `tests/CMakeLists.txt` runs each file as `python tests/<file>.py`. Its `foreach(pytest IN
-    ITEMS …)` loop is named `pytest` but only sets PYTHONPATH — NOTHING here runs under pytest, so
+    `tests/CMakeLists.txt` runs each file as `python tests/<file>.py`. NOTHING here runs under
+    pytest (the file's old `foreach(pytest IN ITEMS …)` loop only ever set PYTHONPATH), so
     collection-by-convention does not happen and a `def test_…` that the file's own `_run_all()`
     never calls simply never executes. It costs nothing, breaks nothing, and reports nothing; the
     suite still says 110/110.
@@ -352,10 +359,105 @@ def test_every_declared_test_is_actually_reachable_from_its_runner():
           f"{scanned} explicit-runner files, 0 stranded")
 
 
+_MAP = os.path.join(_STUDIO, "README.md")
+# ARCH-9: the map was 130,636 characters when it went back to one line per module, and 28 % of
+# September's PRs edited it. A row is a map entry; what a module does in detail, and why, goes in
+# its docstring or its section of studio/docs/module-notes.md.
+MAP_MAX_CHARS = 20_000
+MAP_ROW_MAX_CHARS = 200
+
+
+def _layer(name: str) -> str:
+    """The Imports word the map must print for a module, read off the three pinned sets."""
+    if name in ALLOWED:
+        return "pacer"
+    if name in ALLOWED_QT:
+        return "Qt"
+    return "→Qt" if name in QT_REACHING else "—"
+
+
+def _map_problems(text: str) -> list[str]:
+    """Everything wrong with a module map, one sentence each — empty when the map is right."""
+    problems, rows = [], {}
+    if len(text) > MAP_MAX_CHARS:
+        problems.append(f"the map is {len(text):,} characters, over {MAP_MAX_CHARS:,}: move the "
+                        f"detail to the module's docstring or studio/docs/module-notes.md")
+    for line in text.splitlines():
+        if not line.startswith("| ["):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+        link = re.fullmatch(r"\[[^\]]+\]\(([^)]+)\.py\)", cells[0])
+        if len(cells) != 4 or not link:
+            problems.append(f"not a map row (module | responsibility | imports | test): {line[:90]}")
+            continue
+        name, (_does, imports, tests) = link.group(1), cells[1:]
+        if name in rows:
+            problems.append(f"{name}.py has two rows")
+        rows[name] = line
+        if len(line) > MAP_ROW_MAX_CHARS:
+            problems.append(f"{name}.py's row is {len(line)} characters, over {MAP_ROW_MAX_CHARS}: "
+                            f"one line of responsibility; the rest goes to its notes section")
+        if name in _modules() and imports != _layer(name):
+            problems.append(f"{name}.py: the map says it imports {imports!r}, the layering sets "
+                            f"above say {_layer(name)!r}")
+        named = re.findall(r"`([^`]+)`", tests)
+        if tests != "—" and not named:
+            problems.append(f"{name}.py: the Test cell names no test file ({tests!r})")
+        for t in named:
+            if not os.path.exists(os.path.join(_TESTS_DIR, t + ".py")):
+                problems.append(f"{name}.py: the map's test tests/{t}.py does not exist")
+    for name in sorted(set(_modules()) - set(rows)):
+        problems.append(f"studio/{name}.py has no row in studio/README.md")
+    for name in sorted(set(rows) - set(_modules())):
+        problems.append(f"the map has a row for {name}.py, which is not a studio module")
+    return problems
+
+
+def test_every_studio_module_is_on_the_map_at_its_real_layer():
+    """ONE ROW PER MODULE, AND THE LAYER IT CLAIMS IS THE ONE PINNED ABOVE.
+
+    AGENTS.md sends every agent to `studio/README.md` for the module map. Four modules had no row
+    in it (`provenance`, `provenance_panel`, `__init__`, `__main__`) and nothing noticed, while the
+    rows that did exist had grown to a median 781 characters of measurement history. Both
+    directions are checked, like the allow-lists: a module without a row fails, and so does a row
+    for a module that no longer exists."""
+    text = open(_MAP, encoding="utf-8").read()
+    problems = _map_problems(text)
+    assert not problems, "studio/README.md, the module map:\n  " + "\n  ".join(problems)
+    rows = sum(line.startswith("| [") for line in text.splitlines())
+    print(f"test_every_studio_module_is_on_the_map_at_its_real_layer OK — {rows} rows, "
+          f"{len(text):,} characters")
+
+
+def test_the_map_check_fails_on_each_planted_defect():
+    """A GUARD THAT CANNOT FAIL IS DECORATION. Each defect below is planted into the real map, and
+    the check has to name it."""
+    real = open(_MAP, encoding="utf-8").read()
+    row = next(line for line in real.splitlines() if line.startswith("| [map_render.py]"))
+    plants = {
+        "a module with no row": real.replace(row + "\n", ""),
+        "a row for a module that does not exist": real.replace(
+            row, row + "\n| [ghost.py](ghost.py) | Nothing | — | `test_layering` |"),
+        "a module with two rows": real.replace(row, row + "\n" + row),
+        "a row claiming the wrong layer": real.replace(row, row.replace("| →Qt |", "| — |")),
+        "a row naming a test that does not exist": real.replace(
+            row, row.replace("`test_map_render`", "`test_map_rendr`")),
+        "a row that grew a history": real.replace(row, row.replace(" | →Qt |", " " + "x" * 80 + " | →Qt |")),
+        "a row missing a cell": real.replace(row, row.replace(" | →Qt", "")),
+        "a map that grew": real + "\n" + "x" * MAP_MAX_CHARS,
+    }
+    for what, text in plants.items():
+        assert text != real, f"the plant for {what} changed nothing — the map's row moved"
+        assert _map_problems(text), f"the map check passed a map with {what}"
+    print(f"test_the_map_check_fails_on_each_planted_defect OK — {len(plants)} plants, each caught")
+
+
 if __name__ == "__main__":
     test_only_the_data_layer_imports_pacer()
     test_only_the_view_layer_imports_qt()
     test_the_data_core_does_not_reach_qt_through_a_studio_import()
     test_the_import_scanner_sees_every_studio_spelling()
     test_every_declared_test_is_actually_reachable_from_its_runner()
-    print("\n5 layering tests passed")
+    test_every_studio_module_is_on_the_map_at_its_real_layer()
+    test_the_map_check_fails_on_each_planted_defect()
+    print("\n7 layering tests passed")

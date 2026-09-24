@@ -1643,11 +1643,12 @@ def test_every_quote_of_the_interpolated_cell_error_is_dated_and_names_its_measu
     So every sentence quoting the median must be one of the two tables' medians and date itself
     before #335, wherever it is. A quoted maximum must be one of the tables' maxima, and the
     sentence must say which measurement it is (gate or line). CHANGELOG.md records what a release
-    said, and studio/dev/ and studio/docs/ are dated records, so none of them is read here."""
+    said, and studio/dev/ and studio/docs/ are dated records, so none of them is read here — bar
+    a presented doc among them (module-notes.md holds the module map's old rows, quotes included)."""
     tables = _crossing_tables()
     found, problems = [], []
     for rel, flat in _scanned():
-        if rel.startswith(("studio/dev/", "studio/docs/")):
+        if rel.startswith(("studio/dev/", "studio/docs/")) and rel not in _stale.PRESENTED_DOCS:
             continue
         for sentence in re.split(r"(?<=[.!?])\s+", flat):
             quoted, wrong = _crossing_quote_problems(rel, sentence, *tables)
