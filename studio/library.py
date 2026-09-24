@@ -741,22 +741,6 @@ def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = No
     return best_entry({"entries": others}, track)
 
 
-def previous_pb_missing_text(entry: dict, missing_path: str | None, fmt_time) -> str:
-    """What "Compare with your previous PB" says when that PB's footage is not on disk any more —
-    in plain words, naming the file and where it was, instead of a load failing on it (4 of the
-    owner's 8 rows point at footage moved or deleted since). `missing_path` is the first recorded
-    path that is gone, or None when the row recorded none."""
-    track = entry.get("track") or "this track"
-    best = entry.get("best")
-    lap = f"Your previous best at {track}" + (f" ({fmt_time(float(best))})" if best is not None
-                                              else "")
-    if not missing_path:
-        return f"{lap} has no footage on record, so there is nothing to compare it with."
-    return (f"{lap} was recorded on footage that is no longer where Pacer saw it: "
-            f"{os.path.basename(missing_path)} is missing from {os.path.dirname(missing_path)}. "
-            "If you moved it, load it with Coaching ▸ Load reference recording… to compare.")
-
-
 def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | None,
                   degraded: bool = False, fingerprint_key: str | None = None) -> dict | None:
     """``pb_moment`` gated on BOTH timing axes: returns None (never celebrates) when either

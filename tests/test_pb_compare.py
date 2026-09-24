@@ -41,7 +41,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _qtapp import themed_app  # noqa: E402
 
 from studio import library  # noqa: E402
-from studio._signal import fmt_time  # noqa: E402
 
 _APP = themed_app()
 
@@ -86,14 +85,15 @@ def test_the_previous_pb_is_the_row_behind_the_pb_lines_number():
 
 
 def test_missing_footage_is_said_plainly():
+    from studio.library_controller import previous_pb_missing_text
     row = _row("GX0065", 46.912, track="Sandown Park",
                paths=["/Users/me/Desktop/SD_30_08_26/GX010065.MP4"])
-    text = library.previous_pb_missing_text(row, row["paths"][0], fmt_time)
+    text = previous_pb_missing_text(row, row["paths"][0])
     assert text == ("Your previous best at Sandown Park (0:46.912) was recorded on footage that is "
                     "no longer where Pacer saw it: GX010065.MP4 is missing from "
                     "/Users/me/Desktop/SD_30_08_26. If you moved it, load it with Coaching ▸ "
                     "Load reference recording… to compare."), text
-    none = library.previous_pb_missing_text(dict(row, paths=[]), None, fmt_time)
+    none = previous_pb_missing_text(dict(row, paths=[]), None)
     assert none == ("Your previous best at Sandown Park (0:46.912) has no footage on record, so "
                     "there is nothing to compare it with."), none
     print(f"ok missing: {text!r}")
@@ -246,9 +246,9 @@ def _assert_compare_on_the_two_best_laps(win, slow_path, standing, label):
 
 def test_the_journey_on_the_real_window():
     from PySide6.QtWidgets import QMessageBox
+    from test_debrief_landing import _fresh_app_support, _open
 
     from studio.app import StudioWindow
-    from test_debrief_landing import _fresh_app_support, _open
 
     shown = []
     real_info = QMessageBox.information

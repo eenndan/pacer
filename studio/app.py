@@ -62,7 +62,7 @@ from . import (
 from . import (
     marks as marks_model,
 )
-from ._signal import fmt_hms, fmt_time, lap_label
+from ._signal import fmt_hms, lap_label
 from .central_view import CentralView, undo_summary
 from .command_palette import CommandPalette
 
@@ -70,7 +70,7 @@ from .command_palette import CommandPalette
 # returns it, and `studio.app.ExportChoice` is the name the export tests already reach for.
 from .export_controller import ExportChoice, ExportController  # noqa: F401
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
-from .library_controller import LibraryController
+from .library_controller import LibraryController, previous_pb_missing_text
 from .marks_panel import MarkDialog
 from .overlays import (
     BUSY_DEMO_LABEL,
@@ -3735,7 +3735,7 @@ class StudioWindow(QMainWindow):
         if missing or not paths:
             QMessageBox.information(
                 self, f"{APP_NAME} — previous PB not found",
-                library.previous_pb_missing_text(row, missing[0] if missing else None, fmt_time))
+                previous_pb_missing_text(row, missing[0] if missing else None))
             return
         if self._pb_compare_token is not None and self._pb_compare_token == self._ref_load_token:
             return  # this gesture's load is already running; a second click would only restart it
