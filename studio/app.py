@@ -3813,6 +3813,10 @@ def _fit_window_to_screens(rect, screens):
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The session log, and the native-crash stack that goes into it, BEFORE anything can fail: the
+    # demo fetch below logs its failure, and QApplication() is native code that can abort. It is
+    # idempotent, so install_excepthook's own call further down is a no-op.
+    logsetup.configure()
     argv = sys.argv[1:] if argv is None else argv
     # --full/--chaptered chain a single file's sibling chapters (see StudioWindow).
     full = "--full" in argv or "--chaptered" in argv

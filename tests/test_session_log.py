@@ -16,6 +16,8 @@ WHAT THIS FILE HOLDS `studio.logsetup` TO:
     from every logger family, a real Qt C++ warning and an unhandled thread exception's traceback
     into the file — and each is on disk before the process dies, because the child here ends by
     SIGKILLing itself, so no flush, `atexit` or `logging.shutdown` ever runs;
+  * a NATIVE crash (a real SIGSEGV, raised in C) leaves every thread's Python stack in that same
+    file, after two rollovers as well, while a process that enabled faulthandler itself keeps it;
   * best effort: an unwritable log dir, and a file that stops accepting writes mid-session (a real
     kernel refusal, via RLIMIT_FSIZE), each leave the app on stderr and say so exactly once;
   * idempotent: configuring twice does not double a line;
@@ -24,11 +26,13 @@ WHAT THIS FILE HOLDS `studio.logsetup` TO:
 
 Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer python tests/test_session_log.py
 """
+import faulthandler
 import io
 import json
 import logging
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -65,6 +69,7 @@ class _FreshLogging:
     def __enter__(self):
         root = logging.getLogger()
         self._handlers, self._level = list(root.handlers), root.level
+        self._fault_was_on = faulthandler.is_enabled()
         for h in self._handlers:
             root.removeHandler(h)
         self._seam = logsetup._app_support_dir
@@ -88,14 +93,26 @@ class _FreshLogging:
         root.setLevel(self._level)
         logsetup._app_support_dir = self._seam
         logsetup._configured, logsetup._active_path = False, None
+        # configure() pointed faulthandler at this block's log. Disarm it, so nothing after the
+        # block (a later test, a crash of this process) writes into a file that is gone.
+        if logsetup._crash_stream is not None:
+            faulthandler.disable()
+            logsetup._crash_stream.close()
+            logsetup._crash_stream = None
+            if self._fault_was_on:
+                faulthandler.enable()
         return False
 
 
 def _child_env(app_support: str, home: str) -> dict:
     """A child jailed to `app_support` explicitly (so the directory outlives it for inspection),
-    with a throwaway HOME, so even a child that escaped its jail could only reach a throwaway."""
+    with a throwaway HOME, so even a child that escaped its jail could only reach a throwaway.
+    Without a faulthandler of the developer's own (`PYTHONFAULTHANDLER`, or the dev mode that
+    implies it): a process that enabled one keeps it, so the crash tests would not test the app's."""
     env = dict(os.environ, HOME=home, PACER_APP_SUPPORT_DIR=app_support, PACER_NO_MEDIA="1",
                QT_QPA_PLATFORM="offscreen")
+    env.pop("PYTHONFAULTHANDLER", None)
+    env.pop("PYTHONDEVMODE", None)
     env["PYTHONPATH"] = os.pathsep.join(p for p in (_BINDINGS, env.get("PYTHONPATH")) if p)
     return env
 
@@ -252,6 +269,169 @@ def test_the_real_startup_path_puts_every_family_in_the_file_before_the_process_
         shutil.rmtree(jail, ignore_errors=True)
     print(f"test_the_real_startup_path_puts_every_family_in_the_file_before_the_process_dies OK "
           f"({len(_FAMILIES)} families + Qt + a thread traceback, read after SIGKILL)")
+
+
+# ------------------------------------------------------------------------------ a native crash
+# A SIGSEGV inside Qt or the C++ core never reaches `logging`: the process is gone first. So each
+# child below crashes for real — `ctypes.string_at(0)` reads address 0 from C — and the stack has
+# to be in the file anyway. What the children change is only the ENDING: the fatal signals are
+# pointed at libc's `_exit` before faulthandler is armed, so once faulthandler has written the
+# stack and called the handler it replaced, the child exits with the signal number as its status
+# instead of being killed by it. A process killed by SIGSEGV leaves a macOS crash report in
+# ~/Library/Logs/DiagnosticReports on every run of the suite; one that exits does not (measured).
+_EXIT_ON_FAULT = r"""
+import ctypes, signal
+_libc = ctypes.CDLL(None)
+_libc.signal.argtypes = [ctypes.c_int, ctypes.c_void_p]
+_libc.signal.restype = ctypes.c_void_p
+for _sig in (signal.SIGSEGV, signal.SIGBUS):
+    _libc.signal(_sig, ctypes.cast(_libc._exit, ctypes.c_void_p).value)
+"""
+_FAULT_CODES = (signal.SIGSEGV, signal.SIGBUS)   # the exit status `_exit(signum)` leaves
+_FATAL = "Fatal Python error: "
+
+_NATIVE_CRASH_CHILD = _EXIT_ON_FAULT + r"""
+import json, sys, threading
+sys.path.insert(0, {repo!r})
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from studio import app as studio_app, logsetup
+studio_app.install_excepthook()                  # exactly what main() calls, once a QApplication exists
+parked = threading.Event()
+def e2_probe_parked_thread():
+    parked.wait()
+threading.Thread(target=e2_probe_parked_thread, name="e2-probe-parked", daemon=True).start()
+def e2_probe_native_crash():
+    ctypes.string_at(0)                          # strlen(NULL), in C: a real SIGSEGV
+def e2_probe_crashing_caller():
+    e2_probe_native_crash()
+print("E2-CHILD " + json.dumps({{"active": logsetup.active_log_path()}}), flush=True)
+e2_probe_crashing_caller()
+print("E2-CHILD survived the crash", flush=True)
+"""
+
+
+def _run_crash_child(code: str, jail: str, home: str) -> subprocess.CompletedProcess:
+    proc = subprocess.run([sys.executable, "-c", code.format(repo=_REPO)],
+                          env=_child_env(jail, home), capture_output=True, text=True, timeout=300)
+    assert proc.returncode in _FAULT_CODES, (
+        f"the child was meant to crash (exit {_FAULT_CODES} through _exit), exited "
+        f"{proc.returncode}\nstdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-4000:]}")
+    assert "survived the crash" not in proc.stdout, proc.stdout
+    return proc
+
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def test_a_native_crash_leaves_every_threads_python_stack_in_the_session_log():
+    home = tempfile.mkdtemp(prefix="pacer-e2-home-")
+    jail = tempfile.mkdtemp(prefix="pacer-e2-jail-")
+    try:
+        proc = _run_crash_child(_NATIVE_CRASH_CHILD, jail, home)
+        log = os.path.join(jail, "logs", "pacer.log")
+        report = next((json.loads(ln[len("E2-CHILD "):]) for ln in proc.stdout.splitlines()
+                       if ln.startswith("E2-CHILD {")), None)
+        assert report is not None and report["active"] == log, (report, proc.stderr[-4000:])
+        text = _read(log)
+        assert _FATAL in text, (
+            f"a native crash left no Python stack in the session log — faulthandler is not "
+            f"pointed at it:\n{text[-3000:]}")
+        crash = text[text.index(_FATAL):]
+        # The crashing thread, innermost frame first, then its caller: the stack of THE crash.
+        inner, outer = crash.find("in e2_probe_native_crash"), crash.find("in e2_probe_crashing_caller")
+        assert -1 < inner < outer, f"the crashing thread's frames are missing or out of order:\n{crash}"
+        # all_threads=True: the thread that was merely parked is in it too.
+        assert "in e2_probe_parked_thread" in crash, f"only the crashing thread was dumped:\n{crash}"
+        # In the SAME file the dialog names, after this run's first line, not in a file of its own.
+        assert text.index(f"{APP_NAME} {__version__}") < text.index(_FATAL), text[-3000:]
+        assert sorted(os.listdir(os.path.join(jail, "logs"))) == ["pacer.log"], (
+            os.listdir(os.path.join(jail, "logs")))
+        assert not os.path.exists(_real_dir_under(home)), (
+            f"the child wrote under its HOME's real app-support dir: {os.listdir(home)}")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(jail, ignore_errors=True)
+    print(f"test_a_native_crash_leaves_every_threads_python_stack_in_the_session_log OK "
+          f"(exit {proc.returncode}; both threads' stacks in pacer.log)")
+
+
+# A stream opened on the live file follows it through the rename a rollover does: after one it is
+# on pacer.log.1, after two on pacer.log.2 — and at the third, on a deleted file. The stack of a
+# crash late in a long session has to land where the dialog points, in the live file.
+_ROTATED_CRASH_CHILD = _EXIT_ON_FAULT + r"""
+import logging, sys
+sys.path.insert(0, {repo!r})
+from studio import logsetup
+path = logsetup.configure()
+for h in logging.getLogger().handlers:           # 1.4 MB of filler: the file only, not the pipe
+    if h.get_name() == "pacer-stderr":
+        h.setLevel(logging.ERROR)
+log = logging.getLogger("studio.library")
+for i in range(2 * logsetup.MAX_BYTES // 1000 + 300):
+    log.warning("E2-PROBE filler %05d %s", i, "x" * 1000)
+def e2_probe_crash_after_rollover():
+    ctypes.string_at(0)
+e2_probe_crash_after_rollover()
+print("E2-CHILD survived the crash", flush=True)
+"""
+
+
+def test_after_a_rollover_the_crash_stack_still_lands_in_the_live_log():
+    home = tempfile.mkdtemp(prefix="pacer-e2-home-")
+    jail = tempfile.mkdtemp(prefix="pacer-e2-jail-")
+    try:
+        proc = _run_crash_child(_ROTATED_CRASH_CHILD, jail, home)
+        logs = os.path.join(jail, "logs")
+        files = sorted(os.listdir(logs))
+        assert files == ["pacer.log", "pacer.log.1", "pacer.log.2"], (
+            f"the child did not roll the log over twice ({files}), so this tests nothing")
+        live, older = _read(os.path.join(logs, "pacer.log")), [
+            f for f in files[1:] if _FATAL in _read(os.path.join(logs, f))]
+        assert not older, (
+            f"the crash stack went to {older}: faulthandler stayed on the file a rollover renamed")
+        assert _FATAL in live and "in e2_probe_crash_after_rollover" in live, (
+            f"no crash stack in the live log:\n{live[-3000:]}")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(jail, ignore_errors=True)
+    print("test_after_a_rollover_the_crash_stack_still_lands_in_the_live_log OK "
+          "(two rollovers, the stack in pacer.log)")
+
+
+# A process that enabled faulthandler BEFORE the log was configured chose where that stack goes: a
+# developer's PYTHONFAULTHANDLER, or a test file whose own `faulthandler.enable()` puts a crash in
+# the ctest output (test_studio_features, test_load_lifecycle — and the former calls
+# install_excepthook). configure() must not move it into a jailed file nobody reads.
+_OWN_FAULTHANDLER_CHILD = _EXIT_ON_FAULT + r"""
+import faulthandler, json, sys
+sys.path.insert(0, {repo!r})
+faulthandler.enable()                            # to stderr, as a harness does
+from studio import logsetup
+print("E2-CHILD " + json.dumps({{"path": logsetup.configure()}}), flush=True)
+def e2_probe_harness_crash():
+    ctypes.string_at(0)
+e2_probe_harness_crash()
+print("E2-CHILD survived the crash", flush=True)
+"""
+
+
+def test_a_faulthandler_the_process_already_enabled_keeps_its_destination():
+    home = tempfile.mkdtemp(prefix="pacer-e2-home-")
+    jail = tempfile.mkdtemp(prefix="pacer-e2-jail-")
+    try:
+        proc = _run_crash_child(_OWN_FAULTHANDLER_CHILD, jail, home)
+        log = os.path.join(jail, "logs", "pacer.log")
+        assert os.path.isfile(log), "the log itself was not opened"
+        assert _FATAL in proc.stderr and "in e2_probe_harness_crash" in proc.stderr, (
+            f"the process's own faulthandler lost the stack:\n{proc.stderr[-3000:]}")
+        assert _FATAL not in _read(log), "configure() took over a faulthandler it did not enable"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(jail, ignore_errors=True)
+    print("test_a_faulthandler_the_process_already_enabled_keeps_its_destination OK")
 
 
 # ------------------------------------------------------------------------------ best effort
@@ -437,6 +617,9 @@ def _run_all():
         test_configure_is_idempotent,
         test_an_existing_handler_is_not_given_a_second_stderr_copy,
         test_the_real_startup_path_puts_every_family_in_the_file_before_the_process_dies,
+        test_a_native_crash_leaves_every_threads_python_stack_in_the_session_log,
+        test_after_a_rollover_the_crash_stack_still_lands_in_the_live_log,
+        test_a_faulthandler_the_process_already_enabled_keeps_its_destination,
         test_an_unwritable_log_dir_leaves_the_app_on_stderr_and_says_so_once,
         test_a_log_that_stops_accepting_writes_degrades_once_not_every_line,
         test_the_log_never_grows_past_three_files_of_512_kb,
