@@ -31,7 +31,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: share one RESOURCE_LOCK, so a level there would change nothing but how its command reads.
 PARALLEL_TASKS = ("test", "test-fast")
 #: Every task whose command is a ctest run — none may carry its own -j, or appending one fails.
-CTEST_TASKS = ("test", "test-fast", "test-footage", "golden")
+CTEST_TASKS = ("test", "test-fast", "test-footage", "test-soak", "golden")
 
 _LEVEL_ENV = "CTEST_PARALLEL_LEVEL"
 _J_FLAG = re.compile(r"(^|\s)(-j\S*|--parallel\S*)(\s|$)")

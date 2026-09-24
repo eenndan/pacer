@@ -327,8 +327,8 @@ def _stranded_tests(path) -> list[str]:
 def test_every_declared_test_is_actually_reachable_from_its_runner():
     """A TEST NOBODY CALLS IS NOT A PASSING TEST, AND THE SUITE CANNOT TELL THE DIFFERENCE.
 
-    `tests/CMakeLists.txt` runs each file as `python tests/<file>.py`. Its `foreach(pytest IN
-    ITEMS …)` loop is named `pytest` but only sets PYTHONPATH — NOTHING here runs under pytest, so
+    `tests/CMakeLists.txt` runs each file as `python tests/<file>.py`. NOTHING here runs under
+    pytest (the file's old `foreach(pytest IN ITEMS …)` loop only ever set PYTHONPATH), so
     collection-by-convention does not happen and a `def test_…` that the file's own `_run_all()`
     never calls simply never executes. It costs nothing, breaks nothing, and reports nothing; the
     suite still says 110/110.
