@@ -339,6 +339,8 @@ FOCUS_EMPTY_LINE = f"Focus list · empty — pick up to {focus.MAX_ITEMS} corner
 FOCUS_EMPTY_INVITE = (f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at this "
                       "track, Pacer measures the same corners again and says whether they moved — "
                       "or why it can't tell.")
+# Why nothing can be added when the block is dormant: a focus list is kept per track.
+FOCUS_DORMANT_REASON = "No focus list here — Pacer keeps one per track, and this one isn't known"
 
 
 class FocusBlock(QWidget):
@@ -519,6 +521,17 @@ class FocusBlock(QWidget):
             f"C{cid} is already on your focus list" if on_list else
             f"Work on C{cid}: Pacer will measure this exact stretch of track again next time "
             "you're here")
+
+    def add_state(self) -> tuple[bool, str]:
+        """Whether the Add button would put a corner on the list now, and the button's own words
+        for why not — for the same gesture made from outside the page (Coaching ▸ Add selected
+        corner to focus list, and so ⌘K). A dormant block (no track: nowhere to keep a list) adds
+        nothing."""
+        if not self._headline:
+            return False, FOCUS_DORMANT_REASON
+        if self._selected is None:   # the button's "in the table below" is the page's own words
+            return False, "Select a corner on the Coaching page first — then add it from here"
+        return self.add_button.isEnabled(), self.add_button.toolTip()
 
     def _emit_add(self):
         if self._selected is not None:

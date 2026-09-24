@@ -411,6 +411,23 @@ def test_a_palette_row_triggers_the_menu_action_it_names():
     print("test_a_palette_row_triggers_the_menu_action_it_names OK")
 
 
+def test_typing_focus_finds_the_focus_list():
+    """UX-9e (board review 2026-09-23): ⌘K "focus" answered "No command matches 'focus'" — the
+    focus list, the training loop's whole point, was reachable only through two buttons on the
+    Coaching page. Both of its commands are Coaching menu rows now, so the palette lists them; with
+    no recording open they are greyed and say why, like every other session command."""
+    win = _window()
+    try:
+        found = command_palette.matches(command_palette.entries(win), "focus")
+        # A gated row's title carries its reason's clause ("… — open a recording first").
+        titles = [e.title.split(" — ")[0] for e in found]
+        assert titles[:2] == ["Show focus list", "Add selected corner to focus list"], titles
+        assert all(e.group == "Coaching" and not e.enabled and e.reason for e in found[:2]), found
+    finally:
+        win.deleteLater()
+    print(f"test_typing_focus_finds_the_focus_list OK ({titles})")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

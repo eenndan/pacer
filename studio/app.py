@@ -2248,6 +2248,18 @@ class StudioWindow(QMainWindow):
             "ranked by realistic time lost (median of your clean laps), each with the measured "
             "reason, where in the corner it goes and a jump-to. Again restores the grid.")
         self._opportunities_action.triggered.connect(self._open_opportunities)
+        # The focus list had no name outside the Coaching page's own buttons, so ⌘K "focus" found
+        # nothing (board review UX-9e). Two menu rows the palette harvests: go to the list, and the
+        # page's Add button made from anywhere — gated on that button's own state and words.
+        self._focus_show_action = coaching_menu.addAction("Show focus list")
+        self._focus_show_action.setToolTip(
+            "The corners you chose to work on at this track, and whether they moved: the top of "
+            "the Coaching page")
+        self._focus_show_action.triggered.connect(self.show_coaching_tab)
+        self._focus_add_action = coaching_menu.addAction("Add selected corner to focus list")
+        self._focus_add_action.setToolTip(
+            "Put the corner selected on the Coaching page on this track's focus list")
+        self._focus_add_action.triggered.connect(self._focus_add_selected)
 
         # Left-column declutter (the "calm default"): fully show/hide the coaching panel and the
         # excluded strip. Mirrors the consistency toggle EXACTLY — a checkable QAction whose state is
@@ -2385,10 +2397,26 @@ class StudioWindow(QMainWindow):
         session, so they are already off here."""
         has = hasattr(self, "session")
         for name, reason in (("_ref_action", self._NO_SESSION_REFERENCE_REASON),
-                             ("_opportunities_action", self._NO_SESSION_COACHING_REASON)):
+                             ("_opportunities_action", self._NO_SESSION_COACHING_REASON),
+                             ("_focus_show_action", self._NO_SESSION_COACHING_REASON)):
             action = getattr(self, name, None)
             if action is not None:
                 self._gate_action(action, has, reason)
+        add = getattr(self, "_focus_add_action", None)
+        if add is not None:
+            block = getattr(getattr(getattr(self, "view", None), "opportunities", None),
+                            "focus_block", None)
+            ok, why = block.add_state() if block is not None else \
+                (False, self._NO_SESSION_COACHING_REASON)
+            self._gate_action(add, ok, why)
+
+    def _focus_add_selected(self):
+        """Coaching ▸ Add selected corner to focus list: exactly the Coaching page's Add button,
+        which does nothing while it is disabled."""
+        block = getattr(getattr(getattr(self, "view", None), "opportunities", None),
+                        "focus_block", None)
+        if block is not None:
+            block.add_button.click()
 
     def _sync_view_menu(self):
         """Grey View's session-only items out until a view exists (the View menu's aboutToShow).
