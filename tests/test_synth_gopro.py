@@ -15,9 +15,12 @@ WHAT THE TRUTH COMPARISON MEASURES, and why there are two of them (fixed seed, m
     the chapter seam (lap 7 spans it) and the crossing interpolation, with nothing else in the way —
     so the tolerance is tight and a clock, seam or interpolation defect has nowhere to hide.
   * The default recording (the clean end of a HERO13's GPS noise) at the line the app's unknown-track
-    heuristic places itself: max |Δ| 23.4 ms, mean +2.6 ms. Noise dominates; the rest is the
-    heuristic putting its line at the peak-speed point, where laps begin to brake, and the load-time
-    position boxcar biasing a crossing made under braking (13.1 ms max on the noise-free recording).
+    heuristic places itself: max |Δ| 16.9 ms, mean +1.8 ms. Noise dominates.
+  * GPS noise OFF, at that same auto-fitted line: max |Δ| 0.80 ms. This is the line's PLACEMENT alone.
+    Until X1 the heuristic took the fastest single fix — the braking point — and the load-time
+    position boxcar times a lap that has begun braking there differently from one that has not:
+    13.1 ms max noise-free, 23.4 ms max and +2.6 ms mean with the default noise. It now takes the
+    speed held over 11 fixes (`load._heuristic_start_base`), which sits a few fixes up the straight.
 The truth is always taken at the SAME line the app used, because a lap time is only defined by one.
 
 Deterministic: the same seed gives the same telemetry bytes and the same lap times.
@@ -43,8 +46,9 @@ from studio.session import Session  # noqa: E402
 
 # Tolerances, each with the measured value it sits over (fixed seed; see the module doc).
 EXACT_S = 0.002        # noise-free, mid-straight line: measured max 0.41 ms
-NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 23.4 ms
-NOISY_BIAS_S = 0.010   # …and its mean: measured +2.6 ms
+AUTO_LINE_S = 0.003    # noise-free, the app's own line: measured max 0.80 ms (13.1 ms before X1)
+NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 16.9 ms (23.4 before X1)
+NOISY_BIAS_S = 0.010   # …and its mean: measured +1.8 ms (+2.6 before X1)
 
 _LOADED: dict = {}
 
@@ -102,6 +106,21 @@ def test_noise_free_laps_are_exact_to_the_millisecond():
     _, _, d = _residuals(rec, s, mid)
     print(f"  noise-free, mid-straight line: {_describe(d)}")
     assert np.abs(d).max() <= EXACT_S, f"lap times off truth on a noise-free trace: {np.round(d, 5)}"
+
+
+def test_the_auto_fitted_line_is_off_the_braking_point():
+    """X1: noise-free, at the line the app fits ITSELF on this unknown circuit, every lap within a few
+    ms of truth. What is left is the line's placement: a crossing where some laps have begun braking
+    and others have not is timed differently by the load-time position boxcar. The single-fix
+    peak-speed line sat exactly there (13.1 ms max); the held-speed peak does not."""
+    rec, s = _load(gps_noise=0.0)
+    line = s._fitted_lines[0]   # the loader's own placement (another check applies its own line)
+    assert s.apply_timing_lines_latlon(line, [], confirmed=False), "the auto-fitted line was refused"
+    _, _, d = _residuals(rec, s, line)
+    print(f"  noise-free, the app's own line: {_describe(d)}")
+    assert np.abs(d).max() <= AUTO_LINE_S, (
+        f"lap times off truth at the auto-fitted line on a noise-free trace: {np.round(d, 5)} — "
+        f"is the unknown-track line back on the braking point?")
 
 
 def test_the_corners_are_the_circuits():
@@ -173,6 +192,7 @@ def test_the_same_seed_gives_the_same_recording():
 def _run_all():
     for fn in (test_the_real_loader_times_every_lap_on_the_gps9_clock,
                test_noise_free_laps_are_exact_to_the_millisecond,
+               test_the_auto_fitted_line_is_off_the_braking_point,
                test_the_corners_are_the_circuits,
                test_the_stats_tiles_and_the_coaching_page_are_populated,
                test_the_imu_is_one_rigid_motion_with_the_gps,
