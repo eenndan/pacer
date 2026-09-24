@@ -4204,7 +4204,11 @@ class StatsView(QWidget):
             return text
         if start == [top.ring_cid]:
             return f"{text} C{top.ring_cid} is also where the Coaching tab starts."
-        names = " or ".join(f"C{c}" for c in start)
+        # Named the way Coaching's own start-here line names a tie ("C1, C4, C7 or 1 more").
+        named = [f"C{c}" for c in start[:coaching._TIE_NAME_CAP]]
+        extra = len(start) - len(named)
+        names = (f"{', '.join(named)} or {extra} more" if extra
+                 else f"{', '.join(named[:-1])} or {named[-1]}" if len(named) > 1 else named[0])
         if top.ring_cid in start:
             return f"{text} The Coaching tab starts with {names} — this is one of them."
         return (f"{text} The Coaching tab starts with {names}: it ranks the time lost inside "

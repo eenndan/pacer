@@ -1698,6 +1698,14 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     v.refresh()
     note = v.straights_note.text()
     assert note.endswith("The Coaching tab starts with C3 or C1 — this is one of them."), note
+    # A tie wider than three is named as Coaching names it: three corners and a count.
+    wide = replace(tied, rows=[replace(r, cid=c, time_lost=t) for r, c, t in zip(
+        tied.rows * 2, (3, 1, 4, 5), (0.40, 0.39, 0.38, 0.37), strict=True)])
+    sess.coaching_opportunities = lambda: wide
+    v.refresh()
+    note = v.straights_note.text()
+    assert note.endswith("The Coaching tab starts with C3, C1, C4 or 1 more — this is one of "
+                         "them."), note
     fired = []
     v.corner_clicked.connect(fired.append)
     t.selectRow(0)
