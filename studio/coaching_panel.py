@@ -1017,33 +1017,6 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
     return item
 
 
-def _budget_action_column(table, col: int) -> None:
-    """Widen `col` until the BUTTON inside it fits, not merely its own size hint (§6.4).
-
-    `ResizeToContents` sizes a column from the cell widget's hint and knows nothing about the inset
-    the view then paints that widget INSIDE. Measured on the shipped default (920x380, D24's nine
-    opportunities): the column came out 89 px, the last cell's `visualRect` was x=791 w=88, and the
-    button was placed at x=799 keeping its 88 px minimum — so it ran to 887 against a viewport of
-    880. Every Jump button in the dialog was flat-cut on its right edge, the amber rounding sliced
-    off into the scrollbar gutter.
-
-    Rather than guess the inset from a style metric, ASK THE PAINTER: compare the widget's geometry
-    with the cell it was painted into and add the difference. Self-correcting across styles and DPRs,
-    and a no-op when the column already fits. (The same "the budget asks the painter" move the
-    export pill budget made for the same class of defect.)"""
-    if table.rowCount() < 1:
-        return
-    widget = table.cellWidget(0, col)
-    if widget is None:
-        return
-    cell = table.visualRect(table.model().index(0, col))
-    over = (widget.geometry().right() + 1) - (cell.right() + 1)
-    if over > 0:
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(col, QHeaderView.Fixed)
-        table.setColumnWidth(col, header.sectionSize(col) + over)
-
-
 # The actionable SHORTLIST: the rows the page's headline sums (and the Stats page's coaching digest
 # tile mirrors — stats_panel._set_digest reads this constant so the two surfaces state one total),
 # and the FLOOR on how many rows the page shows. L5-08: it is not a ceiling any more — the page
@@ -1152,10 +1125,9 @@ class OpportunitiesPanel(QWidget):
         self._budgeting = False        # re-entrancy guard: hiding a column fires resizeEvent
         self._theme_budgeting = False  # ditto: shedding a theme line re-lays the page out
         # The last width each optional column had, so the budget can cost one while it is hidden.
-        # The bars are a fixed width; the Jump column is seeded from a button's own hint (the
-        # painter-measured inset is added once the column has been shown — _budget_action_column).
+        # The bars and the Jump column are fixed widths; "Done it?" sizes to its content.
         self._col_px = {_PANEL_COL_PHASES: PHASE_COL_PX, _PANEL_COL_REACH: 0,
-                        _PANEL_COL_GO: self._go_button(None).sizeHint().width()}
+                        _PANEL_COL_GO: self._go_column_px()}
         # The headline (e.g. "0.60 s across your top 3 corners") — the page's one-line framing.
         self._headline = ""
         # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
@@ -1195,10 +1167,16 @@ class OpportunitiesPanel(QWidget):
         # The reason takes the slack; corner · time-lost · done-it? · Jump size to their content and
         # the bars keep a stable width (their segments are shares of it).
         hdr.setSectionResizeMode(_PANEL_COL_REASON, QHeaderView.Stretch)
-        for col in (_COL_CORNER, _COL_LOST, _PANEL_COL_REACH, _PANEL_COL_GO):
+        for col in (_COL_CORNER, _COL_LOST, _PANEL_COL_REACH):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(_PANEL_COL_PHASES, QHeaderView.Fixed)
-        self.table.setColumnWidth(_PANEL_COL_PHASES, PHASE_COL_PX)
+        # §6.4, carried over from the modal: ResizeToContents sizes a column from the cell widget's
+        # HINT and knows nothing about the inset the view then paints the widget INSIDE, so every
+        # Jump was flat-cut on its right edge. The modal asked the painter once, at build; the page
+        # re-budgets on every resize, where asking again would ADD the inset again. So the column
+        # is a fixed width: the button's own floor plus that inset on each side.
+        for col, px in ((_PANEL_COL_PHASES, PHASE_COL_PX), (_PANEL_COL_GO, self._go_column_px())):
+            hdr.setSectionResizeMode(col, QHeaderView.Fixed)
+            self.table.setColumnWidth(col, px)
         # L5-06/L5-08: headers over their own columns, with tooltips, and the padding budget the
         # reason header is elided against (measured now, while it still carries its full label).
         _style_headers(self.table, self._COLUMNS)
@@ -1430,12 +1408,15 @@ class OpportunitiesPanel(QWidget):
                 if (col not in shown) != t.isColumnHidden(col):
                     t.setColumnHidden(col, col not in shown)
                     self._restretch.start(0)
-            if _PANEL_COL_GO in shown:
-                _budget_action_column(t, _PANEL_COL_GO)
             _elide_header(t, _PANEL_COL_REASON, self._COLUMNS[_PANEL_COL_REASON],
                           self._reason_chrome)
         finally:
             self._budgeting = False
+
+    def _go_column_px(self) -> int:
+        """The Jump column's width: the button's own width (never under its floor) and the cell's
+        inset on both sides — `theme.SPACE_S`, the gap a cell keeps around its content."""
+        return max(self._go_button(None).sizeHint().width(), JUMP_MIN_PX) + 2 * theme.SPACE_S
 
     def _go_button(self, opp: coaching.Opportunity | None) -> QPushButton:
         """One row's Jump: emits ``jump_requested(cid, entry_dist)``. With no row it is the template

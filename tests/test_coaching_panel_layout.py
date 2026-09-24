@@ -638,8 +638,10 @@ def test_the_pages_jump_buttons_are_never_clipped():
     """§6.4, carried from the modal to the page that replaced it (R11): at the size the modal
     opened at, every amber Jump button was flat-cut on its right edge — `ResizeToContents` sizes a
     column from the cell widget's HINT and knows nothing about the inset the view then paints that
-    widget inside, so a column of 89 px held an 88 px button placed 8 px in. `_budget_action_column`
-    asks the painter instead.
+    widget inside, so a column of 89 px held an 88 px button placed 8 px in. The page's column is a
+    fixed width with that inset on both sides (`OpportunitiesPanel._go_column_px`) — asking the
+    painter on every resize, as the modal did once, would have added the inset again each pass.
+    Without the inset this sweep fails at once: "row 0's Jump overhangs its cell by 9 px".
 
     The page shows the column only when it can afford it, so the risk is highest just past that
     threshold: swept from full-window down, every width that shows a Jump must show it whole."""
