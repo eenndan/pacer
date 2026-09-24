@@ -433,11 +433,16 @@ print("RESULT " + json.dumps(dict(avail=avail, opened=opened, floor=d.height(),
 
 # --------------------------------------------------- L1-04: the privacy card names every store
 def test_privacy_card_names_every_store_it_writes():
-    from studio import library, logsetup, prefs, track_db
+    from studio import focus, library, logsetup, marks, prefs, session_record, track_db
     copy = " ".join(PRIVACY_PARAGRAPHS)
+    # session_records.json and focus.json joined when the Library's own long privacy paragraph
+    # became one line and a link to this card (board review UX-9d): the card had never named them.
     for store in (os.path.basename(prefs.prefs_path()),
                   os.path.basename(track_db.db_path()),
-                  os.path.basename(library.library_path())):
+                  os.path.basename(library.library_path()),
+                  os.path.basename(session_record.records_path()),
+                  os.path.basename(marks.marks_path()),
+                  os.path.basename(focus.focus_path())):
         assert store in copy, f"{store} is written by the app but not disclosed"
     # E2: the session log is a file the app writes too, and it holds file paths. Named in the
     # removal route, as the path under the folder that route deletes.

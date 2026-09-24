@@ -536,7 +536,7 @@ class PBToast(QWidget):
         """Show the toast over `parent` and keep it on its anchor for as long as it lives.
 
         `keepout` is an optional CALLABLE returning a QRect in `parent`'s coordinates that this
-        card must not cover, or None. A callable and not a rect, because the card is placed three
+        card must not cover — or a list of them — or None. A callable and not a rect, because the card is placed three
         times over 120 ms and the thing being protected moves under it during that (`_place`).
         The caller supplies it — this module stays Qt-only and knows nothing about laps or grids —
         and see `_place` for what it is for.
@@ -663,20 +663,26 @@ class PBToast(QWidget):
         return settled
 
     def _clear_of_keepout(self, region: QRect, x: int, y: int) -> int:
-        """`y`, raised to sit SPACE_M above the caller's keep-out rectangle when the card at
-        (x, y) would overlap it — and left exactly as it was when it would not, when the caller
-        named nothing, or when lifting it would push the card out of its own anchor region.
+        """`y`, raised to sit SPACE_M above each of the caller's keep-out rectangles the card at
+        (x, y) would overlap — the callable may return one QRect or several, taken lowest first,
+        so a card lifted clear of the excluded-laps strip is then checked against the selected row
+        above it — and left exactly as it was when it overlaps none, when the caller named
+        nothing, or when a lift would push the card out of its own anchor region.
 
         The last clause is why this returns a y rather than moving the card: a region too short to
         hold both keeps today's placement, so the worst case is the behaviour that shipped rather
         than a card half outside the panel it belongs to."""
         avoid = self._keepout() if callable(self._keepout) else None
-        if avoid is None or avoid.isEmpty():
-            return y
-        if not QRect(x, y, self.width(), self.height()).intersects(avoid):
-            return y
-        lifted = avoid.top() - theme.SPACE_M - self.height()
-        return lifted if lifted >= region.top() + theme.SPACE_M else y
+        rects = [avoid] if isinstance(avoid, QRect) else list(avoid or [])
+        for rect in sorted((r for r in rects if r is not None and not r.isEmpty()),
+                           key=lambda r: r.bottom(), reverse=True):
+            if not QRect(x, y, self.width(), self.height()).intersects(rect):
+                continue
+            lifted = rect.top() - theme.SPACE_M - self.height()
+            if lifted < region.top() + theme.SPACE_M:
+                break   # no room above this one: keep the placement so far
+            y = lifted
+        return y
 
     @staticmethod
     def _dismiss_icon(hover: bool) -> QIcon:
