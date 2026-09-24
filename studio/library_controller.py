@@ -660,8 +660,7 @@ class LibraryController:
             dry = {**session_record.blank_record(), "conditions": "dry"}
             store, written = session_record.put_if_blank_and_save(
                 {fp: session_record.stamp_context(dry, rows.get(fp)) for fp in fps})
-        except OSError as exc:
-            print(f"studio: could not save the session records ({exc!r}).", flush=True)
+        except OSError:
             _log.exception("session records not saved")
             self.win.statusBar().showMessage(
                 "could not save the session records — check permissions on "
