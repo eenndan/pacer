@@ -44,7 +44,7 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name — ~143 s |
 | `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) — ~139 s |
 | `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak, ~146 s. CI runs it on pushes to main and tags |
-| `pixi run golden` | only the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
+| `pixi run golden` | only the core-math equivalence gate (`test_golden_synthetic`: seeded sessions + the synthetic GoPro through the real loader) — ~8 s |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample |
 | `pixi run studio [-- files]` | the app, on the recordings you name |
 | `pixi run gen-bindings` | regenerate the bindings |
