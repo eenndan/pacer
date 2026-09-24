@@ -529,7 +529,7 @@ pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
       On a track Pacer doesn't know yet it places a sensible start/finish line and flags the timing as <strong>provisional</strong>; drag the line on the map to where a lap begins and it is remembered for that recording. <a href="https://github.com/eenndan/pacer/blob/main/docs/FIRST_LAP.md">Read your first lap</a> walks the rest.
     </div>
     <div class="callout">
-      <strong>No GoPro footage?</strong> <code>pixi run smoke</code> builds the real app headless on a bundled sample clip and ends in <code>SMOKE OK</code>. The clip holds no complete lap, so it proves the build and the load, not the analysis.
+      <strong>No GoPro footage?</strong> <code>pixi run studio -- --demo</code> downloads a synthetic session once and opens it: generated, not filmed, on a circuit Pacer ships, so its laps open with verified timing. <code>pixi run smoke</code> needs no download: it builds the real app headless on a bundled sample clip and ends in <code>SMOKE OK</code>. That clip holds no complete lap, so it proves the build and the load, not the analysis.
     </div>
   </div>
 </section>

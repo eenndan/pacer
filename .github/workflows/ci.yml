@@ -106,18 +106,18 @@ jobs:
         run: QT_QPA_PLATFORM=offscreen pixi run python -m studio.dev._smoke --no-video
 
       - name: Demo asset reachable (non-blocking)
-        # The "Open demo" CTA + `--demo` fetch this clip (studio/demo.py `_DEMO_URL`). It isn't
-        # uploaded yet, so this is a NON-BLOCKING reminder (continue-on-error) that surfaces the
-        # missing asset without failing the pipeline; it goes green once the demo `.mp4` is attached
-        # to the release. Keep the URL in sync with studio/demo.py._DEMO_URL.
+        # `--demo` downloads the synthetic demo session (studio/demo.py `_DEMO_URL`) and keeps it
+        # only if its sha256 is `_DEMO_SHA256`. This step runs THAT fetch — the app's own function,
+        # URL, timeout and checksum — into a throwaway directory, so the warning cannot drift from
+        # what `pixi run studio -- --demo` would do (it used to probe its own copy of the URL). It is
+        # NON-BLOCKING (continue-on-error): a missing or re-uploaded asset is a release-page problem,
+        # not a code one, stated on every run until fixed. tests/test_demo.py holds this shape.
         continue-on-error: true
         run: |
-          URL="https://github.com/eenndan/pacer/releases/download/v0.1.0/pacer-demo-lap.mp4"
-          CODE=$(curl -sIL -o /dev/null -w '%{http_code}' "$URL")
-          if [ "$CODE" = "200" ]; then
-            echo "demo asset OK ($URL)"
+          if pixi run python -c 'import os, sys, tempfile; from studio import demo; sys.exit(0 if demo._try_download_demo(os.path.join(tempfile.mkdtemp(), "demo.mp4")) else 1)'; then
+            echo "demo asset OK"
           else
-            echo "::warning::demo asset unreachable (HTTP $CODE) — 'Open demo' / --demo will fail until it's uploaded: $URL"
+            echo "::warning::demo asset unreachable or not the pinned file — 'pixi run studio -- --demo' will fail until the demo-data release carries it (studio/demo.py _DEMO_URL / _DEMO_SHA256)"
           fi
 
   package-smoke:

@@ -239,6 +239,7 @@ provides `git`.
 git clone --recursive https://github.com/eenndan/pacer && cd pacer
 pixi install                                # environment + editable Python bindings
 pixi run studio -- /path/to/GX010062.MP4    # build + launch on a recording
+pixi run studio -- --demo                   # no footage? a synthetic session, generated not filmed
 ```
 
 Cloned without `--recursive`? `git submodule update --init --recursive` fetches `3rdparty/`.
@@ -248,8 +249,10 @@ chained on request via `--full` or `File ▸ Load full recording`. The
 **[first-lap walkthrough](docs/FIRST_LAP.md)** is the 30-second path from footage to "where am I
 losing time?"; for a code change, start at [AGENTS.md](AGENTS.md).
 
-**No GoPro footage?** `pixi run smoke` builds the real app headless on a bundled sample clip and
-ends in `SMOKE OK`. The clip holds no complete lap, so it proves the build and the load, not the
+**No GoPro footage?** `pixi run studio -- --demo` (above) downloads a synthetic session once and
+opens it: generated, not filmed, on a circuit Pacer ships, so its laps open with verified timing.
+`pixi run smoke` needs no download: it builds the real app headless on a bundled sample clip and
+ends in `SMOKE OK`. That clip holds no complete lap, so it proves the build and the load, not the
 analysis.
 
 ## Acknowledgements

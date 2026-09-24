@@ -148,14 +148,14 @@ VIEW_BUILD_FAILURE_MESSAGE = (
 # that can reach this state (the CLI flag at startup and a resolve that came back None), because
 # they are the same sentence and they had drifted into two copies of it.
 #
-# IT NO LONGER OFFERS A RETRY, and that is the point of the copy edit: it used to say "check your
-# connection and retry", which was true only of a download of an asset that was never published
-# (docs/FIRST_LAP.md). Retrying could not work, and the button to retry WITH is not on the welcome
-# screen any more (studio.demo.demo_available gates it), so the sentence would have named a control
-# that is not there. It states what is true — this build has no demo — and the one door that is.
+# IT OFFERS NO RETRY BUTTON: the one to retry WITH is not on the welcome screen (studio.demo.
+# demo_available gates it), so the sentence must not name a control that is not there. It used to
+# say "Pacer doesn't ship one", true while the asset had never been published; since the synthetic
+# demo was (demo-data-v1), the only way here is a download that failed — offline, or not the pinned
+# file — so it names that, and the one door that is on screen.
 DEMO_UNAVAILABLE_MESSAGE = (
-    "No demo recording is available on this machine — Pacer doesn't ship one. Use Open recording… "
-    "below, or drop a GoPro .mp4 on this window, to get your laps.")
+    "The demo session couldn't be downloaded — it is fetched once, the first time. Use Open "
+    "recording… below, or drop a GoPro .mp4 on this window, to get your laps.")
 
 
 _log = logging.getLogger("studio.app")
@@ -537,7 +537,7 @@ class StudioWindow(QMainWindow):
             self._load(paths)
         elif demo_unavailable:
             # `--demo` was requested but the demo couldn't be resolved (no env var, no cache, and
-            # the download — of an asset that was never published — failed): show the welcome state
+            # the download failed — offline, or not the pinned file): show the welcome state
             # with an honest message rather than silently launching the lapless bundled sample
             # (which reads as a broken app).
             self._show_welcome(error=DEMO_UNAVAILABLE_MESSAGE)
@@ -727,10 +727,11 @@ class StudioWindow(QMainWindow):
         THE SECOND CTA IS OFFERED ONLY IF IT CAN LAND SOMEWHERE. `demo.demo_available()` is the
         offline half of the resolver (env var or cache — no network), and passing None instead of
         the handler is what leaves the demo button off the card entirely. The button used to be
-        unconditional, so on any machine without the env var or a cache — i.e. every machine, since
-        the release asset it would otherwise download was never published — the obvious
-        low-commitment click on a first run produced an apology (§6.7). Asked for at the CLI with
-        `--demo` it is still ATTEMPTED, download and all; this decides only what the UI offers."""
+        unconditional, so on any machine without the env var or a cache — i.e. every machine, while
+        the release asset it would otherwise download was unpublished — the obvious low-commitment
+        click on a first run produced an apology (§6.7). Asked for at the CLI with `--demo` it is
+        ATTEMPTED, download and all, and caches the demo for every later launch; this decides only
+        what the UI offers."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
         on_demo = self._open_demo if demo.demo_available() else None
