@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Sixteen features were built far enough to **measure**, and the measurement said not to ship them. The
+Seventeen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1470,6 +1470,95 @@ later here", from the rank correlation above — that survives a family-wise cor
 recording's corners and replicates on a second recording of the same track, with a distance whose
 noise bar clears `BRAKE_HINT_MIN_M`; or a braking model fitted to the deceleration profile a kart
 actually produces (ramp-in and trail-off, not a constant peak) whose optimum some clean laps reach.
+
+---
+
+## 17. Centring the corner model's curvature window — refused (X4)
+
+**The claim.** #383 found that `_signal`'s plain boxcar runs half a fix late whenever its window is
+even, and centred the curvature window the GPS-lag estimator reads. It left the corner model's alone
+on purpose, because centring it moves corner results and published tables. `corners.pooled_curvature`
+smooths every lap's κ over w = round(8 m / median fix spacing) fixes. That is even on 55 of 62 clean
+laps of Sandown 3h, 23 of 36 of SD_19_09, 23 of 37 of SD_30_08 and 4 of 19 of MK_18_09. So every
+corner boundary sits 0.7–1 m late: centre it and re-cut the tables.
+
+**How it was tested.** `studio/dev/probes/p18_corner_kernel.py` swaps the kernel only inside
+`pooled_curvature` and measures it three ways.
+- **A symmetric corner sampled at a uniform spacing**, where only the kernel can move anything.
+- **The synthetic GoPro** (`studio/dev/synth_gopro.py`) through the real `Session.load`: five seeds ×
+  GPS noise 0, 1 and 2 × both directions, 30 recordings and 2,940 lap × corner cells. Its corners
+  are symmetric arcs, so a true window of any width is centred on the arc's midpoint. The model's
+  apex (the |κ|-weighted centroid) and its window's midpoint are measured against that. Each lap's
+  corner time and minimum, entry and exit speeds are measured against the kart's true motion over a
+  window of the model's own width, centred on the true corner. So are each corner's median loss to
+  the best lap and the order the coaching rows rank. Four controls, two seeds each, noise-free: an
+  odd window (the two kernels are then identical), w = 6, a constant-speed kart, and no load-time
+  position boxcar.
+- **The four working-set recordings**, jailed and tripwired, and all 16 footage checks run with the
+  centred kernel.
+
+**The defect is real, exactly as stated.** At a uniform spacing the plain kernel reads +0.994 m at
+w = 4 (half a fix is 1.000 m) and +0.672 m at w = 6 (0.675 m), and nothing at w = 5 or 7. The
+centred kernel is within 0.006 m at every width.
+
+**But the corner window is not late, because a second bias runs the other way.** Synthetic GoPro,
+10 recordings a row, plain (today) → centred; + = late along the lap:
+
+| GPS noise | apex − truth | window midpoint − truth, mean (per recording) | corner time − truth, mean (rms) |
+|---|---|---|---|
+| none | +1.02 → −0.03 m | **−0.00 (−0.07 … +0.08) → −1.06 (−1.10 … −0.99) m** | −13.4 (21.1) → −20.7 (30.1) ms |
+| default | +1.14 → +0.09 m | +0.32 (−0.03 … +0.83) → −0.79 (−1.21 … −0.09) m | −12.8 (27.4) → −20.5 (35.0) ms |
+| 2× | +1.52 → +0.48 m | +1.04 (−0.10 … +2.02) → −0.07 (−1.01 … +1.16) m | −7.1 (33.5) → −15.0 (38.8) ms |
+| all 30 | +1.23 → +0.18 m | +0.45 → −0.64 m (rms 1.16 → 1.21) | −11.1 (27.8) → −18.7 (34.8) ms |
+
+| control, noise-free | window midpoint − truth, plain → centred |
+|---|---|
+| odd window, w = 5 (the kernels are identical) | −0.88 → −0.88 m |
+| w = 6 | −0.05 → −0.81 m |
+| a constant-speed kart, w = 4 | +1.02 → +0.11 m |
+| no load-time position boxcar, w = 4 | +0.61 → −0.46 m |
+
+- **The second bias is the kart, seen through filters that count fixes.** The load-time position
+  boxcar (13 fixes) and this window both smooth by fix index. A kart brakes into a corner far
+  harder than it accelerates out (1.15 g against at most 0.45 g in the synthetic). So the fixes sit
+  further apart on the entry, the index blur reaches further up the entry than down the exit, and
+  the thresholded window opens early. That is −0.88 m where nothing offsets it (the odd window). At
+  constant speed it is gone, and there centring is exactly right. The position boxcar carries a
+  little over half of it: −0.46 m remains without it.
+- **Today's late half fix cancels it.** Noise-free, every recording's mean window midpoint sits within
+  0.08 m of truth at w = 4 and 0.06 m at w = 6. Centring moves every window ~1 m early and each
+  lap's corner time 7.6 ms further from truth on average. Only at 2× noise, where noise pushes the
+  window late again, does centring bring the midpoint nearer; the corner times are further from
+  truth at every noise level (minimum speed unchanged; entry speed rms 1.21 → 0.95, exit 0.54 → 0.66
+  km/h over all 30).
+- **The apex would come right, but no published number reads it.** It is a centroid, which a
+  symmetric blur cannot move, so centring puts it on truth. Its one reader is the map's corner
+  labels (`CornerModel.corner_map_markers`). Every corner figure reads the window's enter and exit.
+- **What a driver reads does not improve.** The loss to the best lap, which the coaching rows rank,
+  is a difference over one window, so a shared shift cancels: rms error 14.5 against 14.4 ms,
+  Kendall τ against the true order 0.76 against 0.77.
+
+**On the footage it would move a great deal and settle nothing.** The moves are half a fix times each
+recording's even-window share. The apex moves −0.65 / −0.41 / −0.37 / −0.06 m on Sandown 3h /
+SD_19_09 / SD_30_08 / MK_18_09. Boundaries move in the pooled grid's 0.75 m steps: 11 of 14, 7 of 14,
+10 of 14 and 3 of 24 of them, by up to 2.25 m and 98 ms on the best lap. A corner-time cell moves by
+up to 138 ms, time handed between a corner and its straight. The coaching order is unchanged on all
+four, no corner's time lost moves more than 9.9 ms, and the ideal lap moves −3.6 … +7.3 ms. Yet 8 of
+the 9 footage checks of published corner figures fail with the centred kernel (the first-open
+debrief's verdict holds), while the other seven (renders, the compare pane, the pedal band, MK's
+official timing) pass. Two cells change in kind: Sandown 3h chapter 2's coaching THEME turns from
+"pace" (0 % execution, 100 % pace) to "split" (47 / 53), and SD_19_09 chapter 1 ranks two corners
+instead of three. The golden gate would re-cut 4,204 of its 113,437 leaves. Footage has no
+corner-geometry truth to say which placement is right; the synthetic says today's.
+
+**What moves because of this refusal: nothing.** The corner model keeps the plain window.
+`corners.lap_curvature` now says why; it used to say that "a shape does not care", and it does, by
+0.7–1 m. The lag reference stays centred (#383): there the timing is the measurement, and centring
+was measured closer to its truth.
+
+**What would be new evidence:** smoothing that stops counting fixes through braking and acceleration
+(positions or κ smoothed over arc length or time), after which this probe's constant-speed control
+says centring is right; or surveyed corner geometry on real footage that puts today's windows late.
 
 ---
 
