@@ -369,7 +369,7 @@ void py_init_module_pacer(nb::module_ &m) {
       },
       nb::arg("points").none() = nb::none(), nb::arg("cum_distances").none() = nb::none()
       )
-      .def_rw("points", &pacer::Lap::points, "")
+      .def_rw("points", &pacer::Lap::points, nb::for_getter(nb::rv_policy::copy), "")
       .def_rw("cum_distances", &pacer::Lap::cum_distances, "")
       .def("fill_distances",
           &pacer::Lap::FillDistances, nb::arg("cs"))
@@ -398,8 +398,8 @@ void py_init_module_pacer(nb::module_ &m) {
       },
       nb::arg("start_line").none() = nb::none(), nb::arg("sector_lines").none() = nb::none()
       )
-      .def_rw("start_line", &pacer::Sectors::start_line, "")
-      .def_rw("sector_lines", &pacer::Sectors::sector_lines, "")
+      .def_rw("start_line", &pacer::Sectors::start_line, nb::for_getter(nb::rv_policy::copy), "")
+      .def_rw("sector_lines", &pacer::Sectors::sector_lines, nb::for_getter(nb::rv_policy::copy), "")
       ;
 
 

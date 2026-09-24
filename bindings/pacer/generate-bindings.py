@@ -152,6 +152,44 @@ def _splice_sequential_source_keep_alive(pydef_file: Path) -> None:
     pydef_file.write_text(code.replace(_SEQ_CTOR_BINDING, _SEQ_CTOR_BINDING_KEEPALIVE, 1))
 
 
+# ////////////////////////////////////////////////////////////////////////
+# A field read the caller KEEPS comes back as a copy (post-write splice)
+# ////////////////////////////////////////////////////////////////////////
+# nanobind's def_rw getter returns rv_policy::reference_internal: a view INTO the C++ object, kept
+# alive through its owner. For a value a caller stores, that is wrong twice over (X5, measured):
+#   * `kept = laps.sectors.start_line` moved with every later line edit, so an undo stack or a
+#     "before" snapshot built on it would hold the line it was meant to be compared with;
+#   * each element of a `std::vector` field (`sector_lines`, `Lap.points`) pointed into the
+#     vector's buffer, which the next assignment reuses (the kept line reads the new one) or frees
+#     (it reads freed memory: (1.39e-309, 0.0, 0.0, 1.39e-309)).
+# litgen has no per-member return-policy option, so the policy is spliced into exactly these
+# getters (`nb::for_getter`: the setters are untouched). `laps.sectors` itself stays a view, so
+# `laps.sectors.start_line = seg` still writes into the laps; a write TWO levels down
+# (`laps.sectors.start_line.first = p`) now edits a copy, and nothing does that — every caller
+# assigns a whole line or a whole `pacer.Sectors` (see studio/tracks.make_segment).
+# tests/test_laps_bindings.py holds each of these, and fails for any `List[<bound struct>]` field
+# a future header adds without joining this list.
+_COPY_ON_READ = (("Lap", "points"), ("Sectors", "start_line"), ("Sectors", "sector_lines"))
+
+
+def _splice_copy_on_read(pydef_file: Path) -> None:
+    """Give each `_COPY_ON_READ` getter `rv_policy::copy`; fail loudly if one can't be found."""
+    code = pydef_file.read_text()
+    for cls, field in _COPY_ON_READ:
+        head = f'.def_rw("{field}", &pacer::{cls}::{field}, '
+        policy = "nb::for_getter(nb::rv_policy::copy), "
+        if code.count(head + policy) == 1:
+            continue  # already spliced (idempotent)
+        if code.count(head) != 1:
+            raise RuntimeError(
+                f"{cls}::{field}'s def_rw binding not found once in generated {pydef_file.name}; "
+                "litgen output changed — update _COPY_ON_READ in generate-bindings.py (the copy "
+                "return policy was NOT applied)."
+            )
+        code = code.replace(head, head + policy, 1)
+    pydef_file.write_text(code)
+
+
 def autogenerate() -> None:
     repository_dir = Path(__file__).parent.parent.parent
 
@@ -171,8 +209,10 @@ def autogenerate() -> None:
         output_stub_pyi_file=str(repository_dir / "bindings/pacer/pacer/__init__.pyi"),
     )
 
-    # Post-write: add the keep_alive call policy to the SequentialGPSSource constructor binding.
+    # Post-write: add the keep_alive call policy to the SequentialGPSSource constructor binding,
+    # and the copy return policy to the getters of the fields a caller keeps.
     _splice_sequential_source_keep_alive(output_cpp_pydef_file)
+    _splice_copy_on_read(output_cpp_pydef_file)
 
 
 if __name__ == "__main__":
