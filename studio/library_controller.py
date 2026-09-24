@@ -61,7 +61,7 @@ import shutil
 # The Qt-object liveness probe (PySide6's own runtime): a Python wrapper outlives the C++ object a
 # deleteLater() has collected, and _clear_pb_toast has to tell those two apart.
 import shiboken6
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QFileDialog
 
 from . import focus, library, session_record, sidecar, track_db
@@ -265,8 +265,13 @@ class LibraryController:
         try:
             title, body = library.pb_moment_text(moment, fmt_time)
             # Offer the one-tap share only when the card is actually shareable (verified lap) —
-            # a PB moment is verified timing by construction, but stay honest via the same verdict.
-            on_share = None if self.win._share_card_blocked() else self.win._share_pb_card
+            # a PB moment is verified timing by construction, but stay honest via the same verdict
+            # — and only for a PB that beat something: a first session has nothing to beat, and
+            # "Share your PB →" under "the time to beat next time" was the card contradicting
+            # itself (board review UX-9a). The lap card is still File ▸ Export's, any time.
+            beat = moment.get("kind") == "beat"
+            on_share = None if not beat or self.win._share_card_blocked() \
+                else self.win._share_pb_card
             # A beat offers the ANALYSIS gesture as the card's primary action (board review
             # PS-B4); the share card stays, as a secondary link.
             on_compare = (self.win._compare_with_previous_pb if self.offers_pb_compare(moment)
@@ -317,8 +322,9 @@ class LibraryController:
             _log.warning("previous personal-best card not dismissed", exc_info=True)
 
     def _pb_card_keepout(self):
-        """The band the PB card must not cover, in this window's coordinates: the lap grid's
-        SELECTED row, full viewport width. None when there isn't one to protect.
+        """The rectangles the PB card must not cover, in this window's coordinates: the lap grid's
+        SELECTED row, full viewport width, and the excluded-laps strip under the grid. None when
+        there is neither to protect.
 
         WHY THE SELECTION IS THE RIGHT RECTANGLE. An overlay may cover rows; it may not cover the
         row the app has just put the user on. On the path this card fires from that row IS the ★
@@ -328,30 +334,48 @@ class LibraryController:
         public Qt on a widget another module owns: a QAbstractItemView's selection, its
         `visualRect` and its viewport.
 
+        AND THE STRIP UNDER THE GRID (board review UX-9a). The card sits at the bottom of the lap
+        panel's body, which is where the Laps page keeps its "N excluded" strip: measured at
+        1440x900 on SD_30_08 the card covered 30 px of that strip's 42, across all 295 px of its own
+        width — the count and the note under it — for the card's whole life.
+
         Returns None — i.e. "place the card as before" — for every uncertainty: no view, no grid,
         the Laps page not the one on screen (the grid is then not visible), nothing selected, the
         selected row scrolled out of the viewport, or any raise at all. A celebration must never
         break a load, and this runs three times per celebration."""
         try:
-            grid = getattr(getattr(getattr(self.win, "view", None), "table", None), "table", None)
+            table = getattr(getattr(self.win, "view", None), "table", None)
+            grid = getattr(table, "table", None)
             if grid is None or not grid.isVisible():
                 return None
-            model = grid.selectionModel()
-            rows = model.selectedRows() if model is not None else []
-            if not rows:
-                return None
-            viewport = grid.viewport()
-            band = QRect()
-            for index in rows:
-                cell = grid.visualRect(index)
-                band = band.united(QRect(0, cell.y(), viewport.width(), cell.height()))
-            band = band.intersected(viewport.rect())
-            if band.isEmpty():
-                return None
-            return QRect(viewport.mapTo(self.win, band.topLeft()), band.size())
+            keep = []
+            strip = table.excluded_strip() if hasattr(table, "excluded_strip") else None
+            if strip is not None and strip.isVisible():
+                keep.append(QRect(strip.mapTo(self.win, QPoint(0, 0)), strip.size()))
+            band = self._selected_row_band(grid)
+            if band is not None:
+                keep.append(band)
+            return keep or None
         except Exception:  # noqa: BLE001 — placement is best-effort; never fail a load
             _log.warning("personal-best card keep-out not resolved", exc_info=True)
             return None
+
+    def _selected_row_band(self, grid) -> QRect | None:
+        """The grid's selected row(s), full viewport width, in window coordinates; None when
+        nothing is selected or the selection is scrolled out of the viewport."""
+        model = grid.selectionModel()
+        rows = model.selectedRows() if model is not None else []
+        if not rows:
+            return None
+        viewport = grid.viewport()
+        band = QRect()
+        for index in rows:
+            cell = grid.visualRect(index)
+            band = band.united(QRect(0, cell.y(), viewport.width(), cell.height()))
+        band = band.intersected(viewport.rect())
+        if band.isEmpty():
+            return None
+        return QRect(viewport.mapTo(self.win, band.topLeft()), band.size())
 
     # -------------------------------------------------------------------------- File ▸ Library…
     def open_library(self):
@@ -383,7 +407,9 @@ class LibraryController:
                             # The saved-TRACK list is a different store from the session index, but
                             # it is the same question ("what has pacer remembered about my
                             # driving?") and this dialog is already where the app answers it.
-                            manage_tracks=self._open_track_manager)
+                            manage_tracks=self._open_track_manager,
+                            # The whole privacy account, one click from the note's one line.
+                            show_privacy=self.win._show_privacy)
         dlg.exec()
         # Every record write in there already refreshed both readers (`_records_changed`); this
         # re-read is for a callback that raised part-way, which the dialog swallows.

@@ -574,15 +574,21 @@ def test_restore_is_guarded_and_always_returns_an_index():
 def test_the_privacy_note_names_the_file_holding_your_circuits():
     """W7-05: the note enumerated local storage and omitted `tracks.json` — the one file holding
     every circuit's coordinates. It also survives "Clear library" and is not in "Back up…", so a
-    reader who acted on the old wording would believe both had covered it."""
-    from studio.library_dialog import PRIVACY_NOTE
-    assert "tracks.json" in PRIVACY_NOTE, \
-        "the privacy note lists what pacer stores on disk and omits the saved-track database"
-    low = PRIVACY_NOTE.lower()
-    assert "leaves tracks.json untouched" in low or "clear library\" leaves" in low, \
-        "the note must say Clear library does not remove the saved tracks"
-    assert "does not copy it" in low or "not copied" in low, \
-        "the note must say Back up… does not include the saved tracks"
+    reader who acted on the old wording would believe both had covered it.
+
+    Since board review UX-9d the Library's note is one line and a link, and these two facts are
+    said where they are acted on: on the "Clear library" and "Back up…" buttons themselves."""
+    from studio.library_dialog import LibraryDialog
+    dlg = LibraryDialog({"version": 3, "entries": []}, lambda paths: None,
+                        clear_library=lambda: {"entries": []}, backup_library=lambda: None)
+    try:
+        clear, backup = dlg.clear_btn.toolTip().lower(), dlg.backup_btn.toolTip().lower()
+    finally:
+        dlg.deleteLater()
+    assert "tracks.json" in clear and "leaves tracks.json untouched" in clear, \
+        "Clear library must say it does not remove the saved tracks"
+    assert "tracks.json" in backup and "does not copy tracks.json" in backup, \
+        "Back up… must say it does not include the saved tracks"
 
 
 # =============================================== C. forget-the-OPEN-recording sidecar seam (app)

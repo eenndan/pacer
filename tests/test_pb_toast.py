@@ -351,7 +351,8 @@ def test_the_toast_does_not_cover_the_row_it_is_announcing():
         _spin(0.4)
         card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
         keepout = win.library_ctl._pb_card_keepout
-        assert keepout() == band, (keepout(), band)
+        # A list since UX-9a (the excluded strip joined it); this fixture has no excluded lap.
+        assert keepout() == [band], (keepout(), band)
         assert not card.intersects(band), (
             f"{size} scroll=max: the card at {card} covers the selected row {band} by "
             f"{card.intersected(band).width()}x{card.intersected(band).height()}")

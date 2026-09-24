@@ -783,9 +783,12 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
             f"{track} — {best}, {gap:.2f} s faster than your previous best "
             f"({fmt_time(moment['prior'])}).",
         )
+    # A SESSION, not a lap: the title said "First lap logged here" over a body that said "your
+    # first session on this track" (board review UX-9a). The words are the debrief's own first-open
+    # line (pb_standing_text), so the card and the debrief say one thing one way.
     return (
-        "First lap logged here",
-        f"{track} — {best}. Your first session on this track; beat it next time.",
+        "First session logged here",
+        f"{track} — best lap {best}, the time to beat next time.",
     )
 
 
