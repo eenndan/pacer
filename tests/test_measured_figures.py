@@ -739,8 +739,9 @@ def test_the_brake_habit_prose_is_its_table_s_arithmetic():
 
 
 def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
-    """session.py, test_coaching.py and README's module map quote how far apart the two brake
-    answers were and what the widest split said. Each quote must be coaching.py's."""
+    """The module notes quote how far apart the two brake answers were and what the widest split
+    said (session.py's `coaching_brake_points` and test_coaching.py's two-numbers test quoted them
+    too, until L8 retired the habit both were about). Each quote must be coaching.py's."""
     rows = _brake_rows()
     text = _flatten(_read(_COACHING))
     worst = max(float(x) for x in _need(r"\(worst (\d+\.\d) m, C\d+\) and \d+\.\d m apart on 00\d\d \(worst "
@@ -779,7 +780,9 @@ def test_every_quote_of_the_brake_habit_figures_is_the_table_s():
                     (split.best > 0) == (split.habit > 0):
                 problems.append(f"{rel}: calls {split.rec} C{split.cid}'s two answers opposite; the table has "
                                 f"{split.best:+} m and {split.habit:+} m, both 'later'")
-    for family, least in (("upto", 3), ("habit", 3), ("before", 3)):
+    # The floors are the quotes the tree is known to carry: coaching.py's own prose and the module
+    # notes (L8 took session.py's and test_coaching.py's with the habit they described).
+    for family, least in (("upto", 1), ("habit", 2), ("before", 2)):
         assert len(found[family]) >= least, (f"the {family} scan found {found[family]} — fewer quotes "
                                              f"than the tree is known to carry; a phrasing changed")
     assert not problems, "quotes of the brake-habit table that are not coaching.py's:\n  " + \
@@ -2313,8 +2316,9 @@ def _brake_measure(s):
     """coaching.py's brake-habit table by its stated method, off one real session: the rows the
     coaching panel shows, RANKED, whose best lap has a matched application that the retired hint's
     gate would have printed had it been handed that single application instead of the habit (L7
-    took the hint off the rows; the table is the record of what it printed). Also everything the
-    prose names that is not a cell."""
+    took the hint off the rows and L8 the habit; the table is the record of what it printed). The
+    "habit" cell is the median Stats ▸ BRAKING prints — its `Bound m (est)` column since L8, and
+    the one place that median is computed. Also everything the prose names that is not a cell."""
     from studio import coaching
     from studio import coaching_panel as panel
 
@@ -2323,7 +2327,6 @@ def _brake_measure(s):
     best = s.best_lap_id()
     bps = {bp.cid: bp for bp in s.driving.lap_brake_points(best)}
     braking = {b.cid: b for b in s.brake_report()}
-    habits = s.coaching_brake_points()
     clean = len(s.consistency_lap_ids())
     rows = []
     for r in panel._shown_rows(opps):
@@ -2336,8 +2339,6 @@ def _brake_measure(s):
                 or bp.optimal_brake_dist - r.entry_dist > coaching.BRAKE_APPROACH_M):
             continue
         b = braking[r.cid]
-        # The table's "habit" is BRAKING's column, which the fix made the coaching hint's by construction.
-        assert habits[r.cid].metres_later == b.metres_later_med, (r.cid, habits[r.cid], b)
         rows.append((r.cid, order.index(r) + 1, bp.metres_later, b.metres_later_med, b.n, clean))
     unbraked = {r.cid: (order.index(r) + 1, braking[r.cid].n) for r in opps.rows
                 if r.evidence.ranked and r.cid not in bps and r.cid in braking}

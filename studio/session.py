@@ -2730,21 +2730,24 @@ class Session:
         return stats_service.phase_matrix([c.cid for c in corner_list], triples_by_lap)
 
     def _brake_rows(self) -> list[dict]:
-        """The per-lap D4 brake-point rows BOTH braking surfaces aggregate: one dict per clean
-        lap, cid → (onset_ref_m, commit_frac | None, metres_later, optimal_ref_m).
+        """The per-lap D4 brake-point rows every braking surface reads: one dict per clean lap,
+        cid → (onset_ref_m, commit_frac | None, metres_later).
 
         THE POINT OF THE EXTRACTION is that there is exactly one of these. The Stats ▸ BRAKING
-        table and the coaching row's "Brake ~N m later" hint answer the SAME question and used to
+        table and the coaching row's "Brake ~N m later" hint answered the SAME question and used to
         read different laps for it — the table a median over these rows, the hint the best lap's
-        single application — so the app printed two numbers for one corner (see
-        coaching.BrakeHabit for what that measured). Both now medianize this one list, and since
-        L7 took that hint off the Coaching rows, the braking-direction line that replaced it reads
-        its onsets from this list too (`_brake_rows_by_lap`).
+        single application — so the app printed two numbers for one corner (coaching.py's
+        brake-habit table is what that measured). L7 took the hint off the Coaching rows and L8
+        retired the `coaching.BrakeHabit` that medianized this list for it, so BRAKING is the one
+        surface that prints its metres (as the model's bound, `Bound m (est)`); the
+        braking-direction line that replaced the hint reads its onsets from this list too
+        (`_brake_rows_by_lap`). The fourth entry, the projected optimum, left with the habit: it
+        was the only reader.
 
-        Onsets and optima are projected into the reference odometer (× ref_total/lap_total, the
-        house normalized projection) so cross-lap spread measures driver scatter, not lap-length
-        drift; `metres_later` is a LENGTH DIFFERENCE within one lap and needs no projection. []
-        without corners / g signal / clean laps.
+        Onsets are projected into the reference odometer (× ref_total/lap_total, the house
+        normalized projection) so cross-lap spread measures driver scatter, not lap-length drift;
+        `metres_later` is a LENGTH DIFFERENCE within one lap and needs no projection. [] without
+        corners / g signal / clean laps.
 
         C5: A BRAKE POINT IS A WINDOW MEASUREMENT, so it counts only where the lap matched that
         corner on track at both edges (`CornerModel.lap_corner_resolved`). Everything the row
@@ -2752,11 +2755,11 @@ class Session:
         [enter − lead, exit], and the optimum is this lap's `apex_dist` minus a braking distance
         computed from its `apex_speed` — so on an interpolated cell the whole row is measured
         against a boundary nobody matched. The effect on what is printed is SMALL and is reported
-        as such: on the D24 0060 pair the BRAKING table's "m later" moves by at most 0.7 m (C9,
-        21.1 → 20.4) against the 2.0 m the coaching hint itself calls noise
-        (`coaching_panel.BRAKE_HINT_MIN_M`), and 0062 does not move at all. It is applied anyway
+        as such: on the D24 0060 pair the BRAKING table's "m later" moved by at most 0.7 m (C9,
+        21.1 → 20.4) against the 2.0 m the coaching hint itself called noise
+        (`coaching_panel.BRAKE_HINT_MIN_M`), and 0062 did not move at all. It is applied anyway
         because it is one line, because the same window's grip column has counted this way since
-        C4, and because both surfaces medianize THIS list, so they stay one answer."""
+        C4, and because every braking surface reads THIS list, so they stay one answer."""
         return [row for _lap, row in self._brake_rows_by_lap()]
 
     def _brake_rows_by_lap(self) -> list[tuple[int, dict]]:
@@ -2787,8 +2790,7 @@ class Session:
             row = {
                 bp.cid: (bp.actual_brake_dist * scale,
                          (bp.peak_decel_g / bp.a_max_g) if bp.a_max_g > 0 else None,
-                         bp.metres_later,
-                         bp.optimal_brake_dist * scale)
+                         bp.metres_later)
                 for bp in bps if matched(bp.cid)
             }
             # A lap that matched no corner contributes no row at all, exactly as a lap with no
@@ -2799,10 +2801,9 @@ class Session:
 
     def brake_report(self) -> list[stats_service.BrakeConsistency]:
         """Per-corner braking repeatability + commitment over the consistency laps (the
-        Stats page's BRAKING table), aggregated from `_brake_rows` — the same per-lap list the
-        coaching hint's `coaching_brake_points` medians, so the two surfaces' "m later" cannot
-        drift apart. [] without corners / g signal / clean laps. Not cached (read on load /
-        re-segment only)."""
+        Stats page's BRAKING table, whose last column is the brake-point model's bound), aggregated
+        from `_brake_rows` — the one per-lap list every braking surface reads. [] without corners /
+        g signal / clean laps. Not cached (read on load / re-segment only)."""
         rows = self._brake_rows()
         corner_list = self.corners.corner_list()
         if not rows or not corner_list:
@@ -3063,23 +3064,6 @@ class Session:
                     continue
                 pairs.setdefault(int(cid), []).append((float(entry[0]), float(st[k].time)))
         return coaching.brake_directions(pairs)
-
-    def coaching_brake_points(self) -> dict:
-        """The per-corner BRAKING HABIT over the clean laps, keyed by cid → coaching.BrakeHabit —
-        the ESTIMATED "brake ~N m later" figure (D4). No surface prints it since L7 took it off the
-        Coaching rows (`coaching_brake_direction` is their braking line now); Stats ▸ BRAKING prints
-        the same median through `brake_report`. Empty {} without corners / a g signal / clean laps.
-
-        It reads `_brake_rows` — the SAME per-lap list `brake_report` aggregates for the Stats ▸
-        BRAKING table — so the metres this prints are the metres that table prints. It used to be
-        the BEST lap's single application, which disagreed with the table by up to 20.4 m on the
-        working-set recordings and, at 0064's C4, turned a 6 m "later" habit into "~14 m earlier"
-        (see coaching.BrakeHabit)."""
-        rows = self._brake_rows()
-        corner_list = self.corners.corner_list()
-        if not rows or not corner_list:
-            return {}
-        return coaching.brake_habits([c.cid for c in corner_list], rows)
 
     # ------------------------------------------------------- the focus list (the training loop)
     def focus_samples(self, windows) -> list[focus.CornerSample | None]:

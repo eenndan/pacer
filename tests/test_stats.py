@@ -4749,8 +4749,9 @@ def test_coaching_the_brake_points_and_the_line_sigma_count_only_matched_cells()
       0.038 s — one quantity, one lap set, two printed numbers.
     * A BRAKE POINT is read inside the projected window (the last onset in [enter − lead, exit],
       and an optimum built from that window's apex), so an interpolated corner contributes no row
-      to `_brake_rows` — and therefore none to the BRAKING table or to the coaching hint, which
-      medianize the same list. At most 0.7 m on 0060, nothing on 0062."""
+      to `_brake_rows` — and therefore none to the BRAKING table, the one surface that
+      medianizes that list since L8 retired the coaching habit. At most 0.7 m on 0060, nothing on
+      0062."""
     session = _flippable_drift_session()
     s = session()
     ids = s.consistency_lap_ids()
@@ -4793,7 +4794,6 @@ def test_coaching_the_brake_points_and_the_line_sigma_count_only_matched_cells()
     n_before = next(b.n for b in s.brake_report() if b.cid == target)
     gone = session(flip={(i, 2 * k_target) for i in ids})
     assert all(target not in row for row in gone._brake_rows()), gone._brake_rows()
-    assert target not in gone.coaching_brake_points(), "an interpolated corner still has a habit"
     assert next((b.n for b in gone.brake_report() if b.cid == target), 0) == 0, (
         f"C{target} kept {n_before} brake rows measured in a window nobody matched")
     print(f"ok coaching + braking: the LINE σ is the CORNERS table's, an unmatched baseline drops "

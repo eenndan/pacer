@@ -31,9 +31,10 @@ absolute figure's 95 % bootstrap band per Sandown corner, and where two days' ba
 
 IT READS THE APP'S OWN LIST. The per-lap rows are rebuilt the way `Session._brake_rows` builds them
 (clean laps, cells matched on track, the reference-odometer scale) and asserted EQUAL to
-`_brake_rows()` before anything is computed, so the probe measures the list both braking surfaces
-medianize, not a copy of it. Outcome windows go onto each lap through the SAME warp
-`lap_brake_points` uses (`corners.project_boundaries` with the driving service's memo).
+`_brake_rows()` before anything is computed, so the probe measures the list Stats ▸ BRAKING
+medianizes (and the Coaching hint did, until L7), not a copy of it. Outcome windows go onto each
+lap through the SAME warp `lap_brake_points` uses (`corners.project_boundaries` with the driving
+service's memo).
 
 Its verdict is `studio/docs/refused-2026-09.md` §16.
 
@@ -153,7 +154,7 @@ def collect(s) -> dict[int, list[dict]]:
                 and bool(res[index[int(bp.cid)]])]
         row = {bp.cid: (bp.actual_brake_dist * scale,
                         (bp.peak_decel_g / bp.a_max_g) if bp.a_max_g > 0 else None,
-                        bp.metres_later, bp.optimal_brake_dist * scale) for bp in kept}
+                        bp.metres_later) for bp in kept}
         if not row:
             continue
         rebuilt.append(row)
@@ -332,9 +333,9 @@ def main() -> int:
         s = Session.load(paths)
         per = collect(s)
         rows = measure(rec_i, per, coaching.MIN_BRAKE_LAPS)
-        habits = s.coaching_brake_points()
-        assert all(abs(habits[r["cid"]].metres_later - r["abs"]) < 1e-9 for r in rows), \
-            "the hint column is not the app's BrakeHabit median"
+        braking = {b.cid: b for b in s.brake_report()}
+        assert all(abs(braking[r["cid"]].metres_later_med - r["abs"]) < 1e-9 for r in rows), \
+            "the hint column is not the median Stats ▸ BRAKING prints"
         report(key, name, rows, s.driving._a_max(), [x["eff"] for v in per.values() for x in v],
                margin, floor)
         results[key] = rows

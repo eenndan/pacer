@@ -97,7 +97,7 @@ measure what each pace surface does without them. Its verdict is `studio/docs/re
 
 `p17_braking_room` loads the four working-set recordings and asks whether a RELATIVE braking-room
 figure can replace the absolute "brake ~N m later", which is positive at every corner. It rebuilds
-the per-lap list both braking surfaces medianize, asserts it equal to the app's, and holds each
+the per-lap list Stats ▸ BRAKING medianizes, asserts it equal to the app's, and holds each
 candidate to its own noise bar and to the lap outcome (do later onsets go with quicker passes?). Its
 verdict is `studio/docs/refused-2026-09.md` §16.
 
