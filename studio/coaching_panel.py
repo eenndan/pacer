@@ -703,19 +703,15 @@ def _wire_reason_fit(table: QTableWidget, col: int):
     timer.start(0)
 
 
-def _fit_reason_rows(table: QTableWidget, col: int):
-    """Re-height every wrapped reason cell in `col` from the rect the delegate paints into, then
-    re-fit the rows. Idempotent — safe to call on every resize."""
-    # Re-entrancy guard: re-fitting rows can toggle the vertical scrollbar, which re-stretches the
-    # header, which calls back in here. One pass at a time; the next width change refits anyway.
-    if table.property("_fitting_reason"):
-        return
+def _reason_text_box(table: QTableWidget, col: int, column_px: int) -> tuple[int, int]:
+    """(width the glyphs are laid out in, vertical padding) for a `col` cell `column_px` wide —
+    the rect the delegate PAINTS into, not the section's."""
     opt = QStyleOptionViewItem()
     opt.initFrom(table)
     opt.features = QStyleOptionViewItem.HasDisplay
     # The painter's own cell width, not the section's: the grid line lives inside the section and
     # is not paintable text (QTableView::visualRect is a pixel narrower than columnWidth for it).
-    cell_w = table.columnWidth(col) - (1 if table.showGrid() else 0)
+    cell_w = column_px - (1 if table.showGrid() else 0)
     opt.rect = QRect(0, 0, cell_w, 100)
     text_rect = table.style().subElementRect(QStyle.SE_ItemViewItemText, opt, table)
     # ...and SE_ItemViewItemText is still NOT where the glyphs land. QCommonStyle's own
@@ -727,7 +723,17 @@ def _fit_reason_rows(table: QTableWidget, col: int):
     # line as "…", eating the sentence's last word with no user action at all. Same family as the
     # QSS-padding error the block above this function documents, one layer further in.
     inset = 2 * (table.style().pixelMetric(QStyle.PM_FocusFrameHMargin, opt, table) + 1)
-    avail, pad_v = text_rect.width() - inset, 100 - text_rect.height()
+    return text_rect.width() - inset, 100 - text_rect.height()
+
+
+def _fit_reason_rows(table: QTableWidget, col: int):
+    """Re-height every wrapped reason cell in `col` from the rect the delegate paints into, then
+    re-fit the rows. Idempotent — safe to call on every resize."""
+    # Re-entrancy guard: re-fitting rows can toggle the vertical scrollbar, which re-stretches the
+    # header, which calls back in here. One pass at a time; the next width change refits anyway.
+    if table.property("_fitting_reason"):
+        return
+    avail, pad_v = _reason_text_box(table, col, table.columnWidth(col))
     if avail <= 0:  # a collapsed column: leave Qt's own heights alone rather than pin nonsense
         return
     fm = table.fontMetrics()
@@ -1631,13 +1637,31 @@ class OpportunitiesPanel(QWidget):
 
     def _shortlist_px(self) -> int:
         """The height the table needs to show its first ``PANEL_TOP_N`` rows whole: its frame, its
-        header and those rows at the widths they have now. 0 while the page shows its empty state —
-        there is no ranking to make room for."""
+        header and those rows. 0 while the page shows its empty state — there is no ranking to make
+        room for.
+
+        EACH ROW AT ITS NARROW HEIGHT — wrapped as if the vertical scrollbar were showing, whether
+        or not it is. Reserving the rows at the width they happen to have made a knife-edge, and
+        the real window sat on it: on SD_30_08 the three rows fit without the scrollbar (190 px in
+        200) and not with it (204 px), so each fit toggled the bar, narrowed or widened the reason
+        column by its 12 px, and pinned rows for the width it had just left — the page flipped
+        between the two every ~0.4 s, half the time with C7's brake-point line cut to "…". Sized
+        for the narrow width, the shortlist fits either way and the bar never has to appear."""
         t = self.table
         if self.body.currentIndex() != 0 or t.rowCount() == 0:
             return 0
+        col = _PANEL_COL_REASON
+        bar = t.verticalScrollBar()
+        narrow = t.columnWidth(col) - (0 if bar.isVisible() else bar.sizeHint().width())
+        avail, pad_v = _reason_text_box(t, col, narrow)
+        fm = t.fontMetrics()
+        rows = 0
+        for r in range(min(PANEL_TOP_N, t.rowCount())):
+            item = t.item(r, col)
+            wrapped = (fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, item.text()).height()
+                       if item is not None and avail > 0 else 0)
+            rows += max(t.rowHeight(r), wrapped + pad_v)
         hdr = t.horizontalHeader()
-        rows = sum(t.rowHeight(r) for r in range(min(PANEL_TOP_N, t.rowCount())))
         return rows + max(hdr.height(), hdr.sizeHint().height()) + 2 * t.frameWidth()
 
     # ------------------------------------------------------------- interaction

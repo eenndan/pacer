@@ -408,6 +408,98 @@ def test_the_default_window_shows_the_top_three_whole():
           f"theme {0 if p.theme_block.isHidden() else p.theme_block.height()} px)")
 
 
+def _page_state(p) -> tuple:
+    """Everything the height budget and the row fit decide, as one comparable value."""
+    t = p.table
+    return (t.verticalScrollBar().isVisible(), t.columnWidth(_PANEL_COL_REASON), t.rowCount(),
+            tuple(t.rowHeight(r) for r in range(t.rowCount())),
+            tuple(not a.isHidden() for a in p.theme_block.actions), p.theme_block.isHidden())
+
+
+def _clipped_rows(t) -> list[tuple[int, int, int]]:
+    """(row, pinned px, px its wrapped reason needs at the column's CURRENT width) for every row
+    painted shorter than its text — the row whose last line paints as "…"."""
+    from studio.coaching_panel import _reason_text_box
+    avail, pad_v = _reason_text_box(t, _PANEL_COL_REASON, t.columnWidth(_PANEL_COL_REASON))
+    fm = t.fontMetrics()
+    out = []
+    for r in range(t.rowCount()):
+        need = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap,
+                               t.item(r, _PANEL_COL_REASON).text()).height() + pad_v
+        if t.rowHeight(r) < need:
+            out.append((r, t.rowHeight(r), need))
+    return out
+
+
+def test_the_shortlist_budget_settles_and_never_clips_a_row():
+    """The shortlist reserve must converge, at every page height near the default.
+
+    MEASURED on the real window (SD_30_08, 1440x900) with the reserve taken at the rows' CURRENT
+    width: the three rows fit without the vertical scrollbar (190 px in 200) and not with it
+    (204 px), so every fit toggled the bar, moved the reason column 12 px and pinned the rows for
+    the width it had just left. The page flipped between the two states every ~0.4 s, and in one
+    of them C7's "(est)" brake line painted as "…". The reserve is taken at the NARROW width now.
+
+    The knife-edge only exists at a page width where the scrollbar's 12 px changes how a top row
+    wraps, so the test FINDS those widths for this fixture first (and fails if there are none — a
+    sweep that never reaches the edge proves nothing), then sweeps the page height across them.
+
+    What it pins is the GEOMETRY that removes the edge, not the flip itself: this fixture settles
+    either way when nothing re-lays it out, while the real window's periodic relayouts kept the
+    lagging fit running. So: whenever the focus or theme block holds any height, the top rows fit
+    even at the NARROW width — the blocks never take the pixels the scrollbar would need."""
+    from studio import focus as F
+    from studio.coaching_panel import _reason_text_box
+
+    p = _panel(_rows(6), DEFAULT_PANEL)
+    p.set_focus_report(F.Report(track="Stadium", outcomes=[]))
+    t, fm = p.table, p.table.fontMetrics()
+    bar = t.verticalScrollBar().sizeHint().width()
+
+    def wraps(column_px):
+        avail, _ = _reason_text_box(t, _PANEL_COL_REASON, column_px)
+        return [fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap,
+                                t.item(r, _PANEL_COL_REASON).text()).height()
+                for r in range(min(PANEL_TOP_N, t.rowCount()))]
+
+    edges = []
+    for w in range(470, 600, 4):
+        p.resize(w, DEFAULT_PANEL[1])
+        for _ in range(8):
+            _APP.processEvents()
+        wide = t.columnWidth(_PANEL_COL_REASON) + (bar if t.verticalScrollBar().isVisible() else 0)
+        if wraps(wide) != wraps(wide - bar):
+            edges.append(w)
+    assert edges, "no width where the scrollbar changes a top row's wrap: this sweep proves nothing"
+    _, pad_v = _reason_text_box(t, _PANEL_COL_REASON, 300)
+    unsettled, clipped, edge = [], [], []
+    for w in edges[:4]:
+        for h in range(340, 481, 4):
+            p.resize(w, h)
+            for _ in range(12):
+                _APP.processEvents()
+            first = _page_state(p)
+            for _ in range(12):
+                _APP.processEvents()
+            if _page_state(p) != first:
+                unsettled.append((w, h))
+            if _whole_rows(t) >= PANEL_TOP_N and _clipped_rows(t):
+                clipped.append((w, h, _clipped_rows(t)))
+            blocks = not (p.focus_block.isHidden() and p.theme_block.isHidden())
+            if blocks and not t.verticalScrollBar().isVisible():
+                wide = t.columnWidth(_PANEL_COL_REASON)
+                narrow = sum(max(t.rowHeight(r), n + pad_v)
+                             for r, n in enumerate(wraps(wide - bar)))
+                if narrow > t.viewport().height():
+                    edge.append((w, h, narrow, t.viewport().height()))
+    assert not unsettled, f"the page never settled at (width, height) {unsettled}"
+    assert not clipped, f"a row paints shorter than its reason: {clipped}"
+    assert not edge, ("the blocks took pixels the top rows need once the scrollbar shows "
+                      f"(width, height, rows px at the narrow width, viewport): {edge}")
+    print(f"test_the_shortlist_budget_settles_and_never_clips_a_row OK (widths {edges[:4]} × "
+          "36 heights, 340-480 px)")
+
+
 def test_every_header_sits_over_its_own_column():
     """L5-08: `defaultAlignment` centres every header. At a maximized 1220 px reason column that put
     "How to find it" 611 px from the left-aligned sentence it labels. Each header must take its own
@@ -532,6 +624,7 @@ def _run_all():
     test_a_reason_row_is_tall_enough_for_where_the_glyphs_actually_land()
     test_the_theme_block_never_squeezes_out_the_ranking()
     test_the_default_window_shows_the_top_three_whole()
+    test_the_shortlist_budget_settles_and_never_clips_a_row()
     test_every_header_sits_over_its_own_column()
     test_reach_cell_never_states_a_count_without_its_denominator()
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
