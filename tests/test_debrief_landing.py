@@ -16,7 +16,8 @@ Pinned here:
      unverified or ESTIMATED timing, and no "behind" for a recording the index already holds;
   2. the lead says the promotion is a default and how to undo it, and follows the list;
   3. while the page is the debrief its table is the headline's shortlist and the ESTIMATED
-     brake-point line stays off it (UX-2, "brake later" on 7 of 7 corners, is not settled);
+     brake-point line stays off it (UX-2: "brake later" at every corner, and no relative figure
+     survived measurement — refused-2026-09.md §16);
   4. THE JOURNEY on the real StudioWindow over two synthetic recordings of the built-in demo circuit
      (so the timing is verified), jailed, with the driver's remembered tab Corners and a persisted
      grid. It includes the defect this package found in its own first cut: the view's deferred
