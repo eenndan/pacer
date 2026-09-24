@@ -149,6 +149,10 @@ class LibraryController:
             _log.exception("session library not updated (not a write failure)")
         return moment
 
+    def debrief_pb_line(self) -> str | None:
+        """The debrief's PB sentence for the last `update_library` (None when it has none)."""
+        return library.pb_standing_text(self.pb_standing, fmt_time) if self.pb_standing else None
+
     def _library_excludes(self, paths: list[str]) -> bool:
         """True when this recording must stay OUT of the session library: the bundled DEFAULT_SAMPLE
         (not the user's driving) or a recording with no valid lap (a junk row the library would
