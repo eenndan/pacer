@@ -87,8 +87,11 @@ studio_datas = [
 # --- ffmpeg / ffprobe -----------------------------------------------------------------------------
 # Bundle the two binaries at the bundle ROOT; rthook_ffmpeg.py wires PACER_FFMPEG/PACER_FFPROBE to
 # them. Source: whatever ffmpeg/ffprobe is first on PATH at build time — for this repo that's the
-# pixi conda-forge ffmpeg (pyproject.toml [tool.pixi.dependencies] ffmpeg >=7.1,<8), an LGPL build.
-# DISTRIBUTION NOTE: ship the matching ffmpeg LICENSE/COPYING alongside the .app (see PACKAGING.md).
+# pixi conda-forge ffmpeg (pyproject.toml [tool.pixi.dependencies] ffmpeg >=7.1,<8), which pixi.lock
+# pins as ffmpeg-7.1.1-gpl_h670d5b4_111: GPL-3.0-or-later by its own `ffmpeg -L` (--enable-gpl
+# --enable-version3, linking libx264/libx265; libx264 is the export's software fallback).
+# DISTRIBUTION NOTE: a redistributed .app owes the GPLv3 text + the source of ffmpeg/x264/x265 (or a
+# written offer); THIRD_PARTY_NOTICES.md spells that out, with the alternative build.
 ffmpeg_binaries = []
 for _bin in ("ffmpeg", "ffprobe"):
     _path = shutil.which(_bin)

@@ -19,7 +19,7 @@ isn't a plain importable module:
 | --- | --- |
 | `pacer._pacer` native extension (`.so`) + the `pacer` package | the C++ core; found via the installed `pacer` package, so the bundle uses the same binary the app imports |
 | **PySide6 incl. QtMultimedia plugins** | the synced-video player needs the AVFoundation media backend; collected wholesale because the default hook can miss media plugins |
-| pyqtgraph + qtawesome Qt-side data | icon fonts / styling loaded via `__file__` |
+| pyqtgraph + qtawesome Qt-side data | icon fonts / styling loaded via `__file__`. qtawesome brings twelve fonts; the app draws only Phosphor, but qtawesome loads all twelve on its first icon, so all of them ship (licenses in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md#the-icon-fonts-qtawesome-bundles)) |
 | `studio/assets/` (Inter fonts, `pacer.icns`) and `studio/mk_centerline.json` | loaded via `os.path.dirname(__file__)`; mirrored into the bundle so those paths resolve. The QComboBox chevron used to live here too as a tracked `caret-down.png` the app re-rendered on every boot — PR #206 moved it to a per-process temp dir, which is also what stopped the frozen `.app` silently losing its chevron (`px.save` fails inside a read-only signed bundle) |
 | the tiny `3rdparty/.../hero6.mp4` sample | `Session.DEFAULT_SAMPLE` (the launch / "Open demo" fallback). Resolved via `sys._MEIPASS` when frozen |
 | **`ffmpeg` + `ffprobe`** binaries at the bundle root | a Finder-launched `.app` has no PATH ffmpeg; a runtime hook wires the app to the bundled ones (see below) |
@@ -28,16 +28,25 @@ isn't a plain importable module:
 
 Video export shells out to `ffmpeg`/`ffprobe`. The spec bundles whatever `ffmpeg`/`ffprobe` is
 **first on `PATH` at build time** — in this repo that is the pixi conda-forge ffmpeg
-(`pyproject.toml [tool.pixi.dependencies] ffmpeg >=7.1,<8`, an LGPL build).
+(`pyproject.toml [tool.pixi.dependencies] ffmpeg >=7.1,<8`), which `pixi.lock` pins as
+`ffmpeg-7.1.1-gpl_h670d5b4_111`: **GPL-3.0-or-later** by its own `ffmpeg -L`, and it links libx264
+and libx265.
 
 The runtime hook `packaging/rthook_ffmpeg.py` runs before any app code and sets `PACER_FFMPEG` /
 `PACER_FFPROBE` to the bundled binaries. `studio.export_video._resolve_binary` reads those env vars
 first (then a `sys._MEIPASS` lookup, then the bare PATH name), so the app finds ffmpeg with no PATH.
 In a normal dev checkout neither marker is set, so it's exactly the old PATH lookup — unchanged.
 
-> **Licensing for redistribution:** ffmpeg/ffprobe are bundled. The conda-forge ffmpeg is LGPL; if
-> you redistribute the `.dmg`, ship the matching ffmpeg `LICENSE`/`COPYING` alongside it. Swap in a
-> different ffmpeg build by putting it first on `PATH` before running the build.
+> **Licensing for redistribution:** the bundled ffmpeg is that `gpl_*` build, and libx264 is the
+> export's software fallback, so redistributing the `.app` or the `.dmg` owes the GPLv3 text and the
+> corresponding source of ffmpeg, x264 and x265 (or a written offer for it), plus the notices of the
+> libraries it links. [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md#ffmpeg-read-this-before-redistributing-the-app)
+> spells it out.
+>
+> The alternative is conda-forge's `lgpl_*` variant of the same ffmpeg (LGPL-2.1-or-later, no x264
+> or x265): pin it and move the software fallback to `libopenh264`, which is a code change, since the
+> fallback passes libx264's own `-preset` and `-crf`. Swap in any other ffmpeg build by putting it
+> first on `PATH` before running the build.
 
 ## Build (unsigned, local)
 
