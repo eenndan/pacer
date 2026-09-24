@@ -78,9 +78,10 @@ The **Coaching** tab (press **4**; the same rows in a resizable window under **C
 Opportunities**) ranks your corners by **time lost vs your best**, taken as the *median* over
 your clean laps, each with a **reason** (apex speed, braking, coasting, or line) and a **±σ**
 consistency badge — one row telling you *how much* time and *how repeatable* it is. It does not
-follow your lap selection; the **Corners** tab is the per-lap view. Braking-point hints
-("brake ~6 m later into C3") are labelled **EST** because they're inferred from the physics, not
-measured.
+follow your lap selection; the **Corners** tab is the per-lap view. Where your own laps show it,
+a row also says which way your braking went with your quicker passes through that corner
+("Braking later went with quicker passes here (36 laps)"). That is measured from your laps, and it
+is never a distance: Pacer's braking model can't honestly say how many metres.
 
 Stats ▸ **IDEAL LAP** answers the next question — *how much is actually on the table* — and says
 what it was built from: which of your laps donated each corner and straight, how many of your laps

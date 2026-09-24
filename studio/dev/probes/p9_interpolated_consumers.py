@@ -303,7 +303,7 @@ def report_hint_gate(s) -> None:
             no_habit.append(r.cid)
             continue
         past = float(bp.optimal_brake_dist) - float(r.entry_dist)
-        (suppressed if past > coaching_panel.BRAKE_HINT_MAX_PAST_TURN_IN_M else shown).append(
+        (suppressed if past > coaching.BRAKE_APPROACH_M else shown).append(
             (r.cid, past))
     print(f"7. T15 — {len(ranked)} ranked rows; the L5-10 geometry gate suppresses "
           f"{len(suppressed)} of them {[f'C{c}' for c, _ in suppressed]}, "
@@ -317,7 +317,7 @@ def report_hint_gate(s) -> None:
             continue
         c = corner_of[int(r.cid)]
         past = float(bp.optimal_brake_dist) - float(r.entry_dist)
-        gate = past > coaching_panel.BRAKE_HINT_MAX_PAST_TURN_IN_M
+        gate = past > coaching.BRAKE_APPROACH_M
         print(f"   C{r.cid:<4}  {float(r.entry_dist):>9.1f}  {float(c.apex):>7.1f}  "
               f"{float(bp.optimal_brake_dist):>9.1f}  {past:>+12.1f}  "
               f"{float(bp.metres_later):>+7.1f}   {'suppressed' if gate else 'shown'}")
