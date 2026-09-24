@@ -15,12 +15,11 @@ study: what it claims, how each claim was measured, and the gates that keep it t
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
 Building it is one command; reading it is the other intended use.
 
-<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on a real kart session: synced GoPro video, the speed-coloured track map with brake points and named corners, the Δ-to-ideal charts, and the Laps · Corners · Stats · Coaching · Marks panel">
+<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
 
-*Every screenshot on this page is a capture of D24 — two recordings of the Daytona 24-hour race at
-Milton Keynes, May 2026, that Pacer was built on. The numbers in them are that recording's. D24 has
-since left the development machine, so they are not re-measured; where a figure is current, the
-text says which recording it comes from.*
+*Every screenshot here is Pacer on Sandown 3h — three hours at Sandown Park, July 2026 — captured
+by one command, [`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
+[20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4) (MP4, no sound).*
 
 ---
 
@@ -35,8 +34,9 @@ Over **121 clean laps** across three recordings:
   quoting the worst of the three on purpose;
 - 14 clean laps of 15 aligned, 48 of 57, and 59 of 65. A modest sample, and the honest one.
 
-Two recordings are D24's, checked against the race's transponder log in June 2026 and reported as
-recorded — that footage has left the development machine. The third is a sprint race at the same
+Two recordings are D24's — the Daytona 24-hour race at Milton Keynes, May 2026, that Pacer was
+built on — checked against the race's transponder log in June 2026 and reported as recorded: that
+footage has left the development machine. The third is a sprint race at the same
 circuit on 18 September 2026, re-validated in September 2026 against the circuit's Club Speed timing
 on footage that is on the machine, by one command a real-footage check re-runs. The Sandown
 recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.
@@ -86,18 +86,13 @@ of your clean laps have already matched it, and which lap set the mark. The gain
 headline. It is an *order statistic*, so it falls as a session gets longer — the app says how many
 laps it was minimised over rather than letting you read it as a floor.
 
-<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP, captured on the owner's recording before a September 2026 change to corner matching and not re-measured since: 1:06.709 theoretical best over 65 laps, −1.49 s on the table vs your best, stitched from 20 of your 65 clean laps across 12 corners and 13 straights, with a per-segment gain table whose twelve rows hold 1.35 s of the 1.49 s">
-
-*The screenshot is D24's three chapters, captured before a September 2026 change to how Pacer
-matches corners; that recording is no longer available, so its figures have not been re-measured.
-On the recording Pacer is developed against now (Sandown 3h, three chapters), the same page reads
-theoretical best 45.809 over 62 laps, −1.27 s on the table.*
+<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP on Sandown 3h: 0:45.809 theoretical best over 62 laps, −1.27 s on the table vs your best, stitched from 13 of your 62 clean laps across 7 corners and 8 straights, with a per-segment gain table whose nine rows hold 1.13 s of the 1.27 s">
 
 **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation. Brake
 points, corner apexes and draggable start/sector lines sit on it, and every mark is named in the
 key — drag a line and the session re-segments.
 
-<img src="docs/media/map.png" width="620" alt="The map panel maximised, captured on D24: the racing line coloured by speed from 32 to 88 km/h, twelve named corner apexes, brake-point markers, the draggable start-line handle, and the map key naming every glyph">
+<img src="docs/media/map.png" width="620" alt="The map panel maximised on Sandown 3h: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven named corner apexes, brake-point markers, the draggable start-line handle, and the map key naming every glyph">
 
 **Charts, video, and the gap between two laps.** Speed and cumulative Δ to ideal, distance-aligned
 so corners line up. Scrub the chart and the footage follows; play two laps side by side — including
@@ -114,12 +109,13 @@ DRIVING, SPEED · G and **DATA TRUST**, which states what the timing was derived
 fixes were rejected, and the IMU↔GPS cross-check with its **gain** (correlation alone cannot catch
 a mis-scaled channel).
 
-<img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST, captured on D24: GPS9 true clock with 0% of moving fixes rejected, g-meter from IMU lateral and GPS-derived longitudinal, and an IMU↔GPS cross-check reading lateral r=+0.96, lateral gain ×1.11, longitudinal r=+0.81 over 971,016 samples — above the friction circle">
+<img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of 70 laps used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check reading lateral r=+0.96, lateral gain ×1.09, longitudinal r=+0.77 over 767,312 samples, and a gyroscope rotation cross-check — above the friction circle, with a 1.50 g grip envelope">
 
 **Exports.** Lap times and per-lap channels as CSV, a session report as HTML, a shareable lap card
-as an image, and the telemetry burned onto the footage as an MP4 (via ffmpeg).
+as an image, and the telemetry burned onto the footage as an MP4 (via ffmpeg) —
+[20 seconds of one](docs/media/best-lap.mp4), the best lap's, cut for the web.
 
-<img src="docs/media/overlay.png" width="880" alt="A frame of a real exported overlay video: the lap number, elapsed time and live delta burned into the top-left of the GoPro footage, with a g-meter and track map in the corners">
+<img src="docs/media/overlay.png" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.04 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 
 **And the window is yours.** Four resizable panels with a tabbed lap panel (Laps · Corners · Stats ·
 Coaching · Marks, digits `1`–`5`), a maximize button on every panel header, `⌘⌃F` for full screen,
@@ -218,7 +214,7 @@ evidence. The longer investigations are kept the same way:
 - [Why one recording matched far fewer of its corners on track](studio/docs/corner-match-0060-2026-09.md)
 - [Start/finish line verification](studio/docs/start-line-verification.md)
 
-Most were measured on D24, which has since left the development machine; those say so at the top.
+Most were measured on D24 and say so at the top.
 
 ## Non-goals
 

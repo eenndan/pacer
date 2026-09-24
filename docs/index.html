@@ -109,6 +109,9 @@
   /* Alt text has to be readable when an image 404s or the network drops — this page's whole
      argument is carried by seven PNGs. */
   img { max-width: 100%; height: auto; display: block; color: var(--text-dim); font-size: var(--small); }
+  /* The one clip: sized like an image, from its width/height attributes, so the box is reserved
+     before the poster or a byte of video arrives. */
+  video { max-width: 100%; height: auto; display: block; }
 
   .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--space-xl); }
 
@@ -175,7 +178,7 @@
     overflow: hidden;
     background: var(--surface);
   }
-  .figure img { width: 100%; padding: 0; }
+  .figure img, .figure video { width: 100%; padding: 0; }
   .figure figcaption {
     font-size: var(--small); color: var(--text-dim);
     padding: var(--space-m) var(--space-l);
@@ -336,8 +339,24 @@
 
     <figure class="figure">
       <img src="media/hero.png" width="2880" height="1800"
-           alt="The Pacer Studio window on a real kart session, captured on D24: GoPro video with its own transport, a speed-coloured track map with brake points and a named key, the SPEED · Δ TO IDEAL charts reading Δideal +0.61 s, and the tabbed lap panel with lap 42 starred as the session best at 1:08.201.">
-      <figcaption>One window on one recording — D24, the Daytona 24-hour race at Milton Keynes (May 2026) Pacer was built on, as is every screenshot on this page; their numbers are that recording's, and D24 has since left the development machine, so they are not re-measured. The four panels are independently resizable and any one of them maximises to the whole window; the lap panel below the video is five full-height pages — <strong>Laps, Corners, Stats, Coaching, Marks</strong> — on one tab bar.</figcaption>
+           alt="The Pacer Studio window on a real kart session, Sandown 3h: GoPro video with its own transport, a speed-coloured track map with brake points, seven named corners and a key, the SPEED · Δ TO IDEAL charts reading Δideal +0.26 s at 46 km/h, and the tabbed lap panel with lap 31 starred as the session best at 0:47.076.">
+      <figcaption>One window on one recording — Sandown 3h, three hours at Sandown Park in July 2026, as is every screenshot on this page. The four panels are independently resizable and any one of them maximises to the whole window; the lap panel below the video is five full-height pages — <strong>Laps, Corners, Stats, Coaching, Marks</strong> — on one tab bar.</figcaption>
+    </figure>
+
+    <!-- THE CLIP. Twenty seconds of the app's own overlay export of that session's best lap, cut by
+         studio/dev/media_capture.py (the `clip` shot) — a real export, not a screen recording.
+         Still for a reader who asks for reduced motion, with no script: the one <source> carries
+         `media="(prefers-reduced-motion: no-preference)"`, so under `reduce` no source matches and
+         the element shows its poster and nothing else. Safari never dropped `media` on a video
+         <source>, and Chrome and Firefox restored it in late 2023. The file has no audio stream at
+         all, so `muted` is what lets it autoplay, not what keeps it quiet. -->
+    <figure class="figure clip">
+      <video width="1280" height="720" autoplay muted loop playsinline poster="media/best-lap.jpg"
+             aria-label="Twenty seconds of Pacer's own overlay export of lap 31, the best lap of the Sandown 3h session: onboard kart footage with the lap clock and a BEST mark top-left, a g-meter top-right, a mini track map bottom-right and the speed bottom-left.">
+        <source src="media/best-lap.mp4" type="video/mp4" media="(prefers-reduced-motion: no-preference)">
+        <a href="media/best-lap.mp4">The best lap as the app exports it (MP4, 20 s, no sound)</a>
+      </video>
+      <figcaption><strong>The best lap, as the app exports it.</strong> The first twenty seconds of lap 31 (0:47.076), the fastest of the session's 62 clean laps, through <strong>File ▸ Export overlay video</strong> at 720p: the lap clock and <strong>★ BEST</strong>, a g-meter, a mini-map and the speed, drawn onto the GoPro footage by the app. No sound — the file carries no audio track — and a still frame if your system asks for reduced motion.</figcaption>
     </figure>
   </div>
 </section>
@@ -361,7 +380,7 @@
           <li><span class="stat-val">0.13 %</span><span class="stat-label">that worst σ, as a fraction of a ~68 s kart lap</span></li>
           <li><span class="stat-val">121 clean laps</span><span class="stat-label">14, 48 and 59, from 15, 57 and 65 aligned laps, across three recordings</span></li>
         </ul>
-        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 121 is the number of laps actually compared, not the span of lap IDs they occupied in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction. Two recordings are D24's, checked against that log in June 2026 and reported as recorded — that footage has left the development machine. The third, a sprint at the same circuit on 18 September 2026, was re-validated in September 2026 against the circuit's published Club Speed timing, and a real-footage check re-measures it. The Sandown recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.</p>
+        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 121 is the number of laps actually compared, not the span of lap IDs they occupied in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction. Two recordings are D24's — the Daytona 24-hour race at Milton Keynes in May 2026, which Pacer was built on — checked against that log in June 2026 and reported as recorded: that footage has left the development machine. The third, a sprint at the same circuit on 18 September 2026, was re-validated in September 2026 against the circuit's published Club Speed timing, and a real-footage check re-measures it. The Sandown recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.</p>
       </div>
       <figure class="figure">
         <img src="media/accuracy.png" width="2400" height="1080" loading="lazy" decoding="async"
@@ -391,14 +410,14 @@
 
     <div class="grid-2">
       <figure class="figure">
-        <img src="media/ideal-lap.png" width="976" height="1036" loading="lazy" decoding="async"
-             alt="Stats ▸ IDEAL LAP, captured on D24 before a September 2026 change to corner matching and not re-measured since: theoretical best 1:06.709 over 65 laps, −1.49 s on the table vs your best, stitched from 20 of 65 clean laps across 12 corners and 13 straights, with a table of every segment's gain, how many laps were already that fast there, and which lap set the mark.">
-        <figcaption>The ideal lap is a <strong>sum of per-segment minima</strong> — an order statistic, so it falls the longer you stay out. On D24 it read −0.95 s at 5 laps and −1.49 s at 65, for the same driving, measured before a September 2026 change to corner matching and not re-measured since; on the recording Pacer is developed against now (Sandown 3h, three chapters) the same page reads theoretical best 45.809 over 62 laps, −1.27 s on the table, and −0.61 s at 5 laps. So the tile states its sample, names the donor laps, and the gain column <strong>sums to the headline</strong>, with a note accounting for the rows below its 0.05 s floor.</figcaption>
+        <img src="media/ideal-lap.png" width="976" height="892" loading="lazy" decoding="async"
+             alt="Stats ▸ IDEAL LAP on Sandown 3h: theoretical best 0:45.809 over 62 laps, −1.27 s on the table vs your best, stitched from 13 of 62 clean laps across 7 corners and 8 straights, with a table of every segment's gain, how many laps were already that fast there, and which lap set the mark.">
+        <figcaption>The ideal lap is a <strong>sum of per-segment minima</strong> — an order statistic, so it falls the longer you stay out: on this session it is −0.61 s at 5 laps and −1.27 s at 62, for the same driving. So the tile states its sample, names the donor laps, and the gain column <strong>sums to the headline</strong>, with a note accounting for the rows below its 0.05 s floor.</figcaption>
       </figure>
       <figure class="figure">
-        <img src="media/data-trust.png" width="1296" height="948" loading="lazy" decoding="async"
-             alt="Stats ▸ DATA TRUST, captured on D24: timing on the GPS9 true clock with 0% of moving fixes rejected; g-meter using IMU lateral and GPS-derived longitudinal; IMU↔GPS cross-check agreeing at lateral r=+0.96, lateral gain ×1.11, longitudinal r=+0.81 over 971016 samples. Below it, the friction circle with a 1.37 g grip envelope.">
-        <figcaption>DATA TRUST names the clock, the rejected-fix rate, and which axis of the g-meter comes from where. The cross-check reports a <strong>gain</strong> as well as an r, because r is scale-blind: on D24 a channel correlated at 0.96 and was still 11% out.</figcaption>
+        <img src="media/data-trust.png" width="1564" height="1140" loading="lazy" decoding="async"
+             alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of 70 laps used; timing on the GPS9 true clock with 0% of moving fixes rejected; video sync corrected for a measured 0.46 s GPS lag; g-meter using IMU lateral and GPS-derived longitudinal; IMU↔GPS cross-check agreeing at lateral r=+0.96, lateral gain ×1.09, longitudinal r=+0.77 over 767,312 samples; a gyroscope rotation cross-check. Below it, the friction circle with a 1.50 g grip envelope.">
+        <figcaption>DATA TRUST names the clock, the rejected-fix rate, how the telemetry was put on the picture's clock, and which axis of the g-meter comes from where. The cross-check reports a <strong>gain</strong> as well as an r, because r is scale-blind: in this session the lateral channel correlates at 0.96 and is still 9% out.</figcaption>
       </figure>
     </div>
 
@@ -422,12 +441,12 @@
     <div class="grid-2">
       <figure class="figure">
         <img src="media/map.png" width="2864" height="2572" loading="lazy" decoding="async"
-             alt="The track map maximised to the whole window, captured on D24: a kart circuit's racing line coloured by speed from 32 to 88 km/h, twelve labelled corners, brake-point markers, the draggable start/finish line, and an open key naming every mark.">
+             alt="The track map maximised to the whole window on Sandown 3h: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven labelled corners, brake-point markers, the draggable start/finish line, and an open key naming every mark.">
         <figcaption><strong>The racing line is a data channel.</strong> Colour it by speed, Δ vs best, grip, or elevation; drag the start line or add sectors to re-segment the session. Every mark on the plot is named in a key you can open.</figcaption>
       </figure>
       <figure class="figure">
         <img src="media/overlay.png" width="1440" height="810" loading="lazy" decoding="async"
-             alt="A frame of a real exported overlay video, captured on D24: onboard kart footage with a lap-and-delta pill reading LAP 51, 0:28.733, Δ +0.17, a g-meter dial, a mini track map, and a 60 km/h speed readout burned in.">
+             alt="A frame of a real exported overlay video on Sandown 3h: onboard kart footage with a lap-and-delta pill reading LAP 23, 0:19.799, Δ +0.04, a g-meter dial at 0.3 g, a mini track map, and a 57 km/h speed readout burned in.">
         <figcaption><strong>The analysis leaves the app.</strong> A real frame from an exported overlay video — lap, split, live delta, speed, g-meter and mini-map composited onto the footage with ffmpeg. There is also a shareable lap-card image, and a data export of laps CSV + per-lap channels CSV + a one-page HTML session report.</figcaption>
       </figure>
     </div>
@@ -478,7 +497,7 @@
       </div>
       <div class="built-card wide">
         <h3>The real app, driven offscreen, on real footage</h3>
-        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>140+ CTest registrations</strong> run on every change (the fifteen that need a real recording report themselves skipped, by name, where there is none, and so does one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens and its own images.</p>
+        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page, and the clip, is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>140+ CTest registrations</strong> run on every change (the fifteen that need a real recording report themselves skipped, by name, where there is none, and so does one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens and its own images.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>
@@ -486,7 +505,7 @@
       </div>
       <div class="built-card wide">
         <h3>Built, measured, not shipped</h3>
-        <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it, so whoever proposes it next starts from the evidence. The longer investigations are kept the same way: <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gps-accuracy-research.md">GPS lap-timing accuracy</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/upstream-20ms-investigation.md">an upstream “~20&nbsp;ms vs transponder” claim</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/friction-circle-release-investigation.md">brake release from the friction circle</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/measured-channels-2026-09.md">sideslip, wheel hop and a bump map as channels</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gmeter-validation.md">the g-meter against GPS</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/grip-regrounding-2026-09.md">the grip column, re-grounded</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/corner-match-0060-2026-09.md">why one recording matched far fewer of its corners</a> and <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/start-line-verification.md">the start/finish line</a>. Most were measured on D24, which has since left the development machine; those say so at the top.</p>
+        <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it, so whoever proposes it next starts from the evidence. The longer investigations are kept the same way: <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gps-accuracy-research.md">GPS lap-timing accuracy</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/upstream-20ms-investigation.md">an upstream “~20&nbsp;ms vs transponder” claim</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/friction-circle-release-investigation.md">brake release from the friction circle</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/measured-channels-2026-09.md">sideslip, wheel hop and a bump map as channels</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/gmeter-validation.md">the g-meter against GPS</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/grip-regrounding-2026-09.md">the grip column, re-grounded</a>, <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/corner-match-0060-2026-09.md">why one recording matched far fewer of its corners</a> and <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/start-line-verification.md">the start/finish line</a>. Most were measured on D24 and say so at the top.</p>
       </div>
     </div>
   </div>
@@ -547,7 +566,7 @@ pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
       <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">License</a>
     </div>
     <p>Pacer © 2025–2026 eenndan, licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. NonCommercial use only; derivatives must be shared alike.</p>
-    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page is produced by one command, <code>studio/dev/media_capture.py</code>: the app shots are the real window rendered offscreen on a real recording, and the accuracy chart is drawn from the numbers in code rather than hand-designed. One caveat, stated because this page is about stating them: the hero's video pane is a real frame from the same recording composited into the window's own render, because an offscreen Qt render cannot capture a macOS video surface.</p>
+    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page, and the clip, is produced by one command, <code>studio/dev/media_capture.py</code>: the app shots are the real window rendered offscreen on a real recording, the clip is the app's own overlay export cut for the web, and the accuracy chart is drawn from the numbers in code rather than hand-designed. One caveat, stated because this page is about stating them: the hero's video pane is a real frame from the same recording composited into the window's own render, because an offscreen Qt render cannot capture a macOS video surface.</p>
   </div>
 </footer>
 
