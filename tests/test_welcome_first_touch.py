@@ -3,12 +3,12 @@
 Three findings, all measured on the REAL StudioWindow offscreen:
 
   * (a) THE SECOND CTA DEAD-ENDED. "Open demo" was unconditional, and the clip it resolves comes
-    from `PACER_DEMO_MP4`, a local cache, or a release asset **that was never published**
-    (docs/FIRST_LAP.md says so). So on a machine with neither the env var nor a cache — i.e. anyone
-    who builds this from source — the obvious low-commitment click produced "Demo clip
-    unavailable…" as their FIRST experience of the app. The button is now offered only when
-    `studio.demo.demo_available()` says a click could land somewhere, and the copy behind it no
-    longer offers a "retry" that cannot work.
+    from `PACER_DEMO_MP4`, a local cache, or a release asset that **had never been published**
+    (until the synthetic demo, demo-data-v1). So on a machine with neither the env var nor a cache
+    — i.e. anyone who builds this from source — the obvious low-commitment click produced "Demo
+    clip unavailable…" as their FIRST experience of the app. The button is now offered only when
+    `studio.demo.demo_available()` says a click could land somewhere, and the copy behind it offers
+    no "retry" button that is not on the screen.
   * (b) THE BUTTON WEIGHTS WERE INVERTED — the amber PRIMARY measured 133 px beside a 178 px
     secondary, because the secondary was floored at its busy label, and that label was a whole
     sentence ("Fetching the demo clip…"). The theme's hierarchy said one thing and the geometry
@@ -215,14 +215,17 @@ def test_the_cached_clip_is_the_other_state_that_offers_the_button():
     print("test_the_cached_clip_is_the_other_state_that_offers_the_button OK")
 
 
-def test_the_unavailable_copy_no_longer_offers_a_retry_that_cannot_work():
-    """The message `--demo` lands on when nothing resolves. It used to read "check your connection
-    and retry" — a retry of a download of an asset that was never published, aimed at a button that
-    is no longer on the screen. It must name what is true and what does work instead."""
+def test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works():
+    """The message `--demo` lands on when nothing resolves. It read "check your connection and
+    retry" while the asset had never been published — a retry that could not work, aimed at a button
+    no longer on the screen — and then "Pacer doesn't ship one", which stopped being true when the
+    synthetic demo was published (demo-data-v1). A failed download is now the only way here, so the
+    copy names it; it still offers no retry button, and it names the door that IS on the screen."""
     _none_state()
     text = DEMO_UNAVAILABLE_MESSAGE
+    assert "download" in text.lower(), text
+    assert "doesn't ship" not in text.lower(), text
     assert "retry" not in text.lower(), text
-    assert "connection" not in text.lower(), text
     assert "demo" in text.lower() and ".mp4" in text.lower(), text
     assert OPEN_LABEL.rstrip("…") in text, "the copy names the door that IS on the screen"
     # And it is ONE string: the CLI's `--demo` path and the resolve-came-back-None path both use it.
@@ -236,7 +239,7 @@ def test_the_unavailable_copy_no_longer_offers_a_retry_that_cannot_work():
     finally:
         win.close()
         _settle(0.1)
-    print("test_the_unavailable_copy_no_longer_offers_a_retry_that_cannot_work OK")
+    print("test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works OK")
 
 
 def test_the_cli_demo_flag_still_tries_the_network():
@@ -382,7 +385,7 @@ def _run_all():
     test_the_demo_button_is_offered_only_when_a_demo_resolves()
     test_the_env_var_lights_the_button_up_and_the_click_works_end_to_end()
     test_the_cached_clip_is_the_other_state_that_offers_the_button()
-    test_the_unavailable_copy_no_longer_offers_a_retry_that_cannot_work()
+    test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works()
     test_the_cli_demo_flag_still_tries_the_network()
     test_the_primary_is_the_wider_button_in_every_state_it_has_a_twin()
     test_the_secondary_button_still_cannot_move_the_row()

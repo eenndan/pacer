@@ -45,8 +45,9 @@ _SP_CENTROID = [51.37603659615385, -0.36095558076923084]
 _SP_BBOX = [51.37544968461538, -0.3623875461538462, 51.376623507692315, -0.35952361538461547]
 _SP_START = [[51.37617427563954, -0.3616823772388991], [51.376337128483875, -0.3617820116787019]]
 
-# Every built-in, in the order the merged view lists them.
-_BUILTIN_NAMES = ["Daytona Milton Keynes", "Sandown Park"]
+# Every built-in, in the order the merged view lists them. The third is the `--demo` recording's
+# fictional circuit (studio/dev/make_demo.py; tests/test_demo_session.py pins its fields).
+_BUILTIN_NAMES = ["Daytona Milton Keynes", "Sandown Park", "Synthetic demo circuit"]
 
 
 def _pacer_available() -> bool:
@@ -171,7 +172,7 @@ def test_a_saved_sandown_park_overrides_the_built_in_and_is_never_rewritten(monk
             sandown = [r for r in rows if r["name"] == "Sandown Park"]
             assert len(sandown) == 1, f"{label}: the manager lists {len(sandown)} Sandown Parks"
             assert sandown[0]["builtin"] and sandown[0]["editable"], sandown
-            assert [r["name"] for r in rows] == ["Daytona Milton Keynes", "Sandown Park", "Croft"]
+            assert [r["name"] for r in rows] == [*_BUILTIN_NAMES, "Croft"]
 
             assert _fingerprint(p) == before, f"{label}: reading the user's tracks rewrote the file"
             assert not os.path.exists(p + ".bak"), f"{label}: reading the user's tracks backed it up"
