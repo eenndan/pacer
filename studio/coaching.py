@@ -300,9 +300,10 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 #
 # MEASURED (T16b, 2026-09-23) on the evidence table's two working-set recordings, with D2 in (a
 # string of brake blips with no sustained brake is not a brake event), over the rows whose hint the
-# coaching panel would show if it still read the best lap: a RANKED row whose best lap has a matched
-# brake application, at least BRAKE_HINT_MIN_M of metres, and an optimum no more than
-# BRAKE_HINT_MAX_PAST_TURN_IN_M past the turn-in. "best lap" is that lap's single `metres_later`,
+# coaching panel would have shown had it still read the best lap (L7 has since taken the hint off
+# every row): a RANKED row whose best lap has a matched brake application, at least
+# BRAKE_HINT_MIN_M of metres, and an optimum no more than one brake zone (BRAKE_APPROACH_M) past
+# the turn-in, the gate that hint applied. "best lap" is that lap's single `metres_later`,
 # "habit" is the median the BRAKING table's "m later" column prints (+ = could brake later), "laps"
 # is how many clean laps matched an application, and "rank" is the row's place in the evidence
 # table above. The D24 edition, which #344 marked stale after #335 changed corner matching (and D2
@@ -416,9 +417,30 @@ def brake_habits(cids, rows_by_lap) -> dict[int, BrakeHabit]:
 # it opens; the line needs p < BRAKE_DIRECTION_ALPHA, the house α (`stats.COAST_LEAD_ALPHA`). Its
 # SIGN picks the word, so the line can say "earlier" as readily as "later": the defect it replaces
 # was a line that could only ever say one of them.
+#
+# MEASURED (L7, 2026-09-24) on the four working-set recordings — 0068 (SD_19_09_26), 0064 (Sandown
+# 3h 2026) and 0065 (SD_30_08_26), clockwise at Sandown Park, and 0067 (MK_18_09_26), the
+# anticlockwise control on another track — over every corner with a braking habit. One row per
+# corner whose line fires; "row" is whether its Coaching row is ranked, the only rows that print it.
+# tests/test_measured_figures.py derives the prose below from these cells and, given the footage,
+# re-measures every one and that no other corner fires:
+#
+#   rec   corner  laps       ρ        p   line    row
+#   0068  C3        36  -0.399   0.0159   later   ranked
+#   0068  C5        35  -0.340   0.0460   later   ranked
+#   0064  C6        57  -0.419   0.0019   later   ranked
+#   0065  C3        37  -0.359   0.0313   later   ranked
+#   0067  C2        16  -0.571   0.0240   later   ranked
+#   0067  C8        17  -0.740   0.0011   later   ranked
+#
+# The line fires at 6 of the 33 corners — 2 of 7 on 0068, 1 of 7 on 0064, 1 of 7 on 0065 and 2 of
+# 12 on 0067 — and all 6 read "later"; no corner separates "earlier". All 6 sit on ranked rows, so
+# all 6 are printed. Chance alone, at this α over 33 corners, would fire about 0.8 of them each way.
+# These are the six refused-2026-09.md §16 found with its own reader and seeds.
 BRAKE_DIRECTION_ALPHA = 0.05
-# Shuffles per corner; the house figure (`stats.COAST_SIGNFLIP_DRAWS`). At 10,000 a p near the α is
-# resolved to about ±0.002, which the measured table's closest corner clears by more than twice.
+# Shuffles per corner; the house figure (`stats.COAST_SIGNFLIP_DRAWS`). At 10,000 a p near the α
+# carries a Monte Carlo error of about ±0.002; the table's closest corner, 0068 C5, sits 0.004
+# under it.
 BRAKE_DIRECTION_DRAWS = 10_000
 
 BRAKE_LATER = "later"      # later onsets went with quicker passes
