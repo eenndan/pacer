@@ -1245,7 +1245,8 @@ class OpportunitiesPanel(QWidget):
     first open lands here full-window with a lead above the focus list (``DebriefBlock``) and the
     table cut to the shortlist the headline sums — one time figure and its corners, each with its
     Jump. The ESTIMATED brake-point line stays off the rows while the page is the debrief: it reads
-    "brake later" on 7 of 7 corners on two recordings (UX-2, not yet settled), and whatever a
+    "brake later" at 33 of 33 corners on the four working-set recordings (UX-2), no relative
+    figure that would say where survived measurement (refused-2026-09.md §16), and whatever a
     landing leads with is read literally. The measured reason stays; the estimate is back on this
     page the moment the debrief ends.
 
