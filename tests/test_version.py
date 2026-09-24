@@ -186,20 +186,28 @@ def test_changelog_sections_after_0_2_0_keep_the_short_shape():
     assert not problems, (
         "CHANGELOG.md sections after 0.2.0 must keep the short shape (the long form belongs in the "
         "PR description; see studio/dev/changelog.py):\n  " + "\n  ".join(problems))
-    # Not a check over nothing: [Unreleased] is shaped and has entries, and 0.2.0 is not shaped.
+    # Not a check over nothing: [Unreleased] is shaped, 0.2.0 is not, and the shaped sections hold
+    # entries. Counted over every shaped section, not [Unreleased] alone: a release folds
+    # [Unreleased] into its `## [x.y.z]` and leaves it EMPTY, and the fragments in changes/ keep it
+    # so until the next one (this asked [Unreleased] for entries, so v0.3.0's correct fold failed it).
     shaped = [name for name, _h, _e in cl.sections(text) if cl.is_shaped(name)]
     assert "Unreleased" in shaped and "0.2.0" not in shaped, shaped
     lines = text.splitlines()
-    head, end = next((h, e) for name, h, e in cl.sections(text) if name == "Unreleased")
-    _intro, groups, _p = cl._parse(lines[head + 1:end], head + 2)
-    entries = sum(len(es) for _g, _n, es in groups)
-    assert entries >= 1, "[Unreleased] parsed to no entries — the parser no longer reads it"
+    entries = {}
+    for name, head, end in cl.sections(text):
+        if cl.is_shaped(name):
+            _intro, groups, _p = cl._parse(lines[head + 1:end], head + 2)
+            entries[name] = sum(len(es) for _g, _n, es in groups)
+    assert sum(entries.values()) >= 1, (
+        f"the shaped sections parsed to no entries — the parser no longer reads them: {entries}")
+    empty = [name for name, n in entries.items() if name != "Unreleased" and n == 0]
+    assert not empty, f"a released section with no entries — the fold lost them: {empty}"
     # Both directions: the checker fails the two defects it exists for.
     planted = cl.section_problems(_PLANTED_SECTION.splitlines())
     assert any("an entry of 4 lines" in p for p in planted), planted
     assert any("`### Engineering`" in p for p in planted), planted
-    print(f"test_changelog_sections_after_0_2_0_keep_the_short_shape OK ({shaped}, "
-          f"{entries} entries in [Unreleased], {end - head} lines)")
+    print(f"test_changelog_sections_after_0_2_0_keep_the_short_shape OK (entries per shaped "
+          f"section: {entries})")
 
 
 def test_every_changelog_fragment_parses():
@@ -238,14 +246,32 @@ def _write(path, text):
         fh.write(text)
 
 
+def _unreleased(text):
+    """(intro lines, {group: [entry text, ...]}) of changelog `text`'s [Unreleased] section."""
+    cl = _changelog_module()
+    lines = text.splitlines()
+    head, end = next((h, e) for name, h, e in cl.sections(text) if name == "Unreleased")
+    intro, groups, _p = cl._parse(lines[head + 1:end], head + 2)
+    return ([line for _n, line in intro],
+            {name: ["\n".join(t) for _n, t in entries] for name, _n, entries in groups})
+
+
 def test_the_fold_round_trips_fragments_into_the_changelog():
     """The release step, on a copy of the real changelog: fragments land at the top of their
     groups, in the changelog's own shape, and are deleted; a release gets its heading, a fresh
-    [Unreleased] and its compare link; a malformed fragment or an entry with no PR writes nothing."""
+    [Unreleased] and its compare link; a malformed fragment or an entry with no PR writes nothing.
+
+    Whatever the real [Unreleased] holds: a release leaves it EMPTY and the fragments keep it so,
+    so nothing here names the release under it or assumes it has groups (this named 0.2.0 and
+    read [Unreleased]'s old top entries, and v0.3.0's correct fold failed it). Both states are
+    driven on every run: a populated [Unreleased] (the second fold) and the empty one a release
+    leaves (the last)."""
     import tempfile
     cl = _changelog_module()
     real = _read("CHANGELOG.md")
-    history = real[real.index("\n## [0.2.0]"):]
+    newest = _RELEASED_HEADING.findall(real)[0]      # the release [Unreleased] sits on
+    history = real[real.index(f"\n## [{newest}]"):]
+    preamble = real[:real.index("## [Unreleased]")]
     with tempfile.TemporaryDirectory() as tmp:
         _write(os.path.join(tmp, "CHANGELOG.md"), real)
         _write(os.path.join(tmp, "changes", "a-fix.md"),
@@ -257,16 +283,33 @@ def test_the_fold_round_trips_fragments_into_the_changelog():
         assert not problems, problems
         assert _read_abs(tmp, "CHANGELOG.md") == text and not os.listdir(os.path.join(tmp, "changes"))
         assert text.endswith(history), "the fold touched a section older than [Unreleased]"
-        before = real[real.index("## [Unreleased]"):real.index("\n## [0.2.0]")]
-        body = text[text.index("## [Unreleased]"):text.index("\n## [0.2.0]")]
+        assert text.startswith(preamble), "the fold touched the text above [Unreleased]"
         added = {"Added": "- A new thing (#9002)", "Changed": "- One name for grip (#9002)",
                  "Fixed": "- A lift is no longer read as a brake: strings of one-sample blips "
                           "counted as braking (#9001)"}
-        for group, first in added.items():   # each at the top of its group, above the old top
+        (intro0, before), (intro1, after) = _unreleased(real), _unreleased(text)
+        # Each at the top of its group, above whatever the group held (a group [Unreleased] lacked
+        # is created), the groups in the changelog's order, and the intro and every entry kept.
+        assert intro1 == intro0, (intro0, intro1)
+        assert list(after) == [g for g in cl.GROUPS if g in after], list(after)
+        for group in cl.GROUPS:
+            want = ([added[group]] if group in added else []) + before.get(group, [])
+            assert after.get(group, []) == want, (group, after.get(group, [])[:2], want[:2])
+
+        # Into a populated [Unreleased], byte for byte: each new entry lands directly above the
+        # old top of its group, and taking the new lines out gives back the section as it was.
+        _write(os.path.join(tmp, "changes", "d-more.md"),
+               "### Fixed\n\n- Another fix (#9004)\n\n### Added\n\n- Another thing (#9004)\n")
+        again, _target, problems = cl.fold(tmp, write=True)
+        assert not problems, problems
+        before = text[text.index("## [Unreleased]"):text.index(f"\n## [{newest}]")]
+        body = again[again.index("## [Unreleased]"):again.index(f"\n## [{newest}]")]
+        more = {"Added": "- Another thing (#9004)", "Fixed": "- Another fix (#9004)"}
+        for group, first in more.items():
             old_top = before.split(f"### {group}\n\n", 1)[1].split("\n", 1)[0]
             assert f"### {group}\n\n{first}\n{old_top}\n" in body, (group, first, old_top)
-        # ...and nothing else moved: taking the three lines out again gives back the section as it was.
-        assert [ln for ln in body.split("\n") if ln not in added.values()] == before.split("\n")
+        assert [ln for ln in body.split("\n") if ln not in more.values()] == before.split("\n")
+        text = again
 
         # A malformed fragment folds nothing, and neither does an entry whose PR is unknown (no git
         # history in a temporary directory to find it from): both leave every file as it was.
@@ -292,9 +335,20 @@ def test_the_fold_round_trips_fragments_into_the_changelog():
         assert "- Now with its PR (#9003)" in target and "- A new thing (#9002)" in target
         links = re.findall(r"^\[(Unreleased|9\.9\.9)\]: (\S+)$", released, re.MULTILINE)
         assert links == [("Unreleased", "https://github.com/eenndan/pacer/compare/v9.9.9...HEAD"),
-                         ("9.9.9", "https://github.com/eenndan/pacer/compare/v0.2.0...v9.9.9")], links
-        assert _RELEASED_HEADING.findall(released)[:2] == ["9.9.9", "0.2.0"]
-    print("test_the_fold_round_trips_fragments_into_the_changelog OK")
+                         ("9.9.9", f"https://github.com/eenndan/pacer/compare/v{newest}...v9.9.9")
+                         ], links
+        assert _RELEASED_HEADING.findall(released)[:2] == ["9.9.9", newest]
+
+        # The next fragment folds into the fresh, EMPTY [Unreleased] the release left: its group is
+        # created there, and nothing else in the file moves.
+        _write(os.path.join(tmp, "changes", "e-next.md"), "### Fixed\n\n- The next fix (#9005)\n")
+        nxt, _target, problems = cl.fold(tmp, write=True)
+        assert not problems, problems
+        entry = "### Fixed\n\n- The next fix (#9005)\n\n"
+        assert f"\n## [Unreleased]\n\n{entry}## [9.9.9] — 2030-01-02\n" in nxt, (
+            nxt[nxt.index("## [Unreleased]"):][:120])
+        assert nxt.replace(entry, "", 1) == released
+    print(f"test_the_fold_round_trips_fragments_into_the_changelog OK (on [{newest}])")
 
 
 def _read_abs(*parts):
