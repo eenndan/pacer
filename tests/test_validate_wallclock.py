@@ -282,8 +282,11 @@ def _num(cell: str) -> float:
 
 def _table_row(text: str, head: str, after: str) -> list[str]:
     """The cells of the first table row starting `| <head>` below the line containing `after`."""
-    tail = text[text.index(after):]
-    line = next(ln for ln in tail.splitlines() if ln.startswith(f"| {head}"))
+    at = text.find(after)
+    line = next((ln for ln in text[max(at, 0):].splitlines()
+                 if ln.lstrip().startswith(f"| {head}")), None)
+    assert at >= 0 and line, (f"docs/ACCURACY.md has no `| {head}` row under {after!r} — the "
+                              "table this check holds to the footage is gone or reworded")
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 

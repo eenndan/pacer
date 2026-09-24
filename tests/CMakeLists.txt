@@ -142,6 +142,7 @@ add_footage_test(test_measured_figures test_the_beat_rate_table_matches_the_foot
 add_footage_test(test_measured_figures test_the_focus_tables_match_the_footage)
 add_footage_test(test_measured_figures test_the_floor_table_matches_the_footage)
 add_footage_test(test_measured_figures test_the_refusal_record_matches_the_footage)
+add_footage_test(test_validate_wallclock accuracy_mk)
 
 # ---- SOAKS -------------------------------------------------------------------------------------
 # A probabilistic check too slow for every PR, whose root cause a fast deterministic guard in the
