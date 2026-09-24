@@ -4,7 +4,8 @@ Pacer's own source code is licensed under **CC BY-NC-SA 4.0** (see [LICENSE](LIC
 on, links against, and (when packaged as a macOS app — see [docs/PACKAGING.md](docs/PACKAGING.md))
 **bundles** the third-party components listed below, each of which is governed by **its own license**,
 not Pacer's. A redistributed binary must carry these notices. Nothing is redistributed today: no
-release carries a binary.
+release carries a build of the app (`demo-data-v1` holds only the synthetic demo recording, which
+is data).
 
 | Component | Role | License |
 |---|---|---|

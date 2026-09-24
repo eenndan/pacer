@@ -9,10 +9,12 @@ studio/player_pane.py). For headless CI runners with no media/audio devices, whe
 real ffmpeg/AVFoundation pipeline blocks indefinitely. Every check below — the full Session
 load, the panel construction + wiring, the sidecar write/cleanup — runs identically in both
 modes; only the decoder/audio stack is absent."""
+import gc
 import os
 import shutil
 import sys
 import time
+import weakref
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 if "--no-video" in sys.argv[1:]:
@@ -20,6 +22,7 @@ if "--no-video" in sys.argv[1:]:
     # here — before any window exists — is early enough by construction.
     os.environ["PACER_NO_MEDIA"] = "1"
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from studio import library
@@ -122,6 +125,22 @@ _lib = library.load()
 assert len(s.valid_lap_ids()) == 0, "smoke fixture changed: DEFAULT_SAMPLE now has valid laps"
 assert len(_lib["entries"]) == 0, f"library: sample/0-lap open must be skipped, got {len(_lib['entries'])}"
 print("library entries:", len(_lib["entries"]), "(sample correctly not indexed)")
+
+# Tear the window down before the interpreter does. Left to interpreter exit, this module-level
+# window (kept alive by its own signal connections, which Python's collector cannot see) still held
+# its Session, and nanobind listed the Session's Laps and CoordinateSystem as "leaked" AFTER
+# `SMOKE OK`: a report that reads like a refcount bug, as the run's last words. Nothing had leaked;
+# they were simply still in use. The weakref makes that checkable: a Session that outlives its
+# closed, deleted window fails the smoke by name here instead of printing noise at exit.
+_session = weakref.ref(s)
+del s
+w.close()
+w.deleteLater()
+QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+del w
+gc.collect()
+assert _session() is None, "SMOKE FAILED — the Session outlived its closed, deleted window"
+
 # Only ever remove a directory this run created. `divert_app_support` ADOPTS an outer jail
 # (the QA write-jail harness) when one is already installed, and deleting that would pull
 # the floor out from under the harness watching it — hence the ownership flag.
