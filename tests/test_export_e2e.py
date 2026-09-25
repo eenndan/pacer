@@ -26,20 +26,30 @@ WHAT IS CHECKED, on the files themselves:
   * the default export, the dialog accepted unchanged: it opened on "Footage with the overlay burned
     in" (on Source and 5 s, so the stale prefs were in force); the file has a video and a
     non-silent audio stream, both starting at 0, at 30 fps with no timecode, exactly the planned
-    clip long; its middle is the SOURCE frame at each frame's media time (normalised correlation
-    with the known texture, best match within one source frame of the plan), the lap strip is
-    painted, and the map marker moves on every frame with the amber tail touching it;
+    clip long, and the clip starts 5 s before the kart truly crossed the line; its middle is the
+    SOURCE frame at each frame's media time (normalised correlation with the known texture), the
+    lap strip is painted, and the map marker moves on every frame with the amber tail touching it;
   * overlay-only, chosen explicitly: `_overlay_alpha.mov`, ProRes 4444 at 29.97 off the 59.94
     source, a straight (not premultiplied) alpha, no audio, the source's timecode plus the clip's
-    start frame embedded, and a finished box that says why the picture is black and what clock it
-    runs on; and the next dialog opens on the burned-in footage again.
+    start frame embedded, the same marker and tail, and a finished box that says why the picture
+    is black and what clock it runs on; and the next dialog opens on the burned-in footage again.
 
-Each check was watched failing on a planted defect: the Contents pref read again, the old
-session-fraction tail, the marker without interpolation, an overlay-only render without its
-timecode (the PR has the failures).
+THE MARGINS, measured 2026-09-25 on both encoder paths — VideoToolbox here, and libx264 + prores_ks
+with VideoToolbox hidden, as CI has it: the planned source frame correlates 0.99 and every other
+one within 7 frames under 0.02, and it is the best within +0.9 of the plan (limit 1.5: the seek
+keeps the first frame at or after t0, the fps filter then rounds); the clip starts 6 ms from truth
+(limit 25); the marker's neighbourhood changes by at least 0.25 of its p90 on every frame pair but
+one (libx264 skipped the last sub-pixel step; H.264 may skip 1 %, ProRes none); the tail starts
+more than 16k px out on 1.9 % of frames at worst (limit 5 %); 1,101 alpha pixels are brighter than
+their alpha, which premultiplied colour never is (limit 50).
 
-Run: python tests/test_export_e2e.py   (~25 s on the dev Mac: two renders of one 55 s clip at
-640x360; VideoToolbox here, libx264 + prores_ks where it is missing, as in CI)
+Each check was watched failing on a planted defect: the Contents pref read again (the dialog opens
+on overlay-only), the old session-fraction tail (away from its marker on 92 % of burned-in
+frames), the marker without interpolation (still across 58 % of burned-in and 67 % of ProRes frame
+pairs), an overlay-only render without its timecode.
+
+Run: python tests/test_export_e2e.py   (~23 s on a quiet dev Mac, ~35 s at load 5: two renders of
+one 55 s clip at 640x360)
 """
 import json
 import math
@@ -305,7 +315,9 @@ def _map_track(frames: np.ndarray, k: float):
 
 def _still_pairs(frames: np.ndarray, mx, my, half: int = 8) -> tuple[np.ndarray, float]:
     """How much the marker's neighbourhood changes between each pair of consecutive frames (sum of
-    |Δ| over a (2*half+1)^2 window at the earlier frame's marker), and the median change."""
+    |Δ| over a (2*half+1)^2 window at the earlier frame's marker), and the 90th percentile of that
+    change — the scale "still" is judged against. NOT the median: a marker held on its GPS samples
+    is still on more than half the pairs, which takes the median to zero with it."""
     f = frames[..., :3].astype(np.int32)
     moved = np.empty(len(f) - 1)
     for k in range(len(f) - 1):
@@ -313,7 +325,7 @@ def _still_pairs(frames: np.ndarray, mx, my, half: int = 8) -> tuple[np.ndarray,
         a, b = max(0, cy - half), max(0, cx - half)
         moved[k] = np.abs(f[k + 1, a:cy + half + 1, b:cx + half + 1]
                           - f[k, a:cy + half + 1, b:cx + half + 1]).sum()
-    return moved, float(np.median(moved))
+    return moved, float(np.percentile(moved, 90))
 
 
 def _corner() -> tuple[int, int, int, int]:
@@ -332,12 +344,12 @@ def _assert_map_marker(frames: np.ndarray, what: str, still_allowed: float = 0.0
     k = max(0.5, min(W, H) / 1080.0)            # the overlay's size scale (OverlayPainter._k)
     weight, mx, my, gap = _map_track(frames, k)
     assert weight.min() > 0, f"{what}: no map marker in frame {int(np.argmin(weight))}"
-    moved, median = _still_pairs(frames, mx, my)
-    still = np.flatnonzero(moved < 0.1 * median)
+    moved, scale = _still_pairs(frames, mx, my)
+    still = np.flatnonzero(moved < 0.1 * scale)
     assert len(still) <= still_allowed * len(moved), (
         f"{what}: the map marker stood still across {len(still)} of {len(moved)} frame pairs "
         f"(first at frames {still[:6].tolist()}; change {moved[still[:6]].round().tolist()} vs a "
-        f"median {median:.0f}) — held on a GPS sample instead of interpolated between them")
+        f"p90 of {scale:.0f}) — held on a GPS sample instead of interpolated between them")
     # 16k: a pixel or so past the glow. Measured on this clip, frames whose tail starts further
     # out: 1.9 % on libx264, 0.8 % on VideoToolbox; with the old session-fraction tail, 90 %.
     touch = 16.0 * k
