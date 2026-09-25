@@ -329,7 +329,7 @@ def region(w: StudioWindow, rect: QRect) -> QImage:
 def span(w: StudioWindow, first, last, right: int) -> QRect:
     """The TIGHT logical rect from the top of `first` to the bottom of `last`, `right` px wide.
 
-    NO PADDING, and that is the point. The Stats page's sections sit **4 px** apart — `ideal_note`
+    NO PADDING, and that is the point. The Stats page's sections sit **4 px** apart — `ideal.note`
     ends at y=887 and the `SPEED · G` heading starts at y=891 — so a crop padded by even the
     smallest space token frames the first pixels of a neighbouring section and the image reads as a
     mis-cut screenshot. Breathing room is added afterwards, as canvas, by `matte`."""
@@ -516,12 +516,13 @@ def shot_ideal(app: QApplication, w: StudioWindow, out_dir: str) -> str:
     """IDEAL LAP: the heading, both tiles, the sample line, the segment table and the remainder
     note — the whole block, because the honesty IS the relationship between them."""
     stats = _stats_page(app, w)
-    _scroll_to(app, stats, _heading(stats, "IDEAL LAP"), stats.ideal_note)
-    edge = right_edge(w, (stats.t_theoretical, stats.t_ideal_gap, stats.ideal_sample,
-                          stats.ideal_table, stats.ideal_note))
-    rect = span(w, _heading(stats, "IDEAL LAP"), stats.ideal_note, right=edge + PAD)
+    ideal = stats.ideal
+    _scroll_to(app, stats, _heading(stats, "IDEAL LAP"), ideal.note)
+    edge = right_edge(w, (ideal.t_theoretical, ideal.t_gap, ideal.sample, ideal.table,
+                          ideal.note))
+    rect = span(w, _heading(stats, "IDEAL LAP"), ideal.note, right=edge + PAD)
     print(f"media_capture: ideal-lap crop {rect.width()}x{rect.height()} logical · "
-          f"sample line = {stats.ideal_sample.text()[:60]}…")
+          f"sample line = {ideal.sample.text()[:60]}…")
     return save(matte(region(w, rect)), os.path.join(out_dir, "ideal-lap.png"))
 
 

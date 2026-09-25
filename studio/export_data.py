@@ -534,7 +534,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     GROUPS APPEAR AND VANISH LIKE THE PAGE'S DO. A group whose signal is absent is OMITTED, not
     printed full of dashes: no g-meter means no DRIVING group, exactly as `_refresh_driving` hides
     it; a degenerate ideal (one lap won every segment) drops the IDEAL LAP group, the same
-    `ideal_donor_lap_id()` gate `_refresh_ideal` and `laps_summary` take. Within a shown group an
+    `ideal_donor_lap_id()` gate `IdealSection.refresh` and `laps_summary` take. Within a shown group an
     individual absent value still reads as an em-dash, because there the dash IS the information.
 
     `unit` is the reader's display speed unit, matching `laps_table`'s parameter: the report's
@@ -638,8 +638,8 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         pace_rows.insert(3, ("best rolling", "" if rolling is None else fmt_time(rolling)))
         out.append(SummarySection("PACE", pace_rows))
 
-    # --- IDEAL LAP. Same three gates as the page (`_refresh_ideal`): a composite exists, more than
-    # one lap donated, and there is a best lap to measure the gap against.
+    # --- IDEAL LAP. Same three gates as the page (`IdealSection.refresh`): a composite exists,
+    # more than one lap donated, and there is a best lap to measure the gap against.
     sb = getattr(session, "ideal_segment_bests", lambda: None)()
     best_id = session.best_lap_id() if hasattr(session, "best_lap_id") else None
     single = (session.ideal_donor_lap_id() if hasattr(session, "ideal_donor_lap_id") else None)

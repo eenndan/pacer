@@ -433,12 +433,10 @@ ALIGNMENT_TEXT = [
     "studio/session.py",
     "studio/coaching.py",
     "studio/stats.py",
-    "studio/stats_panel.py",
-    # ...and the Stats-page sections split out of it since (ARCH-3), which carried its text.
-    "studio/stats_common.py",
-    "studio/stats_trust.py",
-    "studio/stats_braking.py",
-    "studio/stats_straights.py",
+    # The Stats page: `stats_panel` and every section split out of it (ARCH-3), which carried its
+    # text — read as a set, so a section that moves out keeps this guard without being listed.
+    *sorted(f"studio/{fn}" for fn in os.listdir(os.path.join(_REPO, "studio"))
+            if fn.startswith("stats_") and fn.endswith(".py")),
     "studio/provenance.py",
     "studio/driving_channels.py",
     "tests/test_studio_features.py",
