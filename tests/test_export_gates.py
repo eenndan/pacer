@@ -45,12 +45,14 @@
 Fake sessions throughout (the duck-typed surface these entry points reach through), so no pacer, no
 telemetry file and no render. Run: QT_QPA_PLATFORM=offscreen python tests/test_export_gates.py
 """
+import dataclasses
 import json
 import math
 import os
 import sys
 import tempfile
 import time
+from fractions import Fraction
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1015,6 +1017,12 @@ def test_the_options_hint_quantifies_the_size_and_the_work():
     print("test_the_options_hint_quantifies_the_size_and_the_work OK")
 
 
+# The key earlier builds stored the Contents row under. The owner's prefs.json still holds
+# `export_content_idx: 1`, and the app must never read or write it (E7), so the tests plant it by
+# the literal name on his disk rather than by any constant the app still has.
+_STALE_CONTENT_KEY = "export_content_idx"
+
+
 def _clear_export_preset():
     """Drop the persisted export preset so a guard can start from the app's own defaults.
 
@@ -1022,10 +1030,7 @@ def _clear_export_preset():
     every test in the process and by every run on a machine where the user has ever chosen one.
     A test that assumes an unstored state has to say so — and clear it."""
     data = prefs.load()
-    for key in (ExportController._PREF_EXPORT_RES, ExportController._PREF_EXPORT_QUALITY,
-                ExportController._PREF_EXPORT_LEAD, ExportController._PREF_EXPORT_SCOPE,
-                ExportController._PREF_EXPORT_ASPECT, ExportController._PREF_EXPORT_FIT,
-                ExportController._PREF_EXPORT_CONTENT):
+    for key in (*ExportController._EXPORT_DEFAULT_INDEX, _STALE_CONTENT_KEY):
         data.pop(key, None)
     prefs.save(data)
 
@@ -2058,13 +2063,13 @@ def _stored_export_prefs():
 
 
 def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_rows():
-    """Opening on a remembered overlay-only ProRes at Source (+ a 5 s run-up) shows ONE line naming
-    the two heavy rows and a "Use defaults" action. The action puts every row back to its default,
-    hides the line and writes NOTHING: prefs are written on Export, as they always were — so a
-    Cancel after it leaves the remembered choice in place, and an Export after it stores the
-    defaults. A dialog opening on the defaults shows no such line."""
+    """Opening on a remembered Source resolution (+ a 5 s run-up) shows ONE line naming it and a
+    "Use defaults" action. The action puts every row back to its default — Contents too, when it
+    was changed in the dialog — hides the line and writes NOTHING: prefs are written on Export, as
+    they always were — so a Cancel after it leaves the remembered choice in place, and an Export
+    after it stores the defaults. A dialog opening on the defaults shows no such line. (Contents
+    is no longer remembered at all — E7 — so Source is the one heavy row the line can name.)"""
     _clear_export_preset()
-    prefs.set(ExportController._PREF_EXPORT_CONTENT, 1)
     prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
     prefs.set(ExportController._PREF_EXPORT_LEAD, 1)
     remembered = _stored_export_prefs()
@@ -2079,6 +2084,7 @@ def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_row
             seen["opened"] = _export_rows(dlg)
             button = [b for b in recall.findChildren(QPushButton) if b.text() == "Use defaults"]
             assert len(button) == 1 and not button[0].autoDefault(), "Return must still mean Export"
+            _combo(dlg, "Contents").setCurrentIndex(1)      # a one-off pick, then thought better of
             button[0].click()
             seen["after"] = _export_rows(dlg)
             seen["hidden"] = recall.isHidden()
@@ -2087,9 +2093,9 @@ def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_row
         return on_dialog
 
     assert _run_options_dialog(win, reset_then(QDialog.Rejected)) is None
-    assert "Overlay only — ProRes 4444 (alpha)" in seen["text"], seen["text"]
     assert "Source (no downscale)" in seen["text"], seen["text"]
-    assert seen["opened"]["Contents"] == 1 and seen["opened"]["Resolution"] == 3, seen["opened"]
+    assert seen["opened"]["Resolution"] == 3 and seen["opened"]["Run-up / run-off"] == 1, \
+        seen["opened"]
     assert seen["after"] == _E5_DEFAULT_ROWS, f"Use defaults left rows behind: {seen['after']}"
     assert seen["hidden"], "the line still claims the remembered choices after Use defaults"
     assert seen["prefs_after_click"] == remembered, "Use defaults wrote prefs before Export"
@@ -2107,20 +2113,211 @@ def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_row
         return QDialog.Rejected
     _run_options_dialog(win, on_defaults)
     assert seen["none"] is None, "a dialog on the defaults shows the remembered-choices line"
-
-    # Source alone is named alone (and the lighter remembered rows are not the line's business).
-    prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
-
-    def on_source(dlg):
-        recall = _remembered_line(dlg)
-        seen["source_only"] = " ".join(w.text() for w in recall.findChildren(QLabel))
-        return QDialog.Rejected
-    _run_options_dialog(win, on_source)
-    assert "Source (no downscale)" in seen["source_only"], seen["source_only"]
-    assert "Overlay only" not in seen["source_only"], seen["source_only"]
     win.hide()
     _clear_export_preset()
     print("ok E5: remembered heavy choices are named; Use defaults resets the rows only")
+
+
+# ============================================ E7 — overlay-only is a one-off, and says what it is
+# The owner, 2026-09-25 12:09, over a QuickTime Player window: "exported again. the video is
+# completely black and time scale is odd." The dialog had reopened on Contents "Overlay only —
+# ProRes 4444 (alpha)", remembered since 24 Sep, so the export was the transparent track,
+# GX010067_overlay.mov: QuickTime draws its transparency as black and counts 11:24:30:00 →
+# 11:25:19:08 on its embedded camera timecode instead of 0:00 → 1:17. The file was right. The
+# fault was that a specialist, one-off choice stuck silently, took the composite's file name, and
+# nothing the owner met said what the file was.
+_E7_PRORES, _E7_PNG = 1, 2      # the two overlay-only rows of Contents
+_E7_SYNC = export_video.SourceSync(          # the owner's MK lap 14, as the E6 box states it
+    t0=1977.409, source_name="GX010067.MP4", source_frame=118526, local_start=1977.409,
+    rate=Fraction(30000, 1001), timecode="11:24:01:25", source_timecode="11:24:01:50")
+_E7_BLACK = "looks black in QuickTime and Finder"
+_E7_CLOCK = "runs on the footage's timecode rather than from 0:00"
+_E7_WATCH = ("For a video to watch or share, export again with "
+             f"“{ExportController._EXPORT_CONTENT_OPTIONS[0][0]}”.")
+_E7_PLAYERS = "players such as QuickTime show it on black and count time on the camera's clock"
+
+
+def test_the_dialog_opens_on_the_burned_in_footage_whatever_prefs_hold():
+    """The owner's prefs.json holds `export_content_idx: 1` and `export_res_idx: 3`. The dialog
+    opens on "Footage with the overlay burned in" anyway — under the stale ProRes row and the PNG
+    one alike — while Source, a row that still persists, is reopened and named as before. Picked
+    in the dialog, the ProRes row's hint says what a player will show; the PNG row's does not (no
+    player opens a folder of frames as a video)."""
+    seen = []
+    for stale in (_E7_PRORES, _E7_PNG):
+        _clear_export_preset()
+        prefs.set(_STALE_CONTENT_KEY, stale)
+        prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
+        win = _window(FakeSession())
+
+        def on_dialog(dlg):
+            recall = _remembered_line(dlg)
+            contents = _combo(dlg, "Contents")
+            opened = {"contents": contents.currentText(),
+                      "resolution": _combo(dlg, "Resolution").currentText(),
+                      "line": " ".join(w.text() for w in recall.findChildren(QLabel))
+                      if recall is not None else ""}
+            for row in (_E7_PRORES, _E7_PNG):
+                contents.setCurrentIndex(row)
+                opened[row] = [w for w in dlg.findChildren(QLabel) if "Output:" in w.text()][0].text()
+            seen.append(opened)
+            return QDialog.Rejected
+        _run_options_dialog(win, on_dialog)
+        win.hide()
+    for opened in seen:
+        assert opened["contents"] == "Footage with the overlay burned in", opened
+        assert opened["resolution"] == "Source (no downscale)", opened
+        assert "Source (no downscale)" in opened["line"], opened
+        assert "Overlay only" not in opened["line"], opened
+        assert _E7_PLAYERS in opened[_E7_PRORES], opened[_E7_PRORES]
+        assert "QuickTime" not in opened[_E7_PNG], opened[_E7_PNG]
+    _clear_export_preset()
+    print("ok E7: the dialog opens on the burned-in footage whatever Contents prefs hold")
+
+
+def test_an_export_never_reads_or_writes_the_contents_choice():
+    """Overlay-only is chosen per export. Accepted, it is what renders (the choice carries it out),
+    but no Contents key is stored; the rows that persist are stored as ever; the next dialog opens
+    on the burned-in footage again. And a stale key already on disk is neither read nor
+    rewritten — the owner's prefs.json is left exactly as it is."""
+    _clear_export_preset()
+    win = _window(FakeSession())
+
+    def pick_prores(dlg):
+        _combo(dlg, "Contents").setCurrentIndex(_E7_PRORES)
+        _combo(dlg, "Resolution").setCurrentIndex(0)        # a row that persists, as a control
+        return QDialog.Accepted
+    choice = _run_options_dialog(win, pick_prores)
+    assert choice.config.overlay_only, choice
+    assert choice.config.alpha_codec == export_video.ALPHA_PRORES, choice
+    stored = prefs.load()
+    assert _STALE_CONTENT_KEY not in stored, f"the Contents choice was stored: {stored}"
+    assert stored.get(ExportController._PREF_EXPORT_RES) == 0, stored
+
+    seen = {}
+
+    def reopen(dlg):
+        seen["rows"] = (_combo(dlg, "Contents").currentIndex(),
+                        _combo(dlg, "Resolution").currentIndex())
+        return QDialog.Rejected
+    _run_options_dialog(win, reopen)
+    assert seen["rows"] == (0, 0), f"reopened on (Contents, Resolution) = {seen['rows']}"
+
+    prefs.set(_STALE_CONTENT_KEY, _E7_PRORES)
+    choice = _run_options_dialog(win, lambda dlg: QDialog.Accepted)
+    assert not choice.config.overlay_only, "the stale Contents key was read"
+    assert prefs.load().get(_STALE_CONTENT_KEY) == _E7_PRORES, "the stale Contents key was rewritten"
+    win.hide()
+    _clear_export_preset()
+    print("ok E7: an export never reads or writes the Contents choice")
+
+
+def test_each_contents_choice_proposes_its_own_default_name():
+    """The transparent track took the composite's name — GX010067_overlay.mov, beside the
+    GX010067_overlay.mp4 exports — so nothing in Finder told the two apart. Through the REAL
+    File ▸ Export overlay video… entry point, each Contents row now proposes its own: the burned-in
+    footage keeps `_overlay.mp4`, the ProRes track is `_overlay_alpha.mov`, and a PNG sequence is
+    asked for as a folder (the recording's own), which has no file name to propose."""
+    _clear_export_preset()
+    win = _window(FakeSession())
+    asked = []
+    saved = {(export_video, "ffmpeg_available"): export_video.ffmpeg_available,
+             (export_video, "probe_video_size"): export_video.probe_video_size,
+             (QFileDialog, "getSaveFileName"): QFileDialog.getSaveFileName,
+             (QFileDialog, "getExistingDirectory"): QFileDialog.getExistingDirectory,
+             (QDialog, "exec"): QDialog.exec}
+    export_video.ffmpeg_available = lambda: True
+    export_video.probe_video_size = lambda _path: _E1_SOURCE
+    # Both prompts answer "cancel", so each export stops at its prompt and nothing renders.
+    QFileDialog.getSaveFileName = staticmethod(
+        lambda _w, _title, path, filt: (asked.append((os.path.basename(path), filt)), ("", ""))[1])
+    QFileDialog.getExistingDirectory = staticmethod(
+        lambda _w, _title, folder: (asked.append(("folder", folder)), "")[1])
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "GX010067.MP4")
+            open(src, "wb").close()
+            win._paths = [src]
+            for row in range(len(ExportController._EXPORT_CONTENT_OPTIONS)):
+                QDialog.exec = lambda dlg, r=row: (
+                    _combo(dlg, "Contents").setCurrentIndex(r), QDialog.Accepted)[-1]
+                win.exports.export_overlay_video()
+    finally:
+        for (owner, name), value in saved.items():
+            setattr(owner, name, value)
+    assert asked == [("GX010067_overlay.mp4", "MP4 video (*.mp4)"),
+                     ("GX010067_overlay_alpha.mov", "ProRes 4444 with alpha (*.mov)"),
+                     ("folder", td)], asked
+    win.hide()
+    _clear_export_preset()
+    print("ok E7: each Contents row proposes its own default name")
+
+
+def _e7_spec(out_path, row):
+    """A `_FakeSpec` carrying the config a real `ExportSpec` has for Contents row `row`."""
+    spec = _FakeSpec(out_path)
+    value = ExportController._EXPORT_CONTENT_OPTIONS[row][1]
+    overlay_only = value != ExportController._EXPORT_CONTENT_COMPOSITE
+    spec.config = export_video.OverlayConfig(
+        overlay_only=overlay_only,
+        alpha_codec=value if overlay_only else export_video.ALPHA_PRORES)
+    spec.is_png_sequence = value == export_video.ALPHA_PNG
+    spec.lap_id = 13
+    return spec
+
+
+def _e7_finished_body(win, specs, syncs):
+    """The export-finished box's body after the REAL `_run_video_export` "renders" `specs`, each
+    fake worker reporting its `SourceSync` where the real one does (`result.sync`)."""
+    pending, made, bodies = list(syncs), [], []
+
+    class _Worker(_FakeVideoWorker):
+        def __init__(self, session, spec, make_renderer=None):
+            super().__init__(session, spec, make_renderer)
+            self.result = SimpleNamespace(sync=pending.pop(0))
+            made.append(self)
+
+    def _exec(dlg):
+        while made:                 # each finished file starts the next from its handler
+            made.pop(0).finished_export.emit(True, "")
+        return QDialog.Accepted
+
+    saved = (export_controller.VideoExportWorker, QDialog.exec, QMessageBox.exec)
+    export_controller.VideoExportWorker = _Worker
+    QDialog.exec = _exec
+    QMessageBox.exec = lambda box, *_a, **_k: bodies.append(box.text()) or 0
+    try:
+        win.exports._run_video_export(specs)
+    finally:
+        export_controller.VideoExportWorker, QDialog.exec, QMessageBox.exec = saved
+    assert len(bodies) == 1, bodies
+    return bodies[0]
+
+
+def test_the_finished_box_says_what_an_overlay_only_file_is():
+    """Where the owner met the file, it now explains itself in two sentences: a transparent track
+    looks black in QuickTime and Finder and runs on the footage's timecode (only when it carries
+    one), and a video to watch comes from the burned-in row, named. Said once for a ProRes file or
+    batch; never for the composite, and not for a PNG sequence, which no player opens as a video."""
+    win = _window(FakeSession())
+    untimed = dataclasses.replace(_E7_SYNC, timecode=None, source_timecode=None)
+    prores = _e7_finished_body(win, [_e7_spec("/r/GX010067_overlay_alpha.mov", _E7_PRORES)],
+                               [_E7_SYNC])
+    assert _E7_BLACK in prores and _E7_CLOCK in prores and _E7_WATCH in prores, prores
+    assert prores.index("Starts at 11:24:01:50") < prores.index(_E7_BLACK), prores
+    bare = _e7_finished_body(win, [_e7_spec("/r/GX010067_overlay_alpha.mov", _E7_PRORES)],
+                             [untimed])
+    assert _E7_BLACK in bare and _E7_WATCH in bare, bare
+    assert "0:00" not in bare, f"a file with no timecode was said to run on one: {bare!r}"
+    batch = _e7_finished_body(
+        win, [_e7_spec(f"/r/GX010067_overlay_alpha_lap{n}.mov", _E7_PRORES) for n in (14, 15)],
+        [_E7_SYNC, _E7_SYNC])
+    assert batch.count(_E7_BLACK) == 1 and _E7_CLOCK in batch and _E7_WATCH in batch, batch
+    for row, out in ((0, "/r/GX010067_overlay.mp4"), (_E7_PNG, "/r/GX010067_frames")):
+        body = _e7_finished_body(win, [_e7_spec(out, row)], [_E7_SYNC if row else None])
+        assert "QuickTime" not in body and "export again" not in body, (row, body)
+    win.hide()
+    print("ok E7: the finished box says what an overlay-only file is, and only for one")
 
 
 def _run_all():
@@ -2165,6 +2362,10 @@ def _run_all():
     test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known()
     test_the_real_dialog_learns_the_source_frame_behind_itself()
     test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_rows()
+    test_the_dialog_opens_on_the_burned_in_footage_whatever_prefs_hold()
+    test_an_export_never_reads_or_writes_the_contents_choice()
+    test_each_contents_choice_proposes_its_own_default_name()
+    test_the_finished_box_says_what_an_overlay_only_file_is()
     print("ALL OK")
 
 
