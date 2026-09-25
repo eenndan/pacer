@@ -3030,9 +3030,10 @@ class StatsView(QWidget):
         muted = sum(1 for _val, res in cells if not res)
         if muted:
             # The verb agrees with `muted`, the subject — one muted cell is common (K2).
-            parts.append(f"{muted} of {len(cells)} cells {'is' if muted == 1 else 'are'} muted: "
-                         "that lap's corner edge was not matched on track, so the time is shown "
-                         "but never marked or counted in the typical.")
+            is_are = "is" if muted == 1 else "are"
+            parts.append(f"{muted} of {plural(len(cells), 'cell')} {is_are} muted: that lap's "
+                         "corner edge was not matched on track, so the time is shown but never "
+                         "marked or counted in the typical.")
         excluded = len(getattr(session, "excluded_lap_ids", list)() or [])
         dropouts = len(session.dropout_lap_ids()) if hasattr(session, "dropout_lap_ids") else 0
         left = []

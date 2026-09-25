@@ -1038,14 +1038,17 @@ def _reach_tip(ev: coaching.Evidence, of: int | None) -> str:
     clean laps" there, one line under a headline reading "median of 19 clean laps". Where the two
     differ it now says both, and why, in the words the Stats page's CORNERS hover uses for the same
     16 (`stats_panel._corner_count_tip`)."""
+    # An ABSTAINED row is on the table too (ABSTAIN_FEW_LAPS: under MIN_CORNER_LAPS), so
+    # `ev.n_laps` can be 1 here — and it is the subject of both "count"s below (K2).
+    counts = "counts" if ev.n_laps == 1 else "count"
     if of is None or ev.n_laps >= of:
-        return (f"{ev.reach_laps} of your {ev.n_laps} clean laps already matched or beat your "
-                "best lap's time through this corner.")
-    return (f"{ev.reach_laps} of the {ev.n_laps} laps that count here already matched or beat "
-            f"your best lap's time through this corner. {ev.n_laps} of your {of} clean laps "
-            f"count: on the other {of - ev.n_laps} the corner could not be matched to your best "
-            "lap's line on track, so its time was interpolated between its neighbours and is left "
-            "out, as the Stats page's CORNERS table leaves it out.")
+        return (f"{ev.reach_laps} of your {plural(ev.n_laps, 'clean lap')} already matched or "
+                "beat your best lap's time through this corner.")
+    return (f"{ev.reach_laps} of the {plural(ev.n_laps, 'lap')} that {counts} here already "
+            f"matched or beat your best lap's time through this corner. {ev.n_laps} of your {of} "
+            f"clean laps {counts}: on the other {of - ev.n_laps} the corner could not be matched "
+            "to your best lap's line on track, so its time was interpolated between its neighbours "
+            "and is left out, as the Stats page's CORNERS table leaves it out.")
 
 
 def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> QTableWidgetItem:
