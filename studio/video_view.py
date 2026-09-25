@@ -61,7 +61,7 @@ from PySide6.QtWidgets import (
 
 from . import chapters, data_quality, gmeter_overlay, theme
 from . import marks as marks_model
-from ._signal import fmt_hms
+from ._signal import fmt_hms, plural
 from .player_pane import PlayerPane
 from .widgets import PanelToolbar, ToggleButton, icon_button
 
@@ -496,9 +496,12 @@ class _QualityStrip(QWidget):
                 f" — {data_quality.QUALITY_MEANING[cls]}")
         if cls == data_quality.NO_FIX:
             return head
+        # A hover over one second (CELL_S) of degraded GPS can count a single fix — the very case
+        # this hover exists for.
+        fixes = plural(st["n"], "fix", "fixes")
         if cls == data_quality.UNREPORTED:
-            return f"{head} ({st['n']} fixes)"
-        bits = [f"{st['n']} fixes"]
+            return f"{head} ({fixes})"
+        bits = [fixes]
         if np.isfinite(st["dop"]):
             bits.append(f"worst DOP {st['dop']:.1f}")
         bits.append(f"{st['dropped']} rejected" if st["dropped"] else "none rejected")

@@ -39,9 +39,11 @@ def _app():
     return _APP
 
 
+# Both numbers of both clauses, in either grammatical number — this reads the ARITHMETIC; whether
+# each clause agrees with its count is `test_the_ideal_note_agrees_with_its_own_counts`'s job.
 _IDEAL_NOTE_RE = re.compile(
-    r"These (\d+) segments hold (-?\d+\.\d\d) s of the (-?\d+\.\d\d) s; "
-    r"the other (\d+) hold (-?\d+\.\d\d) s between them")
+    r"(?:These|This) (\d+) segments? holds? (-?\d+\.\d\d) s of the (-?\d+\.\d\d) s; "
+    r"the other (\d+) holds? (-?\d+\.\d\d) s")
 
 
 def _ideal_page_numbers(v):
@@ -210,6 +212,70 @@ def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
     assert sorted(gains, key=lambda k: -gains[k]) == ["C1", "C2"], gains
     assert labels[0] == "C2", "a gain-ordered table leads with C1; this one must not"
     print("test_ideal_decomposition_table_is_a_plan_not_a_taunt OK")
+
+
+def _note_fixture(gains, donors):
+    """A three-lap composite whose SUBJECT — lap 1, the stub's best lap — gives away exactly
+    `gains` per segment, each segment's minimum set by the lap `donors` names (the subject itself
+    only on a zero gain). One corner, so three segments: the smallest legal partition."""
+    from studio.corner_model import SegmentBests
+    times = np.full((3, len(gains)), 3.5)
+    for j, (gain, donor) in enumerate(zip(gains, donors, strict=True)):
+        times[donor, j] = 3.0
+        times[1, j] = 3.0 + gain
+    return SegmentBests(
+        labels=["start", "C1", "C1-finish"], cids=[1], lap_ids=[0, 1, 2], times=times,
+        admitted=np.ones(times.shape, bool), resolved=np.ones(times.shape, bool),
+        bests=[float(c.min()) for c in times.T],
+        donors=[int(times[:, j].argmin()) for j in range(len(gains))],
+        s_edges=list(np.linspace(0.0, 1.0, len(gains) + 1)), donor_span=[(0.0, 0.0)] * len(gains))
+
+
+def test_the_ideal_note_agrees_with_its_own_counts():
+    """K2 — the remainder note printed "These 1 segments hold 0.28 s of the 0.31 s" (found by
+    #403). Both of its counts were spliced into plural-only grammar: "These N segments hold" and
+    "the other M hold … between them, under 0.05 s each". A one-row plan is ordinary — one
+    corner's worth of gain over the floor — and a one-row REMAINDER is commoner still: 96 of the
+    240 composites the sweep above renders (40 %) leave exactly one segment under the floor.
+
+    Pinned on the rendered note, at 1 AND at more than 1 on each clause, and read back through
+    the arithmetic guard too, so the singular spellings are held to the same sums."""
+    _app()
+    from studio.stats_panel import StatsView
+
+    def note(gains, donors, rows):
+        sb = _note_fixture(gains, donors)
+        assert sb.single_donor_id() is None, "the block would hide instead of rendering a note"
+        s = _fake_view_session()
+        s.ideal_segment_bests = lambda: sb
+        s.ideal_total = lambda: sb.total
+        s.theoretical_best = lambda: sb.total
+        s.ideal_donor_lap_id = lambda: sb.single_donor_id()
+        v = StatsView(s)
+        assert v.ideal.table.rowCount() == rows, v.ideal.table.rowCount()
+        _assert_ideal_page_adds_up(v)
+        text = v.ideal.note.text()
+        v.deleteLater()
+        return text
+
+    # ONE segment over the floor (C1, 0.284), two under it (0.000 and 0.024).
+    one_shown = note([0.0, 0.284, 0.024], [1, 0, 0], rows=1)
+    assert one_shown.startswith(
+        "This 1 segment holds 0.28 s of the 0.31 s; the other 2 hold 0.03 s between them, "
+        "under 0.05 s each. Ranked by gain"), one_shown
+    # TWO over the floor (0.28, 0.12), ONE under it (0.02): "between them" and "each" are
+    # plural-only, so the singular clause carries neither.
+    one_left = note([0.02, 0.28, 0.12], [2, 0, 0], rows=2)
+    assert one_left.startswith(
+        "These 2 segments hold 0.40 s of the 0.42 s; the other 1 holds 0.02 s, under 0.05 s. "
+        "Ranked by gain"), one_left
+    # …and the plural spelling is unchanged where it was right (the hand-built 2-over / 3-under
+    # composite every other test here reads).
+    v = StatsView(_fake_view_session())
+    both = v.ideal.note.text()
+    assert both.startswith("These 2 segments hold 0.48 s of the 0.51 s; the other 3 hold "
+                           "0.03 s between them, under 0.05 s each."), both
+    print("test_the_ideal_note_agrees_with_its_own_counts OK")
 
 
 def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():

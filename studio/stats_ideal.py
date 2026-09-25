@@ -270,11 +270,18 @@ class IdealSection:
         # `sample` above the table, where it sits with the tiles it qualifies instead of
         # under ten rows of decomposition. One sentence, one place: printing the sample twice on
         # one block is how two surfaces drift apart.
+        #
+        # BOTH COUNTS CAN BE 1, and each clause agrees with its own (K2): a one-row plan printed
+        # "These 1 segments hold", and a one-row remainder — 96 of the 240 composites
+        # tests/test_stats_ideal.py sweeps — "the other 1 hold … between them, … each".
+        n_shown, n_rest = len(shown), len(rest)
+        lead = (f"This {n_shown} segment holds" if n_shown == 1
+                else f"These {n_shown} segments hold")
+        tail = (f"holds {rest_s:.2f} s, under {IDEAL_GAIN_FLOOR:.2f} s" if n_rest == 1
+                else f"hold {rest_s:.2f} s between them, under {IDEAL_GAIN_FLOOR:.2f} s each")
         self.note.setText(
-            f"These {len(shown)} segments hold {shown_s:.2f} s of the {gap_s:.2f} s; the other "
-            f"{len(rest)} hold {rest_s:.2f} s between them, under "
-            f"{IDEAL_GAIN_FLOOR:.2f} s each. Ranked by gain × how often you have already matched "
-            "your best lap there.")
+            f"{lead} {shown_s:.2f} s of the {gap_s:.2f} s; the other {n_rest} {tail}. Ranked by "
+            "gain × how often you have already matched your best lap there.")
 
     def _set_visible(self, on: bool) -> None:
         """Show/hide the IDEAL LAP block as a UNIT — heading, both tiles, the sample line, the

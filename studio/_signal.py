@@ -218,13 +218,17 @@ def fmt_hms(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-def plural(n: int, noun: str) -> str:
+def plural(n: int, noun: str, many: str | None = None) -> str:
     """"1 corner" / "7 corners" — the one-line count helper the ideal-lap disclosure needs on
     three nouns whose smallest legal value is 1 (a layout where the detector finds ONE corner
     still builds a 3-segment partition and can still stitch a genuine ideal). Shared from here
     because that disclosure is now printed by a Qt view AND by a Qt-free export writer; the
-    private copies in stats_panel / library_dialog delegate to it."""
-    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+    private copies in stats_panel / library_dialog delegate to it.
+
+    `many` is the plural when it is not `noun + "s"` — "1 raw GPS fix" / "2 raw GPS fixes".
+    tests/test_plural_copy.py holds the app's copy to this (or to its own singular branch)
+    wherever a count sits next to a plural noun."""
+    return f"{n} {noun}" if n == 1 else f"{n} {many or noun + 's'}"
 
 
 def lap_label(lap_id: int) -> str:

@@ -475,12 +475,13 @@ def _corner_count_tip(report) -> str:
     if of is None or n >= of:
         return ""
     if n == 0:
-        return (f"No time for C{report.cid}: on none of the {of} clean laps could its entry and "
-                "exit both be matched to your best lap's line on track, and an interpolated corner "
-                "time can be tenths of a second out.")
+        return (f"No time for C{report.cid}: on none of the {plural(of, 'clean lap')} could its "
+                "entry and exit both be matched to your best lap's line on track, and an "
+                "interpolated corner time can be tenths of a second out.")
+    them = "it is" if of - n == 1 else "they are"   # one lap left out is "it" (K2)
     return (f"Over the {n} of {of} clean laps matched on track at C{report.cid}'s entry and exit. "
             f"On the other {of - n} the corner was interpolated between its neighbours, which can "
-            "put its time tenths of a second out, so they are left out of this whole row.")
+            f"put its time tenths of a second out, so {them} left out of this whole row.")
 
 
 # The pace-trend verdict band moved to `stats.TREND_STEADY_BAND`, beside the statistic it
@@ -752,6 +753,9 @@ def coast_note(report) -> str:
     is what stops the first row reading as a finding when it is not."""
     n = report.n_laps
     laps = plural(n, "clean lap")
+    # `laps` is already "1 clean lap" at one lap; the determiner in front of it has to follow, or
+    # the two sentences below read "these 1 clean lap" (K2).
+    these = "this" if n == 1 else "these"
     places = report.places
     if not places:
         return f"No coasting was detected on the {laps}."
@@ -761,13 +765,13 @@ def coast_note(report) -> str:
     if report.lead_separable:
         nxt = places[1]
         return (f"{lead.label} holds the most coasting — {lead.s_per_lap:.2f} s a lap, more than "
-                f"{nxt.label} ({nxt.s_per_lap:.2f} s) or anywhere else by a margin these {laps} "
+                f"{nxt.label} ({nxt.s_per_lap:.2f} s) or anywhere else by a margin {these} {laps} "
                 f"can separate.")
     tied = [p for p in places if p.tied]
     lo = min(p.s_per_lap for p in tied)
     return (f"No one place leads: {_name_list([p.label for p in tied])} are tied — between "
-            f"{lo:.2f} and {lead.s_per_lap:.2f} s of coasting a lap, and these {laps} cannot put "
-            f"them in order.")
+            f"{lo:.2f} and {lead.s_per_lap:.2f} s of coasting a lap, and {these} {laps} cannot "
+            f"put them in order.")
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed. ★ marks the session-best lap.\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
@@ -3024,9 +3028,10 @@ class StatsView(QWidget):
                  for val, res in zip(row, rrow, strict=True) if val is not None]
         muted = sum(1 for _val, res in cells if not res)
         if muted:
-            parts.append(f"{muted} of {len(cells)} cells are muted: that lap's corner edge was not "
-                         "matched on track, so the time is shown but never marked or counted in "
-                         "the typical.")
+            is_are = "is" if muted == 1 else "are"   # agrees with `muted`, its subject (K2)
+            parts.append(f"{muted} of {plural(len(cells), 'cell')} {is_are} muted: that lap's "
+                         "corner edge was not matched on track, so the time is shown but never "
+                         "marked or counted in the typical.")
         excluded = len(getattr(session, "excluded_lap_ids", list)() or [])
         dropouts = len(session.dropout_lap_ids()) if hasattr(session, "dropout_lap_ids") else 0
         left = []
@@ -3069,10 +3074,11 @@ class StatsView(QWidget):
         counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
         left_out = sum(of - n for n, of in counted)
         if left_out:
+            was, are = ("was", "is") if left_out == 1 else ("were", "are")
             parts.append(
                 f"Only corners matched on track count: {sum(n for n, _ in counted)} of "
                 f"{sum(of for _, of in counted)} lap × corner times here; the other {left_out} "
-                f"were interpolated between matched points, and are shown muted lap by lap.")
+                f"{was} interpolated between matched points, and {are} shown muted lap by lap.")
             untimed = [f"C{r.cid}" for r in report if getattr(r, "n_laps", None) and r.n == 0]
             if untimed:
                 parts.append(f"No lap matched {', '.join(untimed)} on track, so "
@@ -3182,8 +3188,12 @@ class StatsView(QWidget):
             if wr is not None:
                 loss.setForeground(behind)
                 loss.setText(WORST_LOSS_MARK + loss.text())
+                # ONE marked corner is what a layout of three corners or fewer gets (`k` above),
+                # and it is not "one of the 1" (K2).
+                which = (f"One of the {len(worst)} most erratic-and-slow corners"
+                         if len(worst) > 1 else "The most erratic-and-slow corner")
                 tips.append(
-                    f"One of the {len(worst)} most erratic-and-slow corners — ranked by "
+                    f"{which} — ranked by "
                     f"σ × median loss = {wr.sigma_s:.2f} × {wr.median_loss_s:.2f} = "
                     f"{wr.score:.3f} s², not by this column alone, and not the Coaching tab's "
                     "ranking (time lost against your best lap).")

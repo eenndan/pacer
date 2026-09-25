@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView
 
 from . import coaching, provenance, theme, units
+from ._signal import plural
 
 # The Coaching panel's OWN row filter, imported (not re-implemented) so the note quotes the
 # Coaching tab's ranking exactly — L5-02.
@@ -27,11 +28,12 @@ def _straight_count_tip(n: int, of: int | None, what: str) -> str:
     if of is None or n >= of:
         return ""
     if n == 0:
-        return (f"No value: on none of the {of} clean laps was {what} matched to your best lap's "
-                "line on track, and an interpolated edge can put it well out.")
+        return (f"No value: on none of the {plural(of, 'clean lap')} was {what} matched to your "
+                "best lap's line on track, and an interpolated edge can put it well out.")
+    them = "it is" if of - n == 1 else "they are"   # one lap left out is "it" (K2)
     return (f"Over the {n} of {of} clean laps matched on track at {what}. On the other {of - n} "
             "that edge was interpolated between neighbouring corners, which can put a time tenths "
-            "of a second and a speed several km/h out, so they are left out.")
+            f"of a second and a speed several km/h out, so {them} left out.")
 
 
 STRAIGHT_COLUMNS = ["Straight", "Best", "Median", "σ (s)", "Trap best", "Trap med", "Exit Δ"]

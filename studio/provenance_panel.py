@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, theme
+from ._signal import plural
 from .widgets import WrapLabel
 
 # The panel's extents, in the app's units rather than in numbers somebody liked (the argument
@@ -201,7 +202,7 @@ class ProvenancePanel(QDialog):
         axis = ("telemetry seconds (GPS9 true clock)" if p.window.kind == "time"
                 else "lap odometer metres")
         column.addWidget(_mono(f"{axis}   {p.window.label()}"))
-        column.addWidget(_mono(f"N = {p.n} raw GPS fixes in that window"))
+        column.addWidget(_mono(f"N = {plural(p.n, 'raw GPS fix', 'raw GPS fixes')} in that window"))
         if p.source:
             column.addWidget(_note(f"Computed by {p.source}."))
 

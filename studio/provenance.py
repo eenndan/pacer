@@ -702,8 +702,8 @@ def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
                  f"interpolated between the neighbouring corners and is not precise enough to "
                  f"compare.")
     population = Table(
-        caption=f"Time in {label} on each of the {len(per_lap)} clean laps{matched}, quickest "
-                f"first",
+        caption=f"Time in {label} on each of the {plural(len(per_lap), 'clean lap')}{matched}, "
+                f"quickest first",
         columns=("lap", "time in corner (s)", "vs best (s)"),
         formats=("{}", "{:.4f}", "{:+.4f}"),
         rows=tuple((lap_label(lap), t, t - value) for lap, t in ranked),
@@ -726,8 +726,8 @@ def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
         ),
         steps=(
             Step("laps compared",
-                 f"{len(per_lap)} clean laps" + (f" ({left_out} interpolated, left out)"
-                                                 if left_out else "")),
+                 plural(len(per_lap), "clean lap") + (f" ({left_out} interpolated, left out)"
+                                                      if left_out else "")),
             Step("quickest", f"lap {lap_label(donor_lap)}"),
             Step("corner entry", f"d = {d0:.4f} m  ->  elapsed {t_at[0]:.9f} s"),
             Step("corner exit", f"d = {d1:.4f} m  ->  elapsed {t_at[1]:.9f} s"),

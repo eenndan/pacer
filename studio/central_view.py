@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import chapters, data_quality, plots_view, sidecar, theme, units
+from ._signal import plural
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
@@ -158,7 +159,7 @@ _IDEAL_CHIP_TIP = (
 # ("stitched together", "not a single") on this tooltip.
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
-    "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
+    "{corners}. It is a minimum over those laps, so it falls as you record more of them "
     "(0.16–0.74 s per doubling of lap count on the owner's recordings) and moves when dragging "
     "the start/finish line changes which corners Pacer finds. The Stats page prints both counts "
     "under it.")
@@ -1857,8 +1858,10 @@ class CentralView(QWidget):
         # answer `ideal_sample` simply gets the constant, exactly as it does for the other reads.
         smp = getattr(self.session, "ideal_sample", lambda: None)() if ok else None
         if smp is not None:
+            # `corners` through `plural`: ONE corner is a legal partition (see _signal.plural),
+            # and this printed "across 1 corners".
             appendix = _IDEAL_CHIP_SAMPLE.format(donors=smp.donors, laps=smp.laps,
-                                                 corners=smp.corners)
+                                                 corners=plural(smp.corners, "corner"))
         elif ok:
             appendix = ""
         else:
