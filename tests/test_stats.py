@@ -4636,6 +4636,29 @@ def test_a_dropped_stats_page_is_freed_by_refcount():
     print("test_a_dropped_stats_page_is_freed_by_refcount OK")
 
 
+def test_every_report_table_in_a_section_column_is_registered_with_the_packer():
+    """A report table is the one thing on this page that cannot yield to a narrow column, so the
+    packer asks the tables REGISTERED against a group what width they need (`_group_min_width`) —
+    and a section hands the page its tables through `tables()` for exactly that. A table built but
+    left out of `tables()` still shows, in a column composed as if it were not there: planting that
+    on CORNERS (ARCH-3 slice 3) squeezed its 734 px table into 680 px at the 1260 px dashboard on
+    MK_18_09, and no layout test here saw it, because each reads the same registry the plant broke.
+    This compares the registry with what the columns actually hold."""
+    _app()
+    from studio.stats_common import ReportTable
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    v.refresh()
+    for group, holder in enumerate(v._columns):
+        held = {id(t): t for t in holder.findChildren(ReportTable)}
+        registered = {id(t) for t in v._column_tables[group]}
+        missing = [held[i].horizontalHeaderItem(0).text() for i in held.keys() - registered]
+        assert not missing, f"group {group} shows tables the packer cannot see: {missing}"
+        assert registered <= held.keys(), f"group {group} registers a table it does not hold"
+    print(f"test_every_report_table_in_a_section_column_is_registered_with_the_packer OK — "
+          f"{sum(len(g) for g in v._column_tables)} tables in {len(v._columns)} columns")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
