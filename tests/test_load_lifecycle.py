@@ -911,7 +911,7 @@ def test_selecting_an_ideal_decomposition_row_rings_the_corner_it_names():
     """The IDEAL LAP decomposition table's rows are clickable — the same `corner_clicked` pathway the
     other three tables use — and the click had never been driven. Content-only coverage cannot catch
     a broken selection model, an unset RING_ROLE, or a handler reading the wrong column."""
-    from studio import stats_panel
+    from studio import stats_common
 
     view, _s, _t0, _t1 = _realqt._real_central_view()
     try:
@@ -922,7 +922,7 @@ def test_selecting_an_ideal_decomposition_row_rings_the_corner_it_names():
 
         table.selectRow(0)
         _APP.processEvents()
-        expected = table.item(0, 0).data(stats_panel.RING_ROLE)
+        expected = table.item(0, 0).data(stats_common.RING_ROLE)
         assert seen == [expected], (seen, expected)
         assert expected is not None, "the row names no corner to ring"
 

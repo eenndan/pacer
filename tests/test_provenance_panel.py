@@ -251,7 +251,7 @@ def test_the_corners_table_offers_inspection_on_the_best_cell_only():
     s = _session()
     view = StatsView(s)
     view.refresh()
-    table = view.corners_table
+    table = view.corners.table
     assert table.rowCount() > 0, "the synthetic stadium must produce a CORNERS table"
     assert table.contextMenuPolicy() == Qt.CustomContextMenu
     cid = int(table.item(0, 0).data(NUM_ROLE))
@@ -259,7 +259,7 @@ def test_the_corners_table_offers_inspection_on_the_best_cell_only():
     assert prov is not None
     assert prov.formatted == table.item(0, 1).text(), (prov.formatted, table.item(0, 1).text())
     # Every other column declines — driven through the real slot, which must simply return.
-    from studio import stats_panel as stats_panel_module
+    from studio import stats_corners as stats_corners_module
 
     def centre(col):
         rect = table.visualItemRect(table.item(0, col))
@@ -267,12 +267,12 @@ def test_the_corners_table_offers_inspection_on_the_best_cell_only():
         assert table.itemAt(pos) is not None and table.itemAt(pos).column() == col
         return pos
 
-    opened, saved = _spy_menus(stats_panel_module)
+    opened, saved = _spy_menus(stats_corners_module)
     try:
         for c in range(2, table.columnCount()):
-            view._on_corner_context_menu(centre(c))
+            view.corners._on_context_menu(centre(c))
         assert opened == [], f"the inspect menu opened off the Best cell: {opened}"
-        view._on_corner_context_menu(centre(1))                 # the Best cell itself
+        view.corners._on_context_menu(centre(1))                 # the Best cell itself
         assert opened == [[provenance_panel.MENU_LABEL]], opened
     finally:
         _restore_menus(saved)
@@ -307,10 +307,10 @@ def test_every_surface_that_explains_the_corner_match_says_the_drift_is_taken_ou
 
     view = StatsView(s)
     view.refresh()
-    tips = {"CORNERS": view.corners_table.toolTip(),
+    tips = {"CORNERS": view.corners.table.toolTip(),
             "STRAIGHTS": view.straights.table.toolTip(),
             "CORNERS BY LAP": view.corner_grid_table.toolTip()}
-    cid = int(view.corners_table.item(0, 0).data(NUM_ROLE))
+    cid = int(view.corners.table.item(0, 0).data(NUM_ROLE))
     prov = s.corner_best_provenance(cid)
     assert prov is not None
     panel = provenance_panel.ProvenancePanel(prov)
@@ -355,7 +355,7 @@ def test_the_surfaces_use_one_menu_label():
     or a docstring is not mistaken for a re-typing)."""
     import ast
     literals, references = [], 0
-    for name in ("lap_table", "stats_panel"):
+    for name in ("lap_table", "stats_corners"):
         path = os.path.join(_REPO, "studio", name + ".py")
         tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
         for node in ast.walk(tree):
