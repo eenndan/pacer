@@ -8,18 +8,43 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.4.1] — 2026-09-25
 
+Everything merged since v0.4.0: 7 pull requests, #406 to #412, five of them on video export. Each
+line names its pull request (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it
+live.
+
+### Highlights
+
+- **Video export runs 1.3× faster at 1080p and up to 2× at 4K.** Decode, overlay and encode now run
+  side by side, and every frame is painted byte for byte as before: MK's best lap takes 26 s at
+  1080p (was 35 s), and 50 s at 4K with 5 s either side (was 101 s) (#412)
+- **Overlay-only ProRes on the hardware encoder.** VideoToolbox renders the transparent ProRes 4444
+  track wherever a probe proves it keeps a true alpha, prores_ks otherwise: a 4K MK lap took 65 s
+  instead of 145 s, and #412 makes it 1.8× faster again (#408, #412)
+- **The export opens on footage, overlay and sound, every time.** "Overlay only" is chosen per
+  export, never remembered, so no old choice turns the next export into a black, silent track; that
+  file is now `_overlay_alpha.mov` and says what it is (#410)
+- **The exported map follows the kart.** Its comet tail ends on the marker and trails it by 2.4 s at
+  every resolution (it sat elsewhere on the lap, twice as long at 4K), and the marker glides every
+  frame instead of stepping at the GPS's 10 Hz (#409)
+- **Overlay-only files an editor can line up.** 29.97 fps off 59.94 footage, the footage's own
+  timecode embedded, Rec. 709 colours from either encoder, and a finished message that says where in
+  which file the clip starts (#408, #409)
+- **The export dialog names what it remembered.** A remembered Source resolution is named as the
+  dialog opens, with "Use defaults" to put every row back, and "Source" now shows the size of the
+  file it will write (#408, #410)
+
 ### Changed
 
 - Video export is 1.3-2x faster, every frame unchanged: MK's best lap renders in ~50 s at 4K (was
-  ~100 s) and ~26 s at 1080p (was ~35 s); decode, overlay and encode now run side by side. (#412)
+  ~100 s) and ~26 s at 1080p (was ~35 s); decode, overlay and encode now run side by side (#412)
 - An overlay-only ProRes export is named `<recording>_overlay_alpha.mov`, apart from the burned-in
   `<recording>_overlay.mp4` beside it (#410)
 - The picker and the finished message say an overlay-only .mov plays black in QuickTime, timed on
   the camera's clock, and name the row that exports a video to watch (#410)
 - Overlay-only ProRes 4444 renders on VideoToolbox where it keeps a true alpha, with prores_ks as
-  the fallback: a 4K MK lap takes 65 s instead of 145 s, a 1080p one 24 s instead of 42 s (#408)
+  the fallback: it cut a 4K MK lap from 145 s to 65 s and a 1080p one from 42 s to 24 s (#408)
 - The export picker gives "Source" a size, and every row a time to render naming its encoder; the
-  dialog names remembered overlay-only or Source choices and offers "Use defaults" (#408)
+  dialog names a remembered Source resolution and offers "Use defaults" (#408)
 
 ### Fixed
 
