@@ -1975,7 +1975,8 @@ def test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known():
     # THE OWNER'S EXPORT: MK's best lap with 5 s either side (77.479 s), overlay-only ProRes at
     # Source. The line names the encoder the probe chose and its own time — 1:06 on VideoToolbox
     # (measured 65.2 s), 2:28 on prores_ks (measured 145.3 s) — and, until the probe has answered,
-    # names only the format and claims no time.
+    # names only the format and claims no time. 2323 frames, not 2325: an overlay-only render
+    # runs at 30000/1001 off 59.94 footage so it can be lined up with it (E6).
     real_known = export_video.known_alpha_encoder
     owner = {}
     try:
@@ -1985,7 +1986,7 @@ def test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known():
                                                  export_video.ALPHA_PRORES, source=_E5_FRAME)
     finally:
         export_video.known_alpha_encoder = real_known
-    assert "2325 frames" in owner[None], owner
+    assert "2323 frames to render at 29.97 fps" in owner[None], owner
     assert "with ProRes 4444 via prores_videotoolbox, about 1:06 to render" in owner[
         export_video.VT_PRORES], owner
     assert "with ProRes 4444 via prores_ks, about 2:28 to render" in owner[
