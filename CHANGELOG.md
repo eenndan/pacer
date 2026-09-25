@@ -8,9 +8,9 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.4.1] — 2026-09-25
 
-Everything merged since v0.4.0: 7 pull requests, #406 to #412, five of them on video export. Each
-line names its pull request (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it
-live.
+Everything merged since v0.4.0: 8 pull requests, #406 to #412 and #414, six of them on video export.
+Each line names its pull request (`github.com/eenndan/pacer/pull/<N>`), where the measurements
+behind it live.
 
 ### Highlights
 
@@ -58,6 +58,8 @@ live.
   embedded, and the finished message says where in which file the clip starts (#409)
 - ProRes overlays are now converted and labelled Rec. 709, so both encoders give the same colours
   (#408)
+- The export picker's "about M:SS to render" follows the faster renderer: it had kept quoting the
+  old times, up to twice as long as a render then took (#414)
 
 ## [0.4.0] — 2026-09-25
 
