@@ -330,6 +330,42 @@ def test_position_signal_then_real_tick_applies_once_and_is_stable():
     print("test_position_signal_then_real_tick_applies_once_and_is_stable OK")
 
 
+def test_the_map_marker_moves_on_every_playback_tick():
+    """HEALTH-2: while the video plays, the live map dot moves on EVERY tick, not at the GPS rate.
+
+    It was placed on the NEAREST trace sample (`tx[index_at_time(t)]`), so on a 10 Hz trace it held
+    still for three 30 Hz ticks and then jumped: on MK_18_09_26's best lap it moved 674 times in
+    2,025 ticks, 1.5 m a step. It is now interpolated between the samples that bracket the playhead
+    (`timeline.trace_point_at`, the export map's rule). Driven through the production path — the
+    real positionChanged signal, then the real tick — at 30 Hz across lap 0 of the synthetic
+    session, whose trace is sampled more coarsely than that; on a GPS sample the dot sits exactly
+    on it."""
+    view, s, t0, _t1 = _real_central_view()
+    spacing = float(np.median(np.diff(t0)))
+    assert spacing > 1.5 / 30.0, f"the fixture's trace must be coarser than the tick: {spacing}"
+    ticks = np.arange(float(t0[0]) + 0.01, float(t0[-1]) - 0.01, 1.0 / 30.0)
+    placed = []
+    for t in ticks:
+        view.video.positionChanged.emit(float(t))
+        view.tick()
+        p = view.map.marker.pos()
+        placed.append((float(p.x()), float(p.y())))
+    steps = np.hypot(*np.diff(np.array(placed), axis=0).T)
+    held = int((steps < 1e-9).sum())
+    assert held == 0, (
+        f"the map marker held still on {held} of {len(steps)} playback ticks — it is stepping at "
+        f"the trace's {1 / spacing:.0f} Hz instead of moving every tick")
+    k = len(t0) // 2
+    view.video.positionChanged.emit(float(t0[k]))
+    view.tick()
+    p = view.map.marker.pos()
+    assert (float(p.x()), float(p.y())) == (float(s.tx[np.searchsorted(s.tt, t0[k])]),
+                                            float(s.ty[np.searchsorted(s.tt, t0[k])])), (
+        "on a sample time the marker must sit exactly on that sample")
+    print(f"test_the_map_marker_moves_on_every_playback_tick OK: {len(steps)} ticks, "
+          f"{len(steps)} moves, trace every {spacing * 1000:.0f} ms")
+
+
 # ============================================================ compare toggle (C4 single source)
 def test_compare_button_click_is_single_source_of_truth_no_reentrancy():
     """The PR#80 issue-1 bug class, at the REAL CentralView level: a user compare_btn.click() emits
@@ -1084,6 +1120,7 @@ def test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_stat
 def _run_all():
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
+    test_the_map_marker_moves_on_every_playback_tick()
     test_compare_button_click_is_single_source_of_truth_no_reentrancy()
     test_compare_scrub_fans_one_seek_to_each_real_pane_per_tick()
     test_compare_tick_keeps_panes_consistent_no_reentry()
