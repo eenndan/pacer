@@ -58,7 +58,7 @@ from PySide6.QtGui import (
 )
 
 from . import data_quality, gmeter_overlay, theme, units
-from ._signal import fmt_time, lap_label
+from ._signal import fmt_time, lap_label, plural
 from .export_palette import EXPORT
 from .gapfill import GAP_TIME_S
 
@@ -3856,7 +3856,7 @@ class Renderer:
                     f"run-off {spec.lead_out:.2f} s")
         relay = self._pipelined and not self._overlay_only and self._relay_ok()
         return (f"{content}, {what}, source {_source_names(spec.source)}, "
-                f"{self._out_w}x{self._out_h}@{self._fps:g} fps, {len(self._times)} frames, "
+                f"{self._out_w}x{self._out_h}@{self._fps:g} fps, {plural(len(self._times), 'frame')}, "
                 f"encoder {self._encoder}, {'hardware' if self._hwaccel else 'software'} decode, "
                 f"relay {'on' if relay else 'off'} -> {os.path.abspath(spec.out_path)}")
 

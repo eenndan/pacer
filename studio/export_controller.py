@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
-from ._signal import fmt_hms, lap_label
+from ._signal import fmt_hms, lap_label, plural
 from .session import fmt_time
 from .workers import VideoExportWorker
 
@@ -915,7 +915,7 @@ class ExportController:
             text = (f"{len(existing)} of {len(specs)} {what} — replace them?\n\n{folder}")
         else:
             name = os.path.basename(existing[0].out_path)
-            text = (f"{name} already holds {len(os.listdir(existing[0].out_path))} files — "
+            text = (f"{name} already holds {plural(len(os.listdir(existing[0].out_path)), 'file')} — "
                     f"replace the frames in it?\n\n{folder}")
         box = QMessageBox(QMessageBox.Warning, f"{APP_NAME} — replace existing export?", text,
                           parent=self.win)
@@ -1372,7 +1372,7 @@ class ExportController:
         listed = "\n".join(names[:5]) + (f"\n… and {len(names) - 5} more" if len(names) > 5 else "")
         files = "file" if len(kept) == 1 else "files"
         box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export cancelled",
-                          f"{APP_NAME} stopped the export after {len(kept)} of {total} files. "
+                          f"{APP_NAME} stopped the export after {len(kept)} of {plural(total, 'file')}. "
                           f"The finished {files} {'was' if len(kept) == 1 else 'were'} kept:\n\n"
                           f"{listed}\n\n{folder}", parent=self.win)
         reveal_btn = box.addButton("Reveal in Finder", QMessageBox.ActionRole)
