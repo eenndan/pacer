@@ -297,9 +297,21 @@ def test_the_import_scanner_sees_every_studio_spelling():
 
 _TESTS_DIR = os.path.join(_REPO, "tests")
 
-# A runner that enumerates its tests from the module namespace rather than by name — any of these
-# spellings — cannot strand one, so those files are exempt from the reachability rule below.
-_AUTO_DISCOVERY = ("globals()", "vars()", "dir()", "getmembers")
+# A runner that enumerates its tests from the module namespace rather than by name — a CALL of any
+# of these — cannot strand one, so those files are exempt from the reachability rule below. A call,
+# not a substring: the substring test exempted six explicit-runner files, this one among them (it
+# names the spellings as data), and so let a test added here go uncalled (ARCH-7).
+_AUTO_DISCOVERY = ("globals", "vars", "dir", "getmembers")
+
+
+def _enumerates_its_namespace(tree) -> bool:
+    """True iff the module calls `globals()` / `vars()` / `dir()` / `getmembers(...)` somewhere."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", "")
+            if name in _AUTO_DISCOVERY and (name == "getmembers" or not node.args):
+                return True
+    return False
 
 
 def _stranded_tests(path) -> list[str]:
@@ -349,7 +361,7 @@ def test_every_declared_test_is_actually_reachable_from_its_runner():
         if not (name.startswith("test_") and name.endswith(".py")):
             continue
         path = os.path.join(_TESTS_DIR, name)
-        if any(tok in open(path, encoding="utf-8").read() for tok in _AUTO_DISCOVERY):
+        if _enumerates_its_namespace(ast.parse(open(path, encoding="utf-8").read())):
             continue          # runner enumerates the namespace; it cannot strand a test
         scanned += 1
         missing = _stranded_tests(path)
@@ -360,6 +372,89 @@ def test_every_declared_test_is_actually_reachable_from_its_runner():
         + "\n".join(f"  {f}: {', '.join(v)}" for f, v in sorted(stranded.items())))
     print(f"test_every_declared_test_is_actually_reachable_from_its_runner OK — "
           f"{scanned} explicit-runner files, 0 stranded")
+
+
+# pytest's own fixtures that stay on under tests/pytest.ini (`caplog` and `cache` go with the two
+# plugins it turns off). Three files' runners pass a hand-made `monkeypatch` of pytest's shape.
+_PYTEST_FIXTURES = {"monkeypatch", "tmp_path", "tmp_path_factory", "tmpdir", "tmpdir_factory",
+                    "capsys", "capsysbinary", "capfd", "capfdbinary", "recwarn", "request",
+                    "pytestconfig", "record_property", "record_testsuite_property"}
+
+
+def _conftest_fixtures() -> set[str]:
+    """What a pytest run can pass a test: tests/conftest.py's fixtures and pytest's own."""
+    tree = ast.parse(open(os.path.join(_TESTS_DIR, "conftest.py"), encoding="utf-8").read())
+    return _PYTEST_FIXTURES | {n.name for n in tree.body if isinstance(n, ast.FunctionDef)
+                               and any("fixture" in ast.unparse(d) for d in n.decorator_list)}
+
+
+def _pytest_parity_problems(name: str, src: str, fixtures: set[str]) -> list[str]:
+    """Where `python -m pytest tests/<name>` and `python tests/<name>` would run different tests.
+
+    pytest (tests/pytest.ini: `python_functions = test_*`) collects every module-level `test_*` the
+    module ends up with, including one defined AFTER the `if __name__ == "__main__":` block and one
+    imported from elsewhere, and every `class Test*`; it errors on a parameter no fixture provides.
+    A `globals()` runner calls only what exists when `__main__` runs, and an explicit one what it
+    names (the reachability check above)."""
+    tree = ast.parse(src)
+    main = next((n.lineno for n in tree.body if isinstance(n, ast.If)
+                 and "__main__" in ast.unparse(n.test)), None)
+    problems = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+            if main is not None and node.lineno > main:
+                problems.append(f"{name}: {node.name} is defined after the __main__ block (line "
+                                f"{main}), so the file's runner never calls it")
+            params = [a.arg for a in node.args.posonlyargs + node.args.args]
+            for arg in params[:len(params) - len(node.args.defaults)]:
+                if arg not in fixtures:
+                    problems.append(f"{name}: {node.name}({arg}) — tests/conftest.py has no "
+                                    f"`{arg}` fixture, so pytest errors on it")
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            problems.append(f"{name}: class {node.name} — pytest collects it, no runner here does")
+        elif isinstance(node, ast.ImportFrom):
+            problems += [f"{name}: imports {a.asname or a.name} — pytest runs it here too"
+                         for a in node.names if (a.asname or a.name).startswith("test_")]
+    return problems
+
+
+def test_pytest_and_each_files_runner_run_the_same_tests():
+    """ARCH-7. pytest is here for LOCAL iteration (`pixi run python -m pytest tests/test_x.py -k
+    name`); CTest still runs each file as a script. The two must run one set of tests, or a green
+    `-k` loop proves nothing about the gate, and the gate can hide a test the loop runs.
+
+    Measured when this was written (2026-09-25, every file run both ways): pytest collected 2,140
+    tests and the `__main__` blocks ran 2,124; the 16 between them were exactly the footage and
+    soak checks, which tests/conftest.py deselects as each runner leaves them out.
+
+    The class the reachability check above cannot see: the 87 `globals()`-runner files are exempt
+    from it, and in one of them a `def test_…` defined below the `__main__` block never runs. That
+    happened: before c91f121, `tests/test_stats.py`'s block sat at line 2043, and the three
+    "the page fits its pane" tests below it had never run once."""
+    fixtures = _conftest_fixtures()
+    assert "monkeypatch_restore" in fixtures, f"the conftest scan lost its fixture: {fixtures}"
+    problems, scanned = [], 0
+    for name in sorted(os.listdir(_TESTS_DIR)):
+        if name.startswith("test_") and name.endswith(".py"):
+            scanned += 1
+            src = open(os.path.join(_TESTS_DIR, name), encoding="utf-8").read()
+            problems += _pytest_parity_problems(name, src, fixtures)
+    assert not problems, ("pytest and the file's own runner would run different tests:\n  "
+                          + "\n  ".join(problems))
+    # Both directions, on planted sources: each divergence is caught, by name, and nothing else.
+    planted = ('from _synthetic import test_shared\n'
+               'def test_fine(monkeypatch_restore, k=1):\n    pass\n'
+               'def test_needs(a_fixture_nobody_defines):\n    pass\n'
+               'class TestThing:\n    pass\n'
+               'if __name__ == "__main__":\n'
+               '    [v() for k, v in sorted(globals().items()) if k.startswith("test_")]\n'
+               'def test_below_main():\n    pass\n')
+    caught = _pytest_parity_problems("planted.py", planted, fixtures)
+    assert [p.split(" — ")[0].split(" is ")[0] for p in caught] == [
+        "planted.py: imports test_shared", "planted.py: test_needs(a_fixture_nobody_defines)",
+        "planted.py: class TestThing", "planted.py: test_below_main"], caught
+    print(f"test_pytest_and_each_files_runner_run_the_same_tests OK — {scanned} files, "
+          f"{len(fixtures)} fixtures, 4/4 planted divergences caught")
 
 
 _MAP = os.path.join(_STUDIO, "README.md")
@@ -487,6 +582,7 @@ if __name__ == "__main__":
     test_the_data_core_does_not_reach_qt_through_a_studio_import()
     test_the_import_scanner_sees_every_studio_spelling()
     test_every_declared_test_is_actually_reachable_from_its_runner()
+    test_pytest_and_each_files_runner_run_the_same_tests()
     test_every_studio_module_is_on_the_map_at_its_real_layer()
     test_the_map_check_fails_on_each_planted_defect()
-    print("\n7 layering tests passed")
+    print("\n8 layering tests passed")

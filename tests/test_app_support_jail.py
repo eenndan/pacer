@@ -226,6 +226,27 @@ def test_a_test_file_run_by_hand_outside_ctest_is_jailed():
     print("test_a_test_file_run_by_hand_outside_ctest_is_jailed OK")
 
 
+def test_a_pytest_run_over_tests_is_jailed():
+    """ARCH-7. `pixi run python -m pytest tests/test_x.py -k name` enters through pytest's own
+    `__main__.py`, which is not in tests/, so the by-hand rule above never fires for it: without
+    tests/conftest.py setting the jail, such a run resolved the REAL directory (seen with this test
+    and the conftest line removed, under a throwaway HOME). The child runs pytest over a real test
+    file in-process, as `-c` (no entry script either), then resolves every seam."""
+    home = tempfile.mkdtemp(prefix="pacer-h8-home-")
+    try:
+        target = os.path.join(_TESTS, "test_gearing.py")
+        src = (f"import pytest\nrc = pytest.main(['-q', '--collect-only', {target!r}])\n"
+               "assert rc == 0, f'pytest exited {rc}'\n"
+               + _RESOLVE_SRC.format(repo=_REPO, seams=_seams()))
+        got = _run([sys.executable, "-c", src], _child_env(home), cwd=_REPO)
+        assert not _escaped(got), (
+            f"a pytest run over tests/ resolves {_escaped(got)} to the real directory: is "
+            f"tests/conftest.py still setting {_JAIL_ENV}? {got['seams']}")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    print("test_a_pytest_run_over_tests_is_jailed OK")
+
+
 def test_a_dev_harness_jail_reaches_the_processes_it_spawns():
     """`studio/dev/_jail.divert_app_support` used to patch module attributes only, so a child
     process of a jailed harness resolved the real directory. It must now export the jail."""
@@ -354,6 +375,7 @@ def _run_all():
     test_this_test_process_cannot_resolve_the_real_directory()
     test_a_python_c_child_of_a_test_cannot_resolve_it()
     test_a_test_file_run_by_hand_outside_ctest_is_jailed()
+    test_a_pytest_run_over_tests_is_jailed()
     test_a_dev_harness_jail_reaches_the_processes_it_spawns()
     test_the_session_log_cannot_reach_the_real_directory()
     test_the_app_itself_still_uses_the_real_directory()

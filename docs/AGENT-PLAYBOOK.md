@@ -35,9 +35,10 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
   failed build followed by `| tail` exits 0 (or use `set -o pipefail`).
 - **One test:** `pixi run ctest --test-dir build/Release -R '^test_x$' --output-on-failure`. CTest
   injects the environment. A bare `python tests/test_x.py` needs `PYTHONPATH=bindings/pacer`, or
-  the C++ `pacer/` directory shadows the bindings package. Tests are plain scripts, not pytest, and
+  the C++ `pacer/` directory shadows the bindings package. Tests are plain scripts under CTest, and
   many run their tests from an explicit list. `tests/test_layering.py` fails a test that is defined
-  but never run.
+  but never run. **One test function:** `pixi run python -m pytest tests/test_x.py -k <part>` —
+  `tests/conftest.py` jails it; CTest remains the gate.
 - **Read a timeout before you hunt a hang.** A `Timeout` far past `--timeout` is the machine
   sleeping (the ctest tasks run under `caffeinate -si`). One exactly at the limit while other work
   is running is contention: check `uptime` and re-run the test alone. Four tests at a time is the

@@ -113,7 +113,11 @@ a = Analysis(
     ),
     hookspath=[],
     runtime_hooks=[_repo("packaging", "rthook_ffmpeg.py")],
-    excludes=["tkinter", "matplotlib", "PyQt5", "PyQt6", "PySide2"],
+    # pytest is in the pixi env for tests/ only, and collect_all("pyqtgraph") above takes the
+    # `pyqtgraph.examples` package, whose test_examples.py imports it: without these, the .app
+    # would carry pytest and pygments (~8 MB) that nothing in it runs.
+    excludes=["tkinter", "matplotlib", "PyQt5", "PyQt6", "PySide2",
+              "pytest", "_pytest", "pluggy", "iniconfig", "pygments"],
     noarchive=False,
 )
 
