@@ -6,6 +6,38 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-09-25
+
+### Changed
+
+- Every export writes one line to the session log when it starts and one when it ends. (#416)
+- `pixi run studio` opens 1.5-3.5 s sooner: an unchanged build now takes 0.1 s, and the missing "SF
+  Mono" font no longer costs about 60 ms at every launch (#415)
+
+### Fixed
+
+- Opening a recording shows the ★ best lap's frame, and the first ▶ plays that lap: the video was
+  black and ▶ started at 0:00, the paddock, while the table, map and charts showed the best lap
+  (#417)
+- Video compare's pane B starts at lap B; it played the start of the recording (#417)
+- A paused lap click, scrub or map drag into another chapter shows its frame instead of black, and
+  opening a recording whose best lap is in chapter 2 no longer reads "loading next chapter…" for 7 s
+  (#417)
+- Dragging the chart cursor or the map dot moves the picture while you drag (3-4 frames a second on
+  4K footage); it used to stay frozen until you let go (#417)
+- Export names say which lap again (`GX010067_lap14_overlay.mp4`, `_session_overlay.mp4`,
+  `_lap14_vs_lap15_compare.mp4`, `_lap14_card.png`); PNG frames get their own lap folder. (#416)
+- A clip cut on the timing line now ends on its finish frame, which shows the lap time. (#416)
+- All laps asks for a folder and confirms once before replacing files; a cancelled batch lists the
+  files it kept. (#416)
+- A cancelled PNG sequence removes its frames; re-exporting into a folder of frames confirms and
+  replaces them instead of mixing two exports. (#416)
+- The lap card's map is the best lap's own trace, drawn from data, not a grab of the live map.
+  (#416)
+- The disk-space refusal reads as one sentence and is not repeated behind Show Details. (#416)
+- The map dot glides with the video instead of jumping ten times a second: it moves on every frame,
+  between the GPS samples, as the exported map's dot already did (#415)
+
 ## [0.4.1] — 2026-09-25
 
 Everything merged since v0.4.0: 8 pull requests, #406 to #412 and #414, six of them on video export.
@@ -1462,7 +1494,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/eenndan/pacer/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/eenndan/pacer/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/eenndan/pacer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eenndan/pacer/compare/v0.2.0...v0.3.0
