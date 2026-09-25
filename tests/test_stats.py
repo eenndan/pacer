@@ -4610,8 +4610,8 @@ def test_a_dropped_stats_page_is_freed_by_refcount():
     table signals hold the section — so a section that keeps a reference back to the page (a
     `lambda: self.session`, say) closes a cycle THROUGH Qt, which Python's collector cannot see:
     every StatsView ever built stays alive. Measured on the first CORNERS split, which did exactly
-    that: `gc.collect()` did not free the page, and this file segfaulted ten tests later inside
-    `_pump`, in a test that never touched CORNERS. Checked with the collector OFF, so the page has
+    that: `gc.collect()` did not free the page, and this file later segfaulted inside `_pump`, in
+    a test that never touches CORNERS. Checked with the collector OFF, so the page has
     to go by refcount the moment its last reference does, as it did before the split."""
     import gc
     import weakref
@@ -4641,7 +4641,7 @@ def test_every_report_table_in_a_section_column_is_registered_with_the_packer():
     packer asks the tables REGISTERED against a group what width they need (`_group_min_width`) —
     and a section hands the page its tables through `tables()` for exactly that. A table built but
     left out of `tables()` still shows, in a column composed as if it were not there: planting that
-    on CORNERS (ARCH-3 slice 3) squeezed its 734 px table into 680 px at the 1260 px dashboard on
+    on CORNERS (ARCH-3 slice 3) squeezed its 734 px table into 680 px at the 1420 px dashboard on
     MK_18_09, and no layout test here saw it, because each reads the same registry the plant broke.
     This compares the registry with what the columns actually hold."""
     _app()
