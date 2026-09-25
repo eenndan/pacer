@@ -28,7 +28,7 @@ import os
 import time
 from typing import NamedTuple
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -36,9 +36,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -419,6 +421,14 @@ class ExportController:
     _PREF_EXPORT_ASPECT = "export_aspect_idx"
     _PREF_EXPORT_FIT = "export_fit_idx"
     _PREF_EXPORT_CONTENT = "export_content_idx"
+    # Each row's DEFAULT, by its pref key: what a first launch opens on, and what "Use defaults"
+    # puts back — one table, so the two can never disagree about what the defaults are.
+    _EXPORT_DEFAULT_INDEX = {
+        _PREF_EXPORT_SCOPE: 0, _PREF_EXPORT_LEAD: 0, _PREF_EXPORT_ASPECT: 0, _PREF_EXPORT_FIT: 0,
+        _PREF_EXPORT_CONTENT: 0, _PREF_EXPORT_RES: 1, _PREF_EXPORT_QUALITY: 0,   # 1080p, High
+    }
+    # The index of "Source (no downscale)" in `_EXPORT_RES_OPTIONS`.
+    _EXPORT_RES_SOURCE = 3
     # The compare export's own two rows. LAYOUT first because it decides the shape of the file:
     # stacked panes make a roughly 8:9 frame a phone shows nearly full-screen, side-by-side an
     # ultrawide one. There is no scope row (a compare is OF a pair, so the pair IS the scope), no
@@ -495,12 +505,18 @@ class ExportController:
         return int(round(out_height * ratio)), int(out_height)
     def _export_size_hint(self, dur: float, out_height: int, quality: str,
                           aspect: str = export_video.ASPECT_SOURCE,
-                          content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1) -> str:
+                          content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1,
+                          source: tuple[int, int, float] | None = None) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
-        it has to render, and WHICH encoder will do it. Derived (see X264_BPP) — never a stored
-        megabyte figure, because the encoder is a property of the machine. "" when there is nothing
-        honest to say: an unknown lap duration, or "Source", whose pixel count we can't know without
-        an ffprobe this dialog deliberately does not run.
+        it has to render, WHICH encoder will do it and about how long that takes. Derived (see
+        X264_BPP and `export_video.RENDER_FPS`) — never a stored megabyte figure, because the
+        encoder is a property of the machine. "" when there is nothing honest to say: an unknown
+        lap duration, or "Source" before the footage's frame is known.
+
+        `source` is the footage's (width, height, fps) when the picker has it
+        (`export_video.known_video_size`, filled behind the dialog). With it every row is sized
+        through `frame_geometry`, the renderer's own rule, never-upscale clamp included; without
+        it the fixed resolutions assume a 16:9 frame and "Source" says nothing.
 
         `dur` is the length of ONE file and `files` how many of them an All-laps batch writes, so
         the frame count and the megabytes are both the batch's total — the number that decides
@@ -510,23 +526,40 @@ class ExportController:
         intra-only at roughly 330 Mbit/s for 1080p30 (Apple's own figure, which is where
         `PRORES_4444_BPP` comes from) — about twenty-five times the H.264 this dialog otherwise
         estimates. A user who pointed that at a thirty-minute recording reported 140 GB and six
-        hours. The row is worth offering; offering it without the number is the trap."""
-        fps = export_video.OverlayConfig.fps_cap or 30.0
-        if not (dur > 0) or out_height >= 99999:
+        hours. The row is worth offering; offering it without the number is the trap.
+
+        THE TIME IS ABOUT, AND SAYS WHOSE. It comes from throughput measured per path on the
+        development Mac, and the progress dialog's live ETA, timed on the real render, is the one
+        to trust. Until the ProRes probe has run (behind the dialog) the line names the format
+        rather than an encoder and leaves the time out."""
+        if not (dur > 0):
             return ""
+        fps = export_video.OverlayConfig.fps_cap or 30.0
+        if source is not None:
+            src_w, src_h, src_fps = source
+            cfg = export_video.OverlayConfig(out_height=out_height, aspect=aspect)
+            geo = export_video.frame_geometry(src_w, src_h, cfg)
+            out_w, out_h = geo.out_w, geo.out_h
+            fps = export_video.resolve_fps(cfg, src_fps)
+        elif out_height >= 99999:
+            return ""
+        else:
+            out_w, out_h = self._estimate_frame_size(out_height, aspect)
         files = max(1, int(files))
         frames = int(math.ceil(dur * fps)) * files
-        out_w, out_h = self._estimate_frame_size(out_height, aspect)
         if content == export_video.ALPHA_PRORES:
-            codec, encoder = content, "ProRes 4444"
+            codec = export_video.known_alpha_encoder()      # None until the probe has run
+            encoder = f"ProRes 4444 via {codec}" if codec else "ProRes 4444"
         elif content == export_video.ALPHA_PNG:
             codec, encoder = content, "a PNG sequence"
         else:
             codec = encoder = export_video.resolve_encoder("auto")
-        size = export_video.fmt_bytes(
-            export_video.estimate_output_bytes(out_w, out_h, fps, dur, quality, codec) * files)
+        size = export_video.fmt_bytes(export_video.estimate_output_bytes(
+            out_w, out_h, fps, dur, quality, codec or content) * files)
+        took = export_video.estimate_render_seconds(out_w, out_h, frames, codec) if codec else None
+        timing = f", about {fmt_hms(took)} to render" if took else ""
         return (f"About {size} — {frames} frames to render at {fps:g} fps "
-                f"with {encoder}. Real size follows how much the footage moves.")
+                f"with {encoder}{timing}. Real size follows how much the footage moves.")
     def _export_session_seconds(self) -> float:
         """How long a FULL-SESSION export runs: the footage's own length, through the same
         accessor the renderer builds its window from, so the estimate and the render cannot
@@ -622,20 +655,57 @@ class ExportController:
         form.setHorizontalSpacing(theme.SPACE_M)
         form.setVerticalSpacing(theme.SPACE_S)
 
-        def _combo(options, pref_key, default):
+        rows = {}
+
+        def _combo(options, pref_key):
             box = QComboBox(dlg)
             for label, _value in options:
                 box.addItem(label)
-            box.setCurrentIndex(self._export_pref_index(pref_key, default, len(options)))
+            box.setCurrentIndex(self._export_pref_index(
+                pref_key, self._EXPORT_DEFAULT_INDEX[pref_key], len(options)))
+            rows[pref_key] = box
             return box
 
-        scope_combo = _combo(self._EXPORT_SCOPE_OPTIONS, self._PREF_EXPORT_SCOPE, 0)
-        lead_combo = _combo(self._EXPORT_LEAD_OPTIONS, self._PREF_EXPORT_LEAD, 0)
-        aspect_combo = _combo(self._EXPORT_ASPECT_OPTIONS, self._PREF_EXPORT_ASPECT, 0)
-        fit_combo = _combo(self._EXPORT_FIT_OPTIONS, self._PREF_EXPORT_FIT, 0)
-        content_combo = _combo(self._EXPORT_CONTENT_OPTIONS, self._PREF_EXPORT_CONTENT, 0)
-        res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES, 1)      # 1080p
-        q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY, 0)  # High
+        scope_combo = _combo(self._EXPORT_SCOPE_OPTIONS, self._PREF_EXPORT_SCOPE)
+        lead_combo = _combo(self._EXPORT_LEAD_OPTIONS, self._PREF_EXPORT_LEAD)
+        aspect_combo = _combo(self._EXPORT_ASPECT_OPTIONS, self._PREF_EXPORT_ASPECT)
+        fit_combo = _combo(self._EXPORT_FIT_OPTIONS, self._PREF_EXPORT_FIT)
+        content_combo = _combo(self._EXPORT_CONTENT_OPTIONS, self._PREF_EXPORT_CONTENT)
+        res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES)
+        q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY)
+
+        # THE DIALOG OPENS ON THE LAST EXPORT'S CHOICES, AND THE HEAVY ONES MUST NOT DO THAT
+        # SILENTLY. "Video export has become extremely slow" was a remembered overlay-only ProRes at
+        # source resolution: 2.4 minutes and 1.4 GB for one MK lap that takes 33 s on the defaults,
+        # re-opened every time with nothing on screen saying the choice was his own, still in force.
+        # So when the dialog opens on a non-default Contents or on Source, one line names them, and
+        # "Use defaults" puts EVERY row back. It writes nothing: prefs are saved on Export, as ever.
+        remembered = []
+        if content_combo.currentIndex() != self._EXPORT_DEFAULT_INDEX[self._PREF_EXPORT_CONTENT]:
+            remembered.append(content_combo.currentText())
+        if res_combo.currentIndex() == self._EXPORT_RES_SOURCE:
+            remembered.append(res_combo.currentText())
+        if remembered:
+            recall = QWidget(dlg)
+            recall_row = QHBoxLayout(recall)
+            recall_row.setContentsMargins(0, 0, 0, 0)
+            recall_row.setSpacing(theme.SPACE_M)
+            recall_text = QLabel("Opened on your last export's choices: "
+                                 f"{' · '.join(remembered)}.", recall)
+            recall_text.setWordWrap(True)
+            recall_text.setProperty("role", "Note")
+            recall_row.addWidget(recall_text, 1)
+            use_defaults = QPushButton("Use defaults", recall)
+            use_defaults.setAutoDefault(False)     # Return still means Export
+            recall_row.addWidget(use_defaults, 0)
+            col.addWidget(recall)
+
+            def _use_defaults():
+                for key, box in rows.items():
+                    box.setCurrentIndex(self._EXPORT_DEFAULT_INDEX[key])
+                recall.hide()
+            use_defaults.clicked.connect(_use_defaults)
+
         form.addRow("Export", scope_combo)
         form.addRow("Run-up / run-off", lead_combo)
         form.addRow("Shape", aspect_combo)
@@ -680,7 +750,10 @@ class ExportController:
 
             clip, files, what = self._scope_plan(scope, lap, lead)
             lines = [f"Renders {what}."]
-            if h >= 99999:
+            source = export_video.known_video_size(src)
+            if h >= 99999 and source is not None and aspect == export_video.ASPECT_SOURCE:
+                lines.append(f"Output: {source[0]}x{source[1]}, the footage's own resolution.")
+            elif h >= 99999:
                 lines.append("Output: source resolution (never upscaled).")
             elif aspect == export_video.ASPECT_SOURCE:
                 lines.append(f"Output: up to {h}p tall, source aspect — never upscaled past source.")
@@ -703,19 +776,38 @@ class ExportController:
                          else "a ProRes 4444 .mov")
                 lines.append(f"Overlay only: {where} on a transparent background, no footage and "
                              "no audio — for compositing over the original in Resolve or Premiere.")
-            size = self._export_size_hint(clip, h, quality, aspect, content, files)
+            size = self._export_size_hint(clip, h, quality, aspect, content, files, source)
             if size:
                 lines.append(size)
             hint.setText("  ".join(lines))
             # A scope with nothing to render cannot be confirmed. `_scope_plan` already says why.
             ok_button.setEnabled(math.isfinite(clip) and clip > 0)
         # EVERY combo: each one moves at least one number in the lines above.
-        for combo in (scope_combo, lead_combo, aspect_combo, fit_combo, content_combo,
-                      res_combo, q_combo):
+        for combo in rows.values():
             combo.currentIndexChanged.connect(_update_hint)
+        # The footage's frame and the ProRes encoder are learned BEHIND the dialog (an ffprobe and
+        # a VideoToolbox session: ~45 ms and ~0.3 s here), and the hint is redrawn once they are
+        # in. Until then it says what it can; a probe that never answers stops being waited on.
+        src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
+        export_video.warm_export_probes(src)
+        probe_poll = None
+        if not export_video.export_probes_ready(src):
+            probe_poll = QTimer(dlg)
+            probe_poll.setInterval(50)
+            give_up = time.monotonic() + 10.0
+
+            def _probes_in():
+                if export_video.export_probes_ready(src) or time.monotonic() > give_up:
+                    probe_poll.stop()
+                    _update_hint()
+            probe_poll.timeout.connect(_probes_in)
+            probe_poll.start()
         _update_hint()
 
-        if dlg.exec() != QDialog.Accepted:
+        accepted = dlg.exec() == QDialog.Accepted
+        if probe_poll is not None:
+            probe_poll.stop()
+        if not accepted:
             return None
         indices = {
             self._PREF_EXPORT_SCOPE: scope_combo.currentIndex(),

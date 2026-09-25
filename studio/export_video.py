@@ -1056,17 +1056,45 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
 
 # --------------------------------------------------------------------- overlay-only (alpha) output
 # ProRes 4444 carries an alpha plane; nothing else an NLE reliably imports does, short of a PNG
-# sequence. `prores_ks` is the encoder that offers `yuva444p10le`: VideoToolbox's ProRes encoder
-# exists on this machine and DOES do 4444, but its alpha-capable pixel formats are `bgra` /
-# `ayuv64le`, not the 10-bit planar format the brief (and Resolve) names — so this path is
-# deliberately the software one.
-_PRORES_ENCODER = "prores_ks"
-# What we ASK the encoder for. What comes back out reads as `yuva444p12le`, and that is not a
+# sequence. TWO encoders write it, and which one runs is the difference between a 4K overlay
+# rendering at 16 fps and at twice that:
+#
+#   VT_PRORES  Apple's own ProRes encoder through VideoToolbox — the media engine where the Mac has
+#              one, Apple's software codec where it does not (`-allow_sw 1`, as on the H.264 path).
+#              It takes `bgra`, which is what the painter can hand it without a conversion.
+#   SW_PRORES  ffmpeg's `prores_ks`, the one that takes the 10-bit planar `yuva444p10le`. Portable,
+#              and the fallback, but it is the bottleneck of every ProRes export it runs.
+#
+# MEASURED, M1 Pro, ffmpeg 7.1.1, 180 frames of 4K `testsrc2`, output discarded: generating the
+# source alone 0.56 s; prores_ks 11.04 s; VideoToolbox on the media engine 1.16 s; VideoToolbox
+# forced onto Apple's SOFTWARE ProRes (`-require_sw 1`) 1.69 s. So even a Mac with no ProRes
+# hardware gains about seven times over prores_ks, which is why `-allow_sw` is on.
+#
+# THE HARDWARE PATH HAS TO EARN ITS PLACE ON EACH MACHINE (`prores_videotoolbox_usable`): a
+# session has to open AND a half-transparent white pixel has to come back white at alpha ~128.
+# An encoder that premultiplied would hand an NLE the grey halo `_paint_alpha_frame` warns about,
+# and nothing about the file would say so. Apple's encoder keeps the alpha straight on both its
+# paths here (white@128 -> 255,255,255,129; grey 96@128 -> 96,96,96,129 on the software one).
+VT_PRORES = "prores_videotoolbox"
+SW_PRORES = "prores_ks"
+_PRORES_ENCODER = SW_PRORES        # the portable encoder, and what `alpha_codec_args` defaults to
+# What we ASK prores_ks for. What comes back out reads as `yuva444p12le`, and that is not a
 # mismatch to chase: the ProRes 4444 bitstream stores 12 bits, so ffmpeg's decoder advertises the
 # 12-bit format for every 4444 stream whatever it was encoded from. The `yuva` prefix — the part
 # that matters — is there either way, and a decoded frame measures 97.7 % fully transparent with
-# an alpha range of 0..255, i.e. a real, straight (non-premultiplied) alpha plane.
+# an alpha range of 0..255, i.e. a real, straight (non-premultiplied) alpha plane. The same holds
+# for VideoToolbox's output, which reads back as `yuva444p12le`, profile 4444, `ap4h` too.
 ALPHA_PIX_FMT = "yuva444p10le"
+# BOTH ProRes paths are converted AND labelled Rec. 709, and the two halves of that are one fix.
+# VideoToolbox turns `bgra` into Y'CbCr with the BT.709 matrix whatever the stream is tagged, and
+# ffmpeg converted with BT.601 for prores_ks; both left the file untagged. So the two encoders'
+# files disagreed on every saturated colour — an opaque (200,30,10) read back from VideoToolbox's
+# untagged file as (186,13,13), from prores_ks's as itself — and an NLE, which reads an untagged HD
+# stream as 709, got prores_ks's wrong instead. Tagging the frames 709 before the encoder makes
+# ffmpeg's own conversion use 709 too and writes the label into the stream: (200,30,10) now comes
+# back exact from both encoders, in ffmpeg and in anything that honours the tag. A fallback that
+# silently changed the colours of the overlay would not be a fallback.
+_PRORES_REC709 = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
 _PRORES_ALPHA_BITS = 16            # a full 16-bit alpha plane; the encoder's own default
 _PNG_PATTERN = "overlay_%06d.png"  # frame files inside the chosen directory
 # Bits per pixel per frame for the two alpha outputs, MEASURED on the frames this renderer
@@ -1086,25 +1114,134 @@ _PNG_PATTERN = "overlay_%06d.png"  # frame files inside the chosen directory
 # 30-minute 1080p overlay from the spec sheet says 74 GB; from the measurement, 12 GB. Still
 # worth a warning — it is roughly nine times the H.264 export beside it — but a warning that is
 # six times over-stated is one users learn to ignore.
+#
+# THE TWO PRORES ENCODERS DO NOT WRITE THE SAME BYTES, and the hardware one is the default, so it
+# has its own figure. Rendered frame for frame through both (the real renderer, MK_18_09_26 best
+# lap and SD_19_09_26 best lap with 5 s of run-up, every frame of each):
+#
+#                        prores_ks   prores_videotoolbox   ratio
+#     MK 1080p (2325 f)    0.881          0.907            1.030
+#     SD 1080p (1705 f)    0.920          0.949            1.032
+#     MK 2160p (2325 f)    0.610          0.632            1.036
+#
+# Apple's encoder spends about 3 % more on the same frame at every size; PRORES_VT_4444_BPP is
+# the D24-measured figure above scaled by that ratio, so the two keep one 1080p basis.
 PRORES_4444_BPP = 0.876
+PRORES_VT_4444_BPP = 0.903
 PNG_SEQUENCE_BPP = 0.311
 
 
-def alpha_codec_args(alpha_codec: str) -> list[str]:
+def alpha_codec_args(alpha_codec: str, encoder: str = SW_PRORES) -> list[str]:
     """The `-c:v ...` portion for an OVERLAY-ONLY render — the one output path with no bitrate and
     no CRF, so there is no quality level to resolve and nothing for the `-qp` trap documented in
     `_video_codec_args` to be silently swallowed by.
 
     ProRes 4444 is intra-only and quantiser-driven by profile alone; the PNG sequence is
     lossless. Both keep every pixel's alpha, which is the entire point: this is a track to lay
-    over the original footage in Resolve or Premiere, not a picture of one."""
+    over the original footage in Resolve or Premiere, not a picture of one. `encoder` picks which
+    ProRes encoder writes it (`resolve_alpha_encoder`); anything but VT_PRORES means prores_ks.
+
+    `apl0` — what Resolve/Premiere look at to call it a real ProRes — is prores_ks's `-vendor`
+    option; Apple's encoder writes `apl0` into every frame header itself (counted in the output:
+    two frames, two `apl0`, from either encoder), so it has no such option to pass."""
     if alpha_codec == ALPHA_PNG:
         return ["-c:v", "png", "-pix_fmt", "rgba"]
+    if encoder == VT_PRORES:
+        return [
+            "-c:v", VT_PRORES, "-profile:v", "4444", "-pix_fmt", "bgra", "-allow_sw", "1",
+            "-vf", _PRORES_REC709,
+        ]
     return [
-        "-c:v", _PRORES_ENCODER, "-profile:v", "4444",
+        "-c:v", SW_PRORES, "-profile:v", "4444",
         "-pix_fmt", ALPHA_PIX_FMT, "-alpha_bits", str(_PRORES_ALPHA_BITS),
-        "-vendor", "apl0",          # what Resolve/Premiere look at to call it a real ProRes
+        "-vendor", "apl0",
+        "-vf", _PRORES_REC709,
     ]
+
+
+def alpha_input_pix_fmt(encoder: str) -> str:
+    """The rawvideo format the painter hands an overlay-only encode: `bgra` for VideoToolbox, whose
+    own input format it is (so ffmpeg converts nothing), `rgba` for everything else. Qt paints the
+    two as `Format_ARGB32` and `Format_RGBA8888`, both straight alpha (`_paint_alpha_frame`)."""
+    return "bgra" if encoder == VT_PRORES else "rgba"
+
+
+def prores_alpha_round_trip(encoder: str) -> bool:
+    """Encode one small frame through `encoder` exactly as a render would, decode it back, and say
+    whether the alpha came back STRAIGHT: a half-transparent white pixel still white (every channel
+    >= 245) at alpha 128 +- 4, and an opaque red still red (the channel order). A session that will
+    not open, a premultiplying encoder and a decoder that fails are all simply "no".
+
+    The file lives in a private temporary directory for the length of the call."""
+    import tempfile
+
+    side = 64                                   # the H.264 probe's size; small enough to be free
+    frame = np.zeros((side, side, 4), np.uint8)
+    frame[: side // 2] = (255, 255, 255, 128)   # the probe pixel: white, half transparent
+    frame[side // 2:] = (220, 30, 20, 255)      # opaque red: R and B must not trade places
+    fmt = alpha_input_pix_fmt(encoder)
+    if fmt == "bgra":
+        frame = frame[..., [2, 1, 0, 3]]
+    with tempfile.TemporaryDirectory(prefix="pacer-prores-probe-") as tmp:
+        out = os.path.join(tmp, "probe.mov")
+        enc = subprocess.run(
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+             "-f", "rawvideo", "-pix_fmt", fmt, "-s", f"{side}x{side}", "-r", "30", "-i", "pipe:0",
+             *alpha_codec_args(ALPHA_PRORES, encoder), out],
+            input=np.ascontiguousarray(frame).tobytes() * 2, capture_output=True, timeout=30)
+        if enc.returncode != 0:
+            return False
+        dec = subprocess.run(
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", out,
+             "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"],
+            capture_output=True, timeout=30)
+    if dec.returncode != 0 or len(dec.stdout) != side * side * 4:
+        return False
+    px = np.frombuffer(dec.stdout, np.uint8).reshape(side, side, 4).astype(int)
+    white, red = px[side // 4, side // 2], px[3 * side // 4, side // 2]
+    straight = min(white[:3]) >= 245 and abs(white[3] - 128) <= 4
+    ordered = red[0] >= 190 and red[2] <= 70 and red[3] >= 250
+    return bool(straight and ordered)
+
+
+def prores_videotoolbox_usable() -> bool:
+    """True iff VideoToolbox's ProRes encoder is listed, a session opens AND it keeps a straight
+    alpha (`prores_alpha_round_trip`). Cached — a fixed property of the machine, like
+    `videotoolbox_usable`. Costs one tiny encode + decode (~0.3 s) the first time."""
+    cached = getattr(prores_videotoolbox_usable, "_cached", None)
+    if cached is not None:
+        return cached
+    ok = False
+    if shutil.which(FFMPEG) is not None:
+        try:
+            listed = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
+                                    capture_output=True, text=True, timeout=20).stdout
+            ok = VT_PRORES in listed and prores_alpha_round_trip(VT_PRORES)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            ok = False
+    prores_videotoolbox_usable._cached = ok  # type: ignore[attr-defined]
+    return ok
+
+
+def resolve_alpha_encoder(choice: str) -> str:
+    """Which encoder writes a ProRes 4444 overlay — the alpha twin of `resolve_encoder`, reading
+    the SAME `OverlayConfig.encoder` words so one knob means one thing on every path:
+
+      * "auto" (and the hardware words) -> VT_PRORES when `prores_videotoolbox_usable` says so
+      * "libx264"/"software"/"sw"/"x264"/"cpu" -> always prores_ks (the render's retry uses this)
+
+    Unlike the H.264 path, a forced "videotoolbox" still has to pass the probe: an alpha that
+    comes back premultiplied is a wrong file, not a slower one."""
+    c = (choice or "auto").lower()
+    if c in ("libx264", "software", "sw", "x264", "cpu"):
+        return SW_PRORES
+    return VT_PRORES if prores_videotoolbox_usable() else SW_PRORES
+
+
+# The encoder a failed or wedged HARDWARE render retries on, ONCE, as the `OverlayConfig.encoder`
+# word that forces it. Only a hardware encoder has an entry: a software one failing again would
+# fail the same way, and PNG has no second encoder at all.
+_SOFTWARE_RETRY = {VT_H264: "libx264", VT_PRORES: "software"}
 
 
 def png_sequence_pattern(out_dir: str) -> str:
@@ -1114,7 +1251,7 @@ def png_sequence_pattern(out_dir: str) -> str:
 
 
 def build_overlay_only_encode_cmd(spec: ExportSpec, out_w: int, out_h: int,
-                                  fps: float) -> list[str]:
+                                  fps: float, encoder: str = SW_PRORES) -> list[str]:
     """ENCODE argv for an overlay-only render: input 0 = our RGBA rawvideo on stdin, and THAT IS
     THE ONLY INPUT. There is no source decode and no audio.
 
@@ -1126,14 +1263,19 @@ def build_overlay_only_encode_cmd(spec: ExportSpec, out_w: int, out_h: int,
 
     It is also why this path is CHEAPER than the composited one rather than more expensive despite
     ProRes's data rate: nothing is decoded, scaled or muxed against a source. The only work is the
-    QPainter composite that both paths do anyway, plus the encode."""
-    out = png_sequence_pattern(spec.out_path) if spec.config.alpha_codec == ALPHA_PNG else spec.out_path
+    QPainter composite that both paths do anyway, plus the encode.
+
+    `encoder` is the ProRes encoder the render resolved (`resolve_alpha_encoder`); it decides the
+    pipe's pixel format too, because the painter fills the pipe in the encoder's own layout."""
+    png = spec.config.alpha_codec == ALPHA_PNG
+    out = png_sequence_pattern(spec.out_path) if png else spec.out_path
+    enc = SW_PRORES if png or encoder != VT_PRORES else VT_PRORES
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
-        "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{out_w}x{out_h}", "-r", f"{fps:.6f}",
-        "-i", "pipe:0",
+        "-f", "rawvideo", "-pix_fmt", alpha_input_pix_fmt(enc), "-s", f"{out_w}x{out_h}",
+        "-r", f"{fps:.6f}", "-i", "pipe:0",
         "-map", "0:v:0",
-        *alpha_codec_args(spec.config.alpha_codec),
+        *alpha_codec_args(spec.config.alpha_codec, enc),
         out,
     ]
 
@@ -1198,7 +1340,7 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     An OVERLAY-ONLY spec hands straight over to `build_overlay_only_encode_cmd`, which has neither
     a source input nor an audio map — the dispatch lives here so the renderer asks one question."""
     if spec.config.overlay_only:
-        return build_overlay_only_encode_cmd(spec, out_w, out_h, fps)
+        return build_overlay_only_encode_cmd(spec, out_w, out_h, fps, encoder)
     clip = clip_seconds(spec.t0, spec.t1, fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
@@ -1236,6 +1378,87 @@ def probe_video_size(src_path: str) -> tuple[int, int, float]:
     num, _, den = out[2].partition("/")
     fps = float(num) / float(den) if den else float(num)
     return w, h, fps
+
+
+# --------------------------------------------------------------------------- what the picker may know
+# The export picker has to put a size and a time on "Source (no downscale)", and for that it needs
+# the footage's frame, which nothing loaded before it knows: the session is telemetry, and the
+# frame lives in the video stream. One ffprobe answers it — 39-46 ms, measured three times on each
+# of the four working-set recordings — and the encoder probes cost ~0.2 s each once per run. None
+# of that may run on the dialog's thread, so `warm_export_probes` runs it behind it and the dialog
+# reads only these caches, refreshing its hint when they fill.
+#
+# Keyed on the file's path, size and mtime: a recording replaced under the same name is asked
+# again. A file that could not be asked is remembered as None, so nobody waits on it twice. The
+# renderer never reads this cache — it probes its own source, as it always has.
+_VIDEO_SIZE_CACHE: dict[tuple[str, int, int], tuple[int, int, float] | None] = {}
+
+
+def _video_size_key(path: str) -> tuple[str, int, int] | None:
+    try:
+        st = os.stat(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    return os.path.abspath(path), st.st_size, st.st_mtime_ns
+
+
+def known_video_size(path: str | None) -> tuple[int, int, float] | None:
+    """The source's (width, height, fps) if `remember_video_size` has already asked; never runs
+    ffprobe itself."""
+    key = _video_size_key(path) if path else None
+    return _VIDEO_SIZE_CACHE.get(key) if key is not None else None
+
+
+def remember_video_size(path: str | None) -> tuple[int, int, float] | None:
+    """`probe_video_size`, once per file, into the cache `known_video_size` reads. None when the
+    file cannot be asked (missing, unreadable, no ffprobe)."""
+    key = _video_size_key(path) if path else None
+    if key is None:
+        return None
+    if key not in _VIDEO_SIZE_CACHE:
+        try:
+            _VIDEO_SIZE_CACHE[key] = probe_video_size(key[0])
+        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError):
+            _VIDEO_SIZE_CACHE[key] = None
+    return _VIDEO_SIZE_CACHE[key]
+
+
+def known_alpha_encoder(choice: str = "auto") -> str | None:
+    """`resolve_alpha_encoder(choice)` if it can answer WITHOUT probing, else None (the probe has
+    not run yet)."""
+    c = (choice or "auto").lower()
+    if c in ("libx264", "software", "sw", "x264", "cpu"):
+        return SW_PRORES
+    cached = getattr(prores_videotoolbox_usable, "_cached", None)
+    if cached is None:
+        return None
+    return VT_PRORES if cached else SW_PRORES
+
+
+def export_probes_ready(src_path: str | None) -> bool:
+    """True once everything the picker's hint reads has been asked: the source's frame (when there
+    is a file to ask) and which ProRes encoder this machine gets."""
+    key = _video_size_key(src_path) if src_path else None
+    return known_alpha_encoder() is not None and (key is None or key in _VIDEO_SIZE_CACHE)
+
+
+def warm_export_probes(src_path: str | None) -> threading.Thread | None:
+    """Fill what `export_probes_ready` waits for on a daemon thread, so the picker never waits on
+    ffprobe or a VideoToolbox session. Returns the thread, or None when nothing is left to learn."""
+    if export_probes_ready(src_path):
+        return None
+
+    def warm() -> None:
+        try:
+            if src_path:
+                remember_video_size(src_path)
+            prores_videotoolbox_usable()
+        except Exception:  # noqa: BLE001 — a hint that cannot be warmed is simply not refined
+            _log.debug("export probe warm-up failed", exc_info=True)
+
+    thread = threading.Thread(target=warm, daemon=True, name="export-probe-warmup")
+    thread.start()
+    return thread
 
 
 def probe_source_duration(source: VideoSource) -> float | None:
@@ -1345,17 +1568,66 @@ X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured
 # leave room for a 5.3K source, one step past the largest measured. The PNG figure is apparent
 # bytes: each frame file also rounds up to a 4 KiB block (+1.9-2.3 KB a frame measured, up to
 # +2.8 % of the estimate), which only ever makes the real usage LARGER, so the floor leaves it out.
+#
+# The ratios in the table are against the FLAT 1080p figure the estimate used until E5. Since E5
+# `estimate_output_bytes` applies that measured ~short_side^-0.5 itself, so the 4K alpha files
+# land ~1.0 of their estimate instead of ~0.7, and the same floors now sit further below them.
+#
+# PRORES THROUGH VIDEOTOOLBOX sits in the same band against its own central figure
+# (`PRORES_VT_4444_BPP`): 1.004 and 1.051 at 1080p, 0.700 at 2160p against the flat figure (0.990
+# with the short-side scaling), on the three renders measured there — so it keeps prores_ks's floor.
 FREE_SPACE_FLOOR_FRACTION = {
     VT_H264: 0.60, SW_H264: 0.06, ALPHA_PRORES: 0.55, ALPHA_PNG: 0.50,
+    SW_PRORES: 0.55, VT_PRORES: 0.55,
 }
+
+# RENDER THROUGHPUT, frames per second of the WHOLE pipeline (decode, composite, encode) per path,
+# at a 1080p and a 2160p output frame — what the picker's time estimate is derived from, never a
+# promise: the progress dialog times the real render live and its ETA is the one to trust.
+# MEASURED 2026-09-25 on the M1 Pro (6P+2E) this app is developed on, through the real renderer on
+# MK_18_09_26's best lap (4K 59.94 HEVC source, rendered at the 30 fps cap), steady-state rate after
+# the first quarter; load average 4-11 from other work, so an idle Mac is a little faster:
+#
+#     path                              1080p    2160p
+#     h264_videotoolbox (footage)        61.2     22.8
+#     libx264 (footage)                  33.7     15.4
+#     prores_videotoolbox (overlay)      96.6     35.4
+#     prores_ks (overlay)                56.0     15.7
+#     PNG sequence (overlay)             96.1     31.5
+#
+# Full renders land on these rates: the 2325-frame 2160p ProRes lap took 65.2 s on VideoToolbox
+# (35.4 fps) and 145.3 s on prores_ks (15.7 fps), the 1080p one 23.9 s on VideoToolbox. Between
+# and beyond the two sizes the cost of a frame is taken as linear in its pixel count.
+RENDER_FPS = {
+    VT_H264: (61.2, 22.8), SW_H264: (33.7, 15.4),
+    VT_PRORES: (96.6, 35.4), SW_PRORES: (56.0, 15.7), ALPHA_PRORES: (56.0, 15.7),
+    ALPHA_PNG: (96.1, 31.5),
+}
+_RENDER_FPS_AT_PX = (1920 * 1080, 3840 * 2160)
+
+
+def estimate_render_seconds(out_w: int, out_h: int, frames: int, codec: str) -> float | None:
+    """About how long `frames` frames of `out_w x out_h` take to render on `codec`'s path, from
+    `RENDER_FPS`; None for a path with no measurement or a degenerate frame. A frame's cost is
+    interpolated linearly in its pixels between the two measured sizes and held to at least a
+    quarter of the 1080p cost below them."""
+    rates = RENDER_FPS.get(codec)
+    if rates is None or frames <= 0 or out_w <= 0 or out_h <= 0:
+        return None
+    (px_lo, px_hi), (fps_lo, fps_hi) = _RENDER_FPS_AT_PX, rates
+    cost_lo, cost_hi = 1.0 / fps_lo, 1.0 / fps_hi
+    per_frame = cost_lo + (cost_hi - cost_lo) * (out_w * out_h - px_lo) / (px_hi - px_lo)
+    return frames * max(per_frame, 0.25 * cost_lo)
 
 
 def output_codec(config: OverlayConfig) -> str:
-    """What will actually write this config's pixels: the alpha codec for an overlay-only render,
-    else the H.264 encoder `resolve_encoder` picks on THIS machine (which may probe VideoToolbox
-    once; the answer is cached)."""
+    """What will actually write this config's pixels: ALPHA_PNG for a sequence, the ProRes encoder
+    `resolve_alpha_encoder` picks for an alpha .mov, else the H.264 encoder `resolve_encoder` picks
+    — each on THIS machine (a VideoToolbox probe runs once; the answer is cached)."""
     if config.overlay_only:
-        return ALPHA_PNG if config.alpha_codec == ALPHA_PNG else ALPHA_PRORES
+        if config.alpha_codec == ALPHA_PNG:
+            return ALPHA_PNG
+        return resolve_alpha_encoder(config.encoder)
     return resolve_encoder(config.encoder)
 
 
@@ -1370,10 +1642,20 @@ def estimate_output_bytes(out_w: int, out_h: int, fps: float, seconds: float,
     if not (seconds > 0) or out_w <= 0 or out_h <= 0:
         return 0
     rate = max(float(fps), 1.0)
-    if codec == ALPHA_PRORES:
-        bits_per_s = out_w * out_h * rate * PRORES_4444_BPP
+    # The alpha outputs' figures are 1080p ones, and an overlay costs LESS per pixel on a bigger
+    # frame: its strokes grow with the short side, its transparent area with the square. Measured,
+    # bits/px/frame against (1080 / short side) ** 0.5: prores_ks 1.118 / 0.876 / 0.745 at
+    # 720 / 1080 / 1440 (predicted 1.073 / - / 0.759), 0.881 -> 0.610 from 1080p to 2160p on MK
+    # (x0.692, predicted x0.707), VideoToolbox 0.907 -> 0.632 (x0.697); PNG 0.401 / 0.311 / 0.263
+    # (predicted 0.381 / - / 0.269). Without it "Source" on 4K footage promised 2.2 GB for the
+    # owner's lap and wrote 1.52; with it the estimate says 1.54.
+    alpha_scale = (OVERLAY_REF_SHORT_SIDE / max(min(out_w, out_h), 1)) ** 0.5
+    if codec in (ALPHA_PRORES, SW_PRORES):
+        bits_per_s = out_w * out_h * rate * PRORES_4444_BPP * alpha_scale
+    elif codec == VT_PRORES:
+        bits_per_s = out_w * out_h * rate * PRORES_VT_4444_BPP * alpha_scale
     elif codec == ALPHA_PNG:
-        bits_per_s = out_w * out_h * rate * PNG_SEQUENCE_BPP
+        bits_per_s = out_w * out_h * rate * PNG_SEQUENCE_BPP * alpha_scale
     else:
         bpp, crf = quality_params(quality)
         if codec == VT_H264:
@@ -2511,21 +2793,22 @@ def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: by
 
 
 def _paint_alpha_frame(painter: OverlayPainter, out_w: int, out_h: int,
-                       vals: OverlayValues, dial) -> bytes:
-    """Composite ONE overlay-only frame onto a fully transparent canvas and return RGBA bytes
-    packed at out_w*4 — the overlay with nothing under it, which is what an NLE wants to lay over
-    the original footage.
+                       vals: OverlayValues, dial, bgra: bool = False) -> bytes:
+    """Composite ONE overlay-only frame onto a fully transparent canvas and return RGBA (or, with
+    `bgra`, BGRA) bytes packed at out_w*4 — the overlay with nothing under it, which is what an NLE
+    wants to lay over the original footage.
 
-    `Format_RGBA8888` rather than Qt's native `Format_ARGB32`: ffmpeg's `rgba` rawvideo is
-    byte-ordered R,G,B,A, while ARGB32 is a host-endian 32-bit word, i.e. B,G,R,A on a
-    little-endian machine. Getting that wrong swaps red and blue in every exported frame and
-    nothing about the file says so. NON-premultiplied, likewise deliberately: premultiplied is
-    what Qt composites in, but a half-transparent white halo stored premultiplied and READ as
-    straight is a grey halo.
+    THE FORMAT FOLLOWS THE ENCODER'S PIPE (`alpha_input_pix_fmt`). ffmpeg's `rgba` rawvideo is
+    byte-ordered R,G,B,A, which is `Format_RGBA8888`; Qt's `Format_ARGB32` is a host-endian 32-bit
+    word, i.e. B,G,R,A on a little-endian machine — exactly the `bgra` VideoToolbox's ProRes
+    encoder takes, so that path paints into it and ffmpeg converts nothing. Mixing the two up
+    swaps red and blue in every exported frame and nothing about the file says so. NON-premultiplied
+    either way, deliberately: premultiplied is what Qt composites in, but a half-transparent white
+    halo stored premultiplied and READ as straight is a grey halo.
 
     There is no `raw` parameter because there is no decode; this is the whole saving the
     overlay-only path claims."""
-    img = QImage(out_w, out_h, QImage.Format_RGBA8888)
+    img = QImage(out_w, out_h, QImage.Format_ARGB32 if bgra else QImage.Format_RGBA8888)
     img.fill(Qt.transparent)
     painter.paint_frame_with_state(img, vals, dial)
     bpl = img.bytesPerLine()
@@ -2721,13 +3004,19 @@ class Renderer:
         # times to learn what it will draw (see `_burned_runs`).
         self._painter = self._make_painter()
         # Resolve the encoder ONCE (probes VideoToolbox). `_encoder` is the concrete ffmpeg -c:v
-        # name actually used; `_fallback_allowed` lets a failed VT encode retry on libx264.
-        self._encoder = resolve_encoder(spec.config.encoder)
-        # The VT -> libx264 retry only means something for the H.264 paths. An overlay-only render
-        # encodes ProRes 4444 or PNG, neither of which is VideoToolbox and neither of which
-        # libx264 could stand in for — retrying one on a software H.264 would turn a failed alpha
-        # export into a successful opaque one, which is worse than the failure.
-        self._fallback_allowed = self._encoder == VT_H264 and not self._overlay_only
+        # name actually used: the H.264 one for a composite, the ProRes one for an alpha .mov,
+        # "png" for a sequence.
+        if not self._overlay_only:
+            self._encoder = resolve_encoder(spec.config.encoder)
+        elif spec.config.alpha_codec == ALPHA_PNG:
+            self._encoder = "png"
+        else:
+            self._encoder = resolve_alpha_encoder(spec.config.encoder)
+        # A failed HARDWARE encode retries once in software, on a stand-in for the SAME file:
+        # h264_videotoolbox -> libx264, prores_videotoolbox -> prores_ks. Never across formats —
+        # retrying an alpha export on a software H.264 would turn a failed alpha export into a
+        # successful opaque one, which is worse than the failure.
+        self._fallback_allowed = self._encoder in _SOFTWARE_RETRY
         self._hwaccel = resolve_hwaccel_decode(spec.config.hwaccel_decode, self._encoder)
         self._dec: subprocess.Popen | None = None
         self._enc: subprocess.Popen | None = None
@@ -2933,7 +3222,8 @@ class Renderer:
         On the overlay-only path there is no `raw` and the frame goes out as RGBA over
         transparency instead — same painter, same per-frame values, four bytes a pixel."""
         if self._overlay_only:
-            return _paint_alpha_frame(self._painter, self._out_w, self._out_h, vals, dial)
+            return _paint_alpha_frame(self._painter, self._out_w, self._out_h, vals, dial,
+                                      bgra=alpha_input_pix_fmt(self._encoder) == "bgra")
         return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
     def _report_frames_done(self) -> None:
@@ -3015,14 +3305,15 @@ class Renderer:
         self._supervisor = None
 
     def run(self, progress=None, cancel=None, chunk: int = 48) -> RenderResult:
-        """Render to completion. `progress(done, total)` / `cancel()` callbacks. A VT encode that
-        fails (`_EncodeError`) or wedges (RenderTimeoutError) retries ONCE on a fresh libx264-forced
-        Renderer; otherwise surfaces a clear RuntimeError. Returns a RenderResult."""
+        """Render to completion. `progress(done, total)` / `cancel()` callbacks. A VideoToolbox
+        encode (H.264 or ProRes) that fails (`_EncodeError`) or wedges (RenderTimeoutError) retries
+        ONCE on a fresh software-forced Renderer (`_SOFTWARE_RETRY`); otherwise surfaces a clear
+        RuntimeError. Returns a RenderResult."""
         try:
             return self._run_chunked(progress, cancel, chunk)
         except (_EncodeError, RenderTimeoutError) as exc:
-            is_encode_fail = isinstance(exc, _EncodeError) and exc.encoder == VT_H264
-            is_vt_wedge = isinstance(exc, RenderTimeoutError) and self._encoder == VT_H264
+            is_encode_fail = isinstance(exc, _EncodeError) and exc.encoder == self._encoder
+            is_vt_wedge = isinstance(exc, RenderTimeoutError)
             # NEVER fall back on a full disk: the software retry is a whole second render that
             # cannot succeed. Surface it now, while the failure is still cheap. But a full disk is
             # what the DISK says, not what ffmpeg's text says (see `_NO_SPACE_MARKERS`).
@@ -3030,9 +3321,11 @@ class Renderer:
             if not (self._fallback_allowed and (is_encode_fail or is_vt_wedge)):
                 # Not a VT-recoverable case → surface a clear error (never a hang).
                 raise RuntimeError(str(exc)) from exc
-            # VideoToolbox failed OR wedged → retry once on libx264 with an identical spec.
+            # VideoToolbox failed OR wedged → retry once in software with an identical spec.
+            _log.warning("%s failed (%s); retrying once on %s", self._encoder,
+                         str(exc).splitlines()[0][:200], _SOFTWARE_RETRY[self._encoder])
             self.cancel()
-            sw_cfg = replace(self._spec.config, encoder="libx264")
+            sw_cfg = replace(self._spec.config, encoder=_SOFTWARE_RETRY[self._encoder])
             sw_spec = replace(self._spec, config=sw_cfg)
             retry = self._respawn(sw_spec)
             try:
@@ -3080,10 +3373,9 @@ class Renderer:
         free = free_bytes(folder, purgeable=False)
         if free is None:
             return None
-        if self._overlay_only:
-            codec = ALPHA_PNG if png else ALPHA_PRORES
-        else:
-            codec = self._encoder
+        # The encoder names the codec on every path — h264_videotoolbox / libx264, the ProRes
+        # encoder (whose files differ in size), or "png" — except that a sequence says ALPHA_PNG.
+        codec = ALPHA_PNG if (self._overlay_only and png) else self._encoder
         est = estimate_output_bytes(self._out_w, self._out_h, self._fps,
                                     clip_seconds(spec.t0, spec.t1, self._fps),
                                     spec.config.quality, codec)
