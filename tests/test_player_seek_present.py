@@ -22,6 +22,9 @@ below copies, each one observed, not assumed):
     false here: pause-then-seek-then-play started at the seek (`CompareController._reset_pair_to_start`).
   * a paused seek takes 136-410 ms to present on his 4K HEVC (VIEW p9), so a drag that re-seeks every
     ~33 ms tick supersedes each seek before its frame exists.
+  * presenting paused builds the FFmpeg engine at LOAD, audio-renderer thread included when an audio
+    output is attached; that thread's teardown was sampled deadlocked against the GUI thread
+    (_AUDIO_DEADLOCK below), so a muted pane attaches no audio output.
 
 TWO HALVES. The fake-player tests pin the state machine exactly, fast, and fail on the unfixed pane
 with the defect named. The real-player tests drive the production widgets over a REAL offscreen
@@ -313,6 +316,9 @@ def test_a_drag_keeps_one_seek_in_flight_and_the_latest_target_wins():
     assert fake.landed == [10_000, 12_000], fake.landed
     fake.present()
     assert fake.landed == [10_000, 12_000], "nothing was held, so nothing more may be issued"
+    assert not pane._frames_watched, (
+        "the drag is over, but the pane still takes every presented frame into Python on the GUI "
+        "thread — playback's present path (studio/README.md, perf invariant 4)")
 
     pane.seek_dragged(13.0)              # a seek that presents nothing...
     pane.seek_dragged(14.0)
@@ -425,6 +431,9 @@ def test_real_player_open_shows_the_best_lap_and_play_starts_there():
         _APP.processEvents()
         sec = view.video.secondary
         assert view.compare.active and sec is not None
+        assert sec.player.audioOutput() is None, (
+            "pane B (always muted) has an audio output: its FFmpeg audio-renderer thread's teardown "
+            "on leaving compare can deadlock against the GUI thread (see _AUDIO_DEADLOCK below)")
         picture_b = _Picture(sec)
         lap_b = view.compare.lap_b
         m_b = _media(s, s.lap_window(lap_b)[0] + theme.LAP_SEEK_NUDGE_S)
@@ -487,6 +496,21 @@ def test_real_player_fresh_pane_seeks_land_in_either_chapter():
                 assert chip[:1] == [True] and chip[-1] is False, chip
                 assert took < 4.0, f"chapter 2 took {took:.1f} s: the seam gate waited for the watchdog"
             print(f"  fresh pane, chapter {chapter + 1}: shown after {1e3 * took:.0f} ms")
+            if chapter == 0:
+                # _AUDIO_DEADLOCK. Presenting paused builds the FFmpeg engine at load, so an attached
+                # QAudioOutput would give every pane an audio-renderer thread from the open. Its
+                # teardown (a chapter switch, leaving compare) disconnects from the Python-made
+                # QAudioOutput, whose PySide disconnectNotify waits for the GIL under Qt's
+                # signal-slot lock — sampled deadlocked against a GUI-thread connect on MK. So a
+                # muted pane carries no audio output; un-muting attaches it and playback goes on.
+                assert pane.player.audioOutput() is None, "a muted pane must not attach its audio"
+                pane.set_muted(False)
+                assert pane.player.audioOutput() is pane.audio and not pane.is_muted()
+                n = len(picture.frames)
+                pane.play()
+                assert _pump_until(lambda p=picture, n=n: len(p.frames) >= n + 5, 5.0), (
+                    "playback stalled after the first un-mute attached the audio output")
+                pane.pause()
         finally:
             pane.dispose()
             pane.deleteLater()

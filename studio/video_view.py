@@ -1350,9 +1350,9 @@ class VideoView(QWidget):
             self.secondary.pause()
 
     def pause_if_playing(self):
-        """Pause each pane only if actually playing. pause() on a never-played (Stopped) pane makes
-        the next play() restart from 0, discarding a seek-to-S/F — so the compare reset uses this to
-        keep each pane parked at its lap start."""
+        """Pause each pane only if actually playing — the compare reset's pause, before each pane's
+        seek parks it (shown, paused) at its lap start. (That pause() on a never-played pane makes
+        play() restart from 0 was measured false on Qt 6.11's FFmpeg backend, 2026-09-25.)"""
         if self.pane.is_playing():
             self.pane.pause()
         if self.secondary is not None and self.secondary.is_playing():

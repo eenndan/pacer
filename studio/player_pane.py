@@ -51,10 +51,10 @@ _SEAM_RESUME_WATCHDOG_MS = 8000
 
 # A DRAG keeps one seek in flight (seek_dragged). The next target goes when the in-flight seek's frame
 # reaches the screen, or after this long if none does (a seek that presents nothing — mid-load, the
-# headless player — must not freeze the drag). Above the slowest paused seek measured, so the timer
-# never supersedes a seek that was about to land: 136-410 ms on the owner's 4K HEVC (QA VIEW p9),
-# 460-560 ms on the synthetic GoPro.
-_DRAG_SEEK_RELEASE_MS = 700
+# headless player — must not freeze the drag). Well above the slowest paused seek measured, because a
+# timer that fires first supersedes a seek about to land — the failure this exists to end: up to
+# 693 ms between drag frames on Sandown 3h's 4K HEVC (P-A p9), 460-560 ms on the synthetic GoPro.
+_DRAG_SEEK_RELEASE_MS = 1000
 
 # ----------------------------------------------------------------- headless / CI seam
 # PACER_NO_MEDIA=1 swaps the media triplet for the inert _Null* stand-ins below (headless CI smoke);
@@ -203,7 +203,14 @@ class PlayerPane(QWidget):
             self.audio = QAudioOutput()
             self.audio.setVolume(0.6)
             self.audio.setMuted(True)
-        self.player.setAudioOutput(self.audio)   # no-ops on the null player
+        # The audio output is attached on the first UN-mute (set_muted), not here. Attached, it gives
+        # the FFmpeg engine an audio-renderer thread whose teardown — every chapter switch, compare
+        # exit, reload — disconnects from this Python-made QAudioOutput: PySide's disconnectNotify
+        # then waits for the GIL while holding Qt's signal-slot lock, and a main thread holding the
+        # GIL that connects anything under the same lock deadlocks (sampled 2026-09-25: leaving
+        # compare on MK hung for good). A muted pane — pane B always, the primary by default — never
+        # needs that thread, and once seeks present paused every pane builds its engine at load.
+        self._audio_attached = False
         self.player.setVideoOutput(self.video)
 
         # The pane is JUST the video surface; the transport chrome lives in the shell.
@@ -229,8 +236,8 @@ class PlayerPane(QWidget):
         self._drag_release.setInterval(_DRAG_SEEK_RELEASE_MS)
         self._drag_release.timeout.connect(self._release_drag)
         sink = getattr(self.video, "videoSink", None)    # the headless stand-in has no sink
-        if sink is not None:
-            sink().videoFrameChanged.connect(self._on_video_frame)
+        self._sink = sink() if sink is not None else None
+        self._frames_watched = False   # the sink is listened to only while a drag seek is in flight
 
         if self._chapters is not None:
             # initial load is not a replacement — don't gate (no spurious statuses, and a gate left
@@ -362,6 +369,11 @@ class PlayerPane(QWidget):
 
     def set_muted(self, muted: bool):
         self.audio.setMuted(bool(muted))
+        if not muted and not self._audio_attached:
+            # first un-mute: only now does the engine get an audio renderer (see __init__). It stays
+            # attached after a re-mute — detaching is itself the teardown that can deadlock.
+            self._audio_attached = True
+            self.player.setAudioOutput(self.audio)
 
     def _clock(self):
         """This pane's telemetry->media conversion — the recording's own, off the ChapterMap it was
@@ -423,6 +435,7 @@ class PlayerPane(QWidget):
             self._drag_held = float(seconds)
             return
         self._drag_inflight = True
+        self._watch_frames(True)
         self._drag_release.start()
         self.seek(seconds)
 
@@ -751,6 +764,18 @@ class PlayerPane(QWidget):
     def _on_state(self, state):
         self.playbackStateChanged.emit(state)
 
+    def _watch_frames(self, on: bool):
+        """Listen to the video sink only while a drag seek is in flight. Connected for good, every
+        frame of playback would cross into Python on the GUI thread — the present path the ~30 Hz
+        tick is kept off (studio/README.md, perf invariant 4)."""
+        if self._sink is None or on == self._frames_watched:
+            return
+        self._frames_watched = on
+        if on:
+            self._sink.videoFrameChanged.connect(self._on_video_frame)
+        else:
+            self._sink.videoFrameChanged.disconnect(self._on_video_frame)
+
     def _on_video_frame(self, frame):
         """A frame reached the video sink: the in-flight drag seek has landed (seek_dragged). A
         bound method, so a frame the backend delivers from its render thread is queued onto ours."""
@@ -764,3 +789,5 @@ class PlayerPane(QWidget):
         held, self._drag_held = self._drag_held, None
         if held is not None:
             self.seek_dragged(held)
+        else:
+            self._watch_frames(False)   # the drag is over: back off the present path

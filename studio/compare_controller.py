@@ -560,8 +560,9 @@ class CompareController:
     def _reset_pair_to_start(self) -> None:
         """Re-seek both panes to lap S/F paused so they roll together on next Play.
 
-        IMPORTANT: pause only the PLAYING pane — a never-played pane → StoppedState, whose play()
-        restarts at 0 and discards the seek."""
+        Only the PLAYING pane is paused here; each pane's own seek shows its lap-start frame paused,
+        pane B's once its fresh source has loaded (PlayerPane.seek, QA VIEW-2). The old warning that
+        pause() on a never-played pane makes play() restart from 0 was measured false on Qt 6.11."""
         a, b = self._compare_a, self._compare_b
         if a is None or b is None:
             return

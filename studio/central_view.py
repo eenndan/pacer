@@ -1520,8 +1520,10 @@ class CentralView(QWidget):
     def _poster_seek(self):
         """Poster the best-lap first frame so the largest quadrant isn't a black void at launch, and
         the map marker / charts / readout reflect a real moment inside a lap. The freshly-built pane
-        is paused, so the seek decodes + presents without playing. Seed applied_t so the next tick
-        sees it as already-applied. No-op when there's no valid best lap."""
+        is still LOADING (and would be StoppedState after): PlayerPane.seek holds the target until
+        the media loads, then presents it paused, so the first ▶ plays the best lap (QA VIEW-1).
+        Seed applied_t so the next tick sees it as already-applied. No-op when there's no valid
+        best lap."""
         best = self.session.best_lap_id()
         if best is None:
             return
@@ -1530,7 +1532,7 @@ class CentralView(QWidget):
             return
         # Nudge past lap start (see _on_laps_selected) so the ms-quantized seek lands inside the lap.
         target = window[0] + theme.LAP_SEEK_NUDGE_S
-        self.video.seek(target)          # paused decode → presents the best lap's start frame
+        self.video.seek(target)          # lands on load, shown paused (PlayerPane.seek)
         self._playback.latest_t = target
         self._playback.applied_t = target
         self._hero_rest_t = target       # the hero reads the lap's total until this moves
