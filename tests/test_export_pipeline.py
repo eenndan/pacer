@@ -9,7 +9,9 @@ the render hands them to the encoder (an encoder stand-in that hashes each frame
 encoding) and compare the two pumps frame by frame — on the synthetic GoPro through the real
 loader, and on a moving clip for the relay, whose seam check needs frames that differ. CI has no
 VideoToolbox, so the relay is switched on by hand here: it is correct on any decoder, it only
-PAYS on the hardware one (see `_RELAY_TURN`).
+PAYS on the hardware one (see `_RELAY_TURN`). Where it pays — the owner's path, where nothing
+switches it on but `_relay_ok` itself — is VIDEOTOOLBOX_CHECKS, a registration of its own that CI
+reports SKIPPED by name (tests/_videotoolbox.py).
 """
 import hashlib
 import os
@@ -31,6 +33,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
+
+import _videotoolbox  # noqa: E402
 
 from studio import export_video as ev  # noqa: E402
 from studio.timeline import nearest_sample  # noqa: E402
@@ -249,6 +253,57 @@ def test_relay_refuses_a_misaligned_decoder_and_still_paints_the_serial_frames()
         print("ok relay: a misaligned decoder is refused and the clip is unchanged")
 
 
+def test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_serial_frames():
+    """The owner's export path, which the relay tests above can only imitate: over `-hwaccel
+    videotoolbox` NOTHING forces the relay on — `_relay_ok` must choose it — and it must hand over
+    at every seam and paint, in order, exactly the frames the serial pump paints off the same
+    hardware decode. Then one real render of it through h264_videotoolbox, relay and all."""
+    _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_decode_available()
+                       and ev.videotoolbox_usable(),
+                       "ffmpeg with a VideoToolbox hardware decode and H.264 session")
+    relays = []
+    orig_init = ev._DecodeRelay.__init__
+
+    def init(self, *a, **k):
+        relays.append(self)
+        orig_init(self, *a, **k)
+    with tempfile.TemporaryDirectory(prefix="pacer-e9-vt-") as tmp:
+        src = os.path.join(tmp, "src.mp4")
+        _moving_clip(src, 12.5)
+        s = _Session(12.0)
+        spec = _spec(src, 12.0, fps_cap=30.0)
+        hw = replace(spec, config=replace(spec.config, hwaccel_decode=True))
+        serial, _, err = _render(replace(hw, config=replace(hw.config, workers=1)), s)
+        assert err is None, err
+        ev._DecodeRelay.__init__ = init
+        try:
+            relayed, r, err = _render(hw, s)
+        finally:
+            ev._DecodeRelay.__init__ = orig_init
+        assert err is None, err
+        assert r._hwaccel and r._relay_ok(), "the relay did not choose itself over the hardware decode"
+        assert relays and relays[0].handovers == 2 and not relays[0].gave_up, (
+            f"the hardware relay did not hand over at both seams: "
+            f"{[(x.handovers, x.gave_up) for x in relays]}")
+        assert len(serial) == 360 and relayed == serial, (
+            f"the hardware relay painted other frames than the serial pump: "
+            f"{[i for i, (a, b) in enumerate(zip(serial, relayed)) if a != b][:10]}")
+        out = os.path.join(tmp, "vt.mp4")
+        real = ev.Renderer(s, ev.ExportSpec(
+            src_path=src, out_path=out, lap_id=1, t0=0.0, t1=12.0,
+            config=ev.OverlayConfig(out_height=360, encoder="videotoolbox", hwaccel_decode=True,
+                                    fps_cap=30.0)))
+        assert real.encoder == ev.VT_H264 and real._relay_ok()
+        res = real.run()
+        tag = subprocess.run([ev.FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                              "stream_tags=encoder", "-of", "default=noprint_wrappers=1:nokey=1",
+                              out], capture_output=True, text=True).stdout.strip()
+        assert res.frames == 360 and "videotoolbox" in tag.lower(), (res.frames, tag)
+    assert not _export_threads(), _export_threads()
+    print(f"ok hardware relay: chose itself, 2 handovers, 360/360 frames identical to the serial "
+          f"pump; a real h264_videotoolbox render of it ({tag})")
+
+
 def test_cancel_mid_render_stops_every_thread_and_process():
     """Cancel partway through a pipelined relay render: CancelledError, promptly, with no export
     thread left running and every decoder reaped."""
@@ -337,8 +392,16 @@ def test_the_pool_bounds_memory():
     print("ok pool: bounded, never grows")
 
 
+# Each is its own CTest registration, `videotoolbox.<name>` (tests/_videotoolbox.py): SKIPPED by name
+# where VideoToolbox is missing (CI) — not in this file's ordinary run or its count.
+VIDEOTOOLBOX_CHECKS = (test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_serial_frames,)
+
+
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    if _videotoolbox.requested():
+        sys.exit(_videotoolbox.run(VIDEOTOOLBOX_CHECKS))
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and v not in VIDEOTOOLBOX_CHECKS]
     failed = 0
     for t in tests:
         try:

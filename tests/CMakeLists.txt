@@ -166,6 +166,29 @@ endfunction()
 
 add_soak_test(test_compare_lifecycle test_toggle_compare_repeatedly_does_not_crash)
 
+# ---- VIDEOTOOLBOX CHECKS (HEALTH-4) ------------------------------------------------------------
+# The export paths only the Apple media engine runs — h264_videotoolbox, the ProRes VideoToolbox
+# encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox` — which CI's runner
+# cannot run. `videotoolbox.<check>` runs `<file>.py --videotoolbox <check>`: without VideoToolbox
+# it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where it used to return
+# early and report PASSED. On the dev Mac it runs, in `test-fast` as well as `test`. A file's
+# VIDEOTOOLBOX_CHECKS and these lines are held one to one by test_videotoolbox_checks.
+function(add_videotoolbox_test file check)
+    add_test(NAME videotoolbox.${check}
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --videotoolbox ${check})
+    set_tests_properties(videotoolbox.${check} PROPERTIES
+                         SKIP_RETURN_CODE 77
+                         LABELS videotoolbox
+                         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+endfunction()
+
+add_videotoolbox_test(test_export_video test_real_videotoolbox_render_if_available)
+add_videotoolbox_test(test_export_video test_a_slow_start_behind_videotoolbox_keeps_the_hardware_encode_if_available)
+add_videotoolbox_test(test_export_video test_the_last_frame_and_the_audio_reach_the_end_on_videotoolbox)
+add_videotoolbox_test(test_export_video test_the_videotoolbox_prores_alpha_round_trip_is_straight)
+add_videotoolbox_test(test_export_video test_real_prores_overlay_on_videotoolbox_matches_the_prores_ks_fallback)
+add_videotoolbox_test(test_export_pipeline test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_serial_frames)
+
 # KEEP THIS LAST. Every registration above runs with PACER_APP_SUPPORT_JAIL=1: the first store path
 # any process in the test's tree resolves is a fresh temp dir (exported to its children, removed at
 # exit), never ~/Library/Application Support/pacer — whether or not the test patched a seam. A test
