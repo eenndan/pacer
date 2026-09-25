@@ -210,7 +210,7 @@ def test_relay_hands_over_and_paints_the_serial_frames():
             ev.Renderer._relay_ok = orig
         assert err is None, err
         assert len(serial) == 360 and len(relayed) == 360, (len(serial), len(relayed))
-        diff = [i for i, (a, b) in enumerate(zip(serial, relayed)) if a != b]
+        diff = [i for i, (a, b) in enumerate(zip(serial, relayed, strict=True)) if a != b]
         assert not diff, f"the relay painted different frames at {diff[:10]}"
         assert not _export_threads(), _export_threads()
         print("ok relay: 360/360 frames identical to the serial pump")
