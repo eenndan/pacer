@@ -8,6 +8,36 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.4.0] — 2026-09-25
 
+Everything merged since v0.3.0: 15 pull requests, #389 and #391 to #404. Each line names its pull
+request (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+
+### Highlights
+
+- **A first open lands on its debrief.** Coaching, full-window: your PB standing, the seconds your
+  top corners cost against your best lap, and those corners added to your focus list where it has
+  room, said on screen with a Remove on each; Esc returns to your layout (#391)
+- **Your new PB against the one it beat, in one click.** "Compare with your previous PB" loads the
+  recording it beat and plays both best laps side by side, or names the file that has moved; the
+  comparison video is one click further (#393)
+- **Braking advice that is measured, or silent.** "Brake ~N m later" said "later" at all 33 corners
+  of four recordings, by construction. A row now names a direction only where your laps hold one
+  after a Holm correction (2 of 33), and Stats labels its figure a model's bound (#395, #399, #401)
+- **An unknown track's start line survives a GPS glitch.** The auto-fit sits where the speed stays
+  highest, not at the fastest single fix. On MK run as an unknown track, a one-fix 106 km/h spike
+  had cost 4 of its 19 valid laps; now it counts 19, as the circuit's own line does (#394)
+- **Words that agree with the numbers.** "1 clean laps" and its kind are fixed in 30-odd places and
+  guarded; the charts' Δ readout opens on the lap's total, not +0.00 s; a first session's PB card
+  no longer offers to share a best with nothing to beat (#396, #404)
+- **A problem report carries the whole story.** Failure notices that went only to a terminal, which
+  a Finder-launched app discards, now reach the session log, beside what each load found: its laps,
+  the g and rotation cross-checks, the GPS lag it corrected (#402)
+- **CI checks the math through the real loader.** The golden gate fingerprints a synthetic GoPro
+  session loaded the way a recording is: 113,388 values (was 40,833), in any timezone, and three
+  planted regressions it missed now fail it. pyright gates 30 Qt-free core modules (#389, #392)
+- **Measured, then refused, and tidied.** Three more ideas lost to their own numbers (refusals
+  §15–§17); timing lines and lap points leave the bindings as copies (no app path kept a view);
+  four Stats sections left a 4,584-line file (#394, #395, #397, #398, #400, #403)
+
 ### Added
 
 - Where your laps show it, a Coaching row says which way braking went with your quicker passes
