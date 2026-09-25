@@ -418,8 +418,7 @@ class TrustSection:
             lap_cls = [q for lid in valid if (q := session.lap_quality(lid)) is not None]
             degraded = [q for q in lap_cls if q < data_quality.GOOD]
             holed = [q for q in degraded if q <= data_quality.POOR]
-            # The noun agrees with the laps found and the verb with the degraded ones — one
-            # degraded lap is the commonest non-zero count (K2).
+            # The noun agrees with the laps found, the verb with the degraded ones (K2).
             note = (f" · {len(degraded)} of {plural(len(valid), 'lap')} "
                     f"contain{'s' if len(degraded) == 1 else ''} a second below good"
                     if degraded and valid else "")

@@ -478,8 +478,7 @@ def _corner_count_tip(report) -> str:
         return (f"No time for C{report.cid}: on none of the {plural(of, 'clean lap')} could its "
                 "entry and exit both be matched to your best lap's line on track, and an "
                 "interpolated corner time can be tenths of a second out.")
-    # One lap left out is the commonest case, and it is "it", not "they" (K2).
-    them = "it is" if of - n == 1 else "they are"
+    them = "it is" if of - n == 1 else "they are"   # one lap left out is "it" (K2)
     return (f"Over the {n} of {of} clean laps matched on track at C{report.cid}'s entry and exit. "
             f"On the other {of - n} the corner was interpolated between its neighbours, which can "
             f"put its time tenths of a second out, so {them} left out of this whole row.")
@@ -3029,8 +3028,7 @@ class StatsView(QWidget):
                  for val, res in zip(row, rrow, strict=True) if val is not None]
         muted = sum(1 for _val, res in cells if not res)
         if muted:
-            # The verb agrees with `muted`, the subject — one muted cell is common (K2).
-            is_are = "is" if muted == 1 else "are"
+            is_are = "is" if muted == 1 else "are"   # agrees with `muted`, its subject (K2)
             parts.append(f"{muted} of {plural(len(cells), 'cell')} {is_are} muted: that lap's "
                          "corner edge was not matched on track, so the time is shown but never "
                          "marked or counted in the typical.")

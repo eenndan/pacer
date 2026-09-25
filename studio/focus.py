@@ -732,8 +732,7 @@ def report_lines(report: Report) -> list[str]:
         return [f"{_corner_list(outcomes)} — baselines measured on this session ("
                 f"{', '.join(f'{o.item.median_s:.2f} s' for o in outcomes)} over "
                 f"{plural(n, 'lap')}). Next time you're at this track, Pacer measures the same "
-                f"stretches again and says "
-                f"whether they moved."]
+                f"stretches again and says whether they moved."]
     return [outcome_sentence(o) for o in outcomes]
 
 

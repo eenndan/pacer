@@ -856,7 +856,7 @@ def comparable(a: dict | None, b: dict | None) -> list[str]:
         out.append(f"tyres {a['tyre_set']} vs {b['tyre_set']}")
     elif a["tyre_laps"] is not None and b["tyre_laps"] is not None \
             and abs(a["tyre_laps"] - b["tyre_laps"]) >= 20:
-        # The unit agrees with the number beside it: a fresh set is legitimately "1 lap".
+        # The unit agrees with the number beside it: a set with one lap on it is "1 lap" (K2).
         out.append(f"tyre age {a['tyre_laps']} vs {b['tyre_laps']} "
                    f"lap{'' if b['tyre_laps'] == 1 else 's'}")
     gear_a = (a["sprocket_front"], a["sprocket_rear"])

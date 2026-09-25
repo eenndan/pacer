@@ -26,6 +26,10 @@ A site is clean when:
 Logging calls and `print` are out of scope — the log is a developer surface. `str.format` and
 `%` templates are scanned too (`"{laps} clean laps"`), keyed by their placeholder.
 
+NOT SEEN: agreement at a distance — a pronoun or a second verb later in the sentence ("on the
+other {n} … so they are left out", "… and are shown muted"). The sweep fixed three of those by
+reading; `test_the_fixed_copy_reads_right_at_one` renders each at 1.
+
 NEGATIVE CONTROL: `RETIRED` holds spellings the sweep replaced, verbatim, and every one must be
 flagged — the scanner is shown to see the class before its silence on the tree means anything.
 Run: python tests/test_plural_copy.py
