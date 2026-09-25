@@ -58,6 +58,38 @@ macro(litgen_find_nanobind)
 endmacro()
 
 
+# Copy the built native module to `destination` only when its bytes differ (HEALTH-1, 2026-09-25).
+# Both copies were `add_custom_target(... ALL COMMAND copy)`, which runs on EVERY build: a no-op
+# `pixi run build` (and so every `pixi run studio`) rewrote both .so files. The stamp makes an
+# unchanged module a no-op; declaring `destination` a byproduct makes a deleted copy come back on
+# the next build. A copy that does happen still lands on a new inode (measured), so a running app
+# keeps the library it mapped.
+function(_litgen_deploy_native_module target_name native_module destination_dir)
+    # The module's file name, spelled out: BYPRODUCTS takes no $<TARGET_FILE_NAME:…>. nanobind sets
+    # PREFIX "" and SUFFIX (the interpreter's EXT_SUFFIX) on the target it adds.
+    get_target_property(prefix ${native_module} PREFIX)
+    get_target_property(suffix ${native_module} SUFFIX)
+    if(NOT suffix)
+        message(FATAL_ERROR "litgen.cmake: ${native_module} has no SUFFIX property, so its deployed "
+                            "file name cannot be spelled out (was it made by nanobind_add_module?)")
+    endif()
+    if(NOT prefix)
+        set(prefix "")
+    endif()
+    set(destination "${destination_dir}/${prefix}${native_module}${suffix}")
+    set(stamp "${CMAKE_CURRENT_BINARY_DIR}/${target_name}.stamp")
+    add_custom_command(
+        OUTPUT "${stamp}"
+        BYPRODUCTS "${destination}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:${native_module}> "${destination}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${stamp}"
+        DEPENDS ${native_module}
+        VERBATIM
+    )
+    add_custom_target(${target_name} ALL DEPENDS "${stamp}")
+endfunction()
+
+
 function(litgen_setup_module
     # Parameters explanation, with an example: let's say we want to build binding for a C++ library named "foolib",
     bound_library               #  name of the C++ for which we build bindings ("foolib")
@@ -87,23 +119,14 @@ function(litgen_setup_module
 
         # 1. Copy the python module to editable_bindings_folder
         set(bindings_module_folder ${editable_bindings_folder}/${python_module_name})
-        set(python_native_module_editable_location ${bindings_module_folder}/$<TARGET_FILE_NAME:${python_native_module_name}>)
-        add_custom_target(
-            ${python_module_name}_deploy_editable
-            ALL
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${python_native_module_name}> ${python_native_module_editable_location}
-            DEPENDS ${python_native_module_name}
-        )
+        _litgen_deploy_native_module(${python_module_name}_deploy_editable
+            ${python_native_module_name} ${bindings_module_folder})
 
         # 2. Copy the python module to the platform dependent installation directory (site-packages when using pip install)
         # We'll rely on find_package(Python) which fills Python_SITEARCH, which is where we want to copy the module
         litgen_find_python()  # will call find_package(Python) and set Python_SITEARCH
-        set(python_native_module_editable_location_site_packages ${Python_SITEARCH}/${python_module_name}/$<TARGET_FILE_NAME:${python_native_module_name}>)
-        add_custom_target(
-            ${python_module_name}_deploy_editable_site_packages
-            ALL
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${python_native_module_name}> ${python_native_module_editable_location_site_packages}
-            DEPENDS ${python_native_module_name})
-        message(STATUS "litgen_setup_module: python native module will be copied to ${python_native_module_editable_location_site_packages}")
+        _litgen_deploy_native_module(${python_module_name}_deploy_editable_site_packages
+            ${python_native_module_name} ${Python_SITEARCH}/${python_module_name})
+        message(STATUS "litgen_setup_module: python native module will be copied to ${Python_SITEARCH}/${python_module_name}")
     endif(NOT SKBUILD)
 endfunction()

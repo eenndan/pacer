@@ -12,7 +12,7 @@ Coordinate spaces:
     the cursors coincide). best_distance is caller-supplied (the active baseline total stays on
     Session). Two of these are NAMED "media time" and are not; see `media_time_at_plot_x`.
   * telemetry time -> trace index / lap (the NEAREST trace sample, `nearest_sample`, + the O(log n)
-    lap-window search).
+    lap-window search), and -> the map dot's position (`trace_point_at`, interpolated).
   * map (x, y) -> trace (whole-trace argmin + the lap-scoped variant for the draggable marker).
 
 Every time in and out of this module is on the GPS9 TELEMETRY clock. Nothing here crosses to the
@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import cast
 
 import numpy as np
+
+from .gapfill import GAP_TIME_S
 
 
 def nearest_sample(times, t: float) -> int | None:
@@ -52,6 +54,34 @@ def nearest_sample(times, t: float) -> int | None:
     if i > 0 and t - times[i - 1] < times[i] - t:
         return i - 1
     return i
+
+
+def trace_point_at(times, xs, ys, t: float, gap_s: float = GAP_TIME_S):
+    """(x, y, stamp) of the trace at time `t`: linear between the two samples that bracket it, so a
+    marker drawn at 30 fps off a 10 Hz trace moves every frame instead of holding three and jumping.
+    THE MARKER RULE for both map dots: the burned-in export's (E6) and the live map's during
+    playback (`MapView.set_playhead_time`, HEALTH-2), so the two cannot disagree about where the
+    kart is. The READOUTS still read `nearest_sample` — a speed is a measurement, not a position
+    between two of them.
+    ACROSS A DROPOUT (samples more than `gap_s` apart — `gapfill`'s rule, the one the map draws its
+    gaps by) it HOLDS the nearest sample instead: the straight line between the two sides of a
+    missing second runs across the infield, which is somewhere the kart never was. `stamp` is the
+    time of the position returned (`t`, or the held sample's). Clamped to the trace; None if empty."""
+    n = len(times)
+    if n == 0:
+        return None
+    i = int(np.searchsorted(times, t, side="right"))    # times[i-1] <= t < times[i]
+    if i <= 0:
+        return float(xs[0]), float(ys[0]), float(times[0])
+    if i >= n:
+        return float(xs[-1]), float(ys[-1]), float(times[-1])
+    ta, tb = float(times[i - 1]), float(times[i])
+    if tb - ta > gap_s:
+        j = i - 1 if t - ta < tb - t else i             # `timeline.nearest_sample`'s tie rule
+        return float(xs[j]), float(ys[j]), float(times[j])
+    f = (t - ta) / (tb - ta)
+    return (float(xs[i - 1] + f * (xs[i] - xs[i - 1])),
+            float(ys[i - 1] + f * (ys[i] - ys[i - 1])), float(t))
 
 
 class Timeline:

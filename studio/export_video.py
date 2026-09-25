@@ -61,6 +61,7 @@ from . import data_quality, gmeter_overlay, theme, units
 from ._signal import fmt_time, lap_label
 from .export_palette import EXPORT
 from .gapfill import GAP_TIME_S
+from .timeline import trace_point_at
 
 _log = logging.getLogger(__name__)
 
@@ -2298,30 +2299,6 @@ def _inset_width(session, lap_id: int | None, height: float, max_width: float) -
 # on MK_18_09_26 and SD_19_09_26 alike) and twice that at 4K, where k is 2. The stroke still scales
 # with k; how much of the lap the tail shows does not.
 _MAP_TAIL_S = 2.4
-
-
-def trace_point_at(times, xs, ys, t: float, gap_s: float = GAP_TIME_S):
-    """(x, y, stamp) of the trace at time `t`: linear between the two samples that bracket it, so a
-    marker drawn at 30 fps off a 10 Hz trace moves every frame instead of holding three and jumping.
-    ACROSS A DROPOUT (samples more than `gap_s` apart — `gapfill`'s rule, the one the map draws its
-    gaps by) it HOLDS the nearest sample instead: the straight line between the two sides of a
-    missing second runs across the infield, which is somewhere the kart never was. `stamp` is the
-    time of the position returned (`t`, or the held sample's). Clamped to the trace; None if empty."""
-    n = len(times)
-    if n == 0:
-        return None
-    i = int(np.searchsorted(times, t, side="right"))    # times[i-1] <= t < times[i]
-    if i <= 0:
-        return float(xs[0]), float(ys[0]), float(times[0])
-    if i >= n:
-        return float(xs[-1]), float(ys[-1]), float(times[-1])
-    ta, tb = float(times[i - 1]), float(times[i])
-    if tb - ta > gap_s:
-        j = i - 1 if t - ta < tb - t else i             # `timeline.nearest_sample`'s tie rule
-        return float(xs[j]), float(ys[j]), float(times[j])
-    f = (t - ta) / (tb - ta)
-    return (float(xs[i - 1] + f * (xs[i] - xs[i - 1])),
-            float(ys[i - 1] + f * (ys[i] - ys[i - 1])), float(t))
 
 
 def trace_tail(times, xs, ys, t: float, span: float = _MAP_TAIL_S,
