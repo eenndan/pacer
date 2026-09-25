@@ -537,7 +537,11 @@ class ExportController:
         fps = export_video.OverlayConfig.fps_cap or 30.0
         if source is not None:
             src_w, src_h, src_fps = source
-            cfg = export_video.OverlayConfig(out_height=out_height, aspect=aspect)
+            # overlay_only too: that render divides the source rate (29.97 off 59.94) rather
+            # than capping it, and the hint quotes the rate the renderer will use.
+            cfg = export_video.OverlayConfig(
+                out_height=out_height, aspect=aspect,
+                overlay_only=content != self._EXPORT_CONTENT_COMPOSITE)
             geo = export_video.frame_geometry(src_w, src_h, cfg)
             out_w, out_h = geo.out_w, geo.out_h
             fps = export_video.resolve_fps(cfg, src_fps)
@@ -1118,6 +1122,7 @@ class ExportController:
             return
         total_files = len(specs)
         done_paths: list[str] = []
+        done_syncs: list = []      # each finished file's `SourceSync` (None for a composite)
         state = {"index": 0, "worker": None, "cancelled": False}
 
         def _title(i: int) -> str:
@@ -1198,12 +1203,13 @@ class ExportController:
                 state["worker"] = None
                 if ok:
                     done_paths.append(spec.out_path)
+                    done_syncs.append(getattr(getattr(worker, "result", None), "sync", None))
                     if i + 1 < total_files and not state["cancelled"]:
                         _start(i + 1)     # next file, same dialog
                         return
                     dlg.hide()
                     _cleanup_all()
-                    self._video_export_finished(done_paths, specs[0], lap)
+                    self._video_export_finished(done_paths, specs[0], lap, done_syncs)
                     return
                 dlg.hide()
                 _cleanup_all()
@@ -1239,7 +1245,8 @@ class ExportController:
         dlg.canceled.connect(on_cancel)
         _start(0)
         dlg.exec()
-    def _video_export_finished(self, out_paths, spec=None, lap: int | None = None) -> None:
+    def _video_export_finished(self, out_paths, spec=None, lap: int | None = None,
+                               syncs=None) -> None:
         """The one thing a finished export owes the user: a plain sentence saying it finished, and
         the file it made.
 
@@ -1259,19 +1266,31 @@ class ExportController:
         message lands on top of the "exported" one — the more recent, more specific fact.
 
         A BATCH NAMES ITS COUNT AND ITS FOLDER rather than listing forty file names: the folder is
-        what Reveal opens and what the user goes to, and forty rows in a message box is a wall."""
+        what Reveal opens and what the user goes to, and forty rows in a message box is a wall.
+
+        AN OVERLAY-ONLY FILE ALSO SAYS WHERE IT STARTS IN THE FOOTAGE (`syncs`, one `SourceSync`
+        per file): it is a track to lay back over that footage in an editor, and the owner's first
+        one arrived with no timecode and no word of where it began."""
         paths = [out_paths] if isinstance(out_paths, str) else list(out_paths)
         if not paths:
             return
         folder = os.path.dirname(os.path.abspath(paths[0]))
         what = self._describe_spec(spec, lap) if spec is not None else "an overlay video"
+        syncs = list(syncs or [])
+        png = bool(getattr(spec, "is_png_sequence", False))
         if len(paths) > 1:
             body = f"{APP_NAME} exported {len(paths)} overlay videos.\n\n{folder}"
             status = f"exported {len(paths)} overlay videos"
+            if (not png and len(syncs) == len(paths)
+                    and all(s is not None and s.timecode for s in syncs)):
+                body += "\n\nEach file carries the timecode of where it starts in the footage."
         else:
             name = os.path.basename(paths[0])
             body = f"{APP_NAME} exported {what} as an overlay video.\n\n{name}\n{folder}"
             status = f"exported {name}"
+            where = export_video.sync_sentence(syncs[0] if syncs else None, png=png)
+            if where:
+                body += f"\n\n{where}"
         # The body carries the product name: macOS drops the window title (see _EXPORT_FAIL_TITLE).
         box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export finished", body,
                           parent=self.win)

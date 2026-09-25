@@ -28,7 +28,9 @@ a frame has no key to decode one — and it does NOT block the export the way th
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -36,6 +38,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from typing import NamedTuple
 
 import numpy as np
@@ -54,6 +57,7 @@ from PySide6.QtGui import (
 from . import data_quality, gmeter_overlay, theme, units
 from ._signal import fmt_time, lap_label
 from .export_palette import EXPORT
+from .gapfill import GAP_TIME_S
 
 _log = logging.getLogger(__name__)
 
@@ -770,13 +774,182 @@ def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
     """The output fps for the render: an explicit `cfg.fps` wins; otherwise the source rate, then
     `cfg.fps_cap` caps it (so a 59.94 fps GoPro exports at 30 by default — half the frames, half the
     work, no perceptible loss for a telemetry overlay). Never exceeds the source rate (capping up
-    would only duplicate frames). Guards a non-positive source by falling back to the cap/30."""
+    would only duplicate frames). Guards a non-positive source by falling back to the cap/30.
+
+    AN OVERLAY-ONLY RENDER DIVIDES THE SOURCE RATE INSTEAD OF CAPPING IT. That file goes back over
+    the footage in an editor, frame against frame, and 30.000 over 60000/1001 footage cannot: the
+    two clocks part by 0.1 %, a frame of drift every 33 s of overlay — 77 ms by the end of the
+    owner's 77.5 s lap-14 clip, 2.7 s over a 45-minute session. Dividing by the smallest whole
+    number that brings the source under the cap keeps every overlay frame ON a source frame
+    (59.94 -> 29.97, 50 -> 25, 119.88 -> 29.97; a rate already under the cap is kept), which is
+    also what lets it carry the footage's timecode (`plan_source_sync`). A composite has its
+    footage burned in, so there is nothing to line up and it keeps the plain cap."""
     if cfg.fps:
         return float(cfg.fps)
     fps = float(src_fps) if src_fps and src_fps > 0 else (cfg.fps_cap or 30.0)
     if cfg.fps_cap:
-        fps = min(fps, float(cfg.fps_cap))
+        cap = float(cfg.fps_cap)
+        if cfg.overlay_only and src_fps and src_fps > 0:
+            fps = fps / max(1, math.ceil(fps / cap - 1e-9))
+        else:
+            fps = min(fps, cap)
     return fps
+
+
+def rate_arg(fps: float) -> str:
+    """`fps` as the rate string ffmpeg is handed: the exact rational when `fps` is one with a
+    denominator of at most 1001 (every NTSC rate), else six decimals. "29.970030" is NOT 30000/1001
+    to ffmpeg — it approximates the decimal — and a timecode track needs the rate it counts in."""
+    exact = Fraction(fps).limit_denominator(1001)
+    if abs(float(exact) - fps) < 1e-9:
+        return f"{exact.numerator}/{exact.denominator}"
+    return f"{fps:.6f}"
+
+
+# --------------------------------------------------------------------------- NLE sync (overlay-only)
+# An overlay-only file exists to be laid back over its footage in Resolve/Premiere, and an editor
+# can only line two clips up by what they carry. The owner's lap-14 ProRes carried nothing: no
+# timecode, 30/1 against 60000/1001 footage, and no word from the app about where in the footage it
+# began. The GoPro file does carry a clock — a `tmcd` track: MK_18_09_26 chapter 1 starts at
+# 10:51:06:25 and chapter 2 at 11:24:10:25, NDF, 60 frames to the TC-second (each 1.001 s long);
+# chapter 1 is 1985.984 s = 119,040 frames = 33:04:00 of timecode, which is exactly the gap between
+# the two. So the render snaps its first frame onto a source frame the overlay's own count can name,
+# and writes that name into the file.
+@dataclass(frozen=True)
+class SourceClock:
+    """A source file's exact frame rate and the timecode of its first frame (None: it has none)."""
+    rate: Fraction
+    timecode: str | None
+
+
+@dataclass(frozen=True)
+class SourceSync:
+    """Where an overlay-only render sits in its footage. `t0` is the snapped window start on the
+    global media clock (frame 0 of the overlay); `source_name`/`source_frame`/`local_start` say
+    which frame of which file that is — the FIRST spanned chapter, whose clock a seam-crossing
+    window keeps counting on, exactly as the next chapter's own timecode does. `timecode` is the
+    overlay's start in its own frame count, what gets embedded, and `source_timecode` the same
+    instant in the footage's count (what an editor sees on the source clip); both None when the
+    source has no NDF timecode this rate can name."""
+    t0: float
+    source_name: str
+    source_frame: int
+    local_start: float
+    rate: Fraction
+    timecode: str | None = None
+    source_timecode: str | None = None
+
+
+def timecode_frames(tc: str, count: int) -> int | None:
+    """An NDF `HH:MM:SS:FF` timecode as frames since midnight at `count` frames per TC-second.
+    None for drop-frame (`;`/`,` — GoPro writes NDF, and DF counting is a different sum) and for
+    anything malformed."""
+    if not tc or ";" in tc or "," in tc or count <= 0:
+        return None
+    parts = tc.replace(".", ":").split(":")
+    if len(parts) != 4:
+        return None
+    try:
+        h, m, s, f = (int(x) for x in parts)
+    except ValueError:
+        return None
+    if not (0 <= m < 60 and 0 <= s < 60 and 0 <= f < count and h >= 0):
+        return None
+    return ((h * 60 + m) * 60 + s) * count + f
+
+
+def format_timecode(frames: int, count: int) -> str:
+    """Frames since midnight at `count` per TC-second as NDF `HH:MM:SS:FF`, wrapped at 24 h."""
+    frames %= 24 * 3600 * count
+    secs, f = divmod(frames, count)
+    return f"{secs // 3600:02d}:{secs // 60 % 60:02d}:{secs % 60:02d}:{f:02d}"
+
+
+_SOURCE_CLOCK_CACHE: dict[tuple[str, int, int], SourceClock | None] = {}
+
+
+def probe_source_clock(path: str) -> SourceClock | None:
+    """The source's exact video rate and start timecode, via one ffprobe, cached per file (path,
+    size, mtime). None when it cannot be asked; a missing tag is a clock with `timecode=None`.
+    The video stream's own tag is preferred and a `tmcd` data stream's is the fallback — GoPro
+    stamps both with the same value."""
+    key = _video_size_key(path)
+    if key is not None and key in _SOURCE_CLOCK_CACHE:
+        return _SOURCE_CLOCK_CACHE[key]
+    clock = None
+    try:
+        out = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_entries",
+             "stream=codec_type,r_frame_rate:stream_tags=timecode", "-of", "json", path],
+            capture_output=True, text=True, timeout=20, check=True).stdout
+        streams = json.loads(out).get("streams", [])
+        video = [st for st in streams if st.get("codec_type") == "video"]
+        if video:
+            rate = Fraction(str(video[0]["r_frame_rate"]))
+            tags = [st.get("tags", {}).get("timecode") for st in video + streams]
+            tc = next((t for t in tags if t), None)
+            clock = SourceClock(rate, tc) if rate > 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError,
+            ZeroDivisionError, AttributeError):
+        clock = None
+    if key is not None:
+        _SOURCE_CLOCK_CACHE[key] = clock
+    return clock
+
+
+def plan_source_sync(spec: ExportSpec, clock: SourceClock | None, fps: float) -> SourceSync | None:
+    """Snap an overlay-only window onto its footage and name its start. None when the render rate
+    is not a whole division of the source rate (an explicit fps can ask for that) or the source's
+    clock is unknown — the window then renders exactly as asked, and says nothing.
+
+    The first frame is the source frame AT OR BEFORE `spec.t0` (a lap keeps its first instant),
+    moved back further to the nearest frame the overlay's count can name: at 29.97 over 59.94 the
+    overlay's timecode counts every second source frame, so only the frames whose own 60-count
+    number is even have a 30-count name. At the very start of the footage it moves forward
+    instead. Without a timecode any source frame will do. Either way every later overlay frame n
+    sits on source frame `source_frame + n*k`, `k` the division."""
+    if clock is None or not (fps > 0):
+        return None
+    k = round(float(clock.rate) / fps)
+    if k < 1 or abs(float(clock.rate) / k - fps) > 1e-6:
+        return None
+    local = max(0.0, spec.t0 - spec.source.time_offset)
+    # +1e-6 frame: a window that already starts on a frame (a retry's spec) stays on it.
+    j = int(math.floor(local * clock.rate + 1e-6))
+    count = round(float(clock.rate))
+    start = timecode_frames(clock.timecode, count) if clock.timecode else None
+    tc = src_tc = None
+    if start is not None and count % k == 0:
+        j -= (start + j) % k
+        if j < 0:
+            j += k
+        tc = format_timecode((start + j) // k, count // k)
+        src_tc = format_timecode(start + j, count)
+    local0 = Fraction(j) / clock.rate
+    return SourceSync(t0=spec.source.time_offset + float(local0),
+                      source_name=os.path.basename(spec.source.probe_path),
+                      source_frame=j, local_start=float(local0), rate=clock.rate / k,
+                      timecode=tc, source_timecode=src_tc)
+
+
+def _rate_words(rate) -> str:
+    """29.97 / 25 / 23.976 — a frame rate the way an editor writes it."""
+    return f"{float(rate):.3f}".rstrip("0").rstrip(".")
+
+
+def sync_sentence(sync: SourceSync | None, png: bool = False) -> str:
+    """The export-finished box's line saying where an overlay-only file starts in its footage, or
+    "" when there is nothing to say (a composite, or a render that could not be placed)."""
+    if sync is None:
+        return ""
+    if sync.source_timecode is None:
+        return (f"Starts {fmt_time(sync.local_start)} into {sync.source_name} (source frame "
+                f"{sync.source_frame}); the footage has no timecode to embed.")
+    where = f"Starts at {sync.source_timecode} in {sync.source_name}"
+    if png:
+        return f"{where}. A PNG sequence cannot carry timecode, so place its first frame there."
+    return (f"{where} — timecode embedded ({sync.timecode} at the overlay's "
+            f"{_rate_words(sync.rate)} fps).")
 
 
 # --------------------------------------------------------------------------- per-frame values
@@ -807,6 +980,10 @@ class OverlayValues:
     marker_index: int | None
     lap_started: bool = True
     lap_finished: bool = False
+    # The TELEMETRY time this frame is a picture of (`_telemetry_time(t)`, lag correction
+    # included) — what the map inset interpolates its marker at and ends its tail on. None on a
+    # values object built by hand, which then draws the marker at `marker_index` with no tail.
+    tt: float | None = None
 
 
 def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> OverlayValues:
@@ -862,7 +1039,7 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
     delta = session.delta_at_lap(lap_id, clock_t) if (lap_id is not None and started) else None
     g = session.g_at_time(tt) if getattr(session, "has_gmeter", False) else None
     return OverlayValues(t=t, lap_id=lap_id, speed_kmh=speed, delta_s=delta, g=g, marker_index=i,
-                         lap_started=started, lap_finished=finished)
+                         lap_started=started, lap_finished=finished, tt=tt)
 
 
 # --------------------------------------------------------------------------- ffmpeg commands
@@ -1251,7 +1428,8 @@ def png_sequence_pattern(out_dir: str) -> str:
 
 
 def build_overlay_only_encode_cmd(spec: ExportSpec, out_w: int, out_h: int,
-                                  fps: float, encoder: str = SW_PRORES) -> list[str]:
+                                  fps: float, encoder: str = SW_PRORES,
+                                  timecode: str | None = None) -> list[str]:
     """ENCODE argv for an overlay-only render: input 0 = our RGBA rawvideo on stdin, and THAT IS
     THE ONLY INPUT. There is no source decode and no audio.
 
@@ -1266,22 +1444,29 @@ def build_overlay_only_encode_cmd(spec: ExportSpec, out_w: int, out_h: int,
     QPainter composite that both paths do anyway, plus the encode.
 
     `encoder` is the ProRes encoder the render resolved (`resolve_alpha_encoder`); it decides the
-    pipe's pixel format too, because the painter fills the pipe in the encoder's own layout."""
+    pipe's pixel format too, because the painter fills the pipe in the encoder's own layout.
+
+    `timecode` (`SourceSync.timecode`) becomes the .mov's `tmcd` track, counted at the exact rate
+    `rate_arg` hands the input — the one thing an editor can line this file up by. A PNG sequence
+    has nowhere to keep one, so it is never passed there; the finished box says where it starts
+    instead (`sync_sentence`)."""
     png = spec.config.alpha_codec == ALPHA_PNG
     out = png_sequence_pattern(spec.out_path) if png else spec.out_path
     enc = SW_PRORES if png or encoder != VT_PRORES else VT_PRORES
+    tc = ["-metadata", f"timecode={timecode}"] if timecode and not png else []
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", alpha_input_pix_fmt(enc), "-s", f"{out_w}x{out_h}",
-        "-r", f"{fps:.6f}", "-i", "pipe:0",
+        "-r", rate_arg(fps), "-i", "pipe:0",
         "-map", "0:v:0",
         *alpha_codec_args(spec.config.alpha_codec, enc),
+        *tc,
         out,
     ]
 
 
 def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
-                     encoder: str = SW_H264) -> list[str]:
+                     encoder: str = SW_H264, timecode: str | None = None) -> list[str]:
     """MUX argv: input 0 = our rgb24 rawvideo on stdin; input 1 = the source audio over the SAME
     source-LOCAL window (mirrors the decode, so audio stays in sync across a seam). Map video+audio,
     encode H.264 (`encoder`) + AAC, the audio padded to exactly the plan's `clip_seconds`
@@ -1338,9 +1523,10 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     stream is unaffected: the `-map 1:a:0?` is optional and the filter has nothing to run on.
 
     An OVERLAY-ONLY spec hands straight over to `build_overlay_only_encode_cmd`, which has neither
-    a source input nor an audio map — the dispatch lives here so the renderer asks one question."""
+    a source input nor an audio map — the dispatch lives here so the renderer asks one question.
+    `timecode` is for that path only: a composite carries its footage, not a clock to line it by."""
     if spec.config.overlay_only:
-        return build_overlay_only_encode_cmd(spec, out_w, out_h, fps, encoder)
+        return build_overlay_only_encode_cmd(spec, out_w, out_h, fps, encoder, timecode)
     clip = clip_seconds(spec.t0, spec.t1, fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
@@ -2073,11 +2259,73 @@ def _inset_width(session, lap_id: int | None, height: float, max_width: float) -
     return float(min(max_width, max(height * (w / h), height * 0.5)))
 
 
+# --------------------------------------------------------------------------- map marker + tail
+# The comet tail is a TIME span: the path driven over the last `_MAP_TAIL_S` seconds. It used to be
+# `24 * k` lap points, which was 2.4 s at 1080p on the 10 Hz GPS (median sample interval 100.00 ms
+# on MK_18_09_26 and SD_19_09_26 alike) and twice that at 4K, where k is 2. The stroke still scales
+# with k; how much of the lap the tail shows does not.
+_MAP_TAIL_S = 2.4
+
+
+def trace_point_at(times, xs, ys, t: float, gap_s: float = GAP_TIME_S):
+    """(x, y, stamp) of the trace at time `t`: linear between the two samples that bracket it, so a
+    marker drawn at 30 fps off a 10 Hz trace moves every frame instead of holding three and jumping.
+    ACROSS A DROPOUT (samples more than `gap_s` apart — `gapfill`'s rule, the one the map draws its
+    gaps by) it HOLDS the nearest sample instead: the straight line between the two sides of a
+    missing second runs across the infield, which is somewhere the kart never was. `stamp` is the
+    time of the position returned (`t`, or the held sample's). Clamped to the trace; None if empty."""
+    n = len(times)
+    if n == 0:
+        return None
+    i = int(np.searchsorted(times, t, side="right"))    # times[i-1] <= t < times[i]
+    if i <= 0:
+        return float(xs[0]), float(ys[0]), float(times[0])
+    if i >= n:
+        return float(xs[-1]), float(ys[-1]), float(times[-1])
+    ta, tb = float(times[i - 1]), float(times[i])
+    if tb - ta > gap_s:
+        j = i - 1 if t - ta < tb - t else i             # `timeline.nearest_sample`'s tie rule
+        return float(xs[j]), float(ys[j]), float(times[j])
+    f = (t - ta) / (tb - ta)
+    return (float(xs[i - 1] + f * (xs[i] - xs[i - 1])),
+            float(ys[i - 1] + f * (ys[i] - ys[i - 1])), float(t))
+
+
+def trace_tail(times, xs, ys, t: float, span: float = _MAP_TAIL_S,
+               gap_s: float = GAP_TIME_S) -> tuple[np.ndarray, np.ndarray]:
+    """The path over `(t - span, t]`, oldest first, ENDING AT `trace_point_at(t)` — the marker — so
+    the tail can only ever trail the dot it belongs to. Both ends are interpolated, so its length
+    in time is `span` on every frame rather than stepping at the GPS rate. It is CUT at the last
+    dropout inside the span (see `trace_point_at`), for the same reason the marker holds there.
+    Empty arrays for an empty trace; a single point when the marker is all there is."""
+    head = trace_point_at(times, xs, ys, t, gap_s)
+    if head is None:
+        return np.empty(0), np.empty(0)
+    back = trace_point_at(times, xs, ys, t - span, gap_s)
+    lo = int(np.searchsorted(times, t - span, side="right"))
+    hi = int(np.searchsorted(times, t, side="right"))
+    px = np.concatenate(([back[0]], np.asarray(xs[lo:hi], float), [head[0]]))
+    py = np.concatenate(([back[1]], np.asarray(ys[lo:hi], float), [head[1]]))
+    stamps = np.concatenate(([back[2]], np.asarray(times[lo:hi], float), [head[2]]))
+    cut = np.nonzero(np.diff(stamps) > gap_s)[0]
+    if len(cut):
+        px, py = px[cut[-1] + 1:], py[cut[-1] + 1:]
+    return px, py
+
+
 class _MapInset:
     """Track-map inset for the export: the exported lap's racing line is projected once and baked
     into a cached RGBA layer (re-rasterizing it per frame dominated render cost); each frame blits
     the layer + draws a glowing marker with a short comet tail. A degenerate lap trace falls back to
-    the full-session trace line so the inset is never empty."""
+    the full-session trace line so the inset is never empty.
+
+    THE MARKER AND ITS TAIL ARE BOTH READ OFF THE SESSION TRACE AT THE FRAME'S TELEMETRY TIME. The
+    tail used to be the LAP line's points up to `marker_index / len(session) * len(lap)` — a
+    session fraction applied to a lap. For MK lap 14 of 22 that fraction sits near 0.6 all clip
+    long, so the owner's 4K export drew its tail parked on the bottom-right straight, a median 241
+    px from a marker that meanwhile held three frames and jumped (the nearest 10 Hz sample, drawn
+    at 30 fps). Reading both from one trace at one time is what makes them agree, in the run-up,
+    the run-off and the full-session scope alike, with no lap to map through."""
 
     def __init__(self, session, box: QRectF, lap_id: int | None, scale_k: float = 1.0):
         self._box = box
@@ -2087,9 +2335,8 @@ class _MapInset:
         self._ok = len(xs) >= 2 and len(ys) >= 2
         if not self._ok:
             return
-        # The exported lap's own line — the ONLY line drawn. We project it (and find the marker's
-        # position along it for the tail). The full-session arrays are kept only as a fallback line
-        # and to map a marker_index (which indexes the full trace) to a frame point.
+        # The exported lap's own line — the ONLY line drawn. The full-session arrays are the
+        # fallback line, and the trace the marker and its tail are read from.
         # Through Session's PUBLIC `lap_trace_xy` (what the map highlight reads), not the private
         # `_lap_trace_xyt` this once reached into: the old hasattr guard was vestigial — `session.tx`
         # is read unguarded four lines up. The None / <2-point fallbacks are the degenerate-lap path.
@@ -2121,12 +2368,16 @@ class _MapInset:
 
         self._proj = proj
         self._xs, self._ys = xs, ys
-        if lx is not None:
-            line_poly = QPolygonF([proj(px, py) for px, py in zip(lx, ly, strict=True)])
-            self._lap_pts = line_poly                       # for the comet tail
-        else:
-            line_poly = QPolygonF([proj(px, py) for px, py in zip(xs, ys, strict=True)])
-            self._lap_pts = None
+        # The whole trace in FRAME pixels, projected once: the projection is affine, so
+        # interpolating here is interpolating in metres. `_tt` is None for a stand-in session
+        # without per-sample times, which then gets the sampled marker and no tail.
+        self._px = cx_off + scale * xs
+        self._py = cy_off - scale * ys
+        tt = getattr(session, "tt", None)
+        self._tt = (np.asarray(tt, dtype=float)
+                    if tt is not None and len(tt) == len(xs) else None)
+        fx, fy = (lx, ly) if lx is not None else (xs, ys)
+        line_poly = QPolygonF([proj(px, py) for px, py in zip(fx, fy, strict=True)])
         # --- bake the static lap line into a cached RGBA image (no box, no full trace), sized to
         # the inset's bottom-right corner. Painted ONCE; `paint` only blits it + draws the marker.
         self._layer = self._bake_layer(box, line_poly, self._k)
@@ -2156,40 +2407,46 @@ class _MapInset:
         p.end()
         return layer
 
-    def paint(self, p: QPainter, marker_index: int | None) -> None:
+    def marker_and_tail(self, tt: float | None,
+                        marker_index: int | None = None) -> tuple[QPointF | None, QPolygonF]:
+        """The marker's frame point and its tail polyline (ending on it) for the frame at
+        TELEMETRY time `tt`. Without a time — or a trace without times — the marker falls back to
+        the `marker_index` sample and there is no tail, since a tail is a span of time."""
+        if tt is not None and self._tt is not None:
+            tx, ty = trace_tail(self._tt, self._px, self._py, float(tt))
+            if not len(tx):
+                return None, QPolygonF()
+            tail = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(tx, ty, strict=True)])
+            return QPointF(float(tx[-1]), float(ty[-1])), tail
+        if marker_index is None or not (0 <= marker_index < len(self._xs)):
+            return None, QPolygonF()
+        return QPointF(float(self._px[marker_index]), float(self._py[marker_index])), QPolygonF()
+
+    def paint(self, p: QPainter, tt: float | None, marker_index: int | None = None) -> None:
         if not self._ok:
             return
         # blit the baked lap line — a sub-ms copy.
         p.drawImage(0, 0, self._layer)
-        if marker_index is None or not (0 <= marker_index < len(self._xs)):
+        m, tail = self.marker_and_tail(tt, marker_index)
+        if m is None:
             return
-        m = self._proj(float(self._xs[marker_index]), float(self._ys[marker_index]))
         k = self._k
-        # --- short comet TAIL: the last few lap points trailing the marker, fading out, so the
-        # direction of travel + recent path read at a glance. Drawn only when we have the lap line.
-        if self._lap_pts is not None and self._lap_pts.size() > 4:
-            # find the lap point nearest the marker (the lap line and the marker share the proj),
-            # then draw the preceding ~24 points as a fading bright tail.
-            n = self._lap_pts.size()
-            # marker_index is a full-trace index; map it to a fraction along the lap line.
-            j = min(n - 1, max(0, int(round(marker_index / max(1, len(self._xs) - 1) * (n - 1)))))
-            tail_len = max(2, int(round(24 * k)))
-            j0 = max(0, j - tail_len)
-            tail = QPolygonF([self._lap_pts.at(i) for i in range(j0, j + 1)])
-            if tail.size() >= 2:
-                # a hot amber comet over the white line shows the recent path + direction of travel;
-                # a dark halo under it keeps it readable where the white line is bright too.
-                hp = QPen(_c(EXPORT.halo, 180), 4.6 * k)
-                hp.setJoinStyle(Qt.RoundJoin)
-                hp.setCapStyle(Qt.RoundCap)
-                p.setPen(hp)
-                p.setBrush(Qt.NoBrush)
-                p.drawPolyline(tail)
-                tp = QPen(_c(EXPORT.accent_bright, 235), 3.2 * k)
-                tp.setJoinStyle(Qt.RoundJoin)
-                tp.setCapStyle(Qt.RoundCap)
-                p.setPen(tp)
-                p.drawPolyline(tail)
+        # --- short comet TAIL: the last `_MAP_TAIL_S` of driving, ending on the marker, so the
+        # direction of travel + recent path read at a glance.
+        if tail.size() >= 2:
+            # a hot amber comet over the white line shows the recent path + direction of travel;
+            # a dark halo under it keeps it readable where the white line is bright too.
+            hp = QPen(_c(EXPORT.halo, 180), 4.6 * k)
+            hp.setJoinStyle(Qt.RoundJoin)
+            hp.setCapStyle(Qt.RoundCap)
+            p.setPen(hp)
+            p.setBrush(Qt.NoBrush)
+            p.drawPolyline(tail)
+            tp = QPen(_c(EXPORT.accent_bright, 235), 3.2 * k)
+            tp.setJoinStyle(Qt.RoundJoin)
+            tp.setCapStyle(Qt.RoundCap)
+            p.setPen(tp)
+            p.drawPolyline(tail)
         # --- glowing marker: a soft radial glow, a hot-coral core, and a bright outer ring so it
         # is trackable over the green line AND a busy background (the bigger/brighter marker ask).
         glow_r = 11.0 * k
@@ -2762,7 +3019,7 @@ class OverlayPainter:
             p, self._g_rect.width(), self._g_rect.height(), dial_state, export=True,
             scale_k=self._g_rect.width() / (self._spec.config.gmeter_frac * OVERLAY_REF_SHORT_SIDE))
         p.restore()
-        self._map.paint(p, vals.marker_index)
+        self._map.paint(p, vals.tt, vals.marker_index)
         _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
         # The strip's fallback elapsed origin is the LAP's start, not the clip's — with a lead-in
         # those differ, and a session with no lap window would otherwise count the run-up.
@@ -2943,6 +3200,9 @@ class RenderResult:
     out_h: int
     fps: float
     duration: float
+    # Where an overlay-only file starts in its footage (None for a composite): what the finished
+    # box states, and the timecode the file carries.
+    sync: SourceSync | None = None
 
 
 class _StderrDrainer:
@@ -2999,6 +3259,16 @@ class Renderer:
         geo = self._resolve_geometry(src_w, src_h)
         self._out_w, self._out_h, self._scale_filter = geo.out_w, geo.out_h, geo.scale_filter
         self._fps = resolve_fps(spec.config, src_fps)
+        # OVERLAY-ONLY: put frame 0 on a source frame the file's timecode can name, and keep the
+        # plan for the encoder's `tmcd` and the finished box (`plan_source_sync`). The lap's own
+        # start line does not move: the run-up absorbs the snap, at most two source frames.
+        self._sync: SourceSync | None = None
+        if self._overlay_only:
+            self._sync = plan_source_sync(spec, probe_source_clock(spec.source.probe_path),
+                                          self._fps)
+            if self._sync is not None and self._sync.t0 != spec.t0:
+                spec = replace(spec, t0=self._sync.t0, lead_in=spec.lap_t0 - self._sync.t0)
+                self._spec = spec
         self._times = frame_times(spec.t0, spec.t1, self._fps)
         # The painter is handed the SAME fps, because its pill budget replays these very frame
         # times to learn what it will draw (see `_burned_runs`).
@@ -3112,8 +3382,10 @@ class Renderer:
                 build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
                                  self._scale_filter),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        sync = getattr(self, "_sync", None)
         self._enc = subprocess.Popen(
-            build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._encoder),
+            build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._encoder,
+                             timecode=sync.timecode if sync is not None else None),
             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
         # Drain BOTH ffmpeg stderrs off-thread so neither can ever block on a full stderr pipe while
         # the loop is busy on the decode-stdout / encode-stdin pipes (deadlock guard).
@@ -3414,7 +3686,7 @@ class Renderer:
         finally:
             self._stop_supervisor()
         return RenderResult(self._spec.out_path, self._i, self._out_w, self._out_h,
-                            self._fps, self._spec.duration)
+                            self._fps, self._spec.duration, getattr(self, "_sync", None))
 
     def _finish(self) -> None:
         """Finalize: flush + close the encoder's stdin (signals EOF so it writes the trailer), then

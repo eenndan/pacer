@@ -45,6 +45,9 @@ class VideoExportWorker(QThread):
         self._spec = spec
         self._make_renderer = make_renderer or export_video.Renderer
         self._cancelled = False
+        # The finished render's `RenderResult` — read by the GUI thread once `finished_export`
+        # says ok, for where an overlay-only file starts in its footage (`result.sync`).
+        self.result = None
 
     def cancel(self):
         self._cancelled = True
@@ -54,8 +57,8 @@ class VideoExportWorker(QThread):
             if self.preflight is not None:
                 self.preflight()
             renderer = self._make_renderer(self._session, self._spec)
-            renderer.run(progress=lambda d, t: self.progress.emit(d, t),
-                         cancel=lambda: self._cancelled)
+            self.result = renderer.run(progress=lambda d, t: self.progress.emit(d, t),
+                                       cancel=lambda: self._cancelled)
             self.finished_export.emit(True, "")
         except export_video.InsufficientSpaceError as exc:
             # REFUSED BEFORE A FRAME WAS RENDERED, so there is no partial output to drop — and
