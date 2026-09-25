@@ -34,6 +34,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["PACER_NO_MEDIA"] = "1"
 
 # test_export_gates diverts every store into a temp tree on import, before any window exists.
+from PySide6.QtWidgets import (  # noqa: E402
+    QDialog,
+    QFileDialog,
+    QMessageBox,
+    QProgressDialog,
+)
 from test_export_gates import (  # noqa: E402
     FakeSession,
     _clear_export_preset,
@@ -43,13 +49,6 @@ from test_export_gates import (  # noqa: E402
     _window,
 )
 from test_export_pipeline import _moving_clip, _Session  # noqa: E402
-
-from PySide6.QtWidgets import (  # noqa: E402
-    QDialog,
-    QFileDialog,
-    QMessageBox,
-    QProgressDialog,
-)
 
 from studio import export_controller  # noqa: E402
 from studio import export_video as ev  # noqa: E402
