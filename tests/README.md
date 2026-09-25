@@ -3,9 +3,9 @@
 Every test here is a CTest registration in [CMakeLists.txt](CMakeLists.txt); the pixi tasks that
 run them, and the measurements behind their levels, exclusions and timeouts, are in
 [pyproject.toml](../pyproject.toml). [AGENTS.md](../AGENTS.md) has the everyday commands. Its
-timings were each measured once on the M1 Pro dev Mac: `test` 206.0 s with all 14 footage checks
-running (2026-09-24, load ~5, no cost data yet — as in CI; 254.1 s the same way on the commit
-before COST ordering and the soak split), `test-fast` 142.9 s (2026-09-23, quiet machine; 420 s
+timings were each measured once on the M1 Pro dev Mac: `test` 281.3 s with all 16 footage checks
+and the 6 VideoToolbox checks running (2026-09-25, 165 registrations, load ~3; 206.0 s on
+2026-09-24 with 14 footage checks and 157 registrations, load ~5), `test-fast` 142.9 s (2026-09-23, quiet machine; 420 s
 serial on the same commit), `test-footage` 139.1 s (2026-09-23, warm page cache;
 `footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s) and `test-soak` 146.1 s.
 
@@ -186,3 +186,16 @@ guard that does run there. It is its own registration, `soak.<check>` (`<file>.p
 it is reported *Skipped* by name. There is one: the compare-toggle crash soak in
 [test_compare_lifecycle.py](test_compare_lifecycle.py) — 107 s on the dev Mac and 184 s in CI
 (2026-09-23/24), for a SIGSEGV whose root cause that file's AST guard catches in 22 ms.
+
+## VideoToolbox checks
+
+The export paths only the Apple media engine runs — h264_videotoolbox, the ProRes VideoToolbox
+encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox` — are checks CI's
+runner cannot run. Each is its own registration, `videotoolbox.<check>` (`<file>.py --videotoolbox
+<check>`, `add_videotoolbox_test` in [CMakeLists.txt](CMakeLists.txt), `LABELS videotoolbox`):
+without VideoToolbox it exits 77 and is reported *Skipped* by name, where it used to return early
+and read as a pass. On the dev Mac it runs in `test-fast` and `test`; a file lists them in its
+`VIDEOTOOLBOX_CHECKS` and leaves them out of its ordinary run, and a check with a software half
+keeps that half there. [_videotoolbox.py](_videotoolbox.py) is the mechanism;
+`test_videotoolbox_checks` holds the declarations and registrations one to one. To see the CI
+shape here, point `PACER_FFMPEG` at an ffmpeg wrapper that hides VideoToolbox.

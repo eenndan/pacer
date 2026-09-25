@@ -65,14 +65,17 @@ set(_ctest test_app_support_jail test_footage_checks)
 # COST. ctest starts the highest COST first, but a FRESH build dir — every CI run, every new
 # worktree — has no measured costs, so it ran in registration order and the slowest suites started
 # last (CI's test step: 320 s against a 246 s floor, 2026-09-23). Seconds, measured on the dev Mac
-# at -j4 on 2026-09-24 (test_stats / test_stats_ideal on 2026-09-25, when the IDEAL LAP tests split
-# out of test_stats; test_export_e2e the same day, two real renders). The footage checks (100) and
-# the soaks (200) sit above these on purpose; their functions below say why, and where they are
-# skipped, starting first costs a second.
+# in ONE `pixi run test` at -j4 on 2026-09-25 (165 registrations, 281 s, load ~3). It re-ranks
+# test_central_view_realqt above test_export_video — CI's slowest suite bar the soak (95-157 s),
+# which was costed below it — and adds two suites that had no COST: test_quality_chip_trust, which
+# started, and so finished, 154th-155th of 157 in CI (41-44 s there), and test_export_pipeline (#412,
+# 46-53 s in CI). test_export_video lost its VideoToolbox checks to registrations of their own. The
+# footage checks (100) and the soaks (200) sit above these on purpose; their functions below say
+# why, and where they are skipped, starting first costs a second.
 set(_cost
-    test_export_video 56  test_central_view_realqt 40  test_export_e2e 35  test_pb_toast 35
-    test_stats_ideal 33  test_load_lifecycle 22  test_charts_header_budget 22
-    test_export_pill_budget 20  test_first_run_path 18  test_stats 15)
+    test_stats_ideal 60  test_export_pipeline 58  test_central_view_realqt 55  test_pb_toast 55
+    test_export_e2e 40  test_export_video 38  test_charts_header_budget 33  test_load_lifecycle 29
+    test_export_pill_budget 27  test_first_run_path 19  test_quality_chip_trust 18  test_stats 16)
 # ==========================================================================================
 
 # A name in the table that is not a tests/test_*.py would silently configure nothing: fail instead.
