@@ -126,7 +126,11 @@ pixi run python -m studio.dev.synth_gopro --out /path/to/new-dir   # refuses a n
 ```
 
 Knobs: `--seed`, `--laps` (14), `--chapters` (2), `--gps-noise` (1.0; 0 is noise-free),
-`--mirror` (anticlockwise); from Python also `gps_lag_s` and `media_ppm`.
+`--mirror` (anticlockwise); from Python also `gps_lag_s` and `media_ppm`. Opt-in HERO13 tracks,
+off by default so the default files stay byte for byte what the golden gate pins: `--fps60` (a
+59.94 fps picture), `--audio` (a 1 kHz tone) and `--timecode HH:MM:SS:FF` (a GoPro-style NDF
+`tmcd`, continued across chapters) — what [test_export_e2e.py](test_export_e2e.py) (~25 s) drives
+the real export dialog over, then reads the files it writes.
 
 ## Real-footage checks
 
