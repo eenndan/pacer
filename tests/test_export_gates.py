@@ -2034,6 +2034,13 @@ def test_the_real_dialog_learns_the_source_frame_behind_itself():
     print("ok E5: the dialog learns the source frame behind itself and redraws the hint")
 
 
+def _remembered_line(dlg):
+    """The remembered-choices row — the widget holding the "Use defaults" button — or None."""
+    buttons = [b for b in dlg.findChildren(QPushButton) if b.text() == "Use defaults"]
+    assert len(buttons) <= 1, "more than one Use defaults button"
+    return buttons[0].parentWidget() if buttons else None
+
+
 def _export_rows(dlg):
     return {label: _combo(dlg, label).currentIndex() for label in
             ("Export", "Run-up / run-off", "Shape", "Source frame", "Contents", "Resolution",
@@ -2065,7 +2072,7 @@ def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_row
 
     def reset_then(verdict):
         def on_dialog(dlg):
-            recall = dlg.findChild(QWidget, "exportRememberedChoices")
+            recall = _remembered_line(dlg)
             assert recall is not None and not recall.isHidden(), "no remembered-choices line"
             seen["text"] = " ".join(w.text() for w in recall.findChildren(QLabel))
             seen["opened"] = _export_rows(dlg)
@@ -2095,7 +2102,7 @@ def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_row
 
     # On the defaults there is nothing to name.
     def on_defaults(dlg):
-        seen["none"] = dlg.findChild(QWidget, "exportRememberedChoices")
+        seen["none"] = _remembered_line(dlg)
         return QDialog.Rejected
     _run_options_dialog(win, on_defaults)
     assert seen["none"] is None, "a dialog on the defaults shows the remembered-choices line"
@@ -2104,7 +2111,7 @@ def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_row
     prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
 
     def on_source(dlg):
-        recall = dlg.findChild(QWidget, "exportRememberedChoices")
+        recall = _remembered_line(dlg)
         seen["source_only"] = " ".join(w.text() for w in recall.findChildren(QLabel))
         return QDialog.Rejected
     _run_options_dialog(win, on_source)

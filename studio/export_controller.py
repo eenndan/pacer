@@ -687,7 +687,6 @@ class ExportController:
             remembered.append(res_combo.currentText())
         if remembered:
             recall = QWidget(dlg)
-            recall.setObjectName("exportRememberedChoices")
             recall_row = QHBoxLayout(recall)
             recall_row.setContentsMargins(0, 0, 0, 0)
             recall_row.setSpacing(theme.SPACE_M)
