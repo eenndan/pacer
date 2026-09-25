@@ -371,12 +371,20 @@ def _pump_until(pred, timeout_s: float) -> bool:
 
 class _Picture:
     """Every frame a pane's video sink receives, as GLOBAL media seconds (chapter offset + the frame's
-    own start time) — the picture itself, not the player's claim about its position."""
+    own start time) — the picture itself, not the player's claim about its position.
+
+    It starts from the frame ALREADY on the sink, because that is on screen too. A software decoder
+    shows a fresh pane's paused frame ~40 ms after its load — compare's pane B had shown lap B's
+    start (media 53.971 for 53.983) 44 ms after the click, inside the one processEvents() before the
+    test could hook that brand-new pane, and a recorder counting only LATER frames failed CI, which
+    has no VideoToolbox, with "pane B never showed lap 1's start". VideoToolbox took 361 ms."""
 
     def __init__(self, pane):
         self.pane = pane
         self.frames: list[float] = []
-        pane.video.videoSink().videoFrameChanged.connect(self._on_frame)
+        sink = pane.video.videoSink()
+        sink.videoFrameChanged.connect(self._on_frame)
+        self._on_frame(sink.videoFrame())   # invalid (nothing shown yet) is ignored
 
     def _on_frame(self, frame):
         if frame.isValid():
