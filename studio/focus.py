@@ -96,6 +96,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import _jsonstore, app_support, session_record
+from ._signal import plural
 from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
 
 _log = logging.getLogger(__name__)
@@ -570,7 +571,9 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         if now is None or now.n_laps < MIN_CORNER_LAPS:
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
                                     blocker=BLOCK_FEW_LAPS,
-                                    detail=f"{now.n_laps if now else 0} clean laps"))
+                                    # 0, 1 or 2 by this branch's own test, so the singular is
+                                    # one of the three values it can print.
+                                    detail=plural(now.n_laps if now else 0, "clean lap")))
             continue
         delta = now.median - item.median_s
         # The SAME actionability test the coaching gate applies to a within-session claim, on the
@@ -637,7 +640,8 @@ def outcome_sentence(o: Outcome) -> str:
     when = _when(o.item.date)
     if o.kind == OUTCOME_SET_HERE:
         return (f"{label} — on your focus list from this session ({o.item.median_s:.2f} s over "
-                f"{o.item.n_laps} laps). Next time you're here, Pacer will say whether it moved.")
+                f"{plural(o.item.n_laps, 'lap')}). Next time you're here, Pacer will say whether "
+                "it moved.")
     if o.kind == OUTCOME_NO_VERDICT:
         if o.blocker == BLOCK_NO_RECORD:
             return (f"{label} — can't say. There's no session record for {o.detail}, so nothing "
@@ -726,8 +730,9 @@ def report_lines(report: Report) -> list[str]:
     if len(outcomes) > 1 and kinds == {OUTCOME_SET_HERE}:
         n = outcomes[0].item.n_laps
         return [f"{_corner_list(outcomes)} — baselines measured on this session ("
-                f"{', '.join(f'{o.item.median_s:.2f} s' for o in outcomes)} over {n} laps). Next "
-                f"time you're at this track, Pacer measures the same stretches again and says "
+                f"{', '.join(f'{o.item.median_s:.2f} s' for o in outcomes)} over "
+                f"{plural(n, 'lap')}). Next time you're at this track, Pacer measures the same "
+                f"stretches again and says "
                 f"whether they moved."]
     return [outcome_sentence(o) for o in outcomes]
 

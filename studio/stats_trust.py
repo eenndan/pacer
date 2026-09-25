@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
 
 from . import data_quality, media_clock, theme
-from ._signal import exclusion_summary
+from ._signal import exclusion_summary, plural
 from .lap_table import DROPOUT_MARK, EXCLUDED_MARK
 from .stats_common import NO_GMETER_NOTE, section_heading
 from .widgets import DASH, WrapLabel
@@ -327,7 +327,7 @@ class TrustSection:
             # piece that does not end where it started. getattr-guarded for the lighter doubles.
             why = exclusion_summary(getattr(session, "excluded_lap_reasons", dict)() or {})
             rows.append(("Statistics use",
-                         f"{len(valid)} of the {total} laps found — "
+                         f"{len(valid)} of the {plural(total, 'lap')} found — "
                          f"{len(excluded)} {EXCLUDED_MARK} excluded"
                          + (f": {why}" if why else "") + " (see the Laps tab).", True))
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
@@ -336,7 +336,7 @@ class TrustSection:
         dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
         if dropouts:
             rows.append(("GPS dropout",
-                         f"inside {len(dropouts)} of {len(valid)} laps — "
+                         f"inside {len(dropouts)} of {plural(len(valid), 'lap')} — "
                          f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
         # BREAK IN SERIES — the fourth trust-breaking fact, and the one the card had no name for.
         # A skipped chapter or a chapter whose telemetry stops covering its video means the times
@@ -418,7 +418,10 @@ class TrustSection:
             lap_cls = [q for lid in valid if (q := session.lap_quality(lid)) is not None]
             degraded = [q for q in lap_cls if q < data_quality.GOOD]
             holed = [q for q in degraded if q <= data_quality.POOR]
-            note = (f" · {len(degraded)} of {len(valid)} laps contain a second below good"
+            # The noun agrees with the laps found and the verb with the degraded ones — one
+            # degraded lap is the commonest non-zero count (K2).
+            note = (f" · {len(degraded)} of {plural(len(valid), 'lap')} "
+                    f"contain{'s' if len(degraded) == 1 else ''} a second below good"
                     if degraded and valid else "")
             rows.append(("GPS quality over time",
                          f"{strip.summary()}{note} — the bar under the scrubber shows where",
@@ -503,9 +506,9 @@ class TrustSection:
             # rather than formatted in: a row that has no measurement says nothing instead of 0.00.
             lag = f" · {rot.lag_clause}" if rot.lag_clause else ""
             rows.append(("Rotation cross-check",
-                         f"{verdict} · over {rot.loop_n} closed laps the gyroscope's measured yaw "
-                         f"integrates to {rot.loop_ratio_gyro:.3f}×2π and the path-derived rate to "
-                         f"{rot.loop_ratio_path:.3f}×2π, against an exact "
+                         f"{verdict} · over {plural(rot.loop_n, 'closed lap')} the gyroscope's "
+                         f"measured yaw integrates to {rot.loop_ratio_gyro:.3f}×2π and the "
+                         f"path-derived rate to {rot.loop_ratio_path:.3f}×2π, against an exact "
                          f"{rot.loop_exact:+.3f} · "
                          f"r={rot.corner_corr:+.2f} between them through the corners{lag}",
                          not rot.ok))

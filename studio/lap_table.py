@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import data_quality, provenance_panel, theme, units
-from ._signal import PRINT_DECIMALS, fmt_time, is_best_at_print, lap_label
+from ._signal import PRINT_DECIMALS, fmt_time, is_best_at_print, lap_label, plural
 from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -1117,7 +1117,7 @@ class LapTable(QWidget):
         _GlyphLabels either side of it (EXCLUDED_ICON / EXPAND_ICON) — so this returns the sentence
         a screen reader should read, and nothing a font has to be asked to draw."""
         share = f" ({n / found:.0%})" if warn else ""
-        return f"{n} excluded of {found} laps found{share}"
+        return f"{n} excluded of {plural(found, 'lap')} found{share}"
 
     def _excluded_warning(self, kept: list, rows: list, unbanded: int) -> str:
         """The warning-tier note: the kept-vs-excluded DISTANCE comparison — the one measurement

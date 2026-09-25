@@ -40,7 +40,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import G, boxcar, speed_long_g
+from ._signal import G, boxcar, plural, speed_long_g
 
 _log = logging.getLogger(__name__)
 
@@ -292,7 +292,8 @@ class AxisCheck:
                     f"direction (|GRAV| below {MIN_GRAV_NORM:g}, where a camera that writes GRAV "
                     f"writes a unit vector), so there is no gravity to remove from its ACCL.")
         if not self.measurable:
-            return (f"g-meter axis check: not measurable ({self.n} unloaded samples, "
+            # Under _AXIS_MIN_QUIET by definition, so any small count — 1 included — can print.
+            return (f"g-meter axis check: not measurable ({plural(self.n, 'unloaded sample')}, "
                     f"need {_AXIS_MIN_QUIET}) — the ACCL/GRAV frame is assumed, not verified.")
         verdict = "ALIGNED" if self.ok else "MISALIGNED"
         return (f"g-meter axis check [{verdict}]: GRAV sits {self.tilt_deg:.1f} deg off this "

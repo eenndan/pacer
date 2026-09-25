@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import coaching, data_quality, focus, theme, units
-from ._signal import DASH, lap_label
+from ._signal import DASH, lap_label, plural
 from .lap_table import set_corner_direction
 from .theme import C
 from .widgets import EmptyState, PanelHeader, WrapLabel
@@ -183,7 +183,8 @@ def empty_state_copy(opps: coaching.Opportunities, session=None) -> tuple[str, s
             return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body()
         needs = (f"Coaching needs {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
                  f"session has {opps.n_laps}")
-        lost = f"{dropouts} of its {valid} laps had a GPS dropout" if dropouts else ""
+        lost = (f"{dropouts} of its {plural(valid, 'lap')} had a GPS dropout" if dropouts
+                else "")
         if lost and valid >= coaching.MIN_LAPS:
             return ("Not enough clean laps.",
                     f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
