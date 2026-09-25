@@ -393,7 +393,9 @@ class ExportController:
         ("Fit the whole picture (bars)", export_video.FIT_FIT),
     ]
     # Footage + overlay, or the overlay ALONE over transparency for finishing in Resolve/Premiere.
-    # The two alpha rows are the two formats an NLE actually takes an alpha track in.
+    # The two alpha rows are the two formats an NLE actually takes an alpha track in. The FIRST row
+    # is the one the dialog opens on, every time: see `_ask_export_options` for why this row alone
+    # is not remembered.
     _EXPORT_CONTENT_COMPOSITE = "composite"
     _EXPORT_CONTENT_OPTIONS = [
         ("Footage with the overlay burned in", _EXPORT_CONTENT_COMPOSITE),
@@ -411,21 +413,23 @@ class ExportController:
         ("None — cut on the timing line", 0.0), ("5 s before and after", 5.0),
         ("10 s before and after", 10.0),
     ]
-    # The picker's three choices persist across relaunches like every other UI choice (the unit, the
+    # The picker's choices persist across relaunches like every other UI choice (the unit, the
     # palette, the lap-panel tab). Kept as call-site keys on prefs' generic get/set: they mean
     # nothing outside this dialog, and prefs.py is a store, not a registry of every screen's state.
+    # Contents has NO key: earlier builds stored it as `export_content_idx`, and where that key is
+    # still in a prefs.json it is never read and never rewritten.
     _PREF_EXPORT_RES = "export_res_idx"
     _PREF_EXPORT_QUALITY = "export_quality_idx"
     _PREF_EXPORT_LEAD = "export_lead_idx"
     _PREF_EXPORT_SCOPE = "export_scope_idx"
     _PREF_EXPORT_ASPECT = "export_aspect_idx"
     _PREF_EXPORT_FIT = "export_fit_idx"
-    _PREF_EXPORT_CONTENT = "export_content_idx"
-    # Each row's DEFAULT, by its pref key: what a first launch opens on, and what "Use defaults"
-    # puts back — one table, so the two can never disagree about what the defaults are.
+    # Each remembered row's DEFAULT, by its pref key: what a first launch opens on, and what "Use
+    # defaults" puts back — one table, so the two can never disagree about what the defaults are.
+    # (Contents' default is its first row, which it opens on every time.)
     _EXPORT_DEFAULT_INDEX = {
         _PREF_EXPORT_SCOPE: 0, _PREF_EXPORT_LEAD: 0, _PREF_EXPORT_ASPECT: 0, _PREF_EXPORT_FIT: 0,
-        _PREF_EXPORT_CONTENT: 0, _PREF_EXPORT_RES: 1, _PREF_EXPORT_QUALITY: 0,   # 1080p, High
+        _PREF_EXPORT_RES: 1, _PREF_EXPORT_QUALITY: 0,   # 1080p, High
     }
     # The index of "Source (no downscale)" in `_EXPORT_RES_OPTIONS`.
     _EXPORT_RES_SOURCE = 3
@@ -633,7 +637,7 @@ class ExportController:
 
     def _ask_export_options(self, lap: int):
         """Modal scope + shape + output picker returning an `ExportChoice`, or None on cancel.
-        Every choice persists across relaunches (prefs), like the unit and the palette.
+        Every choice but Contents persists across relaunches (prefs), like the unit and the palette.
 
         THE ROWS ARE ORDERED BY WHAT THEY COST. Scope first, because it is the difference between
         ninety seconds of render and half an hour of it and every other row is a detail next to
@@ -674,28 +678,31 @@ class ExportController:
         lead_combo = _combo(self._EXPORT_LEAD_OPTIONS, self._PREF_EXPORT_LEAD)
         aspect_combo = _combo(self._EXPORT_ASPECT_OPTIONS, self._PREF_EXPORT_ASPECT)
         fit_combo = _combo(self._EXPORT_FIT_OPTIONS, self._PREF_EXPORT_FIT)
-        content_combo = _combo(self._EXPORT_CONTENT_OPTIONS, self._PREF_EXPORT_CONTENT)
+        # CONTENTS IS CHOSEN PER EXPORT AND NEVER REMEMBERED. Overlay-only is a specialist, one-off
+        # choice: a transparent track for an editor. Remembered, it came back a day later as "the
+        # video is completely black and time scale is odd" (the owner, 2026-09-25) — the correct
+        # ProRes track, which QuickTime draws on black and times by the camera's timecode. So this
+        # row opens on the burned-in footage every time, and no pref is read for it or written.
+        content_combo = QComboBox(dlg)
+        for label, _value in self._EXPORT_CONTENT_OPTIONS:
+            content_combo.addItem(label)
         res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES)
         q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY)
 
-        # THE DIALOG OPENS ON THE LAST EXPORT'S CHOICES, AND THE HEAVY ONES MUST NOT DO THAT
-        # SILENTLY. "Video export has become extremely slow" was a remembered overlay-only ProRes at
-        # source resolution: 2.4 minutes and 1.4 GB for one MK lap that takes 33 s on the defaults,
+        # THE DIALOG OPENS ON THE LAST EXPORT'S CHOICES, AND A HEAVY ONE MUST NOT DO THAT SILENTLY.
+        # "Video export has become extremely slow" was a remembered overlay-only ProRes at source
+        # resolution: 2.4 minutes and 1.4 GB for one MK lap that takes 33 s on the defaults,
         # re-opened every time with nothing on screen saying the choice was his own, still in force.
-        # So when the dialog opens on a non-default Contents or on Source, one line names them, and
-        # "Use defaults" puts EVERY row back. It writes nothing: prefs are saved on Export, as ever.
-        remembered = []
-        if content_combo.currentIndex() != self._EXPORT_DEFAULT_INDEX[self._PREF_EXPORT_CONTENT]:
-            remembered.append(content_combo.currentText())
+        # Contents no longer comes back, so Source is the heavy row left: when the dialog opens on
+        # it, one line names it, and "Use defaults" puts EVERY row back. It writes nothing: prefs
+        # are saved on Export, as ever.
         if res_combo.currentIndex() == self._EXPORT_RES_SOURCE:
-            remembered.append(res_combo.currentText())
-        if remembered:
             recall = QWidget(dlg)
             recall_row = QHBoxLayout(recall)
             recall_row.setContentsMargins(0, 0, 0, 0)
             recall_row.setSpacing(theme.SPACE_M)
-            recall_text = QLabel("Opened on your last export's choices: "
-                                 f"{' · '.join(remembered)}.", recall)
+            recall_text = QLabel("Opened on your last export's resolution: "
+                                 f"{res_combo.currentText()}.", recall)
             recall_text.setWordWrap(True)
             recall_text.setProperty("role", "Note")
             recall_row.addWidget(recall_text, 1)
@@ -707,6 +714,7 @@ class ExportController:
             def _use_defaults():
                 for key, box in rows.items():
                     box.setCurrentIndex(self._EXPORT_DEFAULT_INDEX[key])
+                content_combo.setCurrentIndex(0)
                 recall.hide()
             use_defaults.clicked.connect(_use_defaults)
 
@@ -776,10 +784,15 @@ class ExportController:
                 lines.append(f"Clip: {fmt_time(clip)}{each} — the lap plus {lead:g} s of the "
                              "previous lap at the head and the next lap at the tail.")
             if overlay_only:
-                where = ("a folder of numbered PNG frames" if content == export_video.ALPHA_PNG
-                         else "a ProRes 4444 .mov")
+                png = content == export_video.ALPHA_PNG
+                where = "a folder of numbered PNG frames" if png else "a ProRes 4444 .mov"
+                # A .mov is also something a player opens, and what it shows there is said before
+                # the owner meets it. No player opens a folder of frames as a video.
+                player = ("" if png else "; players such as QuickTime show it on black and count "
+                          "time on the camera's clock")
                 lines.append(f"Overlay only: {where} on a transparent background, no footage and "
-                             "no audio — for compositing over the original in Resolve or Premiere.")
+                             "no audio — for compositing over the original in Resolve or "
+                             f"Premiere{player}.")
             size = self._export_size_hint(clip, h, quality, aspect, content, files, source)
             if size:
                 lines.append(size)
@@ -787,7 +800,7 @@ class ExportController:
             # A scope with nothing to render cannot be confirmed. `_scope_plan` already says why.
             ok_button.setEnabled(math.isfinite(clip) and clip > 0)
         # EVERY combo: each one moves at least one number in the lines above.
-        for combo in rows.values():
+        for combo in (*rows.values(), content_combo):
             combo.currentIndexChanged.connect(_update_hint)
         # The footage's frame and the ProRes encoder are learned BEHIND the dialog (an ffprobe and
         # a VideoToolbox session: ~45 ms and ~0.3 s here), and the hint is redrawn once they are
@@ -818,7 +831,6 @@ class ExportController:
             self._PREF_EXPORT_LEAD: lead_combo.currentIndex(),
             self._PREF_EXPORT_ASPECT: aspect_combo.currentIndex(),
             self._PREF_EXPORT_FIT: fit_combo.currentIndex(),
-            self._PREF_EXPORT_CONTENT: content_combo.currentIndex(),
             self._PREF_EXPORT_RES: res_combo.currentIndex(),
             self._PREF_EXPORT_QUALITY: q_combo.currentIndex(),
         }
@@ -849,9 +861,13 @@ class ExportController:
     def _video_out_suffix(self, choice) -> tuple[str, str]:
         """(default file suffix, file dialog filter) for the chosen output format. A PNG sequence
         has neither — its output is a DIRECTORY — and `export_overlay_video` asks for one instead
-        of calling this."""
+        of calling this.
+
+        The transparent track gets a name of its own. It used to be `<stem>_overlay.mov`, one
+        letter from the burned-in `<stem>_overlay.mp4` beside it, and nothing in Finder said which
+        of the two was the video to watch."""
         if choice.config.overlay_only:
-            return "_overlay.mov", "ProRes 4444 with alpha (*.mov)"
+            return "_overlay_alpha.mov", "ProRes 4444 with alpha (*.mov)"
         return "_overlay.mp4", "MP4 video (*.mp4)"
     def export_overlay_video(self):
         if self._no_laps_to_export():
@@ -1270,7 +1286,12 @@ class ExportController:
 
         AN OVERLAY-ONLY FILE ALSO SAYS WHERE IT STARTS IN THE FOOTAGE (`syncs`, one `SourceSync`
         per file): it is a track to lay back over that footage in an editor, and the owner's first
-        one arrived with no timecode and no word of where it began."""
+        one arrived with no timecode and no word of where it began.
+
+        AND A PRORES ONE SAYS WHAT IT IS, because this box is where the owner meets it: the next
+        click is Reveal and a double-click, and QuickTime then shows "completely black" video
+        timed 11:24:30:00 onwards (the owner, 2026-09-25). Both are right for an editor and wrong
+        for watching, so the box says so and names the row that makes a video to watch."""
         paths = [out_paths] if isinstance(out_paths, str) else list(out_paths)
         if not paths:
             return
@@ -1278,11 +1299,12 @@ class ExportController:
         what = self._describe_spec(spec, lap) if spec is not None else "an overlay video"
         syncs = list(syncs or [])
         png = bool(getattr(spec, "is_png_sequence", False))
+        timed = (len(syncs) == len(paths)
+                 and all(s is not None and s.timecode for s in syncs))
         if len(paths) > 1:
             body = f"{APP_NAME} exported {len(paths)} overlay videos.\n\n{folder}"
             status = f"exported {len(paths)} overlay videos"
-            if (not png and len(syncs) == len(paths)
-                    and all(s is not None and s.timecode for s in syncs)):
+            if not png and timed:
                 body += "\n\nEach file carries the timecode of where it starts in the footage."
         else:
             name = os.path.basename(paths[0])
@@ -1291,6 +1313,13 @@ class ExportController:
             where = export_video.sync_sentence(syncs[0] if syncs else None, png=png)
             if where:
                 body += f"\n\n{where}"
+        # Read with getattr: a compare spec and the tests' duck-typed ones carry no overlay config.
+        if getattr(getattr(spec, "config", None), "overlay_only", False) and not png:
+            seen = ("looks black in QuickTime and runs on the footage's timecode rather "
+                    "than from 0:00; both are what an editor lines it up by" if timed else
+                    "looks black in QuickTime; an editor lays it over the footage")
+            body += (f"\n\nA transparent overlay track {seen}. For a video to watch or share, "
+                     f"export again with “{self._EXPORT_CONTENT_OPTIONS[0][0]}”.")
         # The body carries the product name: macOS drops the window title (see _EXPORT_FAIL_TITLE).
         box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export finished", body,
                           parent=self.win)
