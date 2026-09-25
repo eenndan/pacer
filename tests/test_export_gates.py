@@ -2130,7 +2130,7 @@ _E7_PRORES, _E7_PNG = 1, 2      # the two overlay-only rows of Contents
 _E7_SYNC = export_video.SourceSync(          # the owner's MK lap 14, as the E6 box states it
     t0=1977.409, source_name="GX010067.MP4", source_frame=118526, local_start=1977.409,
     rate=Fraction(30000, 1001), timecode="11:24:01:25", source_timecode="11:24:01:50")
-_E7_BLACK = "looks black in QuickTime and Finder"
+_E7_BLACK = "looks black in QuickTime"
 _E7_CLOCK = "runs on the footage's timecode rather than from 0:00"
 _E7_WATCH = ("For a video to watch or share, export again with "
              f"“{ExportController._EXPORT_CONTENT_OPTIONS[0][0]}”.")
@@ -2296,7 +2296,7 @@ def _e7_finished_body(win, specs, syncs):
 
 def test_the_finished_box_says_what_an_overlay_only_file_is():
     """Where the owner met the file, it now explains itself in two sentences: a transparent track
-    looks black in QuickTime and Finder and runs on the footage's timecode (only when it carries
+    looks black in QuickTime and runs on the footage's timecode (only when it carries
     one), and a video to watch comes from the burned-in row, named. Said once for a ProRes file or
     batch; never for the composite, and not for a PNG sequence, which no player opens as a video."""
     win = _window(FakeSession())

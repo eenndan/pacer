@@ -1315,9 +1315,9 @@ class ExportController:
                 body += f"\n\n{where}"
         # Read with getattr: a compare spec and the tests' duck-typed ones carry no overlay config.
         if getattr(getattr(spec, "config", None), "overlay_only", False) and not png:
-            seen = ("looks black in QuickTime and Finder and runs on the footage's timecode rather "
+            seen = ("looks black in QuickTime and runs on the footage's timecode rather "
                     "than from 0:00; both are what an editor lines it up by" if timed else
-                    "looks black in QuickTime and Finder; an editor lays it over the footage")
+                    "looks black in QuickTime; an editor lays it over the footage")
             body += (f"\n\nA transparent overlay track {seen}. For a video to watch or share, "
                      f"export again with “{self._EXPORT_CONTENT_OPTIONS[0][0]}”.")
         # The body carries the product name: macOS drops the window title (see _EXPORT_FAIL_TITLE).
