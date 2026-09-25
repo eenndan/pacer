@@ -184,7 +184,7 @@ algorithm; the service just caches + delegates.
 | [map_view.py](map_view.py) | Track map: laps, draggable timing lines, marker, corner/brake glyphs, rainbow, ghost | Qt | `test_rainbow_map` |
 | [plots_view.py](plots_view.py) | Speed + Δ charts on one linked x-axis: scrub cursor, ideal and driving overlays, instruments | Qt | `test_charts_panel` |
 | [lap_table.py](lap_table.py) | The sortable Laps table (splits, ⚠ dropout) and the Corners table | Qt | `test_lap_table_columns` |
-| [stats_panel.py](stats_panel.py) · [common](stats_common.py) [braking](stats_braking.py) [ideal](stats_ideal.py) [straights](stats_straights.py) [trust](stats_trust.py) | The Stats page: `StatsView` shell (layout, tiles, charts, unsplit sections); one module per split section | Qt | `test_stats` `test_stats_ideal` |
+| [stats_panel.py](stats_panel.py) · [common](stats_common.py) [braking](stats_braking.py) [coasting](stats_coasting.py) [corners](stats_corners.py) [ideal](stats_ideal.py) [straights](stats_straights.py) [trust](stats_trust.py) | The Stats page: `StatsView` shell (layout, tiles, charts, unsplit sections); one module per split section | Qt | `test_stats` `test_stats_ideal` |
 | [coaching_panel.py](coaching_panel.py) | Coaching page + Opportunities dialog: theme and focus blocks, per-corner rows | Qt | `test_coaching` |
 | [marks_panel.py](marks_panel.py) | The Marks page and mark editor; emits intents, owns no store | Qt | `test_marks` |
 | [provenance_panel.py](provenance_panel.py) | The read-only "inspect this number" panel over one `Provenance` | Qt | `test_provenance_panel` |

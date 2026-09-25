@@ -2039,7 +2039,7 @@ QLabel[role="EmptyTitle"] {{
 /* A NOTE UNDER A TABLE: the sentence that says what the column above is measured against. Muted
    and caption-sized so it reads as apparatus rather than as another number, and a role rather than
    an inline stylesheet so it lands in the one place the app's type scale lives (the CORNERS
-   reconciliation line is the first of these; see stats_panel.CORNERS_TOOLTIP for why it exists).
+   reconciliation line is the first of these; see stats_corners.CORNERS_TOOLTIP for why it exists).
 
    text_dim, NOT text_muted: this is ENABLED prose a reader is meant to read, and text_muted is
    reserved for DISABLED chrome (3.17:1 on surface — WCAG-exempt only because nothing enabled uses

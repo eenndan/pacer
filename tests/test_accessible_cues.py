@@ -266,7 +266,8 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
 
     from studio.lap_table import DROPOUT_MARK, NUM_ROLE
     from studio.stats import CornerReport
-    from studio.stats_panel import WORST_LOSS_MARK, WORST_TINT_N, StatsView
+    from studio.stats_corners import WORST_LOSS_MARK, WORST_TINT_N
+    from studio.stats_panel import StatsView
 
     def corner(cid, loss, sigma):
         return CornerReport(cid=cid, direction=1, n=6, best_s=9.0, median_s=9.0 + loss,
@@ -281,7 +282,7 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
     # A phase triple on C11 only: the two tooltip lines must COMPOSE, not overwrite each other.
     sess.phase_report = lambda: SimpleNamespace(cids=[11], rows=[(0.03, 0.04, 0.02)], share=None)
     view = StatsView(sess)
-    t = view.corners_table
+    t = view.corners.table
     assert t.rowCount() == len(report), t.rowCount()
 
     behind = QColor(theme.behind_colour()).name().upper()
