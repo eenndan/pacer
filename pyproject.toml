@@ -204,3 +204,4 @@ ffmpeg = ">=7.1,<8"
 # could turn the gate red in a PR that changed no Python. Bump it in a PR of its own. It brings
 # nodejs, nodeenv and setuptools into the env; nothing the .app bundles imports any of them.
 pyright = "==1.1.414"
+pytest = ">=9.1.1,<10"
