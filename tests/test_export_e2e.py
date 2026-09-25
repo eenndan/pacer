@@ -274,27 +274,33 @@ def _tc_frames(tc: str, count: int) -> int:
     return ((h * 60 + m) * 60 + s) * count + f
 
 
-def _map_track(frames: np.ndarray):
-    """Per frame: the marker's centre (coral-weighted centroid — the core is #FF5A36) and the
-    distance from it to the nearest amber (#FFD34D) tail pixel. After `marker_track.py`, the
-    orchestrator's tracker, with a weighted centroid: a marker drawn at sub-pixel positions moves
-    a fraction of a pixel per frame at this size, which a thresholded blob cannot see."""
+def _map_track(frames: np.ndarray, k: float):
+    """Per frame: the marker's centre and the gap from it to its amber tail. After
+    `marker_track.py`, the orchestrator's tracker, with two changes this frame size needs:
+      * the centre is a coral-WEIGHTED centroid (the core is #FF5A36): the marker is drawn at
+        sub-pixel positions and moves a fraction of a pixel per frame here, which a thresholded
+        blob cannot see;
+      * the tail (#FFD34D) is looked for BEYOND the marker's own disc (7k: core + ring), because
+        the glow under the core is amber too, and a 1.6 px amber line through 4:2:0 H.264 needs a
+        looser hue test than a ProRes frame does."""
     f = frames[..., :3].astype(np.int32)
     r, g, b = f[..., 0], f[..., 1], f[..., 2]
     coral = np.clip(r - g - 60, 0, None) * (r > 150)
-    tail = (r > 190) & (g > 140) & (g < 225) & (b < 120)
+    amber = (r > 170) & (g > 120) & (g < 235) & (b < 150) & (r - b > 90)
     if frames.shape[-1] == 4:
-        tail &= frames[..., 3] > 150
+        amber &= frames[..., 3] > 150
     yy, xx = np.mgrid[0:f.shape[1], 0:f.shape[2]]
     weight = coral.sum(axis=(1, 2))
     mx = (coral * xx).sum(axis=(1, 2)) / np.maximum(weight, 1)
     my = (coral * yy).sum(axis=(1, 2)) / np.maximum(weight, 1)
-    reach = np.full(len(f), np.inf)
-    for k in range(len(f)):
-        ty, tx = np.nonzero(tail[k])
-        if len(tx) and weight[k]:
-            reach[k] = float(np.hypot(tx - mx[k], ty - my[k]).min())
-    return weight, mx, my, reach
+    gap = np.full(len(f), np.inf)
+    for i in range(len(f)):
+        ty, tx = np.nonzero(amber[i])
+        d = np.hypot(tx - mx[i], ty - my[i])
+        d = d[d > 7.0 * k]
+        if len(d) and weight[i]:
+            gap[i] = float(d.min())
+    return weight, mx, my, gap
 
 
 def _still_pairs(frames: np.ndarray, mx, my, half: int = 8) -> tuple[np.ndarray, float]:
@@ -316,22 +322,29 @@ def _corner() -> tuple[int, int, int, int]:
     return x0, y0, W - x0, H - y0
 
 
-def _assert_map_marker(frames: np.ndarray, what: str) -> None:
-    """The marker moves on EVERY frame and the amber tail touches it on (nearly) every frame."""
+def _assert_map_marker(frames: np.ndarray, what: str, still_allowed: float = 0.0) -> None:
+    """The marker moves on every frame and the amber tail touches it on (nearly) every frame.
+
+    `still_allowed` is the share of frame pairs the FILE may show still although the painter moved
+    the marker: an inter-coded H.264 file can skip a sub-pixel step (libx264 skipped 1 of 1658
+    pairs here, the last), while ProRes codes every frame whole and may skip none. A marker held on
+    a 10 Hz GPS sample at 30 fps is still on two pairs in three, so the defect is far above either."""
     k = max(0.5, min(W, H) / 1080.0)            # the overlay's size scale (OverlayPainter._k)
-    weight, mx, my, reach = _map_track(frames)
+    weight, mx, my, gap = _map_track(frames, k)
     assert weight.min() > 0, f"{what}: no map marker in frame {int(np.argmin(weight))}"
     moved, median = _still_pairs(frames, mx, my)
     still = np.flatnonzero(moved < 0.1 * median)
-    assert len(still) == 0, (
+    assert len(still) <= still_allowed * len(moved), (
         f"{what}: the map marker stood still across {len(still)} of {len(moved)} frame pairs "
         f"(first at frames {still[:6].tolist()}; change {moved[still[:6]].round().tolist()} vs a "
         f"median {median:.0f}) — held on a GPS sample instead of interpolated between them")
-    touch = 13.0 * k                            # the core + ring + glow's radius, and a pixel
-    apart = np.flatnonzero(reach > touch)
-    assert len(apart) <= 0.03 * len(reach), (
-        f"{what}: the amber tail is away from the marker on {len(apart)} of {len(reach)} frames "
-        f"(median gap {np.median(reach[apart]):.0f} px, allowed {touch:.1f}; first at "
+    # 16k: a pixel or so past the glow. Measured on this clip, frames whose tail starts further
+    # out: 1.9 % on libx264, 0.8 % on VideoToolbox; with the old session-fraction tail, 90 %.
+    touch = 16.0 * k
+    apart = np.flatnonzero(gap > touch)
+    assert len(apart) <= 0.05 * len(gap), (
+        f"{what}: the amber tail is away from the marker on {len(apart)} of {len(gap)} frames "
+        f"(median gap {np.median(gap[apart]):.0f} px, allowed {touch:.1f}; first at "
         f"{apart[:6].tolist()}) — a tail that is not read off the marker's own trace")
 
 
@@ -371,9 +384,17 @@ def test_the_default_export_is_the_footage_with_the_overlay_burned_in():
     t0, t1 = ev.lap_window_for_export(session, lap, LEAD_S, LEAD_S)
     n = ev.frame_count(t0, t1, 30.0)
     # The window against TRUTH: the true lap (on the app's own start line) plus both leads.
-    true_lap = float(np.diff(fx["rec"].truth.crossings(session.timing_lines_latlon()[0]))[
-        list(session.valid_lap_ids()).index(lap)])
+    truth = fx["rec"].truth
+    crossed = truth.crossings(session.timing_lines_latlon()[0])
+    p = list(session.valid_lap_ids()).index(lap)
+    true_lap = float(crossed[p + 1] - crossed[p])
     assert abs(n / 30.0 - (true_lap + 2 * LEAD_S)) < 2 / 30.0, (n / 30.0, true_lap)
+    # ...and it starts 5 s before the kart truly crossed the line, on the PICTURE's clock (media
+    # time runs MEDIA_PPM fast of true time; the GPS lag is the telemetry's, not the picture's).
+    start = crossed[p] * (1.0 + truth.media_ppm * 1e-6) - LEAD_S
+    assert abs(t0 - start) < 0.025, (
+        f"the clip starts at {t0:.3f} s of footage, {(t0 - start) * 1000:+.0f} ms from 5 s before "
+        f"the kart crossed the line ({start:.3f} s)")
     assert int(v["nb_frames"]) == n, f"{v['nb_frames']} frames, the clip is {n}"
     assert abs(float(info["format"]["duration"]) - n / 30.0) < 0.002, (info["format"], n)
     assert abs(float(a["duration"]) - n / 30.0) < 0.03, f"audio {a['duration']} s, clip {n / 30:.3f}"
@@ -406,15 +427,19 @@ def test_the_default_export_is_the_footage_with_the_overlay_burned_in():
         assert scores[best] > 0.6, (
             f"frame {i}: the middle of the picture matches no source frame near {want:.1f} (best "
             f"correlation {scores[best]:.2f}) — the footage is not in the file")
-        assert abs(best - want) <= 1.0, (
+        # 1.5: the accurate seek keeps the first frame AT OR AFTER t0 (up to one late), and the
+        # fps filter then takes the nearest 59.94 frame to each 30 fps tick (half a frame either way).
+        assert abs(best - want) <= 1.5, (
             f"frame {i} shows source frame {best}, planned {want:.1f}: the footage is "
             f"{(best - want) / float(SOURCE_FPS) * 1000:+.0f} ms off its overlay")
 
-    # THE OVERLAY: the lap strip is painted over the flat top-left corner.
+    # THE OVERLAY: the lap strip — its pill and its white type — over the flat top-left corner.
     top_left = _decode(out, (0, 0, W // 2, (H - CH) // 2 - 4), "rgb24", select="eq(n,0)")[0]
-    bright = int((top_left.min(axis=-1) > 200).sum())
-    assert bright > 40, f"no lap strip in the top-left corner ({bright} bright px)"
-    _assert_map_marker(_decode(out, _corner(), "rgb24"), "burned-in")
+    pill = int((np.abs(top_left.astype(int) - BG).max(axis=-1) > 24).sum())
+    white = int((top_left.min(axis=-1) > 200).sum())
+    assert pill > 400 and white > 20, (
+        f"no lap strip in the top-left corner ({pill} px off the grey, {white} white)")
+    _assert_map_marker(_decode(out, _corner(), "rgb24"), "burned-in", still_allowed=0.01)
     fx["burned"] = {"path": out, "t0": t0, "frames": n, "took": took}
 
 
