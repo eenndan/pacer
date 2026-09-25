@@ -63,9 +63,13 @@ jobs:
         run: pixi run build
 
       - name: Bindings regen drift gate
-        # The build regenerates the bindings glue/stubs in-place (bindings/pacer/CMakeLists.txt),
-        # so the committed generated files must match what the locked litgen/black produce.
-        run: git diff --exit-code -- bindings/
+        # The committed generated files must match what the locked litgen/black produce from the
+        # committed headers. The build's codegen runs only when its inputs change
+        # (bindings/pacer/CMakeLists.txt), so this step REGENERATES UNCONDITIONALLY first: the gate
+        # must not rest on the build's dependency tracking, a warm build dir or file mtimes.
+        run: |
+          pixi run gen-bindings
+          git diff --exit-code -- bindings/
 
       # Lint and format run BEFORE the tests: each takes about a second, while the test step takes
       # minutes, so a lint error fails the run in about a minute instead of after the whole suite.
