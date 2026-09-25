@@ -28,11 +28,14 @@ a frame has no key to decode one — and it does NOT block the export the way th
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import os
+import queue
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -42,7 +45,7 @@ from fractions import Fraction
 from typing import NamedTuple
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import (
     QFont,
     QFontMetricsF,
@@ -328,7 +331,12 @@ class OverlayConfig:
     # (a directory of frames). Ignored unless `overlay_only`.
     overlay_only: bool = False
     alpha_codec: str = ALPHA_PRORES   # "prores" | "png"
-    # No-op (kept for back-compat); the renderer is single-threaded.
+    # 1 = the single-threaded pump (read -> paint -> write in series; the fallback, and what the
+    # mocked-pipeline tests pin). Anything else = the PIPELINED pump: the decode read and the
+    # encode write each get a thread of their own around the one painting thread (see
+    # `_FramePool`). The painting itself stays on ONE thread whatever this says, because PySide6
+    # holds the GIL through every QPainter call: painting MK lap 14 on 1/2/4/6 threads measured
+    # 127.6 / 136.2 / 128.0 / 123.5 fps at 1080p.
     workers: int | None = None
     # No-progress WATCHDOG: if the frame counter doesn't advance the render is presumed WEDGED
     # (hung VT session / stuck pipe), aborted cleanly, then retried ONCE on libx264 — what makes an
@@ -1147,7 +1155,8 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
 
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
-                     hwaccel: bool = False, scale_filter: str | None = None) -> list[str]:
+                     hwaccel: bool = False, scale_filter: str | None = None,
+                     start_frame: int = 0) -> list[str]:
     """DECODE argv: -ss spec.local_t0 before the input + -t duration, fit the source into
     out_w x out_h (`scale_filter`, from `frame_geometry` — a plain scale, a cover-and-crop or a
     contain-and-pad), force the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop
@@ -1172,20 +1181,41 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
 
     Adding `format=yuv420p` to this chain would not harden anything and would cost something real:
     it would subsample chroma on the way to rgb24, throwing away half the colour resolution the
-    overlay is then composited against, to protect a boundary that no longer exists."""
+    overlay is then composited against, to protect a boundary that no longer exists.
+
+    THE `fps` FILTER RUNS FIRST, so the scale/crop/pad chain only ever sees the frames the render
+    keeps. It picks frames by timestamp alone and everything after it is a per-frame function, so
+    the order cannot change a byte: measured on MK_18_09_26's lap 14 (4K 59.94 -> 1080p 30), the
+    rgb24 stream's md5 over 300 frames was identical both ways, on the hardware and the software
+    decode alike. What it changes is the work: a 59.94 fps source used to be scaled at 59.94 and
+    then have half of it thrown away, and this decode is what a 1080p export waits on (60.1 ->
+    69.9 fps from the decoder alone).
+
+    `start_frame` is the same decode entered `start_frame` frames in — a relay decoder's (see
+    `_DecodeRelay`). Its seek is the plan's own `-ss` plus exactly `start_frame / fps`, added in
+    whole microseconds (the unit ffmpeg parses `-ss` into) rather than re-derived from a float, so
+    both decodes see the same timestamps shifted by a whole number of frames; the relay only asks
+    for a `start_frame` that makes that sum exact (`_relay_step`)."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     scale = scale_filter or f"scale={out_w}:{out_h}"
     n = frame_count(spec.t0, spec.t1, fps)
+    seek = f"{spec.local_t0:.6f}"
+    length = clip_seconds(spec.t0, spec.t1, fps)
+    if start_frame:
+        us = round(float(seek) * 1e6) + start_frame * 1_000_000 // round(fps)
+        seek = f"{us // 1_000_000}.{us % 1_000_000:06d}"
+        n -= start_frame
+        length = n / float(fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
         *hw,
-        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(),
+        "-ss", seek, *spec.source.input_args(),
         # THE PLAN'S OWN LENGTH, not the raw window — see `clip_seconds`. Asking for the window's
         # 68.2286 s made ffmpeg's output trim round 2046.86 frames to 2046 and the render ran dry
         # one frame early; asking for 2047/30 s lands on the frame boundary. `-frames:v` then pins
         # the count from the other side, so the decode can never overrun the plan either.
-        "-t", f"{clip_seconds(spec.t0, spec.t1, fps):.6f}",
-        "-vf", f"{scale},fps={fps:.6f}",
+        "-t", f"{length:.6f}",
+        "-vf", f"fps={fps:.6f},{scale}",
         "-frames:v", str(n),
         "-an", "-sn", "-dn",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
@@ -2313,6 +2343,21 @@ def trace_tail(times, xs, ys, t: float, span: float = _MAP_TAIL_S,
     return px, py
 
 
+def _ink_rect(img: QImage) -> QRect | None:
+    """The smallest rect holding every pixel of the premultiplied `img` with any alpha at all, or
+    None when it is fully transparent. Exact, not estimated: the blit that uses it must reach every
+    inked pixel, so it is read off the image rather than derived from the geometry that drew it."""
+    w, h, bpl = img.width(), img.height(), img.bytesPerLine()
+    px = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * h).reshape(h, bpl)
+    alpha = px[:, : 4 * w].reshape(h, w, 4)[:, :, 3 if sys.byteorder == "little" else 0]
+    rows = np.flatnonzero(alpha.any(axis=1))
+    if not len(rows):
+        return None
+    cols = np.flatnonzero(alpha.any(axis=0))
+    return QRect(int(cols[0]), int(rows[0]), int(cols[-1] - cols[0] + 1),
+                 int(rows[-1] - rows[0] + 1))
+
+
 class _MapInset:
     """Track-map inset for the export: the exported lap's racing line is projected once and baked
     into a cached RGBA layer (re-rasterizing it per frame dominated render cost); each frame blits
@@ -2381,6 +2426,7 @@ class _MapInset:
         # --- bake the static lap line into a cached RGBA image (no box, no full trace), sized to
         # the inset's bottom-right corner. Painted ONCE; `paint` only blits it + draws the marker.
         self._layer = self._bake_layer(box, line_poly, self._k)
+        self._layer_ink = _ink_rect(self._layer)
 
     @staticmethod
     def _bake_layer(box: QRectF, line_poly: QPolygonF, k: float) -> QImage:
@@ -2422,11 +2468,23 @@ class _MapInset:
             return None, QPolygonF()
         return QPointF(float(self._px[marker_index]), float(self._py[marker_index])), QPolygonF()
 
-    def paint(self, p: QPainter, tt: float | None, marker_index: int | None = None) -> None:
+    def paint(self, p: QPainter, tt: float | None, marker_index: int | None = None,
+              opaque: bool = False) -> None:
         if not self._ok:
             return
-        # blit the baked lap line — a sub-ms copy.
-        p.drawImage(0, 0, self._layer)
+        # Blit the baked lap line. The layer runs from the frame's origin to the inset's far
+        # corner — at 4K a 33 MB image blended in full on every frame — while its ink is one
+        # corner of it. Onto an OPAQUE frame (the composite's rgb24) a fully transparent pixel
+        # blends to exactly the pixel under it, so the blit copies the ink's rect alone: 1.7 ms a
+        # 4K frame saved, and 0 of 62 MK frames differed in a byte. Onto the overlay-only canvas
+        # it is NOT the same: Qt blends a straight-alpha canvas by premultiplying and
+        # un-premultiplying every pixel it visits, which rewrites the nearly transparent edge
+        # pixels of the g-dial painted before it (20 of them on MK's 4K frame 0, a channel moving
+        # by up to 255 at alpha ~1). That path keeps the full blit rather than change a pixel.
+        if opaque and self._layer_ink is not None:
+            p.drawImage(self._layer_ink.topLeft(), self._layer, self._layer_ink)
+        elif not opaque:
+            p.drawImage(0, 0, self._layer)
         m, tail = self.marker_and_tail(tt, marker_index)
         if m is None:
             return
@@ -3019,7 +3077,7 @@ class OverlayPainter:
             p, self._g_rect.width(), self._g_rect.height(), dial_state, export=True,
             scale_k=self._g_rect.width() / (self._spec.config.gmeter_frac * OVERLAY_REF_SHORT_SIDE))
         p.restore()
-        self._map.paint(p, vals.tt, vals.marker_index)
+        self._map.paint(p, vals.tt, vals.marker_index, opaque=not img.hasAlphaChannel())
         _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
         # The strip's fallback elapsed origin is the LAP's start, not the clip's — with a lead-in
         # those differ, and a session with no lap window would otherwise count the run-up.
@@ -3034,23 +3092,27 @@ class OverlayPainter:
         p.end()
 
 
-def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: bytes,
-                        vals: OverlayValues, dial) -> bytes:
-    """Composite one rgb24 frame and return bytes tightly PACKED at out_w*3. QImage scanlines are
+def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw,
+                        vals: OverlayValues, dial):
+    """Composite one rgb24 frame and return it tightly PACKED at out_w*3. QImage scanlines are
     4-byte-aligned, so for a non-4-aligned out_w*3 we strip each row's trailing padding (otherwise
-    every row shears + the stream desyncs)."""
-    buf = bytearray(raw)
+    every row shears + the stream desyncs).
+
+    A BYTEARRAY IS PAINTED IN PLACE and handed back as it is — the pipelined pump's pool buffer,
+    which is the whole frame's only copy. Immutable `bytes` (the serial pump's read) is copied once
+    to be paintable. The two used to cost a copy in and another out: 2 x 24.9 MB a 4K frame."""
+    buf = raw if isinstance(raw, bytearray) else bytearray(raw)
     img = QImage(buf, out_w, out_h, 3 * out_w, QImage.Format_RGB888)
     painter.paint_frame_with_state(img, vals, dial)
     bpl = img.bytesPerLine()
     if bpl == 3 * out_w:
-        return bytes(buf)                            # already packed — no padding to strip
+        return buf                                   # already packed — no padding to strip
     arr = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * out_h).reshape(out_h, bpl)
     return arr[:, : 3 * out_w].tobytes()
 
 
 def _paint_alpha_frame(painter: OverlayPainter, out_w: int, out_h: int,
-                       vals: OverlayValues, dial, bgra: bool = False) -> bytes:
+                       vals: OverlayValues, dial, bgra: bool = False, buf=None):
     """Composite ONE overlay-only frame onto a fully transparent canvas and return RGBA (or, with
     `bgra`, BGRA) bytes packed at out_w*4 — the overlay with nothing under it, which is what an NLE
     wants to lay over the original footage.
@@ -3064,10 +3126,17 @@ def _paint_alpha_frame(painter: OverlayPainter, out_w: int, out_h: int,
     halo stored premultiplied and READ as straight is a grey halo.
 
     There is no `raw` parameter because there is no decode; this is the whole saving the
-    overlay-only path claims."""
-    img = QImage(out_w, out_h, QImage.Format_ARGB32 if bgra else QImage.Format_RGBA8888)
+    overlay-only path claims.
+
+    `buf` (a bytearray of out_w*out_h*4, the pipelined pump's pool buffer) is the canvas itself
+    when given: cleared, painted in place and returned, with no image to allocate and no copy out.
+    A four-byte pixel is always 4-aligned, so its rows are packed exactly as `tobytes` packs them."""
+    fmt = QImage.Format_ARGB32 if bgra else QImage.Format_RGBA8888
+    img = QImage(buf, out_w, out_h, 4 * out_w, fmt) if buf is not None else QImage(out_w, out_h, fmt)
     img.fill(Qt.transparent)
     painter.paint_frame_with_state(img, vals, dial)
+    if buf is not None:
+        return buf
     bpl = img.bytesPerLine()
     arr = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * out_h).reshape(out_h, bpl)
     return arr[:, : 4 * out_w].tobytes()
@@ -3236,6 +3305,354 @@ class _StderrDrainer:
         self._thread.join(timeout)
 
 
+# --------------------------------------------------------------------------- the pipelined pump
+# THE RENDER USED TO RUN ITS THREE STAGES IN SERIES on one thread: read a frame off the decoder,
+# paint it, write it to the encoder, and only then ask for the next one. ffmpeg decodes and encodes
+# in processes of their own, so two of the three stages never needed the painter's CPU — the loop
+# just never let them overlap it. The pipelined pump gives the read and the write a thread each,
+# so decoder, painter and encoder all work at once and a frame costs the SLOWEST stage, not the sum.
+#
+# THE PAINT STAYS ON ONE THREAD: PySide6 holds the GIL through every QPainter call (see
+# `OverlayConfig.workers`). The two I/O threads overlap it only while they are in the kernel, which
+# is why the decoder's stream is a SOCKET and not a pipe: a pipe hands a reader at most 64 KB per
+# syscall, so a 25 MB 4K frame is ~400 returns into Python, each waiting out the painter's GIL
+# switch interval. Measured on MK lap 14 (decode + paint, no encode): a reader thread on the pipe
+# gave 35.0 fps at 4K against 33.4 serial; on a socket read with MSG_WAITALL — one syscall a
+# frame — 48.4. A blocking pipe WRITE is already one syscall (it returns once every byte is in),
+# so the encoder keeps its pipe.
+#
+# NOTHING HERE MAY BLOCK WITHOUT A WAY OUT. The parallel pump this module had before a6fbf39 wedged
+# the GUI export forever when the encoder stopped draining its pipe. Every wait on the painting
+# thread polls `abort` (the supervisor's verdict), and the supervisor's kill is what frees the two
+# I/O threads: a killed decoder reads as end-of-stream, a killed encoder fails the write.
+_PIPE_FRAMES = 4      # frame buffers in flight: being read, queued, being painted, being written
+_PIPE_POLL_S = 0.1    # how often a blocked wait on the painting thread re-checks the abort flag
+_SOCK_BUFFER = 8 << 20  # asked of both socket ends; the kernel caps it (8 MB max on macOS)
+
+
+class _FramePool:
+    """The render's frame buffers: `count` of them, allocated once and reused for every frame, so
+    the pump's memory is `count * frame_bytes` — 4 x 24.9 MB = 99.5 MB for a 4K composite, 4 x
+    33.2 MB = 132.7 MB for a 4K overlay-only — however long the clip, and no frame allocates."""
+
+    def __init__(self, frame_bytes: int, count: int):
+        self._free: queue.Queue = queue.Queue()
+        bufs = [bytearray(frame_bytes) for _ in range(count)]
+        self._ids = {id(b) for b in bufs}
+        for b in bufs:
+            self._free.put(b)
+
+    def take(self, stop) -> bytearray | None:
+        """A free buffer, or None once `stop()` says the render is over."""
+        while True:
+            try:
+                return self._free.get(timeout=_PIPE_POLL_S)
+            except queue.Empty:
+                if stop():
+                    return None
+
+    def give(self, buf) -> None:
+        """Return `buf` — ignored unless it is one of this pool's own (a subclass may paint into a
+        frame of its own; the pool must neither grow nor adopt an object it cannot read into)."""
+        if id(buf) in self._ids:
+            self._free.put(buf)
+
+
+class _FrameReader:
+    """Reads the decoder's frames on a thread of its own into pool buffers, in stream order. `get`
+    returns None at the end of the stream, which is also what a killed decoder reads as."""
+
+    def __init__(self, read_into, pool: _FramePool, frame_bytes: int, ahead: int | None = None):
+        self._read_into = read_into          # (writable memoryview) -> bytes actually read
+        self._pool = pool
+        self._fb = frame_bytes
+        self._ready: queue.Queue = queue.Queue()   # bounded by the pool (and `ahead`, if given)
+        # At most `ahead` frames read and not yet taken — what keeps one relay decoder from
+        # holding every buffer of a pool it shares (see `_DecodeRelay`).
+        self._credit = threading.Semaphore(ahead) if ahead else None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._pump, daemon=True, name="export-read")
+        self._thread.start()
+
+    def _pump(self) -> None:
+        try:
+            while True:
+                if self._credit is not None:
+                    while not self._credit.acquire(timeout=_PIPE_POLL_S):
+                        if self._stop.is_set():
+                            return
+                buf = self._pool.take(self._stop.is_set)
+                if buf is None:
+                    return
+                if self._read_into(memoryview(buf)) < self._fb:
+                    self._pool.give(buf)
+                    return
+                self._ready.put(buf)
+        except (OSError, ValueError):
+            return            # the stream was closed under us (teardown): an end of stream too
+        finally:
+            self._ready.put(None)
+
+    def get(self, abort, timeout: float | None = None) -> bytearray | None:
+        """The next frame, or None at the end of the stream, once `abort()` is true, or after
+        `timeout` seconds without one."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            try:
+                buf = self._ready.get(timeout=_PIPE_POLL_S)
+            except queue.Empty:
+                if abort() or (deadline is not None and time.monotonic() > deadline):
+                    return None
+                continue
+            if buf is None:
+                self._ready.put(None)      # the end stays the end for any later caller
+            elif self._credit is not None:
+                self._credit.release()
+            return buf
+
+    def close(self, unblock) -> None:
+        """Stop reading: `unblock()` must wake a read in progress (a socket shutdown does). The
+        frames it had read and nobody took go back to the pool."""
+        self._stop.set()
+        unblock()
+        self._thread.join(timeout=5.0)
+        while True:
+            try:
+                buf = self._ready.get_nowait()
+            except queue.Empty:
+                return
+            if buf is not None:
+                self._pool.give(buf)
+
+
+class _FrameWriter:
+    """Writes painted frames to the encoder on a thread of its own, in the order they were put. A
+    failed write is kept (`error`) and raised on the painting thread at its next `put` or `drain`,
+    the same OSError the serial pump's own write would have raised. Every frame goes back to the
+    pool written or not, so nothing upstream can starve waiting for a buffer."""
+
+    def __init__(self, write, pool: _FramePool, depth: int):
+        self._write = write
+        self._pool = pool
+        self._q: queue.Queue = queue.Queue(maxsize=depth)
+        self._discard = False
+        self.error: BaseException | None = None
+        self._thread = threading.Thread(target=self._pump, daemon=True, name="export-write")
+        self._thread.start()
+
+    def _pump(self) -> None:
+        while True:
+            try:
+                buf = self._q.get(timeout=_PIPE_POLL_S)
+            except queue.Empty:
+                if self._discard:
+                    return            # a teardown that could not queue the end marker
+                continue
+            if buf is None:
+                return
+            if self.error is None and not self._discard:
+                try:
+                    self._write(buf)
+                except (OSError, ValueError) as exc:      # BrokenPipeError is an OSError
+                    self.error = exc
+            self._pool.give(buf)
+
+    def put(self, buf, abort) -> None:
+        while True:
+            if self.error is not None:
+                self._pool.give(buf)
+                raise self.error
+            try:
+                self._q.put(buf, timeout=_PIPE_POLL_S)
+                return
+            except queue.Full:
+                if abort():
+                    self._pool.give(buf)
+                    raise BrokenPipeError("the render was aborted with frames still queued") from None
+
+    def close(self, abort, discard: bool = False) -> None:
+        """Let the thread finish what is queued (or, with `discard`, drop it) and end. Waits only
+        while `abort()` is false: after an abort the killed encoder fails the write in progress."""
+        self._discard = self._discard or discard
+        while self._thread.is_alive():
+            try:
+                self._q.put(None, timeout=_PIPE_POLL_S)
+                break
+            except queue.Full:
+                if abort() or self._discard:
+                    self._discard = True
+                    break
+        while self._thread.is_alive():
+            self._thread.join(_PIPE_POLL_S)
+            if abort() or self._discard:
+                break
+
+    def drain(self, abort) -> None:
+        """Wait until every frame put so far is in the encoder's pipe; raise a failed write."""
+        self.close(abort)
+        if self.error is not None:
+            raise self.error
+
+
+# --------------------------------------------------------------------------- the decode relay
+# ONE VIDEOTOOLBOX SESSION IS LATENCY-BOUND, and at 1080p it is what the export waits on: ffmpeg's
+# VT hwaccel hands the media engine one frame and waits for it before sending the next, so a
+# second session runs largely in the first one's idle time. MK lap 14 at 1080p, 400 frames each:
+# one decoder 58.3 fps; two, on the clip's two halves, 138.8 fps between them. (Two SOFTWARE
+# decoders gave 72.0 -> 82.0: they share the same cores, so the relay is for the hardware decode.)
+#
+# So the clip is decoded as a RELAY of turns. The decoder running a turn is read live while the
+# next one, started `_RELAY_LEAD` frames before its own turn, decodes ahead into the pool. Each is
+# the same decode entered further in (`build_decode_cmd`'s `start_frame`), and NONE IS TRUSTED ON
+# ARITHMETIC: both decoders deliver the frames around the seam and they must match byte for byte,
+# on frames that all differ from one another (a still picture would match at any offset and
+# prove nothing). Any doubt — a mismatch, a repeated frame, a relay decoder that ended or stalled
+# — and the relay stops handing over: the decoder already running carries on to the end of the
+# clip, which is exactly the one decode this module has always run. It can cost speed, never a
+# pixel.
+_RELAY_TURN = 120        # frames a decoder runs before the next takes over (4 s at 30 fps)
+_RELAY_LEAD = 3          # frames a relay decoder starts before its turn: the seam check's first half
+_RELAY_CHECK = 2         # frames past the seam both decoders still deliver: its second half
+_RELAY_AHEAD = 40        # frames the next decoder may buffer: 40 x 6.2 MB = 249 MB at 1080p
+_RELAY_MAX_FRAME = 1920 * 1080 * 3   # the relay's buffers are sized for frames up to 1080p
+_RELAY_WAIT_S = 5.0      # how long the seam check waits on the next decoder before dropping it
+
+
+class _RelayLeg:
+    """One decoder of the relay: its process, its socket and a reader filling pool buffers."""
+
+    def __init__(self, first: int, proc, sock, pool: _FramePool, frame_bytes: int):
+        self.first = first            # the clip frame its first delivered frame is
+        self.proc, self.sock = proc, sock
+        self.reader = _FrameReader(lambda view: _recv_frame(sock, view), pool, frame_bytes,
+                                   ahead=_RELAY_AHEAD)
+
+    def stop(self) -> None:
+        for step in (self.proc.kill, lambda: self.sock.shutdown(socket.SHUT_RDWR)):
+            try:
+                step()
+            except OSError:
+                pass
+        self.reader.close(lambda: None)
+        try:
+            self.proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001 - a reaped/odd process must not fail the teardown
+            pass
+        self.sock.close()
+
+
+class _DecodeRelay:
+    """The composite's frames, in order, from a relay of decoders (see `_RELAY_TURN`). Drop-in for
+    `_FrameReader` on the painting thread: `get` hands out one clip frame after another."""
+
+    def __init__(self, spawn, first_proc, first_sock, n: int, pool: _FramePool,
+                 frame_bytes: int):
+        self._spawn = spawn           # start_frame -> (proc, sock): the same decode, entered later
+        self._n, self._pool, self._fb = n, pool, frame_bytes
+        self._legs = [_RelayLeg(0, first_proc, first_sock, pool, frame_bytes)]
+        self._i = 0                   # clip frames handed out
+        self._seam = _RELAY_TURN      # where the next leg takes over
+        self._window: list[bytes] = []   # digests of the frames checked at this seam
+        self.handovers = 0            # seams crossed on a relay decoder (for the tests)
+        self.gave_up = False          # a seam failed its check; the running decoder finishes
+        self._lock = threading.Lock()   # `procs` is read by the supervisor thread
+        self._start_next()
+
+    def procs(self) -> list:
+        with self._lock:
+            return [leg.proc for leg in self._legs]
+
+    def _start_next(self) -> None:
+        """Spawn the next leg, if the clip has a turn left that is worth one."""
+        if self.gave_up or self._seam + _RELAY_TURN // 2 >= self._n:
+            return
+        proc, sock = self._spawn(self._seam - _RELAY_LEAD)
+        with self._lock:
+            self._legs.append(_RelayLeg(self._seam - _RELAY_LEAD, proc, sock, self._pool,
+                                        self._fb))
+
+    def _give_up(self) -> None:
+        with self._lock:
+            dropped = self._legs[1:]
+            del self._legs[1:]
+        for leg in dropped:
+            leg.stop()
+        self.gave_up = True
+
+    def _check(self, buf, abort) -> bool:
+        """Frame `self._i` from BOTH legs: equal, and unlike every frame checked before it."""
+        other = self._legs[1].reader.get(abort, timeout=_RELAY_WAIT_S)
+        if other is None:
+            return False
+        same = other == buf
+        self._pool.give(other)
+        digest = hashlib.sha1(buf).digest()
+        if not same or digest in self._window:
+            return False
+        self._window.append(digest)
+        return True
+
+    def get(self, abort) -> bytearray | None:
+        buf = self._legs[0].reader.get(abort)
+        if buf is None:
+            return None               # the end of the stream (or an abort): the pump decides
+        if len(self._legs) > 1 and self._i >= self._legs[1].first:
+            if not self._check(buf, abort):
+                self._give_up()
+            elif self._i == self._seam + _RELAY_CHECK - 1:
+                # Every frame around the seam matched: the next leg is this decode, aligned.
+                with self._lock:
+                    done = self._legs.pop(0)
+                done.stop()
+                self.handovers += 1
+                self._window.clear()
+                self._seam += _RELAY_TURN
+                self._start_next()
+        self._i += 1
+        return buf
+
+    def close(self, unblock=None) -> None:
+        with self._lock:
+            legs, self._legs = self._legs, []
+        for leg in legs:
+            leg.stop()
+
+
+def _grow_socket_buffer(sock, option: int) -> None:
+    """Ask for a big socket buffer, stepping down to what the kernel allows (best effort: the
+    reader's MSG_WAITALL is correct at any size; a bigger buffer only lets ffmpeg run further
+    ahead of a painter that is busy)."""
+    size = _SOCK_BUFFER
+    while size >= 64 << 10:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, option, size)
+            return
+        except OSError:
+            size //= 2
+
+
+def _recv_frame(sock, view) -> int:
+    """Fill `view` from the decoder's socket: MSG_WAITALL makes it one syscall a frame, made
+    without the GIL. Returns the bytes read — fewer than asked only at the end of the stream."""
+    want, got = len(view), 0
+    while got < want:
+        n = sock.recv_into(view[got:], want - got, socket.MSG_WAITALL)
+        if n == 0:
+            break
+        got += n
+    return got
+
+
+def _stream_read_into(stream, view) -> int:
+    """Fill `view` from a file-like stream (a stand-in decoder's): `readinto` where it has one."""
+    readinto = getattr(stream, "readinto", None)
+    if readinto is not None:
+        return readinto(view) or 0
+    data = stream.read(len(view))
+    view[:len(data)] = data
+    return len(data)
+
+
 class Renderer:
     """Drives the decode → composite → mux pipeline frame by frame. The caller pumps `run_chunk`
     (e.g. from a QThread, or a chunked QTimer on the GUI thread) so the work can be cancelled and a
@@ -3312,6 +3729,20 @@ class Renderer:
         # The progress callback `_run_chunked` is pumping with, so `run_chunk` can report the
         # frames-complete moment from inside the loop (see `_report_frames_done`).
         self._progress_cb = None
+        # --- the pipelined pump (see `_FramePool`); all None on the serial one ---
+        self._pipelined = self._PIPELINED and spec.config.workers != 1
+        self._pool: _FramePool | None = None
+        self._reader: _FrameReader | None = None
+        self._writer: _FrameWriter | None = None
+        self._dec_sock: socket.socket | None = None
+
+    # A subclass whose frames do not come straight off `self._dec` one `_frame_bytes` read at a time
+    # (the compare render assembles two decoders into one frame, indexed by `self._i`) sets this
+    # False and keeps the serial pump, whatever `OverlayConfig.workers` says.
+    _PIPELINED = True
+
+    def _is_aborted(self) -> bool:
+        return self._aborted is not None
 
     # ----------------------------------------------------------------- extension seams
     # The six hooks below exist for ONE subclass: `export_compare.CompareRenderer`, which renders
@@ -3354,7 +3785,10 @@ class Renderer:
     def _extra_procs(self) -> tuple:
         """Subprocesses this render owns BEYOND the encoder and the single decoder. The watchdog's
         kill, `cancel()` and the teardown all sweep these too, so a subclass's extra decoder can
-        never outlive the render or wedge it."""
+        never outlive the render or wedge it. Here: the decode relay's other decoders."""
+        relay = self._reader
+        if isinstance(relay, _DecodeRelay):
+            return tuple(p for p in relay.procs() if p is not self._dec)
         return ()
 
     def _respawn(self, spec: ExportSpec) -> Renderer:
@@ -3378,10 +3812,12 @@ class Renderer:
             if self._spec.is_png_sequence:
                 os.makedirs(self._spec.out_path, exist_ok=True)
         else:
-            self._dec = subprocess.Popen(
-                build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
-                                 self._scale_filter),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd = build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
+                                   self._scale_filter)
+            if self._pipelined:
+                self._dec, self._dec_sock = self._spawn_socket_decoder(cmd)
+            else:
+                self._dec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         sync = getattr(self, "_sync", None)
         self._enc = subprocess.Popen(
             build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._encoder,
@@ -3394,7 +3830,107 @@ class Renderer:
         enc_se = getattr(self._enc, "stderr", None)
         self._dec_err = _StderrDrainer(dec_se) if dec_se is not None else None
         self._enc_err = _StderrDrainer(enc_se) if enc_se is not None else None
+        if self._pipelined:
+            self._start_pipeline()
         self._started = True
+
+    def _spawn_socket_decoder(self, cmd: list[str], stderr=subprocess.PIPE):
+        """(process, our socket end): the decoder, writing its rgb24 frames into one end of a
+        socketpair (see `_FramePool` for why a socket). ffmpeg's `pipe:1` is a plain write() to fd
+        1, which a socket takes as it takes a pipe — and a killed decoder closes it the same way,
+        reading as end-of-stream."""
+        ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        _grow_socket_buffer(ours, socket.SO_RCVBUF)
+        _grow_socket_buffer(theirs, socket.SO_SNDBUF)
+        try:
+            proc = subprocess.Popen(cmd, stdout=theirs.fileno(), stderr=stderr)
+        except BaseException:
+            ours.close()
+            raise
+        finally:
+            theirs.close()
+        return proc, ours
+
+    def _spawn_relay_leg(self, start_frame: int):
+        """A relay decoder: this render's decode, entered `start_frame` frames in. Its stderr is
+        not kept — any failure of it only ends the relay (see `_DecodeRelay`)."""
+        cmd = build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
+                               self._scale_filter, start_frame=start_frame)
+        return self._spawn_socket_decoder(cmd, stderr=subprocess.DEVNULL)
+
+    def _relay_ok(self) -> bool:
+        """Whether the decode runs as a relay (`_DecodeRelay`): the HARDWARE decode of a composite
+        (the one a second session speeds up), at a whole-number rate whose turn and lead are whole
+        microseconds (the relay's seek is then exact), with frames up to 1080p (what its buffers
+        are sized for) and at least two turns to share."""
+        fps = round(self._fps)
+        return (bool(self._hwaccel) and not self._overlay_only and fps > 0
+                and abs(self._fps - fps) < 1e-9
+                and (_RELAY_TURN * 1_000_000) % fps == 0
+                and (_RELAY_LEAD * 1_000_000) % fps == 0
+                and self._frame_bytes <= _RELAY_MAX_FRAME
+                and len(self._times) >= 2 * _RELAY_TURN)
+
+    def _start_pipeline(self) -> None:
+        """The buffer pool and the two I/O threads around the painting thread."""
+        assert self._enc is not None and self._enc.stdin is not None
+        frame_bytes = self._out_w * self._out_h * (4 if self._overlay_only else 3)
+        relay = self._pipelined and not self._overlay_only and self._relay_ok()
+        # The relay's next decoder buffers up to `_RELAY_AHEAD` frames of its own on top of the
+        # pump's; two more keep the running decoder from ever waiting on it for a buffer.
+        self._pool = _FramePool(frame_bytes,
+                                _PIPE_FRAMES + (_RELAY_AHEAD + 2 if relay else 0))
+        # The encoder is looked up per write, as the serial pump's own `self._enc.stdin.write`
+        # does, so whatever process `self._enc` is — the one the supervisor kills — is the one fed.
+        self._writer = _FrameWriter(lambda buf: self._enc.stdin.write(buf), self._pool, depth=1)
+        if self._overlay_only:
+            return
+        # A real Popen handed our socket exposes no stdout of its own; a stand-in process (the
+        # tests' doubles) serves its frames from one, and is read from there.
+        stdout = getattr(self._dec, "stdout", None)
+        if stdout is not None:
+            read = lambda view: _stream_read_into(stdout, view)  # noqa: E731
+        elif relay:
+            self._reader = _DecodeRelay(self._spawn_relay_leg, self._dec, self._dec_sock,
+                                        len(self._times), self._pool, self._frame_bytes)
+            return
+        else:
+            sock = self._dec_sock
+            read = lambda view: _recv_frame(sock, view)  # noqa: E731
+        self._reader = _FrameReader(read, self._pool, self._frame_bytes)
+
+    def _stop_pipeline(self, drain: bool) -> None:
+        """End the I/O threads: with `drain`, every frame already painted reaches the encoder
+        first; without it (cancel / a failure), whatever is queued is dropped. Idempotent.
+
+        The drain is BOUNDED, like the encoder reap in `_finish`: the pump flushes while the
+        supervisor still watches (`_flush_frames`), so a wedge there becomes RenderTimeoutError;
+        this is the teardown's own backstop, reached with the supervisor already gone."""
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            deadline = time.monotonic() + 30.0
+            writer.close(lambda: self._is_aborted() or time.monotonic() > deadline,
+                         discard=not drain)
+        reader, self._reader = self._reader, None
+        sock, self._dec_sock = self._dec_sock, None
+
+        def unblock() -> None:
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)   # wakes a recv in progress; close would not
+                except OSError:
+                    pass
+
+        if isinstance(reader, _DecodeRelay):
+            _log.info("decode relay: %d of the clip's seams handed over%s", reader.handovers,
+                      "; a seam check failed, the running decoder finished the clip"
+                      if reader.gave_up else "")
+        if reader is not None:
+            reader.close(unblock)
+        else:
+            unblock()
+        if sock is not None:
+            sock.close()
 
     @property
     def encoder(self) -> str:
@@ -3403,9 +3939,11 @@ class Renderer:
         return self._encoder
 
     def run_chunk(self, n: int = 24) -> bool:
-        """Single-threaded pump: composite up to `n` frames in order (read frame -> paint -> write to
-        encoder). Returns True when complete. THE render engine; `run()` pumps it under the watchdog.
-        A short read = clean end (or NoFramesError); a supervisor kill turns the blocked
+        """The pump: composite up to `n` frames in order (read frame -> paint -> write to encoder).
+        Returns True when complete. THE render engine; `run()` pumps it under the watchdog. On the
+        pipelined pump the read and the write happen on their own threads (see `_FramePool`) and
+        this thread paints; frames still leave in order, and the code below reads the same either
+        way. A short read = clean end (or NoFramesError); a supervisor kill turns the blocked
         read/write into the right typed exception (RenderTimeoutError / CancelledError /
         _EncodeError) so the render never hangs."""
         if self._done:
@@ -3413,11 +3951,14 @@ class Renderer:
         if not self._started:
             self._start()
         assert self._enc is not None
-        stdin = self._enc.stdin
-        assert stdin is not None
+        assert self._enc.stdin is not None
         assert self._dec is not None or self._overlay_only
         for _ in range(n):
             if self._i >= len(self._times):
+                try:
+                    self._flush_frames()        # pipelined: the queued frames reach the encoder
+                except (BrokenPipeError, OSError):
+                    self._encode_pipe_broke()
                 # EVERY FRAME IS WRITTEN, AND THE FILE IS NOT FINISHED. `_finish` closes the
                 # encoder's stdin and waits for ffmpeg to write the trailer, which is 1.6-5.7 s of
                 # real work on D24 (12.1 % of one 2160p export's wall clock) with nothing left to
@@ -3429,7 +3970,7 @@ class Renderer:
                 self._report_frames_done()
                 self._finish()
                 return True
-            raw = self._read_source_frame()
+            raw = self._next_source_frame()
             if raw is None:
                 # A short read means ONE of four things:
                 #   * the supervisor killed the decoder on a stall/cancel -> abort loudly;
@@ -3447,6 +3988,10 @@ class Renderer:
                 # An overlay-only render has no decoder and therefore no short read: its frame
                 # count is `frame_times` and nothing else, so the loop simply runs to it.
                 self._raise_if_aborted()
+                try:
+                    self._flush_frames()    # what was painted is written, as on the serial pump
+                except (BrokenPipeError, OSError):
+                    self._encode_pipe_broke()
                 produced = self._i
                 planned = len(self._times)
                 self._finish()
@@ -3462,16 +4007,43 @@ class Renderer:
                 self._ran_short = planned - produced
                 return True
             try:
-                stdin.write(self._compose_frame(raw))
+                self._emit(raw, self._compose_frame(raw))
             except (BrokenPipeError, OSError):
-                # The encoder stopped accepting input. Distinguish a watchdog/cancel kill (the
-                # supervisor broke the pipe to escape a wedge) from a genuine encoder failure.
-                self._raise_if_aborted()
-                self._finish()              # reap; its non-zero-exit branch raises _EncodeError
-                raise _EncodeError(self._encoder, "ffmpeg encode pipe broke") from None
+                self._encode_pipe_broke()
             self._i += 1
             self._last_progress_t = time.monotonic()   # fed the watchdog: a frame made it out
         return False
+
+    def _next_source_frame(self):
+        """`_read_source_frame`, or on the pipelined pump the reader thread's next frame (a pool
+        buffer the painter may paint in place), or None at the end of the stream."""
+        if self._reader is not None:
+            return self._reader.get(self._is_aborted)
+        return self._read_source_frame()
+
+    def _emit(self, raw, frame) -> None:
+        """Hand the painted `frame` to the encoder: written here on the serial pump, queued for the
+        writer thread on the pipelined one (which blocks only while `_PIPE_FRAMES` are in flight).
+        A frame painted into a buffer of its own leaves the source buffer free for the reader."""
+        if self._writer is None:
+            self._enc.stdin.write(frame)
+            return
+        if frame is not raw and self._pool is not None:
+            self._pool.give(raw)
+        self._writer.put(frame, self._is_aborted)
+
+    def _flush_frames(self) -> None:
+        """Block until every frame painted so far is in the encoder's pipe (a no-op on the serial
+        pump, where each one already is). Raises the writer's OSError if a write failed."""
+        if self._writer is not None:
+            self._writer.drain(self._is_aborted)
+
+    def _encode_pipe_broke(self):
+        """The encoder stopped accepting input. Distinguish a watchdog/cancel kill (the supervisor
+        broke the pipe to escape a wedge) from a genuine encoder failure."""
+        self._raise_if_aborted()
+        self._finish()              # reap; its non-zero-exit branch raises _EncodeError
+        raise _EncodeError(self._encoder, "ffmpeg encode pipe broke") from None
 
     def _raise_if_aborted(self) -> None:
         """If the supervisor aborted the render (stall watchdog or cancel), raise the matching
@@ -3492,10 +4064,16 @@ class Renderer:
         precomputed dial snapshot, and return the painted bytes PACKED at out_w*3 for the encoder.
 
         On the overlay-only path there is no `raw` and the frame goes out as RGBA over
-        transparency instead — same painter, same per-frame values, four bytes a pixel."""
+        transparency instead — same painter, same per-frame values, four bytes a pixel. On the
+        pipelined pump that canvas is a pool buffer, painted in place and written from there."""
         if self._overlay_only:
+            buf = None
+            if self._pool is not None:
+                buf = self._pool.take(self._is_aborted)
+                if buf is None:
+                    self._raise_if_aborted()
             return _paint_alpha_frame(self._painter, self._out_w, self._out_h, vals, dial,
-                                      bgra=alpha_input_pix_fmt(self._encoder) == "bgra")
+                                      bgra=alpha_input_pix_fmt(self._encoder) == "bgra", buf=buf)
         return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
     def _report_frames_done(self) -> None:
@@ -3698,6 +4276,9 @@ class Renderer:
         if self._done:
             return
         self._done = True
+        # Pipelined: every frame already painted reaches the encoder before its stdin closes, and
+        # the reader stops (its socket shutdown is what a decoder still mid-stream reads as EOF).
+        self._stop_pipeline(drain=True)
         enc = self._enc
         decs = [p for p in (self._dec, *self._extra_procs()) if p is not None]
         # Stop reading the decoders so they unblock and exit (one may still be mid-stream at our
@@ -3759,6 +4340,8 @@ class Renderer:
                 proc.wait(timeout=5)
             except Exception:
                 pass
+        # After the kill, so neither I/O thread can still be blocked on a live process.
+        self._stop_pipeline(drain=False)
         for drainer in (self._enc_err, self._dec_err):
             if drainer is not None:
                 drainer.join(timeout=1.0)

@@ -253,8 +253,9 @@ def _spec(**kw):
 
 
 def test_decode_cmd_shape():
-    """Decode argv: pre-input -ss t0, -i src, -t (the PLAN's length), scale=WxH + fps filter, rgb24
-    rawvideo to pipe:1, audio/subs/data dropped.
+    """Decode argv: pre-input -ss t0, -i src, -t (the PLAN's length), fps filter + scale=WxH, rgb24
+    rawvideo to pipe:1, audio/subs/data dropped. The fps filter comes FIRST, so the scale only sees
+    the frames the render keeps (byte-identical output — see `build_decode_cmd`).
 
     THE `-t` IS THE PLAN, NOT THE WINDOW, and that is the "one frame short" fix: ffmpeg trims the
     output in the frame's own timebase and ROUNDS, so a window of 70.000000 s at 59.94 fps (4195.8
@@ -267,7 +268,7 @@ def test_decode_cmd_shape():
     # pre-input seek (fast) is BEFORE -i
     assert cmd.index("-ss") < cmd.index("-i")
     assert "/in/src.MP4" in cmd
-    assert any(a == "scale=1920:1080,fps=59.940000" for a in cmd)
+    assert any(a == "fps=59.940000,scale=1920:1080" for a in cmd)
     planned = len(ev.frame_times(100.0, 170.0, 59.94))
     asked = float(cmd[cmd.index("-t") + 1])
     assert abs(asked * 59.94 - planned) < 1e-3, (
@@ -981,10 +982,10 @@ def test_real_fallback_to_libx264_if_ffmpeg(monkeypatch_restore):
 
 
 def test_composite_is_deterministic_across_workers_if_ffmpeg(monkeypatch_restore):
-    """DETERMINISM: the render is single-threaded by design now (the parallel paint pool was removed
-    because it could wedge the GUI export), and the legacy `workers` knob is a no-op. Rendering the
-    same clip with workers=1 and workers=4 must therefore produce BYTE-IDENTICAL frames. Gated on
-    ffmpeg; no media file. (Guards the composite stays stable + frame-exact regardless of the knob.)"""
+    """DETERMINISM: `workers=1` is the serial pump and anything else the pipelined one (the read and
+    the write on threads of their own; the paint stays on one). Rendering the same clip both ways
+    must produce BYTE-IDENTICAL frames. Gated on ffmpeg; no media file. (Guards the composite stays
+    stable + frame-exact whichever pump runs it.)"""
     if not _require_ffmpeg("composite_is_deterministic_across_workers"):
         return
     import hashlib
@@ -2154,10 +2155,11 @@ def test_crop_cuts_before_it_scales_and_fit_pads_without_a_rounding_edge():
                                              frame_fit=ev.FIT_FIT)).scale_filter
     assert "force_original_aspect_ratio=decrease" in fit and "pad=1080:1920" in fit, fit
     assert "force_divisible_by=2" in fit and "color=black" in fit, fit
-    # and the decode argv carries whichever chain it was handed, with the fps pinned after it
+    # and the decode argv carries whichever chain it was handed, with the fps pinned BEFORE it
+    # (the chain then only ever sees the frames the render keeps)
     spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.mp4", lap_id=1, t0=10.0, t1=20.0)
     argv = ev.build_decode_cmd(spec, 1080, 1920, 30.0, scale_filter=crop)
-    assert f"{crop},fps=30.000000" in argv, argv
+    assert f"fps=30.000000,{crop}" in argv, argv
     print("ok frame_geometry: crop cuts before it scales; fit pads")
 
 

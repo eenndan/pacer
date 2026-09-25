@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Eighteen features were built far enough to **measure**, and the measurement said not to ship them. The
+Nineteen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1619,6 +1619,37 @@ for a call, and it caught a test stranded in `test_layering.py` itself while thi
 **What would be new evidence:** a defect the per-file runners let through and pytest's runner
 would have caught, found on this tree; or a way to run pytest without paying its start-up once
 per file.
+
+---
+
+## 19. Painting export frames on several threads, and the ink-only map blit on the overlay-only canvas — refused (E9)
+
+**The claim.** The export painted one frame at a time on one thread, and painting looked like 60 % of
+a 1080p render (cProfile, 57 fps). QPainter on separate QImages is allowed off the GUI thread, so a
+pool of painters should scale it. And the map inset blits a layer the size of the frame on every
+frame, so blitting only its ink should save the rest.
+
+**How it was tested.** MK_18_09_26 lap 14, the real `OverlayPainter` on the real per-frame values:
+600 frames painted by a thread pool of 1/2/3/4/6 (paint only — no decode, no encode); and the
+ink-only blit against the full one on 62 frames a configuration, compared byte for byte.
+
+**Threads do not scale: PySide6 holds the GIL through every QPainter call.** 127.6 / 136.2 / 133.4 /
+128.0 / 123.5 fps at 1080p on 1/2/3/4/6 threads; 49.9 / 51.6 / 52.3 / 51.7 / 51.4 at 4K
+overlay-only. The profile had also overstated the paint: without the profiler a 1080p frame paints
+in 7.2 ms (138 fps) while the decoder alone delivered 60 fps, so the export was waiting on the
+DECODE. What shipped instead (E9): the read and the write on threads of their own (they run
+without the GIL, in the kernel), and a relay of VideoToolbox decoders.
+
+**The ink-only blit changes pixels on the overlay-only canvas.** On the opaque composite it is exact
+(0 of 62 frames differ) and it ships. On the straight-alpha canvas Qt premultiplies and
+un-premultiplies every pixel the full blit visits, which rewrites the nearly transparent edge
+pixels of the g-dial painted before it: 56 of 62 frames differ at 4K (20 pixels on frame 0, a
+channel moving by up to 255 at alpha ~1), 50 of 62 at 1080p. The overlay-only path keeps the full
+blit. (The rewritten pixels are the lossy ones; changing them is a decision of its own.)
+
+**What would be new evidence:** a PySide6 that releases the GIL in QPainter; a paint in worker
+PROCESSES (not built — the painter reads the Session on every frame and each process would need
+its own QGuiApplication and fonts); or a decision to let the overlay-only dial's edge pixels change.
 
 ---
 
