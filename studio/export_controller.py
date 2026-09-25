@@ -353,7 +353,10 @@ class ExportController:
         if image is None:
             self.win.statusBar().showMessage("no verified lap to make a shareable card for", self._status_ms)
             return
-        path = self._export_save_path("Export lap card", "_lap_card.png", "PNG images (*.png)")
+        # The card shows the BEST lap, so its name says which: `GX010067_lap14_card.png`.
+        best = self.win.session.best_lap_id() if hasattr(self.win, "session") else None
+        suffix = f"_lap{lap_label(best)}_card.png" if best is not None else "_lap_card.png"
+        path = self._export_save_path("Export lap card", suffix, "PNG images (*.png)")
         if not path:
             return
         if self._run_export(lambda: self.win._save_card_png(image, path), path):
@@ -858,17 +861,68 @@ class ExportController:
     # by test_app_chrome), so "The render failed: …" used to arrive as an unattributed sentence in a
     # titleless box — the load path was fixed for exactly this and the export never was.
     _EXPORT_FAIL_TITLE = f"{APP_NAME} — could not export video"
-    def _video_out_suffix(self, choice) -> tuple[str, str]:
-        """(default file suffix, file dialog filter) for the chosen output format. A PNG sequence
-        has neither — its output is a DIRECTORY — and `export_overlay_video` asks for one instead
-        of calling this.
+    # The scope row in the words the session log's start line uses.
+    _SCOPE_LOG_WORDS = {
+        export_video.SCOPE_THIS_LAP: "this lap", export_video.SCOPE_BEST_LAP: "best lap",
+        export_video.SCOPE_ALL_LAPS: "all laps", export_video.SCOPE_SESSION: "full session",
+    }
+    def _overlay_name(self, choice, lap: int | None) -> str:
+        """The default name of an overlay export of `lap` (None = the whole recording), from the
+        recording's own stem: `GX010067_lap14_overlay.mp4`, `GX010067_session_overlay.mp4`, the
+        `_overlay_alpha.mov` track, the `_overlay_png` folder (see
+        `export_video.overlay_output_name`).
 
-        The transparent track gets a name of its own. It used to be `<stem>_overlay.mov`, one
+        The transparent track keeps a name of its own. It used to be `<stem>_overlay.mov`, one
         letter from the burned-in `<stem>_overlay.mp4` beside it, and nothing in Finder said which
         of the two was the video to watch."""
-        if choice.config.overlay_only:
-            return "_overlay_alpha.mov", "ProRes 4444 with alpha (*.mov)"
-        return "_overlay.mp4", "MP4 video (*.mp4)"
+        first = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
+        stem = os.path.splitext(os.path.basename(first))[0]
+        return export_video.overlay_output_name(stem, lap, choice.config)
+    def _confirm_replace(self, specs, png: bool, panel_asked: bool) -> bool:
+        """Ask ONCE before an export overwrites what is already there; True to go ahead.
+
+        ALL LAPS REPLACED FILES WITHOUT A WORD. ffmpeg runs with `-y`, and the only overwrite
+        prompt was the save panel's — about the one base name it was handed, which the batch never
+        wrote (EXP-4). A batch is now asked for as a folder, so this is the one question about the
+        files it WILL write: how many of them are already there.
+
+        A PNG SEQUENCE MIXED TWO EXPORTS. Its frames went into a folder that could already hold an
+        earlier sequence's, and a shorter lap left the longer one's last frames behind it (2,023
+        new frames over 2,025 old ones, reported as one export: EXP-5). Replacing it now takes the
+        old frames out first; anything else in the folder is left where it is.
+
+        A single file the save panel already asked about (`panel_asked`) is not asked twice."""
+        def taken(spec) -> bool:
+            out = spec.out_path
+            if png:
+                try:
+                    return os.path.isdir(out) and bool(os.listdir(out))
+                except OSError:
+                    return False
+            return os.path.exists(out)
+        existing = [s for s in specs if taken(s)]
+        if not existing or (panel_asked and len(specs) == 1):
+            return True
+        folder = os.path.dirname(os.path.abspath(existing[0].out_path))
+        if len(specs) > 1:
+            what = "frame folders already hold files" if png else "files already exist"
+            text = (f"{len(existing)} of {len(specs)} {what} — replace them?\n\n{folder}")
+        else:
+            name = os.path.basename(existing[0].out_path)
+            text = (f"{name} already holds {len(os.listdir(existing[0].out_path))} files — "
+                    f"replace the frames in it?\n\n{folder}")
+        box = QMessageBox(QMessageBox.Warning, f"{APP_NAME} — replace existing export?", text,
+                          parent=self.win)
+        replace_btn = box.addButton("Replace", QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(cancel_btn)      # the safe answer is the one Return gives
+        box.exec()
+        if box.clickedButton() is not replace_btn:
+            return False
+        if png:
+            for spec in existing:
+                export_video.remove_png_frames(spec.out_path)
+        return True
     def export_overlay_video(self):
         if self._no_laps_to_export():
             return
@@ -899,18 +953,39 @@ class ExportController:
         choice = self._ask_export_options(lap)
         if choice is None:
             return
-        # A PNG SEQUENCE IS A FOLDER, and asking for it with a save-file prompt would hand back a
-        # file name the renderer then has to reinterpret as a directory. One output, one prompt
-        # that means it.
-        if choice.config.overlay_only and choice.config.alpha_codec == export_video.ALPHA_PNG:
-            out = QFileDialog.getExistingDirectory(
-                self.win, "Choose a folder for the PNG frames",
-                os.path.dirname(self._export_default("")))
-            if not out:
+        scope = choice.scope
+        png = choice.config.overlay_only and choice.config.alpha_codec == export_video.ALPHA_PNG
+        batch = scope == export_video.SCOPE_ALL_LAPS
+        # The lap the NAME carries is the lap the scope renders: "Best lap" names the best lap
+        # whichever one is selected, and the full session names no lap at all.
+        try:
+            ids = export_video.scope_lap_ids(self.win.session, scope, lap)
+        except Exception:  # noqa: BLE001 — a name must never block the export it names
+            ids = [lap]
+        name_lap = None if scope == export_video.SCOPE_SESSION else (ids[0] if ids else lap)
+        home = os.path.dirname(self._export_default(""))
+        lap_path = None
+        if batch or png:
+            # ASKED FOR AS A FOLDER, because a folder is what the user is choosing. A PNG sequence
+            # is a directory of frames, and a save-file prompt would hand back a file name the
+            # renderer had to reinterpret; an All-laps batch writes one file per lap, and a save
+            # panel asked about a base name it never wrote while its real files were replaced
+            # unasked (EXP-4). The frames go into a FRESH subfolder named for the lap, never
+            # loose among the footage the chooser opens on (EXP-5).
+            title = ("Choose a folder for the lap videos" if batch
+                     else "Choose where to put the PNG frames folder")
+            folder = QFileDialog.getExistingDirectory(self.win, title, home)
+            if not folder:
                 return
+            out = os.path.join(folder, self._overlay_name(choice, name_lap))
+            if batch:
+                lap_path = lambda i: os.path.join(folder, self._overlay_name(choice, i))  # noqa: E731
         else:
-            suffix, filt = self._video_out_suffix(choice)
-            out = self._export_save_path("Export overlay video", suffix, filt)
+            filt = ("ProRes 4444 with alpha (*.mov)" if choice.config.overlay_only
+                    else "MP4 video (*.mp4)")
+            out, _ = QFileDialog.getSaveFileName(
+                self.win, "Export overlay video",
+                os.path.join(home, self._overlay_name(choice, name_lap)), filt)
             if not out:
                 return
         # Resolve the scope to one spec per output file. The padding goes through the spec
@@ -918,13 +993,18 @@ class ExportController:
         # video source is resolved — a lead-in can reach back over a chapter seam.
         try:
             specs = export_video.build_scope_specs(
-                self.win.session, out, choice.scope, lap_id=lap, config=choice.config,
-                src_path=src, lead=choice.lead)
+                self.win.session, out, scope, lap_id=lap, config=choice.config,
+                src_path=src, lead=choice.lead, lap_path=lap_path)
         except ValueError as exc:
             QMessageBox.warning(self.win, self._EXPORT_FAIL_TITLE,
                                 f"{APP_NAME} can't export this:\n{exc}")
             return
-        self._run_video_export(specs)
+        if not self._confirm_replace(specs, png, panel_asked=not (batch or png)):
+            for spec in specs:
+                spec.source.cleanup()
+            self.win.statusBar().showMessage("video export cancelled", self._status_ms)
+            return
+        self._run_video_export(specs, scope_text=self._SCOPE_LOG_WORDS.get(scope, scope))
     # ------------------------------------------------------------------ compare export
     _COMPARE_FAIL_TITLE = f"{APP_NAME} — could not export the comparison"
 
@@ -1023,8 +1103,10 @@ class ExportController:
         config = self._ask_compare_options()
         if config is None:
             return
-        out = self._export_save_path("Export comparison video", "_compare.mp4",
-                                     "MP4 video (*.mp4)")
+        # Named for the PAIR, in the lap table's numbers: `GX010067_lap14_vs_lap15_compare.mp4`.
+        out = self._export_save_path(
+            "Export comparison video",
+            f"_lap{lap_label(lap_a)}_vs_lap{lap_label(lap_b)}_compare.mp4", "MP4 video (*.mp4)")
         if not out:
             return
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else None
@@ -1042,7 +1124,7 @@ class ExportController:
         def make_renderer(session, spec):
             return export_compare.CompareRenderer(session, spec, session_b)
 
-        self._run_video_export([spec], make_renderer=make_renderer)
+        self._run_video_export([spec], make_renderer=make_renderer, scope_text="comparison")
 
     @staticmethod
     def _describe_spec(spec, lap: int | None = None) -> str:
@@ -1098,7 +1180,8 @@ class ExportController:
             return head
         seconds = left * elapsed / rendered
         return f"{head} · about {fmt_hms(seconds)} left"
-    def _run_video_export(self, specs, lap: int | None = None, make_renderer=None):
+    def _run_video_export(self, specs, lap: int | None = None, make_renderer=None,
+                          scope_text: str = ""):
         """Run `specs` on a worker QThread behind ONE cancellable modal dialog, in order. Starts
         indeterminate ("Preparing…"), flips to a determinate bar on the first frame's progress, and
         ALWAYS reaches a terminal state: the modal comes down the moment the render stops, whatever
@@ -1132,7 +1215,9 @@ class ExportController:
 
         `make_renderer` is handed straight to the worker and is how the distance-locked COMPARE
         export reuses this whole apparatus — one modal, one cancel, one failure dialog, one
-        completion card — instead of growing a second copy of it."""
+        completion card — instead of growing a second copy of it.
+
+        `scope_text` is the scope row in words, for the session log's start line (HEALTH-3)."""
         specs = list(specs) if isinstance(specs, (list, tuple)) else [specs]
         if not specs:
             return
@@ -1180,6 +1265,8 @@ class ExportController:
                 # on the worker's thread (the probe and the disk query can block) while the
                 # dialog still says "Preparing…", and it refuses only what plainly cannot fit.
                 worker.preflight = lambda: export_video.guard_free_space(specs)
+            worker.log_scope = (f"{scope_text}, file {i + 1} of {total_files}" if total_files > 1
+                                else scope_text)
             state["worker"] = worker
             self.win._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
             # AND put it in the DRAINED set. It was held on that attribute and nowhere else, so
@@ -1230,6 +1317,9 @@ class ExportController:
                 dlg.hide()
                 _cleanup_all()
                 if message == "cancelled":
+                    if done_paths:
+                        self._batch_cancelled(done_paths, total_files)
+                        return
                     self.win.statusBar().showMessage("video export cancelled", self._status_ms)
                     return
                 # PLAIN LANGUAGE FIRST, the encoder's own words behind Details — the same shape as
@@ -1243,7 +1333,11 @@ class ExportController:
                 box = QMessageBox(QMessageBox.Warning, self._EXPORT_FAIL_TITLE,
                                   f"{APP_NAME} {what} the overlay video.\n\n"
                                   f"{self._export_failure_message(message, spec.out_path)}")
-                box.setDetailedText(message)
+                # A refusal's message is the guard's own sentence and is already the body: behind
+                # Show Details it only said the same thing twice (EXP-6). Everything else keeps the
+                # encoder's words there, for a bug report.
+                if not export_video.is_refused_for_space(message):
+                    box.setDetailedText(message)
                 box.addButton(QMessageBox.Close)
                 box.exec()
 
@@ -1261,6 +1355,28 @@ class ExportController:
         dlg.canceled.connect(on_cancel)
         _start(0)
         dlg.exec()
+    def _batch_cancelled(self, kept: list[str], total: int) -> None:
+        """A batch cancelled after some of its files had FINISHED says which ones it kept (EXP-9).
+
+        Cancel removes the file in flight, and only that one: the laps already written are whole,
+        correct exports and stay. The status line used to say "video export cancelled" and no
+        more, so an 18 MB lap-1 file sat in the folder unmentioned — a cancel that reads as "nothing
+        was written" while something was."""
+        folder = os.path.dirname(os.path.abspath(kept[0]))
+        names = [os.path.basename(p) for p in kept]
+        listed = "\n".join(names[:5]) + (f"\n… and {len(names) - 5} more" if len(names) > 5 else "")
+        files = "file" if len(kept) == 1 else "files"
+        box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export cancelled",
+                          f"{APP_NAME} stopped the export after {len(kept)} of {total} {files}. "
+                          f"The finished {files} {'was' if len(kept) == 1 else 'were'} kept:\n\n"
+                          f"{listed}\n\n{folder}", parent=self.win)
+        reveal_btn = box.addButton("Reveal in Finder", QMessageBox.ActionRole)
+        box.setDefaultButton(box.addButton("Done", QMessageBox.AcceptRole))
+        box.exec()
+        self.win.statusBar().showMessage(
+            f"video export cancelled — kept {len(kept)} finished {files}", self._status_ms)
+        if box.clickedButton() is reveal_btn:
+            self.win._reveal_in_finder(folder)
     def _video_export_finished(self, out_paths, spec=None, lap: int | None = None,
                                syncs=None) -> None:
         """The one thing a finished export owes the user: a plain sentence saying it finished, and

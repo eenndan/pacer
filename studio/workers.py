@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from PySide6.QtCore import QThread, Signal
 
@@ -29,6 +30,10 @@ class VideoExportWorker(QThread):
     # builds this worker's shape, and it runs here rather than on the UI thread because it asks the
     # disk and ffprobes the source, either of which can block on a slow or network volume.
     preflight = None
+    # What the USER asked for, in words ("this lap", "all laps, file 3 of 19"), for the session
+    # log's start line. The renderer knows the lap and everything it resolved; only the caller
+    # knows the scope row that produced this spec. Optional like `preflight`.
+    log_scope = ""
 
     def __init__(self, session, spec, make_renderer=None):
         """`make_renderer(session, spec)` builds the renderer this worker drives; the default is the
@@ -53,30 +58,68 @@ class VideoExportWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        # THE SESSION LOG GETS ONE LINE WHEN A RENDER STARTS AND ONE WHEN IT ENDS, whatever the
+        # ending (HEALTH-3). Before this an export left no trace in pacer.log at all, so "the
+        # export was slow" or "it failed" could not be answered from the one file a shipped build
+        # keeps: not the encoder, not the decode path, not the frame size, not the time it took.
+        out = self._spec.out_path
+        # Whether the output was there before this render: a PNG folder the render created goes
+        # with its frames on the way out of a cancel; one that was already there stays.
+        self._out_existed = os.path.exists(out)
+        t_start = time.monotonic()
+        renderer = None
         try:
             if self.preflight is not None:
                 self.preflight()
             renderer = self._make_renderer(self._session, self._spec)
+            describe = getattr(renderer, "describe", None)
+            _log.info("export started: %s%s", f"{self.log_scope}: " if self.log_scope else "",
+                      describe() if callable(describe) else os.path.abspath(out))
+            t_start = time.monotonic()
             self.result = renderer.run(progress=lambda d, t: self.progress.emit(d, t),
                                        cancel=lambda: self._cancelled)
+            took = time.monotonic() - t_start
+            frames = int(getattr(self.result, "frames", 0) or 0)
+            _log.info("export finished: %d frames in %.1f s (%.1f fps), %s -> %s", frames, took,
+                      frames / took if took > 0 else 0.0,
+                      export_video.fmt_bytes(export_video.output_bytes(out)), os.path.abspath(out))
             self.finished_export.emit(True, "")
         except export_video.InsufficientSpaceError as exc:
             # REFUSED BEFORE A FRAME WAS RENDERED, so there is no partial output to drop — and
             # what IS at the output path (a previous export the user said to replace) must
             # survive a refusal that wrote nothing.
+            _log.info("export refused before rendering: %s", exc)
             self.finished_export.emit(False, str(exc))
         except export_video.CancelledError:
+            self._log_end("cancelled", renderer, t_start)
             self._cleanup_partial()
             self.finished_export.emit(False, "cancelled")
         except Exception as exc:  # surfaced in a dialog by the GUI thread
+            first = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:200]
+            self._log_end(f"failed ({first})", renderer, t_start)
             self._cleanup_partial()
             self.finished_export.emit(False, str(exc))
 
+    def _log_end(self, how: str, renderer, t_start: float) -> None:
+        """The end line of a render that did not finish: how far it got and how long it ran."""
+        written = getattr(renderer, "frames_written", None)
+        done, planned = written() if callable(written) else (0, 0)
+        _log.info("export %s after %d of %d frames, %.1f s -> %s", how, done, planned,
+                  time.monotonic() - t_start, os.path.abspath(self._spec.out_path))
+
     def _cleanup_partial(self):
-        """Drop a partially-written output so cancel/error leaves no broken MP4."""
+        """Drop a partially-written output so cancel/error leaves no broken MP4 — and no frames.
+
+        A PNG sequence's output is a FOLDER, which `os.remove` refuses; the error was swallowed,
+        so a cancelled sequence kept every frame it had written (885 PNGs, 41.2 MB: EXP-5). Its
+        frames go instead, and the folder with them when this render created it."""
+        out = self._spec.out_path
         try:
-            if os.path.exists(self._spec.out_path):
-                os.remove(self._spec.out_path)
+            if getattr(self._spec, "is_png_sequence", False) or os.path.isdir(out):
+                export_video.remove_png_frames(
+                    out, remove_folder=not getattr(self, "_out_existed", True))
+            elif os.path.exists(out):
+                os.remove(out)
         except OSError:
             pass
 

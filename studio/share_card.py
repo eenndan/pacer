@@ -14,9 +14,9 @@ TWO LAYERS, deliberately split so the numbers are testable without Qt:
     degraded timing as a verified brag. app.py greys the actions out when ``blocked`` and stamps
     the render when ``stamp`` is set — this module decides, the views obey.
   * ``render_card(data, map_png, *, palette)`` — the Qt composition (QImage + QPainter). It takes
-    the map thumbnail as PNG BYTES (app.py grabs the live MapView widget via the SAME
-    QWidget.grab → QImage → PNG path the HTML report uses), so the pure layer stays Qt-free and
-    the render never reinvents map rendering.
+    the map thumbnail as PNG BYTES, drawn by ``lap_map_png`` from the best lap's own trace on the
+    live map's speed ramp — no longer grabbed off the live MapView, which put whatever the app was
+    showing on the card (EXP-3).
 
 Honesty rules (single-sourced here so both the menu action and the toast obey them):
   * PROVISIONAL start line (``not session.timing_verified``) OR no valid best lap ⇒ ``blocked``
@@ -33,10 +33,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+import numpy as np
+from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 
-from . import coaching, theme, units
+from . import coaching, map_render, theme, units
 from ._signal import fmt_time
 
 # The card is a portrait-ish social image. 1080×1350 is Instagram's 4:5 portrait — the most
@@ -425,3 +426,62 @@ def card_to_png(image: QImage) -> bytes:
     buf.open(QIODevice.WriteOnly)
     image.save(buf, "PNG")
     return bytes(buf.data())
+
+
+# The thumbnail is drawn at the size the plate shows it (never resampled), inside this margin.
+_MAP_THUMB_PAD = 28
+_MAP_LINE_PX = 7.0
+
+
+def lap_map_png(session, lap_id: int | None, *, unit: str | None = None) -> bytes | None:
+    """The card's map: `lap_id`'s own trace, speed-coloured on the live map's speed ramp, as PNG
+    bytes sized for the plate. None when the lap has no drawable trace (the card then has no map).
+
+    DRAWN FROM DATA, NOT GRABBED (EXP-3). The thumbnail used to be a grab of the live MapView, so
+    the card carried whatever the app happened to show: three cards of one session, all headed
+    "BEST LAP 1:07.479", had three different maps — green brake triangles after the load, corner
+    stars after selecting lap 15, orange triangles once the playhead had wandered into lap 3 —
+    none with a key, all with stray GPS scribbles off the circuit. The card states the best lap,
+    so its map is the best lap: that lap's samples and nothing else, no glyph layers, the same
+    picture whatever the window was doing when Share was pressed.
+
+    The colours are the live speed rainbow's own (`map_render.rainbow_channel` + the palette's
+    `rainbow_colors`), GPS-dropout gaps included, so the colour-blind palette recolours it too."""
+    try:
+        ch = session.lap_channels(lap_id)
+        xs, ys = np.asarray(ch["x_m"], float), np.asarray(ch["y_m"], float)
+        got = map_render.rainbow_channel("speed", ch["t_telemetry_s"], xs, ys,
+                                         ch["speed_kmh"], ch["dist_m"], None, None, unit)
+    except Exception:  # noqa: BLE001 — a card without its map beats no card
+        return None
+    ok = np.isfinite(xs) & np.isfinite(ys)
+    if ok.sum() < 2:
+        return None
+    seg = np.asarray(got[0]) if got is not None and got[0] is not None else None
+    if seg is None:           # a flat speed trace: one colour, the middle of the ramp
+        seg = np.full(len(xs) - 1, theme.MAP_RAINBOW_N // 2)
+    x0, x1 = float(xs[ok].min()), float(xs[ok].max())
+    y0, y1 = float(ys[ok].min()), float(ys[ok].max())
+    w = MAP_PLATE_W - MAP_PLATE_INNER
+    h_max, h_min = MAP_PLATE_H_MAX - MAP_PLATE_INNER, MAP_PLATE_H_MIN - MAP_PLATE_INNER
+    scale = min((w - 2 * _MAP_THUMB_PAD) / ((x1 - x0) or 1.0),
+                (h_max - 2 * _MAP_THUMB_PAD) / ((y1 - y0) or 1.0))
+    h = int(min(h_max, max(h_min, (y1 - y0) * scale + 2 * _MAP_THUMB_PAD)))
+    # Centred, north up: local metres run y-UP, image rows run down.
+    px = w / 2 + scale * (xs - (x0 + x1) / 2)
+    py = h / 2 - scale * (ys - (y0 + y1) / 2)
+    img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    colours = [QColor(c) for c in theme.rainbow_colors(theme.MAP_RAINBOW_N)]
+    for i in range(len(seg)):
+        b = int(seg[i])
+        if b < 0 or not (ok[i] and ok[i + 1]):
+            continue            # a GPS dropout, or a sample with no position: no chord across it
+        pen = QPen(colours[b], _MAP_LINE_PX)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        p.drawLine(QPointF(px[i], py[i]), QPointF(px[i + 1], py[i + 1]))
+    p.end()
+    return card_to_png(img)

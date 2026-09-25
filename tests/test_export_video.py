@@ -2053,7 +2053,7 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     # nothing was written rather than that the disk ran out while writing.
     from studio import export_video as EV
     refusal = ("This export would take about 3.4 GB, and the disk holding /Users/x/Movies has "
-               "900 MB free — not enough for even the smallest the export could come out at (2.0 GB).")
+               "900 MB free; even the smallest this export could be is 2.0 GB.")
     assert EV.is_refused_for_space(refusal) and not EV.is_out_of_space(refusal)
     said = ExportController._export_failure_message(refusal, "/Users/x/Movies/lap.mp4")
     assert said.startswith(refusal) and "Nothing was written" in said, said

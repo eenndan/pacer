@@ -500,6 +500,21 @@ def resolve_video_source(chapter_map, t0: float, t1: float,
                        concat_list_path=list_path)
 
 
+def _source_names(source) -> str:
+    """The footage a `VideoSource` reads, by file name — `GX010067.MP4+GX020067.MP4` for a span
+    over a seam — for the session log. Best effort: an unreadable list names its first file."""
+    names = [os.path.basename(getattr(source, "probe_path", "") or "?")]
+    listed = getattr(source, "concat_list_path", None)
+    if listed:
+        try:
+            with open(listed, encoding="utf-8") as f:
+                files = [ln.strip()[len("file '"):-1] for ln in f if ln.startswith("file '")]
+            names = [os.path.basename(p) for p in files] or names
+        except OSError:
+            pass
+    return "+".join(names)
+
+
 def _mk_concat_list(chapters_span, tmp_dir: str) -> str:
     """Write an ffmpeg concat-demuxer list file for `chapters_span` into `tmp_dir`; returns its path.
 
@@ -778,6 +793,40 @@ def frame_times(t0: float, t1: float, fps: float) -> np.ndarray:
     return t0 + np.arange(frame_count(t0, t1, fps)) / fps
 
 
+# How far past the finish line an unpadded lap's SOURCE is resolved, so the finish frame
+# (`with_finish_frame`, at most one output frame past the line) is inside it even when the lap ends
+# just before a chapter seam. 50 ms is over one frame at every rate the export writes (>= 20 fps).
+_FINISH_FRAME_REACH_S = 0.05
+
+
+def with_finish_frame(spec, fps: float):
+    """The spec a render actually runs: an UNPADDED lap clip gains its FINISH FRAME, the first
+    frame at or past the finish line, so its last frame shows the lap time.
+
+    WHY. A lap window is half-open and `frame_times` fills [t0, t1), so the last frame of a clip
+    cut on the timing line sits up to one frame BEFORE the finish: its clock read 1:07.465 on the
+    owner's MK lap 14 against the table's 1:07.479 (1:07.898 against 1:07.915 on lap 19). No frame
+    of the shared clip ever showed the lap time. A padded clip always had this frame — its first
+    run-off frame, where the clock freezes on the table value — so one frame of run-off is exactly
+    what an unpadded clip lacked, and the finish is shown on the SAME media frame whatever the
+    padding: 0 s, 5 s or 10 s.
+
+    The other reading, marking the last in-lap frame "finished", was measured and not taken: it
+    freezes the clock on a picture up to 33 ms BEFORE the kart reaches the line, and it would move
+    the freeze one frame earlier in every padded clip too, where it is right today.
+
+    Only a single-lap `ExportSpec` with no run-off gains the frame: a padded clip already has it, a
+    full-session clip has no finish of its own, and the compare / duck-typed specs are not lap
+    clips — hence `type(...) is`, since `CompareSpec` subclasses `ExportSpec` and its clip is
+    pane A's lap exactly. Idempotent: the frame is recorded as `lead_out`, so a second pass leaves
+    it alone."""
+    if (type(spec) is not ExportSpec or spec.follow_laps or spec.lead_out > 0.0
+            or not fps or fps <= 0):
+        return spec
+    step = 1.0 / float(fps)
+    return replace(spec, t1=spec.t1 + step, lead_out=step)
+
+
 def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
     """The output fps for the render: an explicit `cfg.fps` wins; otherwise the source rate, then
     `cfg.fps_cap` caps it (so a 59.94 fps GoPro exports at 30 by default — half the frames, half the
@@ -1039,7 +1088,9 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
     else:
         lap_id = spec.lap_id
         started = t >= spec.lap_t0 - 1e-9
-        finished = t >= spec.lap_t1
+        # The same tolerance as `started`: the finish frame (`with_finish_frame`) lands ON the line
+        # when the lap is a whole number of frames long, and float addition can put it an ulp short.
+        finished = t >= spec.lap_t1 - 1e-9
         clock_t = _telemetry_time(
             session, min(max(t, spec.lap_t0), max(spec.lap_t0, spec.lap_t1 - _LAP_CLOCK_EPS)))
     i = session.index_at_time(tt)
@@ -1896,6 +1947,7 @@ def _spec_plan(spec, probe) -> _SpecPlan | None:
     try:
         out_w, out_h, fps = spec.output_frame(probe)
         codec = output_codec(spec.config)
+        spec = with_finish_frame(spec, fps)     # the frames the render will really write
         est = estimate_output_bytes(out_w, out_h, fps, clip_seconds(spec.t0, spec.t1, fps),
                                     spec.config.quality, codec)
         return _SpecPlan(est, codec, frame_count(spec.t0, spec.t1, fps))
@@ -2036,7 +2088,7 @@ class InsufficientSpaceError(RuntimeError):
 # What `is_refused_for_space` matches on, so the dialog's sentence and the error text cannot drift
 # apart (the same idiom as `_TRUNCATED_MARKER`). Deliberately none of `_NO_SPACE_MARKERS`: a
 # refusal is not a disk that ran out mid-render, and the dialog says different things for the two.
-_REFUSED_FOR_SPACE_MARKER = "not enough for even the smallest"
+_REFUSED_FOR_SPACE_MARKER = "even the smallest"
 
 
 def is_refused_for_space(message: str) -> bool:
@@ -2105,13 +2157,17 @@ def guard_free_space(specs, probe=None) -> None:
         free = free_bytes(folder)
         if free is None or free >= need:
             continue
+        many = group["files"] > 1
         what = (f"These {group['files']} files would take about {fmt_bytes(group['est'])} "
-                f"together" if group["files"] > 1
-                else f"This export would take about {fmt_bytes(group['est'])}")
+                f"together" if many else f"This export would take about {fmt_bytes(group['est'])}")
         have, floor = _fmt_have_and_need(free, need)
+        # One clause per number, in the order they are read: what it takes, what there is, and
+        # the least it could ever take (EXP-6: "not enough for even the smallest the export could
+        # come out at (145 MB)" had lost a noun).
         raise InsufficientSpaceError(
-            f"{what}, and the disk holding {folder} has {have} free — "
-            f"{_REFUSED_FOR_SPACE_MARKER} the export could come out at ({floor}).")
+            f"{what}, and the disk holding {folder} has {have} free; "
+            f"{_REFUSED_FOR_SPACE_MARKER} {'these files' if many else 'this export'} could be "
+            f"is {floor}.")
 
 
 # --------------------------------------------------------------------------- compositing
@@ -2762,6 +2818,10 @@ def _strip_runs(session, vals: OverlayValues, lap_t0: float, is_best: bool,
         span = le - ls
         tt = _telemetry_time(session, vals.t)
         elapsed = 0.0 if span <= 0 else min(max(tt - ls, 0.0), span)
+        if vals.lap_finished and span > 0:
+            # Past the line the clock IS the lap time, exactly — not a clock-conversion round trip
+            # an ulp short of it (see `with_finish_frame`).
+            elapsed = span
         frac = 0.0 if span <= 0 else elapsed / span
     else:
         frac = 0.0
@@ -3689,6 +3749,11 @@ class Renderer:
             if self._sync is not None and self._sync.t0 != spec.t0:
                 spec = replace(spec, t0=self._sync.t0, lead_in=spec.lap_t0 - self._sync.t0)
                 self._spec = spec
+        # An unpadded lap clip ends ON its finish, not a frame short of it (`with_finish_frame`).
+        # Resolved here because it is one frame at THIS rate; every command, the frame plan and
+        # the painter's budget below read the widened spec.
+        spec = with_finish_frame(spec, self._fps)
+        self._spec = spec
         self._times = frame_times(spec.t0, spec.t1, self._fps)
         # The painter is handed the SAME fps, because its pill budget replays these very frame
         # times to learn what it will draw (see `_burned_runs`).
@@ -3763,6 +3828,39 @@ class Renderer:
         chain produces exactly that frame; a compare render returns the whole two-pane frame but a
         filter that produces ONE PANE, because each of its decoders fills half the picture."""
         return frame_geometry(src_w, src_h, self._spec.config)
+
+    def describe(self) -> str:
+        """The facts of this render for the session log's start line (HEALTH-3): what it holds,
+        which lap, from which footage, the frame it writes and at what rate, the encoder, the
+        decode, whether the relay decode runs, and where the output goes. Every fact is the one
+        this object RESOLVED (the probe, the encoder session, the relay test), not the request, so
+        a slow export's log line says what actually ran. Read with getattr throughout: the compare
+        renderer shares it and carries no overlay-only choice."""
+        spec = self._spec
+        cfg = getattr(spec, "config", None)
+        if getattr(spec, "source_b", None) is not None:
+            content = "comparison"
+        elif getattr(cfg, "overlay_only", False):
+            content = ("overlay-only PNG sequence" if getattr(spec, "is_png_sequence", False)
+                       else "overlay-only ProRes 4444")
+        else:
+            content = "burned-in"
+        if getattr(spec, "follow_laps", False):
+            what = "full session"
+        else:
+            best = " (best)" if getattr(spec, "is_best", False) else ""
+            what = (f"lap {lap_label(spec.lap_id)}{best}, run-up {spec.lead_in:.2f} s / "
+                    f"run-off {spec.lead_out:.2f} s")
+        relay = self._pipelined and not self._overlay_only and self._relay_ok()
+        return (f"{content}, {what}, source {_source_names(spec.source)}, "
+                f"{self._out_w}x{self._out_h}@{self._fps:g} fps, {len(self._times)} frames, "
+                f"encoder {self._encoder}, {'hardware' if self._hwaccel else 'software'} decode, "
+                f"relay {'on' if relay else 'off'} -> {os.path.abspath(spec.out_path)}")
+
+    def frames_written(self) -> tuple[int, int]:
+        """(frames composited so far, frames planned) — what a cancel or a failure got through,
+        for the session log's end line."""
+        return int(self._i), len(self._times)
 
     def _make_painter(self):
         """The object that paints the overlays onto each composited frame."""
@@ -4382,7 +4480,10 @@ def build_lap_spec(session, out_path: str, lap_id: int,
     t0, t1 = lap_window_for_export(session, lap_id, lead_in, lead_out)   # never None here
     chapter_map = getattr(session, "chapters", None)
     if chapter_map is not None and getattr(chapter_map, "chapters", None):
-        source = resolve_video_source(chapter_map, t0, t1)
+        # An unpadded clip renders one frame past its finish (`with_finish_frame`), so its source
+        # has to reach that far — into the next chapter when the lap ends just before a seam.
+        reach = _FINISH_FRAME_REACH_S if t1 <= lap_t1 else 0.0
+        source = resolve_video_source(chapter_map, t0, t1 + reach)
     else:
         path = src_path or getattr(session, "video_path", None)
         if not path:
@@ -4492,9 +4593,76 @@ def lap_output_path(out_path: str, lap_id: int) -> str:
     return f"{stem}_lap{lap_label(lap_id)}{ext}"
 
 
+def overlay_output_name(stem: str, lap_id: int | None,
+                        config: OverlayConfig | None = None) -> str:
+    """The default NAME of an overlay export of `lap_id` (None = the whole recording) from the
+    recording `stem`, by what the file holds: `GX010067_lap14_overlay.mp4`,
+    `GX010067_session_overlay.mp4`, `GX010067_lap14_overlay_alpha.mov` for the ProRes track, and
+    `GX010067_lap14_overlay_png` for a PNG sequence — a FOLDER, so it has no extension.
+
+    THE LAP IS IN THE NAME BECAUSE THE OWNER PUT IT THERE. His own exports read
+    `GX010065_lap22_overlay.mp4` and `…_lap23_overlay.mp4`; #262 dropped the lap when the Scope row
+    arrived, and every export then proposed `GX010067_overlay.mp4` whatever the lap, so the second
+    lap's clip either replaced the first or had to be renamed by hand, and nothing in Finder said
+    which lap a file held. `lap_label` is the number the lap table shows."""
+    what = "session" if lap_id is None else f"lap{lap_label(lap_id)}"
+    cfg = config or OverlayConfig()
+    if cfg.overlay_only and cfg.alpha_codec == ALPHA_PNG:
+        tail = "_overlay_png"
+    elif cfg.overlay_only:
+        tail = "_overlay_alpha.mov"
+    else:
+        tail = "_overlay.mp4"
+    return f"{stem}_{what}{tail}"
+
+
+def png_frame_files(folder: str) -> list[str]:
+    """The frame files a PNG-sequence render writes into `folder` (`_PNG_PATTERN`), sorted, and
+    nothing else that may share the folder. [] for a folder that is not there."""
+    prefix, suffix = _PNG_PATTERN.split("%06d")
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    return sorted(os.path.join(folder, n) for n in names
+                  if n.startswith(prefix) and n.endswith(suffix)
+                  and len(n) == len(prefix) + 6 + len(suffix) and n[len(prefix):-len(suffix)].isdigit())
+
+
+def remove_png_frames(folder: str, remove_folder: bool = False) -> int:
+    """Delete the frames a PNG-sequence render wrote into `folder`, and the folder itself when
+    `remove_folder` and nothing else is left in it. Returns how many frames went. Best effort: a
+    frame that cannot be removed is left, never raised about — this runs on the way out of a
+    cancel or a failure, which already has its own message to deliver."""
+    gone = 0
+    for path in png_frame_files(folder):
+        try:
+            os.remove(path)
+            gone += 1
+        except OSError:
+            pass
+    if remove_folder:
+        try:
+            os.rmdir(folder)             # only an EMPTY folder: anything else in it stays
+        except OSError:
+            pass
+    return gone
+
+
+def output_bytes(path: str) -> int:
+    """What an export put on disk: the file's size, or a PNG sequence's frames summed. 0 when
+    there is nothing there."""
+    try:
+        if os.path.isdir(path):
+            return sum(os.path.getsize(f) for f in png_frame_files(path))
+        return os.path.getsize(path) if os.path.isfile(path) else 0
+    except OSError:
+        return 0
+
+
 def build_scope_specs(session, out_path: str, scope: str, lap_id: int | None = None,
                       config: OverlayConfig | None = None, src_path: str | None = None,
-                      lead: float = 0.0) -> list[ExportSpec]:
+                      lead: float = 0.0, lap_path=None) -> list[ExportSpec]:
     """Every `ExportSpec` a scope renders, in order — one for the three lap scopes, one PER LAP for
     All laps, one for the whole session. The caller owns each spec's `source` and must
     `cleanup()` it.
@@ -4509,14 +4677,19 @@ def build_scope_specs(session, out_path: str, scope: str, lap_id: int | None = N
     lap N+1 at its tail — footage from a neighbouring lap, in a file named for this one. That is
     the artefact a competitor's per-lap export ships silently; here the picker says it in words
     before the render starts, the overlay marks the run-up as pending rather than running, and
-    the default is no padding at all."""
+    the default is no padding at all.
+
+    `lap_path(lap_id)` names each file of a multi-lap batch; without it they are
+    `lap_output_path(out_path, lap_id)`. The app passes it, because an All-laps batch is asked for
+    as a FOLDER and each file carries the owner's own `<stem>_lap{N}_overlay.mp4` name."""
     if scope == SCOPE_SESSION:
         return [build_session_spec(session, out_path, config=config, src_path=src_path)]
     ids = scope_lap_ids(session, scope, lap_id)
     if not ids:
         raise ValueError("this recording has no lap to export for that scope")
     multi = len(ids) > 1
-    return [build_lap_spec(session, lap_output_path(out_path, i) if multi else out_path, i,
+    name = lap_path or (lambda i: lap_output_path(out_path, i))
+    return [build_lap_spec(session, name(i) if multi else out_path, i,
                            config=config, src_path=src_path, lead_in=lead, lead_out=lead)
             for i in ids]
 
