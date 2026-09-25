@@ -8,17 +8,42 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.4.2] — 2026-09-25
 
+Everything merged since v0.4.1: 3 pull requests, #415 to #417, all from the 2026-09-25 hands-on QA.
+Each line names its pull request (`github.com/eenndan/pacer/pull/<N>`), where the measurements
+behind it live.
+
+### Highlights
+
+- **A recording opens on its best lap's picture, and ▶ plays that lap.** It opened black, ▶
+  started at 0:00 or at chapter 2's start, and a best lap in chapter 2 read "loading next chapter…"
+  for 7.5 s; on four recordings tested, ▶ now starts on the ★ lap (#417)
+- **Compare and scrubbing show the frame you asked for.** Compare's pane B plays lap B, not the
+  recording's start; a paused jump into another chapter shows its frame, not black; a scrub drag
+  moves the picture 3.1-3.6 times a second on MK's 4K footage, was 0.9 (#417)
+- **Exports say which lap, and an unpadded clip ends on the lap time.** Names carry the lap again
+  (`GX010067_lap14_overlay.mp4`); a clip cut on the timing line gains its finish frame, so MK's
+  best lap with no run-off ends on 1:07.479, the table's time, where it read 1:07.465 (#416)
+- **Exports ask before replacing, and clean up after a cancel.** All laps confirms once before it
+  replaces files; a PNG export gets its own lap folder, and a cancel removes what it wrote; the
+  lap card's map draws only the best lap; each video export logs its start and end (#416)
+- **The live map's dot moves on every frame.** It stepped at the GPS's 10 Hz; now it moves
+  between samples on 2,024 of 2,025 playback ticks at 30 fps (was 674), by the rule the exported
+  map already used (#415)
+- **A faster start from source, and honest test reports.** An unchanged build no longer
+  regenerates the bindings (0.1 s, was 1.5-3.5 s), and the missing-"SF Mono" warning is gone; the
+  VideoToolbox checks report Skipped, not Passed, where they cannot run, as on CI (#415)
+
 ### Changed
 
-- Every export writes one line to the session log when it starts and one when it ends. (#416)
-- `pixi run studio` opens 1.5-3.5 s sooner: an unchanged build now takes 0.1 s, and the missing "SF
-  Mono" font no longer costs about 60 ms at every launch (#415)
+- Every video export writes one line to the session log when it starts and one when it ends (#416)
+- `pixi run studio` opens 1.5-3.5 s sooner: an unchanged build now takes 0.1 s, and the missing
+  "SF Mono" font no longer costs about 60 ms at every launch (#415)
 
 ### Fixed
 
 - Opening a recording shows the ★ best lap's frame, and the first ▶ plays that lap: the video was
-  black and ▶ started at 0:00, the paddock, while the table, map and charts showed the best lap
-  (#417)
+  black, and ▶ started at 0:00 or at chapter 2's start, while the table, map and charts showed the
+  best lap (#417)
 - Video compare's pane B starts at lap B; it played the start of the recording (#417)
 - A paused lap click, scrub or map drag into another chapter shows its frame instead of black, and
   opening a recording whose best lap is in chapter 2 no longer reads "loading next chapter…" for 7 s
@@ -26,15 +51,15 @@ All notable changes to Pacer are documented here. The format is based on
 - Dragging the chart cursor or the map dot moves the picture while you drag (3-4 frames a second on
   4K footage); it used to stay frozen until you let go (#417)
 - Export names say which lap again (`GX010067_lap14_overlay.mp4`, `_session_overlay.mp4`,
-  `_lap14_vs_lap15_compare.mp4`, `_lap14_card.png`); PNG frames get their own lap folder. (#416)
-- A clip cut on the timing line now ends on its finish frame, which shows the lap time. (#416)
+  `_lap14_vs_lap15_compare.mp4`, `_lap14_card.png`); PNG frames get their own lap folder (#416)
+- A clip cut on the timing line now ends on its finish frame, which shows the lap time (#416)
 - All laps asks for a folder and confirms once before replacing files; a cancelled batch lists the
-  files it kept. (#416)
+  files it kept (#416)
 - A cancelled PNG sequence removes its frames; re-exporting into a folder of frames confirms and
-  replaces them instead of mixing two exports. (#416)
-- The lap card's map is the best lap's own trace, drawn from data, not a grab of the live map.
+  replaces them instead of mixing two exports (#416)
+- The lap card's map is the best lap's own trace, drawn from data, not a grab of the live map
   (#416)
-- The disk-space refusal reads as one sentence and is not repeated behind Show Details. (#416)
+- The disk-space refusal reads as one sentence and is not repeated behind Show Details (#416)
 - The map dot glides with the video instead of jumping ten times a second: it moves on every frame,
   between the GPS samples, as the exported map's dot already did (#415)
 
