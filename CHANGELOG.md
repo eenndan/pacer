@@ -6,6 +6,34 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-25
+
+### Changed
+
+- Video export is 1.3-2x faster, every frame unchanged: MK's best lap renders in ~50 s at 4K (was
+  ~100 s) and ~26 s at 1080p (was ~35 s); decode, overlay and encode now run side by side. (#412)
+- An overlay-only ProRes export is named `<recording>_overlay_alpha.mov`, apart from the burned-in
+  `<recording>_overlay.mp4` beside it (#410)
+- The picker and the finished message say an overlay-only .mov plays black in QuickTime, timed on
+  the camera's clock, and name the row that exports a video to watch (#410)
+- Overlay-only ProRes 4444 renders on VideoToolbox where it keeps a true alpha, with prores_ks as
+  the fallback: a 4K MK lap takes 65 s instead of 145 s, a 1080p one 24 s instead of 42 s (#408)
+- The export picker gives "Source" a size, and every row a time to render naming its encoder; the
+  dialog names remembered overlay-only or Source choices and offers "Use defaults" (#408)
+
+### Fixed
+
+- The video export opens on "Footage with the overlay burned in" every time: "Overlay only" is
+  chosen per export, so a remembered one no longer turns the next export into a black track (#410)
+- The exported map's comet tail now ends on the marker and trails it by the last 2.4 s at every
+  resolution; it used to sit still elsewhere on the lap, and ran twice as long at 4K (#409)
+- The exported map marker now glides every frame instead of stepping at the 10 Hz GPS rate, and
+  holds still across a GPS dropout rather than cutting across the infield (#409)
+- Overlay-only exports line up in an editor: 29.97 fps off 59.94 footage, the footage's own timecode
+  embedded, and the finished message says where in which file the clip starts (#409)
+- ProRes overlays are now converted and labelled Rec. 709, so both encoders give the same colours
+  (#408)
+
 ## [0.4.0] — 2026-09-25
 
 Everything merged since v0.3.0: 15 pull requests, #389 and #391 to #404. Each line names its pull
@@ -1407,7 +1435,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/eenndan/pacer/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/eenndan/pacer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eenndan/pacer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/eenndan/pacer/compare/v0.1.0...v0.2.0
