@@ -65,14 +65,17 @@ set(_ctest test_app_support_jail test_footage_checks)
 # COST. ctest starts the highest COST first, but a FRESH build dir — every CI run, every new
 # worktree — has no measured costs, so it ran in registration order and the slowest suites started
 # last (CI's test step: 320 s against a 246 s floor, 2026-09-23). Seconds, measured on the dev Mac
-# at -j4 on 2026-09-24 (test_stats / test_stats_ideal on 2026-09-25, when the IDEAL LAP tests split
-# out of test_stats; test_export_e2e the same day, two real renders). The footage checks (100) and
-# the soaks (200) sit above these on purpose; their functions below say why, and where they are
-# skipped, starting first costs a second.
+# in ONE `pixi run test` at -j4 on 2026-09-25 (165 registrations, 281 s, load ~3). It re-ranks
+# test_central_view_realqt above test_export_video — CI's slowest suite bar the soak (95-157 s),
+# which was costed below it — and adds two suites that had no COST: test_quality_chip_trust, which
+# started, and so finished, 154th-155th of 157 in CI (41-44 s there), and test_export_pipeline (#412,
+# 46-53 s in CI). test_export_video lost its VideoToolbox checks to registrations of their own. The
+# footage checks (100) and the soaks (200) sit above these on purpose; their functions below say
+# why, and where they are skipped, starting first costs a second.
 set(_cost
-    test_export_video 56  test_central_view_realqt 40  test_export_e2e 35  test_pb_toast 35
-    test_stats_ideal 33  test_load_lifecycle 22  test_charts_header_budget 22
-    test_export_pill_budget 20  test_first_run_path 18  test_stats 15)
+    test_stats_ideal 60  test_export_pipeline 58  test_central_view_realqt 55  test_pb_toast 55
+    test_export_e2e 40  test_export_video 38  test_charts_header_budget 33  test_load_lifecycle 29
+    test_export_pill_budget 27  test_first_run_path 19  test_quality_chip_trust 18  test_stats 16)
 # ==========================================================================================
 
 # A name in the table that is not a tests/test_*.py would silently configure nothing: fail instead.
@@ -165,6 +168,29 @@ function(add_soak_test file check)
 endfunction()
 
 add_soak_test(test_compare_lifecycle test_toggle_compare_repeatedly_does_not_crash)
+
+# ---- VIDEOTOOLBOX CHECKS (HEALTH-4) ------------------------------------------------------------
+# The export paths only the Apple media engine runs — h264_videotoolbox, the ProRes VideoToolbox
+# encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox` — which CI's runner
+# cannot run. `videotoolbox.<check>` runs `<file>.py --videotoolbox <check>`: without VideoToolbox
+# it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where it used to return
+# early and report PASSED. On the dev Mac it runs, in `test-fast` as well as `test`. A file's
+# VIDEOTOOLBOX_CHECKS and these lines are held one to one by test_videotoolbox_checks.
+function(add_videotoolbox_test file check)
+    add_test(NAME videotoolbox.${check}
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --videotoolbox ${check})
+    set_tests_properties(videotoolbox.${check} PROPERTIES
+                         SKIP_RETURN_CODE 77
+                         LABELS videotoolbox
+                         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+endfunction()
+
+add_videotoolbox_test(test_export_video test_real_videotoolbox_render_if_available)
+add_videotoolbox_test(test_export_video test_a_slow_start_behind_videotoolbox_keeps_the_hardware_encode_if_available)
+add_videotoolbox_test(test_export_video test_the_last_frame_and_the_audio_reach_the_end_on_videotoolbox)
+add_videotoolbox_test(test_export_video test_the_videotoolbox_prores_alpha_round_trip_is_straight)
+add_videotoolbox_test(test_export_video test_real_prores_overlay_on_videotoolbox_matches_the_prores_ks_fallback)
+add_videotoolbox_test(test_export_pipeline test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_serial_frames)
 
 # KEEP THIS LAST. Every registration above runs with PACER_APP_SUPPORT_JAIL=1: the first store path
 # any process in the test's tree resolves is a fresh temp dir (exported to its children, removed at

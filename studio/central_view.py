@@ -1772,8 +1772,8 @@ class CentralView(QWidget):
     def _apply_readout(self, t: float):
         # Resolve lap + trace index ONCE per tick and reuse below.
         lap_id = self.session.lap_at_time(t)   # F3: which lap is on the video
-        i = self.session.index_at_time(t)      # nearest trace sample (marker + speed)
-        self.map.set_marker_index(i)           # F3: red marker (same point set_playhead_time chose)
+        i = self.session.index_at_time(t)      # nearest trace sample (the speed readout)
+        self.map.set_playhead_time(t)          # F3: red marker, interpolated between samples
         self._follow_current_lap(lap_id, t)  # charts auto-follow the playhead's lap (vs best)
         self.table.set_current_lap(lap_id)
         self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map

@@ -131,7 +131,7 @@ algorithm; the service just caches + delegates.
 | [focus.py](focus.py) | The per-track focus list (`focus.json`) and its gated cross-session verdict | — | `test_focus_list` |
 | [stats.py](stats.py) | Stats-page reducers + `SessionStats`: totals, per-lap stats, bands, stints, split/corner grids | — | `test_stats` |
 | [bests.py](bests.py) | Service: best lap, best splits, theoretical best (= the ideal lap), best rolling lap | — | `test_session_pure` |
-| [timeline.py](timeline.py) | Cursor/plot/video conversions: plot-x ↔ media time, lap at time, nearest point | — | `test_timeline` |
+| [timeline.py](timeline.py) | Cursor/plot/video conversions: plot-x ↔ media time, lap at time, nearest point; the map dot's interpolated position (`trace_point_at`) | — | `test_timeline` |
 | [render_cache.py](render_cache.py) | Per-lap map-draw cache: gap-aware trace segments, the reference-centerline donor | — | `test_reference` |
 | [gapfill.py](gapfill.py) | Map-only GPS-gap fill: cross-lap borrow, reference centerline or spline, tagged inferred | — | `test_gapfill` |
 | [reference.py](reference.py) | The georeferenced MK centerline ([`mk_centerline.json`](mk_centerline.json)), loop-to-loop fit | — | `test_reference` |

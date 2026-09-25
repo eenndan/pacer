@@ -862,17 +862,24 @@ W_SEMIBOLD = QFont.Weight.DemiBold  # 600
 # UI stack from QSS any more (see the base rule in _build_qss), so a drift between them would have
 # been invisible.
 #
-# D1-01, DECIDED: KEEP THE NAMES THIS MAC DOES NOT HAVE. QFontDatabase.hasFamily is False here
-# (macOS 26, PySide6 6.11.1) for "-apple-system", "SF Pro Text", "sans-serif", "SF Mono",
-# "JetBrains Mono" and "monospace"; what actually paints is the bundled Inter and, for the mono
-# stack, Menlo. Qt skips an absent name at no cost, and deleting them changes no pixel on any
-# machine this app has been measured on. They stay as the stated PREFERENCE on a machine that has
-# them — which also means such a machine paints the mono stack in a different face than the one
-# measured here. That exposure is now small: no live NUMBER reads the mono stack since U1 (#DiffBox
-# and #PaneBadge paint mono_font), only the timecode #Readout, the Shortcuts KeyCap and
-# _mono_stack_font's Inter-absent fallback.
+# D1-01: THE NAMES THIS MAC DOES NOT HAVE STAY AS THE STATED PREFERENCE — BUT A MISSING NAME IS NOT
+# FREE WHERE QT HAS TO LOOK IT UP. QFontDatabase.hasFamily is False here (macOS 26, PySide6
+# 6.11.1) for "-apple-system", "SF Pro Text", "sans-serif", "SF Mono", "JetBrains Mono" and
+# "monospace"; what actually paints is the bundled Inter and, for the mono stack, Menlo. Qt walks a
+# stack in order and stops at the first face it has, so a missing name AFTER a present one is never
+# looked at: the UI stack, led by the bundled Inter, costs nothing. A missing name that LEADS is
+# different. The first lookup of a family Qt does not have starts a one-off scan of every font's
+# aliases on the GUI thread — "Populating font family aliases took 59 ms. Replace uses of missing
+# font family "SF Mono" with one that exists", in the owner's log on 5 launches of 5 (53-64 ms), during
+# the first paint of the loaded session (HEALTH-5, 2026-09-25). So `register_fonts` narrows the mono
+# stack ONCE to the faces this machine has, keeping their order: Menlo here and on the CI runner,
+# where the pixels are unchanged because Menlo is what painted before, and "SF Mono" first on a
+# machine that has it, as the preference always said. That exposure is small: no live NUMBER reads
+# the mono stack since U1 (#DiffBox and #PaneBadge paint mono_font), only the timecode #Readout, the
+# Shortcuts KeyCap and _mono_stack_font's Inter-absent fallback.
 UI_FAMILIES = ("Inter", "-apple-system", "SF Pro Text", "Helvetica Neue", "sans-serif")
-MONO_FAMILIES = ("SF Mono", "JetBrains Mono", "Menlo", "monospace")
+_MONO_PREFERENCE = ("SF Mono", "JetBrains Mono", "Menlo", "monospace")
+MONO_FAMILIES = _MONO_PREFERENCE          # narrowed by register_fonts() to the faces this Mac has
 UI_STACK = ",".join(f'"{f}"' for f in UI_FAMILIES)
 MONO_STACK = ",".join(f'"{f}"' for f in MONO_FAMILIES)
 
@@ -945,11 +952,17 @@ def register_fonts() -> None:
     name "Inter", which only exists once the TTFs are in the font DB), and six test files proved
     they can drift apart: they called apply_theme alone, so Qt substituted a family for the one the
     theme names and they measured a layout 7 px narrower than the shipped one."""
-    global _fonts_registered, _inter_available, _supports_feature
+    global _fonts_registered, _inter_available, _supports_feature, MONO_FAMILIES, MONO_STACK
     if _fonts_registered:
         return
     _fonts_registered = True
     _supports_feature = _qt_supports_feature()
+    # The mono stack, narrowed to the faces this machine has (see the block over MONO_FAMILIES):
+    # `families()` lists the installed names without the alias scan a missing family triggers. If
+    # none is here, the preference stays as it was and Qt falls back as it always did.
+    installed = set(QFontDatabase.families())
+    MONO_FAMILIES = tuple(f for f in _MONO_PREFERENCE if f in installed) or _MONO_PREFERENCE
+    MONO_STACK = ",".join(f'"{f}"' for f in MONO_FAMILIES)
 
     have_files = all(os.path.exists(os.path.join(_FONTS_DIR, f)) for f in _INTER_FILES)
     if not have_files:
@@ -985,7 +998,7 @@ def ui_font(size: int = BODY, weight: QFont.Weight = W_REGULAR) -> QFont:
 
 def _mono_stack_font(size: int, weight: QFont.Weight) -> QFont:
     """The fallback: a real monospaced face, whose digits are tabular by construction."""
-    f = QFont("SF Mono", size)
+    f = QFont(MONO_FAMILIES[0], size)
     f.setWeight(weight)
     f.setFamilies(list(MONO_FAMILIES))
     f.setPixelSize(size)
@@ -998,9 +1011,9 @@ def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
 
     THE FALLBACK ORDER IS LOAD-BEARING, and getting it wrong is how the first version of this fix
     broke CI. When the tnum round trip fails, switching to the mono stack changes the FACE, and
-    every fitted width in the app is derived from Inter's metrics. `MONO_FAMILIES` leads with
-    "SF Mono" and "JetBrains Mono", neither of which exists on macOS 26 or on the CI runner, so Qt
-    walks to whatever it can find — and the compare strip's picker, whose floor is budgeted against
+    every fitted width in the app is derived from Inter's metrics. The mono stack's preference
+    leads with "SF Mono" and "JetBrains Mono", neither of which exists on macOS 26 or on the CI
+    runner, so what paints is whatever this machine has — and the compare strip's picker, whose floor is budgeted against
     its pane, stood 24 px outside a 152 px pane at view width 311
     (`test_video_view_compare::test_l8_01_...`). Degrading from "aligned digits" to "misaligned
     digits" costs a column its tidiness; degrading to a different typeface costs the layout its
