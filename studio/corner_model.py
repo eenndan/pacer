@@ -1289,8 +1289,8 @@ class CornerModel:
 
         One normalized projection remains, in the other direction and outside this family:
         `Session._brake_rows` maps each lap's brake ONSETS back into the reference odometer by
-        `× ref_total/lap_total` (studio/session.py) for the Stats ▸ BRAKING table and the "brake
-        ~N m later" hint. It projects samples, not windows, and is untouched here."""
+        `× ref_total/lap_total` (studio/session.py) for the Stats ▸ BRAKING table and the Coaching
+        rows' braking-direction line. It projects samples, not windows, and is untouched here."""
         basis = self.basis()
         if basis is None or not basis[0]:
             return None

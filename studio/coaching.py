@@ -287,7 +287,14 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 
 # ------------------------------------------- the braking habit: ONE answer to "how much later?"
 #
-# WHY THIS EXISTS. The app answered the driver's plainest question — "how much later can I brake
+# A RECORD NOW, NOT A LIVE PATH. L7 took the hint below off the Coaching rows, and L8 retired
+# the `BrakeHabit` that carried the cross-lap median to them (no app surface read it any more).
+# What is left of the answer is Stats ▸ BRAKING's column — the same median, through
+# `Session.brake_report` — headed `Bound m (est)` since L8, because it is a model's bound and not
+# room to gain (studio/docs/refused-2026-09.md §16). The table below stays: it is what the
+# retired hint printed, and tests/test_measured_figures.py still re-measures it off the footage.
+#
+# WHY IT EXISTED. The app answered the driver's plainest question — "how much later can I brake
 # into this corner?" — with TWO different numbers on two surfaces, and named neither. The coaching
 # row's hint read the BEST lap's single brake application (`driving.BrakePoint.metres_later` on
 # `best_lap_id()`); Stats ▸ BRAKING's "m later" column read the MEDIAN of that same quantity over
@@ -299,9 +306,9 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # every row): a RANKED row whose best lap has a matched brake application, at least
 # BRAKE_HINT_MIN_M of metres, and an optimum no more than one brake zone (BRAKE_APPROACH_M) past
 # the turn-in, the gate that hint applied. "best lap" is that lap's single `metres_later`,
-# "habit" is the median the BRAKING table's "m later" column prints (+ = could brake later), "laps"
-# is how many clean laps matched an application, and "rank" is the row's place in the evidence
-# table above. The D24 edition, which #344 marked stale after #335 changed corner matching (and D2
+# "habit" is the median the BRAKING table prints (its `Bound m (est)` column since L8; + = the
+# model's point lies past the onset), "laps" is how many clean laps matched an application, and
+# "rank" is the row's place in the evidence table above. The D24 edition, which #344 marked stale after #335 changed corner matching (and D2
 # moved again), is kept in studio/docs/coaching-tables-on-d24.md. Both are timed on the built-in
 # Sandown Park line, the owner's own (Q2). tests/test_measured_figures.py derives the prose below
 # from these cells and, given the footage, re-measures every one:
@@ -333,68 +340,19 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
 # sample of a scattered distribution — the BRAKING table's σ and span columns exist precisely
 # because that scatter is large — and it was the only number on the row that was not.
 
-# A braking habit needs at least this many matched applications before it is a habit. (Measured on
-# the table above, a real recording is well clear of it: every corner on the two working-set
-# recordings matched on at least 9 of its clean laps. This guards a 3-lap session, not a normal
-# one.)
+# A corner's braking is a habit — and its DIRECTION is tested (`brake_directions`, below) — only on
+# at least this many matched applications. (Measured on the table above, a real recording is well
+# clear of it: every corner on the two working-set recordings matched on at least 9 of its clean
+# laps. This guards a 3-lap session, not a normal one.)
 MIN_BRAKE_LAPS = 3
-
-
-@dataclass(frozen=True)
-class BrakeHabit:
-    """One corner's braking habit over the clean laps — the app's SINGLE answer to "how much later
-    could I brake here", and the same number the Stats ▸ BRAKING table's "m later" column shows
-    (both are the median of the same per-lap `driving.BrakePoint.metres_later` list).
-
-    Distances are the REFERENCE (best-lap) odometer, the frame `Opportunity.entry_dist` and the
-    corner windows live in, so a brake point can be named against the corner's own turn-in."""
-
-    cid: int                    # the Corner.cid this habit belongs to
-    n_laps: int                 # clean laps with a matched brake application into this corner,
-    #                             on a corner matched on track (C5: `Session._brake_rows`)
-    metres_later: float       # MEDIAN optimal − actual (+ = you could brake later)
-    optimal_brake_dist: float   # median apex-speed-matched latest sustainable brake point (m)
-    actual_brake_dist: float    # median onset where the driver actually brakes (m)
-    # The OBSERVED middle half of `metres_later` across those laps — the spread the recommendation
-    # is drawn from, never a modelled confidence interval. It is what makes the median checkable:
-    # "~23 m later, and the middle half of your laps wanted 19–26 m" is a claim a driver can test.
-    q25_m: float
-    q75_m: float
-
-
-def brake_habits(cids, rows_by_lap) -> dict[int, BrakeHabit]:
-    """Per-corner braking habits from the SAME per-lap rows `stats.brake_consistency` aggregates.
-
-    `rows_by_lap`: one dict per clean lap, cid → (onset_ref_m, commit_frac | None,
-    metres_later | None, optimal_ref_m | None) — a corner missing from a lap's dict simply had no
-    matched brake application on it. Corners with no matched application anywhere, or with an
-    unusable optimum, are absent from the result rather than present with a fabricated zero.
-
-    The headline `metres_later` is `median` over exactly the list `brake_consistency` medians for
-    its own column, so the two surfaces cannot report different numbers for the same corner."""
-    out: dict[int, BrakeHabit] = {}
-    for cid in cids:
-        vals = [r[cid] for r in rows_by_lap if cid in r]
-        laters = np.asarray([v[2] for v in vals if v[2] is not None], float)
-        optima = np.asarray([v[3] for v in vals if len(v) > 3 and v[3] is not None], float)
-        onsets = np.asarray([v[0] for v in vals if v[0] is not None], float)
-        if len(laters) == 0 or len(optima) == 0 or len(onsets) == 0:
-            continue
-        q25, q75 = np.percentile(laters, [25, 75]) if len(laters) >= 2 else (laters[0], laters[0])
-        out[int(cid)] = BrakeHabit(
-            cid=int(cid), n_laps=len(laters), metres_later=float(np.median(laters)),
-            optimal_brake_dist=float(np.median(optima)),
-            actual_brake_dist=float(np.median(onsets)),
-            q25_m=float(q25), q75_m=float(q75))
-    return out
 
 
 # ------------------------------------------- the braking DIRECTION: which way, never how far (L7)
 #
 # WHY THIS EXISTS. The Coaching rows used to end in an ESTIMATED "Brake ~N m later into Cx" line:
-# `BrakeHabit.metres_later`, the distance from the driver's median brake onset to the latest point
-# at which the session's PEAK deceleration, held constant from the onset, still stops at the apex
-# speed. A kart ramps into and trails off the brake and never holds its peak, so that point lies
+# the median `driving.BrakePoint.metres_later` (the retired `BrakeHabit`), the distance from the
+# driver's median brake onset to the latest point at which the session's PEAK deceleration, held
+# constant from the onset, still stops at the apex speed. A kart ramps into and trails off the brake and never holds its peak, so that point lies
 # past the driver's braking by construction: the line said "later" at 33 of 33 corners on the four
 # working-set recordings, and at 15 of them no clean lap ever braked as late as it asked. It was a
 # bound of the model, not advice, and every relative restatement of it failed its own test

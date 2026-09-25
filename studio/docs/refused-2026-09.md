@@ -1471,7 +1471,13 @@ the recording tested (Holm's step-down at α 0.05, the standard #311 set for a c
 row says which way braking went with quicker passes, with its lap count and never a distance
 (`coaching.BrakeDirection`). Of the six corners above, two survive the correction, 0064 C6 and
 0067 C8, and coaching.py's table re-measures them through the app; the other four are documented
-here, uncorrected, and print nothing. Stats ▸ BRAKING still prints the estimate.
+here, uncorrected, and print nothing. Stats ▸ BRAKING still prints the estimate, and since L8
+(2026-09-25) as what it is: headed `Bound m (est)` instead of "m later", with no "+" and a hover
+that calls it a model's bound, not room to gain. It was relabelled rather than removed because it
+is not noise: the same corner's median moves between the three Sandown days beyond both days'
+95 % bootstrap bands at 3 of 7 corners (C1, C5 and C7; `p17_braking_room` prints it), so a reader
+comparing sessions sees a real change in how far that day's braking sat from a constant-peak stop,
+while across one recording's corners it largely ranks the track (above).
 
 **What would be new evidence:** an outcome-grounded per-corner claim — "your quicker passes braked
 later here", from the rank correlation above — that survives a family-wise correction over the

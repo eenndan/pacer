@@ -333,8 +333,9 @@ class BrakeConsistency:
     sigma_m: float | None           # cross-lap σ of the onset (m); None with <2 laps
     span_m: float | None            # max − min onset spread (m)
     commit_pct: float | None        # median (event peak decel / session a_max) × 100
-    metres_later_med: float | None  # median metres-left-on-table (optimal − actual; + = can
-    #                                 brake later). ESTIMATED, from the D4 brake-point model.
+    metres_later_med: float | None  # median (model optimum − actual onset), m: the D4 model's
+    #                                 BOUND — past the onset by construction, never room to gain
+    #                                 (refused-2026-09.md §16); BRAKING's "Bound m (est)" column.
 
 
 @dataclass(frozen=True)
@@ -963,11 +964,10 @@ def brake_consistency(cids, rows_by_lap) -> list[BrakeConsistency]:
     """Aggregate per-lap braking rows into per-corner repeatability + commitment stats.
 
     `rows_by_lap`: one dict per included lap, cid → (onset_ref_m, commit_frac | None,
-    metres_later | None, …) — a corner absent from a lap's dict simply had no matched brake
-    event there (an unbraked or undetected pass; it lowers n, it does not fake a 0). Only the
-    first three entries are read here; `Session._brake_rows` carries a fourth (the projected
-    optimal brake point) that `coaching.brake_habits` medians off the SAME rows, which is what
-    keeps this column and the coaching hint's metres the same number."""
+    metres_later | None) — a corner absent from a lap's dict simply had no matched brake event
+    there (an unbraked or undetected pass; it lowers n, it does not fake a 0). These are
+    `Session._brake_rows`, the one list every braking surface reads; the median `metres_later` is
+    the model's bound the BRAKING table prints as "Bound m (est)", never room to gain."""
     out: list[BrakeConsistency] = []
     for cid in cids:
         vals = [r[cid] for r in rows_by_lap if cid in r]

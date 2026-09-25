@@ -862,10 +862,11 @@ _FULL_WINDOW = (1432, 808)   # the lap panel maximized on the 1440x900 default w
 _PAGES: list = []            # built pages stay alive for the whole run (a dropped one is deleted)
 
 
-def _full_window_page(opp, directions=None, size=_FULL_WINDOW, habits=None):
+def _full_window_page(opp, directions=None, size=_FULL_WINDOW):
     """The Coaching page over `opp`, shown and settled at `size` (default: full-window, where the
-    width budget gives every optional column its room). `habits` stands in for the session's
-    `coaching_brake_points`, which no Coaching row may print since L7."""
+    width budget gives every optional column its room). The stand-in session offers exactly what a
+    real one does for the page: its opportunities and its braking directions (L8 retired the
+    braking habit, `coaching_brake_points`, that no Coaching row had printed since L7)."""
     from studio.coaching_panel import OpportunitiesPanel
 
     class _S:
@@ -874,9 +875,6 @@ def _full_window_page(opp, directions=None, size=_FULL_WINDOW, habits=None):
 
         def coaching_brake_direction(self):
             return directions or {}
-
-        def coaching_brake_points(self):
-            return habits or {}
 
     page = OpportunitiesPanel(_S())
     _PAGES.append(page)
@@ -922,15 +920,6 @@ def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
     go.click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
     print(f"ok page: {t.rowCount()} rows full-window, bars + Jump shown, Jump -> {calls[0]}")
-
-
-def _habit(cid, metres_later, *, n_laps=12, actual=78.0, optimal=None, q25=None, q75=None):
-    """A coaching.BrakeHabit with the two distances consistent with `metres_later` by default."""
-    optimal = actual + metres_later if optimal is None else optimal
-    return K.BrakeHabit(cid=cid, n_laps=n_laps, metres_later=metres_later,
-                        optimal_brake_dist=optimal, actual_brake_dist=actual,
-                        q25_m=metres_later - 3.0 if q25 is None else q25,
-                        q75_m=metres_later + 3.0 if q75 is None else q75)
 
 
 def _direction(cid, rho, p=0.01, n_laps=20, family=1, p_holm=None):
@@ -1022,59 +1011,21 @@ def test_the_braking_line_is_a_direction_and_a_count_never_metres():
     print("ok L7 line: 'Braking later/earlier went with quicker passes here (N laps)', else None")
 
 
-def test_brake_habit_is_the_same_number_the_braking_table_shows():
-    """THE TWO-NUMBERS REGRESSION. The coaching habit ("Brake ~N m later", off the rows since L7)
-    and the Stats ▸ BRAKING table's "m later" column answer ONE question, so they must be ONE
-    number.
-
-    They were not: coaching read the BEST lap's single application and BRAKING the median over the
-    clean laps. Measured on the working-set recordings the pair disagreed by up to 20.4 m, and at
-    0064's C4 the best lap braked 14.2 m past its own optimum while the driver's habit over 53 laps
-    was 6.3 m early — so one surface said "earlier" where the other said "later". Both now medianize
-    ONE per-lap list; this pins that they still do, over rows where the best lap is deliberately
-    unrepresentative."""
-    from studio import stats as stats_service
-    # Five laps into two corners. C1: the best (first) lap brakes 30 m late, the other four 10 m —
-    # exactly the "one unrepresentative lap" shape. C2: the best lap has NO matched application.
-    rows = [
-        {1: (100.0, 0.8, 30.0, 130.0)},
-        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 6.0, 306.0)},
-        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 4.0, 304.0)},
-        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 8.0, 308.0)},
-        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 6.0, 306.0)},
-    ]
-    habits = K.brake_habits([1, 2], rows)
-    table = {b.cid: b for b in stats_service.brake_consistency([1, 2], rows)}
-    for cid in (1, 2):
-        assert habits[cid].metres_later == table[cid].metres_later_med, (
-            f"C{cid}: coaching {habits[cid].metres_later} vs BRAKING {table[cid].metres_later_med}")
-        assert habits[cid].n_laps == table[cid].n
-    assert habits[1].metres_later == 10.0, "the outlying best lap must not set the recommendation"
-    assert habits[2].n_laps == 4, "a corner the best lap never braked into is still a habit"
-    # The interval is the OBSERVED middle half of those same laps, not a modelled margin.
-    assert (habits[2].q25_m, habits[2].q75_m) == (5.5, 6.5), habits[2]
-    print(f"ok one number: C1 {habits[1].metres_later:.1f} m over {habits[1].n_laps} laps "
-          f"(best lap said 30.0), C2 measured on {habits[2].n_laps} laps the best lap missed")
-
-
 def test_the_page_prints_no_braking_metres_only_the_direction_where_it_holds():
-    """L7: no Coaching row prints the ESTIMATED "Brake ~N m later" any more, even with the session's
-    braking habit on hand — it said "later" at 33 of 33 working-set corners by construction. A row
-    whose laps separate a direction says so with its count; a row whose laps do not says nothing;
-    and the first-open debrief carries neither line."""
+    """L7: no Coaching row prints the ESTIMATED "Brake ~N m later" any more — it said "later" at 33
+    of 33 working-set corners by construction (and since L8 the session no longer computes the
+    habit it read). A row whose laps separate a direction says so with its count; a row whose laps
+    do not says nothing; and the first-open debrief carries neither line."""
     _qapp()
     from studio.coaching_panel import _PANEL_COL_REASON
     opp = _populated_opps()
     assert opp.rows[0].evidence.ranked and len(opp.rows) > 1, opp.rows
     top, other = opp.rows[0].cid, opp.rows[1].cid
-    # _corners() puts the top corner's turn-in at 50 m, so this 6 m habit is one the retired hint
-    # printed ("Brake ~6 m later into C1 (est)") — the regression this pins.
-    habits = {c: _habit(c, 6.0, actual=50.0, optimal=56.0) for c in (top, other)}
     # The top row has 0064 C6's numbers (it survives Holm among 7 corners), the other 0068 C3's
     # (p 0.016 uncorrected, 0.111 once corrected) — which is exactly the line that must NOT print.
     directions = {top: _direction(top, -0.419, p=0.0019, n_laps=57, family=7, p_holm=0.0133),
                   other: _direction(other, -0.399, p=0.0159, n_laps=36, family=7, p_holm=0.1113)}
-    page = _full_window_page(opp, directions, habits=habits)
+    page = _full_window_page(opp, directions)
     cells = [page.table.item(r, _PANEL_COL_REASON) for r in range(page.table.rowCount())]
     for cell in cells:
         text = cell.text()
@@ -1637,11 +1588,6 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
 
         def coaching_brake_direction(self):
             return {2: _direction(2, -0.9, p=0.001, n_laps=6)}
-
-        def coaching_brake_points(self):
-            return {2: K.BrakeHabit(cid=2, n_laps=6, metres_later=40.0,
-                                    optimal_brake_dist=140.0, actual_brake_dist=100.0,
-                                    q25_m=35.0, q75_m=45.0)}
 
     panel = OpportunitiesPanel(_S())
     assert panel.table.rowCount() == 2
