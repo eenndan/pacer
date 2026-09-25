@@ -11,8 +11,9 @@ pytest run as safe as that script run, and makes it run the same tests:
   tests/test_app_support_jail.py pins it.
 * What a registration's environment gives each file: offscreen Qt, and the built bindings first on
   sys.path (the repo's C++ `pacer/` directory would otherwise shadow them).
-* What each file's own runner does: leave out its FOOTAGE_CHECKS and SOAK_CHECKS (each runs as its
-  own `footage.<check>` / `soak.<check>` registration; the soak alone is ~113 s), and run a test that
+* What each file's own runner does: leave out its FOOTAGE_CHECKS, SOAK_CHECKS and VIDEOTOOLBOX_CHECKS
+  (each runs as its own `footage.` / `soak.` / `videotoolbox.<check>` registration; the soak alone
+  is ~113 s), and run a test that
   names `monkeypatch_restore` inside its module's `_Restore()` (the three export test files).
 """
 import os
@@ -31,7 +32,8 @@ if _BINDINGS not in sys.path:
 def _by_registration(item) -> bool:
     """A check its file's runner leaves out because CTest runs it under its own name."""
     module = getattr(item, "module", None)
-    own = getattr(module, "FOOTAGE_CHECKS", ()) + getattr(module, "SOAK_CHECKS", ())
+    own = (getattr(module, "FOOTAGE_CHECKS", ()) + getattr(module, "SOAK_CHECKS", ())
+           + getattr(module, "VIDEOTOOLBOX_CHECKS", ()))
     return getattr(item, "obj", None) in own
 
 

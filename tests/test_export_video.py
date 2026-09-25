@@ -14,7 +14,9 @@ Two GATING tiers:
   * REAL-MEDIA tests (FOOTAGE_CHECKS) are NOT part of this file's ordinary run. Each is its own
     CTest registration, `footage.<check>`, on the recording `PACER_GOLDEN_MP4` names — and without
     it CTest reports that check as SKIPPED, by name, rather than this file counting it as passed
-    (tests/_footage.py). VideoToolbox-hardware tests still self-skip when no VT session exists.
+    (tests/_footage.py). The VideoToolbox-hardware checks (VIDEOTOOLBOX_CHECKS) are registrations
+    of their own too, `videotoolbox.<check>`, SKIPPED by name where no VT session opens
+    (tests/_videotoolbox.py); a check with a software half keeps that half here.
   * NO-MEDIA ffmpeg tests (synthetic-clip render, watchdog, cancel, GUI worker, fallback,
     determinism) gate through `_require_ffmpeg`: ffmpeg is a LOCKED pixi dependency (pyproject.toml),
     so inside the pixi env (CI's `pixi run test`) a missing ffmpeg FAILS LOUDLY rather than silently
@@ -46,6 +48,7 @@ from _qtapp import themed_app  # noqa: E402
 _APP = themed_app()
 
 import _footage  # noqa: E402
+import _videotoolbox  # noqa: E402
 
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
@@ -911,11 +914,10 @@ def _stream_encoder_tag(path):
 def test_real_videotoolbox_render_if_available(monkeypatch_restore):
     """END-TO-END GPU offload: if a VideoToolbox H.264 session actually opens on this machine, a
     render forced to the VT encoder must produce a valid H.264 file whose stream encoder tag names
-    h264_videotoolbox (proof the Apple media engine, not libx264, produced it). Skipped (not
-    failed) where VT isn't usable or ffmpeg is absent — so CI without the hardware still passes."""
-    if not ev.ffmpeg_available() or not ev.videotoolbox_usable():
-        print("skip real_videotoolbox_render (no ffmpeg or no VT session)")
-        return
+    h264_videotoolbox (proof the Apple media engine, not libx264, produced it). Its own
+    registration, `videotoolbox.<name>`: SKIPPED by name where VT isn't usable (CI), never a pass."""
+    _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_usable(),
+                       "ffmpeg with an H.264 VideoToolbox session")
     tmp = os.environ.get("TMPDIR", "/tmp")
     src, out = os.path.join(tmp, "f9_vt_src.mp4"), os.path.join(tmp, "f9_vt_out.mp4")
     _make_syn_clip(src)
@@ -2416,8 +2418,8 @@ def _prores_stream(path):
 def test_the_alpha_round_trip_is_straight_and_the_probe_can_say_no(monkeypatch_restore):
     """The probe that admits VideoToolbox is only worth its cost if it can FAIL: a premultiplying
     path hands an NLE a grey halo round every half-transparent edge. prores_ks — the fallback, and
-    CI's encoder — must pass it; the same encoder with a premultiply spliced in front must not;
-    VideoToolbox must pass it wherever a session opens (skipped where none does)."""
+    CI's encoder — must pass it; the same encoder with a premultiply spliced in front must not.
+    VideoToolbox must pass it too: `videotoolbox.test_the_videotoolbox_prores_alpha_round_trip_is_straight`."""
     if not _require_ffmpeg("alpha_round_trip"):
         return
     assert ev.prores_alpha_round_trip(ev.SW_PRORES), "prores_ks lost the straight alpha"
@@ -2428,12 +2430,17 @@ def test_the_alpha_round_trip_is_straight_and_the_probe_can_say_no(monkeypatch_r
             "the probe passed a PREMULTIPLIED encode — it cannot tell a grey halo from a white one")
     finally:
         ev._PRORES_REC709 = straight
-    if ev.prores_videotoolbox_usable():
-        assert ev.prores_alpha_round_trip(ev.VT_PRORES)
-        print("ok prores: straight alpha on prores_ks and VideoToolbox; a premultiply fails")
-    else:
-        print("ok prores: straight alpha on prores_ks; a premultiply fails "
-              "(skip VideoToolbox: no ProRes session opens here)")
+    print("ok prores: straight alpha on prores_ks; a premultiply fails")
+
+
+def test_the_videotoolbox_prores_alpha_round_trip_is_straight():
+    """The round trip above through prores_videotoolbox, the encoder `resolve_alpha_encoder` picks
+    wherever its probe passes: its own registration, SKIPPED by name where no ProRes VideoToolbox
+    session opens (tests/_videotoolbox.py)."""
+    _videotoolbox.need(ev.ffmpeg_available() and ev.prores_videotoolbox_usable(),
+                       "ffmpeg with a ProRes VideoToolbox session")
+    assert ev.prores_alpha_round_trip(ev.VT_PRORES), "VideoToolbox ProRes lost the straight alpha"
+    print("ok prores: straight alpha on VideoToolbox")
 
 
 def test_real_prores_overlay_falls_back_to_prores_ks_and_matches_videotoolbox(monkeypatch_restore):
@@ -2444,8 +2451,22 @@ def test_real_prores_overlay_falls_back_to_prores_ks_and_matches_videotoolbox(mo
     overlay's colours would not be a fallback."""
     if not _require_ffmpeg("real_prores_fallback"):
         return
+    _prores_fallback_and_match(on_videotoolbox=False)
+
+
+def test_real_prores_overlay_on_videotoolbox_matches_the_prores_ks_fallback(monkeypatch_restore):
+    """The comparison half of the check above — the same frames through a WORKING VideoToolbox
+    decode to the fallback's picture — which CI cannot run: its own registration, SKIPPED by name
+    where no ProRes VideoToolbox session opens (tests/_videotoolbox.py)."""
+    _videotoolbox.need(ev.ffmpeg_available() and ev.prores_videotoolbox_usable(),
+                       "ffmpeg with a ProRes VideoToolbox session")
+    _prores_fallback_and_match(on_videotoolbox=True)
+
+
+def _prores_fallback_and_match(on_videotoolbox):
+    """The two checks above: the prores_ks fallback, then (`on_videotoolbox`) the comparison."""
     import tempfile
-    real_probe, vt_here = ev.probe_video_size, ev.prores_videotoolbox_usable()
+    real_probe, vt_here = ev.probe_video_size, on_videotoolbox
     ev.probe_video_size = lambda _p: (640, 360, 30.0)       # type: ignore[assignment]
     ev.probe_source_duration = lambda _s: 1.0e9             # type: ignore[assignment]
     s = StubSession(lap_id=1, t0=0.0, dur=1.0, n=60)
@@ -2484,8 +2505,7 @@ def test_real_prores_overlay_falls_back_to_prores_ks_and_matches_videotoolbox(mo
             assert b"apl0" in fh.read(), "prores_ks must keep the apl0 vendor tag"
         ev.alpha_codec_args = real_args                     # type: ignore[assignment]
         if not vt_here:
-            print("ok prores: a broken VideoToolbox encode fell back to a real prores_ks 4444 "
-                  "(skip the VideoToolbox comparison: no ProRes session opens here)")
+            print("ok prores: a broken VideoToolbox encode fell back to a real prores_ks 4444")
             return
         # 2. The same frames through a working VideoToolbox: the same picture.
         ev.prores_videotoolbox_usable = lambda: True        # type: ignore[assignment]
@@ -2759,11 +2779,24 @@ def test_the_last_frame_and_the_audio_both_reach_the_end_of_a_recording_if_ffmpe
     source's track did. Measured on MK_18_09_26's last chapter before E4: the file's audio ended
     at 16.320 s against a 16.333 s picture, cut at an AAC frame boundary.
 
-    Pinned to libx264, the encoder CI has, and repeated on VideoToolbox where a session opens."""
+    Pinned to libx264, the encoder CI has; the VideoToolbox run is its own registration,
+    `videotoolbox.test_the_last_frame_and_the_audio_reach_the_end_on_videotoolbox`."""
     if not _require_ffmpeg("the_last_frame_and_the_audio_both_reach_the_end_of_a_recording"):
         return
+    _end_of_recording(["libx264"])
+
+
+def test_the_last_frame_and_the_audio_reach_the_end_on_videotoolbox(monkeypatch_restore):
+    """The check above on h264_videotoolbox, which CI cannot run: its own registration, SKIPPED by
+    name where no H.264 VideoToolbox session opens (tests/_videotoolbox.py)."""
+    _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_usable(),
+                       "ffmpeg with an H.264 VideoToolbox session")
+    _end_of_recording(["videotoolbox"])
+
+
+def _end_of_recording(encoders):
+    """The two checks above, on each of `encoders`."""
     import tempfile
-    encoders = ["libx264"] + (["videotoolbox"] if ev.videotoolbox_usable() else [])
     with tempfile.TemporaryDirectory(prefix="pacer-e4-end-") as tmp:
         src = os.path.join(tmp, "last_chapter.mp4")
         _make_av_clip(src, video_s=3.0, audio_s=2.98)
@@ -2871,11 +2904,10 @@ def test_a_slow_start_behind_videotoolbox_keeps_the_hardware_encode_if_available
     real lap does: from t0 = 0 the same feed never overflowed. Measured before E4: 4/4 renders
     at 6 fps and 4/4 at 10 fps failed at frame 30-35; at 15 fps and above none did.
 
-    Skipped (not failed) where no VideoToolbox session opens — CI's runner has none, and libx264
-    never overflowed this queue even fed at 0.5 fps."""
-    if not ev.ffmpeg_available() or not ev.videotoolbox_usable():
-        print("skip a_slow_start_behind_videotoolbox (no ffmpeg or no VT session)")
-        return
+    Its own registration, `videotoolbox.<name>`: SKIPPED by name where no VideoToolbox session
+    opens — CI's runner has none, and libx264 never overflowed this queue even fed at 0.5 fps."""
+    _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_usable(),
+                       "ffmpeg with an H.264 VideoToolbox session")
     import tempfile
     first_failure = []
 
@@ -3195,14 +3227,32 @@ def test_the_single_lap_progress_fill_is_a_time_fraction(monkeypatch_restore):
 FOOTAGE_CHECKS = (test_real_render_smoke_if_ffmpeg_and_media,
                   test_real_chaptered_non_first_chapter_render_if_media,
                   test_real_render_quality_levels_if_media)
+# Each is its own CTest registration, `videotoolbox.<name>` (tests/_videotoolbox.py): SKIPPED by name
+# where VideoToolbox is missing (CI) — not in this file's ordinary run or its count.
+VIDEOTOOLBOX_CHECKS = (test_real_videotoolbox_render_if_available,
+                       test_a_slow_start_behind_videotoolbox_keeps_the_hardware_encode_if_available,
+                       test_the_last_frame_and_the_audio_reach_the_end_on_videotoolbox,
+                       test_the_videotoolbox_prores_alpha_round_trip_is_straight,
+                       test_real_prores_overlay_on_videotoolbox_matches_the_prores_ks_fallback)
+
+
+def _call_restored(fn):
+    """Run `fn` as the runner below does: inside `_Restore()` when it names `monkeypatch_restore`."""
+    import inspect
+    if "monkeypatch_restore" in inspect.signature(fn).parameters:
+        with _Restore():
+            return fn(monkeypatch_restore)
+    return fn()
 
 
 if __name__ == "__main__":
     if _footage.requested():
         sys.exit(_footage.run(FOOTAGE_CHECKS))
+    if _videotoolbox.requested():
+        sys.exit(_videotoolbox.run(VIDEOTOOLBOX_CHECKS, call=_call_restored))
     import inspect
     tests = [v for k, v in sorted(globals().items())
-             if k.startswith("test_") and v not in FOOTAGE_CHECKS]
+             if k.startswith("test_") and v not in FOOTAGE_CHECKS + VIDEOTOOLBOX_CHECKS]
     failed = 0
     for t in tests:
         needs_restore = "monkeypatch_restore" in inspect.signature(t).parameters

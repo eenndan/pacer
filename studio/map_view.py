@@ -32,6 +32,7 @@ from .map_render import (
 )
 from .session import Seg
 from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
+from .timeline import trace_point_at
 from .widgets import EmptyState, ToggleButton
 
 # The very QPainterPaths pyqtgraph fills for a ScatterPlotItem symbol, in a unit box centred on the
@@ -1703,8 +1704,21 @@ class MapView(QWidget):
         self._suppress_marker = False
 
     def set_playhead_time(self, t: float):
-        # Scrub path: resolves the index itself. Shared verb with PlotsView.set_playhead_time.
-        self.set_marker_index(self.session.index_at_time(t))
+        """Place the marker where the kart is at TELEMETRY time `t` — the playback tick and the
+        scrub both come here (shared verb with PlotsView.set_playhead_time).
+
+        INTERPOLATED between the two samples that bracket `t`, and held across a dropout
+        (`timeline.trace_point_at`, the rule the burned-in export's map dot uses). It used to land
+        on the NEAREST sample, so on a 10 Hz trace the dot held still for three 30 Hz ticks (six
+        59.94 fps frames) and then jumped: on MK_18_09_26's best lap (67.5 s) it moved 674 times in
+        2,025 ticks, 1.5 m a step (2.4 m at most); now 2,024 times, 0.5 m (0.8 m) (HEALTH-2,
+        2026-09-25)."""
+        p = trace_point_at(self.session.tt, self.session.tx, self.session.ty, t)
+        if p is None:
+            return
+        self._suppress_marker = True
+        self.marker.setPos(pg.Point(p[0], p[1]))
+        self._suppress_marker = False
 
     # --------------------------------------------------------------- compare ghost (F4)
     def set_ghost_index(self, i: int | None):

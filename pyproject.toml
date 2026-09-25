@@ -24,9 +24,18 @@ pyside6 = ">=6.8"
 pyqtgraph = ">=0.13"
 # Phosphor (+ other) icon fonts as QIcons; works with PySide6 via QtPy. See studio/theme.icon.
 qtawesome = ">=1.3"
+# litgen's own dependency, named here only to hold its major line (see `python` below).
+nanobind = ">=2.7,<3"
 
 [tool.pixi.tasks]
-configure = "cmake -S . -B build/Release -G Ninja"
+# `configure` sets up a MISSING build dir and leaves an existing one alone: `cmake --build` re-runs
+# cmake by itself when a CMakeLists.txt, a cmake module or a CONFIGURE_DEPENDS glob changes, so an
+# unconditional configure bought nothing and cost every `pixi run build` — and so every `pixi run
+# studio`, which depends on it — ~340 ms. With the bindings codegen and the .so copies now running
+# only when their inputs change (bindings/pacer/CMakeLists.txt), a no-op build is ninja saying
+# "no work to do" (HEALTH-1, 2026-09-25: 1.5-3.5 s before). To force a fresh configure, delete
+# build/Release.
+configure = "test -f build/Release/build.ninja || cmake -S . -B build/Release -G Ninja"
 build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # WHY BOTH ctest TASKS ARE RUN UNDER `caffeinate -si`.
 #
@@ -194,7 +203,10 @@ changelog = "python -m studio.dev.changelog"
 [tool.pixi.dependencies]
 cmake = ">=4.0.2,<5"
 scikit-build-core = ">=0.11.4,<0.12"
-python = ">=3.13.5,<4"
+# Python and nanobind are held to their MINOR / MAJOR line until a deliberate upgrade PR: a routine
+# `pixi update` would otherwise move python 3.13.5 -> 3.14.7 and nanobind 2.7.0 -> 3.1.0 (HEALTH-9,
+# `pixi update --dry-run`, 2026-09-25) under a lock touched only to add a tool.
+python = ">=3.13.5,<3.14"
 catch2 = ">=3.15.0,<4"
 ninja = ">=1.13.2,<2"
 ruff = ">=0.15.16,<0.16"

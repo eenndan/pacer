@@ -1,5 +1,7 @@
 #! /usr/bin/env python3
 
+import shutil
+import tempfile
 from pathlib import Path
 
 import litgen
@@ -191,6 +193,14 @@ def _splice_copy_on_read(pydef_file: Path) -> None:
 
 
 def autogenerate() -> None:
+    """Regenerate both files, writing each one only if its bytes changed.
+
+    litgen rewrites its outputs in place (the text between its markers; black then reformats the
+    whole stub), so on unchanged headers it used to hand both files a new mtime with identical
+    bytes on every build — and the rewritten nanobind_pacer.cpp was recompiled on the next one
+    (HEALTH-1, 2026-09-25). It now works on copies in a temporary directory, and a real file is
+    replaced only when its copy differs. The bytes are the same either way: litgen calls black
+    with an explicit `black.Mode()`, so where the stub sits does not change how it is formatted."""
     repository_dir = Path(__file__).parent.parent.parent
 
     header_files = [
@@ -201,18 +211,33 @@ def autogenerate() -> None:
     ]
 
     output_cpp_pydef_file = repository_dir / "bindings/pacer/nanobind_pacer.cpp"
+    output_stub_pyi_file = repository_dir / "bindings/pacer/pacer/__init__.pyi"
 
-    litgen.write_generated_code_for_files(
-        options=my_litgen_options(),
-        input_cpp_header_files=[str(p) for p in header_files],
-        output_cpp_pydef_file=output_cpp_pydef_file,
-        output_stub_pyi_file=str(repository_dir / "bindings/pacer/pacer/__init__.pyi"),
-    )
+    with tempfile.TemporaryDirectory(prefix="pacer-bindings-") as scratch:
+        # litgen fills the region between its markers in an EXISTING file, so each copy starts
+        # from the committed one (whose hand-kept preamble it preserves).
+        pydef = Path(scratch) / output_cpp_pydef_file.name
+        stub = Path(scratch) / output_stub_pyi_file.name
+        shutil.copyfile(output_cpp_pydef_file, pydef)
+        shutil.copyfile(output_stub_pyi_file, stub)
 
-    # Post-write: add the keep_alive call policy to the SequentialGPSSource constructor binding,
-    # and the copy return policy to the getters of the fields a caller keeps.
-    _splice_sequential_source_keep_alive(output_cpp_pydef_file)
-    _splice_copy_on_read(output_cpp_pydef_file)
+        litgen.write_generated_code_for_files(
+            options=my_litgen_options(),
+            input_cpp_header_files=[str(p) for p in header_files],
+            output_cpp_pydef_file=str(pydef),
+            output_stub_pyi_file=str(stub),
+        )
+
+        # Post-write: add the keep_alive call policy to the SequentialGPSSource constructor binding,
+        # and the copy return policy to the getters of the fields a caller keeps.
+        _splice_sequential_source_keep_alive(pydef)
+        _splice_copy_on_read(pydef)
+
+        for fresh, committed in ((pydef, output_cpp_pydef_file), (stub, output_stub_pyi_file)):
+            new_bytes = fresh.read_bytes()
+            if committed.read_bytes() != new_bytes:
+                committed.write_bytes(new_bytes)
+                print(f"generate-bindings: rewrote {committed.relative_to(repository_dir)}")
 
 
 if __name__ == "__main__":
