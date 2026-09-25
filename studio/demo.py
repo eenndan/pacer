@@ -76,8 +76,9 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + ".part"
     try:
-        # A first `--demo` blocks here before any window exists, so say what is happening.
-        print(f"demo: downloading the synthetic demo session from {url} …", flush=True)
+        # A first `--demo` blocks here before any window exists, so say what is happening — and
+        # this is the app's one network fetch, so the session log records where it went.
+        _log.info("downloading the synthetic demo session from %s …", url)
         # urlopen (unlike urlretrieve) takes a timeout, so a stalled connection fails instead of
         # hanging the UI thread; stream to a temp sibling then rename so a partial/failed download
         # never looks like a valid cache hit.

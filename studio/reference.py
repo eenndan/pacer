@@ -17,10 +17,13 @@ best-lap loop and returns the centerline in LOCAL metres as an (M,2) array (or e
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import cast
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 _HERE = os.path.dirname(__file__)
 _DATA = os.path.join(_HERE, "mk_centerline.json")
@@ -235,17 +238,16 @@ def centerline_local(loop_xy):
     measured points — drawn dashed and dimmed like every other inferred fill. So a rejection
     costs a nicer-looking fill, never a silent wrong shape, and needs no message of its own in
     the UI: on a foreign track today there is nothing to say, because nothing is drawn. The
-    verdict and the numbers behind it still go to the console, where the fit already reported."""
+    verdict and the numbers behind it still go to the session log, at INFO: a rejection is this
+    function working as designed on every other circuit, not a fault."""
     norm = _load_normalized()
     if norm is None or loop_xy is None or len(loop_xy) < 10:
         return np.empty((0, 2))
     fitted, info = fit_loop_to_loop(norm, loop_xy)
     ok = fit_is_this_circuit(info["rms"], info["coverage"])
-    print(f"[reference] MK centerline fit: RMS {info['rms']:.1f} m, "
-          f"{info['coverage']:.0%} of best-lap points within {COVERAGE_TOL_M:.0f} m — "
-          + ("accepted as a gap-fill donor"
-             if ok else
-             f"REJECTED, not this circuit (needs RMS <= {FIT_RMS_TOL_M:.0f} m and "
-             f"coverage >= {FIT_COVERAGE_MIN:.0%})"),
-          flush=True)
+    _log.info("MK centerline fit: RMS %.1f m, %.0f%% of best-lap points within %.0f m — %s",
+              info["rms"], 100 * info["coverage"], COVERAGE_TOL_M,
+              "accepted as a gap-fill donor" if ok else
+              f"REJECTED, not this circuit (needs RMS <= {FIT_RMS_TOL_M:.0f} m and "
+              f"coverage >= {FIT_COVERAGE_MIN:.0%})")
     return fitted if ok else np.empty((0, 2))

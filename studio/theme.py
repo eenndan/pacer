@@ -953,9 +953,10 @@ def register_fonts() -> None:
 
     have_files = all(os.path.exists(os.path.join(_FONTS_DIR, f)) for f in _INTER_FILES)
     if not have_files:
+        # A WARNING, not a note: the TTFs ship in the repo and in the .app, so a build without
+        # them is a packaging fault, and every figure on screen then sets in another face.
         _inter_available = False
-        print("theme: Inter not bundled — using system font fallback "
-              f"({UI_STACK}).", flush=True)
+        _log.warning("Inter not bundled — using system font fallback (%s).", UI_STACK)
         return
 
     registered = 0
@@ -965,12 +966,10 @@ def register_fonts() -> None:
             registered += 1
     _inter_available = registered > 0
     if _inter_available:
-        print(f"theme: Inter registered (bundled, {registered}/{len(_INTER_FILES)} faces); "
-              f"tabular figures via {'tnum feature' if _supports_feature else 'mono stack'}.",
-              flush=True)
+        _log.info("Inter registered (bundled, %d/%d faces); tabular figures via %s.", registered,
+                  len(_INTER_FILES), "tnum feature" if _supports_feature else "mono stack")
     else:
-        print("theme: Inter TTFs present but failed to register — using system fallback.",
-              flush=True)
+        _log.warning("Inter TTFs present but failed to register — using system fallback.")
 
 
 def ui_font(size: int = BODY, weight: QFont.Weight = W_REGULAR) -> QFont:

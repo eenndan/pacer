@@ -230,11 +230,6 @@ class Evidence:
         """True when this corner's row is a real opportunity (nothing gated it out)."""
         return not self.abstain
 
-    @property
-    def reach_frac(self) -> float:
-        """Fraction of clean laps that already matched the target (0.0 when nothing measured)."""
-        return self.reach_laps / self.n_laps if self.n_laps else 0.0
-
 
 # The "not measured" evidence: a row built without per-lap times (a synthetic/legacy construction).
 # It deliberately does NOT abstain and carries no reach claim — an unmeasured row must behave
