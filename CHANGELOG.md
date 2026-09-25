@@ -6,6 +6,76 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-25
+
+Everything merged since v0.3.0: 15 pull requests, #389 and #391 to #404. Each line names its pull
+request (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+
+### Highlights
+
+- **A first open lands on its debrief.** Coaching, full-window: your PB standing, the seconds your
+  top corners cost against your best lap, and those corners added to your focus list where it has
+  room, said on screen with a Remove on each; Esc returns to your layout (#391)
+- **Your new PB against the one it beat, in one click.** "Compare with your previous PB" loads the
+  recording it beat and plays both best laps side by side, or names the file that has moved; the
+  comparison video is one click further (#393)
+- **Braking advice that is measured, or silent.** "Brake ~N m later" said "later" at all 33 corners
+  of four recordings, by construction. A row now names a direction only where your laps hold one
+  after a Holm correction (2 of 33), and Stats labels its figure a model's bound (#395, #399, #401)
+- **An unknown track's start line survives a GPS glitch.** The auto-fit sits where the speed stays
+  highest, not at the fastest single fix. On MK run as an unknown track, a one-fix 106 km/h spike
+  had cost 4 of its 19 valid laps; now it counts 19, as the circuit's own line does (#394)
+- **Words that agree with the numbers.** "1 clean laps" and its kind are fixed in 30-odd places and
+  guarded; the charts' Δ readout opens on the lap's total, not +0.00 s; a first session's PB card
+  no longer offers to share a best with nothing to beat (#396, #404)
+- **A problem report carries the whole story.** Failure notices that went only to a terminal, which
+  a Finder-launched app discards, now reach the session log, beside what each load found: its laps,
+  the g and rotation cross-checks, the GPS lag it corrected (#402)
+- **CI checks the math through the real loader.** The golden gate fingerprints a synthetic GoPro
+  session loaded the way a recording is: 113,388 values (was 40,833), in any timezone, and three
+  planted regressions it missed now fail it. pyright gates 30 Qt-free core modules (#389, #392)
+- **Measured, then refused, and tidied.** Three more ideas lost to their own numbers (refusals
+  §15–§17); timing lines and lap points leave the bindings as copies (no app path kept a view);
+  four Stats sections left a 4,584-line file (#394, #395, #397, #398, #400, #403)
+
+### Added
+
+- Where your laps show it, a Coaching row says which way braking went with your quicker passes
+  through that corner, e.g. "Braking later went with quicker passes here (36 laps)" (#399)
+- ⌘K finds the focus list: Coaching ▸ Show focus list, and Add selected corner to focus list (#396)
+- A new PB offers "Compare with your previous PB": one click loads the recording it beat and plays
+  both best laps side by side, or says which file has moved; the export is one click on (#393)
+- A recording's first open lands on its debrief: the Coaching page full-window with its PB line, one
+  ranked total and its top corners; Esc returns to your layout and remembered tab (#391)
+- The debrief puts its top corners on the track's focus list where it has room, says so, and keeps
+  any corner already there; each corner on the list has its own one-click Remove (#391)
+
+### Changed
+
+- The session log records what each load found: its laps, the g and rotation cross-checks, the GPS
+  lag it corrected, and where the demo was downloaded from (#402)
+- Stats ▸ BRAKING's "m later" column is now "Bound m (est)", and its hover says what it is: a
+  braking model's bound that real braking never reaches, not metres you could brake later (#401)
+- The Coaching rows no longer print the estimated "Brake ~N m later": it said "later" at every
+  corner by construction, a bound of the braking model rather than advice (#399)
+- The charts' Δ readout opens on the lap's total and follows the playhead once it moves (#396)
+- A first session's PB card says "First session logged here", offers no share for a best with
+  nothing to beat, and no PB card covers the excluded-laps strip (#396)
+- The Library states its privacy promise in one line, with a "Your data & privacy…" button (#396)
+- The PB card leads with "Compare with your previous PB"; "Share your PB" stays on it, as a link
+  (#393)
+- The first open shows the PB on its debrief instead of the card (#391)
+
+### Fixed
+
+- A count of 1 now reads as English in ~30 places: "These 1 segments hold…", "1 clean laps", "1 of 1
+  laps found", "1 raw GPS fixes", "these 1 clean lap", "1 of 40 cells are muted" (#404)
+- The session log now also keeps the failure notices that only reached a terminal: a refused
+  reference, timing lines not saved, the GPS lag not applied, the IMU g refused, and more (#402)
+- The Library's PB chart no longer prints a day tick into the month label ("31Aug") (#396)
+- On an unknown track the auto-fitted start line no longer follows a single GPS speed glitch; it
+  sits where the speed stays highest, before the braking point, so every lap is counted (#394)
+
 ## [0.3.0] — 2026-09-24
 
 Everything merged since v0.2.0: 165 pull requests, #222 to #388. Each line names its pull request
@@ -1337,7 +1407,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/eenndan/pacer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eenndan/pacer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/eenndan/pacer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/eenndan/pacer/releases/tag/v0.1.0
