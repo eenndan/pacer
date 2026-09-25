@@ -820,6 +820,10 @@ class CompareRenderer(Renderer):
         super().__init__(session_a, spec)
 
     # ---- the inherited seams ----
+    # Serial pump: a compare frame is two decoders' panes assembled by `_read_source_frame` at
+    # `self._i`, which a reader thread could not index (see `Renderer._PIPELINED`).
+    _PIPELINED = False
+
     def _resolve_geometry(self, src_w: int, src_h: int) -> FrameGeometry:
         b_w, b_h, _ = probe_video_size(self._spec.source_b.probe_path)
         self._geo = compare_geometry((src_w, src_h), (b_w, b_h), self._spec.config)
