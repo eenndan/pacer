@@ -263,15 +263,19 @@ def test_the_space_refusal_reads_as_one_sentence_and_is_not_repeated_behind_deta
         spec = ev.ExportSpec(out_path=os.path.join(td, "lap.mp4"), lap_id=0, t0=0.0, t1=60.0,
                              src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
         orig_free = ev.free_bytes
-        ev.free_bytes = lambda _p, purgeable=True: 20_000_000
+        # 1 MB, not 20: the refusal must not depend on which H.264 encoder this machine resolves.
+        # The guard's floor is per encoder (VideoToolbox 0.6 of its estimate, libx264 far lower,
+        # since a CRF stream's size varies most), so 20 MB refused a minute of 1080p here and let it
+        # through on the CI runner, which has no VideoToolbox session to open.
+        ev.free_bytes = lambda _p, purgeable=True: 1_000_000
         try:
             ev.guard_free_space([spec], probe=lambda _p: (1920, 1080, 30.0))
-            raise AssertionError("the guard let 20 MB hold a minute of 1080p")
+            raise AssertionError("the guard let 1 MB hold a minute of 1080p")
         except ev.InsufficientSpaceError as exc:
             message = str(exc)
         finally:
             ev.free_bytes = orig_free
-    assert re.search(r"has 20 MB free; even the smallest this export could be is [\d.]+ MB\.$",
+    assert re.search(r"has 1 MB free; even the smallest this export could be is [\d.]+ MB\.$",
                      message), message
     assert ev.is_refused_for_space(message), message
 
