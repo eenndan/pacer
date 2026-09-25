@@ -4,7 +4,10 @@ panes on the same track position.
 
 Coalesce contract: a drag move only stashes the latest target + a dirty flag; the seek(s) AND the
 cursor/marker/readout refresh are coalesced to <=1 each per tick (`apply_tick`, from `_tick`) —
-this keeps the tick cheap and breaks the drag<->positionChanged feedback loop. Pacer-free, Qt-free.
+this keeps the tick cheap and breaks the drag<->positionChanged feedback loop. The tick's seeks are
+DRAG seeks (`seek_dragged`): the pane keeps one in flight until its frame is on screen, because a
+seek every tick superseded each one before it presented (QA VIEW-4). The release's final seek is a
+plain one, so the picture always ends exactly at the cursor. Pacer-free, Qt-free.
 """
 
 from __future__ import annotations
@@ -83,7 +86,7 @@ class ScrubController:
         that re-places the marker/cursor/readout."""
         marker_t = self.map.take_marker_seek()
         if marker_t is not None:
-            self.video.seek(marker_t)
+            self.video.seek_dragged(marker_t)
 
     # --- per-tick scrub apply (the `_scrub_target is not None` branch of `_tick`) ---
     def apply_tick(self) -> None:
@@ -92,12 +95,12 @@ class ScrubController:
         if self._scrub_pending:
             self._scrub_pending = False
             # pending is only ever set together with a target (on_moved), never alone
-            self.video.seek(cast(float, self._scrub_target))
+            self.video.seek_dragged(cast(float, self._scrub_target))
         # fan the coalesced seek to the secondary pane (compare distance-lock)
         if self._is_comparing and self._scrub_pending_b:
             self._scrub_pending_b = False
             if self._scrub_target_b is not None:
-                self.video.seek_pane(1, self._scrub_target_b)
+                self.video.seek_pane_dragged(1, self._scrub_target_b)
         # views: one refresh/tick to the latest dragged time
         if self._scrub_view_pending and self._scrub_view_t is not None:
             self._scrub_view_pending = False
