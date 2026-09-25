@@ -1678,7 +1678,8 @@ class _Restore:
     other (no pytest here — a tiny manual fixture run around each mocked test)."""
 
     _SAVED = ("subprocess", "probe_video_size", "probe_source_duration", "resolve_encoder",
-              "videotoolbox_encoder_available", "videotoolbox_usable", "videotoolbox_decode_available")
+              "videotoolbox_encoder_available", "videotoolbox_usable", "videotoolbox_decode_available",
+              "prores_videotoolbox_usable", "alpha_codec_args", "free_bytes", "_PRORES_REC709")
 
     def __enter__(self):
         # snapshot subprocess.Popen separately (it lives on the subprocess module, not ev)
@@ -1831,7 +1832,35 @@ def test_the_size_model_is_the_stated_rate_times_the_clip():
     for degenerate in ((0, 1080, 30.0, sec), (1920, 1080, 30.0, 0.0),
                        (1920, 1080, 30.0, float("nan"))):
         assert EV.estimate_output_bytes(*degenerate, "high", EV.VT_H264) == 0, degenerate
+    # E5: each ProRes encoder has its own measured figure (prores_ks is ALPHA_PRORES's), and the
+    # alpha outputs cost less per pixel on a bigger frame: x (1080 / short side) ** 0.5.
+    assert EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.SW_PRORES) == prores
+    vt = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.VT_PRORES)
+    assert vt == int(1920 * 1080 * 30.0 * EV.PRORES_VT_4444_BPP * sec / 8), vt
+    uhd = EV.estimate_output_bytes(3840, 2160, 30.0, sec, "high", EV.VT_PRORES)
+    assert uhd == int(3840 * 2160 * 30.0 * EV.PRORES_VT_4444_BPP * 0.5 ** 0.5 * sec / 8), uhd
+    # the owner's export as measured: MK best lap +-5 s, 2325 frames of 4K on VideoToolbox, 1.522 GB
+    owner = EV.estimate_output_bytes(3840, 2160, 30.0, 2325 / 30.0, "high", EV.VT_PRORES)
+    assert 0.9 < 1.522e9 / owner < 1.1, owner
     print("ok size model: stated rate x clip, per codec; nothing to render costs nothing")
+
+
+def test_the_time_model_reproduces_the_rates_it_was_measured_at():
+    """`estimate_render_seconds` is the picker's "about M:SS to render": frames over the measured
+    rate of the path at 1080p and 2160p, linear in pixels between them. It says nothing for a path
+    it has no measurement of, and nothing about nothing."""
+    for codec, (at_1080, at_2160) in ev.RENDER_FPS.items():
+        assert abs(ev.estimate_render_seconds(1920, 1080, 600, codec) - 600 / at_1080) < 1e-9
+        assert abs(ev.estimate_render_seconds(3840, 2160, 600, codec) - 600 / at_2160) < 1e-9
+        mid = ev.estimate_render_seconds(2560, 1440, 600, codec)
+        assert 600 / at_1080 < mid < 600 / at_2160, (codec, mid)
+        assert ev.estimate_render_seconds(640, 360, 600, codec) > 0
+    assert ev.estimate_render_seconds(1920, 1080, 600, "hevc_mystery") is None
+    assert ev.estimate_render_seconds(1920, 1080, 0, ev.VT_H264) is None
+    # The owner's export, measured end to end: 65.2 s on VideoToolbox, 145.3 s on prores_ks.
+    assert abs(ev.estimate_render_seconds(3840, 2160, 2325, ev.VT_PRORES) - 65.2) < 3.0
+    assert abs(ev.estimate_render_seconds(3840, 2160, 2325, ev.SW_PRORES) - 145.3) < 7.0
+    print("ok time model: the measured rates, linear in pixels between them")
 
 
 def test_free_space_is_asked_of_the_nearest_existing_folder():
@@ -2251,6 +2280,225 @@ def test_an_overlay_only_encode_has_no_source_input_and_no_audio():
     assert png_spec.is_png_sequence and not spec.is_png_sequence
     assert ev.build_encode_cmd(png_spec, 1280, 720, 30.0)[-1] == "/out/frames/overlay_%06d.png"
     print("ok overlay-only: one input, no audio, no source decode")
+
+
+# ================================================ E5 — ProRes 4444 on VideoToolbox, with a fallback
+# The owner's "export has become extremely slow" was a remembered overlay-only ProRes at source
+# resolution: MK's best lap took 145 s on prores_ks (15.7 fps) and takes 65 s on VideoToolbox
+# (35.4 fps), measured through the real renderer. These pin the policy, the argv, the retry and the
+# alpha; the VideoToolbox-only assertions skip where no VideoToolbox ProRes session opens (CI).
+def test_the_prores_encoder_is_videotoolbox_only_where_its_probe_passes(monkeypatch_restore):
+    """`resolve_alpha_encoder` reads the SAME `OverlayConfig.encoder` words as the H.264 path, but
+    even a forced "videotoolbox" has to pass the probe: an alpha that comes back premultiplied is a
+    wrong file, not a slower one. The pipe's pixel format follows the encoder it feeds."""
+    cfg = ev.OverlayConfig(overlay_only=True, alpha_codec=ev.ALPHA_PRORES)
+    ev.prores_videotoolbox_usable = lambda: True            # type: ignore[assignment]
+    assert ev.resolve_alpha_encoder("auto") == ev.VT_PRORES
+    assert ev.resolve_alpha_encoder("videotoolbox") == ev.VT_PRORES
+    assert ev.output_codec(cfg) == ev.VT_PRORES
+    for word in ("software", "libx264", "sw", "cpu"):
+        assert ev.resolve_alpha_encoder(word) == ev.SW_PRORES, word
+    ev.prores_videotoolbox_usable = lambda: False           # type: ignore[assignment]
+    assert ev.resolve_alpha_encoder("auto") == ev.SW_PRORES
+    assert ev.resolve_alpha_encoder("videotoolbox") == ev.SW_PRORES, "a forced VT must pass the probe"
+    assert ev.output_codec(cfg) == ev.SW_PRORES
+    assert ev.output_codec(ev.OverlayConfig(overlay_only=True, alpha_codec=ev.ALPHA_PNG)) == ev.ALPHA_PNG
+
+    vt = ev.alpha_codec_args(ev.ALPHA_PRORES, ev.VT_PRORES)
+    ks = ev.alpha_codec_args(ev.ALPHA_PRORES, ev.SW_PRORES)
+    assert vt[:2] == ["-c:v", "prores_videotoolbox"] and ks[:2] == ["-c:v", "prores_ks"], (vt, ks)
+    for args in (vt, ks):
+        assert args[args.index("-profile:v") + 1] == "4444", args
+        assert "colorspace=bt709" in args[args.index("-vf") + 1], "both label (and convert) 709"
+    assert vt[vt.index("-pix_fmt") + 1] == "bgra" and vt[vt.index("-allow_sw") + 1] == "1", vt
+    assert ks[ks.index("-pix_fmt") + 1] == "yuva444p10le" and "apl0" in ks, ks
+    assert ev.alpha_codec_args(ev.ALPHA_PRORES) == ks, "the default stays the portable encoder"
+
+    spec = ev.ExportSpec(src_path="/v/GX010001.MP4", out_path="/out/overlay.mov", lap_id=1,
+                         t0=10.0, t1=20.0, config=cfg)
+
+    def pipe(encoder):
+        argv = ev.build_encode_cmd(spec, 1280, 720, 30.0, encoder)
+        return argv[argv.index("-pix_fmt") + 1], argv[argv.index("-c:v") + 1]
+    assert pipe(ev.VT_PRORES) == ("bgra", ev.VT_PRORES), "VideoToolbox is fed its own bgra"
+    assert pipe(ev.SW_PRORES) == ("rgba", ev.SW_PRORES)
+    assert pipe(ev.VT_H264) == ("rgba", ev.SW_PRORES), "an H.264 name never reaches the alpha argv"
+
+    # The RENDERER asks the same question, and a sequence is not a ProRes at all.
+    ev.probe_video_size = lambda _p: (1280, 720, 30.0)      # type: ignore[assignment]
+    ev.probe_source_duration = lambda _s: 1.0e9             # type: ignore[assignment]
+    s = StubSession(lap_id=1, t0=10.0, dur=10.0, n=200)
+    ev.prores_videotoolbox_usable = lambda: True            # type: ignore[assignment]
+    assert ev.Renderer(s, spec).encoder == ev.VT_PRORES
+    png = ev.ExportSpec(src_path="/v/GX010001.MP4", out_path="/out/frames", lap_id=1, t0=10.0,
+                        t1=20.0, config=ev.OverlayConfig(overlay_only=True, alpha_codec=ev.ALPHA_PNG))
+    assert ev.Renderer(s, png).encoder == "png"
+    print("ok prores: VideoToolbox only where the probe passes; the pipe follows the encoder")
+
+
+class _VtProresFails(_EnospcEncoder):
+    """A VideoToolbox ProRes encode that dies after a few frames the way a session that will not
+    keep up does — no claim about the disk in its tail."""
+
+    TAIL = b"[prores_videotoolbox @ 0x1] Error encoding frame: -12905\n"
+
+
+def test_a_failed_videotoolbox_prores_retries_once_on_prores_ks_but_not_on_a_full_disk(
+        monkeypatch_restore):
+    """The H.264 path's contract, now on the alpha path: a hardware ProRes encode that fails retries
+    ONCE on prores_ks with an identical spec — still ProRes, still alpha, fed rgba — and a disk that
+    is really full surfaces as DiskFullError with no second encoder started."""
+    s = StubSession(lap_id=2, t0=0.0, dur=2.0, n=400)
+    cfg = ev.OverlayConfig(out_height=720, fps_cap=None, overlay_only=True,
+                           alpha_codec=ev.ALPHA_PRORES)
+    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/exports/lap.mov", lap_id=2, t0=0.0,
+                         t1=2.0, config=cfg)
+    ev.probe_video_size = lambda _p: (1280, 720, 60.0)      # type: ignore[assignment]
+    ev.probe_source_duration = lambda _s: 1.0e9             # type: ignore[assignment]
+    ev.prores_videotoolbox_usable = lambda: True            # type: ignore[assignment]
+    for failing, free, retried in ((_VtProresFails, 90_000_000_000, True),
+                                   (_EnospcEncoder, 90_000_000_000, True),
+                                   (_EnospcEncoder, 1_000_000, False)):
+        started = []
+
+        def fake_popen(cmd, _started=started, _failing=failing, **_kw):
+            encoder = cmd[cmd.index("-c:v") + 1]
+            _started.append((encoder, cmd[cmd.index("-pix_fmt") + 1]))
+            return _failing(fail_after=5) if encoder == ev.VT_PRORES else _FakeProc()
+
+        ev.subprocess.Popen = fake_popen                    # type: ignore[assignment]
+        ev.free_bytes = lambda _p, purgeable=True, _f=free: _f   # type: ignore[assignment]
+        r = ev.Renderer(s, spec)
+        assert r.encoder == ev.VT_PRORES, r.encoder
+        try:
+            res, raised = r.run(), None
+        except Exception as exc:  # noqa: BLE001 — the TYPE is what is under test
+            res, raised = None, exc
+        if retried:
+            assert started == [(ev.VT_PRORES, "bgra"), (ev.SW_PRORES, "rgba")], (
+                f"{failing.__name__}: a failed VideoToolbox ProRes did not retry once on "
+                f"prores_ks: {started} ({raised!r})")
+            assert raised is None and res is not None and res.frames == 120, (raised, res)
+        else:
+            assert started == [(ev.VT_PRORES, "bgra")], f"a full disk started a retry: {started}"
+            assert isinstance(raised, ev.DiskFullError), f"{type(raised).__name__}: {raised}"
+            est = ev.estimate_output_bytes(1280, 720, 60.0, ev.clip_seconds(0.0, 2.0, 60.0),
+                                           "high", ev.VT_PRORES)
+            assert ev.fmt_bytes(ev.floor_bytes(est, ev.VT_PRORES)) in str(raised), str(raised)
+    print("ok prores: a failed VideoToolbox encode retries once on prores_ks; a full disk does not")
+
+
+def _decode_rgba(path, index, w, h):
+    """Frame `index` of `path` as an (h, w, 4) uint8 array, decoded by ffmpeg."""
+    raw = subprocess.run(
+        [ev.FFMPEG, "-nostdin", "-loglevel", "error", "-i", path,
+         "-vf", f"select=eq(n\\,{index})", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba",
+         "pipe:1"], capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.uint8).reshape(h, w, 4)
+
+
+def _prores_stream(path):
+    return subprocess.run(
+        [ev.FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=codec_name,profile,pix_fmt,color_space:stream_tags=encoder",
+         "-of", "default=noprint_wrappers=1", path],
+        capture_output=True, text=True, check=True).stdout
+
+
+def test_the_alpha_round_trip_is_straight_and_the_probe_can_say_no(monkeypatch_restore):
+    """The probe that admits VideoToolbox is only worth its cost if it can FAIL: a premultiplying
+    path hands an NLE a grey halo round every half-transparent edge. prores_ks — the fallback, and
+    CI's encoder — must pass it; the same encoder with a premultiply spliced in front must not;
+    VideoToolbox must pass it wherever a session opens (skipped where none does)."""
+    if not _require_ffmpeg("alpha_round_trip"):
+        return
+    assert ev.prores_alpha_round_trip(ev.SW_PRORES), "prores_ks lost the straight alpha"
+    straight = ev._PRORES_REC709
+    ev._PRORES_REC709 = "premultiply=inplace=1," + straight
+    try:
+        assert not ev.prores_alpha_round_trip(ev.SW_PRORES), (
+            "the probe passed a PREMULTIPLIED encode — it cannot tell a grey halo from a white one")
+    finally:
+        ev._PRORES_REC709 = straight
+    if ev.prores_videotoolbox_usable():
+        assert ev.prores_alpha_round_trip(ev.VT_PRORES)
+        print("ok prores: straight alpha on prores_ks and VideoToolbox; a premultiply fails")
+    else:
+        print("ok prores: straight alpha on prores_ks; a premultiply fails "
+              "(skip VideoToolbox: no ProRes session opens here)")
+
+
+def test_real_prores_overlay_falls_back_to_prores_ks_and_matches_videotoolbox(monkeypatch_restore):
+    """A REAL overlay-only render whose VideoToolbox encode is made to fail must come out of the
+    prores_ks retry as a real ProRes 4444 with an alpha plane, labelled 709. Where VideoToolbox
+    ProRes works, the same frames rendered through it must decode to the SAME picture: identical
+    coverage, and the colour under it within ProRes's own rounding — a fallback that changed the
+    overlay's colours would not be a fallback."""
+    if not _require_ffmpeg("real_prores_fallback"):
+        return
+    import tempfile
+    real_probe, vt_here = ev.probe_video_size, ev.prores_videotoolbox_usable()
+    ev.probe_video_size = lambda _p: (640, 360, 30.0)       # type: ignore[assignment]
+    ev.probe_source_duration = lambda _s: 1.0e9             # type: ignore[assignment]
+    s = StubSession(lap_id=1, t0=0.0, dur=1.0, n=60)
+    real_args = ev.alpha_codec_args
+
+    def render(out, encoder_word):
+        spec = ev.ExportSpec(src_path="/v/GX010001.MP4", out_path=out, lap_id=1, t0=0.0, t1=1.0,
+                             config=ev.OverlayConfig(out_height=360, overlay_only=True,
+                                                     alpha_codec=ev.ALPHA_PRORES,
+                                                     encoder=encoder_word))
+        r = ev.Renderer(s, spec)
+        return r.encoder, r.run()
+
+    with tempfile.TemporaryDirectory(prefix="e5-prores-") as td:
+        # 1. VideoToolbox forced in and broken: the retry must deliver prores_ks.
+        ev.prores_videotoolbox_usable = lambda: True        # type: ignore[assignment]
+
+        def broken(alpha_codec, encoder=ev.SW_PRORES):
+            if encoder == ev.VT_PRORES:
+                return ["-c:v", ev.VT_PRORES, "-profile:v", "no-such-profile"]
+            return real_args(alpha_codec, encoder)
+        ev.alpha_codec_args = broken                        # type: ignore[assignment]
+        fell_back = os.path.join(td, "fell_back.mov")
+        first, res = render(fell_back, "auto")
+        assert first == ev.VT_PRORES and res.frames == 30, (first, res)
+        info = _prores_stream(fell_back)
+        for want in ("codec_name=prores", "profile=4444", "pix_fmt=yuva444p12le",
+                     "color_space=bt709", "prores_ks"):
+            assert want in info, f"{want!r} missing from the fallback's stream:\n{info}"
+        assert real_probe(fell_back)[:2] == (640, 360)
+        ks = _decode_rgba(fell_back, 15, 640, 360)
+        alpha = ks[..., 3]
+        assert (alpha == 0).mean() > 0.5 and (alpha == 255).any() and ((alpha > 0) & (alpha < 255)).any(), (
+            "the fallback's alpha is not a real plane (transparent, opaque AND edge pixels)")
+        with open(fell_back, "rb") as fh:
+            assert b"apl0" in fh.read(), "prores_ks must keep the apl0 vendor tag"
+        ev.alpha_codec_args = real_args                     # type: ignore[assignment]
+        if not vt_here:
+            print("ok prores: a broken VideoToolbox encode fell back to a real prores_ks 4444 "
+                  "(skip the VideoToolbox comparison: no ProRes session opens here)")
+            return
+        # 2. The same frames through a working VideoToolbox: the same picture.
+        ev.prores_videotoolbox_usable = lambda: True        # type: ignore[assignment]
+        on_vt = os.path.join(td, "videotoolbox.mov")
+        used, _ = render(on_vt, "auto")
+        assert used == ev.VT_PRORES
+        info = _prores_stream(on_vt)
+        for want in ("profile=4444", "pix_fmt=yuva444p12le", "color_space=bt709"):
+            assert want in info, f"{want!r} missing from VideoToolbox's stream:\n{info}"
+        with open(on_vt, "rb") as fh:
+            assert b"apl0" in fh.read(), "VideoToolbox's frames carry no apl0 vendor tag"
+        vt = _decode_rgba(on_vt, 15, 640, 360)
+        d_alpha = np.abs(vt[..., 3].astype(int) - alpha.astype(int))
+        covered = (alpha == 255) & (vt[..., 3] == 255)
+        d_rgb = np.abs(vt[..., :3].astype(int) - ks[..., :3].astype(int))[covered]
+        print(f"   VT vs prores_ks, frame 15: alpha max|d| {d_alpha.max()}, opaque rgb mean|d| "
+              f"{d_rgb.mean():.2f} max|d| {d_rgb.max()}")
+        assert d_alpha.max() <= 2, f"the two encoders disagree on coverage by {d_alpha.max()}"
+        assert d_rgb.mean() < 1.0 and d_rgb.max() <= 8, (
+            f"the two encoders' colours differ: mean {d_rgb.mean():.2f}, max {d_rgb.max()}")
+    print("ok prores: the fallback is a real 4444 with alpha; VideoToolbox decodes to the same picture")
 
 
 # ======================================================================== export SCOPE

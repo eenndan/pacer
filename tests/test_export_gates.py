@@ -50,6 +50,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,6 +97,7 @@ from studio import (  # noqa: E402
     export_data,
     export_video,
 )
+from studio._signal import fmt_hms  # noqa: E402
 from studio.app import APP_NAME, StudioWindow  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: E402
@@ -1939,6 +1941,180 @@ def test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk
     print("ok E3: without VideoToolbox the claim is still checked: generic with room, true when full")
 
 
+# ==================================== E5 — an honest "Source" estimate, and the remembered choices
+# The owner's "video export has become extremely slow" was his own remembered choice — overlay-only
+# ProRes 4444 at Source resolution — reopened every time with no size or time for "Source" and
+# nothing saying the heavy rows were his last export's, still in force.
+_E5_FRAME = (3840, 2160, 60000 / 1001)       # the working set's GoPro frame
+
+
+def test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known():
+    """"Source" said nothing at all: `_export_size_hint` returned "" for its 99999 sentinel because
+    the dialog never learned the footage's frame. With the frame (`source`) every row is sized by
+    `frame_geometry` — the renderer's own rule, never-upscale clamp included — and the line adds a
+    time derived from the measured per-path throughput, naming the encoder. Without it, "Source"
+    still says nothing rather than guess."""
+    ctl = ExportController.__new__(ExportController)
+    assert ctl._export_size_hint(23.231, 99999, "high") == "", "no frame yet: nothing to claim"
+
+    enc = export_video.resolve_encoder("auto")
+    frames = int(math.ceil(23.231 * 30))
+    text = ctl._export_size_hint(23.231, 99999, "high", source=_E5_FRAME)
+    est = export_video.estimate_output_bytes(3840, 2160, 30.0, 23.231, "high", enc)
+    took = export_video.estimate_render_seconds(3840, 2160, frames, enc)
+    assert text.startswith(f"About {export_video.fmt_bytes(est)} — {frames} frames to render "
+                           f"at 30 fps with {enc}, about {fmt_hms(took)} to render."), text
+    # A 16:9 source sizes 1080p exactly as the 16:9 guess always did; a 1080p SOURCE clamps the
+    # 1440p row to its own frame (never upscaled) instead of promising 1440p's bytes.
+    assert (ctl._export_size_hint(23.231, 1080, "high", source=_E5_FRAME)
+            == ctl._export_size_hint(23.231, 1080, "high"))
+    hd = (1920, 1080, 30.0)
+    assert (ctl._export_size_hint(23.231, 1440, "high", source=hd)
+            == ctl._export_size_hint(23.231, 1080, "high", source=hd))
+
+    # THE OWNER'S EXPORT: MK's best lap with 5 s either side (77.479 s), overlay-only ProRes at
+    # Source. The line names the encoder the probe chose and its own time — 1:06 on VideoToolbox
+    # (measured 65.2 s), 2:28 on prores_ks (measured 145.3 s) — and, until the probe has answered,
+    # names only the format and claims no time.
+    real_known = export_video.known_alpha_encoder
+    owner = {}
+    try:
+        for codec in (export_video.VT_PRORES, export_video.SW_PRORES, None):
+            export_video.known_alpha_encoder = lambda choice="auto", _c=codec: _c
+            owner[codec] = ctl._export_size_hint(77.479, 99999, "high", export_video.ASPECT_SOURCE,
+                                                 export_video.ALPHA_PRORES, source=_E5_FRAME)
+    finally:
+        export_video.known_alpha_encoder = real_known
+    assert "2325 frames" in owner[None], owner
+    assert "with ProRes 4444 via prores_videotoolbox, about 1:06 to render" in owner[
+        export_video.VT_PRORES], owner
+    assert "with ProRes 4444 via prores_ks, about 2:28 to render" in owner[
+        export_video.SW_PRORES], owner
+    assert "with ProRes 4444. " in owner[None] and "to render." not in owner[None], owner
+    for text in owner.values():
+        assert text.startswith("About 1.") and " GB — " in text, text     # ~1.5 GB, measured 1.52
+    print("ok E5: Source states a size and a time once the frame is known")
+
+
+def test_the_real_dialog_learns_the_source_frame_behind_itself():
+    """The dialog must never wait on ffprobe: it starts the probe on a thread, opens with what it
+    has, and redraws the hint when the frame lands. Driven on the REAL dialog with the REAL
+    background warm-up; only the ffprobe answer is stood in for (a 4K frame for a temp file)."""
+    _clear_export_preset()
+    prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
+    real_probe = export_video.probe_video_size
+    calls = []
+    with tempfile.TemporaryDirectory(prefix="e5-src-") as td:
+        src = os.path.join(td, "GX010099.MP4")
+        with open(src, "wb") as fh:
+            fh.write(b"not really a video")
+        export_video.probe_video_size = lambda p: (calls.append(p), _E5_FRAME)[1]
+        win = _window(FakeSession(), paths=(src,))
+        texts = []
+
+        def on_dialog(dlg):
+            hint = [w for w in dlg.findChildren(QLabel) if "Output:" in w.text()][0]
+            texts.append(hint.text())
+            deadline = time.monotonic() + 10.0
+            while "3840x2160" not in hint.text() and time.monotonic() < deadline:
+                _APP.processEvents()
+                time.sleep(0.02)
+            texts.append(hint.text())
+            return QDialog.Rejected
+
+        try:
+            _run_options_dialog(win, on_dialog)
+        finally:
+            export_video.probe_video_size = real_probe
+        win.hide()
+    assert calls == [src], f"the source was not probed exactly once, behind the dialog: {calls}"
+    assert "Output: 3840x2160, the footage's own resolution." in texts[-1], texts
+    assert "frames to render" in texts[-1] and "to render." in texts[-1], texts
+    _clear_export_preset()
+    print("ok E5: the dialog learns the source frame behind itself and redraws the hint")
+
+
+def _export_rows(dlg):
+    return {label: _combo(dlg, label).currentIndex() for label in
+            ("Export", "Run-up / run-off", "Shape", "Source frame", "Contents", "Resolution",
+             "Quality")}
+
+
+_E5_DEFAULT_ROWS = {"Export": 0, "Run-up / run-off": 0, "Shape": 0, "Source frame": 0,
+                    "Contents": 0, "Resolution": 1, "Quality": 0}
+
+
+def _stored_export_prefs():
+    data = prefs.load()
+    return {k: data.get(k) for k in ExportController._EXPORT_DEFAULT_INDEX}
+
+
+def test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_rows():
+    """Opening on a remembered overlay-only ProRes at Source (+ a 5 s run-up) shows ONE line naming
+    the two heavy rows and a "Use defaults" action. The action puts every row back to its default,
+    hides the line and writes NOTHING: prefs are written on Export, as they always were — so a
+    Cancel after it leaves the remembered choice in place, and an Export after it stores the
+    defaults. A dialog opening on the defaults shows no such line."""
+    _clear_export_preset()
+    prefs.set(ExportController._PREF_EXPORT_CONTENT, 1)
+    prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
+    prefs.set(ExportController._PREF_EXPORT_LEAD, 1)
+    remembered = _stored_export_prefs()
+    win = _window(FakeSession())
+    seen = {}
+
+    def reset_then(verdict):
+        def on_dialog(dlg):
+            recall = dlg.findChild(QWidget, "exportRememberedChoices")
+            assert recall is not None and not recall.isHidden(), "no remembered-choices line"
+            seen["text"] = " ".join(w.text() for w in recall.findChildren(QLabel))
+            seen["opened"] = _export_rows(dlg)
+            button = [b for b in recall.findChildren(QPushButton) if b.text() == "Use defaults"]
+            assert len(button) == 1 and not button[0].autoDefault(), "Return must still mean Export"
+            button[0].click()
+            seen["after"] = _export_rows(dlg)
+            seen["hidden"] = recall.isHidden()
+            seen["prefs_after_click"] = _stored_export_prefs()
+            return verdict
+        return on_dialog
+
+    assert _run_options_dialog(win, reset_then(QDialog.Rejected)) is None
+    assert "Overlay only — ProRes 4444 (alpha)" in seen["text"], seen["text"]
+    assert "Source (no downscale)" in seen["text"], seen["text"]
+    assert seen["opened"]["Contents"] == 1 and seen["opened"]["Resolution"] == 3, seen["opened"]
+    assert seen["after"] == _E5_DEFAULT_ROWS, f"Use defaults left rows behind: {seen['after']}"
+    assert seen["hidden"], "the line still claims the remembered choices after Use defaults"
+    assert seen["prefs_after_click"] == remembered, "Use defaults wrote prefs before Export"
+    assert _stored_export_prefs() == remembered, "a Cancel after Use defaults changed the prefs"
+
+    # Use defaults, then Export: the defaults are what is stored, exactly as any Export stores.
+    choice = _run_options_dialog(win, reset_then(QDialog.Accepted))
+    assert choice is not None and not choice.config.overlay_only
+    assert choice.config.out_height == 1080 and choice.lead == 0.0, choice
+    assert _stored_export_prefs() == dict(ExportController._EXPORT_DEFAULT_INDEX)
+
+    # On the defaults there is nothing to name.
+    def on_defaults(dlg):
+        seen["none"] = dlg.findChild(QWidget, "exportRememberedChoices")
+        return QDialog.Rejected
+    _run_options_dialog(win, on_defaults)
+    assert seen["none"] is None, "a dialog on the defaults shows the remembered-choices line"
+
+    # Source alone is named alone (and the lighter remembered rows are not the line's business).
+    prefs.set(ExportController._PREF_EXPORT_RES, ExportController._EXPORT_RES_SOURCE)
+
+    def on_source(dlg):
+        recall = dlg.findChild(QWidget, "exportRememberedChoices")
+        seen["source_only"] = " ".join(w.text() for w in recall.findChildren(QLabel))
+        return QDialog.Rejected
+    _run_options_dialog(win, on_source)
+    assert "Source (no downscale)" in seen["source_only"], seen["source_only"]
+    assert "Overlay only" not in seen["source_only"], seen["source_only"]
+    win.hide()
+    _clear_export_preset()
+    print("ok E5: remembered heavy choices are named; Use defaults resets the rows only")
+
+
 def _run_all():
     test_a_zero_lap_recording_disables_every_data_export_with_a_reason()
     test_a_zero_lap_export_writes_nothing_and_says_why()
@@ -1978,6 +2154,9 @@ def _run_all():
     test_a_false_no_space_takes_the_libx264_retry_and_never_says_disk_full()
     test_a_disk_that_really_filled_gets_no_retry_and_a_true_sentence()
     test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk()
+    test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known()
+    test_the_real_dialog_learns_the_source_frame_behind_itself()
+    test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_rows()
     print("ALL OK")
 
 

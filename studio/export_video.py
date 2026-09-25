@@ -1389,8 +1389,9 @@ def probe_video_size(src_path: str) -> tuple[int, int, float]:
 # reads only these caches, refreshing its hint when they fill.
 #
 # Keyed on the file's path, size and mtime: a recording replaced under the same name is asked
-# again. The renderer never reads this cache — it probes its own source, as it always has.
-_VIDEO_SIZE_CACHE: dict[tuple[str, int, int], tuple[int, int, float]] = {}
+# again. A file that could not be asked is remembered as None, so nobody waits on it twice. The
+# renderer never reads this cache — it probes its own source, as it always has.
+_VIDEO_SIZE_CACHE: dict[tuple[str, int, int], tuple[int, int, float] | None] = {}
 
 
 def _video_size_key(path: str) -> tuple[str, int, int] | None:
@@ -1418,7 +1419,7 @@ def remember_video_size(path: str | None) -> tuple[int, int, float] | None:
         try:
             _VIDEO_SIZE_CACHE[key] = probe_video_size(key[0])
         except (OSError, subprocess.SubprocessError, RuntimeError, ValueError):
-            return None
+            _VIDEO_SIZE_CACHE[key] = None
     return _VIDEO_SIZE_CACHE[key]
 
 
@@ -1435,10 +1436,10 @@ def known_alpha_encoder(choice: str = "auto") -> str | None:
 
 
 def export_probes_ready(src_path: str | None) -> bool:
-    """True once everything the picker's hint reads is known: the source's frame (when there is a
-    source) and which ProRes encoder this machine gets."""
-    return (known_alpha_encoder() is not None
-            and (not src_path or known_video_size(src_path) is not None))
+    """True once everything the picker's hint reads has been asked: the source's frame (when there
+    is a file to ask) and which ProRes encoder this machine gets."""
+    key = _video_size_key(src_path) if src_path else None
+    return known_alpha_encoder() is not None and (key is None or key in _VIDEO_SIZE_CACHE)
 
 
 def warm_export_probes(src_path: str | None) -> threading.Thread | None:
@@ -1568,9 +1569,13 @@ X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured
 # bytes: each frame file also rounds up to a 4 KiB block (+1.9-2.3 KB a frame measured, up to
 # +2.8 % of the estimate), which only ever makes the real usage LARGER, so the floor leaves it out.
 #
+# The ratios in the table are against the FLAT 1080p figure the estimate used until E5. Since E5
+# `estimate_output_bytes` applies that measured ~short_side^-0.5 itself, so the 4K alpha files
+# land ~1.0 of their estimate instead of ~0.7, and the same floors now sit further below them.
+#
 # PRORES THROUGH VIDEOTOOLBOX sits in the same band against its own central figure
-# (`PRORES_VT_4444_BPP`): 1.004 and 1.051 at 1080p, 0.700 at 2160p, on the three renders measured
-# there — so it keeps prores_ks's floor, with the same room below the lowest.
+# (`PRORES_VT_4444_BPP`): 1.004 and 1.051 at 1080p, 0.700 at 2160p against the flat figure (0.990
+# with the short-side scaling), on the three renders measured there — so it keeps prores_ks's floor.
 FREE_SPACE_FLOOR_FRACTION = {
     VT_H264: 0.60, SW_H264: 0.06, ALPHA_PRORES: 0.55, ALPHA_PNG: 0.50,
     SW_PRORES: 0.55, VT_PRORES: 0.55,
@@ -1637,12 +1642,20 @@ def estimate_output_bytes(out_w: int, out_h: int, fps: float, seconds: float,
     if not (seconds > 0) or out_w <= 0 or out_h <= 0:
         return 0
     rate = max(float(fps), 1.0)
+    # The alpha outputs' figures are 1080p ones, and an overlay costs LESS per pixel on a bigger
+    # frame: its strokes grow with the short side, its transparent area with the square. Measured,
+    # bits/px/frame against (1080 / short side) ** 0.5: prores_ks 1.118 / 0.876 / 0.745 at
+    # 720 / 1080 / 1440 (predicted 1.073 / - / 0.759), 0.881 -> 0.610 from 1080p to 2160p on MK
+    # (x0.692, predicted x0.707), VideoToolbox 0.907 -> 0.632 (x0.697); PNG 0.401 / 0.311 / 0.263
+    # (predicted 0.381 / - / 0.269). Without it "Source" on 4K footage promised 2.2 GB for the
+    # owner's lap and wrote 1.52; with it the estimate says 1.54.
+    alpha_scale = (OVERLAY_REF_SHORT_SIDE / max(min(out_w, out_h), 1)) ** 0.5
     if codec in (ALPHA_PRORES, SW_PRORES):
-        bits_per_s = out_w * out_h * rate * PRORES_4444_BPP
+        bits_per_s = out_w * out_h * rate * PRORES_4444_BPP * alpha_scale
     elif codec == VT_PRORES:
-        bits_per_s = out_w * out_h * rate * PRORES_VT_4444_BPP
+        bits_per_s = out_w * out_h * rate * PRORES_VT_4444_BPP * alpha_scale
     elif codec == ALPHA_PNG:
-        bits_per_s = out_w * out_h * rate * PNG_SEQUENCE_BPP
+        bits_per_s = out_w * out_h * rate * PNG_SEQUENCE_BPP * alpha_scale
     else:
         bpp, crf = quality_params(quality)
         if codec == VT_H264:
