@@ -11,10 +11,12 @@ here rather than quoted:
   1. how many cells / edges are resolved at all, per recording;
   2. COACHING: the per-corner median loss, its rank and its evidence gate, counted both ways;
   3. the IDEAL LAP: which segment donors sit on an unresolved edge, and the total either way;
-  4. BRAKING: the per-corner "m later" habit and its lap count, both ways;
+  4. BRAKING: the per-corner median "m later" (the `Bound m (est)` column since L8) and its lap
+     count, both ways;
   5. COASTING: the ranked places and the leader's separation, both ways;
-  6. the per-lap CSV: how many of the exported corner cells are interpolated;
-  7. T15: how many ranked coaching rows the brake hint's geometry gate suppresses.
+  6. the per-lap CSV: how many of the exported corner cells are interpolated.
+(A seventh section measured the brake hint's T15 geometry gate; L7 took the hint off the Coaching
+rows and L8 retired the braking habit it read, so the gate has nothing left to gate.)
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p9_interpolated_consumers
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p9_interpolated_consumers 0060
@@ -205,9 +207,9 @@ def report_braking(s, ids, cells) -> None:
             per_cid_all[bp.cid].append(float(bp.metres_later))
             if res_by_lap[i][index[bp.cid]]:
                 per_cid_rule[bp.cid].append(float(bp.metres_later))
-    shipped = {h.cid: h for h in s.coaching_brake_points().values()}
-    print("4. BRAKING — the per-corner habit (median m later), every cell vs the rule, "
-          "and what the app now prints")
+    shipped = {b.cid: b for b in s.brake_report() if b.n > 0}
+    print("4. BRAKING — the per-corner median m later (the Bound m (est) column), every cell vs "
+          "the rule, and what the app now prints")
     print("   corner  laps_all  laps_rule   m_all   m_rule      Δm   shipped (laps)")
     for c in corner_list:
         a, b = per_cid_all[c.cid], per_cid_rule[c.cid]
@@ -215,7 +217,7 @@ def report_braking(s, ids, cells) -> None:
         h = shipped.get(c.cid)
         print(f"   C{c.cid:<4}  {len(a):>8}  {len(b):>9}  {ma:>+6.1f}  {mb:>+6.1f}  "
               f"{mb - ma:>+6.1f}   "
-              f"{'—' if h is None else f'{float(h.metres_later):+6.1f} ({int(h.n_laps)})'}")
+              f"{'—' if h is None else f'{float(h.metres_later_med):+6.1f} ({int(h.n)})'}")
 
 
 # ─── 5. coasting ─────────────────────────────────────────────────────────────────────────────────
@@ -286,43 +288,6 @@ def report_export(s) -> None:
           f"{unresolved} of them interpolated ({100 * unresolved / max(got, 1):.1f} %)")
 
 
-# ─── 7. T15: the brake hint's geometry gate ──────────────────────────────────────────────────────
-def report_hint_gate(s) -> None:
-    from studio import coaching, coaching_panel
-
-    opps = s.coaching_opportunities()
-    habits = s.coaching_brake_points()
-    ranked = [r for r in opps.rows if r.evidence.ranked]
-    shown, suppressed, no_habit = [], [], []
-    for r in ranked:
-        bp = habits.get(r.cid)
-        if bp is None or int(bp.n_laps) < coaching.MIN_BRAKE_LAPS:
-            no_habit.append(r.cid)
-            continue
-        if abs(float(bp.metres_later)) < coaching_panel.BRAKE_HINT_MIN_M:
-            no_habit.append(r.cid)
-            continue
-        past = float(bp.optimal_brake_dist) - float(r.entry_dist)
-        (suppressed if past > coaching.BRAKE_APPROACH_M else shown).append(
-            (r.cid, past))
-    print(f"7. T15 — {len(ranked)} ranked rows; the L5-10 geometry gate suppresses "
-          f"{len(suppressed)} of them {[f'C{c}' for c, _ in suppressed]}, "
-          f"{len(shown)} keep the hint, {len(no_habit)} have no hint to gate "
-          f"{[f'C{c}' for c in no_habit]}")
-    print("   corner  turn-in m   apex m  optimum m   past turn-in  habit m   hint")
-    corner_of = {int(c.cid): c for c in s.corners.corner_list()}
-    for r in sorted(ranked, key=lambda r: r.cid):
-        bp = habits.get(r.cid)
-        if bp is None:
-            continue
-        c = corner_of[int(r.cid)]
-        past = float(bp.optimal_brake_dist) - float(r.entry_dist)
-        gate = past > coaching.BRAKE_APPROACH_M
-        print(f"   C{r.cid:<4}  {float(r.entry_dist):>9.1f}  {float(c.apex):>7.1f}  "
-              f"{float(bp.optimal_brake_dist):>9.1f}  {past:>+12.1f}  "
-              f"{float(bp.metres_later):>+7.1f}   {'suppressed' if gate else 'shown'}")
-
-
 def probe_recording(name: str) -> None:
     from studio.session import Session
 
@@ -348,7 +313,6 @@ def probe_recording(name: str) -> None:
     report_braking(s, ids, cells)
     report_coasting(s, ids, [list(e) for e in edges])
     report_export(s)
-    report_hint_gate(s)
 
 
 def main() -> None:

@@ -571,13 +571,13 @@ def apply_provisional_style(item, on: bool = True) -> None:
 
 
 # A separate, lighter trust tier from PROVISIONAL: an ESTIMATED value is a real inferred reading the
-# product DOES stand behind as an estimate (grip utilisation, the brake/throttle band, brake-point
-# hints), not an unverified one to demote. It carries the same "(est)"/ESTIMATED wording the inferred
-# brake/throttle band + brake-point coaching already use, so every estimate reads identically; the
-# cell stays full-strength (no muting/italic) because it IS a value to trust as an estimate — the
-# label is what signals the tier.
+# product DOES stand behind as an estimate (grip utilisation, the brake/throttle band, the
+# brake-point model's bound), not an unverified one to demote. It carries the same
+# "(est)"/ESTIMATED wording the inferred brake/throttle band + Stats ▸ BRAKING's bound already use,
+# so every estimate reads identically; the cell stays full-strength (no muting/italic) because it
+# IS a value to trust as an estimate — the label is what signals the tier.
 # The ONE canonical short form for an inline "estimated" badge/suffix. Everything user-facing that
-# marks a value as estimated uses this (grip column, brake-point hints, the brake/throttle legend),
+# marks a value as estimated uses this (grip column, BRAKING's bound, the brake/throttle legend),
 # so the app never spells it four ways ("(est)"/"(EST)"/"ESTIMATED"/"(est.)"). Longer explanatory
 # tooltip PROSE may still say the full word "estimated"; only the short chips/suffixes unify here.
 #

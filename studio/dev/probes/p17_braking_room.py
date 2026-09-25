@@ -25,13 +25,16 @@ WHAT EACH MUST CLEAR — the brief's three questions, and a fourth the absolute 
       of onset against the time through [enter, exit], [enter − 60 m, exit] and [enter − 100 m,
       exit], permutation p), and is the latest-braking quarter quicker than a random quarter?
 It also prints what the absolute hint tracks across corners: the braking zone's kinetic-energy drop
-(v_onset² − v_apex²)/2 per kg, and the driver's own mean deceleration onset → apex over a_max.
+(v_onset² − v_apex²)/2 per kg, and the driver's own mean deceleration onset → apex over a_max. And
+(L8, which relabelled the Stats ▸ BRAKING column as the model's bound rather than removing it) the
+absolute figure's 95 % bootstrap band per Sandown corner, and where two days' bands do not overlap.
 
 IT READS THE APP'S OWN LIST. The per-lap rows are rebuilt the way `Session._brake_rows` builds them
 (clean laps, cells matched on track, the reference-odometer scale) and asserted EQUAL to
-`_brake_rows()` before anything is computed, so the probe measures the list both braking surfaces
-medianize, not a copy of it. Outcome windows go onto each lap through the SAME warp
-`lap_brake_points` uses (`corners.project_boundaries` with the driving service's memo).
+`_brake_rows()` before anything is computed, so the probe measures the list Stats ▸ BRAKING
+medianizes (and the Coaching hint did, until L7), not a copy of it. Outcome windows go onto each
+lap through the SAME warp `lap_brake_points` uses (`corners.project_boundaries` with the driving
+service's memo).
 
 Its verdict is `studio/docs/refused-2026-09.md` §16.
 
@@ -110,6 +113,14 @@ def quarter_null(values, k: int, rng) -> tuple[float, float]:
     return float(lo), float(hi)
 
 
+def median_ci(values, rng) -> tuple[float, float]:
+    """The 95 % bootstrap band of the median (N_PERM resamples): the column's own sampling spread."""
+    v = np.asarray(values, float)
+    meds = np.median(rng.choice(v, size=(N_PERM, len(v)), replace=True), axis=1)
+    lo, hi = np.percentile(meds, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
 def _rng(rec_i: int, cid: int, test: int) -> np.random.Generator:
     """One seeded stream per (recording, corner, test), so a number does not depend on which
     recordings the command line asked for."""
@@ -143,7 +154,7 @@ def collect(s) -> dict[int, list[dict]]:
                 and bool(res[index[int(bp.cid)]])]
         row = {bp.cid: (bp.actual_brake_dist * scale,
                         (bp.peak_decel_g / bp.a_max_g) if bp.a_max_g > 0 else None,
-                        bp.metres_later, bp.optimal_brake_dist * scale) for bp in kept}
+                        bp.metres_later) for bp in kept}
         if not row:
             continue
         rebuilt.append(row)
@@ -186,6 +197,7 @@ def measure(rec_i: int, per: dict[int, list[dict]], min_laps: int) -> list[dict]
         k = max(int(round(n / 4)), 2)
         q25, q75 = np.percentile(ml, [25, 75])
         row = dict(cid=cid, n=n, abs=float(np.median(ml)), iqr=float(q75 - q25),
+                   abs_ci=median_ci(ml, _rng(rec_i, cid, 30)),
                    reached=int(np.sum(ml <= 0.0)), ke=float(np.median([r["ke"] for r in rows])),
                    eff=float(np.nanmedian([r["eff"] for r in rows])),
                    r3=float(np.percentile(on, 75) - np.median(on)))
@@ -262,6 +274,20 @@ def summary(results: dict[str, list[dict]], margin: float, floor: float) -> None
         print("    R2 per Sandown corner (0068 / 0064 / 0065): " + "; ".join(
             f"C{c} {' / '.join(f'{by[k][c]:+.1f}' for k in SANDOWN)}" for c in cids)
             + f" — one sign on all three at {len(same)}/{len(cids)}")
+        # L8: whether the ABSOLUTE figure — Stats ▸ BRAKING's "Bound m (est)" — says anything about
+        # the day rather than the track: at one corner, do two days' medians sit outside each other's
+        # bootstrap bands? (It is the question that decided relabelling the column over removing it.)
+        at = {k: {r["cid"]: r for r in results[k]} for k in SANDOWN}
+        moves = [c for c in cids if any(
+            a["abs_ci"][1] < b["abs_ci"][0] or b["abs_ci"][1] < a["abs_ci"][0]
+            for i, a in enumerate(at[k][c] for k in SANDOWN)
+            for b in [at[k][c] for k in SANDOWN][i + 1:])]
+        print("  the absolute figure per Sandown corner, median [95 % bootstrap] on 0068 / 0064 / 0065: "
+              + "; ".join(f"C{c} " + " / ".join(
+                  f"{at[k][c]['abs']:+.1f} [{at[k][c]['abs_ci'][0]:+.1f}, {at[k][c]['abs_ci'][1]:+.1f}]"
+                  for k in SANDOWN) for c in cids)
+              + f" — two days' bands do not overlap at {len(moves)}/{len(cids)} "
+              f"({', '.join(f'C{c}' for c in moves) or 'none'})")
     print(f"  R3: never negative by construction; at or above {floor:g} m at "
           f"{sum(1 for _k, r in allr if r['r3'] >= floor)}/{n}, under it ('already on your best') at "
           f"{sum(1 for _k, r in allr if r['r3'] < floor)}/{n}")
@@ -307,9 +333,9 @@ def main() -> int:
         s = Session.load(paths)
         per = collect(s)
         rows = measure(rec_i, per, coaching.MIN_BRAKE_LAPS)
-        habits = s.coaching_brake_points()
-        assert all(abs(habits[r["cid"]].metres_later - r["abs"]) < 1e-9 for r in rows), \
-            "the hint column is not the app's BrakeHabit median"
+        braking = {b.cid: b for b in s.brake_report()}
+        assert all(abs(braking[r["cid"]].metres_later_med - r["abs"]) < 1e-9 for r in rows), \
+            "the hint column is not the median Stats ▸ BRAKING prints"
         report(key, name, rows, s.driving._a_max(), [x["eff"] for v in per.values() for x in v],
                margin, floor)
         results[key] = rows

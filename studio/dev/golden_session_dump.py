@@ -383,7 +383,7 @@ def fingerprint(s, *, strict: bool = True) -> dict:
 
 def _surfaces(s, out, put, guard, laps, best, cids, sel) -> None:
     """THE USER-FACING NUMBERS NO LEAF ABOVE CARRIED (B1b; board review RISK-7): every SessionStats
-    tile, the ideal-lap Δ family, the BRAKING table and the coaching brake hint, the trust
+    tile, the ideal-lap Δ family, the BRAKING table and the coaching braking direction, the trust
     surfaces (verified, quality strip, marks, provenance panels, the g-meter and gyro cross-checks),
     the picture<->telemetry map, the focus list's window samples and the per-sample map channels.
 
@@ -426,7 +426,6 @@ def _surfaces(s, out, put, guard, laps, best, cids, sel) -> None:
         out["stats"]["gg_cloud"] = guard(cloud)
 
     put("brake_report", lambda: _round(s.brake_report()))
-    put("coaching_brake_points", lambda: _round(s.coaching_brake_points()))
     put("coaching_brake_direction", lambda: _round(s.coaching_brake_direction()))
     put("sector_medians", lambda: _round(s.sector_medians()))
     put("effective_sector_count", lambda: s.effective_sector_count())
