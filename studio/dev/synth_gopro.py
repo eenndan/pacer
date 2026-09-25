@@ -17,7 +17,10 @@ WHAT THE FILE CARRIES, each piece shaped the way the reader needs it (`GPMF_mp4r
   * a `GoPro MET` trak: handler `meta`, sample entry `gpmd`, timescale 1000, one 1.001 s payload per
     sample and one sample per chunk, each payload one `DEVC` holding DVNM "HERO13 Black" and the streams
     the loader reads — ACCL and GYRO (200 per payload, raw element order ZXY, ORIN with no ORIO, as a
-    HERO13 writes them), GRAV and CORI (60 per payload, element order XZY) and GPS9 at 10 Hz.
+    HERO13 writes them), GRAV and CORI (60 per payload, element order XZY) and GPS9 at 10 Hz;
+  * OPT-IN, for the export's end-to-end test (tests/test_export_e2e.py): a 59.94 fps picture, a
+    tone as the sound track and a GoPro-style `tmcd` timecode track (`generate`'s keyword flags).
+    Off by default, and the default files are byte for byte what they were before the flags.
 
 WHAT IS KNOWN EXACTLY, and therefore testable (`Truth`): the circuit's centreline, where the kart was
 at every instant (it drives the centreline; only its speed varies), and hence the lap time between
@@ -570,26 +573,26 @@ def _children(buf: bytes, start: int, end: int):
         pos += size
 
 
-def _video_trak(path: str, delta: int) -> tuple[bytes, bytes, int]:
-    """(the video trak with its chunk offsets moved by `delta`, the mdat body, the movie timescale)
-    of an ffmpeg-written MP4."""
+def _media_traks(path: str, delta: int) -> tuple[list[bytes], bytes, int]:
+    """(every trak with its chunk offsets moved by `delta`, the mdat body, the movie timescale) of
+    an ffmpeg-written MP4 — the picture's, then any tone or timecode track (`_add_tracks`)."""
     with open(path, "rb") as f:
         buf = f.read()
     top = {typ: (pos, size) for typ, pos, size in _children(buf, 0, len(buf))}
     mpos, msize = top[b"mdat"]
     opos, osize = top[b"moov"]
     body_start = mpos + 8
-    trak = mvhd = None
+    traks, mvhd = [], None
     for typ, pos, size in _children(buf, opos + 8, opos + osize):
         if typ == b"trak":
-            trak = bytearray(buf[pos:pos + size])
+            traks.append(bytearray(buf[pos:pos + size]))
         elif typ == b"mvhd":
             mvhd = buf[pos:pos + size]
 
-    def patch(start, end):
+    def patch(trak, start, end):
         for typ, pos, size in _children(trak, start, end):
             if typ in (b"mdia", b"minf", b"stbl"):
-                patch(pos + 8, pos + size)
+                patch(trak, pos + 8, pos + size)
             elif typ in (b"stco", b"co64"):
                 w, fmt = (4, ">I") if typ == b"stco" else (8, ">Q")
                 (count,) = struct.unpack(">I", trak[pos + 12:pos + 16])
@@ -598,22 +601,70 @@ def _video_trak(path: str, delta: int) -> tuple[bytes, bytes, int]:
                     (old,) = struct.unpack(fmt, trak[o:o + w])
                     trak[o:o + w] = struct.pack(fmt, old - body_start + delta)
 
-    patch(8, len(trak))
-    return bytes(trak), buf[body_start:mpos + msize], struct.unpack(">I", mvhd[20:24])[0]
+    for trak in traks:
+        patch(trak, 8, len(trak))
+    return [bytes(t) for t in traks], buf[body_start:mpos + msize], struct.unpack(">I", mvhd[20:24])[0]
 
 
-def _encode_video(out_path: str, frames: int, ffmpeg: str) -> None:
+def _track_id(trak: bytes) -> int:
+    """The track_ID in a trak's tkhd (version 0 or 1)."""
+    for typ, pos, _size in _children(trak, 8, len(trak)):
+        if typ == b"tkhd":
+            wide = trak[pos + 8] == 1                   # version 1: 64-bit creation/modification
+            o = pos + 12 + (16 if wide else 8)
+            return struct.unpack(">I", trak[o:o + 4])[0]
+    raise ValueError("trak without a tkhd")
+
+
+def _encode_video(out_path: str, frames: int, ffmpeg: str,
+                  per_payload: int = FRAMES_PER_PAYLOAD) -> None:
+    rate = per_payload * 1000                             # 30 -> 30000/1001 (29.97 fps)
     subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-                    "color=c=0x1d2330:s=320x180:r=30000/1001", "-frames:v", str(frames),
+                    f"color=c=0x1d2330:s=320x180:r={rate}/1001", "-frames:v", str(frames),
                     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
                     "-pix_fmt", "yuv420p", "-x264-params", "keyint=300:min-keyint=300:scenecut=0",
-                    "-video_track_timescale", "30000", "-an", "-n", out_path],
+                    "-video_track_timescale", str(rate), "-an", "-n", out_path],
                    check=True, capture_output=True)
+
+
+# The OPT-IN tracks a GoPro file carries beside its picture and its GPMF (`generate(audio=,
+# timecode=)`): a sound track, here a steady tone a test can tell from silence, and a `tmcd` track —
+# GoPro stamps each chapter with the time of day, NDF, counted at the picture's own nominal rate (a
+# 59.94 fps HERO13 counts 60 to the timecode second), and chapter N+1 starts where chapter N's count
+# ends. The default recording has neither, so the golden gate's bytes never depend on them.
+TONE_HZ = 1000
+TONE_RATE = 48_000
+
+
+def timecode_at(tc: str, frames: int, count: int) -> str:
+    """The NDF timecode `frames` pictures after `tc`, at `count` pictures per timecode second."""
+    h, m, s, f = (int(x) for x in tc.split(":"))
+    n = (((h * 60 + m) * 60 + s) * count + f + frames) % (24 * 3600 * count)
+    secs, f = divmod(n, count)
+    return f"{secs // 3600:02d}:{secs // 60 % 60:02d}:{secs % 60:02d}:{f:02d}"
+
+
+def _add_tracks(clip: str, out: str, ffmpeg: str, per_payload: int, seconds: float,
+                audio: bool, timecode: str | None) -> None:
+    """Remux one chapter's picture with a tone (`audio`) and/or a `tmcd` track (`timecode`); the
+    video samples are copied, never re-encoded."""
+    cmd = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", clip]
+    if audio:
+        cmd += ["-f", "lavfi", "-i",
+                f"sine=frequency={TONE_HZ}:sample_rate={TONE_RATE}:duration={seconds:.6f}"]
+    cmd += ["-map", "0:v:0", "-c:v", "copy", "-video_track_timescale", str(per_payload * 1000)]
+    if audio:
+        cmd += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "96k"]
+    if timecode:
+        cmd += ["-timecode", timecode]
+    subprocess.run([*cmd, "-n", out], check=True, capture_output=True)
 
 
 def _write_mp4(path: str, payloads: list[bytes], video_mp4: str) -> None:
     ftyp = _box(b"ftyp", b"mp41", struct.pack(">I", 0x20131018), b"mp41")
-    trak_v, vdata, movie_ts = _video_trak(video_mp4, len(ftyp) + 8)
+    traks, vdata, movie_ts = _media_traks(video_mp4, len(ftyp) + 8)
+    # The GPMF trak takes the next free track_ID: 2 behind a lone picture, as it always has.
+    gpmf_id = 1 + max(_track_id(t) for t in traks)
     meta = b"".join(payloads)
     mdat = struct.pack(">I", 8 + len(vdata) + len(meta)) + b"mdat" + vdata + meta
     offsets, off = [], len(ftyp) + 8 + len(vdata)
@@ -625,7 +676,7 @@ def _write_mp4(path: str, payloads: list[bytes], video_mp4: str) -> None:
     dur_movie = n * 1001 * movie_ts // 1000
     stamp = int((START_UTC - dt.datetime(1904, 1, 1, tzinfo=dt.UTC)).total_seconds())
     matrix = struct.pack(">9I", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000)
-    tkhd = _full(b"tkhd", 0x0F, struct.pack(">IIIII", stamp, stamp, 2, 0, dur_movie), b"\0" * 8,
+    tkhd = _full(b"tkhd", 0x0F, struct.pack(">IIIII", stamp, stamp, gpmf_id, 0, dur_movie), b"\0" * 8,
                  struct.pack(">hhhh", 0, 0, 0, 0), matrix, struct.pack(">II", 0, 0))
     mdhd = _full(b"mdhd", 0, struct.pack(">IIIIHH", stamp, stamp, 1000, dur_meta, 0x55C4, 0))
     hdlr = _full(b"hdlr", 0, b"mhlr", b"meta", b"\0" * 12, b"\x0bGoPro MET  ")
@@ -641,9 +692,10 @@ def _write_mp4(path: str, payloads: list[bytes], video_mp4: str) -> None:
                 _full(b"stco", 0, struct.pack(">I", n), struct.pack(f">{n}I", *offsets)))
     trak_m = _box(b"trak", tkhd, _box(b"mdia", mdhd, hdlr, _box(b"minf", gmhd, dinf, stbl)))
     mvhd = _full(b"mvhd", 0, struct.pack(">IIII", stamp, stamp, movie_ts, dur_movie),
-                 struct.pack(">IH", 0x10000, 0x100), b"\0" * 10, matrix, b"\0" * 24, struct.pack(">I", 3))
+                 struct.pack(">IH", 0x10000, 0x100), b"\0" * 10, matrix, b"\0" * 24,
+                 struct.pack(">I", gpmf_id + 1))
     with open(path, "xb") as f:                           # never overwrite anything
-        f.write(ftyp + mdat + _box(b"moov", mvhd, trak_v, trak_m))
+        f.write(ftyp + mdat + _box(b"moov", mvhd, *traks, trak_m))
 
 
 # ------------------------------------------------------------------------------ entry points
@@ -671,13 +723,20 @@ def build(seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2, gps_noise
 def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2,
              gps_noise: float = 1.0, mirror: bool = False, ffmpeg: str | None = None,
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
-             origin: tuple[float, float] = ORIGIN, video=None) -> Recording:
+             origin: tuple[float, float] = ORIGIN, video=None, *,
+             frames_per_payload: int = FRAMES_PER_PAYLOAD, audio: bool = False,
+             timecode: str | None = None) -> Recording:
     """Write the synthetic recording into `out_dir` (created; must not already hold files) and return
     its chapter paths and ground truth. Only the video bytes depend on the ffmpeg build.
 
     `video(path, truth, first_payload, n_payloads, ffmpeg)` writes one chapter's picture: an H.264
-    MP4 of exactly FRAMES_PER_PAYLOAD frames per payload at 29.97 fps, track timescale 30000, no
-    B-frames and no audio (studio/dev/make_demo.py renders one). The default is a flat placeholder."""
+    MP4 of exactly `frames_per_payload` frames per payload (30: 29.97 fps, track timescale 30000;
+    60: 59.94 fps, 60000, as a HERO13 records), no B-frames and no audio (studio/dev/make_demo.py
+    renders one). The default is a flat placeholder.
+
+    OPT-IN, and off by default so the default files stay byte for byte what they were: `audio` adds
+    a TONE_HZ tone as each chapter's sound track, and `timecode` ("HH:MM:SS:FF", NDF) a GoPro-style
+    `tmcd` track starting chapter 1 there, each later chapter continuing the count."""
     # PATH first (a `pixi run` puts the env's bin there), then the running interpreter's own env.
     ffmpeg = (ffmpeg or os.environ.get("PACER_FFMPEG") or shutil.which("ffmpeg")
               or shutil.which("ffmpeg", path=os.path.join(sys.prefix, "bin")))
@@ -694,9 +753,14 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
         for ch, payloads in enumerate(per_chapter, start=1):
             clip = os.path.join(tmp, f"video{ch}.mp4")
             if video is None:
-                _encode_video(clip, len(payloads) * FRAMES_PER_PAYLOAD, ffmpeg)
+                _encode_video(clip, len(payloads) * frames_per_payload, ffmpeg, frames_per_payload)
             else:
                 video(clip, truth, first, len(payloads), ffmpeg)
+            if audio or timecode:
+                picture, clip = clip, os.path.join(tmp, f"tracks{ch}.mp4")
+                _add_tracks(picture, clip, ffmpeg, frames_per_payload, len(payloads) * PAYLOAD_S,
+                            audio, timecode and timecode_at(timecode, first * frames_per_payload,
+                                                            frames_per_payload))
             first += len(payloads)
             path = os.path.join(out_dir, f"GX{ch:02d}{RECORDING_NUMBER:04d}.MP4")
             _write_mp4(path, payloads, clip)
@@ -712,8 +776,13 @@ def main(argv=None) -> int:
     ap.add_argument("--chapters", type=int, default=2)
     ap.add_argument("--gps-noise", type=float, default=1.0)
     ap.add_argument("--mirror", action="store_true", help="drive the circuit anticlockwise")
+    ap.add_argument("--fps60", action="store_true", help="a 59.94 fps picture, as a HERO13 records")
+    ap.add_argument("--audio", action="store_true", help=f"a {TONE_HZ} Hz tone as the sound track")
+    ap.add_argument("--timecode", metavar="HH:MM:SS:FF", help="a GoPro-style NDF tmcd track")
     args = ap.parse_args(argv)
-    rec = generate(args.out, args.seed, args.laps, args.chapters, args.gps_noise, args.mirror)
+    rec = generate(args.out, args.seed, args.laps, args.chapters, args.gps_noise, args.mirror,
+                   frames_per_payload=60 if args.fps60 else FRAMES_PER_PAYLOAD, audio=args.audio,
+                   timecode=args.timecode)
     with open(os.path.join(args.out, "truth.json"), "x") as f:
         json.dump(rec.truth.to_json(), f, indent=1)
     for p in rec.paths:

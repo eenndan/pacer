@@ -66,12 +66,13 @@ set(_ctest test_app_support_jail test_footage_checks)
 # worktree — has no measured costs, so it ran in registration order and the slowest suites started
 # last (CI's test step: 320 s against a 246 s floor, 2026-09-23). Seconds, measured on the dev Mac
 # at -j4 on 2026-09-24 (test_stats / test_stats_ideal on 2026-09-25, when the IDEAL LAP tests split
-# out of test_stats). The footage checks (100) and the soaks (200) sit above these on purpose;
-# their functions below say why, and where they are skipped, starting first costs a second.
+# out of test_stats; test_export_e2e the same day, two real renders). The footage checks (100) and
+# the soaks (200) sit above these on purpose; their functions below say why, and where they are
+# skipped, starting first costs a second.
 set(_cost
-    test_export_video 56  test_central_view_realqt 40  test_pb_toast 35  test_stats_ideal 33
-    test_load_lifecycle 22  test_charts_header_budget 22  test_export_pill_budget 20
-    test_first_run_path 18  test_stats 15)
+    test_export_video 56  test_central_view_realqt 40  test_export_e2e 35  test_pb_toast 35
+    test_stats_ideal 33  test_load_lifecycle 22  test_charts_header_budget 22
+    test_export_pill_budget 20  test_first_run_path 18  test_stats 15)
 # ==========================================================================================
 
 # A name in the table that is not a tests/test_*.py would silently configure nothing: fail instead.
