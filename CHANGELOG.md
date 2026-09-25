@@ -32,9 +32,9 @@ All notable changes to Pacer are documented here. The format is based on
 - A first session's PB card says "First session logged here", offers no share for a best with
   nothing to beat, and no PB card covers the excluded-laps strip (#396)
 - The Library states its privacy promise in one line, with a "Your data & privacy…" button (#396)
-- The PB card leads with that compare; "Share your PB" stays on the card, as a link (#393)
-- The first open shows the PB on its debrief instead of the card, and the debrief leaves the
-  estimated "Brake ~N m later" line off its rows (the Coaching tab still shows it) (#391)
+- The PB card leads with "Compare with your previous PB"; "Share your PB" stays on it, as a link
+  (#393)
+- The first open shows the PB on its debrief instead of the card (#391)
 
 ### Fixed
 
