@@ -163,11 +163,14 @@ jobs:
         # added, so the very first time it ever executed was v0.2.0, where it failed on this line.
         # Bootstrapping keeps PyInstaller opt-in (docs/PACKAGING.md: "intentionally not a project
         # dependency") rather than adding it to the env for everyone.
+        #
+        # PINNED to what built v0.4.1 (its log: PyInstaller 6.22.3, contrib hooks 2026.7): an
+        # unpinned install let any PyInstaller release change the tag build silently (HEALTH-10).
         env:
           PYTHONPATH: ${{ github.workspace }}/bindings/pacer
         run: |
           pixi run python -m ensurepip --upgrade
-          pixi run python -m pip install pyinstaller
+          pixi run python -m pip install "pyinstaller==6.22.3" "pyinstaller-hooks-contrib==2026.7"
           pixi run pyinstaller --noconfirm --clean packaging/pacer.spec
       - name: Assert the .app bundle is well-formed
         run: |
