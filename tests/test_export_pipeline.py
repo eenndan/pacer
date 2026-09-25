@@ -209,13 +209,11 @@ def test_relay_hands_over_and_paints_the_serial_frames():
         finally:
             ev.Renderer._relay_ok = orig
         assert err is None, err
-        # 360 frames of lap + its finish frame (`ev.with_finish_frame`: an unpadded lap clip ends ON
-        # the line, not a frame short of it).
-        assert len(serial) == 361 and len(relayed) == 361, (len(serial), len(relayed))
+        assert len(serial) == 360 and len(relayed) == 360, (len(serial), len(relayed))
         diff = [i for i, (a, b) in enumerate(zip(serial, relayed, strict=True)) if a != b]
         assert not diff, f"the relay painted different frames at {diff[:10]}"
         assert not _export_threads(), _export_threads()
-        print("ok relay: 361/361 frames identical to the serial pump")
+        print("ok relay: 360/360 frames identical to the serial pump")
 
 
 def test_relay_refuses_a_misaligned_decoder_and_still_paints_the_serial_frames():
@@ -318,8 +316,8 @@ def test_frame_order_survives_a_slow_encoder():
         serial, _, _ = _render(_spec(src, 3.0, fps_cap=30.0, workers=1), s)
         slow, r, err = _render(_spec(src, 3.0, fps_cap=30.0), s, delay=0.01)
         assert err is None, err
-        assert slow == serial and len(slow) == 91, (len(slow), len(serial))   # 90 + the finish frame
-    print("ok slow encoder: 91/91 frames in order")
+        assert slow == serial and len(slow) == 90, (len(slow), len(serial))
+    print("ok slow encoder: 90/90 frames in order")
 
 
 def test_the_pool_bounds_memory():

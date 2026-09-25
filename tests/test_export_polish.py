@@ -371,10 +371,11 @@ def test_an_unpadded_clip_ends_on_its_finish_and_reads_the_lap_time():
         src = os.path.join(td, "src.mp4")
         _moving_clip(src, 3.5)
         session = _Session(2.99)
-        spec = ev.ExportSpec(src_path=src, out_path=os.path.join(td, "lap.mp4"), lap_id=1,
-                             t0=0.0, t1=2.99,
-                             config=ev.OverlayConfig(out_height=360, encoder="libx264",
-                                                     hwaccel_decode=False, workers=1))
+        # Through `build_lap_spec`, the one place a lap becomes an export (and the app's path).
+        spec = ev.build_lap_spec(session, os.path.join(td, "lap.mp4"), 1, src_path=src,
+                                 config=ev.OverlayConfig(out_height=360, encoder="libx264",
+                                                         hwaccel_decode=False, workers=1))
+        assert (spec.t0, spec.t1) == (0.0, 2.99), spec
         seen = []
         orig = ev.overlay_values_at
         renderer = ev.Renderer(session, spec)      # (its pill budget walks every frame here)

@@ -589,6 +589,10 @@ class ExportSpec:
     # The session's best lap, resolved once. `is_best` answers "is THIS export's lap the best one"
     # and cannot: in follow mode the answer changes 40 times in one file.
     best_lap_id: int | None = None
+    # A LAP clip cut on its finish line: the render adds the finish frame (`with_finish_frame`).
+    # Set by `build_lap_spec`, the one place a lap becomes an export; a spec built by hand keeps
+    # meaning exactly the frames of [t0, t1).
+    ends_on_finish: bool = False
 
     def __post_init__(self):
         # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
@@ -815,12 +819,11 @@ def with_finish_frame(spec, fps: float):
     freezes the clock on a picture up to 33 ms BEFORE the kart reaches the line, and it would move
     the freeze one frame earlier in every padded clip too, where it is right today.
 
-    Only a single-lap `ExportSpec` with no run-off gains the frame: a padded clip already has it, a
-    full-session clip has no finish of its own, and the compare / duck-typed specs are not lap
-    clips — hence `type(...) is`, since `CompareSpec` subclasses `ExportSpec` and its clip is
-    pane A's lap exactly. Idempotent: the frame is recorded as `lead_out`, so a second pass leaves
+    Only a lap clip `build_lap_spec` cut on the line (`ends_on_finish`) gains the frame: a padded
+    clip already has it, a full-session clip has no finish of its own, and a compare or hand-built
+    spec is not marked. Idempotent: the frame is recorded as `lead_out`, so a second pass leaves
     it alone."""
-    if (type(spec) is not ExportSpec or spec.follow_laps or spec.lead_out > 0.0
+    if (not getattr(spec, "ends_on_finish", False) or spec.follow_laps or spec.lead_out > 0.0
             or not fps or fps <= 0):
         return spec
     step = 1.0 / float(fps)
@@ -4494,7 +4497,7 @@ def build_lap_spec(session, out_path: str, lap_id: int,
                       source=source, config=config or OverlayConfig(),
                       is_best=best_id is not None and int(best_id) == int(lap_id),
                       best_lap_id=best_id,
-                      lead_in=lap_t0 - t0, lead_out=t1 - lap_t1)
+                      lead_in=lap_t0 - t0, lead_out=t1 - lap_t1, ends_on_finish=t1 <= lap_t1)
 
 
 def _best_lap_id(session) -> int | None:

@@ -285,12 +285,8 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
             for layout, frame in ((ec.LAYOUT_STACK, (1920, 2160)), (ec.LAYOUT_SIDE, (3840, 1080))):
                 _s, spec = _spec_pair(config=ec.CompareConfig(out_height=1080, layout=layout))
                 assert spec.output_frame(probe) == (*frame, 30.0), (layout, spec.output_frame(probe))
-                # A hair of run-off keeps the single lap on the compare's own frame plan: an
-                # unpadded lap clip gains its finish frame (`ev.with_finish_frame`), a compare
-                # clip — pane A's lap exactly — does not.
                 single = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=spec.t0, t1=spec.t1,
-                                       src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080),
-                                       lead_out=1e-6)
+                                       src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
                 both = ev.estimate_spec_bytes(spec, probe)
                 one = ev.estimate_spec_bytes(single, probe)
                 # 1 B of rounding: each estimate is truncated to whole bytes on its own.
