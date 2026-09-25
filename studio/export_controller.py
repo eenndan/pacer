@@ -866,18 +866,20 @@ class ExportController:
         export_video.SCOPE_THIS_LAP: "this lap", export_video.SCOPE_BEST_LAP: "best lap",
         export_video.SCOPE_ALL_LAPS: "all laps", export_video.SCOPE_SESSION: "full session",
     }
-    def _overlay_name(self, choice, lap: int | None) -> str:
-        """The default name of an overlay export of `lap` (None = the whole recording), from the
-        recording's own stem: `GX010067_lap14_overlay.mp4`, `GX010067_session_overlay.mp4`, the
-        `_overlay_alpha.mov` track, the `_overlay_png` folder (see
-        `export_video.overlay_output_name`).
+    @staticmethod
+    def _overlay_suffix(choice, lap: int | None) -> str:
+        """What follows the recording's stem in an overlay export's default name, for `lap` (None =
+        the whole recording): `_lap14_overlay.mp4`, `_session_overlay.mp4`, the
+        `_lap14_overlay_alpha.mov` track, the `_lap14_overlay_png` folder (see
+        `export_video.overlay_output_name`). `_export_default` puts the stem in front.
 
         The transparent track keeps a name of its own. It used to be `<stem>_overlay.mov`, one
         letter from the burned-in `<stem>_overlay.mp4` beside it, and nothing in Finder said which
         of the two was the video to watch."""
-        first = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
-        stem = os.path.splitext(os.path.basename(first))[0]
-        return export_video.overlay_output_name(stem, lap, choice.config)
+        return export_video.overlay_output_name("", lap, choice.config)
+    def _overlay_name(self, choice, lap: int | None) -> str:
+        """The default file (or PNG folder) NAME, stem included: `GX010067_lap14_overlay.mp4`."""
+        return os.path.basename(self._export_default(self._overlay_suffix(choice, lap)))
     def _confirm_replace(self, specs, png: bool, panel_asked: bool) -> bool:
         """Ask ONCE before an export overwrites what is already there; True to go ahead.
 
@@ -983,9 +985,8 @@ class ExportController:
         else:
             filt = ("ProRes 4444 with alpha (*.mov)" if choice.config.overlay_only
                     else "MP4 video (*.mp4)")
-            out, _ = QFileDialog.getSaveFileName(
-                self.win, "Export overlay video",
-                os.path.join(home, self._overlay_name(choice, name_lap)), filt)
+            out = self._export_save_path("Export overlay video",
+                                         self._overlay_suffix(choice, name_lap), filt)
             if not out:
                 return
         # Resolve the scope to one spec per output file. The padding goes through the spec
@@ -1367,7 +1368,7 @@ class ExportController:
         listed = "\n".join(names[:5]) + (f"\n… and {len(names) - 5} more" if len(names) > 5 else "")
         files = "file" if len(kept) == 1 else "files"
         box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export cancelled",
-                          f"{APP_NAME} stopped the export after {len(kept)} of {total} {files}. "
+                          f"{APP_NAME} stopped the export after {len(kept)} of {total} files. "
                           f"The finished {files} {'was' if len(kept) == 1 else 'were'} kept:\n\n"
                           f"{listed}\n\n{folder}", parent=self.win)
         reveal_btn = box.addButton("Reveal in Finder", QMessageBox.ActionRole)

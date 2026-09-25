@@ -682,58 +682,67 @@ def test_blocked_session_builds_no_card_and_greys_actions():
     print("test_blocked_session_builds_no_card_and_greys_actions OK")
 
 
-def test_build_card_grabs_the_map_with_the_legend_hidden():
-    """_build_share_card grabs the map thumbnail through the map's grab_clean context, so the dev
-    'Map key' legend is hidden AT grab time (never on the card) and restored after. The map is
-    faked with a legend + a grab_clean context that records the legend's visibility during the
-    grab — mirroring the real MapView contract without a full plot build."""
-    from contextlib import contextmanager
+class _TracedSession(FakeSession):
+    """FakeSession with `lap_channels`: the best lap (3) an ellipse, every other lap a figure-eight
+    far to the east — so a thumbnail that draws anything but the best lap's own samples is caught."""
 
-    class _FakeLegend(QWidget):
-        pass
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.asked = []
 
-    class _FakeMap(QWidget):
-        def __init__(self):
-            super().__init__()
-            self.resize(80, 60)
-            self.legend = _FakeLegend(self)
-            self.legend.setVisible(True)
-            self.grab_calls = []
+    def lap_channels(self, lap_id):
+        import numpy as np
+        self.asked.append(lap_id)
+        a = np.linspace(0.0, 2 * np.pi, 240)
+        if lap_id == self._best_id:
+            x, y = 60.0 * np.cos(a), 40.0 * np.sin(a)
+        else:
+            x, y = 900.0 + 60.0 * np.sin(2 * a), 40.0 * np.sin(a)
+        return {"t_telemetry_s": np.linspace(0.0, 60.0, len(a)), "x_m": x, "y_m": y,
+                "speed_kmh": 40.0 + 30.0 * np.sin(a), "dist_m": np.linspace(0.0, 1000.0, len(a))}
 
-        @contextmanager
-        def grab_clean(self):
-            self.legend.setVisible(False)
-            try:
-                yield self
-            finally:
-                self.legend.setVisible(True)
 
-        def grab(self):
-            # record the legend's EXPLICIT hide flag at the moment the pixels are taken. isHidden()
-            # (not isVisible()) because an off-screen never-shown widget always reads isVisible()
-            # False regardless of hide() — isHidden() is True only when hide()/setVisible(False) ran.
-            self.grab_calls.append(self.legend.isHidden())
-            return super().grab()
+def test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map():
+    """EXP-3: the thumbnail was a grab of the live MapView, so three cards of one session, all
+    "BEST LAP 1:07.479", carried three maps — brake triangles, corner stars, another lap's glyphs,
+    stray GPS off the circuit — whatever the window showed. It is now the best lap's own trace on
+    the speed ramp, drawn from data: the live map is never grabbed, only lap 3 is asked for, and
+    the picture is the ellipse (ink on the ring, none at its centre or where the other laps are)."""
+    import numpy as np
 
-    w = _bare_window(FakeSession())
-    fake_map = _FakeMap()
-    w.view = SimpleNamespace(map=fake_map)
+    grabs = []
+
+    class _LiveMap(QWidget):
+        def grab(self, *a):
+            grabs.append(a)
+            return super().grab(*a)
+
+    w = _bare_window(_TracedSession())
+    w.view = SimpleNamespace(map=_LiveMap())
     img = w._build_share_card()
     assert img is not None and img.width() == share_card.CARD_W
-    assert fake_map.grab_calls == [True], \
-        f"the map key must be hidden during the card grab, saw {fake_map.grab_calls}"
-    assert fake_map.legend.isHidden() is False, "the legend must be restored after the grab"
-    print("test_build_card_grabs_the_map_with_the_legend_hidden OK")
+    assert grabs == [], "the card grabbed the live map"
+    assert w.session.asked == [3], f"the card drew laps {w.session.asked}, not the best (3)"
 
-
-def test_build_card_falls_back_to_plain_grab_for_a_bare_widget():
-    """A map with no grab_clean (a bare QWidget, as older wiring / tests use) still yields a card —
-    _grab_clean_map_png falls back to the plain widget→PNG grab, so the card is never lost."""
-    w = _bare_window(FakeSession())  # view.map is a plain QWidget (no grab_clean)
-    assert not hasattr(w.view.map, "grab_clean")
-    img = w._build_share_card()
-    assert img is not None and img.width() == share_card.CARD_W
-    print("test_build_card_falls_back_to_plain_grab_for_a_bare_widget OK")
+    thumb = QImage.fromData(share_card.lap_map_png(w.session, 3, unit="kmh"))
+    assert not thumb.isNull()
+    # 120 x 80 m, fitted into the plate: the full 912 wide and the tallest plate allows.
+    assert (thumb.width(), thumb.height()) == (share_card.MAP_PLATE_W - share_card.MAP_PLATE_INNER,
+                                               share_card.MAP_PLATE_H_MAX
+                                               - share_card.MAP_PLATE_INNER), thumb.size()
+    thumb = thumb.convertToFormat(QImage.Format_RGBA8888)
+    px = np.frombuffer(thumb.constBits(), np.uint8).reshape(thumb.height(), thumb.width(), 4)
+    ink = px[..., 3] > 0
+    h, wd = ink.shape
+    assert not ink[h // 2 - 20:h // 2 + 20, wd // 2 - 20:wd // 2 + 20].any(), "ink inside the ring"
+    ys, xs = np.nonzero(ink)
+    # The ellipse's extremes sit on the fitted box: 28 px in from each side.
+    assert abs(xs.min() - 28) <= 6 and abs(xs.max() - (wd - 29)) <= 6, (xs.min(), xs.max())
+    colours = {tuple(c) for c in px[ink][:, :3][px[ink][:, 3] == 255]}
+    assert len(colours) >= 8, f"one flat colour, not the speed ramp: {len(colours)}"
+    # A lap with no trace gives no thumbnail, and the card still renders without one.
+    assert share_card.lap_map_png(FakeSession(), 3) is None
+    print("test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map OK")
 
 
 def test_pb_toast_share_button_routes_to_on_share():
@@ -794,8 +803,7 @@ if __name__ == "__main__":
     test_export_share_card_cancel_writes_nothing()
     test_copy_share_card_sets_clipboard_image()
     test_blocked_session_builds_no_card_and_greys_actions()
-    test_build_card_grabs_the_map_with_the_legend_hidden()
-    test_build_card_falls_back_to_plain_grab_for_a_bare_widget()
+    test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map()
     test_pb_toast_share_button_routes_to_on_share()
     test_pb_toast_hides_share_button_when_no_callback()
     print("\nAll shareable-lap-card tests passed.")

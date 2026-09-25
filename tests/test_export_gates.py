@@ -1478,13 +1478,14 @@ def test_a_png_sequence_is_asked_for_as_a_folder_and_a_mov_as_a_file():
     """A PNG sequence's output is a DIRECTORY. Asking for it with a save-FILE prompt would hand
     back a file name the renderer then has to reinterpret as a folder; one output, one prompt that
     means it. The ProRes row keeps the file prompt, with a .mov suffix rather than .mp4."""
-    ctl = ExportController.__new__(ExportController)
     composite = export_video.OverlayConfig()
     prores = export_video.OverlayConfig(overlay_only=True,
                                         alpha_codec=export_video.ALPHA_PRORES)
-    assert ctl._video_out_suffix(SimpleNamespace(config=composite))[0].endswith(".mp4")
-    suffix, filt = ctl._video_out_suffix(SimpleNamespace(config=prores))
-    assert suffix.endswith(".mov") and "alpha" in filt.lower(), (suffix, filt)
+    png = export_video.OverlayConfig(overlay_only=True, alpha_codec=export_video.ALPHA_PNG)
+    name = ExportController._overlay_suffix
+    assert name(SimpleNamespace(config=composite), 0) == "_lap1_overlay.mp4"
+    assert name(SimpleNamespace(config=prores), 0) == "_lap1_overlay_alpha.mov"
+    assert name(SimpleNamespace(config=png), 0) == "_lap1_overlay_png", "a folder: no extension"
     print("ok picker: a sequence asks for a folder, a .mov for a file")
 
 
@@ -2246,8 +2247,9 @@ def test_each_contents_choice_proposes_its_own_default_name():
     finally:
         for (owner, name), value in saved.items():
             setattr(owner, name, value)
-    assert asked == [("GX010067_overlay.mp4", "MP4 video (*.mp4)"),
-                     ("GX010067_overlay_alpha.mov", "ProRes 4444 with alpha (*.mov)"),
+    # Named for the lap too (EXP-1): no lap is selected, so the export is of the best, lap 1.
+    assert asked == [("GX010067_lap1_overlay.mp4", "MP4 video (*.mp4)"),
+                     ("GX010067_lap1_overlay_alpha.mov", "ProRes 4444 with alpha (*.mov)"),
                      ("folder", td)], asked
     win.hide()
     _clear_export_preset()
