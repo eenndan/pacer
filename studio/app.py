@@ -680,9 +680,9 @@ class StudioWindow(QMainWindow):
         to_load = chapters.order_chapters(first + chapters.discover_siblings(first[0]))
         # COUNT ONLY WHAT THE APP COULD ACTUALLY OFFER TO OPEN. `group_into_recordings` parses
         # filenames and nothing else, so every stray .MP4 beside the footage came back as its own
-        # "recording" — and the app's OWN exports live exactly there, because `_export_default`
-        # saves next to the recording as `<stem>…_overlay.mp4` (`export_controller.py:157-163`,
-        # `:756-757`). Measured on the owner's four footage folders: of the five recordings this
+        # "recording" — and the app's OWN exports live exactly there, because the export proposes
+        # a name next to the recording, `<stem>_lap{N}_overlay.mp4` (`export_controller.
+        # _overlay_name`). Measured on the owner's four footage folders: of the five recordings this
         # message offered beyond the one it opened, FOUR were files with no telemetry that
         # `Session.load` refuses in 0.00 s — two overlay clips Pacer rendered from the very
         # recording it had just opened (`SD_30_08_26`), one more plus an 8.5 GB non-GoPro clip
@@ -3407,36 +3407,23 @@ class StudioWindow(QMainWindow):
     # ------------------------------------------------ shareable lap card (image)
     # File ▸ Export ▸ "Lap card (image)…" / "Copy lap card" + the PB-toast one-tap share. The
     # numbers come from share_card.card_data (pure Session accessors); the speed-map thumbnail is
-    # the SAME live-MapView→PNG grab the HTML report uses (no reinvented rendering). Honesty lives
-    # in card_data (blocked ⇒ never built; stamped ⇒ "estimated timing" burned on).
+    # the best lap's own trace, drawn from data by share_card.lap_map_png. Honesty lives in
+    # card_data (blocked ⇒ never built; stamped ⇒ "estimated timing" burned on).
     def _build_share_card(self):
         """Render the shareable lap card to a QImage from the current session, or None when the
         session is blocked (provisional / no valid lap) or a session/view is missing. The map
-        thumbnail is grabbed from the live MapView (best-effort — a grab failure just drops the
-        thumbnail, the card still renders). Palette + unit follow the app's active choices."""
+        thumbnail is the best lap's trace, drawn from data (a lap with no drawable trace just drops
+        the thumbnail, the card still renders). Palette + unit follow the app's active choices."""
         if not hasattr(self, "session") or getattr(self, "view", None) is None:
             return None
         data = share_card.card_data(self.session, unit=self._speed_unit)
         if data.blocked:
             return None
-        try:
-            map_png = self._grab_clean_map_png(self.view.map)
-        except Exception:  # noqa: BLE001 — the thumbnail is optional; never fail the card
-            _log.warning("lap-card map thumbnail not grabbed", exc_info=True)
-            map_png = None
+        # The card's map is the BEST LAP'S OWN TRACE, drawn from data (EXP-3) — not a grab of the
+        # live map, which carried whatever lap, glyph layer and stray GPS the window was showing.
+        # `lap_map_png` returns None rather than raising; the card then simply has no map.
+        map_png = share_card.lap_map_png(self.session, data.best_lap_id, unit=self._speed_unit)
         return share_card.render_card(data, map_png, palette=theme.active_palette())
-
-    def _grab_clean_map_png(self, map_view) -> bytes:
-        """Grab the MapView to PNG for the SHARE card with its dev "Map key" legend (and any other
-        pure-interaction chrome) suppressed — that overlay belongs on the live app, never on a
-        social share image. Uses the MapView's ``grab_clean`` context to hide + restore the chrome
-        around the same widget→PNG path the report uses; falls back to the plain grab for a bare
-        widget (tests) that has no such context. The speed colouring is untouched."""
-        grab_clean = getattr(map_view, "grab_clean", None)
-        if grab_clean is None:
-            return self.exports.grab_png(map_view)
-        with grab_clean():
-            return self.exports.grab_png(map_view)
 
     def _grab_report_map_png(self, map_view) -> bytes:
         """Grab the MapView to PNG for the HTML REPORT: the app's pure-INTERACTION chrome hidden,
