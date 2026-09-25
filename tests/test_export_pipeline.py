@@ -287,7 +287,7 @@ def test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_seria
             f"{[(x.handovers, x.gave_up) for x in relays]}")
         assert len(serial) == 360 and relayed == serial, (
             f"the hardware relay painted other frames than the serial pump: "
-            f"{[i for i, (a, b) in enumerate(zip(serial, relayed)) if a != b][:10]}")
+            f"{[i for i, (a, b) in enumerate(zip(serial, relayed, strict=False)) if a != b][:10]}")
         out = os.path.join(tmp, "vt.mp4")
         real = ev.Renderer(s, ev.ExportSpec(
             src_path=src, out_path=out, lap_id=1, t0=0.0, t1=12.0,
