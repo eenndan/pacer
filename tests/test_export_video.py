@@ -1573,7 +1573,9 @@ def test_map_inset_draws_only_lap_line_no_box():
 
 def test_map_inset_degenerate_lap_falls_back_gracefully():
     """If the selected lap's own trace is unusable, the inset falls back to the full-session trace
-    line (still no box) rather than being empty or raising."""
+    line (still no box) rather than being empty or raising. The marker and its comet tail never
+    needed the lap line — both are read off the session trace at the frame's time (E6) — so a
+    degenerate lap still gets both."""
     from PySide6.QtCore import QRectF
 
     class NoLapTrace(StubSession):
@@ -1582,7 +1584,9 @@ def test_map_inset_degenerate_lap_falls_back_gracefully():
     s = NoLapTrace(lap_id=2, t0=0.0, dur=60.0, n=400)
     mi = ev._MapInset(s, QRectF(0, 0, 200, 160), 2, scale_k=1.0)
     assert mi._ok                                            # built from the full trace fallback
-    assert mi._lap_pts is None                               # no lap line -> no comet tail
+    marker, tail = mi.marker_and_tail(float(s.tt[200]))
+    assert marker is not None and tail.size() >= 2           # still a marker, and its tail
+    assert tail.at(tail.size() - 1) == marker                # ...ending on it
 
 
 def test_overlay_painter_size_scale_tracks_height():
