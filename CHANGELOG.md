@@ -6,6 +6,61 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-25
+
+Everything merged since v0.4.0: 8 pull requests, #406 to #412 and #414, six of them on video export.
+Each line names its pull request (`github.com/eenndan/pacer/pull/<N>`), where the measurements
+behind it live.
+
+### Highlights
+
+- **Video export runs 1.3× faster at 1080p and up to 2× at 4K.** Decode, overlay and encode now run
+  side by side, and every frame is painted byte for byte as before: MK's best lap takes 26 s at
+  1080p (was 35 s), and 50 s at 4K with 5 s either side (was 101 s) (#412)
+- **Overlay-only ProRes on the hardware encoder.** VideoToolbox renders the transparent ProRes 4444
+  track wherever a probe proves it keeps a true alpha, prores_ks otherwise: a 4K MK lap took 65 s
+  instead of 145 s, and #412 makes it 1.8× faster again (#408, #412)
+- **The export opens on footage, overlay and sound, every time.** "Overlay only" is chosen per
+  export, never remembered, so no old choice turns the next export into a black, silent track; that
+  file is now `_overlay_alpha.mov` and says what it is (#410)
+- **The exported map follows the kart.** Its comet tail ends on the marker and trails it by 2.4 s at
+  every resolution (it sat elsewhere on the lap, twice as long at 4K), and the marker glides every
+  frame instead of stepping at the GPS's 10 Hz (#409)
+- **Overlay-only files an editor can line up.** 29.97 fps off 59.94 footage, the footage's own
+  timecode embedded, Rec. 709 colours from either encoder, and a finished message that says where in
+  which file the clip starts (#408, #409)
+- **The export dialog names what it remembered.** A remembered Source resolution is named as the
+  dialog opens, with "Use defaults" to put every row back, and "Source" now shows the size of the
+  file it will write (#408, #410)
+
+### Changed
+
+- Video export is 1.3-2x faster, every frame unchanged: MK's best lap renders in ~50 s at 4K (was
+  ~100 s) and ~26 s at 1080p (was ~35 s); decode, overlay and encode now run side by side (#412)
+- An overlay-only ProRes export is named `<recording>_overlay_alpha.mov`, apart from the burned-in
+  `<recording>_overlay.mp4` beside it (#410)
+- The picker and the finished message say an overlay-only .mov plays black in QuickTime, timed on
+  the camera's clock, and name the row that exports a video to watch (#410)
+- Overlay-only ProRes 4444 renders on VideoToolbox where it keeps a true alpha, with prores_ks as
+  the fallback: it cut a 4K MK lap from 145 s to 65 s and a 1080p one from 42 s to 24 s (#408)
+- The export picker gives "Source" a size, and every row a time to render naming its encoder; the
+  dialog names a remembered Source resolution and offers "Use defaults" (#408)
+
+### Fixed
+
+- The video export opens on "Footage with the overlay burned in" every time: "Overlay only" is
+  chosen per export, so a remembered one no longer turns the next export into a black track (#410)
+- The exported map's comet tail now ends on the marker and trails it by the last 2.4 s at every
+  resolution; it used to sit still elsewhere on the lap, and ran twice as long at 4K (#409)
+- The exported map marker now glides every frame instead of stepping at the 10 Hz GPS rate, and
+  holds still across a GPS dropout rather than cutting across the infield (#409)
+- Overlay-only exports line up in an editor: 29.97 fps off 59.94 footage, the footage's own timecode
+  embedded, and the finished message says where in which file the clip starts (#409)
+- ProRes overlays are now converted and labelled Rec. 709, so both encoders give the same colours
+  (#408)
+- The export picker's "about M:SS to render" follows the faster renderer: it had kept quoting the
+  old times, up to twice as long as a render then took (#414)
+
 ## [0.4.0] — 2026-09-25
 
 Everything merged since v0.3.0: 15 pull requests, #389 and #391 to #404. Each line names its pull
@@ -1407,7 +1462,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/eenndan/pacer/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/eenndan/pacer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eenndan/pacer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/eenndan/pacer/compare/v0.1.0...v0.2.0
