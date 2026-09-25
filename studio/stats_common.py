@@ -1,16 +1,19 @@
 """What the Stats page's SECTIONS share — the page shell is `stats_panel.StatsView`.
 
 ARCH-3 (board review 2026-09-23) splits the page one section per module: `stats_trust`,
-`stats_braking` and `stats_straights` so far, the rest still inside `stats_panel`. What more than
-one section needs lives here, so a section never imports the page it sits on: the report table and
-its row height, the section heading, the sortable numeric cell and its blanks-last sort hook, and
-the two values two sections must spell the same way (`RING_ROLE`, `NO_GMETER_NOTE`).
+`stats_braking`, `stats_straights` and `stats_ideal` so far, the rest still inside `stats_panel`.
+What more than one section needs lives here, so a section never imports the page it sits on: the
+report table and its row height, the section heading, the sortable numeric cell and its blanks-last
+sort hook, the stitched-target tile's timing mute (`set_target_tile`), and the two values two
+sections must spell the same way (`RING_ROLE`, `NO_GMETER_NOTE`).
 
 A SECTION is a plain object that BUILDS its widgets, REFRESHES them from a session and owns its
 copy. It is not a container widget: `widgets()` hands the page its widgets in reading order and the
 page adds them straight to its column, so the page's widget tree — and every layout measurement
-`stats_panel` carries — is exactly what it was before the split. `tables()` names the report
-tables the page's column packer has to be able to ask for a width (`StatsView._group_min_width`).
+`stats_panel` carries — is exactly what it was before the split. A TUPLE in that order is a row of
+tiles, which the page places on its own reflowing tile grid (`StatsView._mount`): tile layout is
+the page's. `tables()` names the report tables the page's column packer has to be able to ask for
+a width (`StatsView._group_min_width`).
 """
 
 from __future__ import annotations
@@ -25,7 +28,17 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
-from .lap_table import NUM_ROLE, NUMERIC_COL_START, _NumItem, align_headers_over_their_columns
+from ._signal import fmt_time
+from .lap_table import (
+    NUM_ROLE,
+    NUMERIC_COL_START,
+    PROVISIONAL_TOOLTIP,
+    _NumItem,
+    align_headers_over_their_columns,
+    estimated_timing_tooltip,
+)
+from .theme import C
+from .widgets import Tile
 
 # Every report table's row height. It was a bare 22, documented here as "the consistency-table
 # convention" — a convention inherited from the ConsistencyPanel, which PR #111 DELETED, so the
@@ -62,6 +75,56 @@ def keep_blanks_last(_index, order):
     idiom: the class flag flips before Qt reverses the order). Connected to a sortable report
     table's `sortIndicatorChanged` BEFORE its first `setSortingEnabled(True)`, so it runs first."""
     _NumItem._descending = order == Qt.DescendingOrder
+
+
+def set_target_tile(tile: Tile, value, tip: str, session, text: str | None = None,
+                    caption: str | None = None):
+    """Render a stitched TARGET tile (theoretical best / best rolling / the ideal's gap).
+
+    These are not laps anyone drove — they are composed from the session's best splits and
+    loops — so they share the lap timing's authority: while the timing is PROVISIONAL (an
+    arbitrary start line) OR the clock is DEGRADED (media-clock / low-GPS estimate) the value
+    is muted + italic and carries the explaining note, restored to the normal tile once
+    Verified AND high-quality. Kept byte-for-byte in spirit with the Laps footer this moved
+    from; the measured PACE tiles beside it are unmuted because they ARE laps you drove.
+
+    `text` overrides the m:ss.mmm formatting for a target that is a DIFFERENCE rather than a
+    lap time ("-1.49 s"). It is still a synthesized number and still takes the mute — the rule
+    is about where the number came from, not about how it is printed.
+
+    `caption` re-labels the tile per refresh, for a target whose SAMPLE belongs on it — the
+    ideal's "theoretical best · 65 laps", the same shape the measured `median · 65 clean laps`
+    beside it already uses. It goes through this function rather than a bare `tile.set()` after
+    it, because a second `set()` re-runs `_claim_ink_height` on a value this function has just
+    styled, and the colour-then-font ordering below exists precisely because that path is
+    order-sensitive.
+
+    `session` is the page's session: its timing authority (`timing_verified`,
+    `timing_quality`) is what mutes the tile. A function here rather than a page method
+    because the page's rolling best and the IDEAL LAP section's two tiles are all stitched
+    targets (see stats_ideal)."""
+    tile.set((text if text is not None else fmt_time(value)) if value is not None else None,
+             caption)
+    provisional = not getattr(session, "timing_verified", True)
+    quality = getattr(session, "timing_quality", None)
+    muted = provisional or bool(quality is not None and quality.degraded)
+    # COLOUR FIRST, THEN FONT — not cosmetic ordering. setStyleSheet on a NEW string repolishes
+    # the label, and the repolish re-resolves its font, dropping the italic bit a setFont set a
+    # moment earlier. The other way round the first refresh of a fresh view painted the muted
+    # target tile upright, and only a SECOND refresh() made it italic: the app happened to get
+    # that second call from CentralView after a load, so the cue shipped — but nothing on the
+    # single-refresh paths (a tab switch, a unit flip, a bare StatsView) did. Setting the
+    # stylesheet first means the repolish is already spent when the font lands.
+    tile.value.setStyleSheet(
+        f"color: {theme.PROVISIONAL_COLOR if muted else C.text};")
+    font = theme.mono_font(theme.EMPHASIS, theme.W_SEMIBOLD)
+    font.setItalic(muted)
+    tile.value.setFont(font)
+    if not muted:
+        tile.setToolTip(tip)
+        return
+    note = PROVISIONAL_TOOLTIP if provisional else estimated_timing_tooltip(quality)
+    tile.setToolTip(f"{note}\n\n{tip}")
 
 
 class ReportTable(QTableWidget):

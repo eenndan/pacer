@@ -89,13 +89,14 @@ A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`); opening one loads
 | Add an export / overlay field | `export_video.py` + `gmeter_overlay.py` (compare: `export_compare.py`) | `test_export_video` |
 | Add a shortcut or command | `help_dialog.COMMANDS` (the `?` card and ⌘K derive from it) + the method in `app.py` | `test_help_dialog` |
 | Change km/h ↔ mph handling | `units.py` + its call sites | `test_units` |
-| Add a studio module | a row below; `ALLOWED_QT` / `QT_REACHING` if it reaches Qt | `test_layering` |
+| Add a studio module | a row below (a Stats section: a link in its row); `ALLOWED_QT` / `QT_REACHING` if it reaches Qt | `test_layering` |
 
 The long form of each row is in [module-notes.md](docs/module-notes.md#common-changes-in-full).
 
 ## Modules
 
-One row per `studio/*.py`. **Imports** is the layer in one word, checked against the code by
+One row per `studio/*.py`; each Stats section's `stats_*.py` is a one-word link in `stats_panel`'s.
+**Imports** is the layer in one word, checked against the code by
 `tests/test_layering.py`: `pacer` = imports the C++ core (these four only) · `Qt` = imports Qt ·
 `→Qt` = no Qt of its own, but a studio module it imports loads it · `—` = neither, so it imports
 headless. **Test** is the file under [`tests/`](../tests/) that pins the module (`—`: none).
@@ -183,11 +184,7 @@ algorithm; the service just caches + delegates.
 | [map_view.py](map_view.py) | Track map: laps, draggable timing lines, marker, corner/brake glyphs, rainbow, ghost | Qt | `test_rainbow_map` |
 | [plots_view.py](plots_view.py) | Speed + Δ charts on one linked x-axis: scrub cursor, ideal and driving overlays, instruments | Qt | `test_charts_panel` |
 | [lap_table.py](lap_table.py) | The sortable Laps table (splits, ⚠ dropout) and the Corners table | Qt | `test_lap_table_columns` |
-| [stats_panel.py](stats_panel.py) | `StatsView`, the Stats page shell: layout, tiles, charts, the unsplit sections | Qt | `test_stats` |
-| [stats_common.py](stats_common.py) | What Stats-page sections share: `ReportTable`, headings, cells | Qt | `test_stats` |
-| [stats_trust.py](stats_trust.py) | Stats-page DATA TRUST card | Qt | `test_quality_chip_trust` |
-| [stats_braking.py](stats_braking.py) | Stats-page BRAKING table | Qt | `test_stats` |
-| [stats_straights.py](stats_straights.py) | Stats-page STRAIGHTS table + exit-leverage note | Qt | `test_stats` |
+| [stats_panel.py](stats_panel.py) · [common](stats_common.py) [braking](stats_braking.py) [ideal](stats_ideal.py) [straights](stats_straights.py) [trust](stats_trust.py) | The Stats page: `StatsView` shell (layout, tiles, charts, unsplit sections); one module per split section | Qt | `test_stats` `test_stats_ideal` |
 | [coaching_panel.py](coaching_panel.py) | Coaching page + Opportunities dialog: theme and focus blocks, per-corner rows | Qt | `test_coaching` |
 | [marks_panel.py](marks_panel.py) | The Marks page and mark editor; emits intents, owns no store | Qt | `test_marks` |
 | [provenance_panel.py](provenance_panel.py) | The read-only "inspect this number" panel over one `Provenance` | Qt | `test_provenance_panel` |

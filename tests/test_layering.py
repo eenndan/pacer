@@ -31,9 +31,10 @@ out of scope for both directions — they are Qt/pacer harnesses by nature (6 of
 
 **The map.** `studio/README.md` is the module map AGENTS.md sends every agent to, and it states
 this contract per module (its Imports column), so it is held to the same sets: one row per
-`studio/*.py`, the layer each row claims is the one pinned here, the test it names exists, and the
-map stays a map — it had grown to 130,636 characters of measurement history before ARCH-9 moved
-that to `studio/docs/module-notes.md`. Run:
+`studio/*.py` (a module FAMILY — the Stats page's `stats_*.py` — shares its head's row, each member
+linked there by name), the layer each row claims is the one pinned here, the test it names exists,
+and the map stays a map — it had grown to 130,636 characters of measurement history before ARCH-9
+moved that to `studio/docs/module-notes.md`. Run:
     python tests/test_layering.py
 """
 import ast
@@ -93,8 +94,8 @@ ALLOWED_QT = {
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_controller",
     "library_dialog", "map_view",
     "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel",
-    "session_record_dialog", "share_card", "stats_braking", "stats_common", "stats_panel",
-    "stats_straights", "stats_trust", "theme", "track_dialog", "video_view",
+    "session_record_dialog", "share_card", "stats_braking", "stats_common", "stats_ideal",
+    "stats_panel", "stats_straights", "stats_trust", "theme", "track_dialog", "video_view",
     "widgets", "workers",
 }
 
@@ -366,6 +367,8 @@ _MAP = os.path.join(_STUDIO, "README.md")
 # its docstring or its section of studio/docs/module-notes.md.
 MAP_MAX_CHARS = 20_000
 MAP_ROW_MAX_CHARS = 200
+# A module link in a row's first cell: `[text](name.py)`.
+_MAP_LINK = r"\[([^\]]+)\]\(([^)]+)\.py\)"
 
 
 def _layer(name: str) -> str:
@@ -387,20 +390,34 @@ def _map_problems(text: str) -> list[str]:
         if not line.startswith("| ["):
             continue
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
-        link = re.fullmatch(r"\[[^\]]+\]\(([^)]+)\.py\)", cells[0])
-        if len(cells) != 4 or not link:
+        # A FAMILY row: after its own module, the first cell may link further modules of the same
+        # family — the Stats page's `stats_*.py` sections after `stats_panel.py` (ARCH-3 splits it
+        # one section per module, and a row per section would not fit under MAP_MAX_CHARS). Each
+        # member is a ONE-WORD link to a module sharing the head's prefix, so its file name is in
+        # the raw text a grep lands on and no prose hides in a link; the row cap counts the row
+        # without those links (a member costs its link, not a row); every member gets every check.
+        links = list(re.finditer(_MAP_LINK, cells[0]))
+        if (len(cells) != 4 or not links or links[0].start() != 0
+                or re.sub(_MAP_LINK, "", cells[0]).strip(" ·")):
             problems.append(f"not a map row (module | responsibility | imports | test): {line[:90]}")
             continue
-        name, (_does, imports, tests) = link.group(1), cells[1:]
-        if name in rows:
-            problems.append(f"{name}.py has two rows")
-        rows[name] = line
-        if len(line) > MAP_ROW_MAX_CHARS:
-            problems.append(f"{name}.py's row is {len(line)} characters, over {MAP_ROW_MAX_CHARS}: "
+        name, (_does, imports, tests) = links[0].group(2), cells[1:]
+        family = name.split("_", 1)[0] + "_"
+        for m in links[1:]:
+            if not re.fullmatch(r"\w+", m.group(1)) or not m.group(2).startswith(family):
+                problems.append(f"{name}.py's row links {m.group(0)}: a family member is a "
+                                f"one-word link to a {family}*.py module")
+        width = len(line) - sum(len(m.group(0)) for m in links[1:])
+        if width > MAP_ROW_MAX_CHARS:
+            problems.append(f"{name}.py's row is {width} characters, over {MAP_ROW_MAX_CHARS}: "
                             f"one line of responsibility; the rest goes to its notes section")
-        if name in _modules() and imports != _layer(name):
-            problems.append(f"{name}.py: the map says it imports {imports!r}, the layering sets "
-                            f"above say {_layer(name)!r}")
+        for member in [m.group(2) for m in links]:
+            if member in rows:
+                problems.append(f"{member}.py has two rows")
+            rows[member] = line
+            if member in _modules() and imports != _layer(member):
+                problems.append(f"{member}.py: the map says it imports {imports!r}, the layering "
+                                f"sets above say {_layer(member)!r}")
         named = re.findall(r"`([^`]+)`", tests)
         if tests != "—" and not named:
             problems.append(f"{name}.py: the Test cell names no test file ({tests!r})")
@@ -446,6 +463,16 @@ def test_the_map_check_fails_on_each_planted_defect():
         "a row that grew a history": real.replace(row, row.replace(" | →Qt |", " " + "x" * 80 + " | →Qt |")),
         "a row missing a cell": real.replace(row, row.replace(" | →Qt", "")),
         "a map that grew": real + "\n" + "x" * MAP_MAX_CHARS,
+        # ...and the FAMILY row (the Stats page's): each member is held to what a row is.
+        "a family member dropped from its row": real.replace(" [ideal](stats_ideal.py)", ""),
+        "a family member that does not exist": real.replace(
+            "[ideal](stats_ideal.py)", "[ideal](stats_ideal.py) [ghost](stats_ghost.py)"),
+        "a family member outside its family": real.replace(
+            "[ideal](stats_ideal.py)", "[ideal](stats_ideal.py) [theme](theme.py)"),
+        "prose hidden in a member link": real.replace(
+            "[ideal](stats_ideal.py)", "[the ideal lap tiles and table](stats_ideal.py)"),
+        "a family member listed twice": real.replace(
+            "[ideal](stats_ideal.py)", "[ideal](stats_ideal.py) [ideal](stats_ideal.py)"),
     }
     for what, text in plants.items():
         assert text != real, f"the plant for {what} changed nothing — the map's row moved"

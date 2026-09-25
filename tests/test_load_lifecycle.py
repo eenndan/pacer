@@ -38,7 +38,7 @@ WHAT EACH PINS, AND HOW IT USED TO FAIL
   * `_on_worker_finished`'s queued restart (§3.7.4) — "open B while A is loading" silently dropping
     B would ship green.
 
-  * `stats_panel._on_ideal_row_selected` (§3.7.5) — the newest interactive surface; its content was
+  * `stats_ideal.IdealSection._on_row_selected` (§3.7.5) — the newest interactive surface; its content was
     exhaustively tested and its row selection never once driven.
 
   * the loading card's determinism (§3.8) — see
@@ -915,7 +915,7 @@ def test_selecting_an_ideal_decomposition_row_rings_the_corner_it_names():
 
     view, _s, _t0, _t1 = _realqt._real_central_view()
     try:
-        table = view.stats_view.ideal_table
+        table = view.stats_view.ideal.table
         assert table.rowCount() > 0, "the stadium fixture must yield an ideal-lap decomposition"
         seen = []
         view.stats_view.corner_clicked.connect(seen.append)

@@ -530,7 +530,7 @@ def test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove():
             # THE OTHER FIVE SURFACES AGREE, in the same frame.
             assert view.plots.ideal_btn.isEnabled() is False
             assert "IDEAL" not in view._plots_label.text(), view._plots_label.text()
-            assert view.stats_view.t_theoretical.isHidden()
+            assert view.stats_view.ideal.t_theoretical.isHidden()
         finally:
             s.ideal_donor_lap_id = real
         # ...and it all comes back when the ideal is stitched again.
