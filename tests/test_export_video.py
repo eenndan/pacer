@@ -1862,8 +1862,10 @@ def test_the_time_model_reproduces_the_rates_it_was_measured_at():
         assert ev.estimate_render_seconds(640, 360, 600, codec) > 0
     assert ev.estimate_render_seconds(1920, 1080, 600, "hevc_mystery") is None
     assert ev.estimate_render_seconds(1920, 1080, 0, ev.VT_H264) is None
-    # The owner's export, measured end to end: 65.2 s on VideoToolbox, 145.3 s on prores_ks.
-    assert abs(ev.estimate_render_seconds(3840, 2160, 2325, ev.VT_PRORES) - 65.2) < 3.0
+    # The owner's export, measured end to end: 35.2 s on VideoToolbox since #412 (65.2 s before it —
+    # the table had kept the old rate, so the picker quoted 1:06 for a 35 s render), 145.3 s on
+    # prores_ks, which #412 barely moved.
+    assert abs(ev.estimate_render_seconds(3840, 2160, 2325, ev.VT_PRORES) - 35.2) < 3.0
     assert abs(ev.estimate_render_seconds(3840, 2160, 2325, ev.SW_PRORES) - 145.3) < 7.0
     print("ok time model: the measured rates, linear in pixels between them")
 
