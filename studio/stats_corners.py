@@ -112,13 +112,16 @@ def _corner_count_tip(report) -> str:
 class CornersSection:
     """The CORNERS heading, the phase-share tile (`t_phase`), the corner `table` and the
     reconciliation `note` under it. `on_ring(cid)` is the page's `corner_clicked` — a row click
-    rings that corner on the map, None on deselect. `session_of()` returns the page's CURRENT
-    session, which a right-click on a Best cell inspects: the page's session can be swapped under
-    a live page, and the menu reads it at the click, as it did when it was the page's own slot."""
+    rings that corner on the map, None on deselect.
 
-    def __init__(self, on_ring, session_of):
+    A right-click on a Best cell inspects the session the table was last filled from, kept by
+    `refresh` — the page's own, since the page passes it on every refresh. NOT a callable reaching
+    back into the page: the table's signals hold this object, so a reference from here to the page
+    is a cycle through Qt that Python cannot collect, and every page built would stay alive."""
+
+    def __init__(self, on_ring):
         self._on_ring = on_ring
-        self._session_of = session_of
+        self._session = None
         self.heading = section_heading("CORNERS")
         # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
         # from the per-lap aligned thirds decomposition — coach-grade, and computed, not
@@ -249,6 +252,7 @@ class CornersSection:
         return None if best is None else float(best) - float(ideal)
 
     def refresh(self, session, unit, u_label):
+        self._session = session
         report = getattr(session, "corner_report", list)() or []
         has = bool(report)
         self.heading.setVisible(has)
@@ -365,7 +369,7 @@ class CornersSection:
         not. The cid comes from the row's own name item for the same reason
         `_on_row_selected` reads it there: this table sorts."""
         item = self.table.itemAt(pos)
-        session = self._session_of()
+        session = self._session
         if item is None or session is None or item.column() != _CORNER_BEST_COL:
             return
         name = self.table.item(item.row(), 0)

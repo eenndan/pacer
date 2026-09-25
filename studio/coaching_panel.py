@@ -1037,7 +1037,7 @@ def _reach_tip(ev: coaching.Evidence, of: int | None) -> str:
     (`coaching.summarize`) — so on MK_18_09_26 C2 it is 16 of 19. This sentence said "3 of your 16
     clean laps" there, one line under a headline reading "median of 19 clean laps". Where the two
     differ it now says both, and why, in the words the Stats page's CORNERS hover uses for the same
-    16 (`stats_panel._corner_count_tip`)."""
+    16 (`stats_corners._corner_count_tip`)."""
     # An ABSTAINED row is on the table too (ABSTAIN_FEW_LAPS: under MIN_CORNER_LAPS), so
     # `ev.n_laps` can be 1 here — and it is the subject of both "count"s below (K2).
     counts = "counts" if ev.n_laps == 1 else "count"

@@ -330,6 +330,8 @@ ALLOWED = {
         "LapFixes.window pads one fix each side: the raw-fix table has 0 rows or 2+",
     ("share_card", "ideal_sublabel", "laps", "laps — not"):
         "read under the stitched-ideal gate: two donor laps or more",
+    ("stats_corners", "_corner_count_tip", "of", "clean laps matched"):
+        "1 <= n < of on this branch, so of >= 2",
     ("stats_ideal", "IdealSection.refresh", "row.n", "clean laps drove"):
         "a shown row's gain clears the floor, so its donor is another lap: n >= 2",
     ("stats_panel", "", "n", "clean laps (median"):
@@ -338,8 +340,6 @@ ALLOWED = {
         "SPLITS_NOTE: the grid is drawn from MATRIX_MIN_LAPS (5) laps",
     ("stats_panel", "", "c", "sectors. ★ is"):
         "SPLITS_NOTE: the grid is drawn from two sectors up (one line or more)",
-    ("stats_panel", "_corner_count_tip", "of", "clean laps matched"):
-        "1 <= n < of on this branch, so of >= 2",
     ("stats_panel", "StatsView._refresh_corner_grid", "matrix.n_resolved[c]",
      "laps matched on"):
         "a typical exists only over MATRIX_MIN_LAPS (5) matched laps",
@@ -456,7 +456,8 @@ def test_the_fixed_copy_reads_right_at_one():
     from studio import coaching, focus, session_record
     from studio._signal import plural
     from studio.coaching_panel import _reach_tip, empty_state_copy
-    from studio.stats_panel import _corner_count_tip, coast_note
+    from studio.stats_coasting import coast_note
+    from studio.stats_corners import _corner_count_tip
     from studio.stats_straights import _straight_count_tip
 
     assert plural(1, "raw GPS fix", "raw GPS fixes") == "1 raw GPS fix"
@@ -518,7 +519,8 @@ def test_the_fixed_copy_reads_right_at_one():
     from test_stats import _fake_view_session
 
     from studio.stats import CornerReport
-    from studio.stats_panel import WORST_LOSS_MARK, StatsView
+    from studio.stats_corners import WORST_LOSS_MARK
+    from studio.stats_panel import StatsView
     c1 = CornerReport(cid=1, direction=1, n=37, best_s=2.48, median_s=2.69, sigma_s=0.4,
                       median_loss_s=0.21, apex_best_kmh=73.4, apex_median_kmh=67.4,
                       grip_median=0.72, score=0.08, n_laps=38)
@@ -526,10 +528,10 @@ def test_the_fixed_copy_reads_right_at_one():
     sess.corner_report = lambda: [c1]
     sess.phase_report = lambda: None
     view = StatsView(sess)
-    note = view.corners_note.text()
+    note = view.corners.note.text()
     assert ("the other 1 was interpolated between matched points, and is shown muted lap by lap"
             in note), note
-    loss = view.corners_table.item(0, 4)
+    loss = view.corners.table.item(0, 4)
     assert loss.text().startswith(WORST_LOSS_MARK), loss.text()
     assert loss.toolTip().startswith("The most erratic-and-slow corner — ranked by"), \
         loss.toolTip()

@@ -163,8 +163,9 @@ def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
     single gain (C2, 0.213 s, matched on 42 of 65 laps) and Sandown's (C5, 0.224 s, 13 of 59)
     rank differently for exactly this reason, and Sandown's biggest falls to third."""
     _app()
+    from studio.stats_common import RING_ROLE
     from studio.stats_ideal import IDEAL_GAIN_FLOOR
-    from studio.stats_panel import RING_ROLE, StatsView
+    from studio.stats_panel import StatsView
     v = StatsView(_fake_view_session())
     t = v.ideal.table
     assert t.rowCount() == 2, [t.item(r, 0).text() for r in range(t.rowCount())]

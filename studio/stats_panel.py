@@ -1428,8 +1428,7 @@ class StatsView(QWidget):
         col.addWidget(self.splits_note)
 
         # --- the corner-by-corner session report (hidden without detected corners)
-        self.corners = self._mount(col, CornersSection(self.corner_clicked.emit,
-                                                       lambda: self.session))
+        self.corners = self._mount(col, CornersSection(self.corner_clicked.emit))
 
 
         # ====================== COLUMN 3 — the three remaining report tables

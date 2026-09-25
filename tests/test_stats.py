@@ -1213,7 +1213,7 @@ def test_stats_view_corners_table_tint_sort_and_click():
                      grip_median=None, score=0.08),
     ]
     v = StatsView(sess)
-    t = v.corners_table
+    t = v.corners.table
     assert not t.isHidden() and t.rowCount() == 2
     assert t.item(0, 0).text().startswith("C1")
     assert t.item(1, 7).text() == "—"                       # grip None -> dash, never 0
@@ -1248,17 +1248,17 @@ def test_stats_view_phase_tiles_and_loss_tooltips():
         cids=[1], rows=[(0.61, 0.24, 0.15)], share=PhaseShare(6.1, 2.4, 1.5))
     v = StatsView(sess)
     # R11: ONE tile — the shares on its face in track order, the seconds on its hover.
-    assert not hasattr(v, "t_phase_entry") and not hasattr(v, "t_phase_exit")
-    assert not v.t_phase.isHidden()
-    assert v.t_phase.value.text() == "61 · 24 · 15 %", v.t_phase.value.text()
-    assert "entry · apex · exit" in v.t_phase.caption.text()
-    assert "Lost on entry 6.1 s" in v.t_phase.toolTip() and "on exit 1.5 s" in v.t_phase.toolTip()
-    tip = v.corners_table.item(0, 4).toolTip()
+    assert not hasattr(v.corners, "t_phase_entry") and not hasattr(v.corners, "t_phase_exit")
+    assert not v.corners.t_phase.isHidden()
+    assert v.corners.t_phase.value.text() == "61 · 24 · 15 %", v.corners.t_phase.value.text()
+    assert "entry · apex · exit" in v.corners.t_phase.caption.text()
+    assert "Lost on entry 6.1 s" in v.corners.t_phase.toolTip() and "on exit 1.5 s" in v.corners.t_phase.toolTip()
+    tip = v.corners.table.item(0, 4).toolTip()
     assert "entry +0.61" in tip and "exit +0.15" in tip
     # No phase data -> the tile hides, the table stands alone.
     sess.phase_report = lambda: None
     v.refresh()
-    assert v.t_phase.isHidden()
+    assert v.corners.t_phase.isHidden()
     print("test_stats_view_phase_tiles_and_loss_tooltips OK")
 
 
@@ -1340,7 +1340,8 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     from PySide6.QtWidgets import QLabel
 
     from studio.stats import StraightStat
-    from studio.stats_panel import RING_ROLE, StatsView
+    from studio.stats_common import RING_ROLE
+    from studio.stats_panel import StatsView
     sess = _fake_view_session()
     sess.straights_report = lambda: [
         StraightStat(index=0, label="S/F → C1", ring_cid=2, n=3, best_s=5.0, median_s=5.1,
@@ -1454,16 +1455,15 @@ def test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map():
     rings the place on the map through the one corner_clicked pathway."""
     _app()
     from studio.stats import CoastReport
-    from studio.stats_panel import (
-        _DRIVING_COAST,
+    from studio.stats_coasting import (
         COAST_LESS,
         COAST_LIST_MIN_S,
         COAST_TIED,
         COAST_TOP,
         COASTING_TOOLTIP,
-        RING_ROLE,
-        StatsView,
     )
+    from studio.stats_common import _DRIVING_COAST, RING_ROLE
+    from studio.stats_panel import StatsView
     sess = _fake_view_session()
     # D24-shaped: no place separates from the leader except the last listed one.
     sess.coast_report = lambda: CoastReport(n_laps=38, per_lap_s=1.1, lead_separable=False,
@@ -1473,17 +1473,17 @@ def test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map():
         ("C1 → C2", 1, 0.097, 5, 0.09, False),
         ("C8", 8, 0.02, 2, 0.02, False)))
     v = StatsView(sess)
-    t = v.coasting_table
-    assert not t.isHidden() and not v._coasting_section.isHidden()
+    t = v.coasting.table
+    assert not t.isHidden() and not v.coasting.heading.isHidden()
     assert t.rowCount() == 3, "a place under COAST_LIST_MIN_S is counted, not listed"
-    assert v._coasting_section.text() == f"COASTING · 1 under {COAST_LIST_MIN_S:.2f} s a lap not listed"
+    assert v.coasting.heading.text() == f"COASTING · 1 under {COAST_LIST_MIN_S:.2f} s a lap not listed"
     assert [t.item(r, 0).text() for r in range(3)] == ["C1", "C9 → C10", "C1 → C2"]
     assert [t.item(r, 1).text() for r in range(3)] == ["0.31", "0.10", "0.10"]
     assert t.item(0, 2).text() == "17/38" and t.item(0, 3).text() == "28"
     words = [t.item(r, 4).text() for r in range(3)]
     assert words == [COAST_TIED, COAST_TIED, COAST_LESS], (
         f"the vs top column crowns a leader the laps did not separate: {words}")
-    note = v.coasting_note.text()
+    note = v.coasting.note.text()
     assert note.startswith("No one place leads: C1 and C9 → C10 are tied"), note
     assert "38 clean laps cannot put them in order" in note, note
     assert _DRIVING_COAST in COASTING_TOOLTIP and t.toolTip() == COASTING_TOOLTIP
@@ -1499,27 +1499,27 @@ def test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map():
                                             places=_coast_places(
         ("C1", 1, 1.016, 54, 0.27, True), ("C4", 4, 0.619, 47, 0.16, False)))
     v.refresh()
-    assert v._coasting_section.text() == "COASTING"
+    assert v.coasting.heading.text() == "COASTING"
     assert [t.item(r, 4).text() for r in range(2)] == [COAST_TOP, COAST_LESS]
-    assert v.coasting_note.text() == ("C1 holds the most coasting — 1.02 s a lap, more than C4 "
+    assert v.coasting.note.text() == ("C1 holds the most coasting — 1.02 s a lap, more than C4 "
                                       "(0.62 s) or anywhere else by a margin these 59 clean laps "
-                                      "can separate."), v.coasting_note.text()
+                                      "can separate."), v.coasting.note.text()
 
     # A session that did not coast keeps the heading and says so; no instrument hides it all.
     sess.coast_report = lambda: CoastReport(n_laps=12, per_lap_s=0.0, places=[],
                                             lead_separable=False)
     v.refresh()
-    assert t.isHidden() and not v._coasting_section.isHidden()
-    assert v.coasting_note.text() == "No coasting was detected on the 12 clean laps."
+    assert t.isHidden() and not v.coasting.heading.isHidden()
+    assert v.coasting.note.text() == "No coasting was detected on the 12 clean laps."
     sess.coast_report = lambda: None
     v.refresh()
-    assert v._coasting_section.isHidden() and t.isHidden() and v.coasting_note.isHidden()
+    assert v.coasting.heading.isHidden() and t.isHidden() and v.coasting.note.isHidden()
     print("test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map OK")
 
 
 def test_coast_note_names_at_most_six_tied_places():
     from studio.stats import CoastReport
-    from studio.stats_panel import coast_note
+    from studio.stats_coasting import coast_note
     places = _coast_places(*[(f"C{k}", k, 0.4 - 0.01 * k, 10, 0.1, True) for k in range(1, 12)])
     note = coast_note(CoastReport(n_laps=38, per_lap_s=4.0, places=places, lead_separable=False))
     assert note.startswith("No one place leads: C1, C2, C3, C4, C5, C6 and 5 more are tied — "
@@ -1952,7 +1952,7 @@ def test_stats_view_corners_table_hidden_without_corners():
     _app()
     from studio.stats_panel import StatsView
     v = StatsView(_fake_view_session())      # no corner_report attr -> getattr default []
-    assert v._corners_section.isHidden() and v.corners_table.isHidden()
+    assert v.corners.heading.isHidden() and v.corners.table.isHidden()
     print("test_stats_view_corners_table_hidden_without_corners OK")
 
 
@@ -2296,7 +2296,7 @@ def test_the_stats_page_never_scrolls_sideways_in_its_own_quadrant():
         # ...and the honesty rule the page-level scroll used to buy is KEPT, moved to the widget
         # that actually overflows: a report table narrower than its columns grows its OWN bar
         # rather than clipping a column in silence.
-        for table in (v.lap_table, v.corners_table):
+        for table in (v.lap_table, v.corners.table):
             if not table.isVisible():
                 continue
             assert table.width() <= viewport.width(), (table.width(), viewport.width())
@@ -2871,7 +2871,7 @@ def test_corners_note_names_both_baselines_and_reconciles_them():
     sess.phase_report = lambda: None
     sess.coaching_opportunities = lambda: SimpleNamespace(enough=True, rows=opp_rows)
     view = StatsView(sess)
-    note = view.corners_note.text()
+    note = view.corners.note.text()
 
     # BOTH baselines, in words, on the face — not only in a tooltip.
     assert "own Best" in note, note
@@ -2885,8 +2885,8 @@ def test_corners_note_names_both_baselines_and_reconciles_them():
     # An empty report hides the note rather than leaving a stale sentence under nothing.
     sess.corner_report = lambda: []
     view.refresh()
-    assert view.corners_note.text() == "" and not view.corners_note.isVisible(), (
-        view.corners_note.text())
+    assert view.corners.note.text() == "" and not view.corners.note.isVisible(), (
+        view.corners.note.text())
     print("ok corners-note: both baselines named, three totals reconciled, hidden when empty")
 
 
@@ -3021,7 +3021,8 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     is unchanged."""
     _APP  # noqa: B018
     from studio.stats import CornerReport
-    from studio.stats_panel import DASH, WORST_LOSS_MARK, StatsView
+    from studio.stats_corners import WORST_LOSS_MARK
+    from studio.stats_panel import DASH, StatsView
 
     full = CornerReport(cid=1, direction=1, n=38, best_s=2.48, median_s=2.69, sigma_s=0.4,
                         median_loss_s=0.21, apex_best_kmh=73.4, apex_median_kmh=67.4,
@@ -3038,7 +3039,7 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     sess.coaching_opportunities = lambda: SimpleNamespace(
         enough=True, rows=[SimpleNamespace(cid=8, time_lost=0.05)])
     view = StatsView(sess)
-    t = view.corners_table
+    t = view.corners.table
     rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
 
     for col in (1, 2):
@@ -3050,7 +3051,7 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
         assert "No time for C9" in tip and "38" in tip, tip
     assert not t.item(rows["C9"], 4).text().startswith(WORST_LOSS_MARK), "untimed corner marked"
 
-    note = view.corners_note.text()
+    note = view.corners.note.text()
     assert "Only corners matched on track count: 45 of 114" in note, note
     assert "the other 69 were interpolated" in note, note
     assert "No lap matched C9 on track" in note, note
@@ -3065,7 +3066,7 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     # Every lap counted: the caption and the coaching sentence are exactly what they were.
     sess.corner_report = lambda: [full]
     view.refresh()
-    note = view.corners_note.text()
+    note = view.corners.note.text()
     assert "matched on track" not in note and "interpolated" not in note, note
     assert "against your best lap and totals" in note, note
     view.hide()
@@ -4588,20 +4589,51 @@ def test_braking_coasting_and_the_phase_tiles_say_which_laps_they_count():
     # of the page), against the behaviour measured on the real Session above.
     view = StatsView(_fake_view_session())
     try:
-        coast = view.coasting_table.toolTip()
+        coast = view.coasting.table.toolTip()
         assert "interpolated" in coast and "STRAIGHTS" in coast and "keeps every clean lap" in coast, (
             "COASTING counts the laps STRAIGHTS leaves out and does not say so", coast)
         braking = view.braking.table.toolTip()
         assert "matched to your best lap's line on track" in braking, (
             f"BRAKING's n left out lap {lap + 1}'s C{cid} brake point and its hover does not say "
             f"why: {braking}")
-        phase = view.t_phase.toolTip()
+        phase = view.corners.t_phase.toolTip()
         assert not phase.startswith("Every clean lap's"), phase
         assert "matched on track" in phase, phase
     finally:
         view.hide()
     print(f"ok the Stats copy: COASTING keeps {len(ids)} laps where STRAIGHTS counts fewer, BRAKING "
           f"C{cid} {before} -> {after} under a plant and says why, the phase tiles name their rule")
+
+
+def test_a_dropped_stats_page_is_freed_by_refcount():
+    """A section must never hold its page (ARCH-3). The page holds each section, and each section's
+    table signals hold the section — so a section that keeps a reference back to the page (a
+    `lambda: self.session`, say) closes a cycle THROUGH Qt, which Python's collector cannot see:
+    every StatsView ever built stays alive. Measured on the first CORNERS split, which did exactly
+    that: `gc.collect()` did not free the page, and this file segfaulted ten tests later inside
+    `_pump`, in a test that never touched CORNERS. Checked with the collector OFF, so the page has
+    to go by refcount the moment its last reference does, as it did before the split."""
+    import gc
+    import weakref
+
+    _app()
+    from studio.stats_panel import StatsView
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        v = StatsView(_fake_view_session())
+        v.refresh()
+        page = weakref.ref(v)
+        del v
+        held = page()
+        if held is not None:
+            why = [type(r).__name__ for r in gc.get_referrers(held)]
+            del held
+            raise AssertionError(f"a dropped StatsView is still alive, held by {why}")
+    finally:
+        if was_enabled:
+            gc.enable()
+    print("test_a_dropped_stats_page_is_freed_by_refcount OK")
 
 
 if __name__ == "__main__":

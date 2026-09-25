@@ -484,7 +484,7 @@ def _stats_page(app: QApplication, w: StudioWindow):
 
 
 def _heading(stats, text: str) -> QLabel:
-    """The section heading QLabel with this text (`stats_panel._section` builds one per group)."""
+    """The section heading QLabel with this text (`stats_common.section_heading` builds each one)."""
     for label in stats.findChildren(QLabel):
         if label.text() == text:
             return label

@@ -1427,7 +1427,7 @@ def test_stats_corner_row_click_restores_grid_then_rings_map():
     view.show_stats_maximized()
     _APP.processEvents()
     assert view._maximized_panel is view._table_panel
-    t = view.stats_view.corners_table
+    t = view.stats_view.corners.table
     assert t.rowCount() > 0, "stadium fixture must yield a corner report"
 
     t.selectRow(0)
@@ -1463,7 +1463,7 @@ def test_every_grip_surface_says_it_compares_laps_not_corners():
     view, _s, _t0, _t1 = _real_central_view()
     try:
         corners = view.corner_table.table
-        stats = view.stats_view.corners_table
+        stats = view.stats_view.corners.table
         combo = view.map.rainbow_combo
         grip_name = theme.estimated_label("Grip")
         labels = {
