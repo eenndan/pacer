@@ -1,11 +1,12 @@
 """What the Stats page's SECTIONS share — the page shell is `stats_panel.StatsView`.
 
 ARCH-3 (board review 2026-09-23) splits the page one section per module: `stats_trust`,
-`stats_braking`, `stats_straights` and `stats_ideal` so far, the rest still inside `stats_panel`.
+`stats_braking`, `stats_straights`, `stats_ideal`, `stats_corners` and `stats_coasting` so far, the
+rest still inside `stats_panel`.
 What more than one section needs lives here, so a section never imports the page it sits on: the
 report table and its row height, the section heading, the sortable numeric cell and its blanks-last
-sort hook, the stitched-target tile's timing mute (`set_target_tile`), and the two values two
-sections must spell the same way (`RING_ROLE`, `NO_GMETER_NOTE`).
+sort hook, the stitched-target tile's timing mute (`set_target_tile`), and the values two
+sections must spell the same way (`RING_ROLE`, `NO_GMETER_NOTE`, `_DRIVING_COAST`).
 
 A SECTION is a plain object that BUILDS its widgets, REFRESHES them from a session and owns its
 copy. It is not a container widget: `widgets()` hands the page its widgets in reading order and the
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
-from . import theme
+from . import driving, theme
 from ._signal import fmt_time
 from .lap_table import (
     NUM_ROLE,
@@ -53,6 +54,18 @@ RING_ROLE = NUM_ROLE + 1   # the map-ring corner cid stored on a straight row's 
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
                   "are unavailable.")
+
+# The COAST paragraph of the DRIVING tooltip (`stats_panel`'s ONE AXIS, THREE FILTERS block composes
+# it with the brake pieces) — and, word for word, the close of the COASTING section's tooltip: what
+# a coast IS, stated once for both.
+_DRIVING_COAST = (
+    "A COAST is the narrower test — off-power deceleration inside a band from "
+    f"{driving.COAST_DRAG_MIN:g} g up to that same threshold, held for at least "
+    f"{driving.MIN_COAST_S:g} s. Sustained membership of a band is the opposite shape from an "
+    "onset, and that band is narrower than the bare derivative's own noise, so this one figure is "
+    f"measured on a {driving.COAST_SMOOTH_S:g} s window. The band, the minimum duration and that "
+    "window are the whole instrument — this is time that passed all three tests, not every moment "
+    "the driver was off the throttle.")
 
 
 def section_heading(title: str) -> QLabel:

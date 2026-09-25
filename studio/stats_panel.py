@@ -24,7 +24,8 @@ the mono stack (tabular figures); a signal-absent statistic shows an em-dash, ne
 
 THIS MODULE IS THE PAGE SHELL, AND IT IS BEING SPLIT (ARCH-3). Layout, reflow and orchestration
 stay here; a section that has moved out builds, refreshes and words itself in its own module —
-DATA TRUST in `stats_trust`, BRAKING in `stats_braking`, STRAIGHTS in `stats_straights` — and
+DATA TRUST in `stats_trust`, IDEAL LAP in `stats_ideal`, CORNERS in `stats_corners`, BRAKING in
+`stats_braking`, COASTING in `stats_coasting`, STRAIGHTS in `stats_straights` — and
 what sections share is in `stats_common` (see its docstring for the contract)."""
 
 from __future__ import annotations
@@ -33,16 +34,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -56,17 +55,11 @@ from . import (
     driving,
     gmeter,
     provenance,
-    provenance_panel,
     theme,
     units,
 )
 from . import stats as stats_service
 from ._signal import fmt_hms, fmt_time, plural
-
-# The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so this page quotes
-# the Coaching tab's ranking and totals (the CORNERS note; `stats_straights` for its note) exactly —
-# L5-02.
-from .coaching_panel import PANEL_TOP_N, _ranked_shown
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
@@ -75,24 +68,22 @@ from .lap_table import (
     DROPOUT_SUFFIX,
     DROPOUT_TOOLTIP,
     EXCLUDED_MARK,
-    NUM_ROLE,
     PROVISIONAL_COLOR,
     PROVISIONAL_TOOLTIP,
-    _NumItem,
     estimated_timing_tooltip,
-    set_corner_direction,
 )
 from .stats_braking import BrakingSection
+from .stats_coasting import CoastingSection
 from .stats_common import (
+    _DRIVING_COAST,
     NO_GMETER_NOTE,
-    RING_ROLE,
     ROW_HEIGHT,
     ReportTable,
-    keep_blanks_last,
     num_item,
     section_heading,
     set_target_tile,
 )
+from .stats_corners import CornersSection
 from .stats_ideal import IdealSection
 from .stats_straights import StraightsSection
 from .stats_trust import TrustSection
@@ -399,89 +390,6 @@ BAND_TOOLTIP = (
 # Speed units live in the PER-LAP section label (one place), keeping the columns narrow
 # enough that the whole table fits the quadrant with no clipped column.
 LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s", "Coast s"]
-# "Med loss", not "Med loss vs best corner": MEASURED, not chosen. The header section is 100 px
-# and the face needs 56 px for "Med loss", 104 px for "…vs best" and 148 px for "…vs best corner",
-# while the header already asks for 800 px inside a 636 px viewport — so both longer labels elide
-# to a "Med loss vs…" that names nothing. The baseline is named where there IS room: the caption
-# under the table (built by `_corners_note_text`) and the table tooltip.
-#: The Best column's index — the one cell in this table the provenance inspector can explain
-#: (see StatsView._on_corner_context_menu). Derived from the list below rather than typed, so a
-#: column inserted before it moves the menu with it.
-_CORNER_BEST_COL = 1
-
-# ONE NAME FOR GRIP, the Corners tab's (`lap_table.CORNER_COLUMNS`) and the map's: it is the same
-# `driving.corner_grip` reading, and until #350's follow-up this column alone called it "Grip %".
-# The % moved to the section heading, the way the Corners tab puts it in its unit caption.
-# Measured on Sandown 3h and MK_18_09: the header's ink is 42 -> 57 px, the column 85 -> 101 px and
-# the table 718 -> 734 px. That costs no column at the 1260 / 1420 / 1900 px dashboard widths (same
-# composition, nothing hidden). In a quadrant this table already scrolls, and 16 px more of it does.
-CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
-                  theme.estimated_label("Grip")]
-WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
-# ...and MARKED, not merely tinted. The cue used to be hue and nothing else — tinted and plain
-# cells were identical in size, weight, family, alignment and format, and carried the same tooltip
-# — while the ranking is by σ × median-loss, a PRODUCT that is not a column on screen. So the
-# column read as if it were ordered by its own numbers and was not: on D24 a tinted +0.09 (C11) sat
-# directly under a plain +0.11 (C10), and a plain +0.10 (C7) beat the tinted +0.09. A reader with
-# no colour, or with the colour and no explanation, was given a contradiction either way.
-#
-# THE MARK IS ▲, NOT ⚠, AND THAT IS THE WHOLE POINT. ⚠ is the app's DISTRUST glyph: the lap grid
-# hangs it on a GPS-dropout lap, the DATA TRUST card on a caveated term, and both mean "this
-# number may not be sound". These three cells mean the opposite — they are the corners with the
-# most time available, the three the driver should practise FIRST. Marking the app's best news
-# with its "don't trust this" glyph told a reader the loudest advertised gains were the flagged
-# ones. ▲ is upside, points at the number, and costs nothing to adopt: the reason the old mark
-# reused ⚠ was font coverage ("no new codepoint arrives"), and ▲ is in the same measured ledger
-# (tests/test_glyph_vocabulary.py's _IN_THE_FACE, asserted against the SHIPPED face).
-#
-# It is a PREFIX, deliberately: this column is
-# fixed-decimal and right-aligned, so right alignment IS decimal alignment (a property measured and
-# kept), and a trailing mark would push three of twelve numbers out of the decimal column. Prefixed,
-# it hangs to the left of an untouched right edge. The character stays TEXT rather than becoming a
-# theme.icon() pixmap because Inter draws it (tests/test_glyph_vocabulary.py measures exactly that)
-# and because a cell's icon slot paints at the cell's LEFT edge, a whole column away from the
-# right-aligned number it would be marking.
-WORST_LOSS_MARK = "▲ "
-CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median / σ "
-                   "time-in-corner, the median loss VS THE BEST ANYONE DID IN THAT CORNER "
-                   "(this column's own Best cell — not your best lap's corner, which is what the "
-                   "Coaching page measures against and why its numbers are smaller), apex speeds "
-                   "and median grip utilization (ESTIMATED, % of the session's grip envelope). "
-                   # One row per corner, so this column is the one grip surface whose only on-screen
-                   # comparison is the unsupported one — and it sorts. The shared sentence says so,
-                   # and where the supported comparison lives (theme.GRIP_COMPARE_NOTE).
-                   f"{CORNER_COLUMNS[-1]}: {theme.GRIP_COMPARE_NOTE} The Corners tab shows it lap "
-                   "by lap. "
-                   "Every column counts only the laps whose corner was matched to your best lap's "
-                   "line on track at entry AND exit: an interpolated corner can be tenths of a "
-                   "second out, so it is left out (hover Best or Median for how many laps count), "
-                   "and a corner no lap matched shows dashes rather than a guess. "
-                   + provenance.CORNER_MATCH_DRIFT + " "
-                   f"The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
-                   "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
-                   "cells are not simply this column's three largest numbers; hover one for its "
-                   "own score. It is a consistency ranking, not the Coaching tab's list of what "
-                   "to work on (time lost against your best lap), so the two need not agree. "
-                   "Click a row to ring the corner's apex on the map; click a column header to "
-                   "sort.")
-
-
-def _corner_count_tip(report) -> str:
-    """The CORNERS table's Best/Median hover when not every lap counted: how many did, and why the
-    rest did not. "" when every lap was matched on track (nothing to disclose) or the report never
-    counted its laps (`n_laps` None). A corner NO lap matched says so instead of explaining a dash
-    as missing data (C4: see stats.corner_report for the measurement)."""
-    n, of = report.n, getattr(report, "n_laps", None)
-    if of is None or n >= of:
-        return ""
-    if n == 0:
-        return (f"No time for C{report.cid}: on none of the {plural(of, 'clean lap')} could its "
-                "entry and exit both be matched to your best lap's line on track, and an "
-                "interpolated corner time can be tenths of a second out.")
-    them = "it is" if of - n == 1 else "they are"   # one lap left out is "it" (K2)
-    return (f"Over the {n} of {of} clean laps matched on track at C{report.cid}'s entry and exit. "
-            f"On the other {of - n} the corner was interpolated between its neighbours, which can "
-            f"put its time tenths of a second out, so {them} left out of this whole row.")
 
 
 # The pace-trend verdict band moved to `stats.TREND_STEADY_BAND`, beside the statistic it
@@ -669,14 +577,8 @@ _DRIVING_IMU_CONTRAST = (
 _DRIVING_BRAKE_TAIL = (
     ": an onset is a step, and a centred window "
     "smears exactly the thing being detected.\n\n")
-_DRIVING_COAST = (
-    "A COAST is the narrower test — off-power deceleration inside a band from "
-    f"{driving.COAST_DRAG_MIN:g} g up to that same threshold, held for at least "
-    f"{driving.MIN_COAST_S:g} s. Sustained membership of a band is the opposite shape from an "
-    "onset, and that band is narrower than the bare derivative's own noise, so this one figure is "
-    f"measured on a {driving.COAST_SMOOTH_S:g} s window. The band, the minimum duration and that "
-    "window are the whole instrument — this is time that passed all three tests, not every moment "
-    "the driver was off the throttle.")
+# _DRIVING_COAST, the fourth piece, is in `stats_common`: the COASTING section's tooltip closes
+# with the same paragraph, so the two cannot word the coast differently.
 DRIVING_TOOLTIP = _DRIVING_INTRO + _DRIVING_IMU_CONTRAST + _DRIVING_BRAKE_TAIL + _DRIVING_COAST
 
 
@@ -695,83 +597,6 @@ def driving_tooltip_gps(why: str) -> str:
             + _DRIVING_BRAKE_TAIL + _DRIVING_COAST)
 
 
-# COASTING: where the session's coasting HAPPENS, by place (`Session.coast_report`). The coast
-# paragraph is `_DRIVING_COAST` itself, not a paraphrase: the window is the one quantity #275 found
-# wrong and #279/#297 had to re-state on every surface, and it applies on BOTH g paths (the coast
-# series is rebuilt from the lap's own speed either way), so one sentence serves every recording.
-COAST_COLUMNS = ["Where", "s / lap", "Laps", "Share %", "vs top"]
-# The "vs top" cell: what the laps say about this place against the one with the most coasting.
-# Words, not a tint — which rows are level is the table's one claim, and it has to survive a
-# colour-blind palette and a screen reader.
-COAST_TOP, COAST_TIED, COAST_LESS = "top", "tied", "less"
-# A place holding less than the detector's shortest coast (driving.MIN_COAST_S) on one lap in five
-# is listed by count, not by row — the heading says how many. On the owner's five recordings that
-# leaves 7-14 rows holding 96.5-99.2 % of the coasting, against 12-20 places with any at all.
-COAST_LIST_MIN_S = driving.MIN_COAST_S / 5
-COAST_NAMES_MAX = 6       # the note names this many tied places, then counts the rest
-COASTING_TOOLTIP = (
-    "Where the coasting is. Every clean lap's coasting is split over the corner/straight "
-    "partition — the pieces the STRAIGHTS table is cut from, each corner's edges projected onto "
-    "that lap — and read off that lap's own clock, so a coast running out of a corner into the "
-    "straight is split at the edge, never counted twice. s / lap is the session's coasting in that "
-    "place divided by the clean laps, so the column adds up to the MEAN coasting per lap, not the "
-    "median the DRIVING tile shows; Laps counts the clean laps that coasted there at all.\n\n"
-    # #339 kept this table counting every lap ON PURPOSE (CornerModel.lap_corner_resolved has the
-    # measurement) and said so only in code. It shares the STRAIGHTS table's pieces and says so one
-    # sentence up, so a reader would take the STRAIGHTS table's lap rule with them.
-    "Unlike the CORNERS and STRAIGHTS tables, it keeps every clean lap — including a lap whose "
-    "corner edge could not be matched to your best lap's line on track and was interpolated. "
-    "Leaving those laps out piece by piece would stop the column adding up to the laps' "
-    "coasting; the cost is that, next to an interpolated edge, that lap's coasting may be split "
-    "at the wrong point.\n\n"
-    "This is where the coasting HAPPENS, not where it costs time. Coaching's “coasting” "
-    "reason is a different number: how much longer your typical lap coasts in a corner than your "
-    "best lap does.\n\n"
-    "The order is a ranking only where the laps can separate it. vs top says, place by place, "
-    f"whether a paired sign-flip test over the clean laps separates it from the first row at "
-    f"p < {stats_service.COAST_LEAD_ALPHA:g}: \u201c{COAST_TOP}\u201d is a first row that "
-    f"separates from every other place, \u201c{COAST_TIED}\u201d a place the laps cannot tell "
-    f"apart from it (the first row too, when anything is), \u201c{COAST_LESS}\u201d one they "
-    "can. Click a row to ring the place on the map (a straight rings the corner feeding it).\n\n"
-    + _DRIVING_COAST)
-
-
-def _name_list(names: list[str], limit: int = COAST_NAMES_MAX) -> str:
-    """"C1, C3 and C6" / "C1, C3, C6, C4, C5, C10 and 5 more"."""
-    if len(names) > limit:
-        return f"{', '.join(names[:limit])} and {len(names) - limit} more"
-    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
-
-
-def coast_note(report) -> str:
-    """The line under the COASTING table: what the order in it is worth.
-
-    A LEAD THE LAPS CANNOT SEPARATE IS SAID TO BE ONE. #311 refused to crown a coaching corner the
-    measurement could not separate from the next, and the same shape is here on both D24
-    recordings: the leader ties with 10 other places on 0060 and 7 on 0062, and the two recordings
-    put different corners on top. A table sorted by a column always has a first row; this sentence
-    is what stops the first row reading as a finding when it is not."""
-    n = report.n_laps
-    laps = plural(n, "clean lap")
-    # `laps` is already "1 clean lap" at one lap; the determiner in front of it has to follow, or
-    # the two sentences below read "these 1 clean lap" (K2).
-    these = "this" if n == 1 else "these"
-    places = report.places
-    if not places:
-        return f"No coasting was detected on the {laps}."
-    lead = places[0]
-    if len(places) == 1:
-        return f"All the coasting on the {laps} is in {lead.label}: {lead.s_per_lap:.2f} s a lap."
-    if report.lead_separable:
-        nxt = places[1]
-        return (f"{lead.label} holds the most coasting — {lead.s_per_lap:.2f} s a lap, more than "
-                f"{nxt.label} ({nxt.s_per_lap:.2f} s) or anywhere else by a margin {these} {laps} "
-                f"can separate.")
-    tied = [p for p in places if p.tied]
-    lo = min(p.s_per_lap for p in tied)
-    return (f"No one place leads: {_name_list([p.label for p in tied])} are tied — between "
-            f"{lo:.2f} and {lead.s_per_lap:.2f} s of coasting a lap, and {these} {laps} cannot "
-            f"put them in order.")
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed. ★ marks the session-best lap.\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
@@ -1603,61 +1428,8 @@ class StatsView(QWidget):
         col.addWidget(self.splits_note)
 
         # --- the corner-by-corner session report (hidden without detected corners)
-        self._corners_section = section_heading("CORNERS")
-        col.addWidget(self._corners_section)
-        # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
-        # from the per-lap aligned thirds decomposition — coach-grade, and computed, not
-        # modeled. Hidden with the section / without phase data.
-        # "WHERE BOTH WERE MATCHED": since C4 (#331) `Session.phase_report` counts a lap's triple
-        # only where that lap AND the best lap it is subtracted from were matched on track at the
-        # corner's edges. This sentence opened "Every clean lap's" from before that.
-        phase_tip = ("Each clean lap's Δt-vs-best through each corner — where the lap and your "
-                     "best lap were both matched on track at its entry and exit, the laps the "
-                     "CORNERS table counts — split into "
-                     "equal-distance entry / apex / exit thirds (the same decomposition the "
-                     "coaching reasons use), medianed per corner, positive parts summed. "
-                     "Seconds = what a typical lap gives away in that phase across the whole "
-                     "track; hover a corner's loss cell for its own triple.")
-        # ONE TILE, NOT THREE (R11 / PS-5). The three were one fact — how the corner loss splits —
-        # printed as three headline numbers, and their seconds summed to one more "time on the
-        # table" on a page that already had five (PS-2). The shares stay on the face in track
-        # order; the seconds behind them are on the hover.
-        self._phase_tip = phase_tip
-        self.t_phase = Tile("of corner loss · entry · apex · exit")
-        self.t_phase.setToolTip(phase_tip)
-        col.addLayout(self._grid(self.t_phase))
-        self.corners_table = self._make_table(CORNER_COLUMNS)
-        self.corners_table.setToolTip(CORNERS_TOOLTIP)
-        # The corner-direction arrow in column 0 paints at the app's ICON_PX rather than at the
-        # style's PM_SmallIconSize (see lap_table.CornerTable for the same statement). It fits the
-        # ROW_HEIGHT with 4 px either side.
-        self.corners_table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
-        # Unlike the other stats tables this one is interactive: row-select → map ring,
-        # header-click → sort (numeric via _NumItem, the lap-table idiom).
-        self.corners_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.corners_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.corners_table.setFocusPolicy(Qt.ClickFocus)
-        self.corners_table.itemSelectionChanged.connect(self._on_corner_row_selected)
-        self.corners_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.corners_table.customContextMenuRequested.connect(self._on_corner_context_menu)
-        self.corners_table.horizontalHeader().sortIndicatorChanged.connect(
-            keep_blanks_last)
-        # Explicit initial indicator: TRACK ORDER (corner id ascending). Without this, Qt's
-        # untouched default indicator is column-0 DESCENDING and the first fill's
-        # setSortingEnabled(True) would silently reverse the track.
-        self.corners_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
-        col.addWidget(self.corners_table)
-        # THE RECONCILIATION LINE. This page and the Coaching tab both print a per-corner "loss"
-        # and they are 3.8x apart in total on the owner's own recording (D24 0060: 3.93 s here,
-        # 1.02 s there, and corner by corner from 1.3x to 2450x), because they answer different
-        # questions: this column is measured against each corner's own Best — the quickest anyone
-        # went through it, usually not your best lap — and Coaching is measured against your best
-        # lap. Both are correct; neither said which it was, one tab apart, under the same word.
-        # The header has no room to say it (see CORNER_COLUMNS), and a tooltip is not the face, so
-        # it is said here, with the numbers computed live rather than baked.
-        self.corners_note = WrapLabel()
-        self.corners_note.setProperty("role", "TableNote")
-        col.addWidget(self.corners_note)
+        self.corners = self._mount(col, CornersSection(self.corner_clicked.emit,
+                                                       lambda: self.session))
 
 
         # ====================== COLUMN 3 — the three remaining report tables
@@ -1674,26 +1446,8 @@ class StatsView(QWidget):
 
         # --- where the coasting is, by place (hidden without corners / a g signal / clean laps).
         # Beside BRAKING because the two are the off-power half and the on-brake half of one
-        # stretch of track. Column 0 sorts by RANK (most coasting first), not by track order: the
-        # question this table answers is "where", and its "vs top" column and the note under it say
-        # what that order is worth. (Opening on a numeric column instead would put Qt's indicator
-        # over a right-aligned header label.)
-        self._coasting_section = section_heading("COASTING")
-        self._coasting_section.setToolTip(COASTING_TOOLTIP)
-        col.addWidget(self._coasting_section)
-        self.coasting_table = self._make_table(COAST_COLUMNS)
-        self.coasting_table.setToolTip(COASTING_TOOLTIP)
-        self.coasting_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.coasting_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.coasting_table.setFocusPolicy(Qt.ClickFocus)
-        self.coasting_table.itemSelectionChanged.connect(self._on_coast_row_selected)
-        self.coasting_table.horizontalHeader().sortIndicatorChanged.connect(
-            keep_blanks_last)
-        self.coasting_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
-        col.addWidget(self.coasting_table)
-        self.coasting_note = WrapLabel()
-        self.coasting_note.setProperty("role", "TableNote")
-        col.addWidget(self.coasting_note)
+        # stretch of track.
+        self.coasting = self._mount(col, CoastingSection(self.corner_clicked.emit))
 
         # --- the straight-line report + its exit-leverage note (hidden without corners / a best lap)
         self.straights = self._mount(col, StraightsSection(self.corner_clicked.emit))
@@ -2373,10 +2127,10 @@ class StatsView(QWidget):
         self._refresh_driving(st, rows)
         self._refresh_sectors(session, bool(valid))
         self._refresh_splits(session, self._split_matrix(session))
-        self._refresh_corners(session, unit, u_label)
+        self.corners.refresh(session, unit, u_label)
         self._refresh_corner_grid(session)
         self.braking.refresh(session)
-        self._refresh_coasting(session)
+        self.coasting.refresh(session)
         self.straights.refresh(session, unit, u_label)
         self.trust.refresh(session)
         self._refresh_g_provenance(session)
@@ -3054,276 +2808,6 @@ class StatsView(QWidget):
         return (PROVISIONAL_TOOLTIP if not verified
                 else estimated_timing_tooltip(quality)
                 if quality is not None and quality.degraded else "")
-
-    def _corners_note_text(self, session, report) -> str:
-        """The one line that connects this page's answers to each other, live.
-
-        Every number here is READ, never baked: the same fix the digest tile had, for the same
-        reason — an empirical range typed into shipping copy is right on the recording it was
-        measured on and quietly wrong on the next one. The Coaching total costs one
-        `coaching_opportunities()` (~3-6 ms on the 38-lap D24 pair, on a refresh path that runs on
-        load / re-segment / undo, never per tick); the alternative is printing a number this page
-        cannot check, which is how two surfaces drift apart in the first place.
-        """
-        total = sum(r.median_loss_s for r in report if r.median_loss_s is not None)
-        parts = [f"Med loss is measured against each corner's own Best above — the quickest "
-                 f"anyone went through it, which is usually not your best lap's corner. "
-                 f"Summed, that is {total:.2f} s."]
-        # C4: which cells this table counted, when that is not all of them — the one thing that
-        # makes its numbers differ from a surface that counts every lap (stats.corner_report).
-        counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
-        left_out = sum(of - n for n, of in counted)
-        if left_out:
-            was, are = ("was", "is") if left_out == 1 else ("were", "are")
-            parts.append(
-                f"Only corners matched on track count: {sum(n for n, _ in counted)} of "
-                f"{sum(of for _, of in counted)} lap × corner times here; the other {left_out} "
-                f"{was} interpolated between matched points, and {are} shown muted lap by lap.")
-            untimed = [f"C{r.cid}" for r in report if getattr(r, "n_laps", None) and r.n == 0]
-            if untimed:
-                parts.append(f"No lap matched {', '.join(untimed)} on track, so "
-                             f"{'it has' if len(untimed) == 1 else 'they have'} no times.")
-        opp_fn = getattr(session, "coaching_opportunities", None)
-        opp = opp_fn() if opp_fn is not None else None
-        # The Coaching tab's own totals are over its RANKED rows (the corners that survived its
-        # per-corner evidence gate), so this reconciliation quotes the same set — a "totals X s"
-        # here that included abstained corners would not reconcile with the page it names.
-        rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
-        if rows:
-            top = rows[:PANEL_TOP_N]
-            # Since #339 Coaching counts a cell only where the lap AND the best lap matched that
-            # corner on track — the rule this table counts by — so when this table left some out,
-            # the sentence says Coaching did too: a reader who has just been told cells were left
-            # out here would otherwise have to guess whether the total beside it counts them.
-            # (It said the OPPOSITE until W1. COASTING still counts every cell, deliberately —
-            # see CornerModel.lap_corner_resolved — and is not named here.)
-            same = ", leaving out the same interpolated times," if left_out else ""
-            parts.append(
-                f"The Coaching tab measures the SAME corners against your best lap{same} and "
-                f"totals {sum(r.time_lost for r in rows):.2f} s, "
-                f"{sum(round(r.time_lost, 2) for r in top):.2f} s of it in its top {len(top)}.")
-        gap = self._ideal_gap(session)
-        if gap is not None:
-            parts.append(f"Your ideal lap is {gap:.2f} s under your best.")
-        parts.append("Different baselines, different questions — not three estimates of one.")
-        return " ".join(parts)
-
-    @staticmethod
-    def _ideal_gap(session) -> float | None:
-        """best lap − ideal total, or None when either half is missing (the honesty rule: no
-        number rather than a 0.00 that reads as a measurement)."""
-        ideal_fn = getattr(session, "ideal_total", None)
-        best_fn = getattr(session, "best_lap_id", None)
-        time_fn = getattr(session, "lap_time", None)
-        if ideal_fn is None or best_fn is None or time_fn is None:
-            return None
-        ideal = ideal_fn()
-        best_id = best_fn()
-        if ideal is None or best_id is None:
-            return None
-        best = time_fn(best_id)
-        return None if best is None else float(best) - float(ideal)
-
-    def _refresh_corners(self, session, unit, u_label):
-        report = getattr(session, "corner_report", list)() or []
-        has = bool(report)
-        self._corners_section.setVisible(has)
-        self.corners_table.setVisible(has)
-        self.corners_note.setVisible(has)
-        phase = (getattr(session, "phase_report", lambda: None)() if has else None)
-        phase_rows = (dict(zip(phase.cids, phase.rows, strict=True))
-                      if phase is not None else {})
-        self._refresh_phase_tiles(phase)
-        if not has:
-            self.corners_table.setRowCount(0)
-            self.corners_note.setText("")
-            return
-        # The Grip column's % lives here, as it does in the Corners tab's unit caption: the header
-        # carries the name every grip surface shares (see CORNER_COLUMNS).
-        self._corners_section.setText(f"CORNERS · speeds in {u_label} · grip %")
-        self.corners_note.setText(self._corners_note_text(session, report))
-        # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
-        # "behind" hue — erratic AND slow, a consistency ranking and not Coaching's. Capped at
-        # WORST_TINT_N and at half the field: a tint that covers every row highlights nothing.
-        k = min(WORST_TINT_N, max(1, len(report) // 2))
-        ranked = sorted(report, key=lambda r: -r.score)[:k]
-        worst = {r.cid: r for r in ranked if r.score > 0}
-        behind = QColor(theme.behind_colour())
-        mono = theme.mono_font(theme.TABLE)
-
-        def cell(val, fmtstr):
-            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
-            item.setData(NUM_ROLE, val)
-            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            item.setFont(mono)
-            return item
-
-        t = self.corners_table
-        t.setSortingEnabled(False)   # Qt requirement: never fill a live-sorting table
-        t.blockSignals(True)
-        t.clearSelection()
-        t.setRowCount(len(report))
-        for r, cr in enumerate(report):
-            # The direction goes in the cell's ICON slot (lap_table.set_corner_direction), so the
-            # sort key and the text stay the bare corner number.
-            name = set_corner_direction(_NumItem(f"C{cr.cid}"), cr.direction)
-            name.setData(NUM_ROLE, cr.cid)   # numeric key: C10 must not sort before C2
-            t.setItem(r, 0, name)
-            best, median = cell(cr.best_s, "{:.2f}"), cell(cr.median_s, "{:.2f}")
-            count_tip = _corner_count_tip(cr)
-            if count_tip:
-                best.setToolTip(count_tip)
-                median.setToolTip(count_tip)
-            t.setItem(r, 1, best)
-            t.setItem(r, 2, median)
-            t.setItem(r, 3, cell(cr.sigma_s, "{:.2f}"))
-            loss = cell(cr.median_loss_s, "+{:.2f}")
-            # The tooltip is built in the SAME branch as the cue, so the reason can never be
-            # missing from a cell that carries the mark. Two independent lines when both apply:
-            # WHY THIS CELL IS MARKED (the ranking score, which is not a column on screen — a
-            # reader comparing the marked +0.09 with the plain +0.11 above it has no other way to
-            # find out) and the corner's own phase triple.
-            tips = []
-            wr = worst.get(cr.cid)
-            if wr is not None:
-                loss.setForeground(behind)
-                loss.setText(WORST_LOSS_MARK + loss.text())
-                # ONE marked corner is what a layout of three corners or fewer gets (`k` above),
-                # and it is not "one of the 1" (K2).
-                which = (f"One of the {len(worst)} most erratic-and-slow corners"
-                         if len(worst) > 1 else "The most erratic-and-slow corner")
-                tips.append(
-                    f"{which} — ranked by "
-                    f"σ × median loss = {wr.sigma_s:.2f} × {wr.median_loss_s:.2f} = "
-                    f"{wr.score:.3f} s², not by this column alone, and not the Coaching tab's "
-                    "ranking (time lost against your best lap).")
-            tri = phase_rows.get(cr.cid)
-            if tri is not None:
-                # The corner's own phase matrix, on hover — where INSIDE this corner the
-                # typical lap loses (positive = slower than best over that third).
-                tips.append(f"Median vs best — entry {tri[0]:+.2f} · "
-                            f"apex {tri[1]:+.2f} · exit {tri[2]:+.2f} s")
-            if tips:
-                loss.setToolTip("\n".join(tips))
-            t.setItem(r, 4, loss)
-            t.setItem(r, 5, cell(units.convert_speed(cr.apex_best_kmh, unit)
-                                 if cr.apex_best_kmh is not None else None, "{:.1f}"))
-            t.setItem(r, 6, cell(units.convert_speed(cr.apex_median_kmh, unit)
-                                 if cr.apex_median_kmh is not None else None, "{:.1f}"))
-            t.setItem(r, 7, cell(cr.grip_median * 100.0
-                                 if cr.grip_median is not None else None, "{:.0f}"))
-        t.blockSignals(False)
-        t.setSortingEnabled(True)
-        self._fit_table(t)
-
-    def _refresh_phase_tiles(self, phase):
-        """The where-the-time-goes headline tile: the percent of the lost corner time per phase,
-        entry · apex · exit, with the seconds behind each on the hover. Hidden when there is no
-        phase data (no corners / no best / nothing lost)."""
-        share = getattr(phase, "share", None)
-        fr = share.fracs() if share is not None else None
-        if fr is None:
-            self.t_phase.setVisible(False)
-            return
-        secs = (share.entry_s, share.apex_s, share.exit_s)
-        self.t_phase.setVisible(True)
-        self.t_phase.set(" · ".join(f"{f * 100.0:.0f}" for f in fr) + " %")
-        self.t_phase.setToolTip(
-            "Lost on entry {:.1f} s · at the apex {:.1f} s · on exit {:.1f} s.\n\n".format(*secs)
-            + self._phase_tip)
-
-    def _refresh_coasting(self, session):
-        """The COASTING table + its note. Hidden outright without a report (no corners, no clean
-        lap, or no g signal — no coasting instrument to report on); a session that simply did not
-        coast keeps the heading and says so in the note instead of showing an empty grid."""
-        report = getattr(session, "coast_report", lambda: None)()
-        has = report is not None
-        self._coasting_section.setVisible(has)
-        self.coasting_note.setVisible(has)
-        listed = [p for p in report.places if p.s_per_lap >= COAST_LIST_MIN_S] if has else []
-        self.coasting_table.setVisible(bool(listed))
-        if not has:
-            self.coasting_table.setRowCount(0)
-            return
-        unlisted = len(report.places) - len(listed)
-        self._coasting_section.setText(
-            f"COASTING · {unlisted} under {COAST_LIST_MIN_S:.2f} s a lap not listed"
-            if unlisted else "COASTING")
-        self.coasting_note.setText(coast_note(report))
-        mono = theme.mono_font(theme.TABLE)
-
-        def cell(text: str, key):
-            item = _NumItem(text)
-            item.setData(NUM_ROLE, key)
-            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            item.setFont(mono)
-            return item
-
-        t = self.coasting_table
-        t.setSortingEnabled(False)
-        t.blockSignals(True)
-        t.clearSelection()
-        t.setRowCount(len(listed))
-        for r, p in enumerate(listed):
-            name = _NumItem(p.label)
-            name.setData(NUM_ROLE, r)             # sort key: the rank
-            name.setData(RING_ROLE, p.ring_cid)   # the corner the map rings
-            t.setItem(r, 0, name)
-            t.setItem(r, 1, cell(f"{p.s_per_lap:.2f}", p.s_per_lap))
-            t.setItem(r, 2, cell(f"{p.laps}/{report.n_laps}", p.laps))
-            t.setItem(r, 3, cell(f"{p.share * 100.0:.0f}", p.share))
-            if not p.tied:
-                t.setItem(r, 4, cell(COAST_LESS, 2))
-            elif report.lead_separable:
-                t.setItem(r, 4, cell(COAST_TOP, 0))
-            else:
-                t.setItem(r, 4, cell(COAST_TIED, 1))
-        t.blockSignals(False)
-        t.setSortingEnabled(True)
-        self._fit_table(t)
-
-    def _on_coast_row_selected(self):
-        """A COASTING row rings its place on the map — a corner rings itself, a straight the corner
-        feeding it — through the same corner_clicked pathway as the other tables."""
-        rows = self.coasting_table.selectionModel().selectedRows()
-        if rows:
-            item = self.coasting_table.item(rows[0].row(), 0)
-            self.corner_clicked.emit(item.data(RING_ROLE) if item else None)
-        else:
-            self.corner_clicked.emit(None)
-
-    def _on_corner_context_menu(self, pos):
-        """Right-click the CORNERS table's Best cell → "Inspect this number…".
-
-        ONLY that cell. The third of the app's three inspectable numbers is the corner best, and
-        offering the menu on Median or σ would advertise an inspection `provenance.py` has no
-        builder for — the scope is three numbers, and the menu is where that is either honest or
-        not. The cid comes from the row's own name item for the same reason
-        `_on_corner_row_selected` reads it there: this table sorts."""
-        item = self.corners_table.itemAt(pos)
-        session = self.session
-        if item is None or session is None or item.column() != _CORNER_BEST_COL:
-            return
-        name = self.corners_table.item(item.row(), 0)
-        cid = name.data(NUM_ROLE) if name is not None else None
-        prov = session.corner_best_provenance(int(cid)) if cid is not None else None
-        if prov is None:
-            return
-        menu = QMenu(self)
-        act = menu.addAction(provenance_panel.MENU_LABEL)
-        act.setToolTip("Show the raw GPS fixes, the method and the window this number came from")
-        if menu.exec(self.corners_table.viewport().mapToGlobal(pos)) is act:
-            provenance_panel.open_for(prov, self.window())
-
-    def _on_corner_row_selected(self):
-        """Emit the selected row's corner cid (None on deselect) — read from the row's own
-        item (sorting reorders rows, so a row→cid list would go stale)."""
-        rows = self.corners_table.selectionModel().selectedRows()
-        if rows:
-            item = self.corners_table.item(rows[0].row(), 0)
-            self.corner_clicked.emit(item.data(NUM_ROLE) if item else None)
-        else:
-            self.corner_clicked.emit(None)
 
     def _refresh_lap_table(self, session, rows, unit, u_label):
         has = bool(rows)
