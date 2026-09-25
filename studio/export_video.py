@@ -28,6 +28,7 @@ a frame has no key to decode one — and it does NOT block the export the way th
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -1154,7 +1155,8 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
 
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
-                     hwaccel: bool = False, scale_filter: str | None = None) -> list[str]:
+                     hwaccel: bool = False, scale_filter: str | None = None,
+                     start_frame: int = 0) -> list[str]:
     """DECODE argv: -ss spec.local_t0 before the input + -t duration, fit the source into
     out_w x out_h (`scale_filter`, from `frame_geometry` — a plain scale, a cover-and-crop or a
     contain-and-pad), force the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop
@@ -1187,19 +1189,32 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     rgb24 stream's md5 over 300 frames was identical both ways, on the hardware and the software
     decode alike. What it changes is the work: a 59.94 fps source used to be scaled at 59.94 and
     then have half of it thrown away, and this decode is what a 1080p export waits on (60.1 ->
-    69.9 fps from the decoder alone)."""
+    69.9 fps from the decoder alone).
+
+    `start_frame` is the same decode entered `start_frame` frames in — a relay decoder's (see
+    `_DecodeRelay`). Its seek is the plan's own `-ss` plus exactly `start_frame / fps`, added in
+    whole microseconds (the unit ffmpeg parses `-ss` into) rather than re-derived from a float, so
+    both decodes see the same timestamps shifted by a whole number of frames; the relay only asks
+    for a `start_frame` that makes that sum exact (`_relay_step`)."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     scale = scale_filter or f"scale={out_w}:{out_h}"
     n = frame_count(spec.t0, spec.t1, fps)
+    seek = f"{spec.local_t0:.6f}"
+    length = clip_seconds(spec.t0, spec.t1, fps)
+    if start_frame:
+        us = round(float(seek) * 1e6) + start_frame * 1_000_000 // round(fps)
+        seek = f"{us // 1_000_000}.{us % 1_000_000:06d}"
+        n -= start_frame
+        length = n / float(fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
         *hw,
-        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(),
+        "-ss", seek, *spec.source.input_args(),
         # THE PLAN'S OWN LENGTH, not the raw window — see `clip_seconds`. Asking for the window's
         # 68.2286 s made ffmpeg's output trim round 2046.86 frames to 2046 and the render ran dry
         # one frame early; asking for 2047/30 s lands on the frame boundary. `-frames:v` then pins
         # the count from the other side, so the decode can never overrun the plan either.
-        "-t", f"{clip_seconds(spec.t0, spec.t1, fps):.6f}",
+        "-t", f"{length:.6f}",
         "-vf", f"fps={fps:.6f},{scale}",
         "-frames:v", str(n),
         "-an", "-sn", "-dn",
@@ -3347,11 +3362,14 @@ class _FrameReader:
     """Reads the decoder's frames on a thread of its own into pool buffers, in stream order. `get`
     returns None at the end of the stream, which is also what a killed decoder reads as."""
 
-    def __init__(self, read_into, pool: _FramePool, frame_bytes: int):
+    def __init__(self, read_into, pool: _FramePool, frame_bytes: int, ahead: int | None = None):
         self._read_into = read_into          # (writable memoryview) -> bytes actually read
         self._pool = pool
         self._fb = frame_bytes
-        self._ready: queue.Queue = queue.Queue()   # bounded by the pool: one entry per buffer
+        self._ready: queue.Queue = queue.Queue()   # bounded by the pool (and `ahead`, if given)
+        # At most `ahead` frames read and not yet taken — what keeps one relay decoder from
+        # holding every buffer of a pool it shares (see `_DecodeRelay`).
+        self._credit = threading.Semaphore(ahead) if ahead else None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._pump, daemon=True, name="export-read")
         self._thread.start()
@@ -3359,6 +3377,10 @@ class _FrameReader:
     def _pump(self) -> None:
         try:
             while True:
+                if self._credit is not None:
+                    while not self._credit.acquire(timeout=_PIPE_POLL_S):
+                        if self._stop.is_set():
+                            return
                 buf = self._pool.take(self._stop.is_set)
                 if buf is None:
                     return
@@ -3371,24 +3393,36 @@ class _FrameReader:
         finally:
             self._ready.put(None)
 
-    def get(self, abort) -> bytearray | None:
-        """The next frame, or None at the end of the stream or once `abort()` is true."""
+    def get(self, abort, timeout: float | None = None) -> bytearray | None:
+        """The next frame, or None at the end of the stream, once `abort()` is true, or after
+        `timeout` seconds without one."""
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             try:
                 buf = self._ready.get(timeout=_PIPE_POLL_S)
             except queue.Empty:
-                if abort():
+                if abort() or (deadline is not None and time.monotonic() > deadline):
                     return None
                 continue
             if buf is None:
                 self._ready.put(None)      # the end stays the end for any later caller
+            elif self._credit is not None:
+                self._credit.release()
             return buf
 
     def close(self, unblock) -> None:
-        """Stop reading: `unblock()` must wake a read in progress (a socket shutdown does)."""
+        """Stop reading: `unblock()` must wake a read in progress (a socket shutdown does). The
+        frames it had read and nobody took go back to the pool."""
         self._stop.set()
         unblock()
         self._thread.join(timeout=5.0)
+        while True:
+            try:
+                buf = self._ready.get_nowait()
+            except queue.Empty:
+                return
+            if buf is not None:
+                self._pool.give(buf)
 
 
 class _FrameWriter:
@@ -3458,6 +3492,130 @@ class _FrameWriter:
         self.close(abort)
         if self.error is not None:
             raise self.error
+
+
+# --------------------------------------------------------------------------- the decode relay
+# ONE VIDEOTOOLBOX SESSION IS LATENCY-BOUND, and at 1080p it is what the export waits on: ffmpeg's
+# VT hwaccel hands the media engine one frame and waits for it before sending the next, so a
+# second session runs largely in the first one's idle time. MK lap 14 at 1080p, 400 frames each:
+# one decoder 58.3 fps; two, on the clip's two halves, 138.8 fps between them. (Two SOFTWARE
+# decoders gave 72.0 -> 82.0: they share the same cores, so the relay is for the hardware decode.)
+#
+# So the clip is decoded as a RELAY of turns. The decoder running a turn is read live while the
+# next one, started `_RELAY_LEAD` frames before its own turn, decodes ahead into the pool. Each is
+# the same decode entered further in (`build_decode_cmd`'s `start_frame`), and NONE IS TRUSTED ON
+# ARITHMETIC: both decoders deliver the frames around the seam and they must match byte for byte,
+# on frames that all differ from one another (a still picture would match at any offset and
+# prove nothing). Any doubt — a mismatch, a repeated frame, a relay decoder that ended or stalled
+# — and the relay stops handing over: the decoder already running carries on to the end of the
+# clip, which is exactly the one decode this module has always run. It can cost speed, never a
+# pixel.
+_RELAY_TURN = 120        # frames a decoder runs before the next takes over (4 s at 30 fps)
+_RELAY_LEAD = 3          # frames a relay decoder starts before its turn: the seam check's first half
+_RELAY_CHECK = 2         # frames past the seam both decoders still deliver: its second half
+_RELAY_AHEAD = 40        # frames the next decoder may buffer: 40 x 6.2 MB = 249 MB at 1080p
+_RELAY_MAX_FRAME = 1920 * 1080 * 3   # the relay's buffers are sized for frames up to 1080p
+_RELAY_WAIT_S = 5.0      # how long the seam check waits on the next decoder before dropping it
+
+
+class _RelayLeg:
+    """One decoder of the relay: its process, its socket and a reader filling pool buffers."""
+
+    def __init__(self, first: int, proc, sock, pool: _FramePool, frame_bytes: int):
+        self.first = first            # the clip frame its first delivered frame is
+        self.proc, self.sock = proc, sock
+        self.reader = _FrameReader(lambda view: _recv_frame(sock, view), pool, frame_bytes,
+                                   ahead=_RELAY_AHEAD)
+
+    def stop(self) -> None:
+        for step in (self.proc.kill, lambda: self.sock.shutdown(socket.SHUT_RDWR)):
+            try:
+                step()
+            except OSError:
+                pass
+        self.reader.close(lambda: None)
+        try:
+            self.proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001 - a reaped/odd process must not fail the teardown
+            pass
+        self.sock.close()
+
+
+class _DecodeRelay:
+    """The composite's frames, in order, from a relay of decoders (see `_RELAY_TURN`). Drop-in for
+    `_FrameReader` on the painting thread: `get` hands out one clip frame after another."""
+
+    def __init__(self, spawn, first_proc, first_sock, n: int, pool: _FramePool,
+                 frame_bytes: int):
+        self._spawn = spawn           # start_frame -> (proc, sock): the same decode, entered later
+        self._n, self._pool, self._fb = n, pool, frame_bytes
+        self._legs = [_RelayLeg(0, first_proc, first_sock, pool, frame_bytes)]
+        self._i = 0                   # clip frames handed out
+        self._seam = _RELAY_TURN      # where the next leg takes over
+        self._window: list[bytes] = []   # digests of the frames checked at this seam
+        self.handovers = 0            # seams crossed on a relay decoder (for the tests)
+        self.gave_up = False          # a seam failed its check; the running decoder finishes
+        self._lock = threading.Lock()   # `procs` is read by the supervisor thread
+        self._start_next()
+
+    def procs(self) -> list:
+        with self._lock:
+            return [leg.proc for leg in self._legs]
+
+    def _start_next(self) -> None:
+        """Spawn the next leg, if the clip has a turn left that is worth one."""
+        if self.gave_up or self._seam + _RELAY_TURN // 2 >= self._n:
+            return
+        proc, sock = self._spawn(self._seam - _RELAY_LEAD)
+        with self._lock:
+            self._legs.append(_RelayLeg(self._seam - _RELAY_LEAD, proc, sock, self._pool,
+                                        self._fb))
+
+    def _give_up(self) -> None:
+        with self._lock:
+            dropped = self._legs[1:]
+            del self._legs[1:]
+        for leg in dropped:
+            leg.stop()
+        self.gave_up = True
+
+    def _check(self, buf, abort) -> bool:
+        """Frame `self._i` from BOTH legs: equal, and unlike every frame checked before it."""
+        other = self._legs[1].reader.get(abort, timeout=_RELAY_WAIT_S)
+        if other is None:
+            return False
+        same = other == buf
+        self._pool.give(other)
+        digest = hashlib.sha1(buf).digest()
+        if not same or digest in self._window:
+            return False
+        self._window.append(digest)
+        return True
+
+    def get(self, abort) -> bytearray | None:
+        buf = self._legs[0].reader.get(abort)
+        if buf is None:
+            return None               # the end of the stream (or an abort): the pump decides
+        if len(self._legs) > 1 and self._i >= self._legs[1].first:
+            if not self._check(buf, abort):
+                self._give_up()
+            elif self._i == self._seam + _RELAY_CHECK - 1:
+                # Every frame around the seam matched: the next leg is this decode, aligned.
+                with self._lock:
+                    done = self._legs.pop(0)
+                done.stop()
+                self.handovers += 1
+                self._window.clear()
+                self._seam += _RELAY_TURN
+                self._start_next()
+        self._i += 1
+        return buf
+
+    def close(self, unblock=None) -> None:
+        with self._lock:
+            legs, self._legs = self._legs, []
+        for leg in legs:
+            leg.stop()
 
 
 def _grow_socket_buffer(sock, option: int) -> None:
@@ -3627,7 +3785,10 @@ class Renderer:
     def _extra_procs(self) -> tuple:
         """Subprocesses this render owns BEYOND the encoder and the single decoder. The watchdog's
         kill, `cancel()` and the teardown all sweep these too, so a subclass's extra decoder can
-        never outlive the render or wedge it."""
+        never outlive the render or wedge it. Here: the decode relay's other decoders."""
+        relay = self._reader
+        if isinstance(relay, _DecodeRelay):
+            return tuple(p for p in relay.procs() if p is not self._dec)
         return ()
 
     def _respawn(self, spec: ExportSpec) -> Renderer:
@@ -3654,7 +3815,7 @@ class Renderer:
             cmd = build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
                                    self._scale_filter)
             if self._pipelined:
-                self._dec = self._spawn_socket_decoder(cmd)
+                self._dec, self._dec_sock = self._spawn_socket_decoder(cmd)
             else:
                 self._dec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         sync = getattr(self, "_sync", None)
@@ -3673,29 +3834,55 @@ class Renderer:
             self._start_pipeline()
         self._started = True
 
-    def _spawn_socket_decoder(self, cmd: list[str]) -> subprocess.Popen:
-        """The decoder, writing its rgb24 frames into one end of a socketpair (see `_FramePool` for
-        why a socket). ffmpeg's `pipe:1` is a plain write() to fd 1, which a socket takes as it
-        takes a pipe — and a killed decoder closes it the same way, reading as end-of-stream."""
+    def _spawn_socket_decoder(self, cmd: list[str], stderr=subprocess.PIPE):
+        """(process, our socket end): the decoder, writing its rgb24 frames into one end of a
+        socketpair (see `_FramePool` for why a socket). ffmpeg's `pipe:1` is a plain write() to fd
+        1, which a socket takes as it takes a pipe — and a killed decoder closes it the same way,
+        reading as end-of-stream."""
         ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         _grow_socket_buffer(ours, socket.SO_RCVBUF)
         _grow_socket_buffer(theirs, socket.SO_SNDBUF)
         try:
-            proc = subprocess.Popen(cmd, stdout=theirs.fileno(), stderr=subprocess.PIPE)
+            proc = subprocess.Popen(cmd, stdout=theirs.fileno(), stderr=stderr)
         except BaseException:
             ours.close()
             raise
         finally:
             theirs.close()
-        self._dec_sock = ours
-        return proc
+        return proc, ours
+
+    def _spawn_relay_leg(self, start_frame: int):
+        """A relay decoder: this render's decode, entered `start_frame` frames in. Its stderr is
+        not kept — any failure of it only ends the relay (see `_DecodeRelay`)."""
+        cmd = build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
+                               self._scale_filter, start_frame=start_frame)
+        return self._spawn_socket_decoder(cmd, stderr=subprocess.DEVNULL)
+
+    def _relay_ok(self) -> bool:
+        """Whether the decode runs as a relay (`_DecodeRelay`): the HARDWARE decode of a composite
+        (the one a second session speeds up), at a whole-number rate whose turn and lead are whole
+        microseconds (the relay's seek is then exact), with frames up to 1080p (what its buffers
+        are sized for) and at least two turns to share."""
+        fps = round(self._fps)
+        return (bool(self._hwaccel) and not self._overlay_only and fps > 0
+                and abs(self._fps - fps) < 1e-9
+                and (_RELAY_TURN * 1_000_000) % fps == 0
+                and (_RELAY_LEAD * 1_000_000) % fps == 0
+                and self._frame_bytes <= _RELAY_MAX_FRAME
+                and len(self._times) >= 2 * _RELAY_TURN)
 
     def _start_pipeline(self) -> None:
         """The buffer pool and the two I/O threads around the painting thread."""
         assert self._enc is not None and self._enc.stdin is not None
         frame_bytes = self._out_w * self._out_h * (4 if self._overlay_only else 3)
-        self._pool = _FramePool(frame_bytes, _PIPE_FRAMES)
-        self._writer = _FrameWriter(self._enc.stdin.write, self._pool, depth=1)
+        relay = self._pipelined and not self._overlay_only and self._relay_ok()
+        # The relay's next decoder buffers up to `_RELAY_AHEAD` frames of its own on top of the
+        # pump's; two more keep the running decoder from ever waiting on it for a buffer.
+        self._pool = _FramePool(frame_bytes,
+                                _PIPE_FRAMES + (_RELAY_AHEAD + 2 if relay else 0))
+        # The encoder is looked up per write, as the serial pump's own `self._enc.stdin.write`
+        # does, so whatever process `self._enc` is — the one the supervisor kills — is the one fed.
+        self._writer = _FrameWriter(lambda buf: self._enc.stdin.write(buf), self._pool, depth=1)
         if self._overlay_only:
             return
         # A real Popen handed our socket exposes no stdout of its own; a stand-in process (the
@@ -3703,6 +3890,10 @@ class Renderer:
         stdout = getattr(self._dec, "stdout", None)
         if stdout is not None:
             read = lambda view: _stream_read_into(stdout, view)  # noqa: E731
+        elif relay:
+            self._reader = _DecodeRelay(self._spawn_relay_leg, self._dec, self._dec_sock,
+                                        len(self._times), self._pool, self._frame_bytes)
+            return
         else:
             sock = self._dec_sock
             read = lambda view: _recv_frame(sock, view)  # noqa: E731
@@ -3730,6 +3921,10 @@ class Renderer:
                 except OSError:
                     pass
 
+        if isinstance(reader, _DecodeRelay):
+            _log.info("decode relay: %d of the clip's seams handed over%s", reader.handovers,
+                      "; a seam check failed, the running decoder finished the clip"
+                      if reader.gave_up else "")
         if reader is not None:
             reader.close(unblock)
         else:
