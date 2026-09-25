@@ -10,8 +10,11 @@ serial on the same commit), `test-footage` 139.1 s (2026-09-23, warm page cache;
 `footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s) and `test-soak` 146.1 s.
 
 **Adding a test** edits no shared file. Write `tests/test_<name>.py` as a plain script whose
-`__main__` runs its tests (nothing runs under pytest; `test_layering` fails a `def test_…` no
-runner calls), and put its "why" in the module docstring. CMake registers every `tests/test_*.py`
+`__main__` runs its tests (CTest runs no file under pytest; `test_layering` fails a `def test_…` no
+runner calls, or one pytest and the runner would disagree on), and put its "why" in the module
+docstring. To iterate on one test, `pixi run python -m pytest tests/test_<name>.py -k <part>`
+(add `--durations=5` for timings): [conftest.py](conftest.py) jails it and makes it run what the
+file's runner runs. Why pytest is not the gate: `studio/docs/refused-2026-09.md` §18. CMake registers every `tests/test_*.py`
 by itself, as `python tests/<file>.py` with `QT_QPA_PLATFORM=offscreen` and the bindings on
 `PYTHONPATH`. Edit [CMakeLists.txt](CMakeLists.txt) only to name the test in its exceptions table
 (another environment, or a `COST` so a slow suite starts first), or to add a footage or soak

@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Seventeen features were built far enough to **measure**, and the measurement said not to ship them. The
+Eighteen features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1573,6 +1573,52 @@ was measured closer to its truth.
 **What would be new evidence:** smoothing that stops counting fixes through braking and acceleration
 (positions or κ smoothed over arc length or time), after which this probe's constant-speed control
 says centring is right; or surveyed corner geometry on real footage that puts today's windows late.
+
+---
+
+## 18. pytest as the CTest runner — refused (ARCH-7); pytest for local `-k` shipped instead
+
+**The claim.** The test files are plain scripts whose `__main__` blocks call their tests, and a
+CTest registration is a whole file. Tests had silently never run: four `def test_*` no runner called,
+and three Stats tests below a misplaced `__main__` (fixed in c91f121). There is no `-k` and no
+per-test duration. So run every file as `python -m pytest -q tests/<file>.py` under CTest.
+
+**How it was tested.** pytest 9.1.1 in the env; all 132 files run with their registration's exact
+environment (read from `ctest --show-only=json-v1`) and jailed: as the script under a
+`sys.monitoring` recorder of which top-level `test_*` start, and under pytest. The timing is two
+interleaved whole-suite pairs of the 130 files `test-fast` runs, four wide (load average 8–11 from
+other lanes, so CPU time is the steadier figure).
+
+**The never-run class is empty today.** pytest collects 2,140 tests and the `__main__` blocks run
+2,124. The 16 between them are exactly the 15 footage checks and 1 soak that each runner leaves out
+on purpose. Nothing is stranded and nothing a runner calls is invisible to pytest.
+
+**Run unchanged, pytest breaks 4 files and would reach the owner's data.**
+
+| what pytest does differently | measured |
+|---|---|
+| a test that takes the runner's `monkeypatch_restore` | 27 ERRORs in test_export_video / _compare / _padding |
+| its log capture keeps each failed load's traceback | test_load_affordances: 5 QThreads "leak" (1 → 6) |
+| collects the footage and soak checks | test_measured_figures 7 FootageMissing; test_compare_lifecycle 1.3 → 112.8 s |
+| enters through its own `__main__.py`, not a file in tests/ | a by-hand run resolves all 8 app-support seams to the real directory |
+
+**And it costs every run.** Scripts 673.0 / 675.7 s CPU (157.9 / 153.0 s wall); pytest 696.9 /
+696.2 s CPU (152.9 / 152.2 s wall): **+3.3 % CPU**, flat per process (median +0.15 s a file; no file
+more than +1.4 s). Wall time was lost in the load; on an idle Mac that start-up tax is ~+5 s of
+`test-fast`'s ~155 s. What the runner would buy beyond that is a file reporting every failing test
+rather than stopping at the first. `-k` and `--durations` need pytest in the env, not as the gate.
+
+**What shipped instead.** pytest stays in the env for local iteration, and `tests/conftest.py` +
+`tests/pytest.ini` make `pixi run python -m pytest tests/test_x.py -k <name>` jailed and faithful:
+132/132 files green, 2,124 passed + 16 deselected. `-k` ran 3 of test_stats' 125 tests in 0.84 s,
+where the file takes ~15 s. `tests/test_layering.py` holds pytest and every runner to one set
+statically; on the tree before c91f121 it names the three Stats tests. Its reachability rule had
+exempted six explicit-runner files that merely contained a spelling like `globals()`. It now looks
+for a call, and it caught a test stranded in `test_layering.py` itself while this was written.
+
+**What would be new evidence:** a defect the per-file runners let through and pytest's runner
+would have caught, found on this tree; or a way to run pytest without paying its start-up once
+per file.
 
 ---
 
