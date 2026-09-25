@@ -1559,9 +1559,12 @@ def _e1_export(win, td, *, free, scope=export_video.SCOPE_THIS_LAP):
         (export_controller, "VideoExportWorker"): export_controller.VideoExportWorker,
         (ExportController, "_ask_export_options"): ExportController._ask_export_options,
         (ExportController, "_export_save_path"): ExportController._export_save_path,
+        (ExportController, "_export_folder_path"): ExportController._export_folder_path,
         (QDialog, "exec"): QDialog.exec,
         (QMessageBox, "exec"): QMessageBox.exec,
     }
+    # An All-laps batch is asked for as a FOLDER (EXP-4), its files named per lap inside it.
+    ExportController._export_folder_path = lambda _s, *_a, **_k: td
     export_video.free_bytes = lambda path: (asked.append(path), free)[1]
     export_video.probe_video_size = lambda _path: _E1_SOURCE
     export_video.probe_source_duration = lambda _source: None

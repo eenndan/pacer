@@ -736,8 +736,11 @@ def test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map
     h, wd = ink.shape
     assert not ink[h // 2 - 20:h // 2 + 20, wd // 2 - 20:wd // 2 + 20].any(), "ink inside the ring"
     ys, xs = np.nonzero(ink)
-    # The ellipse's extremes sit on the fitted box: 28 px in from each side.
-    assert abs(xs.min() - 28) <= 6 and abs(xs.max() - (wd - 29)) <= 6, (xs.min(), xs.max())
+    # The ellipse is the height-limited fit (432 px for its 80 m, so 648 px for its 120 m),
+    # centred — and nothing of the far-off laps widens it.
+    assert abs((xs.max() - xs.min()) - 648) <= 10 and abs((ys.max() - ys.min()) - 432) <= 10, \
+        (xs.min(), xs.max(), ys.min(), ys.max())
+    assert abs((xs.min() + xs.max()) / 2 - wd / 2) <= 3, (xs.min(), xs.max())
     colours = {tuple(c) for c in px[ink][:, :3][px[ink][:, 3] == 255]}
     assert len(colours) >= 8, f"one flat colour, not the speed ramp: {len(colours)}"
     # A lap with no trace gives no thumbnail, and the card still renders without one.

@@ -169,6 +169,10 @@ class ExportController:
         """One save prompt; None when the user cancels (⇒ the caller writes nothing)."""
         path, _ = QFileDialog.getSaveFileName(self.win, title, self._export_default(suffix), filt)
         return path or None
+    def _export_folder_path(self, title: str, start: str) -> str | None:
+        """One folder prompt, `_export_save_path`'s twin for the exports whose output is a folder's
+        worth of files; None when the user cancels (⇒ the caller writes nothing)."""
+        return QFileDialog.getExistingDirectory(self.win, title, start) or None
     def _export_lap_id(self) -> int | None:
         """The lap the channels CSV describes: the PRIMARY selected/followed lap (the same
         lap the Corners view tracks), falling back to the best lap. None when the session
@@ -976,7 +980,7 @@ class ExportController:
             # loose among the footage the chooser opens on (EXP-5).
             title = ("Choose a folder for the lap videos" if batch
                      else "Choose where to put the PNG frames folder")
-            folder = QFileDialog.getExistingDirectory(self.win, title, home)
+            folder = self._export_folder_path(title, home)
             if not folder:
                 return
             out = os.path.join(folder, self._overlay_name(choice, name_lap))
