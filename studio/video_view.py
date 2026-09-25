@@ -1350,9 +1350,9 @@ class VideoView(QWidget):
             self.secondary.pause()
 
     def pause_if_playing(self):
-        """Pause each pane only if actually playing. pause() on a never-played (Stopped) pane makes
-        the next play() restart from 0, discarding a seek-to-S/F — so the compare reset uses this to
-        keep each pane parked at its lap start."""
+        """Pause each pane only if actually playing — the compare reset's pause, before each pane's
+        seek parks it (shown, paused) at its lap start. (That pause() on a never-played pane makes
+        play() restart from 0 was measured false on Qt 6.11's FFmpeg backend, 2026-09-25.)"""
         if self.pane.is_playing():
             self.pane.pause()
         if self.secondary is not None and self.secondary.is_playing():
@@ -1381,6 +1381,16 @@ class VideoView(QWidget):
         pane = self._pane_for(side)
         if pane is not None:
             pane.seek(seconds)
+
+    def seek_dragged(self, seconds: float):
+        """A drag's seek on the PRIMARY pane: one in flight, the latest wins (PlayerPane.seek_dragged)."""
+        self.pane.seek_dragged(seconds)
+
+    def seek_pane_dragged(self, side: int, seconds: float):
+        """A drag's seek on ONE pane (the distance-locked scrub's pane B) — see seek_dragged."""
+        pane = self._pane_for(side)
+        if pane is not None:
+            pane.seek_dragged(seconds)
 
     def current_pane_time(self, side: int) -> float:
         """The current global time of one pane (PRIMARY/SECONDARY), for the per-tick badge/g feed."""

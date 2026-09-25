@@ -49,6 +49,13 @@ _WINDOW_STOP_TOL_S = 0.002
 # a disk/recording hiccup at a seam can never leave the player hung.
 _SEAM_RESUME_WATCHDOG_MS = 8000
 
+# A DRAG keeps one seek in flight (seek_dragged). The next target goes when the in-flight seek's frame
+# reaches the screen, or after this long if none does (a seek that presents nothing — mid-load, the
+# headless player — must not freeze the drag). Well above the slowest paused seek measured, because a
+# timer that fires first supersedes a seek about to land — the failure this exists to end: up to
+# 693 ms between drag frames on Sandown 3h's 4K HEVC (P-A p9), 460-560 ms on the synthetic GoPro.
+_DRAG_SEEK_RELEASE_MS = 1000
+
 # ----------------------------------------------------------------- headless / CI seam
 # PACER_NO_MEDIA=1 swaps the media triplet for the inert _Null* stand-ins below (headless CI smoke);
 # built identically otherwise. Read once at construction.
@@ -151,6 +158,13 @@ class PlayerPane(QWidget):
         # source switch in flight: gate out the OLD source's spurious LoadedMedia/EndOfMedia (see
         # _on_media_status / THE CHAPTER-SEAM GATE).
         self._switching = False
+        # True only inside our own player.setSource(): the backend re-emits the OLD source's
+        # statuses from within that call, so nothing arriving then is the new source's load.
+        self._in_set_source = False
+        # A drag's seek still on its way to the screen, and the newest target waiting behind it
+        # (seek_dragged: one in flight, the latest wins).
+        self._drag_inflight = False
+        self._drag_held: float | None = None
         # user paused mid-reopen: makes _apply_pending skip the resume so a deliberate pause survives
         # the seam (the deferred resume captured the pre-pause state).
         self._user_paused_during_reopen = False
@@ -189,7 +203,14 @@ class PlayerPane(QWidget):
             self.audio = QAudioOutput()
             self.audio.setVolume(0.6)
             self.audio.setMuted(True)
-        self.player.setAudioOutput(self.audio)   # no-ops on the null player
+        # The audio output is attached on the first UN-mute (set_muted), not here. Attached, it gives
+        # the FFmpeg engine an audio-renderer thread whose teardown — every chapter switch, compare
+        # exit, reload — disconnects from this Python-made QAudioOutput: PySide's disconnectNotify
+        # then waits for the GIL while holding Qt's signal-slot lock, and a main thread holding the
+        # GIL that connects anything under the same lock deadlocks (sampled 2026-09-25: leaving
+        # compare on MK hung for good). A muted pane — pane B always, the primary by default — never
+        # needs that thread, and once seeks present paused every pane builds its engine at load.
+        self._audio_attached = False
         self.player.setVideoOutput(self.video)
 
         # The pane is JUST the video surface; the transport chrome lives in the shell.
@@ -208,6 +229,15 @@ class PlayerPane(QWidget):
         self._seam_watchdog.setSingleShot(True)
         self._seam_watchdog.setInterval(_SEAM_RESUME_WATCHDOG_MS)
         self._seam_watchdog.timeout.connect(self._on_seam_watchdog)
+
+        # The drag's release: the in-flight seek's frame reaching the video sink, or this timer.
+        self._drag_release = QTimer(self)
+        self._drag_release.setSingleShot(True)
+        self._drag_release.setInterval(_DRAG_SEEK_RELEASE_MS)
+        self._drag_release.timeout.connect(self._release_drag)
+        sink = getattr(self.video, "videoSink", None)    # the headless stand-in has no sink
+        self._sink = sink() if sink is not None else None
+        self._frames_watched = False   # the sink is listened to only while a drag seek is in flight
 
         if self._chapters is not None:
             # initial load is not a replacement — don't gate (no spurious statuses, and a gate left
@@ -249,18 +279,19 @@ class PlayerPane(QWidget):
             return 0.0
         return self._chapters.chapters[self._current_chapter].offset
 
-    def _source_is_chapter(self, index: int) -> bool:
+    def _source_is_chapter(self, index: int, strict: bool = False) -> bool:
         """True iff the player's current source is chapter `index`'s file (the genuine target load
         landed, not a leftover from an earlier _set_source). Compares absolute paths; the headless
-        null player has no source() (synchronous, raceless) so it reports True."""
+        null player has no source() (synchronous, raceless) so it reports True — or False when
+        `strict`: the seam gate opens on a LoadedMedia only with POSITIVE proof (_on_media_status)."""
         if self._chapters is None:
-            return True
+            return not strict
         source = getattr(self.player, "source", None)
         if source is None:
-            return True  # null/inert player (headless): no async load to race
+            return not strict  # null/inert player (headless): no async load to race
         loaded = source().toLocalFile()
         if not loaded:
-            return True  # no resolvable source URL — don't block the legacy apply path
+            return not strict  # no resolvable source URL — don't block the legacy apply path
         want = os.path.abspath(self._chapters.chapters[index].path)
         return os.path.abspath(loaded) == want
 
@@ -275,7 +306,11 @@ class PlayerPane(QWidget):
         self._current_chapter = index
         self._switching = switching   # arm the gate before setSource (replacement only)
         path = self._chapters.chapters[index].path
-        self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+        self._in_set_source = True    # the OLD source's statuses re-emitted in here are not our load
+        try:
+            self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+        finally:
+            self._in_set_source = False
         self.chapterChanged.emit(index)
         # arm the bounded-resume watchdog if this switch defers a seek (idempotent; stopped on apply).
         if self._pending is not None:
@@ -289,6 +324,11 @@ class PlayerPane(QWidget):
         # explicit play overrides a pause made mid-seam: honour PLAY on the genuine load (else
         # play-after-pause-during-reopen never resumes).
         self._user_paused_during_reopen = False
+        if self._pending is not None:
+            # ▶ while a seek waits for its source to load (the open's poster, a paused chapter
+            # jump): play from THAT target once it lands, not from wherever the load starts.
+            index, local, _resume = self._pending
+            self._pending = (index, local, True)
         # parked at the lap end (auto-paused): rewind to the window start so Play re-rolls the lap
         # (else a bare play() pauses again on the next tick).
         win = self._lap_window
@@ -329,6 +369,11 @@ class PlayerPane(QWidget):
 
     def set_muted(self, muted: bool):
         self.audio.setMuted(bool(muted))
+        if not muted and not self._audio_attached:
+            # first un-mute: only now does the engine get an audio renderer (see __init__). It stays
+            # attached after a re-mute — detaching is itself the teardown that can deadlock.
+            self._audio_attached = True
+            self.player.setAudioOutput(self.audio)
 
     def _clock(self):
         """This pane's telemetry->media conversion — the recording's own, off the ChapterMap it was
@@ -347,19 +392,29 @@ class PlayerPane(QWidget):
         into the media player (and back again in `_on_position`). Before this, a lap start was
         handed to the player as if it were a media time, which by the end of a long recording put
         the picture ~0.2 s away from the moment asked for — and, within that distance of a chapter
-        boundary, could resolve to the wrong chapter file. See studio/media_clock.py."""
+        boundary, could resolve to the wrong chapter file. See studio/media_clock.py.
+
+        EVERY SEEK LANDS AND IS SHOWN (QA 2026-09-25, VIEW-1..3; tests/test_player_seek_present.py).
+        Qt 6.11's FFmpeg backend DROPS a setPosition made while the source is still loading — the
+        open's poster seek and compare pane B's lap-start seek both are — so such a seek waits in
+        _pending for the load, exactly as a chapter switch's does. And a seek in StoppedState moves
+        the position but presents no frame (every fresh source is Stopped), so a seek that does not
+        resume play ends paused: _present_paused."""
+        self._drag_held = None   # a deliberate seek drops a drag target still waiting its turn
         if self._chapters is None:
             self.player.setPosition(int(seconds * 1000))
             return
         index, local = self._chapters.to_local(self._clock().to_media(seconds))
         if index == self._current_chapter:
-            if self._switching or self._pending is not None:
-                # switch to THIS chapter still in flight: fold the new target into the deferred seek
-                # (a direct setPosition would hit the old media / be reset), preserving the resume intent.
+            if self._switching or self._pending is not None or self._media_loading():
+                # switch to THIS chapter still in flight, or its media still loading: fold the new
+                # target into the deferred seek (a direct setPosition would hit the old media / be
+                # dropped by the loading one), preserving the resume intent.
                 resume = self._pending[2] if self._pending is not None else self.is_playing()
                 self._pending = (index, local, resume)
             else:
                 self.player.setPosition(int(local * 1000))
+                self._present_paused()
         else:
             # switch source; defer the seek (+ a resume if playing) to LoadedMedia.
             # Flag the seam BEFORE _set_source, exactly as the EndOfMedia auto-advance does: this is
@@ -369,6 +424,35 @@ class PlayerPane(QWidget):
             self.seamLoading.emit(True)
             self._pending = (index, local, self.is_playing())
             self._set_source(index)
+
+    def seek_dragged(self, seconds: float):
+        """A DRAG's seek (the chart scrub, the map-dot drag): at most ONE in flight, the latest
+        target wins. A paused seek on 4K HEVC takes 136-410 ms to reach the screen, and the drag used
+        to re-seek every ~33 ms tick — each seek superseded before its frame existed, so a 1 s drag
+        showed ONE frame (QA VIEW-4). Newer targets now wait for the in-flight seek's frame (or
+        _DRAG_SEEK_RELEASE_MS) and only the newest is sent, so the picture follows the drag."""
+        if self._drag_inflight:
+            self._drag_held = float(seconds)
+            return
+        self._drag_inflight = True
+        self._watch_frames(True)
+        self._drag_release.start()
+        self.seek(seconds)
+
+    def _media_loading(self) -> bool:
+        """True while the current source has not loaded yet — when the FFmpeg backend drops a
+        setPosition. The headless null player has no mediaStatus and loads nothing."""
+        status = getattr(self.player, "mediaStatus", None)
+        return status is not None and status() in (QMediaPlayer.MediaStatus.NoMedia,
+                                                    QMediaPlayer.MediaStatus.LoadingMedia)
+
+    def _present_paused(self):
+        """Show the frame at the player's position when nothing else will: in StoppedState — the
+        state of every fresh source, at the open and after each chapter switch — a seek presents
+        NO frame, and pause() is what decodes and shows it (measured, Qt 6.11 FFmpeg; ▶ afterwards
+        plays from there). A paused or playing player already presents: left alone."""
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState:
+            self.player.pause()
 
     # ------------------------------------------------------------- lap window (compare mode)
     def set_lap_window(self, start_global: float, end_global: float):
@@ -548,6 +632,7 @@ class PlayerPane(QWidget):
         """Stop the decoder AND close the overlay window — clean disposal for a reload / Phase B
         pane teardown (the overlay is a top-level window with no parent window to close it)."""
         self._seam_watchdog.stop()  # no stray seam timer firing into a torn-down player
+        self._drag_release.stop()
         self.player.stop()
         self.gmeter.close()
 
@@ -563,6 +648,7 @@ class PlayerPane(QWidget):
         # deleted C++ object raises at ATTRIBUTE ACCESS, which a tuple of bound methods would do
         # outside the guard — reintroducing the very crash this is here to contain.
         for step in (lambda: self._seam_watchdog.stop(),
+                     lambda: self._drag_release.stop(),
                      lambda: self.player.stop(),
                      lambda: self.player.setVideoOutput(None),
                      lambda: self.player.setAudioOutput(None),
@@ -600,17 +686,27 @@ class PlayerPane(QWidget):
         the new file; the real load then arrives as LoadingMedia -> LoadedMedia. Honouring _pending
         on the spurious LoadedMedia consumes it and the real load discards the seek+resume -> the
         seam stall. So while switching we ignore every status until LoadingMedia confirms the real
-        load began, then apply _pending on the next genuine LoadedMedia."""
-        if self._switching:
-            # the real load always passes through LoadingMedia: open the gate there.
-            if status == QMediaPlayer.MediaStatus.LoadingMedia:
-                self._switching = False
-            return  # ignore the spurious statuses emitted before the real load
+        load began, then apply _pending on the next genuine LoadedMedia.
 
+        The real load does NOT always pass through LoadingMedia: a switch made while the previous
+        source is itself still loading (the open's poster seek into chapter 2) gets none — the
+        backend de-duplicates the status — and the gate used to wait for the 8 s watchdog (QA
+        VIEW-3). So a LoadedMedia also opens it when it is provably the target's: not re-emitted
+        inside our own setSource, and the player reporting the target chapter's file (measured: the
+        leftover LoadedMedia still names the OLD file)."""
         loaded = status in (
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
         )
+        if self._switching:
+            if status == QMediaPlayer.MediaStatus.LoadingMedia:
+                self._switching = False  # the real load began: the next genuine load applies _pending
+                return
+            if not (loaded and not self._in_set_source
+                    and self._source_is_chapter(self._current_chapter, strict=True)):
+                return  # ignore the spurious statuses emitted before the real load
+            self._switching = False  # the target's own load, with no LoadingMedia before it
+
         if loaded and self._pending is not None:
             index, local, resume = self._pending
             # Match the loaded FILE, not just the index: on a fresh pane a chapter-0 load can open the
@@ -624,7 +720,7 @@ class PlayerPane(QWidget):
             self._on_end_of_media()
 
     def _apply_pending(self, local: float, resume: bool):
-        """Apply the deferred cross-chapter seek (to `local` seconds) and optionally resume play,
+        """Apply the deferred seek (to `local` seconds) and resume play, or show the frame paused,
         clearing _pending + the seam state. Shared by the genuine-load path and the watchdog so the
         resume is identical however it's triggered."""
         self._pending = None
@@ -635,9 +731,12 @@ class PlayerPane(QWidget):
         # new source, and a source carries no rate of its own. Unconditional rather than guarded on
         # `!= 1.0` — the guard would be a second place that has to know the default.
         self.player.setPlaybackRate(self._rate)
-        # resume only if the original intent was to play AND the user did not pause mid-reopen.
+        # resume only if the original intent was to play AND the user did not pause mid-reopen;
+        # otherwise the freshly-loaded (Stopped) source must be paused, or it shows nothing.
         if resume and not self._user_paused_during_reopen:
             self.player.play()
+        else:
+            self._present_paused()
         self._user_paused_during_reopen = False
         self.seamLoading.emit(False)   # seam reopen finished
 
@@ -664,3 +763,31 @@ class PlayerPane(QWidget):
 
     def _on_state(self, state):
         self.playbackStateChanged.emit(state)
+
+    def _watch_frames(self, on: bool):
+        """Listen to the video sink only while a drag seek is in flight. Connected for good, every
+        frame of playback would cross into Python on the GUI thread — the present path the ~30 Hz
+        tick is kept off (studio/README.md, perf invariant 4)."""
+        if self._sink is None or on == self._frames_watched:
+            return
+        self._frames_watched = on
+        if on:
+            self._sink.videoFrameChanged.connect(self._on_video_frame)
+        else:
+            self._sink.videoFrameChanged.disconnect(self._on_video_frame)
+
+    def _on_video_frame(self, frame):
+        """A frame reached the video sink: the in-flight drag seek has landed (seek_dragged). A
+        bound method, so a frame the backend delivers from its render thread is queued onto ours."""
+        if self._drag_inflight and frame.isValid():
+            self._release_drag()
+
+    def _release_drag(self):
+        """Let the next drag seek go: the newest target held behind the in-flight one, if any."""
+        self._drag_release.stop()
+        self._drag_inflight = False
+        held, self._drag_held = self._drag_held, None
+        if held is not None:
+            self.seek_dragged(held)
+        else:
+            self._watch_frames(False)   # the drag is over: back off the present path

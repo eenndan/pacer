@@ -109,6 +109,14 @@ class _FakeVideo:
     def seek_pane(self, side, t):
         self.pane_seeks.append((side, t))
 
+    # The drag paths (the tick's scrub seek, the marker drain) seek through these; the pane's
+    # one-in-flight gating behind them is tests/test_player_seek_present.py's, so they record alike.
+    def seek_dragged(self, t):
+        self.seeks.append(t)
+
+    def seek_pane_dragged(self, side, t):
+        self.pane_seeks.append((side, t))
+
     def is_playing(self):
         return self.playing
 
