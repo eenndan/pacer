@@ -1801,23 +1801,26 @@ FREE_SPACE_FLOOR_FRACTION = {
 # at a 1080p and a 2160p output frame — what the picker's time estimate is derived from, never a
 # promise: the progress dialog times the real render live and its ETA is the one to trust.
 # MEASURED 2026-09-25 on the M1 Pro (6P+2E) this app is developed on, through the real renderer on
-# MK_18_09_26's best lap (4K 59.94 HEVC source, rendered at the 30 fps cap), steady-state rate after
-# the first quarter; load average 4-11 from other work, so an idle Mac is a little faster:
+# MK_18_09_26's best lap with ±5 s (4K 59.94 HEVC source, rendered at the 30 fps cap), steady-state
+# rate after the first quarter — and RE-MEASURED the same day after #412 made the renderer 1.3-2x
+# faster (pipelined pump, in-place paint, the 1080p decode relay), which this table had not followed:
+# the picker went on quoting the old pipeline's times, up to twice what a render then took. Load
+# average 4.5-12 while measuring (the render's own threads count), so an idle Mac is a little faster:
 #
-#     path                              1080p    2160p
-#     h264_videotoolbox (footage)        61.2     22.8
-#     libx264 (footage)                  33.7     15.4
-#     prores_videotoolbox (overlay)      96.6     35.4
-#     prores_ks (overlay)                56.0     15.7
-#     PNG sequence (overlay)             96.1     31.5
+#     path                              1080p    2160p     (before #412)
+#     h264_videotoolbox (footage)        87.8     49.5     61.2   22.8
+#     libx264 (footage)                  41.9     17.6     33.7   15.4
+#     prores_videotoolbox (overlay)     131.2     63.4     96.6   35.4
+#     prores_ks (overlay)                58.4     16.0     56.0   15.7
+#     PNG sequence (overlay)            127.5     51.8     96.1   31.5
 #
-# Full renders land on these rates: the 2325-frame 2160p ProRes lap took 65.2 s on VideoToolbox
-# (35.4 fps) and 145.3 s on prores_ks (15.7 fps), the 1080p one 23.9 s on VideoToolbox. Between
-# and beyond the two sizes the cost of a frame is taken as linear in its pixel count.
+# Full renders land on these rates: the owner's 2325-frame 2160p footage lap took 51.0 s end to end
+# on VideoToolbox (45.6 fps, start-up included, against 49.5 steady) and his 2025-frame 1080p one
+# 26.0 s. Between and beyond the two sizes the cost of a frame is taken as linear in its pixel count.
 RENDER_FPS = {
-    VT_H264: (61.2, 22.8), SW_H264: (33.7, 15.4),
-    VT_PRORES: (96.6, 35.4), SW_PRORES: (56.0, 15.7), ALPHA_PRORES: (56.0, 15.7),
-    ALPHA_PNG: (96.1, 31.5),
+    VT_H264: (87.8, 49.5), SW_H264: (41.9, 17.6),
+    VT_PRORES: (131.2, 63.4), SW_PRORES: (58.4, 16.0), ALPHA_PRORES: (58.4, 16.0),
+    ALPHA_PNG: (127.5, 51.8),
 }
 _RENDER_FPS_AT_PX = (1920 * 1080, 3840 * 2160)
 
