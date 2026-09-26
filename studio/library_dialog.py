@@ -218,8 +218,8 @@ _IDEAL_NO_CORNERS_TIP = (
 # lap-count confound does: this column discloses per row, it does not refuse to rank.
 _IDEAL_OTHER_BUILD_TIP = (
     "Ideal lap measured by {} Pacer — re-open the recording to update it.\nThe ideal-lap maths has "
-    "changed since, so this number is not comparable with the ideals measured today; it stays "
-    "muted until the recording is opened again.")
+    "changed between versions of Pacer, so this number may not compare with the ideals measured "
+    "today; it stays muted until the recording is opened again.")
 _IDEAL_ONE_DONOR_TIP = (
     "Ideal lap: same as the best lap for this recording.\nOne lap was quickest through every "
     "corner and every straight, so the ideal IS that lap — there is nothing stitched to show.")
@@ -738,8 +738,8 @@ class LibraryDialog(QDialog):
 
         # ----- WHERE A MISSING ROW'S FOOTAGE WAS, and the way back (QA VIEW-6): shown only while
         # such a row is selected, directly under it, because it is the one thing to say about that
-        # row before anything else. Hidden, it takes no room; shown, it costs the list ~1.3 rows at
-        # the browsable floor (_MIN_BROWSABLE_H), measured with the owner's D24 row.
+        # row before anything else. Hidden, it takes no room; shown, it costs the list 0.8 of a row
+        # at the default size and 0.5 at _MIN_BROWSABLE_H, measured with the owner's D24 row at 2x.
         self.missing_line = QLabel("")
         self.missing_line.setWordWrap(True)
         self.missing_line.setFont(theme.mono_font(11))
