@@ -574,7 +574,43 @@ class ExportController:
         took = export_video.estimate_render_seconds(out_w, out_h, frames, codec) if codec else None
         timing = f", about {fmt_hms(took)} to render" if took else ""
         return (f"About {size} — {frames} frames to render at {fps:g} fps "
-                f"with {encoder}{timing}. Real size follows how much the footage moves.")
+                f"with {encoder}{timing}.{self._size_caveat(codec)}")
+    @staticmethod
+    def _size_caveat(codec: str | None) -> str:
+        """The hedge after the size, said only where it is true. libx264 is CRF-driven and spends
+        what the picture asks for, so its size does follow the footage. VideoToolbox does not: it
+        wrote the same 4.36 Mbit/s for a 1080p lap of night-time MK and of daytime SD19 (EXP-7),
+        and the alpha formats are priced per pixel of overlay."""
+        return " Real size follows how much the footage moves." if codec == export_video.SW_H264 else ""
+    def _compare_size_hint(self, dur: float, out_height: int, quality: str, layout: str,
+                           source: tuple[int, int, float] | None = None) -> str:
+        """The compare picker's size-and-time line, from the COMPARE'S OWN frame: two panes, side
+        by side (twice as wide) or stacked (twice as tall), sized by `compare_geometry`, the
+        renderer's own rule. The bytes come from the one size model every export reads; the time
+        from `export_compare.estimate_compare_seconds`, which costs the second decode every
+        frame pays. "" when there is nothing honest to say: an unknown lap A, or "Source" before
+        pane A's footage frame is known (`source`, filled behind the dialog)."""
+        if not (dur > 0):
+            return ""
+        if source is None and out_height >= 99999:
+            return ""
+        src_w, src_h, src_fps = source if source is not None else (0, 0, 0.0)
+        cfg = export_compare.CompareConfig(out_height=out_height, layout=layout)
+        # Pane B is fitted into pane A's shape, so A's frame alone decides the output; an unknown
+        # frame is `compare_geometry`'s own 16:9 guess.
+        geo = export_compare.compare_geometry((src_w, src_h), (src_w, src_h), cfg)
+        fps = export_video.resolve_fps(cfg, src_fps)
+        frames = int(math.ceil(dur * fps))
+        codec = export_video.resolve_encoder("auto")
+        size = export_video.fmt_bytes(export_video.estimate_output_bytes(
+            geo.out_w, geo.out_h, fps, dur, quality, codec))
+        took = export_compare.estimate_compare_seconds(geo.out_w, geo.out_h, frames, codec)
+        timing = f", about {fmt_hms(took)} to render" if took else ""
+        how = "side by side" if geo.layout == export_compare.LAYOUT_SIDE else "one above the other"
+        return (f"Output: {geo.out_w}x{geo.out_h}, two panes of {geo.pane_w}x{geo.pane_h} {how}.  "
+                f"About {size} — {plural(frames, 'frame')} to render at {fps:g} fps with "
+                f"{codec}{timing}; every frame decodes both laps' footage."
+                f"{self._size_caveat(codec)}")
     def _export_session_seconds(self) -> float:
         """How long a FULL-SESSION export runs: the footage's own length, through the same
         accessor the renderer builds its window from, so the estimate and the render cannot
@@ -641,6 +677,28 @@ class ExportController:
         col.setSpacing(theme.SPACE_M)
         root.addWidget(body)
         return dlg, col
+
+    @staticmethod
+    def _redraw_once_probed(dlg: QDialog, src: str, redraw) -> QTimer | None:
+        """Learn the footage's frame and the ProRes encoder BEHIND a picker (an ffprobe and a
+        VideoToolbox session: ~45 ms and ~0.3 s here) and call `redraw` once they are in. Until
+        then its hint says what it can; a probe that never answers stops being waited on after
+        10 s. Returns the poll timer for the caller to stop when the dialog closes, or None when
+        everything was already known."""
+        export_video.warm_export_probes(src)
+        if export_video.export_probes_ready(src):
+            return None
+        poll = QTimer(dlg)
+        poll.setInterval(50)
+        give_up = time.monotonic() + 10.0
+
+        def _probes_in():
+            if export_video.export_probes_ready(src) or time.monotonic() > give_up:
+                poll.stop()
+                redraw()
+        poll.timeout.connect(_probes_in)
+        poll.start()
+        return poll
 
     def _ask_export_options(self, lap: int):
         """Modal scope + shape + output picker returning an `ExportChoice`, or None on cancel.
@@ -809,23 +867,8 @@ class ExportController:
         # EVERY combo: each one moves at least one number in the lines above.
         for combo in (*rows.values(), content_combo):
             combo.currentIndexChanged.connect(_update_hint)
-        # The footage's frame and the ProRes encoder are learned BEHIND the dialog (an ffprobe and
-        # a VideoToolbox session: ~45 ms and ~0.3 s here), and the hint is redrawn once they are
-        # in. Until then it says what it can; a probe that never answers stops being waited on.
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
-        export_video.warm_export_probes(src)
-        probe_poll = None
-        if not export_video.export_probes_ready(src):
-            probe_poll = QTimer(dlg)
-            probe_poll.setInterval(50)
-            give_up = time.monotonic() + 10.0
-
-            def _probes_in():
-                if export_video.export_probes_ready(src) or time.monotonic() > give_up:
-                    probe_poll.stop()
-                    _update_hint()
-            probe_poll.timeout.connect(_probes_in)
-            probe_poll.start()
+        probe_poll = self._redraw_once_probed(dlg, src, _update_hint)
         _update_hint()
 
         accepted = dlg.exec() == QDialog.Accepted
@@ -1056,8 +1099,7 @@ class ExportController:
         form.addRow("Resolution (each pane)", res_combo)
         form.addRow("Quality", q_combo)
         col.addLayout(form)
-        hint = QLabel("The clip is as long as the first lap, and carries that lap's audio — the "
-                      "second pane is time-warped by the lock, so its sound would be too.")
+        hint = QLabel("")
         hint.setWordWrap(True)
         hint.setProperty("role", "Hint")
         col.addWidget(hint)
@@ -1066,7 +1108,32 @@ class ExportController:
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
         col.addWidget(buttons)
-        if dlg.exec() != QDialog.Accepted:
+        # EXP-8: the single-lap picker has always said what an export costs; this one said
+        # nothing, and a compare costs more than a lap of the same length. The clip is lap A's
+        # window, as `build_compare_spec` resolves it (no run-up: a compare is locked lap to lap).
+        pair = self.compare_pair()
+        clip = self._export_clip_seconds(pair[0], 0.0) if pair is not None else float("nan")
+        src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
+
+        def _update_hint():
+            lines = ["The clip is as long as the first lap, and carries that lap's audio — the "
+                     "second pane is time-warped by the lock, so its sound would be too."]
+            size = self._compare_size_hint(
+                clip, self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1],
+                self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
+                self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
+                export_video.known_video_size(src))
+            if size:
+                lines.append(size)
+            hint.setText("  ".join(lines))
+        for combo in (layout_combo, res_combo, q_combo):
+            combo.currentIndexChanged.connect(_update_hint)
+        probe_poll = self._redraw_once_probed(dlg, src, _update_hint)
+        _update_hint()
+        accepted = dlg.exec() == QDialog.Accepted
+        if probe_poll is not None:
+            probe_poll.stop()
+        if not accepted:
             return None
         self._remember_export_prefs({
             self._PREF_COMPARE_LAYOUT: layout_combo.currentIndex(),

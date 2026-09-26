@@ -64,7 +64,9 @@ IDEAL_GAP_TOOLTIP = ("What the ideal lap says is still on the table: your best l
 # this a gain?". Measured before changing it: this table's columns are ResizeToContents, so the
 # longer header widens its own column (96 -> 131 px) and the table still fits its pane (367 px of
 # header in a 369 px viewport).
-IDEAL_COLUMNS = ["Segment", "Gain (s)", "As fast as this lap", "Best on lap"]
+# Copy #10 (QA 2026-09-26): "Laps this fast" — shorter, and still says what the count is of (the
+# tooltip names the subject lap).
+IDEAL_COLUMNS = ["Segment", "Gain (s)", "Laps this fast", "Best on lap"]
 # A row under this is not advice — it is a rounding difference between two laps of the same
 # corner, and a plan is not 25 rows long. The remainder is never hidden: the note under the table
 # states how many segments were left out and what they are worth, so the rows on screen and the

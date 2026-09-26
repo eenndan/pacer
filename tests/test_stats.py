@@ -1485,7 +1485,8 @@ def test_stats_view_coasting_table_ranks_marks_ties_and_rings_the_map():
     t = v.coasting.table
     assert not t.isHidden() and not v.coasting.heading.isHidden()
     assert t.rowCount() == 3, "a place under COAST_LIST_MIN_S is counted, not listed"
-    assert v.coasting.heading.text() == f"COASTING · 1 under {COAST_LIST_MIN_S:.2f} s a lap not listed"
+    assert v.coasting.heading.text() == (
+        f"COASTING · 1 place under {COAST_LIST_MIN_S:.2f} s/lap not listed"), v.coasting.heading.text()
     assert [t.item(r, 0).text() for r in range(3)] == ["C1", "C9 → C10", "C1 → C2"]
     assert [t.item(r, 1).text() for r in range(3)] == ["0.31", "0.10", "0.10"]
     assert t.item(0, 2).text() == "17/38" and t.item(0, 3).text() == "28"
@@ -3940,7 +3941,8 @@ def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
     assert not plain.font().italic() and not plain.text().startswith(theme.DELTA_BEHIND_ARROW)
     note = v.corner_grid_note.text()
     assert "8 clean laps × 2 corners." in note, note
-    assert "▼ is 0.30–0.40 s or more slower" in note, note
+    assert ("▼ = well off your usual time for that corner (0.30 s at the steadiest corner, "
+            "0.40 s at the most variable)") in note, note
     assert "3 of 16 cells are muted" in note, note
     assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded and 1 {DROPOUT_MARK} GPS-dropout laps "
             "(see the Laps tab).") in note, note

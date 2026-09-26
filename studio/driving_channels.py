@@ -129,8 +129,10 @@ class DrivingChannels:
         # Per-lap channels, all projected through the segmentation -> cleared on re-segment.
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
-        # Seconds on the brakes per lap (driving.brake_time over that lap's brake events).
+        # Seconds on the brakes per lap (driving.brake_time over that lap's brake events), and the
+        # per-sample indicator it integrates (driving.brake_on), which coaching clips to a corner.
         self._brake_time_cache: dict[int, float] = {}
+        self._brake_on_cache: dict[int, np.ndarray] = {}
         self._corner_grip_cache: dict[int, list[float]] = {}
         # D5: per-lap per-sample grip utilization, aligned to the lap's map xy points.
         self._grip_util_cache: dict[int, object] = {}
@@ -145,6 +147,7 @@ class DrivingChannels:
         self._brake_events_cache.clear()
         self._coasting_spans_cache.clear()
         self._brake_time_cache.clear()
+        self._brake_on_cache.clear()
         self._corner_grip_cache.clear()
         self._grip_util_cache.clear()
         self._brake_throttle_cache.clear()
@@ -326,17 +329,32 @@ class DrivingChannels:
         got = self._brake_time_cache.get(lap_id)
         if got is not None:
             return got
+        on = self.lap_brake_on(lap_id)
+        if on is None:
+            return 0.0
+        secs = driving.brake_time_on(self._lap_arrays(lap_id)[2], on, self.lap_brake_events(lap_id))
+        self._brake_time_cache[lap_id] = secs
+        return secs
+
+    def lap_brake_on(self, lap_id: int) -> np.ndarray | None:
+        """The per-sample indicator `lap_brake_time` integrates (driving.brake_on: SERIES 4 at or
+        past theta_b), aligned to the lap's own `_lap_arrays` clock. None without a g signal or on
+        a degenerate lap. Cached per lap. Coaching's "~X s longer on the brakes" integrates the
+        SAME indicator inside the events, clipped to a corner's window, so the two surfaces that
+        say "on the brakes" read one quantity."""
+        got = self._brake_on_cache.get(lap_id)
+        if got is not None:
+            return got
         th = self.thresholds()
         arr = self._lap_arrays(lap_id)
         if th is None or arr is None:
-            return 0.0
+            return None
         dists, speed_kmh, elapsed = arr
         if len(dists) < 2:
-            return 0.0
-        secs = driving.brake_time(elapsed, speed_long_g(speed_kmh, elapsed), th.theta_b,
-                                  self.lap_brake_events(lap_id))
-        self._brake_time_cache[lap_id] = secs
-        return secs
+            return None
+        on = driving.brake_on(elapsed, speed_long_g(speed_kmh, elapsed), th.theta_b)
+        self._brake_on_cache[lap_id] = on
+        return on
 
     def _corner_windows(self, lap_id: int, total_lap: float):
         """The detected corners projected onto this lap's odometer as (enter, exit) spans, widened

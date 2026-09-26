@@ -2820,9 +2820,13 @@ class StatsView(QWidget):
         parts = [f"{plural(n_laps, 'clean lap')} × {plural(n_cols, 'corner')}."]
         if scales:
             lo, hi = min(scales), max(scales)
-            scale = f"{lo:.2f} s" if lo == hi else f"{lo:.2f}–{hi:.2f} s"
-            parts.append(f"▼ is {scale} or more slower than that corner's typical lap, each corner "
-                         "scaled by its own spread.")
+            # Copy #8 (QA 2026-09-26): "▼ is 0.30–1.56 s or more slower than…" read as one range.
+            # It is one threshold per corner, set by that corner's own spread.
+            parts.append(
+                f"▼ = well off your usual time for that corner ({lo:.2f} s at every corner)."
+                if lo == hi else
+                f"▼ = well off your usual time for that corner ({lo:.2f} s at the steadiest "
+                f"corner, {hi:.2f} s at the most variable).")
         unmarkable = [f"C{cid}" for cid, med in zip(matrix.cids, matrix.medians, strict=True)
                       if med is None]
         if unmarkable and scales:

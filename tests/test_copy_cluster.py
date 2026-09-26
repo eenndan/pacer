@@ -105,7 +105,11 @@ def test_the_cluster_on_a_real_window():
         # ---- b) the hero reads the lap's total until the playhead moves
         at_rest = v.diff_box.text()
         total = s.delta_to_ideal_at(best, t1)
+        # VIEW-7: at rest the speed slot names whose number the Δ is (the lap's), not the speed
+        # at the lap's first frame — two instants on one line, until the playhead moves.
+        from studio.central_view import HERO_AT_REST_TAG
         want = theme.format_ideal_readout(total, v._last_diff_speed, best, v._speed_unit)[0]
+        want = want.rsplit("     ", 1)[0] + "     " + HERO_AT_REST_TAG
         assert at_rest == want and total > 0.05, (at_rest, want, total)
         assert "whole lap's total" in v.diff_box.toolTip(), v.diff_box.toolTip()
         _seek(win, (t0 + t1) / 2)

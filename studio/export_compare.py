@@ -82,6 +82,8 @@ from .export_palette import EXPORT
 from .export_video import (
     FIT_CROP,
     FIT_FIT,
+    SW_H264,
+    VT_H264,
     ExportSpec,
     FrameGeometry,
     NoFramesError,
@@ -100,6 +102,7 @@ from .export_video import (
     _telemetry_time,
     _text_at,
     build_decode_cmd,
+    estimate_render_seconds,
     export_delta_colour,
     footage_duration,
     guard_validate_window,
@@ -236,6 +239,41 @@ def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
         filter_a=pane_scale_filter(aw, ah, pane_w, pane_h, cfg.pane_fit),
         filter_b=pane_scale_filter(int(src_b[0]), int(src_b[1]), pane_w, pane_h, cfg.pane_fit),
         layout=layout)
+
+
+# --------------------------------------------------------------------------- render time
+# A COMPARE FRAME COSTS A SINGLE-LAP FRAME OF ITS OWN SIZE, PLUS PANE B. Everything after the two
+# panes are assembled — the paint, the pipe, the encode — is the single-lap pipeline on the
+# two-pane frame, which `export_video.RENDER_FPS` already prices by its pixels. What a single lap
+# never pays is pane B: a second ffmpeg decoding and scaling a second source, and its picture read
+# off a pipe and copied into the frame on the render's own thread. That cost follows the PANE'S
+# pixels — measured, not assumed: with the 720p compare as the anchor, a constant per-frame decode
+# cost predicted the 1080p-pane compare at 1.21x it and a flat factor on the single-lap figure at
+# 1.30x; it took 1.50x.
+# Seconds per frame per pane pixel, MEASURED 2026-09-26 on MK_18_09_26 laps 14 against 15 (4K 59.94
+# HEVC), side by side, 2025 frames, on the Mac at load 4.8-5.2 (the conditions `RENDER_FPS` was
+# measured in): 31.8 / 32.1 s end to end at 720p panes and 47.8 / 47.9 s at 1080p, which is 5.1
+# and 4.5 ns; 4.8 puts both within 3 %. (The QA's 720p compare of 2026-09-25, on a busier Mac,
+# took 36.2 s: 13 % over.) Timing against single-lap controls on the loaded Mac did not work: a
+# compare's two decodes suffer more from other load than a lap's one, and the same 720p compare
+# timed that way came out 22.7-54.1 s. LIBX264 (no VideoToolbox: CI, or a Mac where no session
+# opens) is priced from ONE loaded run, and barely notices pane B, because its software encode is
+# the slow stage: the 720p compare took 81.6 s between single-lap controls of 54.7 and 96.7 s,
+# which scales to 3.4 ns.
+COMPARE_PANE_B_S_PER_PX = {VT_H264: 4.8e-9, SW_H264: 3.4e-9}
+
+
+def estimate_compare_seconds(out_w: int, out_h: int, frames: int, codec: str) -> float | None:
+    """About how long a compare of `frames` frames of the two-pane `out_w x out_h` frame takes to
+    render on `codec`'s path: the single-lap estimate for that frame plus pane B's share, one
+    pane's pixels at `COMPARE_PANE_B_S_PER_PX` each frame. None for a path with no measurement,
+    or nothing to render. Like the single-lap figure it is what the picker quotes before the
+    render; the progress dialog's live ETA, timed on the real render, is the one to trust."""
+    base = estimate_render_seconds(out_w, out_h, frames, codec)
+    per_px = COMPARE_PANE_B_S_PER_PX.get(codec)
+    if base is None or per_px is None:
+        return None
+    return base + frames * (out_w * out_h / 2) * per_px
 
 
 # --------------------------------------------------------------------------- the distance lock

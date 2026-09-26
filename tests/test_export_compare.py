@@ -273,8 +273,9 @@ def test_a_compare_spec_frees_both_panes_temp_files():
 
 def test_the_free_space_guard_sizes_the_two_pane_frame():
     """The compare export reaches the same up-front free-space guard as a single lap, and has to be
-    sized as what it writes: TWO panes, so twice a single lap's frame at the same bitrate target
-    per pixel. Sized as one pane, the guard would require half of the real floor."""
+    sized as what it writes: TWO panes, so twice a single lap's picture at the same bitrate target
+    per pixel, and ONE audio track, lap A's. Sized as one pane, the guard would require half of the
+    real floor."""
     probe = {"/a.MP4": (3840, 2160, 60000 / 1001), "/b.MP4": (1920, 1080, 30.0)}.__getitem__
     real_enc = ev.resolve_encoder
     try:
@@ -289,12 +290,39 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
                                        src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
                 both = ev.estimate_spec_bytes(spec, probe)
                 one = ev.estimate_spec_bytes(single, probe)
-                # 1 B of rounding: each estimate is truncated to whole bytes on its own.
-                assert one > 0 and abs(both - 2 * one) <= 1, (codec, layout, both, one)
+                audio = ev.AAC_BITS_PER_S * ev.clip_seconds(spec.t0, spec.t1, 30.0) / 8
+                # 2 B of rounding: each estimate is truncated to whole bytes on its own.
+                assert one > audio > 0 and abs((both - audio) - 2 * (one - audio)) <= 2, (
+                    codec, layout, both, one, audio)
                 spec.cleanup()
     finally:
         ev.resolve_encoder = real_enc
     print("ok free space: a compare is sized as its two-pane frame")
+
+
+def test_a_compare_costs_its_frame_plus_pane_b():
+    """EXP-8's time model, against the real compares it was calibrated on — MK laps 14 against 15,
+    side by side, 2025 frames, on VideoToolbox, end to end: 31.8 and 32.1 s at 720p panes and
+    47.8 and 47.9 s at 1080p on a quiet Mac (load ~5, where `RENDER_FPS` was measured), and 36.2 s
+    at 720p on the QA's busier one. The model lands within 15 % of every one. A compare costs
+    more than the single lap of its own frame; the two layouts of one pane size cost the same; a
+    path with no measurement says nothing. The encoder is NAMED, never resolved: the model under
+    test is each path's own."""
+    for (w, h), real in (((2560, 720), 31.83), ((2560, 720), 32.13), ((2560, 720), 36.17),
+                         ((3840, 1080), 47.83), ((3840, 1080), 47.90)):
+        est = ec.estimate_compare_seconds(w, h, 2025, ev.VT_H264)
+        assert abs(est / real - 1) <= 0.15, (w, h, est, real)
+    for codec in (ev.VT_H264, ev.SW_H264):
+        side = ec.estimate_compare_seconds(2560, 720, 2025, codec)
+        assert side == ec.estimate_compare_seconds(1280, 1440, 2025, codec), codec
+        assert side > ev.estimate_render_seconds(2560, 720, 2025, codec), codec
+    # On VideoToolbox pane B is most of the difference from a one-pane lap (the encode is cheap on
+    # the media engine); libx264's software encode is the slow stage there, and pane B a margin.
+    vt_pane = ev.estimate_render_seconds(1280, 720, 2025, ev.VT_H264)
+    assert ec.estimate_compare_seconds(2560, 720, 2025, ev.VT_H264) > 1.5 * vt_pane
+    assert ec.estimate_compare_seconds(2560, 720, 2025, "hevc_mystery") is None
+    assert ec.estimate_compare_seconds(2560, 720, 0, ev.VT_H264) is None
+    print("ok compare time: a single lap of the two-pane frame, plus pane B")
 
 
 def test_the_progress_dialog_names_both_laps():

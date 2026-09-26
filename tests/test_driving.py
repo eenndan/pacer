@@ -420,6 +420,24 @@ def test_brake_time_counts_the_application_not_its_lift_off_tail():
     print(f"ok brake time: {secs:.2f} s (truth {truth:.2f} s, event span {events[0].duration:.2f} s)")
 
 
+def test_brake_time_on_is_brake_time_and_clips_to_a_window():
+    """K: `brake_time_on` over the lap's `brake_on` indicator IS `brake_time` (bit for bit) — the
+    coaching rows read the same quantity as the Stats page, clipped to a corner's window — and a
+    clip counts only what lies inside it, the two sides of a cut adding back to the whole."""
+    dist, elapsed, kmh, _truth, _decel = _brake_tail_lap(n_apps=2, noise_ms=0.12, seed=3)
+    g = speed_long_g(kmh, elapsed)
+    events = D.brake_events(dist, elapsed, g, D.BRAKE_G_FLOOR)
+    on = D.brake_on(elapsed, g, D.BRAKE_G_FLOOR)
+    whole = D.brake_time(elapsed, g, D.BRAKE_G_FLOOR, events)
+    assert D.brake_time_on(elapsed, on, events) == whole, (D.brake_time_on(elapsed, on, events), whole)
+    cut = events[0].onset_time + 0.37 * events[0].duration          # between two samples
+    head = D.brake_time_on(elapsed, on, events, t_to=cut)
+    tail = D.brake_time_on(elapsed, on, events, t_from=cut)
+    assert 0.0 < head < whole and 0.0 < tail < whole and abs(head + tail - whole) < 1e-9, (head, tail, whole)
+    assert D.brake_time_on(elapsed, on, events, t_from=elapsed[-1] + 1.0) == 0.0
+    print(f"ok brake_time_on: {whole:.3f} s whole = {head:.3f} + {tail:.3f} s across a cut")
+
+
 def test_brake_time_holds_under_gps_speed_noise():
     """WHY THE COAST WINDOW (see the block above driving.brake_time): at-or-past-theta_b is band
     membership, and the bare 10 Hz derivative's noise flickers a 0.10 g tail across a 0.16 g

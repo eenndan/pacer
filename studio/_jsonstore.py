@@ -112,11 +112,15 @@ def _open_unique(directory: str, name: str) -> tuple[int, str]:
     raise FileExistsError(errno.EEXIST, "no free temporary file name", directory)
 
 
-def write_json(path: str, obj) -> None:
+def write_json(path: str, obj) -> os.stat_result:
     """Replace `path` with `obj` as JSON — ``indent=2`` and a trailing newline, byte for byte what
     every store wrote before — atomically: a unique temp beside it, ``fsync``-ed, then
     ``os.replace``. On any failure the temp is removed and `path` is left exactly as it was. The
-    directory must exist. Raises OSError (and whatever ``json.dump`` raises) to the caller."""
+    directory must exist. Raises OSError (and whatever ``json.dump`` raises) to the caller.
+
+    Returns the ``fstat`` of the file it wrote, taken on its own descriptor AFTER the replace, so a
+    caller can recognise its own bytes on disk later (``library.load``'s cache) without a window
+    in which another writer's file could be stat-ed in their place."""
     directory, name = os.path.split(os.path.abspath(path))
     fd, tmp = _open_unique(directory, name)
     try:
@@ -125,7 +129,8 @@ def write_json(path: str, obj) -> None:
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+            os.replace(tmp, path)
+            return os.fstat(f.fileno())
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
