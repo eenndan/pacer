@@ -273,8 +273,9 @@ def test_a_compare_spec_frees_both_panes_temp_files():
 
 def test_the_free_space_guard_sizes_the_two_pane_frame():
     """The compare export reaches the same up-front free-space guard as a single lap, and has to be
-    sized as what it writes: TWO panes, so twice a single lap's frame at the same bitrate target
-    per pixel. Sized as one pane, the guard would require half of the real floor."""
+    sized as what it writes: TWO panes, so twice a single lap's picture at the same bitrate target
+    per pixel, and ONE audio track, lap A's. Sized as one pane, the guard would require half of the
+    real floor."""
     probe = {"/a.MP4": (3840, 2160, 60000 / 1001), "/b.MP4": (1920, 1080, 30.0)}.__getitem__
     real_enc = ev.resolve_encoder
     try:
@@ -289,8 +290,10 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
                                        src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
                 both = ev.estimate_spec_bytes(spec, probe)
                 one = ev.estimate_spec_bytes(single, probe)
-                # 1 B of rounding: each estimate is truncated to whole bytes on its own.
-                assert one > 0 and abs(both - 2 * one) <= 1, (codec, layout, both, one)
+                audio = ev.AAC_BITS_PER_S * ev.clip_seconds(spec.t0, spec.t1, 30.0) / 8
+                # 2 B of rounding: each estimate is truncated to whole bytes on its own.
+                assert one > audio > 0 and abs((both - audio) - 2 * (one - audio)) <= 2, (
+                    codec, layout, both, one, audio)
                 spec.cleanup()
     finally:
         ev.resolve_encoder = real_enc

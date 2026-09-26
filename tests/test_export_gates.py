@@ -1505,10 +1505,12 @@ _E1_LAP_S = 23.231                          # FakeSession's lap window
 
 
 def _e1_file_bytes() -> float:
-    """What ONE of FakeSession's laps costs at the default 1080p/High on VideoToolbox: the target
-    bitrate the module states, times the clip ffmpeg is asked for — both read off the module's own
-    long-standing public functions, so this is the stated rate and not a copy of the new model."""
+    """What ONE of FakeSession's laps costs at the default 1080p/High on VideoToolbox: what the
+    encoder writes for the target bitrate the module states (EXP-7: its measured yield of it) plus
+    the AAC track, times the clip ffmpeg is asked for — read off the module's public functions and
+    constants rather than through `estimate_output_bytes`, the model under test."""
     bits = export_video.vt_target_bitrate(1920, 1080, 30.0, export_video.quality_params("high")[0])
+    bits = bits * export_video.VT_H264_YIELD + export_video.AAC_BITS_PER_S
     return bits * export_video.clip_seconds(0.0, _E1_LAP_S, 30.0) / 8
 
 
@@ -1590,7 +1592,7 @@ def _e1_export(win, td, *, free, scope=export_video.SCOPE_THIS_LAP):
 
 
 def test_an_export_the_disk_plainly_cannot_hold_is_refused_before_a_frame():
-    """1 MB free against an ~18 MB lap. On main the render simply started: `_Renderer` was built
+    """1 MB free against an ~13 MB lap. On main the render simply started: `_Renderer` was built
     and the user waited for the encoder to hit the wall. Now nothing is built, the dialog says
     it DIDN'T START (not "couldn't finish"), and it names the three numbers a user can act on —
     how much, how much is free, and where.

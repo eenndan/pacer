@@ -1818,20 +1818,30 @@ def test_a_no_space_failure_asks_the_disk_before_it_skips_the_retry(monkeypatch_
     print("ok enospc: the disk decides — full skips the retry with a true sentence, room retries")
 
 
-def test_the_size_model_is_the_stated_rate_times_the_clip():
+def test_the_size_model_is_what_each_encoder_writes():
     """`estimate_output_bytes` is the ONE model behind both the picker's "About N MB" and the
-    free-space guard's requirement. VideoToolbox is bitrate-targeted, so it is the stated target;
-    libx264 is CRF-driven, so it is the measured bits-per-pixel table; the two alpha outputs are
-    their own measured rates. Nothing to render costs nothing."""
+    free-space guard's requirement. VideoToolbox is bitrate-targeted and writes 0.70 of the rate it
+    is asked for (EXP-7: quoting the asking rate ran every H.264 estimate ~25 % high); libx264 is
+    CRF-driven, so it is the measured bits-per-pixel table; both carry the source's AAC track at
+    192.5 kbit/s. The two alpha outputs are their own measured rates, with no audio. Nothing to
+    render costs nothing."""
     from studio import export_video as EV
 
     sec = 60.0
+    # A KNOWN BITRATE: 1080p30 "high" asks VideoToolbox for 6,220,800 bit/s. It writes 0.70 of it,
+    # 4,354,560 bit/s, and the AAC track adds 192,500: 4,547,060 bit/s, 34.1 MB a minute. On main
+    # the estimate was the asking rate alone, 46.7 MB, and a real minute is 34.2 MB.
+    assert EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) == 6_220_800
+    assert (EV.VT_H264_YIELD, EV.AAC_BITS_PER_S) == (0.70, 192_500)
     vt = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.VT_H264)
-    assert vt == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * sec / 8), vt
+    assert vt == 34_102_950, vt
     std = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "standard", EV.VT_H264)
-    assert std == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.06) * sec / 8), std
+    assert std == int((0.70 * EV.vt_target_bitrate(1920, 1080, 30.0, 0.06) + 192_500) * sec / 8), std
+    # The 2 Mbit/s floor is a bitrate VideoToolbox is ASKED for too, and it writes 0.70 of that.
+    tiny = EV.estimate_output_bytes(640, 360, 30.0, sec, "standard", EV.VT_H264)
+    assert tiny == int((0.70 * 2_000_000 + 192_500) * sec / 8), tiny
     x264 = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.SW_H264)
-    assert x264 == int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * sec / 8), x264
+    assert x264 == int((1920 * 1080 * 30.0 * EV.X264_BPP[20] + 192_500) * sec / 8), x264
     prores = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.ALPHA_PRORES)
     png = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.ALPHA_PNG)
     assert prores == int(1920 * 1080 * 30.0 * EV.PRORES_4444_BPP * sec / 8), prores
@@ -1974,8 +1984,9 @@ def test_the_guard_refuses_below_its_floor_and_nothing_at_or_above_it():
 
     probe = lambda _p: (3840, 2160, 60000 / 1001)  # noqa: E731
     expected = {   # what the module states for a 60 s, 1080p30, "high" clip, per encoder
-        EV.VT_H264: int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * 60.0 / 8),
-        EV.SW_H264: int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * 60.0 / 8),
+        EV.VT_H264: int((EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * EV.VT_H264_YIELD
+                         + EV.AAC_BITS_PER_S) * 60.0 / 8),
+        EV.SW_H264: int((1920 * 1080 * 30.0 * EV.X264_BPP[20] + EV.AAC_BITS_PER_S) * 60.0 / 8),
     }
     assert expected[EV.VT_H264] != expected[EV.SW_H264], expected
     for codec, want in expected.items():
