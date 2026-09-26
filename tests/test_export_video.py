@@ -30,6 +30,7 @@ Run: python tests/test_export_video.py
 import os
 import subprocess
 import sys
+import threading
 import time
 import types
 
@@ -1132,6 +1133,12 @@ def test_watchdog_aborts_a_wedged_encoder_if_ffmpeg(monkeypatch_restore):
     assert isinstance(raised, RuntimeError), f"expected RuntimeError, got {type(raised).__name__}"
     assert "stall" in str(raised).lower() or "no frame" in str(raised).lower(), \
         f"error should explain the stall, got: {raised}"
+    # The encoder never took a frame, so there is no pace to scale by and the floor is the limit —
+    # whatever the start-up cost, which on CI once made it 66 s (see
+    # test_a_wedge_behind_a_slow_start_is_caught_at_the_floor).
+    assert r._stall_limit_used == 3.0, (
+        f"the watchdog gave a wedge that never took a frame {r._stall_limit_used:.1f} s, not its "
+        f"3 s floor")
     assert dt < 30, f"watchdog took too long to fire ({dt:.1f}s > 30s)"
     print(f"watchdog_aborts_a_wedged_encoder OK (aborted in {dt:.1f}s)")
 
@@ -3130,30 +3137,39 @@ def test_the_stall_limit_is_a_floor_that_scales_with_the_renders_own_pace(monkey
     shipped 30 s was ~38x the worst real stall, and at every one of those configurations the 10 s
     floor governs while the multiple only takes over past ~0.167 s per frame.
 
-    Asserted on the pure rule, at the boundaries a real render cannot be steered to."""
+    The cost per frame is read off the WRITE clock: frames the encoder took, timed from the first
+    of them, and trusted only once `_WATCHDOG_PACE_FRAMES` intervals are in
+    (`test_a_wedge_behind_a_slow_start_is_caught_at_the_floor` is why). Asserted on the pure rule,
+    at the boundaries a real render cannot be steered to."""
     s, spec, fb = _mini_spec(watchdog_timeout=10.0, watchdog_frame_multiple=60.0)
     _patch_pipeline(None, fb, nframes=60)
     r = ev.Renderer(s, spec)
+    n = ev._WATCHDOG_PACE_FRAMES
+
+    def limit(written, first_write_t, last_write_t):
+        r._written, r._first_write_t, r._last_progress_t = written, first_write_t, last_write_t
+        return r._stall_limit()
 
     # Before the first frame there is no rate to measure, so the floor stands — and it is the floor
     # that has to cover the ffmpeg spawn and the seek (worst measured: 0.674 s).
-    r._render_t0, r._last_progress_t, r._i = 100.0, 100.0, 0
-    assert r._stall_limit() == 10.0, r._stall_limit()
+    assert limit(0, 0.0, 100.0) == 10.0
 
     # A fast render (0.02 s/frame, the 1080p VideoToolbox median): 60 x 0.02 = 1.2 s < the floor.
-    r._render_t0, r._last_progress_t, r._i = 100.0, 102.0, 100
-    assert r._stall_limit() == 10.0, r._stall_limit()
+    assert limit(101, 100.0, 102.0) == 10.0
 
     # A slow one (0.5 s/frame — 7.8x the slowest configuration measured): the render's own pace
     # raises its own limit, which is what stops a long export being killed for being long.
-    r._render_t0, r._last_progress_t, r._i = 100.0, 150.0, 100
-    assert abs(r._stall_limit() - 30.0) < 1e-9, r._stall_limit()
+    assert abs(limit(101, 100.0, 150.0) - 30.0) < 1e-9
+
+    # ...once it IS a pace: `n` intervals at 0.5 s scale the limit, and one fewer does not.
+    assert abs(limit(n + 1, 100.0, 100.0 + 0.5 * n) - 30.0) < 1e-9
+    assert limit(n, 100.0, 100.0 + 0.5 * (n - 1)) == 10.0
 
     # Either knob at zero is the documented off switch (cancel still works).
     r._watchdog_multiple = 0.0
-    assert r._stall_limit() == 10.0, r._stall_limit()
+    assert limit(101, 100.0, 150.0) == 10.0
     r._watchdog_timeout = 0.0
-    assert r._stall_limit() == 0.0, r._stall_limit()
+    assert limit(101, 100.0, 150.0) == 0.0
     print("ok stall limit: a floor that scales with the render's own pace")
 
 
@@ -3197,6 +3213,83 @@ def test_a_slow_but_healthy_render_survives_a_stall_guard_a_constant_would_trip(
     res = ev.Renderer(s2, spec2).run(chunk=1)
     assert res.frames == 60, f"a slow but healthy render was cut short at {res.frames} of 60"
     print("ok slow render: survives a hiccup a constant limit would have called a wedge")
+
+
+class _WedgingEncoder:
+    """A stand-in encoder that takes `take` frames and then stops reading, as a hung VideoToolbox
+    session does: the next write blocks until the supervisor kills the process, then fails as a
+    killed ffmpeg's pipe does. The block is bounded, so a watchdog that never fires fails the test
+    instead of hanging it."""
+
+    def __init__(self, take):
+        self.taken, self._take = 0, take
+        self.returncode = None
+        self.killed = threading.Event()
+        self.stdin = types.SimpleNamespace(write=self._write, flush=lambda: None,
+                                           close=lambda: None)
+
+    def _write(self, _frame):
+        if self.taken < self._take:
+            self.taken += 1
+            return
+        self.killed.wait(60.0)
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def kill(self):
+        self.killed.set()
+
+    def wait(self, *a, **k):
+        return 0
+
+
+def test_a_wedge_behind_a_slow_start_is_caught_at_the_floor(monkeypatch_restore):
+    """REGRESSION — CI, twice on 2026-09-26: "watchdog took too long to fire (70.2s > 30s)" and
+    "(68.8s > 30s)", for a wedge the test's 3 s floor should have caught.
+
+    The limit's pace was the PAINTER's frame count over the time since the render STARTED. On the
+    pipelined pump the painter gets two more frames out, into the writer's hands, behind an encoder
+    that has stopped reading, so a wedge early in a render divided the start-up (ffmpeg's spawn,
+    the seek, the first decode) by a handful of frames and called that the render's pace. On CI
+    the start-up was ~2.2 s and two frames were queued: 60 x 2.2 / 2 = 66 s. The pace is now timed
+    on frames the encoder TOOK, from the first of them, and trusted only after
+    `_WATCHDOG_PACE_FRAMES` intervals, so the floor governs a wedge this early.
+
+    Here the decoder's first frame takes 0.5 s, the encoder takes three frames and wedges, and the
+    floor is 2 s. Before the fix the supervisor fired with 60 x (~0.5 s over the five frames the
+    painter got out) = ~6 s. Asserted on the limit that fired and the frames counted, not on the
+    wall clock of a shared runner."""
+    s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
+    cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", hwaccel_decode=False,
+                           workers=None, watchdog_timeout=2.0, watchdog_frame_multiple=60.0)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
+    spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=1.0,
+                         config=cfg)
+    _patch_pipeline(None, out_w * out_h * 3, nframes=60, slow_at=0, slow_delay=0.5)
+    r = ev.Renderer(s, spec)
+    assert r._pipelined, "the queued frames that hid the wedge are the pipelined pump's"
+    enc = _WedgingEncoder(take=3)
+    real_start = r._start
+
+    def wedge_start():
+        real_start()
+        r._enc = enc        # looked up per write, so the writer thread feeds this one
+    r._start = wedge_start
+    t0 = time.monotonic()
+    raised = None
+    try:
+        r.run(chunk=4)
+    except BaseException as exc:  # noqa: BLE001
+        raised = exc
+    dt = time.monotonic() - t0
+    assert isinstance(raised, RuntimeError) and "stalled" in str(raised), repr(raised)
+    assert enc.taken == 3, f"the encoder took {enc.taken} frames; the wedge here comes after 3"
+    assert r._stall_limit_used == 2.0, (
+        f"a wedge after 3 frames behind a 0.5 s first frame was given "
+        f"{r._stall_limit_used:.1f} s on a 2.0 s floor (it fired after {dt:.1f} s, with "
+        f"{r._i} frames painted): the start-up was counted as the render's pace")
+    assert r._written == 3, f"the watchdog counted {r._written} frames; the encoder took 3"
+    print(f"ok early wedge: caught at the 2.0 s floor after {dt:.1f} s ({r._i} frames painted, "
+          f"3 taken)")
 
 
 def test_the_bar_reaches_its_total_before_the_encoder_is_finalized(monkeypatch_restore):
