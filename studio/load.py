@@ -443,20 +443,25 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
             )
             laps.update()
     else:
-        # Unknown track: place a SENSIBLE default line perpendicular to travel where the speed stays
-        # highest (the main straight) instead of an arbitrary point, then validate/widen it. Fall back
-        # to the old random pick if the heuristic is degenerate OR its line finds no laps. Either way
-        # the timing is PROVISIONAL (muted + the "drag the start/finish line" banner) until confirmed.
         xs = np.fromiter((cs.local(s)[0] for s in samples), float, len(samples))
         ys = np.fromiter((cs.local(s)[1] for s in samples), float, len(samples))
         speeds = np.fromiter((s.full_speed for s in samples), float, len(samples))
-        base = _heuristic_start_base(xs, ys, speeds)
-        if base is not None:
-            _fit_start_line(laps, base)
-        if base is None or _band_lap_count(laps) == 0:
-            laps.sectors = pacer.Sectors(
-                start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
-            )
-            laps.update()
+        _place_unknown_start_line(laps, xs, ys, speeds)
     return laps, cs, video_path, chapter_map, (accl, grav, cori, gyro, device), (
         track.name if track is not None else None), quality, strip
+
+
+def _place_unknown_start_line(laps, xs, ys, speeds) -> None:
+    """Unknown track: place a SENSIBLE default line perpendicular to travel where the speed stays
+    highest (the main straight) instead of an arbitrary point, then validate/widen it. Fall back to
+    the old random pick if the heuristic is degenerate OR its line finds no laps. Either way the
+    timing is PROVISIONAL (muted + the "drag the start/finish line" banner) until confirmed. `xs`,
+    `ys` are the trace in LOCAL metres, in time order; sets `laps.sectors` and runs update()."""
+    base = _heuristic_start_base(xs, ys, speeds)
+    if base is not None:
+        _fit_start_line(laps, base)
+    if base is None or _band_lap_count(laps) == 0:
+        laps.sectors = pacer.Sectors(
+            start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
+        )
+        laps.update()
