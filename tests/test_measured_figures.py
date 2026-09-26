@@ -2528,7 +2528,9 @@ def _focus_measure(s_then, p_then, s_now, p_now):
     for r, o in zip(top, alike.outcomes, strict=True):
         it, now = o.item, o.now
         rows.append((it.cid, r.time_lost, it.median_s, it.iqr_s, now.median, now.iqr, o.delta,
-                     coaching.SPREAD_MARGIN * max(it.iqr_s, now.iqr), o.kind, it.n_laps, now.n_laps))
+                     coaching.SPREAD_MARGIN * max(it.iqr_s, now.iqr), o.kind,
+                     # the laps MEASURED (LOOK-10: a corner times only its matched ones)
+                     it.n_of or it.n_laps, now.n_of or now.n_laps))
     t_then, t_now = float(s_then.corners.basis()[1]), float(s_now.corners.basis()[1])
     c_then = {c.cid: c for c in s_then.corners.corner_list()}
     c_now = {c.cid: c for c in s_now.corners.corner_list()}

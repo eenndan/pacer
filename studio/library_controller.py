@@ -965,7 +965,7 @@ class LibraryController:
         and stored as a lap-FRACTION window: the corner partition is re-derived per session, so a
         corner id alone would have compared two different stretches of track next time (measured:
         C1's window grew 6.1 m between the two working-set recordings focus.py measures, worth
-        +0.062 s of imaginary slowing on a corner the driver took quicker). An untracked session
+        +0.170 s of imaginary slowing on a corner the driver took quicker). An untracked session
         cannot hold a list at all — the list is per track."""
         entry = self._current_library_entry() or {}
         track = entry.get("track")
@@ -1027,6 +1027,35 @@ class LibraryController:
             return []
         self.update_focus_list()
         return [i.cid for i in added]
+
+    def focus_replace(self, cids: list[int]) -> None:
+        """The focus block's "Replace with today's top 3" (QA NEW-5): this track's list becomes
+        `cids`, each with its baseline measured on THIS session. The driver's click, after the check
+        has run (``focus.replace_offer``), so the old baselines have already given their verdict.
+        Refused where a promotion would be (no track, a provisional line, ESTIMATED timing)."""
+        entry = self._current_library_entry() or {}
+        track = entry.get("track")
+        if not track or not entry.get("verified") or entry.get("degraded"):
+            self._focus_failed("today's corners can't be the baseline on untrusted timing")
+            return
+        try:
+            items = self.win.session.focus_items([int(c) for c in cids], entry)
+            if not items:
+                self._focus_failed("today's corners could not be measured on its clean laps")
+                return
+            focus.save_for_track(track, items)
+        except OSError as exc:
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
+                               logging.ERROR)
+            return
+        except Exception as exc:  # noqa: BLE001 — a replacement must never raise into the UI
+            _log.exception("focus list not replaced")
+            self._focus_failed(f"the focus list could not be replaced ({exc!r})", logging.ERROR)
+            return
+        self.update_focus_list()
+        who = ", ".join(i.label for i in items)
+        self.win.statusBar().showMessage(
+            f"focus list replaced: {who}, with baselines from this session", self._status_ms)
 
     def focus_remove(self, cid: int) -> None:
         """Drop corner `cid` from this track's focus list (and the row entirely when it empties)."""
