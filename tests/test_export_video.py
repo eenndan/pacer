@@ -3254,20 +3254,22 @@ def test_a_wedge_behind_a_slow_start_is_caught_at_the_floor(monkeypatch_restore)
     pace is now timed on frames the encoder TOOK, from the first of them, and trusted only after
     `_WATCHDOG_PACE_FRAMES` intervals, so the floor governs a wedge this early.
 
-    Here the decoder's first frame takes 0.5 s, the encoder takes three frames and wedges, and the
-    floor is 2 s. Before the fix the supervisor fired with 60 x (~0.64 s over the six frames the
-    painter got out) = 6.4 s. Asserted on the limit that fired and the frames counted, not on the
-    wall clock of a shared runner."""
+    Here the decoder's first frame takes 1.0 s, the encoder takes three frames and wedges, and the
+    floor is 3 s: the first frame lands 2 s inside the floor, so a loaded runner still reaches the
+    wedge. Before the fix the supervisor fired with 60 x (1.23 s over the six frames the painter
+    got out) = 12.3 s. Asserted on the limit that fired and the frames counted, not on the wall
+    clock of a shared runner."""
+    floor, first, take = 3.0, 1.0, 3
     s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
     cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", hwaccel_decode=False,
-                           workers=None, watchdog_timeout=2.0, watchdog_frame_multiple=60.0)
+                           workers=None, watchdog_timeout=floor, watchdog_frame_multiple=60.0)
     out_w, out_h = ev.output_size(3840, 2160, cfg)
     spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=1.0,
                          config=cfg)
-    _patch_pipeline(None, out_w * out_h * 3, nframes=60, slow_at=0, slow_delay=0.5)
+    _patch_pipeline(None, out_w * out_h * 3, nframes=60, slow_at=0, slow_delay=first)
     r = ev.Renderer(s, spec)
     assert r._pipelined, "the queued frames that hid the wedge are the pipelined pump's"
-    enc = _WedgingEncoder(take=3)
+    enc = _WedgingEncoder(take=take)
     real_start = r._start
 
     def wedge_start():
@@ -3282,14 +3284,14 @@ def test_a_wedge_behind_a_slow_start_is_caught_at_the_floor(monkeypatch_restore)
         raised = exc
     dt = time.monotonic() - t0
     assert isinstance(raised, RuntimeError) and "stalled" in str(raised), repr(raised)
-    assert enc.taken == 3, f"the encoder took {enc.taken} frames; the wedge here comes after 3"
-    assert r._stall_limit_used == 2.0, (
-        f"a wedge after 3 frames behind a 0.5 s first frame was given "
-        f"{r._stall_limit_used:.1f} s on a 2.0 s floor (it fired after {dt:.1f} s, with "
+    assert enc.taken == take, f"the encoder took {enc.taken} frames; the wedge comes after {take}"
+    assert r._stall_limit_used == floor, (
+        f"a wedge after {take} frames behind a {first} s first frame was given "
+        f"{r._stall_limit_used:.1f} s on a {floor} s floor (it fired after {dt:.1f} s, with "
         f"{r._i} frames painted): the start-up was counted as the render's pace")
-    assert r._written == 3, f"the watchdog counted {r._written} frames; the encoder took 3"
-    print(f"ok early wedge: caught at the 2.0 s floor after {dt:.1f} s ({r._i} frames painted, "
-          f"3 taken)")
+    assert r._written == take, f"the watchdog counted {r._written} frames; the encoder took {take}"
+    print(f"ok early wedge: caught at the {floor} s floor after {dt:.1f} s ({r._i} frames "
+          f"painted, {take} taken)")
 
 
 def test_the_bar_reaches_its_total_before_the_encoder_is_finalized(monkeypatch_restore):
