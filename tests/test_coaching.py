@@ -906,7 +906,7 @@ def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
     assert t.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert t.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
     ev = opp.rows[0].evidence
-    assert t.item(0, _PANEL_COL_REACH).text() == f"{ev.reach_laps} of {ev.n_laps}", \
+    assert t.item(0, _PANEL_COL_REACH).text() == f"{ev.reach_laps} of {ev.n_laps} laps", \
         t.item(0, _PANEL_COL_REACH).text()
     assert isinstance(t.cellWidget(0, _PANEL_COL_PHASES), PhaseBar)
     assert "apex speed" in t.item(0, _PANEL_COL_REASON).text()
@@ -1197,7 +1197,7 @@ def test_panel_renders_top3_off_a_session():
     # col 2: "have you already done this?" as the count over its denominator, no verdict word
     # (LOOK-9) — the same cell the dialog builds, from the same shared builder.
     ev = opp.rows[0].evidence
-    assert panel.table.item(0, 2).text() == f"{ev.reach_laps} of {ev.n_laps}", \
+    assert panel.table.item(0, 2).text() == f"{ev.reach_laps} of {ev.n_laps} laps", \
         panel.table.item(0, 2).text()
     assert coaching_module_reason(panel, opp), "the reason cell must carry the coaching sentence"
     # A row click emits the corner cid (the map-ring consumer); selecting row 0 -> rows[0].cid.
@@ -1476,8 +1476,8 @@ def test_reach_tells_a_repeated_target_from_a_rare_one():
     s_r, s_n = _sentence(ev_r), _sentence(ev_n)
     # LOOK-9 (QA 2026-09-26): the COUNT carries it, in one form either side of REACH_REPEAT_FRAC;
     # the "already"/"rarely" verdict flipped at one lap (2/19 vs 1/19 on MK_18_09).
-    assert "6 of 25 laps already matched your best lap here" in s_r, s_r
-    assert "2 of 25 laps already matched your best lap here" in s_n, s_n
+    assert "6 of 25 laps matched your best lap here" in s_r, s_r
+    assert "2 of 25 laps matched your best lap here" in s_n, s_n
     assert s_r != s_n
     print(f"ok reach: repeat => {s_r!r}\n           rare   => {s_n!r}")
 
@@ -1888,8 +1888,8 @@ def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent(
                                     reason=reason, evidence=ev)
     two, one = (K.reach_clause(row(2, 19, K.REACH_REPEAT)),
                 K.reach_clause(row(1, 19, K.REACH_RARE)))
-    assert two == " 2 of 19 laps already matched your best lap here.", two
-    assert one == " 1 of 19 laps already matched your best lap here.", one
+    assert two == " 2 of 19 laps matched your best lap here.", two
+    assert one == " 1 of 19 laps matched your best lap here.", one
     whole = K.Theme(kind=K.THEME_EXECUTION, share=1.0, execution_s=0.28,
                            pace_s=0.0, n_ranked=3, n_abstained=8, cause=K.REASON_LINE,
                            cause_share=0.78)

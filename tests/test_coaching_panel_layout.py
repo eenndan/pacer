@@ -522,7 +522,7 @@ def test_reach_cell_never_states_a_count_without_its_denominator():
         text = p.table.item(r, _PANEL_COL_REACH).text()
         assert not any(w in text for w in ("Yes", "Rarely", "Never")), (
             "the reach cell states a count, not a verdict", r, text)
-        num, _, den = text.partition(" of ")
+        num, _, den = text.removesuffix(" laps").removesuffix(" lap").partition(" of ")
         assert num.isdigit() and den.isdigit() and int(den) > 0, (
             "the reach cell must carry the count AND the sample it came out of", r, text)
     # An UNMEASURED row (no per-lap times behind it) states nothing rather than inventing a count.

@@ -1101,7 +1101,11 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
     word = _REACH_WORD.get(ev.reach)
     # THE COUNT, NOT THE WORD (LOOK-9): "Yes · 2/19" beside "Rarely · 1/19" was a verdict that
     # flipped at one lap (coaching.REACH_REPEAT_FRAC). The count carries it, and cannot flip.
-    item = QTableWidgetItem(f"{ev.reach_laps} of {ev.n_laps}" if word else DASH)
+    # With its unit, as the reason sentence says it — and as wide as the "Rarely · 1/8" it replaced:
+    # a narrower cell let the column budget afford the Jump column at the 1440x900 default page,
+    # which squeezed the reason to 193 px, grew the shortlist rows 58 -> 105 px and pushed the
+    # focus line off the page (test_the_default_window_shows_the_top_three_whole).
+    item = QTableWidgetItem(f"{ev.reach_laps} of {plural(ev.n_laps, 'lap')}" if word else DASH)
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     item.setFont(num_font)
