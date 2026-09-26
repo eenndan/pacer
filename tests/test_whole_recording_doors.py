@@ -19,7 +19,8 @@ verified and the debrief can land), through the REAL StudioWindow, jailed to a f
 holds one other, slower recording of the same circuit:
   1. File ▸ Open… of chapter 1, and the welcome's Open recording…, load every chapter;
   2. the command line: chapters given reversed and twice load once each, in chapter order; two
-     recordings open the first and count the other; one explicit chapter still loads alone;
+     recordings open the first and count the other; one explicit chapter still loads alone; and a
+     row it stored reversed before the fix replays through Open Recent in chapter order;
   3. `Session.load`, the backstop for every other route, chains in chapter order whatever it is
      handed, and says so once in the log;
   4. part of a NEW recording (one chapter on the command line) decides nothing — no debrief, no PB
@@ -248,6 +249,32 @@ def test_the_command_line_opens_one_recording_in_chapter_order_once_each():
         StudioWindow._load = real_load
     print("ok command line: reversed + twice -> [ch1, ch2]; one chapter alone; two recordings -> "
           "the first, the other counted; --full chains")
+
+
+def test_open_recent_replays_a_reversed_row_in_chapter_order():
+    """A row the command line stored before the fix holds its chapters reversed, and Open Recent
+    replays a row's paths verbatim (QA NEW-2's p4b: the reversed order again, 18 laps for 19). On
+    main this committed `_paths == [ch2, ch1]` and wrote the row back reversed."""
+    ch1, ch2 = _recording()
+    with _fresh_app_support(), _no_modals():
+        library.upsert_and_save({
+            "fingerprint": _FP, "stem": "GX019001", "track": md.DEMO_TRACK_NAME,
+            "date": "2026-09-18", "lap_count": 13, "best": 45.0, "theoretical": 44.5,
+            "verified": True, "degraded": False, "dropout": False, "paths": [ch2, ch1]})
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            win.library_ctl.sync_recent_menu()
+            (replay,) = [a for a in win._recent_menu.actions() if a.isEnabled()]
+            _until_loaded(win, replay.trigger)
+            assert win._paths == [ch1, ch2], [os.path.basename(p) for p in win._paths]
+            assert _chapter_names(win.session) == ["GX019001.MP4", "GX029001.MP4"]
+            assert [os.path.basename(p) for p in _row()["paths"]] == \
+                ["GX019001.MP4", "GX029001.MP4"], _row()
+        finally:
+            _close(win)
+    print("ok open recent: a reversed row replays GX019001 + GX029001 and is written back in order")
 
 
 # --------------------------------------------------------------------- 3. the Session.load backstop

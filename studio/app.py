@@ -881,6 +881,12 @@ class StudioWindow(QMainWindow):
         ignored by token (see the completion slots). Queued without the cancel, one damaged
         recording whose read ran for hours held every later open behind it."""
         print("studio: loading telemetry…", flush=True)
+        # Chapter order, once each, whichever door handed the paths over: Open Recent and the
+        # Library replay a stored row verbatim, and a row the command line stored before QA NEW-2
+        # holds its chapters reversed. Session.load would chain them right anyway (its backstop);
+        # doing it here too makes `_paths` — the row written back, the title, the Load-full
+        # predicate — describe the session that actually loads.
+        paths = chapters.load_order(list(paths))
         self._drop_notice = drop_notice
         # Bump the token: any in-flight worker started by a previous _load is now stale and its
         # result will be ignored when it finishes.
