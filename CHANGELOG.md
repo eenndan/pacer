@@ -6,6 +6,76 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-26
+
+### Added
+
+- The comparison video's options say how big the file will be and about how long it takes, as the
+  lap export's do, from its own two-pane frame (#427)
+- After the focus check, the Coaching page offers "Replace with today's top 3 (C1, C5, C7)" when
+  today's biggest corners are not the ones on the list: one click, baselines from this session
+  (#426)
+
+### Changed
+
+- DATA TRUST states its cross-checks and the video sync in words (figures on the hover); STRAIGHTS
+  names the slow exit costing the most; STINTS and COASTING headers say what they measure. (#433)
+- The DISTRIBUTIONS note is one short line per chart (the method is on its hover), and the DRIVING
+  tiles' tooltip leads with what they count, trimmed. (#433)
+- Coaching: "Done it?" and the reason sentence give the count ("6 of 19"), not a verdict that
+  flipped at one lap; a theme holding all of the time says "All"; the bars read "Typical lap Δt".
+  (#428)
+- Charts: at rest the hero reads "whole lap" beside the lap's total instead of the lap-start speed,
+  and in compare it names the same baseline as the chart header. (#428)
+- Focus-list baselines are measured as the Stats CORNERS table measures a corner, and say how many
+  laps each stands on ("2.43 s over 16 of 19 laps"); an older list keeps its own measure (#426)
+- Stats: "GPS trace" names the trace's length beside the footage's, "slowest corner · typical"
+  replaces one lap's slowest moment, and the ideal lap is called "ideal lap" on every tile. (#425)
+- Sound stays on when you open another recording, until you quit; every launch still starts muted
+  (#419)
+
+### Fixed
+
+- A video export whose encoder hangs as it starts is stopped after 10 s; that wait could grow to 30
+  times the export's start-up, a minute when starting took 2 s (#434)
+- At 1440×831 and 1280×800 the Stats CORNERS table fits whole, Marks and ⌘K rows wrap instead of
+  ending in "…", and the speed legend moves off the trace. (#431)
+- CORNERS BY LAP keeps the lap and its time in view while it scrolls; the map frames the circuit
+  rather than stray GPS, and its corner labels no longer cover each other, the start line or glyphs.
+  (#431)
+- The Library mutes an ideal lap an older Pacer measured and says so on hover: rows kept whatever
+  ideal the last build to open them computed (Sandown 19 Sep: 0:46.063 there, 0:46.196 in Stats)
+  (#430)
+- A "(file missing)" row in the Library can be selected: Open is off, and one line says where the
+  footage was and that opening it from its new place with File ▸ Open… updates the row (#430)
+- Coaching's "~X s longer on the brakes" counts time braking, as the Stats page does, not the brake
+  events' length through the lift-off: SD_19_09's C5 read 1.00 s, of which 0.30 s was braking (#429)
+- The export options' H.264 size estimate matches the file: it quoted VideoToolbox's target bitrate,
+  and real files came out about a quarter smaller (#427)
+- Stats: the lap count adds up (19 of 21 laps, 2 excluded, 1 crossing too brief), the ideal-lap gain
+  reads as time to find (1.48 s), and every signed number uses one true minus. (#425)
+- Stats: the CORNERS note quotes the Coaching tab's own total and counts its unranked corners; the
+  grid Coaching page says how many corners it cannot fit and how to see them. (#425)
+- Clicking a tab on the first-open debrief restores the grid, as Esc does: it kept the lap panel
+  full-window, with no video, map or charts (#424)
+- At a new circuit, the first open keeps the map and its start-line cue on screen; the debrief lands
+  once the line is placed, and Save as track adds the PB line and the focus list (#424)
+- Opening the demo no longer writes a Library row, a PB, a focus list or an Open Recent entry (#424)
+- At a new circuit that crosses itself, the auto-fitted start/finish line no longer sits where the
+  other pass cuts it; there it split every lap into two half-laps (#423)
+- Dragging the playback slider now shows the video as you drag, about 3.5 frames a second on 4K and
+  in both compare panes; the picture stayed frozen until you let go (#422)
+- Stats "on the brakes / lap" and PER LAP Brake s count the time actually braking, not each brake
+  event's length through the lift-off: MK 26.0 → 17.8 s a lap, and no longer overlaps Coast s (#421)
+- File ▸ Open and the welcome's Open recording… open the whole recording, as a drop does: a first
+  open's PB, debrief and focus list were decided on chapter 1 alone (#420)
+- Chapters named on the command line load in chapter order, once each: reversed ones lost a lap and
+  overwrote the recording's Library row (#420)
+- Part of a new recording (one chapter on the command line) decides no PB or focus list; File ▸ Load
+  full recording then gives the whole recording's, once (#420)
+- Un-muted video could, rarely, freeze the app for good when playback stopped or another recording
+  opened; the audio thread no longer waits on Python while it holds a Qt lock (#419)
+
 ## [0.4.2] — 2026-09-25
 
 Everything merged since v0.4.1: 3 pull requests, #415 to #417, all from the 2026-09-25 hands-on QA.
@@ -1519,7 +1589,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/eenndan/pacer/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/eenndan/pacer/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/eenndan/pacer/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/eenndan/pacer/compare/v0.3.0...v0.4.0
