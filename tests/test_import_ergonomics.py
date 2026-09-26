@@ -90,6 +90,10 @@ def test_open_dialog_starts_in_last_folder_and_records_it(monkeypatch):
 
         w = _bare_window()
         picked = os.path.join(footage, "GX010060.MP4")
+        sibling = os.path.join(footage, "GX020060.MP4")
+        for p in (picked, sibling):
+            with open(p, "wb"):
+                pass
         seen_start = {}
 
         def fake_dialog(parent, title, start_dir, filt):
@@ -98,12 +102,15 @@ def test_open_dialog_starts_in_last_folder_and_records_it(monkeypatch):
 
         monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(fake_dialog))
         loaded = {}
-        monkeypatch.setattr(w, "_load", lambda paths: loaded.setdefault("paths", paths))
+        monkeypatch.setattr(w, "_load", lambda paths, drop_notice=None:
+                            loaded.setdefault("paths", paths))
 
         w._open_file()
 
         assert seen_start["dir"] == footage, seen_start  # started in the remembered folder
-        assert loaded["paths"] == [picked]               # single-file Open unchanged (no auto-chain)
+        # The RECORDING the picked file belongs to, as a drop opens it (QA NEW-1) — on main this
+        # was the one file, and every first-open verdict was decided on part of the session.
+        assert loaded["paths"] == [picked, sibling], loaded
         # The picked file's folder is now the remembered folder.
         assert prefs.last_dir(prefs_file) == footage
         print("test_open_dialog_starts_in_last_folder_and_records_it OK")

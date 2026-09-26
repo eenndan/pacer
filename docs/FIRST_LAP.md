@@ -12,10 +12,11 @@ Drag a GoPro `.MP4` onto the window, or **File ▸ Open**.
 Pacer reads the GPS9 + motion data the camera already recorded — no transponder, no extra sensors.
 
 **A long recording is split into chapters** (`GX01…`, `GX02…`, same 4-digit recording number), and
-Pacer lays them on one timeline. **Dropping** a chapter chains its siblings for you; **File ▸ Open**
-deliberately opens exactly the file you picked. Either way, if you end up looking at part of a
-recording the window says so — *"1 of 3 chapters — File ▸ Load full recording to analyse the whole
-recording"* — and that menu item is live.
+Pacer lays them on one timeline. **Dropping** a chapter or picking one in **File ▸ Open** opens the
+whole recording, its chapters in order. Only the command line can open part of one
+(`pixi run studio -- GX010062.MP4` loads that chapter alone), and then the window says so — *"1 of 3
+chapters — File ▸ Load full recording to analyse the whole recording"* — and that menu item is live.
+Your personal best and focus list wait for the whole recording, so part of one never decides them.
 
 > **No footage of your own? Open the demo.** `pixi run studio -- --demo` downloads, once (about
 > 11 MB), and opens a **synthetic** session. **Nothing in it was filmed or driven:** a simulated kart
