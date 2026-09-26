@@ -404,6 +404,28 @@ def test_a_recording_with_no_gps_is_not_sold_as_the_true_clock():
     print("test_a_recording_with_no_gps_is_not_sold_as_the_true_clock OK")
 
 
+def test_the_card_never_says_the_gps_lag_is_both_removed_and_left_in():
+    """Copy #5 (QA 2026-09-26). On MK_18_09 the Video sync row said the GPS timestamps' 0.43 s lag
+    "is taken out" while the Rotation row two lines below said its figures are "measured with that
+    offset left in". Both were true — one is the picture, the other the two channels as recorded —
+    but on one card they read as a contradiction about one number. The face says what each does
+    ("… removed"; "this check uses the raw GPS clock") and the offset's figures live on the hover."""
+    from studio import rotation
+
+    real = rotation.RotationCheck(
+        n=26562, corr=0.87, gain=0.89, corner_n=9000, corner_corr=0.946, corner_gain=0.87,
+        straight_n=8000, straight_rms_gyro=0.24, straight_rms_path=0.05, straight_mean_gyro=0.026,
+        loop_n=38, loop_ratio_gyro=0.983, loop_ratio_path=1.001, ok=True,
+        gps_lag_s=0.4764, lag_corr=0.917, lag_corr_at_zero=0.854)
+    rows, tip = _trust_rows(real, applied_lag=0.4764)
+    faces = {term: value for term, value, _c in rows}
+    rot = faces["Rotation cross-check"]
+    assert "left in" not in rot and "offset" not in rot, rot
+    assert "raw GPS clock" in rot, rot
+    assert "left in" in tip, "the measurement itself must stay on the card, on the hover"
+    print("test_the_card_never_says_the_gps_lag_is_both_removed_and_left_in OK")
+
+
 def test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors():
     """The row is the card's THIRD cross-check and the only one with an exact target: a lap is a
     closed loop, so both channels' integrated yaw must be 1.000x2pi. It prints what
@@ -413,10 +435,13 @@ def test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors():
     assert row is not None, [r[0] for r in rows]
     term, value, caveat = row
     assert caveat is False, "an agreeing cross-check is not a caveat"
+    # Copy #4 (QA 2026-09-26): agreeing, the face says it in words — how far the worse of the two
+    # sits from one turn (0.983 -> 1.7 %) — and the figures are on the hover.
+    assert "38 closed laps" in value and "within 1.7 %" in value, value
     for token in ("0.983", "1.001", "38", "+0.95", "exact"):
-        assert token in value, f"{token!r} missing from {value!r}"
+        assert token in tip, f"{token!r} missing from the hover"
     # Both channels against ONE stated target — no verdict about the gap between them.
-    assert "1.000" in value, value
+    assert "1.000" in tip, tip
     assert "HERO13 Black" in tip and "2π" in tip, tip
 
     # A DIFFERENT measurement must produce a different row (nothing is baked in) …
@@ -438,9 +463,11 @@ def test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_
     keep naming it, or it reads as a third correlation."""
     rows, tip = _trust_rows(_Check())
     value = next(r[1] for r in rows if r[0] == "Rotation cross-check")
-    assert "exact" in value.lower(), value
+    # The target, named in words on the face (a closed lap is ONE full turn); the exact figure is
+    # on the hover beside the two ratios.
+    assert "one full turn per lap" in value.lower(), value
     assert "closed lap" in value.lower(), value
-    assert "ground truth" in tip.lower(), tip
+    assert "exact" in tip.lower() and "ground truth" in tip.lower(), tip
     # It must not editorialise about the difference between the two channels: the card prints two
     # ratios against one target and leaves the comparison to the reader, because that difference
     # has already moved once (6.5-10 % of a lap -> ~0.1 %) and any sentence about it would have
@@ -469,11 +496,13 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
         gps_lag_s=0.4764, lag_corr=0.917, lag_corr_at_zero=0.854)
     rows, tip = _trust_rows(real, applied_lag=0.4764)
     value = next(r[1] for r in rows if r[0] == "Rotation cross-check")
-    assert "0.48 s" in value, value
-    assert "behind" in value, value
-    # It must say what the figures BESIDE it are measured with — an offset stated next to a
-    # correlation that silently carries it reads as agreement the channels never had.
-    assert "left in" in value, value
+    # Copy #5 (QA 2026-09-26): the correlation moved to the hover, so the offset it is measured
+    # with went there beside it; the face says only that this check compares the raw clocks.
+    assert "raw GPS clock" in value, value
+    assert "0.48 s" in tip and "behind" in tip, tip
+    # It must say what the figures are measured with — an offset stated next to a correlation
+    # that silently carries it reads as agreement the channels never had.
+    assert "left in" in tip, tip
     # The tooltip carries what the row cannot: the correlation with and without the offset.
     assert "+0.92" in tip and "+0.85" in tip, tip
     assert "media clock" in tip and "lap times" in tip.lower(), tip
@@ -507,8 +536,8 @@ def test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_wi
     # one — it must not print "0.00 s behind", which is a claim nobody made.
     rows2, tip2 = _trust_rows(replace(real, gps_lag_s=None))
     v2 = next(r[1] for r in rows2 if r[0] == "Rotation cross-check")
-    assert "behind" not in v2 and "0.00 s" not in v2, v2
-    assert "0.983" in v2, "the rest of the row is unchanged"
+    assert "behind" not in v2 and "0.00 s" not in v2 and "raw GPS clock" not in v2, v2
+    assert "within 1.7 %" in v2 and "0.983" in tip2, "the rest of the row is unchanged"
     assert "not on the same clock" not in tip2, tip2
     print("test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with OK")
 
@@ -613,7 +642,7 @@ def test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own():
     assert "0.48 s" in value, value                      # the lag, as the rotation row prints it
     assert "26.7 ppm" in value, value                    # …and the rate difference beside it
     assert "0.08 s" in value, value                      # 26.73 ppm across 2823.6 s of recording
-    assert "in the app and in an exported clip alike" in value, value
+    assert "in the app and in exports" in value, value
 
     # The seconds clause is the only part that needs a duration: a recording that cannot say how
     # long it is still gets the row, minus that figure — never a fabricated one.
@@ -681,6 +710,7 @@ def _main():
     test_a_recording_with_no_gps_is_not_sold_as_the_true_clock()
     test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors()
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()
+    test_the_card_never_says_the_gps_lag_is_both_removed_and_left_in()
     test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with()
     test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps()
     test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own()

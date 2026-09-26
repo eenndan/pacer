@@ -28,7 +28,9 @@ from .widgets import WrapLabel
 # paragraph is `_DRIVING_COAST` itself, not a paraphrase: the window is the one quantity #275 found
 # wrong and #279/#297 had to re-state on every surface, and it applies on BOTH g paths (the coast
 # series is rebuilt from the lap's own speed either way), so one sentence serves every recording.
-COAST_COLUMNS = ["Where", "s / lap", "Laps", "Share %", "vs top"]
+# Copy #10 (QA 2026-09-26): "vs top" named no top; the column compares a place with the place
+# that coasts the most.
+COAST_COLUMNS = ["Where", "s / lap", "Laps", "Share %", "vs the top place"]
 # The "vs top" cell: what the laps say about this place against the one with the most coasting.
 # Words, not a tint — which rows are level is the table's one claim, and it has to survive a
 # colour-blind palette and a screen reader.
@@ -56,7 +58,8 @@ COASTING_TOOLTIP = (
     "This is where the coasting HAPPENS, not where it costs time. Coaching's “coasting” "
     "reason is a different number: how much longer your typical lap coasts in a corner than your "
     "best lap does.\n\n"
-    "The order is a ranking only where the laps can separate it. vs top says, place by place, "
+    "The order is a ranking only where the laps can separate it. vs the top place says, place by "
+    "place, "
     f"whether a paired sign-flip test over the clean laps separates it from the first row at "
     f"p < {stats_service.COAST_LEAD_ALPHA:g}: \u201c{COAST_TOP}\u201d is a first row that "
     f"separates from every other place, \u201c{COAST_TIED}\u201d a place the laps cannot tell "

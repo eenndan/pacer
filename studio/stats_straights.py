@@ -54,7 +54,8 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "Click a row to ring the corner feeding that straight.")
 STRAIGHTS_NOTE_TOOLTIP = (
     "The straight whose preceding corner's exit deficit × the straight's median − best time is "
-    "largest — measured, not modelled. It is time down the STRAIGHT after a slow exit, which the "
+    "largest (its exit leverage: the one times the other) — measured, not modelled. \"Usual\" is "
+    "the median over the clean laps. It is time down the STRAIGHT after a slow exit, which the "
     "Coaching tab's ranking does not contain: Coaching ranks the time lost inside each corner "
     "against your best lap, and the corner/straight partition keeps the two apart (together they "
     "sum to the lap). So the two can name different corners without either being wrong; Coaching "
@@ -122,10 +123,11 @@ class StraightsSection:
         if top.leverage <= 0 or top.exit_delta_kmh is None:
             return ""
         exit_gap = abs(units.convert_speed(top.exit_delta_kmh, unit))
-        text = (f"Most exit leverage: C{top.ring_cid} — your median exit is {exit_gap:.1f} "
-                f"{u_label} under your best lap's, onto the {top.label} straight, which runs "
-                f"+{top.median_s - top.best_s:.2f} s over its best (leverage is the one times "
-                "the other).")
+        # Copy #7 (QA 2026-09-26): what it costs, in words; "leverage" and "median" are named on
+        # the hover (STRAIGHTS_NOTE_TOOLTIP).
+        text = (f"Slow exit costing the most: C{top.ring_cid}. Your usual exit is {exit_gap:.1f} "
+                f"{u_label} under your best lap's, and the {top.label} straight after it takes "
+                f"{top.median_s - top.best_s:.2f} s longer than its best.")
         start = self._coaching_start(session)
         if not start:
             return text
