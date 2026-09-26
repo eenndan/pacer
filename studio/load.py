@@ -209,6 +209,39 @@ def _fit_start_line(laps, base):
 _HEURISTIC_HALF_M = 15.0
 _HEURISTIC_HEADING_SAMPLES = 5
 
+# A crossing of a candidate line is its OWN pass when it travels within _SAME_WAY_DEG of the
+# candidate's heading; any other crossing is ANOTHER STRETCH OF TRACK cutting the line. That
+# happens where a circuit crosses itself, and then every lap is cut in two (see
+# _heuristic_start_base). Measured on the owner's four recordings, at the held peak: 0 crossings
+# by another stretch in 23-71 passes, and no own pass more than 8.4 deg off the heading (MK; the
+# three Sandown recordings stay within 4.1-7.9). The synthetic figure-8's two passes are 67.4 deg
+# apart. 30 deg sits between the two populations: two passes closer than that are a merge, not a
+# bridge.
+_SAME_WAY_DEG = 30.0
+# Another stretch that cuts the line on at least this share of its own passes (and at least twice)
+# refuses the place. A crossover cuts it on every lap, so the share is ~1. A spin, or a manoeuvre
+# into the pits, cuts it once or twice in a whole session.
+_OTHER_STRETCH_SHARE = 0.25
+# The held-peak places tried, fastest first, before taking the least-cut one.
+_MAX_LINE_CANDIDATES = 12
+
+
+def _crossings_by_way(xs, ys, cx, cy, ux, uy, half):
+    """(own, other): how many times the trace in `xs`/`ys` (local metres, time order) crosses the
+    line through (cx, cy) square to the unit heading (ux, uy), within `half` metres of (cx, cy).
+    `own` counts the crossings travelling within _SAME_WAY_DEG of the heading; `other` counts the
+    rest."""
+    ahead = (xs - cx) * ux + (ys - cy) * uy          # signed distance past the line
+    j = np.flatnonzero((ahead[:-1] < 0) != (ahead[1:] < 0))
+    r = ahead[j] / (ahead[j] - ahead[j + 1])
+    along = ((xs[j] + r * (xs[j + 1] - xs[j]) - cx) * -uy
+             + (ys[j] + r * (ys[j + 1] - ys[j]) - cy) * ux)
+    j = j[np.abs(along) <= half]
+    dx, dy = xs[j + 1] - xs[j], ys[j + 1] - ys[j]
+    own = int(np.count_nonzero(
+        dx * ux + dy * uy >= math.cos(math.radians(_SAME_WAY_DEG)) * np.hypot(dx, dy)))
+    return own, len(j) - own
+
 
 def _heuristic_start_base(xs, ys, speeds):
     """A SENSIBLE unknown-track start/finish line (vs an arbitrary point): a `pacer.Segment`
@@ -234,24 +267,60 @@ def _heuristic_start_base(xs, ys, speeds):
     23.32 -> 22.12 ms at twice it; on the three Sandown recordings (jailed, no track DB) the line
     moves 9-16 m back up the straight and every lap count stays as it was. Moving it further back
     was measured too and is refused: a slower crossing puts more GPS noise into the lap time than
-    the braking bias it removes (at 20 fixes back, 23.58 ms at twice the noise)."""
+    the braking bias it removes (at 20 fixes back, 23.58 ms at twice the noise).
+
+    THE LINE MUST BE CROSSED ONCE PER LAP, BY ITS OWN PASS (NEW-3a). On a circuit that crosses
+    itself, the fastest place can be at the crossover, and then the other pass cuts the line too.
+    Every lap becomes two pieces, one per loop. Each piece ends where it started, turned by the
+    angle between the passes. Under 120 deg that is a closed lap to the closure test
+    (_signal.MAX_LAP_TURN_DEG), and the bands centre on the pieces because they are the majority.
+    Over 120 deg every piece is open, and no lap is left at all. On the synthetic figure-8
+    (`tests/_synthetic.figure8_trace`, 8 laps of 89.2 s, passes 67.4 deg apart) the held peak sat
+    on the bridge and counted 15 "laps" of 43.5 and 45.7 s. So a place whose line another stretch
+    cuts (`_crossings_by_way`) is refused, every lap's fixes within the line's half-length of it
+    with it, and the next-fastest held place is tried. Where nothing else cuts the held peak's
+    line, it is the line, exactly as before: on all four of the owner's recordings, jailed with no
+    track DB, the line did not move. That includes MK_18_09, which QA read as a crossover (NEW-3):
+    none of its laps crosses itself, and its line is crossed only by its own pass, 23 times.
+    Only the 30 m line is checked, not the widened ones _fit_start_line may try. At ×1.3-1.5,
+    Sandown's hairpin return (16.8-18.5 m from the held peak) and a stretch of MK's (20.9 m) cut
+    the line, and _fit_start_line's own rule already refuses those widenings (T13). Checking them
+    here would move every line the owner has."""
     n = len(speeds)
     if n < 2 * _HEURISTIC_HEADING_SAMPLES + 1:
         return None
     k = _HEURISTIC_HEADING_SAMPLES
+    xs, ys = np.asarray(xs, float), np.asarray(ys, float)
     held = np.median(np.lib.stride_tricks.sliding_window_view(
         np.pad(np.asarray(speeds, float), k, mode="edge"), 2 * k + 1), axis=1)
-    i = int(np.argmax(held))
-    a, b = max(0, i - k), min(n - 1, i + k)
-    dx, dy = float(xs[b] - xs[a]), float(ys[b] - ys[a])
-    heading = math.hypot(dx, dy)
-    if heading < 1e-6:
-        return None
-    ux, uy = dx / heading, dy / heading   # unit direction of travel at the peak
-    px, py = -uy, ux                      # the perpendicular — the timing line's direction
-    cx, cy = float(xs[i]), float(ys[i])
-    return tracks.make_segment(cx - px * _HEURISTIC_HALF_M, cy - py * _HEURISTIC_HALF_M,
-                               cx + px * _HEURISTIC_HALF_M, cy + py * _HEURISTIC_HALF_M)
+    untried = np.ones(n, bool)
+    least_cut = None                      # (share cut by other stretches, line) of the tried places
+    for tried in range(_MAX_LINE_CANDIDATES):
+        i = int(np.argmax(np.where(untried, held, -np.inf)))   # the first try is argmax(held)
+        if not untried[i]:
+            break                         # every place is refused
+        a, b = max(0, i - k), min(n - 1, i + k)
+        dx, dy = float(xs[b] - xs[a]), float(ys[b] - ys[a])
+        heading = math.hypot(dx, dy)
+        if heading < 1e-6:
+            if tried == 0:
+                return None               # a degenerate PEAK: the caller's random-pick fallback
+            untried[i] = False
+            continue
+        ux, uy = dx / heading, dy / heading   # unit direction of travel at the peak
+        px, py = -uy, ux                      # the perpendicular — the timing line's direction
+        cx, cy = float(xs[i]), float(ys[i])
+        line = tracks.make_segment(cx - px * _HEURISTIC_HALF_M, cy - py * _HEURISTIC_HALF_M,
+                                   cx + px * _HEURISTIC_HALF_M, cy + py * _HEURISTIC_HALF_M)
+        own, other = _crossings_by_way(xs, ys, cx, cy, ux, uy, _HEURISTIC_HALF_M)
+        if other < max(2.0, _OTHER_STRETCH_SHARE * own):
+            return line
+        share = other / max(own, 1)
+        if least_cut is None or share < least_cut[0]:
+            least_cut = (share, line)
+        # Refuse the PLACE, on every lap: a line beside a refused one is cut by the same stretch.
+        untried &= np.hypot(xs - cx, ys - cy) > _HEURISTIC_HALF_M
+    return None if least_cut is None else least_cut[1]
 
 
 def _clean(samples, spans, naive):
