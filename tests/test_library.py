@@ -1892,8 +1892,8 @@ def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
             with open(c, "wb"):
                 pass
         _open([ch1, ch2], 36, 46.808, 46.196)                # the full drop-load
-        _open([ch2], 9, 46.808, 46.426)                      # File ▸ Open, chapter 2
-        _open([ch1], 26, 46.862, 46.224)                     # File ▸ Open, chapter 1
+        _open([ch2], 9, 46.808, 46.426)                      # chapter 2 alone (the CLI)
+        _open([ch1], 26, 46.862, 46.224)                     # chapter 1 alone (the CLI)
         idx = library.load()
         assert len(idx["entries"]) == 1, idx["entries"]
         e = idx["entries"][0]

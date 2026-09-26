@@ -250,8 +250,9 @@ pixi run studio -- --demo                   # no footage? a synthetic session, g
 
 Cloned without `--recursive`? `git submodule update --init --recursive` fetches `3rdparty/`.
 
-Then drag any `.MP4` onto the window, or `File ▸ Open`. Chapter siblings (`GX01…`, `GX02…`) are
-chained on request via `--full` or `File ▸ Load full recording`. The
+Then drag any `.MP4` onto the window, or `File ▸ Open`: either opens the whole recording, its
+chapter siblings (`GX01…`, `GX02…`) chained in order. A path on the command line loads just that
+chapter; `--full` or `File ▸ Load full recording` chains the rest. The
 **[first-lap walkthrough](docs/FIRST_LAP.md)** is the 30-second path from footage to "where am I
 losing time?"; for a code change, start at [AGENTS.md](AGENTS.md).
 

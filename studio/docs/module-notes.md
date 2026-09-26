@@ -301,21 +301,27 @@ The **telemetry→media clock conversion** — pure numpy, pacer-free, Qt-free. 
 Pure-Python (no `pacer`): the GoPro chaptered-filename parser, sibling **discovery/grouping** (same recording number, same folder, ordered by chapter), the **not-video guard** (`is_mp4_container`/`split_non_mp4`/`skipped_notice` — an 8-byte ISO-box-header probe, so one file wearing a chapter's name and holding something else cannot take a whole recording's load down), and the **`ChapterMap`** global↔chapter time mapping (per-chapter offset table) — which also **carries the recording's `MediaClock`** (below), because the map is the object the video layer receives per recording. Unit-tested in [`tests/test_chapters.py`](../../tests/test_chapters.py) + [`tests/test_unreadable_chapter.py`](../../tests/test_unreadable_chapter.py).
 
 A long GoPro recording is split, at a file-size limit, into **chapters** (`GX<CC><NNNN>.MP4`:
-prefix, 2-digit chapter `CC`, 4-digit recording `NNNN`). By default opening one chapter loads
-only that file. Pass **`--full`** (or `--chaptered`), or use **File ▸ Load full recording** in
-the UI, to discover the sibling chapters (same recording `NNNN`, same folder, ordered by `CC`)
-and chain them into one continuous session — see [Chaptered sessions](#chapterspy).
+prefix, 2-digit chapter `CC`, 4-digit recording `NNNN`). Every GUI door — a drop, **File ▸
+Open…**, the welcome's **Open recording…** — opens the whole recording: the chapter's siblings
+(same recording `NNNN`, same folder, ordered by `CC`) chained into one continuous session. The
+command line loads exactly the chapters it names; **`--full`** (or `--chaptered`), or **File ▸
+Load full recording** in the UI, chains the rest — see [Chaptered sessions](#chapterspy).
 
 A long GoPro recording is split at a file-size limit (≈12 GB ≈ 28 min for 4K) into **chapters**
 that share a recording number and increment a chapter index, e.g. recording 0062 =
 `GX010062.MP4` + `GX020062.MP4` + `GX030062.MP4`. They are contiguous in time (split mid-lap,
 not at a lap), so a lap can span a chapter boundary.
 
-- **Opt-in, default unchanged.** Opening one chapter loads only that file (the single-file
-  path is byte-identical to before). `--full`/`--chaptered`, or **File ▸ Load full recording**,
-  discovers the sibling chapters (`chapters.discover_siblings`: same recording `NNNN` + same
-  prefix, same folder, ordered ascending by chapter `CC` — never mixes recordings; a
-  single-chapter recording loads gracefully) and reloads them as one session.
+- **Whole in the GUI, explicit on the command line.** A drop, File ▸ Open… and the welcome's
+  Open recording… all go through `StudioWindow._open_recordings`, which chains the siblings
+  (`chapters.discover_siblings`: same recording `NNNN` + same prefix, same folder, ordered
+  ascending by chapter `CC` — never mixes recordings; a single-chapter recording loads
+  gracefully). File ▸ Open used to load the picked file alone, and on a new recording that
+  decided the first-open debrief, PB and focus list on part of the session (QA NEW-1). The
+  command line goes through the same door without the sibling expansion (`--full`/`--chaptered`
+  adds it), and `chapters.load_order` — also `Session.load`'s backstop — chains any list in
+  chapter order, once each (QA NEW-2). Part of a recording (`chapters.chapter_subset`) decides no
+  verdict; **File ▸ Load full recording** reloads the whole.
 
 - **A sibling that isn't video (`chapters.split_non_mp4`).** Discovery groups on NAMES, so a file
   wearing a chapter's name and holding something else is handed to the loader with the real ones,
@@ -365,7 +371,7 @@ The **pure-numpy core of the track map** (extracted from `map_view.py`; every fu
 
 ## `library.py`
 
-**Session library (F8)** — pure path/JSON, pacer-free (the sidecar's twin): a versioned local index at `~/Library/Application Support/pacer/library.json` (atomic tmp+`os.replace`, app-support dir auto-created). One entry per **recording fingerprint** (GoPro prefix + recording number, e.g. `GX0062`, so a single-chapter and a full chaptered open of the same recording share ONE entry — re-opening **updates in place**, no duplicate; the pre-2026-06-18 `<stem>|<duration>` rows are re-keyed and merged by the v4 migration). An open that covered **fewer of the recording's chapters** than the stored row never displaces it (File ▸ Open loads one chapter); the same chapters or more always replace it. Each entry carries track / date (GPS9 wall clock) / lap count / best / theoretical / paths. `load` **self-heals to a safe empty index** on ANY corruption (same philosophy as the sidecar revert guard); `upsert_and_save` is the post-load call; `pb_series(track)` extracts the dated best-lap progression. `_app_support_dir` is the single seam the tests monkeypatch (never the real `~/Library`). The values are fed from **`Session.library_entry(paths)`** (pacer stays on the Session side).
+**Session library (F8)** — pure path/JSON, pacer-free (the sidecar's twin): a versioned local index at `~/Library/Application Support/pacer/library.json` (atomic tmp+`os.replace`, app-support dir auto-created). One entry per **recording fingerprint** (GoPro prefix + recording number, e.g. `GX0062`, so a single-chapter and a full chaptered open of the same recording share ONE entry — re-opening **updates in place**, no duplicate; the pre-2026-06-18 `<stem>|<duration>` rows are re-keyed and merged by the v4 migration). An open that covered **fewer of the recording's chapters** than the stored row never displaces it (the command line can load one chapter); the same chapters or more always replace it. Each entry carries track / date (GPS9 wall clock) / lap count / best / theoretical / paths. `load` **self-heals to a safe empty index** on ANY corruption (same philosophy as the sidecar revert guard); `upsert_and_save` is the post-load call; `pb_series(track)` extracts the dated best-lap progression. `_app_support_dir` is the single seam the tests monkeypatch (never the real `~/Library`). The values are fed from **`Session.library_entry(paths)`** (pacer stays on the Session side).
 
 ## `track_db.py`
 

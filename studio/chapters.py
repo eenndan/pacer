@@ -272,6 +272,42 @@ def order_chapters(paths: list[str]) -> list[str]:
     return ordered
 
 
+def load_order(paths: list[str]) -> list[str]:
+    """`paths` as a load must chain them: each recording's chapters ascending by chapter index,
+    each file once, the recordings in the order they were given (`group_into_recordings`,
+    flattened). PURE. The identity on every list a door builds (`discover_siblings` and
+    `order_chapters` already produce it), so it only ever changes a hand-typed one.
+
+    It exists because the command line chained its paths verbatim: `studio -- GX020067.MP4
+    GX010067.MP4` put chapter 2 first on the clock and turned the owner's 19 laps (best 1:07.479,
+    the seam lap) into 18 (1:07.537) — and the library, which keys chapter SETS rather than
+    orders, took that as a re-measurement and replaced his row with it (QA NEW-2)."""
+    return [p for group in group_into_recordings(paths) for p in group]
+
+
+def chapter_subset(paths: list[str]) -> tuple[int, int] | None:
+    """(chapters in `paths`, chapters of that recording on disk) when `paths` is a STRICT SUBSET of
+    its recording's on-disk chapters — else None (the whole recording, or a chapter set that cannot
+    be resolved).
+
+    THE ONE PREDICATE for "this is part of a recording": the window's notice that says so and the
+    File ▸ Load full recording item that fixes it (`StudioWindow._chapter_subset`), and the library
+    controller that therefore decides no verdict on it, all read this, so they cannot disagree.
+    Best-effort by construction: an unreadable folder answers None, "no partiality to report" —
+    never invent a missing chapter. Compared on absolute paths and counted once each, so a
+    relative command-line path or a repeated one is not mistaken for a whole recording."""
+    have = {os.path.abspath(p) for p in paths or []}
+    if not have:
+        return None
+    try:
+        sibs = {os.path.abspath(p) for p in discover_siblings(paths[0])}
+    except Exception:  # noqa: BLE001 — an unresolvable chapter set is simply not a subset
+        return None
+    if len(sibs) > len(have) and have <= sibs:
+        return len(have), len(sibs)
+    return None
+
+
 def group_into_recordings(paths: list[str]) -> list[list[str]]:
     """Group a flat list of dropped/opened paths into distinct RECORDINGS, so unrelated files are
     never folded onto one clock.

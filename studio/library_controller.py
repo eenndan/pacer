@@ -64,7 +64,7 @@ import shiboken6
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QFileDialog
 
-from . import focus, library, session_record, sidecar, track_db
+from . import chapters, focus, library, session_record, sidecar, track_db
 from . import marks as marks_model
 from .library_dialog import LibraryDialog
 from .overlays import PBToast
@@ -101,10 +101,15 @@ class LibraryController:
         self._status_ms = status_ms
         # What the last `update_library` learned for the debrief landing (board review PS-B1):
         # whether the index had NO row for this recording before the upsert — a first open, as
-        # opposed to a reload, a second chapter or Load full recording — and where its best lap
-        # stands against the track's PB (`library.pb_standing_for`). Reset on every call.
+        # opposed to a reload or a second chapter — and where its best lap stands against the
+        # track's PB (`library.pb_standing_for`). Reset on every call.
         self.opened_new = False
         self.pb_standing: dict | None = None
+        # Whether the last `update_library` was PART of a recording the index does not hold yet
+        # (QA NEW-1): it decided no verdict and wrote no row, so both wait for the whole recording.
+        # Read by the session notice (which says so) and by `refresh_library_entry` (which must not
+        # write that row behind its back). Reset on every call.
+        self.waiting_for_whole = False
         # The library row the last `update_library`'s NEW personal best beat (`library.previous_pb`)
         # — what "Compare with your previous PB" loads as the reference (board review PS-B4). None
         # unless that load celebrated a beat. Reset on every call.
@@ -133,22 +138,45 @@ class LibraryController:
         so it is passed in: library.pb_moment partitions the index on it and takes the prior from
         the OTHER recordings — so the same outing can no longer be the bar, while a full chain that
         genuinely beats a DIFFERENT recording on that track still celebrates (see there for why
-        suppressing on mere presence would swallow exactly that)."""
+        suppressing on mere presence would swallow exactly that).
+
+        PART OF A RECORDING DECIDES NOTHING (QA NEW-1). A load that is a strict subset of its
+        recording's chapters on disk (`chapters.chapter_subset`) returns no moment, sets no standing
+        and is never a first open: its best lap and ranked corners are a sample of the outing. On
+        the owner's SD_19_09, chapter 1 announced "0:46.862, 0.05 s faster" for a true 0:46.808,
+        0.10 s faster, and a focus list without the session's biggest loss. For a recording the
+        index does NOT hold yet it also writes NO ROW, and that is what saves the verdict for the
+        whole recording: a stored partial row makes the full load a re-open (no debrief), and
+        `library.pb_moment`'s own-best rule then silences its PB as well. With no row, the whole
+        recording's first load — Load full recording in that window, or any door later — is
+        decided exactly as a drop decides it. The cost: until then the session is in neither the
+        Library nor Open Recent. Only the command line can open part of a new recording now, and
+        the session notice says what waits (`waiting_for_whole`). A recording the index already
+        holds is still upserted — a part of it never displaces a fuller row (`library._keeps`)."""
         self.opened_new, self.pb_standing, self.previous_pb = False, None, None
+        self.waiting_for_whole = False
         if self._library_excludes(paths):
             return None
         moment = None
         try:
             entry = self.win.session.library_entry(paths)
+            prior_index = library.load()
+            key = entry.get("fingerprint")
+            new = not any(e.get("fingerprint") == key for e in prior_index.get("entries", []))
+            if chapters.chapter_subset(paths) is not None:
+                if new:
+                    self.waiting_for_whole = True
+                    return None
+                library.upsert_and_save(entry)
+                self.win._library_unwritable = False
+                return None
             # Decide the PB moment against the PRIOR index (before the upsert), gated on BOTH timing
             # axes — a provisional/unconfirmed start line makes the lap number meaningless, and a
             # data-quality-degraded (media-clock / low-GPS ESTIMATED) time isn't one to celebrate
             # (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
             # which is what keeps the chapter it just chained from being its "previous best".
-            prior_index = library.load()
             trust = (self.win.session.timing_verified, prior_index, entry.get("track"),
                      entry.get("best"))
-            key = entry.get("fingerprint")
             degraded = self.win.session.timing_quality.degraded
             moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key)
             standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key)
@@ -157,7 +185,6 @@ class LibraryController:
             # like the moment it belongs to.
             if (moment or {}).get("kind") == "beat":
                 self.previous_pb = library.previous_pb(prior_index, entry.get("track"), key)
-            new = not any(e.get("fingerprint") == key for e in prior_index.get("entries", []))
             library.upsert_and_save(entry)
             # Only once the row is WRITTEN: a recording whose row could not be saved would land on
             # the debrief again on every open.
@@ -229,8 +256,11 @@ class LibraryController:
         try:
             if self._library_excludes(paths):
                 return
-            library.upsert_and_save(self.win.session.library_entry(paths))
-            self.win._library_unwritable = False
+            # Part of a recording the index does not hold yet has no row by design (update_library):
+            # writing one from a drag would turn the whole recording's first load into a re-open.
+            if not self.waiting_for_whole:
+                library.upsert_and_save(self.win.session.library_entry(paths))
+                self.win._library_unwritable = False
         except OSError:
             self.win._library_unwritable = True
             _log.exception("session library entry not refreshed")
