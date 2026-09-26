@@ -128,7 +128,12 @@ class _NullMediaPlayer(QObject):
 
 class _NullAudioOutput(QObject):
     """Inert QAudioOutput stand-in (PACER_NO_MEDIA=1): remembers the muted flag, no device. Starts
-    muted, like production."""
+    muted, like production. Same signals (never fire), so code that connects to the real output's —
+    _resolve_notify_overrides, when a test builds the non-headless pane with this stand-in — runs."""
+
+    volumeChanged = Signal(float)
+    mutedChanged = Signal(bool)
+    deviceChanged = Signal()
 
     def __init__(self):
         super().__init__()
