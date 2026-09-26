@@ -457,6 +457,10 @@ SPLITS_TOOLTIP = (
 SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best; ▼ is {scale} or more "
                "slower than that sector's own typical lap, each sector scaled by its own spread. "
                "Interior sectors are timed to the 10 Hz fix grid (±0.1 s).")
+#: CORNERS BY LAP's lead columns, the lap and its time — frozen at the left edge while the corner
+#: columns scroll under them (LOOK-8, QA 2026-09-26: at the owner's 683 px pane the lap time and
+#: C10-C12 were off-screen together, so no row could be read whole).
+CORNER_GRID_LEAD_COLUMNS = SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS
 # The CORNERS BY LAP grid: the SPLITS grid's idiom over the detected corners, which unlike sector
 # lines exist on every recording the owner has. Its one difference from SPLITS — the muted,
 # never-marked cell — and its missing ★ are measured, not styled: see stats.CornerMatrix.
@@ -1532,7 +1536,9 @@ class StatsView(QWidget):
         band.setSpacing(theme.SPACE_XS)
         self._corner_grid_section = section_heading("CORNERS BY LAP")
         band.addWidget(self._corner_grid_section)
-        self.corner_grid_table = ReportTable(SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS, ROW_HEIGHT)
+        # The lap and its time lead and stay put (LOOK-8): see stats_common._FrozenLead.
+        self.corner_grid_table = ReportTable(CORNER_GRID_LEAD_COLUMNS, ROW_HEIGHT,
+                                             frozen=len(CORNER_GRID_LEAD_COLUMNS))
         self.corner_grid_table.setToolTip(CORNER_GRID_TOOLTIP)
         band.addWidget(self.corner_grid_table)
         self.corner_grid_note = WrapLabel()
@@ -2745,9 +2751,8 @@ class StatsView(QWidget):
             t.setRowCount(0)
             self.corner_grid_note.setText("")
             return
-        n_cols = len(matrix.cids)
-        t.set_columns(SPLIT_LEAD_COLUMNS + [f"C{cid}" for cid in matrix.cids]
-                      + SPLIT_TAIL_COLUMNS)
+        lead = len(CORNER_GRID_LEAD_COLUMNS)
+        t.set_columns(CORNER_GRID_LEAD_COLUMNS + [f"C{cid}" for cid in matrix.cids])
         behind = QColor(theme.behind_colour())
         lap_time = getattr(session, "lap_time", None)
         # The lap time is the one column here the start line moves, so it is demoted exactly as the
@@ -2794,14 +2799,14 @@ class StatsView(QWidget):
                             f"{fmt_signed(val - med, d)} s against your typical C{cid} ({med:.{d}f} s, the "
                             f"median of the {matrix.n_resolved[c]} laps matched on track through "
                             "it).")
-                t.setItem(r, c + 1, item)
+                t.setItem(r, c + lead, item)
             lt = lap_time(lap_id) if (complete and lap_time is not None) else None
             tail = num_item(fmt_time(lt) if lt is not None else DASH)
             if timing_note and lt is not None:
                 tail.setForeground(PROVISIONAL_COLOR)
                 theme.apply_provisional_style(tail)
                 tail.setToolTip(timing_note)
-            t.setItem(r, n_cols + 1, tail)
+            t.setItem(r, 1, tail)
         self._fit_table(t)
         self.corner_grid_note.setText(self._corner_grid_note_text(session, matrix))
 

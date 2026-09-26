@@ -31,15 +31,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import NamedTuple
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
+from PySide6.QtGui import QAction, QColor, QFontMetrics, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -243,6 +247,95 @@ def rank(entry: Entry, query: str) -> int | None:
     return 3
 
 
+def split_title(text: str, fm: QFontMetrics, width: int) -> tuple[str, str]:
+    """A row title as (first line, second line) for a title column `width` px wide.
+
+    ONE LINE WHEN IT FITS. When it does not (LOOK-8, QA 2026-09-26: six rows of the 576 px palette
+    ended in "…", e.g. "Load full recording — this recording is already loaded i…"), the NAME stays
+    on the first line and what follows it moves to a second: a gate's reason after its " — "
+    (`app.MENU_REASON_SEP`), else a gloss in trailing parentheses, else the words that did not
+    fit."""
+    if fm.horizontalAdvance(text) <= width:
+        return text, ""
+    cut = text.find(" — ")
+    if cut > 0:
+        return text[:cut], text[cut + 3:]
+    cut = text.rfind(" (")
+    if cut > 0 and text.endswith(")"):
+        return text[:cut], text[cut + 1:]
+    words = text.split(" ")
+    for k in range(len(words) - 1, 0, -1):
+        head = " ".join(words[:k])
+        if fm.horizontalAdvance(head) <= width:
+            return head, " ".join(words[k:])
+    return text, ""
+
+
+class _TitleDelegate(QStyledItemDelegate):
+    """The title column: `split_title`'s first line in the row's own colour, the second MUTED and
+    one step smaller — the reason is secondary to the command it explains. The full sentence stays
+    the item's text (search, tests, accessibility) and a gated row's remedy stays its tooltip."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._detail_font = theme.ui_font(theme.CAPTION)
+
+    @staticmethod
+    def _text_rect(opt: QStyleOptionViewItem) -> QRect:
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        return style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+
+    def _lines(self, opt: QStyleOptionViewItem, index) -> tuple[str, str]:
+        view = opt.widget
+        if view is not None and hasattr(view, "columnWidth"):
+            probe = QStyleOptionViewItem(opt)
+            probe.rect = QRect(0, 0, view.columnWidth(index.column()), theme.GRID_ROW_H)
+            width = self._text_rect(probe).width()
+        else:
+            width = self._text_rect(opt).width()
+        return split_title(opt.text, opt.fontMetrics, width)
+
+    def sizeHint(self, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        size = super().sizeHint(option, index)
+        if not self._lines(opt, index)[1]:
+            return size
+        pad = max(theme.GRID_ROW_H - opt.fontMetrics.height(), 0)
+        two = opt.fontMetrics.height() + QFontMetrics(self._detail_font).height() + pad
+        return QSize(size.width(), max(size.height(), two))
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        head, detail = self._lines(opt, index)
+        if not detail:
+            super().paint(painter, option, index)
+            return
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        text_rect = self._text_rect(opt)
+        opt.text = ""                        # the style paints background, selection and focus only
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        enabled = bool(opt.state & QStyle.State_Enabled)
+        group = QPalette.Normal if enabled else QPalette.Disabled
+        role = (QPalette.HighlightedText if opt.state & QStyle.State_Selected else QPalette.Text)
+        dfm = QFontMetrics(self._detail_font)
+        block = opt.fontMetrics.height() + dfm.height()
+        top = text_rect.top() + max((text_rect.height() - block) // 2, 0)
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(opt.palette.color(group, role))
+        painter.drawText(QRect(text_rect.left(), top, text_rect.width(), opt.fontMetrics.height()),
+                         int(Qt.AlignLeft | Qt.AlignVCenter),
+                         opt.fontMetrics.elidedText(head, Qt.ElideRight, text_rect.width()))
+        painter.setFont(self._detail_font)
+        painter.setPen(QColor(theme.C.text_dim if enabled else theme.C.text_muted))
+        painter.drawText(QRect(text_rect.left(), top + opt.fontMetrics.height(), text_rect.width(),
+                               dfm.height()), int(Qt.AlignLeft | Qt.AlignVCenter),
+                         dfm.elidedText(detail, Qt.ElideRight, text_rect.width()))
+        painter.restore()
+
+
 def matches(all_entries: list[Entry], query: str) -> list[Entry]:
     """`all_entries` filtered + ordered for `query` (empty query keeps everything, in order)."""
     scored = [(r, i, e) for i, e in enumerate(all_entries)
@@ -296,6 +389,12 @@ class CommandPalette(QDialog):
         header.setSectionResizeMode(_COL_TITLE, QHeaderView.Stretch)
         header.setSectionResizeMode(_COL_GROUP, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(_COL_KEY, QHeaderView.ResizeToContents)
+        # A title that cannot fit on one line takes a second, muted one (split_title), so its row
+        # takes the height it needs — re-measured whenever the dialog's width moves the column.
+        self.table.setItemDelegateForColumn(_COL_TITLE, _TitleDelegate(self.table))
+        rows = self.table.verticalHeader()
+        rows.setMinimumSectionSize(theme.GRID_ROW_H)
+        rows.setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.itemActivated.connect(lambda _item: self._activate())
         self.table.cellDoubleClicked.connect(lambda *_: self._activate())
         root.addWidget(self.table, 1)

@@ -993,9 +993,14 @@ def test_no_table_header_floats_off_its_data():
               "STATS/CORNERS BY LAP": stats.corner_grid_table}
     # ...and the dict really is every table the view ships: anything with cells that is not in it
     # would be a tenth surface nobody brought to the rule.
+    # A view over an enumerated table's OWN model is that table's cells and header items drawn a
+    # second time (CORNERS BY LAP's frozen lap + lap-time columns, stats_common._FrozenLead), so
+    # the rule it would be held to is the one already asserted for that table.
+    models = {id(t.model()) for t in tables.values()}
     missed = [f"{type(t).__name__} under {type(t.parentWidget()).__name__}"
               for t in view.findChildren(QTableView)
-              if t not in tables.values() and t.model() is not None and t.model().rowCount()]
+              if t not in tables.values() and t.model() is not None and t.model().rowCount()
+              and id(t.model()) not in models]
     assert not missed, (
         "a table with rows that this guard does not enumerate — add it above and let it pass or "
         f"say why not: {missed}")

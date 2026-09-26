@@ -3922,20 +3922,21 @@ def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
     t = v.corner_grid_table
     assert not v._corner_grid_band.isHidden() and not t.isHidden()
     header = [t.horizontalHeaderItem(c).text() for c in range(t.columnCount())]
-    assert header == ["Lap", "C3", "C7", "Lap time"], header
+    # The lap and its time lead (LOOK-8): see test_the_corner_grid_keeps_the_lap_and_its_time.
+    assert header == ["Lap", "Lap time", "C3", "C7"], header
     assert t.rowCount() == 8 and t.item(0, 0).text() == "1"          # 1-based, app-wide
-    assert t.item(6, 3).text() == "1:15.000", t.item(6, 3).text()
-    slow = t.item(6, 1)
+    assert t.item(6, 1).text() == "1:15.000", t.item(6, 1).text()
+    slow = t.item(6, 2)
     assert slow.text() == f"{theme.DELTA_BEHIND_ARROW} 5.00", slow.text()
     assert slow.foreground().color() == QColor(theme.behind_colour())
     assert "+0.97 s against your typical C3 (4.03 s" in slow.toolTip(), slow.toolTip()
     assert "7 laps matched on track" in slow.toolTip(), slow.toolTip()
-    same = t.item(7, 1)
+    same = t.item(7, 2)
     assert same.text() == "5.00", f"an interpolated cell carries a mark: {same.text()!r}"
     assert same.font().italic() and same.foreground().color() == PROVISIONAL_COLOR, (
         "an interpolated cell is not muted in the trust tier's provisional style")
     assert same.toolTip().startswith("Not marked: on lap 8, C3"), same.toolTip()
-    plain = t.item(0, 1)
+    plain = t.item(0, 2)
     assert not plain.font().italic() and not plain.text().startswith(theme.DELTA_BEHIND_ARROW)
     note = v.corner_grid_note.text()
     assert "8 clean laps × 2 corners." in note, note
@@ -3982,6 +3983,42 @@ def test_the_corner_grid_takes_the_page_width_and_never_the_column_packing():
     for v in (wide, narrow):
         v.hide()
     print("test_the_corner_grid_takes_the_page_width_and_never_the_column_packing OK")
+
+
+def test_the_corner_grid_keeps_the_lap_and_its_time_in_view_while_it_scrolls():
+    """LOOK-8 (QA 2026-09-26). CORNERS BY LAP for twelve corners wants ~950 px, and the owner's
+    Stats pane is 683 px (599 at 1280x800), so the grid scrolls there — and on main the lap time
+    was its LAST column, off-screen together with C10-C12: no row could be read whole. The lap and
+    its time now lead, frozen over the grid's left edge: scrolled all the way right, the two cells
+    a row is read by are still painted where they were, on the same model."""
+    _app()
+    from studio.stats_panel import StatsView
+    cids = list(range(1, 13))
+    ids = list(range(10))
+    times = [[2.5 + 0.1 * c + 0.01 * i for c in range(12)] for i in ids]
+    sess = _fake_view_session()
+    sess.corner_matrix = lambda: corner_matrix(ids, cids, times, [[True] * 12] * 10)
+    sess.lap_time = lambda i: 69.0 + i
+    v = StatsView(sess)
+    v.resize(640, 900)
+    v.show()
+    _settle()
+    t = v.corner_grid_table
+    header = [t.horizontalHeaderItem(c).text() for c in range(t.columnCount())]
+    assert header[:2] == ["Lap", "Lap time"], f"the lap time is not beside the lap: {header}"
+    bar = t.horizontalScrollBar()
+    assert bar.maximum() > 0, "the fixture is meant to scroll (12 corners in a 640 px page)"
+    bar.setValue(bar.maximum())
+    _settle()
+    frozen = getattr(t, "_frozen", None)
+    assert frozen is not None and frozen.isVisible(), "nothing keeps the lap in view"
+    lead = t.columnWidth(0) + t.columnWidth(1)
+    assert frozen.x() == t.frameWidth() and frozen.width() == lead, (frozen.geometry(), lead)
+    assert frozen.model() is t.model() and not frozen.isColumnHidden(1), "not the grid's own cells"
+    assert all(frozen.isColumnHidden(c) for c in range(2, t.columnCount()))
+    assert frozen.height() >= t.horizontalHeader().height() + t.rowHeight(0) * t.rowCount()
+    v.hide()
+    print("test_the_corner_grid_keeps_the_lap_and_its_time_in_view_while_it_scrolls OK")
 
 
 def test_every_longitudinal_surface_names_which_filter_it_read():

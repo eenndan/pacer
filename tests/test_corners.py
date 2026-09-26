@@ -746,43 +746,47 @@ def test_map_corner_labels_declutter_offset_and_no_overlap():
 
 
 def test_map_corner_label_cleared_from_start_line_endpoint_not_just_midpoint():
-    """M7 regression guard: the near-start push must fire off EITHER start-line ENDPOINT (and the
-    video-position marker), not only the midpoint. A corner apex sitting near an endpoint handle —
-    but well past CORNER_START_CLEAR_PX from the midpoint (the old single anchor) — must still be
-    pushed the extra CORNER_START_NUDGE_PX outward, so the amber crosshair stops piercing the glyph
-    (the real 'C11 on the h2 endpoint' collision). Compared against feeding ONLY the midpoint."""
+    """M7 regression guard: a label must clear EITHER start-line ENDPOINT handle (and the
+    video-position marker), not only the midpoint — the real 'C11 on the h2 endpoint' collision.
+
+    Since VIEW-8 (QA 2026-09-26) the guard is the drawn geometry itself rather than a fixed extra
+    nudge: the label's plate box never overlaps the box the handle (or the marker) paints, and a
+    midpoint-only anchor — which is 40 px away here — leaves the label where it would sit anyway."""
     _qapp()
     import pyqtgraph as pg
 
-    from studio.map_view import CORNER_START_NUDGE_PX, _CornerMarkers
+    from studio.map_view import CORNER_MARKER_CLEAR_PX, START_HANDLE_CLEAR_PX, _CornerMarkers
     widget = pg.PlotWidget()
     widget.resize(400, 400)
     widget.getPlotItem().getViewBox().setRange(xRange=(-20, 20), yRange=(-20, 20), padding=0)
     # px-per-data ≈ 400/40 = 10 px/m. Start line (-4,0)→(4,0): midpoint (0,0), endpoints ±4 m.
-    # The target apex at x=4 m sits ON the h2 endpoint (0 px away) but 40 px from the midpoint — far
-    # past CORNER_START_CLEAR_PX (26). A second, distant corner gives a real outward direction (a
-    # single-corner cloud has no outward normal). The push shifts the target's label further from its
-    # apex; we compare the SAME geometry decluttered off the midpoint-only vs off the endpoints.
+    # The target apex at x=4 m sits ON the h2 endpoint (0 px away) but 40 px from the midpoint. A
+    # second, distant corner gives a real outward direction.
     markers = [("C11", 4.0, 0.0, -1), ("C5", 12.0, 12.0, 1)]
 
-    def target_label_offset_px(anchors):
+    def target_box(anchors):
         cm = _CornerMarkers(widget.getPlotItem())
         cm.set_corners(markers, start_anchors=anchors)
-        text = next(it for it in cm._items
-                    if isinstance(it, pg.TextItem) and it.textItem.toPlainText() == "C11")
-        pos = text.pos()
+        i = [m[0] for m in markers].index("C11")
+        pos = cm._texts[i].pos()
         sx, sy = cm._px_per_data()
-        return (((pos.x() - 4.0) * sx) ** 2 + ((pos.y() - 0.0) * sy) ** 2) ** 0.5
+        return pos.x() * sx, pos.y() * sy, cm._half[i], (sx, sy)
 
-    # Midpoint-only (the OLD single anchor): the target is 40 px from it → NO extra push.
-    mid_off = target_label_offset_px([(0.0, 0.0)])
-    # Endpoints (the FIX): the target is on the h2 endpoint → the extra push fires.
-    end_off = target_label_offset_px([(-4.0, 0.0), (4.0, 0.0)])
-    assert end_off > mid_off + CORNER_START_NUDGE_PX - 2.0, (mid_off, end_off)
-    # The video-position marker is also a valid anchor: a marker sitting on the apex pushes too.
-    marker_off = target_label_offset_px([(4.0, 0.0)])
-    assert marker_off > mid_off + CORNER_START_NUDGE_PX - 2.0, (mid_off, marker_off)
-    print(f"ok M7 endpoint declutter: midpoint-only {mid_off:.1f}px < endpoints {end_off:.1f}px")
+    def clears(box, at, half):
+        cx, cy, (hw, hh), (sx, sy) = box
+        return abs(cx - at[0] * sx) >= hw + half - 0.5 or abs(cy - at[1] * sy) >= hh + half - 0.5
+
+    mid = target_box([(0.0, 0.0)])
+    end = target_box([(-4.0, 0.0, START_HANDLE_CLEAR_PX), (4.0, 0.0, START_HANDLE_CLEAR_PX)])
+    assert clears(end, (4.0, 0.0), START_HANDLE_CLEAR_PX), ("C11 sits under the h2 handle", end)
+    assert clears(end, (-4.0, 0.0), START_HANDLE_CLEAR_PX), ("C11 sits under the h1 handle", end)
+    # The video-position marker is an anchor too: a marker sitting on the apex is cleared as well.
+    marker = target_box([(4.0, 0.0, CORNER_MARKER_CLEAR_PX)])
+    assert clears(marker, (4.0, 0.0), CORNER_MARKER_CLEAR_PX), ("C11 under the marker", marker)
+    # ...and a midpoint 40 px away changes nothing about where the label goes.
+    free = target_box([])
+    assert abs(mid[0] - free[0]) < 0.5 and abs(mid[1] - free[1]) < 0.5, (mid, free)
+    print("ok M7 endpoint declutter: C11 clears both handles and the marker")
 
 
 if __name__ == "__main__":
