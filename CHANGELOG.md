@@ -8,6 +8,33 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.5.0] — 2026-09-26
 
+Everything merged since v0.4.2: 16 pull requests, #419 to #434, all from the 2026-09-26 hands-on QA
+(round 2) of the owner's next race day. Each line names its pull request
+(`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+
+### Highlights
+
+- **Every way you open a recording opens all of it.** File ▸ Open, the welcome button, a drop and
+  the command line give the same whole recording, in chapter order; a new recording's PB is never
+  decided on part of it (SD_19_09 via Open had said 0:46.862 for a true 0:46.808) (#420)
+- **The first-open debrief lands right.** A tab click returns to the usual layout; at a new
+  circuit the map and its start-line cue stay up and the debrief waits for the line; focus
+  baselines are the Stats corner measurements, and a check offers today's top three (#424, #426)
+- **Braking means time on the brakes.** "On the brakes / lap" counts time actually braking (MK
+  26.0 → 17.8 s, SD_19_09 14.5 → 9.4 s), and coaching's "longer on the brakes" uses the same
+  measure (#421, #429)
+- **One number, one name.** The Stats page, Coaching and the charts agree: lap counts add up, the
+  ideal-lap gain reads 1.48 s everywhere, signed numbers use one minus, and "Done it?" counts laps
+  instead of flipping at one (#425, #428, #433)
+- **Sound and scrubbing.** Un-muting can no longer leave the audio thread waiting on Python while it
+  holds a Qt lock (a rare freeze), sound stays on across opens, and dragging the playback slider
+  shows the picture, about 3.5 frames a second on 4K, in both compare panes (#419, #422)
+- **Exports quote what they will make.** The H.264 size estimate matches the file (it was about 25 %
+  high), and the comparison video's options now quote a size and a time (#427)
+- **The Library and the layout tell the truth.** Ideal laps from older builds are marked, rows with
+  missing footage say where it was, and the corner tables, Marks, ⌘K and the map fit a 1440×831
+  window without clipping text or covering labels (#430, #431)
+
 ### Added
 
 - The comparison video's options say how big the file will be and about how long it takes, as the
