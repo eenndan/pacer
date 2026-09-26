@@ -45,8 +45,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 
 from studio import library, prefs, theme  # noqa: E402
-from studio.corner_model import IDEAL_VERSION  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
+from studio.corner_model import IDEAL_VERSION  # noqa: E402
 
 # The dialog's SIZE tests measure a wrapped paragraph's height and a table's row height, and both
 # are functions of the FONT — so measure against the app's real theme rather than Qt's default
