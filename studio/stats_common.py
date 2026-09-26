@@ -22,8 +22,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
+    QHeaderView,
     QLabel,
     QSizePolicy,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
 )
@@ -164,11 +167,15 @@ class ReportTable(QTableWidget):
     `_apply_height` re-pays for the bar when it is showing and takes the pixels back when it is
     not, on every resize."""
 
-    def __init__(self, columns: list[str], row_height: int):
+    def __init__(self, columns: list[str], row_height: int, frozen: int = 0):
         super().__init__(0, len(columns))
         self._row_height = row_height
         self._content_w = 0
+        self._frozen: _FrozenLead | None = None
         self.setHorizontalHeaderLabels(columns)
+        # A sortable table re-fits when its sort column moves: the column that now carries the
+        # arrow is the one that pays for it (see `fit`).
+        self.horizontalHeader().sortIndicatorChanged.connect(lambda *_: self.fit())
         # ...and then give every header the SIDE of the column it labels. Qt's
         # QHeaderView.defaultAlignment is AlignCenter, these five tables never overrode it, and
         # every cell from NUMERIC_COL_START on is AlignRight — so each label floated over the
@@ -203,14 +210,34 @@ class ReportTable(QTableWidget):
         # ...and its layout MINIMUM must not be its content: a QTableWidget's minimumSizeHint is
         # generous enough to re-create the very overflow this class exists to remove.
         self.setMinimumWidth(0)
+        if frozen > 0:
+            self._frozen = _FrozenLead(self, frozen)
 
     def fit(self) -> None:
-        """Re-measure after a refill: columns to their content, width capped there, height pinned."""
-        self.resizeColumnsToContents()
+        """Re-measure after a refill: columns to their content, width capped there, height pinned.
+
+        ONLY THE SORTED COLUMN PAYS FOR THE SORT ARROW (LOOK-8, QA 2026-09-26). Qt sizes every
+        section of a header that shows a sort indicator as if the arrow were in it — 28 px of the
+        44 px of chrome each CORNERS header carried, measured on the shipped theme. "Apex best" was
+        106 px for a 4-character number, and the eight columns asked 728 px of the owner's 683 px
+        pane (599 px at 1280x800), so "Grip (est)" showed as a lone "G" behind a scrollbar. One
+        column shows the arrow at a time, so the others are sized without it and the sorted one
+        re-fits when the sort moves (the connection in __init__): 565 px, whole at both sizes."""
+        hdr = self.horizontalHeader()
+        if hdr.isSortIndicatorShown():
+            hdr.setSortIndicatorShown(False)
+            self.resizeColumnsToContents()
+            hdr.setSortIndicatorShown(True)
+            if 0 <= hdr.sortIndicatorSection() < self.columnCount():
+                self.resizeColumnToContents(hdr.sortIndicatorSection())
+        else:
+            self.resizeColumnsToContents()
         self._content_w = (sum(self.columnWidth(c) for c in range(self.columnCount()))
                            + 2 * self.frameWidth() + 2)
         self.setMaximumWidth(self._content_w)
         self._apply_height()
+        if self._frozen is not None:
+            self._frozen.sync()
 
     def set_columns(self, columns: list[str]) -> None:
         """Re-label the header for a table whose COLUMN COUNT is a property of the session.
@@ -259,3 +286,48 @@ class ReportTable(QTableWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_height()
+        if self._frozen is not None:
+            self._frozen.sync()
+
+
+class _FrozenLead(QTableView):
+    """The first `n` columns of a `ReportTable`, drawn over it so they stay put while it scrolls
+    sideways — Qt's frozen-column pattern: a second view on the SAME model, so every cell, font,
+    colour and tooltip is the table's own and nothing is filled twice.
+
+    WHY (LOOK-8, QA 2026-09-26). CORNERS BY LAP is a lap, a lap time and one column per corner:
+    952 px on MK_18_09 against the owner's 683 px pane, and never fewer than ~850 px for twelve
+    corners even with every cell padding cut, so it has to scroll there. Scrolled, C10-C12 and the
+    lap time were off-screen together and a row could not be read whole. With the lap id and the
+    lap time frozen, any corner column scrolled into view sits beside the lap it belongs to."""
+
+    def __init__(self, table: ReportTable, n: int):
+        super().__init__(table)
+        self._table, self._n = table, n
+        self.setModel(table.model())
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setAlternatingRowColors(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(table.verticalHeader().defaultSectionSize())
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.viewport().stackUnder(self)
+        table.horizontalHeader().sectionResized.connect(lambda *_: self.sync())
+
+    def sync(self) -> None:
+        """Match the table's columns, header height, tooltip and frame, over its left edge."""
+        t = self._table
+        for c in range(t.columnCount()):
+            self.setColumnHidden(c, c >= self._n)
+            if c < self._n:
+                self.setColumnWidth(c, t.columnWidth(c))
+        self.horizontalHeader().setFixedHeight(t.horizontalHeader().height())
+        self.setToolTip(t.toolTip())
+        f = t.frameWidth()
+        width = sum(t.columnWidth(c) for c in range(min(self._n, t.columnCount())))
+        self.setGeometry(f, f, width, t.horizontalHeader().height() + t.viewport().height())
+        self.raise_()

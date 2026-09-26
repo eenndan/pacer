@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
@@ -149,6 +149,18 @@ def bt_baseline_pen():                 # the band's zero (lift/cruise) line
 # anchors to the far edge and follows resizes). The plate is also draggable, which nothing said: see
 # the cursor + tooltip in __init__.
 LEGEND_OFFSET = (-8, 8)
+# ...but top-right is only the emptiest corner on AVERAGE. At 1280x800 on MK_18_09 the plate sat
+# on the lap's top-speed stretch (~830-900 m) — the one place on that lap where the trace is at the
+# top of the plot — and covered 6 of its 411 plotted samples plus a brake glyph (LOOK-8, QA
+# 2026-09-26). So the plate is placed per refresh and per resize (`_place_speed_legend`): in the
+# first of the corners below that is already clear of every curve and brake glyph under it, else
+# in the one that needs the least headroom added to the frozen y-range to clear them. Top-right
+# stays first, as measured. The bottom corners are skipped while the pedal band owns that strip.
+LEGEND_CORNERS = (((1, 0), (1, 0), (-8, 8)), ((0, 0), (0, 0), (8, 8)),
+                  ((1, 1), (1, 1), (-8, -8)), ((0, 1), (0, 1), (8, -8)))
+# Clearance kept between the plate and a curve: a brake glyph rides the curve centred on it, so
+# half the largest glyph, plus air.
+LEGEND_CLEAR_PX = theme.BRAKE_MARKER_MAX_PX / 2 + 3
 # ...and past this many rows it is hidden outright rather than blanketing the chart. 7 = the lap
 # table's own MAX_COMPARE_LAPS (6) plus the always-on best lap, i.e. the largest legend the app can
 # legitimately produce; the previous 8 sat one row ABOVE that ceiling, so the guard could never fire.
@@ -401,6 +413,13 @@ class PlotsView(QWidget):
         # The x-range refresh() last FITTED, so leaving the tour can put the whole lap back without
         # re-running a fit that would also move y (see _reset_x_range).
         self._fit_x_range: tuple[float, float] | None = None
+        # The frozen y-range refresh() fitted, BEFORE any legend headroom — what every legend
+        # placement starts from, so a resize re-derives the headroom rather than compounding it.
+        self._fit_y_range: tuple[float, float] | None = None
+        # Set once the user drags the plate, or pans/zooms the speed chart: from then until the
+        # next refresh the placement is theirs, and nothing re-anchors it or re-ranges the axis.
+        self._legend_pinned = False
+        self._legend_corner = 0       # LEGEND_CORNERS index the plate is anchored at
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
@@ -510,6 +529,19 @@ class PlotsView(QWidget):
                 # one escape from a plate over your trace completely unhinted.
                 lg.setCursor(Qt.OpenHandCursor)
                 lg.setToolTip("Drag to move this legend")
+        # The speed plate is placed per refresh and per resize (LEGEND_CORNERS) until the user
+        # takes it over — by dragging it, or by panning/zooming the chart under it.
+        # A resize re-places it once the layout has settled — deferred and coalesced, because the
+        # placement can move the y-range, which can re-width the axis, which resizes the plot.
+        speed_vb = self.p_speed.getViewBox()
+        self._legend_timer = QTimer(self)
+        self._legend_timer.setSingleShot(True)
+        self._legend_timer.timeout.connect(self._place_speed_legend)
+        speed_vb.sigResized.connect(lambda *_: self._legend_timer.start(0))
+        speed_vb.sigRangeChangedManually.connect(self._pin_speed_legend)
+        if leg is not None:
+            self._legend_drag = leg.mouseDragEvent
+            leg.mouseDragEvent = self._on_legend_drag
         for plot in (self.p_speed, self.p_delta):
             plot.titleLabel.setAttr("color", C.text_dim)
             # P3: drop pyqtgraph's own chrome — the little "A" auto-range button (refresh()
@@ -883,6 +915,67 @@ class PlotsView(QWidget):
         for item in self._brake_throttle_items:
             self.p_speed.removeItem(item)
         self._brake_throttle_items = []
+
+    def _pin_speed_legend(self, *_):
+        self._legend_pinned = True
+
+    def _on_legend_drag(self, ev):
+        self._legend_pinned = True
+        self._legend_drag(ev)
+
+    def _place_speed_legend(self, *_):
+        """Anchor the speed legend in the first corner that is clear of every curve and brake
+        glyph under it, else in the one needing the least headroom, and widen the frozen y-range by
+        exactly that headroom (see LEGEND_CORNERS). Refresh- and resize-time only, never per tick;
+        a no-op once the user has moved the plate or the chart (`_legend_pinned`)."""
+        leg = self._speed_legend
+        if (leg is None or not leg.isVisible() or self._legend_pinned
+                or self._fit_y_range is None or not self._speed_curves):
+            return
+        vb = self.p_speed.getViewBox()
+        box, plate = vb.boundingRect(), leg.boundingRect()
+        width, height = box.width(), box.height()
+        (x0, x1), (y0, y1) = vb.viewRange()[0], self._fit_y_range
+        if min(width, height, plate.width(), plate.height()) <= 0 or x1 <= x0 or y1 <= y0:
+            return
+        xs = np.concatenate([np.asarray(c[0], float) for c in self._speed_curves.values()])
+        ys = np.concatenate([np.asarray(c[1], float) for c in self._speed_curves.values()])
+        ok = np.isfinite(xs) & np.isfinite(ys)
+        xs, ys = xs[ok], ys[ok]
+        best = None
+        for k, (_item, parent, (ox, oy)) in enumerate(LEGEND_CORNERS):
+            bottom = parent[1] == 1
+            if bottom and self._bt_band_range is not None:
+                continue
+            left = ox if parent[0] == 0 else width + ox - plate.width()
+            lo = x0 + (left - LEGEND_CLEAR_PX) / width * (x1 - x0)
+            hi = x0 + (left + plate.width() + LEGEND_CLEAR_PX) / width * (x1 - x0)
+            under = ys[(xs >= lo) & (xs <= hi)]
+            # The plate plus its clearance, as a fraction of the plot's height from its own edge.
+            r = (abs(oy) + plate.height() + LEGEND_CLEAR_PX) / height
+            if r >= 1:
+                continue
+            if under.size == 0:
+                grow, rng = 0.0, (y0, y1)
+            elif not bottom:
+                top = max(y1, (float(under.max()) - r * y0) / (1 - r))
+                grow, rng = top - y1, (y0, top)
+            else:
+                low = min(y0, (float(under.min()) - r * y1) / (1 - r))
+                grow, rng = y0 - low, (low, y1)
+            if best is None or grow < best[0] - 1e-9:
+                best = (grow, k, rng)
+            if grow <= 0:
+                break
+        if best is None:
+            return
+        item, parent, offset = LEGEND_CORNERS[best[1]]
+        if best[1] != self._legend_corner:
+            self._legend_corner = best[1]
+            leg.anchor(item, parent, offset)
+        now = vb.viewRange()[1]
+        if abs(now[0] - best[2][0]) > 1e-6 or abs(now[1] - best[2][1]) > 1e-6:
+            vb.setYRange(*best[2], padding=0)
 
     def _reserve_brake_throttle_space(self):
         """M8: when the brake/throttle band is on, drop the speed plot's y lower bound so the band
@@ -1278,6 +1371,8 @@ class PlotsView(QWidget):
         self.p_speed.disableAutoRange()
         self.p_delta.disableAutoRange()
         self._fit_x_range = self._visible_x_range()  # what the loss tour's exit restores
+        self._fit_y_range = tuple(self.p_speed.getViewBox().viewRange()[1])
+        self._legend_pinned = False
 
         # Re-place the cursors on the now-frozen axes (also covers the paused-toggle case).
         if self._cursor_t is not None:
@@ -1294,6 +1389,7 @@ class PlotsView(QWidget):
         self._draw_sectors()
         self._draw_driving()
         self._draw_brake_throttle()
+        self._place_speed_legend()
         # The Δ axis's TITLE changes with the baseline (best / ideal / ref) and the speed axis's
         # with the unit, so the gutter is re-budgeted here as well as on resize.
         self._budget_axis_gutters()

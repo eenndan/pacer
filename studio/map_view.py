@@ -98,18 +98,42 @@ PROVISIONAL_EDGE_PAD_PX = 6.0   # px of air kept between the caption's box and t
 # grow. NOTICE_MS matches app.STATUS_MS so the map's confirmations and the window's read alike.
 NOTICE_MS = 6000
 NOTICE_MAX_W_PX = 340
-# Extra outward push (px) applied to a label whose apex sits within CORNER_START_CLEAR_PX of the
-# start/finish crosshair, so the amber crosshair and its clustered C-labels stop colliding.
-CORNER_START_CLEAR_PX = 26.0
-CORNER_START_NUDGE_PX = 12.0
 # The video-position marker MOVES every video frame while the label layout above is computed ONCE
 # per corner-set change, so a label the marker wanders onto is simply painted over (marker z=10 vs
 # label z=6) and becomes unreadable. Per tick we run an O(n) axis-aligned box test (n = corners,
 # ~10-20 floats) of the marker against each label's laid-out position and nudge ONLY the labels it
 # actually covers, radially away from the marker; the full declutter layout stays off the tick.
-CORNER_MARKER_CLEAR_PX = 12.0   # marker half-extent (a size-15 TargetItem) plus a little air
+# The marker's DRAWN half-extent plus 1 px of air: a size-15 TargetItem paints its crosshair ±15 px
+# (a 30 x 30 px box, measured on the owner's map), not ±7.5 — this read 12 until VIEW-8, so a
+# label could sit 3 px inside the crosshair and still count as clear.
+CORNER_MARKER_CLEAR_PX = 16.0
+# ...and the start line's handles, size-11 TargetItems: a 22 x 22 px box, plus 1 px of air.
+START_HANDLE_CLEAR_PX = 12.0
 CORNER_MARKER_PAD_PX = 2.0      # extra px so a nudged label clears the marker rather than kissing it
 CORNER_MARKER_EPS_PX = 0.5      # sub-px moves aren't worth a setPos/repaint
+# THE LAYOUT PLACES THE LABELS IT DRAWS (VIEW-8, QA 2026-09-25/26). It used to separate
+# CORNER_LABEL_BOX_PX boxes, but a drawn label (the text plus its halo plate) measures 23 x 22 px
+# ("C1") and 30 x 22 px ("C11") — so on MK_18_09 at the owner's layout C1 still sat on C11, under
+# the start line and the playhead, and C3/C4/C8 under brake glyphs at 1280x800. Each label now
+# tries CORNER_LABEL_DIRS directions around its apex (outward from the corner cloud first) at
+# CORNER_LABEL_STEPS_PX extra distances, and takes the spot that overlaps least: other labels
+# first, then the start line (handles and segment), the video marker, the brake glyphs and every
+# apex dot, then the canvas edge. It re-runs when the view's scale, the brake glyphs or the start
+# line change; never on the tick (the moving marker is still `avoid_point`'s).
+CORNER_LABEL_DIRS = 16
+CORNER_LABEL_STEPS_PX = (0.0, 5.0, 10.0, 16.0, 24.0)
+CORNER_LABEL_AIR_PX = 3.0       # kept between a label's plate and the apex dot it names
+CORNER_DOT_HALF_PX = 4.5        # an apex dot (size 7) plus its rim
+# The map frames the CIRCUIT, not everything the receiver logged (VIEW-8): on MK_18_09 1.2 % of the
+# kept fixes are acquisition junk off to one side, and fitting them made the 208 m circuit share
+# its 205 px-tall canvas with 253 m of trace. The valid laps' extent is the frame when at least this
+# share of the trace lies inside it (MK 98.9 %, the three Sandown recordings 95.8-99.7 %); a drive
+# whose laps are a fraction of it — an unknown track, a lone short "lap" — keeps the whole trace,
+# which is also where the video marker can be (MAP-04).
+FIT_CIRCUIT_SHARE = 0.9
+# ...and the frame keeps a label's room at its edge: a corner at the top or bottom of the circuit
+# had nowhere to put its label but off the canvas or onto its own brake glyph (C12 on MK_18_09).
+FIT_LABEL_ROOM_PX = 12.0
 # Click-to-locate cue: a hollow ring slightly larger than the apex dot, drawn in the corner
 # LABEL's own near-primary text colour — deliberately NOT the UI accent.
 #
@@ -759,19 +783,24 @@ class _TraceOverlay:
         return self._bounds
 
 
-def _point_seg_dist(p, a, b) -> float:
-    """Euclidean distance from point ``p`` to the segment a→b (all 2-tuples). Used to test whether a
-    corner label sits on the whole start-line segment, not just near an endpoint (M7 declutter)."""
-    px, py = p
-    ax, ay = a
-    bx, by = b
-    dx, dy = bx - ax, by - ay
-    denom = dx * dx + dy * dy
-    if denom <= 0:  # degenerate segment → distance to the (coincident) endpoint
-        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denom))
-    qx, qy = ax + t * dx, ay + t * dy
-    return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5
+def _overlap(cand, hw: float, hh: float, boxes) -> np.ndarray:
+    """Summed px² overlap of each candidate label box (centre rows of `cand`, half-extents hw x hh)
+    with `boxes` ((cx, cy, half-w, half-h) rows)."""
+    if len(boxes) == 0:
+        return np.zeros(len(cand))
+    ox = (np.minimum(cand[:, None, 0] + hw, boxes[None, :, 0] + boxes[None, :, 2])
+          - np.maximum(cand[:, None, 0] - hw, boxes[None, :, 0] - boxes[None, :, 2]))
+    oy = (np.minimum(cand[:, None, 1] + hh, boxes[None, :, 1] + boxes[None, :, 3])
+          - np.maximum(cand[:, None, 1] - hh, boxes[None, :, 1] - boxes[None, :, 3]))
+    return (np.clip(ox, 0.0, None) * np.clip(oy, 0.0, None)).sum(axis=1)
+
+
+def _outside(cand, hw: float, hh: float, frame) -> np.ndarray:
+    """px² of each candidate label box that falls outside `frame` (x0, y0, x1, y1)."""
+    x0, y0, x1, y1 = frame
+    w = np.clip(np.minimum(cand[:, 0] + hw, x1) - np.maximum(cand[:, 0] - hw, x0), 0.0, None)
+    h = np.clip(np.minimum(cand[:, 1] + hh, y1) - np.maximum(cand[:, 1] - hh, y0), 0.0, None)
+    return 4.0 * hw * hh - w * h
 
 
 class _CornerMarkers:
@@ -795,6 +824,11 @@ class _CornerMarkers:
         self._home: list[tuple[float, float]] = []
         self._outward: list[tuple[float, float]] = []
         self._applied: list[tuple[float, float]] = []
+        # Each drawn label's half-extents (px), measured off its own plate; the placement's
+        # extra obstacles ((x, y, half px) — the brake glyphs); the px-per-data scale it ran at.
+        self._half: list[tuple[float, float]] = []
+        self._obstacles: list[tuple[float, float, float]] = []
+        self.layout_scale: tuple[float, float] = (1.0, 1.0)
 
     def _px_per_data(self) -> tuple[float, float]:
         """(px-per-data-x, px-per-data-y) from the viewbox, to convert px offsets into data coords.
@@ -806,18 +840,20 @@ class _CornerMarkers:
             return 1.0, 1.0
         return size.width() / rect.width(), size.height() / rect.height()
 
-    def set_corners(self, markers, start_anchors=None):
+    def set_corners(self, markers, start_anchors=None, obstacles=None):
         """(Re)build labels + apex dots from (label,x,y,direction) markers ([] clears; also clears
-        any highlight). Labels are nudged outward from the corner-cloud centroid, pushed clear of the
+        any highlight), then place the labels (`_label_positions`): clear of each other, of the
         start/finish cluster (``start_anchors`` = local-metre (x,y) points a label must clear — the
-        start line's two endpoints + the video-position marker, or None/[]), and de-cluttered so
-        overlapping labels are separated rather than dropped; dots are always drawn."""
+        start line's two endpoints + the video-position marker, or None/[]) and of ``obstacles``
+        ((x, y, half-extent px) — the brake glyphs). Every label is drawn; dots always are."""
         self.set_highlight(None)
         self._markers = list(markers)
         for it in self._items:
             self.plot.removeItem(it)
         self._items = []
         self._texts, self._home, self._outward, self._applied = [], [], [], []
+        self._half = []
+        self._obstacles = list(obstacles or [])
         if not markers:
             return
         for direction, colour in ((1, CORNER_LEFT_COLOR), (-1, CORNER_RIGHT_COLOR)):
@@ -834,88 +870,113 @@ class _CornerMarkers:
             dots.setZValue(5)  # above lap traces, below the marker (z=10)
             self.plot.addItem(dots)
             self._items.append(dots)
-        for label, (lx, ly) in zip(
-                [m[0] for m in markers], self._label_positions(markers, start_anchors), strict=True):
+        for label, _x, _y, _d in markers:
             # fill = a translucent dark plate behind the glyphs (the "halo"); border None keeps
             # it subtle. Anchor centred on the offset point so the nudge reads symmetrically.
             text = pg.TextItem(text=label, color=CORNER_LABEL_COLOR, anchor=(0.5, 0.5),
                                fill=pg.mkBrush(CORNER_LABEL_HALO))
             text.setFont(self._font)
-            text.setPos(lx, ly)
             text.setZValue(6)
             self.plot.addItem(text)
             self._items.append(text)
             self._texts.append(text)
-            self._home.append((lx, ly))
-            self._applied.append((lx, ly))
+            # The drawn plate, in px (a TextItem ignores the view's scale), floored at the old box.
+            box = text.textItem.boundingRect()
+            self._half.append((max(box.width(), CORNER_LABEL_BOX_PX[0]) / 2.0,
+                               max(box.height(), CORNER_LABEL_BOX_PX[1]) / 2.0))
+        self._place(self._label_positions(markers, start_anchors))
+
+    def relayout(self, start_anchors=None, obstacles=None):
+        """Re-place the existing labels — the same items, new homes — after the view's scale, the
+        brake glyphs or the start line changed. Never called from the tick."""
+        if not self._texts:
+            return
+        self._obstacles = list(obstacles or [])
+        self._place(self._label_positions(self._markers, start_anchors))
+
+    def _place(self, positions):
+        self._home = [(float(x), float(y)) for x, y in positions]
+        self._applied = list(self._home)
+        for text, (lx, ly) in zip(self._texts, self._home, strict=True):
+            text.setPos(lx, ly)
+        self.layout_scale = self._px_per_data()
 
     def _label_positions(self, markers, start_anchors):
-        """Compute the (lx, ly) draw position for each corner label in data units, decluttered.
+        """Each label's (lx, ly) draw position in data units, placed where it overlaps least.
 
-        Each label starts nudged outward from the apex-cloud centroid; a label whose apex sits near
-        the start/finish cluster (within CORNER_START_CLEAR_PX px of EITHER start-line endpoint, the
-        whole start-line segment, or the video-position marker — ``start_anchors``) gets an extra
-        outward push so the amber crosshairs stay readable (M7: keying only on the line midpoint let
-        C11 sit on the h2 endpoint handle); then any two labels whose px boxes overlap are separated
-        (both slid apart along the line joining them) rather than one being dropped — every corner
-        keeps a visible label. All the collision reasoning is in PX space; the returned positions are
-        back in data units."""
-        cx = float(np.mean([x for _l, x, _y, _d in markers]))
-        cy = float(np.mean([y for _l, _x, y, _d in markers]))
+        All the collision reasoning is in PX space (data scaled by `_px_per_data`; y stays up, which
+        no overlap test cares about). Labels are placed one at a time, the most crowded apex first,
+        each over CORNER_LABEL_DIRS x CORNER_LABEL_STEPS_PX candidate spots (see CORNER_LABEL_DIRS):
+        a spot's cost is its overlap with the labels already placed (x10), with the start/finish
+        cluster, the brake glyphs and every apex dot (x4) and with the area outside the canvas (x4),
+        plus a little for distance and for turning away from the outward direction — so a label
+        with room sits exactly where it always did, just outside its apex."""
         sx, sy = self._px_per_data()
-        bw, bh = CORNER_LABEL_BOX_PX
-        # Start/finish exclusion anchors in PX space: each anchor point, plus (when there are two
-        # endpoints) the whole start-line SEGMENT between them, so a label mid-segment also clears.
-        anchors_px = [(float(ax) * sx, float(ay) * sy) for ax, ay in (start_anchors or [])]
-        seg_px = tuple(anchors_px[:2]) if len(anchors_px) >= 2 else None
-        # Initial px placement: outward-normal offset from the centroid, plus a start-cluster push.
-        px_pts: list[list[float]] = []
-        self._outward = []
-        for _label, x, y, _d in markers:
-            apex_px = (float(x) * sx, float(y) * sy)
-            dx, dy = float(x) - cx, float(y) - cy
-            norm = (dx * dx + dy * dy) ** 0.5 or 1.0
-            ux, uy = dx / norm, dy / norm  # outward unit vector (data-space direction)
-            self._outward.append((ux, uy))  # reused by avoid_point as the degenerate-overlap direction
-            off = CORNER_LABEL_OFFSET_PX
-            # Start-cluster exclusion: a corner apex near ANY anchor point (or the start-line
-            # segment) gets an extra outward nudge so its label clears the amber crosshairs +
-            # video-position marker (the common cluster near the start).
-            near = any((apex_px[0] - apx) ** 2 + (apex_px[1] - apy) ** 2 < CORNER_START_CLEAR_PX ** 2
-                       for apx, apy in anchors_px)
-            if not near and seg_px is not None:
-                near = _point_seg_dist(apex_px, seg_px[0], seg_px[1]) < CORNER_START_CLEAR_PX
-            if near:
-                off += CORNER_START_NUDGE_PX
-            px_pts.append([apex_px[0] + ux * off, apex_px[1] + uy * off])
-        # Iteratively separate overlapping label boxes (a few passes settle the near-start cluster;
-        # this is a tasteful nudge, not a physics sim). Two overlapping boxes are pushed apart along
-        # the line joining them until their boxes just clear.
-        for _ in range(6):
-            moved = False
-            for i in range(len(px_pts)):
-                for j in range(i + 1, len(px_pts)):
-                    ax, ay = px_pts[i]
-                    bx, by = px_pts[j]
-                    ddx, ddy = bx - ax, by - ay
-                    ox, oy = bw - abs(ddx), bh - abs(ddy)
-                    if ox <= 0 or oy <= 0:
-                        continue  # boxes already clear on at least one axis
-                    moved = True
-                    # Push apart along whichever axis needs the smaller correction (least visual move).
-                    if ox < oy:
-                        sgn = 1.0 if ddx >= 0 else -1.0
-                        shift = (ox / 2.0 + 0.5) * sgn
-                        px_pts[i][0] -= shift
-                        px_pts[j][0] += shift
-                    else:
-                        sgn = 1.0 if ddy >= 0 else -1.0
-                        shift = (oy / 2.0 + 0.5) * sgn
-                        px_pts[i][1] -= shift
-                        px_pts[j][1] += shift
-            if not moved:
-                break
-        return [(px / sx, py / sy) for px, py in px_pts]
+        apex = np.array([[float(x) * sx, float(y) * sy] for _l, x, y, _d in markers], float)
+        half = np.array(self._half if len(self._half) == len(markers)
+                        else [(CORNER_LABEL_BOX_PX[0] / 2.0, CORNER_LABEL_BOX_PX[1] / 2.0)]
+                        * len(markers), float)
+        centre = apex.mean(axis=0)
+        # Obstacles as (cx, cy, half-w, half-h) px boxes.
+        obs = [(ax, ay, CORNER_DOT_HALF_PX, CORNER_DOT_HALF_PX) for ax, ay in apex]
+        # An anchor is (x, y) or (x, y, half-extent px); a bare pair is marker-sized.
+        anchors = [(float(a[0]) * sx, float(a[1]) * sy,
+                    float(a[2]) if len(a) > 2 else CORNER_MARKER_CLEAR_PX)
+                   for a in (start_anchors or [])]
+        obs += [(ax, ay, h, h) for ax, ay, h in anchors]
+        if len(anchors) >= 2:                       # the start line's own segment, every 3 px
+            (ax, ay, _h), (bx, by, _h2) = anchors[0], anchors[1]
+            n = max(2, int(np.hypot(bx - ax, by - ay) / 3.0))
+            obs += [(ax + (bx - ax) * k / n, ay + (by - ay) * k / n, 2.5, 2.5) for k in range(n + 1)]
+        boxes = np.array(obs, float).reshape(-1, 4)
+        # The brake glyphs are SOFT: better a glyph's corner on a plate than a label so far from its
+        # apex that it names the wrong corner.
+        soft = np.array([(float(x) * sx, float(y) * sy, h, h) for x, y, h in self._obstacles],
+                        float).reshape(-1, 4)
+        view = self.plot.getViewBox().viewRect()
+        frame = (view.left() * sx, view.top() * sy, view.right() * sx, view.bottom() * sy)
+        frame = (min(frame[0], frame[2]), min(frame[1], frame[3]),
+                 max(frame[0], frame[2]), max(frame[1], frame[3]))
+        dist = np.hypot(*(apex[:, None, :] - apex[None, :, :]).transpose(2, 0, 1))
+        order = np.argsort(-(dist < 60.0).sum(axis=1), kind="stable")
+        steps = np.asarray(CORNER_LABEL_STEPS_PX)
+        turn = np.array([0.0] + [s * k for k in range(1, CORNER_LABEL_DIRS // 2)
+                                 for s in (1.0, -1.0)] + [CORNER_LABEL_DIRS / 2.0])
+        penalty = 1.0 * np.tile(steps, len(turn)) + 3.0 * np.repeat(np.abs(turn), len(steps))
+        self._outward = [(0.0, 0.0)] * len(markers)
+        cands = []
+        for i in range(len(markers)):
+            hw, hh = half[i]
+            ox, oy = apex[i] - centre
+            norm = float(np.hypot(ox, oy)) or 1.0
+            self._outward[i] = (ox / norm, oy / norm)
+            theta = np.arctan2(oy, ox) + turn * 2.0 * np.pi / CORNER_LABEL_DIRS
+            c, sn = np.cos(theta), np.sin(theta)
+            with np.errstate(divide="ignore"):
+                d0 = np.minimum((hw + CORNER_LABEL_AIR_PX + CORNER_DOT_HALF_PX) / np.abs(c),
+                                (hh + CORNER_LABEL_AIR_PX + CORNER_DOT_HALF_PX) / np.abs(sn))
+            d = (d0[:, None] + steps[None, :]).ravel()
+            unit = np.stack([np.repeat(c, len(steps)), np.repeat(sn, len(steps))], 1)
+            cand = apex[i] + unit * d[:, None]
+            # What does not depend on the other labels is costed once.
+            fixed = (4.0 * _overlap(cand, hw, hh, boxes) + 1.5 * _overlap(cand, hw, hh, soft)
+                     + 4.0 * _outside(cand, hw, hh, frame) + penalty)
+            cands.append((cand, fixed))
+        out = np.zeros_like(apex)
+        done: list[int] = []
+        # Greedy, most crowded first; then ONE more pass that re-places each label against all the
+        # others, which frees the spot an early label took from a later, more cornered one.
+        for i in [*order, *order]:
+            cand, fixed = cands[i]
+            hw, hh = half[i]
+            # (+1 px each: two plates kept a pixel apart, not kissing)
+            others = np.array([[*out[j], half[j][0] + 1.0, half[j][1] + 1.0]
+                               for j in done if j != i]).reshape(-1, 4)
+            best = int(np.argmin(fixed + 10.0 * _overlap(cand, hw, hh, others)))
+            out[i] = cand[best]
+            if i not in done:
+                done.append(i)
+        return [(px / sx, py / sy) for px, py in out]
 
     def avoid_point(self, mx: float, my: float) -> int:
         """Keep the corner labels out from under the moving video-position marker at data point
@@ -936,11 +997,13 @@ class _CornerMarkers:
         if sx <= 0 or sy <= 0:
             return 0
         mpx, mpy = mx * sx, my * sy
-        # Combined half-extents: half the label box plus the marker's own half-extent.
-        half_w = CORNER_LABEL_BOX_PX[0] / 2.0 + CORNER_MARKER_CLEAR_PX
-        half_h = CORNER_LABEL_BOX_PX[1] / 2.0 + CORNER_MARKER_CLEAR_PX
         nudged = 0
         for i, text in enumerate(self._texts):
+            # Combined half-extents: half the label's own plate plus the marker's half-extent.
+            lw, lh = (self._half[i] if i < len(self._half)
+                      else (CORNER_LABEL_BOX_PX[0] / 2.0, CORNER_LABEL_BOX_PX[1] / 2.0))
+            half_w = lw + CORNER_MARKER_CLEAR_PX
+            half_h = lh + CORNER_MARKER_CLEAR_PX
             hx, hy = self._home[i]
             dx, dy = hx * sx - mpx, hy * sy - mpy
             adx, ady = abs(dx), abs(dy)
@@ -1093,6 +1156,13 @@ class MapView(QWidget):
         # ANY range change (our fit, a wheel zoom, a pan) moves the start line relative to the
         # panel edges, so the provisional caption re-checks that it still fits (MAP-05).
         self.plot.getViewBox().sigRangeChanged.connect(lambda *_: self._clamp_provisional_label())
+        # ...and a range change that moved the SCALE re-places the corner labels, which are laid
+        # out in px (a resize re-fits, a wheel zoom rescales; a pan moves nothing relative to them).
+        self.plot.getViewBox().sigRangeChanged.connect(self._on_range_changed)
+        # The fit's label room is in px, so it is re-derived when the VIEWBOX settles on its size —
+        # which lags the widget's own resizeEvent — while our fit still stands.
+        self.plot.getViewBox().sigResized.connect(
+            lambda *_: self._fit_view() if getattr(self, "_view_fitted", False) else None)
 
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
@@ -1306,8 +1376,34 @@ class MapView(QWidget):
         The trace term falls back to the raw points when the overlay drew none of them (a trace too
         short to be a polyline is still somewhere the marker can sit)."""
         trace = self._trace_overlay.bounds() or _xy_bounds(self.session.tx, self.session.ty)
-        return _union_bounds((trace, self._best_overlay.bounds(),
+        return _union_bounds((self._circuit_bounds() or trace, self._best_overlay.bounds(),
                               self._current_overlay.bounds()))
+
+    def _circuit_bounds(self):
+        """The valid laps' extent, standing in for the trace's when the trace is (nearly) all
+        circuit — see FIT_CIRCUIT_SHARE. None otherwise, or on a session without laps. Memoized per
+        valid-lap set and start line: `_fit_view` runs on every resize."""
+        s = self.session
+        ids = tuple(s.valid_lap_ids()) if hasattr(s, "valid_lap_ids") else ()
+        lap_xy = getattr(s, "lap_trace_xy", None)
+        if not ids or lap_xy is None:
+            return None
+        start = getattr(s, "start_line", None)
+        key = (ids, tuple(getattr(start, k, None) for k in ("x1", "y1", "x2", "y2")))
+        if getattr(self, "_circuit_memo", (None,))[0] != key:
+            try:
+                box = _union_bounds(_xy_bounds(*lap_xy(lid)) for lid in ids)
+            except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+                box = None          # a partial (bare/test) session: frame the trace, as before
+            tx, ty = np.asarray(s.tx, float), np.asarray(s.ty, float)
+            fin = np.isfinite(tx) & np.isfinite(ty)
+            if box is not None and fin.any():
+                x_lo, x_hi, y_lo, y_hi = box
+                inside = fin & (tx >= x_lo) & (tx <= x_hi) & (ty >= y_lo) & (ty <= y_hi)
+                if inside.sum() < FIT_CIRCUIT_SHARE * fin.sum():
+                    box = None
+            self._circuit_memo = (key, box)
+        return self._circuit_memo[1]
 
     def _fit_view(self):
         """Frame the map on its content and freeze it there (autorange off, so the video marker
@@ -1318,10 +1414,17 @@ class MapView(QWidget):
         if box is None:
             return
         x_lo, x_hi, y_lo, y_hi = box
-        # 2% pad so the aspect-locked track fills the panel without handles flush to the edge.
-        px = max(x_hi - x_lo, 1.0) * 0.02
-        py = max(y_hi - y_lo, 1.0) * 0.02
+        dx, dy = max(x_hi - x_lo, 1.0), max(y_hi - y_lo, 1.0)
+        # 2% pad so the aspect-locked track fills the panel without handles flush to the edge, plus
+        # FIT_LABEL_ROOM_PX on every side at the scale the aspect lock will settle on.
         vb = self.plot.getViewBox()
+        size, room = vb.boundingRect(), FIT_LABEL_ROOM_PX
+        extra = 0.0
+        if size.width() > 4 * room and size.height() > 4 * room:
+            scale = min((size.width() - 2 * room) / (dx * 1.04),
+                        (size.height() - 2 * room) / (dy * 1.04))
+            extra = room / scale
+        px, py = dx * 0.02 + extra, dy * 0.02 + extra
         vb.setRange(xRange=(x_lo - px, x_hi + px), yRange=(y_lo - py, y_hi + py), padding=0)
         vb.disableAutoRange()
         self._view_fitted = True
@@ -1526,6 +1629,7 @@ class MapView(QWidget):
                          for s in sectors]
         # Re-pin the provisional cue (or remove it if the track is known).
         self.refresh_provisional_cue()
+        self._relayout_labels()           # a moved start line moves the cluster labels clear
 
     def refresh_provisional_cue(self):
         """Overlay a dashed accent start line + "drag to set start/finish — lap timing provisional"
@@ -1957,26 +2061,59 @@ class MapView(QWidget):
         The layout's marker anchor is a SNAPSHOT (the marker moves every video frame), so the fresh
         labels are immediately re-checked against the marker's live position — the same O(n) test the
         30 Hz tick runs (_marker_dragged → _CornerMarkers.avoid_point)."""
-        self._corner_markers.set_corners(markers, start_anchors=self._start_clear_anchors())
+        self._corner_markers.set_corners(markers, start_anchors=self._start_clear_anchors(),
+                                         obstacles=self._label_obstacles())
         marker = getattr(self, "marker", None)
         if marker is not None:
             p = marker.pos()
             self._corner_markers.avoid_point(p.x(), p.y())
 
+    def _label_obstacles(self) -> list[tuple[float, float, float]]:
+        """What a corner label must not cover besides the start/finish cluster: every brake glyph
+        on the canvas, as (x, y, half-extent px)."""
+        out = []
+        brakes = getattr(self, "_brake_markers", None)
+        for item in (brakes._items if brakes is not None else []):
+            for spot in item.points():
+                pos = spot.pos()
+                out.append((pos.x(), pos.y(), spot.size() / 2.0 + 1.0))
+        return out
+
+    def _relayout_labels(self) -> None:
+        """Re-place the corner labels against the current scale, start line and brake glyphs —
+        then let the live marker nudge them, exactly as a fresh `set_corners` does."""
+        cm = getattr(self, "_corner_markers", None)
+        if cm is None or not cm._texts:
+            return
+        cm.relayout(self._start_clear_anchors(), self._label_obstacles())
+        marker = getattr(self, "marker", None)
+        if marker is not None:
+            p = marker.pos()
+            cm.avoid_point(p.x(), p.y())
+
+    def _on_range_changed(self, *_):
+        cm = getattr(self, "_corner_markers", None)
+        if cm is None or not cm._texts:
+            return
+        (sx, sy), (lx, ly) = cm._px_per_data(), cm.layout_scale
+        if abs(sx - lx) > 1e-6 * max(lx, 1e-9) or abs(sy - ly) > 1e-6 * max(ly, 1e-9):
+            self._relayout_labels()
+
     def _start_clear_anchors(self):
         """The local-metre points a corner label must clear near the start/finish: the start line's
         two ENDPOINT handle positions AND the current video-position marker (per QA item #21, so C1/
         C11 slide clear of the whole start/finish + marker cluster). Returns [] when nothing is
-        available (bare-Session test paths). Each is an (x, y) tuple in local metres."""
-        anchors: list[tuple[float, float]] = []
+        available (bare-Session test paths). Each is (x, y, half-extent px): local metres, and the
+        drawn box the label must clear around it (START_HANDLE_CLEAR_PX / CORNER_MARKER_CLEAR_PX)."""
+        anchors: list[tuple[float, float, float]] = []
         seg = getattr(self.session, "start_line", None)
         if seg is not None:
-            anchors.append((seg.x1, seg.y1))
-            anchors.append((seg.x2, seg.y2))
+            anchors.append((seg.x1, seg.y1, START_HANDLE_CLEAR_PX))
+            anchors.append((seg.x2, seg.y2, START_HANDLE_CLEAR_PX))
         marker = getattr(self, "marker", None)
         if marker is not None:
             p = marker.pos()
-            anchors.append((p.x(), p.y()))
+            anchors.append((p.x(), p.y(), CORNER_MARKER_CLEAR_PX))
         return anchors
 
     def highlight_corner(self, cid: int | None):
@@ -1989,6 +2126,7 @@ class MapView(QWidget):
         """Show brake glyphs from `lap_markers` = [(markers, colour)], markers = [(x, y,
         peak_decel)] in local metres. Current lap normally; both laps in compare. [] clears."""
         self._brake_markers.set_markers(lap_markers)
+        self._relayout_labels()           # the glyphs are obstacles the labels step around
         # The key describes what is on the canvas, so it is told at the same moment (and from the
         # same argument) rather than drawing a fixed glyph of its own — see _MapLegend.
         self._map_key.set_brake_glyphs([(theme.series_symbol(colour), colour)

@@ -156,7 +156,15 @@ class MarksPanel(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table.setWordWrap(False)
+        # "WHAT" WRAPS (LOOK-8, QA 2026-09-26). An auto mark's sentence is the finding itself —
+        # "GPS poor for 185 s — every fix here was rejected — no 3D lock, or DOP above 10" — and at
+        # the owner's layout it needs 495-577 px against the 427 px the column gets, so all seven
+        # GPS rows on MK_18_09 ended in "…" at the part that says why. Rows take the height their
+        # text needs, never less than the one-line row they had.
+        self.table.setWordWrap(True)
+        rows = self.table.verticalHeader()
+        rows.setMinimumSectionSize(rows.defaultSectionSize())
+        rows.setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.setSortingEnabled(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
