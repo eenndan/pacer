@@ -28,6 +28,18 @@ from ._signal import plural
 # Session.
 _UNSET = object()
 
+# THE IDEAL LAP'S VERSION: bump it in the PR that changes what `SegmentBests.total` comes to on an
+# unchanged recording — corner detection, the partition, donor admission or resolution, the
+# clean-lap set. Every Library row is stamped with the version that measured its ideal
+# (`Session.library_entry`), and the Library mutes a row from any other version, because a stored
+# ideal is only recomputed when its recording is opened again (QA NEW-8 / LOOK-4). Re-measured on
+# the owner's four present recordings under one build, the ideals older builds had written sat
+# 0.133 / 0.017 / 0.004 / 0.000 s from today's, while their best laps matched to the last bit.
+# 1 is the first stamped version; a row written before stamps existed carries none and reads as
+# older. tests/test_library_truth.py pins the golden baseline's ideal leaves to this number, so a
+# re-cut that moves one cannot land without the bump.
+IDEAL_VERSION = 1
+
 # ------------------------------------------------------- ideal-lap donor admission (D1)
 # A partition edge pair closer together than this ON THE REFERENCE ODOMETER is a POINT, not a
 # segment. Two cases produce one: the first corner can begin on the start line (and the last can

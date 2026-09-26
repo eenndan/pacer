@@ -24,6 +24,9 @@ Schema (version 4) — one JSON object::
         "best":        <float seconds> | null,    # best lap time
         "theoretical": <float seconds> | null,    # Session.theoretical_best — the IDEAL lap
                                              #   (v3 meaning; see the v2→v3 note below)
+        "ideal_version": <int> | null,       # corner_model.IDEAL_VERSION that measured
+                                             #   `theoretical`; null = written before rows were
+                                             #   stamped (see "A ROW IS A MEASUREMENT" below)
         "verified":    <bool>,               # session.timing_verified — a TRUSTED start/finish line
         "degraded":    <bool>,               # session.timing_quality.degraded — ESTIMATED absolute timing
         "dropout":     <bool>,               # the session's best lap (or any valid lap) had a GPS dropout
@@ -55,6 +58,17 @@ many laps were loaded. ``studio/library_dialog.py`` renders it as the ``Laps`` c
 It is the count of VALID laps, while the ideal is minimised over the CLEAN ones (valid, no GPS
 dropout) — the same number on all five of the owner's recordings, and an over-statement by the
 dropout count on a recording that has one.
+
+A ROW IS A MEASUREMENT, taken by whichever build last opened the recording, and it is re-taken only
+when the recording is opened again: rows without their footage (a disconnected drive) are never
+recomputed. So ``ideal_version`` records which ideal-lap maths measured ``theoretical``, and the
+dialog mutes a row from any other version (``ideal_stale``). It is an optional field, not a schema
+bump: an absent or unusable stamp reads as "older", which is what every row written before it is
+(QA NEW-8 / LOOK-4: Sandown 19 Sep's row said 0:46.063 while its Stats page said 0:46.196). The
+BEST lap needs no stamp: re-measured on the owner's four present recordings under one build, every
+stored ``best`` and ``lap_count`` came back bit-identical while three ideals moved 0.004-0.133 s,
+because lap timing is held bit-identical across builds by the golden equivalence gate. A PB
+comparison across rows written by different builds is therefore sound, and one across ideals is not.
 
 The three TRUST flags (``verified``/``degraded``/``dropout``, schema v2) let the PB progression
 EXCLUDE an untrustworthy "best": a PROVISIONAL start line (``not verified``) or a data-quality-
@@ -222,6 +236,7 @@ def _norm_entry(e: dict) -> dict:
     entry always carries all three v2 flags as real bools — the PB filter reads them directly."""
     best = e.get("best")
     theo = e.get("theoretical")
+    stamp = e.get("ideal_version")
     return {
         "fingerprint": str(e["fingerprint"]),
         "stem": str(e["stem"]),
@@ -230,6 +245,9 @@ def _norm_entry(e: dict) -> dict:
         "lap_count": int(e["lap_count"]),
         "best": None if best is None else float(best),
         "theoretical": None if theo is None else float(theo),
+        # A stamp that is not a plain int reads as none ("older"): it may cost the row its
+        # current status, never the row — unlike the fields above, which validate or drop it.
+        "ideal_version": stamp if isinstance(stamp, int) and not isinstance(stamp, bool) else None,
         "verified": bool(e.get("verified", _TRUST_UNKNOWN["verified"])),
         "degraded": bool(e.get("degraded", _TRUST_UNKNOWN["degraded"])),
         "dropout": bool(e.get("dropout", _TRUST_UNKNOWN["dropout"])),
@@ -341,17 +359,71 @@ def load(path: str | None = None) -> dict:
 
     Only genuine FILE-level corruption (absent / unreadable / not JSON / not a dict / missing or
     non-int ``version`` / non-list ``entries``) -> ``empty_index()``. `path` defaults to
-    ``library_path()``."""
+    ``library_path()``.
+
+    ONE PARSE PER FILE STATE (QA HEALTH-6). A launch called this four times — the Open Recent
+    seed, the Library action's gate, the load-time verdict and its upsert — and every menu sync
+    since, so an older index was migrated, and its migration logged, on each; a launch that saved
+    nothing did it all again next time. The result is kept per path under the file's IDENTITY
+    (``_identity``: inode, size, mtime and ctime), taken BEFORE the read, and handed out as a copy
+    so no caller's mutation reaches it. Every writer here replaces the file with a new inode
+    (``_jsonstore.write_json``), so a save by any process misses; ``save`` records the state it
+    wrote itself. Inside ``locked`` the identity is read under the lock, so a read-modify-write
+    still sees the other writers' rows (#380)."""
     if path is None:
         path = library_path()
+    key = os.path.abspath(path)
+    ident = _identity(path)
+    kept = _parsed.get(key)
+    if ident is not None and kept is not None and kept[0] == ident:
+        return copy.deepcopy(kept[1])
+    index, safe = _parse(path)
+    if ident is not None:
+        _parsed[key] = (ident, copy.deepcopy(index), safe)
+    return index
+
+
+# abspath -> (file identity when read, the index load() returned, whether save may overwrite that
+# state without a backup). What `load` read; what `save` wrote.
+_parsed: dict[str, tuple[tuple, dict, bool]] = {}
+
+
+def _identity(path: str) -> tuple | None:
+    """What tells one state of the file at `path` from any other, or None when there is no file.
+    The inode moves on every atomic replace, and ctime on any in-place write — even one that keeps
+    the size and copies an old mtime back, as ``shutil.copy2`` onto the ``.bak`` does."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _unsafe_reason(ok: bool, data: dict | None) -> str | None:
+    """Why ``save`` must copy this on-disk state aside before overwriting it, or None when it may
+    simply be rewritten: see ``_backup_unsafe``. Takes the raw ``read_object`` result, before any
+    migration."""
+    version = data.get("version") if ok and data is not None else None
+    stamped = isinstance(version, int) and not isinstance(version, bool)
+    if not ok or not stamped or version > VERSION or not isinstance(data.get("entries"), list):
+        return "an unreadable/newer index"
+    if version < VERSION and _migration_rewrites_rows(data):
+        return f"the version-{version} index its migration merges rows of"
+    return None
+
+
+def _parse(path: str) -> tuple[dict, bool]:
+    """``load``'s uncached read: (the normalized index, whether ``save`` may overwrite this file
+    state without a backup)."""
     ok, data = _jsonstore.read_object(path)
+    safe = _unsafe_reason(ok, data) is None
     if not ok:
-        return empty_index()
+        return empty_index(), safe
     version = data.get("version")
     # A missing / non-int version is untrustworthy shape (not a real schema number) -> corruption.
     if isinstance(version, bool) or not isinstance(version, int):
         _jsonstore.report_unreadable(path, f"version {version!r} is not a schema number")
-        return empty_index()
+        return empty_index(), safe
     if version < VERSION:
         # OLDER file: migrate forward, preserving every entry, then re-validate below.
         _log.warning("library: migrating index from version %d to %d (%s)", version, VERSION, path)
@@ -364,14 +436,14 @@ def load(path: str | None = None) -> dict:
     raw = data.get("entries")
     if not isinstance(raw, list):
         _jsonstore.report_unreadable(path, "its entries are not a list")
-        return empty_index()
+        return empty_index(), safe
     entries = [e for e in raw if _valid_entry(e)]
     dropped = len(raw) - len(entries)
     if dropped:
         # A later save rewrites only the survivors, healing the file.
         _log.warning("library: dropped %d malformed entr%s of %d from %s",
                      dropped, "y" if dropped == 1 else "ies", len(raw), path)
-    return {"version": VERSION, "entries": [_norm_entry(e) for e in entries]}
+    return {"version": VERSION, "entries": [_norm_entry(e) for e in entries]}, safe
 
 
 def backup_path(path: str | None = None) -> str:
@@ -395,16 +467,18 @@ def _backup_unsafe(path: str) -> None:
 
     "Unreadable" is everything ``load`` reads as EMPTY, not only what fails to parse: a string
     ``version`` or a non-list ``entries`` is valid JSON too, and such a file used to be overwritten
-    with no copy at all (``marks._backup_unsafe`` names the same trap)."""
+    with no copy at all (``marks._backup_unsafe`` names the same trap).
+
+    A file state ``load`` already parsed, or ``save`` wrote, carries its verdict (``_parsed``), so
+    the common save does not read the file a second time to learn it is healthy."""
     if not os.path.exists(path):
         return
-    ok, data = _jsonstore.read_object(path)
-    version = data.get("version") if ok else None
-    stamped = isinstance(version, int) and not isinstance(version, bool)
-    if not ok or not stamped or version > VERSION or not isinstance(data.get("entries"), list):
-        _copy_to_backup(path, "an unreadable/newer index")
-    elif version < VERSION and _migration_rewrites_rows(data):
-        _copy_to_backup(path, f"the version-{version} index its migration merges rows of")
+    kept = _parsed.get(os.path.abspath(path))
+    if kept is not None and kept[2] and kept[0] == _identity(path):
+        return
+    reason = _unsafe_reason(*_jsonstore.read_object(path))
+    if reason is not None:
+        _copy_to_backup(path, reason)
 
 
 def _copy_to_backup(path: str, what: str) -> bool:
@@ -441,7 +515,15 @@ def save(index: dict, path: str | None = None) -> None:
         _backup_unsafe(path)
         # Re-normalize on the way out: store only the schema fields, in canonical shape/order.
         out = {"version": VERSION, "entries": [_norm_entry(e) for e in index.get("entries", [])]}
-        _jsonstore.write_json(path, out)
+        st = _jsonstore.write_json(path, out)
+        # What a `load` of these bytes returns, under the identity of the inode WE wrote (fstat of
+        # our own descriptor, so another writer landing after the replace cannot be mistaken for
+        # us): a launch that saves reads its own save back from here, not from disk.
+        _parsed[os.path.abspath(path)] = (
+            (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns),
+            {"version": VERSION, "entries": [_norm_entry(e) for e in out["entries"]
+                                             if _valid_entry(e)]},
+            True)
 
 
 def upsert(index: dict, entry: dict) -> dict:
@@ -868,6 +950,19 @@ def trust_label(entry: dict) -> str | None:
     if bool(entry.get("dropout", _TRUST_UNKNOWN["dropout"])):
         return "dropout"
     return None
+
+
+def ideal_stale(entry: dict, current: int) -> str | None:
+    """None when `entry`'s ideal lap was measured by the ideal-lap maths `current` names
+    (``corner_model.IDEAL_VERSION``, passed in so this module stays numpy-free); otherwise
+    ``"older"`` — a lower stamp, or none at all, which is every row written before rows were
+    stamped — or ``"newer"``, a row a later build wrote before this one was run again. Either way
+    its ``theoretical`` is not comparable with the rows measured today (see "A ROW IS A
+    MEASUREMENT" above)."""
+    stamp = entry.get("ideal_version")
+    if stamp == current:
+        return None
+    return "newer" if isinstance(stamp, int) and stamp > current else "older"
 
 
 def prior_best(index: dict, track: str) -> float | None:
