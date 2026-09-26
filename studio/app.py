@@ -531,13 +531,15 @@ class StudioWindow(QMainWindow):
         # 11 px up and repainting 16,604 px, at the moment the app is telling the user something
         # (QA D4-10). The welcome state also had no persistent place for a message at all.
         self.statusBar()
-        # --full on the CLI auto-discovers the first file's sibling chapters; explicit multiple
-        # paths are used as-is.
-        if full and len(paths) == 1:
-            paths = chapters.discover_siblings(paths[0])
+        # The command line is a door like the others, so it goes through the same one: its paths are
+        # grouped by recording, put in chapter order once each, and when they span several
+        # recordings the first is opened and the rest counted, as a drop does. Handed over verbatim,
+        # `-- GX020067.MP4 GX010067.MP4` chained chapter 2 first (18 laps for 19) and overwrote the
+        # owner's library row with it (QA NEW-2). What it does NOT do unasked is chain the chapters
+        # on disk: one explicit path loads that chapter, and --full chains its siblings.
         # Launched with no recording -> the welcome empty state rather than a blank/auto-demo window.
         if paths:
-            self._load(paths)
+            self._open_recordings(paths, whole=full, gesture="Given")
         elif demo_unavailable:
             # `--demo` was requested but the demo couldn't be resolved (no env var, no cache, and
             # the download failed — offline, or not the pinned file): show the welcome state
@@ -652,32 +654,35 @@ class StudioWindow(QMainWindow):
         event.acceptProposedAction()
         self._open_recordings(paths)
 
-    def _open_recordings(self, paths: list[str]):
+    def _open_recordings(self, paths: list[str], whole: bool = True, gesture: str = "Dropped"):
         """Group `paths` into recordings and load the first, never merging unrelated recordings.
 
-        Expands the chosen recording's full on-disk chapter set via discover_siblings (so a dropped
-        chapter chains its siblings, matching --full — but NOT File ▸ Open, which deliberately opens
-        exactly the file you picked; see _open_file), then loads that ONE recording. On a
-        multi-recording drop it surfaces a clear, non-modal status message naming what was opened.
-        Shared by dropEvent (and any future multi-selection open path).
+        THE ONE DOOR: a drop, File ▸ Open…, the welcome's Open recording… and the command line all
+        open through here. `whole` expands the chosen recording to its full on-disk chapter set via
+        discover_siblings, so a dropped or picked chapter chains its siblings; the command line
+        passes it only with --full, because an explicit path there asks for exactly that chapter.
+        Either way the chapters load in chapter order, once each. On a multi-recording request it
+        surfaces a clear, non-modal status message saying what was opened, starting with `gesture`
+        ("Dropped", or "Given" on the command line).
 
         That warning is CARRIED THROUGH the load (drop_notice) rather than left to expire on its own:
         it used to be a 6 s transient that _on_session_loaded overwrote after 2.5-3.6 s, so the one
         message naming the recordings that were NOT opened was erased by the load it had just started
         and nothing in the window mentioned them again (QA L10-02)."""
-        groups = chapters.group_into_recordings(paths)
+        # Absolute first: a relative command-line path is otherwise not recognised as a chapter of
+        # the recording discover_siblings resolves, and the partial-recording predicate (and so
+        # the notice and the verdict it gates) would read one chapter as the whole recording.
+        groups = chapters.group_into_recordings([os.path.abspath(p) for p in paths])
         if not groups:
             return
         first = groups[0]
-        # Expand the chosen recording's full chapter set. group_into_recordings only saw the dropped
+        # Expand the chosen recording's full chapter set. group_into_recordings only saw the given
         # paths; discover_siblings finds the rest of THIS recording's chapters on disk. UNION the two
-        # (dropped chapters ∪ discovered siblings), ordered by chapter index and de-duped, so neither
-        # an explicitly-dropped chapter nor an on-disk sibling is ever lost — and dropping the two
+        # (given chapters ∪ discovered siblings), ordered by chapter index and de-duped, so neither
+        # an explicitly-given chapter nor an on-disk sibling is ever lost — and dropping the two
         # chapters of one recording loads exactly those two (the common case stays unchanged).
-        # This is the WHOLE difference between the two front doors, and _session_notice is what
-        # names it on the other one (QA D4-02): dropping GX010062 loads 66 laps across 3 chapters,
-        # picking the same file in File ▸ Open… loads 22.
-        to_load = chapters.order_chapters(first + chapters.discover_siblings(first[0]))
+        to_load = (chapters.order_chapters(first + chapters.discover_siblings(first[0]))
+                   if whole else first)
         # COUNT ONLY WHAT THE APP COULD ACTUALLY OFFER TO OPEN. `group_into_recordings` parses
         # filenames and nothing else, so every stray .MP4 beside the footage came back as its own
         # "recording" — and the app's OWN exports live exactly there, because the export proposes
@@ -701,7 +706,7 @@ class StudioWindow(QMainWindow):
         drop_notice = None
         if offerable:
             drop_notice = (
-                f"Dropped {len(offerable) + 1} recordings — "
+                f"{gesture} {len(offerable) + 1} recordings — "
                 f"opened {chapters.recording_label(to_load)}. Open the others one at a time.")
         self._load(to_load, drop_notice=drop_notice)
         if drop_notice:
@@ -1217,9 +1222,11 @@ class StudioWindow(QMainWindow):
         for opens on the Coaching page full-window (``CentralView.show_debrief``), with its PB
         standing, its one ranked total and top corners, and those corners already on the focus
         list where it has room (``LibraryController.pre_promote_focus``) — each one click from
-        gone. A reload, a second chapter or Load full recording is not a first open and changes
-        nothing. No debrief when nothing is ranked: its page would be an empty state. Fully
-        guarded — a landing must never break the load it ends."""
+        gone. A reload or a second chapter is not a first open and changes nothing. PART of a new
+        recording is not one either — it decides no verdict and writes no row
+        (``LibraryController.update_library``), so it is the whole recording's first load, Load
+        full recording included, that lands here, once. No debrief when nothing is ranked: its page
+        would be an empty state. Fully guarded — a landing must never break the load it ends."""
         view = getattr(self, "view", None)
         if not getattr(self.library_ctl, "opened_new", False) or not hasattr(view, "show_debrief"):
             return False
@@ -1280,19 +1287,11 @@ class StudioWindow(QMainWindow):
 
         THE ONE SOURCE for "you are looking at part of a recording", read by both the notice that
         SAYS so and the File ▸ Load full recording item that FIXES it, so the two cannot disagree
-        about whether there is anything to chain. Best-effort by construction: an unreadable folder
-        answers None, i.e. "no partiality to report", which is the safe direction — never invent a
-        missing chapter."""
-        paths = getattr(self, "_paths", None)
-        if not paths:
-            return None
-        try:
-            sibs = chapters.discover_siblings(paths[0])
-        except Exception:  # noqa: BLE001 — an unresolvable chapter set is simply not a subset
-            return None
-        if len(sibs) > len(paths) and set(paths) <= set(sibs):
-            return len(paths), len(sibs)
-        return None
+        about whether there is anything to chain — and `chapters.chapter_subset`, which this reads,
+        is also what makes the library controller decide no verdict on such a session. Best-effort
+        by construction: an unreadable folder answers None, i.e. "no partiality to report", which
+        is the safe direction — never invent a missing chapter."""
+        return chapters.chapter_subset(getattr(self, "_paths", None) or [])
 
     def _session_notice(self) -> str | None:
         """The ONE untimed status-bar line for the CURRENTLY loaded session, derived from live state
@@ -1321,13 +1320,14 @@ class StudioWindow(QMainWindow):
             live session, so it survives a timing edit's re-decide like every other clause;
           * the same for the cross-recording REFERENCE, in its own clause — it is the recording
             every Δ on screen is measured against, and it was the one surface this rule skipped;
-          * a PARTIAL RECORDING — the session is a strict subset of its chapters on disk. The two
-            front doors disagree by 44 laps on the owner's own footage (dropping GX010062 loads 66
-            across three chapters; picking the same file in File ▸ Open… loads 22) and NOTHING on
-            screen said which you got: the title bar's "· 3 chapters" suffix only appears in the
-            affirmative case, and this line never mentioned chapters at all (QA D4-02). Stated
-            alongside rather than instead of the clauses above, because it is the reason a chapter
-            can have no laps or an unfamiliar best;
+          * a PARTIAL RECORDING — the session is a strict subset of its chapters on disk. File ▸
+            Open… used to load only the file picked, 22 laps of GX010062's 66, and NOTHING on
+            screen said so: the title bar's "· 3 chapters" suffix only appears in the affirmative
+            case, and this line never mentioned chapters at all (QA D4-02). Every GUI door now opens
+            the whole recording (QA NEW-1), so this is the command line's single chapter or a
+            library row stored from part of one; on a FIRST open it also says the PB and focus
+            list are waiting. Stated alongside rather than instead of the clauses above, because it
+            is the reason a chapter can have no laps or an unfamiliar best;
           * an UNREADABLE TRACK DATABASE — tracks.json exists and this build cannot read a circuit
             out of it, so no track auto-detects and every recording opens as "unknown track" with
             no way to tell that from a genuinely new circuit (QA D2-16);
@@ -1369,6 +1369,11 @@ class StudioWindow(QMainWindow):
         subset = self._chapter_subset()
         chapter_notice = (f"{subset[0]} of {subset[1]} chapters — File ▸ Load full recording to "
                           "analyse the whole recording") if subset else None
+        # A partial FIRST open decides nothing (LibraryController.update_library), so this is the
+        # one place that says the verdict is still to come — and what brings it.
+        if chapter_notice and getattr(getattr(self, "library_ctl", None), "waiting_for_whole",
+                                      False):
+            chapter_notice += "; your PB and focus list wait for it"
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
         # The two writes that used to fail into a print (§7.5). The library flag is set by whichever
@@ -2747,25 +2752,31 @@ class StudioWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _open_file(self):
-        """File ▸ Open…: pick a GoPro MP4 and reload through the guarded _load path.
+        """File ▸ Open… and the welcome's Open recording… (the same handler): pick a GoPro MP4 and
+        open the RECORDING it belongs to — its sibling chapters on disk, in chapter order, exactly
+        as a drop does (`_open_recordings`).
 
-        IT OPENS THE FILE YOU PICKED, and only that file — it does NOT chain the recording's sibling
-        chapters the way a DROP does (dropEvent -> _open_recordings -> discover_siblings). On the
-        owner's GX010062 that is 22 laps here against 66 there, from the same file, in 1.33 s
-        against 3.81 s (QA D4-02). The difference was previously invisible: the window title's
-        "· 3 chapters" suffix only appears in the affirmative case and the status bar said nothing,
-        so a user could analyse a third of their session and never know. `_session_notice` states it
-        now — "1 of 3 chapters — File ▸ Load full recording to analyse the whole recording" — and
-        names the control that fixes it.
+        IT USED TO OPEN ONLY THE FILE PICKED, on the argument that picking a FILE and dropping a
+        RECORDING are different gestures (QA D4-02, which made the partial load visible and kept it
+        as this door's default). Measured on the owner's next race day, that argument cost the one
+        verdict the app exists to give (QA NEW-1). The picker takes ONE file, so on a new recording
+        every Open was the one-chapter case, and the first-open debrief, PB line and focus list were
+        all decided on chapter 1:
+          * SD_19_09 (0068), 26 of its 36 laps: "New personal best: 0:46.862, 0.05 s faster" for a
+            true 0:46.808, 0.10 s faster; and C7/C5/C2 on the focus list where the whole session
+            ranks C1/C5/C7 — C1, its biggest loss (+0.147 s), left off;
+          * MK_18_09 (0067): chapter 1 alone is GPS-degraded (9.75 % of fixes rejected, every one
+            of them in that chapter; 6.39 % over both, under the gate), so no PB line, no debrief
+            and no focus list at all;
+          * and File ▸ Load full recording, one click later, revisited none of it.
+        The drop and the command line with both chapters gave the right answers on both, and the
+        whole recording costs 0.3-0.6 s more to open than its first chapter (SD_19_09 2.94 s
+        against 2.63 s, MK_18_09 2.89 s against 2.29 s).
 
-        WHY NOT JUST CHAIN, measured, because that was the obvious alternative: chaining here would
-        leave NO path in the GUI that produces a single-chapter session (drop chains, Open would
-        chain, and Open Recent / Library replay whatever paths a previous load stored), which makes
-        `File ▸ Load full recording` — an opt-in this app deliberately built, and whose enablement
-        rule is `len(_paths) == 1` — permanently disabled and therefore dead. It would also change
-        every number this front door produces (22 laps -> 66, a different session best, a different
-        library row) for a user who asked for one file, and cost every Open +2.5 s. Picking a FILE
-        and dropping a RECORDING are different gestures; the fix is to say which one you made.
+        File ▸ Load full recording stays, for a session another door loaded partially — a single
+        chapter named on the command line, or a library row stored from part of a recording — and
+        so does the notice that names it. A partial first open decides no verdict at all
+        (`LibraryController.update_library`), so the whole recording's first load still gets one.
 
         Starts the dialog in the persisted last-opened folder (a track-day user's footage lives in one
         place), falling back to the current recording's folder and then nowhere. On a successful open
@@ -2775,7 +2786,7 @@ class StudioWindow(QMainWindow):
             self, "Open recording", start_dir, "GoPro recordings (*.MP4 *.mp4)")
         if path:
             prefs.set_last_dir(os.path.dirname(path))
-            self._load([path])
+            self._open_recordings([path])
 
     def _open_start_dir(self) -> str:
         """The folder the Open / reference dialogs should start in: the persisted last-opened folder
