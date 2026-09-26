@@ -255,8 +255,11 @@ def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
 # four alternating runs against a 720p one on 2026-09-26, whose shared load cancels between two
 # compares), which is 8.2 ns. The shared Mac was too loaded to time a compare against a single-lap
 # control: the compare's two decodes suffer more from other load than a lap's one, and 720p
-# compares timed that way came out 22.7-54.1 s.
-COMPARE_PANE_B_S_PER_PX = {VT_H264: 7.8e-9, SW_H264: 7.8e-9}
+# compares timed that way came out 22.7-54.1 s. LIBX264 (no VideoToolbox: CI, or a Mac where no
+# session opens) is priced from ONE such run, and it barely notices pane B: its software encode is
+# the slow stage, and the 720p compare took 81.6 s between single-lap controls of 54.7 and 96.7 s,
+# which scales to 3.4 ns.
+COMPARE_PANE_B_S_PER_PX = {VT_H264: 7.8e-9, SW_H264: 3.4e-9}
 
 
 def estimate_compare_seconds(out_w: int, out_h: int, frames: int, codec: str) -> float | None:

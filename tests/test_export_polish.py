@@ -447,11 +447,11 @@ def test_the_compare_picker_states_its_own_size_and_time():
             took = fmt_hms(export_compare.estimate_compare_seconds(w, h, frames, codec))
             assert (f"About {size} — {frames} frames to render at 30 fps with {codec}, "
                     f"about {took} to render") in text, text
-        # The two layouts are the same pixels, so the same bytes; a compare is dearer than the
-        # single lap of the same length at the same pane size, in bytes and in time.
+        # The two layouts are the same pixels, so the same bytes; a compare is dearer than a
+        # single lap of its own two-pane frame, because pane B is decoded on top.
         assert seen[0].split("About ")[1].split(" —")[0] == seen[1].split("About ")[1].split(" —")[0]
-        single = ev.estimate_render_seconds(1280, 720, frames, codec)
-        assert export_compare.estimate_compare_seconds(2560, 720, frames, codec) > 1.5 * single
+        single = ev.estimate_render_seconds(2560, 720, frames, codec)
+        assert export_compare.estimate_compare_seconds(2560, 720, frames, codec) > single
     win.hide()
     print("ok EXP-8: the compare picker states its own size and time")
 

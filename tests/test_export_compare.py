@@ -315,7 +315,10 @@ def test_a_compare_costs_its_frame_plus_pane_b():
         side = ec.estimate_compare_seconds(2560, 720, 2025, codec)
         assert side == ec.estimate_compare_seconds(1280, 1440, 2025, codec), codec
         assert side > ev.estimate_render_seconds(2560, 720, 2025, codec), codec
-        assert side > 1.5 * ev.estimate_render_seconds(1280, 720, 2025, codec), codec
+    # On VideoToolbox pane B is most of the difference from a one-pane lap (the encode is cheap on
+    # the media engine); libx264's software encode is the slow stage there, and pane B a margin.
+    vt_pane = ev.estimate_render_seconds(1280, 720, 2025, ev.VT_H264)
+    assert ec.estimate_compare_seconds(2560, 720, 2025, ev.VT_H264) > 1.5 * vt_pane
     assert ec.estimate_compare_seconds(2560, 720, 2025, "hevc_mystery") is None
     assert ec.estimate_compare_seconds(2560, 720, 0, ev.VT_H264) is None
     print("ok compare time: a single lap of the two-pane frame, plus pane B")
