@@ -374,13 +374,13 @@ class OverlayConfig:
     # `_WATCHDOG_PACE_FRAMES` more are in; the floor stands until then. It used to be the painter's
     # count over the time since the render STARTED, and the pipelined pump's painter queues two
     # frames behind an encoder that never takes one, so a wedge at the start divided the start-up
-    # (spawn, seek, first decode) by two and called it a pace: 60 x start-up / 2. MK 720p's 0.42 s
-    # opening made that 12.6 s on this Mac, and CI's ~2.2 s one made it 66 s (the test that waited
-    # 68.8 s and 70.2 s for a wedge its 3 s floor should have caught). Ten intervals is the smallest
-    # round count at which the worst gap measured above, landing among the first frames of the
-    # slowest configuration, still leaves the multiple under the floor: 60 x (0.783 + 9 x 0.064) /
-    # 10 = 8.2 s. What that costs a slow render: one of its first eleven frames must not take
-    # longer than the floor, 156x the slowest median measured.
+    # (spawn, seek, first decode) by two and called it a pace: 60 x start-up / 2. A VideoToolbox
+    # export of MK at 720p, its encoder wedged from the start, was given 13.1 s on this Mac; on CI
+    # a test waited 68.8 s and 70.2 s for a wedge its 3 s floor should have caught, the ~66 s limit
+    # a 2.2 s start-up gives. Ten intervals keep the worst gap measured above, landing among the
+    # first frames of the slowest configuration, from lifting the limit off the floor: 60 x (0.783
+    # + 9 x 0.064) / 10 = 8.2 s. What that costs a slow render: none of its first eleven frames may
+    # take longer than the floor, 156x the slowest median measured.
     watchdog_timeout: float = 10.0
     watchdog_frame_multiple: float = 60.0
     # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of the SHORT SIDE.

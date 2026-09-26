@@ -3249,14 +3249,14 @@ def test_a_wedge_behind_a_slow_start_is_caught_at_the_floor(monkeypatch_restore)
     The limit's pace was the PAINTER's frame count over the time since the render STARTED. On the
     pipelined pump the painter gets two more frames out, into the writer's hands, behind an encoder
     that has stopped reading, so a wedge early in a render divided the start-up (ffmpeg's spawn,
-    the seek, the first decode) by a handful of frames and called that the render's pace. On CI
-    the start-up was ~2.2 s and two frames were queued: 60 x 2.2 / 2 = 66 s. The pace is now timed
-    on frames the encoder TOOK, from the first of them, and trusted only after
+    the seek, the first decode) by a handful of frames and called that the render's pace. With two
+    frames queued, the ~2.2 s start-up the CI failures imply is a 60 x 2.2 / 2 = 66 s limit. The
+    pace is now timed on frames the encoder TOOK, from the first of them, and trusted only after
     `_WATCHDOG_PACE_FRAMES` intervals, so the floor governs a wedge this early.
 
     Here the decoder's first frame takes 0.5 s, the encoder takes three frames and wedges, and the
-    floor is 2 s. Before the fix the supervisor fired with 60 x (~0.5 s over the five frames the
-    painter got out) = ~6 s. Asserted on the limit that fired and the frames counted, not on the
+    floor is 2 s. Before the fix the supervisor fired with 60 x (~0.64 s over the six frames the
+    painter got out) = 6.4 s. Asserted on the limit that fired and the frames counted, not on the
     wall clock of a shared runner."""
     s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
     cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", hwaccel_decode=False,
