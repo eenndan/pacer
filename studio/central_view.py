@@ -1709,6 +1709,11 @@ class CentralView(QWidget):
             kind if kind in _PLOTS_BASELINE_LABELS else plots_view.DELTA_BASELINE_BEST)
         label.setText(_PLOTS_BASELINE_LABELS[self._plots_baseline_kind])
         label.setToolTip(self._delta_baseline_tip())
+        # LOOK-13: in compare the hero follows this baseline (see _update_diff_box), so a change of
+        # baseline re-renders it for the current moment — a paused compare gets no tick to do it.
+        playback = getattr(self, "_playback", None)
+        if playback is not None and hasattr(self, "_last_diff_speed"):
+            self._update_diff_box(playback.applied_t, self._last_diff_speed, self._last_diff_lap)
 
     def _update_table_header(self):
         """The Corners tab always names WHICH lap its per-corner rows describe — directly on
