@@ -1482,10 +1482,10 @@
      },
      "reason": {
       "apex_speed_deficit": 1.3865607765171646,
-      "brake_extra_s": 3.2644374654979558,
+      "brake_extra_s": 0.0479882858084153,
       "coast_extra_s": 0.0,
-      "contribution": 0.304871233395548,
-      "kind": "braking",
+      "contribution": 0.21268967243694722,
+      "kind": "line",
       "sigma": 0.26542180241261276
      },
      "time_lost": 0.3328887313520337
@@ -1508,10 +1508,10 @@
      },
      "reason": {
       "apex_speed_deficit": 0.6237493782508707,
-      "brake_extra_s": 7.634323113714228,
+      "brake_extra_s": 0.0,
       "coast_extra_s": 0.5994156835610909,
-      "contribution": 0.15831964332987908,
-      "kind": "braking",
+      "contribution": 0.10965837198655481,
+      "kind": "coasting",
       "sigma": 0.20982100195223838
      },
      "time_lost": 0.16454100602196142
@@ -20835,10 +20835,10 @@
      },
      "reason": {
       "apex_speed_deficit": 1.3212774590587841,
-      "brake_extra_s": 6.920338395656238,
+      "brake_extra_s": 0.27266619096455,
       "coast_extra_s": 0.3998895714379671,
-      "contribution": 0.22972421081380495,
-      "kind": "braking",
+      "contribution": 0.14515511295622216,
+      "kind": "line",
       "sigma": 0.2303372952666341
      },
      "time_lost": 0.23968286591185617
@@ -36532,10 +36532,10 @@
      },
      "reason": {
       "apex_speed_deficit": 0.9249186228047819,
-      "brake_extra_s": 3.444860142470441,
+      "brake_extra_s": 0.24972161149268857,
       "coast_extra_s": 0.0,
-      "contribution": 0.0917877858459303,
-      "kind": "braking",
+      "contribution": 0.04836739713726447,
+      "kind": "line",
       "sigma": 0.14111198457707336
      },
      "time_lost": 0.09978124120114007
