@@ -425,7 +425,7 @@ class PlotsView(QWidget):
         # freezes out of the colour-blind flip (tests/test_contrast.py pins exactly this pairing).
         self.ideal_btn = ToggleButton(
             "Ideal lap", glyph="ph.star-four", on_colour=theme.best_sector_colour,
-            tooltip="Ideal lap: overlay the SYNTHETIC theoretical ideal Δ — your quickest time "
+            tooltip="Ideal lap: overlay the SYNTHETIC ideal lap's Δ — your quickest time "
                     "through each corner and each straight, stitched together (dashed; it drops "
                     "below the y=0 best-lap line and finishes there, by the whole gap). Not a "
                     "single drivable lap; it shows WHERE your achievable lap is faster than your "
@@ -1347,7 +1347,7 @@ class PlotsView(QWidget):
     def _delta_curve_label(self, lid: int) -> str:
         """P7 legend text for the ideal-referenced Δ curve: the normal lap label plus the baseline
         it is measured against, so the swap is legible without reading the y-axis."""
-        return f"{self._curve_label(lid, False)} · Δ to ideal (synthetic)"
+        return f"{self._curve_label(lid, False)} · Δ to ideal lap"
 
     def _draw_ideal(self, x_mode: str):
         """D1: draw the synthetic ideal-lap curve on the Δ plot when the toggle is on.
@@ -1380,7 +1380,7 @@ class PlotsView(QWidget):
         if series is None:
             return
         ix, iy = series
-        c = self.p_delta.plot(ix, iy, pen=_ideal_line_pen(), name="ideal lap (synthetic)")
+        c = self.p_delta.plot(ix, iy, pen=_ideal_line_pen(), name="ideal lap")
         c.setDownsampling(auto=True)
         c.setClipToView(True)
         self._curves.append((self.p_delta, c))

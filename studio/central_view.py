@@ -141,7 +141,7 @@ _BEST_LAP_BEST_NOTE = (
 # APPEND their reason to it and restore it verbatim afterwards — the same contract
 # plots_view._set_control_enabled has with the three chart controls.
 _IDEAL_CHIP_TIP = (
-    "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — your quickest time through each "
+    "Hero readout reference: ON = Δ to your IDEAL LAP — your quickest time through each "
     "corner and each straight, stitched together into one synthetic lap (not a single lap you "
     "have driven); OFF = Δ to your best single lap. The other number is always in the readout's "
     "tooltip.")
@@ -1933,7 +1933,7 @@ class CentralView(QWidget):
             # states with no stitched ideal it is not called at all — it would render
             # `Δideal +0.00 s`, the claim this whole gate exists to stop, one level down in a
             # tooltip where nothing else would contradict it.
-            tip = (f"Δ to your IDEAL achievable lap here: {theme.format_ideal_run(d_ideal)}"
+            tip = (f"Δ to your ideal lap here: {theme.format_ideal_run(d_ideal)}"
                    + self._ideal_clamp_note(d_ideal)) if stitched else \
                 _IDEAL_HOVER_REASONS[self._ideal_state]
             # ...and the SAME honesty for the other reference, which had none. Δ-to-best on the

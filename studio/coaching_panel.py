@@ -1167,6 +1167,25 @@ _SCOPE_TOOLTIP = (
     "each row also carries where in the corner the time goes and a Jump to it.")
 
 
+def more_rows_hint(hidden: list) -> str:
+    """The grid page's line for the ranking rows it has no room for (LOOK-3): how many, whether
+    Coaching ranked them, and the gesture that shows them. "" when nothing is hidden."""
+    if not hidden:
+        return ""
+    ranked = sum(1 for r in hidden if getattr(getattr(r, "evidence", None), "ranked", True))
+    rest = len(hidden) - ranked
+    n = len(hidden)
+    if not ranked:
+        what = (f"{n} more corner{'' if n == 1 else 's'} "
+                f"{'is' if n == 1 else 'are'} listed but not ranked")
+    elif not rest:
+        what = f"{n} more ranked corner{'' if n == 1 else 's'}"
+    else:
+        what = f"{n} more corners: {ranked} ranked, {rest} listed but not ranked"
+    return (f"{what} — the panel's maximize button, or Opportunities in the Coaching menu, "
+            f"shows {'it' if n == 1 else 'them'}.")
+
+
 class OpportunitiesPanel(QWidget):
     """The Coaching page of the lap panel's tab stack: the session THEME, then the ranked
     opportunities (corner · time lost · done-it? · dominant reason) over a freshly computed
@@ -1367,6 +1386,17 @@ class OpportunitiesPanel(QWidget):
         lay.addWidget(self.focus_block)
         lay.addWidget(self.theme_block)
         lay.addWidget(self.body, 1)  # the rows take the page's full height
+        # THE ROWS THE VIEWPORT COULD NOT HOLD, SAID (LOOK-3, QA 2026-09-26). In the grid the page
+        # fits what it can — 3 rows at the owner's layout — and the rest simply were not there: on
+        # MK_18_09 8 corners, C7's +0.25 s (the largest loss against his best lap) among them, were
+        # listed only once the page was maximized, and nothing in the grid said so. One line under
+        # the table now counts them and names the gesture that shows them (`_sync_more_hint`).
+        self.more_hint = QLabel("")
+        self.more_hint.setProperty("role", "Note")
+        self.more_hint.setWordWrap(True)
+        self.more_hint.setContentsMargins(theme.SPACE_S, 2, theme.SPACE_S, 2)
+        self.more_hint.setVisible(False)
+        lay.addWidget(self.more_hint)
         self.refresh()
 
     def set_focus_report(self, report: focus.Report | None) -> None:
@@ -1662,6 +1692,19 @@ class OpportunitiesPanel(QWidget):
             self._tuned_key = key
         finally:
             self._tuning = False
+        self._sync_more_hint()
+
+    def _sync_more_hint(self):
+        """Count the shown ranking's rows the table is NOT showing, ranked and not, and say how to
+        see them — or hide the line when every row is on screen. Not on the debrief, whose table is
+        the shortlist by design (`_row_limit`), nor in the empty state."""
+        hidden = ([] if self._debrief or self.body.currentIndex() != 0
+                  else self._all_rows[self.table.rowCount():])
+        text = more_rows_hint(hidden)
+        if self.more_hint.text() != text:
+            self.more_hint.setText(text)
+        if self.more_hint.isHidden() == bool(text):
+            self.more_hint.setVisible(bool(text))
 
     def _rows_px(self) -> int:
         """Total height the current rows occupy."""
@@ -1685,6 +1728,7 @@ class OpportunitiesPanel(QWidget):
         self._refresh_summary_label()
         self.empty_state.set_state(*empty_state_copy(opps, self.session))
         self.body.setCurrentIndex(1)
+        self._sync_more_hint()
 
     def resizeEvent(self, event):
         """Re-budget the columns, re-fit the row heights and re-tune the row count.
@@ -1744,7 +1788,8 @@ class OpportunitiesPanel(QWidget):
         self._theme_budgeting = True
         try:
             height = self.height()
-            room = max(height - self._header.height() - self._shortlist_px(), 0)
+            hint = self.more_hint.sizeHint().height() if self.more_hint.isVisibleTo(self) else 0
+            room = max(height - self._header.height() - self._shortlist_px() - hint, 0)
             # The debrief's lead first (0 px and hidden on the ordinary page), then the focus block.
             used = self.debrief_block.fit_into(self.width(),
                                                min(int(height * DEBRIEF_MAX_FRACTION), room))

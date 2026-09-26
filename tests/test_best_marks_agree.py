@@ -345,7 +345,12 @@ def test_both_surfaces_count_the_excluded_laps_out_of_the_same_total():
     """The Laps strip and the Stats DATA TRUST card state the same fact about the same
     segmentation. The strip divided by valid+excluded and the card by the laps the segmenter
     FOUND, so on every D24 start-line placement that produced excluded laps the two printed
-    different totals — 69 against 81 at the worst, on one recording, at the same instant."""
+    different totals — 69 against 81 at the worst, on one recording, at the same instant.
+
+    Both then divided by `lap_count()`, which counts the crossings too brief to be a lap: "19 of
+    the 22 laps found — 2 excluded" on MK_18_09, where 19 + 2 = 21 (LOOK-6, QA 2026-09-26). The
+    shared count is now the LAPS, valid + excluded, and the leftover crossings are named as
+    crossings on the strip (the card says the same sentence: test_lap_closure)."""
     sess = _FakeExcludedSession()
     table = LapTable(sess)
     table.resize(900, 320)
@@ -354,11 +359,14 @@ def test_both_surfaces_count_the_excluded_laps_out_of_the_same_total():
     _APP.processEvents()
     headline = table._excluded_header.text()
     assert str(sess.N_EXCLUDED) in headline, headline
-    # The card's denominator, verbatim from stats_trust.TrustSection.refresh.
-    assert str(sess.N_FOUND) in headline, (
+    # The card's denominator, verbatim from stats_trust.TrustSection.refresh: the laps.
+    laps = sess.N_VALID + sess.N_EXCLUDED
+    assert f"of {laps} laps found" in headline, (
         f"the Laps strip says {headline!r}; the DATA TRUST card says "
-        f"'{sess.N_VALID} of the {sess.N_FOUND} laps found'")
-    assert str(sess.N_VALID + sess.N_EXCLUDED) not in headline, headline
+        f"'{sess.N_VALID} of the {laps} laps found'")
+    brief = sess.N_FOUND - laps
+    note = table._excluded_note.text()
+    assert f"{brief} other start/finish crossings were too brief" in note, note
     print("test_both_surfaces_count_the_excluded_laps_out_of_the_same_total OK")
 
 

@@ -863,6 +863,8 @@ def _fake_stats_service(*, has_g=True, laps=True, stints=None):
         pace=lambda: PaceStats(n=2, best=68.2, median=69.1, sigma=1.27, spread=0.9),
         lap_stats=lambda: rows,
         session_vmax=lambda: (97.5, 1),
+        # (typical, laps, lowest, its lap): the median of 48.0 and 50.0, and lap 0's 48.0.
+        slowest_corner=lambda: (49.0, 2, 48.0, 0),
         gg_cloud=lambda max_points=4000: gg,
         pace_trend=lambda: -0.05,
         race_pace=lambda: 68.9,
@@ -1020,11 +1022,11 @@ def test_stats_view_renders_every_group():
     assert v.t_best.value.text() == "1:08.200"
     assert "97.5 km/h" in v.t_vmax.value.text()
     assert "lap 2" in v.t_vmax.caption.text()                # 1-based, the app-wide rule
-    assert "48.0" in v.t_vmin.value.text()                   # session slowest point
+    assert "49.0" in v.t_vmin.value.text()                   # the typical slowest corner
     assert v.t_peak_lat.value.text() == "1.60 g"             # max over the laps
     # v1.1 pace-quality tiles
     assert v.t_race_pace.value.text() == "1:08.900"
-    assert v.t_trend.value.text() == "-0.05 s/lap"
+    assert v.t_trend.value.text() == "\u22120.05 s/lap"     # the true minus (LOOK-7)
     assert "improving" in v.t_trend.caption.text()
     # R11: PACE is six tiles. The four cut (median − best, σ/median, within 1 %, the coaching
     # digest) and why are written where the grid is built; the report export keeps its own rows.
@@ -1048,7 +1050,7 @@ def test_stats_view_renders_every_group():
     # against the best lap's own 21.412 — see _fake_segment_bests for the matrix.
     assert not v.ideal.heading.isHidden() and not v.ideal.t_theoretical.isHidden()
     assert v.ideal.t_theoretical.value.text() == "0:20.900"
-    assert v.ideal.t_gap.value.text() == "-0.51 s"
+    assert v.ideal.t_gap.value.text() == "0.51 s"           # unsigned: time to find (LOOK-7)
     # Verified + high-quality timing: rendered as normal tiles, never the provisional muting.
     assert not v.t_rolling.value.font().italic()
     assert not v.ideal.t_theoretical.value.font().italic()
@@ -1288,7 +1290,7 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     assert t.item(0, 0).text() == "C1" and t.item(0, 2).text() == "2.1"
     assert t.item(0, 4).text() == "88" and t.item(0, 5).text() == "3.5"
     assert t.item(1, 2).text() == "—"                   # single-lap σ: dash, never 0
-    assert t.item(1, 5).text() == "-1.2"
+    assert t.item(1, 5).text() == "\u22121.2"
     fired = []
     v.corner_clicked.connect(fired.append)
     t.selectRow(1)
@@ -1367,7 +1369,7 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     assert not t.isHidden() and t.rowCount() == 2            # the ~0s stub is omitted (B8)
     assert t.item(0, 0).text() == "S/F → C1"
     assert t.item(0, 6).text() == "—"                      # k=0 exit delta: no double-count
-    assert t.item(1, 6).text() == "-2.0"
+    assert t.item(1, 6).text() == "\u22122.0"
     assert t.item(1, 0).data(RING_ROLE) == 1
     assert not hasattr(v, "t_fix_first"), "the imperative tile is gone"
     note = v.straights.note.text()
@@ -2886,7 +2888,7 @@ def test_corners_note_names_both_baselines_and_reconciles_them():
     # ...and the three totals, computed from the data in front of it.
     assert "1.00 s" in note, ("the Med loss column's own sum", note)
     assert "0.50 s" in note, ("the coaching total, the number the other tab prints", note)
-    assert "0.25 s of it in its top 3" in note or "0.50 s of it in its top 3" in note, note
+    assert "its headline totals 0.50 s over 3 corners" in note, note
     # It must never read as three estimates of one quantity.
     assert "Different baselines" in note, note
     # An empty report hides the note rather than leaving a stale sentence under nothing.
@@ -2895,6 +2897,118 @@ def test_corners_note_names_both_baselines_and_reconciles_them():
     assert view.corners.note.text() == "" and not view.corners.note.isVisible(), (
         view.corners.note.text())
     print("ok corners-note: both baselines named, three totals reconciled, hidden when empty")
+
+
+def test_slowest_corner_is_the_typical_lap_not_one_lap_s_moment():
+    """LOOK-12 (QA 2026-09-26). SPEED · G printed the session MINIMUM as "slowest point": 14.5 km/h
+    on MK_18_09, lap 18's traffic moment, against a typical 30.1 km/h (the median of the per-lap
+    minimums, the figure STINTS' Min takes per run); 31.4 against 39.3 on SD_19_09. The tile now
+    shows the typical over the CLEAN laps, and its hover names the minimum with its lap."""
+    _APP  # noqa: B018
+    from studio.stats_panel import StatsView
+
+    mins = {0: 30.0, 1: 31.0, 2: 29.0, 3: 14.5, 4: 32.0, 5: 9.0}   # lap 5: a GPS-dropout lap
+    arrays = {i: (np.array([0.0, 1000.0]), np.array([v, 90.0]), np.array([0.0, 70.0]))
+              for i, v in mins.items()}
+    st = _service(valid=list(mins), cons=[0, 1, 2, 3, 4], lap_times={i: 70.0 for i in mins},
+                  arrays=arrays, windows={i: (70.0 * i, 70.0 * i + 70.0) for i in mins})
+    assert st.slowest_corner() == (30.0, 5, 14.5, 3), st.slowest_corner()
+
+    sess = _fake_view_session()
+    sess.stats.slowest_corner = st.slowest_corner
+    v = StatsView(sess)
+    assert v.t_vmin.caption.text() == "slowest corner · typical", v.t_vmin.caption.text()
+    assert v.t_vmin.value.text() == "30.0 km/h", v.t_vmin.value.text()
+    assert "14.5 km/h on lap 4" in v.t_vmin.toolTip(), v.t_vmin.toolTip()
+    print("ok slowest-corner: the typical lap's, with the one slowest moment and its lap on hover")
+
+
+def test_the_two_session_lengths_name_their_clocks():
+    """LOOK-5 (QA 2026-09-26). "41:34 recorded" sat over "GPS quality over 2684 s of recording"
+    on MK_18_09: the kept GPS trace's span and the footage's, both called the recording. The tile
+    is the GPS trace; the quality line spans the footage and says so, in the tile's format."""
+    _APP  # noqa: B018
+    from studio import data_quality as dq
+    from studio.stats_panel import StatsView
+
+    v = StatsView(_fake_view_session())
+    assert v.t_duration.caption.text().startswith("GPS trace"), v.t_duration.caption.text()
+    cls = np.full(2684, dq.GOOD, np.int8)
+    cls[:185] = dq.POOR
+    tl = dq.QualityTimeline(cell_s=1.0, cls=cls, n=np.full(2684, 10, np.int32),
+                            dropped=np.zeros(2684, np.int32), dop=np.ones(2684),
+                            reports_quality=True)
+    assert tl.summary().startswith("GPS quality over 44:44 of footage: 185 s poor"), tl.summary()
+    print("ok clocks: GPS trace on the tile, footage on the quality line")
+
+
+def test_every_signed_number_on_the_page_prints_one_minus():
+    """LOOK-7 (QA 2026-09-26): the Stats tiles printed "-0.35 s/lap" with an ASCII hyphen, two
+    tabs from Coaching's "−8.9 km/h". One formatter now; and U+2212 is the width of "+" in the
+    tiles' tabular face, so a signed column stays decimal-aligned (the reason an old note gave
+    for keeping the hyphen — a MONO tile — is gone: `mono_font` is Inter with tnum)."""
+    _APP  # noqa: B018
+    import re
+
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QTableWidget
+
+    from studio import theme
+    from studio._signal import MINUS, fmt_signed
+    from studio.stats_panel import StatsView
+    from studio.widgets import Tile
+
+    assert fmt_signed(-0.354, 2, "s/lap") == f"{MINUS}0.35 s/lap"
+    assert fmt_signed(0.2) == "+0.20" and fmt_signed(-0.004) == "0.00"
+    fm = QFontMetricsF(theme.mono_font(theme.TABLE))
+    assert abs(fm.horizontalAdvance(MINUS) - fm.horizontalAdvance("+")) < 0.01, (
+        fm.horizontalAdvance(MINUS), fm.horizontalAdvance("+"))
+    v = StatsView(_fake_view_session())
+    faces = [t.value.text() for t in v.findChildren(Tile)]
+    cells = [t.item(r, c).text() for t in v.findChildren(QTableWidget)
+             for r in range(t.rowCount()) for c in range(t.columnCount()) if t.item(r, c)]
+    hyphen = [x for x in faces + cells if re.search(r"(^|\s)-\d", x)]
+    assert not hyphen, f"an ASCII-hyphen minus on the Stats page: {hyphen}"
+    assert v.t_trend.value.text() == f"{MINUS}0.05 s/lap", v.t_trend.value.text()
+    print("ok one-minus: every signed number on the Stats page prints U+2212")
+
+
+def test_corners_note_sums_the_coaching_rows_one_way_and_counts_the_unranked():
+    """LOOK-3 (QA 2026-09-26). On MK_18_09 the note read "totals 0.29 s, 0.28 s of it in its top
+    3": the SAME three ranked corners summed raw (0.286) and rounded (0.13 + 0.09 + 0.06), which
+    invents a 0.01 s remainder — while the Coaching tab measured 1.07 s across the 11 corners it
+    lists, 8 of them not ranked, and the note never said they existed. The fixture is those
+    numbers: three ranked rows whose raw and printed sums differ, and eight abstained rows."""
+    _APP  # noqa: B018
+    from types import SimpleNamespace
+
+    from studio.stats import CornerReport
+    from studio.stats_panel import StatsView
+
+    def corner(cid):
+        return CornerReport(cid=cid, direction=1, n=6, best_s=9.0, median_s=9.2, sigma_s=0.1,
+                            median_loss_s=0.2, apex_best_kmh=60.0, apex_median_kmh=58.0,
+                            grip_median=0.8, score=0.02)
+
+    def row(cid, lost, ranked):
+        return SimpleNamespace(cid=cid, time_lost=lost, evidence=SimpleNamespace(ranked=ranked))
+
+    ranked = [row(5, 0.134, True), row(2, 0.088, True), row(8, 0.064, True)]    # raw 0.286
+    unranked = [row(c, v, False) for c, v in ((7, 0.25), (11, 0.187), (6, 0.14), (9, 0.08),
+                                              (4, 0.06), (10, 0.03), (12, 0.02), (1, 0.02))]
+    sess = _fake_view_session()
+    sess.corner_report = lambda: [corner(c) for c in range(1, 13)]
+    sess.phase_report = lambda: None
+    sess.coaching_opportunities = lambda: SimpleNamespace(enough=True, rows=ranked + unranked)
+    view = StatsView(sess)
+    note = view.corners.note.text()
+    # ONE way: the rows print 0.13, 0.09 and 0.06, so the only total of them is 0.28 s.
+    assert "0.29" not in note, ("the raw sum of the rounded rows is back", note)
+    assert "its headline totals 0.28 s over 3 corners" in note, note
+    # EVERY row the Coaching tab lists is accounted for, as not ranked, with its printed total.
+    shown = sum(round(r.time_lost, 2) for r in unranked)
+    assert f"8 more are listed there but not ranked ({shown:.2f} s)" in note, note
+    print("ok corners-note: one way of summing, and the not-ranked rows counted")
 
 
 def test_every_cross_lap_corner_surface_counts_the_same_cells():
@@ -3067,7 +3181,7 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     # Coaching counted every clean lap, interpolated or not, which #339 had made false.
     assert "interpolated corners too" not in note, note
     assert ("The Coaching tab measures the SAME corners against your best lap, leaving out the "
-            "same interpolated times, and totals" in note), note
+            "same interpolated times: its headline totals" in note), note
     assert "Different baselines" in note, note
 
     # Every lap counted: the caption and the coaching sentence are exactly what they were.
@@ -3075,7 +3189,7 @@ def test_corners_table_says_which_laps_count_and_dashes_a_corner_no_lap_matched(
     view.refresh()
     note = view.corners.note.text()
     assert "matched on track" not in note and "interpolated" not in note, note
-    assert "against your best lap and totals" in note, note
+    assert "against your best lap: its headline totals" in note, note
     view.hide()
     print("ok CORNERS: partial counts disclosed on the cell, an unmatched corner dashed and named, "
           "and the coaching sentence says it leaves out the same cells")
@@ -3684,7 +3798,7 @@ def test_stats_view_split_matrix_marks_the_best_and_the_behind_cells():
     # A middling cell is plain, and still says both numbers — including the laps that are QUICKER
     # than typical and still 0.40 s off the best, which is the pair no single anchor can give.
     mid = v.splits_table.item(1, 1)
-    assert "-0.05 s against your typical S1" in mid.toolTip(), mid.toolTip()
+    assert "\u22120.05 s against your typical S1" in mid.toolTip(), mid.toolTip()
     assert "+0.40 s against the sector best" in mid.toolTip(), mid.toolTip()
     # The note states the SAMPLE and the two things a reader cannot see: what the ▼ is measured
     # against, and the 10 Hz floor the interior columns are quantized to.

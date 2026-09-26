@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView
 
 from . import coaching, provenance, theme, units
-from ._signal import plural
+from ._signal import fmt_signed, plural
 
 # The Coaching panel's OWN row filter, imported (not re-implemented) so the note quotes the
 # Coaching tab's ranking exactly — L5-02.
@@ -60,6 +60,11 @@ STRAIGHTS_NOTE_TOOLTIP = (
     "sum to the lap). So the two can name different corners without either being wrong; Coaching "
     "is the list of what to work on.")
 
+
+
+def _signed_1dp(value: float) -> str:
+    """The Exit Δ cell: one decimal through the page's one signed formatter (true minus, LOOK-7)."""
+    return fmt_signed(value, 1)
 
 class StraightsSection:
     """The STRAIGHTS heading, table and exit-leverage note (`heading`, `table`, `note`).
@@ -169,7 +174,9 @@ class StraightsSection:
         mono = theme.mono_font(theme.TABLE)
 
         def cell(val, fmtstr):
-            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
+            text = (DASH if val is None else fmtstr(val) if callable(fmtstr)
+                    else fmtstr.format(val))
+            item = _NumItem(text)
             item.setData(NUM_ROLE, val)
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             item.setFont(mono)
@@ -193,7 +200,7 @@ class StraightsSection:
                 cell(units.convert_speed(st.trap_median_kmh, unit)
                      if st.trap_median_kmh is not None else None, "{:.1f}"),
                 cell(units.convert_speed(st.exit_delta_kmh, unit)
-                     if st.exit_delta_kmh is not None else None, "{:+.1f}"),
+                     if st.exit_delta_kmh is not None else None, _signed_1dp),
             ]
             # How many laps each column counted, where that is not all of them (C4).
             of = getattr(st, "n_laps", None)
