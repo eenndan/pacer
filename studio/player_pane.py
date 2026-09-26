@@ -470,6 +470,14 @@ class PlayerPane(QWidget):
         self._drag_release.start()
         self.seek(seconds)
 
+    def finish_drag(self):
+        """The drag is over (the transport handle let go): a target still held behind the in-flight
+        seek goes NOW, as a deliberate seek. Waiting for the in-flight frame first would put the
+        final picture a whole extra seek late, for a frame it would only replace. Nothing held: the
+        in-flight seek IS the final one, and is left to land."""
+        if self._drag_held is not None:
+            self.seek(self._drag_held)
+
     def _media_loading(self) -> bool:
         """True while the current source has not loaded yet — when the FFmpeg backend drops a
         setPosition. The headless null player has no mediaStatus and loads nothing."""

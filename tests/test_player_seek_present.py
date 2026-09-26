@@ -52,7 +52,7 @@ from PySide6.QtMultimedia import (  # noqa: E402
     QVideoFrame,
     QVideoFrameFormat,
 )
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QSlider  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -336,6 +336,78 @@ def test_a_drag_keeps_one_seek_in_flight_and_the_latest_target_wins():
     print("test_a_drag_keeps_one_seek_in_flight_and_the_latest_target_wins OK")
 
 
+def _compare_view():
+    """A real VideoView in compare over the fake backend, both panes' first chapters loaded, paused
+    and shown. Pane B gets the fan-out the app wires, CompareController.fanout_seek_b's routing
+    without its distance mapping: B's target is A's + 30 s, so the two panes' seeks tell apart."""
+    from studio.video_view import PaneSpec, VideoView
+    cmap = chapters.ChapterMap(["/nonexistent/GX010000.MP4", "/nonexistent/GX020000.MP4"], [100.0, 100.0])
+    with _ffmpeg_like_backend():
+        view = VideoView(cmap)
+        view.set_compare(PaneSpec(0, (5.0, 60.0), "A", choices=[0, 1]),
+                         PaneSpec(1, (5.0, 60.0), "B", choices=[0, 1]))
+    view.set_compare_seek_fanout(
+        lambda t, dragged=False: (view.seek_pane_dragged if dragged else view.seek_pane)(1, t + 30.0))
+    fakes = view.pane.player, view.secondary.player
+    for fake in fakes:
+        fake.finish_load()
+        fake.pause()
+        fake.present()
+        fake.landed.clear()
+    return view, *fakes
+
+
+def test_a_slider_handle_drag_keeps_one_seek_in_flight_per_pane_and_its_release_lands_the_last():
+    """LIFE-2 (QA 2026-09-26): dragging the transport slider's HANDLE showed no picture until the
+    release — 0 frames in a 2.6 s, 120-move drag on MK's 4K footage, both panes in compare. Every
+    move seeked each pane directly, and twice (sliderMoved AND triggerAction(SliderMove)), each seek
+    superseded before its frame existed. The handle drag now takes seek_dragged on both panes, one
+    call per move; the release lands a held target at once; clicks and wheel steps stay exact."""
+    view, fa, fb = _compare_view()
+    calls = []
+    real_dragged = view.pane.seek_dragged
+    view.pane.seek_dragged = lambda t: (calls.append(t), real_dragged(t))
+    sl = view.slider
+    sl.setSliderDown(True)                     # what QSlider's mouse press on the handle does...
+    for s in (10, 11, 12, 13):
+        sl.setSliderPosition(s * 1000)         # ...and each mouse move
+    assert fa.landed == [10_000], (
+        f"a handle drag sent pane A {fa.landed}: each move superseded the seek still decoding, so the "
+        "picture sat still for the whole drag (LIFE-2)")
+    assert fb.landed == [40_000], f"...and pane B, through the compare fan-out, {fb.landed} (LIFE-2)"
+    assert calls == [10.0, 11.0, 12.0, 13.0], f"one drag seek per move, not two: {calls} (LIFE-5)"
+    fa.present()
+    fb.present()                               # the in-flight frames reach the screen...
+    assert (fa.landed, fb.landed) == ([10_000, 13_000], [40_000, 43_000]), (fa.landed, fb.landed)
+    sl.setSliderPosition(14_000)               # ...14 s is held behind 13 s...
+    sl.setSliderDown(False)                    # ...and the release sends it now
+    assert (fa.landed[-1], fb.landed[-1]) == (14_000, 44_000), (
+        f"the release left the last target waiting for a frame it only replaces: {fa.landed}, "
+        f"{fb.landed}")
+    fa.present()
+    fb.present()
+    assert (fa.shown_ms(), fb.shown_ms()) == (14_000, 44_000), (fa.shown_ms(), fb.shown_ms())
+
+    fa.landed.clear()
+    fb.landed.clear()
+    sl.setSliderDown(True)                     # a drag whose last target is the one in flight:
+    sl.setSliderPosition(30_000)
+    sl.setSliderDown(False)                    # the release adds nothing
+    assert (fa.landed, fb.landed) == ([30_000], [60_000]), (fa.landed, fb.landed)
+    fa.present()
+    fb.present()
+
+    fa.landed.clear()
+    fb.landed.clear()
+    sl.triggerAction(QSlider.SliderAction.SliderPageStepAdd)   # a groove click: +5 s, exact
+    sl.triggerAction(QSlider.SliderAction.SliderSingleStepSub)  # a step: -1 s, exact
+    sl.setSliderPosition(20_000)               # a wheel step: SliderMove with the handle UP, exact
+    assert (fa.landed, fb.landed) == ([35_000, 34_000, 20_000], [65_000, 64_000, 50_000]), (
+        fa.landed, fb.landed)
+    view.stop_all()
+    print("test_a_slider_handle_drag_keeps_one_seek_in_flight_per_pane_and_its_release_lands_the_last OK")
+
+
 # ================================================================== the real player (synthetic GoPro)
 _REAL: dict = {}
 _FRAME_TOL_S = 0.05          # one 59.94 fps frame is 16.7 ms; the frame shown for a seek starts at/before it
@@ -533,6 +605,7 @@ if __name__ == "__main__":
     test_a_paused_jump_across_a_chapter_shows_its_frame()
     test_a_seek_on_a_loaded_never_played_pane_shows_its_frame()
     test_a_drag_keeps_one_seek_in_flight_and_the_latest_target_wins()
+    test_a_slider_handle_drag_keeps_one_seek_in_flight_per_pane_and_its_release_lands_the_last()
     test_real_player_open_shows_the_best_lap_and_play_starts_there()
     test_real_player_fresh_pane_seeks_land_in_either_chapter()
     print("test_player_seek_present: all OK")
