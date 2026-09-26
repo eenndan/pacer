@@ -34,7 +34,13 @@ os.environ.setdefault("PACER_NO_MEDIA", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from test_debrief_landing import _APP, _fresh_app_support, _open, _settle, _two_recordings  # noqa: E402
+from test_debrief_landing import (  # noqa: E402
+    _APP,
+    _fresh_app_support,
+    _open,
+    _settle,
+    _two_recordings,
+)
 
 _DEMO_CIRCUIT = "Synthetic demo circuit"
 
