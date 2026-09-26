@@ -56,6 +56,30 @@ _SEAM_RESUME_WATCHDOG_MS = 8000
 # 693 ms between drag frames on Sandown 3h's 4K HEVC (P-A p9), 460-560 ms on the synthetic GoPro.
 _DRAG_SEEK_RELEASE_MS = 1000
 
+
+def _resolve_notify_overrides(audio: QAudioOutput) -> None:
+    """Have PySide look up this output's connectNotify/disconnectNotify Python overrides NOW, on the
+    GUI thread, so that no FFmpeg engine thread ever has to (QA 2026-09-26, LIFE-1).
+
+    Attached to a player, the output is connected to by the engine's AudioRenderer, and an
+    ASYNCHRONOUS teardown — stop(), the dispose() of a reload, setAudioOutput(None) — destroys that
+    renderer on its own thread, where ~QObject calls the output's disconnectNotify while holding one
+    of Qt's pooled signal-slot mutexes. For an object PySide constructed, that virtual is the
+    generated wrapper, which the FIRST time takes the GIL to look for a Python override and then
+    answers from a per-object cache. Sampled on MK, the GIL held 5 s after the first stop() or
+    dispose() of an un-muted pane: the QFFmpeg::AudioRenderer thread sat in take_gil under
+    QAudioOutputWrapper::disconnectNotify in 4 of 4 runs — a thread waiting for the GIL with a Qt
+    mutex held, the precondition of the hang sampled on 2026-09-25. One connect + disconnect here,
+    while this thread holds the GIL anyway, fills both caches: the same runs park 0 of 4. (A chapter
+    switch is no such teardown: setSource joins the engine inside the call, with the GIL released.)
+    This leans on shiboken's per-object cache, measured on PySide 6.11.1;
+    tests/test_player_audio.py pins the call, not the cache."""
+    def _noop(*_args):
+        pass
+    audio.volumeChanged.connect(_noop)
+    audio.volumeChanged.disconnect(_noop)
+
+
 # ----------------------------------------------------------------- headless / CI seam
 # PACER_NO_MEDIA=1 swaps the media triplet for the inert _Null* stand-ins below (headless CI smoke);
 # built identically otherwise. Read once at construction.
@@ -104,7 +128,12 @@ class _NullMediaPlayer(QObject):
 
 class _NullAudioOutput(QObject):
     """Inert QAudioOutput stand-in (PACER_NO_MEDIA=1): remembers the muted flag, no device. Starts
-    muted, like production."""
+    muted, like production. Same signals (never fire), so code that connects to the real output's —
+    _resolve_notify_overrides, when a test builds the non-headless pane with this stand-in — runs."""
+
+    volumeChanged = Signal(float)
+    mutedChanged = Signal(bool)
+    deviceChanged = Signal()
 
     def __init__(self):
         super().__init__()
@@ -201,15 +230,16 @@ class PlayerPane(QWidget):
             # muted by default (telemetry tool — no surprise 4K-clip audio); volume preset so un-mute
             # is audible.
             self.audio = QAudioOutput()
+            _resolve_notify_overrides(self.audio)   # before any engine thread can disconnect from it
             self.audio.setVolume(0.6)
             self.audio.setMuted(True)
-        # The audio output is attached on the first UN-mute (set_muted), not here. Attached, it gives
-        # the FFmpeg engine an audio-renderer thread whose teardown — every chapter switch, compare
-        # exit, reload — disconnects from this Python-made QAudioOutput: PySide's disconnectNotify
-        # then waits for the GIL while holding Qt's signal-slot lock, and a main thread holding the
-        # GIL that connects anything under the same lock deadlocks (sampled 2026-09-25: leaving
-        # compare on MK hung for good). A muted pane — pane B always, the primary by default — never
-        # needs that thread, and once seeks present paused every pane builds its engine at load.
+        # The audio output is attached on the first UN-mute (set_muted), not here: attached, it gives
+        # the FFmpeg engine an audio-renderer thread (and opens the device), and a muted pane — pane
+        # B always, the primary by default — would never use either; once seeks present paused,
+        # every pane builds its engine at load. The renderer's one hazard, its asynchronous teardown
+        # calling back into Python from its own thread (stop(), a reload's dispose(), a detach — not
+        # a chapter switch, which joins the engine synchronously), is closed at construction by
+        # _resolve_notify_overrides, so an un-mute is safe on every path that later tears it down.
         self._audio_attached = False
         self.player.setVideoOutput(self.video)
 
@@ -371,7 +401,8 @@ class PlayerPane(QWidget):
         self.audio.setMuted(bool(muted))
         if not muted and not self._audio_attached:
             # first un-mute: only now does the engine get an audio renderer (see __init__). It stays
-            # attached after a re-mute — detaching is itself the teardown that can deadlock.
+            # attached after a re-mute: detaching would be one more asynchronous renderer teardown,
+            # and a muted output plays nothing anyway.
             self._audio_attached = True
             self.player.setAudioOutput(self.audio)
 

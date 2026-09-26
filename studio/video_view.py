@@ -1093,6 +1093,14 @@ class VideoView(QWidget):
     # comparing', and this says only what the view now holds.
     compareModeChanged = Signal(bool)
 
+    # The primary pane's mute choice for THIS RUN of the app (QA 2026-09-26, LIFE-4). Opening another
+    # recording rebuilds the whole view, and with it a fresh, muted PlayerPane, so an un-mute reset
+    # on every open; toggle_mute records it here and each new view starts from it. Per process, so per
+    # window (the app opens one), and never persisted: a launch starts muted on purpose. Un-muting a
+    # pane as it is built is safe because its output is primed against the renderer-teardown hazard
+    # at construction (player_pane._resolve_notify_overrides).
+    _audio_on = False
+
     def __init__(self, source: str | chapters.ChapterMap | None):
         super().__init__()
         # Remembered so the lazy secondary pane can open the SAME ChapterMap.
@@ -1150,6 +1158,9 @@ class VideoView(QWidget):
         self.mute_btn = icon_button("ph.speaker-simple-x",
                                     tooltip="Audio muted — click to unmute (M)")
         self.mute_btn.clicked.connect(self.toggle_mute)
+        if VideoView._audio_on:          # un-muted earlier in this run: the new recording is too
+            self.pane.set_muted(False)
+            self._sync_mute_button()
 
         # Playback-speed picker, in the PLAYBACK group beside ▶ and 🔇 rather than with the view
         # toggles: it changes what the transport does, not what the panel shows. A QComboBox and
@@ -1893,12 +1904,19 @@ class VideoView(QWidget):
     # ------------------------------------------------------------- audio (mute)
     def toggle_mute(self):
         """F4: flip the PRIMARY audio mute state and update the button icon/tooltip. The secondary
-        pane stays ALWAYS muted (a telemetry tool — never two audio streams at once)."""
+        pane stays ALWAYS muted (a telemetry tool — never two audio streams at once). The choice
+        carries to the next recording opened in this run (see _audio_on)."""
         muted = not self.pane.is_muted()
         self.pane.set_muted(muted)
+        VideoView._audio_on = not muted
         # Secondary is always muted; never unmute it.
         if self.secondary is not None:
             self.secondary.set_muted(True)
+        self._sync_mute_button()
+
+    def _sync_mute_button(self):
+        """The mute button's glyph + tooltip, from the PRIMARY pane's actual state."""
+        muted = self.pane.is_muted()
         self.mute_btn.setIcon(theme.icon("ph.speaker-simple-x" if muted
                                          else "ph.speaker-simple-high"))
         self.mute_btn.setToolTip("Audio muted — click to unmute (M)" if muted
