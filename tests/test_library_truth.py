@@ -233,6 +233,44 @@ def test_a_missing_footage_row_is_selectable_not_openable_and_says_where_it_was(
         dlg.deleteLater()
 
 
+def test_right_click_session_record_on_a_missing_row_edits_that_row():
+    """The row's right-click "Session record…" selects the row, then edits the selection. On a
+    row that could not be selected, `selectRow` CLEARED the selection instead, so the menu item did
+    nothing at all (measured on main: no editor, and the 19 Sep row deselected). A missing row's
+    session record is still his to write — the footage is elsewhere, the session happened."""
+    from PySide6.QtWidgets import QMenu
+
+    from studio import library_dialog
+
+    class _PicksSessionRecord(QMenu):
+        # A Python override, because assigning QMenu.exec on the class does not take (its exec
+        # has static and instance overloads), and the real popup then blocks the run.
+        def exec(self, *a):
+            return next(x for x in self.actions() if x.text() == "Session record…")
+
+    with tempfile.TemporaryDirectory() as d:
+        clip = os.path.join(d, "GX010068.MP4")
+        open(clip, "wb").close()
+        rows = [_entry("GX010068", [clip]),
+                _entry("GX010060", ["/Volumes/pacer-test-no-such-drive/D24/GX010060.MP4"],
+                       track="Daytona Milton Keynes", date="2026-05-23")]
+        edited = []
+        dlg = LibraryDialog({"version": library.VERSION, "entries": rows}, _OpenSpy(),
+                            forget_recording=lambda e: {"entries": rows},
+                            edit_record=lambda e: edited.append(e["fingerprint"]))
+        dlg.show()
+        QApplication.processEvents()
+        library_dialog.QMenu = _PicksSessionRecord
+        try:
+            rect = dlg.table.visualRect(dlg.table.model().index(_row(dlg, "GX0060"), 1))
+            dlg._on_context_menu(rect.center())
+        finally:
+            library_dialog.QMenu = QMenu
+        assert edited == ["GX0060"], f"right-click on the D24 row edited {edited}"
+        dlg.close()
+        dlg.deleteLater()
+
+
 def test_reopening_the_recording_from_its_new_folder_repoints_the_row():
     """The line's promise, through the app's own load-time path: the drive comes back under a new
     mount point, File ▸ Open picks a chapter (the door expands it to the whole recording), and
