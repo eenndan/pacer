@@ -1224,6 +1224,8 @@ class VideoView(QWidget):
         self.slider.sliderMoved.connect(self._on_slider_moved)
         # groove clicks are actionTriggered not sliderMoved — route them through the same clamped seek.
         self.slider.actionTriggered.connect(self._on_slider_action)
+        # a handle drag's last target may still be waiting its turn: the release lands it now.
+        self.slider.sliderReleased.connect(self._on_slider_released)
         if self.pane.total_duration > 0:
             self.slider.setRange(0, int(self.pane.total_duration * 1000))
         self.pane.durationChanged.connect(self._on_duration)
@@ -1994,8 +1996,9 @@ class VideoView(QWidget):
         self.slider.set_span_note("this bar spans the compared lap, not the whole session")
 
     def set_compare_seek_fanout(self, fn) -> None:
-        """Inject the compare-mode fan-out hook: called from _on_slider_moved with the primary's new
-        global time so the seek is distance-locked to pane B. None disables it (single-video mode)."""
+        """Inject the compare-mode fan-out hook: called from _on_slider_moved as `fn(t, dragged=…)`
+        with the primary's new global time, so the seek is distance-locked to pane B — through B's
+        drag path while the handle is dragged. None disables it (single-video mode)."""
         self._compare_seek_fanout = fn
 
     def _on_slider_moved(self, ms: int):
@@ -2006,16 +2009,36 @@ class VideoView(QWidget):
             lo, hi = self._lap_window
             ms = min(max(ms, int(lo * 1000)), int(hi * 1000))
         t = ms / 1000.0
-        self.seek(t)  # PRIMARY pane
+        # A HANDLE drag takes the drag path the chart scrub has had since #417: one seek in flight
+        # per pane, the newest target held behind it (PlayerPane.seek_dragged). A seek per move was
+        # superseded before its frame existed, so the picture sat still for the whole drag: 0 frames
+        # in a 2.6 s, 120-move drag on MK's 4K footage, both panes in compare (QA 2026-09-26,
+        # LIFE-2). Groove clicks, wheel steps and the arrow keys stay exact seeks.
+        dragged = self.slider.isSliderDown()
+        if dragged:
+            self.pane.seek_dragged(t)
+        else:
+            self.seek(t)  # PRIMARY pane
         # fan the same move out to pane B (distance-locked); only in compare mode, after the primary seek.
         if self.secondary is not None and self._compare_seek_fanout is not None:
-            self._compare_seek_fanout(t)
+            self._compare_seek_fanout(t, dragged=dragged)
 
-    def _on_slider_action(self, _action: int):
-        """Route a groove click/wheel (actionTriggered, every action — never reaches sliderMoved)
-        through the same clamped seek as a drag. No double-seek: a handle drag emits only
-        sliderMoved, never triggerAction."""
+    def _on_slider_action(self, action: int):
+        """Route a groove click / wheel step (actionTriggered — never reaches sliderMoved) through
+        the same clamped seek as a drag. A HANDLE drag triggers an action too: while the handle is
+        down, every setSliderPosition emits sliderMoved AND triggerAction(SliderMove) — two seeks
+        per move, measured 240 for 120 moves (QA 2026-09-26, LIFE-5) — so that one is dropped here:
+        _on_slider_moved has already taken the move. (Qt delivers the action as a plain int.)"""
+        if action == QSlider.SliderAction.SliderMove.value and self.slider.isSliderDown():
+            return
         self._on_slider_moved(self.slider.sliderPosition())
+
+    def _on_slider_released(self):
+        """The handle is let go: a pane whose drag still holds a newer target behind its in-flight
+        seek lands it NOW, as an exact seek, rather than after the in-flight frame it would only
+        replace (PlayerPane.finish_drag). Pane B's is its own distance-locked target."""
+        for pane in self._panes():
+            pane.finish_drag()
 
     def _on_duration(self, ms: int):
         """A per-chapter real video-track duration arrives as each source loads (durationChanged,
