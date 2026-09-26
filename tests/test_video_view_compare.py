@@ -441,7 +441,7 @@ def test_d1_slider_move_fans_out_to_pane_b_in_compare():
     In single-video mode the hook must NOT fire (no pane B)."""
     view = VideoView(_cmap("PRIMARY"))
     fanned = []
-    view.set_compare_seek_fanout(lambda t: fanned.append(t))
+    view.set_compare_seek_fanout(lambda t, dragged=False: fanned.append(t))
 
     # Single mode first: a slider move must NOT fan out (no secondary pane mounted).
     view._on_slider_moved(5_000)
@@ -465,7 +465,7 @@ def test_d1_step_routes_through_fanout():
     fans out to pane B too — the arrows distance-lock the pair exactly like the slider."""
     view = VideoView(_cmap("PRIMARY"))
     fanned = []
-    view.set_compare_seek_fanout(lambda t: fanned.append(t))
+    view.set_compare_seek_fanout(lambda t, dragged=False: fanned.append(t))
     view.set_compare(_spec(0, (4.0, 9.0), "A", [0, 1]),
                      _spec(1, (20.0, 30.0), "B", [0, 1]))
     # Park the primary near lap A's start, then step +1 s; the fan-out must fire (clamped to window).

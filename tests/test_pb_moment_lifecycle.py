@@ -286,16 +286,21 @@ def _window(best, laps, track=_TRACK):
 
 def test_load_full_recording_does_not_celebrate_against_its_own_chapter():
     """§3.2 REPRO 1, end to end: open GX010062 (22 laps, 68.771) then "Load full recording"
-    (all three chapters, 66 laps, 68.201). On main the second call returns
-    {'kind': 'beat', 'prior': 68.771, 'improvement': 0.57} — the recording beating itself."""
+    (all three chapters, 66 laps, 68.201). On main the second call returned
+    {'kind': 'beat', 'prior': 68.771, 'improvement': 0.57} — the recording beating itself.
+
+    Since QA NEW-1 the chapter open decides nothing and writes no row, so that path cannot start;
+    the identity guard still stands between the whole recording and a PARTIAL ROW ALREADY ON DISK
+    (an older build stored one for every File ▸ Open), which is what the second half drives."""
     if not _pacer_available():
         print("skip test_load_full_recording_does_not_celebrate_against_its_own_chapter (no pacer)")
         return
     with _temp_library(), tempfile.TemporaryDirectory(prefix="pacer-test-media-") as media:
         ch = _chapter_files(media)
         studio_app, win = _window(68.771, 22)
-        first = win.library_ctl.update_library([ch[0]])
-        assert first is not None and first["kind"] == "first", first
+        assert win.library_ctl.update_library([ch[0]]) is None, "part of a recording decided"
+        assert library.load()["entries"] == [], "part of a new recording wrote its row"
+        library.upsert_and_save(win.session.library_entry([ch[0]]))   # as an older build did
 
         studio_app, win = _window(68.201, 66)
         moment = win.library_ctl.update_library(ch)
@@ -309,14 +314,17 @@ def test_load_full_recording_does_not_celebrate_against_its_own_chapter():
 
 def test_a_second_chapter_of_one_outing_does_not_celebrate():
     """§3.2 REPRO 2: two chapters of ONE outing opened one after the other (the review drove
-    GX030060 then GX020060). They share a fingerprint, so this is the same self-comparison."""
+    GX030060 then GX020060). They share a fingerprint, so this is the same self-comparison — and
+    since QA NEW-1 neither chapter alone decides anything, even over a row an older build stored
+    for the first of them."""
     if not _pacer_available():
         print("skip test_a_second_chapter_of_one_outing_does_not_celebrate (no pacer)")
         return
     with _temp_library(), tempfile.TemporaryDirectory(prefix="pacer-test-media-") as media:
         ch = _chapter_files(media, number="0060")
         studio_app, win = _window(68.771, 21)
-        assert win.library_ctl.update_library([ch[2]]) is not None   # first logged
+        assert win.library_ctl.update_library([ch[2]]) is None, "part of a recording decided"
+        library.upsert_and_save(win.session.library_entry([ch[2]]))   # as an older build did
 
         studio_app, win = _window(68.201, 22)
         moment = win.library_ctl.update_library([ch[1]])
@@ -370,12 +378,14 @@ def test_load_full_recording_still_beats_a_previous_days_recording():
     print("test_load_full_recording_still_beats_a_previous_days_recording OK")
 
 
-def test_two_chapters_opened_separately_still_beat_a_previous_days_recording():
-    """The same falsifier on the cross-chapter path: day 1 at 68.500, then chapter 3 (68.771,
-    silent) and chapter 2 (68.201) of one outing. The second chapter must still celebrate over
-    day 1 — only the self-comparison with chapter 3 is suppressed."""
+def test_chapters_opened_separately_leave_the_pb_to_the_whole_recording():
+    """The same falsifier on the cross-chapter path: day 1 at 68.500, then chapter 3 (68.771) and
+    chapter 2 (68.201) of one outing. Chapter 2 alone used to celebrate over day 1; since QA NEW-1
+    part of a recording decides nothing — SD_19_09's chapter 1 announced 0:46.862 for a true
+    0:46.808 — so the PB over day 1 is the WHOLE recording's to announce. It still is, against
+    day 1: nothing the chapters did stands in its way."""
     if not _pacer_available():
-        print("skip test_two_chapters_opened_separately_still_beat_a_previous_days_recording (no pacer)")
+        print("skip test_chapters_opened_separately_leave_the_pb_to_the_whole_recording (no pacer)")
         return
     with _temp_library(), tempfile.TemporaryDirectory(prefix="pacer-test-media-") as media:
         day1 = _chapter_files(media, count=1, number="0059")
@@ -387,10 +397,13 @@ def test_two_chapters_opened_separately_still_beat_a_previous_days_recording():
         assert win.library_ctl.update_library([ch[2]]) is None, "chapter 3 is slower"
 
         studio_app, win = _window(68.201, 22)
-        moment = win.library_ctl.update_library([ch[1]])
+        assert win.library_ctl.update_library([ch[1]]) is None, "a chapter alone decided a PB"
+
+        studio_app, win = _window(68.201, 66)
+        moment = win.library_ctl.update_library(ch)
         assert moment is not None and moment["kind"] == "beat", moment
         assert moment["prior"] == 68.500 and abs(moment["improvement"] - 0.299) < 1e-9, moment
-    print("test_two_chapters_opened_separately_still_beat_a_previous_days_recording OK")
+    print("test_chapters_opened_separately_leave_the_pb_to_the_whole_recording OK")
 
 
 # ============================================= C. the toast's lifetime (REAL window; needs pacer)
@@ -593,7 +606,7 @@ if __name__ == "__main__":
     test_a_second_chapter_of_one_outing_does_not_celebrate()
     test_a_genuinely_new_recording_still_celebrates_through_the_app_path()
     test_load_full_recording_still_beats_a_previous_days_recording()
-    test_two_chapters_opened_separately_still_beat_a_previous_days_recording()
+    test_chapters_opened_separately_leave_the_pb_to_the_whole_recording()
     test_a_second_personal_best_still_shows_after_the_first_card_is_gone()
     test_a_stale_wrapper_cannot_swallow_the_next_celebration()
     test_a_failing_dismiss_cannot_strand_the_load()

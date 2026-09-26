@@ -318,8 +318,20 @@ class Session:
         analyse a silent subset of the user's recording. Those go to the loader and fail loudly,
         exactly as before. Skipping is never silent either — it is logged, and the app names the
         file in its session notice. If NOTHING is loadable there is no session to build, so that
-        raises rather than returning a mysteriously empty one."""
-        paths, skipped = chapters.split_non_mp4(list(paths))
+        raises rather than returning a mysteriously empty one.
+
+        The chapters are chained IN CHAPTER ORDER, each once (`chapters.load_order`), whatever
+        order they arrive in. Every door builds that order already; this is the backstop for any
+        route that does not, because the loader chains exactly what it is handed: MK's two chapters
+        given reversed on the command line loaded 18 laps (1:07.479 became 1:07.537 — the best lap
+        is the seam lap) and the same file given twice loaded 22 laps from 11 (QA NEW-2). Logged
+        once, when it changes anything."""
+        ordered = chapters.load_order(list(paths))
+        if ordered != list(paths):
+            _log.warning("chaining the chapters in chapter order, once each: %s (given: %s)",
+                         ", ".join(os.path.basename(p) for p in ordered),
+                         ", ".join(os.path.basename(p) for p in paths))
+        paths, skipped = chapters.split_non_mp4(ordered)
         if skipped:
             _log.warning("skipping %d file(s) that are not readable video: %s", len(skipped),
                          ", ".join(os.path.basename(p) for p in skipped))
@@ -946,6 +958,7 @@ class Session:
             lap_arrays=self._lap_arrays,
             lap_window=self.lap_window,
             brake_events=lambda i: self.driving.lap_brake_events(i),
+            brake_time=lambda i: self.driving.lap_brake_time(i),
             coast_spans=lambda i: self.driving.lap_coasting_spans(i),
         )
 

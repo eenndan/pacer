@@ -467,6 +467,27 @@ def test_compare_fanout_seek_b_noop_outside_compare():
     print("test_compare_fanout_seek_b_noop_outside_compare OK")
 
 
+def test_compare_fanout_seek_b_drags_pane_b_while_the_handle_is_dragged():
+    """LIFE-2: a slider HANDLE drag fans out to pane B through B's DRAG path (one seek in flight, the
+    newest held), as it does to pane A — seeked once per move, B stayed frozen for the whole drag. A
+    click, wheel step or arrow key stays an exact seek. Same distance-locked target either way."""
+    s, a, _b = _make_session()
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
+    state["applied_t"] = 105.0
+    compare.enter()
+    video.pane_seeks.clear()
+    dragged = []
+    video.seek_pane_dragged = lambda side, t: dragged.append((side, t))   # tell the two paths apart
+    ta = _lap_times(s, a)
+    t_a = float(ta[len(ta) // 3])
+    compare.fanout_seek_b(t_a, dragged=True)
+    assert video.pane_seeks == [] and len(dragged) == 1 and dragged[0][0] == 1, (
+        f"a handle drag's fan-out seeked pane B directly: exact {video.pane_seeks}, drag {dragged}")
+    compare.fanout_seek_b(t_a)
+    assert video.pane_seeks == dragged, (video.pane_seeks, dragged)   # same target, exact path
+    print("test_compare_fanout_seek_b_drags_pane_b_while_the_handle_is_dragged OK")
+
+
 # ===================================================================== CompareController
 def test_compare_tick_badges_and_g_for_two_laps():
     """Compare per-tick: each pane's "Δ vs other" badge (+behind / −ahead) at that pane's own track

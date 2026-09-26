@@ -452,7 +452,7 @@ def upsert(index: dict, entry: dict) -> dict:
     (built by ``Session.library_entry`` / a test); it is normalized on store.
 
     KEPT BY WHAT IT COVERED. The key is chapter-invariant on purpose, so every open of any subset of
-    a recording's chapters upserts this one row, and File ▸ Open loads only the file picked.
+    a recording's chapters upserts this one row, and the command line can load a single chapter.
     Replacing unconditionally made whichever chapter was opened LAST the outing — board review
     UX-4, on SD_19_09: a full load (36 laps · 0:46.808), then chapter 2 alone, then chapter 1 alone
     left "26 laps · 0:46.862", and the owner's Sandown PB was gone from the Library and its PB

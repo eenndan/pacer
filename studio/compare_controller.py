@@ -127,14 +127,16 @@ class CompareController:
         return self._compare_b
 
     # ------------------------------------------------------------------ slider/arrow distance-lock
-    def fanout_seek_b(self, t_a: float) -> None:
+    def fanout_seek_b(self, t_a: float, dragged: bool = False) -> None:
         """The global scrub slider + arrow keys seek only pane A, which desyncs the pair in compare
         mode (D1). So distance-lock the same move to pane B: convert pane A's new playhead time
         `t_a` (TELEMETRY, like every time the panes emit and accept) to a normalized-distance
         position, then back to pane B's own telemetry time, and seek B there — the pane crosses to
         its own recording's media clock itself.
         No-op outside compare or if either lap is degenerate. Pane B resolves against session_b (the
-        reference clock when cross)."""
+        reference clock when cross). A slider HANDLE drag (`dragged`) seeks B through its drag path,
+        as it does A: seeked once per move, B stayed frozen for the whole drag (QA 2026-09-26,
+        LIFE-2)."""
         a, b = self._compare_a, self._compare_b
         if not self._compare or a is None or b is None:
             return
@@ -146,7 +148,7 @@ class CompareController:
             return
         t_b = self._session_b.media_time_at_plot_x(b, x, "distance", best_distance=best_d)
         if t_b is not None:
-            self.video.seek_pane(1, t_b)
+            (self.video.seek_pane_dragged if dragged else self.video.seek_pane)(1, t_b)
 
     # ------------------------------------------------------------------ per-tick upkeep
     def tick(self) -> None:

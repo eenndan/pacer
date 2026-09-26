@@ -3,11 +3,10 @@
 Six QA findings from the design-wave measurements, each pinned by the thing that was measured:
 
   * D4-02 (HIGH) — THE TWO FRONT DOORS DISAGREED BY 44 LAPS AND NEITHER SAID SO. Dropping
-    GX010062.MP4 loads 66 laps across three chapters; picking the SAME file in File ▸ Open… loads
-    22, because dropEvent goes through _open_recordings -> chapters.discover_siblings and _open_file
-    does not. The window title's "· 3 chapters" suffix only appears in the affirmative case and the
-    status bar said nothing in either. The behaviour is deliberate (see _open_file's docstring for
-    why chaining there would kill File ▸ Load full recording); the SILENCE was not.
+    GX010062.MP4 loaded 66 laps across three chapters; picking the SAME file in File ▸ Open…
+    loaded 22, and the status bar said nothing in either. File ▸ Open… now opens the whole
+    recording too (QA NEW-1, tests/test_whole_recording_doors.py); a partial session still comes
+    from the command line's single chapter or a stored row, and it must still SAY so.
   * D4-01 (HIGH) — THE BUSY CARD FROZE FOR 1.5 s UNDER A HEADLINE THAT HAD STOPPED BEING TRUE.
     Session.load is off-thread, _build_ui is not; the card must NAME the stage that is about to
     block, on the card already on screen, with a forced paint.

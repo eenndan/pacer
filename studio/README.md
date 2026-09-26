@@ -13,13 +13,16 @@ one section per module in this order — read the one you need, not the whole fi
 
 ```bash
 pixi run studio                              # the welcome screen: drop or open a recording
-pixi run studio -- /path/to/GX010062.MP4     # one chapter only (DEFAULT — single-file, as before)
-pixi run studio -- --full /path/to/GX010062.MP4  # opt-in: discover + chain ALL sibling chapters
-pixi run studio -- a.MP4 b.MP4               # explicit chaptered recording (chained in order)
+pixi run studio -- /path/to/GX010062.MP4     # that chapter only: the command line loads what it names
+pixi run studio -- --full /path/to/GX010062.MP4  # discover + chain ALL sibling chapters
+pixi run studio -- b.MP4 a.MP4               # explicit chapters: chained in chapter order, once each
 ```
 
-A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`); opening one loads only that file, and
-`--full` or **File ▸ Load full recording** chains its siblings (same `NNNN`, same folder, by `CC`).
+A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`). A drop, **File ▸ Open…** and the
+welcome's **Open recording…** open the whole recording (same `NNNN`, same folder, by `CC`). The
+command line loads the chapters it names, grouped by recording (several recordings: the first
+opens and the rest are counted, as on a drop); `--full` or **File ▸ Load full recording** chains the
+rest. Part of a new recording decides no PB or focus list until the whole recording is loaded.
 `--demo` opens the demo clip when one resolves ([`demo.py`](demo.py)). Equivalent without pixi:
 `python -m studio [files]`. Dev tools live in [`dev/`](dev/): diagnose a file headlessly with
 `pixi run python -m studio.dev.diagnose -- file.MP4 [--clean]`, measure GPS smoothing with
