@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from . import corners as corners_mod
-from . import units
+from . import driving, units
 from ._signal import plural
 from .corners import project_boundaries
 
@@ -523,15 +523,18 @@ class Opportunity:
 # holding the most ranked time, whether or not it clears THEME_SHARE; a lap set that ranks nothing
 # has no share and no cause ("none"). The D24 edition, which #344 marked stale after #335 changed
 # corner matching, is kept in studio/docs/coaching-tables-on-d24.md. Every Sandown lap set is timed on
-# the built-in Sandown Park line, the owner's own (Q2):
+# the built-in Sandown Park line, the owner's own (Q2). K (2026-09-26) re-measured the cause column
+# when the braking reason began counting time on the brakes instead of the brake events' spans
+# (`_window_brake_time`): two chapters' top cause moved, 0068 chapter 2 from line 74 % to braking
+# 53 % and 0064 chapter 2 from braking 51 % to line 100 %; no other cell did:
 #
 #   lap set           laps  ranked  ranked s  abstained s  execution   pace  top cause
 #   0068                36       5     0.426        0.072       78 %   22 %  line 53 %
 #   0064                62       4     0.768        0.106        0 %  100 %  line 100 %
 #   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  line 61 %
-#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  line 74 %
+#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  braking 53 %
 #   0064 chapter 1      17       0     0.000        3.738        0 %    0 %  none 0 %
-#   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  braking 51 %
+#   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  line 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
 #
 # 0068 splits 78 % execution / 22 % pace and 0064 splits 0 % / 100 % — the same track two months
@@ -705,12 +708,25 @@ def _project_window(c_enter: float, c_exit: float, corner_dist_total: float | No
 
 def _window_brake_time(events, d_enter: float, d_exit: float,
                        dist: np.ndarray | None = None,
-                       elapsed: np.ndarray | None = None) -> float:
+                       elapsed: np.ndarray | None = None,
+                       on: np.ndarray | None = None) -> float:
     """Time on the brakes (s) spent INSIDE a corner's approach+window
     [d_enter − BRAKE_APPROACH_M, d_exit], integrating each brake event's OVERLAP with that window.
     `events` is a list with .onset_dist / .onset_time / .duration (driving.BrakeEvent); `dist` /
     `elapsed` are the SAME lap's odometer + seconds-from-lap-start arrays the events were detected
-    on (see _brake_extra).
+    on (see _brake_extra), and `on` that lap's `driving.brake_on` indicator on the same clock.
+
+    WITH `on` IT IS THE STATS PAGE'S "ON THE BRAKES" (`driving.brake_time_on`, clipped to the
+    window): the part of each event where the deceleration, smoothed over the coast band's window,
+    is at or past theta_b. The event's span is not that. It runs through the light lead-in and the
+    lift-off tail the release hysteresis holds it open through, and across a merged event through
+    the power between two applications, so the row said "~1.70 s longer on the brakes" for a
+    corner losing 0.121 s (0064 chapter 3's C1), of which 0.60 s was braking. Measured (K,
+    2026-09-26) on the THEME table's seven lap sets plus 0065 and 0067, real loader: the figure
+    falls on every braking row (0068's C5 1.00 → 0.30 s) and the reason moves on three RANKED rows
+    — 0068 chapter 2's C1 line → braking (its best lap's span covered the whole window), 0064
+    chapter 2's C7 and 0065's C7 braking → line — which moves two THEME rows' top cause. Without
+    `on` (a caller with no g series) it falls back to the span, which is the event's length.
 
     An event carries no release odometer, so it is recovered by interpolating onset_time + duration
     through the lap's own clock (which lands back on the detector's release sample exactly, since
@@ -727,6 +743,9 @@ def _window_brake_time(events, d_enter: float, d_exit: float,
     lo = d_enter - BRAKE_APPROACH_M
     if dist is None or elapsed is None or len(dist) < 2 or len(elapsed) < 2:
         return sum(float(e.duration) for e in events if lo <= e.onset_dist <= d_exit)
+    if on is not None:
+        return driving.brake_time_on(elapsed, on, events, float(np.interp(lo, dist, elapsed)),
+                                     float(np.interp(d_exit, dist, elapsed)))
     total = 0.0
     for e in events:
         d_release = float(np.interp(float(e.onset_time) + float(e.duration), elapsed, dist))
@@ -745,7 +764,7 @@ def _brake_extra(med_events, best_events, med_win: tuple[float, float],
     """Extra s on the brakes vs best in the corner approach, floored at 0. An earlier onset shows
     up as more time on the brakes, so this one difference captures both 'earlier' and 'longer'.
     med_win/best_win are the corner window projected onto each lap's own odometer (see _win);
-    med_trace/best_trace are that lap's (dist, elapsed) arrays for the overlap integral."""
+    med_trace/best_trace are that lap's (dist, elapsed[, brake_on]) arrays for the integral."""
     return max(_window_brake_time(med_events, *med_win, *med_trace)
                - _window_brake_time(best_events, *best_win, *best_trace), 0.0)
 
@@ -961,6 +980,8 @@ def summarize(
     median_elapsed: np.ndarray | None = None,
     best_dist: np.ndarray | None = None,
     best_elapsed: np.ndarray | None = None,
+    median_brake_on: np.ndarray | None = None,
+    best_brake_on: np.ndarray | None = None,
     median_traces: tuple | None = None,
     best_traces: tuple | None = None,
     median_align=corners_mod.DERIVE_ALIGNMENT,
@@ -985,6 +1006,9 @@ def summarize(
     corner's own time by up to 0.49 s at the slowest corner). With them a brake
     event's OVERLAP with the corner window is integrated on the lap's own clock instead of the event
     being taken or dropped whole by its onset (_window_brake_time) — absent → that degenerate rule.
+    median_brake_on/best_brake_on are those two laps' `driving.brake_on` indicators on the same
+    clocks: with them the brake reason counts the time ON THE BRAKES inside the window, the Stats
+    page's quantity, not the events' spans (see _window_brake_time) — absent → the spans.
     median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
     lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the spatial boundary
     alignment in the phase decomposition (omitted → the normalized projection).
@@ -1048,9 +1072,10 @@ def summarize(
     # L5-01: each lap's (odometer, seconds-from-start) pair, so a brake event's overlap with the
     # corner window is integrated on that lap's own clock (a BrakeEvent carries no release
     # odometer). Missing either half → (None, None) → the degenerate onset rule.
-    med_trace = ((median_dist, median_elapsed)
+    # K: each also carries that lap's brake_on indicator, so the overlap counts time ON THE BRAKES.
+    med_trace = ((median_dist, median_elapsed, median_brake_on)
                  if median_dist is not None and median_elapsed is not None else (None, None))
-    best_trace = ((best_dist, best_elapsed)
+    best_trace = ((best_dist, best_elapsed, best_brake_on)
                   if best_dist is not None and best_elapsed is not None else (None, None))
 
     # The WHOLE partition's reference boundaries: each lap's spatial warp is built from all of

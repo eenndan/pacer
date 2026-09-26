@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Nineteen features were built far enough to **measure**, and the measurement said not to ship them. The
+Twenty features were built far enough to **measure**, and the measurement said not to ship them. The
 work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
 would ever look. It is written down here so the next person to suggest one of these starts from the
 numbers instead of from the idea.
@@ -1650,6 +1650,63 @@ blit. (The rewritten pixels are the lossy ones; changing them is a decision of i
 **What would be new evidence:** a PySide6 that releases the GIL in QPainter; a paint in worker
 PROCESSES (not built — the painter reads the Session on every frame and each process would need
 its own QGuiApplication and fonts); or a decision to let the overlay-only dial's edge pixels change.
+
+---
+
+## 20. Splitting a merged brake event where the kart went back on power — refused (K)
+
+**The idea.** #421 found SD_19_09 lap 1's 12.5 s "brake event" to be three applications with the
+kart back on power between them, fused by `merge_brake_maneuvers`. The merge joins fragments across
+up to 25 m of coast, and its throttle gate needs +0.5 g, which a kart rarely pulls. Split such an
+event where the kart gained speed, so that each application is its own event, glyph and brake point.
+
+**How it was measured.** The real loader on the four working-set recordings, with a copy of the
+merge that records which fragments each event holds, asserted equal to the app's events on every lap.
+A gap inside an event counts as a clear release when it lasts more than 0.5 or 1.0 s under
+θ_b × `RELEASE_RATIO`, or when the 0.5 s-smoothed speed rises by more than 1.5 km/h across it
+(the kart back on power). Each consumer was then re-read through the app's own accessors with the
+merge patched to split there. The probes and their output are the K package's evidence (#429).
+
+| | MK_18_09 (0067) | SD_19_09 (0068) | SD_30_08 (0065) | Sandown 3h (0064) |
+|---|---|---|---|---|
+| events (valid laps) | 200 (19) | 251 (36) | 269 (37) | 472 (62) |
+| fused across a release > 0.5 s / > 1.0 s | 22 / 12 | 14 / 8 | 15 / 7 | 87 / 39 |
+| fused across a return to power (> 1.5 km/h) | **10 (5.0 %)** | **9 (3.6 %)** | **8 (3.0 %)** | **59 (12.5 %)** |
+| of those, applications for two corners | 8 | 2 | 2 | 25 |
+| (lap, corner) brake points the split moves > 5 m or restores | 11 / 199 | 10 / 222 | 8 / 238 | 59 / 416 |
+
+Fused across a release over 0.5 s, an event spans a median 44-103 m and 3.6-6.5 s, against 26-31 m
+and 1.9-2.4 s for every event.
+No flagged gap lies inside one detector-free reference zone. The typical one is the approach to
+Sandown's C1, which the corner model draws as one 175 m corner. He dabs the brakes at the kink
+(100-140 m), goes back on power, then brakes for the hairpin around 215 m. The kink application is
+there on 36/36, 36/37 and 58/62 laps and the hairpin brake on 36/36, 37/37 and 61/62, but
+light-deceleration blips under 25 m apart join the two on 9, 7 and 19 laps. On 7, 5 and 15 of those, C1's brake point
+is the kink's instead of the hairpin's. At MK C10→C11 the fused event hides C11's brake on 2 of 19 laps.
+
+**What it costs, and what a split costs.** The pedal band paints fragments, not events, and is
+byte-identical under every variant. Brake events / lap moves only on Sandown 3h (8 → 9); Brake s by
+at most 0.5 s on a lap. No ranked coaching row changes its reason. The real cost is BRAKING's
+C1 row on the three Sandown recordings: onset σ **42.2 / 39.0 / 45.0 m** and span 128.6 / 114.9 /
+149.7 m, a scatter the merge makes, not the driver. A split brings σ to 13.9 / 2.7 / 20.2 m. It also
+hands other corners the wrong brake, because `lap_brake_points` takes the LAST onset in
+[enter − 30 m, exit], and at close corner pairs the next corner's brake starts inside that window
+once it is its own event. Sandown 3h's C6 brake point moves 13-38 m later on 11 laps, up to C7's brake (lap 54: 622.7 → 660.8 m,
+past C6's exit), and its published "Braking later went with quicker passes" line stops firing
+(ρ −0.419, p_Holm 0.013 → −0.186, 1.0). MK's C10 does the same on 6 laps, onto C11's brake. Three repairs of that
+matching were measured, each with and without the split, and each drops a corner's own brake
+points instead:
+
+| matching rule | what it loses |
+|---|---|
+| window ends at this lap's apex (the lowest speed) | Sandown 3h C4 7 of 53, C6 5 of 57; MK C11 3; SD_19_09 C4 2 |
+| window ends where the next corner's lead-in starts | Sandown 3h C6 10 of 57, C5 3; MK C3 5 of 12, C8 2 |
+| an event belongs to the corner that holds its lowest speed | MK C8 15 of 17 and its published direction line; C10 10-16 |
+
+**What would be new evidence:** a corner model that draws Sandown's kink and hairpin as two corners
+(the C1 scatter then leaves the merge's reach); or a rule that gives each application to exactly one
+corner and, on these four recordings, moves no corner's brake point onto another corner's brake and
+drops none.
 
 ---
 
