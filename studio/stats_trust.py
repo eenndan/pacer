@@ -14,8 +14,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
 
 from . import data_quality, media_clock, theme
-from ._signal import exclusion_summary, plural
-from .lap_table import DROPOUT_MARK, EXCLUDED_MARK
+from ._signal import exclusion_summary, fmt_signed, plural
+from .lap_table import DROPOUT_MARK, EXCLUDED_MARK, too_brief_count, too_brief_note
 from .stats_common import NO_GMETER_NOTE, section_heading
 from .widgets import DASH, WrapLabel
 
@@ -317,11 +317,15 @@ class TrustSection:
                          "could not be placed for you.", True))
         excluded = getattr(session, "excluded_lap_ids", list)() or []
         if excluded:
-            # Denominator = the laps the segmenter FOUND, not valid+excluded: a recording can
-            # also carry slivers that never reached the ⊘ band at all, and "24 of 49" would be
-            # arithmetic invented to make the two numbers meet. State both true counts instead.
-            count = getattr(session, "lap_count", None)
-            total = count() if callable(count) else len(valid) + len(excluded)
+            # "LAPS FOUND" = THE LAPS, valid + excluded, and the crossings too brief to be a lap
+            # are named as crossings (LOOK-6, QA 2026-09-26). The denominator used to be
+            # `lap_count()`, which counts those slivers too: "19 of the 22 laps found — 2
+            # excluded" on MK_18_09, where 19 + 2 = 21 and the 22nd was the crossing the Laps tab
+            # says was "too brief to count as a lap". The Laps tab's strip counts the same way
+            # (lap_table.too_brief_count), so the two pages still state one fact with one
+            # denominator — the reason this once moved to `lap_count()`.
+            total = len(valid) + len(excluded)
+            brief = too_brief_count(session, total)
             # WHY, per reason — it used to say "their distance off the session median" for every
             # excluded lap, which was already false for a lap with a stop and is false again for a
             # piece that does not end where it started. getattr-guarded for the lighter doubles.
@@ -329,7 +333,8 @@ class TrustSection:
             rows.append(("Statistics use",
                          f"{len(valid)} of the {plural(total, 'lap')} found — "
                          f"{len(excluded)} {EXCLUDED_MARK} excluded"
-                         + (f": {why}" if why else "") + " (see the Laps tab).", True))
+                         + (f": {why}" if why else "") + " (see the Laps tab)."
+                         + (f" {too_brief_note(brief)}" if brief else ""), True))
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
         # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
         # the other three caveats: it is one, and it was the only one printed among the provenance.
@@ -468,12 +473,12 @@ class TrustSection:
             gain = getattr(cross, "lat_gain", None)
             gain_bit = f" · lateral gain ×{gain:.2f}" if gain is not None else ""
             rows.append(("IMU↔GPS cross-check",
-                         f"{verdict} · lateral r={cross.lat_corr:+.2f}{gain_bit} · "
+                         f"{verdict} · lateral r={fmt_signed(cross.lat_corr, 2)}{gain_bit} · "
                          # Grouped: the cross-check's sample count is the only six-figure number
                          # the app prints, and "346713" is read digit by digit where "346,713" is
                          # read at a glance — the same reason every number on this page is set in
                          # the tabular stack.
-                         f"longitudinal r={cross.long_corr:+.2f} · {cross.n:,} samples",
+                         f"longitudinal r={fmt_signed(cross.long_corr, 2)} · {cross.n:,} samples",
                          not cross.ok))
             tips.append(cross.summary())
             tips.append("Lateral gain is the IMU's lateral magnitude over the GPS-derived one: "
@@ -508,8 +513,8 @@ class TrustSection:
                          f"{verdict} · over {plural(rot.loop_n, 'closed lap')} the gyroscope's "
                          f"measured yaw integrates to {rot.loop_ratio_gyro:.3f}×2π and the "
                          f"path-derived rate to {rot.loop_ratio_path:.3f}×2π, against an exact "
-                         f"{rot.loop_exact:+.3f} · "
-                         f"r={rot.corner_corr:+.2f} between them through the corners{lag}",
+                         f"{fmt_signed(rot.loop_exact, 3)} · "
+                         f"r={fmt_signed(rot.corner_corr, 2)} between them through the corners{lag}",
                          not rot.ok))
             tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
                         "the only quantity on this card with a ground truth rather than a second "
@@ -533,7 +538,7 @@ class TrustSection:
                     f"the camera's media clock — the one the picture plays on — and the GPS trace "
                     f"on its receiver's own. Measured on this recording, {rot.lag_clause}: the "
                     f"correlation above is what they score with that offset still in "
-                    f"(r={rot.lag_corr:+.2f} at the offset, {rot.lag_corr_at_zero:+.2f} without "
+                    f"(r={fmt_signed(rot.lag_corr, 2)} at the offset, {fmt_signed(rot.lag_corr_at_zero, 2)} without "
                     f"it). The figures above are not shifted; they describe the two channels as "
                     f"recorded, and what the app did with the offset is the Video sync row above. "
                     f"Lap times are differences taken on one clock, so none of this moves them.")

@@ -42,7 +42,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import PRINT_DECIMALS, is_best_at_print
+from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print
 from .consistency import sigma
 
 # "moving" threshold, m/s — the SAME cutoff the g-meter/thresholds use for their moving
@@ -76,6 +76,14 @@ TREND_MIN_LAPS = 6
 # exported report and the clipboard summary print the same verdict off the same slope and a
 # second copy of the band is how the file starts disagreeing with the screen.
 TREND_STEADY_BAND = 0.02
+
+#: Two tile captions the Stats page AND the exported summary print (export_data mirrors the page's
+#: rows), so one number has one name on both (QA 2026-09-26). The SESSION duration is the kept GPS
+#: trace's span, not the footage's — the DATA TRUST card's GPS-quality line spans the footage
+#: (LOOK-5). The SPEED · G minimum is `SessionStats.slowest_corner`'s TYPICAL, not the session's
+#: one slowest moment (LOOK-12).
+DURATION_CAPTION = "GPS trace"
+VMIN_CAPTION = "slowest corner · typical"
 # "Race pace" window: the best mean of this many CONSECUTIVE clean laps — the sustained-run
 # number next to the single glory lap.
 RACE_PACE_N = 3
@@ -1206,11 +1214,12 @@ def trend_verdict(slope: float | None) -> str | None:
 
 
 def fmt_trend(slope: float | None) -> str | None:
-    """The trend VALUE as both surfaces print it: `+0.14 s/lap`, or a flat `0.00 s/lap` for a
-    signed near-zero (a "±0.00" display reads as a glitch). None passes through as None."""
+    """The trend VALUE as both surfaces print it: `+0.14 s/lap`, `−0.35 s/lap` (the true minus,
+    `_signal.fmt_signed`), or a flat `0.00 s/lap` for a signed near-zero (a "±0.00" display reads
+    as a glitch). None passes through as None."""
     if slope is None:
         return None
-    return "0.00 s/lap" if round(slope, 2) == 0 else f"{slope:+.2f} s/lap"
+    return fmt_signed(slope, 2, "s/lap")
 
 
 def theil_sen_slope(values, x=None) -> float | None:
@@ -1738,6 +1747,23 @@ class SessionStats:
             if st.vmax_kmh is not None and (best is None or st.vmax_kmh > best[0]):
                 best = (st.vmax_kmh, st.idx)
         return best
+
+    def slowest_corner(self) -> tuple[float, int, float, int] | None:
+        """(typical km/h, laps, lowest km/h, its lap id): the SPEED · G "slowest corner" tile.
+
+        TYPICAL = the median over the CLEAN laps of each lap's slowest speed — the statistic STINTS'
+        "Min" column takes per run, over the same laps, off the same `LapStat.vmin_kmh`. The session
+        MINIMUM this tile printed before is one lap's moment, not a corner: measured (LOOK-12, QA
+        2026-09-26) it was 14.5 km/h on MK_18_09 lap 18 against a typical 30.1 km/h (4 of 19 laps
+        under 21 km/h: traffic and the opening laps), and 31.4 km/h on SD_19_09 lap 6 against 39.3.
+        The minimum and its lap stay available for the tooltip. None with no speed on a clean lap."""
+        clean = set(self._consistency_lap_ids())
+        rows = [(st.vmin_kmh, st.idx) for st in self.lap_stats()
+                if st.vmin_kmh is not None and st.idx in clean]
+        if not rows:
+            return None
+        low = min(rows)
+        return float(np.median([v for v, _ in rows])), len(rows), float(low[0]), int(low[1])
 
     # ------------------------------------------------------------------ band distributions
     def _band_report(self, per_lap: Callable[[int], tuple | None], width: float, *,

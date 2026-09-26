@@ -575,7 +575,8 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     tot = st.totals() if st is not None else None
     note = ""
     if tot is not None and tot.duration_s > 0:
-        rows += [("recorded", fmt_hms(tot.duration_s)), ("moving", fmt_hms(tot.moving_s)),
+        rows += [(stats_service.DURATION_CAPTION, fmt_hms(tot.duration_s)),
+                 ("moving", fmt_hms(tot.moving_s)),
                  # None below stats.MIN_KEPT_FRAC: the trace was too broken for a path length to
                  # mean anything, and the page dashes it rather than printing a fiction.
                  ("distance", "" if tot.distance_m is None
@@ -584,7 +585,8 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
                   if tot.start_clock and tot.end_clock else "")]
         note = _distance_note(tot)
     else:
-        rows += [("recorded", ""), ("moving", ""), ("distance", ""), ("on track", "")]
+        rows += [(stats_service.DURATION_CAPTION, ""), ("moving", ""), ("distance", ""),
+                 ("on track", "")]
     out.append(SummarySection("SESSION", rows, note=note))
 
     # --- PACE. GATED ON VALID LAPS, NOT ON THE PACE SUMMARY, because that is the page's gate
@@ -650,14 +652,15 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         gap = float(np.asarray(sb.times[sb.lap_ids.index(best_id)]).sum()) - sb.total
         out.append(SummarySection("IDEAL LAP", [
             (smp.caption(), fmt_time(sb.total)),
-            ("on the table · vs your best", f"{-gap:+.2f} s"),
+            # UNSIGNED, as the tile prints it: time you can find is a magnitude (LOOK-7).
+            ("on the table · vs your best", f"{gap:.2f} s"),
         ], note=smp.sentence()))
 
     # --- SPEED · G: session peaks over the per-lap stats, the page's own reductions.
     lap_rows = st.lap_stats() if st is not None else []
     if lap_rows:
         vmax = st.session_vmax()
-        vmins = [r.vmin_kmh for r in lap_rows if r.vmin_kmh is not None]
+        slow = getattr(st, "slowest_corner", lambda: None)()
         lat_peaks = [r.peak_lat_g for r in lap_rows if r.peak_lat_g is not None]
         brk_peaks = [r.peak_brake_g for r in lap_rows if r.peak_brake_g is not None]
         out.append(SummarySection("SPEED · G", [
@@ -665,8 +668,9 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
             ("top speed" if vmax is None else f"top speed · lap {lap_label(vmax[1])}",
              "" if vmax is None else
              f"{units.convert_speed(vmax[0], unit_id):.1f} {u_label}"),
-            ("slowest point", f"{units.convert_speed(min(vmins), unit_id):.1f} {u_label}"
-             if vmins else ""),
+            # The page's TYPICAL slowest corner, off the same accessor (LOOK-12).
+            (stats_service.VMIN_CAPTION,
+             "" if slow is None else f"{units.convert_speed(slow[0], unit_id):.1f} {u_label}"),
             ("peak lateral g", _sec(max(lat_peaks) if lat_peaks else None, "{:.2f} g")),
             ("peak braking g", _sec(max(brk_peaks) if brk_peaks else None, "{:.2f} g")),
         ]))

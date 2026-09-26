@@ -478,3 +478,51 @@ def drift_band_session():
     fastest, the other three at 0.118 / 0.289 / 0.460 % line-length drift — the sub-gate band the
     two sessions above have no lap in, with every corner boundary spatially matched."""
     return _drift_session(drift_band_laps())
+
+
+# ------------------------------------------------------------------ a circuit that crosses itself
+def figure8_trace(laps: int = 8, a: float = 150.0, b_over_a: float = 1.5, peak_after_m: float = 10.0,
+                  hz: float = 10.0):
+    """A figure-8 circuit driven `laps` identical laps, sampled at `hz`: the lemniscate
+    x = a·cos(u), y = b·sin(u)·cos(u) (b = b_over_a·a) in LOCAL metres, whose two passes cross at
+    the origin, as a bridge carries one over the other. Pacer-free: the caller makes the GPS fixes.
+
+    One pass is FAST through the crossover and the other slow (it has just left a hairpin). The fast
+    pass builds speed over ~90 m to a peak `peak_after_m` metres past the bridge and brakes over the
+    ~25 m after it. The held-peak rule (`load._heuristic_start_base`) reads its peak about 10 m
+    before the fastest place, so at the default the line lands ON the bridge. There, the line square
+    to the fast pass is cut by the slow one: their headings differ by 180 - 2·atan(b/a) deg, 67.4 at
+    the default b/a = 1.5. A negative `peak_after_m` puts the fastest place before the bridge,
+    out of the slow pass's reach.
+
+    Every lap is the same drive, so a lap timed at ANY line lasts exactly `lap_s`. The positions are
+    exact (no noise): what this pins is the geometry of the passes, not a receiver's scatter.
+
+    Returns SimpleNamespace(t, x, y, v, s, lap_m, lap_s, node_s, peak_s): each fix's time (s), local
+    position (m), speed (m/s) and arc length since the start (m); the lap's length and time; and the
+    arc lengths, within a lap, of the fast pass's crossover and of its fastest place."""
+    b = b_over_a * a
+    u = np.linspace(0.0, 2.0 * np.pi, 400_001)
+    px, py = a * np.cos(u), b * np.sin(u) * np.cos(u)
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(px), np.diff(py)))])
+    lap_m = float(cum[-1])
+    node_fast = float(np.interp(np.pi / 2, u, cum))        # heading (-a, -b) through the origin
+    node_slow = float(np.interp(3 * np.pi / 2, u, cum))    # heading (+a, -b)
+    peak = (node_fast + peak_after_m) % lap_m
+
+    def wrap(d):
+        return (d + lap_m / 2) % lap_m - lap_m / 2
+
+    d1, d2 = wrap(cum - peak), wrap(cum - node_slow)
+    speed = (12.0 + 12.0 * np.exp(-(d1 / np.where(d1 < 0, 90.0, 25.0)) ** 2)
+             + 3.0 * np.exp(-(d2 / 60.0) ** 2))
+    # Time as a function of arc length, integrated on the fine grid (no Euler drift), then inverted
+    # at the fix times.
+    t_of_s = np.concatenate([[0.0], np.cumsum(np.diff(cum) / (0.5 * (speed[1:] + speed[:-1])))])
+    lap_s = float(t_of_s[-1])
+    t = np.arange(0.0, laps * lap_s, 1.0 / hz)
+    k, rem = np.divmod(t, lap_s)
+    s_in = np.interp(rem, t_of_s, cum)
+    return SimpleNamespace(t=t, x=np.interp(s_in, cum, px), y=np.interp(s_in, cum, py),
+                           v=np.interp(s_in, cum, speed), s=k * lap_m + s_in, lap_m=lap_m,
+                           lap_s=lap_s, node_s=node_fast, peak_s=peak)
