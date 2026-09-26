@@ -387,6 +387,8 @@ class FocusBlock(QWidget):
     # The recordings (library fingerprints) the driver just marked Dry — exactly the ones the
     # button named, so the app writes what was offered and nothing more.
     mark_dry_requested = Signal(list)
+    # Today's top corners, to REPLACE the list with (``focus.replace_offer``, QA NEW-5).
+    replace_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -396,6 +398,7 @@ class FocusBlock(QWidget):
         self._cids: list[int] = []      # cids currently on the list, in list order
         self._selected: int | None = None
         self._mark_fps: list[str] = []  # the unrecorded sessions the Mark button would write
+        self._replace: list[int] = []    # today's top corners the Replace button would store
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XS)
@@ -416,8 +419,14 @@ class FocusBlock(QWidget):
         self.mark_button.setAutoDefault(False)
         self.mark_button.setDefault(False)
         self.mark_button.clicked.connect(self._emit_mark)
+        # After the check (never beside a pending Mark): today's top corners, one click to swap in.
+        self.replace_button = QPushButton("")
+        self.replace_button.setAutoDefault(False)
+        self.replace_button.setDefault(False)
+        self.replace_button.clicked.connect(self._emit_replace)
         mark.addWidget(self.mark_question)
         mark.addWidget(self.mark_button)
+        mark.addWidget(self.replace_button)
         mark.addStretch(1)
         self._mark_row = QWidget()
         self._mark_row.setLayout(mark)
@@ -456,7 +465,7 @@ class FocusBlock(QWidget):
         self.setVisible(False)
 
     # ------------------------------------------------------------------ fill
-    def set_report(self, report: focus.Report | None) -> None:
+    def set_report(self, report: focus.Report | None, shortlist: list[int] | None = None) -> None:
         """Fill from a ``focus.Report``. Three states, and the difference between the last two
         matters: **None** is DORMANT (this recording has no detected track, so there is nowhere to
         keep a list and inviting one would be an offer the app cannot honour); an **empty** report
@@ -478,6 +487,18 @@ class FocusBlock(QWidget):
             self.mark_question.setText(prompt[0])
             self.mark_button.setText(prompt[1])
             self.mark_button.setToolTip(prompt[2])
+        self._replace = [] if self._empty or prompt else (
+            focus.replace_offer(report, shortlist or []) or [])
+        if self._replace:
+            who = ", ".join(f"C{c}" for c in self._replace)
+            self.replace_button.setText(focus.replace_label(self._replace))
+            self.replace_button.setToolTip(
+                f"Replaces your focus list with {who}, with baselines measured on this session: "
+                "the next session here is checked against them.")
+        for widget, want in ((self.mark_question, bool(prompt)), (self.mark_button, bool(prompt)),
+                             (self.replace_button, bool(self._replace))):
+            if widget.isHidden() == want:
+                widget.setVisible(want)
         # On an empty list the trailing stretch gives way, so the line takes the row's slack and
         # the Add button sits at its right edge.
         self._buttons.layout().setStretch(self._row_stretch, 0 if self._empty else 1)
@@ -549,6 +570,10 @@ class FocusBlock(QWidget):
         if self._mark_fps:
             self.mark_dry_requested.emit(list(self._mark_fps))
 
+    def _emit_replace(self):
+        if self._replace:
+            self.replace_requested.emit(list(self._replace))
+
     # --------------------------------------------------------------- the fit
     def _needed_px(self, width: int, n_lines: int) -> int:
         """The height the headline plus `n_lines` outcome lines plus the button row would need at
@@ -570,7 +595,7 @@ class FocusBlock(QWidget):
         fonts = [self.headline.font()] + [lb.font() for lb in self.lines[:n_lines]]
         need = m.top() + m.bottom() + lay.spacing() * max(len(texts), 1)
         need += self.add_button.sizeHint().height()
-        if self._mark_fps:
+        if self._mark_fps or self._replace:
             # The mark row goes with the buttons, never with the lines: it is the answer to the
             # headline's "no record" as much as to any line, so it stays while lines are shed.
             need += lay.spacing() + max(self.mark_button.sizeHint().height(),
@@ -610,7 +635,7 @@ class FocusBlock(QWidget):
                 widget.setVisible(want)
         if self._buttons.isHidden() == visible:
             self._buttons.setVisible(visible)
-        mark = visible and bool(self._mark_fps)
+        mark = visible and bool(self._mark_fps or self._replace)
         if self._mark_row.isHidden() == mark:
             self._mark_row.setVisible(mark)
         if self.isHidden() == visible:
@@ -1226,6 +1251,7 @@ class OpportunitiesPanel(QWidget):
     focus_add_requested = Signal(int)
     focus_remove_requested = Signal(int)
     focus_mark_dry_requested = Signal(list)
+    focus_replace_requested = Signal(list)
     # A row's Jump: (cid, the corner's entry odometer on the best lap). The app selects the corner
     # and seeks the video to the best lap's entry to it (StudioWindow._jump_to_opportunity).
     jump_requested = Signal(int, float)
@@ -1355,6 +1381,7 @@ class OpportunitiesPanel(QWidget):
         self.focus_block.add_requested.connect(self.focus_add_requested)
         self.focus_block.remove_requested.connect(self.focus_remove_requested)
         self.focus_block.mark_dry_requested.connect(self.focus_mark_dry_requested)
+        self.focus_block.replace_requested.connect(self.focus_replace_requested)
         # The debrief's lead, above everything it introduces; hidden unless the page IS the debrief.
         self.debrief_block = DebriefBlock()
         self.debrief_block.compare_requested.connect(self.compare_pb_requested)
@@ -1373,7 +1400,7 @@ class OpportunitiesPanel(QWidget):
         """Show the focus list and this session's verdict on it (the app builds the report from the
         store + ``Session.focus_report``). Passing an empty report shows the one-line invitation;
         never calling this at all leaves the page exactly as it was before the feature."""
-        self.focus_block.set_report(report)
+        self.focus_block.set_report(report, self.shortlist_cids())
         self.focus_block.set_selected_corner(self._selected_cid())
         self._sync_debrief_lead()
         self._relayout()
