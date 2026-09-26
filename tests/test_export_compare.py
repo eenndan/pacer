@@ -301,14 +301,15 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
 
 
 def test_a_compare_costs_its_frame_plus_pane_b():
-    """EXP-8's time model, against the compares it was calibrated on — MK laps 14 against 15, side
-    by side, 2025 frames: the 720p one took 36.2 s end to end on a day the single-lap estimates
-    ran within +-5 %, and the 1080p one 1.7x that (the median of four runs alternating with a
-    720p one, which cancels a shared machine's load between two compares). The model lands within
-    15 % of both. A compare costs more than the single lap of its own frame; the two layouts of one
-    pane size cost the same; a path with no measurement says nothing. The encoder is NAMED, never
-    resolved: the model under test is each path's own."""
-    for (w, h), real in (((2560, 720), 36.17), ((3840, 1080), 1.7 * 36.17)):
+    """EXP-8's time model, against the real compares it was calibrated on — MK laps 14 against 15,
+    side by side, 2025 frames, on VideoToolbox, end to end: 31.8 and 32.1 s at 720p panes and
+    47.8 and 47.9 s at 1080p on a quiet Mac (load ~5, where `RENDER_FPS` was measured), and 36.2 s
+    at 720p on the QA's busier one. The model lands within 15 % of every one. A compare costs
+    more than the single lap of its own frame; the two layouts of one pane size cost the same; a
+    path with no measurement says nothing. The encoder is NAMED, never resolved: the model under
+    test is each path's own."""
+    for (w, h), real in (((2560, 720), 31.83), ((2560, 720), 32.13), ((2560, 720), 36.17),
+                         ((3840, 1080), 47.83), ((3840, 1080), 47.90)):
         est = ec.estimate_compare_seconds(w, h, 2025, ev.VT_H264)
         assert abs(est / real - 1) <= 0.15, (w, h, est, real)
     for codec in (ev.VT_H264, ev.SW_H264):
