@@ -139,6 +139,10 @@ MERGE_ACCEL_G = 0.50      # g; SAFETY only: a clear, hard re-throttle (smoothed 
 #                           fallback for a corner model that wrongly merges two real corners. Set HIGH
 #                           on purpose: a low value wrongly blocks valid same-corner merges.
 MERGE_GATE_S = 0.30       # s; boxcar for the merge gate's signed g (wider than the detector's SMOOTH_S)
+# The merge DOES join applications with the kart back on power between them (3.0-12.5 % of events on
+# the working set, most at Sandown's two-part C1). Splitting them there was measured and refused:
+# `lap_brake_points` then hands close corners the next corner's brake, and every matching repair
+# tried drops corners' own brake points (refused-2026-09.md §20).
 CORNER_LEAD_M = 40.0      # m; widen corner windows upstream (braking starts before the geometry)
 GRIP_ENV_PCT = 98.0       # percentile of combined |g| over the session = the grip "limit" (robust max)
 GRIP_ENV_FLOOR = 0.3      # g; a session that never loaded the tyres can't make a tiny divisor
