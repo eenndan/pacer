@@ -958,6 +958,7 @@ class Session:
             lap_arrays=self._lap_arrays,
             lap_window=self.lap_window,
             brake_events=lambda i: self.driving.lap_brake_events(i),
+            brake_time=lambda i: self.driving.lap_brake_time(i),
             coast_spans=lambda i: self.driving.lap_coasting_spans(i),
         )
 

@@ -14,12 +14,12 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView, QMenu
 
 from . import provenance, provenance_panel, theme, units
-from ._signal import plural
+from ._signal import fmt_signed, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the CORNERS note
 # quotes the Coaching tab's ranking and totals exactly (`stats_straights` does the same for its
 # note) — L5-02.
-from .coaching_panel import PANEL_TOP_N, _ranked_shown
+from .coaching_panel import PANEL_TOP_N, _ranked_shown, _shown_rows
 from .lap_table import NUM_ROLE, _NumItem, set_corner_direction
 from .stats_common import ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
 from .widgets import DASH, Tile, WrapLabel
@@ -224,11 +224,30 @@ class CornersSection:
             # out here would otherwise have to guess whether the total beside it counts them.
             # (It said the OPPOSITE until W1. COASTING still counts every cell, deliberately —
             # see CornerModel.lap_corner_resolved — and is not named here.)
-            same = ", leaving out the same interpolated times," if left_out else ""
-            parts.append(
-                f"The Coaching tab measures the SAME corners against your best lap{same} and "
-                f"totals {sum(r.time_lost for r in rows):.2f} s, "
-                f"{sum(round(r.time_lost, 2) for r in top):.2f} s of it in its top {len(top)}.")
+            #
+            # ONE WAY OF SUMMING, AND EVERY ROW ACCOUNTED FOR (LOOK-3, QA 2026-09-26). This read
+            # "totals 0.29 s, 0.28 s of it in its top 3" on MK_18_09: 0.29 was the raw 0.286 and
+            # 0.28 the rounded rows, the same three corners — while the Coaching tab measured 1.07 s
+            # across all 11 it lists, 8 of them not ranked. Every figure is now a sum of the 2-dp
+            # values the Coaching rows print, the rule its own headline sums by (B12), and the
+            # not-ranked rows are counted rather than silently left out of "the SAME corners".
+            same = ", leaving out the same interpolated times" if left_out else ""
+            more = rows[PANEL_TOP_N:]
+            unranked = [r for r in _shown_rows(opp) if not any(r is x for x in rows)]
+
+            def shown_sum(rs) -> str:
+                return f"{sum(round(r.time_lost, 2) for r in rs):.2f} s"
+
+            coach = (f"The Coaching tab measures the SAME corners against your best lap{same}: "
+                     f"its headline totals {shown_sum(top)} over {plural(len(top), 'corner')}")
+            if more:
+                coach += (f", {len(more)} more ranked "
+                          f"{'corner adds' if len(more) == 1 else 'corners add'} "
+                          f"{shown_sum(more)}")
+            if unranked:
+                coach += (f"; {len(unranked)} more {'is' if len(unranked) == 1 else 'are'} "
+                          f"listed there but not ranked ({shown_sum(unranked)})")
+            parts.append(coach + ".")
         gap = self._ideal_gap(session)
         if gap is not None:
             parts.append(f"Your ideal lap is {gap:.2f} s under your best.")
@@ -329,8 +348,8 @@ class CornersSection:
             if tri is not None:
                 # The corner's own phase matrix, on hover — where INSIDE this corner the
                 # typical lap loses (positive = slower than best over that third).
-                tips.append(f"Median vs best — entry {tri[0]:+.2f} · "
-                            f"apex {tri[1]:+.2f} · exit {tri[2]:+.2f} s")
+                tips.append(f"Median vs best — entry {fmt_signed(tri[0])} · "
+                            f"apex {fmt_signed(tri[1])} · exit {fmt_signed(tri[2])} s")
             if tips:
                 loss.setToolTip("\n".join(tips))
             t.setItem(r, 4, loss)

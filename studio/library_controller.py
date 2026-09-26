@@ -64,7 +64,7 @@ import shiboken6
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QFileDialog
 
-from . import chapters, focus, library, session_record, sidecar, track_db
+from . import chapters, demo, focus, library, session_record, sidecar, track_db
 from . import marks as marks_model
 from .library_dialog import LibraryDialog
 from .overlays import PBToast
@@ -72,6 +72,11 @@ from .session import DEFAULT_SAMPLE, fmt_time
 from .session_record_dialog import SessionRecordDialog
 
 _log = logging.getLogger("studio.app")
+
+# The debrief's PB line while a first open's circuit has no name (`waiting_for_name`): the PB and
+# the focus list are both kept per track, so there is nothing to stand against until it has one.
+NAME_WAIT_LINE = ("This circuit has no name yet, so there is no personal best to stand against: "
+                  "File ▸ Save as track… names it, and decides your PB and focus list.")
 
 
 def previous_pb_missing_text(entry: dict, missing_path: str | None) -> str:
@@ -110,6 +115,16 @@ class LibraryController:
         # Read by the session notice (which says so) and by `refresh_library_entry` (which must not
         # write that row behind its back). Reset on every call.
         self.waiting_for_whole = False
+        # THE VERDICT ALSO WAITS FOR TRUSTED TIMING (QA NEW-3b/NEW-4). `waiting_for_line`: the last
+        # `update_library` was a NEW recording's whole first open on a start line the loader fitted
+        # itself (`session.timing_verified` False, a circuit Pacer does not know), so it decided
+        # nothing and wrote no row, exactly as a partial open does; the drag that places the line,
+        # or File ▸ Save as track…, decides it then, once (`refresh_library_entry`).
+        # `waiting_for_name`: that decision was made on trusted timing with NO track name (a line
+        # placed at an unknown circuit), so the PB standing and the focus list, both kept per
+        # track, wait for Save as track to name it. Both reset on every `update_library`.
+        self.waiting_for_line = False
+        self.waiting_for_name = False
         # The library row the last `update_library`'s NEW personal best beat (`library.previous_pb`)
         # — what "Compare with your previous PB" loads as the reference (board review PS-B4). None
         # unless that load celebrated a beat. Reset on every call.
@@ -152,9 +167,19 @@ class LibraryController:
         decided exactly as a drop decides it. The cost: until then the session is in neither the
         Library nor Open Recent. Only the command line can open part of a new recording now, and
         the session notice says what waits (`waiting_for_whole`). A recording the index already
-        holds is still upserted — a part of it never displaces a fuller row (`library._keeps`)."""
+        holds is still upserted — a part of it never displaces a fuller row (`library._keeps`).
+
+        NOR DOES AN UNTRUSTED START LINE (QA NEW-3b). A new recording at a circuit Pacer does not
+        know is timed on a line the loader fitted itself, and on the owner's MK layout that fit sat
+        where the track crosses itself: laps off by up to ±2.6 s, a 1:49.5 "lap" valid, and the
+        debrief maximized over the one map that could fix it. Its whole first open therefore decides
+        nothing and writes no row either (`waiting_for_line`); the drag that places the line, or
+        File ▸ Save as track…, decides it once (`refresh_library_entry`), and the row is written
+        then, with the verified best. A line placed at a circuit with no name leaves the PB and
+        the focus list to the name (`waiting_for_name`)."""
         self.opened_new, self.pb_standing, self.previous_pb = False, None, None
         self.waiting_for_whole = False
+        self.waiting_for_line = self.waiting_for_name = False
         if self._library_excludes(paths):
             return None
         moment = None
@@ -170,25 +195,15 @@ class LibraryController:
                 library.upsert_and_save(entry)
                 self.win._library_unwritable = False
                 return None
-            # Decide the PB moment against the PRIOR index (before the upsert), gated on BOTH timing
-            # axes — a provisional/unconfirmed start line makes the lap number meaningless, and a
-            # data-quality-degraded (media-clock / low-GPS ESTIMATED) time isn't one to celebrate
-            # (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
-            # which is what keeps the chapter it just chained from being its "previous best".
-            trust = (self.win.session.timing_verified, prior_index, entry.get("track"),
-                     entry.get("best"))
-            degraded = self.win.session.timing_quality.degraded
-            moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key)
-            standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key)
-            # The row that beat was measured against, from the same PRIOR index: after the upsert
-            # this recording's own row is the track's best. Kept even if the write below fails,
-            # like the moment it belongs to.
-            if (moment or {}).get("kind") == "beat":
-                self.previous_pb = library.previous_pb(prior_index, entry.get("track"), key)
+            if new and not self.win.session.timing_verified:
+                self.waiting_for_line = True
+                return None
+            moment, standing = self._pb_decision(entry, prior_index)
             library.upsert_and_save(entry)
             # Only once the row is WRITTEN: a recording whose row could not be saved would land on
             # the debrief again on every open.
             self.opened_new, self.pb_standing = new, standing
+            self.waiting_for_name = new and not entry.get("track")
             self.win._library_unwritable = False
         except OSError:
             # The DISK said no. That is the one library failure the user can act on, so it is the
@@ -204,9 +219,68 @@ class LibraryController:
             _log.exception("session library not updated (not a write failure)")
         return moment
 
+    def _pb_decision(self, entry: dict, index: dict) -> tuple[dict | None, dict | None]:
+        """(moment, standing) for this session's `entry` against `index`, and the row a beat was
+        measured against into `previous_pb`.
+
+        Decided against the index BEFORE this session is upserted, gated on BOTH timing axes — a
+        provisional/unconfirmed start line makes the lap number meaningless, and a
+        data-quality-degraded (media-clock / low-GPS ESTIMATED) time isn't one to celebrate
+        (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
+        which is what keeps the chapter it just chained from being its "previous best".
+        `previous_pb` comes from the same index: after the upsert this recording's own row is the
+        track's best. Kept even if the write that follows fails, like the moment it belongs to."""
+        key = entry.get("fingerprint")
+        trust = (self.win.session.timing_verified, index, entry.get("track"), entry.get("best"))
+        degraded = self.win.session.timing_quality.degraded
+        moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key)
+        standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key)
+        if (moment or {}).get("kind") == "beat":
+            self.previous_pb = library.previous_pb(index, entry.get("track"), key)
+        return moment, standing
+
+    def _land_deferred_verdict(self, paths: list[str]) -> None:
+        """The first-open verdict `update_library` deferred for an untrusted start line, decided
+        now that the line is trusted: the same decision and the same landing a load's tail makes
+        (`StudioWindow._land_on_debrief`), once, because the row is written here and the recording
+        is never new again."""
+        moment = self.update_library(paths)
+        self.win._apply_session_notice()
+        if not self.win._land_on_debrief() and moment is not None:
+            self.show_pb_moment(moment)
+        self.update_focus_list()
+
+    def _land_named_verdict(self, entry: dict) -> None:
+        """The rest of a first open decided without a track name (`waiting_for_name`), now that
+        Save as track has named the circuit: the PB standing against the OTHER recordings at that
+        track ("First session logged at …" when there are none) and the focus promotion. Not a
+        second landing: an open debrief takes the new lead in place, and otherwise a moment worth
+        a card gets the card. Guarded like every landing."""
+        self.waiting_for_name = False
+        key = entry.get("fingerprint")
+        index = library.load()
+        # This recording's own row, written unnamed when the line was placed, is not a prior.
+        others = {**index, "entries": [e for e in index.get("entries", [])
+                                       if e.get("fingerprint") != key]}
+        moment, self.pb_standing = self._pb_decision(entry, others)
+        view = getattr(self.win, "view", None)
+        try:
+            cids = view.opportunities.shortlist_cids() if view is not None else []
+            promoted = self.pre_promote_focus(cids) if cids else []
+            if view is not None and view.is_debrief():
+                view.opportunities.set_debrief(True, self.debrief_pb_line(), promoted,
+                                               self.offers_pb_compare(self.pb_standing))
+            elif moment is not None:
+                self.show_pb_moment(moment)
+        except Exception:  # noqa: BLE001 — a landing must never break the gesture it ends
+            _log.warning("named first-open verdict not shown", exc_info=True)
+
     def debrief_pb_line(self) -> str | None:
-        """The debrief's PB sentence for the last `update_library` (None when it has none)."""
-        return library.pb_standing_text(self.pb_standing, fmt_time) if self.pb_standing else None
+        """The debrief's PB sentence for the last `update_library` (None when it has none), or,
+        while the circuit has no name, what the PB and the focus list are waiting for."""
+        if self.pb_standing:
+            return library.pb_standing_text(self.pb_standing, fmt_time)
+        return NAME_WAIT_LINE if self.waiting_for_name else None
 
     def offers_pb_compare(self, moment: dict | None) -> bool:
         """Whether a PB surface showing `moment` (a ``pb_moment`` or ``pb_standing`` dict) may offer
@@ -224,6 +298,13 @@ class LibraryController:
         surface forever). Shared by the load-time upsert and every later refresh so a recording can
         never be admitted by one and refused by the other."""
         if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
+            return True
+        # THE DEMO IS NOT HIS DRIVING EITHER (QA NEW-6): Open demo wrote "First session logged at
+        # Synthetic demo circuit", a Library row, a focus list and an Open Recent entry. Both places
+        # `demo.resolve_demo_recording` finds it: the env override and the app-support cache.
+        demos = {os.path.abspath(p) for p in (os.environ.get("PACER_DEMO_MP4"),
+                                              demo.demo_cache_path()) if p}
+        if any(os.path.abspath(p) in demos for p in paths):
             return True
         return not self.win.session.valid_lap_ids()
 
@@ -253,14 +334,24 @@ class LibraryController:
         paths = getattr(self.win, "_paths", None)
         if not paths or not hasattr(self.win, "session"):
             return
+        # The gesture that makes a deferred first open's timing trusted, a line drag or Save as
+        # track, is its verdict's moment (update_library, QA NEW-3b/NEW-4): decided now, once.
+        if self.waiting_for_line and self.win.session.timing_verified:
+            self._land_deferred_verdict(paths)
+            return
+        named = None
         try:
             if self._library_excludes(paths):
                 return
-            # Part of a recording the index does not hold yet has no row by design (update_library):
-            # writing one from a drag would turn the whole recording's first load into a re-open.
-            if not self.waiting_for_whole:
-                library.upsert_and_save(self.win.session.library_entry(paths))
+            # Part of a recording the index does not hold yet has no row by design (update_library),
+            # and neither has a new one on an untrusted line: writing one from a drag would turn the
+            # whole recording's first load into a re-open.
+            if not self.waiting_for_whole and not self.waiting_for_line:
+                entry = self.win.session.library_entry(paths)
+                library.upsert_and_save(entry)
                 self.win._library_unwritable = False
+                if self.waiting_for_name and entry.get("track"):
+                    named = entry
         except OSError:
             self.win._library_unwritable = True
             _log.exception("session library entry not refreshed")
@@ -268,6 +359,8 @@ class LibraryController:
             self.win._apply_session_notice()
         except Exception:  # noqa: BLE001 — the index is additive; never break the session
             _log.exception("session library entry not refreshed (not a write failure)")
+        if named is not None:
+            self._land_named_verdict(named)
         # A drag re-times every lap, so every focus measurement taken over this session is stale —
         # and it can also CONFIRM the start line, which is one of the gates the verdict reads.
         self.update_focus_list()

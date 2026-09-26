@@ -374,6 +374,69 @@ def test_coast_instrument_states_window_minimum_and_band():
     print(f"ok disclosure: {sentence}")
 
 
+# ------------------------------------------------------------------- braking TIME (LOOK-2)
+def _brake_tail_lap(n_apps=1, noise_ms=0.0, seed=0):
+    """A 10 Hz lap built from KNOWN decelerations: per application a 0.15 s ramp to 0.55 g, 1.2 s
+    held, a 0.4 s trail to 0.20 g, then a LIGHT TAIL of 0.10 g — lift-off, between the release
+    (theta_b * RELEASE_RATIO = 0.056 g at a 0.16 g floor) and theta_b — for 4 s, then power.
+    Returns (dist, elapsed, speed_kmh, truth_s, decel_s): truth is the time the noise-free profile
+    is at or past 0.16 g, decel the time it decelerates at all. `noise_ms` is Gaussian speed noise
+    (the fixes' own is 0.11-0.17 m/s)."""
+    fine = 0.001
+    segs = [(0.0, 0.0, 3.0)]
+    for _ in range(n_apps):
+        segs += [(0.0, -0.55, 0.15), (-0.55, -0.55, 1.2), (-0.55, -0.20, 0.40),
+                 (-0.20, -0.10, 0.10), (-0.10, -0.10, 4.0), (-0.10, 0.25, 0.30),
+                 (0.25, 0.25, 4.5), (0.25, 0.0, 0.3), (0.0, 0.0, 2.0)]
+    a = np.concatenate([np.linspace(g0, g1, int(round(secs / fine)), endpoint=False)
+                        for g0, g1, secs in segs])
+    v = 20.0 + np.cumsum(a * G) * fine
+    k = np.arange(0, len(a), 100)                       # the per-lap GPS9 grid, 10 Hz
+    elapsed = k * fine
+    vs = v[k] + np.random.default_rng(seed).normal(0.0, noise_ms, len(k))
+    dist = np.concatenate([[0.0], np.cumsum(0.5 * (vs[1:] + vs[:-1]) * np.diff(elapsed))])
+    return (dist, elapsed, vs * 3.6, float(np.sum(a <= -D.BRAKE_G_FLOOR) * fine),
+            float(np.sum(a < 0.0) * fine))
+
+
+def test_brake_time_counts_the_application_not_its_lift_off_tail():
+    """`driving.brake_time` is the time AT OR PAST theta_b inside the events, not their length.
+
+    The fixture's one application is at or past 0.16 g for 1.75 s and is followed by 4 s of 0.10 g
+    lift-off, which the release hysteresis holds the event open through: the event spans 5.8 s,
+    which is what the Stats page summed until LOOK-2. The events themselves are only read."""
+    dist, elapsed, kmh, truth, _decel = _brake_tail_lap()
+    g = speed_long_g(kmh, elapsed)
+    events = D.brake_events(dist, elapsed, g, D.BRAKE_G_FLOOR)
+    assert len(events) == 1 and events[0].duration > truth + 3.0, (
+        f"premise: one event, held open through the tail: {events}")
+    secs = D.brake_time(elapsed, g, D.BRAKE_G_FLOOR, events)
+    assert abs(secs - truth) <= 0.15, (
+        f"{secs:.2f} s on the brakes for an application at/past theta_b for {truth:.2f} s "
+        f"(the event spans {events[0].duration:.2f} s)")
+    assert secs <= events[0].duration
+    assert D.brake_time(elapsed, g, D.BRAKE_G_FLOOR, []) == 0.0
+    assert D.brake_events(dist, elapsed, g, D.BRAKE_G_FLOOR) == events   # onsets untouched
+    print(f"ok brake time: {secs:.2f} s (truth {truth:.2f} s, event span {events[0].duration:.2f} s)")
+
+
+def test_brake_time_holds_under_gps_speed_noise():
+    """WHY THE COAST WINDOW (see the block above driving.brake_time): at-or-past-theta_b is band
+    membership, and the bare 10 Hz derivative's noise flickers a 0.10 g tail across a 0.16 g
+    threshold. Six applications with 4 s tails, speed noise 0.15 m/s, three seeds: on the
+    COAST_SMOOTH_S series the answer is within 20 % of the truth (measured +4-13 %); the same count
+    on the bare series reads +42-48 %, and the event span +143-167 %."""
+    for seed in range(3):
+        dist, elapsed, kmh, truth, _decel = _brake_tail_lap(n_apps=6, noise_ms=0.15, seed=seed)
+        g = speed_long_g(kmh, elapsed)
+        events = D.brake_events(dist, elapsed, g, D.BRAKE_G_FLOOR)
+        secs = D.brake_time(elapsed, g, D.BRAKE_G_FLOOR, events)
+        assert abs(secs - truth) / truth < 0.20, (
+            f"seed {seed}: {secs:.2f} s on the brakes against a truth of {truth:.2f} s "
+            f"({len(events)} events spanning {sum(e.duration for e in events):.2f} s)")
+    print(f"ok brake time under noise: last seed {secs:.2f} s vs truth {truth:.2f} s")
+
+
 def test_brake_throttle_intensity_band():
     """D3: the synthetic brake/throttle band maps the SAME speed-derived long-g to a bounded
     [-1,1] pedal intensity — hard brake -> strongly negative, on-power -> positive, cruise/
@@ -859,6 +922,49 @@ def test_session_driving_accessors_and_caching():
     assert px_t is not None and abs(px_t[0]) < 1e-6  # elapsed starts at 0
     print(f"ok session: brake @ {events[0].onset_dist:.0f} m, "
           f"{len(spans)} coast span(s), brake/throttle band [-1,1], markers+positions consistent")
+
+
+def test_the_stats_braking_figure_is_time_on_the_brakes():
+    """LOOK-2, through the REAL wiring: Session -> DrivingChannels -> SessionStats.lap_stats, the
+    row the DRIVING tile, the PER LAP `Brake s` column and the exported DRIVING group all reduce.
+
+    One application at or past theta_b for 1.75 s, then 4 s of 0.10 g lift-off. The page used to
+    sum the event's span and print 5.8 s — and that same tail is COAST time on the coast band's
+    series, so Brake s + Coast s came to 9.7 s on a lap that decelerates for 5.9 s. Now the brake
+    figure is the time at or past theta_b, the event count is unchanged, and the two figures split
+    the deceleration at theta_b instead of counting its tail twice."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import bare_session, reset_corner_caches, reset_driving_caches
+
+    from studio import gmeter
+
+    dist, elapsed, kmh, truth, decel = _brake_tail_lap()
+    n = len(dist)
+    times = 100.0 + elapsed
+    s = bare_session(valid=[0], best=0)
+    s._dist_cache[0] = (times, dist, times - times[0])
+    s._cols_cache = {0: (times, dist.copy(), np.zeros(n), kmh / 3.6, dist.copy())}
+    s.tt, s.tv = times.copy(), kmh.copy()
+    s.laps = SimpleNamespace(laps_count=lambda: 1, start_timestamp=lambda i: float(times[0]),
+                             lap_time=lambda i: float(times[-1] - times[0]))
+    s._gmeter = gmeter.GMeter(times=times.copy(), lat_g=np.zeros(n), long_g=np.zeros(n),
+                              cross=None, source="accl")
+    reset_driving_caches(s)
+    reset_corner_caches(s)
+    assert s.driving.thresholds().theta_b == D.BRAKE_G_FLOOR  # the truth is measured at 0.16 g
+    (event,) = s.driving.lap_brake_events(0)
+    (row,) = s.stats.lap_stats()
+    assert abs(row.brake_s - truth) <= 0.15, (
+        f"the Stats page books {row.brake_s:.2f} s of braking on a lap whose one application is "
+        f"at or past theta_b for {truth:.2f} s — the event spans {event.duration:.2f} s through "
+        f"its lift-off tail")
+    assert row.brake_n == 1                                   # brake events / lap: unchanged
+    assert row.brake_s + row.coast_s <= decel + 0.2, (
+        f"Brake s {row.brake_s:.2f} + Coast s {row.coast_s:.2f} count one moment twice on a lap "
+        f"that decelerates for {decel:.2f} s")
+    assert s.driving.lap_brake_time(0) is s.driving.lap_brake_time(0)  # cached per lap
+    print(f"ok stats braking: {row.brake_s:.2f} s on the brakes (truth {truth:.2f} s, event "
+          f"{event.duration:.2f} s) + {row.coast_s:.2f} s coasting within {decel:.2f} s of decel")
 
 
 def test_session_grip_channel_aligned_and_cached():

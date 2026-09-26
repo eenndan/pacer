@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_export_data import PNG_1PX, make_session, make_stitched_session  # noqa: E402
 
 from studio import data_quality, export_data, share_card  # noqa: E402
+from studio import stats as stats_service  # noqa: E402
 from studio._signal import DASH, fmt_hms, fmt_time  # noqa: E402
 
 
@@ -200,7 +201,7 @@ def test_stats_summary_values_equal_the_session_accessors():
 
     tot = st.totals()
     session = sections["SESSION"]
-    assert session["recorded"] == fmt_hms(tot.duration_s)
+    assert session[stats_service.DURATION_CAPTION] == fmt_hms(tot.duration_s)
     assert session["moving"] == fmt_hms(tot.moving_s)
     assert session["laps"].startswith(f"{len(s.valid_lap_ids())} valid"), session["laps"]
 
@@ -256,12 +257,18 @@ def test_driving_group_states_the_coasting_instrument():
     reason this channel had to be re-measured at all. So the group's note is
     `driving.coast_instrument`, verbatim, and it reaches both renderers (an exported table has no
     tooltip to hide the caveat in). Compared against the accessor, not spelled out here, so a
-    change to the instrument cannot leave the disclosure behind."""
+    change to the instrument cannot leave the disclosure behind.
+
+    LOOK-2 put the BRAKING-TIME sentence (`driving.brake_time_instrument`) in front of it: the
+    braking row is the time at or past the threshold inside each event, not the event's span, and
+    the row's caption is the Stats tile's own (`stats.BRAKE_TILE_CAPTION`)."""
     s = make_session()
     want = s.driving.coast_instrument()
-    assert want, "the fixture must have a g signal (the DRIVING group is hidden without one)"
+    brake = s.driving.brake_time_instrument()
+    assert want and brake, "the fixture must have a g signal (the DRIVING group is hidden without one)"
     sec = next(x for x in export_data.stats_summary(s) if x.title == "DRIVING")
-    assert sec.note == want, sec.note
+    assert sec.note == f"{brake} {want}", sec.note
+    assert dict(sec.rows).keys() >= {stats_service.BRAKE_TILE_CAPTION, "brake events / lap"}, sec.rows
     for token in ("0.50 s", "0.25 s", "0.03 g"):   # window, minimum duration, band floor
         assert token in sec.note, sec.note
     # Read the report as TEXT, not as markup. The note reaches the page through `esc()`, so the
@@ -282,8 +289,9 @@ def test_degenerate_ideal_is_withheld_from_every_surface_together():
     assert s.ideal_donor_lap_id() is not None, "fixture must be the degenerate case"
     assert "Theoretical best" not in _trailer(s)
     assert "IDEAL LAP" not in {sec.title for sec in export_data.stats_summary(s)}
-    assert "theoretical best" not in _write_report(s)
-    assert "theoretical best" not in export_data.stats_summary_text(s, None)
+    # The caption the IDEAL LAP tile and these two surfaces print (`IdealSample.caption`).
+    assert "ideal lap ·" not in _write_report(s)
+    assert "ideal lap ·" not in export_data.stats_summary_text(s, None)
     assert share_card.card_data(s, unit="kmh").delta_to_ideal_s is None
     print("test_degenerate_ideal_is_withheld_from_every_surface_together OK")
 

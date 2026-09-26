@@ -35,7 +35,8 @@ from ._signal import G, speed_long_g
 #                      `lap_brake_events` / `lap_brake_throttle` build it again per lap on that
 #                      lap's native ~10 Hz grid.
 #   4. (3) + a boxcar  GPS d|v|/dt, boxcar driving.COAST_SMOOTH_S (0.50 s), ~10 Hz. The BAND
-#                      series, read by `lap_coasting_spans` and nothing else.
+#                      series, read by `lap_coasting_spans` and by `lap_brake_time` — the two
+#                      sides of theta_b on one series, so a moment is coast or brake, never both.
 #
 # 3 AND 4 ARE THE SAME CALL WITH DIFFERENT WINDOWS BECAUSE THE TWO TESTS HAVE OPPOSITE SHAPES, and
 # both halves of that are MEASURED on the D24 0060 (38 valid laps) and 0062 (65) recordings, moving
@@ -128,6 +129,8 @@ class DrivingChannels:
         # Per-lap channels, all projected through the segmentation -> cleared on re-segment.
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
+        # Seconds on the brakes per lap (driving.brake_time over that lap's brake events).
+        self._brake_time_cache: dict[int, float] = {}
         self._corner_grip_cache: dict[int, list[float]] = {}
         # D5: per-lap per-sample grip utilization, aligned to the lap's map xy points.
         self._grip_util_cache: dict[int, object] = {}
@@ -141,6 +144,7 @@ class DrivingChannels:
         kept (the g series is unchanged)."""
         self._brake_events_cache.clear()
         self._coasting_spans_cache.clear()
+        self._brake_time_cache.clear()
         self._corner_grip_cache.clear()
         self._grip_util_cache.clear()
         self._brake_throttle_cache.clear()
@@ -264,6 +268,13 @@ class DrivingChannels:
         self._thresholds_cache = driving.derive_thresholds(long_clean, speed_kmh)
         return self._thresholds_cache
 
+    def brake_time_instrument(self) -> str | None:
+        """What every braking-TIME figure here counts (driving.brake_time_instrument), carrying
+        this session's theta_b; None without a g signal. The exported DRIVING note prints it next
+        to `coast_instrument`, because the two figures are the two sides of one threshold."""
+        th = self.thresholds()
+        return None if th is None else driving.brake_time_instrument(th.theta_b)
+
     def coast_instrument(self) -> str | None:
         """The sentence that discloses what every coasting number here was measured with — the
         window, the minimum duration and the band, carrying this session's own theta_b. None
@@ -303,6 +314,29 @@ class DrivingChannels:
                                       corner_windows=windows)
         self._brake_events_cache[lap_id] = events
         return events
+
+    def lap_brake_time(self, lap_id: int) -> float:
+        """Seconds ON THE BRAKES on one lap: inside its brake events, the time the SERIES 4
+        deceleration is at or past theta_b (driving.brake_time; its block says why this is not
+        the events' summed `duration`). 0.0 when no g signal or a degenerate lap, like the empty
+        event list it reduces; the Stats page asks only when there IS a g signal. Cached per lap.
+
+        Reads the events, never rebuilds them: onsets, peaks and spans stay exactly what the
+        glyphs, the BRAKING table, coaching and the pedal band read."""
+        got = self._brake_time_cache.get(lap_id)
+        if got is not None:
+            return got
+        th = self.thresholds()
+        arr = self._lap_arrays(lap_id)
+        if th is None or arr is None:
+            return 0.0
+        dists, speed_kmh, elapsed = arr
+        if len(dists) < 2:
+            return 0.0
+        secs = driving.brake_time(elapsed, speed_long_g(speed_kmh, elapsed), th.theta_b,
+                                  self.lap_brake_events(lap_id))
+        self._brake_time_cache[lap_id] = secs
+        return secs
 
     def _corner_windows(self, lap_id: int, total_lap: float):
         """The detected corners projected onto this lap's odometer as (enter, exit) spans, widened

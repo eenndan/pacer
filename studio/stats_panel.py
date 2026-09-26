@@ -59,7 +59,7 @@ from . import (
     units,
 )
 from . import stats as stats_service
-from ._signal import fmt_hms, fmt_time, plural
+from ._signal import fmt_hms, fmt_signed, fmt_time, plural
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
@@ -292,6 +292,26 @@ SPARK_PX_PER_LAP = theme.SPACE_XL
 # the vertical range while hiding ONE lap beats the one that recovers 77 % by hiding two.
 SPARK_OUTLIER_IQR = 3.0
 SPARK_MIN_FOR_FENCE = 6   # quartiles of fewer laps than this describe nothing; show them all
+# SESSION's duration tile and SPEED · G's slowest-corner tile: one caption each, shared with the
+# exported summary (export_data mirrors the page's rows) so the two never name one number twice.
+DURATION_CAPTION = stats_service.DURATION_CAPTION
+VMIN_CAPTION = stats_service.VMIN_CAPTION
+
+
+def slowest_corner_tip(slow, unit, u_label) -> str:
+    """The slowest-corner tile's hover: what the typical is a median of, and the one slowest
+    moment it deliberately is not, with its lap (LOOK-12)."""
+    base = ("Your typical lap's slowest speed — the median, over your clean laps, of each lap's "
+            "minimum, which is usually the tightest corner. STINTS' Min is the same figure per "
+            "run.")
+    if slow is None:
+        return base
+    typical, n, low, low_lap = slow
+    return (f"{base} Over {plural(n, 'clean lap')} here. The single slowest moment was "
+            f"{units.convert_speed(low, unit):.1f} {u_label} on lap {low_lap + 1}: one lap, not "
+            "how you drive the corner (traffic, a mistake or an off can put a lap there).")
+
+
 SPARK_TOOLTIP = ("Lap-time trend over the clean laps (GPS-dropout ⚠ laps excluded). "
                  "Highlighted dots mark session-best (PB) laps; the dashed line is the "
                  "session best (the floor). Y labels: fastest / slowest lap.")
@@ -523,13 +543,17 @@ GG_KEY_RINGS = "solid rings: 0.5 g steps"
 #     `Brk g` column, the friction circle and its p98 envelope are made of.
 #   * the ONSET series (_signal.speed_long_g, called by driving_channels): the SAME derivative
 #     with NO window, rebuilt per lap on that lap's own ~10 Hz fixes. It is what every brake event
-#     — `Brake s`, the two braking DRIVING tiles, the BRAKING table's commit %, the map's brake
-#     glyphs and the coaching rows' braking cause — is made of.
+#     — the events `Brake s` and the two braking DRIVING tiles are measured inside, the BRAKING
+#     table's commit %, the map's brake glyphs and the coaching rows' braking cause — is made of.
 #   * the BAND series (that same derivative boxcarred over driving.COAST_SMOOTH_S, #275): what
 #     every COAST span — `Coast s` and the two coasting DRIVING tiles — is made of. It exists
 #     because the coast band is narrower than the onset series' own noise, so on that series a
 #     band run lasted 2 samples where MIN_COAST_S needs 4 and the reported coast was 5.9 % / 4.5 %
 #     of the real band time. THE THIRD FILTER IS WHY THE COPY BELOW SPLITS BRAKE FROM COAST.
+#     Since LOOK-2 it also times the braking: `Brake s` and the braking tile are the time INSIDE
+#     each event that this series is at or past theta_b (driving.brake_time), not the event's
+#     span, which runs through the lift-off tail. Coast and brake time are the two sides of theta_b
+#     on this one series, so no moment is counted as both.
 #
 # MEASURED, and it is visible in one row. On the D24 0060 pair (38 valid laps) a brake event's own
 # peak deceleration exceeds the "peak braking g" printed on the SAME lap row on 37 of 38 laps, at a
@@ -576,7 +600,16 @@ _DRIVING_IMU_CONTRAST = (
     "tile and the friction circle above are drawn on")
 _DRIVING_BRAKE_TAIL = (
     ": an onset is a step, and a centred window "
-    "smears exactly the thing being detected.\n\n")
+    "smears exactly the thing being detected.\n\n"
+    "ON THE BRAKES is NOT an event's length. The hysteresis holds an event open until the "
+    f"deceleration falls under {driving.RELEASE_RATIO:g} × the threshold, through the light "
+    "lead-in and the lift-off tail, which are not braking, and one event can bridge the power "
+    "between two applications. So the time counts only the part of each event where the "
+    f"deceleration, smoothed over the {driving.COAST_SMOOTH_S:g} s window the coasting figures "
+    "use, is at or past the threshold: the other side of the coast band, so no moment is both. "
+    "BRAKE EVENTS counts the events themselves, one per brake glyph on the map: two applications "
+    "close together, with no hard return to power between them, can count once, and a brief dab "
+    "counts too.\n\n")
 # _DRIVING_COAST, the fourth piece, is in `stats_common`: the COASTING section's tooltip closes
 # with the same paragraph, so the two cannot word the coast differently.
 DRIVING_TOOLTIP = _DRIVING_INTRO + _DRIVING_IMU_CONTRAST + _DRIVING_BRAKE_TAIL + _DRIVING_COAST
@@ -602,12 +635,14 @@ LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the 
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
                      "accelerometer. Brk g is the GPS speed derivative as the g-meter filters it "
                      f"— boxcarred over {gmeter.LONG_SMOOTH_S:g} s, so it is a SUSTAINED peak. "
-                     "Brake s and Coast s count events detected on that same derivative, on this "
-                     "lap's own ~10 Hz fixes (the same events the map glyphs and coaching read). "
-                     "A brake onset is a step, so Brake s is detected with no window at all. "
-                     "A coast is sustained membership of a band narrower than that derivative's "
-                     f"own noise, so Coast s alone carries a {driving.COAST_SMOOTH_S:g} s "
-                     "window. "
+                     "Brake s and Coast s are measured inside events detected on that same "
+                     "derivative, on this lap's own ~10 Hz fixes (the same events the map glyphs "
+                     "and coaching read). A brake onset is a step, so those events are detected "
+                     "with no window at all. Brake s is the time inside them that the "
+                     "deceleration is at or past the brake threshold, not the events' length, "
+                     "and Coast s the off-power time short of it: each is membership of a band "
+                     "the derivative's own noise flickers across, so both are measured on a "
+                     f"{driving.COAST_SMOOTH_S:g} s window, and no moment counts as both. "
                      "A window can only lower a peak, so a brake "
                      "event's own peak deceleration normally runs ABOVE the Brk g printed beside "
                      "it — measured on both reference recordings, on almost every lap. They are a "
@@ -629,11 +664,13 @@ def lap_table_tooltip_gps(why: str) -> str:
             f"~10 Hz fixes. Neither is an accelerometer reading, and Brk g does not carry the "
             f"{gmeter.LONG_SMOOTH_S:g} s window an IMU-driven meter's braking axis is smoothed "
             f"on, so it is the derivative as 10 Hz gives it rather than a SUSTAINED peak. "
-            f"Brake s and Coast s count events detected on that same derivative (the same events "
-            f"the map glyphs and coaching read). A brake onset is a step, so Brake s is detected "
-            f"with no window at all. A coast is sustained membership of a band narrower than that "
-            f"derivative's own noise, so Coast s alone carries a "
-            f"{driving.COAST_SMOOTH_S:g} s window.")
+            f"Brake s and Coast s are measured inside events detected on that same derivative (the "
+            f"same events the map glyphs and coaching read). A brake onset is a step, so those "
+            f"events are detected with no window at all. Brake s is the time inside them that the "
+            f"deceleration is at or past the brake threshold, not the events' length, and Coast s "
+            f"the off-power time short of it: each is membership of a band the derivative's own "
+            f"noise flickers across, so both are measured on a {driving.COAST_SMOOTH_S:g} s "
+            f"window, and no moment counts as both.")
 
 
 #: The `peak lateral g` tile's legend, hoisted out of _build so the GPS-derived page and the
@@ -703,8 +740,9 @@ PEAK_BRAKE_TOOLTIP = (
     f"the two braking DRIVING tiles, the Brake s column, the BRAKING table, the map's "
     f"glyphs — is detected on the SAME axis with no window at all, so an individual "
     f"event's peak deceleration normally runs ABOVE this figure rather than under it. "
-    f"(The two COASTING tiles beside them are the third filter on that axis, and carry a "
-    f"window of their own — see DRIVING.) One axis, three filters, for three jobs.")
+    f"(The time on the brakes inside those events, and the two COASTING tiles, read a third "
+    f"filter on that axis with a window of its own — see DRIVING.) One axis, three filters, for "
+    f"three jobs.")
 
 
 def peak_brake_tooltip_gps(why: str) -> str:
@@ -1120,7 +1158,15 @@ class StatsView(QWidget):
         self.t_laps = Tile("laps")
         self.t_laps.setToolTip(f"Valid laps · {EXCLUDED_MARK} band-excluded · "
                                f"{DROPOUT_MARK} laps with a GPS dropout")
-        self.t_duration = Tile("recorded")
+        # "GPS TRACE", NOT "recorded" (LOOK-5, QA 2026-09-26): this is the kept GPS trace's span,
+        # first fix to last, and the DATA TRUST card's GPS-quality line directly below spans the
+        # FOOTAGE — 41:34 here against 44:44 there on MK_18_09, whose first 3:05 had no fix. Two
+        # "recording" lengths one card apart; each now says which clock it is.
+        self.t_duration = Tile(DURATION_CAPTION)
+        self.t_duration.setToolTip(
+            "How long the GPS trace runs, first kept fix to last. The footage can be longer: the "
+            "camera records before the GPS has a fix, and the DATA TRUST card's GPS-quality line "
+            "spans the whole footage.")
         self.t_moving = Tile("moving")
         self.t_distance = Tile("distance")
         self.t_clock = Tile("on track")
@@ -1262,10 +1308,10 @@ class StatsView(QWidget):
         col.addWidget(self._speed_section)
         self.t_vmax = Tile("top speed")
         self.t_vmax.setToolTip("Max 3D GPS speed across the valid laps (10 Hz).")
-        self.t_vmin = Tile("slowest point")
-        self.t_vmin.setToolTip(
-            "The slowest on-lap speed across the valid laps — typically the tightest "
-            "corner (a traffic or off-line lap can dip lower).")
+        # THE TYPICAL SLOWEST CORNER, not the session minimum (LOOK-12, QA 2026-09-26; see
+        # `SessionStats.slowest_corner`): the minimum was one lap's traffic moment, 14.5 km/h on
+        # MK_18_09 against a typical 30.1. The minimum and its lap are on the hover.
+        self.t_vmin = Tile(VMIN_CAPTION)
         self.t_peak_lat = Tile("peak lateral g")
         # Provenance-dependent, and re-set per refresh — see _refresh_g_provenance.
         self.t_peak_lat.setToolTip(PEAK_LAT_TOOLTIP)
@@ -1374,7 +1420,7 @@ class StatsView(QWidget):
         self._driving_section = section_heading("DRIVING")
         self._driving_section.setToolTip(DRIVING_TOOLTIP)
         col.addWidget(self._driving_section)
-        self.t_brake = Tile("braking / lap · median")
+        self.t_brake = Tile(stats_service.BRAKE_TILE_CAPTION)
         self.t_brake_n = Tile("brake events / lap")
         self.t_coast = Tile("coasting / lap · median")
         self.t_longest_coast = Tile("longest coast")
@@ -2062,7 +2108,8 @@ class StatsView(QWidget):
             # render identically and would leave a "difference" nobody can see.
             recorded, moving = fmt_hms(tot.duration_s), fmt_hms(tot.moving_s)
             same = recorded == moving
-            self.t_duration.set(recorded, "recorded · all moving" if same else "recorded")
+            self.t_duration.set(recorded, f"{DURATION_CAPTION} · all moving" if same
+                                else DURATION_CAPTION)
             self.t_moving.setVisible(not same)
             self.t_moving.set(None if same else moving)
             self._set_distance(tot)
@@ -2113,9 +2160,10 @@ class StatsView(QWidget):
                             f"top speed · lap {vmax[1] + 1}")
         else:
             self.t_vmax.set(None, "top speed")
-        vmins = [r.vmin_kmh for r in rows if r.vmin_kmh is not None]
-        self.t_vmin.set(f"{units.convert_speed(min(vmins), unit):.1f} {u_label}"
-                        if vmins else None)
+        slow = getattr(st, "slowest_corner", lambda: None)() if st is not None else None
+        self.t_vmin.set(None if slow is None else
+                        f"{units.convert_speed(slow[0], unit):.1f} {u_label}")
+        self.t_vmin.setToolTip(slowest_corner_tip(slow, unit, u_label))
         lat_peaks = [r.peak_lat_g for r in rows if r.peak_lat_g is not None]
         brk_peaks = [r.peak_brake_g for r in rows if r.peak_brake_g is not None]
         self.t_peak_lat.set(f"{max(lat_peaks):.2f} g" if lat_peaks else None)
@@ -2515,8 +2563,7 @@ class StatsView(QWidget):
                 best_item.setForeground(best_colour)
                 best_item.setToolTip(
                     f"Session-best S{k + 1} split — the fastest this sector was driven, in the "
-                    "same purple the Laps tab paints on the lap that set it. The theoretical "
-                    "best above is this column summed.")
+                    "same purple the Laps tab paints on the lap that set it.")
             self.sector_table.setItem(k, 1, best_item)
             med = medians[k] if k < len(medians) else None
             self.sector_table.setItem(
@@ -2579,7 +2626,7 @@ class StatsView(QWidget):
                 # direction off a number the shuffled-label null already covers.
                 flat = abs(slope) < stats_service.VMIN_STEADY_BAND
                 shown = units.convert_speed(slope, unit)
-                t.setItem(r, 7, cell("0.00" if flat else f"{shown:+.2f}"))
+                t.setItem(r, 7, cell("0.00" if flat else fmt_signed(shown, 2)))
         self._fit_table(t)
         # THE SAMPLE, under the grid that is read off it. Two runs of 4 and 40 laps are not two
         # comparable paces, and the row count is the only thing on screen that says so.
@@ -2665,8 +2712,8 @@ class StatsView(QWidget):
                         # quickest. Two marks reading off two baselines and saying so beats one
                         # baseline that answers only half the question (see MATRIX_SCALE_MIN_S).
                         item.setToolTip(
-                            f"{val - med:+.{d}f} s against your typical S{c + 1} "
-                            f"({med:.{d}f} s); {gap:+.{d}f} s against the sector best "
+                            f"{fmt_signed(val - med, d)} s against your typical S{c + 1} "
+                            f"({med:.{d}f} s); {fmt_signed(gap, d)} s against the sector best "
                             f"({col_best:.{d}f} s, lap {matrix.best_lap[c] + 1}).")
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 item.setFont(mono)
@@ -2744,7 +2791,7 @@ class StatsView(QWidget):
                             item.setForeground(behind)
                             item.setText(theme.DELTA_BEHIND_ARROW + " " + item.text())
                         item.setToolTip(
-                            f"{val - med:+.{d}f} s against your typical C{cid} ({med:.{d}f} s, the "
+                            f"{fmt_signed(val - med, d)} s against your typical C{cid} ({med:.{d}f} s, the "
                             f"median of the {matrix.n_resolved[c]} laps matched on track through "
                             "it).")
                 t.setItem(r, c + 1, item)

@@ -44,6 +44,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QRect, Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
+    QLabel,
     QStyle,
     QStyleOptionViewItem,
 )
@@ -565,7 +566,33 @@ def test_the_braking_line_row_holds_it_and_names_the_laps_it_counted():
     print("test_the_braking_line_row_holds_it_and_names_the_laps_it_counted OK")
 
 
+def test_the_grid_page_says_what_its_viewport_left_out():
+    """LOOK-3 (QA 2026-09-26). At the owner's grid layout the page holds 3 rows, and on MK_18_09
+    the other 8 corners the Coaching tab lists — C7's +0.25 s, his largest median loss against his
+    best lap, among them — appeared only when the page was maximized. Nothing on the grid page
+    said they existed. MK's shape: three ranked rows, eight the evidence gate did not rank."""
+    import dataclasses
+    rows = _rows(11)
+    rows = rows[:3] + [dataclasses.replace(
+        r, evidence=dataclasses.replace(r.evidence, abstain=coaching.ABSTAIN_SPREAD))
+        for r in rows[3:]]
+    grid = _panel(rows, (719, 330))
+    shown = grid.table.rowCount()
+    assert shown < len(rows), ("the fixture must leave rows out of the grid page", shown)
+    lines = [lab.text() for lab in grid.findChildren(QLabel)
+             if lab.isVisible() and "not ranked" in lab.text()]
+    assert lines, "the grid page lists some corners and never says the rest are there"
+    assert lines[0].startswith(f"{len(rows) - shown} more corners"), lines[0]
+    assert "maximize" in lines[0], ("the line must name how to see them", lines[0])
+    full = _panel(rows, (1432, 808))
+    assert full.table.rowCount() == len(rows), full.table.rowCount()
+    assert not any(lab.isVisible() and "not ranked" in lab.text()
+                   for lab in full.findChildren(QLabel)), "every row is on screen: no line"
+    print(f"test_the_grid_page_says_what_its_viewport_left_out OK ({lines[0]!r})")
+
+
 def _run_all():
+    test_the_grid_page_says_what_its_viewport_left_out()
     test_narrow_panel_spends_its_width_on_the_prose()
     test_wide_panel_keeps_the_reach_column()
     test_reason_header_never_paints_clipped()

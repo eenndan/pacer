@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import MAX_DOP
+from ._signal import MAX_DOP, fmt_hms
 
 # Timing-clock provenance — which per-sample time axis the load path actually built.
 GPS9_TRUECLOCK = "gps9_trueclock"        # GPS9 per-sample fix spacing (the validated headline path)
@@ -443,9 +443,14 @@ class QualityTimeline:
         counts = self.counts()
         parts = [f"{counts[c] * self.cell_s:.0f} s {QUALITY_LABEL[c].lower()}"
                  for c in CONCERN_CLASSES if counts.get(c)]
+        # "OF FOOTAGE", in m:ss (LOOK-5, QA 2026-09-26). This timeline spans the MEDIA — every
+        # second of footage, fix or no fix — while the Stats page's duration tile is the kept GPS
+        # trace's span: "2684 s of recording" sat under "41:34 recorded" on MK_18_09, two lengths
+        # of one recording, one card apart. Each now names its clock, in the tile's own format.
+        span = fmt_hms(self.span_s)
         if not parts:
-            return f"GPS quality good over all {self.span_s:.0f} s of the recording"
-        return (f"GPS quality over {self.span_s:.0f} s of recording: " + ", ".join(parts)
+            return f"GPS quality good over all {span} of the footage"
+        return (f"GPS quality over {span} of footage: " + ", ".join(parts)
                 + ", the rest good")
 
 

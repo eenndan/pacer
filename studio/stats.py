@@ -42,7 +42,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import PRINT_DECIMALS, is_best_at_print
+from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print
 from .consistency import sigma
 
 # "moving" threshold, m/s — the SAME cutoff the g-meter/thresholds use for their moving
@@ -76,6 +76,14 @@ TREND_MIN_LAPS = 6
 # exported report and the clipboard summary print the same verdict off the same slope and a
 # second copy of the band is how the file starts disagreeing with the screen.
 TREND_STEADY_BAND = 0.02
+
+#: Two tile captions the Stats page AND the exported summary print (export_data mirrors the page's
+#: rows), so one number has one name on both (QA 2026-09-26). The SESSION duration is the kept GPS
+#: trace's span, not the footage's — the DATA TRUST card's GPS-quality line spans the footage
+#: (LOOK-5). The SPEED · G minimum is `SessionStats.slowest_corner`'s TYPICAL, not the session's
+#: one slowest moment (LOOK-12).
+DURATION_CAPTION = "GPS trace"
+VMIN_CAPTION = "slowest corner · typical"
 # "Race pace" window: the best mean of this many CONSECUTIVE clean laps — the sustained-run
 # number next to the single glory lap.
 RACE_PACE_N = 3
@@ -274,6 +282,13 @@ class PathDistance:
     rejected_n: int      # how many chords the gate refused
 
 
+#: The DRIVING braking figure's caption, one string for the Stats tile and the exported DRIVING
+#: group. It says what is counted — time ON THE BRAKES (`LapStat.brake_s`) — because the caption it
+#: replaces, "braking / lap", sat over the summed event spans: 26.0 s a lap on MK 0067, where
+#: 17.8 s was at or past the brake threshold (LOOK-2).
+BRAKE_TILE_CAPTION = "on the brakes / lap · median"
+
+
 @dataclass(frozen=True)
 class LapStat:
     """One valid lap's statistics row. None = the underlying signal is absent (no g-meter),
@@ -286,8 +301,10 @@ class LapStat:
     vmin_kmh: float | None      # min full_speed on the lap — the slowest-corner speed
     peak_lat_g: float | None    # max |lateral g| (IMU lateral — the trusted axis)
     peak_brake_g: float | None  # max deceleration, reported positive (validated GPS-derived long)
-    brake_s: float | None       # total time in brake events
-    brake_n: int | None         # number of brake events
+    brake_s: float | None       # time ON THE BRAKES: at/past theta_b inside the brake events
+    #                             (driving.brake_time) — NOT the events' summed spans, which run
+    #                             through each lift-off tail (the block above driving.brake_time)
+    brake_n: int | None         # number of brake events (the map's brake glyphs, one per event)
     coast_s: float | None       # total time coasting
     coast_frac: float | None    # coast_s / lap time
 
@@ -1197,11 +1214,12 @@ def trend_verdict(slope: float | None) -> str | None:
 
 
 def fmt_trend(slope: float | None) -> str | None:
-    """The trend VALUE as both surfaces print it: `+0.14 s/lap`, or a flat `0.00 s/lap` for a
-    signed near-zero (a "±0.00" display reads as a glitch). None passes through as None."""
+    """The trend VALUE as both surfaces print it: `+0.14 s/lap`, `−0.35 s/lap` (the true minus,
+    `_signal.fmt_signed`), or a flat `0.00 s/lap` for a signed near-zero (a "±0.00" display reads
+    as a glitch). None passes through as None."""
     if slope is None:
         return None
-    return "0.00 s/lap" if round(slope, 2) == 0 else f"{slope:+.2f} s/lap"
+    return fmt_signed(slope, 2, "s/lap")
 
 
 def theil_sen_slope(values, x=None) -> float | None:
@@ -1503,7 +1521,8 @@ class SessionStats:
     .tv / (.tx, .ty)); `wall_clock_ms` the (first, last) kept-fix GPS9 epoch timestamps;
     `valid_lap_ids` / `consistency_lap_ids` the memoized lap sets; `lap_time` / `lap_arrays` /
     `lap_window` the per-lap fetches; `brake_events` / `coast_spans` the driving-channel
-    event lists (already cached per lap by DrivingChannels)."""
+    event lists and `brake_time` the seconds on the brakes inside those events (all already cached
+    per lap by DrivingChannels)."""
 
     def __init__(self, *,
                  gmeter: Callable[[], object],
@@ -1517,6 +1536,7 @@ class SessionStats:
                  lap_arrays: Callable[[int], tuple],
                  lap_window: Callable[[int], tuple[float, float] | None],
                  brake_events: Callable[[int], list],
+                 brake_time: Callable[[int], float],
                  coast_spans: Callable[[int], list]):
         self._gmeter = gmeter
         self._trace_times = trace_times
@@ -1529,6 +1549,7 @@ class SessionStats:
         self._lap_arrays = lap_arrays
         self._lap_window = lap_window
         self._brake_events = brake_events
+        self._brake_time = brake_time
         self._coast_spans = coast_spans
         # totals depend only on the constant trace → computed once, survives re-segments.
         self._totals_cache: SessionTotals | None = None
@@ -1576,8 +1597,10 @@ class SessionStats:
     def lap_stats(self) -> list[LapStat]:
         """One LapStat per VALID lap, in session order; cached per segmentation. Speed stats
         come from the lap's own arrays; g peaks slice the g-meter by the lap's media window;
-        brake/coast reduce the driving-channel event lists. Signal-absent fields are None
-        (never 0) — see LapStat."""
+        brake/coast reduce the driving-channel event lists. `brake_s` is the channel's own time on
+        the brakes (`brake_time`), never Σ event.duration: an event is held open through its
+        lift-off tail, so that sum booked 26.0 s a lap on MK 0067 where 17.8 s was braking.
+        Signal-absent fields are None (never 0) — see LapStat."""
         if self._lap_stats_cache is not None:
             return self._lap_stats_cache
         gm = self._gmeter()
@@ -1602,7 +1625,7 @@ class SessionStats:
             if has_g:
                 events = self._brake_events(i)
                 spans = self._coast_spans(i)
-                brake_s = float(sum(e.duration for e in events))
+                brake_s = float(self._brake_time(i))
                 brake_n = len(events)
                 coast_s = float(sum(sp.duration for sp in spans))
                 coast_frac = coast_s / lap_time if lap_time > 0 else None
@@ -1724,6 +1747,23 @@ class SessionStats:
             if st.vmax_kmh is not None and (best is None or st.vmax_kmh > best[0]):
                 best = (st.vmax_kmh, st.idx)
         return best
+
+    def slowest_corner(self) -> tuple[float, int, float, int] | None:
+        """(typical km/h, laps, lowest km/h, its lap id): the SPEED · G "slowest corner" tile.
+
+        TYPICAL = the median over the CLEAN laps of each lap's slowest speed — the statistic STINTS'
+        "Min" column takes per run, over the same laps, off the same `LapStat.vmin_kmh`. The session
+        MINIMUM this tile printed before is one lap's moment, not a corner: measured (LOOK-12, QA
+        2026-09-26) it was 14.5 km/h on MK_18_09 lap 18 against a typical 30.1 km/h (4 of 19 laps
+        under 21 km/h: traffic and the opening laps), and 31.4 km/h on SD_19_09 lap 6 against 39.3.
+        The minimum and its lap stay available for the tooltip. None with no speed on a clean lap."""
+        clean = set(self._consistency_lap_ids())
+        rows = [(st.vmin_kmh, st.idx) for st in self.lap_stats()
+                if st.vmin_kmh is not None and st.idx in clean]
+        if not rows:
+            return None
+        low = min(rows)
+        return float(np.median([v for v, _ in rows])), len(rows), float(low[0]), int(low[1])
 
     # ------------------------------------------------------------------ band distributions
     def _band_report(self, per_lap: Callable[[int], tuple | None], width: float, *,
