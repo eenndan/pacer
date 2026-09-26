@@ -26,6 +26,7 @@ import numpy as np
 
 from . import corners as corners_mod
 from . import units
+from ._signal import plural
 from .corners import project_boundaries
 
 # Min clean laps before coaching; the per-corner loss is a MEDIAN, ill-defined/unstable below 3.
@@ -1188,10 +1189,14 @@ def reach_clause(opp: Opportunity) -> str:
     # table cell, and the count is ALSO in the row's own "Done it?" column. What cannot be dropped
     # is the VOICE (already / rarely / never — that is the instruction changing) and the
     # denominator (the honesty rule: never a count without the sample it came out of).
-    if ev.reach == REACH_REPEAT:
-        return f" You have already done this — {ev.reach_laps} of {ev.n_laps} laps."
-    if ev.reach == REACH_RARE:
-        return f" You have rarely done this — {ev.reach_laps} of {ev.n_laps} laps."
+    #
+    # THE COUNT, NOT A VERDICT (LOOK-9, QA 2026-09-26). It said "You have already done this" at
+    # REACH_REPEAT_FRAC and "You have rarely done this" one lap under it: 2 of 19 laps read "already"
+    # beside 1 of 19 reading "rarely" on MK_18_09, a verdict flipping at one lap. The count says the
+    # same thing without the flip, and names WHAT was matched ("done" what?, copy #1).
+    if ev.reach in (REACH_REPEAT, REACH_RARE):
+        return (f" {ev.reach_laps} of {plural(ev.n_laps, 'lap')} already matched your best lap "
+                "here.")
     # No REACH_NEVER wording: `reason_sentence`, the only caller, reaches here for RANKED rows, and a
     # ranked row has matched the target on at least MIN_REACH_LAPS laps (`corner_evidence`). A
     # corner no lap has matched is an abstain and says so in `abstain_sentence`. The invariant is
@@ -1252,7 +1257,8 @@ def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
         # M6 (same pathology): coast_extra_s is a raw cause, not recoverable time — phrase as cause.
         base = f"back to throttle sooner (~{r.coast_extra_s:.2f} s longer coasting)"
     elif r.kind == REASON_LINE:
-        base = f"be consistent here (σ {r.sigma:.2f} s)"
+        # Copy #1: the instruction first, then the spread it is about (σ, said as the ± it is).
+        base = f"repeat your best line — your laps vary ±{r.sigma:.2f} s through it"
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)
@@ -1285,10 +1291,20 @@ def theme_sentence(theme: Theme) -> str:
     # short session most of the measured loss can sit in abstained corners (0064's chapter 3 alone:
     # 0.121 s ranked against 0.444 s abstained). The same words the abstain sentence uses for the
     # same quantity, so the page has one name for it.
+    #
+    # "ALL", NOT "MOST", AT 100 % (LOOK-9 / copy #2, QA 2026-09-26): "Most of the time on offer is
+    # execution, not pace — 100% of it is …" contradicted itself in one sentence on MK_18_09.
+    whole = round(theme.share, 2) >= 1.0
     if theme.kind == THEME_EXECUTION:
+        if whole:
+            return ("All of the time on offer is in corners where you have already driven your "
+                    "best lap's pace: repeat it, no new speed needed.")
         return (f"Most of the time on offer is execution, not pace — {theme.share:.0%} of it is "
-                "in corners you have already driven at this pace.")
+                "in corners where you have already driven your best lap's pace.")
     if theme.kind == THEME_PACE:
+        if whole:
+            return ("All of the time on offer is in corners you have rarely been quick through: "
+                    "it needs new speed, not repetition.")
         return (f"Most of the time on offer is pace, not execution — {theme.share:.0%} of it is "
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer

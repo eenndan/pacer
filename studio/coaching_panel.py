@@ -63,6 +63,10 @@ PHASE_COL_PX = 150   # the proportional bar's stable width (its segments are sha
 # hover for the full label. Keyed by the header TEXT so the dialog's six and the panel's four share
 # one definition and can't drift.
 _HEADER_ALIGN = {"Time lost": Qt.AlignRight, "Done it?": Qt.AlignRight}
+# VIEW-9 (QA 2026-09-25): the bar column is the TYPICAL LAP's Δt, the Time lost column a cross-lap
+# median; on MK_18_09 C5 read +0.13 s lost beside "net −0.01 s" and C8 +0.06 beside +0.19. Its
+# header and its sum now say whose number it is, so the two cannot be read as one quantity.
+PHASE_HEADER = "Typical lap Δt"
 _HEADER_TIPS = {
     "Corner": "The corner's number in track order, with an arrow for its direction — "
               "anticlockwise is a left-hander, clockwise a right.",
@@ -70,12 +74,13 @@ _HEADER_TIPS = {
                  "over your clean laps (seconds). A lap counts at a corner only where it was "
                  "matched to your best lap's line on track at the corner's entry and exit.",
     "Done it?": "How many of your clean laps already matched or beat your best lap's time "
-                "through this corner, out of the laps matched on track there (hover a cell for "
-                "the count). Many of them — repeat what you have already driven. Few — "
-                "this is pace you have not established yet, and it needs something new.",
-    "Entry · Apex · Exit Δt": "Where in the corner your typical lap is faster/slower than your best "
-                              "lap (Δt per third, seconds) — NOT the row's Time lost, which is a "
-                              "cross-lap median.",
+                "through this corner, out of the laps matched on track there. Many of them — "
+                "repeat what you have already driven. Few — this is pace you have not "
+                "established yet, and it needs something new.",
+    PHASE_HEADER: "Where in the corner your TYPICAL LAP is faster/slower than your best lap (Δt "
+                  "per third, seconds, and their sum under the bar) — ONE lap's profile, not the "
+                  "row's Time lost, which is the median over all your laps. The two can differ in "
+                  "sign.",
     "How to find it": "The dominant MEASURED reason this corner is losing time, with its numbers — "
                       "plus the ESTIMATED brake-point line when one is available for the corner.",
 }
@@ -851,7 +856,8 @@ class PhaseBar(QWidget):
         # "+0.08 s lost" whose typical lap is net faster across the corner must say so where it is
         # read. Faster reads in the palette's ahead hue, slower stays muted (the accent is reserved
         # for the dominant losing third above).
-        face = QLabel(f"net {net:+.2f} s" if abs(net) > 1e-6 else "net ~0 s")
+        face = QLabel(f"typical lap {net:+.2f} s".replace("-", "−") if abs(net) > 1e-6
+                      else "typical lap ~0 s")
         face.setFont(theme.mono_font(theme.CAPTION))
         face.setAlignment(Qt.AlignCenter)
         face.setProperty("role", "Note")     # the muted default; the ahead case tints over it
@@ -1068,7 +1074,9 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
     rather than inventing a count."""
     ev = opp.evidence
     word = _REACH_WORD.get(ev.reach)
-    item = QTableWidgetItem(f"{word} · {ev.reach_laps}/{ev.n_laps}" if word else DASH)
+    # THE COUNT, NOT THE WORD (LOOK-9): "Yes · 2/19" beside "Rarely · 1/19" was a verdict that
+    # flipped at one lap (coaching.REACH_REPEAT_FRAC). The count carries it, and cannot flip.
+    item = QTableWidgetItem(f"{ev.reach_laps} of {ev.n_laps}" if word else DASH)
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     item.setFont(num_font)
@@ -1232,7 +1240,7 @@ class OpportunitiesPanel(QWidget):
     # The debrief's "Compare with your previous PB" (DebriefBlock); the window does the loading.
     compare_pb_requested = Signal()
 
-    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", "Entry · Apex · Exit Δt", ""]
+    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", PHASE_HEADER, ""]
 
     def __init__(self, session: Session):
         super().__init__()
