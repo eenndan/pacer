@@ -1555,6 +1555,12 @@ class CentralView(QWidget):
         self._update_table_header()
         if getattr(self, "_debrief", False) and index != 3:
             self._end_debrief(restore_tab=False)   # the driver chose another page
+            # ...and left the landing, so the grid comes back exactly as Esc brings it back. Ending
+            # the debrief alone kept the lap panel maximized: a click on Laps gave a full-window
+            # table with no video, map or charts, and the "Esc returns…" line went with the lead
+            # (QA LOOK-1). `_debrief` is already False, so the restore cannot end it a second time.
+            if getattr(self, "_maximized_panel", None) is self._table_panel:
+                self._restore_splitter_sizes()
         if not getattr(self, "_tab_quiet", False):  # the debrief's own flips are not a choice
             self.lapTabChanged.emit(index)
 
