@@ -300,6 +300,27 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
     print("ok free space: a compare is sized as its two-pane frame")
 
 
+def test_a_compare_costs_its_frame_plus_pane_b():
+    """EXP-8's time model, against the compares it was calibrated on — MK laps 14 against 15, side
+    by side, 2025 frames: the 720p one took 36.2 s end to end on a day the single-lap estimates
+    ran within +-5 %, and the 1080p one 1.7x that (the median of four runs alternating with a
+    720p one, which cancels a shared machine's load between two compares). The model lands within
+    15 % of both. A compare costs more than the single lap of its own frame; the two layouts of one
+    pane size cost the same; a path with no measurement says nothing. The encoder is NAMED, never
+    resolved: the model under test is each path's own."""
+    for (w, h), real in (((2560, 720), 36.17), ((3840, 1080), 1.7 * 36.17)):
+        est = ec.estimate_compare_seconds(w, h, 2025, ev.VT_H264)
+        assert abs(est / real - 1) <= 0.15, (w, h, est, real)
+    for codec in (ev.VT_H264, ev.SW_H264):
+        side = ec.estimate_compare_seconds(2560, 720, 2025, codec)
+        assert side == ec.estimate_compare_seconds(1280, 1440, 2025, codec), codec
+        assert side > ev.estimate_render_seconds(2560, 720, 2025, codec), codec
+        assert side > 1.5 * ev.estimate_render_seconds(1280, 720, 2025, codec), codec
+    assert ec.estimate_compare_seconds(2560, 720, 2025, "hevc_mystery") is None
+    assert ec.estimate_compare_seconds(2560, 720, 0, ev.VT_H264) is None
+    print("ok compare time: a single lap of the two-pane frame, plus pane B")
+
+
 def test_the_progress_dialog_names_both_laps():
     """One modal serves both exports, so its label has to be able to describe a PAIR. A compare
     render announced as "lap 4" would name half of what it is doing."""

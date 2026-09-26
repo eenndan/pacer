@@ -1877,6 +1877,16 @@ _REAL_H264 = (
     ("MK lap 14, 720p (the 2 Mbit/s floor)", ev.VT_H264, 1280, 720, 2026, "standard", 13_507_729),
     ("MK lap 15 +-5 s, 9:16 crop", ev.VT_H264, 1080, 1920, 2334, "high", 44_301_853),
     ("MK lap 19, 1:1 fit (the floor)", ev.VT_H264, 720, 720, 2039, "standard", 13_596_154),
+    ("SD19 best lap, 4K", ev.VT_H264, 3840, 2160, 1406, "high", 103_301_836),
+    ("SD19 best lap, 1080p", ev.VT_H264, 1920, 1080, 1406, "high", 26_715_631),
+    ("SD19 best lap, 1080p", ev.VT_H264, 1920, 1080, 1406, "standard", 16_500_358),
+    ("SD19 best lap, 720p", ev.VT_H264, 1280, 720, 1406, "high", 12_524_457),
+    ("SD19 best lap, 720p (the floor)", ev.VT_H264, 1280, 720, 1406, "standard", 9_389_316),
+    # the compare's two-pane frames: two panes' pictures, one audio track (lap A's)
+    ("MK compare 14 v 15, 720p side by side", ev.VT_H264, 2560, 720, 2025, "high", 34_348_163),
+    ("MK compare 14 v 15, 1080p side by side", ev.VT_H264, 3840, 1080, 2025, "high", 75_170_694),
+    ("MK compare 14 v 15, 720p stacked", ev.VT_H264, 1280, 1440, 2025, "standard", 21_283_451),
+    ("MK compare 14 v 15, 1080p stacked", ev.VT_H264, 1920, 2160, 2025, "standard", 45_780_901),
 )
 
 
