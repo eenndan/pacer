@@ -11,8 +11,7 @@ What is asserted here, on inputs whose answer is known by construction:
   * the MEASUREMENT: a window is a FRACTION of the lap odometer, so the same stretch of track is
     compared across two sessions whose corner partitions differ — the failure this design exists
     to prevent, sized on real data in studio/focus.py (C1's window grew 173.4 m → 179.5 m between
-    the two working-set recordings, worth +0.062 s of "you got slower" on a corner the driver took
-    0.139 s quicker over the same stretch);
+    the two working-set recordings, worth +0.170 s of "you got slower" on a corner the driver took 0.029 s quicker over the same stretch);
   * the GATE: no session record on either side, records that disagree, a provisional start line,
     ESTIMATED timing, mismatched lap lengths and too few clean laps each REFUSE a verdict — and a
     refused verdict carries `delta is None`, so no surface can print a number the evidence does not

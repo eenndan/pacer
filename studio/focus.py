@@ -31,14 +31,16 @@ is a built-in track too, on the owner's own saved line. The D24 edition, which #
 after #335 changed corner matching, is kept in studio/docs/coaching-tables-on-d24.md.
 Promote 0064's top three ranked corners and measure them again on 0068 over the SAME windows.
 "promoted for" is the coaching row's time lost; the medians and interquartile ranges are the
-window's seconds over each session's clean laps; "bar" is ``SPREAD_MARGIN`` × the wider of the two
-IQRs, the test ``verdict`` applies. tests/test_measured_figures.py derives the prose from these
+window's seconds over each session's clean laps matched on track at both of its edges (since QA
+LOOK-10 the CORNERS table's own instrument, ``METHOD_MATCHED``: 0064's C4 is 61 of its 62 laps and
+0068's 35 of 36); "bar" is ``SPREAD_MARGIN`` × the wider of the two IQRs, the test ``verdict``
+applies. tests/test_measured_figures.py derives the prose from these
 cells and, given the footage, re-measures every one:
 
   corner  promoted for  0064 median  IQR    0068 median  IQR    change  bar    verdict
-  C1      +0.229 s      10.395 s     0.557  10.256 s     0.240  −0.139  0.279  unchanged
-  C4      +0.193 s      5.223 s      0.249  5.169 s      0.108  −0.054  0.125  unchanged
-  C7      +0.178 s      4.065 s      0.268  4.042 s      0.080  −0.023  0.134  unchanged
+  C1      +0.229 s      10.341 s     0.309  10.312 s     0.200  −0.029  0.155  unchanged
+  C4      +0.193 s      5.286 s      0.231  5.116 s      0.171  −0.170  0.115  improved
+  C7      +0.178 s      4.100 s      0.305  4.104 s      0.105  +0.004  0.152  unchanged
 
   * both start lines are trusted, even in the jailed check, because both recordings detect the
     built-in Sandown Park. So the gate passes the start line and blocks all three verdicts at
@@ -47,7 +49,9 @@ cells and, given the footage, re-measures every one:
     conditions first" — not a number. Until Q2 it stopped a step earlier, at `unverified`: with no
     Sandown Park to detect, both lines were the loader's own fit;
   * the spread test's verdicts, reached only by forcing the start-line and session-record gates
-    open: unchanged on 3, improved on 0, slower on 0, as on D24, whose lines were trusted too.
+    open: unchanged on 2, improved on 1, slower on 0. The fraction instrument before LOOK-10
+    read unchanged on 3, as on D24, whose lines were trusted too: its C4 baseline was 5.223 s where
+    the matched laps' is 5.286 s, the same cells the Stats page's CORNERS table reads.
     Before Q2 the same test read two of the three "improved" (C7 −0.136 s, C4 −0.214 s), over
     windows that were not the same stretch of track — exactly what the start-line gate exists to
     stop, and it did (below).
@@ -58,16 +62,16 @@ session's own trace, so "C1" is not the same measurement twice. Each recording's
 every corner, the median time over it, and 0068's median over 0064's STORED window instead:
 
   corner  0064 window  0068 window  0064 own  0068 own  own change  0068 over 0064's  stored change
-  C1      173.4 m      179.5 m      10.395 s  10.458 s  +0.062 s    10.256 s          −0.139 s
-  C2      51.1 m       51.8 m       4.323 s   4.266 s   −0.056 s    4.250 s           −0.072 s
-  C3      79.6 m       81.1 m       5.595 s   5.579 s   −0.016 s    5.548 s           −0.046 s
-  C4      70.6 m       74.3 m       5.223 s   5.367 s   +0.144 s    5.169 s           −0.054 s
-  C5      45.8 m       47.3 m       3.571 s   3.585 s   +0.014 s    3.534 s           −0.037 s
-  C6      43.5 m       44.3 m       3.256 s   3.189 s   −0.068 s    3.156 s           −0.101 s
-  C7      51.1 m       51.1 m       4.065 s   4.011 s   −0.053 s    4.042 s           −0.023 s
+  C1      173.4 m      179.5 m      10.341 s  10.511 s  +0.170 s    10.312 s          −0.029 s
+  C2      51.1 m       51.8 m       4.401 s   4.257 s   −0.144 s    4.242 s           −0.159 s
+  C3      79.6 m       81.1 m       5.424 s   5.605 s   +0.181 s    5.574 s           +0.150 s
+  C4      70.6 m       74.3 m       5.286 s   5.311 s   +0.025 s    5.116 s           −0.170 s
+  C5      45.8 m       47.3 m       3.577 s   3.640 s   +0.063 s    3.590 s           +0.013 s
+  C6      43.5 m       44.3 m       3.373 s   3.123 s   −0.250 s    3.092 s           −0.281 s
+  C7      51.1 m       51.1 m       4.100 s   4.076 s   −0.024 s    4.104 s           +0.004 s
 
-Reported as a cross-session change, C1's own-window +0.062 s is "you got slower", and more than all
-of it is the detector drawing a longer window; over the stored window it is −0.139 s. So a focus
+Reported as a cross-session change, C1's own-window +0.170 s is "you got slower", and more than all
+of it is the detector drawing a longer window; over the stored window it is −0.029 s. So a focus
 item stores its window as a FRACTION of the lap odometer and both sides are measured by the same
 function over that fraction; the corner id is a label on it, never the identity. A fraction is the
 same stretch of track only when the two odometers start in the same place, and since Q2 they do:
@@ -75,7 +79,7 @@ both recordings are timed on the built-in Sandown Park line, and across the seve
 sits −1.0..+0.4 m from 0064's (scaled by the two lap totals). Before Q2 each was cut on the loader's
 own line, the two lines sat about 10 m apart, and every apex was offset by −11.2..−8.5 m — the reason
 the gate refuses a comparison when either line is provisional. Over the stored windows the seven
-corners read −0.139..−0.023 s, while the lap totals agree to 0.93 % (730.6 vs 737.3 m).
+corners read −0.281..+0.150 s, while the lap totals agree to 0.93 % (730.6 vs 737.3 m).
 
 Persistence follows ``library.py`` / ``session_record.py`` — schema version read + forward
 migration, a ``.bak`` before any un-round-trippable overwrite, atomic write, one bad list dropped
@@ -101,7 +105,18 @@ from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
 
 _log = logging.getLogger(__name__)
 
-VERSION = 1
+# v2 (QA LOOK-10): a baseline is measured the way the CORNERS table measures a corner
+# (`METHOD_MATCHED`) and carries how many laps it was measured on (`n_of`). A v1 item keeps its
+# meaning, `METHOD_FRACTION`, and is re-measured by it (`_migrate`).
+VERSION = 2
+
+# How a baseline was measured, stored per item so both halves of a comparison use one instrument.
+# FRACTION (v1): every clean lap's time over the window's fractions of its OWN odometer.
+# MATCHED (v2): the laps whose spatial matches of both window edges survived, timed between them —
+# on the session that promoted it, exactly that corner's CORNERS-table cells (`Session.focus_samples`).
+METHOD_FRACTION = "fraction"
+METHOD_MATCHED = "matched"
+_METHODS = (METHOD_FRACTION, METHOD_MATCHED)
 
 _FILENAME = "focus.json"
 
@@ -153,17 +168,20 @@ class CornerSample:
     median: float     # median time through the window (s)
     iqr: float        # interquartile range of the per-lap times (s)
     n_laps: int       # clean laps with a finite time through it
+    n_of: int | None = None  # clean laps measured at all (≥ n_laps: a lap whose window edge was
+    #                          not matched on track is counted here, never timed); None = unknown
 
 
-def sample_window(times) -> CornerSample | None:
+def sample_window(times, n_of: int | None = None) -> CornerSample | None:
     """``CornerSample`` for one window's per-lap times (non-finite dropped). None when nothing
-    finite came back — an absent sample is not a zero one."""
+    finite came back — an absent sample is not a zero one. `n_of`: the laps it was measured on."""
     t = np.asarray(list(times), float)
     t = t[np.isfinite(t)]
     if len(t) == 0:
         return None
     q25, q75 = (np.percentile(t, [25, 75]) if len(t) >= 2 else (t[0], t[0]))
-    return CornerSample(median=float(np.median(t)), iqr=float(q75 - q25), n_laps=int(len(t)))
+    return CornerSample(median=float(np.median(t)), iqr=float(q75 - q25), n_laps=int(len(t)),
+                        n_of=None if n_of is None else int(n_of))
 
 
 def window_times(windows, laps) -> list[list[float]]:
@@ -217,10 +235,19 @@ class FocusItem:
     lap_total: float           # its lap odometer total (m) — the geometry sanity check
     verified: bool             # its start line was TRUSTED (else the odometer origin is arbitrary)
     degraded: bool             # its absolute timing was ESTIMATED
+    n_of: int = 0              # baseline: the clean laps measured at all (0 = not recorded, v1)
+    method: str = METHOD_MATCHED  # how the baseline was measured (METHOD_*): the re-measure too
 
     @property
     def label(self) -> str:
         return f"C{self.cid}"
+
+    @property
+    def count_text(self) -> str:
+        """"19 laps", or "16 of 19 laps" when some laps' window could not be matched on track."""
+        if self.n_of and self.n_of != self.n_laps:
+            return f"{self.n_laps} of {plural(self.n_of, 'lap')}"
+        return plural(self.n_laps, "lap")
 
 
 def item_to_dict(item: FocusItem) -> dict:
@@ -233,7 +260,7 @@ def item_to_dict(item: FocusItem) -> dict:
         "reason": str(item.reason), "reach": str(item.reach),
         "fingerprint": str(item.fingerprint), "date": item.date,
         "lap_total": float(item.lap_total), "verified": bool(item.verified),
-        "degraded": bool(item.degraded),
+        "degraded": bool(item.degraded), "n_of": int(item.n_of), "method": str(item.method),
     }
 
 
@@ -246,7 +273,9 @@ def item_from_dict(d: dict) -> FocusItem:
         time_lost=float(d.get("time_lost", 0.0)), reason=str(d.get("reason", "")),
         reach=str(d.get("reach", "")), fingerprint=str(d.get("fingerprint", "")),
         date=d.get("date"), lap_total=float(d.get("lap_total", 0.0)),
-        verified=bool(d.get("verified", False)), degraded=bool(d.get("degraded", False)))
+        verified=bool(d.get("verified", False)), degraded=bool(d.get("degraded", False)),
+        # An item that does not say how it was measured is a v1 item: the fraction instrument.
+        n_of=int(d.get("n_of", 0)), method=str(d.get("method", METHOD_FRACTION)))
 
 
 def _finite(v) -> bool:
@@ -274,7 +303,10 @@ def _valid_item(d) -> bool:
     date = d.get("date")
     if date is not None and not isinstance(date, str):
         return False
-    return True
+    n_of = d.get("n_of", 0)
+    if isinstance(n_of, bool) or not isinstance(n_of, int) or n_of < 0:
+        return False
+    return d.get("method", METHOD_FRACTION) in _METHODS
 
 
 def _valid_list(e) -> bool:
@@ -310,9 +342,20 @@ def empty_store() -> dict:
 
 
 def _migrate(data: dict, from_version: int) -> dict:
-    """Forward-migrate an OLDER store, PRESERVING every list. v1 is the first schema, so there is
-    nothing to transform yet — the hook exists so the next bump has one obvious place to go and
-    cannot be "fixed" by wiping the file (``library._migrate``'s whole point)."""
+    """Forward-migrate an OLDER store, PRESERVING every list (``library._migrate``'s whole point:
+    a version bump is never "fixed" by wiping the file).
+
+    v1 → v2 (QA LOOK-10): a v1 baseline was measured by `METHOD_FRACTION`, and it KEEPS that
+    meaning — each item is stamped with it, and the verdict re-measures it by the same instrument —
+    rather than being compared against a differently-measured today (the two run 0.01–0.17 s apart
+    per corner, the size of what the verdict compares). A driver's list survives the upgrade and
+    still gets its verdict; a corner promoted from now on is measured the matched way."""
+    if from_version < 2:
+        for e in data.get("lists", []) if isinstance(data.get("lists"), list) else []:
+            for item in e.get("items", []) if isinstance(e, dict) and isinstance(
+                    e.get("items"), list) else []:
+                if isinstance(item, dict):
+                    item.setdefault("method", METHOD_FRACTION)
     return data
 
 
@@ -580,7 +623,7 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # same statistic (`coaching.SPREAD_MARGIN` × the interquartile spread) rather than a second
         # notion of significance invented here. The wider of the two sessions' spreads is the bar,
         # because a change is only as aimable as the noisier side of the comparison. With 62 and 36
-        # laps the standard error of either median is ~0.01-0.07 s (the normal approximation,
+        # laps the standard error of either median is ~0.02-0.04 s (the normal approximation,
         # 1.2533 × IQR / 1.349 / √laps, over the six samples in the table at the top of this module)
         # and a significance test would pass almost anything: this asks whether a driver could aim
         # at the difference, not whether it is real.
@@ -640,8 +683,7 @@ def outcome_sentence(o: Outcome) -> str:
     when = _when(o.item.date)
     if o.kind == OUTCOME_SET_HERE:
         return (f"{label} — on your focus list from this session ({o.item.median_s:.2f} s over "
-                f"{plural(o.item.n_laps, 'lap')}). Next time you're here, Pacer will say whether "
-                "it moved.")
+                f"{o.item.count_text}). Next time you're here, Pacer will say whether it moved.")
     if o.kind == OUTCOME_NO_VERDICT:
         if o.blocker == BLOCK_NO_RECORD:
             return (f"{label} — can't say. There's no session record for {o.detail}, so nothing "
@@ -728,12 +770,43 @@ def report_lines(report: Report) -> list[str]:
         return [f"{who} — can't say: "
                 f"{_BLOCK_SENTENCE.get(first.blocker, 'not comparable')}."]
     if len(outcomes) > 1 and kinds == {OUTCOME_SET_HERE}:
-        n = outcomes[0].item.n_laps
-        return [f"{_corner_list(outcomes)} — baselines measured on this session ("
-                f"{', '.join(f'{o.item.median_s:.2f} s' for o in outcomes)} over "
-                f"{plural(n, 'lap')}). Next time you're at this track, Pacer measures the same "
-                f"stretches again and says whether they moved."]
+        # The lap count each baseline was ACTUALLY measured on: one count when they share it, else
+        # one per corner — C2 over "16 of 19 laps" is not C5 over 19 (QA LOOK-10).
+        counts = {o.item.count_text for o in outcomes}
+        if len(counts) == 1:
+            said = (f"{', '.join(f'{o.item.median_s:.2f} s' for o in outcomes)} over "
+                    f"{counts.pop()}")
+        else:
+            said = ", ".join(f"{o.item.median_s:.2f} s over {o.item.count_text}" for o in outcomes)
+        return [f"{_corner_list(outcomes)} — baselines measured on this session ({said}). Next "
+                f"time you're at this track, Pacer measures the same stretches again and says "
+                f"whether they moved."]
     return [outcome_sentence(o) for o in outcomes]
+
+
+def replace_offer(report: Report | None, shortlist: list[int]) -> list[int] | None:
+    """Today's ranked top corners, when the focus block should offer to REPLACE the list with them
+    (QA NEW-5) — else None.
+
+    After the check has run: the list holds a corner set on an EARLIER session, nothing is waiting
+    on a session record (the one-click "Mark both dry" comes first, so the verdict is read before
+    the list moves on), and today's shortlist is not already the list. Measured on the owner's
+    SD_30_08 → SD_19_09: the list stayed 30 Aug's C7/C5/C3 while the page said "Start with C1",
+    and the next Sandown check would have re-measured the old three against the old baselines.
+    Replacing is the driver's click, never a default: a list he chose must not move under him."""
+    cids = [int(c) for c in shortlist or []]
+    if report is None or not report.active or not cids or report.unrecorded:
+        return None
+    if all(o.kind == OUTCOME_SET_HERE for o in report.outcomes):
+        return None
+    if sorted(o.item.cid for o in report.outcomes) == sorted(cids):
+        return None
+    return cids[:MAX_ITEMS]
+
+
+def replace_label(cids: list[int]) -> str:
+    """The offer's button: "Replace with today's top 3 (C1, C5, C7)"."""
+    return f"Replace with today's top {len(cids)} ({', '.join(f'C{c}' for c in cids)})"
 
 
 def report_headline(report: Report) -> str:
