@@ -82,6 +82,8 @@ from .export_palette import EXPORT
 from .export_video import (
     FIT_CROP,
     FIT_FIT,
+    SW_H264,
+    VT_H264,
     ExportSpec,
     FrameGeometry,
     NoFramesError,
@@ -100,6 +102,7 @@ from .export_video import (
     _telemetry_time,
     _text_at,
     build_decode_cmd,
+    estimate_render_seconds,
     export_delta_colour,
     footage_duration,
     guard_validate_window,
@@ -236,6 +239,30 @@ def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
         filter_a=pane_scale_filter(aw, ah, pane_w, pane_h, cfg.pane_fit),
         filter_b=pane_scale_filter(int(src_b[0]), int(src_b[1]), pane_w, pane_h, cfg.pane_fit),
         layout=layout)
+
+
+# --------------------------------------------------------------------------- render time
+# A COMPARE FRAME COSTS A SINGLE-LAP FRAME OF ITS OWN SIZE, PLUS A SECOND DECODE. Everything after
+# the two panes are assembled — the paint, the pipe, the encode — is the single-lap pipeline on the
+# two-pane frame, which `export_video.RENDER_FPS` already prices by its pixels. What a single lap
+# never pays is pane B's own ffmpeg: a second 4K HEVC source decoded and scaled for every frame
+# written, a cost set by the SOURCE, so it is added per frame rather than scaled with the output.
+# Seconds per output frame, measured on MK_18_09_26 laps 14 against 15 (4K 59.94 HEVC):
+#   PROVISIONAL — fitted from the calibration renders before commit.
+COMPARE_SECOND_DECODE_S = {VT_H264: 0.0068, SW_H264: 0.0068}
+
+
+def estimate_compare_seconds(out_w: int, out_h: int, frames: int, codec: str) -> float | None:
+    """About how long a compare of `frames` frames of the two-pane `out_w x out_h` frame takes to
+    render on `codec`'s path: the single-lap estimate for that frame plus the second decode each
+    frame pays (`COMPARE_SECOND_DECODE_S`). None for a path with no measurement, or nothing to
+    render. Like the single-lap figure, it is what the picker quotes before the render; the
+    progress dialog's live ETA, timed on the real render, is the one to trust."""
+    base = estimate_render_seconds(out_w, out_h, frames, codec)
+    extra = COMPARE_SECOND_DECODE_S.get(codec)
+    if base is None or extra is None:
+        return None
+    return base + frames * extra
 
 
 # --------------------------------------------------------------------------- the distance lock

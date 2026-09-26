@@ -1859,7 +1859,45 @@ def test_the_size_model_is_what_each_encoder_writes():
     # the owner's export as measured: MK best lap +-5 s, 2325 frames of 4K on VideoToolbox, 1.522 GB
     owner = EV.estimate_output_bytes(3840, 2160, 30.0, 2325 / 30.0, "high", EV.VT_PRORES)
     assert 0.9 < 1.522e9 / owner < 1.1, owner
-    print("ok size model: stated rate x clip, per codec; nothing to render costs nothing")
+    print("ok size model: what each encoder writes x clip; nothing to render costs nothing")
+
+
+# REAL H.264 FILES, 2026-09-26: the owner's footage through the real options dialog and renderer
+# (the calibration harness of package I, jailed, rendered to scratch), sized on disk. MK_18_09_26 is
+# night footage, SD_19_09_26 day; both 4K 59.94 HEVC GoPro, rendered at the 30 fps cap. `frames`
+# is the file's own frame count. The first row is the owner's own lap-14 export of 2026-09-25,
+# which the QA reproduced to 2 bytes. (what, encoder, out_w, out_h, frames, quality, bytes)
+_REAL_H264 = (
+    ("MK lap 14 +-5 s, 4K (his own export)", ev.VT_H264, 3840, 2160, 2325, "high", 170_662_641),
+    ("MK lap 14, 4K", ev.VT_H264, 3840, 2160, 2026, "high", 148_728_415),
+    ("MK lap 14, 4K", ev.VT_H264, 3840, 2160, 2026, "standard", 89_905_466),
+    ("MK lap 14, 1080p", ev.VT_H264, 1920, 1080, 2026, "high", 38_449_299),
+    ("MK lap 14, 1080p", ev.VT_H264, 1920, 1080, 2026, "standard", 23_743_369),
+    ("MK lap 14, 720p", ev.VT_H264, 1280, 720, 2026, "high", 18_027_111),
+    ("MK lap 14, 720p (the 2 Mbit/s floor)", ev.VT_H264, 1280, 720, 2026, "standard", 13_507_729),
+    ("MK lap 15 +-5 s, 9:16 crop", ev.VT_H264, 1080, 1920, 2334, "high", 44_301_853),
+    ("MK lap 19, 1:1 fit (the floor)", ev.VT_H264, 720, 720, 2039, "standard", 13_596_154),
+)
+
+
+def test_the_h264_estimate_lands_on_real_files():
+    """EXP-7: every H.264 file the QA rendered came out at 0.71-0.80 of the size the picker had
+    promised, because the estimate was the bitrate VideoToolbox is ASKED for and VideoToolbox
+    writes 0.70 of it — plus an AAC track the estimate left out. Against the real files above, the
+    estimate must now be within +-12 % of every one (main: 0.708-0.800, all outside), and the
+    free-space guard's floor must sit at least 20 % below every one, so the guard can never refuse
+    an export that would have fitted. The encoder is named per row, never resolved: the model
+    under test is each encoder's own."""
+    for what, codec, w, h, frames, quality, real in _REAL_H264:
+        est = ev.estimate_output_bytes(w, h, 30.0, frames / 30.0, quality, codec)
+        assert 0.88 <= real / est <= 1.12, (
+            f"{what} {quality} ({codec}): {real:,} B real against an estimate of {est:,} B "
+            f"({real / est:.3f})")
+        floor = ev.floor_bytes(est, codec)
+        assert real >= 1.2 * floor, (
+            f"{what} {quality} ({codec}): {real:,} B real, only {real / floor:.2f}x the guard's "
+            f"floor of {floor:,} B")
+    print(f"ok EXP-7: the H.264 estimate lands within 12 % of {len(_REAL_H264)} real files")
 
 
 def test_the_time_model_reproduces_the_rates_it_was_measured_at():

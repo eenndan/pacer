@@ -2003,7 +2003,7 @@ def test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known():
         export_video.VT_PRORES], owner
     assert "with ProRes 4444 via prores_ks, about 2:25 to render" in owner[
         export_video.SW_PRORES], owner
-    assert "with ProRes 4444. " in owner[None] and "to render." not in owner[None], owner
+    assert owner[None].endswith("with ProRes 4444.") and "to render." not in owner[None], owner
     for text in owner.values():
         assert text.startswith("About 1.") and " GB — " in text, text     # ~1.5 GB, measured 1.52
     print("ok E5: Source states a size and a time once the frame is known")

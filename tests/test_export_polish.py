@@ -23,6 +23,7 @@ the real `Renderer` over a generated clip (libx264, software decode, so it holds
 Run: python tests/test_export_polish.py
 """
 import logging
+import math
 import os
 import re
 import sys
@@ -37,6 +38,7 @@ os.environ["PACER_NO_MEDIA"] = "1"
 from PySide6.QtWidgets import (  # noqa: E402
     QDialog,
     QFileDialog,
+    QLabel,
     QMessageBox,
     QProgressDialog,
 )
@@ -50,9 +52,9 @@ from test_export_gates import (  # noqa: E402
 )
 from test_export_pipeline import _moving_clip, _Session  # noqa: E402
 
-from studio import export_controller  # noqa: E402
+from studio import export_compare, export_controller  # noqa: E402
 from studio import export_video as ev  # noqa: E402
-from studio._signal import fmt_time  # noqa: E402
+from studio._signal import fmt_hms, fmt_time  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 from studio.workers import VideoExportWorker  # noqa: E402
 
@@ -264,7 +266,7 @@ def test_the_space_refusal_reads_as_one_sentence_and_is_not_repeated_behind_deta
                              src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
         orig_free = ev.free_bytes
         # 1 MB, not 20: the refusal must not depend on which H.264 encoder this machine resolves.
-        # The guard's floor is per encoder (VideoToolbox 0.6 of its estimate, libx264 far lower,
+        # The guard's floor is per encoder (VideoToolbox 0.8 of its estimate, libx264 far lower,
         # since a CRF stream's size varies most), so 20 MB refused a minute of 1080p here and let it
         # through on the CI runner, which has no VideoToolbox session to open.
         ev.free_bytes = lambda _p, purgeable=True: 1_000_000
@@ -402,6 +404,58 @@ def test_an_unpadded_clip_ends_on_its_finish_and_reads_the_lap_time():
     print(f"ok EXP-2: the unpadded clip ends on {label!r} ({result.frames} frames)")
 
 
+# ================================== EXP-8 — the compare picker says what the export will cost
+def test_the_compare_picker_states_its_own_size_and_time():
+    """The single-lap picker has always said how big an export lands and how long it takes; the
+    compare picker said neither (EXP-8: a 720p side-by-side took 36.2 s and wrote 34.3 MB with
+    nothing quoted). A compare is not a lap of the same length: its frame is two panes, twice as
+    wide side by side or twice as tall stacked, and every frame decodes both laps' footage.
+
+    Read off the REAL dialog, row by row, with the encoder PINNED: the size and the time both
+    depend on which H.264 encoder this machine resolves (VideoToolbox here, libx264 on CI)."""
+    win = _window(FakeSession(laps=(0, 1, 2)))
+    clip = win.exports._export_clip_seconds(0, 0.0)          # lap A's window, as the render cuts it
+    frames = math.ceil(clip * 30.0)
+    rows = ((1, 0, 0, "2560x720, two 1280x720 panes side by side", (2560, 720), "high"),
+            (0, 0, 0, "1280x1440, two 1280x720 panes one above the other", (1280, 1440), "high"),
+            (1, 1, 1, "3840x1080, two 1920x1080 panes side by side", (3840, 1080), "standard"))
+    saved = {(ExportController, "compare_pair"): ExportController.compare_pair,
+             (ev, "resolve_encoder"): ev.resolve_encoder, (QDialog, "exec"): QDialog.exec}
+    for codec in (ev.VT_H264, ev.SW_H264):
+        seen = []
+
+        def _read(dlg, seen=seen):
+            hint = next(lb for lb in dlg.findChildren(QLabel) if lb.property("role") == "Hint")
+            for layout, res, quality, *_ in rows:
+                _combo(dlg, "Layout").setCurrentIndex(layout)
+                _combo(dlg, "Resolution (each pane)").setCurrentIndex(res)
+                _combo(dlg, "Quality").setCurrentIndex(quality)
+                seen.append(hint.text())
+            return QDialog.Rejected
+        ExportController.compare_pair = lambda _self: (0, 2, None, False)
+        ev.resolve_encoder = lambda _choice, c=codec: c
+        QDialog.exec = _read
+        try:
+            assert win.exports._ask_compare_options() is None
+        finally:
+            for (owner, name), value in saved.items():
+                setattr(owner, name, value)
+        for text, (*_, output, (w, h), quality) in zip(seen, rows, strict=True):
+            assert "carries that lap's audio" in text, text
+            assert f"Output: {output}." in text, text
+            size = ev.fmt_bytes(ev.estimate_output_bytes(w, h, 30.0, clip, quality, codec))
+            took = fmt_hms(export_compare.estimate_compare_seconds(w, h, frames, codec))
+            assert (f"About {size} — {frames} frames to render at 30 fps with {codec}, "
+                    f"about {took} to render") in text, text
+        # The two layouts are the same pixels, so the same bytes; a compare is dearer than the
+        # single lap of the same length at the same pane size, in bytes and in time.
+        assert seen[0].split("About ")[1].split(" —")[0] == seen[1].split("About ")[1].split(" —")[0]
+        single = ev.estimate_render_seconds(1280, 720, frames, codec)
+        assert export_compare.estimate_compare_seconds(2560, 720, frames, codec) > 1.5 * single
+    win.hide()
+    print("ok EXP-8: the compare picker states its own size and time")
+
+
 if __name__ == "__main__":
     test_every_export_proposes_a_name_that_says_which_lap()
     test_all_laps_asks_once_before_replacing_files_it_will_write()
@@ -410,4 +464,5 @@ if __name__ == "__main__":
     test_the_space_refusal_reads_as_one_sentence_and_is_not_repeated_behind_details()
     test_an_export_logs_one_line_when_it_starts_and_one_when_it_ends()
     test_an_unpadded_clip_ends_on_its_finish_and_reads_the_lap_time()
+    test_the_compare_picker_states_its_own_size_and_time()
     print("all export-polish tests passed")
