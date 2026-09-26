@@ -152,7 +152,7 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   and 0 of 12 grip cells rendered a readable value"* is the comment above the fix. A companion
   guard proves the app never writes into its own source tree, from a tripwire on every write path
   Python and Qt expose.
-- **140+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
+- **160+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
   widgets and measure them. CI runs all of it on every pull request, four tests at a time, in about
   six minutes (its test step on the last three `main` runs, September 2026: 322–370 s), plus an
   end-to-end offscreen smoke — except the fifteen `footage.*` checks, which need a real recording
