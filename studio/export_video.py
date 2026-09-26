@@ -307,6 +307,11 @@ def overlay_unit(out_w: int, out_h: int) -> float:
     return float(min(max(int(out_w), 1), max(int(out_h), 1)))
 
 
+# Intervals between frames the encoder took that the stall watchdog times before its multiple may
+# raise the limit above the floor (see `OverlayConfig.watchdog_timeout`).
+_WATCHDOG_PACE_FRAMES = 10
+
+
 @dataclass(frozen=True)
 class OverlayConfig:
     """Layout + output knobs for the export. All overlay placements are FRACTIONS of the output's
@@ -339,7 +344,7 @@ class OverlayConfig:
     # holds the GIL through every QPainter call: painting MK lap 14 on 1/2/4/6 threads measured
     # 127.6 / 136.2 / 128.0 / 123.5 fps at 1080p.
     workers: int | None = None
-    # No-progress WATCHDOG: if the frame counter doesn't advance the render is presumed WEDGED
+    # No-progress WATCHDOG: if the encoder stops taking frames the render is presumed WEDGED
     # (hung VT session / stuck pipe), aborted cleanly, then retried ONCE on libx264 — what makes an
     # infinite hang impossible. THE LIMIT IS NOT A CONSTANT, because a constant is wrong at both
     # ends: big enough never to kill a legitimately slow render, it is far too slack to catch a
@@ -364,6 +369,18 @@ class OverlayConfig:
     # a loaded machine raises its own limit and can never be killed for being slow. At every
     # configuration measured above the floor governs (2160p libx264: 60 x 0.064 = 3.8 s < 10 s);
     # the multiple only takes over past ~0.167 s per frame, which is 2.6x the slowest ever seen.
+    #
+    # THAT COST IS TIMED ON FRAMES THE ENCODER TOOK, FROM THE FIRST OF THEM, once
+    # `_WATCHDOG_PACE_FRAMES` more are in; the floor stands until then. It used to be the painter's
+    # count over the time since the render STARTED, and the pipelined pump's painter queues two
+    # frames behind an encoder that never takes one, so a wedge at the start divided the start-up
+    # (spawn, seek, first decode) by two and called it a pace: 60 x start-up / 2. A VideoToolbox
+    # export of MK at 720p, its encoder wedged from the start, was given 13.1 s on this Mac; on CI
+    # a test waited 68.8 s and 70.2 s for a wedge its 3 s floor should have caught, the ~66 s limit
+    # a 2.2 s start-up gives. Ten intervals keep the worst gap measured above, landing among the
+    # first frames of the slowest configuration, from lifting the limit off the floor: 60 x (0.783
+    # + 9 x 0.064) / 10 = 8.2 s. What that costs a slow render: none of its first eleven frames may
+    # take longer than the floor, 156x the slowest median measured.
     watchdog_timeout: float = 10.0
     watchdog_frame_multiple: float = 60.0
     # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of the SHORT SIDE.
@@ -3216,8 +3233,8 @@ class CancelledError(Exception):
 
 
 class RenderTimeoutError(RuntimeError):
-    """No frame progress for `watchdog_timeout` s — a wedged stage that never "fails"; `run` retries
-    once on libx264 then surfaces a clear error."""
+    """No frame reached the encoder for the stall limit (`Renderer._stall_limit`) — a wedged stage
+    that never "fails"; `run` retries once on libx264 then surfaces a clear error."""
 
 
 class NoFramesError(RuntimeError):
@@ -3793,8 +3810,11 @@ class Renderer:
         # --- watchdog / abort plumbing (a supervisor thread can break a wedged blocking I/O) ---
         self._watchdog_timeout = float(getattr(spec.config, "watchdog_timeout", 10.0) or 0.0)
         self._watchdog_multiple = float(getattr(spec.config, "watchdog_frame_multiple", 60.0) or 0.0)
-        self._last_progress_t = 0.0            # monotonic time of the last frame written
-        self._render_t0 = 0.0                  # monotonic time the pump started (the rate's origin)
+        # The WRITE clock (see `_write_frame`): how many frames the encoder has taken, when it took
+        # the first (the pace's origin) and when the last (the render's start, until it has one).
+        self._written = 0
+        self._first_write_t = 0.0
+        self._last_progress_t = 0.0
         self._stall_limit_used = 0.0           # the limit that actually fired, for the message
         self._aborted: str | None = None       # set by the supervisor: "cancel" | "timeout"
         self._supervisor: threading.Thread | None = None
@@ -3986,9 +4006,9 @@ class Renderer:
         # pump's; two more keep the running decoder from ever waiting on it for a buffer.
         self._pool = _FramePool(frame_bytes,
                                 _PIPE_FRAMES + (_RELAY_AHEAD + 2 if relay else 0))
-        # The encoder is looked up per write, as the serial pump's own `self._enc.stdin.write`
-        # does, so whatever process `self._enc` is — the one the supervisor kills — is the one fed.
-        self._writer = _FrameWriter(lambda buf: self._enc.stdin.write(buf), self._pool, depth=1)
+        # The writer thread writes through `_write_frame`, as the serial pump does, so on either
+        # pump the watchdog counts the frames the encoder took.
+        self._writer = _FrameWriter(self._write_frame, self._pool, depth=1)
         if self._overlay_only:
             return
         # A real Popen handed our socket exposes no stdout of its own; a stand-in process (the
@@ -4116,8 +4136,7 @@ class Renderer:
                 self._emit(raw, self._compose_frame(raw))
             except (BrokenPipeError, OSError):
                 self._encode_pipe_broke()
-            self._i += 1
-            self._last_progress_t = time.monotonic()   # fed the watchdog: a frame made it out
+            self._i += 1        # painted; the watchdog counts it once the encoder takes it
         return False
 
     def _next_source_frame(self):
@@ -4132,11 +4151,27 @@ class Renderer:
         writer thread on the pipelined one (which blocks only while `_PIPE_FRAMES` are in flight).
         A frame painted into a buffer of its own leaves the source buffer free for the reader."""
         if self._writer is None:
-            self._enc.stdin.write(frame)
+            self._write_frame(frame)
             return
         if frame is not raw and self._pool is not None:
             self._pool.give(raw)
         self._writer.put(frame, self._is_aborted)
+
+    def _write_frame(self, frame) -> None:
+        """Write one painted frame into the encoder's pipe, and feed the watchdog once it is in:
+        on the painting thread for the serial pump, on the writer thread for the pipelined one. A
+        frame painted, or queued behind an encoder that stopped reading, is not progress; one the
+        encoder took is. The encoder is looked up per write, so whatever process `self._enc` is —
+        the one the supervisor kills — is the one fed.
+
+        The times are stored before the count, so a supervisor reading between them sees a pace
+        at most one frame slow, never a count with no time behind it."""
+        self._enc.stdin.write(frame)
+        now = time.monotonic()
+        if self._written == 0:
+            self._first_write_t = now
+        self._last_progress_t = now
+        self._written += 1
 
     def _flush_frames(self) -> None:
         """Block until every frame painted so far is in the encoder's pipe (a no-op on the serial
@@ -4188,7 +4223,8 @@ class Renderer:
             self._progress_cb(self._i, len(self._times))
 
     def _stall_limit(self) -> float:
-        """How long this render may go without writing a frame before it is presumed wedged.
+        """How long this render may go without the encoder taking a frame before it is presumed
+        wedged.
 
         The configured `watchdog_timeout` is a FLOOR, and the limit also scales with the render's
         own mean cost per frame so far — so the guard is derived from the work in front of it
@@ -4196,25 +4232,30 @@ class Renderer:
         loaded-machine 4K software one at the same time. See `OverlayConfig.watchdog_timeout` for
         the measurements both numbers come from.
 
-        Zero disables the stall check entirely (cancel still works). Before the first frame there
-        is no rate to measure, so the floor stands — which is what must cover the ffmpeg spawn and
-        the seek (worst measured: 0.674 s)."""
+        That cost is read off the WRITE clock (`_write_frame`) and starts at the first frame the
+        encoder took, so the start-up is never counted as a frame's cost; and it is trusted only
+        once `_WATCHDOG_PACE_FRAMES` intervals are in, so neither is one early hiccup. Until then
+        the floor stands, which is also what must cover the ffmpeg spawn and the seek before the
+        first frame (worst measured: 0.674 s).
+
+        Zero disables the stall check entirely (cancel still works)."""
         floor = self._watchdog_timeout
         if floor <= 0 or self._watchdog_multiple <= 0:
             return floor
-        if self._i <= 0 or self._render_t0 <= 0:
+        intervals = self._written - 1
+        if intervals < _WATCHDOG_PACE_FRAMES:
             return floor
-        per_frame = (self._last_progress_t - self._render_t0) / self._i
+        per_frame = (self._last_progress_t - self._first_write_t) / intervals
         return max(floor, self._watchdog_multiple * per_frame)
 
     def _start_supervisor(self, cancel) -> None:
         """Daemon supervisor: polls every 0.5s; aborts "cancel" if `cancel()` returns True, or
-        "timeout" if no frame for `_stall_limit()` s. Kills ffmpeg so the blocked pipe I/O returns;
-        `_raise_if_aborted` then raises the typed error. A zero/none timeout disables only the stall
-        check (cancel still works)."""
+        "timeout" if the encoder took no frame for `_stall_limit()` s. Kills ffmpeg so the blocked
+        pipe I/O returns; `_raise_if_aborted` then raises the typed error. A zero/none timeout
+        disables only the stall check (cancel still works)."""
         if self._supervisor is not None:
             return
-        self._last_progress_t = self._render_t0 = time.monotonic()
+        self._last_progress_t = time.monotonic()
         self._supervisor_stop.clear()
 
         def supervise() -> None:
