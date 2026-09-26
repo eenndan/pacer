@@ -112,7 +112,10 @@ def test_a_row_measured_by_another_ideal_version_shows_its_number_muted_and_says
         open(clip, "wb").close()
         rows = [_entry("GX010068", [clip], theo=46.196),
                 _entry("GX010065", [clip], theo=46.201, ideal_version=None),
-                _entry("GX010064", [clip], theo=45.805, ideal_version=_CURRENT - 1)]
+                _entry("GX010064", [clip], theo=45.805, ideal_version=_CURRENT - 1),
+                # ...and rows a NEWER build wrote (a downgrade): muted too, never told "older".
+                _entry("GX010066", [clip], theo=46.3, ideal_version=_CURRENT + 1),
+                _entry("GX010067", [clip], theo=None, ideal_version=_CURRENT + 1)]
         dlg = LibraryDialog({"version": library.VERSION, "entries": rows}, _OpenSpy())
         muted = QColor(C.text_muted).name()
         cells = {fp: dlg.table.item(_row(dlg, fp), _COL_THEO)
@@ -125,6 +128,12 @@ def test_a_row_measured_by_another_ideal_version_shows_its_number_muted_and_says
             head = cell.toolTip().splitlines()[0]
             assert "older Pacer" in head and "re-open" in head.lower(), cell.toolTip()
         assert cells["GX0065"].text() == fmt_time(46.201), "a stale ideal keeps its number"
+        newer = {fp: dlg.table.item(_row(dlg, fp), _COL_THEO) for fp in ("GX0066", "GX0067")}
+        assert newer["GX0066"].foreground().color().name() == muted
+        for fp, cell in newer.items():
+            # "older Pacer", not "older": the appended file path's "/var/folders/" contains it.
+            assert "newer" in cell.toolTip() and "older Pacer" not in cell.toolTip(), \
+                (fp, cell.toolTip())
         fresh = cells["GX0068"]
         assert fresh.foreground().color().name() != muted, "a current ideal must not be muted"
         assert "older Pacer" not in fresh.toolTip(), fresh.toolTip()

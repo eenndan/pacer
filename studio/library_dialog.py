@@ -206,13 +206,17 @@ _IDEAL_STALE_TIP = (
     "Pacer built the ideal lap from your corners and straights (the old value was a copy of the "
     "best lap, so the migration retired it), or by a build that found no corners here. Re-opening "
     "the recording measures it with this one.")
+_IDEAL_NEWER_NONE_TIP = (
+    "Ideal lap: not stored for this recording.\nA newer version of Pacer analyzed it and stored "
+    "none; re-opening the recording measures it with this one.")
 _IDEAL_NO_CORNERS_TIP = (
     "Ideal lap: none for this recording.\nThis version of Pacer found no corners here to stitch an "
     "ideal lap from, so re-opening the recording will not change it.")
 # A NUMBER FROM ANOTHER VERSION OF THE IDEAL-LAP MATHS: shown, muted, with this leading its hover.
 # Not an em dash, for three reasons: the number is in the right place (the measured gaps to today's
-# build were 0.004-0.133 s on the owner's rows, inside the 0.16-0.74 s the column already moves per
-# doubling of laps, which _THEO_HEADER_TIP discloses rather than hides); two of his rows are on a
+# build were 0.004-0.133 s on the owner's rows, smaller than the 0.16-0.74 s the column already
+# moves per doubling of laps, which _THEO_HEADER_TIP discloses rather than hides); two of his
+# rows are on a
 # drive that is not connected, and for them it is the only ideal there will be until it is; and
 # the dash already means two other things in this column. It still sorts by its value, as the
 # lap-count confound does: this column discloses per row, it does not refuse to rank.
@@ -538,7 +542,9 @@ def _ideal_cell(entry: dict) -> tuple[float | None, str | None, str | None]:
     theo, best = entry.get("theoretical"), entry.get("best")
     stale = _library.ideal_stale(entry, corner_model.IDEAL_VERSION)
     if theo is None:
-        return None, (_IDEAL_STALE_TIP if stale else _IDEAL_NO_CORNERS_TIP), stale
+        why = {None: _IDEAL_NO_CORNERS_TIP, "older": _IDEAL_STALE_TIP}.get(
+            stale, _IDEAL_NEWER_NONE_TIP)
+        return None, why, stale
     if best is not None and abs(float(theo) - float(best)) <= _IDEAL_SAME_S:
         return None, _IDEAL_ONE_DONOR_TIP, stale
     if stale:
