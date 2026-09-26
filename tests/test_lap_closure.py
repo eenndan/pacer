@@ -243,13 +243,20 @@ def test_every_surface_names_the_same_reason():
     why = "ends 21 m from its start, heading the other way"
 
     table = LapTable(s)
-    assert "10 excluded of 13 laps found" in table._excluded_header.text(), table._excluded_header.text()
+    # LOOK-6: the laps found are the LAPS (valid + excluded); the sliver is a crossing, named.
+    assert "10 excluded of 12 laps found" in table._excluded_header.text(), \
+        table._excluded_header.text()
     table._toggle_excluded_collapsed()
     lines = table._excluded_body.text().split("\n")
     assert len(lines) == 10 and all(line.endswith(f"· {why}") for line in lines), lines
 
     card = dict((t, v) for t, v, _c in StatsView(s).trust.card.rows())
     assert "10 ⊘ excluded: 10 don't end where they started" in card["Statistics use"], card
+    # ...and the card adds up the way the strip does: 2 + 10 = 12 laps, plus 1 crossing that is
+    # not a lap (it said "2 of the 13 laps found" — LOOK-6, QA 2026-09-26).
+    assert card["Statistics use"].startswith("2 of the 12 laps found"), card["Statistics use"]
+    assert ("1 other start/finish crossing was too brief to count as a lap"
+            in card["Statistics use"]), card["Statistics use"]
 
     laps_row = dict(next(sec for sec in export_data.stats_summary(s) if sec.title == "SESSION").rows)
     assert laps_row["laps"] == "2 valid · 10 excluded (10 don't end where they started)", laps_row

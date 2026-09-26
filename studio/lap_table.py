@@ -167,7 +167,17 @@ def _with_star(star_tip: str, tip: str) -> str:
     return f"{star_tip}\n\n{tip}" if tip else star_tip
 
 
-def _too_brief_note(n: int) -> str:
+def too_brief_count(session, laps: int) -> int:
+    """Start/finish crossings the segmenter cut that are in NEITHER lap list — slivers the coarse
+    gate rejected (`_signal._banded_out_lap_ids`: under MIN_LAP_SAMPLES points or MIN_LAP_TIME).
+    `laps` is valid + excluded, "the laps found"; the remainder of `lap_count()` is not a lap, and
+    both the Laps tab's strip and the DATA TRUST card name it as a crossing (LOOK-6). 0 on a
+    session double with no lap_count()."""
+    lap_count = getattr(session, "lap_count", None)
+    return max(0, lap_count() - laps) if callable(lap_count) else 0
+
+
+def too_brief_note(n: int) -> str:
     """The sentence that accounts for detected laps in NEITHER the valid nor the excluded list —
     crossings the coarse gate rejected as slivers. "" for none, so it drops out of the join."""
     if n <= 0:
@@ -1089,23 +1099,21 @@ class LapTable(QWidget):
         than MIN_LAP_TIME). QA L3-06: the panel showed 25 valid rows and "24 excluded" on a
         recording whose lap_count() is 50, so the two visible numbers did not add up to the third
         and the missing one was unexplained. getattr-guarded for the lighter test doubles."""
-        lap_count = getattr(self.session, "lap_count", None)
-        return max(0, lap_count() - banded) if callable(lap_count) else 0
+        return too_brief_count(self.session, banded)
 
     def _excluded_headline(self, n: int, found: int, warn: bool) -> str:
         """The one-liner's WORDS: the count RECONCILED against the laps the segmenter FOUND (so
         "24 excluded" is visibly 24 of everything detected, not 24 of the 25 rows above it), plus
         the share once the strip escalates.
 
-        `found`, NOT valid+excluded, because the Stats page's DATA TRUST card states this same
-        fact about this same segmentation and divides by `Session.lap_count()` — and a recording
-        also carries crossings too brief to reach the ⊘ band at all, so the two denominators are
-        not the same number. MEASURED by dragging the start/finish line round the D24 0060 pair
-        (the app's own advertised recovery action): at 15 % round the lap the card read "33 of the
-        81 laps found" while this strip read "36 excluded of 69 laps" — 81 against 69, one
-        recording, one instant, two pages. Every placement that produced an excluded lap
-        disagreed, on both recordings. The remainder is named by `_too_brief_note` below rather
-        than left as a gap between two totals.
+        `found` is valid + excluded — THE LAPS — and the Stats page's DATA TRUST card divides by the
+        same count, because the two state one fact about one segmentation. They once disagreed
+        (D24 0060, start line dragged to 15 % round the lap: "33 of the 81 laps found" against "36
+        excluded of 69 laps"), which moved both onto `Session.lap_count()`; but that count includes
+        the start/finish crossings too brief to be a lap, so on MK_18_09 "2 excluded of 22 laps
+        found" sat over 19 rows with the 22nd a crossing "too brief to count as a lap" (LOOK-6, QA
+        2026-09-26). Both surfaces now count laps as laps and name the crossings as crossings
+        (`too_brief_note`), so 19 + 2 = 21 on both and the crossing is said beside it.
 
         The SHARE moves onto the same denominator for the same reason — a percentage of a number
         the line does not print is unreadable. It does not change where the strip escalates on
@@ -1129,7 +1137,7 @@ class LapTable(QWidget):
         if kept:
             parts.append(f"Counted laps run ~{statistics.median([r['dist'] for r in kept]):.0f} m; "
                          f"these run ~{statistics.median([r['dist'] for r in rows]):.0f} m.")
-        parts.append(_too_brief_note(unbanded) if unbanded else "")
+        parts.append(too_brief_note(unbanded) if unbanded else "")
         parts.append("If a real lap was dropped, drag the start/finish line on the map.")
         return " ".join(p for p in parts if p)
 
@@ -1159,10 +1167,11 @@ class LapTable(QWidget):
         kept = self.session.lap_rows() if kept is None else kept
         banded = len(kept) + len(rows)
         unbanded = self._unbanded_count(banded)
-        # The laps the segmenter FOUND — the DATA TRUST card's denominator for the same fact (see
-        # _excluded_headline). Falls back to `banded` on a session double with no lap_count(),
-        # where _unbanded_count already returns 0.
-        found = banded + unbanded
+        # The laps FOUND are the laps — kept + excluded — and the DATA TRUST card divides by the
+        # same count (see _excluded_headline). The brief crossings are NOT laps and are named as
+        # crossings in the note below (LOOK-6, QA 2026-09-26: "2 excluded of 22 laps found" over
+        # 19 rows, the 22nd being "too brief to count as a lap").
+        found = banded
         # TIER: the odd stray lap whispers; a session losing several laps AND more than
         # EXCLUDED_WARN_RATIO of them warns. The share is ALWAYS in the words as well as the colour,
         # so the escalation survives greyscale and colour blindness.
@@ -1187,7 +1196,7 @@ class LapTable(QWidget):
         # opens: it divides by the laps found, so a session carrying brief crossings shows fewer
         # rows than its own denominator, and the reader is told why instead of being left to
         # subtract. The warning voice already contains that sentence, so it simply wins.
-        note = self._excluded_warning(kept, rows, unbanded) if warn else _too_brief_note(unbanded)
+        note = self._excluded_warning(kept, rows, unbanded) if warn else too_brief_note(unbanded)
         self._excluded_note.setText(note)
         self._excluded_note.setVisible(bool(note))
         # The full list shows only when expanded; collapsed, the header (+ any warning) is all.

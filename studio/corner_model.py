@@ -320,13 +320,15 @@ class IdealSample(NamedTuple):
         return self.segments - self.corners
 
     def caption(self) -> str:
-        """The ideal's SAMPLE, as the tile caption states it: `theoretical best · 65 laps`.
+        """The ideal's SAMPLE, as the tile caption states it: `ideal lap · 65 laps` — the one name
+        every surface gives this number (copy #9, QA 2026-09-26: it was "theoretical best" here,
+        "IDEAL LAP" over it, "Ideal lap" in the Library and the chart toggle).
 
         The Stats tile, the laps.csv trailer and the exported HTML report all print this — it is
         the disclosure §5.4 found the leaving-the-app surfaces skipping — so it is defined ONCE,
         on the value object that carries the counts. A surface that composes its own string from
         `.laps` is free to disagree about the wording the moment either is edited; this cannot."""
-        return f"theoretical best · {self.laps} laps"
+        return f"ideal lap · {self.laps} laps"
 
     def sentence(self) -> str:
         """The full disclosure paragraph under the tiles: what the minimum ran over, and why BOTH
