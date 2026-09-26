@@ -88,12 +88,14 @@ def video_sync_row(session):
              if isinstance(span, (int, float)) and not isinstance(span, bool) and span > 0
              else "")
     if applied:
-        basis = (f"the trace is placed on the picture's own clock (the two run {ppm:.1f} ppm "
-                 f"apart{drift}) and " if fitted else "")
+        # Copy #5 (QA 2026-09-26): said plainly, with the clock drift in the same clause — the
+        # speed, Δ and map dot beside a frame are that frame's own, in the app and in exports.
+        span = f" ({drift.removeprefix(', ')})" if drift else ""
+        tail = (f" and its clock drifted {ppm:.1f} ppm{span}; both are removed" if fitted
+                else "; that is removed")
         return (VIDEO_SYNC_TERM,
-                f"corrected — {basis}the GPS timestamps' measured {abs(applied):.2f} s lag is "
-                f"taken out, so the speed, Δ and map dot beside a frame are that frame's own, in "
-                f"the app and in an exported clip alike", False)
+                f"corrected — telemetry is lined up to the frame, in the app and in exports: the "
+                f"GPS ran {abs(applied):.2f} s late{tail}", False)
     if fitted:
         # The forced case above, and the honest half-correction: the drift is out, the lag is not.
         # "around half a second" is what it measured wherever it COULD be measured (+0.476 /
@@ -472,14 +474,23 @@ class TrustSection:
             verdict = "agree" if cross.ok else "DISAGREE"
             gain = getattr(cross, "lat_gain", None)
             gain_bit = f" · lateral gain ×{gain:.2f}" if gain is not None else ""
-            rows.append(("IMU↔GPS cross-check",
-                         f"{verdict} · lateral r={fmt_signed(cross.lat_corr, 2)}{gain_bit} · "
-                         # Grouped: the cross-check's sample count is the only six-figure number
-                         # the app prints, and "346713" is read digit by digit where "346,713" is
-                         # read at a glance — the same reason every number on this page is set in
-                         # the tabular stack.
-                         f"longitudinal r={fmt_signed(cross.long_corr, 2)} · {cross.n:,} samples",
-                         not cross.ok))
+            # Grouped: the cross-check's sample count is the only six-figure number the app
+            # prints, and "346713" is read digit by digit where "346,713" is read at a glance.
+            measured = (f"lateral r={fmt_signed(cross.lat_corr, 2)}{gain_bit} · longitudinal "
+                        f"r={fmt_signed(cross.long_corr, 2)} · {cross.n:,} samples")
+            # Copy #6 (QA 2026-09-26): the verdict in words, the figures on the hover — except
+            # when the two DISAGREE, where the figures are the diagnosis and stay on the face.
+            weighed = gain is not None and getattr(cross, "gain_measurable", True)
+            if not cross.ok:
+                value = f"{verdict} · {measured}"
+            elif weighed:
+                value = (f"{verdict} · the g-meter's cornering force matches the GPS path's "
+                         f"within {max(abs(gain - 1.0) * 100.0, 1.0):.0f} %")
+            else:
+                value = (f"{verdict} · the g-meter's cornering follows the GPS path's (its scale "
+                         f"could not be weighed: too little cornering)")
+            rows.append(("IMU↔GPS cross-check", value, not cross.ok))
+            tips.append(f"IMU↔GPS, measured: {measured}.")
             tips.append(cross.summary())
             tips.append("Lateral gain is the IMU's lateral magnitude over the GPS-derived one: "
                         "×1 means the g you read is scaled right. The correlation beside it "
@@ -508,14 +519,29 @@ class TrustSection:
             # own sentence, so this row and the load-time log say it in the same words — and it is
             # EMPTY when the offset could not be measured, which is why the clause is appended
             # rather than formatted in: a row that has no measurement says nothing instead of 0.00.
-            lag = f" · {rot.lag_clause}" if rot.lag_clause else ""
-            rows.append(("Rotation cross-check",
-                         f"{verdict} · over {plural(rot.loop_n, 'closed lap')} the gyroscope's "
-                         f"measured yaw integrates to {rot.loop_ratio_gyro:.3f}×2π and the "
-                         f"path-derived rate to {rot.loop_ratio_path:.3f}×2π, against an exact "
-                         f"{fmt_signed(rot.loop_exact, 3)} · "
-                         f"r={fmt_signed(rot.corner_corr, 2)} between them through the corners{lag}",
-                         not rot.ok))
+            measured = (f"over {plural(rot.loop_n, 'closed lap')} the gyroscope's measured yaw "
+                        f"integrates to {rot.loop_ratio_gyro:.3f}×2π and the path-derived rate to "
+                        f"{rot.loop_ratio_path:.3f}×2π, against an exact "
+                        f"{fmt_signed(rot.loop_exact, 3)} · r={fmt_signed(rot.corner_corr, 2)} "
+                        "between them through the corners")
+            # Copy #4/#5 (QA 2026-09-26). In words when they agree, the figures on the hover; the
+            # figures stay on the face when they DISAGREE, because then they are the diagnosis.
+            # The clock clause is not on the face any more: beside the Video sync row's "the GPS
+            # ran 0.43 s late … removed" it read as a contradiction ("… measured with that offset
+            # left in"). Both are true — this check compares the channels as RECORDED — so the face
+            # says that, and the offset with both correlations is on the hover (below).
+            if rot.ok:
+                exact = abs(rot.loop_exact) or 1.0
+                off = max(abs(rot.loop_ratio_gyro - rot.loop_exact),
+                          abs(rot.loop_ratio_path - rot.loop_exact)) / exact * 100.0
+                raw = " (this check uses the raw GPS clock)" if rot.lag_clause else ""
+                value = (f"{verdict} · the gyro and the GPS path each count one full turn per "
+                         f"lap, within {max(off, 0.1):.1f} % over "
+                         f"{plural(rot.loop_n, 'closed lap')}, and match through the corners{raw}")
+            else:
+                value = f"{verdict} · {measured}"
+            rows.append(("Rotation cross-check", value, not rot.ok))
+            tips.append(f"Rotation, measured: {measured}.")
             tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
                         "the only quantity on this card with a ground truth rather than a second "
                         "estimate to agree with. That is why the headline here is the closed-lap "

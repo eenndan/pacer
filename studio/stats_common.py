@@ -59,13 +59,13 @@ NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, br
 # it with the brake pieces) — and, word for word, the close of the COASTING section's tooltip: what
 # a coast IS, stated once for both.
 _DRIVING_COAST = (
-    "A COAST is the narrower test — off-power deceleration inside a band from "
+    "A COAST is off-power deceleration inside a band from "
     f"{driving.COAST_DRAG_MIN:g} g up to that same threshold, held for at least "
-    f"{driving.MIN_COAST_S:g} s. Sustained membership of a band is the opposite shape from an "
-    "onset, and that band is narrower than the bare derivative's own noise, so this one figure is "
-    f"measured on a {driving.COAST_SMOOTH_S:g} s window. The band, the minimum duration and that "
-    "window are the whole instrument — this is time that passed all three tests, not every moment "
-    "the driver was off the throttle.")
+    f"{driving.MIN_COAST_S:g} s. Staying in a band is the opposite shape from an onset, and the "
+    "band is narrower than the bare rate's own noise, so it is measured on a "
+    f"{driving.COAST_SMOOTH_S:g} s window. The band, the minimum duration and that window are the "
+    "whole instrument: this is time that passed all three tests, not every moment the driver was "
+    "off the throttle.")
 
 
 def section_heading(title: str) -> QLabel:

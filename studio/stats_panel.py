@@ -302,8 +302,8 @@ def slowest_corner_tip(slow, unit, u_label) -> str:
     """The slowest-corner tile's hover: what the typical is a median of, and the one slowest
     moment it deliberately is not, with its lap (LOOK-12)."""
     base = ("Your typical lap's slowest speed — the median, over your clean laps, of each lap's "
-            "minimum, which is usually the tightest corner. STINTS' Min is the same figure per "
-            "run.")
+            "minimum, which is usually the tightest corner. STINTS' Slowest corner is the same "
+            "figure per run.")
     if slow is None:
         return base
     typical, n, low, low_lap = slow
@@ -358,17 +358,29 @@ BAND_LAT_LABEL = "lateral g<br>− right · + left"   # the friction circle's ow
 # window follows: a histogram of a filtered channel owes the reader its filter exactly the way a
 # maximum owes its window. The rate and the window are READ from gmeter, never retyped, so the copy
 # cannot drift from the signal it describes.
-BAND_NOTE_BARS = (
+#
+# SHORT ON THE FACE, THE METHOD ON THE HOVER (QA 2026-09-26, "also long"): the face keeps what each
+# chart is and the lateral channel's filter (the argument above), one clause each; the weighting,
+# the sampling and the resampling are the note's tooltip (BAND_METHOD_*), assembled the same way.
+BAND_NOTE_BARS = "Bars: your average clean lap's seconds in each band."
+BAND_NOTE_SPEED = "Speed: the 10 Hz GPS trace."
+BAND_NOTE_LAT = f"Lateral g: the accelerometer, smoothed over {gmeter.LAT_SMOOTH_S:g} s."
+BAND_METHOD_BARS = (
     "Bars are your average clean lap: the seconds it spends in each band, weighted by TIME and not "
     "by sample count, so a chart's bands sum to that lap's measured time (a GPS dropout is an "
     "absence rather than a band, and those laps are out of both charts).")
-BAND_NOTE_SPEED = (
+BAND_METHOD_SPEED = (
     "Speed comes from the 10 Hz GPS trace, where every sample is a real 100 ms of driving.")
-BAND_NOTE_LAT = (
+BAND_METHOD_LAT = (
     f"Lateral g comes from the accelerometer, which the g-meter boxcars over "
     f"{gmeter.LAT_SMOOTH_S:g} s and resamples to {gmeter.OUTPUT_HZ:g} Hz before anything reads it "
     f"— five times the GPS rate, which is why the distribution is worth drawing at all, but a "
     f"filtered series and not the sensor's raw 200 Hz.")
+
+
+def band_note_lat_gps_short(why: str) -> str:
+    """BAND_NOTE_LAT's face for a GPS-derived lateral axis; the method is `band_note_lat_gps`."""
+    return f"Lateral g: derived from the GPS path ({why})."
 
 
 def band_note_lat_gps(why: str) -> str:
@@ -416,7 +428,13 @@ LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s",
 # qualifies: the exported report and the clipboard summary print the same verdict off the same
 # slope, and export_data is Qt-free by contract so it cannot reach into this module.
 SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
-STINT_COLUMNS = ["Run", "Laps", "Best", "Median", "σ (s)", "Pace/lap", "Min", "Min/lap"]
+# Copy #10 (QA 2026-09-26): "Min" beside Best and Median read as a lap time — it is the slowest
+# corner's speed — and "Pace/lap" / "Min/lap" named a slope by its unit. Two-line headers, because
+# the table must stay whole in the owner's 599 px pane at 1280x800 (583 px measured).
+STINT_PACE_TREND, STINT_VMIN, STINT_VMIN_TREND = (
+    "Lap time\nchange/lap", "Slowest\ncorner", "Slowest corner\nchange/lap")
+STINT_COLUMNS = ["Run", "Laps", "Best", "Median", "σ (s)", STINT_PACE_TREND, STINT_VMIN,
+                 STINT_VMIN_TREND]
 STINTS_TOOLTIP = (
     "Each RUN on track and how it went. A run ends where the recording holds time that was not "
     "analysed as a lap — a pit stop, a spin, laps a GPS dropout flagged — and the threshold is "
@@ -424,8 +442,9 @@ STINTS_TOOLTIP = (
     f"{stats_service.STINT_GAP_MIN_S:g} s), so it means the same thing on a 25 s kart circuit as "
     "on a 4-minute one.\n\n"
     "IS IT YOU OR THE TYRES? The last two columns are the answer, side by side and with no "
-    "verdict attached. Pace/lap is how the LAP TIME is trending through the run; Min/lap is the "
-    "same fit over the slowest corner speed of each lap. Lap time fading while corner speed falls "
+    "verdict attached. Lap time change/lap is how the LAP TIME is trending through the run; "
+    "Slowest corner change/lap is the same fit over the slowest corner speed of each lap (Slowest "
+    "corner: its median over the run). Lap time fading while corner speed falls "
     "away with it is grip going off. Lap time fading while corner speed holds — and σ widening — "
     "is the driver. Both are suppressed under "
     f"{stats_service.TREND_MIN_LAPS} laps, and a slope inside "
@@ -587,29 +606,32 @@ GG_KEY_RINGS = "solid rings: 0.5 g steps"
 # is built only on the IMU path), so the sentence was comparing itself to a filter that is not
 # there. Composing both versions from the same four pieces means the coast paragraph — the one
 # #275 already rotted once — cannot drift between them.
+#
+# TRIMMED, FACTS KEPT (QA 2026-09-26: 600+ characters that opened with an engineering caveat). It
+# now opens with what the four tiles ARE, then the brake instrument (threshold, hysteresis, the
+# re-fused manoeuvre, the unwindowed onset and #421's time-at-threshold), then the coast one.
 _DRIVING_INTRO = (
-    "Brake and Coast are DETECTED EVENTS, not readings of the tiles above: they run on their own "
-    "copy of the longitudinal g — the GPS speed derivative on each lap's own ~10 Hz fixes — and "
-    "the two read it through DIFFERENT windows, because the two tests have opposite shapes.\n\n"
-    "A BRAKE EVENT is a run below the session's OWN brake threshold — derived from this "
-    "recording's braking-decel distribution rather than fixed — released on hysteresis, with the "
-    "fragments of one braking manoeuvre re-fused into one event. It is detected with NO smoothing "
-    "window at all")
+    "Braking / lap is your time ON THE BRAKES and brake events / lap how often you braked; the two "
+    "coasting tiles are off-power time. All four are DETECTED on each lap's own ~10 Hz GPS fixes "
+    "(the speed's rate of change), not read off the tiles above, and brake and coast read that "
+    "rate through different windows, because the two tests have opposite shapes.\n\n"
+    "A BRAKE EVENT opens when the deceleration passes this session's OWN brake threshold (derived "
+    "from this recording's braking, not fixed) and is released on hysteresis; the fragments of "
+    "one braking manoeuvre are re-fused into one event. Onsets are found with NO smoothing window "
+    "at all")
 _DRIVING_IMU_CONTRAST = (
-    f", the opposite choice from the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking "
-    "tile and the friction circle above are drawn on")
+    f", unlike the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking tile and the friction circle "
+    "above are drawn on")
 _DRIVING_BRAKE_TAIL = (
-    ": an onset is a step, and a centred window "
-    "smears exactly the thing being detected.\n\n"
-    "ON THE BRAKES is NOT an event's length. The hysteresis holds an event open until the "
+    ": an onset is a step, and a centred window smears exactly the thing being detected.\n\n"
+    "ON THE BRAKES is NOT an event's length: the hysteresis holds an event open until the "
     f"deceleration falls under {driving.RELEASE_RATIO:g} × the threshold, through the light "
-    "lead-in and the lift-off tail, which are not braking, and one event can bridge the power "
-    "between two applications. So the time counts only the part of each event where the "
-    f"deceleration, smoothed over the {driving.COAST_SMOOTH_S:g} s window the coasting figures "
-    "use, is at or past the threshold: the other side of the coast band, so no moment is both. "
-    "BRAKE EVENTS counts the events themselves, one per brake glyph on the map: two applications "
-    "close together, with no hard return to power between them, can count once, and a brief dab "
-    "counts too.\n\n")
+    "lead-in and the lift-off tail, and one event can bridge two applications. The time counts "
+    "only where the deceleration, smoothed over the "
+    f"{driving.COAST_SMOOTH_S:g} s window the coasting figures use, is at or past the threshold "
+    "— the other side of the coast band, so no moment is both. BRAKE EVENTS counts the events, "
+    "one per brake glyph on the map: two applications with no hard return to power between them "
+    "can count once, and a brief dab counts too.\n\n")
 # _DRIVING_COAST, the fourth piece, is in `stats_common`: the COASTING section's tooltip closes
 # with the same paragraph, so the two cannot word the coast differently.
 DRIVING_TOOLTIP = _DRIVING_INTRO + _DRIVING_IMU_CONTRAST + _DRIVING_BRAKE_TAIL + _DRIVING_COAST
@@ -2435,15 +2457,18 @@ class StatsView(QWidget):
         if not has:
             self.bands_note.setText("")
             return
-        parts = [BAND_NOTE_BARS]
+        parts, method = [BAND_NOTE_BARS], [BAND_METHOD_BARS]
         if speed is not None:
             self.speed_bands.set_x_label(BAND_SPEED_LABEL.format(unit=u_label))
             self.speed_bands.set_bands(speed)
             parts.append(BAND_NOTE_SPEED)
+            method.append(BAND_METHOD_SPEED)
         if lat is not None:
             self.lat_bands.set_bands(lat)
             why = gps_lateral_clause(self.session)
-            parts.append(BAND_NOTE_LAT if why is None else band_note_lat_gps(why))
+            parts.append(BAND_NOTE_LAT if why is None else band_note_lat_gps_short(why))
+            method.append(BAND_METHOD_LAT if why is None else band_note_lat_gps(why))
+        self.bands_note.setToolTip("\n\n".join(method))
         shown = speed if speed is not None else lat
         if shown.has_split:
             parts.append(BAND_SPLIT_NOTE.format(

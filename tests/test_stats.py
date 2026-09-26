@@ -1373,8 +1373,10 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     assert t.item(1, 0).data(RING_ROLE) == 1
     assert not hasattr(v, "t_fix_first"), "the imperative tile is gone"
     note = v.straights.note.text()
-    assert not v.straights.note.isHidden() and note.startswith("Most exit leverage: C1 — "), note
-    assert "2.0 km/h under your best lap's" in note and "C1 → C2" in note and "+0.30 s" in note
+    # Copy #7 (QA 2026-09-26): what it costs, in words; the ranking's name is on the hover.
+    assert not v.straights.note.isHidden() and note.startswith("Slow exit costing the most: C1. "), note
+    assert "2.0 km/h under your best lap's" in note and "C1 → C2" in note and "0.30 s longer" in note
+    assert "leverage" not in note and "leverage" in v.straights.note.toolTip(), note
     assert "Coaching" not in note, "this stub has no corner ids, so no Coaching clause"
     labels = [lb.text().lower() for lb in v.findChildren(QLabel)]
     assert not any("fix first" in t for t in labels), [t for t in labels if "fix" in t]
@@ -1945,7 +1947,9 @@ def test_trust_card_states_the_lateral_gain():
     session.gmeter_cross = lambda: halved
     v_bad = StatsView(session)
     text_bad = v_bad.trust.card.text()
-    assert "gain ×1.11" in text_good, text_good
+    # Copy #6 (QA 2026-09-26): agreeing, the gain is said in words on the face (11 % off) and
+    # printed on the hover; disagreeing, the figures ARE the diagnosis and stay on the face.
+    assert "within 11 %" in text_good and "gain ×1.11" in v_good.trust.card.toolTip(), text_good
     assert "gain ×0.56" in text_bad, text_bad
     assert "agree" in text_good and "DISAGREE" in text_bad
     assert text_good != text_bad                       # the card is no longer scale-blind
@@ -2746,12 +2750,25 @@ def test_every_data_trust_row_fits_on_one_line_once_it_can():
     print(f"test_every_data_trust_row_fits_on_one_line_once_it_can OK ({len(rows)} rows)")
 
 
+def test_stints_headers_name_a_speed_and_two_changes_not_a_minimum():
+    """Copy #10 (QA 2026-09-26). STINTS printed "Min" beside Best and Median — two lap times — so
+    "Min 30.2" read as a lap time; it is the run's slowest-corner SPEED, the figure the SPEED · G
+    tile calls "slowest corner". "Pace/lap" and "Min/lap" named two slopes by their units."""
+    from studio.stats_panel import STINT_COLUMNS, STINTS_TOOLTIP, slowest_corner_tip
+    flat = [h.replace("\n", " ") for h in STINT_COLUMNS]
+    assert "Min" not in flat and "Min/lap" not in flat and "Pace/lap" not in flat, flat
+    assert flat[5:] == ["Lap time change/lap", "Slowest corner", "Slowest corner change/lap"], flat
+    for name in flat[5:]:
+        assert name in STINTS_TOOLTIP, f"the tooltip does not name {name!r}"
+    assert "STINTS' Slowest corner" in slowest_corner_tip(None, "kmh", "km/h")
+    print("test_stints_headers_name_a_speed_and_two_changes_not_a_minimum OK")
+
+
 def test_the_cross_check_sample_count_is_grouped():
     """"346713 samples" is read digit by digit; "346,713" is read at a glance."""
     v = _laid_out(1900)
-    values = [val for _term, val, _caveat in v.trust.card.rows()]
-    line = next(t for t in values if "samples" in t)
-    assert "1,000 samples" in line, line
+    # An agreeing cross-check prints its figures on the hover (copy #6), grouped there.
+    assert "1,000 samples" in v.trust.card.toolTip(), v.trust.card.toolTip()
     v.hide()
     print("test_the_cross_check_sample_count_is_grouped OK")
 
@@ -3387,11 +3404,13 @@ def test_stats_view_distribution_charts_render_and_disclose_their_channels():
         assert len(chart._fast.xData) == len(chart._fast.yData) + 1
     # The weighting is in the heading, where a reader takes the numbers off.
     assert "s per lap" in v._bands_section.text()
-    note = v.bands_note.text()
-    assert "TIME" in note and "sample count" in note                    # the weighting, in words
+    note, method = v.bands_note.text(), v.bands_note.toolTip()
+    # Short on the face, the method on the hover (QA 2026-09-26): the face keeps each channel and
+    # the lateral filter's window; the weighting and the rates are the tooltip.
+    assert "TIME" in method and "sample count" in method                # the weighting, in words
     assert "10 Hz" in note                                              # the speed channel's rate
-    assert "0.15 s" in note and "50 Hz" in note                         # …and the g channel's
-    assert "200 Hz" in note, "the sensor rate has to be named to be disowned"
+    assert "0.15 s" in note and "50 Hz" in method                       # …and the g channel's
+    assert "200 Hz" in method, "the sensor rate has to be named to be disowned"
     assert "fastest 3" in note and "slowest 3" in note                  # the sample, named
     assert "1:08.200" in note and "1:10.400" in note                    # …with its lap times
     # The refutation belongs on the surface a reader would otherwise ask best-vs-median of.
