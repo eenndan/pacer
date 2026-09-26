@@ -679,12 +679,17 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
             # Two of these five rows are coasting figures, and a coasting figure is only as
             # meaningful as the window / minimum duration / band behind it — those three settings
             # move it by more than 6x on the same recording. So the group carries the instrument
-            # as its note, the way IDEAL LAP carries its sample sentence. getattr-guarded: a
-            # Session double without the driving service still exports the numbers, noteless.
+            # as its note, the way IDEAL LAP carries its sample sentence. The braking time gets its
+            # own sentence first (LOOK-2): it is the time AT OR PAST the threshold inside each
+            # event, not the event's span, and an exported table has no tooltip to say so.
+            # getattr-guarded: a Session double without the driving service still exports the
+            # numbers, noteless.
             drv = getattr(session, "driving", None)
-            note = (getattr(drv, "coast_instrument", lambda: None)() or "") if drv else ""
+            note = " ".join(x for x in (
+                getattr(drv, "brake_time_instrument", lambda: None)() if drv else None,
+                getattr(drv, "coast_instrument", lambda: None)() if drv else None) if x)
             out.append(SummarySection("DRIVING", [
-                ("braking / lap · median",
+                (stats_service.BRAKE_TILE_CAPTION,
                  _sec(float(np.median(brake)) if brake else None, "{:.1f} s")),
                 ("brake events / lap",
                  _sec(float(np.median(counts)) if counts else None, "{:.0f}")),

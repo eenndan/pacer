@@ -439,6 +439,72 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
     return out
 
 
+# BRAKING TIME IS NOT AN EVENT'S LENGTH, and until 2026-09 the Stats page summed the length.
+# An event ENTERS past theta_b but only RELEASES under theta_b*RELEASE_RATIO, and the merge above
+# fuses fragments across up to MERGE_TROUGH_GAP_M of coast — right for placing ONE brake point per
+# corner, wrong for a stopwatch: the span runs through the light lead-in and the lift-off tail
+# (0.056-0.16 g, the coast band's own range), and a merged event bridges the power between two
+# applications. Measured on the owner's MK 0067 and SD 0068 (19 + 36 valid laps): 34 % and 39 % of
+# event time was not at or past theta_b on the window below; the tile read 26.0 / 14.5 s a lap
+# against 17.8 / 9.4 s at or past it; SD 0068 lap 1 booked 24.4 s of a 50.0 s lap, one "event" of
+# 12.5 s being three applications with the kart back on power between them. And 79 % / 81 % of the
+# coasting time was ALSO booked as braking, so Brake s + Coast s counted one moment twice.
+#
+# WHY THE COAST WINDOW, NOT THE BARE ONSET SERIES. "Time at or past theta_b" is membership of a
+# band, the coast's shape, not an onset's, and the bare 10 Hz derivative's ~0.1 g of noise flickers
+# a light tail across theta_b. Against a synthetic truth (8 known applications a lap, each followed
+# by a 2.5 s tail at 0.04, 0.08 or 0.12 g; 200 laps a setting; speed noise 0.10-0.17 m/s, the
+# fixes' own) the event span read +51-194 %, samples past theta_b on the bare series +2-70 %, and
+# the same test on this 0.50 s window +2.0-6.7 % (+11.8-27.3 % only for the tail parked at 0.12 g,
+# just under a 0.16 g theta_b). Without tails every at-or-past version is within ±2.1 %. On the
+# real laps the bare-series count sits within 0.3 % (MK) and 3 % (SD 0068) of this one, so the
+# window buys robustness, not a different answer today. And it is the coast band's own series, so
+# a moment is braking (smoothed decel at or past theta_b) or coasting (short of it), never both —
+# measured 0.0 s of overlap on both recordings.
+def brake_time(elapsed, long_g, theta_b: float, events) -> float:
+    """Seconds ON THE BRAKES on one lap: inside each of `events` (this lap's detected BrakeEvents,
+    from `brake_events` over the SAME `elapsed`), the time the longitudinal g — boxcarred over
+    COAST_SMOOTH_S, the coast band's window — is at or past -theta_b. `long_g` is the clean
+    speed-derived series the events were detected on (it is smoothed here, like `coasting_spans`
+    smooths its own copy). See the block above for why this and not `e.duration`.
+
+    Integrated as a trapezoid of the at-or-past indicator on the lap's own clock, clipped to each
+    event's onset->release span: a sample's state holds for half an interval each side, so the
+    answer never exceeds the event's own duration. The events are only READ — onsets, peaks and
+    durations (the glyphs, the BRAKING table, coaching, the pedal band) do not move. 0.0 with no
+    event."""
+    elapsed = np.asarray(elapsed, float)
+    g = np.asarray(long_g, float)
+    n = min(len(elapsed), len(g))
+    if n < 2 or not events:
+        return 0.0
+    elapsed, g = elapsed[:n], g[:n]
+    past = (boxcar(g, _coast_window(elapsed)) <= -float(theta_b)).astype(float)
+    total = 0.0
+    for e in events:
+        # onset_time IS elapsed[onset] and onset_time + duration lands on elapsed[release] (the
+        # detector's own span), so the event's samples are recovered from its two times.
+        idx = np.flatnonzero((elapsed >= e.onset_time - 1e-9)
+                             & (elapsed <= e.onset_time + e.duration + 1e-9))
+        if len(idx) < 2:
+            continue
+        i0, i1 = int(idx[0]), int(idx[-1])
+        on = past[i0:i1 + 1]
+        total += float(np.sum(np.diff(elapsed[i0:i1 + 1]) * 0.5 * (on[:-1] + on[1:])))
+    return total
+
+
+def brake_time_instrument(theta_b: float) -> str:
+    """The sentence that says what a braking-TIME figure counts — the house pattern of
+    `coast_instrument`, composed from the constants and carrying this session's theta_b. The
+    exported DRIVING note prints it beside the braking figure it qualifies."""
+    return (f"Braking time: the part of each detected brake event where the GPS longitudinal g — "
+            f"smoothed over {COAST_SMOOTH_S:.2f} s, the coasting band's own window — is at or "
+            f"past this session's brake threshold {theta_b:.3f} g. The light lead-in and the "
+            f"lift-off tail the event is held open through (down to {RELEASE_RATIO:g} x that "
+            f"threshold) are not counted.")
+
+
 def coast_instrument(theta_b: float) -> str:
     """The one sentence that says what a coasting number was measured with — the window, the
     minimum duration and the band, in the units they are set in. The three together move the
