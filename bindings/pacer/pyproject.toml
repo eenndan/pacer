@@ -6,7 +6,7 @@ name = "pacer"
 requires-python = ">= 3.11"
 # Keep in lockstep with studio/__init__.py __version__ (canonical) and the root pyproject.toml.
 # Pinned by tests/test_version.py.
-version = "0.4.2"
+version = "0.5.0"
 
 [build-system]
 requires = [
