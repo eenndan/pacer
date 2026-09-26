@@ -121,7 +121,7 @@ CORNER_MARKER_EPS_PX = 0.5      # sub-px moves aren't worth a setPos/repaint
 # apex dot, then the canvas edge. It re-runs when the view's scale, the brake glyphs or the start
 # line change; never on the tick (the moving marker is still `avoid_point`'s).
 CORNER_LABEL_DIRS = 16
-CORNER_LABEL_STEPS_PX = (0.0, 6.0, 12.0, 20.0, 30.0)
+CORNER_LABEL_STEPS_PX = (0.0, 5.0, 10.0, 16.0, 24.0)
 CORNER_LABEL_AIR_PX = 3.0       # kept between a label's plate and the apex dot it names
 CORNER_DOT_HALF_PX = 4.5        # an apex dot (size 7) plus its rim
 # The map frames the CIRCUIT, not everything the receiver logged (VIEW-8): on MK_18_09 1.2 % of the
@@ -131,6 +131,9 @@ CORNER_DOT_HALF_PX = 4.5        # an apex dot (size 7) plus its rim
 # whose laps are a fraction of it — an unknown track, a lone short "lap" — keeps the whole trace,
 # which is also where the video marker can be (MAP-04).
 FIT_CIRCUIT_SHARE = 0.9
+# ...and the frame keeps a label's room at its edge: a corner at the top or bottom of the circuit
+# had nowhere to put its label but off the canvas or onto its own brake glyph (C12 on MK_18_09).
+FIT_LABEL_ROOM_PX = 12.0
 # Click-to-locate cue: a hollow ring slightly larger than the apex dot, drawn in the corner
 # LABEL's own near-primary text colour — deliberately NOT the UI accent.
 #
@@ -925,38 +928,54 @@ class _CornerMarkers:
             (ax, ay, _h), (bx, by, _h2) = anchors[0], anchors[1]
             n = max(2, int(np.hypot(bx - ax, by - ay) / 3.0))
             obs += [(ax + (bx - ax) * k / n, ay + (by - ay) * k / n, 2.5, 2.5) for k in range(n + 1)]
-        obs += [(float(x) * sx, float(y) * sy, h, h) for x, y, h in self._obstacles]
         boxes = np.array(obs, float).reshape(-1, 4)
+        # The brake glyphs are SOFT: better a glyph's corner on a plate than a label so far from its
+        # apex that it names the wrong corner.
+        soft = np.array([(float(x) * sx, float(y) * sy, h, h) for x, y, h in self._obstacles],
+                        float).reshape(-1, 4)
         view = self.plot.getViewBox().viewRect()
         frame = (view.left() * sx, view.top() * sy, view.right() * sx, view.bottom() * sy)
         frame = (min(frame[0], frame[2]), min(frame[1], frame[3]),
                  max(frame[0], frame[2]), max(frame[1], frame[3]))
         dist = np.hypot(*(apex[:, None, :] - apex[None, :, :]).transpose(2, 0, 1))
         order = np.argsort(-(dist < 60.0).sum(axis=1), kind="stable")
-        placed = np.zeros((0, 4))
-        out = np.zeros_like(apex)
-        self._outward = [(0.0, 0.0)] * len(markers)
         steps = np.asarray(CORNER_LABEL_STEPS_PX)
-        for i in order:
+        turn = np.array([0.0] + [s * k for k in range(1, CORNER_LABEL_DIRS // 2)
+                                 for s in (1.0, -1.0)] + [CORNER_LABEL_DIRS / 2.0])
+        penalty = 1.0 * np.tile(steps, len(turn)) + 3.0 * np.repeat(np.abs(turn), len(steps))
+        self._outward = [(0.0, 0.0)] * len(markers)
+        cands = []
+        for i in range(len(markers)):
             hw, hh = half[i]
             ox, oy = apex[i] - centre
             norm = float(np.hypot(ox, oy)) or 1.0
             self._outward[i] = (ox / norm, oy / norm)
-            turn = np.array([0.0] + [s * k for k in range(1, CORNER_LABEL_DIRS // 2)
-                                     for s in (1.0, -1.0)] + [CORNER_LABEL_DIRS / 2.0])
             theta = np.arctan2(oy, ox) + turn * 2.0 * np.pi / CORNER_LABEL_DIRS
             c, sn = np.cos(theta), np.sin(theta)
             with np.errstate(divide="ignore"):
                 d0 = np.minimum((hw + CORNER_LABEL_AIR_PX + CORNER_DOT_HALF_PX) / np.abs(c),
                                 (hh + CORNER_LABEL_AIR_PX + CORNER_DOT_HALF_PX) / np.abs(sn))
             d = (d0[:, None] + steps[None, :]).ravel()
-            cand = apex[i] + np.stack([np.repeat(c, len(steps)), np.repeat(sn, len(steps))], 1) * d[:, None]
-            cost = (10.0 * _overlap(cand, hw, hh, placed) + 4.0 * _overlap(cand, hw, hh, boxes)
-                    + 4.0 * _outside(cand, hw, hh, frame)
-                    + 0.5 * np.tile(steps, len(theta)) + 4.0 * np.repeat(np.abs(turn), len(steps)))
-            best = int(np.argmin(cost))
+            unit = np.stack([np.repeat(c, len(steps)), np.repeat(sn, len(steps))], 1)
+            cand = apex[i] + unit * d[:, None]
+            # What does not depend on the other labels is costed once.
+            fixed = (4.0 * _overlap(cand, hw, hh, boxes) + 1.5 * _overlap(cand, hw, hh, soft)
+                     + 4.0 * _outside(cand, hw, hh, frame) + penalty)
+            cands.append((cand, fixed))
+        out = np.zeros_like(apex)
+        done: list[int] = []
+        # Greedy, most crowded first; then ONE more pass that re-places each label against all the
+        # others, which frees the spot an early label took from a later, more cornered one.
+        for i in [*order, *order]:
+            cand, fixed = cands[i]
+            hw, hh = half[i]
+            # (+1 px each: two plates kept a pixel apart, not kissing)
+            others = np.array([[*out[j], half[j][0] + 1.0, half[j][1] + 1.0]
+                               for j in done if j != i]).reshape(-1, 4)
+            best = int(np.argmin(fixed + 10.0 * _overlap(cand, hw, hh, others)))
             out[i] = cand[best]
-            placed = np.vstack([placed, [cand[best][0], cand[best][1], hw, hh]])
+            if i not in done:
+                done.append(i)
         return [(px / sx, py / sy) for px, py in out]
 
     def avoid_point(self, mx: float, my: float) -> int:
@@ -1140,6 +1159,10 @@ class MapView(QWidget):
         # ...and a range change that moved the SCALE re-places the corner labels, which are laid
         # out in px (a resize re-fits, a wheel zoom rescales; a pan moves nothing relative to them).
         self.plot.getViewBox().sigRangeChanged.connect(self._on_range_changed)
+        # The fit's label room is in px, so it is re-derived when the VIEWBOX settles on its size —
+        # which lags the widget's own resizeEvent — while our fit still stands.
+        self.plot.getViewBox().sigResized.connect(
+            lambda *_: self._fit_view() if getattr(self, "_view_fitted", False) else None)
 
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
@@ -1391,10 +1414,17 @@ class MapView(QWidget):
         if box is None:
             return
         x_lo, x_hi, y_lo, y_hi = box
-        # 2% pad so the aspect-locked track fills the panel without handles flush to the edge.
-        px = max(x_hi - x_lo, 1.0) * 0.02
-        py = max(y_hi - y_lo, 1.0) * 0.02
+        dx, dy = max(x_hi - x_lo, 1.0), max(y_hi - y_lo, 1.0)
+        # 2% pad so the aspect-locked track fills the panel without handles flush to the edge, plus
+        # FIT_LABEL_ROOM_PX on every side at the scale the aspect lock will settle on.
         vb = self.plot.getViewBox()
+        size, room = vb.boundingRect(), FIT_LABEL_ROOM_PX
+        extra = 0.0
+        if size.width() > 4 * room and size.height() > 4 * room:
+            scale = min((size.width() - 2 * room) / (dx * 1.04),
+                        (size.height() - 2 * room) / (dy * 1.04))
+            extra = room / scale
+        px, py = dx * 0.02 + extra, dy * 0.02 + extra
         vb.setRange(xRange=(x_lo - px, x_hi + px), yRange=(y_lo - py, y_hi + py), padding=0)
         vb.disableAutoRange()
         self._view_fitted = True
@@ -2066,7 +2096,7 @@ class MapView(QWidget):
         if cm is None or not cm._texts:
             return
         (sx, sy), (lx, ly) = cm._px_per_data(), cm.layout_scale
-        if abs(sx - lx) > 0.01 * max(lx, 1e-9) or abs(sy - ly) > 0.01 * max(ly, 1e-9):
+        if abs(sx - lx) > 1e-6 * max(lx, 1e-9) or abs(sy - ly) > 1e-6 * max(ly, 1e-9):
             self._relayout_labels()
 
     def _start_clear_anchors(self):

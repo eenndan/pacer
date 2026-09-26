@@ -39,7 +39,9 @@ _CORNER_BEST_COL = 1
 # The % moved to the section heading, the way the Corners tab puts it in its unit caption.
 # Measured on Sandown 3h and MK_18_09: the header's ink is 42 -> 57 px, the column 85 -> 101 px and
 # the table 718 -> 734 px. That costs no column at the 1260 / 1420 / 1900 px dashboard widths (same
-# composition, nothing hidden). In a quadrant this table already scrolls, and 16 px more of it does.
+# composition, nothing hidden). In a quadrant it did cost the column itself — at the owner's 683 px
+# pane "Grip (est)" showed as a lone "G" (LOOK-8) — until the sort arrow's room went to the sorted
+# column alone (stats_common.ReportTable.fit): 581 px now, whole at 1440x831 and at 1280x800.
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
                   theme.estimated_label("Grip")]
 WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked

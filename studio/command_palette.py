@@ -247,17 +247,20 @@ def rank(entry: Entry, query: str) -> int | None:
     return 3
 
 
-def split_title(text: str, fm: QFontMetrics, width: int) -> tuple[str, str]:
+def split_title(text: str, fm: QFontMetrics, width: int, gated: bool = False) -> tuple[str, str]:
     """A row title as (first line, second line) for a title column `width` px wide.
 
-    ONE LINE WHEN IT FITS. When it does not (LOOK-8, QA 2026-09-26: six rows of the 576 px palette
-    ended in "…", e.g. "Load full recording — this recording is already loaded i…"), the NAME stays
-    on the first line and what follows it moves to a second: a gate's reason after its " — "
-    (`app.MENU_REASON_SEP`), else a gloss in trailing parentheses, else the words that did not
-    fit."""
+    LOOK-8 (QA 2026-09-26): six rows of the 576 px palette ended in "…", four of them part-way
+    through the reason the command is off ("Load full recording — this recording is already loaded
+    i…"). A GATED row's reason — what follows its " — " (`app.MENU_REASON_SEP`) — always takes the
+    second line, so every reason reads the same way. Any other title stays on one line while it
+    fits; when it does not, the name keeps the first line and the rest moves down: a gloss in
+    trailing parentheses, else the words that did not fit."""
+    cut = text.find(" — ")
+    if gated and cut > 0:
+        return text[:cut], text[cut + 3:]
     if fm.horizontalAdvance(text) <= width:
         return text, ""
-    cut = text.find(" — ")
     if cut > 0:
         return text[:cut], text[cut + 3:]
     cut = text.rfind(" (")
@@ -285,6 +288,13 @@ class _TitleDelegate(QStyledItemDelegate):
         style = opt.widget.style() if opt.widget is not None else QApplication.style()
         return style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
 
+    @staticmethod
+    def _text_margin(opt: QStyleOptionViewItem) -> int:
+        """The inset the style itself gives item text inside SE_ItemViewItemText (QCommonStyle's
+        `PM_FocusFrameHMargin + 1`), so a two-line row starts at the same x as a one-line row."""
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        return style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, opt.widget) + 1
+
     def _lines(self, opt: QStyleOptionViewItem, index) -> tuple[str, str]:
         view = opt.widget
         if view is not None and hasattr(view, "columnWidth"):
@@ -293,7 +303,8 @@ class _TitleDelegate(QStyledItemDelegate):
             width = self._text_rect(probe).width()
         else:
             width = self._text_rect(opt).width()
-        return split_title(opt.text, opt.fontMetrics, width)
+        gated = not bool(index.flags() & Qt.ItemIsEnabled)
+        return split_title(opt.text, opt.fontMetrics, width - 2 * self._text_margin(opt), gated)
 
     def sizeHint(self, option, index):
         opt = QStyleOptionViewItem(option)
@@ -313,7 +324,8 @@ class _TitleDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
             return
         style = opt.widget.style() if opt.widget is not None else QApplication.style()
-        text_rect = self._text_rect(opt)
+        margin = self._text_margin(opt)
+        text_rect = self._text_rect(opt).adjusted(margin, 0, -margin, 0)
         opt.text = ""                        # the style paints background, selection and focus only
         style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
         enabled = bool(opt.state & QStyle.State_Enabled)
