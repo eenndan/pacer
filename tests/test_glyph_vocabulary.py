@@ -303,7 +303,7 @@ def test_the_excluded_strip_draws_its_two_marks_with_theme_icon():
     assert calm._excluded_header.property("tone") in (None, "")
     assert calm._excluded_mark._colour == theme.C.text_dim
     # The words keep the whole sentence: nothing that used to be a glyph carried a number.
-    assert "24 excluded of 50 laps found" in table._excluded_header.text()
+    assert "24 excluded of 49 laps found" in table._excluded_header.text()
     print("test_the_excluded_strip_draws_its_two_marks_with_theme_icon OK")
 
 

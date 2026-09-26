@@ -49,13 +49,13 @@ IDEAL_SAMPLE_TOOLTIP = (
     "moves when the corners are re-detected, which happens every time you drag the start/finish "
     "line. Compare it with another session only when the two have a similar lap count and "
     "corner count.")
-THEORETICAL_TOOLTIP = ("Theoretical best — your quickest time through each corner and each "
+THEORETICAL_TOOLTIP = ("Ideal lap — your quickest time through each corner and each "
                        "straight, stitched into one lap. A reference target, not a lap you "
                        "drove: no single lap was this fast all the way round, but every piece "
                        "of it is a piece you drove. The table below says where it lives."
                        + IDEAL_SAMPLE_TOOLTIP)
-IDEAL_GAP_TOOLTIP = ("What the theoretical best says is still on the table: your best lap minus "
-                     "the stitched ideal. It is time you have already demonstrated, one segment "
+IDEAL_GAP_TOOLTIP = ("What the ideal lap says is still on the table: your best lap minus the "
+                     "stitched ideal lap. It is time you have already demonstrated, one segment "
                      "at a time, on laps you drove — not a simulation and not a lap record."
                      + IDEAL_SAMPLE_TOOLTIP)
 # "As fast as this lap", not "Laps as fast" (§5.6). The count is laps that drove the segment at
@@ -73,7 +73,7 @@ IDEAL_COLUMNS = ["Segment", "Gain (s)", "Laps this fast", "Best on lap"]
 # tile above them still add up (see IdealSection.refresh).
 IDEAL_GAIN_FLOOR = 0.05
 IDEAL_TOOLTIP = (
-    "Where the theoretical best lives: per segment of the corner/straight partition, the time "
+    "Where the ideal lap lives: per segment of the corner/straight partition, the time "
     "your BEST lap gives away against your quickest time through it, the lap that set that "
     "quickest time, and how many of your clean laps drove that segment at least as fast as your "
     "best lap did. The gains over EVERY segment sum exactly to the gap under the tile above.\n\n"
@@ -90,7 +90,7 @@ class IdealSection:
     def __init__(self, on_ring):
         self._on_ring = on_ring
         self.heading = section_heading("IDEAL LAP")
-        self.t_theoretical = Tile("theoretical best")
+        self.t_theoretical = Tile("ideal lap")
         self.t_theoretical.setToolTip(THEORETICAL_TOOLTIP)
         self.t_gap = Tile("on the table · vs your best")
         self.t_gap.setToolTip(IDEAL_GAP_TOOLTIP)
@@ -211,11 +211,12 @@ class IdealSection:
         # matrix the gains come from makes `gap == Σ gains` true by construction rather than by
         # agreement between two accessors. The tile and the table cannot drift.
         gap = float(sb.times[sb.lap_ids.index(best_id)].sum()) - total
-        # SIGNED, and negative, because that is the direction the number moves your lap time —
-        # the same convention the hero's `vs ideal` chip and the trend tile use. Formatted with
-        # the ASCII sign f-strings produce, not a typographic minus: this is a MONO tile and the
-        # app's one measured mark-in-a-mono-face defect is exactly that substitution.
-        set_target_tile(self.t_gap, gap, IDEAL_GAP_TOOLTIP, session, text=f"{-gap:+.2f} s")
+        # UNSIGNED (LOOK-7, QA 2026-09-26). It printed "-1.48 s" — the direction it would move
+        # your lap time — while the hero read the same gap as "Δideal +1.48 s" and the CORNERS note
+        # "1.48 s under your best". "On the table" is time you can FIND, a magnitude; a minus sign
+        # on it read as "nothing to gain". The gap is ≥ 0 by construction (a minimum over laps
+        # that include the best one).
+        set_target_tile(self.t_gap, gap, IDEAL_GAP_TOOLTIP, session, text=f"{gap:.2f} s")
 
         shown = [r for r in rows if r.gain >= IDEAL_GAIN_FLOOR]
         rest = [r for r in rows if r.gain < IDEAL_GAIN_FLOOR]

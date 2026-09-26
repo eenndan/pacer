@@ -286,7 +286,8 @@ def test_excluded_strip_escalates_when_the_ratio_crosses_the_threshold():
     # segmentation over lap_count(), and the two printed different totals for it (measured on the
     # D24 0060 pair with the start line dragged: 81 against 69). The share follows the denominator
     # it is a share OF.
-    assert loud._excluded_header.text() == "24 excluded of 50 laps found (48%)"
+    assert loud._excluded_header.text() == "24 excluded of 49 laps found (49%)", \
+        loud._excluded_header.text()
     assert loud._excluded_header.property("tone") == "warn"
     warn_rule = theme._build_qss().split('QLabel#LapExcludedHeader[tone="warn"]')[1].split("}")[0]
     assert theme.C.accent in warn_rule, warn_rule
@@ -307,9 +308,10 @@ def test_excluded_counts_reconcile_with_the_detected_lap_count():
     """L3-06's cleanest item: the panel showed 25 rows and "24 excluded" on a recording whose
     lap_count() is 50, so its two visible numbers did not add up to the third and the 50th lap was
     unexplained. Every detected lap is now accounted for — and against the SAME total the Stats
-    page's DATA TRUST card divides by, which is what makes the two pages agree."""
+    page's DATA TRUST card divides by, which is what makes the two pages agree. That total is the
+    LAPS (25 + 24 = 49): the 50th is a crossing too brief to be a lap and is named as one (LOOK-6)."""
     lt = LT.LapTable(_FakeLapSession(valid=25, excluded=24, detected=50))
-    assert "24 excluded of 50 laps found" in lt._excluded_header.text()
+    assert "24 excluded of 49 laps found" in lt._excluded_header.text(), lt._excluded_header.text()
     assert "1 other start/finish crossing was too brief" in lt._excluded_note.text(), \
         lt._excluded_note.text()
     # Nothing left over -> no phantom sentence.

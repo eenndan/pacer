@@ -59,7 +59,7 @@ from . import (
     units,
 )
 from . import stats as stats_service
-from ._signal import fmt_hms, fmt_time, plural
+from ._signal import fmt_hms, fmt_signed, fmt_time, plural
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
@@ -292,6 +292,26 @@ SPARK_PX_PER_LAP = theme.SPACE_XL
 # the vertical range while hiding ONE lap beats the one that recovers 77 % by hiding two.
 SPARK_OUTLIER_IQR = 3.0
 SPARK_MIN_FOR_FENCE = 6   # quartiles of fewer laps than this describe nothing; show them all
+# SESSION's duration tile and SPEED · G's slowest-corner tile: one caption each, shared with the
+# exported summary (export_data mirrors the page's rows) so the two never name one number twice.
+DURATION_CAPTION = stats_service.DURATION_CAPTION
+VMIN_CAPTION = stats_service.VMIN_CAPTION
+
+
+def slowest_corner_tip(slow, unit, u_label) -> str:
+    """The slowest-corner tile's hover: what the typical is a median of, and the one slowest
+    moment it deliberately is not, with its lap (LOOK-12)."""
+    base = ("Your typical lap's slowest speed — the median, over your clean laps, of each lap's "
+            "minimum, which is usually the tightest corner. STINTS' Min is the same figure per "
+            "run.")
+    if slow is None:
+        return base
+    typical, n, low, low_lap = slow
+    return (f"{base} Over {plural(n, 'clean lap')} here. The single slowest moment was "
+            f"{units.convert_speed(low, unit):.1f} {u_label} on lap {low_lap + 1}: one lap, not "
+            "how you drive the corner (traffic, a mistake or an off can put a lap there).")
+
+
 SPARK_TOOLTIP = ("Lap-time trend over the clean laps (GPS-dropout ⚠ laps excluded). "
                  "Highlighted dots mark session-best (PB) laps; the dashed line is the "
                  "session best (the floor). Y labels: fastest / slowest lap.")
@@ -1138,7 +1158,15 @@ class StatsView(QWidget):
         self.t_laps = Tile("laps")
         self.t_laps.setToolTip(f"Valid laps · {EXCLUDED_MARK} band-excluded · "
                                f"{DROPOUT_MARK} laps with a GPS dropout")
-        self.t_duration = Tile("recorded")
+        # "GPS TRACE", NOT "recorded" (LOOK-5, QA 2026-09-26): this is the kept GPS trace's span,
+        # first fix to last, and the DATA TRUST card's GPS-quality line directly below spans the
+        # FOOTAGE — 41:34 here against 44:44 there on MK_18_09, whose first 3:05 had no fix. Two
+        # "recording" lengths one card apart; each now says which clock it is.
+        self.t_duration = Tile(DURATION_CAPTION)
+        self.t_duration.setToolTip(
+            "How long the GPS trace runs, first kept fix to last. The footage can be longer: the "
+            "camera records before the GPS has a fix, and the DATA TRUST card's GPS-quality line "
+            "spans the whole footage.")
         self.t_moving = Tile("moving")
         self.t_distance = Tile("distance")
         self.t_clock = Tile("on track")
@@ -1280,10 +1308,10 @@ class StatsView(QWidget):
         col.addWidget(self._speed_section)
         self.t_vmax = Tile("top speed")
         self.t_vmax.setToolTip("Max 3D GPS speed across the valid laps (10 Hz).")
-        self.t_vmin = Tile("slowest point")
-        self.t_vmin.setToolTip(
-            "The slowest on-lap speed across the valid laps — typically the tightest "
-            "corner (a traffic or off-line lap can dip lower).")
+        # THE TYPICAL SLOWEST CORNER, not the session minimum (LOOK-12, QA 2026-09-26; see
+        # `SessionStats.slowest_corner`): the minimum was one lap's traffic moment, 14.5 km/h on
+        # MK_18_09 against a typical 30.1. The minimum and its lap are on the hover.
+        self.t_vmin = Tile(VMIN_CAPTION)
         self.t_peak_lat = Tile("peak lateral g")
         # Provenance-dependent, and re-set per refresh — see _refresh_g_provenance.
         self.t_peak_lat.setToolTip(PEAK_LAT_TOOLTIP)
@@ -2080,7 +2108,8 @@ class StatsView(QWidget):
             # render identically and would leave a "difference" nobody can see.
             recorded, moving = fmt_hms(tot.duration_s), fmt_hms(tot.moving_s)
             same = recorded == moving
-            self.t_duration.set(recorded, "recorded · all moving" if same else "recorded")
+            self.t_duration.set(recorded, f"{DURATION_CAPTION} · all moving" if same
+                                else DURATION_CAPTION)
             self.t_moving.setVisible(not same)
             self.t_moving.set(None if same else moving)
             self._set_distance(tot)
@@ -2131,9 +2160,10 @@ class StatsView(QWidget):
                             f"top speed · lap {vmax[1] + 1}")
         else:
             self.t_vmax.set(None, "top speed")
-        vmins = [r.vmin_kmh for r in rows if r.vmin_kmh is not None]
-        self.t_vmin.set(f"{units.convert_speed(min(vmins), unit):.1f} {u_label}"
-                        if vmins else None)
+        slow = getattr(st, "slowest_corner", lambda: None)() if st is not None else None
+        self.t_vmin.set(None if slow is None else
+                        f"{units.convert_speed(slow[0], unit):.1f} {u_label}")
+        self.t_vmin.setToolTip(slowest_corner_tip(slow, unit, u_label))
         lat_peaks = [r.peak_lat_g for r in rows if r.peak_lat_g is not None]
         brk_peaks = [r.peak_brake_g for r in rows if r.peak_brake_g is not None]
         self.t_peak_lat.set(f"{max(lat_peaks):.2f} g" if lat_peaks else None)
@@ -2533,8 +2563,7 @@ class StatsView(QWidget):
                 best_item.setForeground(best_colour)
                 best_item.setToolTip(
                     f"Session-best S{k + 1} split — the fastest this sector was driven, in the "
-                    "same purple the Laps tab paints on the lap that set it. The theoretical "
-                    "best above is this column summed.")
+                    "same purple the Laps tab paints on the lap that set it.")
             self.sector_table.setItem(k, 1, best_item)
             med = medians[k] if k < len(medians) else None
             self.sector_table.setItem(
@@ -2597,7 +2626,7 @@ class StatsView(QWidget):
                 # direction off a number the shuffled-label null already covers.
                 flat = abs(slope) < stats_service.VMIN_STEADY_BAND
                 shown = units.convert_speed(slope, unit)
-                t.setItem(r, 7, cell("0.00" if flat else f"{shown:+.2f}"))
+                t.setItem(r, 7, cell("0.00" if flat else fmt_signed(shown, 2)))
         self._fit_table(t)
         # THE SAMPLE, under the grid that is read off it. Two runs of 4 and 40 laps are not two
         # comparable paces, and the row count is the only thing on screen that says so.
@@ -2683,8 +2712,8 @@ class StatsView(QWidget):
                         # quickest. Two marks reading off two baselines and saying so beats one
                         # baseline that answers only half the question (see MATRIX_SCALE_MIN_S).
                         item.setToolTip(
-                            f"{val - med:+.{d}f} s against your typical S{c + 1} "
-                            f"({med:.{d}f} s); {gap:+.{d}f} s against the sector best "
+                            f"{fmt_signed(val - med, d)} s against your typical S{c + 1} "
+                            f"({med:.{d}f} s); {fmt_signed(gap, d)} s against the sector best "
                             f"({col_best:.{d}f} s, lap {matrix.best_lap[c] + 1}).")
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 item.setFont(mono)
@@ -2762,7 +2791,7 @@ class StatsView(QWidget):
                             item.setForeground(behind)
                             item.setText(theme.DELTA_BEHIND_ARROW + " " + item.text())
                         item.setToolTip(
-                            f"{val - med:+.{d}f} s against your typical C{cid} ({med:.{d}f} s, the "
+                            f"{fmt_signed(val - med, d)} s against your typical C{cid} ({med:.{d}f} s, the "
                             f"median of the {matrix.n_resolved[c]} laps matched on track through "
                             "it).")
                 t.setItem(r, c + 1, item)

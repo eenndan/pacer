@@ -218,6 +218,28 @@ def fmt_hms(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
+#: The TRUE minus (U+2212) every signed number on the Stats page prints. Inter draws it at the
+#: width of its "+" under tabular figures (tests/test_stats.py measures that), so a signed column
+#: stays decimal-aligned; the ASCII hyphen f-strings produce is narrower and sits low.
+MINUS = "−"
+
+
+def fmt_signed(value: float, decimals: int = 2, unit: str = "") -> str:
+    """ONE signed-number formatter: "+0.20", "−0.35 s/lap", and an UNSIGNED zero ("0.00") for a
+    value that prints as zero, because "±0.00" reads as a glitch and a signed zero invites a
+    direction the number does not have. `unit` follows after a space.
+
+    LOOK-7 (QA 2026-09-26): the Stats tiles and tables printed "-0.35 s/lap" with an ASCII hyphen
+    two tabs away from Coaching's "−8.9 km/h" — and "-1.48 s" of ideal-lap gain one row from a hero
+    reading "+1.48 s". A quantity that means "time you can find" is printed unsigned by its caller;
+    every signed one goes through here, so the page has one minus."""
+    v = float(value)
+    text = f"{abs(v):.{decimals}f}"
+    if round(v, decimals) != 0:
+        text = ("+" if v > 0 else MINUS) + text
+    return f"{text} {unit}" if unit else text
+
+
 def plural(n: int, noun: str, many: str | None = None) -> str:
     """"1 corner" / "7 corners" — the one-line count helper the ideal-lap disclosure needs on
     three nouns whose smallest legal value is 1 (a layout where the detector finds ONE corner
