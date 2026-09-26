@@ -1818,20 +1818,30 @@ def test_a_no_space_failure_asks_the_disk_before_it_skips_the_retry(monkeypatch_
     print("ok enospc: the disk decides — full skips the retry with a true sentence, room retries")
 
 
-def test_the_size_model_is_the_stated_rate_times_the_clip():
+def test_the_size_model_is_what_each_encoder_writes():
     """`estimate_output_bytes` is the ONE model behind both the picker's "About N MB" and the
-    free-space guard's requirement. VideoToolbox is bitrate-targeted, so it is the stated target;
-    libx264 is CRF-driven, so it is the measured bits-per-pixel table; the two alpha outputs are
-    their own measured rates. Nothing to render costs nothing."""
+    free-space guard's requirement. VideoToolbox is bitrate-targeted and writes 0.70 of the rate it
+    is asked for (EXP-7: quoting the asking rate ran every H.264 estimate ~25 % high); libx264 is
+    CRF-driven, so it is the measured bits-per-pixel table; both carry the source's AAC track at
+    192.5 kbit/s. The two alpha outputs are their own measured rates, with no audio. Nothing to
+    render costs nothing."""
     from studio import export_video as EV
 
     sec = 60.0
+    # A KNOWN BITRATE: 1080p30 "high" asks VideoToolbox for 6,220,800 bit/s. It writes 0.70 of it,
+    # 4,354,560 bit/s, and the AAC track adds 192,500: 4,547,060 bit/s, 34.1 MB a minute. On main
+    # the estimate was the asking rate alone, 46.7 MB, and a real minute is 34.2 MB.
+    assert EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) == 6_220_800
+    assert (EV.VT_H264_YIELD, EV.AAC_BITS_PER_S) == (0.70, 192_500)
     vt = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.VT_H264)
-    assert vt == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * sec / 8), vt
+    assert vt == 34_102_950, vt
     std = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "standard", EV.VT_H264)
-    assert std == int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.06) * sec / 8), std
+    assert std == int((0.70 * EV.vt_target_bitrate(1920, 1080, 30.0, 0.06) + 192_500) * sec / 8), std
+    # The 2 Mbit/s floor is a bitrate VideoToolbox is ASKED for too, and it writes 0.70 of that.
+    tiny = EV.estimate_output_bytes(640, 360, 30.0, sec, "standard", EV.VT_H264)
+    assert tiny == int((0.70 * 2_000_000 + 192_500) * sec / 8), tiny
     x264 = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.SW_H264)
-    assert x264 == int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * sec / 8), x264
+    assert x264 == int((1920 * 1080 * 30.0 * EV.X264_BPP[20] + 192_500) * sec / 8), x264
     prores = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.ALPHA_PRORES)
     png = EV.estimate_output_bytes(1920, 1080, 30.0, sec, "high", EV.ALPHA_PNG)
     assert prores == int(1920 * 1080 * 30.0 * EV.PRORES_4444_BPP * sec / 8), prores
@@ -1849,7 +1859,55 @@ def test_the_size_model_is_the_stated_rate_times_the_clip():
     # the owner's export as measured: MK best lap +-5 s, 2325 frames of 4K on VideoToolbox, 1.522 GB
     owner = EV.estimate_output_bytes(3840, 2160, 30.0, 2325 / 30.0, "high", EV.VT_PRORES)
     assert 0.9 < 1.522e9 / owner < 1.1, owner
-    print("ok size model: stated rate x clip, per codec; nothing to render costs nothing")
+    print("ok size model: what each encoder writes x clip; nothing to render costs nothing")
+
+
+# REAL H.264 FILES, 2026-09-26: the owner's footage through the real options dialog and renderer
+# (the calibration harness of package I, jailed, rendered to scratch), sized on disk. MK_18_09_26 is
+# night footage, SD_19_09_26 day; both 4K 59.94 HEVC GoPro, rendered at the 30 fps cap. `frames`
+# is the file's own frame count. The first row is the owner's own lap-14 export of 2026-09-25,
+# which the QA reproduced to 2 bytes. (what, encoder, out_w, out_h, frames, quality, bytes)
+_REAL_H264 = (
+    ("MK lap 14 +-5 s, 4K (his own export)", ev.VT_H264, 3840, 2160, 2325, "high", 170_662_641),
+    ("MK lap 14, 4K", ev.VT_H264, 3840, 2160, 2026, "high", 148_728_415),
+    ("MK lap 14, 4K", ev.VT_H264, 3840, 2160, 2026, "standard", 89_905_466),
+    ("MK lap 14, 1080p", ev.VT_H264, 1920, 1080, 2026, "high", 38_449_299),
+    ("MK lap 14, 1080p", ev.VT_H264, 1920, 1080, 2026, "standard", 23_743_369),
+    ("MK lap 14, 720p", ev.VT_H264, 1280, 720, 2026, "high", 18_027_111),
+    ("MK lap 14, 720p (the 2 Mbit/s floor)", ev.VT_H264, 1280, 720, 2026, "standard", 13_507_729),
+    ("MK lap 15 +-5 s, 9:16 crop", ev.VT_H264, 1080, 1920, 2334, "high", 44_301_853),
+    ("MK lap 19, 1:1 fit (the floor)", ev.VT_H264, 720, 720, 2039, "standard", 13_596_154),
+    ("SD19 best lap, 4K", ev.VT_H264, 3840, 2160, 1406, "high", 103_301_836),
+    ("SD19 best lap, 1080p", ev.VT_H264, 1920, 1080, 1406, "high", 26_715_631),
+    ("SD19 best lap, 1080p", ev.VT_H264, 1920, 1080, 1406, "standard", 16_500_358),
+    ("SD19 best lap, 720p", ev.VT_H264, 1280, 720, 1406, "high", 12_524_457),
+    ("SD19 best lap, 720p (the floor)", ev.VT_H264, 1280, 720, 1406, "standard", 9_389_316),
+    # the compare's two-pane frames: two panes' pictures, one audio track (lap A's)
+    ("MK compare 14 v 15, 720p side by side", ev.VT_H264, 2560, 720, 2025, "high", 34_348_163),
+    ("MK compare 14 v 15, 1080p side by side", ev.VT_H264, 3840, 1080, 2025, "high", 75_170_694),
+    ("MK compare 14 v 15, 720p stacked", ev.VT_H264, 1280, 1440, 2025, "standard", 21_283_451),
+    ("MK compare 14 v 15, 1080p stacked", ev.VT_H264, 1920, 2160, 2025, "standard", 45_780_901),
+)
+
+
+def test_the_h264_estimate_lands_on_real_files():
+    """EXP-7: every H.264 file the QA rendered came out at 0.71-0.80 of the size the picker had
+    promised, because the estimate was the bitrate VideoToolbox is ASKED for and VideoToolbox
+    writes 0.70 of it — plus an AAC track the estimate left out. Against the real files above, the
+    estimate must now be within +-12 % of every one (main: 0.708-0.800, all outside), and the
+    free-space guard's floor must sit at least 20 % below every one, so the guard can never refuse
+    an export that would have fitted. The encoder is named per row, never resolved: the model
+    under test is each encoder's own."""
+    for what, codec, w, h, frames, quality, real in _REAL_H264:
+        est = ev.estimate_output_bytes(w, h, 30.0, frames / 30.0, quality, codec)
+        assert 0.88 <= real / est <= 1.12, (
+            f"{what} {quality} ({codec}): {real:,} B real against an estimate of {est:,} B "
+            f"({real / est:.3f})")
+        floor = ev.floor_bytes(est, codec)
+        assert real >= 1.2 * floor, (
+            f"{what} {quality} ({codec}): {real:,} B real, only {real / floor:.2f}x the guard's "
+            f"floor of {floor:,} B")
+    print(f"ok EXP-7: the H.264 estimate lands within 12 % of {len(_REAL_H264)} real files")
 
 
 def test_the_time_model_reproduces_the_rates_it_was_measured_at():
@@ -1974,8 +2032,9 @@ def test_the_guard_refuses_below_its_floor_and_nothing_at_or_above_it():
 
     probe = lambda _p: (3840, 2160, 60000 / 1001)  # noqa: E731
     expected = {   # what the module states for a 60 s, 1080p30, "high" clip, per encoder
-        EV.VT_H264: int(EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * 60.0 / 8),
-        EV.SW_H264: int(1920 * 1080 * 30.0 * EV.X264_BPP[20] * 60.0 / 8),
+        EV.VT_H264: int((EV.vt_target_bitrate(1920, 1080, 30.0, 0.10) * EV.VT_H264_YIELD
+                         + EV.AAC_BITS_PER_S) * 60.0 / 8),
+        EV.SW_H264: int((1920 * 1080 * 30.0 * EV.X264_BPP[20] + EV.AAC_BITS_PER_S) * 60.0 / 8),
     }
     assert expected[EV.VT_H264] != expected[EV.SW_H264], expected
     for codec, want in expected.items():

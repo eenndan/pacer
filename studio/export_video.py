@@ -1812,6 +1812,21 @@ def guard_validate_window(spec: ExportSpec) -> None:
 X264_BPP = {20: 0.68, 23: 0.51}
 X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured points
 
+# VIDEOTOOLBOX WRITES 0.70 OF THE BITRATE IT IS ASKED FOR, and until EXP-7 the estimate quoted the
+# asking price: every H.264 file the QA rendered came out at 0.71-0.80 of the size the picker had
+# promised. Re-measured 2026-09-26 through the real dialog and renderer (the table is at
+# `FREE_SPACE_FLOOR_FRACTION`): the video stream is 0.700 of `vt_target_bitrate` at every size and
+# both quality presets, including the 2 Mbit/s floor. The rate control undershoots its own target
+# by the same fraction whatever the picture holds (parked footage and a flying lap agreed to the
+# third digit on 2026-09-23), so one factor is the whole correction.
+VT_H264_YIELD = 0.70
+# And both composited paths carry the source's audio, AAC at `-b:a 192k` (`build_encode_cmd`):
+# 192.5 kbit/s in every file measured. It was left out while the estimate's only other reader was
+# the free-space guard ("it only ever makes the real file bigger"), and it is the other half of why
+# the 720p estimates ran further off than the 4K ones: at the 2 Mbit/s floor it is an eighth of the
+# file.
+AAC_BITS_PER_S = 192_500
+
 # THE FLOOR THE FREE-SPACE GUARD REQUIRES, as a fraction of `estimate_output_bytes`, per codec.
 # Refusing an export that would have fitted is the one failure the guard must not add, so each
 # floor sits BELOW every real file measured against the estimate. Measured 2026-09-23: 41 real
@@ -1844,11 +1859,20 @@ X264_BPP_FALLBACK = 0.60          # an unknown CRF sits between the two measured
 # `estimate_output_bytes` applies that measured ~short_side^-0.5 itself, so the 4K alpha files
 # land ~1.0 of their estimate instead of ~0.7, and the same floors now sit further below them.
 #
+# The VideoToolbox row is against the stated target the estimate used until EXP-7. Since EXP-7 the
+# estimate is what the encoder writes (`VT_H264_YIELD` of the target, plus `AAC_BITS_PER_S`), and
+# the renders re-measured 2026-09-26 through the real dialog and renderer — MK at 4K, 1080p, 720p,
+# 9:16 crop and 1:1 fit, SD19 at 4K, 1080p and 720p, both presets, and the two-pane compare frames
+# — land at 1.000-1.005 of it. So its floor is 0.80 of the new estimate: about the bytes 0.60 of
+# the old one asked for (-6 % at 4K, +6 % at the 2 Mbit/s floor), and every real file measured is
+# at least 1.25x it. A silent source (no AAC track) at the 2 Mbit/s floor is the tightest case the
+# model allows, 1.10x.
+#
 # PRORES THROUGH VIDEOTOOLBOX sits in the same band against its own central figure
 # (`PRORES_VT_4444_BPP`): 1.004 and 1.051 at 1080p, 0.700 at 2160p against the flat figure (0.990
 # with the short-side scaling), on the three renders measured there — so it keeps prores_ks's floor.
 FREE_SPACE_FLOOR_FRACTION = {
-    VT_H264: 0.60, SW_H264: 0.06, ALPHA_PRORES: 0.55, ALPHA_PNG: 0.50,
+    VT_H264: 0.80, SW_H264: 0.06, ALPHA_PRORES: 0.55, ALPHA_PNG: 0.50,
     SW_PRORES: 0.55, VT_PRORES: 0.55,
 }
 
@@ -1908,8 +1932,8 @@ def output_codec(config: OverlayConfig) -> str:
 def estimate_output_bytes(out_w: int, out_h: int, fps: float, seconds: float,
                           quality: str | None, codec: str) -> int:
     """About how many bytes a render of `seconds` at `out_w x out_h @ fps` writes with `codec`
-    (VT_H264 / SW_H264 / ALPHA_PRORES / ALPHA_PNG). The VIDEO stream only: the composited path also
-    carries ~24 KB/s of AAC, left out because it only ever makes the real file bigger.
+    (VT_H264 / SW_H264 / ALPHA_PRORES / ALPHA_PNG). The two H.264 paths are composited, so they
+    also carry the source's AAC track (`AAC_BITS_PER_S`); the alpha outputs have no audio.
 
     A CENTRAL estimate, the number the picker prints after "About". How far real files land from
     it, and why, is measured at `FREE_SPACE_FLOOR_FRACTION`. Zero for a degenerate window."""
@@ -1933,9 +1957,10 @@ def estimate_output_bytes(out_w: int, out_h: int, fps: float, seconds: float,
     else:
         bpp, crf = quality_params(quality)
         if codec == VT_H264:
-            bits_per_s = vt_target_bitrate(out_w, out_h, rate, bpp)
+            bits_per_s = vt_target_bitrate(out_w, out_h, rate, bpp) * VT_H264_YIELD
         else:
             bits_per_s = out_w * out_h * rate * X264_BPP.get(crf, X264_BPP_FALLBACK)
+        bits_per_s += AAC_BITS_PER_S
     return int(bits_per_s * seconds / 8)
 
 
