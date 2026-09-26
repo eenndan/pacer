@@ -2,8 +2,8 @@
 
 `load._heuristic_start_base` puts the line square to travel where the speed stays highest (X1;
 `studio/docs/refused-2026-09.md` §15 keeps it there). On a circuit that crosses itself (a figure-8
-with a bridge), that place can be just before the crossover, and then the OTHER pass cuts the line
-too. Every lap becomes two pieces, one per loop of the 8, and neither guard behind the heuristic sees
+with a bridge), that place can be on the crossover, and then the OTHER pass cuts the line too.
+Every lap becomes two pieces, one per loop of the 8, and neither guard behind the heuristic sees
 it. Each piece starts and ends at the crossover, so its ends are metres apart, and it turns through
 the angle between the two passes, which is under the closure test's 120 deg
 (`_signal.MAX_LAP_TURN_DEG`). The pieces are also the majority, so the time and distance bands
