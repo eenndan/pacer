@@ -3039,6 +3039,10 @@ class Session:
             median_elapsed=med_elapsed,
             best_dist=best_dist,
             best_elapsed=best_elapsed,
+            # The two laps' on-the-brakes indicators, so "~X s longer on the brakes" counts what
+            # the Stats page's braking figure counts (driving.brake_on), not the events' spans.
+            median_brake_on=self.driving.lap_brake_on(med_id) if med_id is not None else None,
+            best_brake_on=self.driving.lap_brake_on(best),
             median_traces=median_traces,
             best_traces=best_traces,
             # The corner service's memoized warps for these two laps — the same objects the

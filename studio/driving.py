@@ -473,14 +473,38 @@ def brake_time(elapsed, long_g, theta_b: float, events) -> float:
     event's onset->release span: a sample's state holds for half an interval each side, so the
     answer never exceeds the event's own duration. The events are only READ — onsets, peaks and
     durations (the glyphs, the BRAKING table, coaching, the pedal band) do not move. 0.0 with no
-    event."""
+    event. Two halves, so a second reader measures the same quantity: `brake_on` (the indicator)
+    and `brake_time_on` (its integral, which the coaching rows clip to a corner's window)."""
     elapsed = np.asarray(elapsed, float)
     g = np.asarray(long_g, float)
     n = min(len(elapsed), len(g))
     if n < 2 or not events:
         return 0.0
+    return brake_time_on(elapsed[:n], brake_on(elapsed[:n], g[:n], theta_b), events)
+
+
+def brake_on(elapsed, long_g, theta_b: float) -> np.ndarray:
+    """The indicator `brake_time` integrates: 1.0 where the longitudinal g, boxcarred over
+    COAST_SMOOTH_S (the coast band's window, so a moment is on the brakes or coasting, never
+    both), is at or past -theta_b, else 0.0. Aligned to the shorter of `elapsed` / `long_g`."""
+    elapsed = np.asarray(elapsed, float)
+    g = np.asarray(long_g, float)
+    n = min(len(elapsed), len(g))
     elapsed, g = elapsed[:n], g[:n]
-    past = (boxcar(g, _coast_window(elapsed)) <= -float(theta_b)).astype(float)
+    return (boxcar(g, _coast_window(elapsed)) <= -float(theta_b)).astype(float)
+
+
+def brake_time_on(elapsed, on, events, t_from: float = -np.inf, t_to: float = np.inf) -> float:
+    """Seconds ON THE BRAKES inside `events`, from the lap's `brake_on` indicator: the trapezoid
+    of `on` over each event's onset->release samples. [t_from, t_to] (seconds on the same clock)
+    clips it, interpolating the indicator at a cut that falls between samples; unclipped it is
+    exactly `brake_time`'s arithmetic. The coaching rows read it clipped to a corner's window."""
+    elapsed = np.asarray(elapsed, float)
+    on = np.asarray(on, float)
+    n = min(len(elapsed), len(on))
+    if n < 2 or not events:
+        return 0.0
+    elapsed, on = elapsed[:n], on[:n]
     total = 0.0
     for e in events:
         # onset_time IS elapsed[onset] and onset_time + duration lands on elapsed[release] (the
@@ -490,8 +514,14 @@ def brake_time(elapsed, long_g, theta_b: float, events) -> float:
         if len(idx) < 2:
             continue
         i0, i1 = int(idx[0]), int(idx[-1])
-        on = past[i0:i1 + 1]
-        total += float(np.sum(np.diff(elapsed[i0:i1 + 1]) * 0.5 * (on[:-1] + on[1:])))
+        t, v = elapsed[i0:i1 + 1], on[i0:i1 + 1]
+        if t_from > t[0] or t_to < t[-1]:
+            a, b = max(float(t_from), float(t[0])), min(float(t_to), float(t[-1]))
+            if not b > a:
+                continue
+            cut = np.concatenate(([a], t[(t > a) & (t < b)], [b]))
+            t, v = cut, np.interp(cut, t, v)
+        total += float(np.sum(np.diff(t) * 0.5 * (v[:-1] + v[1:])))
     return total
 
 

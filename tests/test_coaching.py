@@ -804,6 +804,86 @@ def test_session_determinism_across_reloads():
     print("ok session determinism: identical Opportunities after a cache clear")
 
 
+def _braking_stadium_session():
+    """Bare Session on the stadium, WITH a g signal, whose laps brake into corner 2 (the arc
+    [494.25, 588.5]) with ONE identical application: 0.5 g from 20 to 12 m/s, onset at 470 m.
+    Laps 1-3 then hold a 0.10 g lift-off for 20 m — between the release (theta_b * RELEASE_RATIO)
+    and theta_b, so the event stays open through it — and carry the lower speed into the corner;
+    the best lap (0) holds 12 m/s. Known by construction: every lap is on the brakes for the same
+    application, and the tail is coasting."""
+    from _synthetic import bare_session, reset_corner_caches, reset_driving_caches
+    from test_corners import elapsed_for, stadium
+
+    from studio import gmeter
+    from studio._signal import G
+
+    s = bare_session(valid=[0, 1, 2, 3], best=0)
+    s._cols_cache = {}
+    xs, ys, cum = stadium()
+    app_m = (20.0 ** 2 - 12.0 ** 2) / (2 * 0.5 * G)
+
+    def profile(tail_m):
+        v = np.full_like(cum, 20.0)
+        app = (cum >= 470.0) & (cum < 470.0 + app_m)
+        v[app] = np.sqrt(20.0 ** 2 - 2 * 0.5 * G * (cum[app] - 470.0))
+        s1 = 470.0 + app_m
+        v[cum >= s1] = 12.0
+        tail = (cum >= s1) & (cum < s1 + tail_m)
+        v[tail] = np.sqrt(12.0 ** 2 - 2 * 0.10 * G * (cum[tail] - s1))
+        v[cum >= s1 + tail_m] = np.sqrt(12.0 ** 2 - 2 * 0.10 * G * tail_m)
+        return v
+
+    lap_times, tt, tv = {}, [], []
+    for lid, base, tail_m in ((0, 100.0, 0.0), (1, 300.0, 20.0), (2, 460.0, 20.0), (3, 620.0, 20.0)):
+        sp = profile(tail_m)
+        t = base + elapsed_for(cum, sp)
+        s._cols_cache[lid] = (t, xs, ys, sp, cum)
+        lap_times[lid] = float(t[-1] - t[0])
+        tt.append(t)
+        tv.append(sp * 3.6)
+    s.tt, s.tv = np.concatenate(tt), np.concatenate(tv)
+    s._gmeter = gmeter.GMeter(times=s.tt.copy(), lat_g=np.zeros(len(s.tt)),
+                              long_g=np.zeros(len(s.tt)), cross=None, source="accl")
+    s.laps = SimpleNamespace(lap_time=lambda i: lap_times[i],
+                             start_timestamp=lambda i: float(s._cols_cache[i][0][0]),
+                             sectors=SimpleNamespace(sector_lines=[]), laps_count=lambda: 4)
+    reset_corner_caches(s)
+    reset_driving_caches(s)
+    return s
+
+
+def test_the_brake_reason_counts_time_on_the_brakes_not_the_event_span():
+    """K, through the REAL wiring (Session -> DrivingChannels -> coaching.summarize): the coaching
+    row's "~X s longer on the brakes" is time ON THE BRAKES — `driving.brake_on`, the quantity the
+    Stats page's braking figure counts since #421 — not the brake events' spans.
+
+    Every lap brakes into corner 2 with the same application; the slower laps then lift off at
+    0.10 g, which the release hysteresis holds the event open through. The row used to integrate
+    the spans and blame the brakes for the lift-off tail ("~1.8 s longer on the brakes", with the
+    same tail counted again as coasting). Measured on the owner's recordings the span read 3x the
+    braking (0064 chapter 3's C1: 1.70 s for 0.60 s) and moved the reason on three ranked rows."""
+    from studio import driving as D
+
+    s = _braking_stadium_session()
+    assert abs(s.driving.thresholds().theta_b - D.BRAKE_G_FLOOR) < 1e-9, s.driving.thresholds()
+    med = s.coaching_opportunities().median_lap_id
+    (ev_med,), (ev_best,) = s.driving.lap_brake_events(med), s.driving.lap_brake_events(0)
+    assert ev_med.duration > ev_best.duration + 1.0, (ev_med, ev_best)   # the tail holds it open
+    row = next(r for r in s.coaching_opportunities().rows if r.cid == 2)
+    assert row.time_lost > 0.5, row
+    # Not 0: the coast window smears the application's trailing edge into the tail, and this
+    # lap is sampled every 1.5 m, so its 7-sample window spans ~1 s in the slow corner (0.32 s
+    # here). The spans read the whole tail.
+    assert row.reason.brake_extra_s < 0.5, (
+        f"C2's row says ~{row.reason.brake_extra_s:.2f} s longer on the brakes, but every lap is on "
+        f"the brakes for the same application: the typical lap's event spans {ev_med.duration:.2f} s "
+        f"through its lift-off tail against the best lap's {ev_best.duration:.2f} s")
+    assert row.reason.kind == K.REASON_COASTING and row.reason.coast_extra_s > 1.0, row.reason
+    print(f"ok brake reason: {row.reason.brake_extra_s:.2f} s longer on the brakes (spans "
+          f"{ev_med.duration:.2f} vs {ev_best.duration:.2f} s), reason {row.reason.kind} "
+          f"({row.reason.coast_extra_s:.2f} s coasting)")
+
+
 def test_session_gate_under_min_laps():
     """A session with only 2 clean laps yields the friendly excluded state."""
     from _synthetic import bare_session, reset_corner_caches, reset_driving_caches
