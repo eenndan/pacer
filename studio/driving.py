@@ -3,7 +3,8 @@
 PACER-FREE (numpy only). Labels three things on a lap:
 
   * BRAKE EVENTS — contiguous deceleration below -theta_b, held open with Schmitt hysteresis
-    (release above -theta_b*RELEASE_RATIO) so threshold ripple doesn't shatter one zone.
+    (release above -theta_b*RELEASE_RATIO) so threshold ripple doesn't shatter one zone. Their
+    time ON THE BRAKES is `brake_time`, never their summed length (see the block above it).
   * COASTING SPANS — off-power transitions: the car is DECELERATING from drag/engine braking
     (decel above COAST_DRAG_MIN) but NOT braking (below theta_b), while moving. This is the
     throttle-off-to-brake gap, which decelerates — unlike the old "speed stays flat" test that
@@ -501,7 +502,7 @@ def brake_time_instrument(theta_b: float) -> str:
     return (f"Braking time: the part of each detected brake event where the GPS longitudinal g — "
             f"smoothed over {COAST_SMOOTH_S:.2f} s, the coasting band's own window — is at or "
             f"past this session's brake threshold {theta_b:.3f} g. The light lead-in and the "
-            f"lift-off tail the event is held open through (down to {RELEASE_RATIO:g} x that "
+            f"lift-off tail the event is held open through (down to {RELEASE_RATIO:g} × that "
             f"threshold) are not counted.")
 
 
