@@ -3081,23 +3081,71 @@ class Session:
         return coaching.brake_directions(pairs)
 
     # ------------------------------------------------------- the focus list (the training loop)
-    def focus_samples(self, windows) -> list[focus.CornerSample | None]:
+    def focus_samples(self, windows, method: str = focus.METHOD_MATCHED
+                      ) -> list[focus.CornerSample | None]:
         """Per (enter_frac, exit_frac) window, this session's median / IQR / lap count over the
         CLEAN laps — the one measurement both halves of a cross-session comparison go through.
+
+        MEASURED THE WAY THE CORNERS TABLE MEASURES (QA LOOK-10, `focus.METHOD_MATCHED`). A
+        window's edges sit on THIS session's reference lap at the same fractions, and each lap's
+        time through it is read between the lap's spatial matches of those two edges (the corner
+        service's warp, `CornerModel.lap_alignment`), counting only the laps where BOTH edges
+        matched on track — the rule `lap_corner_resolved` applies to a corner. A window promoted
+        from this session IS a corner's window, so its sample is that corner's CORNERS row, bit
+        for bit: on the owner's MK_18_09 the debrief quoted C5/C2/C8 at 5.20 / 2.39 / 2.61 s "over
+        19 laps" beside the Stats page's 5.18 / 2.43 / 2.61 s, and C2 was matched on 16 of the 19.
+        `CornerSample.n_of` is how many laps were measured at all (the "of 19").
+
+        `method=focus.METHOD_FRACTION` is the instrument a v1 focus list's baselines were measured
+        with, kept so such a list is re-measured by the method that made it (`focus._migrate`).
 
         The window is a FRACTION of the lap odometer, not metres and not a corner id, because the
         corner partition is re-derived per session: between the two working-set recordings
         focus.py measures, C1's own window grew 173.4 m → 179.5 m and with it its own-window
-        median time by +0.062 s, none of which the driver did (studio/focus.py). Measured over one
-        stored window instead, the same corner is −0.139 s. Each lap projects the fractions onto its
+        median time by +0.170 s, none of which the driver did (studio/focus.py). Measured over one
+        stored window instead, the same corner is −0.029 s. Each lap projects the fractions onto its
         own total, exactly as `lap_corner_stats`
-        projects a corner window, and the seconds come off that lap's own elapsed clock."""
-        laps = []
+        projects a corner window, and the seconds come off that lap's own elapsed clock (the v1
+        instrument; the matched one reads them between the lap's matches of the window's edges)."""
+        if method == focus.METHOD_FRACTION:
+            laps = []
+            for lid in self.consistency_lap_ids():
+                dist, _speed_kmh, elapsed = self._lap_arrays(lid)
+                if dist is not None and elapsed is not None:
+                    laps.append((dist, elapsed))
+            return [focus.sample_window(t) for t in focus.window_times(windows, laps)]
+        basis = self.corners.basis()
+        if basis is None or not basis[0]:
+            return [None for _ in windows]
+        corner_list, total_ref = basis
+        frame = {float(b) for c in corner_list for b in (c.enter, c.exit)}
+
+        def place(frac) -> float:
+            # A corner's own boundary when the fraction lands on one (a window promoted here), so
+            # the full-partition warp the CORNERS table reads is the one read.
+            d = float(frac) * float(total_ref)
+            near = min(frame, key=lambda b: abs(b - d))
+            return near if abs(near - d) <= 1e-6 else d
+
+        edges = [(place(f0), place(f1)) for f0, f1 in windows]
+        extra = tuple(sorted({d for pair in edges for d in pair if d not in frame}))
+        times: list[list[float]] = [[] for _ in windows]
+        n_of = [0] * len(windows)
         for lid in self.consistency_lap_ids():
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
-            if dist is not None and elapsed is not None:
-                laps.append((dist, elapsed))
-        return [focus.sample_window(t) for t in focus.window_times(windows, laps)]
+            if dist is None or elapsed is None or len(dist) < 2 or float(dist[-1]) <= 0:
+                continue
+            total_lap = float(dist[-1])
+            full = self.corners.lap_alignment(lid, total_lap)
+            own = self.corners.lap_alignment(lid, total_lap, extra) if extra else None
+            for k, (d0, d1) in enumerate(edges):
+                n_of[k] += 1
+                align = full if d0 in frame and d1 in frame else own
+                if align is None or not bool(np.isin([d0, d1], align[0]).all()):
+                    continue        # an edge interpolated, not matched: counted, never timed
+                m0, m1 = np.interp([d0, d1], align[0], align[1])
+                times[k].append(float(np.interp(m1, dist, elapsed) - np.interp(m0, dist, elapsed)))
+        return [focus.sample_window(t, n_of=n) for t, n in zip(times, n_of, strict=True)]
 
     def focus_items(self, cids: list[int], entry: dict) -> list[focus.FocusItem]:
         """Promote `cids` (corner ids of THIS session) into persistable focus items.
@@ -3107,8 +3155,9 @@ class Session:
         definition of "which recording is this". The baseline numbers are measured HERE, by
         `focus_samples`, so the stored median is the same statistic the next session will produce
         for the same window rather than the corner service's differently-projected one (their
-        per-corner medians run 0.01–0.17 s apart on 0064 and 0.01–0.07 s apart on 0068, the
+        per-corner medians run 0.00–0.01 s apart on 0064 and 0.00–0.01 s apart on 0068 since QA LOOK-10 made them one instrument, the rest being the laps its resolved gate leaves out; before it, 0.01–0.17 and 0.01–0.07 s, the
         working-set pair focus.py's tables measure, which is the size of the thing being compared).
+        Since QA LOOK-10 that one statistic IS the corner service's (`focus.METHOD_MATCHED`).
 
         Corners with no usable window, or no clean lap through it, are dropped rather than stored
         with a fabricated baseline — the whole point of the item is the number it carries."""
@@ -3129,7 +3178,7 @@ class Session:
             items.append(focus.FocusItem(
                 cid=int(c.cid), direction=int(c.direction), enter_frac=float(f0),
                 exit_frac=float(f1), median_s=sample.median, iqr_s=sample.iqr,
-                n_laps=sample.n_laps,
+                n_laps=sample.n_laps, n_of=int(sample.n_of or sample.n_laps),
                 time_lost=float(row.time_lost) if row is not None else 0.0,
                 reason=row.reason.kind if row is not None else coaching.REASON_NONE,
                 reach=row.evidence.reach if row is not None else coaching.REACH_UNKNOWN,
@@ -3150,7 +3199,14 @@ class Session:
         recording."""
         if not items:
             return focus.Report(track=list_track or entry.get("track"))
-        samples = self.focus_samples([(i.enter_frac, i.exit_frac) for i in items])
+        # Each item re-measured by the instrument its baseline was measured with.
+        samples: list[focus.CornerSample | None] = [None] * len(items)
+        for method in {i.method for i in items}:
+            idx = [k for k, i in enumerate(items) if i.method == method]
+            got = self.focus_samples([(items[k].enter_frac, items[k].exit_frac) for k in idx],
+                                     method)
+            for k, sample in zip(idx, got, strict=True):
+                samples[k] = sample
         store = records if records is not None else {}
         now_fp = str(entry.get("fingerprint") or "")
         now_ctx = {

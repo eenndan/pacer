@@ -320,13 +320,15 @@ class IdealSample(NamedTuple):
         return self.segments - self.corners
 
     def caption(self) -> str:
-        """The ideal's SAMPLE, as the tile caption states it: `theoretical best · 65 laps`.
+        """The ideal's SAMPLE, as the tile caption states it: `ideal lap · 65 laps` — the one name
+        every surface gives this number (copy #9, QA 2026-09-26: it was "theoretical best" here,
+        "IDEAL LAP" over it, "Ideal lap" in the Library and the chart toggle).
 
         The Stats tile, the laps.csv trailer and the exported HTML report all print this — it is
         the disclosure §5.4 found the leaving-the-app surfaces skipping — so it is defined ONCE,
         on the value object that carries the counts. A surface that composes its own string from
         `.laps` is free to disagree about the wording the moment either is edited; this cannot."""
-        return f"theoretical best · {self.laps} laps"
+        return f"ideal lap · {self.laps} laps"
 
     def sentence(self) -> str:
         """The full disclosure paragraph under the tiles: what the minimum ran over, and why BOTH
@@ -627,7 +629,7 @@ class CornerModel:
         self._bests_cache: object = _UNSET  # per-corner session-best time
         self._segment_bests_cache: object = _UNSET  # the ideal-lap segment composite
         # Per-(lap, total_lap) monotone warp onto the reference odometer — see lap_alignment.
-        self._align_cache: dict[tuple[int, float], object] = {}
+        self._align_cache: dict[tuple, object] = {}
         self._geometry_cache: object = _UNSET   # corners.SessionGeometry or None — see geometry()
         self._shift_cache: dict[int, object] = {}  # lap id -> its fitted rigid shift
 
@@ -740,7 +742,8 @@ class CornerModel:
             self._shift_cache[lap_id] = got
         return geom.relative_shift(got, best)
 
-    def lap_alignment(self, lap_id: int, total_lap: float) -> object | None:
+    def lap_alignment(self, lap_id: int, total_lap: float,
+                      edges: tuple | None = None) -> object | None:
         """ONE lap's monotone warp onto the reference (best) lap's odometer — the thing every
         corner-window projection in the app is a read of — MEMOIZED per (lap, total_lap).
         Pass the result as `alignment=` to `corners.project_boundaries` / `segment_times` /
@@ -793,7 +796,7 @@ class CornerModel:
         A stale warp after a start-line drag would be a far worse bug than the latency, so
         `tests/test_corner_alignment_memo.py` drives the drag / sector edit / undo / reference
         load and asserts the memoized answer equals a from-scratch recompute after each."""
-        key = (int(lap_id), float(total_lap))
+        key = (int(lap_id), float(total_lap)) + ((tuple(edges),) if edges is not None else ())
         got = self._align_cache.get(key, _UNSET)
         if got is not _UNSET:
             return got
@@ -804,6 +807,11 @@ class CornerModel:
         # The warp is fitted to the WHOLE partition (corners.project_boundaries' `frame`), so a
         # caller asking about one corner gets the alignment the whole-partition callers use.
         frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        # `edges`: the same warp built on OTHER reference-odometer boundaries instead — a stored
+        # focus window's two edges (`Session.focus_samples`), matched on track by the same search,
+        # geometry and gate as a corner's, so "both edges are knots" means what it means for one.
+        if edges is not None:
+            frame = [float(b) for b in edges]
         ref_trace = self._best_trace()
         # The receiver's rigid bias is taken out of the comparison lap, and the reference lap's own
         # NON-RIGID deviation from the session's consensus out of the anchor (corners.anchor_offsets

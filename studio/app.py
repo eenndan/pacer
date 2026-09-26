@@ -1355,6 +1355,14 @@ class StudioWindow(QMainWindow):
                 # into place. To register the track: studio/dev/print_track_entry.py.
                 notice = ("unknown track — start/finish line was auto-fitted; "
                           "drag it into place to fix lap timing")
+                # A NEW recording's verdict waits for that drag (LibraryController.update_library,
+                # QA NEW-3b): the map that takes it stays on screen, and this says what waits.
+                if getattr(getattr(self, "library_ctl", None), "waiting_for_line", False):
+                    notice += "; your PB and debrief wait for it"
+        elif getattr(getattr(self, "library_ctl", None), "waiting_for_name", False):
+            # The line is placed at a circuit with no name: the PB and focus list are per track.
+            notice = ("unnamed circuit — File ▸ Save as track… names it; your PB and focus list "
+                      "wait for that")
         # Its OWN clause, not a branch of the chain above: a detected track keeps timing_verified
         # True, so a discarded sidecar would otherwise be stated nowhere at all on exactly the
         # recording whose saved lines the user cared enough to place by hand.
@@ -1927,6 +1935,7 @@ class StudioWindow(QMainWindow):
             panel.focus_add_requested.connect(self.library_ctl.focus_add)
             panel.focus_remove_requested.connect(self.library_ctl.focus_remove)
             panel.focus_mark_dry_requested.connect(self.library_ctl.mark_sessions_dry)
+            panel.focus_replace_requested.connect(self.library_ctl.focus_replace)
             panel.jump_requested.connect(self._jump_to_opportunity)
             panel.compare_pb_requested.connect(self._compare_with_previous_pb)
         self.library_ctl.update_focus_list()

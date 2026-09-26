@@ -55,7 +55,8 @@ def _ideal_page_numbers(v):
     m = _IDEAL_NOTE_RE.search(v.ideal.note.text())
     assert m, f"the note's shape changed; this guard cannot read it: {v.ideal.note.text()!r}"
     tile = v.ideal.t_gap.value.text()
-    assert tile.endswith(" s") and tile[0] == "-", tile
+    # UNSIGNED: time on the table is a magnitude (LOOK-7); the hero prints it as Δ +x.xx s.
+    assert tile.endswith(" s") and tile[0].isdigit(), tile
     return SimpleNamespace(cells=cells, n_shown=int(m[1]), shown=float(m[2]), gap=float(m[3]),
                            n_rest=int(m[4]), rest=float(m[5]), tile=abs(float(tile[:-2])))
 
@@ -309,7 +310,7 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
     smp = sb.sample
     assert (smp.donors, smp.laps, smp.corners, smp.segments) == (2, 3, 2, 5), smp
 
-    assert v.ideal.t_theoretical.caption.text() == "theoretical best · 3 laps", \
+    assert v.ideal.t_theoretical.caption.text() == "ideal lap · 3 laps", \
         v.ideal.t_theoretical.caption.text()
     line = v.ideal.sample.text()
     assert "Stitched from 2 of your 3 clean laps" in line, line
@@ -353,7 +354,7 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
     v.session.ideal_total = lambda: two.total
     v.session.ideal_donor_lap_id = lambda: two.single_donor_id()
     v.refresh()
-    assert v.ideal.t_theoretical.caption.text() == "theoretical best · 2 laps", \
+    assert v.ideal.t_theoretical.caption.text() == "ideal lap · 2 laps", \
         v.ideal.t_theoretical.caption.text()
     assert "Stitched from 2 of your 2 clean laps" in v.ideal.sample.text(), v.ideal.sample.text()
     # Fewer laps, a SLOWER ideal and therefore a smaller gap — the property the disclosure exists

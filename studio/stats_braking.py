@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView
 
 from . import driving, theme
+from ._signal import MINUS
 from .lap_table import NUM_ROLE, _NumItem
 from .stats_common import ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
 from .widgets import DASH
@@ -95,7 +96,8 @@ class BrakingSection:
         mono = theme.mono_font(theme.TABLE)
 
         def cell(val, fmtstr):
-            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
+            # A negative bound prints the page's one minus, U+2212 (LOOK-7), not a hyphen.
+            item = _NumItem(fmtstr.format(val).replace("-", MINUS) if val is not None else DASH)
             item.setData(NUM_ROLE, val)
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             item.setFont(mono)

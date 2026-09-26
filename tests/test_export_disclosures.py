@@ -201,7 +201,7 @@ def test_stats_summary_values_equal_the_session_accessors():
 
     tot = st.totals()
     session = sections["SESSION"]
-    assert session["recorded"] == fmt_hms(tot.duration_s)
+    assert session[stats_service.DURATION_CAPTION] == fmt_hms(tot.duration_s)
     assert session["moving"] == fmt_hms(tot.moving_s)
     assert session["laps"].startswith(f"{len(s.valid_lap_ids())} valid"), session["laps"]
 
@@ -289,8 +289,9 @@ def test_degenerate_ideal_is_withheld_from_every_surface_together():
     assert s.ideal_donor_lap_id() is not None, "fixture must be the degenerate case"
     assert "Theoretical best" not in _trailer(s)
     assert "IDEAL LAP" not in {sec.title for sec in export_data.stats_summary(s)}
-    assert "theoretical best" not in _write_report(s)
-    assert "theoretical best" not in export_data.stats_summary_text(s, None)
+    # The caption the IDEAL LAP tile and these two surfaces print (`IdealSample.caption`).
+    assert "ideal lap ·" not in _write_report(s)
+    assert "ideal lap ·" not in export_data.stats_summary_text(s, None)
     assert share_card.card_data(s, unit="kmh").delta_to_ideal_s is None
     print("test_degenerate_ideal_is_withheld_from_every_surface_together OK")
 
