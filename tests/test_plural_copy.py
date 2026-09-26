@@ -291,8 +291,6 @@ ALLOWED = {
         "_IDEAL_CHIP_SAMPLE is filled only for a STITCHED ideal: two donor laps or more",
     ("coaching", "brake_direction_line", "d.n_laps", "laps)"):
         "`brake_directions` drops a corner under MIN_BRAKE_LAPS (3) laps",
-    ("coaching", "reach_clause", "ev.n_laps", "laps."):
-        "reached only for RANKED rows, which clear MIN_CORNER_LAPS (3)",
     ("coaching", "theme_actions", "ev.n_laps", "laps"):
         "`lead` is ranked, so its evidence clears MIN_CORNER_LAPS (3)",
     ("coaching", "theme_actions", "ev.n_laps", "laps have matched"):
