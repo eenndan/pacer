@@ -664,6 +664,29 @@ The window and its gestures, as the map drew them before it was shortened:
   The new handlers are all cheap O(n) lookups (numeric sort, per-column min, lap-scoped nearest,
   sector-line redraw), never per-frame work.
 
+- **Memory over a long session: read the footprint, not RSS** (QA2-J, 2026-09-26, `main` ffd921a).
+  RSS climbs for the first few cycles of an evening and then plateaus, while the memory the system
+  charges the app stays flat. Setup: the real window on four of the owner's recordings, driven
+  inside `exec()`, 8 cycles each.
+
+  | 8 cycles | RSS, start → cycles 1 … 8 (MB) | physical footprint (MB) |
+  |---|---|---|
+  | 4 opens each | 692 → 1,260 · 1,423 · 1,551 · 1,637 · 1,646 · 1,668 · 1,668 · 1,652 | 258 → 199-248 |
+  | 4 compare pairs each | 714 → 1,174 · 1,235 · 1,265 · 1,271 · 1,283 · 1,271 · 1,341 · 1,388 | 282 → 255-257 |
+
+  - **Where it lives.** `vmmap --summary` puts the climb in freed malloc pages that libmalloc keeps
+    resident as reusable. After cycle 8: MALLOC_MEDIUM 848 MB resident, 22 MB dirty;
+    MALLOC_LARGE_REUSABLE 335 MB resident, 0 dirty. `ps` counts these pages and Activity Monitor's
+    Memory column does not. `malloc_zone_pressure_relief` releases only the large cache
+    (−291 MB RSS); the medium pages go when the kernel needs them.
+  - **Nothing of ours is retained.** After every open the old `Session` and `CentralView` were
+    dead. Per-class object counts are 1:1 per rebuild, `leaks` finds 0 leaks, and the Python +
+    numpy heap (`tracemalloc`) is 29.7 MB both before and after 8 opens. About 5 MB per cycle of
+    reachable C/C++ allocations remains, outside Python.
+  - **The trap.** A probe that pumps `processEvents()` never delivers the `deleteLater()` of a
+    swap, so it shows a false leak. [`tests/test_reload_memory.py`](../../tests/test_reload_memory.py)
+    pins the release: a reload frees the old session and view, and a compare exit frees pane B.
+
 ## Common changes, in full
 
 The map's *Common changes* table before it was shortened:

@@ -220,9 +220,17 @@ def _studiowindow_with_view(*, build_menu: bool = False):
     does (StudioWindow.__new__ + the real _build_ui, so the production tick timer + video-focus
     wiring are present) — optionally with the real _build_menu so the View ▸ Full Screen action
     exists. Returns (win, view). No real Session.load / media file (PACER_NO_MEDIA)."""
+    from shiboken6 import Shiboken
+
     from studio.app import StudioWindow
 
     _view, s, _t0, _t1 = _real_central_view()
+    # The builder's own view is not the window's (_build_ui builds that one below). Delete it: a
+    # parentless widget whose children hold Python lambdas is never collected, so it stayed alive for
+    # the rest of the process holding the session — a second CentralView per window this fixture
+    # built, and a false "the reload kept the old Session" in tests/test_reload_memory.py.
+    _view.dispose()
+    Shiboken.delete(_view)
     win = StudioWindow.__new__(StudioWindow)
     # The export cluster lives on its own controller (§7.1) and the real __init__ builds it. This
     # fixture goes through __new__, so it seeds the controller like it seeds the rest of the state
