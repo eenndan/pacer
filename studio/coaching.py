@@ -522,15 +522,18 @@ class Opportunity:
 # holding the most ranked time, whether or not it clears THEME_SHARE; a lap set that ranks nothing
 # has no share and no cause ("none"). The D24 edition, which #344 marked stale after #335 changed
 # corner matching, is kept in studio/docs/coaching-tables-on-d24.md. Every Sandown lap set is timed on
-# the built-in Sandown Park line, the owner's own (Q2):
+# the built-in Sandown Park line, the owner's own (Q2). K (2026-09-26) re-measured the cause column
+# when the braking reason began counting time on the brakes instead of the brake events' spans
+# (`_window_brake_time`): two chapters' top cause moved, 0068 chapter 2 from line 74 % to braking
+# 53 % and 0064 chapter 2 from braking 51 % to line 100 %; no other cell did:
 #
 #   lap set           laps  ranked  ranked s  abstained s  execution   pace  top cause
 #   0068                36       5     0.426        0.072       78 %   22 %  line 53 %
 #   0064                62       4     0.768        0.106        0 %  100 %  line 100 %
 #   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  line 61 %
-#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  line 74 %
+#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  braking 53 %
 #   0064 chapter 1      17       0     0.000        3.738        0 %    0 %  none 0 %
-#   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  braking 51 %
+#   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  line 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
 #
 # 0068 splits 78 % execution / 22 % pace and 0064 splits 0 % / 100 % — the same track two months
