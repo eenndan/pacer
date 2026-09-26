@@ -3195,6 +3195,9 @@ class Session:
             "lap_count": len(self.valid_lap_ids()),
             "best": best,
             "theoretical": self.theoretical_best(),
+            # Which ideal-lap maths measured `theoretical` — also when it came out None, which is
+            # then THIS build finding no corners rather than an older one (QA NEW-8 / LOOK-4).
+            "ideal_version": corner_model.IDEAL_VERSION,
             "verified": bool(self.timing_verified),
             "degraded": bool(self.timing_quality.degraded),
             # Whether the entry's BEST lap itself had a GPS dropout — the exact question the

@@ -16,8 +16,10 @@ Layout::
     │ Date│Track│Laps│Best│Ideal│Conditions│Tyres    │     Unknown-track bucket + a conditions combo
     │  …      …    …    …    …      …         …       │     with a No-record bucket)
     │  “No recordings match …” when the filter empties│  ← sortable table (one row / recording);
-    ├───────────────────────────────────────────────┤     missing-file rows greyed + disabled; an
-    │  <selected track> · 12 sessions · best … · …    │     UNTRUSTWORTHY row carries a trust tag
+    ├───────────────────────────────────────────────┤     missing-file rows greyed, selectable and
+    │  Footage not found: … was in ~/Desktop/D24. …   │  ← never openable, this line saying where
+    │  <selected track> · 12 sessions · best … · …    │     the footage was; an UNTRUSTWORTHY row
+    │                                                 │     carries a trust tag
     │  Dry · air 24° · MG Yellow #3, 42 laps · 11/82  │  ← the selected row's SESSION RECORD…
     │  Not like-for-like vs your best here: Dry vs Wet│  ← …and whether it and the row holding the
     │  PB progression — <track>   [best-vs-date plot] │     track's best lap were the same kind of day
@@ -38,7 +40,8 @@ a double-click re-open the selected row's recording (disabled for a missing/junk
 this dialog prints a lap time — the Best/Ideal cells, the summary line, the chart's left axis
 (``_LapTimeAxis``) — it goes through ``_signal.fmt_time``, so one frame never carries two formats.
 The Ideal-lap column shows an em dash, and says why on hover, in the two states where it would
-otherwise reprint the Best-lap cell — see ``_ideal_cell``.
+otherwise reprint the Best-lap cell, and MUTES a number another version of the ideal-lap maths
+measured (the row's ``ideal_version`` stamp) — see ``_ideal_cell``.
 
 The LAPS column is not decoration: ``Best lap`` and ``Ideal lap`` are both minima over the
 session's laps, so both fall as a session gets longer and a ranking of either is partly a ranking
@@ -88,7 +91,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import APP_NAME, prefs, theme
+from . import APP_NAME, corner_model, prefs, theme
 from . import library as _library
 from . import session_record as _records
 from ._signal import fmt_time
@@ -191,16 +194,32 @@ _TYRES_HEADER_TIP = (
 # v3 entry with no corner detected reads back identically to a migrated v2 one. That row was being
 # told a story about its own history that may be false, and given an instruction (re-open it) that
 # cannot change the value. The stored keys are `best date degraded dropout fingerprint lap_count
-# paths stem theoretical track verified` — nothing distinguishes "retired by the migration" from
-# "never had one" — so the tip states the FACT and names the two possible causes without asserting
-# either, and the instruction is conditional on the cause that re-opening can actually fix.
-# Telling them apart needs a stored flag on the migrated entries (studio/library.py `_migrate` /
-# `_norm_entry`); see this PR's hand-off note.
+# paths stem theoretical track verified` — nothing distinguished "retired by the migration" from
+# "never had one".
+#
+# THE ROW NOW SAYS WHICH IDEAL-LAP MATHS MEASURED IT (`ideal_version`, QA NEW-8 / LOOK-4), and that
+# is the flag this note asked for. A None stamped by THIS build is "no corners here", which
+# re-opening cannot change; a None from any other build (every row stamped before, and every
+# migrated one) was written by an older Pacer, which re-opening measures again.
 _IDEAL_STALE_TIP = (
-    "Ideal lap: not stored for this recording.\nEither it was analyzed before Pacer built the "
-    "ideal lap from your corners and straights (the old value was a copy of the best lap, so the "
-    "migration retired it), or Pacer found no corners here to stitch one from. Re-opening the "
-    "recording fills it in if there are corners to find.")
+    "Ideal lap: not stored for this recording.\nIt was analyzed by an older Pacer: either before "
+    "Pacer built the ideal lap from your corners and straights (the old value was a copy of the "
+    "best lap, so the migration retired it), or by a build that found no corners here. Re-opening "
+    "the recording measures it with this one.")
+_IDEAL_NO_CORNERS_TIP = (
+    "Ideal lap: none for this recording.\nThis version of Pacer found no corners here to stitch an "
+    "ideal lap from, so re-opening the recording will not change it.")
+# A NUMBER FROM ANOTHER VERSION OF THE IDEAL-LAP MATHS: shown, muted, with this leading its hover.
+# Not an em dash, for three reasons: the number is in the right place (the measured gaps to today's
+# build were 0.004-0.133 s on the owner's rows, inside the 0.16-0.74 s the column already moves per
+# doubling of laps, which _THEO_HEADER_TIP discloses rather than hides); two of his rows are on a
+# drive that is not connected, and for them it is the only ideal there will be until it is; and
+# the dash already means two other things in this column. It still sorts by its value, as the
+# lap-count confound does: this column discloses per row, it does not refuse to rank.
+_IDEAL_OTHER_BUILD_TIP = (
+    "Ideal lap measured by {} Pacer — re-open the recording to update it.\nThe ideal-lap maths has "
+    "changed since, so this number is not comparable with the ideals measured today; it stays "
+    "muted until the recording is opened again.")
 _IDEAL_ONE_DONOR_TIP = (
     "Ideal lap: same as the best lap for this recording.\nOne lap was quickest through every "
     "corner and every straight, so the ideal IS that lap — there is nothing stitched to show.")
@@ -423,6 +442,21 @@ def _entry_missing(entry: dict) -> bool:
     return not any(os.path.exists(p) for p in paths)
 
 
+def _missing_footage_text(entry: dict) -> str:
+    """The one line a selected missing row gets (QA VIEW-6): which file, the folder Pacer last saw
+    it in, and the way back. The way back is real: File ▸ Open… loads the whole recording from
+    wherever it is now, and the same chapters are a re-measurement that replaces the row with its
+    new paths (``library._keeps``, pinned by tests/test_library_truth.py)."""
+    paths = entry.get("paths") or []
+    if not paths:
+        return "No footage is on record for this recording, so there is nothing to open."
+    folder, home = os.path.dirname(paths[0]), os.path.expanduser("~")
+    if folder == home or folder.startswith(home + os.sep):
+        folder = "~" + folder[len(home):]
+    return (f"Footage not found: {os.path.basename(paths[0])} was in {folder}. Reconnect its "
+            "drive (or find where it went) and open it with File ▸ Open… — this row then updates.")
+
+
 def _entry_junk(entry: dict) -> bool:
     """True iff `entry` has no valid laps — nothing to time, chart or open, so the dialog greys +
     quarantines it. An UNKNOWN TRACK is NOT junk: the track registry ships with about one circuit,
@@ -481,17 +515,18 @@ def _record_cell_tip(record: dict | None) -> str:
     return "\n".join(lines) if lines else _NO_RECORD_TIP
 
 
-def _ideal_cell(entry: dict) -> tuple[float | None, str | None]:
-    """(value, why-there-is-none) for the Ideal-lap cell.
+def _ideal_cell(entry: dict) -> tuple[float | None, str | None, str | None]:
+    """(value, why-there-is-none-or-why-it-is-muted, ``library.ideal_stale``) for the Ideal-lap
+    cell.
 
-    A number when the entry holds a real stitched ideal. Otherwise ``(None, reason)`` for the two
-    states where printing one would be a lie rather than a lap time:
+    A number when the entry holds a real stitched ideal — with ``_IDEAL_OTHER_BUILD_TIP`` as its
+    reason when another version of the ideal-lap maths measured it (the cell is then muted).
+    Otherwise ``(None, reason)`` for the two states where printing one would be a lie rather than a
+    lap time:
 
-      * the entry has no stored ``theoretical`` — either it predates schema v3 and the migration
-        retired the value (it held a copy of ``best`` under the old definition — see
-        studio/library.py), or it was written by a v3 writer for a recording with no corner
-        partition. **The entry carries nothing that tells those two apart**, so the tip names both
-        rather than guessing on read (see ``_IDEAL_STALE_TIP``);
+      * the entry has no stored ``theoretical`` — THIS build found no corners (its own stamp), or
+        an older Pacer wrote the row: the migration retired a pre-v3 value that was a copy of
+        ``best`` (see studio/library.py), or an older build found no corner partition;
       * the ideal came out equal to the best lap, which means one lap won every segment.
 
     The dialog is PACER-FREE and reads a plain dict, so it cannot call ``ideal_donor_lap_id()``
@@ -501,11 +536,15 @@ def _ideal_cell(entry: dict) -> tuple[float | None, str | None]:
     faster (1.37 s on D24 one chapter and 1.49 s on three). A degenerate session ALSO writes the tie
     through ``Session.library_entry``, which is why this is checked on read."""
     theo, best = entry.get("theoretical"), entry.get("best")
+    stale = _library.ideal_stale(entry, corner_model.IDEAL_VERSION)
     if theo is None:
-        return None, _IDEAL_STALE_TIP
+        return None, (_IDEAL_STALE_TIP if stale else _IDEAL_NO_CORNERS_TIP), stale
     if best is not None and abs(float(theo) - float(best)) <= _IDEAL_SAME_S:
-        return None, _IDEAL_ONE_DONOR_TIP
-    return float(theo), None
+        return None, _IDEAL_ONE_DONOR_TIP, stale
+    if stale:
+        return float(theo), _IDEAL_OTHER_BUILD_TIP.format(
+            "an older" if stale == "older" else "a newer"), stale
+    return float(theo), None, None
 
 
 def _date_sort_key(date: str | None) -> float | None:
@@ -696,6 +735,17 @@ class LibraryDialog(QDialog):
         self._empty_note.setVisible(False)
         root.addWidget(self._empty_note, 3)
         self._show_empty_note(len(self._entries), "", _ALL_TRACKS)
+
+        # ----- WHERE A MISSING ROW'S FOOTAGE WAS, and the way back (QA VIEW-6): shown only while
+        # such a row is selected, directly under it, because it is the one thing to say about that
+        # row before anything else. Hidden, it takes no room; shown, it costs the list ~1.3 rows at
+        # the browsable floor (_MIN_BROWSABLE_H), measured with the owner's D24 row.
+        self.missing_line = QLabel("")
+        self.missing_line.setWordWrap(True)
+        self.missing_line.setFont(theme.mono_font(11))
+        self.missing_line.setProperty("role", "Hint")
+        self.missing_line.setVisible(False)
+        root.addWidget(self.missing_line)
 
         # ----- light cross-session progress summary for the selected track (the 2nd/3rd-visit
         # hook: "N sessions · best … · M PBs · improving"). Reads library.track_summary (trustworthy
@@ -1112,9 +1162,9 @@ class LibraryDialog(QDialog):
     # ------------------------------------------------------------------ table build
     def _fill_rows(self):
         """Populate one row per entry. The DATE cell carries the row's metadata (paths / track /
-        missing flag) in its data roles; a missing-file row is disabled + greyed across all
-        columns. Sorting is OFF here (re-enabled by the caller) so insertion order is preserved
-        while filling."""
+        missing flag) in its data roles; a missing-file row is greyed across all columns and
+        selectable but never openable, and a no-laps row is greyed and disabled. Sorting is OFF
+        here (re-enabled by the caller) so insertion order is preserved while filling."""
         dim = QBrush(QColor(C.text_muted))
         for r, e in enumerate(self._entries):
             missing = _entry_missing(e)
@@ -1123,7 +1173,7 @@ class LibraryDialog(QDialog):
             date = e.get("date")
             track = e.get("track")
             best = e.get("best")
-            theo, theo_reason = _ideal_cell(e)
+            theo, theo_reason, theo_stale = _ideal_cell(e)
 
             date_item = _NumItem(date or "—")
             date_item.setData(NUM_ROLE, _date_sort_key(date))
@@ -1214,7 +1264,17 @@ class LibraryDialog(QDialog):
                     it.setToolTip(tooltip)
                 if disabled:
                     it.setForeground(dim)
-                    it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
+                    # A MISSING row stays selectable (QA VIEW-6): a click on it used to leave the
+                    # selection — and an enabled Open — on another recording, and selecting it is
+                    # how the line under the table gets to say where the footage was. It stays
+                    # unopenable through MISSING_ROLE. A no-laps row has nothing to say, and stays
+                    # out of reach.
+                    if junk:
+                        it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
+                elif col == _COL_THEO and theo_stale and theo is not None:
+                    # Another version of the ideal-lap maths measured this number: kept, muted, and
+                    # the hover leads with why (see _IDEAL_OTHER_BUILD_TIP).
+                    it.setForeground(dim)
                 elif col == _COL_TRACK and trust:
                     # Muted + italic across the row's Track cell so the tag reads as demoted, not an
                     # error. The row stays fully selectable/openable — it's just marked, not blocked.
@@ -1236,6 +1296,7 @@ class LibraryDialog(QDialog):
         item = self._selected_date_item()
         if item is None:
             self.open_btn.setEnabled(False)
+            self._show_missing(None)
             self._sync_record_btn(None)
             self._show_pb(None)
             self._show_summary(None)
@@ -1244,11 +1305,21 @@ class LibraryDialog(QDialog):
         missing = bool(item.data(MISSING_ROLE))
         self.open_btn.setEnabled(not missing)
         entry = self._selected_entry()
+        self._show_missing(entry if missing else None)
         self._sync_record_btn(entry)
         track = item.data(TRACK_ROLE)
         self._show_pb(track)
         self._show_summary(track)
         self._show_record(entry)
+
+    def _show_missing(self, entry: dict | None) -> None:
+        """Say where a selected missing row's footage was, and why Open is off; clear both for any
+        other selection."""
+        text = _missing_footage_text(entry) if entry is not None and _entry_missing(entry) else ""
+        self.missing_line.setText(text)
+        self.missing_line.setVisible(bool(text))
+        self.open_btn.setToolTip("This recording's footage is not where Pacer last saw it — the "
+                                 "line under the list says where that was" if text else "")
 
     # ------------------------------------------------------------------ session record
     def _record_for(self, entry: dict | None) -> dict | None:
