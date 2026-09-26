@@ -523,13 +523,17 @@ GG_KEY_RINGS = "solid rings: 0.5 g steps"
 #     `Brk g` column, the friction circle and its p98 envelope are made of.
 #   * the ONSET series (_signal.speed_long_g, called by driving_channels): the SAME derivative
 #     with NO window, rebuilt per lap on that lap's own ~10 Hz fixes. It is what every brake event
-#     — `Brake s`, the two braking DRIVING tiles, the BRAKING table's commit %, the map's brake
-#     glyphs and the coaching rows' braking cause — is made of.
+#     — the events `Brake s` and the two braking DRIVING tiles are measured inside, the BRAKING
+#     table's commit %, the map's brake glyphs and the coaching rows' braking cause — is made of.
 #   * the BAND series (that same derivative boxcarred over driving.COAST_SMOOTH_S, #275): what
 #     every COAST span — `Coast s` and the two coasting DRIVING tiles — is made of. It exists
 #     because the coast band is narrower than the onset series' own noise, so on that series a
 #     band run lasted 2 samples where MIN_COAST_S needs 4 and the reported coast was 5.9 % / 4.5 %
 #     of the real band time. THE THIRD FILTER IS WHY THE COPY BELOW SPLITS BRAKE FROM COAST.
+#     Since LOOK-2 it also times the braking: `Brake s` and the braking tile are the time INSIDE
+#     each event that this series is at or past theta_b (driving.brake_time), not the event's
+#     span, which runs through the lift-off tail. Coast and brake time are the two sides of theta_b
+#     on this one series, so no moment is counted as both.
 #
 # MEASURED, and it is visible in one row. On the D24 0060 pair (38 valid laps) a brake event's own
 # peak deceleration exceeds the "peak braking g" printed on the SAME lap row on 37 of 38 laps, at a
@@ -576,7 +580,16 @@ _DRIVING_IMU_CONTRAST = (
     "tile and the friction circle above are drawn on")
 _DRIVING_BRAKE_TAIL = (
     ": an onset is a step, and a centred window "
-    "smears exactly the thing being detected.\n\n")
+    "smears exactly the thing being detected.\n\n"
+    "ON THE BRAKES is NOT an event's length. The hysteresis holds an event open until the "
+    f"deceleration falls under {driving.RELEASE_RATIO:g} × the threshold, through the light "
+    "lead-in and the lift-off tail, which are not braking, and one event can bridge the power "
+    "between two applications. So the time counts only the part of each event where the "
+    f"deceleration, smoothed over the {driving.COAST_SMOOTH_S:g} s window the coasting figures "
+    "use, is at or past the threshold: the other side of the coast band, so no moment is both. "
+    "BRAKE EVENTS counts the events themselves, one per brake glyph on the map: two applications "
+    "close together, with no hard return to power between them, can count once, and a brief dab "
+    "counts too.\n\n")
 # _DRIVING_COAST, the fourth piece, is in `stats_common`: the COASTING section's tooltip closes
 # with the same paragraph, so the two cannot word the coast differently.
 DRIVING_TOOLTIP = _DRIVING_INTRO + _DRIVING_IMU_CONTRAST + _DRIVING_BRAKE_TAIL + _DRIVING_COAST
@@ -602,12 +615,14 @@ LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the 
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
                      "accelerometer. Brk g is the GPS speed derivative as the g-meter filters it "
                      f"— boxcarred over {gmeter.LONG_SMOOTH_S:g} s, so it is a SUSTAINED peak. "
-                     "Brake s and Coast s count events detected on that same derivative, on this "
-                     "lap's own ~10 Hz fixes (the same events the map glyphs and coaching read). "
-                     "A brake onset is a step, so Brake s is detected with no window at all. "
-                     "A coast is sustained membership of a band narrower than that derivative's "
-                     f"own noise, so Coast s alone carries a {driving.COAST_SMOOTH_S:g} s "
-                     "window. "
+                     "Brake s and Coast s are measured inside events detected on that same "
+                     "derivative, on this lap's own ~10 Hz fixes (the same events the map glyphs "
+                     "and coaching read). A brake onset is a step, so those events are detected "
+                     "with no window at all. Brake s is the time inside them that the "
+                     "deceleration is at or past the brake threshold, not the events' length, "
+                     "and Coast s the off-power time short of it: each is membership of a band "
+                     "the derivative's own noise flickers across, so both are measured on a "
+                     f"{driving.COAST_SMOOTH_S:g} s window, and no moment counts as both. "
                      "A window can only lower a peak, so a brake "
                      "event's own peak deceleration normally runs ABOVE the Brk g printed beside "
                      "it — measured on both reference recordings, on almost every lap. They are a "
@@ -629,11 +644,13 @@ def lap_table_tooltip_gps(why: str) -> str:
             f"~10 Hz fixes. Neither is an accelerometer reading, and Brk g does not carry the "
             f"{gmeter.LONG_SMOOTH_S:g} s window an IMU-driven meter's braking axis is smoothed "
             f"on, so it is the derivative as 10 Hz gives it rather than a SUSTAINED peak. "
-            f"Brake s and Coast s count events detected on that same derivative (the same events "
-            f"the map glyphs and coaching read). A brake onset is a step, so Brake s is detected "
-            f"with no window at all. A coast is sustained membership of a band narrower than that "
-            f"derivative's own noise, so Coast s alone carries a "
-            f"{driving.COAST_SMOOTH_S:g} s window.")
+            f"Brake s and Coast s are measured inside events detected on that same derivative (the "
+            f"same events the map glyphs and coaching read). A brake onset is a step, so those "
+            f"events are detected with no window at all. Brake s is the time inside them that the "
+            f"deceleration is at or past the brake threshold, not the events' length, and Coast s "
+            f"the off-power time short of it: each is membership of a band the derivative's own "
+            f"noise flickers across, so both are measured on a {driving.COAST_SMOOTH_S:g} s "
+            f"window, and no moment counts as both.")
 
 
 #: The `peak lateral g` tile's legend, hoisted out of _build so the GPS-derived page and the
@@ -703,8 +720,9 @@ PEAK_BRAKE_TOOLTIP = (
     f"the two braking DRIVING tiles, the Brake s column, the BRAKING table, the map's "
     f"glyphs — is detected on the SAME axis with no window at all, so an individual "
     f"event's peak deceleration normally runs ABOVE this figure rather than under it. "
-    f"(The two COASTING tiles beside them are the third filter on that axis, and carry a "
-    f"window of their own — see DRIVING.) One axis, three filters, for three jobs.")
+    f"(The time on the brakes inside those events, and the two COASTING tiles, read a third "
+    f"filter on that axis with a window of its own — see DRIVING.) One axis, three filters, for "
+    f"three jobs.")
 
 
 def peak_brake_tooltip_gps(why: str) -> str:
@@ -1374,7 +1392,7 @@ class StatsView(QWidget):
         self._driving_section = section_heading("DRIVING")
         self._driving_section.setToolTip(DRIVING_TOOLTIP)
         col.addWidget(self._driving_section)
-        self.t_brake = Tile("braking / lap · median")
+        self.t_brake = Tile(stats_service.BRAKE_TILE_CAPTION)
         self.t_brake_n = Tile("brake events / lap")
         self.t_coast = Tile("coasting / lap · median")
         self.t_longest_coast = Tile("longest coast")

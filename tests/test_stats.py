@@ -557,7 +557,7 @@ def _fake_gmeter(times, lat_g, long_g, long_g_gps=None):
 
 def _service(*, gm=None, trace_t=(), trace_v_kmh=(), xs=(), ys=(), wall=(0, 0),
              valid=(), cons=None, lap_times=None, arrays=None, windows=None,
-             events=None, spans=None):
+             events=None, spans=None, brake_time=None):
     """A SessionStats over plain fake callables — the same DI seam Session wires."""
     gm = gm if gm is not None else _fake_gmeter([], [], [])
     lap_times = lap_times or {}
@@ -565,6 +565,7 @@ def _service(*, gm=None, trace_t=(), trace_v_kmh=(), xs=(), ys=(), wall=(0, 0),
     windows = windows or {}
     events = events or {}
     spans = spans or {}
+    brake_time = brake_time or {}
     return SessionStats(
         gmeter=lambda: gm,
         trace_times=lambda: np.asarray(trace_t, float),
@@ -577,6 +578,7 @@ def _service(*, gm=None, trace_t=(), trace_v_kmh=(), xs=(), ys=(), wall=(0, 0),
         lap_arrays=lambda i: arrays[i],
         lap_window=lambda i: windows.get(i),
         brake_events=lambda i: events.get(i, []),
+        brake_time=lambda i: brake_time.get(i, 0.0),
         coast_spans=lambda i: spans.get(i, []),
     )
 
@@ -646,6 +648,9 @@ def test_lap_stats_speed_g_and_brake_coast_reductions():
         windows={0: (100.0, 170.0), 1: (200.0, 268.0)},
         events={0: [SimpleNamespace(duration=1.5), SimpleNamespace(duration=0.5)],
                 1: [SimpleNamespace(duration=2.0)]},
+        # The channel's time ON THE BRAKES (driving.brake_time), deliberately NOT the events'
+        # summed span (2.0 s on lap 0): an event is held open through its lift-off tail (LOOK-2).
+        brake_time={0: 1.25, 1: 0.8},
         spans={0: [SimpleNamespace(duration=3.5)], 1: []},
     )
     rows = st.lap_stats()
@@ -655,7 +660,8 @@ def test_lap_stats_speed_g_and_brake_coast_reductions():
     assert abs(r0.avg_kmh - 1000.0 / 70.0 * 3.6) < 1e-9   # odometer / lap time
     assert abs(r0.peak_lat_g - 1.4) < 1e-12               # window [100,170) -> samples 0+1
     assert abs(r0.peak_brake_g - 1.1) < 1e-12             # from long_g_gps, NOT the junk IMU long
-    assert r0.brake_s == 2.0 and r0.brake_n == 2
+    assert r0.brake_s == 1.25 and r0.brake_n == 2         # brake time, not Σ event.duration
+    assert r1.brake_s == 0.8 and r1.brake_n == 1
     assert r0.coast_s == 3.5 and abs(r0.coast_frac - 3.5 / 70.0) < 1e-12
     assert abs(r1.peak_brake_g - 0.5) < 1e-12             # window [200,268) -> samples 2+3
     assert r1.coast_s == 0.0 and r1.coast_frac == 0.0     # a real zero WITH a g signal
@@ -728,6 +734,7 @@ def test_invalidate_drops_lap_level_keeps_totals():
                               np.array([0.0, 70.0])),
         lap_window=lambda i: None,
         brake_events=lambda i: [],
+        brake_time=lambda i: 0.0,
         coast_spans=lambda i: [],
     )
     tot = st.totals()
