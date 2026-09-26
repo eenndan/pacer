@@ -3039,6 +3039,10 @@ class Session:
             median_elapsed=med_elapsed,
             best_dist=best_dist,
             best_elapsed=best_elapsed,
+            # The two laps' on-the-brakes indicators, so "~X s longer on the brakes" counts what
+            # the Stats page's braking figure counts (driving.brake_on), not the events' spans.
+            median_brake_on=self.driving.lap_brake_on(med_id) if med_id is not None else None,
+            best_brake_on=self.driving.lap_brake_on(best),
             median_traces=median_traces,
             best_traces=best_traces,
             # The corner service's memoized warps for these two laps — the same objects the
@@ -3251,6 +3255,9 @@ class Session:
             "lap_count": len(self.valid_lap_ids()),
             "best": best,
             "theoretical": self.theoretical_best(),
+            # Which ideal-lap maths measured `theoretical` — also when it came out None, which is
+            # then THIS build finding no corners rather than an older one (QA NEW-8 / LOOK-4).
+            "ideal_version": corner_model.IDEAL_VERSION,
             "verified": bool(self.timing_verified),
             "degraded": bool(self.timing_quality.degraded),
             # Whether the entry's BEST lap itself had a GPS dropout — the exact question the

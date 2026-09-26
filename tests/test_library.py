@@ -46,6 +46,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import library, prefs, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
+from studio.corner_model import IDEAL_VERSION  # noqa: E402
 
 # The dialog's SIZE tests measure a wrapped paragraph's height and a table's row height, and both
 # are functions of the FONT — so measure against the app's real theme rather than Qt's default
@@ -87,12 +88,13 @@ from studio.library_dialog import (  # noqa: E402
 # ------------------------------------------------------------------ helpers
 def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
            best=68.4, theo=67.9, paths=None,
-           verified=True, degraded=False, dropout=False):
+           verified=True, degraded=False, dropout=False, ideal_version=IDEAL_VERSION):
     """Build a valid library entry with a fingerprint derived from the (chapter-invariant) stem.
     (The signature dropped the old per-recording duration arg — the fingerprint no longer uses
     it; tests that need DISTINCT recordings pass distinct stems.) The v2 trust flags default to
     TRUSTWORTHY (verified, not degraded, no dropout) so most tests get a PB-eligible entry; a test
-    that wants an EXCLUDED entry flips one flag."""
+    that wants an EXCLUDED entry flips one flag. `ideal_version` defaults to THIS build's ideal
+    maths (a row measured today); a test of a row an older Pacer wrote passes None or a lower one."""
     return {
         "fingerprint": library.fingerprint(stem),
         "stem": stem,
@@ -101,6 +103,7 @@ def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
         "lap_count": laps,
         "best": best,
         "theoretical": theo,
+        "ideal_version": ideal_version,
         "verified": verified,
         "degraded": degraded,
         "dropout": dropout,
@@ -321,7 +324,7 @@ def test_load_corrupt_returns_empty_then_heals():
         assert set(raw) == {"version", "entries"}
         assert set(raw["entries"][0]) == {
             "fingerprint", "stem", "track", "date", "lap_count", "best", "theoretical",
-            "verified", "degraded", "dropout", "paths"}
+            "ideal_version", "verified", "degraded", "dropout", "paths"}
 
 
 def test_load_drops_only_malformed_entries_keeps_valid_history():
@@ -932,16 +935,25 @@ def test_dialog_ideal_column_never_reprints_the_best_lap_cell():
 
       * a real stitched ideal  → the time, right there;
       * a pre-v3 entry whose value the migration retired → em dash + "open it again";
+      * no ideal from THIS build (its own stamp: no corners found) → em dash + "re-opening will
+        not change it" — the case the row's `ideal_version` now tells apart from the one above;
       * an ideal equal to the best lap (one lap won every segment) → em dash + why.
 
     The two em-dash cases are told apart on HOVER, because "—" alone reads as missing data and one
     of the two has an action attached to it."""
-    from studio.library_dialog import _HEADERS, _IDEAL_ONE_DONOR_TIP, _IDEAL_STALE_TIP
+    from studio.library_dialog import (
+        _HEADERS,
+        _IDEAL_NO_CORNERS_TIP,
+        _IDEAL_ONE_DONOR_TIP,
+        _IDEAL_STALE_TIP,
+    )
 
     assert _HEADERS[_COL_THEO] == "Ideal lap", _HEADERS
     idx = {"version": library.VERSION, "entries": [
         _entry("GX010060", date="2024-05-01", best=68.400, theo=67.312),   # stitched
-        _entry("GX010061", date="2024-05-02", best=68.400, theo=None),     # retired by migration
+        _entry("GX010061", date="2024-05-02", best=68.400, theo=None,      # retired by migration
+               ideal_version=None),
+        _entry("GX010064", date="2024-05-05", best=68.400, theo=None),     # no corners, today
         _entry("GX010062", date="2024-05-03", best=68.400, theo=68.400),   # one donor
         # ...and a tie that is only a tie once rendered: `fmt_time` prints milliseconds, so a
         # 0.3 ms "gain" is two identical cells, which is the thing being prevented.
@@ -953,6 +965,7 @@ def test_dialog_ideal_column_never_reprints_the_best_lap_cell():
         "2024-05-02": ("—", _IDEAL_STALE_TIP),
         "2024-05-03": ("—", _IDEAL_ONE_DONOR_TIP),
         "2024-05-04": ("—", _IDEAL_ONE_DONOR_TIP),
+        "2024-05-05": ("—", _IDEAL_NO_CORNERS_TIP),
     }
     for date, (text, reason) in want.items():
         row = _row_with_date(dlg, date)
@@ -1146,7 +1159,10 @@ def test_dialog_open_routes_through_callback():
 
 
 def test_dialog_missing_file_row_greyed_and_not_openable():
-    """A missing-file row is greyed + disabled (not selectable), so Open never fires for it."""
+    """A missing-file row is greyed and never opens — but it IS selectable (QA VIEW-6: a click on
+    it used to leave the selection, and an enabled Open, on another recording). Selecting it is
+    what disables Open and brings up the line that says where the footage was
+    (tests/test_library_truth.py)."""
     with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
         idx, _, _ = _two_entry_index([real.name])
         spy = _OpenSpy()
@@ -1156,14 +1172,16 @@ def test_dialog_missing_file_row_greyed_and_not_openable():
             r for r in range(dlg.table.rowCount())
             if dlg.table.item(r, _COL_DATE).data(MISSING_ROLE))
         date_item = dlg.table.item(missing_row, _COL_DATE)
-        # Greyed + not enabled/selectable across the row.
-        assert not (date_item.flags() & Qt.ItemIsEnabled)
-        assert not (date_item.flags() & Qt.ItemIsSelectable)
+        # Greyed, but enabled + selectable, across the row.
+        assert date_item.flags() & Qt.ItemIsEnabled
+        assert date_item.flags() & Qt.ItemIsSelectable
         assert "(file missing)" in dlg.table.item(missing_row, _COL_TRACK).text()
-        # Even forcing the open path on the missing row is a no-op (guard in _open_selected).
+        # Selecting it disables Open, and the open path is a no-op on it (guard in _open_selected).
         dlg.table.clearSelection()
-        dlg.table.selectRow(missing_row)            # disabled rows don't actually select…
-        dlg._open_selected()                        # …and the explicit guard blocks it anyway
+        dlg.table.selectRow(missing_row)
+        assert dlg.table.selectionModel().selectedRows()[0].row() == missing_row
+        assert not dlg.open_btn.isEnabled()
+        dlg._open_selected()
         assert spy.calls == []
         dlg.deleteLater()
 
