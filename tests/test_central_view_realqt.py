@@ -740,6 +740,28 @@ def test_hero_readout_leads_with_labelled_delta_to_ideal():
     print(f"test_hero_readout_leads_with_labelled_delta_to_ideal OK ({text!r} / {best_text!r})")
 
 
+def test_hero_names_the_baseline_the_compare_chart_draws():
+    """LOOK-13 (QA 2026-09-26). In video compare the charts header read "SPEED · Δ TO BEST" and
+    its axis "Δ to best (s)" while the hero beside it still led with "Δideal +1.48 s" — two
+    baselines side by side. While comparing, the hero leads with the baseline the chart draws."""
+    from studio import plots_view
+    view, _s, t0, _t1 = _real_central_view()
+    assert view.ideal_readout_btn.isChecked()
+    view.video.positionChanged.emit(float(t0[len(t0) // 2]))
+    view.tick()
+    assert view.diff_box.text().startswith("Δideal"), view.diff_box.text()
+    view._comparing = lambda: True                    # compare on, the chart drawing Δ-to-best
+    view._plots_baseline_kind = plots_view.DELTA_BASELINE_BEST
+    view._update_diff_box(view._playback.applied_t, view._last_diff_speed, view._last_diff_lap)
+    text = view.diff_box.text()
+    assert text.startswith("Δ ") and not text.startswith("Δideal"), (
+        "the hero must name the chart's baseline while comparing", text)
+    view._plots_baseline_kind = plots_view.DELTA_BASELINE_IDEAL
+    view._update_diff_box(view._playback.applied_t, view._last_diff_speed, view._last_diff_lap)
+    assert view.diff_box.text().startswith("Δideal"), view.diff_box.text()
+    print(f"test_hero_names_the_baseline_the_compare_chart_draws OK ({text!r})")
+
+
 def test_hero_readout_keeps_every_character_at_every_column_width():
     """The hero #DiffBox is a QLabel — QLabels never elide, they HARD-CLIP — so the live number must
     survive intact at ANY charts-column width. Centred, an over-subscribed bar used to eat BOTH ends
@@ -1118,6 +1140,7 @@ def test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_stat
 
 
 def _run_all():
+    test_hero_names_the_baseline_the_compare_chart_draws()
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
     test_the_map_marker_moves_on_every_playback_tick()

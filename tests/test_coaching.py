@@ -253,7 +253,7 @@ def test_line_sigma_is_the_fallback_reason():
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_LINE, r.reason
     assert abs(r.reason.sigma - 0.20) < 1e-9
-    assert "consistent" in K.reason_sentence(r)
+    assert "repeat your best line" in K.reason_sentence(r)   # copy #1 (QA 2026-09-26)
     print(f"ok line reason (fallback): {K.reason_sentence(r)}")
 
 
@@ -986,7 +986,7 @@ def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
     assert t.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert t.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
     ev = opp.rows[0].evidence
-    assert t.item(0, _PANEL_COL_REACH).text() == f"Yes · {ev.reach_laps}/{ev.n_laps}", \
+    assert t.item(0, _PANEL_COL_REACH).text() == f"{ev.reach_laps} of {ev.n_laps} laps", \
         t.item(0, _PANEL_COL_REACH).text()
     assert isinstance(t.cellWidget(0, _PANEL_COL_PHASES), PhaseBar)
     assert "apex speed" in t.item(0, _PANEL_COL_REASON).text()
@@ -1274,10 +1274,10 @@ def test_panel_renders_top3_off_a_session():
     # Row 0 is the top-ranked corner (the far corner, cid 2), with the +time-lost format.
     assert panel.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert panel.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # col 2: "have you already done this?", one word plus the count over its denominator — the same
-    # cell the dialog builds, from the same shared builder.
+    # col 2: "have you already done this?" as the count over its denominator, no verdict word
+    # (LOOK-9) — the same cell the dialog builds, from the same shared builder.
     ev = opp.rows[0].evidence
-    assert panel.table.item(0, 2).text().endswith(f"· {ev.reach_laps}/{ev.n_laps}"), \
+    assert panel.table.item(0, 2).text() == f"{ev.reach_laps} of {ev.n_laps} laps", \
         panel.table.item(0, 2).text()
     assert coaching_module_reason(panel, opp), "the reason cell must carry the coaching sentence"
     # A row click emits the corner cid (the map-ring consumer); selecting row 0 -> rows[0].cid.
@@ -1493,8 +1493,9 @@ def test_l5_05_all_faster_phase_bar_is_visible_not_a_border_sliver():
     # sized by |Δt|: the apex (biggest |Δ|) takes the widest stretch, the exit the narrowest.
     assert widths[1] > widths[0] > widths[2], widths
     # …and the net sign is on the row FACE, not only in the tooltip.
-    face = [lb.text() for lb in bar.findChildren(QLabel) if lb.text().startswith("net ")]
-    assert face == ["net -0.09 s"], face
+    # VIEW-9: the face names WHOSE net it is — the typical lap's, not the row's Time lost.
+    face = [lb.text() for lb in bar.findChildren(QLabel) if lb.text().startswith("typical lap ")]
+    assert face == ["typical lap \u22120.09 s"], face
     assert "net faster than best here" in bar.toolTip()
     print(f"ok L5-05: faster thirds {ahead} sized {widths}, row face says {face[0]!r}")
 
@@ -1553,8 +1554,10 @@ def test_reach_tells_a_repeated_target_from_a_rare_one():
             reason=K.Reason(kind=K.REASON_APEX, contribution=0.1, apex_speed_deficit=3.0,
                             brake_extra_s=0.0, coast_extra_s=0.0, sigma=0.1), evidence=ev))
     s_r, s_n = _sentence(ev_r), _sentence(ev_n)
-    assert "already done this" in s_r and "6 of 25 laps" in s_r, s_r
-    assert "rarely done this" in s_n and "2 of 25 laps" in s_n, s_n
+    # LOOK-9 (QA 2026-09-26): the COUNT carries it, in one form either side of REACH_REPEAT_FRAC;
+    # the "already"/"rarely" verdict flipped at one lap (2/19 vs 1/19 on MK_18_09).
+    assert "6 of 25 laps matched your best lap here" in s_r, s_r
+    assert "2 of 25 laps matched your best lap here" in s_n, s_n
     assert s_r != s_n
     print(f"ok reach: repeat => {s_r!r}\n           rare   => {s_n!r}")
 
@@ -1945,6 +1948,36 @@ def test_u2_count_decided_coaching_copy_keeps_its_next_action_and_reconciles_tot
     assert plain == ("Not enough clean laps yet.\n\nCoaching needs 3 clean (valid, GPS-dropout-"
                      "free) laps; this session has 2. Drive a few more laps and reload."), plain
     print("ok U2: count-decided copy keeps 'drive more' and reconciles a dropout")
+
+
+def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent():
+    """LOOK-9 (QA 2026-09-26). On MK_18_09 C11 read "Yes · 2/19" and "You have already done this"
+    beside C7's "Rarely · 1/19" / "You have rarely done this": a verdict that flipped at one lap
+    (REACH_REPEAT_FRAC). And the theme said "Most of the time on offer is execution … — 100% of
+    it is …". The reason sentence now states the count in one form whatever side of the threshold
+    it falls, and a 100 % share says "All"."""
+    import dataclasses
+
+    def row(k, n, reach):
+        ev = K.Evidence(n_laps=n, reach_laps=k, reach=reach, iqr=0.02,
+                               abstain=K.ABSTAIN_NONE)
+        reason = K.Reason(kind=K.REASON_LINE, contribution=0.05,
+                                 apex_speed_deficit=0.0, brake_extra_s=0.0, coast_extra_s=0.0,
+                                 sigma=0.3)
+        return K.Opportunity(cid=1, direction=1, time_lost=0.1, entry_dist=0.0,
+                                    reason=reason, evidence=ev)
+    two, one = (K.reach_clause(row(2, 19, K.REACH_REPEAT)),
+                K.reach_clause(row(1, 19, K.REACH_RARE)))
+    assert two == " 2 of 19 laps matched your best lap here.", two
+    assert one == " 1 of 19 laps matched your best lap here.", one
+    whole = K.Theme(kind=K.THEME_EXECUTION, share=1.0, execution_s=0.28,
+                           pace_s=0.0, n_ranked=3, n_abstained=8, cause=K.REASON_LINE,
+                           cause_share=0.78)
+    sentence = K.theme_sentence(whole)
+    assert sentence.startswith("All of the time on offer") and "Most" not in sentence, sentence
+    most = dataclasses.replace(whole, share=0.78, pace_s=0.08)
+    assert K.theme_sentence(most).startswith("Most of the time on offer"), most
+    print(f"ok LOOK-9: {two.strip()!r} / {one.strip()!r}; {sentence!r}")
 
 
 if __name__ == "__main__":

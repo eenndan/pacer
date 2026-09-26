@@ -514,15 +514,15 @@ def test_reach_cell_never_states_a_count_without_its_denominator():
     and this one is a COUNT, so its denominator is what the unit was. "Yes · 4/8" is checkable;
     "Yes · 4" is a number the reader cannot place, and "Yes" alone is a claim with no evidence.
 
-    Both halves are asserted: the word (which is the glance cue that changes the instruction) and
-    the `k/n` (which is the honesty rule — never a count without the sample it came out of)."""
+    LOOK-9 (QA 2026-09-26) took the WORD off: "Yes · 2/19" beside "Rarely · 1/19" was a verdict
+    flipping at one lap (coaching.REACH_REPEAT_FRAC). The cell is the count and its sample, "2 of
+    19", and nothing else — no word that can flip."""
     p = _panel(_rows(6), (900, 600))
-    words = {"Yes", "Rarely", "Never"}
     for r in range(p.table.rowCount()):
         text = p.table.item(r, _PANEL_COL_REACH).text()
-        word, _, count = text.partition(" · ")
-        assert word in words, ("the reach cell must lead with its one-word answer", r, text)
-        num, _, den = count.partition("/")
+        assert not any(w in text for w in ("Yes", "Rarely", "Never")), (
+            "the reach cell states a count, not a verdict", r, text)
+        num, _, den = text.removesuffix(" laps").removesuffix(" lap").partition(" of ")
         assert num.isdigit() and den.isdigit() and int(den) > 0, (
             "the reach cell must carry the count AND the sample it came out of", r, text)
     # An UNMEASURED row (no per-lap times behind it) states nothing rather than inventing a count.

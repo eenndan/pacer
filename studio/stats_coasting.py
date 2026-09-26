@@ -149,7 +149,8 @@ class CoastingSection:
             return
         unlisted = len(report.places) - len(listed)
         self.heading.setText(
-            f"COASTING · {unlisted} under {COAST_LIST_MIN_S:.2f} s a lap not listed"
+            f"COASTING · {unlisted} {'place' if unlisted == 1 else 'places'} under "
+            f"{COAST_LIST_MIN_S:.2f} s/lap not listed"
             if unlisted else "COASTING")
         self.note.setText(coast_note(report))
         mono = theme.mono_font(theme.TABLE)

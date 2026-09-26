@@ -133,6 +133,10 @@ _HERO_AT_REST_NOTE = (
 # How far the playhead may sit from the poster seek's time and still be "at rest": the player's
 # echo of a seek comes back millisecond-quantized; anything a person does moves it further.
 HERO_REST_SLACK_S = 0.1
+# VIEW-7 (QA 2026-09-25): at rest the Δ is the WHOLE LAP's total while the speed beside it was the
+# lap's START (75 km/h under "Δideal +1.48 s" on MK_18_09) — two instants on one line. At rest the
+# speed slot says whose number the Δ is instead; the speed returns with the first move.
+HERO_AT_REST_TAG = "whole lap"
 _BEST_LAP_BEST_NOTE = (
     "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
     "zero for the whole lap. Pick another lap for a number that moves.")
@@ -289,9 +293,17 @@ def _hero_templates() -> tuple[str, ...]:
     for unit in units.UNITS:
         out.append(theme.format_ideal_readout(_HERO_WIDEST_DELTA_S, _HERO_WIDEST_SPEED_KMH, 0,
                                               unit)[0])
+        out.append(_at_rest(out[-1]))
         for d in (_HERO_WIDEST_DELTA_S, -_HERO_WIDEST_DELTA_S):
             out.append(theme.format_delta_speed(d, _HERO_WIDEST_SPEED_KMH, 0, unit)[0])
+            out.append(_at_rest(out[-1]))
     return tuple(out)
+
+
+def _at_rest(readout: str) -> str:
+    """A hero readout with its speed slot replaced by HERO_AT_REST_TAG (VIEW-7): the formatters join
+    the Δ and the speed with five spaces, and at rest the Δ is the lap's and the speed is not."""
+    return readout.rsplit("     ", 1)[0] + "     " + HERO_AT_REST_TAG
 
 
 def _hero_min_width(label: QLabel) -> int:
@@ -1703,6 +1715,11 @@ class CentralView(QWidget):
             kind if kind in _PLOTS_BASELINE_LABELS else plots_view.DELTA_BASELINE_BEST)
         label.setText(_PLOTS_BASELINE_LABELS[self._plots_baseline_kind])
         label.setToolTip(self._delta_baseline_tip())
+        # LOOK-13: in compare the hero follows this baseline (see _update_diff_box), so a change of
+        # baseline re-renders it for the current moment — a paused compare gets no tick to do it.
+        playback = getattr(self, "_playback", None)
+        if playback is not None and hasattr(self, "_last_diff_speed"):
+            self._update_diff_box(playback.applied_t, self._last_diff_speed, self._last_diff_lap)
 
     def _update_table_header(self):
         """The Corners tab always names WHICH lap its per-corner rows describe — directly on
@@ -1919,7 +1936,12 @@ class CentralView(QWidget):
         d_ideal = self.session.delta_to_ideal_at(lap_id, t_delta) if lap_id is not None else None
         on_best = lap_id is not None and lap_id == self.session.best_lap_id()
         stitched = self._ideal_state == "stitched"
-        if stitched and self.ideal_readout_btn.isChecked():
+        # LOOK-13 (QA 2026-09-26): in compare the header over the charts reads "SPEED · Δ TO BEST"
+        # while the hero kept leading with Δideal — two baselines side by side. While comparing,
+        # the hero leads with the baseline the lower chart is drawing.
+        chart_best = (self._comparing()
+                      and self._plots_baseline_kind != plots_view.DELTA_BASELINE_IDEAL)
+        if stitched and self.ideal_readout_btn.isChecked() and not chart_best:
             text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
             # `sigil=False`: this sentence already says "Δ", and the run used to add its own —
             # "Δ to your best lap here: Δ +0.00 s" (§5.6).
@@ -1942,6 +1964,7 @@ class CentralView(QWidget):
                 tip += _BEST_LAP_BEST_NOTE
         if t_delta != t:
             tip += _HERO_AT_REST_NOTE
+            text = _at_rest(text)
         colour = sem_colour or theme.C.text
         self.diff_box.setText(text)
         self.diff_box.setToolTip(tip)
