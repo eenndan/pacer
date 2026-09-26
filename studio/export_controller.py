@@ -607,9 +607,10 @@ class ExportController:
         took = export_compare.estimate_compare_seconds(geo.out_w, geo.out_h, frames, codec)
         timing = f", about {fmt_hms(took)} to render" if took else ""
         how = "side by side" if geo.layout == export_compare.LAYOUT_SIDE else "one above the other"
-        return (f"Output: {geo.out_w}x{geo.out_h}, two {geo.pane_w}x{geo.pane_h} panes {how}.  "
-                f"About {size} — {frames} frames to render at {fps:g} fps with {codec}{timing}; "
-                f"every frame decodes both laps' footage.{self._size_caveat(codec)}")
+        return (f"Output: {geo.out_w}x{geo.out_h}, two panes of {geo.pane_w}x{geo.pane_h} {how}.  "
+                f"About {size} — {plural(frames, 'frame')} to render at {fps:g} fps with "
+                f"{codec}{timing}; every frame decodes both laps' footage."
+                f"{self._size_caveat(codec)}")
     def _export_session_seconds(self) -> float:
         """How long a FULL-SESSION export runs: the footage's own length, through the same
         accessor the renderer builds its window from, so the estimate and the render cannot
