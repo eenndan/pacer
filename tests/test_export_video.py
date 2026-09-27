@@ -1256,7 +1256,11 @@ def _old_diff_box_text_and_colour(d, sp, lap_id):
         delta_txt = "Δ —"
     else:
         arrow = theme.delta_arrow(d)
-        delta_txt = f"Δ {d:+.2f} s" + (f" {arrow}" if arrow else "")
+        # QA REG-3, the one deliberate change: the old box's number with the app's one minus
+        # (U+2212), and no sign on a zero.
+        num = f"{d:+.2f}".replace("-", "−")
+        num = "0.00" if num in ("+0.00", "−0.00") else num
+        delta_txt = f"Δ {num} s" + (f" {arrow}" if arrow else "")
     speed_txt = f"{sp:.0f} km/h" if (sp is not None and lap_id is not None) else "— km/h"
     colour = theme.delta_colour(d) or theme.C.text
     return f"{delta_txt}     {speed_txt}", colour
