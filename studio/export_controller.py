@@ -452,6 +452,18 @@ class ExportController:
         ("Side by side", export_compare.LAYOUT_SIDE),
     ]
     _PREF_COMPARE_LAYOUT = "export_compare_layout_idx"
+    # THE COMPARE HAS ITS OWN RESOLUTION, remembered apart from the overlay's. They used to share
+    # `export_res_idx`, so the owner's overlay at "Source" opened his next comparison at Source too:
+    # two 4K panes, 3840x4320, H.264 level 6.0, 299 MB and 3:41 for one lap (JOURNEY-3). A compare
+    # is two pictures in one frame and is shared to phones, so it opens on 1080p panes (1920x2160)
+    # until the user picks another row here. Its "Source" is capped at a 4K frame
+    # (`export_compare.MAX_FRAME_PIXELS`), and says so: two full 4K panes are not a file anything
+    # he shares it to will play.
+    _COMPARE_RES_OPTIONS = [
+        ("720p", 720), ("1080p", 1080), ("1440p", 1440), ("Source — up to a 4K frame", 99999),
+    ]
+    _PREF_COMPARE_RES = "export_compare_res_idx"
+    _COMPARE_RES_DEFAULT = 1                       # 1080p panes
     # SIZE ESTIMATE. The dialog sells a file-size trade-off ("larger file" / "smaller file"), so it
     # has to put a number on it — the two presets really are ~3x apart. The estimate is derived per
     # encoder, never a stored megabyte figure, because the encoder choice is a property of the
@@ -589,7 +601,12 @@ class ExportController:
         renderer's own rule. The bytes come from the one size model every export reads; the time
         from `export_compare.estimate_compare_seconds`, which costs the second decode every
         frame pays. "" when there is nothing honest to say: an unknown lap A, or "Source" before
-        pane A's footage frame is known (`source`, filled behind the dialog)."""
+        pane A's footage frame is known (`source`, filled behind the dialog).
+
+        The frames are the render's own: lap A's window plus its FINISH FRAME, the one that shows
+        both lap times (`with_finish_frame`), which a compare always ends on. The size is priced on
+        the frame the cap leaves (`compare_geometry`), which is also the frame VideoToolbox's
+        hardware encoder takes and `VT_H264_YIELD` was measured on."""
         if not (dur > 0):
             return ""
         if source is None and out_height >= 99999:
@@ -600,15 +617,17 @@ class ExportController:
         # frame is `compare_geometry`'s own 16:9 guess.
         geo = export_compare.compare_geometry((src_w, src_h), (src_w, src_h), cfg)
         fps = export_video.resolve_fps(cfg, src_fps)
-        frames = int(math.ceil(dur * fps))
+        frames = export_video.frame_count(0.0, dur, fps) + 1
         codec = export_video.resolve_encoder("auto")
         size = export_video.fmt_bytes(export_video.estimate_output_bytes(
-            geo.out_w, geo.out_h, fps, dur, quality, codec))
+            geo.out_w, geo.out_h, fps, frames / fps, quality, codec))
         took = export_compare.estimate_compare_seconds(geo.out_w, geo.out_h, frames, codec)
         timing = f", about {fmt_hms(took)} to render" if took else ""
         how = "side by side" if geo.layout == export_compare.LAYOUT_SIDE else "one above the other"
-        return (f"Output: {geo.out_w}x{geo.out_h}, two panes of {geo.pane_w}x{geo.pane_h} {how}.  "
-                f"About {size} — {plural(frames, 'frame')} to render at {fps:g} fps with "
+        cap = (" — capped at one 4K frame, the biggest H.264 picture phones and messaging apps "
+               "play" if geo.capped else "")
+        return (f"Output: {geo.out_w}x{geo.out_h}, two panes of {geo.pane_w}x{geo.pane_h} {how}"
+                f"{cap}.  About {size} — {plural(frames, 'frame')} to render at {fps:g} fps with "
                 f"{codec}{timing}; every frame decodes both laps' footage."
                 f"{self._size_caveat(codec)}")
     def _export_session_seconds(self) -> float:
@@ -682,23 +701,37 @@ class ExportController:
     def _redraw_once_probed(dlg: QDialog, src: str, redraw) -> QTimer | None:
         """Learn the footage's frame and the ProRes encoder BEHIND a picker (an ffprobe and a
         VideoToolbox session: ~45 ms and ~0.3 s here) and call `redraw` once they are in. Until
-        then its hint says what it can; a probe that never answers stops being waited on after
-        10 s. Returns the poll timer for the caller to stop when the dialog closes, or None when
-        everything was already known."""
+        then its hint says what it can, and that it is measuring (`_measuring_line`). Returns the
+        poll timer for the caller to stop when the dialog closes, or None when everything was
+        already known.
+
+        IT WAITS AS LONG AS THE DIALOG IS OPEN. It used to stop waiting after 10 s, redrawing the
+        hint as it stood — and a probe that answered after that was never shown. On a loaded Mac
+        the first dialog of a session waited 13.7 s for its ffprobe, so the owner's first export at
+        "Source" quoted no size and no time, and the second one did (REG-4, EXP-11). A 50 ms poll
+        on a dialog the user is reading costs nothing; the caller stops it on close."""
         export_video.warm_export_probes(src)
         if export_video.export_probes_ready(src):
             return None
         poll = QTimer(dlg)
         poll.setInterval(50)
-        give_up = time.monotonic() + 10.0
 
         def _probes_in():
-            if export_video.export_probes_ready(src) or time.monotonic() > give_up:
+            if export_video.export_probes_ready(src):
                 poll.stop()
                 redraw()
         poll.timeout.connect(_probes_in)
         poll.start()
         return poll
+
+    @staticmethod
+    def _measuring_line(src: str) -> str:
+        """What the hint says in place of a size and a time it is still measuring: the footage's
+        frame (`export_video.warm_export_probes`) is not in yet. "" once it is, or when there is no
+        footage to ask; the hint then says what it knows, or nothing."""
+        if not src or export_video.export_probes_ready(src):
+            return ""
+        return "Measuring the footage for the size and the time to render…"
 
     def _ask_export_options(self, lap: int):
         """Modal scope + shape + output picker returning an `ExportChoice`, or None on cancel.
@@ -861,6 +894,8 @@ class ExportController:
             size = self._export_size_hint(clip, h, quality, aspect, content, files, source)
             if size:
                 lines.append(size)
+            if "to render" not in size and self._measuring_line(src):
+                lines.append(self._measuring_line(src))
             hint.setText("  ".join(lines))
             # A scope with nothing to render cannot be confirmed. `_scope_plan` already says why.
             ok_button.setEnabled(math.isfinite(clip) and clip > 0)
@@ -1072,7 +1107,8 @@ class ExportController:
 
     def _ask_compare_options(self):
         """Layout + resolution + quality for a compare export, or None on cancel. Every row
-        persists, like the single-lap picker's."""
+        persists, like the single-lap picker's; the resolution under its OWN key
+        (`_PREF_COMPARE_RES`), so neither picker opens on the other's choice."""
         dlg, col = self._export_dialog("Export comparison video")
         desc = QLabel("Both laps play locked to the same point on TRACK, not the same time on the "
                       "clock — so as one pulls ahead the two frames stay at the same corner and "
@@ -1093,7 +1129,8 @@ class ExportController:
             return box
 
         layout_combo = _combo(self._COMPARE_LAYOUT_OPTIONS, self._PREF_COMPARE_LAYOUT, 0)
-        res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES, 1)       # 1080p
+        res_combo = _combo(self._COMPARE_RES_OPTIONS, self._PREF_COMPARE_RES,
+                           self._COMPARE_RES_DEFAULT)
         q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY, 0)  # High
         form.addRow("Layout", layout_combo)
         form.addRow("Resolution (each pane)", res_combo)
@@ -1119,12 +1156,14 @@ class ExportController:
             lines = ["The clip is as long as the first lap, and carries that lap's audio — the "
                      "second pane is time-warped by the lock, so its sound would be too."]
             size = self._compare_size_hint(
-                clip, self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1],
+                clip, self._COMPARE_RES_OPTIONS[res_combo.currentIndex()][1],
                 self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
                 self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
                 export_video.known_video_size(src))
             if size:
                 lines.append(size)
+            elif self._measuring_line(src):
+                lines.append(self._measuring_line(src))
             hint.setText("  ".join(lines))
         for combo in (layout_combo, res_combo, q_combo):
             combo.currentIndexChanged.connect(_update_hint)
@@ -1137,11 +1176,11 @@ class ExportController:
             return None
         self._remember_export_prefs({
             self._PREF_COMPARE_LAYOUT: layout_combo.currentIndex(),
-            self._PREF_EXPORT_RES: res_combo.currentIndex(),
+            self._PREF_COMPARE_RES: res_combo.currentIndex(),
             self._PREF_EXPORT_QUALITY: q_combo.currentIndex(),
         })
         return export_compare.CompareConfig(
-            out_height=self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1],
+            out_height=self._COMPARE_RES_OPTIONS[res_combo.currentIndex()][1],
             quality=self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
             layout=self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
             speed_unit=self.win._speed_unit, palette=theme.active_palette())
@@ -1213,8 +1252,20 @@ class ExportController:
         lap_id = lap if lap_id is None else lap_id
         lap_b = getattr(spec, "lap_b", None)
         if lap_id is not None and lap_b is not None:
-            return f"lap {lap_label(lap_id)} against lap {lap_label(lap_b)}"
+            # A cross-recording pane B is a lap of ANOTHER recording, and the clip burns it in as
+            # "REF LAP n"; "against lap 23" alone reads as this recording's lap 23.
+            ref = "reference " if getattr(spec, "cross", False) else ""
+            return f"lap {lap_label(lap_id)} against {ref}lap {lap_label(lap_b)}"
         return f"lap {lap_label(lap_id)}" if lap_id is not None else "an overlay video"
+
+    @staticmethod
+    def _video_kind(spec, article: bool = False) -> str:
+        """What the finished and the failed box call the file: a two-lap compare is a comparison
+        video, everything else an overlay video (JOURNEY-4: the compare's box said "overlay")."""
+        compare = getattr(spec, "lap_b", None) is not None
+        if article:
+            return "a comparison video" if compare else "an overlay video"
+        return "comparison video" if compare else "overlay video"
     # An ETA needs EVIDENCE, and the start of a render is the worst possible sample of it: the
     # first chunk carries the ffmpeg spawn, the VideoToolbox session probe and the painter's pill
     # budget, so a rate measured over it reads far slower than the render settles at. These two
@@ -1403,7 +1454,7 @@ class ExportController:
                 what = ("didn't start" if export_video.is_refused_for_space(message)
                         else "couldn't finish")
                 box = QMessageBox(QMessageBox.Warning, self._EXPORT_FAIL_TITLE,
-                                  f"{APP_NAME} {what} the overlay video.\n\n"
+                                  f"{APP_NAME} {what} the {self._video_kind(spec)}.\n\n"
                                   f"{self._export_failure_message(message, spec.out_path)}")
                 # A refusal's message is the guard's own sentence and is already the body: behind
                 # Show Details it only said the same thing twice (EXP-6). Everything else keeps the
@@ -1496,7 +1547,8 @@ class ExportController:
                 body += "\n\nEach file carries the timecode of where it starts in the footage."
         else:
             name = os.path.basename(paths[0])
-            body = f"{APP_NAME} exported {what} as an overlay video.\n\n{name}\n{folder}"
+            body = (f"{APP_NAME} exported {what} as {self._video_kind(spec, article=True)}.\n\n"
+                    f"{name}\n{folder}")
             status = f"exported {name}"
             where = export_video.sync_sentence(syncs[0] if syncs else None, png=png)
             if where:

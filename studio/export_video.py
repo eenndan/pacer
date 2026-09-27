@@ -848,6 +848,23 @@ def with_finish_frame(spec, fps: float):
     return replace(spec, t1=spec.t1 + step, lead_out=step)
 
 
+def _finish_keyframe_args(spec, fps: float) -> list[str]:
+    """`-force_key_frames` for the FINISH FRAME of a clip that ends on one (`with_finish_frame`),
+    so the frame that states the lap time is coded whole rather than as a leftover.
+
+    WHY. It is the frame a clip stops on, and the one a viewer pauses to read. Coded as a P-frame it
+    takes whatever the rate control has left, and right after a keyframe (ffmpeg's default interval
+    is 12 frames) that is little: on the owner's PB compare at 720p panes frame 1404 was a 45.5 KB
+    keyframe and the finish frame a 6.5 KB P-frame beside 13-16 KB ones, and its "0:46.808" read as
+    "0:46.308". A keyframe there costs one frame's worth of bytes (0.2 % of that file) and reads
+    clean whatever the phase. [] for any other clip: a padded one ends in run-off, a session on
+    nothing in particular."""
+    if not getattr(spec, "ends_on_finish", False) or spec.lead_out <= 0.0 or not fps or fps <= 0:
+        return []
+    last = frame_count(spec.t0, spec.t1, fps) - 1
+    return ["-force_key_frames", f"expr:gte(n,{last})"] if last > 0 else []
+
+
 def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
     """The output fps for the render: an explicit `cfg.fps` wins; otherwise the source rate, then
     `cfg.fps_cap` caps it (so a 59.94 fps GoPro exports at 30 by default — half the frames, half the
@@ -1642,6 +1659,7 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
         *spec.source.input_args(),
         "-map", "0:v:0", "-map", "1:a:0?",
         *_video_codec_args(encoder, out_w, out_h, fps, spec.config.quality),
+        *_finish_keyframe_args(spec, fps),
         "-c:a", "aac", "-b:a", "192k",
         # Padded to exactly the clip, and no `-shortest`: nothing may cut the video, and nothing
         # unbounded may enter ffmpeg's sync queue (E4).

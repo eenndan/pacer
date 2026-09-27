@@ -63,12 +63,15 @@ THE `_`-PREFIXED IMPORTS BELOW ARE DELIBERATE, and each one is a thing that must
 second duck-typed copy is how a stand-in session starts meaning something different in one exporter
 than in the other. `_paint_readout`, `_draw_text`, `_text_at`, `_font` and `_c` are how a burned
 overlay LOOKS; a compare clip drawing its speeds in another face would read as another app's
-export. `_even` / `_even_down` are the encoder's even-dimension rule. This module is
-`export_video`'s subclass, not its neighbour.
+export. `_even` / `_even_down` are the encoder's even-dimension rule. `_FINISH_FRAME_REACH_S` is
+how far past the line a lap clip's source must reach for its finish frame, and a compare clip ends
+on its finish exactly as a lap clip does. This module is `export_video`'s subclass, not its
+neighbour.
 """
 
 from __future__ import annotations
 
+import math
 import subprocess
 from dataclasses import dataclass, replace
 
@@ -80,6 +83,7 @@ from . import theme, units
 from ._signal import fmt_time, lap_label
 from .export_palette import EXPORT
 from .export_video import (
+    _FINISH_FRAME_REACH_S,
     FIT_CROP,
     FIT_FIT,
     SW_H264,
@@ -174,6 +178,9 @@ class CompareGeometry:
     filter_a: str
     filter_b: str
     layout: str
+    # True when the panes were shrunk to keep the frame inside `MAX_FRAME_PIXELS` /
+    # `MAX_FRAME_SIDE`, so the picker can say why "Source" is not the footage's own size.
+    capped: bool = False
 
     def pane_origin(self, side: int) -> tuple[int, int]:
         """(x, y) of pane `side` (0 = A, 1 = B) within the output frame."""
@@ -210,6 +217,48 @@ def pane_scale_filter(src_w: int, src_h: int, dst_w: int, dst_h: int,
             f"pad={dst_w}:{dst_h}:(ow-iw)/2:(oh-ih)/2:color=black")
 
 
+# THE TWO-PANE FRAME NEVER HOLDS MORE PIXELS THAN ONE 4K FRAME, NOR IS IT WIDER OR TALLER THAN 4096,
+# whatever the resolution row asks for. Two 4K panes stacked are 3840x4320: 64,800 macroblocks a
+# frame, H.264 level 6.0, past the 5.1/5.2 that phones, TVs and messaging apps decode. It is past
+# what the Mac's hardware encoder takes, too. Measured 2026-09-27 on the M1 Pro this is developed
+# on: a VideoToolbox HARDWARE session opens for every frame up to 36,864 macroblocks with neither
+# side over 4096 (1280x1440 is L4.0, 1920x2160 L5.0, 2560x2880 and 3840x2160 L5.1, 4096x2304 and
+# 2304x4096 L5.2, all writing 0.69-0.71 of their bitrate target), and refuses 3840x4320, 7680x2160
+# and even 5120x1440 (28,800 macroblocks, but 5120 wide). `-allow_sw 1` then hands the frame to
+# Apple's SOFTWARE H.264 encoder without a word, which is slower and writes 1.02-1.10 of its target
+# where the hardware writes 0.70: the owner's compare at his remembered "Source" rendered for 3:41
+# against the 1:41 its picker quoted, and wrote 299 MB against 205 MB (JOURNEY-3). Its level-6.0
+# file does not even decode in this Mac's own hardware; the capped 2714x3052 one does.
+#
+# A warning could not fix that, because the file itself is the problem: nothing he shares it to
+# plays it. So the cap is a rule, not a caveat. "Source" means the largest panes whose frame fits
+# one 4K frame (2714x3052 for two stacked 4K panes, 4096x1152 side by side), and a row already
+# inside the cap is untouched. 3840x2160's pixel count is level 5.1 at the export's 30 fps.
+MAX_FRAME_PIXELS = 3840 * 2160
+MAX_FRAME_SIDE = 4096
+
+
+def _pane_size(short: int, aw: int, ah: int) -> tuple[int, int]:
+    """(pane_w, pane_h) of a pane in pane A's shape whose SHORT side is `short` (16:9 when the
+    footage's frame is unknown), both even."""
+    if aw <= 0 or ah <= 0:
+        return _even(short * 16 / 9), _even(short)
+    if aw >= ah:
+        pane_h = _even(short)
+        return _even(pane_h * aw / ah), pane_h
+    pane_w = _even(short)
+    return pane_w, _even(pane_w * ah / aw)
+
+
+def _frame_of(pane_w: int, pane_h: int, layout: str) -> tuple[int, int]:
+    return (2 * pane_w, pane_h) if layout == LAYOUT_SIDE else (pane_w, 2 * pane_h)
+
+
+def _fits_the_cap(pane_w: int, pane_h: int, layout: str) -> bool:
+    out_w, out_h = _frame_of(pane_w, pane_h, layout)
+    return out_w * out_h <= MAX_FRAME_PIXELS and max(out_w, out_h) <= MAX_FRAME_SIDE
+
+
 def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
                      cfg: CompareConfig) -> CompareGeometry:
     """Resolve the two-pane frame for sources `src_a` / `src_b` (each a (w, h)).
@@ -221,24 +270,29 @@ def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
 
     The pane's SHORT side is `cfg.out_height`, never upscaled past pane A's own footage — the same
     rule and the same reason as the single-lap export, applied one level down because here the
-    frame is two panes."""
+    frame is two panes. The FRAME is then held inside one 4K frame (`MAX_FRAME_PIXELS`,
+    `MAX_FRAME_SIDE`), shrinking both panes alike when it would not fit."""
     aw, ah = int(src_a[0]), int(src_a[1])
     want = max(2, int(cfg.out_height))
-    if aw <= 0 or ah <= 0:
-        pane_w, pane_h = _even(want * 16 / 9), _even(want)
-    elif aw >= ah:
-        pane_h = _even(min(want, ah))
-        pane_w = _even(pane_h * aw / ah)
-    else:
-        pane_w = _even(min(want, aw))
-        pane_h = _even(pane_w * ah / aw)
+    short = want if aw <= 0 or ah <= 0 else min(want, ah if aw >= ah else aw)
     layout = cfg.layout if cfg.layout in LAYOUT_CHOICES else LAYOUT_STACK
-    out_w, out_h = (2 * pane_w, pane_h) if layout == LAYOUT_SIDE else (pane_w, 2 * pane_h)
+    pane_w, pane_h = _pane_size(short, aw, ah)
+    capped = not _fits_the_cap(pane_w, pane_h, layout)
+    if capped:
+        out_w, out_h = _frame_of(pane_w, pane_h, layout)
+        scale = min(math.sqrt(MAX_FRAME_PIXELS / (out_w * out_h)), MAX_FRAME_SIDE / max(out_w, out_h))
+        short = _even_down(short * scale)
+        pane_w, pane_h = _pane_size(short, aw, ah)
+        # The long side rounds UP to even, so the first guess can be a pixel or two over.
+        while short > 2 and not _fits_the_cap(pane_w, pane_h, layout):
+            short -= 2
+            pane_w, pane_h = _pane_size(short, aw, ah)
+    out_w, out_h = _frame_of(pane_w, pane_h, layout)
     return CompareGeometry(
         out_w=out_w, out_h=out_h, pane_w=pane_w, pane_h=pane_h,
         filter_a=pane_scale_filter(aw, ah, pane_w, pane_h, cfg.pane_fit),
         filter_b=pane_scale_filter(int(src_b[0]), int(src_b[1]), pane_w, pane_h, cfg.pane_fit),
-        layout=layout)
+        layout=layout, capped=capped)
 
 
 # --------------------------------------------------------------------------- render time
@@ -355,6 +409,13 @@ def lock_to_track(session_a, lap_a: int, session_b, lap_b: int, media_times_a) -
     window with no special case — which is also the answer to "what if one lap is shorter": there
     is no running out, only a different amount of B's footage consumed per output frame.
 
+    A FRAME AT OR PAST LAP A'S FINISH IS BOTH FINISHES, EXACTLY. The render ends on lap A's finish
+    frame (`with_finish_frame`), where the two clocks must read the two lap times as the lap table
+    prints them — not a clock-conversion round trip an ulp short of them, which is the single-lap
+    rule (`_strip_runs`) applied to both panes. Before, the clip stopped one frame short of the line
+    and never showed either time: 0:46.799 / 0:46.903 against the table's 0:46.808 / 0:46.912 on
+    the owner's PB compare (JOURNEY-4).
+
     Raises ValueError when either lap is degenerate (the mappers answer None), rather than silently
     exporting a pane that never moves."""
     times_a = np.asarray(media_times_a, dtype=float)
@@ -362,6 +423,9 @@ def lock_to_track(session_a, lap_a: int, session_b, lap_b: int, media_times_a) -
     b_start, b_span = _lap_span(session_b, lap_b)
     _require_distance_axis(session_a, lap_a, a_start)
     _require_distance_axis(session_b, lap_b, b_start)
+    # Lap A's finish on the MEDIA clock the frame times are on, the way `lap_window_for_export`
+    # converts it; the tolerance is `overlay_values_at`'s, for a finish frame an ulp short.
+    a_finish = _media_time(session_a, a_start + a_span) - 1e-9
     n = len(times_a)
     fraction = np.empty(n, dtype=float)
     t_b_media = np.empty(n, dtype=float)
@@ -371,22 +435,26 @@ def lock_to_track(session_a, lap_a: int, session_b, lap_b: int, media_times_a) -
     speed_b = np.full(n, np.nan, dtype=float)
     for i, t in enumerate(times_a):
         tt_a = _telemetry_time(session_a, float(t))
-        s = session_a.plot_x_at_media_time(lap_a, tt_a, "distance", _UNIT_TOTAL)
-        if s is None:
-            raise ValueError(
-                f"lap {lap_label(lap_a)} cannot be placed on a distance axis (too few points, or a "
-                f"zero-length odometer) — there is no track position to lock to")
-        s = min(max(float(s), 0.0), 1.0)
-        tt_b = session_b.media_time_at_plot_x(lap_b, s, "distance", _UNIT_TOTAL)
-        if tt_b is None:
-            raise ValueError(
-                f"lap {lap_label(lap_b)} cannot be placed on a distance axis (too few points, or a "
-                f"zero-length odometer) — there is no track position to lock to")
-        tt_b = float(tt_b)
+        if float(t) >= a_finish:
+            s, tt_b = 1.0, b_start + b_span
+            elapsed_a[i], elapsed_b[i] = a_span, b_span
+        else:
+            s = session_a.plot_x_at_media_time(lap_a, tt_a, "distance", _UNIT_TOTAL)
+            if s is None:
+                raise ValueError(
+                    f"lap {lap_label(lap_a)} cannot be placed on a distance axis (too few points, "
+                    f"or a zero-length odometer) — there is no track position to lock to")
+            s = min(max(float(s), 0.0), 1.0)
+            tt_b = session_b.media_time_at_plot_x(lap_b, s, "distance", _UNIT_TOTAL)
+            if tt_b is None:
+                raise ValueError(
+                    f"lap {lap_label(lap_b)} cannot be placed on a distance axis (too few points, "
+                    f"or a zero-length odometer) — there is no track position to lock to")
+            tt_b = float(tt_b)
+            elapsed_a[i] = min(max(tt_a - a_start, 0.0), a_span)
+            elapsed_b[i] = min(max(tt_b - b_start, 0.0), b_span)
         fraction[i] = s
         t_b_media[i] = _media_time(session_b, tt_b)
-        elapsed_a[i] = min(max(tt_a - a_start, 0.0), a_span)
-        elapsed_b[i] = min(max(tt_b - b_start, 0.0), b_span)
         sa = _speed_at(session_a, tt_a)
         sb = _speed_at(session_b, tt_b)
         if sa is not None:
@@ -501,15 +569,20 @@ def build_compare_spec(session_a, out_path: str, lap_a: int, lap_b: int,
         raise ValueError(f"lap {lap_label(lap_b)} has no usable export window")
     a0, a1 = win_a
     b0, b1 = win_b
-    source_a = _source_for(session_a, a0, a1, src_path_a)
+    # A compare is always cut on both lines, so it ends on its FINISH FRAME like an unpadded lap
+    # clip (`ends_on_finish`, `with_finish_frame`), and both sources reach far enough past their
+    # finish to hold it — into the next chapter when a lap ends just before a seam.
+    reach = _FINISH_FRAME_REACH_S
+    source_a = _source_for(session_a, a0, a1 + reach, src_path_a)
     try:
-        source_b = _source_for(session_b, b0, b1, src_path_b)
+        source_b = _source_for(session_b, b0, b1 + reach, src_path_b)
     except Exception:
         source_a.cleanup()
         raise
     return CompareSpec(out_path=out_path, lap_id=lap_a, t0=a0, t1=a1, source=source_a,
                        config=cfg, lap_b=lap_b, source_b=source_b, t_b0=b0, t_b1=b1,
-                       cross=session_b is not session_a, label_a=label_a, label_b=label_b)
+                       cross=session_b is not session_a, label_a=label_a, label_b=label_b,
+                       ends_on_finish=True)
 
 
 # --------------------------------------------------------------------------- pane B's stream
