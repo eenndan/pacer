@@ -625,7 +625,31 @@ def test_the_last_frame_shows_both_lap_times_as_the_table_prints_them(monkeypatc
     # Pane B's finish frame is inside the decode it asks for (two frames of tail past its line).
     k = int(round((r.lock.t_b_media[-1] - spec.t_b0) * 30.0))
     assert k <= round((spec.t_b1 - spec.t_b0) * 30.0) + ec.CompareRenderer._B_TAIL_FRAMES, k
+    # ...and the encoder codes that frame WHOLE. Left to the rate control it can be a starved
+    # P-frame straight after a keyframe: 6.5 KB beside 13-16 KB ones on his 720p compare, whose
+    # "0:46.808" then read "0:46.308".
+    enc = ev.build_encode_cmd(r._spec, 1280, 1440, 30.0, ev.VT_H264)
+    at = enc.index("-force_key_frames")
+    assert enc[at + 1] == "expr:gte(n,1405)", enc[at:at + 2]
     print(f"ok finish frame: the compare ends on {last.caption_a!r} / {last.caption_b!r}")
+
+
+def test_only_a_clip_that_ends_on_its_finish_forces_a_keyframe():
+    """The forced keyframe belongs to the finish frame alone. A padded lap ends in run-off and a
+    hand-built window on nothing in particular, so their encodes are left exactly as they were;
+    an unpadded lap clip (#416's finish frame) gets it like a compare."""
+    spec = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=10.0, t1=12.99, src_path="/a.MP4")
+    assert "-force_key_frames" not in ev.build_encode_cmd(spec, 640, 360, 30.0)
+    padded = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=10.0, t1=18.0, src_path="/a.MP4",
+                           lead_in=0.0, lead_out=5.0)
+    assert "-force_key_frames" not in ev.build_encode_cmd(ev.with_finish_frame(padded, 30.0),
+                                                          640, 360, 30.0)
+    lap = ev.with_finish_frame(ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=10.0, t1=12.99,
+                                             src_path="/a.MP4", ends_on_finish=True), 30.0)
+    enc = ev.build_encode_cmd(lap, 640, 360, 30.0)
+    # 2.99 s is 89.7 frames: frames 0..89 are the lap, frame 90 its finish.
+    assert enc[enc.index("-force_key_frames") + 1] == "expr:gte(n,90)", enc
+    print("ok finish keyframe: only a clip that ends on its finish forces one")
 
 
 def test_pane_b_running_out_holds_its_last_frame(monkeypatch_restore):
@@ -752,6 +776,11 @@ def test_real_render_puts_pane_b_at_the_locked_frame():
         # ...and the lock is doing something: B's frame index is NOT i, and not i scaled either.
         drift = np.abs(want_b - np.arange(n))
         assert drift.max() > 10, drift.max()
+        # The finish frame is a keyframe in the FILE, not only in the command that made it.
+        flags = subprocess.run(
+            [ev.FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=flags",
+             "-of", "csv=p=0", out], check=True, capture_output=True, text=True).stdout.split()
+        assert len(flags) == 61 and flags[-1].startswith("K"), flags[-3:]
         print(f"ok end-to-end lock: pane A max {err_a.max():.2f} frames, "
               f"pane B max {err_b.max():.2f} frames, against a lock that moves "
               f"{drift.max()} frames away from a clock lock")
