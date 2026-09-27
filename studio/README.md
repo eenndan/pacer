@@ -26,8 +26,8 @@ rest. Part of a new recording decides no PB or focus list until the whole record
 `--demo` downloads the synthetic demo session once (about 11 MB) and opens it
 ([`demo.py`](demo.py)). Equivalent without pixi: `python -m studio [files]` with the env's own
 interpreter (`.pixi/envs/default/bin/python`) once `pixi run build` has run, which deploys the
-bindings package into the env: no `PYTHONPATH`. A first launch prints one line before its slow
-import ([`__main__.py`](__main__.py)). Dev tools live in [`dev/`](dev/): diagnose a file headlessly with
+bindings package into the env: no `PYTHONPATH`. Dev tools live in [`dev/`](dev/): diagnose a
+file headlessly with
 `pixi run python -m studio.dev.diagnose -- file.MP4 [--clean]`, measure GPS smoothing with
 `studio.dev.denoise_check`, and see [`tests/README.md`](../tests/README.md) for the golden dump.
 
