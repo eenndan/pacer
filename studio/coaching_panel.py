@@ -38,7 +38,7 @@ from . import coaching, data_quality, focus, theme, units
 from ._signal import DASH, lap_label, plural
 from .lap_table import set_corner_direction
 from .theme import C
-from .widgets import EmptyState, PanelHeader, WrapLabel
+from .widgets import ActionChip, EmptyState, PanelHeader, WrapLabel
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -347,6 +347,13 @@ FOCUS_EMPTY_INVITE = (f"Pick up to {focus.MAX_ITEMS} corners to work on. Next ti
                       "or why it can't tell.")
 # Why nothing can be added when the block is dormant: a focus list is kept per track.
 FOCUS_DORMANT_REASON = "No focus list here — Pacer keeps one per track, and this one isn't known"
+# QA JOURNEY-1: the list's one line on a page with no room for the block, and what its click does.
+# The glyph is the panel maximize button's own (central_view._MAXIMIZE_GLYPH), because the click
+# does what that button does, on the Coaching page.
+FOCUS_LINE_GLYPH = "ph.corners-out"
+FOCUS_LINE_TIP = ("Your focus list at this track. The page has no room for it at this size: click "
+                  "to see it whole, full-window, with its verdicts and its buttons (Coaching ▸ "
+                  "Show focus list). Esc brings the grid back.")
 
 
 class FocusBlock(QWidget):
@@ -531,6 +538,15 @@ class FocusBlock(QWidget):
         budget sheds is demoted rather than deleted (and the empty list's invitation with it)."""
         invite = [FOCUS_EMPTY_INVITE] if self._empty else []
         return "\n".join([self._headline, *self._lines, *invite]).strip()
+
+    def line_text(self) -> str:
+        """The list in ONE line, for a page with no room for the block (QA JOURNEY-1): the corners
+        in list order and a question still waiting on the driver ("Both dry?"). "" when there is
+        no list: the empty list's invitation and a dormant page get no line."""
+        if not self._cids:
+            return ""
+        ask = f" — {self.mark_question.text()}" if self._mark_fps else ""
+        return f"Focus list: {' · '.join(f'C{c}' for c in self._cids)}{ask}"
 
     def _sync_buttons(self):
         """Label + enablement from the selection and the list. The button SAYS which corner it
@@ -1290,6 +1306,8 @@ class OpportunitiesPanel(QWidget):
     jump_requested = Signal(int, float)
     # The debrief's "Compare with your previous PB" (DebriefBlock); the window does the loading.
     compare_pb_requested = Signal()
+    # The focus list's one line was clicked: show the list whole (the window's Show focus list).
+    focus_show_requested = Signal()
 
     _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", PHASE_HEADER, ""]
 
@@ -1416,6 +1434,23 @@ class OpportunitiesPanel(QWidget):
         self.focus_block.remove_requested.connect(self.focus_remove_requested)
         self.focus_block.mark_dry_requested.connect(self.focus_mark_dry_requested)
         self.focus_block.replace_requested.connect(self.focus_replace_requested)
+        # THE LIST KEEPS ONE LINE WHEN THE BLOCK HAS NO ROOM (QA JOURNEY-1). The shortlist is
+        # reserved first, so at the owner's grid (a 719x222 page, the top three rows already short
+        # of room) the block's budget is 0 and his list — and the "Both dry?" waiting in it — was
+        # simply not on the page he lands on after the debrief. This row names the corners and the
+        # pending question, and its click shows the block whole (`focus_show_requested`).
+        self.focus_line = ActionChip("")
+        self.focus_line.setIcon(theme.icon(FOCUS_LINE_GLYPH, color=C.text_dim))
+        self.focus_line.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
+        self.focus_line.setToolTip(FOCUS_LINE_TIP)
+        self.focus_line.clicked.connect(self.focus_show_requested)
+        line_row = QHBoxLayout()
+        line_row.setContentsMargins(theme.SPACE_M, theme.SPACE_XXS, theme.SPACE_M, theme.SPACE_XXS)
+        line_row.addWidget(self.focus_line)
+        line_row.addStretch(1)
+        self._focus_line_row = QWidget()
+        self._focus_line_row.setLayout(line_row)
+        self._focus_line_row.setVisible(False)
         # The debrief's lead, above everything it introduces; hidden unless the page IS the debrief.
         self.debrief_block = DebriefBlock()
         self.debrief_block.compare_requested.connect(self.compare_pb_requested)
@@ -1426,6 +1461,7 @@ class OpportunitiesPanel(QWidget):
         lay.addWidget(header)
         lay.addWidget(self.debrief_block)
         lay.addWidget(self.focus_block)
+        lay.addWidget(self._focus_line_row)   # in the block's place, only while the block is hidden
         lay.addWidget(self.theme_block)
         lay.addWidget(self.body, 1)  # the rows take the page's full height
         # THE ROWS THE VIEWPORT COULD NOT HOLD, SAID (LOOK-3, QA 2026-09-26). In the grid the page
@@ -1826,7 +1862,12 @@ class OpportunitiesPanel(QWidget):
         55 % of it, and the three ranked rows those blocks summarize need ~190-230 px there — so the
         real window showed two of them (one on SD_30_08) and the answer sat below the fold of the
         page that exists to give it. The blocks now share only what is left once the table's header
-        and its ``PANEL_TOP_N`` rows, measured at the current width, are whole."""
+        and its ``PANEL_TOP_N`` rows, measured at the current width, are whole.
+
+        A LIST THE BLOCK HAS NO ROOM FOR KEEPS ONE LINE (QA JOURNEY-1), the way the rows the
+        viewport cannot hold keep ``more_hint``: its corners, a pending "Both dry?" and a click to
+        see it whole. Like that hint it is paid for by the table, since it only appears when the
+        page has no room left to give; the theme then yields to it."""
         if self._theme_budgeting:
             return
         self._theme_budgeting = True
@@ -1837,9 +1878,10 @@ class OpportunitiesPanel(QWidget):
             # The debrief's lead first (0 px and hidden on the ordinary page), then the focus block.
             used = self.debrief_block.fit_into(self.width(),
                                                min(int(height * DEBRIEF_MAX_FRACTION), room))
-            used += self.focus_block.fit_into(self.width(),
+            shown = self.focus_block.fit_into(self.width(),
                                               min(int(height * FOCUS_MAX_FRACTION),
                                                   max(room - used, 0)))
+            used += shown + self._sync_focus_line("" if shown else self.focus_block.line_text())
             self.theme_block.fit_into(
                 self.width(),
                 min(int(height * THEME_MAX_FRACTION),
@@ -1848,6 +1890,16 @@ class OpportunitiesPanel(QWidget):
             self._refresh_summary_label()
         finally:
             self._theme_budgeting = False
+
+    def _sync_focus_line(self, text: str) -> int:
+        """Show the focus list's one line with `text` ("" hides it); returns the height it takes.
+        Touches a widget only when it changes, for FocusBlock._apply's reason."""
+        if text and self.focus_line.text() != text:
+            self.focus_line.setText(text)
+        row = self._focus_line_row
+        if row.isHidden() == bool(text):
+            row.setVisible(bool(text))
+        return row.sizeHint().height() if text else 0
 
     def _shortlist_px(self) -> int:
         """The height the table needs to show its first ``PANEL_TOP_N`` rows whole: its frame, its

@@ -64,6 +64,7 @@ from . import (
 )
 from ._signal import fmt_hms, lap_label
 from .central_view import CentralView, undo_summary
+from .coaching_panel import DEBRIEF_COMPARE
 from .command_palette import CommandPalette
 
 # ExportChoice is RE-EXPORTED, not used here: it moved to the controller with the picker that
@@ -431,6 +432,8 @@ class StudioWindow(QMainWindow):
     _NO_SESSION_COACHING_REASON = ("Open a recording first — the ranking is over your own laps.")
     _NO_REFERENCE_REASON = ("No reference recording is loaded — use Coaching ▸ Load reference "
                             "recording… to pick one, and this clears it again.")
+    _NO_PREVIOUS_PB_REASON = ("No new personal best in this session — this loads the recording a "
+                              "new PB beat, so it is offered on the session that set one.")
     _REFERENCE_WITHOUT_VIDEO_REASON = ("The loaded reference has no footage to play — it came in "
                                        "as data only, so there is no second video to put beside "
                                        "this one.")
@@ -1968,6 +1971,7 @@ class StudioWindow(QMainWindow):
             panel.focus_replace_requested.connect(self.library_ctl.focus_replace)
             panel.jump_requested.connect(self._jump_to_opportunity)
             panel.compare_pb_requested.connect(self._compare_with_previous_pb)
+            panel.focus_show_requested.connect(self._show_focus_list)
         self.library_ctl.update_focus_list()
 
     def _build_ui_guarded(self, stage: str) -> Exception | None:
@@ -2286,6 +2290,16 @@ class StudioWindow(QMainWindow):
             "(right), each playing its own footage. Load a reference recording first.")
         self._cross_compare_action.triggered.connect(self._enter_cross_compare)
         self._gate_action(self._cross_compare_action, False, self._NO_REFERENCE_REASON)
+        # The PB moment's one gesture, kept past the moment (QA JOURNEY-1). It lived on the debrief
+        # and the PB card only: the first tab click ends the one, the other leaves after 6 s, and
+        # what was left was the three-step detour above — Load reference…, find 30 Aug's folder,
+        # Compare vs reference. Enabled while this session's new PB knows the row it beat.
+        self._pb_compare_action = coaching_menu.addAction(DEBRIEF_COMPARE)
+        self._pb_compare_action.setToolTip(
+            "Load the recording that held your previous best at this track as the reference, and "
+            "play the two best laps side by side — the debrief's button, kept for after it.")
+        self._pb_compare_action.triggered.connect(self._compare_with_previous_pb)
+        self._gate_action(self._pb_compare_action, False, self._NO_SESSION_REFERENCE_REASON)
         # F10 Opportunities: the Coaching page full-window — every corner ranked by time lost vs
         # your own best lap. It opened a modal copy of that ranking until R11 (one ranking, one
         # place); the page now carries the modal's bars and Jump buttons wherever it has the room.
@@ -2301,9 +2315,9 @@ class StudioWindow(QMainWindow):
         # page's Add button made from anywhere — gated on that button's own state and words.
         self._focus_show_action = coaching_menu.addAction("Show focus list")
         self._focus_show_action.setToolTip(
-            "The corners you chose to work on at this track, and whether they moved: the top of "
-            "the Coaching page")
-        self._focus_show_action.triggered.connect(self.show_coaching_tab)
+            "The corners you chose to work on at this track, and whether they moved: the Coaching "
+            "page full-window, where the list always has room. Esc brings the grid back.")
+        self._focus_show_action.triggered.connect(self._show_focus_list)
         self._focus_add_action = coaching_menu.addAction("Add selected corner to focus list")
         self._focus_add_action.setToolTip(
             "Put the corner selected on the Coaching page on this track's focus list")
@@ -2450,6 +2464,11 @@ class StudioWindow(QMainWindow):
             action = getattr(self, name, None)
             if action is not None:
                 self._gate_action(action, has, reason)
+        pb = getattr(self, "_pb_compare_action", None)
+        if pb is not None:
+            known = getattr(getattr(self, "library_ctl", None), "previous_pb", None) is not None
+            self._gate_action(pb, has and known, self._NO_PREVIOUS_PB_REASON if has
+                              else self._NO_SESSION_REFERENCE_REASON)
         add = getattr(self, "_focus_add_action", None)
         if add is not None:
             block = getattr(getattr(getattr(self, "view", None), "opportunities", None),
@@ -2457,6 +2476,19 @@ class StudioWindow(QMainWindow):
             ok, why = block.add_state() if block is not None else \
                 (False, self._NO_SESSION_COACHING_REASON)
             self._gate_action(add, ok, why)
+
+    def _show_focus_list(self):
+        """Coaching ▸ Show focus list, and the Coaching page's one-line list: the list WHOLE, on
+        the Coaching page maximized (``CentralView.show_focus_list``). It only switched to the tab
+        until QA JOURNEY-1, which at the owner's grid showed the same page with the list still
+        hidden. Video focus is left first, as a PB compare leaves it: its fullscreen belongs to
+        the video panel this maximize would replace."""
+        view = getattr(self, "view", None)
+        if getattr(self, "session", None) is None or not hasattr(view, "show_focus_list"):
+            return
+        if getattr(view, "is_video_focused", lambda: False)():
+            view.set_video_focus(False)
+        view.show_focus_list()
 
     def _focus_add_selected(self):
         """Coaching ▸ Add selected corner to focus list: exactly the Coaching page's Add button,
@@ -3626,7 +3658,12 @@ class StudioWindow(QMainWindow):
         froze the window on the moat cross-recording-compare path). On completion the loaded Session is
         adopted via set_reference_session + _apply_reference_change on the UI thread; on a guard refusal
         or a load failure the local best lap is kept and the reason surfaces (a status line + notice),
-        never a freeze."""
+        never a freeze.
+
+        The picked folder is NOT remembered as File ▸ Open's (QA JOURNEY-5). A reference is another
+        day's recording as a rule, and the detour to 30 Aug's folder for a PB compare left the next
+        File ▸ Open starting there instead of among today's footage. The picker still starts where
+        File ▸ Open does."""
         if not hasattr(self, "session"):
             return
         start_dir = self._open_start_dir()
@@ -3634,7 +3671,6 @@ class StudioWindow(QMainWindow):
             self, "Load reference recording", start_dir, "GoPro recordings (*.MP4 *.mp4)")
         if not path:
             return
-        prefs.set_last_dir(os.path.dirname(path))
         paths = chapters.discover_siblings(path)
         self._start_reference_load(paths)
 

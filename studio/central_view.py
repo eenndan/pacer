@@ -1626,6 +1626,16 @@ class CentralView(QWidget):
         if self._maximized_panel is not self._table_panel:
             self._toggle_panel_maximized(self._table_panel)
 
+    def show_focus_list(self):
+        """Coaching ▸ Show focus list, and the Coaching page's one-line list: the page maximized,
+        which is where the focus block always has room (QA JOURNEY-1: at the owner's grid the page
+        is 719x222, its top rows are reserved first, and the block's budget there is 0 — the item
+        switched to that tab and the list stayed hidden). Unlike ``show_coaching_maximized`` it is
+        NOT a toggle: "show" run twice still shows. Esc or ⛶ gives the grid back."""
+        self.tab_bar.setCurrentIndex(3)
+        if self._maximized_panel is not self._table_panel:
+            self._toggle_panel_maximized(self._table_panel)
+
     # ----------------------------------------------------- the first-open debrief (PS-B1)
     def show_debrief(self, pb_line: str | None, promoted: list[int],
                      compare: bool = False, saved: bool = True) -> None:
