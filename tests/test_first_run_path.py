@@ -100,6 +100,7 @@ from test_central_view_realqt import _studiowindow_with_view  # noqa: E402
 from studio import chapters, sidecar  # noqa: E402
 from studio.app import (  # noqa: E402
     DEMO_UNAVAILABLE_MESSAGE,
+    LOAD_INTERNAL_ERROR_MESSAGE,
     SIDECAR_UNREADABLE_NOTICE,
     TRACKS_UNREADABLE_NOTICE,
     StudioWindow,
@@ -427,6 +428,7 @@ _FAILURE_MESSAGES = [
     "Couldn't read telemetry from this recording — it may be corrupt or unsupported. Try copying "
     "it off the SD card again.",
     DEMO_UNAVAILABLE_MESSAGE,   # read from the app, not re-typed: it is one string now
+    LOAD_INTERNAL_ERROR_MESSAGE,  # Pacer's own failure, not the file's (EVAL-5)
 ]
 
 
@@ -470,7 +472,7 @@ def test_the_failure_frame_and_the_first_run_frame_are_the_same_screen():
 def test_every_production_failure_message_fits_the_reserved_error_slot():
     """A ONE-MESSAGE TEST IS WHAT LETS A ONE-LINE OVERFLOW THROUGH. The reserved slot's height is a
     constant (WelcomeView.ERROR_LINES), so every sentence the app can actually put in it is swept —
-    all seven of app._load_failure_message's plus the demo's — each with the longest plausible
+    eight of app._load_failure_message's plus the demo's — each with the longest plausible
     basename appended, at both shipped window widths.
 
     MEASURED ON THE REAL LABEL AS LAID OUT, not on a detached probe at the width the label was

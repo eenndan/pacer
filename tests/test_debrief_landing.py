@@ -88,9 +88,14 @@ def test_the_lead_says_it_is_a_default_and_how_to_undo_it():
     assert "Pacer put C7, C5 and C3" in three and "a default, not a decision" in three, three
     assert "remove any you won't work on" in three, three
     assert "Pacer put C4," in one and "remove it if you won't work on it" in one, one
-    for note in (three, one, none):
+    # The synthetic demo's list is never written (QA EVAL-2): the same default, not promised for
+    # a next time that will not see it.
+    demo = debrief_note([7, 5, 3], saved=False)
+    assert "Pacer put C7, C5 and C3" in demo and "a default, not a decision" in demo, demo
+    assert "for next time" in three and "for next time" not in demo, demo
+    for note in (three, one, none, demo):
         assert note.endswith("Esc returns to your usual layout."), note
-    print(f"ok lead: {three!r}")
+    print(f"ok lead: {three!r}; the demo's: {demo!r}")
 
 
 # ---------------------------------------------------------------- 2-3. the page's debrief mode

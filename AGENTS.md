@@ -58,8 +58,9 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
   `caffeinate -si`; check `pmset -g log`). One AT the limit while other lanes are busy is
   contention: check `uptime` and re-run the test alone.
 - **Run one test:** `pixi run ctest --test-dir build/Release -R '^test_x$' --output-on-failure` —
-  CTest injects the `PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` a bare
-  `python tests/test_x.py` can miss. **One test function:** `pixi run python -m pytest
+  CTest injects the `QT_QPA_PLATFORM=offscreen` a bare `python tests/test_x.py` can miss (and
+  `PYTHONPATH=bindings/pacer`, which no run needs: the build deploys the whole bindings package
+  into the env, `tests/test_bindings_import.py`). **One test function:** `pixi run python -m pytest
   tests/test_x.py -k <part>` (jailed by `tests/conftest.py`; for iterating, not the gate).
 - **Real-footage checks** (`footage.<check>`) re-measure published figures on the owner's Desktop
   recordings. Without its recording a check is reported *Skipped* by name — a skip is not a pass,

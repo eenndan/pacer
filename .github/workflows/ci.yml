@@ -106,14 +106,14 @@ jobs:
         # blocks forever (a previous run hung 27+ min here). Everything the smoke gates — the
         # full Session load, panel construction, sidecar write — still runs. Locally this
         # finishes in seconds, so the 5-min step timeout is pure hang headroom.
+        #
+        # NO PYTHONPATH, and through the `smoke` task: this runner's env is as fresh as a new
+        # clone's, so the step starts Python the way `pixi run studio` does and fails when the
+        # README's command would. It used to point PYTHONPATH at bindings/pacer, and stayed green
+        # while `pixi run studio -- --demo` failed on every fresh clone (EVAL-1, 2026-09-26). The
+        # build now deploys the whole package into site-packages (bindings/pacer/CMakeLists.txt).
         timeout-minutes: 5
-        env:
-          # Same rationale as the ctest registration (tests/CMakeLists.txt): with no pip install
-          # of `pacer` in the fresh CI env, a bare `python -m` from the repo root resolves
-          # `import pacer` to the C++ source dir as an EMPTY namespace package. Point the
-          # interpreter at the cmake-deployed bindings package explicitly.
-          PYTHONPATH: ${{ github.workspace }}/bindings/pacer
-        run: QT_QPA_PLATFORM=offscreen pixi run python -m studio.dev._smoke --no-video
+        run: QT_QPA_PLATFORM=offscreen pixi run smoke
 
       - name: Demo asset reachable (non-blocking)
         # `--demo` downloads the synthetic demo session (studio/demo.py `_DEMO_URL`) and keeps it
@@ -153,8 +153,10 @@ jobs:
       - name: Build the C++ core + bindings
         run: pixi run build
       - name: Build the .app (PyInstaller — no .dmg)
-        # Same rationale as the ctest/smoke PYTHONPATH: point `import pacer` at the cmake-deployed
-        # bindings package so the spec bundles the real _pacer.so on a fresh CI env.
+        # PYTHONPATH pins the spec's `import pacer` to the in-tree bindings/pacer package, as CTest
+        # does. Since 2026-09-27 the build also deploys that same package into site-packages, so
+        # a run without it bundles identical files; it stays because this job runs only on a tag
+        # and cannot be re-verified from a pull request.
         #
         # ensurepip first: `pip` is NOT in [tool.pixi.dependencies], so a fresh env solved from the
         # lockfile has no pip and `python -m pip install` dies with "No module named pip". A dev box

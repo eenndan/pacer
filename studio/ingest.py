@@ -21,6 +21,21 @@ class LoadCancelled(Exception):
     """The payload walk stopped because the load it belongs to was abandoned (see `cancellable`)."""
 
 
+class TelemetryUnreadable(RuntimeError):
+    """pacer's GPMF opener refused this file: no telemetry track it could open (the C++
+    `GPMFSource` constructor, `pacer/gps-source/gps-source.cpp`, the core's only read-side throw).
+
+    THE ONE LOAD FAILURE THAT IS A FACT ABOUT THE FILE, and so the only one the app may answer with
+    "the copy is probably incomplete — copy it off the SD card again". Anything else a load raises
+    (an AttributeError from bindings that did not import, a TypeError, a numpy error in the
+    analysis) is Pacer's own failure on a file the parser read. `StudioWindow._load_failure_message`
+    says so instead of blaming the footage: on 2026-09-26 it called a sha256-checked download
+    "corrupt" over an AttributeError in the bindings (EVAL-5).
+
+    A RuntimeError subclass with the parser's own message ("Failed to open file: <path>"), so every
+    caller that caught or matched the untyped error still does."""
+
+
 # The cancel check installed for reads on THIS thread (see `cancellable`). Thread-local, so the check
 # a load worker installs for its own read can never stop a read another thread is doing.
 _cancel = threading.local()
@@ -106,6 +121,16 @@ def recording_carries_telemetry(paths: list[str]) -> str:
     return TELEMETRY_UNKNOWN if TELEMETRY_UNKNOWN in verdicts else TELEMETRY_ABSENT
 
 
+def _open_source(path) -> pacer.GPMFSource:
+    """`pacer.GPMFSource(path)`, with the opener's refusal typed as `TelemetryUnreadable`. Only the
+    RuntimeError the C++ throw becomes: a missing binding (AttributeError) or a bad call (TypeError)
+    is not the file's doing, and passes through as itself."""
+    try:
+        return pacer.GPMFSource(path)
+    except RuntimeError as exc:
+        raise TelemetryUnreadable(str(exc)) from exc
+
+
 def chain_sources(paths):
     """Build the `SequentialGPSSource` chain over the GoPro chapters ->
     (head, owners, durations, meta_durations).
@@ -120,13 +145,15 @@ def chain_sources(paths):
     above, which is the whole reason both are returned: a GoPro chapter's metadata track ends on
     its own payload grid, and on GoPro's own sample clips it misses the video length by anything
     from -0.701 s (hero7) to +0.934 s (karma). Their DIFFERENCE is what `ChapterMap` reports as a
-    desynced chapter."""
-    owners: list[pacer.RawGPSSource] = [pacer.GPMFSource(paths[0])]
+    desynced chapter.
+
+    Raises `TelemetryUnreadable` for a chapter the GPMF opener refuses."""
+    owners: list[pacer.RawGPSSource] = [_open_source(paths[0])]
     durations = [owners[0].get_video_duration()]
     meta_durations = [owners[0].get_total_duration()]
     head = owners[0]
     for p in paths[1:]:
-        nxt = pacer.GPMFSource(p)
+        nxt = _open_source(p)
         owners.append(nxt)
         durations.append(nxt.get_video_duration())
         meta_durations.append(nxt.get_total_duration())

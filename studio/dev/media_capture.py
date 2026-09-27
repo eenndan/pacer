@@ -19,7 +19,9 @@ by passing a path positionally to a tool whose `argv[1]` was its output. Never o
 
 The published set is that recording's — Sandown 3h, three hours at Sandown Park, the owner's
 primary recording since D24 left the machine. `accuracy` needs no recording (it is drawn from
-`ACCURACY` below), which is why the line above leaves it out.
+`ACCURACY` below), which is why the line above leaves it out, and neither does `debrief`: it is the
+synthetic demo's first open, so anyone can re-shoot it (`--only debrief`, no recording named;
+`PACER_DEMO_MP4` skips the one-time download).
 
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
@@ -40,6 +42,9 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
                                                auditable in code instead of burned into artwork
   og.png          the social card              composed from hero.png, so it can never again embed
                                                a stale screenshot
+  debrief.png     the demo's first open        "the loop: a first open lands here, and its corners
+                                               are already on the focus list" — on the synthetic
+                                               demo, the session every reader can open
 
 TWO THINGS THE OFFSCREEN RENDER CANNOT DO BY ITSELF, AND WHAT THIS DOES ABOUT THEM
 
@@ -91,7 +96,7 @@ from PySide6.QtGui import (  # noqa: E402
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
-from studio import APP_NAME, chapters, export_video, theme  # noqa: E402
+from studio import APP_NAME, chapters, demo, export_video, theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
 from studio.dev import _jail  # noqa: E402
 from studio.theme import C  # noqa: E402
@@ -123,6 +128,10 @@ WINDOW_TALL = (1440, 1500)
 # about 1.6 wide-to-tall: this shape binds on WIDTH there, leaves canvas above and below the line,
 # and clips no label — C1 to C7 all read in the committed image.
 WINDOW_MAP = (1440, 1340)
+# The debrief is a page of sentences, shown in the README's ~880 px column: the narrower the
+# window, the larger they read there. 1024 is refused: the grid's own minimums hold the window
+# at ~1055 px (measured), so this stays clear of that floor, and `shot_debrief` checks it.
+WINDOW_DEBRIEF = (1100, 900)
 DPR = 2                       # retina; every PNG below is 2x its logical size
 PAD = theme.SPACE_M           # breathing room around a cropped section, in logical px
 
@@ -868,11 +877,56 @@ def build_og(out_dir: str, hero_png: str) -> str:
     return save(img, os.path.join(out_dir, "og.png"))
 
 
+# ====================================================================== 8 — the debrief (the demo)
+def shot_debrief(app: QApplication, out_dir: str) -> str:
+    """The first-open debrief, the loop the app is built around: the lead, the focus list Pacer
+    pre-filled, and the ranked corners, each one Jump from the video.
+
+    SHOT ON THE SYNTHETIC DEMO, NEVER ON THE RECORDING ABOVE. The demo is the one session every
+    reader can open (`pixi run studio -- --demo`) and it is nobody's driving, so this image shows
+    exactly what they will see. It is resolved the way `--demo` resolves it (PACER_DEMO_MP4, else
+    the cache, which is empty inside this run's jail, else the one-time sha-checked download), and
+    opened through the command line's door, which is what `--demo` builds."""
+    path = demo.resolve_demo_recording()
+    if path is None:
+        raise SystemExit("the debrief shot needs the synthetic demo: the download failed (offline?) "
+                         "— point PACER_DEMO_MP4 at a copy of it")
+    w = StudioWindow([path])
+    deadline = time.time() + _LOAD_TIMEOUT_S
+    while w.view is None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    if w.view is None:
+        raise RuntimeError("the demo did not load")
+    w.resize(*WINDOW_DEBRIEF)
+    w.show()
+    settle(app)
+    if (w.width(), w.height()) != WINDOW_DEBRIEF:
+        raise RuntimeError(f"the window refused {WINDOW_DEBRIEF}: it is {w.width()}x{w.height()}")
+    view = w.view
+    if not view.is_debrief():
+        raise RuntimeError("the demo did not land on its debrief (LibraryController.update_library)")
+    panel, table = view._table_panel, view.opportunities.table
+    last = table.rowCount() - 1
+    origin = panel.mapTo(w, QPoint(0, 0))
+    bottom = table.viewport().mapTo(
+        w, QPoint(0, table.rowViewportPosition(last) + table.rowHeight(last))).y()
+    rect = QRect(origin.x(), origin.y(), panel.width(), bottom + PAD - origin.y())
+    print(f"media_capture: debrief crop {rect.width()}x{rect.height()} logical · "
+          f"{table.rowCount()} rows · lead = {view.opportunities.debrief_block.full_text()[:60]}…")
+    img = region(w, rect)
+    w.close()
+    return save(img, os.path.join(out_dir, "debrief.png"))
+
+
 # ====================================================================== driver
-SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og")
+SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief")
+# The shots that need the recording named on the command line: `accuracy` is drawn from numbers
+# and `og` from hero.png, and `debrief` opens the synthetic demo instead.
+_RECORDING_SHOTS = {"hero", "ideal", "trust", "map", "overlay", "clip"}
 
 
-def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
+def capture(recording: str | None, out_dir: str, only: set[str], work_dir: str,
             with_video: bool = True) -> None:
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)
@@ -889,8 +943,10 @@ def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
     # is a bug, not a variant.
     _jail.divert_app_support("pacer-media-")
 
-    needs_app = only & {"hero", "ideal", "trust", "map", "overlay", "clip"}
+    needs_app = only & _RECORDING_SHOTS
     hero_png = os.path.join(out_dir, "hero.png")
+    if needs_app and recording is None:
+        raise SystemExit(f"{', '.join(sorted(needs_app))} need a recording: name it first")
     if needs_app:
         w = open_window(app, recording, WINDOW)
         print(f"media_capture: {w.session.lap_count()} laps, "
@@ -912,11 +968,15 @@ def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
         draw_accuracy(out_dir)
     if "og" in only:
         build_og(out_dir, hero_png)
+    if "debrief" in only:
+        shot_debrief(app, out_dir)
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("recording", help="INPUT recording (chapter 1; siblings auto-discovered)")
+    ap.add_argument("recording", nargs="?", default=None,
+                    help="INPUT recording (chapter 1; siblings auto-discovered); not needed for "
+                         "accuracy, og or debrief alone")
     ap.add_argument("--out", default=os.path.join("docs", "media"),
                     help="OUTPUT directory for the PNGs (default: docs/media)")
     ap.add_argument("--work", default=None,
