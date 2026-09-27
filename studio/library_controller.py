@@ -1072,13 +1072,16 @@ class LibraryController:
         screen that shows it, and overrule a corner the driver kept or chose. Nothing is promoted
         where the verdict could never speak — no track (nowhere to keep a list), a provisional
         start line or ESTIMATED timing (`focus._blocker` refuses every comparison with such a
-        baseline, so an auto-made list would refuse forever)."""
+        baseline, so an auto-made list would refuse forever). Nor onto a list with a baseline
+        recorded after this session (QA REG-1): an older session's corners are not today's plan."""
         entry = self._focus_entry()
         track = entry.get("track")
         if not track or not entry.get("verified") or entry.get("degraded"):
             return []
         try:
             items = self._focus_items(track)
+            if focus.newer_than(items, self.win.session.focus_context(entry, track)):
+                return []
             taken = {i.cid for i in items}
             free = focus.MAX_ITEMS - len(items)
             wanted = [int(c) for c in cids if int(c) not in taken][:max(free, 0)]
@@ -1100,13 +1103,20 @@ class LibraryController:
         """The focus block's "Replace with today's top 3" (QA NEW-5): this track's list becomes
         `cids`, each with its baseline measured on THIS session. The driver's click, after the check
         has run (``focus.replace_offer``), so the old baselines have already given their verdict.
-        Refused where a promotion would be (no track, a provisional line, ESTIMATED timing)."""
+        Refused where a promotion would be (no track, a provisional line, ESTIMATED timing), and
+        from a session older than a baseline on the list (QA REG-1), which the offer never makes."""
         entry = self._focus_entry()
         track = entry.get("track")
         if not track or not entry.get("verified") or entry.get("degraded"):
             self._focus_failed("today's corners can't be the baseline on untrusted timing")
             return
         try:
+            newer = focus.newer_than(self._focus_items(track),
+                                     self.win.session.focus_context(entry, track))
+            if newer:
+                self._focus_failed(f"this session is older than your focus list (set on "
+                                   f"{focus.set_on(newer)}), so its corners can't replace it")
+                return
             items = self.win.session.focus_items([int(c) for c in cids], entry)
             if not items:
                 self._focus_failed("today's corners could not be measured on its clean laps")

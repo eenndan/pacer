@@ -149,6 +149,8 @@ OUTCOME_SET_HERE = "set_here"        # promoted from THIS session: there is noth
 # first that fires, so "we are not even looking at the same track" beats "the conditions differed".
 BLOCK_NONE = ""
 BLOCK_TRACK = "track"              # the stored list belongs to another track
+BLOCK_OLDER = "older"              # this session was recorded BEFORE the baseline: the check runs
+                                   #   forward in time only (QA REG-1)
 BLOCK_UNVERIFIED = "unverified"    # a provisional start line on either side: the odometer origin,
                                    #   and so every fraction-mapped window, is arbitrary
 BLOCK_DEGRADED = "degraded"        # ESTIMATED absolute timing on either side — the clock itself
@@ -237,6 +239,8 @@ class FocusItem:
     degraded: bool             # its absolute timing was ESTIMATED
     n_of: int = 0              # baseline: the clean laps measured at all (0 = not recorded, v1)
     method: str = METHOD_MATCHED  # how the baseline was measured (METHOD_*): the re-measure too
+    start_ms: int = 0          # its recording's first GPS fix, epoch ms: orders two sessions of
+    #                            one day (QA REG-1); 0 = not stamped (stored before 0.5.1)
 
     @property
     def label(self) -> str:
@@ -261,6 +265,7 @@ def item_to_dict(item: FocusItem) -> dict:
         "fingerprint": str(item.fingerprint), "date": item.date,
         "lap_total": float(item.lap_total), "verified": bool(item.verified),
         "degraded": bool(item.degraded), "n_of": int(item.n_of), "method": str(item.method),
+        "start_ms": int(item.start_ms),
     }
 
 
@@ -275,7 +280,9 @@ def item_from_dict(d: dict) -> FocusItem:
         date=d.get("date"), lap_total=float(d.get("lap_total", 0.0)),
         verified=bool(d.get("verified", False)), degraded=bool(d.get("degraded", False)),
         # An item that does not say how it was measured is a v1 item: the fraction instrument.
-        n_of=int(d.get("n_of", 0)), method=str(d.get("method", METHOD_FRACTION)))
+        n_of=int(d.get("n_of", 0)), method=str(d.get("method", METHOD_FRACTION)),
+        # No stamp is no order within a day, never a guessed one (`recorded_before`).
+        start_ms=int(d.get("start_ms", 0)))
 
 
 def _finite(v) -> bool:
@@ -305,6 +312,9 @@ def _valid_item(d) -> bool:
         return False
     n_of = d.get("n_of", 0)
     if isinstance(n_of, bool) or not isinstance(n_of, int) or n_of < 0:
+        return False
+    start = d.get("start_ms", 0)
+    if isinstance(start, bool) or not isinstance(start, int) or start < 0:
         return False
     return d.get("method", METHOD_FRACTION) in _METHODS
 
@@ -503,6 +513,49 @@ def save_for_track(track: str, items: list[FocusItem], path: str | None = None) 
     return store
 
 
+# ------------------------------------------------------------------------------- the order in time
+def _day(date: str | None) -> datetime.date | None:
+    """The calendar day of a stored ISO date ("YYYY-MM-DD"), or None when it is not one: the store
+    only checks that a date IS a string (see `_when` for what that let through)."""
+    if not date or len(date) < 10:
+        return None
+    try:
+        return datetime.date(int(date[0:4]), int(date[5:7]), int(date[8:10]))
+    except ValueError:
+        return None
+
+
+def recorded_before(now_ctx: dict, item: FocusItem) -> bool:
+    """Whether the session `now_ctx` describes was recorded BEFORE `item`'s baseline (QA REG-1).
+
+    THE CHECK RUNS FORWARD IN TIME ONLY. "Did it move since you put it on the list?" is a question
+    about a LATER session. Asked of an earlier one it runs the comparison backwards: measured on the
+    owner's Sandown pair, 19 Sep's list on 30 Aug read "C7 — 0.06 s faster than 19 Sep" about a day
+    three weeks before it, and #426's offer then put 30 Aug's corners back on the list.
+
+    Ordered by the recordings' own clocks: the first GPS fix's instant when both sides carry one,
+    which orders two sessions of one day, else the calendar date. An order that cannot be told
+    (a side with no date, or a same-day item stored before the stamp) is not "older": the pair is
+    compared as it always was, rather than refused on a guess."""
+    then_ms, now_ms = int(item.start_ms or 0), int(now_ctx.get("start_ms") or 0)
+    if then_ms > 0 and now_ms > 0:
+        return now_ms < then_ms
+    then, now = _day(item.date), _day(now_ctx.get("date"))
+    return then is not None and now is not None and now < then
+
+
+def newer_than(items: list[FocusItem], now_ctx: dict) -> list[FocusItem]:
+    """The items whose baseline was recorded AFTER the session `now_ctx` describes: a list with any
+    takes neither that session's corners by default nor its replacement of them (QA REG-1)."""
+    return [i for i in items if recorded_before(now_ctx, i)]
+
+
+def set_on(items: list[FocusItem]) -> str:
+    """"19 Sep", or "30 Aug and 19 Sep": the days `items`' baselines were set, once each, in order."""
+    days = list(dict.fromkeys(_when(i.date) for i in items))
+    return days[0] if len(days) == 1 else ", ".join(days[:-1]) + f" and {days[-1]}"
+
+
 # ------------------------------------------------------------------------------------- the verdict
 @dataclass(frozen=True)
 class Outcome:
@@ -550,13 +603,15 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
     """(BLOCK_*, detail) for one item against the current session, or (BLOCK_NONE, "").
 
     The tests run in a FIXED priority so the reported objection is deterministic and the most
-    fundamental one wins: not the same track beats an arbitrary odometer origin beats an estimated
-    clock beats a mismatched lap length beats an unknown-conditions pair beats a known-different
-    one. The last two are PR #258's rule, said out loud instead of silently: an absent record is
+    fundamental one wins: not the same track beats a session older than the baseline beats an
+    arbitrary odometer origin beats an estimated clock beats a mismatched lap length beats an
+    unknown-conditions pair beats a known-different one. The last two are PR #258's rule, said out loud instead of silently: an absent record is
     not evidence of like-for-like, and a driver told "+0.3 s, you improved" across a 12 °C swing has
     been told something the app cannot support."""
     if (now_ctx.get("track") or None) != (now_ctx.get("list_track") or None):
         return BLOCK_TRACK, str(now_ctx.get("track") or "an unknown track")
+    if recorded_before(now_ctx, item):
+        return BLOCK_OLDER, _when(item.date)
     if not item.verified or not now_ctx.get("verified", False):
         return BLOCK_UNVERIFIED, ""
     if item.degraded or now_ctx.get("degraded", False):
@@ -649,21 +704,20 @@ _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
 def _when(date: str | None) -> str:
     """"23 May" from an ISO date — the short form a verdict line says a baseline was set on.
     "last time" when the recording carried no date — no wall clock on its fixes at all, which is
-    NOT the GPS5 era (that stamps every fix from GPSU; see Session.session_date)."""
-    if not date or len(date) < 10:
-        return "last time"
-    # A CALENDAR day, not two in-range-looking integers: the stored date is a string the store only
-    # checks IS a string, and indexing `_MONTHS[int("00") - 1]` does not raise — it is December, so
-    # "2026-00-15" used to be stated as a baseline set on "15 Dec" (and a day of 00 as "0 May").
-    try:
-        day = datetime.date(int(date[0:4]), int(date[5:7]), int(date[8:10]))
-    except ValueError:
+    NOT the GPS5 era (that stamps every fix from GPSU; see Session.session_date).
+
+    A CALENDAR day, not two in-range-looking integers (`_day`): the stored date is a string the store
+    only checks IS a string, and indexing `_MONTHS[int("00") - 1]` does not raise — it is December,
+    so "2026-00-15" used to be stated as a baseline set on "15 Dec" (and a day of 00 as "0 May")."""
+    day = _day(date)
+    if day is None:
         return "last time"
     return f"{day.day} {_MONTHS[day.month - 1]}"
 
 
 _BLOCK_SENTENCE = {
     BLOCK_TRACK: "this is a different track",
+    BLOCK_OLDER: "this session is older than its baseline",
     BLOCK_UNVERIFIED: "one of the two sessions has a provisional start line, so the two lap "
                       "odometers don't line up",
     BLOCK_DEGRADED: "one of the two sessions has ESTIMATED timing, so the clock itself isn't "
@@ -685,6 +739,9 @@ def outcome_sentence(o: Outcome) -> str:
         return (f"{label} — on your focus list from this session ({o.item.median_s:.2f} s over "
                 f"{o.item.count_text}). Next time you're here, Pacer will say whether it moved.")
     if o.kind == OUTCOME_NO_VERDICT:
+        if o.blocker == BLOCK_OLDER:
+            return (f"{label} — no verdict: its baseline is from {o.detail}, after this session; "
+                    "verdicts compare later sessions.")
         if o.blocker == BLOCK_NO_RECORD:
             return (f"{label} — can't say. There's no session record for {o.detail}, so nothing "
                     f"says the two days were comparable; a coach will put up to 4 s a lap on "
@@ -758,6 +815,11 @@ def report_lines(report: Report) -> list[str]:
         return []
     kinds = {o.kind for o in outcomes}
     blockers = {o.blocker for o in outcomes}
+    if blockers == {BLOCK_OLDER}:
+        # Looking back at an older session is not a refusal to explain per corner: the whole list
+        # is newer than it, and one line says so (QA REG-1).
+        return [f"This session is older than your focus list (set on "
+                f"{set_on([o.item for o in outcomes])}); verdicts compare later sessions."]
     if len(outcomes) > 1 and kinds == {OUTCOME_NO_VERDICT} and len(blockers) == 1:
         first = outcomes[0]
         who = _corner_list(outcomes)
@@ -793,11 +855,17 @@ def replace_offer(report: Report | None, shortlist: list[int]) -> list[int] | No
     the list moves on), and today's shortlist is not already the list. Measured on the owner's
     SD_30_08 → SD_19_09: the list stayed 30 Aug's C7/C5/C3 while the page said "Start with C1",
     and the next Sandown check would have re-measured the old three against the old baselines.
-    Replacing is the driver's click, never a default: a list he chose must not move under him."""
+    Replacing is the driver's click, never a default: a list he chose must not move under him.
+
+    NEVER FROM A SESSION OLDER THAN ANY BASELINE ON THE LIST (QA REG-1). Looking back at 30 Aug
+    after 19 Sep's replace offered 30 Aug's three, and one click would have put the older day's
+    baselines under the next check."""
     cids = [int(c) for c in shortlist or []]
     if report is None or not report.active or not cids or report.unrecorded:
         return None
     if all(o.kind == OUTCOME_SET_HERE for o in report.outcomes):
+        return None
+    if any(o.blocker == BLOCK_OLDER for o in report.outcomes):
         return None
     if sorted(o.item.cid for o in report.outcomes) == sorted(cids):
         return None
@@ -822,6 +890,8 @@ def report_headline(report: Report) -> str:
         return f"Focus list · {n} {noun}, set from this session"
     verdicts = report.n_verdicts
     refused = sum(1 for o in report.outcomes if o.kind == OUTCOME_NO_VERDICT)
+    if all(o.blocker == BLOCK_OLDER for o in report.outcomes):
+        return f"Focus list · {n} {noun} · no verdict on an older session"   # never "yet"
     if verdicts == 0:
         return f"Focus list · {n} {noun} · no verdict yet — {_refusal_summary(report)}"
     tail = f", {refused} without enough evidence" if refused else ""
@@ -834,6 +904,8 @@ def _refusal_summary(report: Report) -> str:
     if not blockers:
         return "nothing to compare yet"
     top = max(set(blockers), key=blockers.count)
+    if top == BLOCK_OLDER:
+        return "this session is older than the list"
     if top == BLOCK_NO_RECORD:
         return "these sessions have no record of their conditions"
     if top == BLOCK_CONDITIONS:
