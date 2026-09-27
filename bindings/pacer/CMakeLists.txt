@@ -71,3 +71,42 @@ add_dependencies(
     _pacer
     _generate_pacer_bindings
 )
+
+# THE SITE-PACKAGES COPY IS A WHOLE PACKAGE, NOT JUST THE .so (EVAL-1, 2026-09-27).
+# litgen_setup_module copies the compiled module into <site-packages>/pacer/ and nothing else. A
+# folder with no __init__.py is a PEP 420 namespace PORTION, and so is the repo's C++ pacer/
+# directory, which sits on sys.path whenever Python starts from the repo root (`python -m studio`).
+# The import system returns a namespace package when it finds only portions, and never asks the
+# editable install's finder, which sits after the path finder on sys.meta_path. So
+# `import pacer` "succeeded" with no Laps and no GPMFSource: measured on a fresh env, after
+# `pixi run build`, from the repo root, a subdirectory and outside the repo alike. The README's
+# `pixi run studio -- --demo` failed on every fresh clone. Only the runs that set
+# PYTHONPATH=bindings/pacer (CTest, the smoke task, CI) worked, and on the dev Mac a stale Jun 4
+# __init__.py in site-packages hid it.
+#
+# So the build also deploys the package's own __init__.py and stubs beside the .so. A REGULAR
+# package beats any number of namespace portions wherever it sits on sys.path, so every way of
+# starting Python in this env imports the bindings, from any directory: `pixi run`, `pixi shell`,
+# the env's interpreter run directly, an IDE, and PyInstaller's `import pacer`. There is no
+# variable to set. Same shape as the .so copies (bindings/litgen.cmake): copy_if_different behind
+# a stamp, so a no-op build stays a no-op; the destinations are byproducts, so a deleted copy (a
+# recreated env) comes back on the next build; and it depends on the codegen stamp, so stubs
+# regenerated in this build are the ones deployed. tests/test_bindings_import.py holds it.
+if(NOT SKBUILD)
+    set(_pacer_package_sources "${CMAKE_CURRENT_SOURCE_DIR}/pacer/__init__.py"
+                               "${CMAKE_CURRENT_SOURCE_DIR}/pacer/__init__.pyi")
+    set(_pacer_site_package "${Python_SITEARCH}/pacer")
+    set(_pacer_package_stamp "${CMAKE_CURRENT_BINARY_DIR}/pacer_deploy_package_site_packages.stamp")
+    add_custom_command(
+        OUTPUT "${_pacer_package_stamp}"
+        BYPRODUCTS "${_pacer_site_package}/__init__.py" "${_pacer_site_package}/__init__.pyi"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_pacer_site_package}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_pacer_package_sources}
+                "${_pacer_site_package}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_pacer_package_stamp}"
+        DEPENDS ${_pacer_package_sources} "${_pacer_bindings_stamp}"
+        COMMENT "Deploying the pacer package (__init__.py + stubs) to ${_pacer_site_package}"
+        VERBATIM
+    )
+    add_custom_target(pacer_deploy_package_site_packages ALL DEPENDS "${_pacer_package_stamp}")
+endif()

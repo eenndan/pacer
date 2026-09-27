@@ -97,7 +97,8 @@ pixi run python -m studio.dev.golden_session_dump /tmp/after.json    # AFTER
 pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   # expect max|Δ| = 0
 ```
 
-No `PYTHONPATH` is needed above — the dump puts the built `bindings/pacer` on `sys.path` itself.
+No `PYTHONPATH` is needed above — the dump puts the built `bindings/pacer` on `sys.path` itself,
+and since 2026-09-27 the build deploys the whole package into the env, so no run needs one.
 It used to be needed and was not documented, so the command as written **exited 2 on intact
 footage**: from the repo root `import pacer` resolved to the C++ `pacer/` source directory (a
 namespace package with no `GPMFSource`), and the tool reported that AttributeError as

@@ -2,14 +2,15 @@
 screens to PNG for visual review / regression (NOT wired into the product — a dev tool, like the
 other studio/dev/ scripts).
 
-Run (the PYTHONPATH note is load-bearing):
+Run, after `pixi run build`:
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.ui_capture <recording.mp4> [--out DIR]
+    pixi run python -m studio.dev.ui_capture <recording.mp4> [--out DIR]
 
-Why the PYTHONPATH prefix: a bare run can resolve a STALE site-packages `pacer` that lacks
-`read_accl_columns` and then hangs at load. Pointing PYTHONPATH at the freshly built `bindings/pacer`
-picks up the correct bindings. With no <recording> the tool falls back to the bundled
-`3rdparty/gpmf-parser/samples/hero6.mp4`, so it runs with no user file.
+It used to need a `PYTHONPATH=bindings/pacer` prefix: a bare run could resolve a STALE site-packages
+`pacer` that lacked `read_accl_columns`, and hang at load. The build now deploys the current package
+into site-packages (bindings/pacer/CMakeLists.txt), so the prefix is harmless and unneeded. With no
+<recording> the tool falls back to the bundled `3rdparty/gpmf-parser/samples/hero6.mp4`, so it runs
+with no user file.
 
 THE THEME TRAP THIS BAKES IN: building StudioWindow WITHOUT `theme.apply_theme(app)` renders every
 widget in Qt's DEFAULT LIGHT palette — a false "unstyled / amateur" look that is purely a

@@ -8,6 +8,11 @@ What each pins, and why it could regress:
     collapse onto TWO headlines and a truncated REAL GoPro chapter was reported as "not a GoPro
     recording". The classifier is a pure `staticmethod`, so the whole table is driven here through
     the ACTUAL exceptions `Session.load` raises — no Qt, no window, no dialog.
+  * Pacer's own error vs the file's (EVAL-5) — past the path checks, EVERY exception used to read
+    "it may be corrupt … copy it off the SD card again", so a fresh clone's AttributeError in the
+    bindings called a sha256-checked demo download corrupt. Only `ingest.TelemetryUnreadable` may
+    blame the file now. The real load path with bindings that did not import must say "internal
+    error", name the log, and write the traceback into it.
   * a failed RELOAD (L10-01/L10-06) — the load runs off the UI thread, so `_load` swapping the live
     view out for the "Loading telemetry…" card left the window stranded on an endless card with 0
     controls when the load then failed, while the dialog claimed the previous session was fine.
@@ -26,8 +31,11 @@ import os
 import sys
 import tempfile
 import time
+import types
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERO6 = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")  # intact GoPro clip
+sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # The inert media triplet (no decoder/audio device) — set BEFORE importing the studio widgets.
@@ -43,8 +51,13 @@ _APP = QApplication.instance() or QApplication([])
 # reused rather than re-derived — see tests/test_central_view_realqt.py.
 import test_central_view_realqt as _realqt  # noqa: E402
 
-from studio import data_quality  # noqa: E402
-from studio.app import LOAD_PLACEHOLDER_MS, StudioWindow  # noqa: E402
+from studio import data_quality, ingest, logsetup  # noqa: E402
+from studio.app import (  # noqa: E402
+    LOAD_INTERNAL_ERROR_MESSAGE,
+    LOAD_LOG_LINE,
+    LOAD_PLACEHOLDER_MS,
+    StudioWindow,
+)
 from studio.central_view import CentralView  # noqa: E402
 from studio.session import Session  # noqa: E402
 
@@ -141,23 +154,120 @@ def test_failure_message_distinguishes_five_malformed_inputs():
     print("test_failure_message_distinguishes_five_malformed_inputs OK")
 
 
-def test_failure_message_generic_branch_is_reachable():
-    """The "may be corrupt or unsupported" fallback fired 0/5 on the malformed inputs above — it is
-    the honest catch-all for an UNEXPECTED exception, not dead code. An existing, readable file that
-    fails for some other reason must reach it (and never leak the Python class name)."""
+def test_only_a_telemetry_read_failure_blames_the_file():
+    """EVAL-5. Past the path checks, the classifier used to answer EVERY exception with "it may be
+    corrupt … copy it off the SD card again". So an AttributeError in Pacer's own bindings called
+    a sha256-checked demo download corrupt. Only the parser's typed refusal
+    (`ingest.TelemetryUnreadable`) may say something about the file now. Anything else is Pacer's
+    own error, whatever its class, and never leaks the class name into the sentence."""
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "GX010097.MP4")
         with open(path, "wb") as f:
             # A REAL MP4 box header, not 64 zero bytes: a GoPro-named file whose contents are not
-            # an MP4 container is now its own case (the destroyed-stub branch), so the generic
-            # fallback needs an input that gets PAST every classified case to be reached at all.
+            # an MP4 container is its own case (the destroyed-stub branch), so an input has to get
+            # PAST every path check for the exception's type to decide anything.
             f.write(b"\x00\x00\x00\x18ftypmp41" + b"\x00" * 64)
-        msg = StudioWindow._load_failure_message([path], ValueError("some numpy blow-up"))
-        assert "may be corrupt or unsupported" in msg, msg
-        assert "ValueError" not in msg, msg
-        # No path at all (the "(no file)" case) must not raise.
-        assert StudioWindow._load_failure_message([], RuntimeError("x"))
-    print("test_failure_message_generic_branch_is_reachable OK")
+        refused = StudioWindow._load_failure_message(
+            [path], ingest.TelemetryUnreadable(f"Failed to open file: {path}"))
+        assert "is a GoPro file" in refused and "SD card" in refused, refused
+        for exc in (AttributeError("module 'pacer' has no attribute 'Laps'"),
+                    ImportError("cannot import name '_pacer'"), TypeError("incompatible arguments"),
+                    NameError("name 'x' is not defined"), ValueError("some numpy blow-up"),
+                    RuntimeError("an error that is not the parser's")):
+            msg = StudioWindow._load_failure_message([path], exc)
+            assert msg == LOAD_INTERNAL_ERROR_MESSAGE, (type(exc).__name__, msg)
+        for word in ("corrupt", "SD card", "copy", "Error"):
+            assert word not in LOAD_INTERNAL_ERROR_MESSAGE, word
+        assert "internal error" in LOAD_INTERNAL_ERROR_MESSAGE, LOAD_INTERNAL_ERROR_MESSAGE
+        assert "log" in LOAD_INTERNAL_ERROR_MESSAGE, LOAD_INTERNAL_ERROR_MESSAGE
+        # No path at all (the "(no file)" case) must not raise, and blames nothing it did not read.
+        no_path = StudioWindow._load_failure_message([], RuntimeError("x"))
+        assert no_path == LOAD_INTERNAL_ERROR_MESSAGE, no_path
+        assert "SD card" in StudioWindow._load_failure_message(
+            [], ingest.TelemetryUnreadable("Failed to open file: x"))
+    print("test_only_a_telemetry_read_failure_blames_the_file OK")
+
+
+def _first_load_failure(paths, exc):
+    """`_on_load_failed` on a window that has no session yet (the fresh-clone state) -> the dialog's
+    text, and the welcome screen's error sentence."""
+    win, _view = _window()
+    del win.session  # the pre-first-load state
+    win.view = None
+    DIALOGS.clear()
+    win._on_load_failed(paths, exc)
+    assert DIALOGS, "no failure dialog was raised"
+    welcome_error = win.centralWidget().error_label.text()
+    win.close()
+    _APP.processEvents()
+    return DIALOGS[-1][1], welcome_error
+
+
+def _log_since(path, offset):
+    with open(path, encoding="utf-8") as f:
+        f.seek(offset)
+        return f.read()
+
+
+def test_bindings_that_did_not_import_are_reported_as_pacers_own_error():
+    """EVAL-1's load, end to end. On a fresh clone `import pacer` was a namespace package, so the
+    REAL `Session.load` of an intact GoPro clip died with "module 'pacer' has no attribute 'Laps'".
+    The dialog then told the user to copy the file off the SD card again. Re-created here by
+    handing the loader such an empty module; nothing else is stubbed. The dialog must call it
+    Pacer's error and say how to open the log. The session log, a real one in this process's jail,
+    must hold the traceback at ERROR."""
+    from studio import load as _load
+    log = logsetup.configure()
+    assert log is not None, "no session log could be opened in the jail"
+    offset = os.path.getsize(log)
+    real = _load.pacer
+    _load.pacer = types.ModuleType("pacer")  # what the namespace package offered: no attributes
+    try:
+        try:
+            Session.load([_HERO6])
+            exc = None
+        except Exception as e:  # noqa: BLE001 — mirrors SessionLoadWorker.run
+            exc = e
+    finally:
+        _load.pacer = real
+    assert isinstance(exc, AttributeError) and "'Laps'" in str(exc), repr(exc)
+    assert StudioWindow._load_failure_message([_HERO6], exc) == LOAD_INTERNAL_ERROR_MESSAGE
+
+    text, welcome_error = _first_load_failure([_HERO6], exc)
+    assert LOAD_INTERNAL_ERROR_MESSAGE in text, text
+    assert "corrupt" not in text and "SD card" not in text, text
+    assert f"{LOAD_LOG_LINE}\n{logsetup.display_path(log)}" in text, text
+    assert LOAD_INTERNAL_ERROR_MESSAGE in welcome_error, welcome_error
+    written = _log_since(log, offset)
+    assert "ERROR" in written and "failed to load" in written, written[-800:]
+    assert "Traceback (most recent call last)" in written and "'Laps'" in written, written[-800:]
+    print("test_bindings_that_did_not_import_are_reported_as_pacers_own_error OK")
+
+
+def test_a_telemetry_read_failure_still_names_the_file():
+    """The other half: a file the parser really refuses keeps its file sentence, through the REAL
+    `Session.load`. A truncated GoPro chapter raises the typed error, which is still the
+    RuntimeError every older caller caught, with the parser's own words. It gets no internal-error
+    wording and no log pointer, and it is logged as a warning, not an error."""
+    log = logsetup.configure()
+    offset = os.path.getsize(log) if log else 0
+    with tempfile.TemporaryDirectory() as root:
+        truncated = _malformed(root)["truncated"]
+        try:
+            Session.load([truncated])
+            exc = None
+        except Exception as e:  # noqa: BLE001 — mirrors SessionLoadWorker.run
+            exc = e
+        assert isinstance(exc, ingest.TelemetryUnreadable), repr(exc)
+        assert isinstance(exc, RuntimeError) and str(exc).startswith("Failed to open file"), exc
+        text, welcome_error = _first_load_failure([truncated], exc)
+    assert "is a GoPro file" in text and "Copy it off the SD card again" in text, text
+    assert "internal error" not in text and LOAD_LOG_LINE not in text, text
+    assert "is a GoPro file" in welcome_error, welcome_error
+    if log:
+        written = _log_since(log, offset)
+        assert "WARNING" in written and "failed to load" in written, written[-800:]
+    print("test_a_telemetry_read_failure_still_names_the_file OK")
 
 
 # ============================================================ L10-01 / L10-06 · a failed reload
@@ -347,7 +457,9 @@ def test_zero_lap_notice_still_supersedes_the_timing_notice():
 def _run_all():
     assert LOAD_PLACEHOLDER_MS > 0
     test_failure_message_distinguishes_five_malformed_inputs()
-    test_failure_message_generic_branch_is_reachable()
+    test_only_a_telemetry_read_failure_blames_the_file()
+    test_bindings_that_did_not_import_are_reported_as_pacers_own_error()
+    test_a_telemetry_read_failure_still_names_the_file()
     test_failed_reload_keeps_then_restores_the_working_ui()
     test_failed_reload_rebuilds_the_ui_when_the_loading_card_did_go_up()
     test_first_load_failure_has_no_previous_session_line()
