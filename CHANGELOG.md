@@ -6,6 +6,70 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-09-27
+
+Everything merged since v0.5.0: 8 pull requests, #436 to #443, from the round-3 QA of v0.5.0: its
+regressions, the next race day end to end, a fresh clone's first hour. Each line names its pull
+request (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+
+### Highlights
+
+- **A fresh clone runs.** On a new machine, `pixi run studio -- --demo` said the telemetry was
+  corrupt: `import pacer` found the C++ sources, not the bindings. The build now installs the whole
+  bindings package, and CI launches the app the README's way (#436)
+- **The slider lands where you let go.** While the handle was held, the playing video pulled it back
+  to the lagging picture, so a release could jump up to 102 s; a held handle now follows only the
+  pointer (on MK, 4 of 20 drag sequences missed, now 0 of 20) (#438)
+- **The demo shows the loop.** Every demo open lands on the first-open debrief, saving nothing, and
+  the README and the first-lap guide describe the debrief and the focus list (#437)
+- **Your plan stays in reach.** Show focus list shows it, a one-line focus row stands in when space
+  is short, Coaching ▸ Compare with your previous PB is one click, and an older session is no longer
+  judged against a newer focus list (#440, #442)
+- **Comparison videos play anywhere.** They open on 1080p panes; Source is capped at one 4K frame,
+  so the hardware encoder takes it (level 5.1, not 6.0). The last frame shows both lap times, and
+  every clip's finish frame is a keyframe, so its lap time reads cleanly (#439)
+- **Honest messages, one minus.** An internal error no longer blames your file; a first open with
+  poor GPS says why it decides nothing; every signed number, exports included, uses one true minus
+  (#436, #443)
+- **The public pages match the app.** Its screenshots are re-shot, and the counts, times and sizes
+  they quote are now checked by tests (#441)
+
+### Changed
+
+- A first open on poor GPS lands on your usual layout and says why ("GPS quality low (10% of fixes
+  rejected)…"); Add to focus list is off there, as its corner could never be checked (#443)
+- The lap card of a new PB says so beside the time ("NEW PB · −0.10 s vs 30 Aug") (#443)
+- The comparison video keeps its own resolution, opening on 1080p panes; "Source" is capped at one
+  4K frame, as two 4K panes (3840×4320) were a 299 MB file phones don't play (#439)
+
+### Fixed
+
+- One minus everywhere: Coaching rows, chart readouts, the map key and exported overlays printed a
+  hyphen ("Δ -0.31") where the Stats page prints "−" (#443)
+- Each Coaching row states its "N of M laps" count once, and its bar names the lap it reads (#443)
+- The lap card's coaching line no longer ends cut mid-word ("4 of 36 laps match…") (#443)
+- Opening a session older than your focus list no longer grades it backwards or offers to replace
+  the newer list with its corners: one line says the list is newer (#442)
+- A first launch no longer sits silent for about 15 s: it says Qt is loading for the first time, and
+  a first `--demo` says how big its one download is (11 MB) (#441)
+- Coaching ▸ Show focus list shows the list: the Coaching page full-window, where it has room (#440)
+- A focus list the Coaching page has no room for keeps one line, with a pending "Both dry?"; a click
+  shows it whole (#440)
+- Coaching ▸ Compare with your previous PB, after the debrief and its card have gone (#440)
+- A reference pick no longer moves the folder File ▸ Open starts in (#440)
+- The comparison video ends on both lap times as the table shows them; it stopped a frame short, at
+  0:46.799 / 0:46.903 for 0:46.808 / 0:46.912 (#439)
+- The first export dialog of a session states the size and time at "Source" once the footage is
+  measured, and says it is measuring until then (#439)
+- Dragging the playback slider while the video plays keeps the handle under the pointer, and the
+  video resumes where you let go; on release the handle could jump over a minute away (#438)
+- The demo lands on its first-open debrief again and still saves nothing: its first line says so,
+  and its focus list lasts only while the demo is open (#437)
+- `pixi run studio` loads recordings and `--demo` on a fresh clone: the build now installs the whole
+  bindings package into the environment, so no run needs `PYTHONPATH` (#436)
+- A load that fails on Pacer's own error says so and names the log, instead of calling your file
+  corrupt and sending you back to the SD card (#436)
+
 ## [0.5.0] — 2026-09-26
 
 Everything merged since v0.4.2: 16 pull requests, #419 to #434, all from the 2026-09-26 hands-on QA
@@ -14,9 +78,9 @@ Everything merged since v0.4.2: 16 pull requests, #419 to #434, all from the 202
 
 ### Highlights
 
-- **Every way you open a recording opens all of it.** File ▸ Open, the welcome button, a drop and
-  the command line give the same whole recording, in chapter order; a new recording's PB is never
-  decided on part of it (SD_19_09 via Open had said 0:46.862 for a true 0:46.808) (#420)
+- **Opening a recording gives you all of it.** File ▸ Open, the welcome button and a drop open the
+  whole recording in chapter order, and command-line chapters load in chapter order; a new PB is
+  never decided on part of one (SD_19_09 via Open had said 0:46.862 for a true 0:46.808) (#420)
 - **The first-open debrief lands right.** A tab click returns to the usual layout; at a new
   circuit the map and its start-line cue stay up and the debrief waits for the line; focus
   baselines are the Stats corner measurements, and a check offers today's top three (#424, #426)
@@ -1616,7 +1680,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/eenndan/pacer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/eenndan/pacer/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/eenndan/pacer/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/eenndan/pacer/compare/v0.4.0...v0.4.1
