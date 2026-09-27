@@ -363,12 +363,14 @@ _CORE_TOLERANCE = 0.05
 def _ctest_registrations() -> int:
     """How many tests `ctest -N` would list, derived from tests/CMakeLists.txt and what it globs.
 
-    Four registration forms: the `add_pacer_test` macro (one Catch2 executable each), every
+    Five registration forms: the `add_pacer_test` macro (one Catch2 executable each), every
     `tests/test_*.py` (registered by the file's glob, one each), `add_footage_test` (one real-footage
-    check each, which CTest reports Skipped wherever its recording is absent — CI included) and
-    `add_soak_test` (one soak each, reported Skipped wherever PACER_SOAK is not 1). Derived rather
-    than pinned, so ADDING A TEST updates the expected number by itself and only the PROSE has to
-    catch up."""
+    check each, which CTest reports Skipped wherever its recording is absent — CI included),
+    `add_videotoolbox_test` (one hardware-encoder check each, Skipped wherever VideoToolbox is
+    absent — CI again) and `add_soak_test` (one soak each, reported Skipped wherever PACER_SOAK is
+    not 1). Derived rather than pinned, so ADDING A TEST updates the expected number by itself and
+    only the PROSE has to catch up. Until 2026-09-27 this counted four of the five, 170 against
+    `ctest -N`'s 176, which a floor 25 wide never noticed."""
     with open(_CMAKE, encoding="utf-8") as f:
         text = f.read()
     assert re.search(r"file\(GLOB \w+ CONFIGURE_DEPENDS \S*/test_\*\.py\)", text), (
@@ -377,10 +379,21 @@ def _ctest_registrations() -> int:
     catch2 = len(re.findall(r"^add_pacer_test\(", text, re.M))
     python = len([n for n in os.listdir(os.path.dirname(_CMAKE))
                   if n.startswith("test_") and n.endswith(".py")])
-    footage = len(re.findall(r"^add_footage_test\(", text, re.M))
-    soak = len(re.findall(r"^add_soak_test\(", text, re.M))
-    assert catch2 and python and footage, "a registration form found nothing — this check has gone vacuous"
-    return catch2 + python + footage + soak
+    skipped = _skippable_registrations()
+    assert catch2 and python, "a registration form found nothing — this check has gone vacuous"
+    return catch2 + python + sum(skipped.values())
+
+
+def _skippable_registrations() -> dict[str, int]:
+    """The registrations CI reports Skipped by name, per form: `footage`, `videotoolbox`, `soak`."""
+    with open(_CMAKE, encoding="utf-8") as f:
+        text = f.read()
+    got = {kind: len(re.findall(rf"^add_{kind}_test\(", text, re.M))
+           for kind in ("footage", "videotoolbox", "soak")}
+    assert got["footage"] and got["videotoolbox"], (
+        f"tests/CMakeLists.txt registers {got}: a form found nothing, so this check has gone "
+        "vacuous")
+    return got
 
 
 def _core_lines() -> int:
@@ -482,6 +495,202 @@ def test_public_pages_quote_the_real_core_size():
             checked += 1
     assert checked >= 2, f"only {checked} core-size claims found across both pages"
     print(f"test_public_pages_quote_the_real_core_size OK ({want} lines, {checked} claims)")
+
+
+# ------------------------------------------------------------------ 7b. what CI skips, and the times
+# QA ROUND 3 (EVAL-6, 2026-09-26) found four published numbers stale, and nothing held any of them:
+#   * "the fifteen `footage.*` checks" CI skips, while tests/CMakeLists.txt registered sixteen, and
+#     no page mentioned the six `videotoolbox.*` export checks CI also reports Skipped;
+#   * CI "in about six minutes", while its job ran 7.5-9.7 min on `main`;
+#   * `pixi run golden` "takes about a second", while AGENTS.md said ~8 s and the lane measured 32 s;
+#   * "14 features measured and refused", held in tests/test_measured_figures.py.
+# The two counts are derived here, like the suite floor above: a claim is a floor ("16+", within a
+# slack) or a count that must be exact. A time cannot be derived from the tree, so it has to carry
+# the date it was measured on, and where two documents quote one time they must agree.
+_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+          "fifteen sixteen seventeen eighteen nineteen twenty").split()
+_NUM = r"(\d+|" + "|".join(sorted(_WORDS, key=len, reverse=True)) + r")"
+_TICK = r"(?:`|<code>|</code>)?"
+_SKIP_CLAIMS = {
+    "footage": (rf"\b{_NUM}(\+?)\s+{_TICK}footage\.\*{_TICK}\s+checks",
+                rf"\b{_NUM}(\+?)\s+real-footage checks",
+                rf"\b{_NUM}(\+?)\s+checks re-measure something on a real recording"),
+    "videotoolbox": (rf"\b{_NUM}(\+?)\s+{_TICK}videotoolbox\.\*{_TICK}\s+(?:export\s+)?checks",),
+}
+_SKIP_SLACK = {"footage": 4, "videotoolbox": 2}
+_SKIP_PAGES = ("README.md", os.path.join("docs", "index.html"), "AGENTS.md",
+               os.path.join("tests", "README.md"), os.path.join("studio", "README.md"),
+               *(os.path.join("docs", n) for n in sorted(os.listdir(_DOCS)) if n.endswith(".md")))
+
+
+def _count_value(got: str) -> int:
+    return int(got) if got.isdigit() else _WORDS.index(got.lower())
+
+
+def _skip_claim_problems(rel: str, text: str, kind: str, registered: int) -> tuple[int, list[str]]:
+    """(claims of `kind` in `text`, what is wrong with them). A floor ("16+") must be at most what
+    is registered and within `_SKIP_SLACK`; a bare count, in digits or words, must be exact."""
+    flat = " ".join(text.split())
+    found, problems = 0, []
+    for pattern in _SKIP_CLAIMS[kind]:
+        for got, plus in re.findall(pattern, flat, re.I):
+            found += 1
+            n = _count_value(got)
+            if plus and n > registered:
+                problems.append(f"{rel} says {got}+ {kind}.* checks; tests/CMakeLists.txt "
+                                f"registers {registered}")
+            elif plus and registered - n > _SKIP_SLACK[kind]:
+                problems.append(f"{rel} says {got}+ {kind}.* checks, {registered - n} below the "
+                                f"{registered} registered: raise the floor")
+            elif not plus and n != registered:
+                problems.append(f"{rel} says {got} {kind}.* checks; tests/CMakeLists.txt registers "
+                                f"{registered}: write that, or a floor ('{registered}+')")
+    return found, problems
+
+
+def test_the_pages_count_what_ci_skips():
+    """Every count of the `footage.*` and `videotoolbox.*` checks, on the public pages and in the
+    developer docs, is true of tests/CMakeLists.txt; both public pages state both."""
+    registered = _skippable_registrations()
+    problems, per_page = [], {}
+    for rel in _SKIP_PAGES:
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            text = f.read()
+        if rel.endswith(".html"):
+            text = _without_comments(text)
+        for kind in _SKIP_CLAIMS:
+            n, found = _skip_claim_problems(rel, text, kind, registered[kind])
+            per_page[(rel, kind)] = n
+            problems += found
+    assert not problems, "\n".join(problems)
+    for rel in ("README.md", os.path.join("docs", "index.html")):
+        for kind in _SKIP_CLAIMS:
+            assert per_page[(rel, kind)], (
+                f"{rel} no longer says how many {kind}.* checks CI skips — if that was "
+                "deliberate, "
+                "take it out of this check too, so the check cannot go vacuous")
+    # Both directions, on planted text: each stale shape EVAL-6 found fails, the true ones pass.
+    fp, vt = registered["footage"], registered["videotoolbox"]
+    for kind, text, want in (
+            ("footage", "the fifteen `footage.*` checks", 1 if fp != 15 else 0),
+            ("footage", f"the {fp + 1}+ `footage.*` checks", 1),
+            ("footage", f"the {fp - _SKIP_SLACK['footage'] - 1}+ <code>footage.*</code> checks", 1),
+            ("footage", f"with the {fp} real-footage checks", 0),
+            ("footage", f"{_WORDS[fp].capitalize()} checks re-measure something on a real "
+                        "recording", 0),
+            ("videotoolbox", f"the {vt + 1} `videotoolbox.*` export checks", 1),
+            ("videotoolbox", f"the {vt}+ <code>videotoolbox.*</code> export checks", 0)):
+        n, found = _skip_claim_problems("planted", text, kind, registered[kind])
+        assert n == 1 and len(found) == want, (text, found)
+    print(f"test_the_pages_count_what_ci_skips OK ({registered}, "
+          f"{sum(per_page.values())} claims across {len(_SKIP_PAGES)} files)")
+
+
+_MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
+_MEASURED = re.compile(rf"measured \d{{1,2}} (?:{_MONTHS}) 20\d\d")
+
+
+def _sentence(flat: str, anchor: str, rel: str) -> str:
+    """The sentence of `flat` holding `anchor`, up to its closing parenthesis and full stop."""
+    at = flat.find(anchor)
+    assert at >= 0, f"{rel} no longer says {anchor!r} — if that was deliberate, update this check"
+    end = flat.find(").", at)
+    return flat[at:end + 2 if end >= 0 else None]
+
+
+def test_the_pages_date_their_timings_and_agree_on_them():
+    """A duration on the README carries the date it was measured, and agrees with its sources.
+
+    CI's minutes must bracket the seconds range quoted beside them. The golden gate's range must
+    hold AGENTS.md's figure for the same task. "N tests at a time" is the CTEST_PARALLEL_LEVEL of
+    the `test` task that CI runs. The install size is dated, and the landing page quotes the
+    same number of GB."""
+    with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
+        readme = " ".join(f.read().split())
+    ci = _sentence(readme, "CI runs all of it on every pull request", "README.md")
+    m = re.search(r"in (\w+) to (\w+) minutes .*?(\d+)–(\d+) s\)", ci)
+    assert m and _MEASURED.search(ci), f"README.md's CI time is undated or unparsed: {ci!r}"
+    lo_min, hi_min, lo_s, hi_s = (_count_value(m.group(1)), _count_value(m.group(2)),
+                                  int(m.group(3)), int(m.group(4)))
+    assert lo_min * 60 <= lo_s <= hi_s <= hi_min * 60, (
+        f"README.md says CI takes {m.group(1)} to {m.group(2)} minutes but quotes {lo_s}–{hi_s} s")
+
+    golden = _sentence(readme, "`pixi run golden`, the gate you actually run", "README.md")
+    g = re.search(r"\((\d+)–(\d+) s on the development Mac, (measured [^)]*)\)", golden)
+    assert g and _MEASURED.search(g.group(3)), f"README.md's golden time is undated: {golden!r}"
+    with open(os.path.join(_REPO, "AGENTS.md"), encoding="utf-8") as f:
+        row = re.search(r"^\| `pixi run golden` \|.*?~(\d+) s \|$", f.read(), re.M)
+    assert row, "AGENTS.md's task table no longer times `pixi run golden`"
+    assert int(g.group(1)) <= int(row.group(1)) <= int(g.group(2)), (
+        f"README.md says golden takes {g.group(1)}–{g.group(2)} s, AGENTS.md ~{row.group(1)} s")
+
+    with open(os.path.join(_REPO, "pyproject.toml"), encoding="utf-8") as f:
+        level = re.search(r'^test = \{.*CTEST_PARALLEL_LEVEL = "(\d+)"', f.read(), re.M)
+    at_a_time = re.search(r"\b(\w+) tests at a time", ci)
+    assert level and at_a_time and _count_value(at_a_time.group(1)) == int(level.group(1)), (
+        f"README.md says {at_a_time and at_a_time.group(0)!r}; the test task runs "
+        f"CTEST_PARALLEL_LEVEL={level and level.group(1)}")
+
+    size = _sentence(readme, "The environment `pixi install` puts on disk", "README.md")
+    gb = re.search(r"about (\d+) GB \(", size)
+    assert gb and _MEASURED.search(size), f"README.md's install size is undated: {size!r}"
+    page = " ".join(_page().split())
+    assert f"about {gb.group(1)} GB on disk" in page, (
+        f"docs/index.html does not quote README.md's install size (about {gb.group(1)} GB)")
+    print(f"test_the_pages_date_their_timings_and_agree_on_them OK (CI {lo_s}–{hi_s} s, golden "
+          f"{g.group(1)}–{g.group(2)} s vs AGENTS.md ~{row.group(1)} s, -j{level.group(1)}, "
+          f"{gb.group(1)} GB)")
+
+
+def test_the_pages_quote_the_demo_s_real_size():
+    """"About 11 MB" is `studio/demo.py`'s pinned asset, rounded: that docstring said ~8 MB of an
+    11,061,721-byte download (QA EVAL-9)."""
+    tree = ast.parse(open(os.path.join(_REPO, "studio", "demo.py"), encoding="utf-8").read())
+    size = next(n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "_DEMO_BYTES" for t in n.targets))
+    want, found = round(size / 1e6), []
+    for rel in (os.path.join("docs", "FIRST_LAP.md"), "README.md",
+                os.path.join("docs", "index.html"), os.path.join("studio", "README.md"),
+                os.path.join("studio", "demo.py")):
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            flat = " ".join(re.sub(r"\n>\s?", " ", f.read()).split())
+        found += [(rel, int(n)) for n in re.findall(r"about (\d+) MB", flat)]
+    assert len(found) >= 3, f"only {found} demo-size claims found — the check has gone vacuous"
+    wrong = [f"{rel} says about {n} MB" for rel, n in found if n != want]
+    assert not wrong, (f"the demo is {size:,} B (studio/demo.py _DEMO_BYTES), about {want} MB: "
+                       f"{wrong}")
+    print(f"test_the_pages_quote_the_demo_s_real_size OK ({len(found)} claims, {want} MB)")
+
+
+# Words v0.5.0 retired from the UI (#425 named the ideal lap one thing everywhere, and the chart
+# legend followed), and that the public pages kept using in prose and alt text until QA round 3
+# (EVAL-3). Alt text counts: it is what a reader who cannot see the image is told the image says.
+# CHANGELOG.md is history and exempt; code identifiers (`theoretical_best`) do not match.
+_RETIRED = {
+    "theoretical best": "the ideal lap (#425: one name on every surface)",
+    "theoretical ideal": "the ideal lap (#425)",
+    "as fast as this lap": "'Laps this fast', the IDEAL LAP table's column (#425)",
+    "Δ to ideal (synthetic)": "'Δ to ideal lap', the chart legend's words",
+}
+
+
+def test_no_public_page_uses_a_retired_ui_word():
+    pages = ["README.md", os.path.join("studio", "README.md"),
+             *(os.path.join("docs", n) for n in sorted(os.listdir(_DOCS))
+               if n.endswith((".md", ".html")))]
+    hits = []
+    for rel in pages:
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            text = f.read()
+        flat = " ".join((_without_comments(text) if rel.endswith(".html") else text).split()).lower()
+        hits += [f"{rel}: {word!r} — the app says {now}" for word, now in _RETIRED.items()
+                 if word.lower() in flat]
+    assert not hits, "retired UI words on the public pages:\n  " + "\n  ".join(hits)
+    assert "theoretical best" in " ".join(open(os.path.join(_REPO, "CHANGELOG.md"),
+                                               encoding="utf-8").read().split()).lower(), (
+        "CHANGELOG.md no longer holds the retired name either — this check has lost its control")
+    print(f"test_no_public_page_uses_a_retired_ui_word OK ({len(pages)} pages, "
+          f"{len(_RETIRED)} words)")
 
 
 # ------------------------------------------------------------------ 7. the clip
@@ -708,6 +917,10 @@ if __name__ == "__main__":
     test_markdown_images_resolve()
     test_public_pages_quote_the_real_suite_size()
     test_public_pages_quote_the_real_core_size()
+    test_the_pages_count_what_ci_skips()
+    test_the_pages_date_their_timings_and_agree_on_them()
+    test_the_pages_quote_the_demo_s_real_size()
+    test_no_public_page_uses_a_retired_ui_word()
     test_the_clip_is_silent_small_and_still_on_request()
     test_the_clip_check_fails_on_each_planted_defect()
     print("ALL OK")

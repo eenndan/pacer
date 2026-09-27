@@ -135,7 +135,7 @@ the real export dialog over, then reads the files it writes.
 
 ## Real-footage checks
 
-Fifteen checks re-measure something on a real recording, and each is its own CTest registration,
+Sixteen checks re-measure something on a real recording, and each is its own CTest registration,
 `footage.<check>`. Without its recording CTest lists it under *"The following tests did not run: …
 (Skipped)"* — a skip, never a pass, and never a failure (CI has no footage at all). **When you
 report gates, name every `footage.*` that skipped.** Until 2026-09-19 each of them printed a skip

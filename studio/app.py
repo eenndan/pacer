@@ -764,7 +764,7 @@ class StudioWindow(QMainWindow):
         self._sync_view_menu()
 
     def _open_demo(self):
-        """Welcome-screen "Open demo": resolve a real demo lapping recording OFF the UI thread
+        """Welcome-screen "Open demo": resolve the synthetic demo session OFF the UI thread
         (env / cache / a one-time release download — see studio.demo), then load it.
 
         The resolve used to run inline in this slot, so a first run with no cache did a network
@@ -3982,11 +3982,11 @@ def main(argv: list[str] | None = None) -> int:
     full = "--full" in argv or "--chaptered" in argv
     # No path on the CLI -> open to the welcome empty state (the demo is one click from there).
     paths = [a for a in argv if not a.startswith("-")]
-    # --demo: open a real demo lapping recording on startup (resolved via env/cache/release
-    # download; see studio.demo). This is the packaged-app first-run path. If the demo can't be
-    # resolved (offline / download failed) we do NOT fall back to the bundled gpmf clips — they have
-    # zero real laps, so a first-run user would see a blank-looking studio. StudioWindow shows the
-    # honest "demo unavailable" welcome state instead.
+    # --demo: open the synthetic demo session on startup — generated, not filmed — resolved via
+    # env/cache/release download (see studio.demo). This is the packaged-app first-run path. If the
+    # demo can't be resolved (offline / download failed) we do NOT fall back to the bundled gpmf
+    # clips — they have zero real laps, so a first-run user would see a blank-looking studio.
+    # StudioWindow shows the honest "demo unavailable" welcome state instead.
     demo_startup = False
     if not paths and "--demo" in argv:
         path = demo.resolve_demo_recording()

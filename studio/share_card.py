@@ -47,8 +47,8 @@ CARD_H = 1350
 
 # The honest label for the Δ-to-ideal: the ideal is `session.ideal_total` — the quickest time the
 # driver has done through each corner and each straight, stitched together — NOT a lap anyone
-# actually drove. Kept consistent with the plots' "SYNTHETIC theoretical ideal … Not a single
-# drivable lap" wording (D1/#53). The sublabel is drawn UNELIDED at 24 px from `pad` against the
+# actually drove. Kept consistent with the plots' "the SYNTHETIC ideal lap … Not a single drivable
+# lap" wording (D1/#53). The sublabel is drawn UNELIDED at 24 px from `pad` against the
 # card's 936 px content box — pinned by tests/test_share_card.py.
 IDEAL_LABEL = "vs your ideal lap"
 
@@ -58,7 +58,7 @@ def ideal_sublabel(laps: int | None) -> str:
 
     §5.4: this card is the app's most public surface and the least hoverable — it lands in a group
     chat with no tooltip and no page around it — and it was the one place the ideal was printed
-    with no lap count while every in-app surface carried `theoretical best · N laps`. The ideal is
+    with no lap count while every in-app surface carried `ideal lap · N laps`. The ideal is
     an order statistic: `+0.95 s` over 5 laps and `+1.49 s` over 65 are the SAME DRIVING on the
     owner's D24 recording (corner_model.IdealSample has the measured table). A shared image
     claiming a gap without saying what it was minimised over invites exactly the comparison the

@@ -18,7 +18,7 @@ Float formatting policy (two deliberately different precisions):
 DISCLOSURES TRAVEL WITH THE NUMBER (§5.4). Everything written here leaves the app: there is no
 tooltip, no neighbouring tile and no hover behind an exported file. So every value that is an
 ORDER STATISTIC rather than a measurement carries what it was taken over, in the file — the ideal
-lap's `theoretical best · N laps` and its full sample sentence, both read straight off
+lap's `ideal lap · N laps` and its full sample sentence, both read straight off
 `corner_model.IdealSample` (the same object the Stats tile caption reads), never re-composed here.
 
 EVERY WRITE IS ATOMIC (`_atomic_write`: temp file + `os.replace`), the same contract the four
@@ -84,7 +84,7 @@ class SummaryRow(NamedTuple):
     """One laps.csv trailer row: the machine label, the value, and the row's DISCLOSURE.
 
     §5.4 — the trailer printed "Theoretical best,62.869" bare, while every in-app surface showing
-    that same number captions it `theoretical best · N laps`. The ideal is a minimum over the
+    that same number captions it `ideal lap · N laps`. The ideal is a minimum over the
     session's clean laps, so the count is not decoration: on the owner's D24 three-chapter
     recording the same driving reads 67.917 s over 5 laps and 66.709 s over 65
     (`corner_model.IdealSample`). A CSV row stating the second without the "65" invites a
@@ -442,7 +442,7 @@ class SummarySection:
 
     `rows` are `(label, value)` where the label carries any caption the tile carries — the sample
     ("median lap · 24 clean laps"), the source lap ("top speed · lap 12"), the disclosure
-    ("theoretical best · 24 laps") — because an exported line has no tile beneath it to put a
+    ("ideal lap · 24 laps") — because an exported line has no tile beneath it to put a
     caption on. An EMPTY value is the em-dash case: the accessor returned None, and the renderers
     print `DASH`, never a 0 (the None-not-zero rule the whole Stats layer is built on).
 
@@ -719,7 +719,7 @@ def stats_summary_text(session, unit: str | None = None, *, title: str = "") -> 
     unrecognised (`timing_verified` False — the state any unknown circuit loads in), the app
     DISABLES the share-card action outright and the report prints "PROVISIONAL — every lap time and
     split below is measured from an arbitrary point", while this text published a best lap, a
-    median, a race pace and `theoretical best · 38 laps` with no qualifier anywhere in it. Same
+    median, a race pace and an ideal lap over 38 laps with no qualifier anywhere in it. Same
     `_timing_meta` the report row uses, so the two cannot say different things.
 
     Disclosure, not refusal: the export path's standing choice (the report states the caveat rather
@@ -797,7 +797,7 @@ def write_report_html(path: str, session, source_label: str = "",
     document a driver mails to a coach carried 40 lap rows and not one of the session numbers the
     app leads with — no pace distribution, no ideal lap, no peaks. `stats_summary` supplies them,
     reading the SAME accessors the Stats page reads, and the IDEAL LAP group brings its
-    `theoretical best · N laps` caption and its sample sentence with it (§5.4).
+    `ideal lap · N laps` caption and its sample sentence with it (§5.4).
 
     IT ALSO SAYS WHAT THE TIMING IS WORTH. The meta table gains a `Timing` row off
     `timing_verified` / `timing_quality` — the two facts that qualify every number below it. The

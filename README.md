@@ -88,7 +88,7 @@ of your clean laps have already matched it, and which lap set the mark. The gain
 headline. It is an *order statistic*, so it falls as a session gets longer — the app says how many
 laps it was minimised over rather than letting you read it as a floor.
 
-<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP on Sandown 3h: 0:45.809 theoretical best over 62 laps, −1.27 s on the table vs your best, stitched from 13 of your 62 clean laps across 7 corners and 8 straights, with a per-segment gain table whose nine rows hold 1.13 s of the 1.27 s">
+<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP on Sandown 3h: an ideal lap of 0:45.809 over 62 laps, 1.27 s on the table vs your best, stitched from 13 of your 62 clean laps across 7 corners and 8 straights, with a per-segment table of the gain, how many laps were already that fast there and which lap set the mark, whose nine rows hold 1.13 s of the 1.27 s">
 
 **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation. Brake
 points, corner apexes and draggable start/sector lines sit on it, and every mark is named in the
@@ -120,7 +120,7 @@ DRIVING, SPEED · G and **DATA TRUST**, which states what the timing was derived
 fixes were rejected, and the IMU↔GPS cross-check with its **gain** (correlation alone cannot catch
 a mis-scaled channel).
 
-<img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of 70 laps used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check reading lateral r=+0.96, lateral gain ×1.09, longitudinal r=+0.77 over 767,312 samples, and a gyroscope rotation cross-check — above the friction circle, with a 1.50 g grip envelope">
+<img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of the 69 laps found used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag and 26.2 ppm of clock drift, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check that agrees, the g-meter's cornering force matching the GPS path's within 9 %, and a gyroscope rotation cross-check that agrees within 2.7 % over 62 closed laps — above the friction circle, with a 1.50 g grip envelope">
 
 **Exports.** Lap times and per-lap channels as CSV, a session report as HTML, a shareable lap card
 as an image, and the telemetry burned onto the footage as an MP4 (via ffmpeg) —
@@ -163,12 +163,14 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   guard proves the app never writes into its own source tree, from a tripwire on every write path
   Python and Qt expose.
 - **160+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
-  widgets and measure them. CI runs all of it on every pull request, four tests at a time, in about
-  six minutes (its test step on the last three `main` runs, September 2026: 322–370 s), plus an
-  end-to-end offscreen smoke — except the fifteen `footage.*` checks, which need a real recording
-  CI does not have, and one crash soak that runs on every push to `main` instead; CTest lists those
-  by name as *Skipped*. `pixi run golden`, the gate you actually run after every maths change,
-  takes about a second.
+  widgets and measure them. CI runs all of it on every pull request, four tests at a time, plus an
+  end-to-end offscreen smoke, in five to eight minutes (the whole job on the last five pull
+  requests, measured 27 September 2026: 315–452 s). It skips what its runner cannot run: the 16+
+  `footage.*` checks, which need a real recording, the 6+ `videotoolbox.*` export checks, which
+  need Apple's hardware encoder, and one crash soak that runs on every push to `main` instead.
+  CTest lists every one of them by name as *Skipped*. `pixi run golden`, the gate you actually run
+  after every maths change, takes seconds, not minutes (8–14 s on the development Mac, measured
+  27 September 2026).
 
 Depth: **[AGENTS.md](AGENTS.md)** (the authoritative developer reference) and
 **[studio/README.md](studio/README.md)** (the module map).
@@ -253,12 +255,17 @@ provides `git`.
 
 ```bash
 git clone --recursive https://github.com/eenndan/pacer && cd pacer
-pixi install                                # environment + editable Python bindings
+pixi install                                # environment + editable Python bindings (~2 GB, once)
 pixi run studio -- /path/to/GX010062.MP4    # build + launch on a recording
 pixi run studio -- --demo                   # no footage? a synthetic session, generated not filmed
 ```
 
 Cloned without `--recursive`? `git submodule update --init --recursive` fetches `3rdparty/`.
+
+The environment `pixi install` puts on disk is about 2 GB (2.1 GiB, over half of it Qt, measured
+27 September 2026). The first `pixi run studio` builds the core first, about 15 s, and the first
+launch after that spends about as long again loading Qt for the first time, and says so; later
+launches start in a second or two.
 
 Then drag any `.MP4` onto the window, or `File ▸ Open`: either opens the whole recording, its
 chapter siblings (`GX01…`, `GX02…`) chained in order. A path on the command line loads just that
