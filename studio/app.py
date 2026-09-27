@@ -1242,8 +1242,10 @@ class StudioWindow(QMainWindow):
         gone. A reload or a second chapter is not a first open and changes nothing. PART of a new
         recording is not one either — it decides no verdict and writes no row
         (``LibraryController.update_library``), so it is the whole recording's first load, Load
-        full recording included, that lands here, once. No debrief when nothing is ranked: its page
-        would be an empty state. Fully guarded — a landing must never break the load it ends."""
+        full recording included, that lands here, once. The synthetic demo lands here on every
+        open, keeping nothing (``LibraryController.update_library``, QA EVAL-2). No debrief when
+        nothing is ranked: its page would be an empty state. Fully guarded — a landing must never
+        break the load it ends."""
         view = getattr(self, "view", None)
         if not getattr(self.library_ctl, "opened_new", False) or not hasattr(view, "show_debrief"):
             return False
@@ -1253,7 +1255,8 @@ class StudioWindow(QMainWindow):
                 return False
             promoted = self.library_ctl.pre_promote_focus(cids)
             view.show_debrief(self.library_ctl.debrief_pb_line(), promoted,
-                              self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing))
+                              self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing),
+                              saved=not self.library_ctl.demo_preview)
             return True
         except Exception:  # noqa: BLE001 — see the docstring
             _log.warning("debrief not shown", exc_info=True)
