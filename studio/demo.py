@@ -8,8 +8,8 @@ they show nothing in the lap table / delta plots, so a first-run user sees an em
 simulated kart lapping a fictional circuit, written by `studio/dev/make_demo.py` (`pixi run
 make-demo`). No person, kart, place or camera footage is in it, and its picture says so on every
 frame. The circuit is a built-in track, so the session opens with VERIFIED timing: laps, corners,
-the ideal lap and a ranked Coaching page with nobody's footage but its own. The file (~8 MB) is
-deliberately NOT committed to the repo, so it is resolved at runtime in this order:
+the ideal lap and a ranked Coaching page with nobody's footage but its own. The file (about 11 MB,
+`_DEMO_BYTES`) is deliberately NOT committed to the repo, so it is resolved at runtime in this order:
 
   1. PACER_DEMO_MP4 env var      — an explicit path (a dev who already has a recording; also the
      test seam).
@@ -39,11 +39,14 @@ _log = logging.getLogger(__name__)
 # `demo-data-v1` pre-release — kept OUT of the git tree on purpose (see docs/PACKAGING.md "Demo
 # data"). Override with PACER_DEMO_URL for a local mirror. A download is kept only if it is THIS
 # file, byte for byte: a truncated fetch, or anything else answering at the URL, must never open
-# as the demo. Re-publishing a changed demo means a new tag, and bumping all three together.
+# as the demo. Re-publishing a changed demo means a new tag, and bumping all four together.
 _DEMO_URL = (
     "https://github.com/eenndan/pacer/releases/download/demo-data-v1/pacer-demo.mp4"
 )
 _DEMO_SHA256 = "60a15d28a7085a8bd1c433c5c25a3c521563bd68008cb3cd76053b0c74b1b560"
+# ...and its size, which the sha fixes: what the download line tells a first `--demo` it is waiting
+# for, and the "about 11 MB" the public pages quote (tests/test_landing_page.py holds them to it).
+_DEMO_BYTES = 11_061_721
 # The CACHE's name, which is what the window title shows for a non-GoPro file: it says what the
 # recording is, so the title bar keeps saying so while the video pane is collapsed.
 _DEMO_FILENAME = "pacer-synthetic-demo.mp4"
@@ -76,9 +79,11 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + ".part"
     try:
-        # A first `--demo` blocks here before any window exists, so say what is happening — and
-        # this is the app's one network fetch, so the session log records where it went.
-        _log.info("downloading the synthetic demo session from %s …", url)
+        # A first `--demo` blocks here before any window exists, so say what is happening and how
+        # much of it there is — and this is the app's one network fetch, so the session log
+        # records where it went.
+        _log.info("downloading the synthetic demo session, once (%s MB) from %s …",
+                  f"{_DEMO_BYTES / 1e6:.0f}", url)
         # urlopen (unlike urlretrieve) takes a timeout, so a stalled connection fails instead of
         # hanging the UI thread; stream to a temp sibling then rename so a partial/failed download
         # never looks like a valid cache hit.

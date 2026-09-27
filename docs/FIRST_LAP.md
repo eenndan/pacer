@@ -75,10 +75,10 @@ divider between them drags.
   compare it lap to lap within the same corner, not corner to corner. A lower reading does not
   mean that corner has more grip to spare.
 - **Speed · Δ to ideal charts** — the speed trace and the cumulative time delta, distance-aligned
-  so corners line up. The live readout leads with **Δideal**: how far you are off your *theoretical
-  ideal* — the best you've driven at each point on track, stitched together (not a single drivable
-  lap) — right where you are on track. Two toggles add a **Brake/Throttle** band under the speed
-  curve and overlay the **ideal lap** itself.
+  so corners line up. The live readout leads with **Δideal**: how far you are off your **ideal
+  lap** — your quickest time through each corner and each straight, stitched together (not a
+  single lap you have driven) — right where you are on track. Two toggles add a **Brake/Throttle**
+  band under the speed curve and overlay the ideal lap itself.
 - **The tabbed panel**, five full-height pages on the digits **1–5**:
   - **Laps** — every lap and its sector splits, sortable, session best starred (★). The **Entry**
     column is the corner-entry speed; toggle **View ▸ Units** for mph.

@@ -23,10 +23,11 @@ welcome's **Open recording…** open the whole recording (same `NNNN`, same fold
 command line loads the chapters it names, grouped by recording (several recordings: the first
 opens and the rest are counted, as on a drop); `--full` or **File ▸ Load full recording** chains the
 rest. Part of a new recording decides no PB or focus list until the whole recording is loaded.
-`--demo` opens the demo clip when one resolves ([`demo.py`](demo.py)). Equivalent without pixi:
-`python -m studio [files]` with the env's own interpreter (`.pixi/envs/default/bin/python`) once
-`pixi run build` has run, which deploys the bindings package into the env: no `PYTHONPATH`. Dev
-tools live in [`dev/`](dev/): diagnose a file headlessly with
+`--demo` downloads the synthetic demo session once (about 11 MB) and opens it
+([`demo.py`](demo.py)). Equivalent without pixi: `python -m studio [files]` with the env's own
+interpreter (`.pixi/envs/default/bin/python`) once `pixi run build` has run, which deploys the
+bindings package into the env: no `PYTHONPATH`. A first launch prints one line before its slow
+import ([`__main__.py`](__main__.py)). Dev tools live in [`dev/`](dev/): diagnose a file headlessly with
 `pixi run python -m studio.dev.diagnose -- file.MP4 [--clean]`, measure GPS smoothing with
 `studio.dev.denoise_check`, and see [`tests/README.md`](../tests/README.md) for the golden dump.
 
@@ -135,7 +136,7 @@ algorithm; the service just caches + delegates.
 | [coaching.py](coaching.py) | Per-corner loss, its measured reason, reach/abstain evidence, the session theme, brake habits | — | `test_coaching` |
 | [focus.py](focus.py) | The per-track focus list (`focus.json`) and its gated cross-session verdict | — | `test_focus_list` |
 | [stats.py](stats.py) | Stats-page reducers + `SessionStats`: totals, per-lap stats, bands, stints, split/corner grids | — | `test_stats` |
-| [bests.py](bests.py) | Service: best lap, best splits, theoretical best (= the ideal lap), best rolling lap | — | `test_session_pure` |
+| [bests.py](bests.py) | Service: best lap, best splits, the ideal lap (`theoretical_best`), best rolling lap | — | `test_session_pure` |
 | [timeline.py](timeline.py) | Cursor/plot/video conversions: plot-x ↔ media time, lap at time, nearest point; the map dot's interpolated position (`trace_point_at`) | — | `test_timeline` |
 | [render_cache.py](render_cache.py) | Per-lap map-draw cache: gap-aware trace segments, the reference-centerline donor | — | `test_reference` |
 | [gapfill.py](gapfill.py) | Map-only GPS-gap fill: cross-lap borrow, reference centerline or spline, tagged inferred | — | `test_gapfill` |
@@ -166,7 +167,7 @@ algorithm; the service just caches + delegates.
 | [marks.py](marks.py) | Manual marks (`marks.json`) and derived auto marks, anchored to chapter time | — | `test_marks` |
 | [sidecar.py](sidecar.py) | Timing lines beside the MP4 (`<stem>.pacer.json`), in absolute lat/lon | — | `test_sidecar` |
 | [prefs.py](prefs.py) | UI preferences `prefs.json`: units, palette, active tab, splitter sizes | — | `test_prefs` |
-| [demo.py](demo.py) | Resolves the `--demo` clip (env → cache → release asset); `demo_available()` is offline | — | `test_demo` |
+| [demo.py](demo.py) | Resolves the `--demo` synthetic session (env → cache → a one-time, sha-checked download); `demo_available()` is offline | — | `test_demo` |
 
 ### Controllers
 

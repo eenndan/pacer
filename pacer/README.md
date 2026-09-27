@@ -59,8 +59,10 @@ C++ headers → `bindings/<pkg>/generate-bindings.py` runs **litgen** (srcML) �
   between the `litgen_pydef`/`litgen_glue_code` markers (the `#include` preamble above them is
   hand-kept — e.g. add/remove an `#include` there when a header enters/leaves the codegen list).
   Change the header (and litgen options), then regenerate via `pixi run gen-bindings` and rebuild.
-- The C++ build runs the codegen target itself and deploys the compiled `.so`, so any header edit —
-  even a comment — changes both generated files, and CI's drift gate wants BOTH committed.
+- The C++ build runs the codegen target itself, so any header edit — even a comment — changes both
+  generated files, and CI's drift gate wants BOTH committed. It then deploys the whole `pacer`
+  package — the compiled `.so`, `__init__.py` and the stubs — into the env's site-packages, so
+  `import pacer` needs no `PYTHONPATH` (`tests/test_bindings_import.py` holds it).
 - **A struct-field read is a copy or a view, field by field.** `sectors.start_line`,
   `sectors.sector_lines` and `lap.points` return copies (`_COPY_ON_READ` in `generate-bindings.py`,
   X5: a kept line used to move with the next edit, and a kept list element could read freed memory).

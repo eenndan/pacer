@@ -13,7 +13,7 @@ At the end is a [15-minute code tour](#a-15-minute-code-tour): the five files th
 - [3. Phase bars wrong on every corner](#3-phase-bars-wrong-on-every-corner)
 - [4. The GPS is late, and the gyroscope said so](#4-the-gps-is-late-and-the-gyroscope-said-so)
 - [5. Gates that are proven to go red](#5-gates-that-are-proven-to-go-red)
-- [6. Fourteen features measured and refused](#6-fourteen-features-measured-and-refused)
+- [6. Features measured and refused](#6-features-measured-and-refused)
 - [7. The accuracy claim, re-proven on current footage](#7-the-accuracy-claim-re-proven-on-current-footage)
 - [8. The argument that was an output](#8-the-argument-that-was-an-output)
 
@@ -134,9 +134,9 @@ Receipt: [#286](https://github.com/eenndan/pacer/pull/286) ·
 [#371](https://github.com/eenndan/pacer/pull/371) · `tests/test_golden_synthetic.py` ·
 `tests/test_synth_gopro.py`.
 
-## 6. Fourteen features measured and refused
+## 6. Features measured and refused
 
-**14** features were built far enough to measure, and the measurement said no.
+**20+** features were built far enough to measure, and the measurement said no.
 
 An idea here is not refused in a meeting. It is prototyped against real recordings, given a
 statistic that could prove it, and refused only when that statistic says so. One example is a
@@ -148,8 +148,9 @@ neutralised race's slow laps out of the clean set.
 
 Each refusal is written down with the number that killed it, so whoever proposes it next starts
 from the evidence rather than the idea. The record is itself guarded. Its sections must be numbered
-once each, its opening count is derived from them, and every citation of a section elsewhere in the
-tree must land on one that exists.
+once each, its opening count is derived from them, the count at the top of this story and on the
+landing page is held to it as a floor, and every citation of a section elsewhere in the tree must
+land on one that exists.
 
 Receipt: [Features measured and refused](../studio/docs/refused-2026-09.md) ·
 `tests/test_measured_figures.py`.
