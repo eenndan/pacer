@@ -47,6 +47,7 @@ from PySide6.QtGui import QFontMetricsF  # noqa: E402
 from studio import export_compare as ec  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 from studio import media_clock as mc  # noqa: E402
+from studio._signal import fmt_time  # noqa: E402
 
 # A temp directory PRIVATE TO THIS PROCESS. The fixed names below (`pacer_cmp_a.mp4` and its
 # siblings) used to sit straight in the SHARED $TMPDIR — `/tmp/claude-501`, keyed on the uid, one
@@ -123,6 +124,47 @@ def test_geometry_never_upscales_past_pane_as_footage():
     export applies to its frame, applied here to the PANE, because here the frame is two panes."""
     g = ec.compare_geometry((1280, 720), (1280, 720), ec.CompareConfig(out_height=1080))
     assert (g.pane_w, g.pane_h) == (1280, 720), g
+
+
+def _h264_level_51_at_30fps(w: int, h: int) -> bool:
+    """H.264 level 5.1 at the export's 30 fps: at most 36,864 macroblocks a frame (MaxFS) and
+    983,040 a second (MaxMBPS). A 4K UHD frame, 3840x2160, is 32,400."""
+    mbs = -(-w // 16) * -(-h // 16)
+    return mbs <= 36_864 and mbs * 30 <= 983_040
+
+
+def test_the_two_pane_frame_never_exceeds_one_4k_frame():
+    """JOURNEY-3: the owner's comparison at his remembered "Source" was two 4K panes stacked,
+    3840x4320 — H.264 level 6.0, a frame VideoToolbox's hardware encoder refuses (its software
+    fallback took 3:41 and wrote 299 MB against the 205 MB quoted) and phones do not play. Every
+    row, every layout and every footage shape now lands inside one 4K frame: at most 3840x2160's
+    pixels, no side over 4096, H.264 level 5.1 at 30 fps. Rows already inside it are untouched,
+    and a capped frame keeps pane A's shape and says it was capped."""
+    for src in ((3840, 2160), (2704, 1520), (1920, 1080), (5312, 2988), (2160, 3840), (4000, 3000)):
+        for want in (720, 1080, 1440, 99999):
+            for layout in ec.LAYOUT_CHOICES:
+                g = ec.compare_geometry(src, src, ec.CompareConfig(out_height=want, layout=layout))
+                case = (src, want, layout, g)
+                assert g.out_w * g.out_h <= ec.MAX_FRAME_PIXELS == 3840 * 2160, case
+                assert max(g.out_w, g.out_h) <= ec.MAX_FRAME_SIDE == 4096, case
+                assert _h264_level_51_at_30fps(g.out_w, g.out_h), case
+                assert all(v % 2 == 0 for v in (g.out_w, g.out_h, g.pane_w, g.pane_h)), case
+                assert abs(g.pane_w / g.pane_h - src[0] / src[1]) < 0.01, case
+                assert min(g.pane_w, g.pane_h) <= min(want, *src), case      # never upscaled
+    four_k = (3840, 2160)
+
+    def frame(want, layout):
+        g = ec.compare_geometry(four_k, four_k, ec.CompareConfig(out_height=want, layout=layout))
+        return g.out_w, g.out_h, g.capped
+    # The owner's footage: the rows he can pick, as they now render.
+    assert frame(720, ec.LAYOUT_STACK) == (1280, 1440, False)
+    assert frame(1080, ec.LAYOUT_STACK) == (1920, 2160, False)       # the compare's default
+    assert frame(1440, ec.LAYOUT_STACK) == (2560, 2880, False)
+    assert frame(99999, ec.LAYOUT_STACK) == (2714, 3052, True)       # was 3840x4320
+    assert frame(1080, ec.LAYOUT_SIDE) == (3840, 1080, False)
+    assert frame(1440, ec.LAYOUT_SIDE) == (4096, 1152, True)         # was 5120x1440
+    assert frame(99999, ec.LAYOUT_SIDE) == (4096, 1152, True)        # was 7680x2160
+    print("ok geometry: every compare frame fits one 4K frame (H.264 level 5.1)")
 
 
 def test_pane_filter_pads_a_mismatched_source_and_crops_on_request():
@@ -286,11 +328,14 @@ def test_the_free_space_guard_sizes_the_two_pane_frame():
             for layout, frame in ((ec.LAYOUT_STACK, (1920, 2160)), (ec.LAYOUT_SIDE, (3840, 1080))):
                 _s, spec = _spec_pair(config=ec.CompareConfig(out_height=1080, layout=layout))
                 assert spec.output_frame(probe) == (*frame, 30.0), (layout, spec.output_frame(probe))
+                # Both clips cut on the line, so both end on their finish frame (JOURNEY-4).
                 single = ev.ExportSpec(out_path="/o.mp4", lap_id=0, t0=spec.t0, t1=spec.t1,
-                                       src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080))
+                                       src_path="/a.MP4", config=ev.OverlayConfig(out_height=1080),
+                                       ends_on_finish=True)
                 both = ev.estimate_spec_bytes(spec, probe)
                 one = ev.estimate_spec_bytes(single, probe)
-                audio = ev.AAC_BITS_PER_S * ev.clip_seconds(spec.t0, spec.t1, 30.0) / 8
+                wide = ev.with_finish_frame(spec, 30.0)
+                audio = ev.AAC_BITS_PER_S * ev.clip_seconds(wide.t0, wide.t1, 30.0) / 8
                 # 2 B of rounding: each estimate is truncated to whole bytes on its own.
                 assert one > audio > 0 and abs((both - audio) - 2 * (one - audio)) <= 2, (
                     codec, layout, both, one, audio)
@@ -332,9 +377,16 @@ def test_the_progress_dialog_names_both_laps():
     _s, spec = _spec_pair()
     text = ExportController._describe_spec(spec)
     assert text == "lap 4 against lap 8", text
+    # A cross-recording pane B is ANOTHER recording's lap, burned in as "REF LAP 8".
+    cross = ec.CompareSpec(out_path="/o.mp4", lap_id=3, t0=0.0, t1=1.0, src_path="/a.MP4",
+                           lap_b=7, source_b=ev.single_file_source("/b.MP4"), cross=True)
+    assert ExportController._describe_spec(cross) == "lap 4 against reference lap 8"
     # ... and the single-lap spec is described exactly as it was
     single = ev.ExportSpec(out_path="/o.mp4", lap_id=3, t0=0.0, t1=1.0, src_path="/a.MP4")
     assert ExportController._describe_spec(single) == "lap 4"
+    # The finished box calls each file what it is (JOURNEY-4: the compare's said "overlay video").
+    assert ExportController._video_kind(spec, article=True) == "a comparison video"
+    assert ExportController._video_kind(single, article=True) == "an overlay video"
 
 
 def test_the_worker_drives_the_renderer_it_was_handed():
@@ -528,6 +580,50 @@ def test_the_whole_render_launches_three_processes(monkeypatch_restore):
     print(f"ok {total} frames from 3 processes and 2 seeks total")
 
 
+def _pb_pair_session():
+    """Two laps timed like the owner's PB compare, 46.808 s against 46.912 s. Neither is a whole
+    number of 30 fps frames (1404.24 and 1407.36), which is exactly when a clip that stops at the
+    last frame before the line never shows the lap time."""
+    lap_a, lap_b = 29, 22
+    ta = np.linspace(1801.173, 1801.173 + 46.808, 469)
+    tb = np.linspace(600.0, 600.0 + 46.912, 470)
+    _ta, da = odometer(469, 0.1, 0.0, 1180.0)
+    _tb, db = odometer(470, 0.1, 0.0, 1176.0, lambda u: 1.2 + 0.8 * np.sin(u) ** 2)
+    s = bare_session({lap_a: (ta, da), lap_b: (tb, db)}, best=lap_a, valid=[lap_a, lap_b])
+    s.chapters = None
+    s.lap_window = lambda i, _c={lap_a: (ta[0], ta[-1]), lap_b: (tb[0], tb[-1])}: _c.get(i)
+    s.lap_time = lambda i, _c={lap_a: 46.808, lap_b: 46.912}: _c[i]      # the table's numbers
+    return s, lap_a, lap_b
+
+
+def test_the_last_frame_shows_both_lap_times_as_the_table_prints_them(monkeypatch_restore):
+    """JOURNEY-4: the owner's PB compare ended on "LAP 30 0:46.799" over "REF LAP 23 0:46.903"
+    while the table said 0:46.808 and 0:46.912. The clip stopped on the last frame BEFORE lap A's
+    line, so no frame showed either lap time. #416 gave the single-lap clip its finish frame; the
+    compare now ends on one too, and on it both clocks read the table's lap times exactly, the
+    track bar is full and the gap is the lap-time difference. The frame before it still runs."""
+    s, a, b = _pb_pair_session()
+    cfg = ec.CompareConfig(out_height=120, encoder="libx264")
+    spec = ec.build_compare_spec(s, "/out.mp4", a, b, config=cfg, src_path_a="/a.MP4",
+                                 src_path_b="/b.MP4", label_a="LAP 30", label_b="REF LAP 23")
+    ev.probe_video_size = ec.probe_video_size = lambda _p: (3840, 2160, 60000 / 1001)
+    ev.probe_source_duration = lambda _s: 1.0e9
+    ev.resolve_encoder = lambda _c: ev.SW_H264
+    r = ec.CompareRenderer(s, spec, s)
+    last, before = r._frames[-1], r._frames[-2]
+    assert last.caption_a == f"LAP 30   {fmt_time(s.lap_time(a))}" == "LAP 30   0:46.808", (
+        f"the clip ends on {last.caption_a!r}, not lap 30's time")
+    assert last.caption_b == f"REF LAP 23   {fmt_time(s.lap_time(b))}" == "REF LAP 23   0:46.912", (
+        f"the clip ends on {last.caption_b!r}, not lap 23's time")
+    assert last.fraction == 1.0 and abs(last.delta - (46.808 - 46.912)) < 1e-9, last
+    assert before.caption_a == "LAP 30   0:46.800" and before.fraction < 1.0, before
+    assert r.total_frames == ev.frame_count(spec.t0, spec.t1, 30.0) + 1 == 1406, r.total_frames
+    # Pane B's finish frame is inside the decode it asks for (two frames of tail past its line).
+    k = int(round((r.lock.t_b_media[-1] - spec.t_b0) * 30.0))
+    assert k <= round((spec.t_b1 - spec.t_b0) * 30.0) + ec.CompareRenderer._B_TAIL_FRAMES, k
+    print(f"ok finish frame: the compare ends on {last.caption_a!r} / {last.caption_b!r}")
+
+
 def test_pane_b_running_out_holds_its_last_frame(monkeypatch_restore):
     """A lap at the very end of a recording can leave pane B a frame or two short. Hold the last
     picture and COUNT it rather than throwing away an otherwise-correct clip — but a pane B that
@@ -619,9 +715,10 @@ def test_real_render_puts_pane_b_at_the_locked_frame():
     try:
         res = ec.render_compare(sa, out, 0, 0, session_b=sb, config=cfg,
                                 src_path_a=clip_a, src_path_b=clip_b)
-        assert res.frames == 60, res.frames
+        # 60 frames of lap, then the FINISH FRAME on lap A's line (2.000 s, both panes at s = 1).
+        assert res.frames == 61, res.frames
         # --- independently recompute the lock from the odometers alone ---
-        times = ev.frame_times(0.0, float(ta[-1]), fps)
+        times = ev.frame_times(0.0, float(ta[-1]) + 1.0 / fps, fps)
         s_of = np.interp(times, ta, da) / da[-1]
         tb_of = np.interp(s_of * db[-1], db, tb)
         want_b = np.round(tb_of * fps).astype(int)
@@ -634,7 +731,7 @@ def test_real_render_puts_pane_b_at_the_locked_frame():
         assert (w, h) == (_CLIP_W, 2 * _CLIP_H), (w, h)
         frame_bytes = w * h * 3
         n = len(raw) // frame_bytes
-        assert n == 60, n
+        assert n == 61, n
         arr = np.frombuffer(raw, np.uint8).reshape(n, h, w, 3)
         # A clean band in the middle of each pane: clear of the caption, the speed pill, the gap
         # pill on the seam and the progress bar.

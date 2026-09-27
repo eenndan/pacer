@@ -415,7 +415,9 @@ def test_the_compare_picker_states_its_own_size_and_time():
     depend on which H.264 encoder this machine resolves (VideoToolbox here, libx264 on CI)."""
     win = _window(FakeSession(laps=(0, 1, 2)))
     clip = win.exports._export_clip_seconds(0, 0.0)          # lap A's window, as the render cuts it
-    frames = math.ceil(clip * 30.0)
+    # ... plus the FINISH FRAME a compare ends on, the one that shows both lap times (JOURNEY-4).
+    frames = math.ceil(clip * 30.0) + 1
+    clip = frames / 30.0
     rows = ((1, 0, 0, "2560x720, two panes of 1280x720 side by side", (2560, 720), "high"),
             (0, 0, 0, "1280x1440, two panes of 1280x720 one above the other", (1280, 1440), "high"),
             (1, 1, 1, "3840x1080, two panes of 1920x1080 side by side", (3840, 1080), "standard"))
