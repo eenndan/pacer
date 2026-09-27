@@ -141,6 +141,14 @@ class LibraryController:
         # with that session: every load builds a new one.
         self.demo_preview = False
         self._demo_focus: tuple[object, list[focus.FocusItem]] | None = None
+        # A FIRST OPEN ON DEGRADED TIMING DECIDES NOTHING EITHER (QA REG-2). Its PB is refused
+        # (`library.pb_moment_for`) and so is every focus baseline (`focus.baseline_refusal`), so a
+        # debrief would be the Coaching page maximized over "Esc returns to your usual layout." and
+        # an Add whose corner could never be checked. Like a partial open (#420) it lands on the
+        # usual layout, where the map's banner shows the GPS, and the notice says why in one line
+        # (`degraded_notice`). Unlike a partial open its row IS written, flagged `degraded`: the
+        # recording is whole, and no later load of it would decide more. Reset on every call.
+        self.degraded_first_open = False
 
     # --------------------------------------------------------------- session library index (F8)
     def update_library(self, paths: list[str]) -> dict | None:
@@ -199,7 +207,7 @@ class LibraryController:
         decided (the lead says so instead: `debrief_pb_line`), and its focus list lives in memory
         (`_save_focus`)."""
         self.opened_new, self.pb_standing, self.previous_pb = False, None, None
-        self.waiting_for_whole = False
+        self.waiting_for_whole = self.degraded_first_open = False
         self.waiting_for_line = self.waiting_for_name = False
         self.demo_preview = self._is_demo(paths)
         if self.demo_preview:
@@ -228,6 +236,7 @@ class LibraryController:
             # Only once the row is WRITTEN: a recording whose row could not be saved would land on
             # the debrief again on every open.
             self.opened_new, self.pb_standing = new, standing
+            self.degraded_first_open = new and bool(entry.get("degraded"))
             self.waiting_for_name = new and not entry.get("track")
             self.win._library_unwritable = False
         except OSError:
@@ -309,6 +318,14 @@ class LibraryController:
         if self.pb_standing:
             return library.pb_standing_text(self.pb_standing, fmt_time)
         return NAME_WAIT_LINE if self.waiting_for_name else None
+
+    def degraded_notice(self) -> str | None:
+        """The session notice's clause for a first open on degraded timing (QA REG-2): what rules
+        the verdicts out, with its measure, and what that withholds. None otherwise."""
+        if not self.degraded_first_open:
+            return None
+        why = self.win.session.timing_quality.untrusted() or "timing estimated"
+        return f"{why}: too uncertain to judge a PB or set a focus list, so no debrief"
 
     def offers_pb_compare(self, moment: dict | None) -> bool:
         """Whether a PB surface showing `moment` (a ``pb_moment`` or ``pb_standing`` dict) may offer
@@ -1043,6 +1060,12 @@ class LibraryController:
                                "a focus list (File ▸ Save as track… names it)")
             return
         try:
+            # Gated like the debrief's default and Replace (QA REG-2): on a GPS-degraded day this
+            # stored a baseline every later check refused, for good.
+            why = focus.baseline_refusal(self.win.session.focus_trust(entry))
+            if why:
+                self._focus_failed(why)
+                return
             items = self._focus_items(track)
             if any(i.cid == int(cid) for i in items) or len(items) >= focus.MAX_ITEMS:
                 return
@@ -1108,7 +1131,8 @@ class LibraryController:
         entry = self._focus_entry()
         track = entry.get("track")
         if not track or not entry.get("verified") or entry.get("degraded"):
-            self._focus_failed("today's corners can't be the baseline on untrusted timing")
+            self._focus_failed(focus.baseline_refusal(self.win.session.focus_trust(entry))
+                               or "today's corners can't be the baseline on untrusted timing")
             return
         try:
             newer = focus.newer_than(self._focus_items(track),

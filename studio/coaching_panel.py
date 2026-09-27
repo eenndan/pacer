@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import coaching, data_quality, focus, theme, units
-from ._signal import DASH, lap_label, plural
+from ._signal import DASH, fmt_signed, lap_label, plural
 from .lap_table import set_corner_direction
 from .theme import C
 from .widgets import ActionChip, EmptyState, PanelHeader, WrapLabel
@@ -347,6 +347,15 @@ FOCUS_EMPTY_INVITE = (f"Pick up to {focus.MAX_ITEMS} corners to work on. Next ti
                       "or why it can't tell.")
 # Why nothing can be added when the block is dormant: a focus list is kept per track.
 FOCUS_DORMANT_REASON = "No focus list here — Pacer keeps one per track, and this one isn't known"
+# QA REG-2: the hover of a session whose corners can never be a baseline (`Report.baseline_refusal`
+# says which fact rules it out; this says why that rules it out).
+FOCUS_REFUSED_TIP = ("A focus corner is checked against the session it was set on, and every later "
+                     "check refuses a baseline measured on this session's timing, so none is "
+                     "offered from it.")
+
+
+def _sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
 # QA JOURNEY-1: the list's one line on a page with no room for the block, and what its click does.
 # The glyph is the panel maximize button's own (central_view._MAXIMIZE_GLYPH), because the click
 # does what that button does, on the Coaching page.
@@ -411,6 +420,7 @@ class FocusBlock(QWidget):
         self._selected: int | None = None
         self._mark_fps: list[str] = []  # the unrecorded sessions the Mark button would write
         self._replace: list[int] = []    # today's top corners the Replace button would store
+        self._refusal = ""               # why this session can be no baseline (QA REG-2), or ""
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XS)
@@ -491,8 +501,16 @@ class FocusBlock(QWidget):
         self._lines = focus.report_lines(report) if report is not None else []
         self._headline = focus.report_headline(report) if report is not None else ""
         self._empty = report is not None and not report.active
+        # A session whose corners every later check would refuse (QA REG-2: a GPS-degraded day
+        # stored one with a manual Add, and it waited for a verdict forever) invites no pick: the
+        # empty line says why instead, and Add stays off with the same words.
+        self._refusal = getattr(report, "baseline_refusal", "") if report is not None else ""
         if self._empty:
-            self._headline, self._lines = FOCUS_EMPTY_LINE, []
+            self._headline = (f"Focus list · empty — {self._refusal}" if self._refusal
+                              else FOCUS_EMPTY_LINE)
+            self._lines = []
+            self.empty_line.setText(self._headline)
+            self.empty_line.setToolTip(FOCUS_REFUSED_TIP if self._refusal else FOCUS_EMPTY_INVITE)
         prompt = None if self._empty else focus.mark_dry_prompt(report)
         self._mark_fps = [fp for fp, _when in report.unrecorded] if prompt else []
         if prompt:
@@ -536,7 +554,7 @@ class FocusBlock(QWidget):
     def full_text(self) -> str:
         """The whole block as one string — what the header tooltip carries, so a line the height
         budget sheds is demoted rather than deleted (and the empty list's invitation with it)."""
-        invite = [FOCUS_EMPTY_INVITE] if self._empty else []
+        invite = [FOCUS_REFUSED_TIP if self._refusal else FOCUS_EMPTY_INVITE] if self._empty else []
         return "\n".join([self._headline, *self._lines, *invite]).strip()
 
     def line_text(self) -> str:
@@ -554,6 +572,11 @@ class FocusBlock(QWidget):
         instruction with no object."""
         cid, full = self._selected, len(self._cids) >= focus.MAX_ITEMS
         on_list = cid is not None and cid in self._cids
+        if self._refusal:            # no corner of this session can be a baseline (QA REG-2)
+            self.add_button.setText("Add to focus list")
+            self.add_button.setEnabled(False)
+            self.add_button.setToolTip(_sentence(self._refusal))
+            return
         self.add_button.setText(f"Add C{cid} to focus list" if cid is not None and not on_list
                                 else "Add to focus list")
         self.add_button.setEnabled(cid is not None and not on_list and not full)
@@ -572,6 +595,8 @@ class FocusBlock(QWidget):
         nothing."""
         if not self._headline:
             return False, FOCUS_DORMANT_REASON
+        if self._refusal:
+            return False, _sentence(self._refusal)
         if self._selected is None:   # the button's "in the table below" is the page's own words
             return False, "Select a corner on the Coaching page first — then add it from here"
         return self.add_button.isEnabled(), self.add_button.toolTip()
@@ -827,7 +852,7 @@ class PhaseBar(QWidget):
     #: CAPTION type; a spacing step would be choosing it for the wrong reason.
     _BAR_H = 6  # px; the proportional bar's height (the numbers sit below it)
 
-    def __init__(self, phases: coaching.PhaseLoss, parent=None):
+    def __init__(self, phases: coaching.PhaseLoss, parent=None, *, lap: int | None = None):
         super().__init__(parent)
         self._phases = phases
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -873,7 +898,7 @@ class PhaseBar(QWidget):
         nums.setSpacing(theme.SPACE_XS)
         num_font = theme.mono_font(theme.CAPTION)
         for pid, v in zip(ids, vals, strict=True):
-            lbl = QLabel(f"{v:+.2f}")
+            lbl = QLabel(fmt_signed(v, 2))
             lbl.setFont(num_font)
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(f"color:{self._phase_colour(pid, v, dominant)};")
@@ -887,11 +912,12 @@ class PhaseBar(QWidget):
         # positive-loss headline row never reads as if the corner were net faster overall.
         net = phases.total
         if net > 1e-6:
-            net_line = (f"Typical-lap net {net:+.2f} s over the window "
+            net_line = (f"Typical-lap net {fmt_signed(net, 2)} s over the window "
                         f"— slowest third: {_PHASE_LABEL[dominant].lower()}.")
         elif net < -1e-6:
-            net_line = (f"Typical-lap net {net:+.2f} s over the window (net faster than best here) "
-                        "— the row's Time lost is the cross-lap median, a different measure.")
+            net_line = (f"Typical-lap net {fmt_signed(net, 2)} s over the window (net faster than "
+                        "best here) — the row's Time lost is the cross-lap median, a different "
+                        "measure.")
         else:
             net_line = "Typical-lap net ~0 s over the window (on your best-lap pace here)."
 
@@ -899,8 +925,12 @@ class PhaseBar(QWidget):
         # "+0.08 s lost" whose typical lap is net faster across the corner must say so where it is
         # read. Faster reads in the palette's ahead hue, slower stays muted (the accent is reserved
         # for the dominant losing third above).
-        face = QLabel(f"typical lap {net:+.2f} s".replace("-", "−") if abs(net) > 1e-6
-                      else "typical lap ~0 s")
+        # QA JOURNEY-8: "typical lap +0.12 s" beside a Time lost of "+0.15 s" still read as one
+        # quantity stated twice. The thirds are ONE lap's clock (`lap`, the session's typical lap:
+        # `Opportunities.median_lap_id`), Time lost the median over every counted lap, so the face
+        # names the lap by number — which also says why the two may differ.
+        who = f"lap {lap_label(lap)}" if lap is not None else "typical lap"
+        face = QLabel(f"{who} {fmt_signed(net, 2, 's')}" if abs(net) > 1e-6 else f"{who} ~0 s")
         face.setFont(theme.mono_font(theme.CAPTION))
         face.setAlignment(Qt.AlignCenter)
         face.setProperty("role", "Note")     # the muted default; the ahead case tints over it
@@ -913,10 +943,12 @@ class PhaseBar(QWidget):
             face.setStyleSheet(f"color:{theme.ahead_colour()};")
         lay.addWidget(face)
 
+        whose = f" (lap {lap_label(lap)})" if lap is not None else ""
         self.setToolTip(
-            "Where in the corner your typical lap is faster/slower than your best lap "
+            f"Where in the corner your typical lap{whose} is faster/slower than your best lap "
             "(Δt per third, s) — NOT the same as the row's Time lost:\n"
-            + "   ".join(f"{_PHASE_LABEL[p]} {v:+.2f}" for p, v in zip(ids, vals, strict=True))
+            + "   ".join(f"{_PHASE_LABEL[p]} {fmt_signed(v, 2)}"
+                         for p, v in zip(ids, vals, strict=True))
             + "\n" + net_line)
 
     @staticmethod
@@ -1141,7 +1173,7 @@ def _p_phrase(p: float) -> str:
 
 
 def _reason_cell(opp: coaching.Opportunity, directions: dict,
-                 speed_unit: str | None = None) -> QTableWidgetItem:
+                 speed_unit: str | None = None, reach: bool = True) -> QTableWidgetItem:
     """The 'How to find it' reason cell: the coaching sentence (apex deficit in `speed_unit`, km/h
     default) + (where the laps separate one, corrected for every corner the recording tested)
     the MEASURED braking-direction line, with the per-reason tooltip.
@@ -1153,8 +1185,11 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
     at a corner whose laps do not separate a direction — so a missing line is a finding, not a gap.
 
     An ABSTAINED row shows `coaching.abstain_sentence` (which `reason_sentence` returns for it) and
-    no braking line: a row that has just declined to make a claim does not grow a lever under it."""
-    sentence = coaching.reason_sentence(opp, speed_unit)
+    no braking line: a row that has just declined to make a claim does not grow a lever under it.
+
+    `reach` False leaves off the "N of M laps matched your best lap here" count, for a row whose
+    "Done it?" cell is on screen saying exactly that (QA JOURNEY-8: every row said it twice)."""
+    sentence = coaching.reason_sentence(opp, speed_unit, reach=reach)
     if not opp.evidence.ranked:
         item = QTableWidgetItem(sentence)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -1172,7 +1207,7 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
         # The count is the laps the rank test ran over, and they are not every clean lap: since
         # #339 `_brake_rows` drops a lap's brake point where that lap's corner was interpolated
         # (MK_18_09 C2: 16 counted, 18 braked). The sentence says so rather than a second count.
-        rho = f"{d.rho:+.2f}".replace("-", "−")   # the true minus the reason sentences print
+        rho = fmt_signed(d.rho, 2)   # the true minus the reason sentences print
         tip = (f"{tip}\n\n{line}: over the {d.n_laps} clean laps that braked into this corner and "
                "were matched on track at its entry and exit, the "
                f"{d.verdict} a lap began braking, the less time it took through the corner "
@@ -1640,8 +1675,9 @@ class OpportunitiesPanel(QWidget):
                 self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
                 self.table.setItem(r, 2, _reach_cell(opp, self._num_font,  # have you done it?
                                                      self._n_clean))
-                self.table.setItem(r, 3, _reason_cell(opp, directions, self._speed_unit))
-                self.table.setCellWidget(r, _PANEL_COL_PHASES, PhaseBar(opp.phases))  # D2
+                self.table.setItem(r, 3, self._reason_item(opp, directions))
+                self.table.setCellWidget(r, _PANEL_COL_PHASES,  # D2
+                                         PhaseBar(opp.phases, lap=self._typical_lap))
                 self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
@@ -1653,6 +1689,23 @@ class OpportunitiesPanel(QWidget):
         self.body.setCurrentIndex(0)
         if held is not None and held not in self._cids:
             self.corner_clicked.emit(None)
+
+    def _reason_item(self, opp: coaching.Opportunity, directions: dict) -> QTableWidgetItem:
+        """One row's reason cell, carrying the reach count only while "Done it?" is off screen: the
+        count is said once, by whichever of the two the page shows (QA JOURNEY-8)."""
+        return _reason_cell(opp, directions, self._speed_unit,
+                            reach=self.table.isColumnHidden(_PANEL_COL_REACH))
+
+    def _refill_reasons(self) -> None:
+        """Rebuild the reason cells in place after "Done it?" came or went, then re-fit the rows."""
+        directions = {} if self._debrief else self._brake_dirs
+        self.table.blockSignals(True)
+        try:
+            for r, opp in enumerate(self._all_rows[:self.table.rowCount()]):
+                self.table.setItem(r, _PANEL_COL_REASON, self._reason_item(opp, directions))
+        finally:
+            self.table.blockSignals(False)
+        _fit_reason_rows(self.table, _PANEL_COL_REASON)
 
     def _selected_cid(self):
         """The currently ringed corner's cid, or None."""
@@ -1671,8 +1724,9 @@ class OpportunitiesPanel(QWidget):
         into. At the app's own minimum this takes the reason column from its header's 100-px fallback
         to the 128 px actually left over, retires the horizontal scrollbar the overflow raised, and
         stops "How to find it" painting as a clipped "How to find". Nothing is lost when a column
-        goes: the reason sentence spells "Done it?" out ("You have already done this — 9 of 38
-        laps"), a row click still rings the corner on the map, and full-window every column is back.
+        goes: when "Done it?" goes, its count moves into the reason sentence ("9 of 38 laps matched
+        your best lap here", said once either way: `_reason_item`), a row click still rings the
+        corner on the map, and full-window every column is back.
 
         The room is measured as if the vertical scrollbar were showing, for the reason
         ``_shortlist_px`` gives: a threshold the bar's own 12 px can cross toggles a column every
@@ -1699,6 +1753,8 @@ class OpportunitiesPanel(QWidget):
                 if (col not in shown) != t.isColumnHidden(col):
                     t.setColumnHidden(col, col not in shown)
                     self._restretch.start(0)
+                    if col == _PANEL_COL_REACH:     # the count moves into / out of the reason
+                        self._refill_reasons()
             _elide_header(t, _PANEL_COL_REASON, self._COLUMNS[_PANEL_COL_REASON],
                           self._reason_chrome)
         finally:

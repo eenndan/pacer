@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import chart_stats, data_quality, theme, units
-from ._signal import fmt_time, lap_label
+from ._signal import fmt_signed, fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
 from .widgets import EmptyState, ToggleButton, budget_plot_gutters, budget_plot_min_height
@@ -1807,10 +1807,11 @@ class PlotsView(QWidget):
         Measured in the app: with the best lap selected alone the Δ-to-ideal curve starts at
         −4e-16, which `:+.3f` prints as `-0.000 s`. A minus sign in a readout whose whole job is
         ahead-vs-behind is not a rounding artefact the reader can be asked to ignore, so anything
-        under half a millisecond — below what a 10 Hz clock can even resolve — prints as +0.000."""
+        under half a millisecond — below what a 10 Hz clock can even resolve — prints as 0.000, and
+        a minus is U+2212, the app's one minus (`fmt_signed`, QA REG-3)."""
         if v is None:
             return "—"
-        return f"{0.0 if abs(v) < 5e-4 else v:+.3f} s"
+        return fmt_signed(0.0 if abs(v) < 5e-4 else v, 3, "s")
 
     def _fit(self, label: QLabel, *segments: str) -> str:
         """Join `segments` with a separator, dropping trailing ones that do not fit `label`.
@@ -1948,18 +1949,18 @@ class PlotsView(QWidget):
             got = "" if iv.dt is None else f", got {iv.dt:.2f} s"
             slope = f"slope — needs ≥ {chart_stats.SLOPE_MIN_INTERVAL_S:.1f} s{got}"
         else:
-            slope = f"slope {iv.slope:+.2f} {unit}/s"
+            slope = f"slope {fmt_signed(iv.slope, 2)} {unit}/s"
         head = f"A→B   Δt {dt}   Δd {dd}   {base} over it {gained}"
         if 0 <= self._loss_index < len(self._loss_spans):
             span = self._loss_spans[self._loss_index]
             head = (f"Δ loss {self._loss_index + 1} of {len(self._loss_spans)} · lap "
-                    f"{lap_label(span.lap_id)} · {span.loss:+.3f} s   {head}")
+                    f"{lap_label(span.lap_id)} · {fmt_signed(span.loss, 3, 's')}   {head}")
         # SLOPE BEFORE MIN/MAX on the second line, because `_fit` drops from the right: the rate of
         # change is the number the datum gesture exists for (and the one that carries the honesty
         # note when it is refused), while min and max are context the chart itself already shows.
         self._set_datum_text(self._fit(self.datum_label, head) + "\n" + self._fit(
             self.datum_label,
-            f"speed   A {iv.y0:,.1f} → B {iv.y1:,.1f} {unit}   Δ {iv.diff:+,.1f}   {slope}",
+            f"speed   A {iv.y0:,.1f} → B {iv.y1:,.1f} {unit}   Δ {fmt_signed(iv.diff, 1)}   {slope}",
             f"mean {iv.mean:,.1f}   min {iv.minimum:,.1f}   max {iv.maximum:,.1f}"))
 
     # --------------------------------------------------------------- hover dot
@@ -1997,7 +1998,8 @@ class PlotsView(QWidget):
         _, lid, xi, yi = best
         self.hover_dot.setData([xi], [yi])
         unit = self._axis_unit()
-        self.hover_label.setText(f"lap {lap_label(lid)}  Δ {yi:+.3f} s\n@ {xi:.0f} {unit}")
+        self.hover_label.setText(f"lap {lap_label(lid)}  Δ {fmt_signed(yi, 3, 's')}\n"
+                                 f"@ {xi:.0f} {unit}")
         self.hover_label.setPos(xi, yi)
         self.hover_dot.setVisible(True)
         self.hover_label.setVisible(True)

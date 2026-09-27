@@ -1247,10 +1247,14 @@ class StudioWindow(QMainWindow):
         (``LibraryController.update_library``), so it is the whole recording's first load, Load
         full recording included, that lands here, once. The synthetic demo lands here on every
         open, keeping nothing (``LibraryController.update_library``, QA EVAL-2). No debrief when
-        nothing is ranked: its page would be an empty state. Fully guarded — a landing must never
-        break the load it ends."""
+        nothing is ranked: its page would be an empty state. None on degraded timing either (QA
+        REG-2): no PB and no focus corner can come of it, so the notice says why instead
+        (``LibraryController.degraded_notice``). Fully guarded — a landing must never break the
+        load it ends."""
         view = getattr(self, "view", None)
         if not getattr(self.library_ctl, "opened_new", False) or not hasattr(view, "show_debrief"):
+            return False
+        if getattr(self.library_ctl, "degraded_first_open", False):
             return False
         try:
             cids = view.opportunities.shortlist_cids()
@@ -1373,13 +1377,18 @@ class StudioWindow(QMainWindow):
                 notice = ("unknown track — start/finish line was auto-fitted; "
                           "drag it into place to fix lap timing")
                 # A NEW recording's verdict waits for that drag (LibraryController.update_library,
-                # QA NEW-3b): the map that takes it stays on screen, and this says what waits.
-                if getattr(getattr(self, "library_ctl", None), "waiting_for_line", False):
+                # QA NEW-3b): the map that takes it stays on screen, and this says what waits —
+                # unless the timing is degraded, when no drag brings either (QA REG-2).
+                if getattr(getattr(self, "library_ctl", None), "waiting_for_line", False) \
+                        and not session.timing_quality.degraded:
                     notice += "; your PB and debrief wait for it"
         elif getattr(getattr(self, "library_ctl", None), "waiting_for_name", False):
             # The line is placed at a circuit with no name: the PB and focus list are per track.
             notice = ("unnamed circuit — File ▸ Save as track… names it; your PB and focus list "
                       "wait for that")
+        # A first open on degraded timing: why it decided nothing, with the measure (QA REG-2).
+        degraded = getattr(getattr(self, "library_ctl", None), "degraded_notice", lambda: None)()
+        notice = " · ".join(p for p in (notice, degraded) if p) or None
         # Its OWN clause, not a branch of the chain above: a detected track keeps timing_verified
         # True, so a discarded sidecar would otherwise be stated nowhere at all on exactly the
         # recording whose saved lines the user cared enough to place by hand.
@@ -3504,7 +3513,11 @@ class StudioWindow(QMainWindow):
         the thumbnail, the card still renders). Palette + unit follow the app's active choices."""
         if not hasattr(self, "session") or getattr(self, "view", None) is None:
             return None
-        data = share_card.card_data(self.session, unit=self._speed_unit)
+        # The load's PB verdict and the row it beat, for the card's PB mark (QA JOURNEY-7).
+        ctl = getattr(self, "library_ctl", None)
+        data = share_card.card_data(
+            self.session, unit=self._speed_unit, pb_standing=getattr(ctl, "pb_standing", None),
+            prior_date=(getattr(ctl, "previous_pb", None) or {}).get("date"))
         if data.blocked:
             return None
         # The card's map is the BEST LAP'S OWN TRACE, drawn from data (EXP-3) — not a grab of the

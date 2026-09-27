@@ -2532,7 +2532,7 @@ class StatsView(QWidget):
             if env else GG_KEY_RINGS)
         # +0.0 for the origin reads as a signed measurement of nothing; the ends keep their sign
         # because on this plot the sign IS the direction (see the axis labels).
-        ticks = [(v, f"{v:+.1f}" if v else "0") for v in (-r_max, 0.0, r_max)]
+        ticks = [(v, fmt_signed(v, 1) if v else "0") for v in (-r_max, 0.0, r_max)]
         plot.getAxis("left").setTicks([ticks])
         plot.getAxis("bottom").setTicks([ticks])
         pad = 0.1 * r_max

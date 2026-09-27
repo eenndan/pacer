@@ -38,7 +38,7 @@ from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 
 from . import coaching, map_render, theme, units
-from ._signal import fmt_time
+from ._signal import fmt_signed, fmt_time
 
 # The card is a portrait-ish social image. 1080×1350 is Instagram's 4:5 portrait — the most
 # forgiving crop across feeds/stories/chat, and big enough for a legible hero number.
@@ -98,6 +98,29 @@ def hero_delta_line(gap: float) -> str:
     return "level with your ideal lap"
 
 
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def pb_mark(standing: dict | None, best_s: float | None, prior_date: str | None = None) -> str:
+    """The card's personal-best mark, "NEW PB · −0.10 s vs 30 Aug", or "" (QA JOURNEY-7: on the day
+    the debrief announced a new PB, the card of that lap did not say so).
+
+    `standing` is the load's ``library.pb_standing_for`` verdict, so the trust gates are its own
+    (no PB on a provisional line or estimated timing), and only a BEAT earns a mark. Only of THIS
+    lap: a start-line drag since the load re-times the laps, and a verdict about another number
+    would put a PB on a lap that did not set it. `prior_date` is the beaten row's ISO date."""
+    if not standing or standing.get("kind") != "beat" or best_s is None:
+        return ""
+    if abs(float(standing.get("best", float("nan"))) - float(best_s)) > 5e-4:
+        return ""
+    mark = f"NEW PB · {fmt_signed(-float(standing['improvement']), 2, 's')}"
+    try:
+        _y, m, d = (int(x) for x in str(prior_date).split("-"))
+        return f"{mark} vs {d} {_MONTHS[m - 1]}" if 1 <= m <= 12 else mark
+    except ValueError:
+        return mark
+
+
 @dataclass(frozen=True)
 class TopOpp:
     """The #1 coaching opportunity as the card shows it (already resolved to display strings)."""
@@ -130,6 +153,7 @@ class CardData:
     top_opp: TopOpp | None          # the #1 opportunity, or None (< MIN_LAPS clean laps / none losing)
     blocked: bool         # True ⇒ do NOT render a card (provisional / no valid lap)
     stamp: str            # "" or an honesty stamp to burn on the card ("estimated timing")
+    pb: str = ""          # the personal-best mark beside "BEST LAP" (`pb_mark`), or ""
 
 
 def _top_opportunity(session, unit: str) -> TopOpp | None:
@@ -152,14 +176,20 @@ def _top_opportunity(session, unit: str) -> TopOpp | None:
         opp = ranked[0]  # ranked biggest-loss first
         glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
         label = f"C{opp.cid} {glyph}".strip()
+        # The lever alone (QA JOURNEY-7): the "4 of 36 laps matched your best lap here" count was
+        # the tail the card's one line cut mid-word ("4 of 36 laps match…"), and a shared image is
+        # read by people for whom the lever is the news.
         return TopOpp(corner_label=label, time_lost_s=float(opp.time_lost),
-                      reason=coaching.reason_sentence(opp, unit))
+                      reason=coaching.reason_sentence(opp, unit, reach=False))
     except Exception:  # noqa: BLE001 — the card degrades to "no opportunity", never crashes
         return None
 
 
-def card_data(session, *, unit: str | None = None) -> CardData:
+def card_data(session, *, unit: str | None = None, pb_standing: dict | None = None,
+              prior_date: str | None = None) -> CardData:
     """Assemble the card's display values from Session accessors ONLY (pure; no Qt, no new math).
+    `pb_standing` / `prior_date` are the load's PB verdict and the beaten row's date, for the PB
+    mark (`pb_mark`); the library is the app's to read, not the card's.
 
     Honesty verdict (see the module doc): ``blocked`` when the timing is PROVISIONAL (unverified
     start line) or there is no valid best lap — an unverified lap time is not a brag. ``stamp`` is
@@ -214,6 +244,8 @@ def card_data(session, *, unit: str | None = None) -> CardData:
         top_opp=_top_opportunity(session, unit),
         blocked=blocked,
         stamp=stamp,
+        pb=pb_mark(pb_standing, session.lap_time(best_id) if best_id is not None else None,
+                   prior_date),
     )
 
 
@@ -350,6 +382,9 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
 
     # --- hero: the best lap, big ---
     _draw_text(p, pad, 240, "BEST LAP", _font(28, theme.W_SEMIBOLD), theme.C.text_muted)
+    if data.pb:     # the PB standing, on the label row of the time it is about (JOURNEY-7)
+        _draw_text(p, 0, 240, data.pb, _font(28, theme.W_SEMIBOLD), theme.ahead_colour(),
+                   align_right_at=right)
     _draw_text(p, pad, 360, data.best_time, _font(132, theme.W_SEMIBOLD), theme.C.text)
 
     # --- Δ-to-ideal: how far off the achievable envelope, honestly labelled ---

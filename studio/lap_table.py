@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import data_quality, provenance_panel, theme, units
-from ._signal import PRINT_DECIMALS, fmt_time, is_best_at_print, lap_label, plural
+from ._signal import PRINT_DECIMALS, fmt_signed, fmt_time, is_best_at_print, lap_label, plural
 from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -2296,12 +2296,12 @@ class CornerTable(QWidget):
                 # resolution, so the printed time and the mark cannot disagree.
                 (f"{st.time:.{PRINT_DECIMALS}f}", None),
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
-                 (f"{st.delta:+.2f}", theme.delta_colour(st.delta))),
+                 (fmt_signed(st.delta, 2), theme.delta_colour(st.delta))),
                 (f"{conv(st.apex_speed, u):.1f}", None),
                 # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
                 # rule (negative = green) is applied to the NEGATED speed delta.
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
-                 (f"{conv(st.apex_speed_delta, u):+.1f}",
+                 (fmt_signed(conv(st.apex_speed_delta, u), 1),
                   theme.delta_colour(-st.apex_speed_delta))),
                 (f"{conv(st.entry_speed, u):.1f}", None),
                 (f"{conv(st.exit_speed, u):.1f}", None),

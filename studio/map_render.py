@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import units
+from ._signal import fmt_signed
 from .gapfill import GAP_TIME_S
 from .theme import MAP_RAINBOW_N, estimated_label
 
@@ -153,10 +154,11 @@ def _flat_hint(channel: str, value: str) -> str:
 
 def _fmt_delta(x: float) -> str:
     """Format a signed Δ in seconds, normalizing a tiny negative to +0.00 (never "-0.00 s") (P2).
-    Anything with |x| under the 5 ms display floor renders as the unsigned "0.00 s"."""
+    Anything with |x| under the 5 ms display floor renders as the unsigned "0.00 s". The minus is
+    U+2212, the app's one minus (`fmt_signed`, QA REG-3)."""
     if abs(x) < DELTA_FLAT_EPS_S:
         return "0.00 s"
-    return f"{x:+.2f} s"
+    return fmt_signed(x, 2, "s")
 
 
 def _fmt_rate(x: float) -> str:

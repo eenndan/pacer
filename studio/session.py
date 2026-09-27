@@ -3199,7 +3199,9 @@ class Session:
         gating itself is `focus.verdict` — pure, so the refusals are unit-testable without a
         recording."""
         if not items:
-            return focus.Report(track=list_track or entry.get("track"))
+            # Nothing to re-measure, but whether today's corners may start a list is still asked.
+            return focus.Report(track=list_track or entry.get("track"),
+                                baseline_refusal=focus.baseline_refusal(self.focus_trust(entry)))
         # Each item re-measured by the instrument its baseline was measured with.
         samples: list[focus.CornerSample | None] = [None] * len(items)
         for method in {i.method for i in items}:
@@ -3222,9 +3224,15 @@ class Session:
             "date": entry.get("date"),
             "start_ms": int(self._wall_clock_ms()[0]),
             "lap_total": float(self.corners.basis()[1]) if self.corners.basis() else 0.0,
-            "verified": bool(entry.get("verified", False)),
-            "degraded": bool(entry.get("degraded", False)),
+            **self.focus_trust(entry),
         }
+
+    def focus_trust(self, entry: dict) -> dict:
+        """The trust half of `focus_context`: the entry's two flags, and what makes the timing
+        untrusted with its measure (`TimingQuality.untrusted`), for `focus.baseline_refusal`."""
+        return {"verified": bool(entry.get("verified", False)),
+                "degraded": bool(entry.get("degraded", False)),
+                "untrusted": self.timing_quality.untrusted()}
 
     # Driving channels (brake/coast/grip + thresholds, F5/D3/D4/D5) are the `session.driving`
     # service (studio/driving_channels.py); per-lap caches clear on re-segment, the thresholds
