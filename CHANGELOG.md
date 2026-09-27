@@ -8,10 +8,9 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.5.1] — 2026-09-27
 
-Everything merged since v0.5.0: 8 pull requests, #436 to #443, all from the hands-on QA (round 3)
-of v0.5.0 itself on the evening of 2026-09-26: its regressions, the owner's next race day end to
-end, and a technical evaluator's first hour on a fresh clone. Each line names its pull request
-(`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+Everything merged since v0.5.0: 8 pull requests, #436 to #443, from the round-3 QA of v0.5.0: its
+regressions, the next race day end to end, a fresh clone's first hour. Each line names its pull
+request (`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
 
 ### Highlights
 
