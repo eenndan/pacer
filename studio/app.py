@@ -1336,6 +1336,8 @@ class StudioWindow(QMainWindow):
             trust strip and provisional cue read, so the bar retracts the "drag it into place" line
             in the same beat the map does. It used to be decided ONCE at load from `track_name`, so
             it survived byte-identical across the very drag that answered it (QA MAP-06);
+          * a FIRST OPEN ON DEGRADED TIMING — why it decided nothing (no PB, no focus list, no
+            debrief), with the measure (``LibraryController.degraded_notice``, QA REG-2);
           * a SAVED-LINES failure — a sidecar that is on disk and could not be used. Distinct from
             the revert-guard rejection below it and from the (correctly silent) absent case: the
             user's hand-placed start/finish line is being discarded, and the app then goes on to

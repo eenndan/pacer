@@ -352,10 +352,6 @@ FOCUS_DORMANT_REASON = "No focus list here — Pacer keeps one per track, and th
 FOCUS_REFUSED_TIP = ("A focus corner is checked against the session it was set on, and every later "
                      "check refuses a baseline measured on this session's timing, so none is "
                      "offered from it.")
-
-
-def _sentence(text: str) -> str:
-    return text[:1].upper() + text[1:]
 # QA JOURNEY-1: the list's one line on a page with no room for the block, and what its click does.
 # The glyph is the panel maximize button's own (central_view._MAXIMIZE_GLYPH), because the click
 # does what that button does, on the Coaching page.
@@ -363,6 +359,11 @@ FOCUS_LINE_GLYPH = "ph.corners-out"
 FOCUS_LINE_TIP = ("Your focus list at this track. The page has no room for it at this size: click "
                   "to see it whole, full-window, with its verdicts and its buttons (Coaching ▸ "
                   "Show focus list). Esc brings the grid back.")
+
+
+def _sentence(text: str) -> str:
+    """`text` as a sentence's start: the refusal is a clause in the empty line, a tooltip alone."""
+    return text[:1].upper() + text[1:]
 
 
 class FocusBlock(QWidget):
