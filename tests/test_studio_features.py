@@ -854,12 +854,15 @@ def test_load_failure_message_is_plain_language():
     from studio.app import StudioWindow
     msg = StudioWindow._load_failure_message
 
-    # A real-but-non-GoPro MP4 (exists on disk, non-empty): GPMFSource raises "Failed to open file".
+    # A real-but-non-GoPro MP4 (exists on disk, non-empty): GPMFSource raises "Failed to open file",
+    # which the ingest layer types as TelemetryUnreadable (what Session.load surfaces).
     import tempfile
+
+    from studio.ingest import TelemetryUnreadable
     with tempfile.NamedTemporaryFile(suffix=".mp4") as tf:
         tf.write(b"\x00" * 64)
         tf.flush()
-        m = msg([tf.name], RuntimeError(f"Failed to open file: {tf.name}"))
+        m = msg([tf.name], TelemetryUnreadable(f"Failed to open file: {tf.name}"))
     assert "GoPro" in m and "GPS" in m, m
     assert "RuntimeError" not in m, f"leaked the class name: {m}"
 
