@@ -133,6 +133,18 @@ class TimingQuality:
         low-GPS concern reports, so no consumer has to re-derive or collapse it to "some fixes"."""
         return round(self.dropped_fraction * 100)
 
+    def untrusted(self) -> str:
+        """What keeps this recording's timing out of the verdicts — a PB, a focus baseline — WITH
+        its measure: "GPS quality low (10% of fixes rejected)", "timing estimated from the video
+        clock", or both; "" when nothing does, and for no GPS at all (no lap to judge). QA REG-2:
+        a degraded first open said only "Esc returns to your usual layout."."""
+        parts = []
+        if self.media_clock:
+            parts.append("timing estimated from the video clock")
+        if self.low_gps_quality:
+            parts.append(f"GPS quality low ({self.dropped_pct()}% of fixes rejected)")
+        return " and ".join(parts)
+
     def concerns(self) -> list[str]:
         """Human-readable concern lines (most-significant first), one per active issue — the
         text the data-quality banner stacks. Empty when the timing is fully high-quality."""

@@ -587,6 +587,8 @@ class Report:
     # the earlier days first in list order, today last, each once. Exactly what the focus block's
     # one-click "Mark both dry" offers to write — and nothing it may not (`mark_dry_prompt`).
     unrecorded: tuple[tuple[str, str], ...] = ()
+    # Why no corner of THIS session may become a baseline (`baseline_refusal`), or "" when one may.
+    baseline_refusal: str = ""
 
     @property
     def active(self) -> bool:
@@ -596,6 +598,23 @@ class Report:
     @property
     def n_verdicts(self) -> int:
         return sum(1 for o in self.outcomes if o.has_verdict)
+
+
+def baseline_refusal(now_ctx: dict) -> str:
+    """Why no corner of THIS session can become a focus baseline, or "" when one can (QA REG-2).
+
+    The two trust facts `_blocker` refuses a stored baseline for (BLOCK_UNVERIFIED, BLOCK_DEGRADED),
+    asked of the session BEFORE anything is stored: every later check answers an item promoted from
+    such a session "no verdict", for good. The debrief's pre-promotion and the Replace offer already
+    refused one; a manual Add stored it on a GPS-degraded day, and the page invited that Add. Said
+    with the measure it rests on, which the session supplies as ``untrusted``
+    (`TimingQuality.untrusted`)."""
+    if not now_ctx.get("verified", False):
+        return "this session's start line is provisional, so its corners can't be a baseline"
+    if now_ctx.get("degraded", False):
+        why = now_ctx.get("untrusted") or "this session's timing is estimated"
+        return f"{why}, so this session's corners can't be a baseline"
+    return ""
 
 
 def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
@@ -693,7 +712,7 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
             and session_record.is_empty(rec_now):
         unrecorded.setdefault(now_fp, "today")
     return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes,
-                  unrecorded=tuple(unrecorded.items()))
+                  unrecorded=tuple(unrecorded.items()), baseline_refusal=baseline_refusal(now_ctx))
 
 
 # ------------------------------------------------------------------------------------- the words
@@ -859,9 +878,13 @@ def replace_offer(report: Report | None, shortlist: list[int]) -> list[int] | No
 
     NEVER FROM A SESSION OLDER THAN ANY BASELINE ON THE LIST (QA REG-1). Looking back at 30 Aug
     after 19 Sep's replace offered 30 Aug's three, and one click would have put the older day's
-    baselines under the next check."""
+    baselines under the next check.
+
+    NOR FROM A SESSION WHOSE CORNERS CAN BE NO BASELINE (QA REG-2, `baseline_refusal`): the click
+    was refused, so the button was an offer nothing could answer."""
     cids = [int(c) for c in shortlist or []]
-    if report is None or not report.active or not cids or report.unrecorded:
+    if report is None or not report.active or not cids or report.unrecorded \
+            or report.baseline_refusal:
         return None
     if all(o.kind == OUTCOME_SET_HERE for o in report.outcomes):
         return None

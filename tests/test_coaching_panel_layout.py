@@ -55,6 +55,7 @@ from studio import coaching, theme  # noqa: E402
 from studio.coaching_panel import (  # noqa: E402
     _COL_CORNER,
     _COL_LOST,
+    _PANEL_COL_PHASES,
     _PANEL_COL_REACH,
     _PANEL_COL_REASON,
     PANEL_TOP_N,
@@ -173,6 +174,26 @@ def test_wide_panel_keeps_the_reach_column():
     assert t.columnWidth(_PANEL_COL_REASON) >= REASON_MIN_PX, t.columnWidth(_PANEL_COL_REASON)
     print("test_wide_panel_keeps_the_reach_column OK "
           f"(reason {t.columnWidth(_PANEL_COL_REASON)}px, 'Done it?' shown)")
+
+
+def test_each_row_says_its_count_once_and_its_bar_names_the_lap():
+    """QA JOURNEY-8 (2026-09-26): every row said "4 of 36 laps" twice — in "Done it?" and again at
+    the end of the reason — and set "+0.15 s" of Time lost beside "typical lap +0.12 s", which a
+    racer reads as one quantity stated twice (they are two statistics: a median over the laps, and
+    the thirds of one lap's clock). The count is now said by whichever of the two the page shows —
+    the reason carries it back while "Done it?" is hidden, so a narrow page drops no measured fact
+    — and the bar's sum names the one lap it was measured on."""
+    for size, hidden in ((MIN_PANEL, True), ((900, 600), False)):
+        t = _panel(_rows(6), size).table
+        assert t.isColumnHidden(_PANEL_COL_REACH) is hidden, size
+        for r in range(t.rowCount()):
+            count = f"{t.item(r, _PANEL_COL_REACH).text()} matched your best lap here"
+            said = t.item(r, _PANEL_COL_REASON).text().count(count)
+            assert said == (1 if hidden else 0), (size, t.item(r, _PANEL_COL_REASON).text())
+    bar = _panel(_rows(3), (1400, 800)).table.cellWidget(0, _PANEL_COL_PHASES)
+    faces = [lb.text() for lb in bar.findChildren(QLabel) if lb.text().startswith(("lap ", "typ"))]
+    assert faces == ["lap 4 +0.09 s"], faces       # median_lap_id 3 is lap 4 on screen
+    print("test_each_row_says_its_count_once_and_its_bar_names_the_lap OK")
 
 
 def test_reason_header_never_paints_clipped():
@@ -595,6 +616,7 @@ def _run_all():
     test_the_grid_page_says_what_its_viewport_left_out()
     test_narrow_panel_spends_its_width_on_the_prose()
     test_wide_panel_keeps_the_reach_column()
+    test_each_row_says_its_count_once_and_its_bar_names_the_lap()
     test_reason_header_never_paints_clipped()
     test_every_header_carries_a_tooltip()
     test_page_fills_its_height_with_the_ranking()

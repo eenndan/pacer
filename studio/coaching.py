@@ -1252,7 +1252,7 @@ def abstain_sentence(opp: Opportunity) -> str:
     return ""
 
 
-def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
+def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = True) -> str:
     """The human, numbers-only coaching sentence for one opportunity's dominant reason. Kept
     here (next to the model) so the panel and any export read ONE phrasing and can't drift. When
     a clear dominant phase exists (D2) a reason-aware clause is appended (a fix-location "… — most
@@ -1264,7 +1264,12 @@ def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
 
     An ABSTAINED row returns its `abstain_sentence` instead: the lever is not stated for a corner
     whose claim did not survive the evidence gate, on any surface, so no consumer can accidentally
-    print advice this module just declined to give."""
+    print advice this module just declined to give.
+
+    `reach` False returns the lever alone, for a surface that states the count itself or has no
+    room for it: the Coaching row whose "Done it?" cell is on screen, and the lap card, which cut
+    the clause mid-word (QA JOURNEY-7/8). The count is never dropped from a Coaching row: while
+    "Done it?" is hidden the sentence carries it again (`coaching_panel`)."""
     if not opp.evidence.ranked:
         return abstain_sentence(opp)
     r = opp.reason
@@ -1286,11 +1291,11 @@ def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)
-    reach = reach_clause(opp)
+    count = reach_clause(opp) if reach else ""
     # The lever has never carried a terminator — it is a fragment read under a "How to find it"
     # header. The reach clause is a second SENTENCE, so it needs one in front of it, and only when
     # there is one: an unmeasured row (REACH_UNKNOWN) still prints byte-identically to before.
-    return f"{lever}.{reach}" if reach else lever
+    return f"{lever}.{count}" if count else lever
 
 
 # ------------------------------------------------------- the session theme, in words

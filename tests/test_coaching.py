@@ -1161,7 +1161,7 @@ def test_m4_phasebar_tooltip_does_not_claim_time_lost_and_guards_sign_flip():
     assert "NOT the same as the row's Time lost" in tip, tip
     # A negative net is stated as "net faster than best here", never as a loss.
     assert "net faster than best here" in tip, tip
-    assert "Typical-lap net -0.21 s" in tip, tip
+    assert "Typical-lap net \u22120.21 s" in tip, tip
     # And a positive net still names the slowest third (the normal case), still not "time lost".
     pos = K.PhaseLoss(entry=0.05, apex=0.20, exit=0.03)     # total +0.28, apex slowest
     tip_pos = PhaseBar(pos).toolTip()

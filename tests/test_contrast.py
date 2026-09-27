@@ -270,7 +270,7 @@ def test_the_ideal_readout_clamps_instead_of_printing_a_minus_sign():
     assert theme.format_ideal_run(None) == "Δideal —"
     assert theme.format_ideal_run(1.6374) == "Δideal +1.64 s"
     for d in (-1e-9, -0.004, -0.052, -0.15857, -3.0):
-        assert theme.format_ideal_run(d) == "Δideal +0.00 s", d
+        assert theme.format_ideal_run(d) == "Δideal 0.00 s", d
         text, colour = theme.format_ideal_readout(d, 37.0, 2)
         assert "-" not in text.split("     ")[0], (d, text)
         assert colour is None, d
@@ -1109,20 +1109,21 @@ def test_welcome_error_outranks_the_welcome_subtitle():
 def test_format_delta_value_never_prints_negative_zero():
     """L12-10: `f'{-1.8e-15:+.2f}'` is '-0.00', which reads as 'you are behind' on a lap where you
     are level — and the exporter burned it into 100 of 697 frames (14.3%) of a delivered MP4. Any Δ
-    inside the even dead band now prints +0.00, so the number, the colour and the arrow agree."""
-    assert theme.format_delta_value(-1e-15) == "+0.00"
-    assert theme.format_delta_value(-1.78e-15) == "+0.00"
-    assert theme.format_delta_value(-0.004) == "+0.00"
-    assert theme.format_delta_value(-0.0) == "+0.00"
-    assert theme.format_delta_value(0.0) == "+0.00"
+    inside the even dead band now prints the unsigned 0.00 (QA REG-3: one minus, and no sign on
+    zero), so the number, the colour and the arrow agree."""
+    assert theme.format_delta_value(-1e-15) == "0.00"
+    assert theme.format_delta_value(-1.78e-15) == "0.00"
+    assert theme.format_delta_value(-0.004) == "0.00"
+    assert theme.format_delta_value(-0.0) == "0.00"
+    assert theme.format_delta_value(0.0) == "0.00"
     assert theme.format_delta_value(None) == "—"
     # Real deltas are untouched, sign and all.
-    assert theme.format_delta_value(-0.31) == "-0.31"
+    assert theme.format_delta_value(-0.31) == "\u22120.31"
     assert theme.format_delta_value(0.31) == "+0.31"
-    assert theme.format_delta_value(-0.006) == "-0.01"
+    assert theme.format_delta_value(-0.006) == "\u22120.01"
     # The composed run strings inherit it, live box and export alike.
-    assert theme.format_delta_run(-1e-15) == "Δ +0.00 s"
-    assert theme.format_delta_run(-0.004, units=False, arrow=False) == "Δ +0.00"
+    assert theme.format_delta_run(-1e-15) == "Δ 0.00 s"
+    assert theme.format_delta_run(-0.004, units=False, arrow=False) == "Δ 0.00"
     # ...and the dead band is the SAME one the colour and the arrow use, so no surface disagrees.
     for d in (-1e-15, -0.004, 0.004):
         assert theme.delta_colour(d) is None and theme.delta_arrow(d) == ""
@@ -1142,8 +1143,8 @@ def test_exported_overlay_readout_never_burns_negative_zero():
     from studio import export_video
     assert hasattr(export_video, "strip_tail")
     for d in (-1e-15, -0.0049, 0.0):
-        assert theme.format_delta_run(d, units=False, arrow=False) == "Δ +0.00"
-        assert export_video.strip_tail(d)[0] == "Δ +0.00"
+        assert theme.format_delta_run(d, units=False, arrow=False) == "Δ 0.00"
+        assert export_video.strip_tail(d)[0] == "Δ 0.00"
     print("test_exported_overlay_readout_never_burns_negative_zero OK")
 
 

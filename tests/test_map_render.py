@@ -27,6 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from studio import map_render, theme  # noqa: E402
+from studio._signal import fmt_signed  # noqa: E402
 from studio.map_render import (  # noqa: E402
     GRIP_UTIL_DISPLAY_MAX,
     bucket_polylines,
@@ -182,7 +183,9 @@ def test_rainbow_channel_delta_negated_and_gated():
     assert seg[0] > seg[-1]
     # Legend reads the signed Δ: most-behind on the low end, most-ahead on the high end.
     vals = -resample_grid_to_points(cum, grid)
-    assert lo == f"{-float(np.min(vals)):+.2f} s" and hi == f"{-float(np.max(vals)):+.2f} s"
+    # ...with the app's one minus (QA REG-3).
+    assert lo == fmt_signed(-float(np.min(vals)), 2, "s"), lo
+    assert hi == fmt_signed(-float(np.max(vals)), 2, "s"), hi
     # Gates: no grid (no best lap) and a zero-length odometer both → None.
     assert rainbow_channel("delta", t, xs, ys, speed, cum, None, None) is None
     assert rainbow_channel("delta", t, xs, ys, speed, np.zeros_like(cum), None, grid) is None
@@ -209,7 +212,7 @@ def test_rainbow_channel_delta_best_lap_hint_and_no_negative_zero():
     assert _fmt_delta(-0.0) == "0.00 s"
     assert _fmt_delta(-0.001) == "0.00 s"
     assert _fmt_delta(DELTA_FLAT_EPS_S / 2) == "0.00 s"
-    assert _fmt_delta(0.31) == "+0.31 s" and _fmt_delta(-0.31) == "-0.31 s"
+    assert _fmt_delta(0.31) == "+0.31 s" and _fmt_delta(-0.31) == "\u22120.31 s"
     print("test_rainbow_channel_delta_best_lap_hint_and_no_negative_zero OK")
 
 

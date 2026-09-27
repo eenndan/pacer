@@ -123,7 +123,7 @@ def test_prefs_app_support_seam_matches_library():
 def test_theme_readout_default_is_kmh():
     """Default (no unit) keeps the exact km/h strings the live #DiffBox + export shipped with —
     the existing tests' byte-identity must not move."""
-    assert theme.format_delta_speed(0.0, 73.4, 2)[0] == "Δ +0.00 s     73 km/h"
+    assert theme.format_delta_speed(0.0, 73.4, 2)[0] == "Δ 0.00 s     73 km/h"
     assert theme.format_speed_run(88.0, 2) == "88 km/h"
     assert theme.speed_number(73.4, 2) == "73"
     print("test_theme_readout_default_is_kmh OK")
@@ -132,7 +132,7 @@ def test_theme_readout_default_is_kmh():
 def test_theme_readout_mph():
     """With mph, the speed number converts and the label flips; the Δ scalar is untouched."""
     # 73.4 km/h → 45.6 mph → "46".
-    assert theme.format_delta_speed(0.0, 73.4, 2, units.MPH)[0] == "Δ +0.00 s     46 mph"
+    assert theme.format_delta_speed(0.0, 73.4, 2, units.MPH)[0] == "Δ 0.00 s     46 mph"
     assert theme.format_speed_run(88.0, 2, units.MPH) == "55 mph"   # 88 km/h → 54.68 → 55
     assert theme.speed_number(100.0, 2, units.MPH) == "62"
     # No lap → honest em-dash + the (now mph) label.
@@ -337,7 +337,7 @@ def test_corner_table_speed_cells_flip():
     assert ct.table.item(0, 3).text() == "49.7"     # 80 km/h → 49.71
     assert ct.table.item(0, 5).text() == "62.1"     # 100 km/h → 62.14
     # Δ apex is a difference: -4 km/h → -2.5 mph (sign preserved).
-    assert ct.table.item(0, 4).text() == "-2.5"
+    assert ct.table.item(0, 4).text() == "\u22122.5"
     assert "mph" in ct.table.horizontalHeaderItem(5).toolTip()
     print("test_corner_table_speed_cells_flip OK")
 

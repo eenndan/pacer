@@ -56,14 +56,14 @@ def test_delta_arrow_and_run_carry_direction_without_colour():
     # The signed number AND the arrow agree — doubly non-colour.
     ahead = theme.format_delta_run(-0.32)
     behind = theme.format_delta_run(0.32)
-    assert ahead == "Δ -0.32 s ▲", ahead
+    assert ahead == "Δ \u22120.32 s ▲", ahead
     assert behind == "Δ +0.32 s ▼", behind
     # Even Δ (dead-band): no arrow, so the existing readout is unchanged.
-    assert theme.format_delta_run(0.0) == "Δ +0.00 s", theme.format_delta_run(0.0)
+    assert theme.format_delta_run(0.0) == "Δ 0.00 s", theme.format_delta_run(0.0)
     # arrow=False for word-labelled contexts (tooltips) drops the glyph.
-    assert theme.format_delta_run(-0.32, arrow=False) == "Δ -0.32 s"
+    assert theme.format_delta_run(-0.32, arrow=False) == "Δ \u22120.32 s"
     # The combined live readout inherits the arrow (it composes format_delta_run).
-    assert theme.format_delta_speed(-0.20, 100.0, 2)[0].startswith("Δ -0.20 s ▲")
+    assert theme.format_delta_speed(-0.20, 100.0, 2)[0].startswith("Δ \u22120.20 s ▲")
     print("test_delta_arrow_and_run_carry_direction_without_colour OK")
 
 

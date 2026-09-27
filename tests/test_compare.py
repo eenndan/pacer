@@ -649,7 +649,7 @@ def test_l8_06_pane_badges_use_the_shared_delta_formatter():
     c._set_pane_badge(0, 1.2225)
     assert c.video.badges[0][0] == "Δ +1.22 s ▼", c.video.badges[0]
     c._set_pane_badge(1, -0.8604)
-    assert c.video.badges[1][0] == "Δ -0.86 s ▲", c.video.badges[1]
+    assert c.video.badges[1][0] == "Δ \u22120.86 s ▲", c.video.badges[1]
     c._set_pane_badge(0, None)
     assert c.video.badges[0] == ("Δ —", None), c.video.badges[0]
     print("test_l8_06_pane_badges_use_the_shared_delta_formatter OK")

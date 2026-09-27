@@ -43,7 +43,7 @@ from typing import cast
 import numpy as np
 
 from . import data_quality
-from ._signal import MAX_DOP, MIN_FIX, lap_label, plural
+from ._signal import MAX_DOP, MIN_FIX, MINUS, lap_label, plural
 
 # The two axes a window can be stated on. A lap time is bounded by two INSTANTS; a sector split
 # and a corner are bounded by two ODOMETER POSITIONS and only become times after an interpolation.
@@ -147,7 +147,9 @@ def _fmt(fmt: str, v) -> str:
     # No fallback to `str(v)`: every Table is built in this module (`fix_table`, `corner_best`'s
     # population) with a format per column that matches the values it puts there, so a cell that
     # does not format is a builder bug and must be loud. tests/test_provenance.py sweeps it.
-    return fmt.format(v)
+    text = fmt.format(v)
+    # A SIGNED column ("vs best") prints the app's one minus (QA REG-3); the CSV keeps raw values.
+    return text.replace("-", MINUS, 1) if fmt.startswith("{:+") else text
 
 
 def _csv_cell(v) -> str:

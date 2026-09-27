@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtGui import QImage  # noqa: E402
+from PySide6.QtGui import QColor, QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -413,6 +413,50 @@ def test_the_coaching_reason_is_fitted_like_every_other_line_on_the_card():
           f"(worst fitted line {worst[1]} px in {avail})")
 
 
+def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
+    """QA JOURNEY-7 (2026-09-26). On SD_19_09's first open the debrief said "New personal best at
+    Sandown Park: 0:46.808, 0.10 s faster than your previous best (0:46.912)", and the lap card of
+    that very lap said nothing of it; its reason line ended "4 of 36 laps match…", cut mid-word,
+    because the swept guard above only ever met sentences with no reach count (an Opportunity built
+    with no per-lap times). The mark is the load's PB verdict, a BEAT, of THIS lap only; the reason
+    is the lever alone, the count being the Coaching row's to state."""
+    times = [5.0] * 4 + [5.15] * 32                      # 4 of 36 laps at the best lap's time
+    c1 = coaching.Opportunity(
+        cid=1, direction=1, time_lost=0.147, entry_dist=100.0,
+        reason=coaching.Reason(kind=coaching.REASON_LINE, contribution=0.1, apex_speed_deficit=0.0,
+                               brake_extra_s=0.0, coast_extra_s=0.0, sigma=0.46),
+        phases=coaching.PhaseLoss(entry=0.02, apex=0.02, exit=0.07),
+        evidence=coaching.corner_evidence(times, 5.0, 0.147))
+    assert "4 of 36 laps matched" in coaching.reason_sentence(c1), "the fixture has its count"
+    session = FakeSession(track="Sandown Park", best_time=46.808, ideal=46.196, opps=(
+        coaching.Opportunities(enough=True, n_laps=36, median_lap_id=3, rows=[c1])))
+    reason = share_card.card_data(session, unit="kmh").top_opp.reason
+    assert reason == "repeat your best line (laps vary ±0.46 s) — most of it on exit", reason
+    txt, px, _width = _reason_fit(reason)
+    assert txt == reason and px == share_card._REASON_PX_STEPS[0], (txt, px)
+    beat = {"kind": "beat", "track": "Sandown Park", "best": 46.808, "prior": 46.912,
+            "improvement": 0.104}
+    try:
+        d = share_card.card_data(session, unit="kmh", pb_standing=beat, prior_date="2026-08-30")
+    except TypeError as exc:                             # a tree with no PB mark at all
+        raise AssertionError(f"the card takes no PB verdict: {exc}") from exc
+    assert d.pb == "NEW PB · −0.10 s vs 30 Aug", d.pb
+    assert share_card.card_data(session, unit="kmh", pb_standing=beat).pb == \
+        "NEW PB · −0.10 s"
+    for other in (None, {**beat, "kind": "first"}, {**beat, "kind": "behind", "gap": 0.2},
+                  {**beat, "best": 46.9}):               # ...and the last: another lap's verdict
+        assert share_card.card_data(session, unit="kmh", pb_standing=other).pb == "", other
+    # Drawn: the ahead hue's ink on the BEST LAP row, right of the label, only with the mark.
+    ahead = QColor(theme.ahead_colour())
+
+    def _ink(data):
+        img = share_card.render_card(data)
+        return sum(1 for x in range(560, 1008, 2) for y in range(212, 244, 2)
+                   if QColor(img.pixel(x, y)).rgb() == ahead.rgb())
+    assert _ink(d) > 20 and _ink(share_card.card_data(session, unit="kmh")) == 0, "not drawn"
+    print(f"test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole OK ({d.pb!r})")
+
+
 def test_no_card_ink_reaches_the_edge_of_the_image():
     """The same finding, read from the RENDERED PIXELS rather than from the fit — the defect was
     visible as ink in the last 4 pixel COLUMNS of the PNG. Everything the card draws lives inside
@@ -796,6 +840,7 @@ if __name__ == "__main__":
     test_render_card_stamped_and_degraded_still_renders()
     test_title_fit_shrinks_then_elides_long_names_keeps_short_unchanged()
     test_the_coaching_reason_is_fitted_like_every_other_line_on_the_card()
+    test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole()
     test_no_card_ink_reaches_the_edge_of_the_image()
     test_title_does_not_collide_with_the_stamp_on_a_degraded_long_name()
     test_map_plate_height_hugs_the_thumbnail_aspect()

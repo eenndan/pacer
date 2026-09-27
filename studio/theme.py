@@ -26,6 +26,7 @@ from PySide6.QtGui import (
 )
 
 from . import units
+from ._signal import fmt_signed
 
 _log = logging.getLogger(__name__)
 
@@ -694,16 +695,21 @@ def line_width(logical_px: float) -> float:
 
 
 def format_delta_value(d: float | None) -> str:
-    """Δ number alone, no glyph/units: em dash for None, else signed 2dp (e.g. -0.31).
+    """Δ number alone, no glyph/units: em dash for None, else signed 2dp (e.g. −0.31).
 
-    A Δ inside the DELTA_EVEN_EPS_S dead band is snapped to +0.0 FIRST, so float noise can never
+    A Δ inside the DELTA_EVEN_EPS_S dead band is snapped to 0 FIRST, so float noise can never
     print the meaningless `-0.00`: `f"{-1.8e-15:+.2f}"` is `-0.00`, which reads as "you are behind"
     on a lap where you are dead level, and the export burns it into the delivered MP4 where the
     recipient cannot correct it. The same dead band already drives delta_colour() and delta_arrow(),
-    so all three now agree on what counts as 'even'."""
+    so all three now agree on what counts as 'even'.
+
+    ONE MINUS (QA REG-3): through `_signal.fmt_signed`, so a Δ behind prints U+2212 like every
+    other signed number — this was the ASCII hyphen the hero, the compare badges and every exported
+    overlay burned in ("Δ -0.31") — and a dead-even Δ is the unsigned "0.00" (a sign on zero
+    invites a direction the number does not have)."""
     if d is None:
         return "—"
-    return f"{0.0 if abs(d) <= DELTA_EVEN_EPS_S else d:+.2f}"
+    return fmt_signed(0.0 if abs(d) <= DELTA_EVEN_EPS_S else d, 2)
 
 
 def format_delta_run(d: float | None, *, units: bool = True, arrow: bool = True,
