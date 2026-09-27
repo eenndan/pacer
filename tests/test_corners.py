@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from studio import corners as C  # noqa: E402
-from studio._signal import _smooth  # noqa: E402
+from studio._signal import _smooth, fmt_signed  # noqa: E402
 
 RADIUS = 30.0
 STRAIGHT = 200.0
@@ -678,7 +678,7 @@ def test_corner_table_populates_and_highlights():
         is_best = abs(s.time - bests[r]) < 1e-9
         expected_time = f"{s.time:.2f}" + (BEST_SECTOR_MARK if is_best else "")
         assert table.table.item(r, 1).text() == expected_time
-        assert table.table.item(r, 2).text() == f"{s.delta:+.2f}"
+        assert table.table.item(r, 2).text() == fmt_signed(s.delta, 2)   # the one minus (QA REG-3)
         assert table.table.item(r, 3).text() == f"{s.apex_speed:.1f}"
         # best-sector-coloured + bold Time cell iff this lap holds the session best for that corner
         # (default palette: best_sector_colour() == C.best purple)

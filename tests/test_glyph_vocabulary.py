@@ -247,7 +247,7 @@ def test_the_one_minus_is_drawn_by_the_export_face_at_the_width_of_plus():
 
     from PySide6.QtGui import QFontMetricsF
 
-    from studio import export_video, map_render
+    from studio import export_video, map_render, provenance
     from studio.coaching_panel import PhaseBar
     from studio.plots_view import PlotsView
 
@@ -261,7 +261,8 @@ def test_the_one_minus_is_drawn_by_the_export_face_at_the_width_of_plus():
     bar = PhaseBar(coaching.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04))
     texts = [lb.text() for lb in bar.findChildren(QLabel)] + [bar.toolTip()]
     texts += [export_video.strip_tail(-0.31)[0], theme.format_delta_run(-0.31),
-              map_render._fmt_delta(-0.31), PlotsView._fmt_seconds(-0.2)]
+              map_render._fmt_delta(-0.31), PlotsView._fmt_seconds(-0.2),
+              provenance._fmt("{:+.4f}", -0.0123)]      # the corner population's "vs best"
     hits = [t for t in texts if hyphen.search(t)]
     assert not hits, f"an ASCII hyphen as a minus: {hits}"
     assert export_video.strip_tail(-0.31)[0] == "Δ −0.31", export_video.strip_tail(-0.31)
