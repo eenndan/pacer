@@ -140,13 +140,16 @@ def test_the_two_pane_frame_never_exceeds_one_4k_frame():
     row, every layout and every footage shape now lands inside one 4K frame: at most 3840x2160's
     pixels, no side over 4096, H.264 level 5.1 at 30 fps. Rows already inside it are untouched,
     and a capped frame keeps pane A's shape and says it was capped."""
+    his = ec.compare_geometry((3840, 2160), (3840, 2160), ec.CompareConfig(out_height=99999))
+    assert his.out_w * his.out_h <= 3840 * 2160, (
+        f"his Source compare is {his.out_w}x{his.out_h}, more than one 4K frame")
     for src in ((3840, 2160), (2704, 1520), (1920, 1080), (5312, 2988), (2160, 3840), (4000, 3000)):
         for want in (720, 1080, 1440, 99999):
             for layout in ec.LAYOUT_CHOICES:
                 g = ec.compare_geometry(src, src, ec.CompareConfig(out_height=want, layout=layout))
                 case = (src, want, layout, g)
-                assert g.out_w * g.out_h <= ec.MAX_FRAME_PIXELS == 3840 * 2160, case
-                assert max(g.out_w, g.out_h) <= ec.MAX_FRAME_SIDE == 4096, case
+                assert g.out_w * g.out_h <= 3840 * 2160, case
+                assert max(g.out_w, g.out_h) <= 4096, case
                 assert _h264_level_51_at_30fps(g.out_w, g.out_h), case
                 assert all(v % 2 == 0 for v in (g.out_w, g.out_h, g.pane_w, g.pane_h)), case
                 assert abs(g.pane_w / g.pane_h - src[0] / src[1]) < 0.01, case
@@ -164,6 +167,7 @@ def test_the_two_pane_frame_never_exceeds_one_4k_frame():
     assert frame(1080, ec.LAYOUT_SIDE) == (3840, 1080, False)
     assert frame(1440, ec.LAYOUT_SIDE) == (4096, 1152, True)         # was 5120x1440
     assert frame(99999, ec.LAYOUT_SIDE) == (4096, 1152, True)        # was 7680x2160
+    assert (ec.MAX_FRAME_PIXELS, ec.MAX_FRAME_SIDE) == (3840 * 2160, 4096)
     print("ok geometry: every compare frame fits one 4K frame (H.264 level 5.1)")
 
 

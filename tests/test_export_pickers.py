@@ -44,6 +44,9 @@ from studio import export_video as ev  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 
 _RES = "Resolution (each pane)"
+# The comparison's own resolution pref, by the name it lands under in prefs.json: a key on his disk
+# is a contract, so the tests pin the literal rather than whatever constant the app names it by.
+_COMPARE_RES_KEY = "export_compare_res_idx"
 
 
 def _hint(dlg) -> QLabel:
@@ -65,7 +68,7 @@ def _reset_prefs(**stored):
     a REAL stored preference in this file's temp tree, shared by every test in the process."""
     _clear_export_preset()
     data = prefs.load()
-    for key in (ExportController._PREF_COMPARE_RES, ExportController._PREF_COMPARE_LAYOUT):
+    for key in (_COMPARE_RES_KEY, ExportController._PREF_COMPARE_LAYOUT):
         data.pop(key, None)
     data.update(stored)
     prefs.save(data)
@@ -102,7 +105,7 @@ def test_the_compare_opens_on_its_own_1080p_whatever_the_overlay_remembers():
     assert opened == "1080p", f"the comparison opened on {opened!r}, the overlay's remembered row"
     assert "Output: 1920x2160, two panes of 1920x1080 one above the other." in hint, hint
     assert cfg.out_height == 720, cfg
-    assert prefs.get(ExportController._PREF_COMPARE_RES) == 0
+    assert prefs.get(_COMPARE_RES_KEY) == 0
     assert prefs.get(ExportController._PREF_EXPORT_RES) == ExportController._EXPORT_RES_SOURCE, (
         "the comparison's choice was written over the overlay's")
     _compare_dialog(win, lambda dlg: (seen.append((_combo(dlg, _RES).currentText(), "")),
@@ -116,7 +119,7 @@ def test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so():
     """On his 4K footage "Source" was 3840x4320. The row is now the largest pair of panes that fits
     one 4K frame, the hint names that frame and why, and the size is priced on it, finish frame
     included. 1440p panes (2560x2880) already fit, so that row is untouched and says nothing."""
-    _reset_prefs(**{ExportController._PREF_COMPARE_RES: 3})
+    _reset_prefs(**{_COMPARE_RES_KEY: 3})
     real_probe = ev.probe_video_size
     ev.probe_video_size = lambda _p: _E5_FRAME
     try:
@@ -211,7 +214,7 @@ def test_the_compare_dialog_waits_for_a_slow_probe_too():
     """The comparison picker shares the wait, and its "Source" row has nothing to price until the
     frame is known: it says it is measuring, then states the capped frame and its size."""
     texts = _late_probe(lambda win, on: _compare_dialog(win, on),
-                        {ExportController._PREF_COMPARE_RES: 3})
+                        {_COMPARE_RES_KEY: 3})
     opened, _waited, landed = texts
     assert "Measuring the footage" in opened and "About " not in opened, opened
     assert "Output: 2714x3052" in landed and "About " in landed and "to render" in landed, landed
@@ -219,11 +222,23 @@ def test_the_compare_dialog_waits_for_a_slow_probe_too():
 
 
 def _run_all():
-    test_the_compare_opens_on_its_own_1080p_whatever_the_overlay_remembers()
-    test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so()
-    test_the_first_dialog_states_the_size_once_a_slow_probe_lands()
-    test_the_compare_dialog_waits_for_a_slow_probe_too()
+    tests = (test_the_compare_opens_on_its_own_1080p_whatever_the_overlay_remembers,
+             test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so,
+             test_the_first_dialog_states_the_size_once_a_slow_probe_lands,
+             test_the_compare_dialog_waits_for_a_slow_probe_too)
+    failed = []
+    for test in tests:
+        try:
+            test()
+        except Exception:  # noqa: BLE001 — run every test, then fail by name
+            import traceback
+            traceback.print_exc()
+            failed.append(test.__name__)
+            print(f"FAIL {test.__name__}")
     _clear_export_preset()
+    if failed:
+        print(f"{len(failed)}/{len(tests)} export-picker tests FAILED: {failed}")
+        sys.exit(1)
     print("all export-picker tests passed")
 
 
