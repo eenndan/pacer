@@ -1384,7 +1384,11 @@ class VideoView(QWidget):
 
     def step(self, seconds: float):
         """Step ±`seconds`, clamped to the slider range, through the slider-move seek path (so
-        compare-window confinement applies)."""
+        compare-window confinement applies). Not while the handle is held: the pointer owns the
+        transport then, and a step would queue a target the handle does not show for the release
+        to land (see _on_pane_position)."""
+        if self.slider.isSliderDown():
+            return
         ms = int((self.pane.current_global_time() + seconds) * 1000)
         self._on_slider_moved(min(max(ms, self.slider.minimum()), self.slider.maximum()))
 
@@ -1994,10 +1998,20 @@ class VideoView(QWidget):
     def _on_pane_position(self, global_s: float):
         """The PRIMARY pane advanced (global seconds): track the slider and forward the position to
         the app for the telemetry sync. ONLY the primary pane is connected here — the secondary's
-        positionChanged is never wired, so it can never drive the map/cursor/readout."""
-        self.slider.blockSignals(True)
-        self.slider.setValue(int(global_s * 1000))
-        self.slider.blockSignals(False)
+        positionChanged is never wired, so it can never drive the map/cursor/readout.
+
+        A HELD handle belongs to the pointer, so the playhead leaves it alone until the release (QA
+        2026-09-26 round 3, JOURNEY-2). setValue moves the handle as well as the value, and a drag's
+        playhead runs behind the pointer: one seek in flight, the newest target held behind it
+        (PlayerPane.seek_dragged). Un-muted, the clock reports on through a seek (33-38 reports in a
+        1.5 s drag on SD19, 8 muted), so a report after the last move left the handle on the lagging
+        playhead, up to 102 s from the pointer (SD19, MK, Sandown 3h). The release then landed,
+        rightly, at the pointer: "a minute past where he let go". The telemetry — map, charts,
+        readout — still follows the picture."""
+        if not self.slider.isSliderDown():
+            self.slider.blockSignals(True)
+            self.slider.setValue(int(global_s * 1000))
+            self.slider.blockSignals(False)
         self.positionChanged.emit(global_s)
 
     def _set_slider_window(self, window: tuple[float, float]):
