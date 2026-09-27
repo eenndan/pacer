@@ -170,14 +170,13 @@ test-soak = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-f
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
 # The CI E2E gate as a task: build the whole StudioWindow offscreen on the bundled GoPro sample.
-# PYTHONPATH for the same reason tests/CMakeLists.txt sets it on every Python test (see the
-# comment there): `pixi run build` drops the compiled module into site-packages/pacer/, which has
-# no __init__.py, so a bare `import pacer` resolves to a namespace package and the editable
-# install's finder never runs — the smoke run then dies inside Session.load with "module 'pacer'
-# has no attribute 'Laps'". Pointing at the cmake-deployed bindings package makes it win in every
-# install state; relative like the sample path the script itself opens (both resolve off the
-# workspace root the task runs from).
-smoke = { cmd = "python -m studio.dev._smoke --no-video", depends-on = ["build"], env = { PYTHONPATH = "bindings/pacer" } }
+# NO PYTHONPATH, ON PURPOSE: the gate starts Python exactly as `studio` below does, so it fails
+# whenever the README's command would. Until 2026-09-27 it set PYTHONPATH=bindings/pacer, the one
+# thing `studio` lacked, and passed while `pixi run studio -- --demo` failed on every fresh clone:
+# `import pacer` resolved to a namespace package with no Laps (EVAL-1). The build now deploys the
+# whole package into site-packages (bindings/pacer/CMakeLists.txt), so no variable is needed; on
+# main's tree this task without the override died with "module 'pacer' has no attribute 'Laps'".
+smoke = { cmd = "python -m studio.dev._smoke --no-video", depends-on = ["build"] }
 gen-bindings = "python bindings/pacer/generate-bindings.py"
 studio = { cmd = "python -m studio", depends-on = ["build"] }
 # The `--demo` recording (studio/dev/make_demo.py): a SYNTHETIC session — generated, not filmed —
