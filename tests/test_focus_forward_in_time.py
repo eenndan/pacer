@@ -40,7 +40,13 @@ from studio import focus, session_record  # noqa: E402
 SD30 = {"fp": "GX0065", "date": "2026-08-30"}
 SD19 = {"fp": "GX0068", "date": "2026-09-19"}
 HOUR_MS = 3_600_000
-NOON_19 = 1_789_815_600_000     # 2026-09-19 around midday, epoch ms
+NOON_19 = 1_789_815_600_000     # 2026-09-19 12:00 BST, epoch ms
+# Read through getattr, so that on a tree without the rule these tests fail on the rule itself.
+OLDER = getattr(focus, "BLOCK_OLDER", "older")
+
+
+def _stamp(item) -> int | None:
+    return getattr(item, "start_ms", None)
 
 
 def _items(day: dict, cids=(7, 5, 3), start_ms=0) -> list[focus.FocusItem]:
@@ -77,7 +83,7 @@ def test_a_later_session_is_checked_and_an_older_one_is_not():
     assert forward.n_verdicts == 3, [o.blocker for o in forward.outcomes]
     backward = _check(_items(SD19, (1, 5, 7)), _ctx(SD30), records)   # 19 Sep's list, on 30 Aug
     kinds = [(o.kind, o.blocker, o.delta) for o in backward.outcomes]
-    assert all(k == (focus.OUTCOME_NO_VERDICT, focus.BLOCK_OLDER, None) for k in kinds), (
+    assert all(k == (focus.OUTCOME_NO_VERDICT, OLDER, None) for k in kinds), (
         "a session older than the list was graded against it", kinds)
     assert focus.report_lines(backward) == [
         "This session is older than your focus list (set on 19 Sep); verdicts compare later "
@@ -88,7 +94,7 @@ def test_a_later_session_is_checked_and_an_older_one_is_not():
     # With no record on either day the backwards pair must not ask "Both dry?" either (JOURNEY-6).
     unrecorded = _check(_items(SD19, (1, 5, 7)), _ctx(SD30), session_record.empty_store())
     assert focus.mark_dry_prompt(unrecorded) is None, focus.mark_dry_prompt(unrecorded)
-    assert all(o.blocker == focus.BLOCK_OLDER for o in unrecorded.outcomes)
+    assert all(o.blocker == OLDER for o in unrecorded.outcomes)
     print("ok SD30 → SD19 checked; SD19's list on SD30: no verdict, no Mark, no Replace")
 
 
@@ -102,7 +108,7 @@ def test_two_sessions_of_one_day_are_ordered_by_their_start():
     assert later.n_verdicts == 3, [o.blocker for o in later.outcomes]
     earlier = _check(_items(afternoon, start_ms=NOON_19 + 3 * HOUR_MS), _ctx(morning, NOON_19),
                      records)
-    assert all(o.blocker == focus.BLOCK_OLDER for o in earlier.outcomes), (
+    assert all(o.blocker == OLDER for o in earlier.outcomes), (
         "the morning was graded against the afternoon's list", [o.blocker for o in earlier.outcomes])
     assert focus.replace_offer(earlier, [2, 4, 6]) is None
     # A same-day list stored before the start stamp existed cannot be ordered: compared as before.
@@ -126,7 +132,7 @@ def test_the_replace_offer_never_swaps_a_newer_list_for_an_older_sessions_corner
     mixed = _items(SD30, (7,)) + _items(SD19, (1,))
     report = _check(mixed, _ctx(sep5), records)
     assert [o.kind for o in report.outcomes][0] != focus.OUTCOME_NO_VERDICT, report.outcomes[0]
-    assert report.outcomes[1].blocker == focus.BLOCK_OLDER, report.outcomes[1]
+    assert report.outcomes[1].blocker == OLDER, report.outcomes[1]
     assert "19 Sep" in focus.report_lines(report)[1], focus.report_lines(report)
     assert focus.replace_offer(report, [2, 4, 6]) is None, "offered over a newer baseline"
     # ...while a session after the whole list still gets the offer.
@@ -142,7 +148,7 @@ def test_the_start_stamp_round_trips_and_an_unstamped_list_keeps_its_items():
         path = os.path.join(d, "focus.json")
         focus.save_for_track("Sandown Park", _items(SD19, start_ms=NOON_19), path)
         (first, *_rest) = focus.for_track(focus.load(path), "Sandown Park")
-        assert first.start_ms == NOON_19, first
+        assert _stamp(first) == NOON_19, ("the start stamp was not stored", first)
         # A list saved before the stamp: every item kept, its order unknown (0).
         with open(path) as fh:
             raw = json.load(fh)
@@ -152,7 +158,7 @@ def test_the_start_stamp_round_trips_and_an_unstamped_list_keeps_its_items():
         with open(path, "w") as fh:
             json.dump(raw, fh)
         items = focus.for_track(focus.load(path), "Sandown Park")
-        assert [i.cid for i in items] == [7, 3] and all(i.start_ms == 0 for i in items), items
+        assert [i.cid for i in items] == [7, 3] and all(_stamp(i) == 0 for i in items), items
     print("ok store: the start stamp round-trips; an unstamped item loads with its order unknown")
 
 
@@ -164,12 +170,12 @@ def test_the_session_stamps_its_start_on_the_item_and_the_check():
     entry = {"fingerprint": "SYNTH1", "track": "Stadium", "date": "2026-01-01",
              "verified": True, "degraded": False}
     (item,) = s.focus_items([s.coaching_opportunities().rows[0].cid], entry)
-    assert item.start_ms == start, (item.start_ms, start)
+    assert _stamp(item) == start, ("a promoted item carries no start stamp", _stamp(item), start)
     assert s.focus_context(entry, "Stadium")["start_ms"] == start
     # A baseline recorded after this session is refused on it.
     later = dataclasses.replace(item, fingerprint="SYNTH2", date="2026-01-02")
     report = s.focus_report([later], entry, _dry("SYNTH1", "SYNTH2"), "Stadium")
-    assert report.outcomes[0].blocker == focus.BLOCK_OLDER, report.outcomes[0]
+    assert report.outcomes[0].blocker == OLDER, report.outcomes[0]
     print(f"ok session: items and the check carry the session's first-fix clock ({start} ms "
           "on this stub; the window test holds a real one)")
 
@@ -191,7 +197,7 @@ def test_an_older_session_never_rewrites_a_newer_list_on_the_real_window():
             listed = focus.for_track(focus.load(), track)
             assert listed, "the first open's debrief put today's corners on the list"
             clock = win.session._wall_clock_ms()[0]
-            assert clock > 0 and {i.start_ms for i in listed} == {clock}, (
+            assert clock > 0 and {_stamp(i) for i in listed} == {clock}, (
                 "a promoted item must carry its recording's first-fix clock", clock, listed)
             # The list as a LATER session left it: every baseline a day after this recording.
             day = win.session.session_date()
