@@ -42,7 +42,27 @@ auto-detect next time? **File ▸ Save as track…** turns your line into a name
 *(On the tracks Pacer already ships — Daytona Milton Keynes, Sandown Park and the demo's synthetic
 circuit — and on any track you've saved, this step is done for you.)*
 
-## 3 · Read the lap
+## 3 · Land on the debrief (a recording's first open)
+
+A recording's first open, once its lap timing is trusted (step 2), lands on its **debrief** rather
+than the four panels: the **Coaching** page (step 5), full-window. Its first line says where this
+session's best lap stands against your personal best at that track, and Pacer has already put the
+session's top corners (three at most) on that track's **focus list**, each with a baseline measured
+on this session and a **Remove** beside it: a default, not a decision. **Esc** returns to your usual
+layout. On timing Pacer calls estimated (a GPS5 camera's video clock, for one) it gives neither the
+line nor the list, because neither could be compared honestly.
+
+That list is the loop. The next session you open at that track re-measures the same stretches and
+says, corner by corner, whether each got faster, got slower or stayed inside its own lap-to-lap
+spread, or why it can't say: a provisional start line, estimated timing, or no session record
+saying the two days were alike.
+
+The demo lands here on every open, and keeps nothing: no Library row, no personal best, and a focus
+list that lasts only while the demo is open.
+
+![The synthetic demo's debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, then the ranked corners with their reasons and a Jump to the video](media/debrief.png)
+
+## 4 · Read the lap
 
 The window is four panels — video, map, charts, and a tabbed panel under the video. Any panel
 maximises to the whole window (the ⛶ button in its header, or double-click the header), and every
@@ -73,7 +93,7 @@ divider between them drags.
     your times, stretches of degraded GPS). **B** drops a mark at the playhead; **,** and **.**
     jump between them.
 
-## 4 · See where the time goes (the coaching)
+## 5 · See where the time goes (the coaching)
 
 The **Coaching** tab (press **4**; the same rows in a resizable window under **Coaching ▸
 Opportunities**) ranks your corners by **time lost vs your best**, taken as the *median* over
@@ -89,16 +109,17 @@ what it was built from: which of your laps donated each corner and straight, how
 have already been that fast there, and how many laps the whole thing was minimised over. That last
 number matters: the ideal is a sum of per-segment minima, so it drops the longer you stay out.
 
-## 5 · Race a lap side-by-side
+## 6 · Race a lap side-by-side
 
 Scrub the lap and the **GoPro video** follows. **Load a reference recording** (**Coaching ▸ Load
 reference recording…**) to play your lap **next to** the best lap of *another* recording of the
 same track — yours from last month, or a friend's GoPro file.
 
-## 6 · Come back faster
+## 7 · Come back faster
 
 Every session lands in the **Session Library** (**File ▸ Library…**, or **⌘L**), which charts your **personal-
-best progression per track** over time. Beat your previous best on a track and Pacer says so.
+best progression per track** over time. Beat your previous best on a track and Pacer says so, and
+that session's debrief (step 3) says whether your focus corners moved.
 
 ---
 

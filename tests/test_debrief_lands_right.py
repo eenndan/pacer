@@ -310,6 +310,19 @@ def test_the_demo_lands_on_its_debrief_and_keeps_nothing():
           "re-open; no row, PB, focus list, record or Open Recent entry")
 
 
+def test_the_walkthrough_says_what_the_demo_keeps_in_the_apps_words():
+    """docs/FIRST_LAP.md tells a reader what the demo's debrief will say it keeps; the app's line is
+    the source, so an edit to one cannot leave the other promising something else."""
+    from studio.library_controller import DEMO_DEBRIEF_LINE
+    kept = DEMO_DEBRIEF_LINE.split("nothing is saved: ", 1)[1].rstrip(".")
+    guide = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs",
+                         "FIRST_LAP.md")
+    with open(guide, encoding="utf-8") as f:
+        text = " ".join(f.read().split())   # the guide wraps its lines at 100 columns
+    assert f"keeps nothing: {kept}." in text, (kept, "docs/FIRST_LAP.md no longer says it")
+    print(f"ok EVAL-2: the walkthrough says the demo keeps nothing: {kept!r}")
+
+
 def test_the_demo_never_reads_or_writes_his_focus_list():
     """His own recording of the same circuit first: its debrief writes his list and he keeps two of
     the three. The demo then promotes its own three, reading nothing of his, and a gesture on its

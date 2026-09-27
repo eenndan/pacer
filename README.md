@@ -18,8 +18,9 @@ Building it is one command; reading it is the other intended use.
 
 <img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
 
-*Every screenshot here is Pacer on Sandown 3h — three hours at Sandown Park, July 2026 — captured
-by one command, [`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
+*Every screenshot here is Pacer on Sandown 3h — three hours at Sandown Park, July 2026 — but the
+debrief, which is the synthetic demo's; all are captured by one command,
+[`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
 [20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4) (MP4, no sound).*
 
 ---
@@ -104,6 +105,15 @@ channels ride along.
 your *best* one, each with a dominant reason chosen from four measured signals — apex speed,
 braking, coasting, line — and a button that jumps the video to your best lap through that corner.
 No model, no ML: every number is a reduction of a validated channel.
+
+**The loop it is built around.** A recording's first open, once its timing is trusted, lands on its
+**debrief**: that Coaching page full-window, under a line saying where the session's best lap stands
+against your personal best at the track, with its top corners already on the track's **focus list**
+(a default: each has a Remove). The next session there re-measures those stretches and says whether
+each moved, or why it can't: a provisional line, estimated timing, no record that the two days were
+alike. The demo lands on its debrief too, and keeps nothing.
+
+<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, then the ranked corners with their reasons and a Jump to the video">
 
 **Session statistics.** A full page — PACE, IDEAL LAP, SECTORS, CORNERS, BRAKING, STRAIGHTS,
 DRIVING, SPEED · G and **DATA TRUST**, which states what the timing was derived from, how many
