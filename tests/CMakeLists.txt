@@ -34,9 +34,10 @@ find_package(Python REQUIRED COMPONENTS Interpreter)
 
 # ================================== THE EXCEPTIONS TABLE ==================================
 # ENVIRONMENT. The default suits a new test: QT_QPA_PLATFORM=offscreen, and PYTHONPATH pointing at
-# the cmake-deployed bindings package — on a fresh env with no pip install, `import pacer` otherwise
-# resolves the C++ source dir pacer/ as an EMPTY namespace package and fails with AttributeError.
-# Neither costs a test that does not use it. These name the tests whose environment differs.
+# the in-tree bindings package, so a test imports exactly what this build wrote there. A run without
+# it gets the same files: the build deploys the whole package into site-packages, where it outranks
+# the C++ source dir pacer/ (tests/test_bindings_import.py). Neither costs a test that does not use
+# it. These name the tests whose environment differs.
 #
 # No offscreen platform (the test imports no Qt):
 set(_no_qt

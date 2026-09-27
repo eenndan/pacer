@@ -18,10 +18,10 @@ as a fresh clone's shell has none, and starts the env's own interpreter:
     directory is on `sys.path` there;
   * from a subdirectory, where `pixi run python …` keeps the caller's directory;
   * from outside the repo: an IDE, a script, PyInstaller's spec.
-Each child must get a REGULAR package (`__file__` set) with `Laps` and `GPMFSource`. The copy it gets
-must also be byte-identical to the in-tree `bindings/pacer/pacer/` (`__init__.py`, `__init__.pyi`,
-the `.so`). A deploy that copies part of the package, or a stale stub left from an older install,
-fails here by name.
+Each child must get a REGULAR package (`__file__` set) with `Laps` and `GPMFSource`. The copy it
+gets must also be byte-identical to the in-tree `bindings/pacer/pacer/` (`__init__.py`,
+`__init__.pyi`, the `.so`). A deploy that copies part of the package, or a stale stub left from an
+older install, fails here by name.
 
 The fix it holds is in bindings/pacer/CMakeLists.txt: the build deploys the whole package into
 site-packages, and a regular package beats any number of namespace portions. No Qt, no telemetry
@@ -67,7 +67,7 @@ def _assert_real_bindings(where: str, got: dict):
 
 
 def test_repo_root_imports_the_real_bindings():
-    """`pixi run studio` and `python -m studio` start here, with the C++ `pacer/` dir on sys.path."""
+    """`pixi run studio` and `python -m studio` start here, with the C++ `pacer/` on sys.path."""
     _assert_real_bindings("the repo root", _import_pacer_from(_REPO))
     print("test_repo_root_imports_the_real_bindings OK")
 

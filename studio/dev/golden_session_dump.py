@@ -48,12 +48,12 @@ sys.path.insert(0, _ROOT)
 #
 # That workflow is `pixi run python -m studio.dev.golden_session_dump <out.json>` with no
 # PYTHONPATH, and from the repo root it used to resolve `pacer` to the C++ SOURCE directory:
-# `pacer/` has no `__init__.py`, and neither does the `site-packages/pacer/` the build deploys the
-# compiled module into, so both are PEP 420 namespace PORTIONS — `import pacer` then succeeds and
-# has no `GPMFSource`. `bindings/pacer/pacer/` is a REGULAR package, and a regular package beats
-# any number of namespace portions, so putting it on the path settles the resolution in every
-# install state. Inserted immediately after the repo root: exactly where `PYTHONPATH=bindings/pacer`
-# would put it, which is the same fix the `smoke` pixi task applies via its env.
+# `pacer/` has no `__init__.py`, and neither did the `site-packages/pacer/` the build filled with
+# only the compiled module until 2026-09-27, so both were PEP 420 namespace PORTIONS — `import
+# pacer` then succeeded and had no `GPMFSource`. `bindings/pacer/pacer/` is a REGULAR package, and a
+# regular package beats any number of namespace portions, so putting it on the path settles the
+# resolution in every install state, including an env the build has not deployed into yet.
+# Inserted immediately after the repo root: exactly where `PYTHONPATH=bindings/pacer` would put it.
 sys.path.insert(1, os.path.join(_ROOT, "bindings", "pacer"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

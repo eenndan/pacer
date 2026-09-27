@@ -24,7 +24,9 @@ command line loads the chapters it names, grouped by recording (several recordin
 opens and the rest are counted, as on a drop); `--full` or **File ▸ Load full recording** chains the
 rest. Part of a new recording decides no PB or focus list until the whole recording is loaded.
 `--demo` opens the demo clip when one resolves ([`demo.py`](demo.py)). Equivalent without pixi:
-`python -m studio [files]`. Dev tools live in [`dev/`](dev/): diagnose a file headlessly with
+`python -m studio [files]` with the env's own interpreter (`.pixi/envs/default/bin/python`) once
+`pixi run build` has run, which deploys the bindings package into the env: no `PYTHONPATH`. Dev
+tools live in [`dev/`](dev/): diagnose a file headlessly with
 `pixi run python -m studio.dev.diagnose -- file.MP4 [--clean]`, measure GPS smoothing with
 `studio.dev.denoise_check`, and see [`tests/README.md`](../tests/README.md) for the golden dump.
 

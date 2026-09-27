@@ -110,8 +110,8 @@ jobs:
         # NO PYTHONPATH, and through the `smoke` task: this runner's env is as fresh as a new
         # clone's, so the step starts Python the way `pixi run studio` does and fails when the
         # README's command would. It used to point PYTHONPATH at bindings/pacer, and stayed green
-        # while `pixi run studio -- --demo` failed on every fresh clone (EVAL-1, 2026-09-26).
-        # The build now deploys the whole package into site-packages (bindings/pacer/CMakeLists.txt).
+        # while `pixi run studio -- --demo` failed on every fresh clone (EVAL-1, 2026-09-26). The
+        # build now deploys the whole package into site-packages (bindings/pacer/CMakeLists.txt).
         timeout-minutes: 5
         run: QT_QPA_PLATFORM=offscreen pixi run smoke
 

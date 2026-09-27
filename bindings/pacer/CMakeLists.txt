@@ -72,17 +72,17 @@ add_dependencies(
     _generate_pacer_bindings
 )
 
-# THE SITE-PACKAGES COPY IS A WHOLE PACKAGE, NOT JUST THE .so (EVAL-1, 2026-09-27). litgen_setup_module
-# copies the compiled module into <site-packages>/pacer/ and nothing else. A folder with no
-# __init__.py is a PEP 420 namespace PORTION, and so is the repo's C++ pacer/ directory, which sits
-# on sys.path whenever Python starts from the repo root (`python -m studio`). The import system
-# returns a namespace package when it finds only portions, and it never asks the editable
-# install's finder, which it appends to sys.meta_path after the path finder. So `import pacer`
-# "succeeded" with no Laps and no GPMFSource: measured on a fresh env, after `pixi run build`,
-# from the repo root, a subdirectory and outside the repo alike. `pixi run studio -- --demo`, the
-# README's command, failed on every fresh clone. Only the runs that set PYTHONPATH=bindings/pacer
-# (CTest, the smoke task, CI) worked, and on the dev Mac a stale Jun 4 __init__.py in site-packages
-# hid it.
+# THE SITE-PACKAGES COPY IS A WHOLE PACKAGE, NOT JUST THE .so (EVAL-1, 2026-09-27).
+# litgen_setup_module copies the compiled module into <site-packages>/pacer/ and nothing else. A
+# folder with no __init__.py is a PEP 420 namespace PORTION, and so is the repo's C++ pacer/
+# directory, which sits on sys.path whenever Python starts from the repo root (`python -m studio`).
+# The import system returns a namespace package when it finds only portions, and never asks the
+# editable install's finder, which sits after the path finder on sys.meta_path. So
+# `import pacer` "succeeded" with no Laps and no GPMFSource: measured on a fresh env, after
+# `pixi run build`, from the repo root, a subdirectory and outside the repo alike. The README's
+# `pixi run studio -- --demo` failed on every fresh clone. Only the runs that set
+# PYTHONPATH=bindings/pacer (CTest, the smoke task, CI) worked, and on the dev Mac a stale Jun 4
+# __init__.py in site-packages hid it.
 #
 # So the build also deploys the package's own __init__.py and stubs beside the .so. A REGULAR
 # package beats any number of namespace portions wherever it sits on sys.path, so every way of
@@ -101,7 +101,8 @@ if(NOT SKBUILD)
         OUTPUT "${_pacer_package_stamp}"
         BYPRODUCTS "${_pacer_site_package}/__init__.py" "${_pacer_site_package}/__init__.pyi"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_pacer_site_package}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_pacer_package_sources} "${_pacer_site_package}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_pacer_package_sources}
+                "${_pacer_site_package}"
         COMMAND ${CMAKE_COMMAND} -E touch "${_pacer_package_stamp}"
         DEPENDS ${_pacer_package_sources} "${_pacer_bindings_stamp}"
         COMMENT "Deploying the pacer package (__init__.py + stubs) to ${_pacer_site_package}"

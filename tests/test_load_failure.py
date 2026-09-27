@@ -34,7 +34,7 @@ import time
 import types
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_HERO6 = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")  # an intact GoPro clip
+_HERO6 = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")  # intact GoPro clip
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -178,9 +178,11 @@ def test_only_a_telemetry_read_failure_blames_the_file():
             assert msg == LOAD_INTERNAL_ERROR_MESSAGE, (type(exc).__name__, msg)
         for word in ("corrupt", "SD card", "copy", "Error"):
             assert word not in LOAD_INTERNAL_ERROR_MESSAGE, word
-        assert "internal error" in LOAD_INTERNAL_ERROR_MESSAGE and "log" in LOAD_INTERNAL_ERROR_MESSAGE
+        assert "internal error" in LOAD_INTERNAL_ERROR_MESSAGE, LOAD_INTERNAL_ERROR_MESSAGE
+        assert "log" in LOAD_INTERNAL_ERROR_MESSAGE, LOAD_INTERNAL_ERROR_MESSAGE
         # No path at all (the "(no file)" case) must not raise, and blames nothing it did not read.
-        assert StudioWindow._load_failure_message([], RuntimeError("x")) == LOAD_INTERNAL_ERROR_MESSAGE
+        no_path = StudioWindow._load_failure_message([], RuntimeError("x"))
+        assert no_path == LOAD_INTERNAL_ERROR_MESSAGE, no_path
         assert "SD card" in StudioWindow._load_failure_message(
             [], ingest.TelemetryUnreadable("Failed to open file: x"))
     print("test_only_a_telemetry_read_failure_blames_the_file OK")

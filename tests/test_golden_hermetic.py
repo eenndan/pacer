@@ -309,8 +309,9 @@ def test_documented_golden_command_reaches_the_parser_without_pythonpath():
     """AGENTS.md's real-media workflow is `pixi run python -m studio.dev.golden_session_dump …`
     with NO PYTHONPATH, and before this it could not work as written.
 
-    The repo's C++ `pacer/` directory and the cmake-deployed `site-packages/pacer/` both lack an
-    `__init__.py`, so they are PEP 420 namespace portions: `import pacer` succeeded and had no
+    The repo's C++ `pacer/` directory and the cmake-deployed `site-packages/pacer/` both lacked an
+    `__init__.py` (the build deploys a whole package there since 2026-09-27), so they were PEP 420
+    namespace portions: `import pacer` succeeded and had no
     `GPMFSource`, and the resulting AttributeError was printed as
 
         FATAL: ~/Desktop/D24/GX020060.MP4 exists but is not readable as GPMF
