@@ -12,10 +12,11 @@ WHAT IT WAS, measured with the real player on SD19 with every seek-path call log
   * The HANDLE was wrong. While it was held, every playhead report still went into the slider
     (`VideoView._on_pane_position` -> `QSlider.setValue`, which moves the handle too), and #422's
     drag keeps one seek in flight with the newest target held behind it, so the playhead runs several
-    moves behind the pointer. Un-muted (#419), the clock reports on through a seek (33-38 reports in
-    a 1.5 s drag, 8 muted), so a report after the last move left the handle on the lagging playhead:
-    13.7-81.9 s behind the pointer on SD19, up to 102.5 s off on MK, 99.4 s on Sandown 3h. The
-    release then landed, correctly, at the pointer: "a minute past where he let go".
+    moves behind the pointer. A report after the last move left the handle on the lagging playhead:
+    13.7-81.9 s behind the pointer on SD19, up to 102.5 s off on MK, 99.4 s on Sandown 3h (that one
+    muted). Un-muted (#419) it is likely: the clock reports on through a seek, 33-39 times in a 1.5 s
+    drag against 8 muted. The release then landed, correctly, at the pointer: "a minute past where
+    he let go".
 
 THE RULE PINNED HERE: a held handle belongs to the pointer. A playhead report moves the telemetry,
 not the handle, and the release lands the handle's value (+-1 frame), whatever gesture came before:

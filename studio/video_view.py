@@ -2003,11 +2003,11 @@ class VideoView(QWidget):
         A HELD handle belongs to the pointer, so the playhead leaves it alone until the release (QA
         2026-09-26 round 3, JOURNEY-2). setValue moves the handle as well as the value, and a drag's
         playhead runs behind the pointer: one seek in flight, the newest target held behind it
-        (PlayerPane.seek_dragged). Un-muted, the clock reports on through a seek (33-38 reports in a
-        1.5 s drag on SD19, 8 muted), so a report after the last move left the handle on the lagging
-        playhead, up to 102 s from the pointer (SD19, MK, Sandown 3h). The release then landed,
-        rightly, at the pointer: "a minute past where he let go". The telemetry — map, charts,
-        readout — still follows the picture."""
+        (PlayerPane.seek_dragged). A report after the last move left the handle on the lagging
+        playhead, up to 102 s from the pointer (SD19, MK, Sandown 3h), and the release then landed,
+        rightly, at the pointer: "a minute past where he let go". Un-muted it is likely: the clock
+        reports on through a seek, 33-39 times in a 1.5 s drag on SD19 against 8 muted. The
+        telemetry — map, charts, readout — still follows the picture."""
         if not self.slider.isSliderDown():
             self.slider.blockSignals(True)
             self.slider.setValue(int(global_s * 1000))
