@@ -1,4 +1,5 @@
-"""Where the first-open debrief lands, and when (QA round 2, 2026-09-26: LOOK-1, NEW-3b, NEW-4, NEW-6).
+"""Where the first-open debrief lands, and when (QA round 2, 2026-09-26: LOOK-1, NEW-3b, NEW-4, NEW-6;
+round 3: EVAL-2).
 
 WHY, finding by finding, each measured on the owner's own recordings:
   * LOOK-1: leaving the debrief by a TAB click ended the debrief but kept the lap panel maximized,
@@ -16,6 +17,10 @@ WHY, finding by finding, each measured on the owner's own recordings:
     second landing. A re-open lands nowhere.
   * NEW-6: Open demo wrote "First session logged at Synthetic demo circuit", a Library row, a focus
     list and an Open Recent entry. The demo is not his driving.
+  * EVAL-2: that fix (#424) returned before the first-open flag was set, so the demo never showed the
+    debrief, the loop an evaluator opens it to see (measured on v0.5.0: tab "Laps", both doors). It
+    lands there on every open now and still keeps nothing: its lead says so, its focus list lives
+    in memory, and his own list at the same circuit is neither read nor written.
 
 The journeys drive the real StudioWindow over synthetic recordings of the built-in demo circuit,
 jailed in a fresh app-support directory; "a circuit Pacer does not know" is that circuit taken out
@@ -240,32 +245,116 @@ def test_save_as_track_on_the_fitted_line_decides_it_all_at_once():
     print("ok NEW-4: Save as track on the fitted line lands once, PB line and focus list included")
 
 
-# ----------------------------------------------------------------------------------- NEW-6
-def test_the_demo_is_not_his_driving():
-    """Both places the demo resolves from: the app-support cache and PACER_DEMO_MP4."""
+# ------------------------------------------------------------------------------ NEW-6 / EVAL-2
+def _files(root: str) -> list[str]:
+    """Every file under `root`, relative: the jail's whole state, not just the stores we thought of."""
+    return sorted(os.path.relpath(os.path.join(d, n), root)
+                  for d, _dirs, names in os.walk(root) for n in names)
+
+
+@contextlib.contextmanager
+def _demo_env(path: str):
+    saved = os.environ.get("PACER_DEMO_MP4")
+    os.environ["PACER_DEMO_MP4"] = path
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("PACER_DEMO_MP4", None)
+        else:
+            os.environ["PACER_DEMO_MP4"] = saved
+
+
+def test_the_demo_lands_on_its_debrief_and_keeps_nothing():
+    """Both places the demo resolves from, the app-support cache and PACER_DEMO_MP4: every open
+    lands on the debrief, and the jail holds nothing afterwards but the demo it was given."""
     from studio import demo, focus
-    with tempfile.TemporaryDirectory(prefix="landsright_") as folder, _fresh_app_support():
+    from studio import library_controller as lc
+    with tempfile.TemporaryDirectory(prefix="landsright_") as folder, \
+            _fresh_app_support() as support:
         a, b = _two_recordings(folder)
         cached = demo.demo_cache_path()
         os.makedirs(os.path.dirname(cached), exist_ok=True)
         shutil.copyfile(a, cached)
-        saved_env = os.environ.get("PACER_DEMO_MP4")
-        os.environ["PACER_DEMO_MP4"] = b
-        try:
+        given = _files(support)
+        with _demo_env(b):
             for path in (cached, b):
                 with _window() as win:
                     _load(win, path)
-                    assert win.session.valid_lap_ids(), "the demo loaded no laps"
-                    assert not win.view.is_debrief() and win._pb_toast is None, path
-                    assert not _rows(), ("the demo wrote a Library row", _rows())
-                    assert win.library_ctl._recent_entries() == []
+                    view, opp = win.view, win.view.opportunities
+                    short = opp.shortlist_cids()
+                    assert short and view.is_debrief(), ("the demo did not land on its debrief",
+                                                         path, view.tab_bar.currentIndex())
+                    assert view._maximized_panel is view._table_panel
+                    lead = opp.debrief_block.full_text()
+                    assert lead.startswith(lc.DEMO_DEBRIEF_LINE), lead
+                    assert "logged" not in lead and "for next time" not in lead, lead
+                    assert opp.focus_block.cids() == short, (opp.focus_block.cids(), short)
+                    assert win._pb_toast is None
+                    # The list's gestures work on the demo, in memory, and the lead follows them.
+                    win.library_ctl.focus_remove(short[0])
+                    assert opp.focus_block.cids() == short[1:], opp.focus_block.cids()
+                    assert f"C{short[0]}" not in opp.debrief_block.full_text()
+                    win.library_ctl.sync_record_action()
+                    assert not win._record_action.isEnabled()
+                    assert win._record_action.toolTip() == lc.LibraryController._DEMO_RECORD_REASON
+                    # A re-open is a first open again, from nothing: the Remove above is gone.
+                    _load(win, path)
+                    assert win.view.is_debrief(), "a re-open of the demo did not land"
+                    assert win.view.opportunities.focus_block.cids() == short
+                    assert _files(support) == given, ("the demo wrote into app-support",
+                                                      _files(support))
+                    assert not _rows() and win.library_ctl._recent_entries() == []
                     assert focus.load()["lists"] == [], focus.load()
-        finally:
-            if saved_env is None:
-                os.environ.pop("PACER_DEMO_MP4", None)
-            else:
-                os.environ["PACER_DEMO_MP4"] = saved_env
-    print("ok NEW-6: the demo (cache and env) writes no row, PB, focus list or Open Recent entry")
+    print(f"ok EVAL-2: the demo (cache and env) lands on its debrief, {short} in memory, again on a "
+          "re-open; no row, PB, focus list, record or Open Recent entry")
+
+
+def test_the_walkthrough_says_what_the_demo_keeps_in_the_apps_words():
+    """docs/FIRST_LAP.md tells a reader what the demo's debrief will say it keeps; the app's line is
+    the source, so an edit to one cannot leave the other promising something else."""
+    from studio.library_controller import DEMO_DEBRIEF_LINE
+    kept = DEMO_DEBRIEF_LINE.split("nothing is saved: ", 1)[1].rstrip(".")
+    guide = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs",
+                         "FIRST_LAP.md")
+    with open(guide, encoding="utf-8") as f:
+        text = " ".join(f.read().split())   # the guide wraps its lines at 100 columns
+    assert f"keeps nothing: {kept}." in text, (kept, "docs/FIRST_LAP.md no longer says it")
+    print(f"ok EVAL-2: the walkthrough says the demo keeps nothing: {kept!r}")
+
+
+def test_the_demo_never_reads_or_writes_his_focus_list():
+    """His own recording of the same circuit first: its debrief writes his list and he keeps two of
+    the three. The demo then promotes its own three, reading nothing of his, and a gesture on its
+    list leaves his store byte for byte; back on his recording, the list is his two."""
+    from studio import demo, focus
+    with tempfile.TemporaryDirectory(prefix="landsright_") as folder, _fresh_app_support():
+        mine, other = _two_recordings(folder)
+        cached = demo.demo_cache_path()
+        os.makedirs(os.path.dirname(cached), exist_ok=True)
+        shutil.copyfile(other, cached)
+        with _window() as win:
+            _load(win, mine)
+            short = win.view.opportunities.shortlist_cids()
+            assert win.view.is_debrief() and len(short) > 1, short
+            win.library_ctl.focus_remove(short[0])
+            his = [i.cid for i in focus.for_track(focus.load(), _DEMO_CIRCUIT)]
+            assert his == short[1:], his
+            with open(focus.focus_path(), "rb") as f:
+                stored = f.read()
+            _load(win, cached)
+            assert win.view.is_debrief(), "the demo did not land on its debrief"
+            assert win.view.opportunities.focus_block.cids() == short, (
+                "the demo's list is not its own three: it read his",
+                win.view.opportunities.focus_block.cids())
+            win.library_ctl.focus_remove(short[1])
+            with open(focus.focus_path(), "rb") as f:
+                assert f.read() == stored, "a gesture on the demo's list wrote his focus.json"
+            _load(win, mine)
+            assert not win.view.is_debrief(), "his re-open landed"
+            assert win.view.opportunities.focus_block.cids() == his, (
+                "his list after the demo", win.view.opportunities.focus_block.cids(), his)
+    print(f"ok EVAL-2: his list {his} at the demo's circuit, untouched by the demo's own {short}")
 
 
 if __name__ == "__main__":

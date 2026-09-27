@@ -34,8 +34,9 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
   **Never pipe a gate into `tail` or `head`.** A pipeline returns its last command's status, so a
   failed build followed by `| tail` exits 0 (or use `set -o pipefail`).
 - **One test:** `pixi run ctest --test-dir build/Release -R '^test_x$' --output-on-failure`. CTest
-  injects the environment. A bare `python tests/test_x.py` needs `PYTHONPATH=bindings/pacer`, or
-  the C++ `pacer/` directory shadows the bindings package. Tests are plain scripts under CTest, and
+  injects the environment. A bare `python tests/test_x.py` needs `QT_QPA_PLATFORM=offscreen`, and
+  no `PYTHONPATH`: `pixi run build` deploys the whole bindings package into the env, and a regular
+  package outranks the C++ `pacer/` directory. Tests are plain scripts under CTest, and
   many run their tests from an explicit list. `tests/test_layering.py` fails a test that is defined
   but never run. **One test function:** `pixi run python -m pytest tests/test_x.py -k <part>` —
   `tests/conftest.py` jails it; CTest remains the gate.

@@ -57,7 +57,7 @@ from _qtapp import themed_app  # noqa: E402
 
 _APP = themed_app()
 
-from studio import chapters, sidecar  # noqa: E402
+from studio import chapters, ingest, sidecar  # noqa: E402
 from studio.session import Session  # noqa: E402
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -365,7 +365,7 @@ def test_the_failure_message_for_an_overwritten_chapter_does_not_blame_the_sd_ca
         with open(renamed, "w", encoding="utf-8") as f:
             f.write("not a video\n" * 40)
         other = StudioWindow._load_failure_message(
-            [renamed], RuntimeError(f"Failed to open file: {renamed}"))
+            [renamed], ingest.TelemetryUnreadable(f"Failed to open file: {renamed}"))
         assert "doesn't look like a GoPro recording" in other, other
 
         # Negative control 2: a TRUNCATED real chapter is still an MP4 — keep "copy it again".
@@ -373,7 +373,7 @@ def test_the_failure_message_for_an_overwritten_chapter_does_not_blame_the_sd_ca
         with open(truncated, "wb") as f:
             f.write(b"\x00\x00\x00\x18ftypmp41" + b"\x00" * 4096)
         trunc_msg = StudioWindow._load_failure_message(
-            [truncated], RuntimeError(f"Failed to open file: {truncated}"))
+            [truncated], ingest.TelemetryUnreadable(f"Failed to open file: {truncated}"))
         assert "is a GoPro file" in trunc_msg, trunc_msg
         assert "SD card" in trunc_msg, trunc_msg
     print("test_the_failure_message_for_an_overwritten_chapter_does_not_blame_the_sd_card OK")
@@ -422,7 +422,7 @@ def test_the_failure_blames_the_chapter_the_loader_actually_opened():
         assert StudioWindow._offending_path(paths) == paths[1], "blamed the skipped chapter"
         # …and the message describes THAT file (a real MP4 whose telemetry failed), not the stub.
         msg = StudioWindow._load_failure_message(
-            paths, RuntimeError(f"Failed to open file: {paths[1]}"))
+            paths, ingest.TelemetryUnreadable(f"Failed to open file: {paths[1]}"))
         assert "is a GoPro file" in msg, msg
         assert "overwritten" not in msg, msg
         # All-junk: nothing was handed to the loader, so the first path is the honest subject.

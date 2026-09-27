@@ -78,6 +78,12 @@ _log = logging.getLogger("studio.app")
 NAME_WAIT_LINE = ("This circuit has no name yet, so there is no personal best to stand against: "
                   "File ▸ Save as track… names it, and decides your PB and focus list.")
 
+# The debrief's first line on the synthetic demo, in the PB line's place (QA EVAL-2). The demo is
+# not his driving (QA NEW-6), so no PB is logged and "First session logged at…" would be false: it
+# says what is kept instead, which is nothing (`update_library`, `_save_focus`).
+DEMO_DEBRIEF_LINE = ("This is the synthetic demo, so nothing is saved: no Library row, no personal "
+                     "best, and a focus list that lasts only while the demo is open.")
+
 
 def previous_pb_missing_text(entry: dict, missing_path: str | None) -> str:
     """What "Compare with your previous PB" says when that PB's footage is not on disk any more —
@@ -129,6 +135,12 @@ class LibraryController:
         # — what "Compare with your previous PB" loads as the reference (board review PS-B4). None
         # unless that load celebrated a beat. Reset on every call.
         self.previous_pb: dict | None = None
+        # THE SYNTHETIC DEMO (QA EVAL-2). `demo_preview`: the last `update_library` was the demo, a
+        # first open that wrote nothing (reset on every call). `_demo_focus`: its focus list, as
+        # (the Session it was promoted on, the items) — held here and never written, so it dies
+        # with that session: every load builds a new one.
+        self.demo_preview = False
+        self._demo_focus: tuple[object, list[focus.FocusItem]] | None = None
 
     # --------------------------------------------------------------- session library index (F8)
     def update_library(self, paths: list[str]) -> dict | None:
@@ -176,10 +188,23 @@ class LibraryController:
         nothing and writes no row either (`waiting_for_line`); the drag that places the line, or
         File ▸ Save as track…, decides it once (`refresh_library_entry`), and the row is written
         then, with the verified best. A line placed at a circuit with no name leaves the PB and
-        the focus list to the name (`waiting_for_name`)."""
+        the focus list to the name (`waiting_for_name`).
+
+        THE SYNTHETIC DEMO IS A FIRST OPEN THAT KEEPS NOTHING (QA EVAL-2). #424 kept it out of every
+        store (QA NEW-6: it is not his driving), but by returning before `opened_new`, so the demo
+        never showed the debrief, and the debrief is the loop an evaluator came to see. Now it lands
+        there on EVERY open: the index never holds a row for the demo, and "no row" is what a first
+        open means, so remembering "seen it" in memory would invent a second rule, and a re-open
+        that forgot what the first did is exactly "nothing is saved". No row, moment or standing is
+        decided (the lead says so instead: `debrief_pb_line`), and its focus list lives in memory
+        (`_save_focus`)."""
         self.opened_new, self.pb_standing, self.previous_pb = False, None, None
         self.waiting_for_whole = False
         self.waiting_for_line = self.waiting_for_name = False
+        self.demo_preview = self._is_demo(paths)
+        if self.demo_preview:
+            self.opened_new = bool(self.win.session.valid_lap_ids())
+            return None
         if self._library_excludes(paths):
             return None
         moment = None
@@ -277,7 +302,10 @@ class LibraryController:
 
     def debrief_pb_line(self) -> str | None:
         """The debrief's PB sentence for the last `update_library` (None when it has none), or,
-        while the circuit has no name, what the PB and the focus list are waiting for."""
+        while the circuit has no name, what the PB and the focus list are waiting for, or, on the
+        demo, that nothing is kept."""
+        if self.demo_preview:
+            return DEMO_DEBRIEF_LINE
         if self.pb_standing:
             return library.pb_standing_text(self.pb_standing, fmt_time)
         return NAME_WAIT_LINE if self.waiting_for_name else None
@@ -300,13 +328,18 @@ class LibraryController:
         if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
             return True
         # THE DEMO IS NOT HIS DRIVING EITHER (QA NEW-6): Open demo wrote "First session logged at
-        # Synthetic demo circuit", a Library row, a focus list and an Open Recent entry. Both places
-        # `demo.resolve_demo_recording` finds it: the env override and the app-support cache.
-        demos = {os.path.abspath(p) for p in (os.environ.get("PACER_DEMO_MP4"),
-                                              demo.demo_cache_path()) if p}
-        if any(os.path.abspath(p) in demos for p in paths):
+        # Synthetic demo circuit", a Library row, a focus list and an Open Recent entry.
+        if self._is_demo(paths):
             return True
         return not self.win.session.valid_lap_ids()
+
+    @staticmethod
+    def _is_demo(paths: list[str]) -> bool:
+        """Whether `paths` is the synthetic demo, at either place `demo.resolve_demo_recording`
+        finds it: the env override and the app-support cache."""
+        demos = {os.path.abspath(p) for p in (os.environ.get("PACER_DEMO_MP4"),
+                                              demo.demo_cache_path()) if p}
+        return any(os.path.abspath(p) in demos for p in paths)
 
     def refresh_library_entry(self):
         """Re-write the loaded recording's library entry from the session AS IT NOW STANDS.
@@ -767,6 +800,8 @@ class LibraryController:
     # ----------------------------------------------------- session records (setup + conditions)
     _NO_RECORD_REASON = ("Open a recording with at least one valid lap — a session record is "
                          "attached to a library row, and a recording with no laps has none")
+    _DEMO_RECORD_REASON = ("Not on the synthetic demo — a session record is attached to a library "
+                           "row, and nothing about the demo is saved")
 
     def sync_record_action(self) -> None:
         """Gate File ▸ Session record… on the one thing it needs: a loaded recording the LIBRARY
@@ -776,7 +811,9 @@ class LibraryController:
         user could never find again."""
         ok = hasattr(self.win, "session") and bool(self.win._paths) \
             and not self._library_excludes(self.win._paths)
-        self.win._gate_action(self.win._record_action, ok, self._NO_RECORD_REASON)
+        # The demo has laps, so "open a recording with at least one valid lap" is false there.
+        reason = self._DEMO_RECORD_REASON if self._demo_loaded() else self._NO_RECORD_REASON
+        self.win._gate_action(self.win._record_action, ok, reason)
 
     def _current_library_entry(self) -> dict | None:
         """The loaded recording's library entry — the identity a session record hangs off and the
@@ -934,6 +971,38 @@ class LibraryController:
             _log.exception("focus list not read")
             return focus.empty_store()
 
+    # THE DEMO'S LIST IS THE SAME LIST, KEPT IN MEMORY (QA EVAL-2). Every focus gesture reads and
+    # writes through these three, so the debrief's promotion, Remove, Add and the verdict line run
+    # on the demo exactly as on a recording of his, and none of them can reach focus.json: the demo
+    # is recognised by the LOADED session's paths, not by the last `update_library`, because the
+    # view's first `update_focus_list` runs before that call does.
+    def _demo_loaded(self) -> bool:
+        paths = getattr(self.win, "_paths", None)
+        return bool(paths) and hasattr(self.win, "session") and self._is_demo(paths)
+
+    def _focus_entry(self) -> dict:
+        """The library entry the focus list is measured and kept under: the index's own, or, for
+        the demo, which the index never admits, the one it WOULD write (built, never saved)."""
+        if not self._demo_loaded():
+            return self._current_library_entry() or {}
+        try:
+            return self.win.session.library_entry(self.win._paths)
+        except Exception:  # noqa: BLE001 — a lookup must never raise into the UI
+            _log.exception("demo focus list: could not build the entry")
+            return {}
+
+    def _focus_items(self, track: str) -> list[focus.FocusItem]:
+        if not self._demo_loaded():
+            return focus.for_track(self._load_focus(), track)
+        held = self._demo_focus
+        return list(held[1]) if held is not None and held[0] is self.win.session else []
+
+    def _save_focus(self, track: str, items: list[focus.FocusItem]) -> None:
+        if self._demo_loaded():
+            self._demo_focus = (self.win.session, list(items))
+        else:
+            focus.save_for_track(track, items)
+
     def update_focus_list(self) -> None:
         """Push the focus list + THIS session's verdict on it onto the Coaching page.
 
@@ -945,14 +1014,14 @@ class LibraryController:
         if panel is None or not hasattr(panel, "set_focus_report"):
             return
         try:
-            entry = self._current_library_entry() or {}
+            entry = self._focus_entry()
             track = entry.get("track")
             if not track:
                 # No detected track: there is nowhere to keep a per-track list, so the block stays
                 # dormant rather than inviting the driver into an offer the app cannot honour.
                 panel.set_focus_report(None)
                 return
-            items = focus.for_track(self._load_focus(), track)
+            items = self._focus_items(track)
             panel.set_focus_report(
                 self.win.session.focus_report(items, entry, self._load_records(), track))
         except Exception:  # noqa: BLE001 — never let the focus block break a load
@@ -967,22 +1036,21 @@ class LibraryController:
         C1's window grew 6.1 m between the two working-set recordings focus.py measures, worth
         +0.170 s of imaginary slowing on a corner the driver took quicker). An untracked session
         cannot hold a list at all — the list is per track."""
-        entry = self._current_library_entry() or {}
+        entry = self._focus_entry()
         track = entry.get("track")
         if not track:
             self._focus_failed("this recording has no detected track, so there is nowhere to keep "
                                "a focus list (File ▸ Save as track… names it)")
             return
         try:
-            store = self._load_focus()
-            items = focus.for_track(store, track)
+            items = self._focus_items(track)
             if any(i.cid == int(cid) for i in items) or len(items) >= focus.MAX_ITEMS:
                 return
             added = self.win.session.focus_items([int(cid)], entry)
             if not added:
                 self._focus_failed(f"C{cid} could not be measured on this session's clean laps")
                 return
-            focus.save_for_track(track, items + added)
+            self._save_focus(track, items + added)
         except OSError as exc:
             self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
                                logging.ERROR)
@@ -1005,19 +1073,19 @@ class LibraryController:
         where the verdict could never speak — no track (nowhere to keep a list), a provisional
         start line or ESTIMATED timing (`focus._blocker` refuses every comparison with such a
         baseline, so an auto-made list would refuse forever)."""
-        entry = self._current_library_entry() or {}
+        entry = self._focus_entry()
         track = entry.get("track")
         if not track or not entry.get("verified") or entry.get("degraded"):
             return []
         try:
-            items = focus.for_track(self._load_focus(), track)
+            items = self._focus_items(track)
             taken = {i.cid for i in items}
             free = focus.MAX_ITEMS - len(items)
             wanted = [int(c) for c in cids if int(c) not in taken][:max(free, 0)]
             added = self.win.session.focus_items(wanted, entry) if wanted else []
             if not added:
                 return []
-            focus.save_for_track(track, items + added)
+            self._save_focus(track, items + added)
         except OSError as exc:
             self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
                                logging.ERROR)
@@ -1033,7 +1101,7 @@ class LibraryController:
         `cids`, each with its baseline measured on THIS session. The driver's click, after the check
         has run (``focus.replace_offer``), so the old baselines have already given their verdict.
         Refused where a promotion would be (no track, a provisional line, ESTIMATED timing)."""
-        entry = self._current_library_entry() or {}
+        entry = self._focus_entry()
         track = entry.get("track")
         if not track or not entry.get("verified") or entry.get("degraded"):
             self._focus_failed("today's corners can't be the baseline on untrusted timing")
@@ -1043,7 +1111,7 @@ class LibraryController:
             if not items:
                 self._focus_failed("today's corners could not be measured on its clean laps")
                 return
-            focus.save_for_track(track, items)
+            self._save_focus(track, items)
         except OSError as exc:
             self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
                                logging.ERROR)
@@ -1059,13 +1127,13 @@ class LibraryController:
 
     def focus_remove(self, cid: int) -> None:
         """Drop corner `cid` from this track's focus list (and the row entirely when it empties)."""
-        entry = self._current_library_entry() or {}
+        entry = self._focus_entry()
         track = entry.get("track")
         if not track:
             return
         try:
-            items = [i for i in focus.for_track(self._load_focus(), track) if i.cid != int(cid)]
-            focus.save_for_track(track, items)
+            items = [i for i in self._focus_items(track) if i.cid != int(cid)]
+            self._save_focus(track, items)
         except OSError as exc:
             self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})",
                                logging.ERROR)

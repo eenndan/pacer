@@ -1928,6 +1928,62 @@ def test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen():
           f"shapes passed")
 
 
+# ─── the refusal count the public pages quote ────────────────────────────────────────────────────
+# The intro's count is derived above; the pages that quote it were not. docs/ENGINEERING.md's story
+# 6 and the landing page both said "14" while the doc had 20 sections (QA EVAL-6, 2026-09-26), and
+# ENGINEERING.md went on to say the count "is derived from them". Held here as a FLOOR ("20+"),
+# like the suite size on the same pages: a refusal written tomorrow edits the doc, not every page
+# that mentions it, until the floor falls more than _REFUSAL_FLOOR_SLACK behind. A bare count, in
+# digits or in words, must be exact.
+_REFUSAL_PAGES = ("README.md", "docs/index.html", "docs/ENGINEERING.md")
+_REFUSAL_FLOOR_SLACK = 5
+_NUMBER_WORDS = {_count_word(n).lower(): n for n in range(1, 100)}
+_REFUSAL_CLAIM = re.compile(
+    r"(?:\*\*|<strong>)?\b(\d+|" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) +
+    r")(\+?)(?:\*\*|</strong>)?\s+features (?:were built far enough to measure|measured and refused)",
+    re.I)
+
+
+def _refusal_count_problems(rel: str, text: str, sections: int) -> tuple[int, list[str]]:
+    """(the refusal counts `text` quotes, what is wrong with them). A function of the text."""
+    found, problems = _REFUSAL_CLAIM.findall(" ".join(text.split())), []
+    for got, plus in found:
+        n = int(got) if got.isdigit() else _NUMBER_WORDS[got.lower()]
+        if plus and n > sections:
+            problems.append(f"{rel} says {got}+ refused features; refused-2026-09.md has {sections}")
+        elif plus and sections - n > _REFUSAL_FLOOR_SLACK:
+            problems.append(f"{rel} says {got}+ refused features, {sections - n} below the "
+                            f"{sections} sections: raise the floor")
+        elif not plus and n != sections:
+            problems.append(f"{rel} says {got} refused features; refused-2026-09.md has "
+                            f"{sections} sections: write '{sections}+' (a floor) or the count")
+    return len(found), problems
+
+
+def test_the_pages_quote_the_refusal_count_as_a_true_floor():
+    sections = len(_refused_sections(_read(_REFUSED)))
+    checked, problems = 0, []
+    for rel in _REFUSAL_PAGES:
+        n, found = _refusal_count_problems(rel, _read(os.path.join(_REPO, rel)), sections)
+        checked, problems = checked + n, problems + found
+    assert not problems, "\n".join(problems)
+    assert checked >= 2, f"only {checked} refusal counts found on {_REFUSAL_PAGES}: gone vacuous"
+    # Both directions, on planted text: EVAL-6's two stale shapes fail, and so does a floor above
+    # the doc or too far below it; a true floor and the exact count in words pass.
+    word, built = _count_word(sections), "features were built far enough to measure"
+    stale = sections - _REFUSAL_FLOOR_SLACK - 1
+    for text, bad in ((f"**14** {built}", sections != 14),
+                      ("## 6. Fourteen features measured and refused", sections != 14),
+                      (f"<strong>{sections + 1}+</strong> {built}", True),
+                      (f"**{stale}+** {built}", True),
+                      (f"<strong>{sections}+</strong> {built}", False),
+                      (f"{word} features measured and refused", False)):
+        n, found = _refusal_count_problems("planted", text, sections)
+        assert n == 1 and bool(found) == bad, (text, found)
+    print(f"test_the_pages_quote_the_refusal_count_as_a_true_floor OK ({checked} claims, "
+          f"{sections} sections)")
+
+
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
 # WHERE THE LAP SETS ARE FOUND (G2): under the folder PACER_MEASURED_FIGURES_DIR names, else under
 # the Desktop — the working set's home, and where `_LAP_SETS` says every table's recordings are, so by
@@ -2671,6 +2727,7 @@ def _run_all():
     test_the_refusal_record_s_verdict_is_derived_from_its_table()
     test_the_refusals_doc_numbers_its_sections_once_each_and_counts_them()
     test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen()
+    test_the_pages_quote_the_refusal_count_as_a_true_floor()
     print("\nmeasured-figures checks passed")
 
 

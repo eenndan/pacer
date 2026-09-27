@@ -143,6 +143,17 @@ SIDECAR_UNWRITABLE_NOTICE = ("your timing lines couldn't be saved next to the re
 VIEW_BUILD_FAILURE_MESSAGE = (
     "This recording loaded, but Pacer couldn't build its session view — that's a bug in Pacer, "
     "not a problem with your file. Help ▸ Report a problem… with the details below.")
+# A load that failed on something OTHER than the file: anything but `ingest.TelemetryUnreadable`
+# and the path cases `_load_failure_message` measures. It used to fall through to "it may be
+# corrupt … copy it off the SD card again", which a fresh clone showed for a sha256-checked demo
+# download over an AttributeError in Pacer's own bindings (EVAL-5, 2026-09-26). The dialog adds
+# where the log is (`LOAD_LOG_LINE`), as the crash dialog does.
+LOAD_INTERNAL_ERROR_MESSAGE = (
+    "Pacer hit an internal error opening this recording — the details are in the log. That's a "
+    "bug in Pacer, not a problem with your file: Help ▸ Report a problem… and attach the log.")
+# The internal-error dialog's pointer to the session log, followed on the next line by its path:
+# how to open it, since no menu item does (the crash dialog's CRASH_LOG_LINE is the same idea).
+LOAD_LOG_LINE = "To open the log, paste this path into Finder ▸ Go ▸ Go to Folder… (⇧⌘G):"
 # `--demo` was asked for and no demo recording could be resolved. ONE string, read by both sites
 # that can reach this state (the CLI flag at startup and a resolve that came back None), because
 # they are the same sentence and they had drifted into two copies of it.
@@ -753,7 +764,7 @@ class StudioWindow(QMainWindow):
         self._sync_view_menu()
 
     def _open_demo(self):
-        """Welcome-screen "Open demo": resolve a real demo lapping recording OFF the UI thread
+        """Welcome-screen "Open demo": resolve the synthetic demo session OFF the UI thread
         (env / cache / a one-time release download — see studio.demo), then load it.
 
         The resolve used to run inline in this slot, so a first run with no cache did a network
@@ -1231,8 +1242,10 @@ class StudioWindow(QMainWindow):
         gone. A reload or a second chapter is not a first open and changes nothing. PART of a new
         recording is not one either — it decides no verdict and writes no row
         (``LibraryController.update_library``), so it is the whole recording's first load, Load
-        full recording included, that lands here, once. No debrief when nothing is ranked: its page
-        would be an empty state. Fully guarded — a landing must never break the load it ends."""
+        full recording included, that lands here, once. The synthetic demo lands here on every
+        open, keeping nothing (``LibraryController.update_library``, QA EVAL-2). No debrief when
+        nothing is ranked: its page would be an empty state. Fully guarded — a landing must never
+        break the load it ends."""
         view = getattr(self, "view", None)
         if not getattr(self.library_ctl, "opened_new", False) or not hasattr(view, "show_debrief"):
             return False
@@ -1242,7 +1255,8 @@ class StudioWindow(QMainWindow):
                 return False
             promoted = self.library_ctl.pre_promote_focus(cids)
             view.show_debrief(self.library_ctl.debrief_pb_line(), promoted,
-                              self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing))
+                              self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing),
+                              saved=not self.library_ctl.demo_preview)
             return True
         except Exception:  # noqa: BLE001 — see the docstring
             _log.warning("debrief not shown", exc_info=True)
@@ -1692,8 +1706,11 @@ class StudioWindow(QMainWindow):
         offending = self._offending_path(paths) or "(no file)"
         detail = f"{type(exc).__name__}: {exc}"
         message = self._load_failure_message(paths, exc)
-        # With the worker's traceback: the exception object carries it across the thread.
-        _log.warning("failed to load %s: %s", offending, detail, exc_info=exc)
+        internal = message == LOAD_INTERNAL_ERROR_MESSAGE
+        # With the worker's traceback: the exception object carries it across the thread. Pacer's
+        # own failure is an ERROR in the log; a file that could not be read is a warning.
+        (_log.error if internal else _log.warning)("failed to load %s: %s", offending, detail,
+                                                    exc_info=exc)
         reload_failed = hasattr(self, "session")
         # "The loading card is up over a still-good session" — tested against the CENTRAL WIDGET,
         # because installing that card is what disposes the view and clears self.view. A fast
@@ -1718,9 +1735,15 @@ class StudioWindow(QMainWindow):
         # failure cases — and the product was named nowhere on the one surface a first-time user is
         # most likely to meet first (QA D2-10). The five case messages below are untouched; this is
         # a naming line in front of them, in the same shape the crash dialog already uses.
+        # Pacer's own failure says where its log is, as the crash dialog does, and only when a log
+        # is actually being written: naming a file nothing went into would send the user looking.
+        log = logsetup.active_log_path() if internal else None
+        log_line = f"\n\n{LOAD_LOG_LINE}\n{logsetup.display_path(log)}" if log else ""
         box = QMessageBox(QMessageBox.Critical, f"{APP_NAME} — could not load recording",
                           f"{APP_NAME} couldn't open this recording.\n\n"
-                          f"{message}\n\n{offending}{tail}", parent=self)
+                          f"{message}\n\n{offending}{tail}{log_line}", parent=self)
+        if log_line:
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse)  # so the path can be copied
         # Raw exception text lives in the collapsible details, not the headline.
         box.setDetailedText(detail)
         box.exec()
@@ -1779,17 +1802,25 @@ class StudioWindow(QMainWindow):
             Only ever said about bytes we have actually seen: telling the owner of an intact but
             momentarily unreadable chapter that it "has been overwritten" is the worst sentence
             this table could produce, and it is the one the unreadable case above prevents;
-          * opens but carries no GPMF/GPS track — split by whether the NAME is a GoPro chapter name
-            (a truncated/incomplete copy of real footage) or not (the wrong file entirely);
-          * anything else — a generic, honest fallback (the raw class name stays in the details/log).
+          * opens but carries no GPMF/GPS track (`ingest.TelemetryUnreadable`, the parser's own
+            refusal) — split by whether the NAME is a GoPro chapter name (a truncated/incomplete
+            copy of real footage) or not (the wrong file entirely);
+          * anything else is PACER'S OWN FAILURE on a file nothing above faulted —
+            `LOAD_INTERNAL_ERROR_MESSAGE`, never a sentence about the file. This used to be "it may
+            be corrupt … copy it off the SD card again" for every exception type, and so an
+            AttributeError from bindings that did not import told a fresh clone that its
+            sha256-checked demo download was corrupt (EVAL-5). The raw class name and the
+            traceback go to the details and the log.
 
         Pure + static: no Qt, no window state, so the whole table is unit-testable (tests/
         test_load_failure.py). A recording that OPENS but has zero GPS fixes does NOT raise — it
         loads as a 0-valid-lap session (see _session_notice), so it never reaches here."""
         offending = StudioWindow._offending_path(paths)
         if offending is None:
-            return ("Couldn't read telemetry from this recording — it may be corrupt or "
-                    "unsupported. Try copying it off the SD card again.")
+            if isinstance(exc, ingest.TelemetryUnreadable):
+                return ("Couldn't read telemetry from this recording — it may be corrupt or "
+                        "unsupported. Try copying it off the SD card again.")
+            return LOAD_INTERNAL_ERROR_MESSAGE
         if os.path.isdir(offending):
             return "That's a folder, not a recording — open the .MP4 files inside it."
         if not os.path.exists(offending):
@@ -1837,15 +1868,14 @@ class StudioWindow(QMainWindow):
                 return ("That file has a GoPro chapter name but its contents aren't video — it "
                         "has been overwritten or replaced. Open another chapter of this recording.")
             return not_a_gopro
-        if isinstance(exc, RuntimeError) and "open file" in str(exc).lower():
+        if isinstance(exc, ingest.TelemetryUnreadable):
             # An MP4 GPMFSource couldn't find a GPMF/GPS track in.
             if is_gopro_name:
                 return ("This is a GoPro file, but its telemetry track couldn't be read — the copy "
                         "is probably incomplete. Copy it off the SD card again.")
             return not_a_gopro
-        # Unknown cause — honest generic message; the raw class name stays in the details/log only.
-        return ("Couldn't read telemetry from this recording — it may be corrupt or unsupported. "
-                "Try copying it off the SD card again.")
+        # The parser read this file, or never got to it: nothing here is the file's fault.
+        return LOAD_INTERNAL_ERROR_MESSAGE
 
     def _build_ui(self):
         """Atomic swap: dispose the outgoing view, build a fresh CentralView for the just-loaded
@@ -3952,11 +3982,11 @@ def main(argv: list[str] | None = None) -> int:
     full = "--full" in argv or "--chaptered" in argv
     # No path on the CLI -> open to the welcome empty state (the demo is one click from there).
     paths = [a for a in argv if not a.startswith("-")]
-    # --demo: open a real demo lapping recording on startup (resolved via env/cache/release
-    # download; see studio.demo). This is the packaged-app first-run path. If the demo can't be
-    # resolved (offline / download failed) we do NOT fall back to the bundled gpmf clips — they have
-    # zero real laps, so a first-run user would see a blank-looking studio. StudioWindow shows the
-    # honest "demo unavailable" welcome state instead.
+    # --demo: open the synthetic demo session on startup — generated, not filmed — resolved via
+    # env/cache/release download (see studio.demo). This is the packaged-app first-run path. If the
+    # demo can't be resolved (offline / download failed) we do NOT fall back to the bundled gpmf
+    # clips — they have zero real laps, so a first-run user would see a blank-looking studio.
+    # StudioWindow shows the honest "demo unavailable" welcome state instead.
     demo_startup = False
     if not paths and "--demo" in argv:
         path = demo.resolve_demo_recording()
