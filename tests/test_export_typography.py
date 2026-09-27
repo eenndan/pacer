@@ -92,7 +92,7 @@ def _strip_box(out_h):
     cfg = ev.OverlayConfig()
     m = cfg.margin_frac * h
     sh = max(cfg.strip_h_frac * h, 20.0)
-    return QRectF(m, m, ev.strip_pill_width(sh, ("LAP 8   1:25.000",), ("Δ -12.34",)), sh)
+    return QRectF(m, m, ev.strip_pill_width(sh, ("LAP 8   1:25.000",), ("Δ \u221212.34",)), sh)
 
 
 def _paint(out_h, box, speed, strip=False, t=42.0):

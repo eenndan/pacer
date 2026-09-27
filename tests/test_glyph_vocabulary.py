@@ -236,6 +236,38 @@ def test_the_ledger_of_what_the_face_can_draw_is_measured():
           f"{len(_IN_THE_FACE)} of the app's marks, falls back on {len(_OUT_OF_THE_FACE)})")
 
 
+def test_the_one_minus_is_drawn_by_the_export_face_at_the_width_of_plus():
+    """Check 2b, QA REG-3 (2026-09-26). The Stats page moved to U+2212 (#425) and the rest did not:
+    one Coaching cell read "typical lap −0.01 s" over thirds reading "-0.01", 21 ASCII hyphens sat
+    in MK_18_09's Coaching rows, and every exported overlay burned "Δ -0.31". Every signed number
+    now goes through `_signal.fmt_signed`. The overlay is the one surface that cannot be re-rendered,
+    so its face is measured too: the minus must be the export face's own glyph (not a fallback),
+    and as wide as "+", so a Δ crossing zero does not move the strip's tabular run."""
+    import re
+
+    from PySide6.QtGui import QFontMetricsF
+
+    from studio import export_video, map_render
+    from studio.coaching_panel import PhaseBar
+    from studio.plots_view import PlotsView
+
+    for px in (44.0 * 0.54, 88.0 * 0.54):                # the strip's run at 1080p and at 4K
+        face = export_video._font(px, bold=True)
+        assert _family(face, "−") == _family(face, "0"), (px, _family(face, "−"))
+        fm = QFontMetricsF(face)
+        assert abs(fm.horizontalAdvance("−") - fm.horizontalAdvance("+")) < 0.01, (
+            px, fm.horizontalAdvance("−"), fm.horizontalAdvance("+"))
+    hyphen = re.compile(r"(?<![\w])-\d")
+    bar = PhaseBar(coaching.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04), lap=16)
+    texts = [lb.text() for lb in bar.findChildren(QLabel)] + [bar.toolTip()]
+    texts += [export_video.strip_tail(-0.31)[0], theme.format_delta_run(-0.31),
+              map_render._fmt_delta(-0.31), PlotsView._fmt_seconds(-0.2)]
+    hits = [t for t in texts if hyphen.search(t)]
+    assert not hits, f"an ASCII hyphen as a minus: {hits}"
+    assert export_video.strip_tail(-0.31)[0] == "Δ −0.31", export_video.strip_tail(-0.31)
+    print("test_the_one_minus_is_drawn_by_the_export_face_at_the_width_of_plus OK")
+
+
 # --------------------------------------------------------------------------- the fixed surfaces
 class _FakeLapSession:
     """The LapTable read surface, with excluded laps so the strip is populated."""

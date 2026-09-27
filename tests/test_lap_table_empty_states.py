@@ -183,7 +183,7 @@ def test_corner_deltas_dash_on_the_lap_they_would_compare_with_itself():
     ct.set_lap(1)
     assert not ct.baseline_note.isVisible()
     assert tb.item(0, _DELTA_BEST_COL).text() == "+0.11", tb.item(0, _DELTA_BEST_COL).text()
-    assert tb.item(0, _DELTA_APEX_COL).text() == "-0.9", tb.item(0, _DELTA_APEX_COL).text()
+    assert tb.item(0, _DELTA_APEX_COL).text() == "\u22120.9", tb.item(0, _DELTA_APEX_COL).text()
     print("test_corner_deltas_dash_on_the_lap_they_would_compare_with_itself OK")
 
 

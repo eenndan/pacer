@@ -1273,7 +1273,7 @@ def test_format_delta_speed_reproduces_old_live_diff_box():
         (None, None, None),        # no lap at all -> "Δ —     — km/h"
         (None, 73.4, None),        # speed known but NO lap -> honest "— km/h"
         (None, 73.4, 2),           # lap but no Δ baseline
-        (0.0, 73.4, 2),            # dead-even -> neutral text colour, "Δ +0.00 s"
+        (0.0, 73.4, 2),            # dead-even -> neutral text colour, "Δ 0.00 s"
         (0.004, 73.4, 2),          # within dead band -> neutral
         (-0.31, 88.0, 2),          # ahead -> green
         (0.62, 64.0, 2),           # behind -> red
@@ -1289,18 +1289,18 @@ def test_format_delta_speed_reproduces_old_live_diff_box():
 
 def test_format_delta_speed_exact_strings_and_spacing():
     """Pin the exact live readout strings (incl. the FIVE-space gap between the Δ run and the speed
-    run, the "Δ +0.00 s" units form, and the em-dash no-lap forms) so a stray space/format change is
+    run, the "Δ 0.00 s" units form, and the em-dash no-lap forms) so a stray space/format change is
     caught even if the inlined reference above were also edited."""
     from studio import theme
     assert theme.format_delta_speed(None, None, None)[0] == "Δ —     — km/h"
     # Even Δ (dead-band): no direction arrow, so the neutral readout is unchanged.
-    assert theme.format_delta_speed(0.0, 73.4, 2)[0] == "Δ +0.00 s     73 km/h"
+    assert theme.format_delta_speed(0.0, 73.4, 2)[0] == "Δ 0.00 s     73 km/h"
     # Ahead/behind carry the accessibility ▲/▼ arrow (non-colour redundancy) after the signed value.
-    assert theme.format_delta_speed(-0.31, 88.0, 2)[0] == "Δ -0.31 s ▲     88 km/h"
+    assert theme.format_delta_speed(-0.31, 88.0, 2)[0] == "Δ \u22120.31 s ▲     88 km/h"
     assert theme.format_delta_speed(0.62, 64.0, 2)[0] == "Δ +0.62 s ▼     64 km/h"
     # export-side fragments: tight Δ run (no " s", no arrow — the burned overlay passes arrow=False),
     # bare speed number under the SAME no-lap gate.
-    assert theme.format_delta_run(-0.31, units=False, arrow=False) == "Δ -0.31"
+    assert theme.format_delta_run(-0.31, units=False, arrow=False) == "Δ \u22120.31"
     assert theme.format_delta_run(None, units=False, arrow=False) == "Δ —"
     assert theme.speed_number(73.4, 2) == "73"
     assert theme.speed_number(73.4, None) == "—"        # no lap -> em dash (the honesty rule)
@@ -1360,10 +1360,10 @@ def test_the_best_lap_strip_drops_the_delta_and_says_why():
         assert best_colour == ev.EXPORT.accent
         # the ordinary lap: the shared tight run, the shared colour rule, arrow=False kept
         text, colour = ev.strip_tail(-0.31, is_best=False)
-        assert text == theme.format_delta_run(-0.31, units=False, arrow=False) == "Δ -0.31"
+        assert text == theme.format_delta_run(-0.31, units=False, arrow=False) == "Δ \u22120.31"
         assert colour == ev.export_delta_colour(-0.31)
         # and theme's dead band still reaches the file (a -0.00 must never be burned in)
-        assert ev.strip_tail(-1e-15)[0] == "Δ +0.00"
+        assert ev.strip_tail(-1e-15)[0] == "Δ 0.00"
     finally:
         ev.export_delta_colour = orig
 
@@ -1477,7 +1477,7 @@ def test_the_readout_pill_holds_every_speed_this_export_can_burn():
 
 
 def test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range():
-    """`Δ -0.31` and `Δ -12.40` are not the same width, and the strip is sized once. The budget is
+    """`Δ −0.31` and `Δ −12.40` are not the same width, and the strip is sized once. The budget is
     the session's OWN Δ curve read through the per-frame lookup the render uses, so a lap that
     swings to double digits gets a pill that holds it."""
     from PySide6.QtGui import QFontMetricsF
@@ -1491,13 +1491,13 @@ def test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range():
     spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0)
     s_speeds, s_labels, s_tails = ev._burned_runs(small, spec, 30.0)
     b_speeds, b_labels, b_tails = ev._burned_runs(big, spec, 30.0)
-    assert set(s_tails) == {"Δ +0.00"}, sorted(set(s_tails))
-    assert set(b_tails) == {"Δ -12.40"}, sorted(set(b_tails))
+    assert set(s_tails) == {"Δ 0.00"}, sorted(set(s_tails))
+    assert set(b_tails) == {"Δ \u221212.40"}, sorted(set(b_tails))
     fm = QFontMetricsF(ev._font(44.0 * 0.54, bold=True))
     w_small = ev.strip_pill_width(44.0, s_labels, s_tails)
     w_big = ev.strip_pill_width(44.0, b_labels, b_tails)
     assert w_big > w_small, (w_small, w_big)
-    # "Δ +0.00" -> "Δ -12.40" is exactly ONE extra digit cell (plus the +/- advance difference),
+    # "Δ 0.00" -> "Δ −12.40" is ONE extra digit cell plus the minus sign (0.00 is unsigned),
     # and with tabular figures a digit cell is a fixed width — so this is an equality in disguise.
     assert w_big - w_small >= fm.horizontalAdvance("0") * 0.9, (w_small, w_big)
     # a best-lap export is sized for the mark instead
