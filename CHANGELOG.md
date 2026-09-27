@@ -8,6 +8,33 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.5.1] — 2026-09-27
 
+Everything merged since v0.5.0: 8 pull requests, #436 to #443, all from the hands-on QA (round 3)
+of v0.5.0 itself on the evening of 2026-09-26: its regressions, the owner's next race day end to
+end, and a technical evaluator's first hour on a fresh clone. Each line names its pull request
+(`github.com/eenndan/pacer/pull/<N>`), where the measurements behind it live.
+
+### Highlights
+
+- **A fresh clone runs.** On a new machine, `pixi run studio -- --demo` said the telemetry was
+  corrupt: `import pacer` found the C++ sources, not the bindings. The build now installs the whole
+  bindings package, and CI launches the app the README's way (#436)
+- **The slider lands where you let go.** While the handle was held, the playing video pulled it back
+  to the lagging picture, so a release could jump up to 102 s; a held handle now follows only the
+  pointer (on MK, 4 of 20 drag sequences missed, now 0 of 20) (#438)
+- **The demo shows the loop.** Every demo open lands on the first-open debrief, saving nothing, and
+  the README and the first-lap guide describe the debrief and the focus list (#437)
+- **Your plan stays in reach.** Show focus list shows it, a one-line focus row stands in when space
+  is short, Coaching ▸ Compare with your previous PB is one click, and an older session is no longer
+  judged against a newer focus list (#440, #442)
+- **Comparison videos play anywhere.** They open on 1080p panes; Source is capped at one 4K frame,
+  so the hardware encoder takes it (level 5.1, not 6.0). The last frame shows both lap times, and
+  every clip's finish frame is a keyframe, so its lap time reads cleanly (#439)
+- **Honest messages, one minus.** An internal error no longer blames your file; a first open with
+  poor GPS says why it decides nothing; every signed number, exports included, uses one true minus
+  (#436, #443)
+- **The public pages match the app.** Its screenshots are re-shot, and the counts, times and sizes
+  they quote are now checked by tests (#441)
+
 ### Changed
 
 - A first open on poor GPS lands on your usual layout and says why ("GPS quality low (10% of fixes
@@ -52,9 +79,9 @@ Everything merged since v0.4.2: 16 pull requests, #419 to #434, all from the 202
 
 ### Highlights
 
-- **Every way you open a recording opens all of it.** File ▸ Open, the welcome button, a drop and
-  the command line give the same whole recording, in chapter order; a new recording's PB is never
-  decided on part of it (SD_19_09 via Open had said 0:46.862 for a true 0:46.808) (#420)
+- **Opening a recording gives you all of it.** File ▸ Open, the welcome button and a drop open the
+  whole recording in chapter order, and command-line chapters load in chapter order; a new PB is
+  never decided on part of one (SD_19_09 via Open had said 0:46.862 for a true 0:46.808) (#420)
 - **The first-open debrief lands right.** A tab click returns to the usual layout; at a new
   circuit the map and its start-line cue stay up and the debrief waits for the line; focus
   baselines are the Stats corner measurements, and a check offers today's top three (#424, #426)
