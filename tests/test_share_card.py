@@ -430,6 +430,10 @@ def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
     assert "4 of 36 laps matched" in coaching.reason_sentence(c1), "the fixture has its count"
     session = FakeSession(track="Sandown Park", best_time=46.808, ideal=46.196, opps=(
         coaching.Opportunities(enough=True, n_laps=36, median_lap_id=3, rows=[c1])))
+    reason = share_card.card_data(session, unit="kmh").top_opp.reason
+    assert reason == "repeat your best line (laps vary ±0.46 s) — most of it on exit", reason
+    txt, px, _width = _reason_fit(reason)
+    assert txt == reason and px == share_card._REASON_PX_STEPS[0], (txt, px)
     beat = {"kind": "beat", "track": "Sandown Park", "best": 46.808, "prior": 46.912,
             "improvement": 0.104}
     try:
@@ -442,10 +446,6 @@ def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
     for other in (None, {**beat, "kind": "first"}, {**beat, "kind": "behind", "gap": 0.2},
                   {**beat, "best": 46.9}):               # ...and the last: another lap's verdict
         assert share_card.card_data(session, unit="kmh", pb_standing=other).pb == "", other
-    reason = d.top_opp.reason
-    assert reason == "repeat your best line (laps vary ±0.46 s) — most of it on exit", reason
-    txt, px, _width = _reason_fit(reason)
-    assert txt == reason and px == share_card._REASON_PX_STEPS[0], (txt, px)
     # Drawn: the ahead hue's ink on the BEST LAP row, right of the label, only with the mark.
     ahead = QColor(theme.ahead_colour())
 

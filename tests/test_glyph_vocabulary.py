@@ -258,7 +258,7 @@ def test_the_one_minus_is_drawn_by_the_export_face_at_the_width_of_plus():
         assert abs(fm.horizontalAdvance("−") - fm.horizontalAdvance("+")) < 0.01, (
             px, fm.horizontalAdvance("−"), fm.horizontalAdvance("+"))
     hyphen = re.compile(r"(?<![\w])-\d")
-    bar = PhaseBar(coaching.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04), lap=16)
+    bar = PhaseBar(coaching.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04))
     texts = [lb.text() for lb in bar.findChildren(QLabel)] + [bar.toolTip()]
     texts += [export_video.strip_tail(-0.31)[0], theme.format_delta_run(-0.31),
               map_render._fmt_delta(-0.31), PlotsView._fmt_seconds(-0.2)]

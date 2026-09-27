@@ -77,14 +77,15 @@ def test_a_session_on_untrusted_timing_can_set_no_baseline():
 def test_the_focus_block_invites_no_pick_it_could_never_answer():
     from studio.coaching_panel import FOCUS_EMPTY_LINE, FocusBlock
     block = FocusBlock()
-    block.set_report(focus.Report(track="Sandown Park", baseline_refusal=REFUSED), [5, 2, 8])
+    degraded = _ctx(degraded=True, untrusted="GPS quality low (10% of fixes rejected)")
+    block.set_report(focus.verdict([], degraded, [], {}), [5, 2, 8])     # an empty list
     block.set_selected_corner(5)
     assert not block.add_button.isEnabled(), "Add stayed on for a corner that can be no baseline"
     assert block.add_button.toolTip() == REFUSED, block.add_button.toolTip()
     assert block.add_state() == (False, REFUSED), block.add_state()
     assert block.empty_line.text() == f"Focus list · empty — {REFUSED}", block.empty_line.text()
     # ...and on a trusted session the invitation and the Add are exactly as they were.
-    block.set_report(focus.Report(track="Sandown Park"), [5, 2, 8])
+    block.set_report(focus.verdict([], _ctx(), [], {}), [5, 2, 8])
     block.set_selected_corner(5)
     assert block.add_button.isEnabled() and block.empty_line.text() == FOCUS_EMPTY_LINE
     print("ok block: no invitation, Add off with the reason; unchanged on trusted timing")
