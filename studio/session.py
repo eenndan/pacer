@@ -3184,7 +3184,8 @@ class Session:
                 reach=row.evidence.reach if row is not None else coaching.REACH_UNKNOWN,
                 fingerprint=str(entry.get("fingerprint") or ""), date=entry.get("date"),
                 lap_total=total, verified=bool(entry.get("verified", False)),
-                degraded=bool(entry.get("degraded", False))))
+                degraded=bool(entry.get("degraded", False)),
+                start_ms=int(self._wall_clock_ms()[0])))
         return items[:focus.MAX_ITEMS]
 
     def focus_report(self, items: list[focus.FocusItem], entry: dict,
@@ -3208,17 +3209,22 @@ class Session:
             for k, sample in zip(idx, got, strict=True):
                 samples[k] = sample
         store = records if records is not None else {}
-        now_fp = str(entry.get("fingerprint") or "")
-        now_ctx = {
+        return focus.verdict(items, self.focus_context(entry, list_track), samples, store)
+
+    def focus_context(self, entry: dict, list_track: str | None = None) -> dict:
+        """THIS session's facts a focus verdict reads (``focus.verdict``'s `now_ctx`): identity and
+        trust off its library `entry`, its lap odometer, and its first GPS fix's wall clock
+        (`start_ms`), which orders two sessions of one day where the date cannot (QA REG-1)."""
+        return {
             "list_track": list_track or entry.get("track"),
             "track": entry.get("track"),
-            "fingerprint": now_fp,
+            "fingerprint": str(entry.get("fingerprint") or ""),
             "date": entry.get("date"),
+            "start_ms": int(self._wall_clock_ms()[0]),
             "lap_total": float(self.corners.basis()[1]) if self.corners.basis() else 0.0,
             "verified": bool(entry.get("verified", False)),
             "degraded": bool(entry.get("degraded", False)),
         }
-        return focus.verdict(items, now_ctx, samples, store)
 
     # Driving channels (brake/coast/grip + thresholds, F5/D3/D4/D5) are the `session.driving`
     # service (studio/driving_channels.py); per-lap caches clear on re-segment, the thresholds
