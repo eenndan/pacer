@@ -650,17 +650,19 @@ class FocusBlock(QWidget):
 DEBRIEF_ESC = "Esc returns to your usual layout."
 
 
-def debrief_note(promoted: list[int]) -> str:
+def debrief_note(promoted: list[int], saved: bool = True) -> str:
     """The debrief's second line: what Pacer just did to the focus list, said as the default it is
     and how to undo it (board review PS-B1: "an explicit, reversible default — say so on screen"),
-    then the way out."""
+    then the way out. `saved` False is the synthetic demo's list, which is never written, so it is
+    not promised "for next time" (QA EVAL-2)."""
     if not promoted:
         return DEBRIEF_ESC
     labels = [f"C{c}" for c in promoted]
     who = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + f" and {labels[-1]}"
     undo = "remove it if you won't work on it" if len(labels) == 1 else \
         "remove any you won't work on"
-    return (f"Pacer put {who}, from today's top corners, on your focus list for next time — "
+    where = "on your focus list for next time" if saved else "on the focus list"
+    return (f"Pacer put {who}, from today's top corners, {where} — "
             f"a default, not a decision: {undo}. {DEBRIEF_ESC}")
 
 
@@ -1302,8 +1304,9 @@ class OpportunitiesPanel(QWidget):
         self._all_rows: list[coaching.Opportunity] = []
         self._shortlist: list[coaching.Opportunity] = []   # what the headline sums (PANEL_TOP_N)
         self._debrief = False        # the page is the first-open debrief (set_debrief)
-        # (PB line, the corners Pacer pre-promoted, whether the line offers the PB compare)
-        self._debrief_lead: tuple = (None, [], False)
+        # (PB line, the corners Pacer pre-promoted, whether the line offers the PB compare, whether
+        # the list is saved — False only on the synthetic demo)
+        self._debrief_lead: tuple = (None, [], False, True)
         self._brake_dirs: dict = {}  # cid -> coaching.BrakeDirection (refresh)
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
         self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
@@ -1452,9 +1455,9 @@ class OpportunitiesPanel(QWidget):
         """The lead names only the pre-promoted corners STILL on the list: a Remove below it must
         not leave it saying Pacer put a corner there that is gone."""
         if self._debrief:
-            pb_line, promoted, compare = self._debrief_lead
+            pb_line, promoted, compare, saved = self._debrief_lead
             kept = [c for c in promoted if c in self.focus_block.cids()]
-            self.debrief_block.set_lines(pb_line, debrief_note(kept), compare)
+            self.debrief_block.set_lines(pb_line, debrief_note(kept, saved), compare)
 
     def shortlist_cids(self) -> list[int]:
         """The corners the headline sums, in rank order — what the debrief pre-promotes, so the
@@ -1462,14 +1465,16 @@ class OpportunitiesPanel(QWidget):
         return [r.cid for r in self._shortlist]
 
     def set_debrief(self, on: bool, pb_line: str | None = None,
-                    promoted: list[int] | None = None, compare: bool = False) -> None:
+                    promoted: list[int] | None = None, compare: bool = False,
+                    saved: bool = True) -> None:
         """Make this page the first-open debrief (see the class note), or the ordinary page again.
         The view owns WHEN (``CentralView.show_debrief`` / ``_end_debrief``); this owns what the
         page shows: the lead, the shortlist-only table, and no braking line. `compare` offers
-        "Compare with your previous PB" beside the PB line (``compare_pb_requested``)."""
+        "Compare with your previous PB" beside the PB line (``compare_pb_requested``); `saved`
+        False words the note for a list that is never written (the demo's, ``debrief_note``)."""
         self._debrief = bool(on)
-        self._debrief_lead = ((pb_line, list(promoted or []), bool(compare)) if on
-                              else (None, [], False))
+        self._debrief_lead = ((pb_line, list(promoted or []), bool(compare), bool(saved)) if on
+                              else (None, [], False, True))
         if on:
             self._sync_debrief_lead()
         else:
