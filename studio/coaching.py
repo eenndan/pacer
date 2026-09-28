@@ -20,6 +20,7 @@ See the "spread, reach and the evidence gate" block below for the measured numbe
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -198,6 +199,16 @@ REACH_REPEAT_FRAC = 0.10
 # interquartile band; 0064 C2, 0.096 s against 0.216 s). The margin's case is the actionability
 # argument above, not those counts.
 SPREAD_MARGIN = 0.5
+
+# The standard error of a median from its interquartile range, by the normal approximation
+# SE ≈ 1.2533 σ / √n with σ ≈ IQR / 1.349 (the form focus.py's comment quotes). Public so the focus
+# verdict can take the same SE when it is next revised. Nothing prints it: it only widens the
+# "Start with" tie margin on short sessions (`lead_ties`).
+SE_MEDIAN_K = 1.2533 / 1.349
+
+# How many standard errors of two rows' difference their gap must clear before "Start with" may
+# name one of them alone — measured on the working set's 22 ranked pairs above `lead_ties`.
+TIE_SE_K = 1.5
 
 # How a corner's target relates to what the driver has actually produced — the "can't vs didn't"
 # axis, and the one thing that changes the instruction rather than only the number.
@@ -1371,13 +1382,43 @@ def theme_sentence(theme: Theme) -> str:
 # actionability margin the per-row gate already applies to ONE row's claim, applied to the gap
 # between two of them. It reads only numbers the rows already carry (no modelled interval, no new
 # field, no golden leaf), and it was validated against the permutation ground truth on all 30
-# ranked pairs of both recordings: 0 misses — it never stays silent on a pair the permutation calls
-# a tie — and 2 over-calls, both marginal (p = 0.039, p = 0.066). The alternatives measured on the
-# same 30 pairs: 0.25x min(IQR) MISSES 6 of the ties (unsafe), and 1.0x min(IQR), 0.5x max(IQR) and
-# 0.5x the pair-difference IQR each over-call 13 of 30 (blunt).
+# ranked pairs of both D24 recordings (38 and 65 laps): 0 misses — it never stayed silent on a pair
+# the permutation calls a tie — and 2 over-calls, both marginal (p = 0.039, p = 0.066). The
+# alternatives measured on the same 30 pairs: 0.25x min(IQR) MISSES 6 of the ties (unsafe), and
+# 1.0x min(IQR), 0.5x max(IQR) and 0.5x the pair-difference IQR each over-call 13 of 30 (blunt).
 #
-# A row built without per-lap times carries iqr 0.0 (_NO_EVIDENCE), so the margin is 0 and it can
-# never tie: an unmeasured summary prints exactly what it printed before.
+# SHORT SESSIONS (ADV-2, QA r4 on the working set). Half a spread has no lap-count term, and the
+# uncertainty of a median does: on the 19-lap MK_18_09_26 the rule named C5 without C8 — gap
+# 0.071 s, bar 0.054 s — while the same permutation test calls that lead pair a tie (p = 0.190). So
+# the margin is now the WIDER of half the smaller spread and TIE_SE_K standard errors of the pair's
+# difference, hypot(se_a, se_b) with se = SE_MEDIAN_K * IQR / sqrt(n); on MK's pair that is 0.082 s.
+# Validated on all 22 ranked pairs of the four working-set recordings (19-62 laps, the ADVICE
+# lane's pickles, 20,000 permutations each): misses 2 -> 1 (SD_19_09_26 C5 vs C2, p = 0.151, not a
+# lead pair) and over-calls 4 -> 4. TIE_SE_K = 1.0 changes nothing on those pairs; 2.0 over-calls 6
+# and ties SD_19_09_26's C1, which the permutation separates at p = 0.001. The SE term is capped at
+# the WIDER of the two spreads, so a tie it decides still "sits closer together than your own
+# lap-to-lap spread", the sentence's reason: at n = 3, 1.5 SE of a difference is 1.14x a shared
+# IQR. The cap moves none of the 22 pairs. Still no interval is printed (refused-2026-09.md §3).
+#
+# A row built without per-lap times carries n_laps 0 and iqr 0.0 (_NO_EVIDENCE), so its margin is 0
+# and it can never tie: an unmeasured summary prints exactly what it printed before.
+def _median_se(ev: Evidence) -> float:
+    """The standard error of a row's median time, SE_MEDIAN_K x its IQR / sqrt(its counted laps)."""
+    return SE_MEDIAN_K * ev.iqr / math.sqrt(ev.n_laps) if ev.n_laps > 0 else 0.0
+
+
+def _tie_margin(a: Opportunity, b: Opportunity) -> float:
+    """The gap two ranked rows' losses must reach before the measurement separates them (see the
+    block above): half the smaller spread, or TIE_SE_K standard errors of their difference capped at
+    the wider spread, whichever is larger. 0 when either row is unmeasured."""
+    ea, eb = a.evidence, b.evidence
+    if ea.n_laps <= 0 or eb.n_laps <= 0:
+        return 0.0
+    spread = SPREAD_MARGIN * min(ea.iqr, eb.iqr)
+    se = TIE_SE_K * math.hypot(_median_se(ea), _median_se(eb))
+    return max(spread, min(se, max(ea.iqr, eb.iqr)))
+
+
 def lead_ties(rows: list[Opportunity], lead_cid: int | None) -> list[Opportunity]:
     """The ranked rows whose loss the measurement cannot separate from the lead's, biggest first
     and the lead itself in front. [] when no ranked row carries `lead_cid`; a ONE-element result
@@ -1387,8 +1428,7 @@ def lead_ties(rows: list[Opportunity], lead_cid: int | None) -> list[Opportunity
     if lead is None:
         return []
     return [lead] + [r for r in ranked if r is not lead
-                     and abs(lead.time_lost - r.time_lost)
-                     < SPREAD_MARGIN * min(lead.evidence.iqr, r.evidence.iqr)]
+                     and abs(lead.time_lost - r.time_lost) < _tie_margin(lead, r)]
 
 
 # Name at most three corners before the line costs more than it says; any others are counted. The

@@ -276,6 +276,16 @@ modelled interval, no new field, no golden leaf). Validated against the permutat
 all 30 ranked pairs of both recordings: **0 misses** (it never stays silent on a pair the
 permutation calls a tie) and 2 over-calls, both marginal (p = 0.039 and p = 0.066).
 
+**Revised 2026-09-29 on short-session evidence (ADV-2, QA round 4); the interval stays refused.**
+Half a spread has no lap-count term, and on the 19-lap MK_18_09_26 the rule named C5 without C8
+(gap 0.071 s against a 0.054 s bar) where the same permutation test calls that lead pair a tie
+(p = 0.190). The tie margin is now the wider of half the smaller spread and 1.5 standard errors of
+the pair's difference (each median's from its own IQR and lap count), the latter capped at the
+wider spread so the sentence's "closer together than your own lap-to-lap spread" stays true. On
+the 22 ranked pairs of the four working-set recordings (19-62 laps): misses 2 → 1 (SD_19_09_26 C5
+vs C2, p = 0.151, not a lead pair), over-calls 4 → 4; the D24 figures above are history. The
+standard error only widens a tie: nothing new is printed, so no interval reaches the page.
+
 ---
 
 ## 4. A per-corner GPS-quality abstain — refused (#255, re-measured here)
