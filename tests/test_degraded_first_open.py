@@ -173,6 +173,61 @@ def _check_the_degraded_landing(win):
     assert row["degraded"] is True, row
 
 
+# --------------------------------------------------- the same, at a circuit Pacer does not know
+def test_a_degraded_first_open_at_an_unnamed_circuit_promises_nothing():
+    """QA r4 CODE-2 (2026-09-28). At a circuit with no name the verdict waits for the start line
+    and then for the name (#433). On degraded timing neither can bring anything, yet after the
+    drag the status bar still said "your PB and focus list wait for that" beside the clause saying
+    there would be none, and before it the notice gave no reason the drag would decide nothing."""
+    from PySide6.QtWidgets import QInputDialog
+    from test_debrief_landing import _fresh_app_support, _open, _settle, _two_recordings
+    from test_debrief_lands_right import _drag_start_line, _unknown_circuit
+    from test_debrief_lands_right import _window as _blank_window  # this file has its own
+
+    from studio import library
+
+    name = "Test circuit"
+    ask = QInputDialog.getText
+    QInputDialog.getText = staticmethod(lambda *a, **k: (name, True))
+    try:
+        with tempfile.TemporaryDirectory(prefix="degraded_") as folder, _fresh_app_support(), \
+                _gate(0.0), _unknown_circuit() as line, _blank_window() as win:
+            a, _b = _two_recordings(folder)
+            _open(win, a)
+            ctl, quality = win.library_ctl, win.session.timing_quality
+            # The measure's prefix only: at gate 0.0 it reads "0% of fixes rejected".
+            why = f"GPS quality low ({quality.dropped_pct()}% of fixes rejected)"
+            clause = f"{why}: too uncertain to judge a PB or set a focus list, so no debrief"
+            # 1. Before the drag: the line still needs placing (lap times depend on it), and the
+            #    notice says why placing it will decide nothing.
+            assert quality.degraded and ctl.waiting_for_line, (quality.degraded, ctl.waiting_for_line)
+            notice = win._session_notice() or ""
+            assert "drag it into place" in notice and clause in notice, notice
+            assert "wait for" not in notice, notice
+            # 2. The drag: the row is written, flagged, and no name is waited for.
+            _drag_start_line(win, line)
+            assert win.session.timing_verified and win.session.track_name is None
+            assert ctl.degraded_first_open and not win.view.is_debrief(), ctl.degraded_first_open
+            notice = win._session_notice() or ""
+            assert notice == clause, notice
+            assert win.statusBar().currentMessage() == clause, win.statusBar().currentMessage()
+            assert not ctl.waiting_for_name, "a name was promised a PB and focus list"
+            (row,) = (e for e in library.load()["entries"] if e.get("fingerprint") == "GX9001")
+            assert row["degraded"] is True and row["track"] is None, row
+            # 3. Save as track names it and, as the notice said, brings nothing.
+            win._save_as_track()
+            _settle(0.2)
+            assert win.session.track_name == name
+            assert ctl.pb_standing is None, ctl.pb_standing
+            assert focus.for_track(focus.load(), name) == [], "a focus list came of degraded laps"
+            assert not win.view.is_debrief()
+            assert win._session_notice() == clause, win._session_notice()
+    finally:
+        QInputDialog.getText = ask
+    print("ok unnamed: the pre-drag notice says why, no name is waited for, Save as track brings "
+          "nothing")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
