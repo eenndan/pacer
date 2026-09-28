@@ -37,7 +37,7 @@ import numpy as np
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 
-from . import coaching, map_render, theme, units
+from . import coaching, library, map_render, theme, units
 from ._signal import fmt_signed, fmt_time
 
 # The card is a portrait-ish social image. 1080×1350 is Instagram's 4:5 portrait — the most
@@ -108,10 +108,16 @@ def pb_mark(standing: dict | None, best_s: float | None, prior_date: str | None 
     `standing` is the load's ``library.pb_standing_for`` verdict, so the trust gates are its own
     (no PB on a provisional line or estimated timing), and only a BEAT earns a mark. Only of THIS
     lap: a start-line drag since the load re-times the laps, and a verdict about another number
-    would put a PB on a lap that did not set it. `prior_date` is the beaten row's ISO date."""
+    would put a PB on a lap that did not set it. `prior_date` is the beaten row's ISO date.
+
+    Nor a beat inside timing precision (``library.within_timing_precision``): the debrief calls
+    that lap level with the PB, and the card said "NEW PB · 0.00 s" for a 0.004 s beat — a
+    difference the timing cannot resolve, in a figure that rounded to nothing (DOMAIN-6)."""
     if not standing or standing.get("kind") != "beat" or best_s is None:
         return ""
     if abs(float(standing.get("best", float("nan"))) - float(best_s)) > 5e-4:
+        return ""
+    if library.within_timing_precision(float(standing["improvement"])):
         return ""
     mark = f"NEW PB · {fmt_signed(-float(standing['improvement']), 2, 's')}"
     try:

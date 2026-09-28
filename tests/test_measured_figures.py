@@ -47,6 +47,8 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      "refused-2026-09.md … §N" in the tree must land on a section that exists. A dev probe's
      citation must also land on the section that names the probe. It has a negative control built
      from the collisions that really happened (#314/#315, #348/#349/#351).
+  6. A CONSTANT DERIVED FROM A PUBLISHED FIGURE IS ITS ARITHMETIC. `library.PB_PRECISION_S`, the
+     floor under which a PB reads "level", is 2√2 × docs/ACCURACY.md row C's σ, read off the row.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -1253,6 +1255,26 @@ def test_every_quote_of_the_floor_is_a_row_of_the_table():
     assert not problems, "\n  ".join(["floor quotes that are not theme.py's table:"] + problems)
     print(f"test_every_quote_of_the_floor_is_a_row_of_the_table OK ({len(found)} sentences in "
           f"{sorted(set(found))})")
+
+
+# ─── The PB floor is ACCURACY row C's arithmetic ─────────────────────────────────────────────────
+_ACCURACY = os.path.join(_REPO, "docs", "ACCURACY.md")
+_LIBRARY = os.path.join(_REPO, "studio", "library.py")
+
+
+def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
+    """DOMAIN-6. `library.PB_PRECISION_S` is the floor under which a personal best reads "level
+    with your personal best" rather than "0.00 s faster": the difference of two laps timed by the
+    best instrument measured, at 2σ — 2 × √2 × σ, with σ docs/ACCURACY.md row C's (the MK sprint
+    against Club Speed timing). The σ is read off the published row, so re-measuring row C to a
+    figure that moves the floor fails here until the constant follows it."""
+    row = _need(r"(?m)^\| \*\*C\*\*.*\| \*\*([+−-]?[0-9.]+) s\*\* \| \*\*([0-9.]+) s\*\* \|\s*$",
+                _read(_ACCURACY), "docs/ACCURACY.md's row C (mean error, σ)")
+    sigma = float(row.group(2))
+    floor = _constant(_LIBRARY, "PB_PRECISION_S")
+    assert round(2 * math.sqrt(2) * sigma, 2) == floor, \
+        f"2·√2·σ = {2 * math.sqrt(2) * sigma:.4f} s from row C's σ {sigma} s, but PB_PRECISION_S = {floor}"
+    print(f"test_the_pb_floor_is_accuracy_row_c_s_arithmetic OK (σ {sigma} s → {floor} s)")
 
 
 # ─── T16: a table no footage here can re-measure says so where it is published ───────────────────
@@ -2724,6 +2746,7 @@ def _run_all():
     test_every_quote_of_the_focus_figures_is_focus_py_s()
     test_the_floor_table_is_consistent_with_its_own_definitions()
     test_every_quote_of_the_floor_is_a_row_of_the_table()
+    test_the_pb_floor_is_accuracy_row_c_s_arithmetic()
     test_the_refusal_record_s_verdict_is_derived_from_its_table()
     test_the_refusals_doc_numbers_its_sections_once_each_and_counts_them()
     test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen()

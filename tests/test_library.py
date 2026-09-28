@@ -867,6 +867,59 @@ def test_track_summary_counts_best_pbs_and_trend():
     assert library.track_summary(idx, None) is None
 
 
+def test_a_pb_inside_timing_precision_reads_level_not_0_00_s_faster():
+    """DOMAIN-6 (next-level review, 2026-09-28). A PB beaten by 0.001 s or 0.004 s read "New
+    personal best! … 0.00 s faster than your previous best": a celebration of a gap the timing
+    cannot resolve, printed to a precision the sentence rounded away. Inside ``PB_PRECISION_S``
+    (2√2 × ACCURACY row C's σ, re-derived in test_measured_figures) the toast and the debrief line
+    say LEVEL, in both directions, and never print the sub-floor gap in milliseconds; the kinds are
+    untouched (still a "beat": the row is the track's best, the compare offer stands). The owner's
+    four real PB steps — Sandown 1.476 / 0.164 / 0.104 s and MK 0.749 s — still celebrate."""
+    def beat(prior, new, track="Sandown Park"):
+        m = library.pb_moment({"entries": [_entry("OLD", track=track, best=prior)]}, track, new,
+                              fingerprint_key=library.fingerprint("NEW"))
+        assert m is not None and m["kind"] == "beat", (prior, new, m)   # the verdict is unchanged
+        return m
+
+    for new in (46.807, 46.804, 46.760):                # 0.001 / 0.004 / 0.048 s under 46.808
+        m = beat(46.808, new)
+        title, body = library.pb_moment_text(m, fmt_time)
+        line = library.pb_standing_text(m, fmt_time)
+        assert title == "Level with your personal best", (new, title)
+        for text in (title, body, line):
+            assert "0.00 s faster" not in text and "New personal best" not in text, (new, text)
+            assert "faster" not in text, (new, text)
+        assert body == (f"Sandown Park — {fmt_time(new)}, level with your previous best (0:46.808) "
+                        f"within timing precision (under 0.07 s apart)."), body
+        assert line == (f"Best lap {fmt_time(new)} at Sandown Park, level with your personal best "
+                        f"there, within timing precision (under 0.07 s apart)."), line
+    for prior, new, track in ((48.552, 47.076, "Sandown Park"), (47.076, 46.912, "Sandown Park"),
+                              (46.912, 46.808, "Sandown Park"), (68.228, 67.479, "Daytona MK"),
+                              (46.808, 46.700, "Sandown Park")):
+        m = beat(prior, new, track)
+        title, body = library.pb_moment_text(m, fmt_time)
+        assert title == "New personal best!", (prior, new, title)
+        assert f"{prior - new:.2f} s faster than your previous best" in body, body
+        assert library.pb_standing_text(m, fmt_time).startswith("New personal best at "), m
+    # The debrief line's behind branch applies the same floor: a 0.03 s deficit is level, the
+    # floor itself is not, and a gap that prints as the same millisecond keeps the tie sentence
+    # the debrief has always printed (tests/test_debrief_landing.py pins it for a gap of 0).
+    idx = {"entries": [_entry("OLD", track="Sandown Park", best=46.808)]}
+
+    def behind(best):
+        s = library.pb_standing_for(True, idx, "Sandown Park", best,
+                                    fingerprint_key=library.fingerprint("NEW"))
+        assert s is not None and s["kind"] == "behind", s
+        return library.pb_standing_text(s, fmt_time)
+    assert behind(46.838) == ("Best lap 0:46.838 at Sandown Park, level with your personal best "
+                              "there, within timing precision (under 0.07 s apart)."), behind(46.838)
+    assert behind(46.8083) == "Best lap 0:46.808 at Sandown Park, level with your personal best " \
+                              "there.", behind(46.8083)
+    assert behind(46.878) == ("Best lap 0:46.878 at Sandown Park, 0.07 s off your personal best "
+                              "there (0:46.808)."), behind(46.878)
+    assert library.within_timing_precision(-0.069) and not library.within_timing_precision(0.07)
+
+
 def test_app_support_path_uses_patched_seam(monkeypatch):
     """library_path() resolves through _app_support_dir — patching that seam (the test idiom)
     fully diverts reads/writes away from the user's real ~/Library."""
