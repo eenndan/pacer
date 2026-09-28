@@ -28,7 +28,9 @@ def say_if_first_launch() -> bool:
 
 say_if_first_launch()
 
-from .app import main  # noqa: E402  (after the note: this import IS the wait it announces)
+# Absolute, not `from .app`: the .app's bootloader runs this file as a top-level script with no
+# parent package (packaging/pacer.spec's Analysis entry), where a relative import raises (REG2-1).
+from studio.app import main  # noqa: E402  (after the note: this import IS the wait it announces)
 
 if __name__ == "__main__":
     sys.exit(main())
