@@ -18,7 +18,9 @@ be no baseline (`focus.baseline_refusal`), with the same words.
 
 Pinned here: the refusal and its words (pure), the focus block on such a report, and the journey on
 the real window over a synthetic recording made degraded by the same in-process gate, beside a
-negative control: the same recording at the shipped gate still lands on its debrief.
+negative control: the same recording at the shipped gate still lands on its debrief. And the same at a
+circuit Pacer does not know (QA r4 CODE-2): the notice says why the line's drag will decide nothing,
+and neither it nor Save as track promises a PB or a focus list.
 
 Run: python tests/test_degraded_first_open.py   (~10 s)
 """
