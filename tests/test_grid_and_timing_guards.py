@@ -17,6 +17,11 @@
     so Cmd+Z became a permanent no-op). Both writers are now gated on the same predicate the
     loader applies: a segmentation with no valid lap is never recorded anywhere.
 
+  * CODE-1 (QA r4) — the same _on_lines confirmed the timing on EVERY edit, so Add sector at an
+    unknown circuit confirmed the auto-fitted start line it never moved. Only a moved start line
+    (> _START_MOVED_M, either way round) confirms now; the real-window journey is in
+    test_debrief_lands_right.
+
   * L3-01 — the Corners table's four speed tooltips said km/h over cells holding mph (wrong by
     1.61x). CentralView.__init__ seeds each sub-view's unit by direct field assignment and then
     re-applies the ONE side effect that the rebuild does not re-run, plots._apply_speed_axis_label;
@@ -299,20 +304,23 @@ def test_the_persisted_layout_is_on_the_first_painted_frame():
 
 
 # --------------------------------------------------------------- MAP-02: both writers
-def _fake_view(valid_lap_ids, path):
+def _fake_view(valid_lap_ids, path, start_line=None):
     """The duck-typed slice of CentralView that _save_sidecar / _on_lines actually touch, so the
-    two guards can be driven with no widget tree at all."""
-    calls = SimpleNamespace(pushed=0, resegmented=0, rebuilt=0, emitted=0)
+    two guards can be driven with no widget tree at all. `start_line` is the session's line BEFORE
+    the edit; every re-segmentation records the user_confirm it was handed."""
+    calls = SimpleNamespace(pushed=0, resegmented=0, rebuilt=0, emitted=0, confirms=[])
     session = SimpleNamespace(
         valid_lap_ids=lambda: list(valid_lap_ids),
         track_name="Daytona MK",
         timing_user_confirmed=True,
         timing_lines_latlon=lambda: ([[51.376, -0.360], [51.377, -0.361]], []),
         push_timing_history=lambda: setattr(calls, "pushed", calls.pushed + 1),
+        start_line=start_line,
     )
 
-    def set_timing_lines(_start, _sectors):
+    def set_timing_lines(_start, _sectors, user_confirm=True):
         calls.resegmented += 1
+        calls.confirms.append(user_confirm)
 
     session.set_timing_lines = set_timing_lines
     view = SimpleNamespace(
@@ -368,6 +376,42 @@ def test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack():
         # The edit itself still applies on screen — only the RECORD of it is refused.
         assert view.calls.resegmented == 1 and view.calls.rebuilt == 1 and view.calls.emitted == 1
     print("test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack OK")
+
+
+# ------------------------------------------ CODE-1: only a moved start line confirms
+def test_only_a_start_line_that_moved_confirms_the_timing():
+    """Add sector and Clear sectors re-segment through _on_lines with the start line exactly where
+    it was, and every _on_lines call used to confirm the timing (set_timing_lines' default). At a
+    circuit Pacer does not know, that turned a sector edit into the start line's confirmation: a
+    verified Library row and the first-open verdict, decided on the loader's own auto-fit (QA r4
+    CODE-1). The confirmation is now what the user actually did: move the start line."""
+    from studio.session import Seg
+    line = Seg(10.0, 20.0, 18.0, 26.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "GX010099.pacer.json")
+
+        def confirm_for(prior, start):
+            view = _fake_view([0, 1], path, start_line=prior)
+            CentralView._on_lines(view, start, [line])
+            assert view.calls.resegmented == 1, view.calls
+            return view.calls.confirms[0]
+
+        # A sector edit hands _on_lines the unmoved start line (a fresh Seg, equal by value).
+        assert confirm_for(line, Seg(10.0, 20.0, 18.0, 26.0)) is False, \
+            "a sector-only edit confirmed the start line it never moved"
+        # A µm lat/lon round-trip wobble is not a move; the same line drawn end-to-start is not.
+        assert confirm_for(line, Seg(10.0, 20.0000004, 18.0, 26.0)) is False
+        assert confirm_for(line, Seg(18.0, 26.0, 10.0, 20.0)) is False
+        # A handle dragged half a metre is.
+        assert confirm_for(line, Seg(10.5, 20.0, 18.0, 26.0)) is True
+        # No prior line to compare with (a stand-in session, or none yet): keep today's rule.
+        assert confirm_for(None, line) is True
+
+    from studio.central_view import _START_MOVED_M, _start_seg_moved
+    assert _start_seg_moved(line, None) is True and _start_seg_moved(None, line) is True
+    assert not _start_seg_moved(line, Seg(10.0, 20.0 + 0.9 * _START_MOVED_M, 18.0, 26.0))
+    assert _start_seg_moved(line, Seg(10.0, 20.0 + 1.1 * _START_MOVED_M, 18.0, 26.0))
+    print("test_only_a_start_line_that_moved_confirms_the_timing OK")
 
 
 # -------------------------------------------------- W1-latency: the busy affordance
@@ -565,6 +609,7 @@ def _run_all():
     test_the_persisted_layout_is_on_the_first_painted_frame()
     test_a_zero_lap_placement_is_never_written_to_the_sidecar()
     test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack()
+    test_only_a_start_line_that_moved_confirms_the_timing()
     test_a_timing_edit_is_acknowledged_while_it_blocks()
     test_a_failed_timing_edit_does_not_strand_the_wait_cursor()
     print("ALL OK")

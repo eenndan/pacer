@@ -211,7 +211,8 @@ class Session:
         # confirmed the start/finish line (a drag, or a restored sidecar that recorded the
         # confirmation). A detected track is trusted on its own (track_name), so this only matters
         # on an unknown track whose start line was auto-fitted. set_timing_lines() flips it True
-        # (an explicit edit IS the confirmation); the sidecar persists it across reloads.
+        # (a start line the user moved IS the confirmation; a sector-only edit passes False); the
+        # sidecar persists it across reloads.
         self._timing_user_confirmed = False
         # The start/sector lines the LOADER placed for this recording, in the load-invariant
         # (lat, lon) form — captured by Session.load BEFORE app.py's sidecar restore, so they
@@ -1347,9 +1348,10 @@ class Session:
         return True if ref is None else self._start_line_matches(ref[0])
 
     def confirm_timing(self) -> None:
-        """Mark the start/finish line as user-confirmed (Provisional → Verified). Called when the
-        user drags a timing line — an explicit edit IS the confirmation. Idempotent; persisted by
-        the sidecar via ``timing_user_confirmed``."""
+        """Mark the start/finish line as user-confirmed (Provisional → Verified): what a drag that
+        MOVES the start line does (through ``set_timing_lines``); a sector-only edit does not
+        (QA r4 CODE-1, ``CentralView._on_lines``). Idempotent; persisted by the sidecar via
+        ``timing_user_confirmed``."""
         self._timing_user_confirmed = True
 
     @property
@@ -1382,9 +1384,11 @@ class Session:
 
     def set_timing_lines(self, start: Seg, sectors: list[Seg],
                          user_confirm: bool = True) -> None:
-        """Re-segment on new timing lines. `user_confirm=True` (a genuine user edit, the default)
-        marks the timing user-confirmed → Verified; the sidecar-restore + revert paths pass
-        `user_confirm=False` so they don't fabricate a confirmation the user never made (that's
+        """Re-segment on new timing lines. `user_confirm=True` (the default) marks the timing
+        user-confirmed → Verified; `False` leaves the flag as it was (it never un-confirms). The
+        map's edits pass True only when the start line MOVED (`CentralView._on_lines`: a sector
+        edit is not the start line's confirmation, QA r4 CODE-1); the sidecar-restore + revert
+        paths pass False so they don't fabricate a confirmation the user never made (that's
         decided from the persisted flag in `apply_timing_lines_latlon`)."""
         if user_confirm:
             self._timing_user_confirmed = True

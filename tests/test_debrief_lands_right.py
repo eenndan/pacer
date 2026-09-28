@@ -1,5 +1,5 @@
 """Where the first-open debrief lands, and when (QA round 2, 2026-09-26: LOOK-1, NEW-3b, NEW-4, NEW-6;
-round 3: EVAL-2).
+round 3: EVAL-2; round 4: CODE-1).
 
 WHY, finding by finding, each measured on the owner's own recordings:
   * LOOK-1: leaving the debrief by a TAB click ended the debrief but kept the lap panel maximized,
@@ -15,6 +15,9 @@ WHY, finding by finding, each measured on the owner's own recordings:
     The drag is now the verdict's moment (the debrief lands, once), and the name completes it (the
     PB standing against the OTHER recordings at that track, and the focus promotion) without a
     second landing. A re-open lands nowhere.
+  * CODE-1: Add sector (or Clear sectors) re-segments through the same path as the drag, and it
+    confirmed the loader's line unmoved: a verified Library row and the debrief, decided on the fit
+    NEW-3b had just stopped trusting. Only a start line that moved confirms now.
   * NEW-6: Open demo wrote "First session logged at Synthetic demo circuit", a Library row, a focus
     list and an Open Recent entry. The demo is not his driving.
   * EVAL-2: that fix (#424) returned before the first-open flag was set, so the demo never showed the
@@ -184,6 +187,19 @@ def test_an_unknown_circuit_waits_for_the_line_then_lands_once():
                 win.statusBar().currentMessage()
             assert win.library_ctl.waiting_for_line and not _rows(), _rows()
             assert win._pb_toast is None
+            # 1b. A SECTOR edit is not that answer (CODE-1, QA r4). Add sector and Clear sectors
+            #     re-segment through the same _on_lines as a drag, and each used to confirm the
+            #     loader's own line: a verified row, the debrief, the verdict decided on it. The
+            #     start line did not move, so nothing is decided and the notice still says why.
+            for gesture in (view.map._add_sector, view.map._reset_sectors):
+                gesture()
+                _settle(0.3)
+                name_ = gesture.__name__
+                assert not win.session.timing_verified, f"{name_} confirmed the fitted start line"
+                assert win.library_ctl.waiting_for_line and not _rows(), (name_, _rows())
+                assert landings == [] and not view.is_debrief(), (name_, landings)
+                assert "your PB and debrief wait for it" in win.statusBar().currentMessage(), \
+                    (name_, win.statusBar().currentMessage())
             # 2. The drag that places the line is the verdict's moment: it lands, once.
             _drag_start_line(win, line)
             assert win.session.timing_verified and win.session.track_name is None
@@ -213,7 +229,8 @@ def test_an_unknown_circuit_waits_for_the_line_then_lands_once():
             assert not win.view.is_debrief() and win._pb_toast is None
     finally:
         QInputDialog.getText = ask
-    print(f"ok NEW-3b/NEW-4: grid + cue on the fitted line, one landing on the drag, "
+    print(f"ok NEW-3b/NEW-4/CODE-1: grid + cue on the fitted line through Add and Clear sector, "
+          f"one landing on the drag, "
           f"'First session logged at {name}' and {short} on the name, none on a re-open")
 
 
