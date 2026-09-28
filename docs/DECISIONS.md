@@ -38,16 +38,16 @@ read goes to him as information, and each freeze-end default applies unless he r
 
 Only he can do these. They have no default and stay open until he does them; the work goes ahead
 without them. Status as checked read-only on 2026-09-28, with its evidence: `gh` for what GitHub
-shows, "his word" for what only he can report.
+shows, and his word for what only he can report.
 
 | Act | Status (evidence) | Note |
 |---|---|---|
-| A second copy of every original recording, wherever it lives, plus the transponder CSV | open (his word: none yet) | Until then each recording exists once. |
+| A second copy of every original recording, wherever it lives, plus the transponder CSV | open (no word from him yet) | Until then each recording exists once. |
 | Save the Sandown Club Speed heat pages of 19 Jul, 30 Aug and 19 Sep, whole days | open (no page saved yet) | Three accuracy rows at a second circuit wait on them. |
 | Upload `docs/media/og.png` as the social preview, and pin the repository | open (`gh`: no custom preview, nothing pinned) | The upload is a copy: re-upload whenever `og.png` changes. |
 | A profile name and bio, or a stated choice to stay anonymous | open (`gh`: no name, no bio) | |
-| A private backup target for the agents' notes and memory | open (his word: none yet) | Never named here. |
-| Turn off the unused desktop-app connectors for this project; remove gitnexus | open (his word: none yet) | |
+| A private backup target for the agents' notes and memory | open (no word from him yet) | Never named here. |
+| Turn off the unused desktop-app connectors for this project; remove gitnexus | open (no word from him yet) | |
 | The clip's upload URL, when an agent asks | open (not asked yet) | |
 | The About line's headline number, when an agent asks | open (not asked yet) | |
 | The board review's real-screen pass (item 15-V1) | open (backlog) | Nothing waits on it. |
