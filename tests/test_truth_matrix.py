@@ -30,8 +30,9 @@ app output (review §7), and every bound is the measured value with at most 1.5�
                 that turns it green fails here until it flips the status, and a change that makes
                 it worse fails too.
   * stated    — a known effect pinned under its ceiling, to be said in words on its surface. A
-                stated row whose size is already written somewhere also carries a floor (`tol`,
-                stat > tol), so the words cannot outlive the effect.
+                stated row whose size is already written somewhere, or whose fix has a named
+                target (row 7: TRUTH-12's), also carries a floor (`tol`, stat > tol), so the words
+                cannot outlive the effect.
 Braking truth (row 7) is the app's OWN pipeline — its session threshold, its COAST_SMOOTH_S
 boxcar, its event detector — run on the noise-free TRUE speed at the same instants, so the row
 isolates what GPS noise adds and nothing definitional. It is therefore blind to the detector's own
@@ -182,10 +183,11 @@ ROWS: tuple[Row, ...] = (
     # 7 · time on the brakes per lap (s), and brake events per lap (the Stats tile's count), |mean|
     # of app − the app's own pipeline on the true speed: exactly what GPS noise adds. The row
     # isolates GPS noise and is blind to the detector's own logic (tests/test_driving.py has that).
-    # Noise adds time on the brakes on almost every lap (42 of 42 at noise 2, 41 of 42 at 4.5):
-    # stated, in words and with no figure, by both DRIVING tooltips (TRUTH-7; tests/test_stats.py
-    # holds the sentence). The floor is TRUTH-12's target, so a noise-aware threshold that reaches
-    # it fails here until the row goes green and that sentence is re-read.
+    # Noise adds time on the brakes on almost every lap (measured 2026-09-29, and no check
+    # re-counts it: 42 of 42 at noise 2, 41 of 42 at 4.5): stated, in words and with no figure, by
+    # both DRIVING tooltips (TRUTH-7; tests/test_stats.py holds the sentence). The floor is
+    # TRUTH-12's target, so a noise-aware threshold that reaches it fails here until the row goes
+    # green and that sentence is re-read.
     Row("brake.mean", 0.0, 0.00238095, G, tol=0.0035),
     Row("brake.mean", 2.0, 0.696424, S, tol=0.30, ceiling=1.04, fixed_by=_T12),
     Row("brake.mean", 4.5, 0.76616, S, tol=0.30, ceiling=1.14, fixed_by=_T12),
