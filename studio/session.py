@@ -2922,7 +2922,9 @@ class Session:
     def coaching_opportunities(self) -> coaching.Opportunities:
         """The ranked coaching opportunities (F10): per corner, the MEDIAN time lost vs the
         best lap over the consistency laps (biggest first), with the dominant measured reason
-        attached to every ranked row. Deterministic and explainable (see studio/coaching.py).
+        attached to every ranked row — its apex / braking / coasting levers medians over the same
+        laps too (`_coaching_lap_inputs`, ADV-1). Deterministic and explainable (see
+        studio/coaching.py).
 
         Returns an Opportunities with `enough=False` (empty rows) when there are fewer than
         coaching.MIN_LAPS valid, dropout-free laps — the friendly "need more laps" state, no
@@ -2966,34 +2968,20 @@ class Session:
                                           median_lap_id=None, rows=[])
         best_corner_times = [s.time for s in best_stats]
 
-        # The representative ("median") lap — its time is the median of the candidate set.
+        # The median-time lap — the lap the phase thirds read (the reasons read every lap, below).
         med_id = coaching.median_lap_id(cand_ids, lap_times)
 
         # Cross-lap σ of time-in-corner per cid (from the F6 ranking), as the LINE signal.
         sigmas_by_cid = {sp.cid: sp.sigma for sp in self.corner_consistency()}
 
-        # Apex Δ vs the LOCAL best (median_apex − best_apex), NOT CornerStat.apex_speed_delta which
-        # follows the reference baseline — keep the apex signal on the SAME baseline as the loss
-        # (D13). [] if no median lap.
-        if med_id is not None:
-            med_stats = self.corners.lap_corner_stats(med_id)
-            median_apex_deltas = (
-                [med_stats[i].apex_speed - best_stats[i].apex_speed for i in range(n)]
-                if len(med_stats) == n else [])
-        else:
-            median_apex_deltas = []
+        # ADV-1: the BRAKING / COASTING / APEX signals are the laps' habit — per corner, the median
+        # over the counted laps of each lap's cell minus the best lap's (summarize) — so every
+        # candidate lap's cells go in, not the median-time lap's alone.
+        cells = self._coaching_lap_inputs(cand_ids)
 
-        # The driving channels (brake/coast) for the median + best laps — the BRAKING/COASTING
-        # signals. [] when there's no g signal (the apex/line signals still drive the reasons).
-        med_brakes = self.driving.lap_brake_events(med_id) if med_id is not None else []
-        best_brakes = self.driving.lap_brake_events(best)
-        med_coast = self.driving.lap_coasting_spans(med_id) if med_id is not None else []
-        best_coast = self.driving.lap_coasting_spans(best)
-
-        # Odometer totals so summarize can project each corner window onto each lap's OWN odometer
-        # before matching that lap's brake/coast events (which live in its own odometer — D13). The
-        # corner edges (c.enter/c.exit) are in the corner basis' reference total; the median/best
-        # events are in their own laps' totals. Mirrors lap_corner_grip's projection.
+        # Odometer totals so summarize can project each corner window onto the median and best laps'
+        # own odometers for the phase thirds. The corner edges (c.enter/c.exit) are in the corner
+        # basis' reference total. Mirrors lap_corner_grip's projection.
         basis = self.corners.basis()
         corner_dist_total = float(basis[1]) if basis is not None else None
         best_lap_total = self.best_lap_total_distance()
@@ -3002,11 +2990,8 @@ class Session:
 
         # D2: the typical lap's + best lap's distance/elapsed traces so summarize can decompose
         # each corner's Δt-vs-best into entry/apex/exit thirds (each third's time read off the
-        # lap's OWN clock at the odometer edges, the typical lap vs best — the SAME comparison the
-        # loss/reasons use). Same projection as lap_corner_stats.
-        # The matching `elapsed` (seconds-from-lap-start) arrays go with them: a BrakeEvent carries
-        # no release odometer, so summarize needs each lap's own clock to integrate a brake event's
-        # OVERLAP with a corner window instead of taking or dropping it whole by its onset.
+        # lap's OWN clock at the odometer edges, the typical lap vs best). Same projection as
+        # lap_corner_stats.
         med_dist, _med_speed_kmh, med_elapsed = (
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
         best_dist, _best_speed_kmh, best_elapsed = self._lap_arrays(best)
@@ -3031,11 +3016,12 @@ class Session:
             corner_times_by_lap=corner_times_by_lap,
             best_corner_times=best_corner_times,
             sigmas_by_cid=sigmas_by_cid,
-            median_brake_events=med_brakes,
-            best_brake_events=best_brakes,
-            median_coast_spans=med_coast,
-            best_coast_spans=best_coast,
-            median_apex_deltas=median_apex_deltas,
+            brake_time_by_lap=[cells[i][0] for i in cand_ids],
+            coast_time_by_lap=[cells[i][1] for i in cand_ids],
+            apex_by_lap=[cells[i][2] for i in cand_ids],
+            best_brake_time=cells[best][0],
+            best_coast_time=cells[best][1],
+            best_apex=cells[best][2],
             corner_dist_total=corner_dist_total,
             median_lap_total=median_lap_total,
             best_lap_total=best_lap_total,
@@ -3043,10 +3029,6 @@ class Session:
             median_elapsed=med_elapsed,
             best_dist=best_dist,
             best_elapsed=best_elapsed,
-            # The two laps' on-the-brakes indicators, so "~X s longer on the brakes" counts what
-            # the Stats page's braking figure counts (driving.brake_on), not the events' spans.
-            median_brake_on=self.driving.lap_brake_on(med_id) if med_id is not None else None,
-            best_brake_on=self.driving.lap_brake_on(best),
             median_traces=median_traces,
             best_traces=best_traces,
             # The corner service's memoized warps for these two laps — the same objects the
@@ -3061,6 +3043,46 @@ class Session:
             resolved_by_lap=resolved_by_lap,
             best_resolved=self.corners.lap_corner_resolved(best),
         )
+
+    def _coaching_lap_inputs(self, lap_ids) -> dict[int, tuple[list[float], list[float],
+                                                               list[float]]]:
+        """Per lap in `lap_ids` AND the best lap, keyed by lap id: the three per-corner cells the
+        coaching levers take their median over (ADV-1) — (time on the brakes, time coasting, apex
+        speed km/h), each aligned to `corners.corner_list()`. Laps whose `lap_corner_stats` do not
+        cover every corner are skipped (`coaching_opportunities` drops them from its candidates).
+
+        The brake and coast cells are `coaching.lap_window_inputs` on the lap's own odometer,
+        clock and `driving.brake_on`, each corner window projected through that lap's MEMOIZED
+        warp (`CornerModel.lap_alignment`) — never a derived one, and never the normalized scale
+        (#289). The best lap's total is `best_lap_total_distance()`, the one its phase thirds and
+        the old best-lap subtrahend used. Apex speed is `lap_corner_stats`' on the local best
+        baseline (not `apex_speed_delta`, which follows the reference baseline — D13)."""
+        corner_list = self.corners.corner_list()
+        n = len(corner_list)
+        best = self.best_lap_id()
+        basis = self.corners.basis()
+        corner_dist_total = float(basis[1]) if basis is not None else None
+        frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        out: dict[int, tuple[list[float], list[float], list[float]]] = {}
+        for i in list(lap_ids) + ([best] if best is not None else []):
+            if i in out:
+                continue
+            st = self.corners.lap_corner_stats(i)
+            if len(st) != n:
+                continue
+            if i == best:
+                lap_total = self.best_lap_total_distance()
+            else:
+                td = self._lap_time_dist(i)
+                lap_total = float(td[1][-1]) if td is not None else None
+            dist, _speed_kmh, elapsed = self._lap_arrays(i)
+            brake, coast = coaching.lap_window_inputs(
+                corner_list, self.driving.lap_brake_events(i), self.driving.lap_coasting_spans(i),
+                dist, elapsed, self.driving.lap_brake_on(i),
+                corner_dist_total=corner_dist_total, lap_total=lap_total, frame=frame,
+                align=self.corners.lap_alignment(i, lap_total) if lap_total else None)
+            out[i] = (brake, coast, [float(s.apex_speed) for s in st])
+        return out
 
     def coaching_brake_direction(self) -> dict:
         """Per corner, which way the clean laps' brake onset went with their time through the

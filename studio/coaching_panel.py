@@ -821,14 +821,18 @@ _PHASE_LABEL = {coaching.PHASE_ENTRY: "Entry", coaching.PHASE_APEX: "Apex",
 # A short, friendly per-reason hint shown as the row tooltip (the sentence already carries the
 # numbers; this explains what the lever IS). Keyed by the coaching.REASON_* ids.
 _REASON_TIP = {
-    coaching.REASON_APEX: "Your typical lap's minimum (apex) speed here is below your best "
-                          "lap's — carry more speed through the slowest point.",
-    coaching.REASON_BRAKING: "You spend longer on the brakes into this corner than on your best "
-                             "lap — brake later and/or release sooner.",
-    coaching.REASON_COASTING: "There's a coasting phase here (neither braking nor on throttle) "
-                              "your best lap doesn't have — get back to throttle sooner.",
+    coaching.REASON_APEX: "Across your clean laps, the minimum (apex) speed here is typically "
+                          "below your best lap's (the median over those laps) — carry more speed "
+                          "through the slowest point.",
+    coaching.REASON_BRAKING: "Across your clean laps, you typically spend longer on the brakes "
+                             "into this corner than on your best lap (the median over those laps) "
+                             "— brake later and/or release sooner.",
+    coaching.REASON_COASTING: "Across your clean laps, you typically coast here (neither braking "
+                              "nor on throttle) longer than your best lap does (the median over "
+                              "those laps) — get back to throttle sooner.",
     coaching.REASON_LINE: "The loss here is mostly inconsistency (lap-to-lap spread) rather than "
-                          "one fixable input — repeat the same line.",
+                          "one fixable input — repeat the same line. The spread is the middle "
+                          "half of your clean laps through this corner.",
     coaching.REASON_NONE: "Time is available here versus your best lap.",
 }
 
@@ -1143,8 +1147,8 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
     coaching.py's evidence table, T16b), so the column
     that mattered most was the one asking for arithmetic. This states the conclusion instead —
     and states it as a COUNT OVER ITS DENOMINATOR, so it stays checkable. σ itself is not lost: the
-    REASON_LINE sentence spells it, the Stats ▸ CORNERS table has a σ column, and the Consistency
-    panel ranks on it.
+    Stats ▸ CORNERS table has a σ column, and the Consistency panel ranks on it. (The REASON_LINE
+    sentence used to spell it too; since ADV-4 it states the IQR its own evidence gate reads.)
 
     An unmeasured row (a legacy/synthetic Opportunity with no per-lap times) reads the em-dash
     rather than inventing a count."""
@@ -2006,9 +2010,10 @@ class OpportunitiesPanel(QWidget):
         story = "\n\n".join(t for t in (self.debrief_block.full_text(),
                                         self.focus_block.full_text(),
                                         self.theme_block.full_text()) if t)
-        # The retired modal's title named the typical lap; it is said here now.
-        typical = (f" The reasons and the Entry·Apex·Exit bars read your typical lap, lap "
-                   f"{lap_label(self._typical_lap)}." if self._typical_lap is not None
-                   and self._headline else "")
+        # The retired modal's title named the typical lap; it is said here now. Since ADV-1 the
+        # reasons are medians over the clean laps; only the bars still read that one lap.
+        typical = (f" The reasons are medians over your clean laps; the Entry·Apex·Exit bars read "
+                   f"your typical lap, lap {lap_label(self._typical_lap)}."
+                   if self._typical_lap is not None and self._headline else "")
         scope = _SCOPE_TOOLTIP + typical
         self.summary_label.setToolTip(f"{story}\n\n{scope}" if story else scope)

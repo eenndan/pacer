@@ -29,14 +29,16 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       on both (see that fixture's block for why each ingredient is needed).
   * ``drift_median``— the SAME three geometries with the drift on the MEDIAN-time lap
                       (tests/_synthetic.drift_median_session). ``drift_noise`` drifts the SLOWEST
-                      lap and the whole coaching model reads the MEDIAN one, so every coaching
+                      lap while the coaching phase thirds read the MEDIAN one, so every coaching
                       corner-window projection was the identity in that phase and a coaching-path
                       defect could not move a leaf of it: #289 moved 15 of 168,664 leaves on the
-                      D24 0060 pair and 0 synthetic ones. Measured negative control — reverting
-                      #289's `_project_window` wiring moves 2 of this phase's 12,101 leaves (a
-                      coaching row's `reason.brake_extra_s` by 10.6 ms, 3.909945 -> 3.899391 s,
-                      and the `contribution` it feeds) and 0 of `drift_noise`'s 12,115, or of any
-                      leaf in the three phases above it.
+                      D24 0060 pair and 0 synthetic ones. Measured negative control since ADV-1
+                      (the reasons are medians over every counted lap, not the median lap's
+                      alone): reverting #289's warp in `coaching.lap_window_inputs` moves 0
+                      golden leaves in any phase — the drifted lap's brake cell moves by 20.3 ms
+                      but is not the median cell — so the control is
+                      `test_drift_median_fixture_puts_the_drift_where_coaching_reads` (property 5),
+                      which reads that cell through `Session._coaching_lap_inputs` and goes red.
   * ``drift_band``  — a LADDER across the SUB-GATE DRIFT BAND
                       (tests/_synthetic.drift_band_session). Every lap of the two phases above is
                       either 0.0000 % line-length drift or 0.995 %, so NONE sits in (0 %, 0.5 %] —
@@ -278,8 +280,8 @@ def synthetic_fingerprint(recording=None, *, gopro: bool = True) -> dict:
 
     # The drift + noise session: the paths the stadium laps cannot reach (see the module docstring).
     result["drift_noise"] = fingerprint(_build_drift_noise(), strict=False)
-    # The same geometry with the drift on the MEDIAN lap: the coaching path, which reads that lap
-    # and only that lap, and which drift_noise therefore exercises in its identity projection.
+    # The same geometry with the drift on the MEDIAN lap: the coaching phase thirds read that lap
+    # and only that lap, and drift_noise therefore exercises them in their identity projection.
     result["drift_median"] = fingerprint(_build_drift_median(), strict=False)
     # The sub-gate drift BAND, as a ladder: the two phases above jump from 0 % drift to 0.995 %,
     # so every lap the removed 0.5 % gate would have kept on the normalized projection is missing
@@ -640,8 +642,8 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
 
 
 def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
-    """The median-drift phase exists because `drift_noise` drifts the SLOWEST lap while the whole
-    coaching model reads the MEDIAN one, so pin the properties that make this fixture able to fail
+    """The median-drift phase exists because `drift_noise` drifts the SLOWEST lap while the coaching
+    phase thirds read the MEDIAN one, so pin the properties that make this fixture able to fail
     where that one cannot — each is one a plausible speed tweak would quietly remove:
 
       1. the lap coaching reads (`coaching.median_lap_id` over the consistency laps) is the
@@ -655,8 +657,13 @@ def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
          `lap_total/corner_dist_total` scale sit >= 1 m apart at some corner edge. This is the
          magnitude of the defect #289 fixed (6.5 m on the D24 0060 pair) and the reason a coaching
          window defect can move a leaf here;
-      5. coaching runs (`enough`) on the median lap and its rows carry the window-sensitive
-         evidence (brake/coast extra seconds) that the moved window feeds."""
+      5. coaching runs (`enough`) on the median lap, and the drifted lap's C2 time-on-the-brakes
+         cell — one of the cells the braking reason takes its median over since ADV-1 — is
+         `coaching.lap_window_inputs` read through the lap's MEMOIZED warp, and sits at least
+         0.015 s (measured 0.0203 s) from the same cell on the normalized projection. This is the
+         #289 negative control now: a reason is a median over the counted laps, the drifted lap's
+         cell is not the median one, and reverting the warp moves 0 golden leaves — this goes red
+         instead (a revert in `lap_window_inputs` or in `Session._coaching_lap_inputs`)."""
     s = _build_drift_median()
     ids = s.valid_lap_ids()
     best = s.best_lap_id()
@@ -701,14 +708,28 @@ def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
 
     opp = s.coaching_opportunities()
     assert opp.enough and opp.median_lap_id == med, (opp.enough, opp.median_lap_id, med)
-    assert any(r.reason.brake_extra_s > 0 or r.reason.coast_extra_s > 0 for r in opp.rows), (
-        "no coaching row carries brake/coast evidence — the window feeds nothing measurable")
+    cells = s._coaching_lap_inputs(cons)
+    dist, _v, elapsed = s._lap_arrays(med)
+    lever_args = (corner_list, s.driving.lap_brake_events(med), s.driving.lap_coasting_spans(med),
+                  dist, elapsed, s.driving.lap_brake_on(med))
+    warped, _coast = coaching.lap_window_inputs(*lever_args, corner_dist_total=corner_total,
+                                                lap_total=totals[med], frame=frame, align=align)
+    normal, _coast = coaching.lap_window_inputs(*lever_args, corner_dist_total=corner_total,
+                                                lap_total=totals[med], frame=frame, align=None)
+    c2 = [c.cid for c in corner_list].index(2)
+    assert cells[med][0][c2] == warped[c2], (
+        f"the session's C2 brake cell {cells[med][0][c2]!r} is not the warped window's "
+        f"{warped[c2]!r} — the coaching levers left the corner service's memoized warp (#289)")
+    assert abs(warped[c2] - normal[c2]) >= 0.015, (
+        f"warped and normalized C2 brake cells are only {abs(warped[c2] - normal[c2]):.4f} s apart "
+        f"({warped[c2]:.4f} vs {normal[c2]:.4f}) — a #289 revert would pass unseen")
 
     for i, lap in enumerate(drift_median_laps()):
         sd = float(np.std(lap["cols"][3] - lap["clean_speed"]))
         assert abs(sd - DN_SPEED_SIGMA_MPS) <= 0.15 * DN_SPEED_SIGMA_MPS, f"lap {i} speed sd {sd}"
     print(f"ok median-drift fixture: coaching reads lap {med} at {drift[med]:.3%} drift, unmatched "
-          f"boundary {unmatched[0]:.1f} m, window gap {max(gaps):.2f} m")
+          f"boundary {unmatched[0]:.1f} m, window gap {max(gaps):.2f} m, C2 brake cell warped "
+          f"{warped[c2]:.4f} s vs normalized {normal[c2]:.4f} s")
 
 
 def test_drift_band_fixture_covers_the_sub_gate_band():

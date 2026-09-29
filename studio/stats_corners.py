@@ -190,8 +190,9 @@ class CornersSection:
         Every number here is READ, never baked: the same fix the digest tile had, for the same
         reason — an empirical range typed into shipping copy is right on the recording it was
         measured on and quietly wrong on the next one. The Coaching total costs one
-        `coaching_opportunities()` (~3-6 ms on the 38-lap D24 pair, on a refresh path that runs on
-        load / re-segment / undo, never per tick); the alternative is printing a number this page
+        `coaching_opportunities()` (~7-14 ms warm on the working set's 19-62-lap recordings since its
+        levers read every lap, COACHING-1; on a refresh path that runs on load / re-segment / undo,
+        never per tick); the alternative is printing a number this page
         cannot check, which is how two surfaces drift apart in the first place.
         """
         total = sum(r.median_loss_s for r in report if r.median_loss_s is not None)

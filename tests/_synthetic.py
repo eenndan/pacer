@@ -231,8 +231,10 @@ _DN_LAPS = (
 # -------------------------------------------------- the MEDIAN-drift variant of the same fixture
 # THE FIXTURE ABOVE CANNOT SEE A COACHING-PATH DEFECT, and this one exists because of it. In
 # `_DN_LAPS` the drifting lap is the SLOWEST (37.06 s vs 35.91 / 36.60), while the whole coaching
-# model — `Session.coaching_opportunities` -> `coaching.summarize` — reads the MEDIAN-time lap
-# (`coaching.median_lap_id`). Measured on main: `_DN_LAPS`' median lap 2 sits at 0.0000 % drift and
+# model — `Session.coaching_opportunities` -> `coaching.summarize` — read the MEDIAN-time lap
+# (`coaching.median_lap_id`). Since ADV-1 only the phase thirds do: the reasons are medians over
+# every counted lap, so the drifted lap here is one cell of each, and the #289 control is the
+# fixture test's property 5 (the drifted lap's own brake cell), not a golden leaf. Measured on main: `_DN_LAPS`' median lap 2 sits at 0.0000 % drift and
 # drives the reference line itself, so its warp is the IDENTITY (max |warp − normalized| over the
 # partition is 0.000 m) and every corner-window projection on the coaching path is a no-op there —
 # no change to it can move a leaf. (Before #300 that lap produced no warp at all, `lap_alignment`
@@ -247,7 +249,7 @@ _DN_LAPS = (
 # unmatched boundary are the same properties `_DN_LAPS` already pins — only the speed profiles move,
 # putting the drifting lap's time (36.39 s) BETWEEN the two clean laps (35.91 / 37.93 s). The wide
 # lap is therefore the median while lap 0 stays the best, so the coaching median window is drifted,
-# warped and interpolated at its unmatched boundary, and a defect in it moves leaves.
+# warped and interpolated at its unmatched boundary, and a defect in it moves the phase leaves.
 # `test_golden_synthetic.test_drift_median_fixture_puts_the_drift_where_coaching_reads` pins that
 # ordering, so a later speed tweak cannot silently hand the median back to a clean lap.
 _DM_LAPS = (

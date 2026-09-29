@@ -418,6 +418,7 @@ ALIGNMENT_DOCS = [
     ("studio/session.py", "straights_report"),
     ("studio/coaching.py", "_project_window"),
     ("studio/coaching.py", "corner_phase_losses"),
+    ("studio/coaching.py", "lap_window_inputs"),
     ("studio/coaching.py", "summarize"),
     ("studio/stats.py", "phase_matrix"),
 ]

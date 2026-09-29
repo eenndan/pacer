@@ -52,6 +52,33 @@ def _coast(start_dist, end_dist, duration=0.6):
                            duration=float(duration))
 
 
+def _levers(times, best, *, brake=None, coast=None, apex=None,
+            best_brake=None, best_coast=None, best_apex=None) -> dict:
+    """summarize's per-lap lever inputs (ADV-1) for a fixture shaped like `_plan_times`: every lap
+    SLOWER than the best through a corner carries that corner's planted cell (`brake` / `coast`
+    seconds, `apex` km/h), and every lap ON the baseline carries the best lap's own (`best_*`;
+    0 s and 100 km/h by default). The laps' habit — the median over the cells of lap − best — is
+    then the planted difference wherever the slow laps are the majority. A scalar applies to every
+    corner; None means "the same as the best lap"."""
+    n = len(best)
+
+    def row(v, default):
+        if v is None:
+            return list(default)
+        return [float(v)] * n if np.isscalar(v) else [float(x) for x in v]
+
+    bb, bc = row(best_brake, [0.0] * n), row(best_coast, [0.0] * n)
+    ba = row(best_apex, [100.0] * n)
+    lb, lc, la = row(brake, bb), row(coast, bc), row(apex, ba)
+
+    def per_lap(slow, base):
+        return [[slow[j] if t[j] > best[j] else base[j] for j in range(n)] for t in times]
+
+    return dict(brake_time_by_lap=per_lap(lb, bb), coast_time_by_lap=per_lap(lc, bc),
+                apex_by_lap=per_lap(la, ba), best_brake_time=bb, best_coast_time=bc,
+                best_apex=ba)
+
+
 # ------------------------------------------------------------------ median-lap selection
 def test_median_lap_id_is_deterministic_lower_of_two():
     # odd count: the true median-TIME lap. times {68,70,71} -> median 70 -> its id (3).
@@ -74,9 +101,7 @@ def test_ranking_is_by_median_time_lost_biggest_first():
     for _ in range(5):
         times.append([best[j] + losses_plan[j] + rng.normal(0, 0.01) for j in range(4)])
     lap_times = [sum(r) for r in times]
-    opp = K.summarize(corners, [0, 1, 2, 3, 4], lap_times, times, best,
-                      sigmas_by_cid={}, median_brake_events=[], best_brake_events=[],
-                      median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0, 0, 0, 0])
+    opp = K.summarize(corners, [0, 1, 2, 3, 4], lap_times, times, best, sigmas_by_cid={})
     assert opp.enough and opp.median_lap_id is not None
     cids = [r.cid for r in opp.rows]
     # ranked by median loss: C3(cid 3) biggest, then C1(cid 1), then C4(cid 4); C2(cid 2) ~0 is
@@ -124,10 +149,9 @@ def _one_corner_lossy(loss=0.5):
 
 def test_apex_deficit_picks_apex_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
-    # the median lap is 5 km/h DOWN at the apex vs best — a clear apex-speed deficit
+    # the slow laps are 5 km/h DOWN at the apex vs best — a clear apex-speed deficit habit
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
-                      median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-5.0])
+                      sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=95.0))
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_APEX, r.reason
     assert abs(r.reason.apex_speed_deficit - 5.0) < 1e-9
@@ -139,9 +163,9 @@ def test_coasting_picks_coasting_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # a coast INSIDE the corner window [50,90] the best lap does NOT have, and NO apex deficit
     med_coast = [_coast(60.0, 80.0, duration=0.6)]
+    _brake_s, coast_s = K.lap_window_inputs(corners, [], med_coast)
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
-                      median_coast_spans=med_coast, best_coast_spans=[], median_apex_deltas=[0.0])
+                      sigmas_by_cid={1: 0.03}, **_levers(times, best, coast=coast_s))
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_COASTING, r.reason
     assert abs(r.reason.coast_extra_s - 0.6) < 1e-9
@@ -160,9 +184,9 @@ def test_braking_picks_braking_reason():
     med_brakes = [_brake(onset_dist=30.0, duration=0.9)]   # within [20, 90]
     best_brakes = [_brake(onset_dist=40.0, duration=0.3)]
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
-                      best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
-                      median_apex_deltas=[0.0])
+                      sigmas_by_cid={1: 0.03},
+                      **_levers(times, best, brake=K.lap_window_inputs(corners, med_brakes, [])[0],
+                                best_brake=K.lap_window_inputs(corners, best_brakes, [])[0]))
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_BRAKING, r.reason
     assert abs(r.reason.brake_extra_s - 0.6) < 1e-9  # 0.9 - 0.3
@@ -212,10 +236,11 @@ def test_braking_extra_measures_only_the_in_window_part():
     med_brakes = [_brake(onset_dist=50.0, onset_time=2.5, duration=1.4)]   # wholly inside [20,90]
     best_brakes = [_brake(onset_dist=10.0, onset_time=0.5, duration=1.5)]  # onset upstream of 20
     assert K._window_brake_time(best_brakes, 50.0, 90.0) == 0.0, "the pre-fix rule saw nothing"
+    lap_brake = K.lap_window_inputs(corners, med_brakes, [], dist, elapsed)[0]
+    best_brake = K.lap_window_inputs(corners, best_brakes, [], dist, elapsed)[0]
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
-                      best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
-                      median_apex_deltas=[0.0],
+                      sigmas_by_cid={1: 0.03},
+                      **_levers(times, best, brake=lap_brake, best_brake=best_brake),
                       median_dist=dist, median_elapsed=elapsed,
                       best_dist=dist, best_elapsed=elapsed)
     r = opp.rows[0]
@@ -232,9 +257,7 @@ def test_every_ranked_row_is_analysed_not_only_the_first_three():
     best = [5.0] * 5
     times = [[best[j] + (0.50 - 0.10 * j) for j in range(5)] for _ in range(4)]
     lap_times = [sum(r) for r in times]
-    kw = dict(sigmas_by_cid={c.cid: 0.20 for c in corners},
-              median_brake_events=[], best_brake_events=[], median_coast_spans=[],
-              best_coast_spans=[], median_apex_deltas=[0.0] * 5)
+    kw = dict(sigmas_by_cid={c.cid: 0.20 for c in corners})
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, **kw)
     assert len(opp.rows) == 5
     kinds = [r.reason.kind for r in opp.rows]
@@ -249,8 +272,7 @@ def test_line_sigma_is_the_fallback_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # no apex/brake/coast signal at all, but real cross-lap spread -> LINE
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.20}, median_brake_events=[], best_brake_events=[],
-                      median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0])
+                      sigmas_by_cid={1: 0.20})
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_LINE, r.reason
     assert abs(r.reason.sigma - 0.20) < 1e-9
@@ -263,18 +285,177 @@ def test_dominant_reason_is_the_largest_contribution():
     contribution wins — here a big coast (0.6 s) beats a tiny apex deficit (0.3 km/h)."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     med_coast = [_coast(60.0, 80.0, duration=0.6)]
+    coast_s = K.lap_window_inputs(corners, [], med_coast)[1]
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
-                      median_coast_spans=med_coast, best_coast_spans=[], median_apex_deltas=[-0.3])
+                      sigmas_by_cid={1: 0.03}, **_levers(times, best, coast=coast_s, apex=99.7))
     assert opp.rows[0].reason.kind == K.REASON_COASTING, opp.rows[0].reason
     # and a big apex deficit beats a tiny coast
     med_coast_small = [_coast(60.0, 62.0, duration=0.05)]
+    coast_small = K.lap_window_inputs(corners, [], med_coast_small)[1]
     opp2 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
-                       median_coast_spans=med_coast_small, best_coast_spans=[],
-                       median_apex_deltas=[-8.0])
+                       sigmas_by_cid={1: 0.03}, **_levers(times, best, coast=coast_small, apex=92.0))
     assert opp2.rows[0].reason.kind == K.REASON_APEX, opp2.rows[0].reason
     print("ok dominant: largest seconds-of-loss contribution wins (coast vs apex both ways)")
+
+
+# ------------------------------------------------ ADV-1: the levers are the habit, not one lap
+def _six_laps():
+    """One corner, six laps: two on the best lap's time (lap 0 IS the best) and four slower, so
+    the median-TIME lap (`median_lap_id`, the lower middle) is lap 2 and the corner is reachable."""
+    corners = _corners(1)
+    best = [5.0]
+    times = [[5.0], [5.0], [5.3], [5.4], [5.5], [5.6]]
+    return corners, best, times, [r[0] for r in times]
+
+
+def test_the_lever_is_the_habit_not_one_lap():
+    """ADV-1 (QA r4, 2026-09-28). The reason used to difference the median-TIME lap alone against
+    the best lap and print that one lap's anecdote as the instruction: SD_19_09 C2 read "back to
+    throttle sooner (~1.50 s longer coasting)" while the laps' median difference was 0.00 s. Each
+    lever is now the median, over the corner's counted laps, of each lap's difference from best.
+
+    Both directions: the median-time lap ALONE coasts 1.5 s longer and every other lap matches the
+    best lap → no coasting lever (0.00 s, LINE on the corner's spread); four of six laps spend
+    0.30 s longer on the brakes while the median-time lap does not → BRAKING at 0.30 s."""
+    corners, best, times, lap_times = _six_laps()
+    assert K.median_lap_id(list(range(6)), lap_times) == 2
+    coast = [[0.0], [0.0], [1.5], [0.0], [0.0], [0.0]]            # only the median-time lap
+    opp = K.summarize(corners, list(range(6)), lap_times, times, best, sigmas_by_cid={1: 0.20},
+                      coast_time_by_lap=coast, best_coast_time=[0.0])
+    r = opp.rows[0]
+    assert r.reason.coast_extra_s == 0.0, r.reason
+    assert r.reason.kind == K.REASON_LINE, (
+        f"one lap's 1.5 s coast became the instruction: {K.reason_sentence(r)}", r.reason)
+
+    brake = [[0.0], [0.30], [0.0], [0.30], [0.30], [0.30]]         # 4 of 6, not the median lap
+    opp = K.summarize(corners, list(range(6)), lap_times, times, best, sigmas_by_cid={1: 0.03},
+                      brake_time_by_lap=brake, best_brake_time=[0.0])
+    r = opp.rows[0]
+    assert abs(r.reason.brake_extra_s - 0.30) < 1e-12 and r.reason.kind == K.REASON_BRAKING, r.reason
+    # The apex lever is the same statistic, signed the other way (best − lap).
+    apex = [[100.0], [100.0], [90.0], [100.0], [100.0], [100.0]]
+    opp = K.summarize(corners, list(range(6)), lap_times, times, best, sigmas_by_cid={1: 0.03},
+                      apex_by_lap=apex, best_apex=[100.0])
+    assert opp.rows[0].reason.apex_speed_deficit == 0.0, opp.rows[0].reason
+    print(f"ok ADV-1 habit: a lone 1.5 s coast on the median-time lap -> {K.REASON_LINE}; "
+          f"4 of 6 laps +0.30 s on the brakes -> {K.REASON_BRAKING} {r.reason.brake_extra_s:.2f} s")
+
+
+def test_a_session_reads_the_laps_coasting_habit_not_the_median_laps_coast():
+    """ADV-1 through the real Session: on the golden gate's drift-band session the median-time lap
+    coasts 0.60 s longer than the best lap through C2 and the other laps do not, so the row said
+    "coasting" off one lap. Its lever is now the laps' median difference — none."""
+    from _synthetic import drift_band_session
+
+    s = drift_band_session()
+    opp = s.coaching_opportunities()
+    c2 = next(r for r in opp.rows if r.cid == 2)
+    assert c2.reason.coast_extra_s == 0.0 and c2.reason.kind != K.REASON_COASTING, (
+        f"C2's coasting lever is {c2.reason.coast_extra_s:.3f} s ({c2.reason.kind}) — one lap's "
+        "anecdote, not the laps' habit", c2.reason)
+    # ...and the anecdote is really there on the median-time lap, so the assertion above has teeth.
+    cells = s._coaching_lap_inputs(s.consistency_lap_ids())
+    k = [c.cid for c in s.corners.corner_list()].index(2)
+    best = s.best_lap_id()
+    lone = cells[opp.median_lap_id][1][k] - cells[best][1][k]
+    assert lone > 0.5, lone
+    others = [cells[i][1][k] - cells[best][1][k] for i in cells if i not in (opp.median_lap_id, best)]
+    assert max(others) < 0.05, others
+    print(f"ok ADV-1 session: C2's median-time lap coasts +{lone:.2f} s alone; the habit reads "
+          f"{c2.reason.coast_extra_s:.2f} s ({c2.reason.kind})")
+
+
+def test_the_levers_take_the_median_of_the_signed_differences_then_the_floor():
+    """ADV-1's order of operations, pinned: the median of the SIGNED lap − best differences, THEN
+    floored at 0. For an even count the two orders differ — cells {−0.4, +0.2} read 0 this way and
+    0.1 the other — and for a lever the laps do not share (half faster than best, half slower) 0 is
+    the honest answer."""
+    corners = _corners(1)
+    best = [5.0]
+    times = [[5.0], [5.0], [5.5], [5.5]]
+    lap_times = [r[0] for r in times]
+    brake = [[0.6], [0.6], [1.2], [1.2]]           # best lap on 1.0 s: cells −0.4, −0.4, +0.2, +0.2
+    opp = K.summarize(corners, list(range(4)), lap_times, times, best, sigmas_by_cid={1: 0.03},
+                      brake_time_by_lap=brake, best_brake_time=[1.0])
+    assert opp.rows[0].reason.brake_extra_s == 0.0, opp.rows[0].reason
+    print("ok ADV-1 order: median of signed differences, then the floor")
+
+
+def test_an_unresolved_cell_counts_in_none_of_the_lever_medians():
+    """The levers read EXACTLY the cells the row's `time_lost` is a median of: a lap whose corner
+    was not matched on track at both edges (C5, `resolved_by_lap`) is out of the loss, and must be
+    out of the brake, coast and apex medians too — here its wild cells would move all three."""
+    corners = _corners(1)
+    best = [5.0]
+    times = [[5.0], [5.0], [5.5], [5.5], [5.5], [5.5]]
+    lap_times = [r[0] for r in times]
+    kw = dict(brake_time_by_lap=[[0.0], [0.0], [0.0], [0.2], [0.2], [9.0]], best_brake_time=[0.0],
+              coast_time_by_lap=[[0.0], [0.0], [0.0], [0.2], [0.2], [9.0]], best_coast_time=[0.0],
+              apex_by_lap=[[100.0], [100.0], [100.0], [98.0], [98.0], [50.0]], best_apex=[100.0],
+              sigmas_by_cid={1: 0.03})
+    masked = K.summarize(corners, list(range(6)), lap_times, times, best,
+                         resolved_by_lap=[[True]] * 5 + [[False]], best_resolved=[True], **kw)
+    r = masked.rows[0].reason
+    assert (r.brake_extra_s, r.coast_extra_s, r.apex_speed_deficit) == (0.0, 0.0, 0.0), r
+    counted = K.summarize(corners, list(range(6)), lap_times, times, best,
+                          resolved_by_lap=[[True]] * 6, best_resolved=[True], **kw)
+    c = counted.rows[0].reason
+    assert (c.brake_extra_s, c.coast_extra_s, c.apex_speed_deficit) == (0.1, 0.1, 1.0), c
+    print("ok ADV-1 mask: an unmatched lap's cells stay out of all three lever medians")
+
+
+def test_session_levers_equal_an_independent_median_over_the_laps():
+    """The Session wiring, recomputed independently: on the braking stadium (a real g signal, a
+    coasting tail on the three slow laps) every row's apex / brake / coast lever equals, bit for
+    bit, the median over the counted laps of `lap_window_inputs` (each lap's memoized warp) and
+    `lap_corner_stats`' apex speed, minus the best lap's, floored at 0."""
+    s = _braking_stadium_session()
+    cl = s.corners.corner_list()
+    n = len(cl)
+    best = s.best_lap_id()
+    total_ref = float(s.corners.basis()[1])
+    ids = [i for i in s.consistency_lap_ids() if len(s.corners.lap_corner_stats(i)) == n]
+
+    def cells(i):
+        tot = (s.best_lap_total_distance() if i == best
+               else float(s._lap_time_dist(i)[1][-1]))
+        dist, _v, el = s._lap_arrays(i)
+        b, c = K.lap_window_inputs(cl, s.driving.lap_brake_events(i), s.driving.lap_coasting_spans(i),
+                                   dist, el, s.driving.lap_brake_on(i), corner_dist_total=total_ref,
+                                   lap_total=tot, align=s.corners.lap_alignment(i, tot))
+        return b, c, [st.apex_speed for st in s.corners.lap_corner_stats(i)]
+
+    B = cells(best)
+    L = {i: cells(i) for i in ids}
+    rows = {r.cid: r.reason for r in s.coaching_opportunities().rows}
+    assert rows, "the braking stadium ranks nothing"
+    best_ok = s.corners.lap_corner_resolved(best)
+    for j, c in enumerate(cl):
+        if c.cid not in rows:
+            continue
+        ok = [i for i in ids if s.corners.lap_corner_resolved(i)[j] and best_ok[j]]
+        want = [max(float(np.median([sign * (L[i][k][j] - B[k][j]) for i in ok])), 0.0)
+                for k, sign in ((2, -1.0), (0, 1.0), (1, 1.0))]
+        got = [rows[c.cid].apex_speed_deficit, rows[c.cid].brake_extra_s, rows[c.cid].coast_extra_s]
+        assert got == want, (c.cid, got, want)
+    assert rows[2].coast_extra_s > 1.0, rows[2]   # the tail the three slow laps share
+    print(f"ok session levers == independent median over {len(ids)} laps on {len(rows)} rows")
+
+
+def test_the_line_row_states_the_iqr_its_gate_reads_never_sigma():
+    """ADV-4 (QA r4). "laps vary ±1.28 s" printed σ on SD3h C1 while the row's own evidence gate
+    reads the interquartile range (0.31 s there): 90 % of the laps sat inside the printed band. The
+    line sentence now states the middle half; a row with no measured evidence states no spread."""
+    import dataclasses
+
+    ev = K.Evidence(n_laps=62, reach_laps=4, reach=K.REACH_RARE, iqr=0.309, abstain=K.ABSTAIN_NONE)
+    opp = dataclasses.replace(_opp_with(K.REASON_LINE, K._NO_PHASES, sigma=1.278), evidence=ev)
+    sent = K.reason_sentence(opp, reach=False)
+    assert sent == "repeat your best line (middle half of laps within 0.31 s)", sent
+    assert "1.28" not in sent and "±" not in sent, sent
+    bare = _opp_with(K.REASON_LINE, K._NO_PHASES, sigma=1.278)      # _NO_EVIDENCE, n_laps 0
+    assert K.reason_sentence(bare) == "repeat your best line", K.reason_sentence(bare)
+    print(f"ok ADV-4 line copy: {sent!r}; unmeasured: {K.reason_sentence(bare)!r}")
 
 
 # ----------------------------------------------- D2: entry/apex/exit Δt-vs-best decomposition
@@ -435,8 +616,7 @@ def test_summarize_attaches_phase_decomposition():
     best_dist, best_t = _flat_trace(0.0, 200.0, 80.0)
     med_dist, med_t = _flat_trace(0.0, 200.0, 70.0)
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
-                      median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0],
+                      sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=97.0),
                       median_dist=med_dist, median_elapsed=med_t,
                       best_dist=best_dist, best_elapsed=best_t)
     row = opp.rows[0]
@@ -445,8 +625,7 @@ def test_summarize_attaches_phase_decomposition():
     assert pl.total > 0, ("typical lap slower than best ⇒ positive Δt", pl)
     # absent traces ⇒ zero phases (back-compat path)
     opp0 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
-                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0])
+                       sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=97.0))
     assert opp0.rows[0].phases.as_tuple() == (0.0, 0.0, 0.0)
     # the dominant-phase clause shows up in the sentence when one third dominates
     flat_sentence = K.reason_sentence(opp0.rows[0])  # no phases -> no clause
@@ -515,15 +694,17 @@ def test_brake_approach_window_and_coast_only_when_best_lacks_it():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # identical brake on both laps -> brake contribution 0 (falls back to line)
     same_brake = [_brake(onset_dist=35.0, duration=0.7)]
+    same_s = K.lap_window_inputs(corners, same_brake, [])[0]
+    assert same_s == [0.7], same_s   # the application IS counted — on both laps alike
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, sigmas_by_cid={1: 0.10},
-                      median_brake_events=same_brake, best_brake_events=same_brake,
-                      median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0])
+                      **_levers(times, best, brake=same_s, best_brake=same_s))
     assert opp.rows[0].reason.kind == K.REASON_LINE, opp.rows[0].reason
     # a brake far before the approach window (outside [enter-30, exit]) is ignored
     far_brake = [_brake(onset_dist=-100.0, duration=2.0)]
+    far_s = K.lap_window_inputs(corners, far_brake, [])[0]
+    assert far_s == [0.0], far_s
     opp2 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, sigmas_by_cid={1: 0.10},
-                       median_brake_events=far_brake, best_brake_events=[],
-                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0])
+                       **_levers(times, best, brake=far_s))
     assert opp2.rows[0].reason.kind == K.REASON_LINE, opp2.rows[0].reason
     print("ok windows: matched brake/coast not a loss; out-of-window brake ignored")
 
@@ -536,10 +717,10 @@ def test_summarize_is_deterministic():
     times = [[best[j] + (0.4 if j == 2 else 0.1) + rng.normal(0, 0.02) for j in range(4)]
              for _ in range(6)]
     lap_times = [sum(r) for r in times]
+    brake_s, coast_s = K.lap_window_inputs(corners, [_brake(220.0, duration=0.7)],
+                                           [_coast(260.0, 280.0)])
     kw = dict(sigmas_by_cid={1: 0.1, 2: 0.2, 3: 0.05, 4: 0.05},
-              median_brake_events=[_brake(220.0, duration=0.7)], best_brake_events=[],
-              median_coast_spans=[_coast(260.0, 280.0)], best_coast_spans=[],
-              median_apex_deltas=[-1.0, 0.0, -3.0, 0.0])
+              **_levers(times, best, brake=brake_s, coast=coast_s, apex=[99.0, 100.0, 97.0, 100.0]))
     a = K.summarize(corners, [0, 1, 2, 3, 4, 5], lap_times, times, best, **kw)
     b = K.summarize(corners, [0, 1, 2, 3, 4, 5], lap_times, times, best, **kw)
     assert a == b, "summarize must be byte-identical across calls (determinism)"
@@ -552,24 +733,21 @@ def test_too_few_laps_is_friendly_excluded_state():
     best = [5.0, 6.0, 7.0]
     times = [[5.1, 6.1, 7.1], [5.2, 6.0, 7.3]]  # only 2 laps < MIN_LAPS
     lap_times = [sum(r) for r in times]
-    opp = K.summarize(corners, [0, 1], lap_times, times, best, sigmas_by_cid={},
-                      median_brake_events=[], best_brake_events=[], median_coast_spans=[],
-                      best_coast_spans=[], median_apex_deltas=[0, 0, 0])
+    opp = K.summarize(corners, [0, 1], lap_times, times, best, sigmas_by_cid={})
     assert opp.enough is False and opp.rows == [] and opp.n_laps == 2
     print("ok gate: < MIN_LAPS -> enough=False, no rows, no crash")
 
 
 def test_no_corners_or_no_loss_excluded():
     # no corners
-    opp = K.summarize([], [0, 1, 2], [70, 71, 72], [[], [], []], [], {}, [], [], [], [], [])
+    opp = K.summarize([], [0, 1, 2], [70, 71, 72], [[], [], []], [], {})
     assert opp.enough is False and opp.rows == []
     # enough laps + corners but NO corner loses time -> enough=True but no rows (dialog shows the
     # "nice driving" empty state)
     corners = _corners(2)
     best = [5.0, 6.0]
     times = [[5.0, 6.0], [5.0, 6.0], [5.0, 6.0]]  # the typical lap matches best everywhere
-    opp2 = K.summarize(corners, [0, 1, 2], [11.0, 11.0, 11.0], times, best, {}, [], [], [], [],
-                       [0.0, 0.0])
+    opp2 = K.summarize(corners, [0, 1, 2], [11.0, 11.0, 11.0], times, best, {})
     assert opp2.enough is True and opp2.rows == []
     print("ok gate: no corners -> excluded; no loss -> enough but empty rows")
 
@@ -577,28 +755,31 @@ def test_no_corners_or_no_loss_excluded():
 # ---------------------------------------- D13: coaching row halves share ONE baseline (local best)
 def test_brake_window_projected_onto_each_laps_own_odometer():
     """D13 (odometer-frame): a corner's [enter, exit] is in the BEST-lap (reference) odometer, but
-    each lap's brake events live in its OWN odometer. summarize() must project the window onto each
-    lap's own odometer before matching. Here the corner is [50, 90] in a 1000 m reference frame; the
-    median lap is 1100 m long, so its window is [55, 99]. A median brake at onset 96 m (inside the
-    PROJECTED [55-30, 99] window, but OUTSIDE the un-projected [50-30, 90]) must count as braking —
-    proving the projection happened. Without the fix the brake would fall outside and pick LINE."""
+    each lap's brake events live in its OWN odometer. `lap_window_inputs` (the per-lap cells the
+    braking reason takes its median over) must project the window onto the lap's own odometer
+    before matching. Here the corner is [50, 90] in a 1000 m reference frame; the lap is 1100 m
+    long, so its window is [55, 99]. A brake at onset 96 m (inside the PROJECTED [55-30, 99]
+    window, but OUTSIDE the un-projected [50-30, 90]) must count — proving the projection
+    happened; end to end, the slow laps' habit then reads BRAKING."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
     med_brakes = [_brake(onset_dist=96.0, duration=0.9)]   # in projected [25, 99], not raw [20, 90]
     best_brakes = [_brake(onset_dist=40.0, duration=0.3)]  # best frame == reference frame here
+    lap_s = K.lap_window_inputs(corners, med_brakes, [], corner_dist_total=1000.0,
+                                lap_total=1100.0)[0]
+    best_s = K.lap_window_inputs(corners, best_brakes, [], corner_dist_total=1000.0,
+                                 lap_total=1000.0)[0]
+    assert lap_s == [0.9] and best_s == [0.3], (lap_s, best_s)
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
-                      best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
-                      median_apex_deltas=[0.0],
-                      corner_dist_total=1000.0, median_lap_total=1100.0, best_lap_total=1000.0)
+                      sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=lap_s, best_brake=best_s))
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_BRAKING, r.reason
     assert abs(r.reason.brake_extra_s - 0.6) < 1e-9  # 0.9 - 0.3
-    # control: the SAME inputs WITHOUT the totals (identity projection) leave the brake outside the
+    # control: the SAME events WITHOUT the totals (identity projection) leave the brake outside the
     # un-projected window -> it does NOT count -> the row falls back to LINE.
+    raw_s = K.lap_window_inputs(corners, med_brakes, [])[0]
+    assert raw_s == [0.0], raw_s
     opp0 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                       sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
-                       best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
-                       median_apex_deltas=[0.0])
+                       sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=raw_s, best_brake=best_s))
     assert opp0.rows[0].reason.kind == K.REASON_LINE, opp0.rows[0].reason
     print("ok D13 odometer-frame: corner window projected onto each lap's own odometer for braking")
 
@@ -607,7 +788,7 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     """C1: a corner's [enter, exit] lives in the REFERENCE odometer, and on a drifted lap the
     window the BRAKE/COAST evidence is matched in must be the spatially aligned one — the single
     warp `lap_corner_stats`, `segment_times` and the phase triple already read — not the bare
-    normalized scale `d·lap_total/ref_total`.
+    normalized scale `d·lap_total/ref_total`. Since ADV-1 that window is `lap_window_inputs`'.
 
     Fixture (both laps down the same straight line, so the spatial match is exact and the two
     projections are analytic): reference 1000 m, typical lap 1050 m — 5 % line-length drift, ten
@@ -615,8 +796,8 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     normalized projection maps it onto 1.05·d. The one corner is [50, 90] reference, so the gated
     window is [50, 90] and the normalized one [52.5, 94.5] — 4.5 m of daylight at the exit.
 
-    The typical lap brakes at 92.0 m, which on the track is 2 m PAST the corner exit. Under the
-    gated window that application is outside the corner and contributes nothing (⇒ LINE, on the
+    The lap brakes at 92.0 m, which on the track is 2 m PAST the corner exit. Under the warped
+    window that application is outside the corner and contributes nothing (⇒ LINE, on the
     corner's own spread). Under the normalized window it lands inside and manufactures 0.125 s of
     "extra braking in the corner" that never happened there (⇒ BRAKING) — a row pairing a
     warp-derived phase triple with a normalized-frame reason, which is the defect."""
@@ -628,42 +809,39 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     ref_x = np.linspace(0.0, ref_total, 1001)
     lap_x = np.linspace(0.0, lap_total, 1051)
     med_traces = (ref_x, np.zeros_like(ref_x), ref_x, lap_x, np.zeros_like(lap_x), lap_x)
-    # The best lap IS the corner basis' frame here (zero drift ⇒ identity projection either way).
-    best_traces = (ref_x, np.zeros_like(ref_x), ref_x, ref_x, np.zeros_like(ref_x), ref_x)
+    frame = [50.0, 90.0]
 
     # FIXTURE GUARD, asked of the real projection (the #286 lesson: a golden/fixture assertion must
     # ask the matcher, not the thing built from it): the two frames really do disagree here.
-    gated = corners_mod.project_boundaries([50.0, 90.0], ref_total, lap_total,
-                                           traces=med_traces, frame=[50.0, 90.0])
-    normalized = np.array([50.0, 90.0]) * (lap_total / ref_total)
+    align = corners_mod.lap_alignment(frame, ref_total, lap_total, traces=med_traces)
+    gated = corners_mod.project_boundaries(frame, ref_total, lap_total, alignment=align)
+    normalized = np.array(frame) * (lap_total / ref_total)
     assert abs(float(gated[1]) - 90.0) < 1e-6, gated
     assert float(normalized[1]) - float(gated[1]) > 2.0, (gated, normalized)
 
-    # Constant 20 m/s on both laps, so the overlap integral is analytic.
+    # Constant 20 m/s, so the overlap integral is analytic.
     med_dist, med_elapsed = _flat_trace(0.0, lap_total, 72.0, n=1051)
-    best_dist, best_elapsed = _flat_trace(0.0, ref_total, 72.0, n=1001)
     med_brakes = [_brake(onset_dist=92.0, onset_time=92.0 / 20.0, duration=0.5)]
-
-    kw = dict(sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes, best_brake_events=[],
-              median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0],
-              corner_dist_total=ref_total, median_lap_total=lap_total, best_lap_total=ref_total,
-              median_dist=med_dist, median_elapsed=med_elapsed,
-              best_dist=best_dist, best_elapsed=best_elapsed)
+    kw = dict(corner_dist_total=ref_total, lap_total=lap_total, frame=frame)
+    warped = K.lap_window_inputs(corners, med_brakes, [], med_dist, med_elapsed, align=align, **kw)
+    assert warped[0] == [0.0], (
+        "the brake application is 2 m past the corner exit on the track; the warped window must "
+        f"not count it, got {warped[0]}")
+    # The SAME window the phase thirds read: `_project_window` through the same warp.
+    assert K._project_window(50.0, 90.0, ref_total, lap_total, frame=frame,
+                             alignment=align) == (float(gated[0]), float(gated[1]))
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      median_traces=med_traces, best_traces=best_traces, **kw)
+                      sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=warped[0]))
     row = opp.rows[0]
-    assert row.reason.brake_extra_s == 0.0, (
-        "the brake application is 2 m past the corner exit on the track; the gated window must "
-        f"not count it, got {row.reason.brake_extra_s:.4f} s", row.reason)
-    assert row.reason.kind == K.REASON_LINE, row.reason
+    assert row.reason.brake_extra_s == 0.0 and row.reason.kind == K.REASON_LINE, row.reason
 
-    # CONTROL, same inputs with NO traces: the gate has nothing to align with, so the projection
-    # stays normalized (byte-identical to the pre-gate output) and the out-of-corner brake counts.
-    ungated = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, **kw)
-    ug = ungated.rows[0]
-    assert abs(ug.reason.brake_extra_s - 0.125) < 1e-9, ug.reason
+    # CONTROL, the normalized projection (align=None): the out-of-corner brake counts.
+    normal = K.lap_window_inputs(corners, med_brakes, [], med_dist, med_elapsed, align=None, **kw)
+    assert abs(normal[0][0] - 0.125) < 1e-9, normal
+    ug = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                     sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=normal[0])).rows[0]
     assert ug.reason.kind == K.REASON_BRAKING, ug.reason
-    print(f"ok C1 gated reason window: gated ⇒ {row.reason.kind} "
+    print(f"ok C1 gated reason window: warped ⇒ {row.reason.kind} "
           f"(brake {row.reason.brake_extra_s:.3f} s), normalized ⇒ {ug.reason.kind} "
           f"(brake {ug.reason.brake_extra_s:.3f} s)")
 
@@ -935,8 +1113,7 @@ def _populated_opps():
     lap_times = [sum(r) for r in times]
     return K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
-                       median_brake_events=[], best_brake_events=[], median_coast_spans=[],
-                       best_coast_spans=[], median_apex_deltas=[-5.0, 0.0, 0.0, 0.0])
+                       **_levers(times, best, apex=[95.0, 100.0, 100.0, 100.0]))
 
 
 _FULL_WINDOW = (1432, 808)   # the lap panel maximized on the 1440x900 default window
@@ -1191,8 +1368,7 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
     times, lap_times = _plan_times(best, plan)
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
-                      median_brake_events=[], best_brake_events=[], median_coast_spans=[],
-                      best_coast_spans=[], median_apex_deltas=[-5.0, 0.0, 0.0, 0.0])
+                      **_levers(times, best, apex=[95.0, 100.0, 100.0, 100.0]))
     # summarize still RANKS all four (the internal 1e-9 threshold is unchanged).
     assert [r.cid for r in opp.rows] == [1, 3, 2, 4], [r.cid for r in opp.rows]
     # but the shown rows drop the two that round to +0.00 s.
@@ -1230,9 +1406,7 @@ def test_p1_summary_grammar_by_count():
     def _panel_for(plan):
         times, lap_times = _plan_times(best, plan)
         o = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                        sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02},
-                        median_brake_events=[], best_brake_events=[], median_coast_spans=[],
-                        best_coast_spans=[], median_apex_deltas=[0.0, 0.0, 0.0])
+                        sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02})
 
         class _S:
             def coaching_opportunities(self):
@@ -1656,9 +1830,8 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
     times = [[5.0, 6.0], [5.0, 6.0], [5.5, 6.0], [5.5, 6.05], [5.5, 6.4], [5.5, 6.4]]
     lap_times = [sum(r) for r in times]
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.25, 2: 0.20}, median_brake_events=[],
-                      best_brake_events=[], median_coast_spans=[], best_coast_spans=[],
-                      median_apex_deltas=[-4.0, 0.0])
+                      sigmas_by_cid={1: 0.25, 2: 0.20},
+                      **_levers(times, best, apex=[96.0, 100.0]))
     kinds = {r.cid: r.evidence.abstain for r in opp.rows}
     assert kinds.get(1) == K.ABSTAIN_NONE and kinds.get(2) == K.ABSTAIN_SPREAD, kinds
     assert [r.cid for r in opp.rows] == [1, 2], "the ranked row leads, the abstained one follows"
@@ -1736,9 +1909,9 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does NOT generalize: line holds 53 % of 0068's ranked time and 100 % of
-    0064's (a cause on 0064 only), and two of the five single chapters name no single cause, so the
-    "no single cause" branch is a common case on real recordings and is asserted here as a
+    Measured, the cause axis does not generalize to every lap set: line holds 78 % of 0068's ranked
+    time and 100 % of 0064's (a theme on each), but one of the five single chapters names no single
+    cause, so the "no single cause" branch is a real case on real recordings and is asserted here as a
     first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
