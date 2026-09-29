@@ -7,9 +7,9 @@ it was built, in eight measured stories: [docs/ENGINEERING.md](docs/ENGINEERING.
 against a real transponder — and the engineering case study behind it.**
 
 Open a GoPro `.MP4`. Pacer reads the 10 Hz GPS and 200 Hz IMU the camera already recorded and gives
-you what a dedicated data logger would: lap and sector times, the racing line, an **ideal lap**
-stitched from your own best segments, and a ranked list of the corners where you give the most
-away. No transponder, no logger, no cloud, no extra hardware.
+you lap and sector times, the racing line, an **ideal lap** stitched from your own best segments,
+and a ranked list of the corners where you give the most away. No transponder, no logger, no
+cloud, no extra hardware.
 
 It is a real, working app — and it is a **portfolio piece**, so this page is written as a case
 study: what it claims, how each claim was measured, and the gates that keep it true. **Source is
@@ -53,17 +53,17 @@ sheet — every driver of every heat that day, 99 rows — it matches one window
 other window leaves a residual at least **44×** larger. The session Pacer timed is provably the
 session the official timing timed.
 
-Why it works: timing runs on the camera's own **GPS9 true clock**, not the video/sample clock that
-consumer tools use, which drifts on the order of 0.1 % — enough to quietly bias every lap in a
-session. Where the remaining error comes from, and the sensor fusion, Kalman/RTS smoothing,
+Why it works: a GoPro writes GPS in ~1 s packets, and spreading a packet's fixes evenly places
+each only to about ±0.05 s (28 ms rms), so a lap timed that way can read up to ~0.1 s off, with no
+average bias. GPS9 (a Hero 11 or 13) stamps every fix, and Pacer times on that **true clock**.
+Where the remaining error comes from, and the sensor fusion, Kalman/RTS smoothing,
 Doppler-aided positioning and map-matching that were tried and **rejected on evidence**, are in
 **[docs/ACCURACY.md](docs/ACCURACY.md)**.
 
-That clock is also what lets a **delta** be measured rather than estimated. Without a per-sample
-clock, the only way to price a stretch of track is to integrate `∫ds/v` along it — and `1/v`
-amplifies any speed error exactly where the car is slowest, which is exactly where a corner's time
-is largest. Pacer's own corner phase bars were still doing that, and auditing them against the
-clock found them wrong on **every one of the 12 corners** of the D24 best lap, by up to
+A **delta** is measured on the clock too, not estimated. Pacer's own corner phase bars once priced
+a stretch by integrating `∫ds/v` along it — and `1/v` amplifies any speed error exactly where the
+car is slowest, which is exactly where a corner's time is largest. Auditing them against the clock
+found them wrong on **every one of the 12 corners** of the D24 best lap, by up to
 **+0.493 s** on the slowest (`studio/coaching.py::_span_clock`). Every delta the app shows — the Δ
 trace, sector and corner splits, the ideal lap, the coaching breakdown, the exports — is a
 difference of two clock readings, and a test fails if an estimator comes back.

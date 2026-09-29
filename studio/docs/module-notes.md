@@ -76,10 +76,11 @@ The **load pipeline** behind `Session.load` (one of the four modules that may na
   per-sample TIME AXIS that those crossing times interpolate on (next bullet).
 
 - **Timing uses the GPS9 true wall clock by default** (`load._gps9_times`). The old `naive`
-  axis spread each GPMF payload's MEDIA span across `i/n`; the GoPro media clock for the GPS track
-  runs ~0.1% fast (~9.990 Hz), which **systematically compressed every lap** (~30 ms on the best
-  lap). The GPS9 stream carries the true GPS fix time (`timestamp_ms`) — a clean 10.000 Hz **wall
-  clock** (the transponder's clock). We take only its per-sample SPACING and re-anchor each
+  axis spread each GPMF payload's MEDIA span across `i/n`: a 1.001 s payload of 10 fixes runs ~0.1%
+  off the true rate (~9.990 Hz) until a payload of 11 resets it, so the naive axis **mis-placed
+  fixes by up to ±0.05 s** (28 ms rms, `media_clock.py`) and a lap could read up to ~0.1 s off,
+  with no average bias. The GPS9 stream carries the true GPS fix time (`timestamp_ms`) — a clean
+  10.000 Hz **wall clock** (the transponder's clock). We take only its per-sample SPACING and re-anchor each
   contiguous run to that run's media time, so video sync / chapter offsets are unchanged while
   inter-sample spacing is the real wall-clock spacing. Degrades to naive wherever no contiguous
   GPS9 run is found — which is what a GPS5-era stream does, but **not** because its fixes are

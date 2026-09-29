@@ -24,11 +24,12 @@ At the end is a [15-minute code tour](#a-15-minute-code-tour): the five files th
 **4.5×.** That is how much more widely a fitted clock's lap times scattered around a real
 transponder's than the times from the clock the camera writes itself.
 
-A GoPro stores GPS in payloads of about one second. The media timestamps say when a payload
-starts and ends, not when each fix inside it was taken. A tool that spreads the fixes evenly
-across the payload runs about 0.1 % off the true rate, and that bias lands on every lap. The
-upstream project Pacer was forked from fitted a per-sample clock to those payloads instead, and a
-port of that fit lived in this repo for a while.
+A GoPro stores GPS in payloads of about one second, most holding ten fixes. The media timestamps
+say when a payload starts and ends, not when each fix inside it was taken. A tool that spreads the
+fixes evenly across the payload runs about 0.1 % off the true rate until a payload of eleven
+resets it, so each fix lands up to ±0.05 s from its true time and a lap can read up to ~0.1 s
+off, with no average bias. The upstream project Pacer was forked from fitted a per-sample clock
+to those payloads instead, and a port of that fit lived in this repo for a while.
 
 On a Hero 11 or a Hero 13, the GPS9 stream stamps every fix with the receiver's own time, so there
 is nothing to fit. Against the transponder log of a 24-hour race, the fitted clock matched GPS9 on
