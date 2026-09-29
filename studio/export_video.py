@@ -1163,10 +1163,11 @@ class FrameGeometry:
     `out_w`/`out_h` are the final, EVEN pixel dimensions. `scale_filter` is the `-vf` chain
     (without the trailing `fps=`) that turns a decoded source frame into one output frame:
     a plain `scale` for the source's own aspect, a cover-then-crop for CROP, a
-    contain-then-pad for FIT."""
+    contain-then-pad for FIT. `capped`: held to one 4K frame (`fits_one_frame`)."""
     out_w: int
     out_h: int
     scale_filter: str
+    capped: bool = False
 
 
 def frame_geometry(src_w: int, src_h: int, cfg: OverlayConfig) -> FrameGeometry:
@@ -1192,9 +1193,30 @@ def frame_geometry(src_w: int, src_h: int, cfg: OverlayConfig) -> FrameGeometry:
 
     The bars are painted BLACK. The one documented manual pipeline for this rendered telemetry
     onto a solid blue and chroma-keyed it in Premiere to get it rescaled for 9:16; the point of
-    doing the reflow in the renderer is that there is nothing left to key."""
+    doing the reflow in the renderer is that there is nothing left to key.
+
+    AN H.264 FRAME IS HELD TO ONE 4K FRAME (`fits_one_frame`): an over-sized "Source" (5.3K, 4K
+    4:3, 4K fitted whole into 9:16 or 1:1) is the frame a lower row would give, same shape and
+    chain. Overlay-only is exempt: ProRes and PNG have no H.264 level."""
     src_w, src_h = int(src_w), int(src_h)
-    want = max(2, int(cfg.out_height))
+    geo = _frame_at(src_w, src_h, cfg, max(2, int(cfg.out_height)))
+    if cfg.overlay_only or fits_one_frame(geo.out_w, geo.out_h):
+        return geo
+    # Scale the side `want` sets (the height at source aspect, else the short side), start just
+    # above it and step down: `_even` rounds up, and 9:16 then lands on 2160x3840, not 2158x3836.
+    source_aspect = ASPECT_RATIOS.get(cfg.aspect) is None or not (src_w > 0 and src_h > 0)
+    side = geo.out_h if source_aspect else min(geo.out_w, geo.out_h)
+    want = 4 + _even_down(side * min(math.sqrt(MAX_FRAME_PIXELS / (geo.out_w * geo.out_h)),
+                                     MAX_FRAME_SIDE / max(geo.out_w, geo.out_h)))
+    geo = _frame_at(src_w, src_h, cfg, want)
+    while want > 2 and not fits_one_frame(geo.out_w, geo.out_h):
+        want -= 2
+        geo = _frame_at(src_w, src_h, cfg, want)
+    return replace(geo, capped=True)
+
+
+def _frame_at(src_w: int, src_h: int, cfg: OverlayConfig, want: int) -> FrameGeometry:
+    """`frame_geometry`'s frame for a `want` of `cfg.out_height`'s kind, before the 4K cap."""
     ratio = ASPECT_RATIOS.get(cfg.aspect)
     if ratio is None or not (src_w > 0 and src_h > 0):
         # SOURCE ASPECT — the historic path, byte-for-byte: height controls, width follows.
@@ -1309,6 +1331,27 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
         "-an", "-sn", "-dn",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
+
+
+# NO H.264 FRAME THIS APP WRITES HOLDS MORE PIXELS THAN ONE 4K FRAME, OR IS WIDER OR TALLER THAN
+# 4096. Measured on the M1 Pro this is developed on (2026-09-27): a VideoToolbox HARDWARE session
+# opens for every frame up to 36,864 macroblocks with neither side over 4096 (1280x1440 is L4.0,
+# 1920x2160 L5.0, 2560x2880 and 3840x2160 L5.1, 4096x2304 and 2304x4096 L5.2, all writing 0.69-0.71
+# of their bitrate target), and refuses 3840x4320 (two 4K panes stacked), 7680x2160, 5120x1440 and
+# (2026-09-29) 5312x2988 and 3840x6828 (4K fitted whole into 9:16). `-allow_sw 1` then hands the
+# frame to Apple's SOFTWARE H.264 without a word: 1.02-1.10 of target, a single lap's 2 s 22-26x
+# slower, and the owner's compare at "Source" took 3:41 against the 1:41 quoted and wrote 299 MB
+# against 205 (JOURNEY-3). Where the hardware does open over the cap (4000x3000, 47,000 macroblocks)
+# the file is level 6.0, past the 5.1/5.2 phones, TVs and messaging apps decode; a level-6.0 compare
+# did not decode in this Mac's own hardware. So the cap is a rule, not a caveat, for the compare's
+# panes and a single lap's frame alike, and a frame inside it is untouched. 3840x2160 is level 5.1
+# at 30 fps; the rule holds 4096x2160 (34,560 macroblocks) to it too.
+MAX_FRAME_PIXELS = 3840 * 2160
+MAX_FRAME_SIDE = 4096
+
+
+def fits_one_frame(w: int, h: int) -> bool:
+    return w * h <= MAX_FRAME_PIXELS and max(w, h) <= MAX_FRAME_SIDE
 
 
 def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
