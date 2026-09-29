@@ -4,4 +4,4 @@
 
 ### Changed
 - The published accuracy gives each recording's mean error as a point estimate, +0.001 to
-  +0.003 s, where it read "unbiased to ±0.003 s"; the accuracy chart's caption says the same.
+  +0.003 s, no longer as a bound; the accuracy chart's caption says the same.
