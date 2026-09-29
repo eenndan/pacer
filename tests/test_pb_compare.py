@@ -23,7 +23,9 @@ Pinned here:
   5. THE JOURNEY on the real StudioWindow, jailed, over two synthetic recordings of the built-in
      demo circuit (verified timing): the debrief's button and the card's, each end to end — pane
      A this session's best lap even with the playhead elsewhere, pane B the previous PB's lap,
-     the debrief ended so the video panel is on screen, the export enabled — and the missing file.
+     the debrief ended so the video panel is on screen, the export enabled — and the missing file;
+     each click writes one INFO line to the session log naming the row it loads
+     (FIRST-OPEN-LOOP-3), before any modal.
 
 Run: python tests/test_pb_compare.py   (~25 s; the pixi env's ffmpeg writes the video trak)
 """
@@ -246,14 +248,15 @@ def _assert_compare_on_the_two_best_laps(win, slow_path, standing, label):
 
 def test_the_journey_on_the_real_window():
     from PySide6.QtWidgets import QMessageBox
-    from test_debrief_landing import _fresh_app_support, _open
+    from test_debrief_landing import _fresh_app_support, _loop_log, _open, _said
 
     from studio.app import StudioWindow
 
     shown = []
     real_info = QMessageBox.information
     QMessageBox.information = staticmethod(lambda *a, **_k: shown.append(a[1:3]))
-    with tempfile.TemporaryDirectory(prefix="pb_compare_") as folder, _fresh_app_support():
+    with tempfile.TemporaryDirectory(prefix="pb_compare_") as folder, _fresh_app_support(), \
+            _loop_log() as said:
         slow, fast = _recordings(folder)
         win = StudioWindow([])
         win.resize(1440, 900)
@@ -271,6 +274,10 @@ def test_the_journey_on_the_real_window():
             assert view.is_debrief(), "a first open lands on its debrief"
             assert "New personal best" in panel.debrief_block.headline.text()
             assert win.library_ctl.previous_pb["fingerprint"] == "GX9001"
+            landed = _said(said, "debrief shown")   # the first open's list is full: no default
+            assert len(landed) == 2 and "first open GX9002" in landed[1], landed
+            assert landed[1].endswith("debrief shown; focus list left as it was (no default added)"), \
+                landed
             btn = panel.debrief_block.compare_btn
             assert btn.isVisible(), "the debrief's PB line offers no compare"
 
@@ -279,6 +286,10 @@ def test_the_journey_on_the_real_window():
             btn.click()
             _assert_compare_on_the_two_best_laps(win, slow, standing, "debrief")
             assert not shown, shown
+            # One session-log line per click, naming the row it loads (FIRST-OPEN-LOOP-3).
+            (asked,) = _said(said, "compare with previous PB")
+            assert asked.startswith("INFO compare with previous PB: GX9001 ("), asked
+            assert asked.endswith(" — loading"), asked
 
             # (b) the card, which is what a PB gets when there is no debrief to carry it
             win._clear_reference()
@@ -291,6 +302,7 @@ def test_the_journey_on_the_real_window():
             card.compare_btn.click()
             _assert_compare_on_the_two_best_laps(win, slow, standing, "card")
             assert not shown, shown
+            assert _said(said, "compare with previous PB") == [asked] * 2, said
 
             # (c) the previous PB's footage has moved since: said plainly, nothing loaded
             win._clear_reference()
@@ -303,6 +315,9 @@ def test_the_journey_on_the_real_window():
             assert title.endswith("previous PB not found"), title
             assert "GX019001.MP4 is missing from" in text and os.path.dirname(slow) in text, text
             assert win._ref_load_token == token, "a load was started for a file that is gone"
+            missed = _said(said, "compare with previous PB")
+            assert missed == [asked] * 2 + [asked.replace(" — loading", " — footage missing")], \
+                missed
             assert not win.session.has_reference()
         finally:
             QMessageBox.information = real_info

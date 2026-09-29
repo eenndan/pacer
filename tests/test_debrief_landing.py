@@ -22,6 +22,10 @@ Pinned here:
      (so the timing is verified), jailed, with the driver's remembered tab Corners and a persisted
      grid. It includes the defect this package found in its own first cut: the view's deferred
      first-show grid restores put the grid back on screen under a lap panel still marked maximized.
+     Each gesture of the loop writes one INFO line to the session log (FIRST-OPEN-LOOP-3): a first
+     open's debrief with its pre-fill marked "Pacer's default", a focus edit and a Mark-dry click
+     marked "by hand", and none on a re-open. The pre-fill writes focus.json with no click, so
+     without these lines a race-day read could not tell a list he touched from one he left.
 
 Run: python tests/test_debrief_landing.py   (~10 s; the pixi env's ffmpeg writes the video trak)
 """
@@ -163,6 +167,44 @@ def _fresh_app_support():
                 m._app_support_dir = fn
 
 
+@contextlib.contextmanager
+def _loop_log():
+    """The INFO lines the training loop's gestures write (FIRST-OPEN-LOOP-3), as a list of
+    messages. The level is set HERE: only `main()` configures the session log at INFO, so under
+    ctest the 'studio' logger inherits the root's WARNING and every line would be dropped before
+    reaching a handler — a capture that saw nothing would read as "no line was written"."""
+    import logging
+
+    class _Lines(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.INFO)
+            self.lines: list[str] = []
+
+        def emit(self, record):
+            self.lines.append(f"{record.levelname} {record.getMessage()}")
+
+    log, lines = logging.getLogger("studio"), _Lines()
+    level = log.level
+    log.addHandler(lines)
+    log.setLevel(logging.INFO)
+    try:
+        yield lines.lines
+    finally:
+        log.removeHandler(lines)
+        log.setLevel(level)
+
+
+def _said(lines: list[str], part: str) -> list[str]:
+    """The captured lines naming `part`, each asserted INFO: a gesture is not a warning."""
+    hits = [ln for ln in lines if part in ln]
+    assert all(ln.startswith("INFO ") for ln in hits), ("a loop line not at INFO", hits)
+    return hits
+
+
+def _corners(cids) -> str:
+    return ", ".join(f"C{c}" for c in cids)
+
+
 def _two_recordings(folder: str) -> tuple[str, str]:
     """Two recordings of the built-in demo circuit, byte-identical telemetry under two recording
     numbers — two library identities (GX9001, GX9002), so the second open is a first open too."""
@@ -217,7 +259,8 @@ def test_the_journey_on_the_real_window():
     for k in boxes:
         setattr(QMessageBox, k, staticmethod(_no_modal))
     grid = [[700, 732], [400, 446], [320, 526]]
-    with tempfile.TemporaryDirectory(prefix="debrief_rec_") as folder, _fresh_app_support():
+    with tempfile.TemporaryDirectory(prefix="debrief_rec_") as folder, _fresh_app_support(), \
+            _loop_log() as said:
         a, b = _two_recordings(folder)
         prefs.set_lap_panel_tab(1)          # the driver's remembered tab: Corners
         prefs.set_grid_sizes(grid)          # ...and a grid he has dragged
@@ -244,6 +287,12 @@ def test_the_journey_on_the_real_window():
             lead = panel.debrief_block.full_text()
             assert f"First session logged at {track}" in lead, lead
             assert debrief_note(short) in lead, lead
+            # The session log tells the pre-fill (Pacer's default, no click) from a hand edit, so a
+            # race-day read can count the edits (FIRST-OPEN-LOOP-3).
+            shown = _said(said, "debrief shown")
+            assert len(shown) == 1 and "first open GX9001" in shown[0], said
+            assert f"pre-filled with {_corners(short)} (Pacer's default)" in shown[0], shown
+            assert not _said(said, "by hand"), said
 
             # One click drops a pre-promoted corner, and the lead stops naming it.
             gone = short[-1]
@@ -252,6 +301,9 @@ def test_the_journey_on_the_real_window():
             _settle(0.1)
             assert [i.cid for i in listed()] == short[:-1], listed()
             assert f"C{gone}" not in panel.debrief_block.note.text(), panel.debrief_block.note.text()
+            (edit,) = _said(said, "by hand")
+            assert edit.startswith("INFO focus list for GX9001"), edit
+            assert f"removed C{gone} by hand -> {_corners(short[:-1])}" in edit, edit
 
             # Esc: the grid he left, on the tab he left it on; the estimate is the page's again.
             saved = view._saved_splitter_sizes
@@ -275,11 +327,16 @@ def test_the_journey_on_the_real_window():
             assert now[gone]["fingerprint"] == "GX9002", now[gone]
             assert f"Pacer put C{gone}," in panel.debrief_block.note.text()
             assert "level with your personal best" in panel.debrief_block.headline.text()
+            shown = _said(said, "debrief shown")
+            assert len(shown) == 2 and "first open GX9002" in shown[1], shown
+            assert f"pre-filled with C{gone} (Pacer's default)" in shown[1], shown
             refusal = panel.focus_block.full_text()
             assert "no session record for" in refusal, refusal
             (mark,) = _visible([panel.focus_block.mark_button], "Mark ")
             mark.click()
             _settle(0.1)
+            (dry,) = _said(said, "marked dry by hand")
+            assert dry == "INFO session records: 2 marked dry by hand (GX9001, GX9002)", dry
             verdict = panel.focus_block.full_text()
             assert view.is_debrief(), "the verdict must arrive without leaving the debrief"
             for cid in kept:
@@ -293,6 +350,8 @@ def test_the_journey_on_the_real_window():
             assert not view.is_debrief() and view._maximized_panel is None
             assert view.tab_bar.currentIndex() == 1 and prefs.lap_panel_tab() == 1
             assert {i.cid: focus.item_to_dict(i) for i in listed()} == before
+            assert len(_said(said, "debrief shown")) == 2, "a re-open logged a first open"
+            assert len(_said(said, "by hand")) == 2, _said(said, "by hand")
         finally:
             win.close()
             win.deleteLater()
