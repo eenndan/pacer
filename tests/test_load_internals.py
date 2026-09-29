@@ -28,7 +28,7 @@ def _samples(ts_ms):
 def test_used_gps9_trueclock_decision():
     """True IFF a contiguous GPS9 run exists — two consecutive non-sentinel fixes a sane single
     GPS9 step apart (0.02..0.40 s) — the SAME rule _gps9_times uses to re-anchor spacing. It flips
-    data_quality.TimingQuality.clock, which drives the whole 'video clock runs ~0.1% fast' degraded
+    data_quality.TimingQuality.clock, which drives the whole media-clock (packet-spread) degraded
     banner + the PB-celebration suppression, so it must not silently desync from the axis."""
     # clean 10 Hz GPS9 (dt = 0.1 s) -> a run -> True
     assert _used_gps9_trueclock(_samples([1000, 1100, 1200, 1300])) is True

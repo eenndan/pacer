@@ -29,15 +29,44 @@ def test_default_is_high_quality():
 
 
 def test_media_clock_fallback_is_degraded():
-    """An older GPS5 camera (no GPS9) fell back to the ~0.1%-fast media clock → media_clock True,
-    degraded, and a banner concern line that names the cause + the ~0.1% drift."""
+    """An older GPS5 camera (no GPS9) fell back to the media-clock (packet-spread) axis →
+    media_clock True, degraded, and a banner concern line that names the cause + what it can cost a
+    lap (the one shared bound, MEDIA_CLOCK_LAP_ERROR)."""
     q = TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK)
     assert q.media_clock and q.degraded
     assert not q.low_gps_quality
     concerns = q.concerns()
     assert len(concerns) == 1
-    assert "video clock" in concerns[0] and "0.1%" in concerns[0]
+    assert "video clock" in concerns[0] and dq.MEDIA_CLOCK_LAP_ERROR in concerns[0], concerns[0]
     print("test_media_clock_fallback_is_degraded OK")
+
+
+def test_the_media_clock_warning_quotes_one_bound_and_no_drift():
+    """Every media-clock sentence quotes the ONE bound and none of them claims a clock drift.
+
+    The copy said "lap times may drift ~0.1%" (and "runs ~0.1% fast") on five surfaces, and the
+    repo's own measurement contradicts it: the video and GPS clocks' RATES agree to ~27 ppm
+    (studio/load.py's head comment; 1.8 ms on a 68 s lap, 0.1 % would be 68 ms). What the fallback
+    really costs is PLACEMENT — a ~1 s GPS packet's fixes are spread evenly, so each is placed only
+    to about ±0.05 s (studio/media_clock.py), and a lap time is two such instants. So the sentence
+    is a hedged bound, and it is one constant so the five surfaces cannot drift apart again."""
+    bound = dq.MEDIA_CLOCK_LAP_ERROR
+    for q in (TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK),
+              TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK, dropped_fraction=0.5)):
+        texts = {"concerns[0]": q.concerns()[0], "summary": q.summary(), "detail": q.detail(),
+                 "cost": q.cost()}
+        for name, text in texts.items():
+            assert "0.1%" not in text and "drift" not in text, (
+                f"{name} still claims the video clock drifts: {text!r}")
+            # The combined one-line summary names both concerns and has no room for the bound;
+            # its detail/cost/concern lines carry it.
+            if not (name == "summary" and q.low_gps_quality):
+                assert bound in text, f"{name} does not quote the one bound {bound!r}: {text!r}"
+    # The map banner is setWordWrap(False): its media-clock line may not grow past the 66
+    # characters it had, or it clips on a narrow map.
+    summary = TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK).summary()
+    assert len(summary) <= 66, f"{len(summary)} chars: {summary!r}"
+    print("test_the_media_clock_warning_quotes_one_bound_and_no_drift OK")
 
 
 def test_low_gps_quality_threshold():
@@ -83,9 +112,9 @@ def test_a_recording_with_no_gps_trace_is_its_own_verdict_not_the_default_one():
     concerns = q.concerns()
     assert concerns, "a state this severe must give the banner something to say"
     assert "GPS" in concerns[0], concerns
-    # It must not borrow the media-clock sentence: there is no ~0.1% drift to warn about when
-    # there is no clock.
-    assert "0.1%" not in concerns[0], concerns[0]
+    # It must not borrow the media-clock sentence: there is no clock whose lap error to bound
+    # when no axis was built.
+    assert dq.MEDIA_CLOCK_LAP_ERROR not in concerns[0], concerns[0]
     for text in (q.summary(), q.detail()):
         assert text, "summary/detail carry the map banner and the tooltips"
         assert "GPS9" not in text, text

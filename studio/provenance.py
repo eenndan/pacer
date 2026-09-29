@@ -220,9 +220,12 @@ class Quality:
             rate = 1.0 / self.dt_median if self.dt_median > 0 else float("nan")
             gap = f"{self.gaps} gap{'s' if self.gaps != 1 else ''} over 1.5x that"
             out.append(f"Fix spacing  median {self.dt_median * 1000:.0f} ms ({rate:.1f} Hz) · {gap}")
+        # Not "times drift": the clocks' rates agree to ~27 ppm; the fallback's cost is placement,
+        # stated as the one bound every media-clock surface quotes.
         out.append("Time axis  " + ("GPS9 true clock (per-fix GPS timestamps)"
                                     if self.clock == data_quality.GPS9_TRUECLOCK
-                                    else "video clock — no GPS9 stream; times drift"))
+                                    else "video clock — no GPS9 stream; a lap may read "
+                                         f"{data_quality.MEDIA_CLOCK_LAP_ERROR} off"))
         return out
 
 
