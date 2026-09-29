@@ -2923,6 +2923,7 @@ def _run_all():
     test_the_reach_line_and_the_spread_gate_are_the_table_s()
     test_the_theme_table_is_the_evidence_table_s_arithmetic()
     test_the_theme_prose_follows_the_table_and_THEME_SHARE()
+    test_the_line_signature_delta_clears_its_measured_null()
     test_every_quote_of_the_coaching_figures_is_coaching_py_s()
     test_the_brake_habit_prose_is_its_table_s_arithmetic()
     test_every_quote_of_the_brake_habit_figures_is_the_table_s()
