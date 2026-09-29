@@ -1538,10 +1538,8 @@ def lead_ties(rows: list[Opportunity], lead_cid: int | None) -> list[Opportunity
 # length of a wider tie. The tied sentence also drops the single-lead "you have matched it on N of M
 # laps" clause: that clause is per corner, and repeating it per tied corner would make the page's
 # longest line longer than the theme sentence above it (the count stays on every row's "Done it?").
-#
-# _TIE_NAME_CAP was the three-name cap. No sentence here reads it any more; it stays for a
-# fixed-width surface that caps its tie line and counts the rest (the lap card's, QA1-SHARE-TIE).
-_TIE_NAME_CAP = 3
+# The one fixed-width surface that repeats the tie, the lap card's corner row, keeps its own cap
+# and counts the rest (share_card._OPP_TIE_NAMES): its names are always this sentence's first ones.
 
 
 def corner_names(cids: Iterable[int]) -> str:
