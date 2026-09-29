@@ -27,9 +27,10 @@ LIFE-4. Every open rebuilds the view, and with it a fresh, muted pane, so an un-
 open. It now carries to the next recording in the same run (VideoView._audio_on), never across a
 relaunch: a launch starts muted on purpose, and nothing is persisted.
 
-THE STAND-INS' SIGNALS (PROCESS-6). Under PACER_NO_MEDIA=1 — CI's smoke and every inert-triplet
-registration — the pane's player and output are the _Null* stand-ins, so a studio connect to a
-signal one of them lacks raises AttributeError at construction there and nowhere else. The LIFE-1
+THE STAND-INS' SIGNALS (PROCESS-6). Wherever a _Null* stand-in replaces the real player or output —
+every PACER_NO_MEDIA=1 build (CI's smoke, the inert-triplet tests), and the tests that swap one in
+for the real class (test_player_seek_present builds the real pane over _NullAudioOutput) — a
+studio connect to a signal it lacks raises AttributeError there and nowhere else. The LIFE-1
 priming's `audio.volumeChanged.connect` did exactly that before 8fbaf2a gave _NullAudioOutput the
 real output's signals (test-fast caught it). The last test holds every such connect in studio/ to
 a signal the stand-in declares. It does not ask for full parity (_NullMediaPlayer lacks 18 of
@@ -173,9 +174,10 @@ def test_the_stand_ins_declare_every_signal_studio_connects():
     # stopped seeing the pane's connects, and the check would pass by reading nothing
     assert connects >= 5, f"the scan found {connects} player/audio connects in studio/, expected >= 5"
     assert not missing, (
-        "studio connects to a signal its PACER_NO_MEDIA stand-in does not declare, so every headless "
-        "build (CI's smoke, the inert-triplet tests) raises AttributeError there — declare it on "
-        "the _Null* class in studio/player_pane.py (it never fires):\n  " + "\n  ".join(missing))
+        "studio connects to a signal its _Null* stand-in does not declare, so wherever the stand-in "
+        "replaces the real object (PACER_NO_MEDIA=1, CI's smoke, a test that swaps it in) that "
+        "connect raises AttributeError — declare it on the _Null* class in studio/player_pane.py "
+        "(it never fires):\n  " + "\n  ".join(missing))
     print(f"test_the_stand_ins_declare_every_signal_studio_connects OK ({connects} connects)")
 
 
