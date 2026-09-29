@@ -29,12 +29,14 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       on both (see that fixture's block for why each ingredient is needed).
   * ``drift_median``— the SAME three geometries with the drift on the MEDIAN-time lap
                       (tests/_synthetic.drift_median_session). ``drift_noise`` drifts the SLOWEST
-                      lap while the coaching phase thirds read the MEDIAN one, so every coaching
-                      corner-window projection was the identity in that phase and a coaching-path
-                      defect could not move a leaf of it: #289 moved 15 of 168,664 leaves on the
-                      D24 0060 pair and 0 synthetic ones. Measured negative control since ADV-1
-                      (the reasons are medians over every counted lap, not the median lap's
-                      alone): reverting #289's warp in `coaching.lap_window_inputs` moves 0
+                      lap while coaching read the MEDIAN one, so every coaching corner-window
+                      projection was the identity in that phase and a coaching-path defect could
+                      not move a leaf of it: #289 moved 15 of 168,664 leaves on the D24 0060 pair
+                      and 0 synthetic ones. Coaching reads no single lap now — the reasons are
+                      medians over every counted lap (ADV-1), the Entry·Apex·Exit thirds the phase
+                      report's median row (COACHING-2), of which the drifted lap is half — and
+                      the measured negative control is: reverting #289's warp in
+                      `coaching.lap_window_inputs` moves 0
                       golden leaves in any phase — the drifted lap's brake cell moves by 20.3 ms
                       but is not the median cell — so the control is
                       `test_drift_median_fixture_puts_the_drift_where_coaching_reads` (property 5),
@@ -280,8 +282,9 @@ def synthetic_fingerprint(recording=None, *, gopro: bool = True) -> dict:
 
     # The drift + noise session: the paths the stadium laps cannot reach (see the module docstring).
     result["drift_noise"] = fingerprint(_build_drift_noise(), strict=False)
-    # The same geometry with the drift on the MEDIAN lap: the coaching phase thirds read that lap
-    # and only that lap, and drift_noise therefore exercises them in their identity projection.
+    # The same geometry with the drift on the MEDIAN lap: coaching's thirds read that lap alone
+    # until COACHING-2 (drift_noise exercised them in the identity projection only); they are the
+    # phase report's median over the two non-best laps now, the drifted one among them.
     result["drift_median"] = fingerprint(_build_drift_median(), strict=False)
     # The sub-gate drift BAND, as a ladder: the two phases above jump from 0 % drift to 0.995 %,
     # so every lap the removed 0.5 % gate would have kept on the normalized projection is missing
@@ -642,13 +645,16 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
 
 
 def test_drift_median_fixture_puts_the_drift_where_coaching_reads():
-    """The median-drift phase exists because `drift_noise` drifts the SLOWEST lap while the coaching
-    phase thirds read the MEDIAN one, so pin the properties that make this fixture able to fail
-    where that one cannot — each is one a plausible speed tweak would quietly remove:
+    """The median-drift phase exists because `drift_noise` drifts the SLOWEST lap while coaching
+    read the MEDIAN one, so pin the properties that make this fixture able to fail where that one
+    cannot — each is one a plausible speed tweak would quietly remove:
 
-      1. the lap coaching reads (`coaching.median_lap_id` over the consistency laps) is the
+      1. the median-time lap (`coaching.median_lap_id` over the consistency laps) is the
          DRIFTING one, and is not the best lap (whose window projection is the identity by
-         definition — projecting the corner basis onto the lap it was built from);
+         definition — projecting the corner basis onto the lap it was built from). Coaching reads
+         no single lap since ADV-1 and COACHING-2; the drifted lap is a cell of every lever
+         median and half of every phase median it is matched at (the phase report leaves the best
+         lap out of three);
       2. it is the ONLY lap past 0.5 % of line-length drift, at 0.9-1.1 %, and it has a real warp
          (`lap_alignment` is not None) rather than the normalized projection;
       3. exactly one interior corner boundary on it has no spatial match, so its warp INTERPOLATES
@@ -798,6 +804,34 @@ def test_drift_band_fixture_covers_the_sub_gate_band():
         f"lap {i} {drift[i]:.3%} drift ({seps[i]:.2f} m off normalized)" for i in seps))
 
 
+def test_coaching_thirds_are_the_phase_report_rows_in_every_phase():
+    """COACHING-2's pass criterion, on every session the fingerprint takes: each coaching row's
+    Entry·Apex·Exit triple IS `phase_report`'s row for its corner, bit for bit (the fingerprint
+    rounds, so it cannot say that). Before, the rows read the median-time lap's own thirds and
+    differed from the report on every synthetic row."""
+    paths, truth = _gopro_recording()
+    gopro = _gopro_session(paths)
+    # `base` is absent: its bare stadium has no `laps`, so coaching is a placeholder leaf there.
+    sessions = [("drift_noise", _build_drift_noise()),
+                ("drift_median", _build_drift_median()), ("drift_band", _build_drift_band()),
+                ("gopro", gopro)]
+    checked = {}
+    for name, s in sessions + [("gopro_sectors", None)]:
+        if s is None:
+            assert _place_sectors(gopro, truth), "the sector lines did not take"
+            s = gopro
+        pr = s.phase_report()
+        rows = dict(zip(pr.cids, pr.rows, strict=True)) if pr is not None else {}
+        opp = s.coaching_opportunities()
+        for r in opp.rows:
+            assert r.phases.as_tuple() == (rows.get(r.cid) or (0.0, 0.0, 0.0)), (name, r.cid)
+        checked[name] = sum(1 for r in opp.rows if any(r.phases.as_tuple()))
+    # TEETH: the phases that move in the re-cut carry real, non-zero thirds on their rows.
+    for name in ("drift_noise", "drift_median", "drift_band", "gopro", "gopro_sectors"):
+        assert checked[name] > 0, f"{name}: no row carries a triple — the check above is vacuous"
+    print(f"ok coaching thirds == phase_report rows, rows with thirds per phase: {checked}")
+
+
 def test_synthetic_fingerprint_matches_baseline():
     """The equivalence gate: the synthetic Session-math fingerprint must match the committed
     baseline within eps 1e-9. Any drift in a corner / driving / delta / consistency / bests leaf
@@ -883,6 +917,7 @@ if __name__ == "__main__":
         test_drift_band_fixture_covers_the_sub_gate_band,
         test_gopro_recording_is_the_baselined_one,
         test_gopro_phases_reach_what_the_seeded_phases_cannot,
+        test_coaching_thirds_are_the_phase_report_rows_in_every_phase,
         test_synthetic_fingerprint_matches_baseline,
     ]
     for t in tests:
