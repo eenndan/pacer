@@ -131,7 +131,7 @@ def build(
     dist: np.ndarray,
     speed_kmh: np.ndarray,
     elapsed: np.ndarray,
-    loop_xy: np.ndarray,
+    loop_xy: np.ndarray | None,
     primary_loop_xy: np.ndarray | None,
     source_label: str,
     lap_id: int,

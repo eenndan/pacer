@@ -37,9 +37,9 @@ import csv
 import html
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import NamedTuple, TextIO
 
 from . import APP_NAME, data_quality, units
 from . import stats as stats_service
@@ -119,7 +119,7 @@ def _f3(v) -> str:
     return f"{float(v):.3f}"
 
 
-def _atomic_write(path: str, body: Callable[[object], None], *, newline: str | None = None) -> None:
+def _atomic_write(path: str, body: Callable[[TextIO], object], *, newline: str | None = None) -> None:
     """Write `path` by filling a sibling `.tmp` and `os.replace`-ing it into place — the SAME
     contract prefs/library/track_db/sidecar hold, and for the same reason: a write that fails
     part-way must not be able to damage what was already there.
@@ -342,11 +342,12 @@ def laps_summary(session) -> list[SummaryRow]:
         if accessor == "theoretical_best" and degenerate:
             continue  # one lap won every segment: the "ideal" IS that lap, so it says nothing
         v = getattr(session, accessor)()
-        ideal = accessor == "theoretical_best" and sample is not None
+        # Not None exactly on the theoretical-best row of a session with a sample.
+        ideal = sample if accessor == "theoretical_best" else None
         out.append(SummaryRow(
             label=label,
             value=_f3(v) if v is not None else "",
-            over_laps=str(sample.laps) if ideal else "",
+            over_laps=str(ideal.laps) if ideal is not None else "",
             # `sentence()`, NOT `caption() + sentence()`. The caption's separator is a MIDDLE DOT
             # and laps.csv has been pure ASCII for its whole life — a machine-contract file that
             # suddenly renders "theoretical best Â· 24 laps" in a spreadsheet guessing MacRoman is
@@ -354,7 +355,7 @@ def laps_summary(session) -> list[SummaryRow]:
             # ("Stitched from 11 of your 24 clean laps…") and `over_laps` carries the number a
             # parser wants, so nothing is lost; the two HUMAN surfaces (report, clipboard) print
             # the caption verbatim.
-            note=sample.sentence() if ideal else ""))
+            note=ideal.sentence() if ideal is not None else ""))
     return out
 
 
@@ -611,7 +612,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         pace_rows = [("best lap", ""), (median_label, ""),
                      ("race pace · best 3-lap run", ""), ("σ lap", ""), ("median − best", ""),
                      ("consistency · σ/median", ""), ("within 1% of best", ""), ("trend", "")]
-        if pace is not None:
+        if pace is not None and st is not None:  # a pace implies stats; the checker needs it said
             count, n_within = st.laps_within_pct(1.0)
             trend = st.pace_trend()
             rp = st.race_pace()
@@ -658,7 +659,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
 
     # --- SPEED · G: session peaks over the per-lap stats, the page's own reductions.
     lap_rows = st.lap_stats() if st is not None else []
-    if lap_rows:
+    if lap_rows and st is not None:  # rows imply stats; the checker needs it said
         vmax = st.session_vmax()
         slow = getattr(st, "slowest_corner", lambda: None)()
         lat_peaks = [r.peak_lat_g for r in lap_rows if r.peak_lat_g is not None]
@@ -771,7 +772,7 @@ img { max-width: 100%; height: auto; border: 1px solid #ccc; margin: 0.5em 0; }
 
 
 def write_report_html(path: str, session, source_label: str = "",
-                      images: list[tuple[str, bytes] | tuple[str, bytes, int | None]] = (),
+                      images: Sequence[tuple[str, bytes] | tuple[str, bytes, int | None]] = (),
                       unit: str | None = None) -> None:
     """One SELF-CONTAINED page: the session header (recording, track, date, lap count,
     best lap), the laps table (same rows/columns as `write_laps_csv`, via `laps_table`),

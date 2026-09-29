@@ -38,11 +38,12 @@ from test_layering import QT_REACHING, _modules  # the one definition of "Qt-fre
 
 # Qt-free core modules that pyright (basic) does not pass yet. This set only shrinks. 14 modules
 # with 146 errors between them when the gate landed (2026-09-24); 9 left after GATES-4 took five
-# JSON stores off it, 4 after GATES-6 took the five analysis services (2026-09-29). focus waits for
-# the first-open freeze (docs/DECISIONS.md) to end: its 6 errors need code narrowing, the freeze
-# lets the ratchet change only annotations there, and the first focus.py editor after the freeze
-# takes it off.
-NOT_YET = {"coaching", "export_data", "focus", "session"}
+# JSON stores off it, 4 after GATES-6 took the five analysis services, 1 after GATES-5 took the
+# session facade and its readers, coaching and export_data (2026-09-29). focus waits for the
+# first-open freeze (docs/DECISIONS.md) to end: its 6 errors need code narrowing, the freeze lets
+# the ratchet change only annotations there, and the first focus.py editor after the freeze takes
+# it off.
+NOT_YET = {"focus"}
 
 _ENTRY = re.compile(r"studio/(\w+)\.py")
 
