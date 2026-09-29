@@ -1245,14 +1245,21 @@ class LibraryController:
         ``editable`` is the user's own file holding it, which is a different question from
         ``builtin``: a built-in the user has refined is both, and deleting that one reverts to the
         shipped line instead of removing the circuit. Guarded — an unreadable DB lists nothing
-        rather than breaking the dialog."""
+        rather than breaking the dialog.
+
+        The ``--demo`` circuit is FICTIONAL, so it is listed only while it is the open session's
+        track or the user holds a refined copy (LEFT-28); detection still knows it either way. The
+        attribute chain tolerates a bare window and the unbound ``_track_rows(None)`` tests make."""
+        live = getattr(getattr(getattr(self, "win", None), "session", None), "track_name", None)
         try:
             editable = set(track_db.user_names())
             return [{"name": e["name"],
                      "builtin": track_db.is_builtin(e["name"]),
                      "editable": e["name"] in editable,
                      "sectors": len(e.get("sectors") or [])}
-                    for e in track_db.all_tracks()]
+                    for e in track_db.all_tracks()
+                    if not (track_db.is_demo_only(e["name"])
+                            and e["name"] not in editable and e["name"] != live)]
         except (OSError, ValueError) as exc:
             _log.warning("saved tracks not readable (%r)", exc)
             return []

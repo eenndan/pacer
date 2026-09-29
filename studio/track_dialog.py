@@ -29,6 +29,7 @@ A ROW IS A PLAIN DICT, built by the app from the merged track view::
 
 ``builtin`` and ``editable`` are two different questions and both are needed: a built-in the user
 has REFINED is both, and deleting it reverts to the shipped line rather than removing the circuit.
+The app leaves the fictional ``--demo`` circuit out of the rows unless the demo is open or refined.
 
 THE REFUSALS COME FROM THE STORE, NOT FROM HERE. ``track_db.rename_track`` / ``remove_track`` raise
 ValueError subclasses whose messages are already written for a human ("a track called 'Croft' is
