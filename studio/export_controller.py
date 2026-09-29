@@ -457,11 +457,15 @@ class ExportController:
     # two 4K panes, 3840x4320, H.264 level 6.0, 299 MB and 3:41 for one lap (JOURNEY-3). A compare
     # is two pictures in one frame and is shared to phones, so it opens on 1080p panes (1920x2160)
     # until the user picks another row here. Its "Source" is capped at a 4K frame
-    # (`export_compare.MAX_FRAME_PIXELS`), and says so: two full 4K panes are not a file anything
+    # (`export_video.MAX_FRAME_PIXELS`), and says so: two full 4K panes are not a file anything
     # he shares it to will play.
     _COMPARE_RES_OPTIONS = [
         ("720p", 720), ("1080p", 1080), ("1440p", 1440), ("Source — up to a 4K frame", 99999),
     ]
+    # What both pickers' Output line adds when "Source" is held to one 4K frame
+    # (`export_video.fits_one_frame`); the single-lap row keeps its remembered "(no downscale)"
+    # label, true of the 16:9 4K it was made for, and this is where a capped frame says why.
+    _CAP_NOTE = " — capped at one 4K frame, the biggest H.264 picture phones and messaging apps play"
     _PREF_COMPARE_RES = "export_compare_res_idx"
     _COMPARE_RES_DEFAULT = 1                       # 1080p panes
     # SIZE ESTIMATE. The dialog sells a file-size trade-off ("larger file" / "smaller file"), so it
@@ -529,7 +533,8 @@ class ExportController:
     def _export_size_hint(self, dur: float, out_height: int, quality: str,
                           aspect: str = export_video.ASPECT_SOURCE,
                           content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1,
-                          source: tuple[int, int, float] | None = None) -> str:
+                          source: tuple[int, int, float] | None = None,
+                          fit: str = export_video.FIT_CROP) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
         it has to render, WHICH encoder will do it and about how long that takes. Derived (see
         X264_BPP and `export_video.RENDER_FPS`) — never a stored megabyte figure, because the
@@ -563,7 +568,7 @@ class ExportController:
             # overlay_only too: that render divides the source rate (29.97 off 59.94) rather
             # than capping it, and the hint quotes the rate the renderer will use.
             cfg = export_video.OverlayConfig(
-                out_height=out_height, aspect=aspect,
+                out_height=out_height, aspect=aspect, frame_fit=fit,
                 overlay_only=content != self._EXPORT_CONTENT_COMPOSITE)
             geo = export_video.frame_geometry(src_w, src_h, cfg)
             out_w, out_h = geo.out_w, geo.out_h
@@ -624,8 +629,7 @@ class ExportController:
         took = export_compare.estimate_compare_seconds(geo.out_w, geo.out_h, frames, codec)
         timing = f", about {fmt_hms(took)} to render" if took else ""
         how = "side by side" if geo.layout == export_compare.LAYOUT_SIDE else "one above the other"
-        cap = (" — capped at one 4K frame, the biggest H.264 picture phones and messaging apps "
-               "play" if geo.capped else "")
+        cap = self._CAP_NOTE if geo.capped else ""
         return (f"Output: {geo.out_w}x{geo.out_h}, two panes of {geo.pane_w}x{geo.pane_h} {how}"
                 f"{cap}.  About {size} — {plural(frames, 'frame')} to render at {fps:g} fps with "
                 f"{codec}{timing}; every frame decodes both laps' footage."
@@ -861,17 +865,25 @@ class ExportController:
             clip, files, what = self._scope_plan(scope, lap, lead)
             lines = [f"Renders {what}."]
             source = export_video.known_video_size(src)
-            if h >= 99999 and source is not None and aspect == export_video.ASPECT_SOURCE:
-                lines.append(f"Output: {source[0]}x{source[1]}, the footage's own resolution.")
+            fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
+            how = ("source aspect" if aspect == export_video.ASPECT_SOURCE else
+                   "the sides cropped off" if fit == export_video.FIT_CROP
+                   else "the whole picture, with bars")
+            if source is not None:
+                # THE FRAME THE RENDER WRITES, from the renderer's own rule: never upscaled, and
+                # an H.264 "Source" held to one 4K frame, which the row's label cannot say.
+                geo = export_video.frame_geometry(source[0], source[1], export_video.OverlayConfig(
+                    out_height=h, aspect=aspect, frame_fit=fit, overlay_only=overlay_only))
+                own = (geo.out_w, geo.out_h) == (source[0], source[1])
+                said = "the footage's own resolution" if own else how
+                lines.append(f"Output: {geo.out_w}x{geo.out_h}, {said}"
+                             f"{self._CAP_NOTE if geo.capped else ''}.")
             elif h >= 99999:
                 lines.append("Output: source resolution (never upscaled).")
             elif aspect == export_video.ASPECT_SOURCE:
                 lines.append(f"Output: up to {h}p tall, source aspect — never upscaled past source.")
             else:
                 ow, oh = self._estimate_frame_size(h, aspect)
-                fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
-                how = ("the sides cropped off" if fit == export_video.FIT_CROP
-                       else "the whole picture, with bars")
                 lines.append(f"Output: up to {ow}x{oh}, {how} — never upscaled past source.")
             # THE PADDING IS NAMED FOR WHAT IT ACTUALLY CONTAINS. Seconds either side of the
             # timing line are seconds of the PREVIOUS and NEXT lap: a per-lap batch that pads is a
@@ -891,7 +903,7 @@ class ExportController:
                 lines.append(f"Overlay only: {where} on a transparent background, no footage and "
                              "no audio — for compositing over the original in Resolve or "
                              f"Premiere{player}.")
-            size = self._export_size_hint(clip, h, quality, aspect, content, files, source)
+            size = self._export_size_hint(clip, h, quality, aspect, content, files, source, fit)
             if size:
                 lines.append(size)
             if "to render" not in size and self._measuring_line(src):

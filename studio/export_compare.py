@@ -86,6 +86,8 @@ from .export_video import (
     _FINISH_FRAME_REACH_S,
     FIT_CROP,
     FIT_FIT,
+    MAX_FRAME_PIXELS,
+    MAX_FRAME_SIDE,
     SW_H264,
     VT_H264,
     ExportSpec,
@@ -108,6 +110,7 @@ from .export_video import (
     build_decode_cmd,
     estimate_render_seconds,
     export_delta_colour,
+    fits_one_frame,
     footage_duration,
     guard_validate_window,
     lap_window_for_export,
@@ -217,25 +220,11 @@ def pane_scale_filter(src_w: int, src_h: int, dst_w: int, dst_h: int,
             f"pad={dst_w}:{dst_h}:(ow-iw)/2:(oh-ih)/2:color=black")
 
 
-# THE TWO-PANE FRAME NEVER HOLDS MORE PIXELS THAN ONE 4K FRAME, NOR IS IT WIDER OR TALLER THAN 4096,
-# whatever the resolution row asks for. Two 4K panes stacked are 3840x4320: 64,800 macroblocks a
-# frame, H.264 level 6.0, past the 5.1/5.2 that phones, TVs and messaging apps decode. It is past
-# what the Mac's hardware encoder takes, too. Measured 2026-09-27 on the M1 Pro this is developed
-# on: a VideoToolbox HARDWARE session opens for every frame up to 36,864 macroblocks with neither
-# side over 4096 (1280x1440 is L4.0, 1920x2160 L5.0, 2560x2880 and 3840x2160 L5.1, 4096x2304 and
-# 2304x4096 L5.2, all writing 0.69-0.71 of their bitrate target), and refuses 3840x4320, 7680x2160
-# and even 5120x1440 (28,800 macroblocks, but 5120 wide). `-allow_sw 1` then hands the frame to
-# Apple's SOFTWARE H.264 encoder without a word, which is slower and writes 1.02-1.10 of its target
-# where the hardware writes 0.70: the owner's compare at his remembered "Source" rendered for 3:41
-# against the 1:41 its picker quoted, and wrote 299 MB against 205 MB (JOURNEY-3). Its level-6.0
-# file does not even decode in this Mac's own hardware; the capped 2714x3052 one does.
-#
-# A warning could not fix that, because the file itself is the problem: nothing he shares it to
-# plays it. So the cap is a rule, not a caveat. "Source" means the largest panes whose frame fits
-# one 4K frame (2714x3052 for two stacked 4K panes, 4096x1152 side by side), and a row already
-# inside the cap is untouched. 3840x2160's pixel count is level 5.1 at the export's 30 fps.
-MAX_FRAME_PIXELS = 3840 * 2160
-MAX_FRAME_SIDE = 4096
+# THE TWO-PANE FRAME IS HELD TO ONE 4K FRAME like every H.264 frame this app writes: two 4K panes
+# stacked are 3840x4320, H.264 level 6.0, which VideoToolbox's hardware encoder refuses and no phone
+# plays (JOURNEY-3; the limits and their measurement are at `export_video.MAX_FRAME_PIXELS`). "Source"
+# means the largest panes whose frame fits (2714x3052 for two stacked 4K panes, 4096x1152 side by
+# side), and a row already inside the cap is untouched.
 
 
 def _pane_size(short: int, aw: int, ah: int) -> tuple[int, int]:
@@ -255,8 +244,7 @@ def _frame_of(pane_w: int, pane_h: int, layout: str) -> tuple[int, int]:
 
 
 def _fits_the_cap(pane_w: int, pane_h: int, layout: str) -> bool:
-    out_w, out_h = _frame_of(pane_w, pane_h, layout)
-    return out_w * out_h <= MAX_FRAME_PIXELS and max(out_w, out_h) <= MAX_FRAME_SIDE
+    return fits_one_frame(*_frame_of(pane_w, pane_h, layout))
 
 
 def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
