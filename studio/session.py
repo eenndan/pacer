@@ -1374,13 +1374,6 @@ class Session:
         ref = getattr(self, "_track_lines", None)
         return True if ref is None else self._start_line_matches(ref[0])
 
-    def confirm_timing(self) -> None:
-        """Mark the start/finish line as user-confirmed (Provisional → Verified): what a drag that
-        MOVES the start line does (through ``set_timing_lines``); a sector-only edit does not
-        (QA r4 CODE-1, ``CentralView._on_lines``). Idempotent; persisted by the sidecar via
-        ``timing_user_confirmed``."""
-        self._timing_user_confirmed = True
-
     @property
     def timing_user_confirmed(self) -> bool:
         """The raw user-confirmation flag (for the sidecar to persist). Distinct from

@@ -172,7 +172,7 @@ def test_undo_keeps_confirmed_state():
     manual edit confirms the timing; undoing back to a confirmed snapshot must not demote it."""
     s = _make_session()
     s.track_name = None  # unknown track: trust rides purely on the user-confirmation flag
-    s.confirm_timing()
+    s.set_timing_lines(s.start_line, s.sector_lines)  # the drag's call: it confirms the timing
     assert s.timing_verified is True
     s.push_timing_history()  # snapshots confirmed=True
     s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [])  # a fresh user edit stays confirmed

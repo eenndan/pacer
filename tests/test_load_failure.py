@@ -422,8 +422,9 @@ def test_auto_fit_notice_retracts_when_the_start_line_is_placed():
     assert win.session.timing_verified is False
 
     # The user drags the start/finish line: _on_lines confirms the timing (a start line that
-    # MOVED; a sector-only edit does not, QA r4 CODE-1) and emits timingEdited.
-    win.session.confirm_timing()
+    # MOVED; a sector-only edit does not, QA r4 CODE-1) and emits timingEdited. Its
+    # set_timing_lines sets this flag; the fixture's stub laps cannot re-segment, so set it here.
+    win.session._timing_user_confirmed = True
     view.timingEdited.emit()
     _APP.processEvents()
     assert win.session.timing_verified is True

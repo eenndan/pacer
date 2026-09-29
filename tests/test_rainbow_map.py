@@ -670,8 +670,9 @@ def test_provisional_cue_clears_when_timing_confirmed():
     mv = MapView(s)
     assert mv._provisional_line is not None, "starts Provisional (unknown, unconfirmed)"
     # A user drag confirms the timing (what Session.set_timing_lines does), then the app re-segments
-    # and calls map.refresh_overlays(), which re-evaluates the cue.
-    s.confirm_timing()
+    # and calls map.refresh_overlays(), which re-evaluates the cue. The stub's laps cannot
+    # re-segment, so set the flag set_timing_lines(user_confirm=True) sets.
+    s._timing_user_confirmed = True
     assert s.timing_verified is True
     mv.refresh_overlays()
     assert mv._provisional_line is None, "confirming the start line must clear the dashed cue"
