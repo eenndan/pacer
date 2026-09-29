@@ -26,8 +26,8 @@ transponder's than the times from the clock the camera writes itself.
 
 A GoPro stores GPS in payloads of about one second, most holding ten fixes. The media timestamps
 say when a payload starts and ends, not when each fix inside it was taken. A tool that spreads the
-fixes evenly across the payload runs about 0.1 % off the true rate until a payload of eleven
-resets it, so each fix lands within about ±0.05 s of its true time and a lap can read up to
+fixes evenly across the payload runs about 0.1 % off the true rate until a payload of nine or
+eleven resets it, so each fix lands within about ±0.05 s of its true time and a lap can read up to
 ~0.1 s off, with no average bias. The upstream project Pacer was forked from fitted a per-sample
 clock to those payloads instead, and a port of that fit lived in this repo for a while.
 
@@ -128,8 +128,9 @@ Each ingredient was shown necessary, and both reverts now fail the gate.
 The same idea, pushed further, is a synthetic GoPro recording with known truth. It is a chaptered
 MP4 with real GPMF streams: GPS noise and glitches, the measured GPS lag and media-clock rate, and
 an IMU on a misaligned mount. It goes through the real loader in CI, and the noise-free laps land
-within 0.41 ms of the truth. Planted defects fail it by name: timing on the media clock, a 500 ppm
-clock error, a step at a chapter seam, a gravity axis left unpermuted.
+within 0.41 ms of the truth. Four defects were planted in the real loader in #371, and each failed
+it by name: timing on the media clock, a 500 ppm clock error, a step at a chapter seam, a gravity
+axis left unpermuted. `pixi run verify` runs it, and the golden gate, in one command.
 
 Receipt: [#286](https://github.com/eenndan/pacer/pull/286) ·
 [#371](https://github.com/eenndan/pacer/pull/371) · `tests/test_golden_synthetic.py` ·

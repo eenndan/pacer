@@ -27,21 +27,19 @@ debrief, which is the synthetic demo's; all are captured by one command,
 
 ## Accuracy — the claim everything else rests on
 
-Pacer's lap times are validated **out-of-sample against official timing** — a real transponder log,
-the ground truth a race series scores a session with, and a circuit's own published timing sheet.
-Over **121 clean laps** across three recordings:
+Pacer's lap times are validated **out-of-sample against official timing** — a race's transponder
+log, the ground truth a series scores a session with, and a circuit's published timing sheet. Over
+**121 clean laps** across three recordings — a modest sample, and the honest one:
 
-- essentially **unbiased** — mean error within **±0.003 s**;
+- mean error **+0.0010 to +0.0030 s** per recording — point estimates, not a bound;
 - **σ 0.0247 s**, **0.0527 s** and **0.0871 s** — the worst about **0.13 %** of a ~68 s kart lap,
-  quoting the worst of the three on purpose;
-- 14 clean laps of 15 aligned, 48 of 57, and 59 of 65. A modest sample, and the honest one.
+  quoting the worst on purpose.
 
 Two recordings are D24's — the Daytona 24-hour race at Milton Keynes, May 2026, that Pacer was
-built on — checked against the race's transponder log in June 2026 and reported as recorded: that
-footage has left the development machine. The third is a sprint race at the same
-circuit on 18 September 2026, re-validated in September 2026 against the circuit's Club Speed timing
-on footage that is on the machine, by one command a real-footage check re-runs. The Sandown
-recordings, the other circuit, wait for their timing sheets, which sit behind a Club Speed sign-in.
+built on — checked against the race's transponder log in June 2026 and reported as recorded: one's
+footage no longer exists, the other's is kept off the development machine. The third, a sprint
+there on 18 September 2026, is re-measured against the circuit's Club Speed timing by a real-footage
+check. The Sandown recordings wait for timing sheets behind a Club Speed sign-in.
 
 <img src="docs/media/accuracy.png" width="880" alt="Lap-time error against official timing: recording A (D24, transponder) mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B (D24, transponder) mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4; recording C (MK sprint, Club Speed, September 2026) mean +0.0010 s, σ 0.0247 s, 14 clean of 15 aligned, median DOP 1.25">
 
@@ -49,24 +47,28 @@ No lap is hand-matched: the session's per-lap *duration* sequence is correlated 
 candidate window of the timing. Because the winning window is *chosen* to maximise `r`, that `r` is
 not an accuracy statistic — the **margin** is. Against the 24-hour transponder log the fingerprint
 matches at **r ≥ 0.99 at exactly one offset and below 0.29 at every other**. Against the sprint's
-sheet — every driver of every heat that day, 99 rows — it matches one window at r 0.9998, and every
-other window leaves a residual at least **44×** larger. The session Pacer timed is provably the
-session the official timing timed.
+sheet — every driver of every heat that day — it matches one window at r 0.9998, and every other
+window leaves a residual at least **44×** larger.
 
 Why it works: a GoPro writes GPS in ~1 s packets, and spreading a packet's fixes evenly places
-each only to about ±0.05 s (28 ms rms), so a lap timed that way can read up to ~0.1 s off, with no
-average bias. GPS9 (a Hero 11 or 13) stamps every fix, and Pacer times on that **true clock**.
-Where the remaining error comes from, and the sensor fusion, Kalman/RTS smoothing,
-Doppler-aided positioning and map-matching that were tried and **rejected on evidence**, are in
+each only to about ±0.05 s (28 ms rms on two GPS9 recordings), so a lap timed that way can read up
+to ~0.1 s off, with no average bias. GPS9 (a Hero 11 or 13) stamps every fix, and Pacer times on
+that **true clock**. The error budget, and the sensor fusion, Kalman/RTS smoothing, Doppler-aided
+positioning and map-matching **rejected on evidence**, are in
 **[docs/ACCURACY.md](docs/ACCURACY.md)**.
 
+**Verify it yourself:** `pixi run verify` times a synthetic GoPro recording with known truth
+through the real loader (noise-free: `max|Δ| 0.41 ms`) and runs the golden gate. That proves the
+clock, the chapter seam and the interpolation — not a receiver's noise floor, which official timing
+measures.
+
 A **delta** is measured on the clock too, not estimated. Pacer's own corner phase bars once priced
-a stretch by integrating `∫ds/v` along it — and `1/v` amplifies any speed error exactly where the
-car is slowest, which is exactly where a corner's time is largest. Auditing them against the clock
-found them wrong on **every one of the 12 corners** of the D24 best lap, by up to
-**+0.493 s** on the slowest (`studio/coaching.py::_span_clock`). Every delta the app shows — the Δ
-trace, sector and corner splits, the ideal lap, the coaching breakdown, the exports — is a
-difference of two clock readings, and a test fails if an estimator comes back.
+a stretch by integrating `∫ds/v` along it — and `1/v` amplifies any speed error where the car is
+slowest, which is where a corner's time is largest. Auditing them against the clock found them
+wrong on **every one of the 12 corners** of the D24 best lap, by up to **+0.493 s** on the slowest
+(`studio/coaching.py::_span_clock`). Every delta the app shows — the Δ trace, sector and corner
+splits, the ideal lap, the coaching breakdown, the exports — is a difference of two clock readings,
+and a test fails if an estimator comes back.
 
 ---
 
