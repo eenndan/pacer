@@ -16,6 +16,7 @@ Runs offscreen (QImage/QPainter need a QApplication). No telemetry file, no pace
 Session surface is duck-typed exactly as far as card_data reaches. Run: python tests/test_share_card.py
 """
 import os
+import re
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -180,6 +181,168 @@ def test_card_data_survives_coaching_error():
     d = share_card.card_data(Boom(), unit="kmh")
     assert d.top_opp is None and not d.blocked
     print("test_card_data_survives_coaching_error OK")
+
+
+# ------------------------------------------ QA W1 REG-1: the card honours the page's tie rule
+# The working set's RANKED rows, biggest loss first — (cid, time lost s, IQR s, counted laps, laps at
+# the target, reach) — as the QA r4 ADVICE lane extracted them through the real (jailed) loader; the
+# same numbers tests/test_coaching.py's `_WORKING_SET_RANKED` pins the page's "Start with" on
+# (asserted equal to it below, by `_page_twin`).
+_R, _P = coaching.REACH_REPEAT, coaching.REACH_RARE
+_WORKING_SET_RANKED = {
+    "MK_18_09_26": [(5, 0.134780, 0.230944, 19, 6, _R), (2, 0.087096, 0.106218, 16, 3, _R),
+                    (8, 0.064168, 0.107409, 17, 4, _R)],
+    "SD_19_09_26": [(1, 0.146633, 0.200070, 36, 4, _R), (5, 0.093451, 0.064636, 35, 3, _P),
+                    (7, 0.077588, 0.101853, 36, 4, _R), (2, 0.059539, 0.096228, 35, 5, _R),
+                    (3, 0.049277, 0.090632, 36, 9, _R)],
+    "SD_30_08_26": [(7, 0.099327, 0.095077, 37, 5, _R), (5, 0.082542, 0.113700, 37, 6, _R),
+                    (3, 0.046750, 0.078567, 37, 9, _R)],
+    "Sandown 3h 2026": [(1, 0.229400, 0.309380, 61, 3, _P), (4, 0.193470, 0.230531, 61, 5, _P),
+                        (7, 0.177929, 0.304993, 62, 4, _P), (6, 0.167461, 0.187463, 62, 4, _P)],
+}
+
+
+def _page_twin() -> dict:
+    """tests/test_coaching.py's `_WORKING_SET_RANKED`, read from its SOURCE — importing that file
+    would theme this process's QApplication at module scope — so the card's copy cannot drift from
+    the one the page's "Start with" is pinned on without a test saying so."""
+    import ast
+
+    class _Reach(ast.NodeTransformer):   # the table's only names are the two reach constants
+        def visit_Name(self, node: ast.Name) -> ast.Constant:
+            return ast.Constant({"_R": _R, "_P": _P}[node.id])
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_coaching.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    table = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                 and [getattr(t, "id", None) for t in n.targets] == ["_WORKING_SET_RANKED"])
+    return ast.literal_eval(_Reach().visit(table))
+
+
+def _working_set_session(name: str) -> FakeSession:
+    """A card session whose coaching rows are one working-set recording's real ranked rows (the
+    reason is `_apex_opp`'s: the tie rule reads only the losses, spreads and lap counts)."""
+    rows = [coaching.Opportunity(
+        cid=cid, direction=1, time_lost=loss, entry_dist=100.0, reason=_apex_opp().reason,
+        evidence=coaching.Evidence(n_laps=n, reach_laps=hit, reach=reach, iqr=iqr,
+                                   abstain=coaching.ABSTAIN_NONE))
+        for cid, loss, iqr, n, hit, reach in _WORKING_SET_RANKED[name]]
+    return FakeSession(opps=coaching.Opportunities(
+        enough=True, n_laps=max(r.evidence.n_laps for r in rows), median_lap_id=3, rows=rows))
+
+
+def _named(text: str) -> tuple[list[str], int]:
+    """(the corners a line names, in order; how many more it counts) — "C1, C4, C7 or 1 more" and
+    "C1 · C4 · C7 · 1 more" both read (["C1", "C4", "C7"], 1)."""
+    more = re.search(r"(\d+) more", text)
+    return re.findall(r"C\d+", text), int(more.group(1)) if more else 0
+
+
+def test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card():
+    """QA W1 REG-1. On MK_18_09_26 the Coaching page says "Start with C5, C2 or C8: +0.13 s down to
+    +0.06 s sit closer together than your own lap-to-lap spread, so this cannot rank them.", and
+    the shared lap card said "BIGGEST OPPORTUNITY C5 +0.13 s" — the one surface that leaves the
+    app overclaiming the one ranking the page refuses. The same on SD_30_08_26 (C7 vs "C7 or C5")
+    and Sandown 3h (C1 vs "C1, C4, C7 or 1 more").
+
+    The card now asks the page's own rule (`coaching.lead_ties`, off the same rows and lead) and
+    names the same corners, capped the same way; SD_19_09_26, whose lead stands alone on the page,
+    keeps the single-lead block word for word."""
+    assert _WORKING_SET_RANKED == _page_twin(), "this table drifted from test_coaching.py's twin"
+    TIE = "TOP OPPORTUNITIES · too close to rank"
+    expect = {  # (heading, corner line, loss figure) on the card
+        "MK_18_09_26": (TIE, "C5 · C2 · C8", "+0.13 to +0.06 s"),
+        "SD_30_08_26": (TIE, "C7 · C5", "+0.10 to +0.08 s"),
+        "Sandown 3h 2026": (TIE, "C1 · C4 · C7 · 1 more", "+0.23 to +0.17 s"),
+        "SD_19_09_26": ("BIGGEST OPPORTUNITY", "C1 ⟲", "+0.15 s"),
+    }
+    for name, (heading, label, loss) in expect.items():
+        session = _working_set_session(name)
+        top = share_card.card_data(session, unit="kmh").top_opp
+        assert top is not None, name
+        assert top.corner_label == label, (name, top.corner_label)
+        assert (share_card.opp_heading(top), share_card.opp_loss(top)) == (heading, loss), \
+            (name, share_card.opp_heading(top), share_card.opp_loss(top))
+        # The card names exactly the corner set the page's "Start with" sentence names.
+        opps = session.coaching_opportunities()
+        page = coaching.theme_actions(coaching.session_theme(opps.rows), opps.rows)[-1]
+        assert page.startswith("Start with "), page
+        assert _named(page.split(":")[0]) == _named(top.corner_label), (name, page, top)
+        if heading == TIE:
+            assert top.reason == "", (name, top.reason)   # no one corner's reason under a tie
+        else:                                             # ...and the single lead is unchanged
+            assert top.tied_low_s is None, top
+            assert top.reason == coaching.reason_sentence(opps.rows[0], "kmh", reach=False), top
+    # A span whose two ends round to one figure says so, rather than "+0.15 to +0.15 s".
+    level = share_card.TopOpp("C3 · C12", 0.148, "", tied_low_s=0.146)
+    assert share_card.opp_loss(level) == "+0.15 s each", share_card.opp_loss(level)
+    print("test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card OK")
+
+
+def _row_ink(img: QImage, y0: int, y1: int, colour: str) -> list[int]:
+    """The x of every pixel in rows [y0, y1) painted exactly `colour` (glyph cores, not their
+    antialiased edges)."""
+    rgb = QColor(colour).rgb()
+    return [x for x in range(share_card.CARD_W) for y in range(y0, y1)
+            if img.pixel(x, y) == rgb]
+
+
+def test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss():
+    """Rendered: a tie's block has its heading, its corners and its span, and NOTHING on the reason
+    row (the single-lead card of the same lead does ink it — the control); and a tie's corner line,
+    sized beside a right-aligned span, never runs into it — swept over the widest a real track makes
+    (12 corners, the cap, the widest span) and a pathological 99-corner, 99-more line."""
+    import dataclasses
+
+    from PySide6.QtGui import QPainter
+
+    tie = share_card.card_data(_working_set_session("MK_18_09_26"), unit="kmh")
+    lead = share_card.card_data(_working_set_session("SD_19_09_26"), unit="kmh")
+    # No map: the plate is MAP_PLATE_H_MAX tall, so the block's rows sit at fixed y.
+    opp_top = 512 + share_card.MAP_PLATE_H_MAX + 56
+    reason_band = (opp_top + 80, opp_top + 118)
+    tie_img = share_card.render_card(tie, None, palette=theme.PALETTE_STANDARD)
+    lead_img = share_card.render_card(lead, None, palette=theme.PALETTE_STANDARD)
+    assert _row_ink(lead_img, *reason_band, theme.C.text_dim), "control: the lead has a reason"
+    assert not _row_ink(tie_img, *reason_band, theme.C.text_dim), "a tie drew a reason line"
+
+    pad, right = 72, share_card.CARD_W - 72
+    img = QImage(share_card.CARD_W, share_card.CARD_H, QImage.Format_ARGB32)
+    p = QPainter(img)
+    try:
+        widest = []
+        for label in ("C12 · C10 · C11 · 9 more", "C99 · C99 · C99 · 99 more", "C5 · C2 · C8"):
+            for hi, lo in ((9.99, 9.98), (0.13, 0.06), (0.15, 0.15)):
+                opp = share_card.TopOpp(label, hi, "", tied_low_s=lo)
+                p.setFont(share_card._font(46, theme.W_SEMIBOLD))
+                loss_w = p.fontMetrics().horizontalAdvance(share_card.opp_loss(opp))
+                avail = right - pad - loss_w - share_card._OPP_GAP
+                txt, font = share_card._fit_line(p, label, avail, share_card._OPP_PX_STEPS,
+                                                 theme.W_SEMIBOLD)
+                p.setFont(font)
+                w = p.fontMetrics().horizontalAdvance(txt)
+                assert w <= avail, (label, share_card.opp_loss(opp), w, avail)
+                widest.append((pad + w, font.pixelSize(), txt))
+        # Every real form draws WHOLE at the block's own 46 px; only the pathological one shrinks.
+        for _right_x, px, txt in widest:
+            assert "…" not in txt, txt
+            assert px == 46 or txt.startswith("C99"), (txt, px)
+    finally:
+        p.end()
+    # ...and in pixels, on the card itself: the corners' ink ends left of the span's.
+    for label in ("C12 · C10 · C11 · 9 more", "C99 · C99 · C99 · 99 more"):
+        data = dataclasses.replace(tie, top_opp=share_card.TopOpp(label, 9.99, "",
+                                                                  tied_low_s=9.98))
+        img = share_card.render_card(data, None, palette=theme.PALETTE_STANDARD)
+        names = _row_ink(img, opp_top + 20, opp_top + 64, theme.C.text)
+        span = _row_ink(img, opp_top + 20, opp_top + 64, theme.behind_colour())
+        assert names and span and max(names) < min(span), (label, max(names), min(span))
+        bg = img.pixel(5, 5)
+        assert not [x for x in range(right + 1, share_card.CARD_W)
+                    if any(img.pixel(x, y) != bg for y in range(opp_top, opp_top + 120))], label
+    print(f"test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss OK "
+          f"(widest corner line ends at x={max(r for r, *_ in widest)} of {right})")
 
 
 # --------------------------------------------------------------------- hero Δ-to-ideal copy
@@ -864,6 +1027,8 @@ if __name__ == "__main__":
     test_card_data_stamps_degraded_timing()
     test_card_data_no_opportunity_when_too_few_laps()
     test_card_data_survives_coaching_error()
+    test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card()
+    test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss()
     test_hero_delta_line_reads_cleanly_on_both_branches()
     test_even_ideal_card_renders_with_the_clean_copy()
     test_single_donor_session_withholds_the_ideal_block()

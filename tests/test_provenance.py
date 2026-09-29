@@ -335,6 +335,23 @@ def test_the_fix_quality_is_summarised_over_the_window_not_the_recording():
           f"{p.quality.lines()[0]}")
 
 
+def test_a_video_clock_window_states_the_one_bound_not_a_drift():
+    """On an older GPS5 camera the time-axis line said "video clock — no GPS9 stream; times
+    drift". The repo measured the video and GPS clocks' rates to agree to ~27 ppm; what the
+    fallback costs is PLACEMENT (each fix only to about ±0.05 s), so the line quotes the same
+    hedged bound every other media-clock surface quotes (data_quality.MEDIA_CLOCK_LAP_ERROR)."""
+    import dataclasses
+
+    from studio import data_quality
+    s = _session()
+    q = dataclasses.replace(s.lap_time_provenance(s.best_lap_id()).quality,
+                            clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    axis = next(line for line in q.lines() if line.startswith("Time axis"))
+    assert "video clock" in axis and data_quality.MEDIA_CLOCK_LAP_ERROR in axis, axis
+    assert "drift" not in axis, axis
+    print(f"test_a_video_clock_window_states_the_one_bound_not_a_drift OK — {axis}")
+
+
 def test_the_quality_fields_survive_the_load_smoothing():
     """`load._smooth_track` rebuilds every sample field by field, and for a long time it did not
     name `dop`/`fix` — so the app's record of how good each fix was ended one step after the gate

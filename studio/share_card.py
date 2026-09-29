@@ -3,8 +3,9 @@
 A single portrait PNG a kart racer posts after a good session — the one social artifact no
 competitor (RaceChrono / TrackAddict / AiM / Garmin) ships. It composes the session's headline
 numbers into a tidy, palette- and unit-honouring card: track + date, the best lap (hero), the
-Δ-to-ideal (the honest per-point envelope, NOT a drivable lap), the #1 coaching opportunity, a
-speed-coloured map thumbnail, and a subtle "pacer" wordmark.
+Δ-to-ideal (the honest per-point envelope, NOT a drivable lap), the #1 coaching opportunity (or
+the corners tied for it, when the Coaching page cannot rank them), a speed-coloured map thumbnail,
+and a subtle "pacer" wordmark.
 
 TWO LAYERS, deliberately split so the numbers are testable without Qt:
 
@@ -129,11 +130,37 @@ def pb_mark(standing: dict | None, best_s: float | None, prior_date: str | None 
 
 @dataclass(frozen=True)
 class TopOpp:
-    """The #1 coaching opportunity as the card shows it (already resolved to display strings)."""
+    """The card's coaching opportunity (already resolved to display strings): the #1 corner, or —
+    when the measurement cannot rank the top corners apart (`coaching.lead_ties`) — the tied set,
+    which is what the Coaching page's "Start with C5, C2 or C8" names."""
 
-    corner_label: str    # "C4 ⟳" — corner id + turn-direction glyph
-    time_lost_s: float   # median s lost vs the best lap's same corner (> 0)
-    reason: str          # the human, numbers-only reason sentence (unit-aware, ESTIMATED-safe)
+    corner_label: str    # "C4 ⟳" — corner id + turn-direction glyph; a tie: "C5 · C2 · C8"
+    time_lost_s: float   # median s lost vs the best lap's same corner (> 0); a tie: the lead's
+    reason: str          # the human, numbers-only reason sentence (unit-aware, ESTIMATED-safe);
+    #                      "" for a tie — a reason is one corner's, and no corner leads
+    tied_low_s: float | None = None  # a tie: the smallest tied loss; None when one corner leads
+
+
+# The heading over a tie. The page's own reason for refusing the crown is "closer together than
+# your own lap-to-lap spread"; the card has one label row, so it says the verdict and leaves the
+# reason to the page.
+TIE_HEADING = "TOP OPPORTUNITIES · too close to rank"
+
+
+def opp_heading(opp: TopOpp) -> str:
+    """The label over the card's opportunity block: one corner is the BIGGEST; a tie is not."""
+    return "BIGGEST OPPORTUNITY" if opp.tied_low_s is None else TIE_HEADING
+
+
+def opp_loss(opp: TopOpp) -> str:
+    """The time-lost figure beside the corner(s): "+0.13 s", or a tie's span "+0.13 to +0.06 s"
+    — the same two ends the page's "+0.13 s down to +0.06 s" prints. A span whose ends round to
+    one figure says so ("+0.15 s each") rather than printing "+0.15 to +0.15 s"."""
+    hi = f"+{opp.time_lost_s:.2f}"
+    if opp.tied_low_s is None:
+        return f"{hi} s"
+    lo = f"+{opp.tied_low_s:.2f}"
+    return f"{hi} s each" if lo == hi else f"{hi} to {lo} s"
 
 
 @dataclass(frozen=True)
@@ -156,17 +183,19 @@ class CardData:
     #                                 least hoverable surface the number reaches, so the sample
     #                                 travels WITH it rather than staying behind in a tooltip.
     unit: str             # the active speed unit id (km/h default) — for any speed reads
-    top_opp: TopOpp | None          # the #1 opportunity, or None (< MIN_LAPS clean laps / none losing)
+    top_opp: TopOpp | None          # the #1 opportunity (or the tied top set), or None (< MIN_LAPS
+    #                                 clean laps / none losing)
     blocked: bool         # True ⇒ do NOT render a card (provisional / no valid lap)
     stamp: str            # "" or an honesty stamp to burn on the card ("estimated timing")
     pb: str = ""          # the personal-best mark beside "BEST LAP" (`pb_mark`), or ""
 
 
 def _top_opportunity(session, unit: str) -> TopOpp | None:
-    """The single biggest coaching opportunity as a display row, or None when the session has too
-    few clean laps or no corner is losing time. Reuses the CANONICAL coaching model + sentence
-    (no new analysis) and the lap table's direction glyph, so the card can't drift from the panel.
-    Fully guarded — a card must never be broken by a coaching hiccup."""
+    """The biggest coaching opportunity as a display row — or the corners tied with it — or None
+    when the session has too few clean laps or no corner is losing time. Reuses the CANONICAL
+    coaching model, sentence and tie rule (no new analysis) and the lap table's direction glyph,
+    so the card can't drift from the panel. Fully guarded — a card must never be broken by a
+    coaching hiccup."""
     try:
         from .lap_table import CORNER_DIR_GLYPH
         opps = session.coaching_opportunities()
@@ -180,6 +209,18 @@ def _top_opportunity(session, unit: str) -> TopOpp | None:
         if not ranked:
             return None
         opp = ranked[0]  # ranked biggest-loss first
+        # QA W1 REG-1: the Coaching page will not crown a lead its corners' own lap-to-lap spread
+        # cannot separate ("Start with C5, C2 or C8: … so this cannot rank them"), and the card
+        # printed "BIGGEST OPPORTUNITY C5" under it, on three of the four working-set recordings.
+        # The page's rule, not a copy of it: `lead_ties` off the same rows and the same lead, and
+        # the same names capped the same way ("C1, C4, C7 or 1 more").
+        tied = coaching.lead_ties(list(opps.rows), opp.cid)
+        if len(tied) > 1:
+            named = tied[:coaching._TIE_NAME_CAP]
+            extra = len(tied) - len(named)
+            label = " · ".join(f"C{r.cid}" for r in named) + (f" · {extra} more" if extra else "")
+            return TopOpp(corner_label=label, time_lost_s=float(tied[0].time_lost), reason="",
+                          tied_low_s=float(tied[-1].time_lost))
         glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
         label = f"C{opp.cid} {glyph}".strip()
         # The lever alone (QA JOURNEY-7): the "4 of 36 laps matched your best lap here" count was
@@ -274,6 +315,13 @@ _TITLE_PX_STEPS = (58, 50, 44)
 # 977 px; 24 px holds every sentence the three fixtures produce (869 px worst), and anything longer
 # still elides rather than smearing off the edge. This is the artifact a user SENDS to someone.
 _REASON_PX_STEPS = (30, 27, 24)
+# ...and for the opportunity's corner line, which shares its row with the right-aligned loss. One
+# corner ("C12 ⟲", 125 px at 46 px) is nowhere near the loss; a TIE's names can be. Measured
+# (Inter semibold, 46 px): the widest a real track makes, 12 corners' "C12 · C10 · C11 · 9 more",
+# is 507 px beside the widest span "+9.99 to +9.99 s" at 368 px — 899 of 936 px with the gap, so
+# it draws whole at 46. A pathological "C99 · C99 · C99 · 99 more" (576 px) takes the second step.
+_OPP_PX_STEPS = (46, 40, 34)
+_OPP_GAP = 24     # the least clear space between the corner line and the loss figure
 
 # Map plate: the thumbnail scales to this width; the plate's height then hugs the scaled thumbnail
 # (L5 — a wide landscape grab no longer letterboxes into a fixed-tall plate), within these bounds.
@@ -431,17 +479,25 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     opp_top = map_top + map_h + 56
     if data.top_opp is not None:
         opp = data.top_opp
-        _draw_text(p, pad, opp_top, "BIGGEST OPPORTUNITY", _font(28, theme.W_SEMIBOLD),
+        _draw_text(p, pad, opp_top, opp_heading(opp), _font(28, theme.W_SEMIBOLD),
                    theme.C.text_muted)
-        _draw_text(p, pad, opp_top + 60, f"{opp.corner_label}", _font(46, theme.W_SEMIBOLD),
-                   theme.C.text)
+        loss, loss_font = opp_loss(opp), _font(46, theme.W_SEMIBOLD)
+        p.setFont(loss_font)
+        loss_w = p.fontMetrics().horizontalAdvance(loss)
+        # The corner(s) take what the figure leaves — see _OPP_PX_STEPS; one corner is always whole
+        # at the first step, so its line draws exactly as it always has.
+        names, names_font = _fit_line(p, opp.corner_label, right - pad - loss_w - _OPP_GAP,
+                                      _OPP_PX_STEPS, theme.W_SEMIBOLD)
+        _draw_text(p, pad, opp_top + 60, names, names_font, theme.C.text)
         # the time lost reads in the "behind" hue (time given away)
-        _draw_text(p, 0, opp_top + 60, f"+{opp.time_lost_s:.2f} s", _font(46, theme.W_SEMIBOLD),
-                   theme.behind_colour(), align_right_at=right)
+        _draw_text(p, 0, opp_top + 60, loss, loss_font, theme.behind_colour(),
+                   align_right_at=right)
         # The reason is the only line on the card that is a SENTENCE, and it was the only one drawn
         # with neither an `align_right_at` nor a fit — see _REASON_PX_STEPS for what that measured.
-        reason, reason_font = _fit_line(p, opp.reason, right - pad, _REASON_PX_STEPS)
-        _draw_text(p, pad, opp_top + 110, reason, reason_font, theme.C.text_dim)
+        # A tie has none: a reason belongs to one corner, and the card has just said none leads.
+        if opp.reason:
+            reason, reason_font = _fit_line(p, opp.reason, right - pad, _REASON_PX_STEPS)
+            _draw_text(p, pad, opp_top + 110, reason, reason_font, theme.C.text_dim)
     else:
         _draw_text(p, pad, opp_top, "Drive a few more clean laps for coaching tips.",
                    _font(28), theme.C.text_muted)
