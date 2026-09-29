@@ -2182,7 +2182,7 @@ def test_lead_ties_widen_on_a_short_session():
         "SD_19_09_26": "Start with C1: +0.15 s, and you have matched it on 4 of 36 laps.",
         "SD_30_08_26": f"Start with C7 or C5: +0.10 s and +0.08 s {spread}, so either is the same "
                        "call.",
-        "Sandown 3h 2026": f"Start with C1, C4, C7 or 1 more: +0.23 s down to +0.17 s {spread}, "
+        "Sandown 3h 2026": f"Start with C1, C4, C7 or C6: +0.23 s down to +0.17 s {spread}, "
                            "so this cannot rank them.",
     }
     for name, sentence in expect.items():
@@ -2194,6 +2194,88 @@ def test_lead_ties_widen_on_a_short_session():
     long = _working_set_rows("MK_18_09_26", n_laps=60)
     assert [r.cid for r in K.lead_ties(long, 5)] == [5, 2], K.lead_ties(long, 5)
     print(f"ok ADV-2 short-session ties: {expect['MK_18_09_26']!r}")
+
+
+def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_corner_is_named():
+    """QA1-THEME-CLASH (REG-2, W1 close-out QA). Sandown 3h's debrief read "All of the time on offer
+    is in corners you have rarely been quick through: it needs new speed, not repetition." directly
+    above "Consistency is the common thread — 100% of that time is in C1, C4, C7, C6." — and then
+    "Start with C1, C4, C7 or 1 more", a fourth corner the debrief's three-row grid does not show.
+
+    The consistency cause is the spread fallback: no lever fired, so it names no input to change,
+    and under a pace theme it only argues. The reword the QA offered ("the gap is the rare best lap,
+    not the spread") does not survive the numbers: on Sandown 3h's four rows 51-56 % of each
+    corner's time on offer lies beyond the laps' fast quartile and the rest INSIDE their spread
+    (coaching.py, above `theme_actions`). So the line is dropped for that pairing and nothing else.
+
+    The rows are the working set's real ones (`_WORKING_SET_RANKED`) with their real reasons, as the
+    loader gives them on 95694b9: consistency everywhere but SD_19_09_26's C5 (braking). The other
+    three recordings' actions are exactly what they printed before."""
+    import dataclasses
+    real_kinds = {"SD_19_09_26": {5: K.REASON_BRAKING}}
+
+    def rows_of(name):
+        kinds = real_kinds.get(name, {})
+        return [dataclasses.replace(r, reason=dataclasses.replace(
+            r.reason, kind=kinds.get(r.cid, K.REASON_CONSISTENCY)))
+            for r in _working_set_rows(name)]
+
+    spread = "sit closer together than your own lap-to-lap spread"
+    expect = {
+        "MK_18_09_26": (K.THEME_EXECUTION, [
+            "Consistency is the common thread — 100% of that time is in C5, C2, C8.",
+            f"Start with C5, C2 or C8: +0.13 s down to +0.06 s {spread}, so this cannot rank "
+            "them."]),
+        "SD_19_09_26": (K.THEME_EXECUTION, [
+            "Consistency is the common thread — 78% of that time is in C1, C7, C2, C3.",
+            "Start with C1: +0.15 s, and you have matched it on 4 of 36 laps."]),
+        "SD_30_08_26": (K.THEME_EXECUTION, [
+            "Consistency is the common thread — 100% of that time is in C7, C5, C3.",
+            f"Start with C7 or C5: +0.10 s and +0.08 s {spread}, so either is the same call."]),
+        "Sandown 3h 2026": (K.THEME_PACE, [
+            f"Start with C1, C4, C7 or C6: +0.23 s down to +0.17 s {spread}, so this cannot rank "
+            "them."]),
+    }
+    for name, (kind, lines) in expect.items():
+        rows = rows_of(name)
+        theme = K.session_theme(rows)
+        acts = K.theme_actions(theme, rows)
+        assert theme.kind == kind and theme.cause == K.REASON_CONSISTENCY, (name, theme)
+        assert acts == lines, (name, acts)
+        page = " ".join([K.theme_sentence(theme), *acts])
+        assert not ("not repetition" in page and "Consistency" in page), (name, page)
+        # Every corner "Start with" names is named, never counted: the debrief shows three rows.
+        start = acts[-1].split(":")[0]
+        named = [int(c) for c in re.findall(r"C(\d+)", start)]
+        tied = [r.cid for r in K.lead_ties(rows, theme.lead_cid)]
+        assert named == tied and "more" not in start, (name, start, tied)
+    # The rule is the PAIRING, not either half: a pace theme keeps a concrete cause, a consistency
+    # cause keeps its line under an execution or split theme, and "most" pace drops it like "all".
+    pace = [_ranked_row(c, loss, 0.01, reach=K.REACH_RARE, n_laps=40, reach_laps=2,
+                        kind=K.REASON_BRAKING) for c, loss in ((1, 0.5), (2, 0.3), (3, 0.2))]
+    assert K.theme_actions(K.session_theme(pace), pace)[0].startswith("Braking is the common")
+    cons = [dataclasses.replace(r, reason=dataclasses.replace(r.reason, kind=K.REASON_CONSISTENCY))
+            for r in pace]
+
+    def repeat(rows, cid):
+        return [dataclasses.replace(r, evidence=dataclasses.replace(
+            r.evidence, reach=K.REACH_REPEAT, reach_laps=12)) if r.cid == cid else r for r in rows]
+
+    most = repeat(cons, 3)                                  # 0.8 s of 1.0 s rarely reached
+    most_theme = K.session_theme(most)
+    assert most_theme.kind == K.THEME_PACE and most_theme.share < 1.0, most_theme
+    assert [a.split(":")[0] for a in K.theme_actions(most_theme, most)] == ["Start with C1"]
+    split = repeat(cons, 1)                                 # 0.5 s against 0.5 s
+    split_theme = K.session_theme(split)
+    assert split_theme.kind == K.THEME_SPLIT, split_theme
+    assert K.theme_actions(split_theme, split)[0].startswith("Consistency is the common thread")
+    # A wide tie names all of its corners (the page and the Stats note name the same ones).
+    wide = [_ranked_row(c, 0.40 - 0.005 * i, 0.3) for i, c in enumerate((3, 1, 4, 5, 9))]
+    assert K.corner_names([r.cid for r in K.lead_ties(wide, 3)]) == "C3, C1, C4, C5 or C9"
+    assert K.theme_actions(K.session_theme(wide), wide)[-1].startswith(
+        "Start with C3, C1, C4, C5 or C9: +0.40 s down to +0.38 s")
+    assert [K.corner_names(c) for c in ([7], [7, 5], [])] == ["C7", "C7 or C5", ""]
+    print(f"ok QA1-THEME-CLASH: Sandown 3h => {expect['Sandown 3h 2026'][1]!r}")
 
 
 def test_a_tie_decided_by_the_standard_error_never_outruns_the_spread_it_prints():
