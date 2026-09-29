@@ -26,6 +26,7 @@ See the "spread, reach and the evidence gate" block below for the measured numbe
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -1529,22 +1530,25 @@ def lead_ties(rows: list[Opportunity], lead_cid: int | None) -> list[Opportunity
                      and abs(lead.time_lost - r.time_lost) < _tie_margin(lead, r)]
 
 
-# Name at most three corners before the line costs more than it says; any others are counted. The
-# tied sentence also drops the single-lead "you have matched it on N of M laps" clause: that clause
-# is per corner, and repeating it per tied corner would make the page's longest line longer than
-# the theme sentence above it (the count stays on every row's own "Done it?" column).
-_TIE_NAME_CAP = 3
+# EVERY TIED CORNER IS NAMED (QA1-THEME-CLASH, REG-2 of the W1 close-out QA). The sentence named
+# three and counted the rest — "Start with C1, C4, C7 or 1 more" on Sandown 3h — and the debrief
+# grid shows three rows, so the fourth corner it told him to start with was on no surface of the
+# page he landed on. Measured on the four working-set recordings and their nine chapters, the widest
+# tie is those four corners, where "or C6" is shorter than "or 1 more"; a longer list is the honest
+# length of a wider tie. The tied sentence also drops the single-lead "you have matched it on N of M
+# laps" clause: that clause is per corner, and repeating it per tied corner would make the page's
+# longest line longer than the theme sentence above it (the count stays on every row's "Done it?").
+def corner_names(cids: Iterable[int]) -> str:
+    """"C7", "C7 or C5", "C1, C4, C7 or C6" — every corner named, in the order given ("" for
+    none). One spelling for the start-here tie, here and on the Stats note that repeats it."""
+    names = [f"C{c}" for c in cids]
+    return ", ".join(names[:-1]) + f" or {names[-1]}" if len(names) > 1 else "".join(names)
 
 
 def _tied_lead_sentence(tied: list[Opportunity]) -> str:
     """"Start with C3 or C12: …" — the honest form of the start-here action when the corners at the
     top of the list are the same number. Called only with 2+ rows."""
-    named = tied[:_TIE_NAME_CAP]
-    extra = len(tied) - len(named)
-    if extra:
-        names = f"{', '.join(f'C{r.cid}' for r in named)} or {extra} more"
-    else:
-        names = ", ".join(f"C{r.cid}" for r in named[:-1]) + f" or C{named[-1].cid}"
+    names = corner_names(r.cid for r in tied)
     nums = (f"+{tied[0].time_lost:.2f} s and +{tied[1].time_lost:.2f} s" if len(tied) == 2
             else f"+{tied[0].time_lost:.2f} s down to +{tied[-1].time_lost:.2f} s")
     tail = "so either is the same call." if len(tied) == 2 else "so this cannot rank them."
@@ -1561,14 +1565,37 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     whatever the session looks like.
 
     The start-here line names MORE THAN ONE corner when the measurement cannot tell them apart
-    (`lead_ties`) — on the real recordings the top two are a tie on both, by 0.086 s and 0.005 s."""
+    (`lead_ties`) — on the real recordings the top two are a tie on both, by 0.086 s and 0.005 s.
+
+    A PACE theme under the CONSISTENCY cause states no cause line (see the block below), so that
+    pairing has one action."""
     if theme.kind == THEME_NONE:
         return []
     out: list[str] = []
+    # NO CAUSE LINE UNDER A PACE THEME WHEN THE CAUSE IS THE SPREAD FALLBACK (QA1-THEME-CLASH,
+    # REG-2). Sandown 3h's page read "…it needs new speed, not repetition." directly above
+    # "Consistency is the common thread — 100% of that time is in C1, C4, C7, C6.": the theme says
+    # the time is speed he has rarely had, and the cause line tells him to repeat. CONSISTENCY is
+    # the fallback that fires when no input (apex, brakes, coast, line) explains the loss, so under
+    # a pace theme it names nothing to change — it only argues. The QA's alternative wording, "the
+    # gap is the rare best lap, not the spread", was MEASURED and is half false: over each row's
+    # counted laps, the share of its time on offer (median → best lap) that lies beyond the laps'
+    # fast quartile, i.e. NOT inside their own spread, on 95694b9:
+    #
+    #   lap set             theme        cause              rows  beyond the fast quartile
+    #   Sandown 3h (0064)   pace 100 %   consistency 100 %     4  51 % 56 % 52 % 51 %
+    #   0064 chapter 2      pace 100 %   consistency 100 %     2  54 % 41 %
+    #
+    # About half of every gap is the spread. These are the only two of the 13 lap sets (four
+    # recordings, nine chapters) with a pace theme; 9 are execution + consistency, which the line
+    # agrees with ("repeat it"), 1 execution + braking and 2 rank nothing. So the line goes, only
+    # for this pairing; the rows keep their own "consistency: middle half of laps within …" lever,
+    # and every concrete cause keeps its line under a pace theme.
     if theme.cause != REASON_NONE and theme.cause_cids:
-        corners_txt = ", ".join(f"C{c}" for c in theme.cause_cids)
-        out.append(f"{_CAUSE_WORD[theme.cause]} is the common thread — {theme.cause_share:.0%} "
-                   f"of that time is in {corners_txt}.")
+        if not (theme.kind == THEME_PACE and theme.cause == REASON_CONSISTENCY):
+            corners_txt = ", ".join(f"C{c}" for c in theme.cause_cids)
+            out.append(f"{_CAUSE_WORD[theme.cause]} is the common thread — "
+                       f"{theme.cause_share:.0%} of that time is in {corners_txt}.")
     else:
         out.append("No single cause dominates these corners — work them one at a time.")
     lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
