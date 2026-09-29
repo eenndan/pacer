@@ -53,6 +53,8 @@ _J_FLAG = re.compile(r"(^|\s)(-j\S*|--parallel\S*)(\s|$)")
 #: ctest's name-selecting flags; `-L`/`-LE` select labels, not names.
 _NAME_FLAGS = ("-R", "-E", "--tests-regex", "--exclude-regex")
 _PLAIN_NAME = re.compile(r"test_\w+")
+#: A textual superset of the idiom _pops_no_media recognises, to skip parsing the other files.
+_MAYBE_POPS = re.compile(r"(pop\(\s*|del\s+os\.environ\[\s*)[\"']PACER_NO_MEDIA[\"']")
 
 
 def _tasks() -> dict:
@@ -139,8 +141,10 @@ def _real_player_tests() -> set[str]:
     found = set()
     for path in glob.glob(os.path.join(_TESTS, "test_*.py")):
         with open(path, encoding="utf-8") as f:
-            if _builds_a_real_player(f.read()):
-                found.add(os.path.splitext(os.path.basename(path))[0])
+            source = f.read()
+        # parse only the files that could match: parsing every test file took 2.3 s under load
+        if _MAYBE_POPS.search(source) and _builds_a_real_player(source):
+            found.add(os.path.splitext(os.path.basename(path))[0])
     return found
 
 
@@ -227,7 +231,8 @@ def test_the_ci_decode_world_runs_every_real_player_test():
          '    os.environ.pop("PACER_NO_MEDIA", None)\nFOOTAGE_CHECKS = (test_real,)\n'),
     ]
     for src in real:
-        assert _builds_a_real_player(src), f"a real-player test the scan misses:\n{src}"
+        assert _MAYBE_POPS.search(src) and _builds_a_real_player(src), (
+            f"a real-player test the scan misses:\n{src}")
     for src in inert:
         assert not _builds_a_real_player(src), f"an inert test the scan counts as real:\n{src}"
     found = _real_player_tests()
