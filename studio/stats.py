@@ -39,11 +39,15 @@ from __future__ import annotations
 import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print
 from .consistency import sigma
+
+if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
+    from .gmeter import GMeter
 
 # "moving" threshold, m/s — the SAME cutoff the g-meter/thresholds use for their moving
 # masks (gmeter._MOVING_MS), so "time moving" and every g statistic agree on what counts
@@ -965,7 +969,7 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
         best = float(np.min(times)) if n else None
         med = float(np.median(times)) if n else None
         sig = sigma(times)
-        loss = med - best if n else None
+        loss = med - best if med is not None and best is not None else None  # both iff n
         out.append(CornerReport(
             cid=int(cid), direction=int(direction), n=n, n_laps=n_laps,
             best_s=best, median_s=med, sigma_s=sig, median_loss_s=loss,
@@ -1153,10 +1157,10 @@ def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
         # LAST straight (same physical exit), so k=0 reads None rather than double-counting.
         delta = None
         exits = column(exits_by_lap, k - 1) if k >= 1 else None
-        if k >= 1:
+        if exits is not None:  # iff k >= 1
             if len(exits) and k - 1 < len(best_exits) and np.isfinite(best_exits[k - 1]):
                 delta = float(np.median(exits)) - float(best_exits[k - 1])
-        spread = (med - best) if n else None
+        spread = (med - best) if med is not None and best is not None else None  # both iff n
         leverage = (max(0.0, -delta) * max(0.0, spread)
                     if delta is not None and spread is not None else 0.0)
         label, ring = straight_label(cids, k)
@@ -1354,7 +1358,7 @@ def stint_rows(lap_ids, lap_times, starts, ends, vmins=None,
     for n, run in enumerate(split_stints(ids, s, e, gap), start=1):
         ks = [pos[i] for i in run]
         t = np.asarray([times[k] for k in ks], float)
-        v = np.asarray([np.nan if vs[k] is None else float(vs[k]) for k in ks], float)
+        v = np.asarray([np.nan if (x := vs[k]) is None else float(x) for k in ks], float)
         has_v = bool(np.any(np.isfinite(v)))
         long_enough = len(run) >= TREND_MIN_LAPS
         out.append(Stint(
@@ -1395,7 +1399,7 @@ def split_matrix(lap_ids, splits_by_lap, columns: int | None = None) -> SplitMat
     best_lap: list[int | None] = []
     scales: list[float] = []
     for c in range(n_cols):
-        col = [(k, row[c]) for k, row in enumerate(cells) if row[c] is not None]
+        col = [(k, x) for k, row in enumerate(cells) if (x := row[c]) is not None]
         if not col:
             bests.append(None)
             medians.append(None)
@@ -1525,7 +1529,7 @@ class SessionStats:
     per lap by DrivingChannels)."""
 
     def __init__(self, *,
-                 gmeter: Callable[[], object],
+                 gmeter: Callable[[], GMeter],
                  trace_times: Callable[[], np.ndarray],
                  trace_speed_kmh: Callable[[], np.ndarray],
                  trace_xy: Callable[[], tuple[np.ndarray, np.ndarray]],
@@ -1683,7 +1687,7 @@ class SessionStats:
         # substituting a zero, which would read as a break of the whole session's length.
         keep = [k for k, w in enumerate(windows) if w is not None]
         ids = [ids[k] for k in keep]
-        windows = [windows[k] for k in keep]
+        windows = [w for w in windows if w is not None]  # the same `keep` rows, in order
         vmin_by_lap = {st.idx: st.vmin_kmh for st in self.lap_stats()}
         self._stints_cache = stint_rows(
             ids,

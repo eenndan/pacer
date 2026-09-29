@@ -15,18 +15,28 @@ Session — Session owns the pacer side + wires its privates into the callables.
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 import numpy as np
 
 from . import corners
 from ._signal import plural
 
+if TYPE_CHECKING:  # the injected reference lap — typed for the checker, not imported at runtime
+    from .cross_reference import ReferenceLap
+
+
 # "not yet computed" sentinel (None is a legal cached value); module-local to avoid importing
-# Session.
-_UNSET = object()
+# Session. An enum member rather than a bare object() so that `is _UNSET` narrows a cache's type
+# for pyright; it is compared only by identity, as the object() was.
+class _Unset(enum.Enum):
+    TOKEN = 0
+
+
+_UNSET: Final = _Unset.TOKEN
 
 # THE IDEAL LAP'S VERSION: bump it in the PR that changes what `SegmentBests.total` comes to on an
 # unchanged recording — corner detection, the partition, donor admission or resolution, the
@@ -627,7 +637,7 @@ class CornerModel:
                  lap_columns: Callable[[int], tuple],
                  lap_arrays: Callable[[int], tuple],
                  lap_time_dist: Callable[[int], tuple | None],
-                 reference: Callable[[], object | None]):
+                 reference: Callable[[], ReferenceLap | None]):
         self._reference_id = reference_id
         self._best_lap_id = best_lap_id
         self._valid_lap_ids = valid_lap_ids
@@ -636,14 +646,17 @@ class CornerModel:
         self._lap_arrays = lap_arrays
         self._lap_time_dist = lap_time_dist
         self._reference = reference
-        self._basis_cache: object = _UNSET  # (corners, total_ref) or None
+        # (corners, total_ref) or None
+        self._basis_cache: tuple[list[corners.Corner], float] | None | _Unset = _UNSET
         self._stats_cache: dict[int, list[corners.CornerStat]] = {}  # per-lap stats + the reference's own under reference_id
-        self._bests_cache: object = _UNSET  # per-corner session-best time
-        self._segment_bests_cache: object = _UNSET  # the ideal-lap segment composite
+        self._bests_cache: list[float | None] | _Unset = _UNSET  # per-corner session-best time
+        # the ideal-lap segment composite
+        self._segment_bests_cache: SegmentBests | None | _Unset = _UNSET
         # Per-(lap, total_lap) monotone warp onto the reference odometer — see lap_alignment.
-        self._align_cache: dict[tuple, object] = {}
-        self._geometry_cache: object = _UNSET   # corners.SessionGeometry or None — see geometry()
-        self._shift_cache: dict[int, object] = {}  # lap id -> its fitted rigid shift
+        self._align_cache: dict[tuple, corners.Alignment | None] = {}
+        # corners.SessionGeometry or None — see geometry()
+        self._geometry_cache: corners.SessionGeometry | None | _Unset = _UNSET
+        self._shift_cache: dict[int, np.ndarray] = {}  # lap id -> its fitted rigid shift
 
     def invalidate(self) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
@@ -755,7 +768,7 @@ class CornerModel:
         return geom.relative_shift(got, best)
 
     def lap_alignment(self, lap_id: int, total_lap: float,
-                      edges: tuple | None = None) -> object | None:
+                      edges: tuple | None = None) -> corners.Alignment | None:
         """ONE lap's monotone warp onto the reference (best) lap's odometer — the thing every
         corner-window projection in the app is a read of — MEMOIZED per (lap, total_lap).
         Pass the result as `alignment=` to `corners.project_boundaries` / `segment_times` /
@@ -833,9 +846,10 @@ class CornerModel:
         # 0060, past the very gate this is widening (its residual runs to 4.9 m at the C8 exit) —
         # and `lap_corner_resolved(best)` would start reading False.
         shift, anchor = (0.0, 0.0), None
-        if ref_trace is not None and lap_id != self._best_lap_id():
+        # (A trace exists only for a best lap, so `best` is never None where ref_trace is not.)
+        if ref_trace is not None and (best := self._best_lap_id()) is not None and lap_id != best:
             shift = self.lap_shift(lap_id)
-            anchor = corners.anchor_offsets(frame, self.geometry(), self._best_lap_id(), *ref_trace)
+            anchor = corners.anchor_offsets(frame, self.geometry(), best, *ref_trace)
         align = corners.lap_alignment(frame, total_ref, float(total_lap),
                                       traces=self._lap_traces(lap_id, ref_trace),
                                       lap_shift=shift, anchor_offset=anchor)
@@ -1156,7 +1170,8 @@ class CornerModel:
             labels.append(f"{c.label}-{nxt}")
 
         ref_trace = self._best_trace()
-        rows, spans, edges, lap_ids, expected, resolved = [], [], [], [], [], []
+        rows: list[np.ndarray] = []  # typed, or numpy's stubs take `times` below for 1-D
+        spans, edges, lap_ids, expected, resolved = [], [], [], [], []
         for lid in self._clean_lap_ids():
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
             if len(dist) < 2 or float(dist[-1]) <= 0:

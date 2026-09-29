@@ -11,12 +11,17 @@ Session — Session owns the pacer side + the g-meter and wires its privates int
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Callable
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 
 from . import corners, driving
 from ._signal import G, speed_long_g
+
+if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
+    from .gmeter import GMeter
 
 # --- FOUR LONGITUDINAL SERIES, AND A LAP ROW PRINTS TWO OF THEM SIDE BY SIDE --------------------
 # `gmeter` documents ONE MAGNITUDE, TWO WINDOWS — the 0.15 s lateral against the 0.35 s
@@ -67,8 +72,13 @@ from ._signal import G, speed_long_g
 #    (0.862 -> 1.081 g, 0.652 -> 0.811 g). Two channels, one axis, no label saying so.
 
 # "cache not yet computed" sentinel (None is a legal cached value); module-local to avoid
-# importing Session.
-_UNSET = object()
+# importing Session. An enum member rather than a bare object() so that `is _UNSET` narrows a
+# cache's type for pyright; it is compared only by identity, as the object() was.
+class _Unset(enum.Enum):
+    TOKEN = 0
+
+
+_UNSET: Final = _Unset.TOKEN
 
 
 class DrivingChannels:
@@ -85,7 +95,7 @@ class DrivingChannels:
     """
 
     def __init__(self, *,
-                 gmeter: Callable[[], object],
+                 gmeter: Callable[[], GMeter],
                  trace_times: Callable[[], np.ndarray],
                  trace_speed_kmh: Callable[[], np.ndarray],
                  lap_arrays: Callable[[int], tuple | None],
@@ -98,7 +108,7 @@ class DrivingChannels:
                  corner_basis: Callable[[], tuple | None],
                  lap_corner_stats: Callable[[int], list],
                  lap_elevation: Callable[[int], np.ndarray] | None = None,
-                 corner_alignment: Callable[[int, float], object] | None = None):
+                 corner_alignment: Callable[[int, float], corners.Alignment | None] | None = None):
         self._gmeter = gmeter
         # Per-sample altitude for the lap (for the OPT-IN hill-compensated braking, driving.py);
         # optional so a bare/old construction still works — a None just keeps braking flat-ground.
@@ -121,11 +131,11 @@ class DrivingChannels:
         self._corner_alignment = corner_alignment
         # thresholds + grip envelope: _UNSET until computed (None = legal no-g); both derive from the
         # g series, which is constant -> kept across re-segments.
-        self._thresholds_cache: object = _UNSET
-        self._grip_env_cache: object = _UNSET
+        self._thresholds_cache: driving.Thresholds | None | _Unset = _UNSET
+        self._grip_env_cache: float | _Unset = _UNSET
         # D4: the session's demonstrated peak braking decel (g), derived from EVERY valid lap's brake
         # events -> depends on the segmentation, so it is dropped on re-segment with the per-lap caches.
-        self._a_max_cache: object = _UNSET
+        self._a_max_cache: float | _Unset = _UNSET
         # Per-lap channels, all projected through the segmentation -> cleared on re-segment.
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
@@ -330,9 +340,9 @@ class DrivingChannels:
         if got is not None:
             return got
         on = self.lap_brake_on(lap_id)
-        if on is None:
+        if on is None or (arr := self._lap_arrays(lap_id)) is None:
             return 0.0
-        secs = driving.brake_time_on(self._lap_arrays(lap_id)[2], on, self.lap_brake_events(lap_id))
+        secs = driving.brake_time_on(arr[2], on, self.lap_brake_events(lap_id))
         self._brake_time_cache[lap_id] = secs
         return secs
 
@@ -645,7 +655,7 @@ class DrivingChannels:
           * 'distance': x = (dist / lap_total) * active_baseline_total
           * 'time':     x = elapsed (into the lap)"""
         dists, elapsed, intensity = self.lap_brake_throttle(lap_id)
-        if intensity is None:
+        if intensity is None or dists is None:  # None together (lap_brake_throttle)
             return None, None
         if mode == "time":
             return elapsed, intensity

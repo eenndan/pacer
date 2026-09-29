@@ -26,7 +26,9 @@ keeps this module usable from the pure-numpy unit tests.
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 
@@ -447,12 +449,21 @@ def _spatial_matches(d_ref, total_ref: float,
 
 # "no alignment supplied — derive it here". A distinct sentinel because None is the LEGAL value
 # meaning "this lap keeps the normalized projection", which a caller must be able to pass through.
-DERIVE_ALIGNMENT = object()
+# An enum member rather than a bare object() so that `is DERIVE_ALIGNMENT` narrows the parameter's
+# type for pyright; it is compared only by identity, as the object() was.
+class _Derive(enum.Enum):
+    DERIVE_ALIGNMENT = 0
+
+
+DERIVE_ALIGNMENT: Final = _Derive.DERIVE_ALIGNMENT
+
+# One lap's warp onto the reference odometer: the (knot_ref, knot_lap) pair lap_alignment builds.
+Alignment = tuple[np.ndarray, np.ndarray]
 
 
 def lap_alignment(frame, total_ref: float, total_lap: float, *,
                   traces: tuple | None = None,
-                  lap_shift=(0.0, 0.0), anchor_offset=None) -> tuple | None:
+                  lap_shift=(0.0, 0.0), anchor_offset=None) -> Alignment | None:
     """ONE comparison lap's odometer alignment to the reference lap, as the (knot_ref, knot_lap)
     pair of a monotone piecewise-linear warp — or None when the normalized projection applies
     verbatim (no traces, or no spatial match survived anywhere on the lap).
@@ -499,7 +510,7 @@ def lap_alignment(frame, total_ref: float, total_lap: float, *,
 
 def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
                        traces: tuple | None = None, frame=None,
-                       alignment=DERIVE_ALIGNMENT) -> np.ndarray:
+                       alignment: Alignment | None | _Derive = DERIVE_ALIGNMENT) -> np.ndarray:
     """Project reference-odometer corner-window boundaries `d_ref` onto a comparison lap's odometer.
 
     The alignment shared by lap_corner_stats / segment_times / driving / coaching. With no spatial
