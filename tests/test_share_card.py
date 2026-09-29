@@ -186,7 +186,8 @@ def test_card_data_survives_coaching_error():
 # ------------------------------------------ QA W1 REG-1: the card honours the page's tie rule
 # The working set's RANKED rows, biggest loss first — (cid, time lost s, IQR s, counted laps, laps at
 # the target, reach) — as the QA r4 ADVICE lane extracted them through the real (jailed) loader; the
-# same numbers tests/test_coaching.py's `_WORKING_SET_RANKED` pins the page's "Start with" on.
+# same numbers tests/test_coaching.py's `_WORKING_SET_RANKED` pins the page's "Start with" on
+# (asserted equal to it below, by `_page_twin`).
 _R, _P = coaching.REACH_REPEAT, coaching.REACH_RARE
 _WORKING_SET_RANKED = {
     "MK_18_09_26": [(5, 0.134780, 0.230944, 19, 6, _R), (2, 0.087096, 0.106218, 16, 3, _R),
@@ -199,6 +200,24 @@ _WORKING_SET_RANKED = {
     "Sandown 3h 2026": [(1, 0.229400, 0.309380, 61, 3, _P), (4, 0.193470, 0.230531, 61, 5, _P),
                         (7, 0.177929, 0.304993, 62, 4, _P), (6, 0.167461, 0.187463, 62, 4, _P)],
 }
+
+
+def _page_twin() -> dict:
+    """tests/test_coaching.py's `_WORKING_SET_RANKED`, read from its SOURCE — importing that file
+    would theme this process's QApplication at module scope — so the card's copy cannot drift from
+    the one the page's "Start with" is pinned on without a test saying so."""
+    import ast
+
+    class _Reach(ast.NodeTransformer):   # the table's only names are the two reach constants
+        def visit_Name(self, node: ast.Name) -> ast.Constant:
+            return ast.Constant({"_R": _R, "_P": _P}[node.id])
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_coaching.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    table = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                 and [getattr(t, "id", None) for t in n.targets] == ["_WORKING_SET_RANKED"])
+    return ast.literal_eval(_Reach().visit(table))
 
 
 def _working_set_session(name: str) -> FakeSession:
@@ -223,13 +242,14 @@ def _named(text: str) -> tuple[list[str], int]:
 def test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card():
     """QA W1 REG-1. On MK_18_09_26 the Coaching page says "Start with C5, C2 or C8: +0.13 s down to
     +0.06 s sit closer together than your own lap-to-lap spread, so this cannot rank them.", and
-    the lap card he shares said "BIGGEST OPPORTUNITY C5 +0.13 s" — the one surface that leaves the
+    the shared lap card said "BIGGEST OPPORTUNITY C5 +0.13 s" — the one surface that leaves the
     app overclaiming the one ranking the page refuses. The same on SD_30_08_26 (C7 vs "C7 or C5")
     and Sandown 3h (C1 vs "C1, C4, C7 or 1 more").
 
     The card now asks the page's own rule (`coaching.lead_ties`, off the same rows and lead) and
     names the same corners, capped the same way; SD_19_09_26, whose lead stands alone on the page,
     keeps the single-lead block word for word."""
+    assert _WORKING_SET_RANKED == _page_twin(), "this table drifted from test_coaching.py's twin"
     TIE = "TOP OPPORTUNITIES · too close to rank"
     expect = {  # (heading, corner line, loss figure) on the card
         "MK_18_09_26": (TIE, "C5 · C2 · C8", "+0.13 to +0.06 s"),
