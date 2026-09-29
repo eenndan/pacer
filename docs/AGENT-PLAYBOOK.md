@@ -107,3 +107,49 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
 - **Report briefly.** Give the pull request (or "shipped nothing", and why), the gates, what other
   work must know, and a line headed **"Premises that turned out to be wrong"**, which says "none"
   when there were none.
+
+## 5. Waves, QA, releases and measures
+
+Packages go out in waves: dispatched together, merged, then checked by QA. These rules are the
+2026-09-28 review's decisions on that cadence, each with the reason it was adopted.
+
+- **Wave start.** The owner's checkout has `HEAD` and `AGENTS.md` equal to `origin/main`, or it
+  is fast-forwarded before anything is dispatched: agents read `AGENTS.md` from that checkout.
+- **Wave content.** A fix wave carries P0/P1 findings only, because a QA round's P1 regressions
+  came from P2/P3 fixes. At most 8 pull requests; packages that share a surface run in sequence;
+  at most 3 heavy lanes (footage, export, full-suite or manual golden runs) at once; at most 2
+  findings per package on one surface, so one agent run can finish a package.
+- **Hand-off.** At ~100 tool calls an agent commits, pushes, writes "State at hand-off" in the
+  pull request body (what is done, what is left, the next command) and stops. There is no
+  call-count target: cost is the context each call re-reads, so it is judged by the context per
+  merged pull request.
+- **Briefs** quote the one QA or review paragraph a package needs, never a report's path: finding
+  the paragraph costs every agent several calls.
+- **Pre-push**, on a built tree: `pixi run ctest --test-dir build/Release -R
+  '^(test_landing_page|test_inline_styles|test_plural_copy|test_layering)$'`. These four fail on
+  a forgotten doc or copy edit, not on code, and cost seconds rather than a CI round.
+- **QA rounds.** No owner-journey round (a simulated first open or new recording) until the owner
+  has used a build: those rounds kept finding the previous wave's own work. After any wave, and
+  before the showcase tag, run REG (regressions) plus an EVAL front-door pass, nothing else; a
+  JOURNEY-style run comes once per capability release. Report rework (fix PRs whose defect a PR
+  of the previous 7 days introduced) as Y-only beside Y+P (partly so), because partial verdicts
+  on few PRs carried its rise. "Stop when every P0/P1 is a regression" would never have fired.
+- **Tags** only on (a) the owner's use of the previous loop, (b) a capability an evaluator can
+  see, or (c) a P0/P1 on an evaluator's path. At most one per race day, never one per QA wave: a
+  release list that moves daily reads as churn. The next tag is the showcase release: five-bullet
+  notes, cut after REG and EVAL on the candidate, named by RUL-12 in [DECISIONS.md](DECISIONS.md).
+- **Product.** Until the race-day experiment reports, a product pull request needs a defect the
+  owner hit or a ruling he made, and holds `studio/*.py` net lines at 0 or fewer: the code had
+  grown faster than its use. The first-open freeze runs until his next new recording or
+  2026-11-09: [DECISIONS.md](DECISIONS.md#the-first-open-freeze) names what it freezes and allows.
+- **Tests.** A fix's test extends the existing test file of the surface it fixes. A new
+  `tests/test_<name>.py` is for a surface with none, and the pull request says why: after the
+  board review, test lines grew more than twice as fast as product lines.
+- **CI** is judged on the median of at least 10 pull-request runs, never one: push runs carry the
+  soak, and one day's pull-request runs differed by minutes. The target, a median of at most
+  300 s once the truth matrix lands, is paid for by building the Stats view once in
+  `test_stats_ideal` (package GATES-3). A pull request adding over 20 s of CI names what it buys.
+- **Measures** are set on outcomes, not on counts that drift with the data, and compared only
+  across waves of the same type. Pre-register a measure the app cannot satisfy by itself.
+- **Decisions** (owner rulings, the defaults applied for him, the freeze window) live in a tracked
+  file, [DECISIONS.md](DECISIONS.md), never only in a brief: one once lived in an untracked log.

@@ -10,7 +10,10 @@ This file is loaded into every session; the rest is read on demand:
 - **App work:** [studio/README.md](studio/README.md) — module map, layering, perf invariants.
 - **C++ core and bindings:** [pacer/README.md](pacer/README.md) — data flow, modules, codegen.
 - **Tests, the golden gate, real footage:** [tests/README.md](tests/README.md).
-- **Working rules:** [docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md) — gates, evidence, delivery.
+- **Working rules:** [docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md) — gates, evidence, delivery,
+  and how waves, QA rounds and releases run (§5).
+- **Owner rulings and the freeze:** [docs/DECISIONS.md](docs/DECISIONS.md) — what he ruled, or the
+  default applied; cite a row when a PR relies on one.
 - **Before proposing a feature:** [studio/docs/refused-2026-09.md](studio/docs/refused-2026-09.md)
   — the ones measured and refused, with the numbers that killed them.
 
