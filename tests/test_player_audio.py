@@ -26,11 +26,21 @@ QML AudioOutput, LIFE candidate iii) is the structural fallback.
 LIFE-4. Every open rebuilds the view, and with it a fresh, muted pane, so an un-mute reset on every
 open. It now carries to the next recording in the same run (VideoView._audio_on), never across a
 relaunch: a launch starts muted on purpose, and nothing is persisted.
+
+THE STAND-INS' SIGNALS (PROCESS-6). Under PACER_NO_MEDIA=1 — CI's smoke and every inert-triplet
+registration — the pane's player and output are the _Null* stand-ins, so a studio connect to a
+signal one of them lacks raises AttributeError at construction there and nowhere else. The LIFE-1
+priming's `audio.volumeChanged.connect` did exactly that before 8fbaf2a gave _NullAudioOutput the
+real output's signals (test-fast caught it). The last test holds every such connect in studio/ to
+a signal the stand-in declares. It does not ask for full parity (_NullMediaPlayer lacks 18 of
+QMediaPlayer's 22 signals, none connected) and it does not emulate CI's missing audio device.
 """
 
 from __future__ import annotations
 
+import glob
 import os
+import re
 import sys
 import threading
 
@@ -126,7 +136,51 @@ def test_an_unmute_carries_to_the_next_recording_opened_in_this_run():
     print("test_an_unmute_carries_to_the_next_recording_opened_in_this_run OK")
 
 
+#: `self.player.positionChanged.connect(` (player_pane.py) and the bare `audio.volumeChanged.connect(`
+#: of the LIFE-1 priming: the media objects the pane owns, by the names it gives them.
+_CONNECT = re.compile(r"\b(player|audio)\.(\w+)\.connect\(")
+_STAND_INS = {"player": player_pane._NullMediaPlayer, "audio": player_pane._NullAudioOutput}
+
+
+def _signal_names(cls) -> set[str]:
+    from PySide6.QtCore import QMetaMethod
+
+    mo = cls.staticMetaObject
+    return {bytes(mo.method(i).name().data()).decode() for i in range(mo.methodCount())
+            if mo.method(i).methodType() == QMetaMethod.MethodType.Signal}
+
+
+def _undeclared(source: str) -> list[str]:
+    return [f"{obj}.{sig}" for obj, sig in _CONNECT.findall(source)
+            if sig not in _signal_names(_STAND_INS[obj])]
+
+
+def test_the_stand_ins_declare_every_signal_studio_connects():
+    """Every `player.<sig>.connect` / `audio.<sig>.connect` in the top-level studio/*.py names a
+    signal _NullMediaPlayer / _NullAudioOutput declares. Top level only: studio/dev/ holds probes
+    that build their own QMediaPlayer (spike_video_sync connects errorOccurred), never a pane's.
+    The plant: a connect to a signal no stand-in has is reported, a real one is not."""
+    assert _undeclared("self.audio.bogusChanged.connect(self._x)\n") == ["audio.bogusChanged"]
+    assert _undeclared("self.player.positionChanged.connect(self._on_position)\n") == []
+    studio = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "studio")
+    connects, missing = 0, []
+    for path in sorted(glob.glob(os.path.join(studio, "*.py"))):
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+        connects += len(_CONNECT.findall(source))
+        missing += [f"{os.path.basename(path)}: {m}" for m in _undeclared(source)]
+    # four player signals and the priming's one audio signal on 2026-09-29: fewer means the pattern
+    # stopped seeing the pane's connects, and the check would pass by reading nothing
+    assert connects >= 5, f"the scan found {connects} player/audio connects in studio/, expected >= 5"
+    assert not missing, (
+        "studio connects to a signal its PACER_NO_MEDIA stand-in does not declare, so every headless "
+        "build (CI's smoke, the inert-triplet tests) raises AttributeError there — declare it on "
+        "the _Null* class in studio/player_pane.py (it never fires):\n  " + "\n  ".join(missing))
+    print(f"test_the_stand_ins_declare_every_signal_studio_connects OK ({connects} connects)")
+
+
 if __name__ == "__main__":
     test_the_pane_resolves_its_audio_outputs_notify_overrides_on_the_gui_thread()
     test_an_unmute_carries_to_the_next_recording_opened_in_this_run()
+    test_the_stand_ins_declare_every_signal_studio_connects()
     print("test_player_audio: all OK")
