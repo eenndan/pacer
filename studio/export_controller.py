@@ -530,7 +530,7 @@ class ExportController:
                           aspect: str = export_video.ASPECT_SOURCE,
                           content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1,
                           source: tuple[int, int, float] | None = None,
-                          fit: str = export_video.FIT_CROP) -> str:
+                          fit: str = export_video.FIT_CROP, on_line: bool = False) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
         it has to render, WHICH encoder will do it and about how long that takes. Derived (see
         X264_BPP and `export_video.RENDER_FPS`) — never a stored megabyte figure, because the
@@ -544,7 +544,8 @@ class ExportController:
 
         `dur` is the length of ONE file and `files` how many of them an All-laps batch writes, so
         the frame count and the megabytes are both the batch's total — the number that decides
-        whether this is worth starting.
+        whether this is worth starting. `on_line`: each file is cut on its finish line, so the
+        render adds its finish frame (`export_video.planned_frames`).
 
         AN ALPHA EXPORT IS A DIFFERENT ORDER OF MAGNITUDE AND HAS TO SAY SO. ProRes 4444 is
         intra-only at roughly 330 Mbit/s for 1080p30 (Apple's own figure, which is where
@@ -574,7 +575,7 @@ class ExportController:
         else:
             out_w, out_h = self._estimate_frame_size(out_height, aspect)
         files = max(1, int(files))
-        frames = int(math.ceil(dur * fps)) * files
+        frames = export_video.planned_frames(dur, fps, on_line) * files
         if content == export_video.ALPHA_PRORES:
             codec = export_video.known_alpha_encoder()      # None until the probe has run
             encoder = f"ProRes 4444 via {codec}" if codec else "ProRes 4444"
@@ -618,7 +619,7 @@ class ExportController:
         # frame is `compare_geometry`'s own 16:9 guess.
         geo = export_compare.compare_geometry((src_w, src_h), (src_w, src_h), cfg)
         fps = export_video.resolve_fps(cfg, src_fps)
-        frames = export_video.frame_count(0.0, dur, fps) + 1
+        frames = export_video.planned_frames(dur, fps, ends_on_finish=True)
         codec = export_video.resolve_encoder("auto")
         size = export_video.fmt_bytes(export_video.estimate_output_bytes(
             geo.out_w, geo.out_h, fps, frames / fps, quality, codec))
@@ -898,7 +899,8 @@ class ExportController:
                 lines.append(f"Overlay only: {where} on a transparent background, no footage and "
                              "no audio — for compositing over the original in Resolve or "
                              f"Premiere{player}.")
-            size = self._export_size_hint(clip, h, quality, aspect, content, files, source, fit)
+            size = self._export_size_hint(clip, h, quality, aspect, content, files, source, fit,
+                                          on_line=not (session_scope or lead))
             if size:
                 lines.append(size)
             if "to render" not in size and self._measuring_line(src):

@@ -88,6 +88,7 @@ from .export_video import (
     FIT_FIT,
     MAX_FRAME_PIXELS,
     MAX_FRAME_SIDE,
+    ON_LINE_S,
     SW_H264,
     VT_H264,
     ExportSpec,
@@ -403,7 +404,7 @@ def lock_to_track(session_a, lap_a: int, session_b, lap_b: int, media_times_a) -
     _require_distance_axis(session_b, lap_b, b_start)
     # Lap A's finish on the MEDIA clock the frame times are on, the way `lap_window_for_export`
     # converts it; the tolerance is `overlay_values_at`'s, for a finish frame an ulp short.
-    a_finish = _media_time(session_a, a_start + a_span) - 1e-9
+    a_finish = _media_time(session_a, a_start + a_span) - ON_LINE_S
     n = len(times_a)
     fraction = np.empty(n, dtype=float)
     t_b_media = np.empty(n, dtype=float)
