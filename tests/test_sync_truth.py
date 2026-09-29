@@ -49,6 +49,10 @@ from studio.session import Session  # noqa: E402
 
 FRAME_S = sg.PAYLOAD_S / sg.FRAMES_PER_PAYLOAD   # one frame of the synthetic's 29.97 fps video
 LOOKUP_MAX_S = 0.005    # the lookup's share: measured ~0 (the old ceiling: +50 ms)
+# The map dot's median, measured +17.7..+19.0 ms: 1.32x headroom, where the frame bound alone let
+# the residual almost double unseen (LEFT-31). A change to the load-time smoothing moves it —
+# TRUTH-8's gap-honest boxcar must re-run this file.
+DOT_MAX_S = 0.025
 MOVING_MPS = 5.0
 # (planted GPS lag s, GPS noise, chapters): the planted range, the clean and noisier ends of it, and
 # a chapter seam.
@@ -124,7 +128,8 @@ def _ms(x):
 
 def test_the_map_dot_shows_the_frame_it_is_drawn_over():
     """The PASS criterion: across the planted lag range, the map dot's median offset from where the
-    kart truly is in that frame is inside one video frame — and so is each of its two shares."""
+    kart truly is in that frame is inside one video frame — and so is each of its two shares. The
+    dot is also held to DOT_MAX_S, its measured residual with headroom, not just to the frame."""
     for case in CASES:
         rec, s = _load(*case)
         m = measure(rec, s)
@@ -141,6 +146,9 @@ def test_the_map_dot_shows_the_frame_it_is_drawn_over():
             f"{case}: the installed GPS lag puts the overlay {_ms(clock)} off the picture "
             f"(installed {s.media_clock.gps_lag:+.4f} s for a planted {case[0]} s)")
         assert abs(dot) < FRAME_S, f"{case}: the map dot sits {_ms(dot)} off the picture"
+        assert abs(dot) < DOT_MAX_S, (
+            f"{case}: the map dot sits {_ms(dot)} off the picture — inside a frame, but past the "
+            f"{_ms(DOT_MAX_S)} its measured +17.7..+19.0 ms leaves room for")
         assert abs(m["speed"]) < FRAME_S, f"{case}: the speed readout is {_ms(m['speed'])} off"
 
 
