@@ -7,8 +7,9 @@ SECOND, orthogonal quality axis to the timing-TRUST surface (Session.timing_veri
     whether a "best" measured against the line is meaningful.
   * timing QUALITY — is the per-sample TIMING itself accurate, and were the GPS fixes good? This
     is what `TimingQuality` carries. A media-clock recording produces fully-segmented laps off a
-    trusted line, yet the times still drift ~0.1% (older GoPro without GPS9); and a trace whose
-    DOP/fix gate rejected a large fraction of fixes is geometrically degraded. Both render the
+    trusted line, yet each lap can read up to ~0.1 s off (older GoPro without GPS9: the
+    media-clock fallback places a fix only to about ±0.05 s); and a trace whose DOP/fix gate
+    rejected a large fraction of fixes is geometrically degraded. Both render the
     lap times with the same de-emphasis the trust surface already provides.
 
 The load pipeline (studio/load.py + studio/_signal.py) computes the raw signals; this module just
@@ -39,6 +40,23 @@ MEDIA_CLOCK_FALLBACK = "media_clock_fallback"  # naive media clock (older GPS5 c
 # vouching for the most accurate timing the app has on a file with not one satellite fix in it.
 # This is that state, named, so no time axis can be claimed where none was built.
 NO_GPS_TRACE = "no_gps_trace"            # no usable GPS trace survived — no time axis was built
+
+# What the media-clock fallback can cost ONE LAP — the one figure every GPS5 warning quotes.
+#
+# THE COPY USED TO SAY the lap times "may drift" by a tenth of a percent (the map banner's hover:
+# the clock "runs fast and compresses every lap"), on five surfaces, and the repo's own measurement
+# says otherwise: the video and GPS clocks' RATES agree to ~27 ppm (studio/load.py's head comment;
+# 1.8 ms on a 68 s lap, where a tenth of a percent would be 68 ms). What the fallback really costs
+# is PLACEMENT.
+# A GoPro writes GPS in ~1 s packets and the fallback spreads a packet's fixes evenly across it,
+# so each fix is placed only to about ±0.05 s (28 ms rms on the GPS9 recordings,
+# studio/media_clock.py), and a lap time is the difference of two such instants.
+#
+# A HEDGED BOUND, NOT A MEASUREMENT. No lap from a GPS5 camera has ever been timed against official
+# timing; a simulation of the packet spread puts a 68 s lap's error at -32/+68 ms (10 Hz) and
+# -43/+12 ms (18 Hz, GPS5's rate), 5th/95th percentile. So the sentences say "up to", and one
+# constant carries it so the surfaces cannot drift apart again.
+MEDIA_CLOCK_LAP_ERROR = "up to ~0.1 s"
 
 # A dropped-fix fraction at/above this reads as "GPS quality low" in the UI (a few rejected fixes
 # on an otherwise clean trace is normal and not worth a banner). 8% ≈ a fix every ~12 s on a 10 Hz
@@ -106,7 +124,8 @@ class TimingQuality:
 
     @property
     def media_clock(self) -> bool:
-        """True when timing fell back to the (~0.1%-fast) media clock — an older GPS5 camera."""
+        """True when timing fell back to the media-clock (packet-spread) axis — an older GPS5
+        camera."""
         return self.clock == MEDIA_CLOCK_FALLBACK
 
     @property
@@ -155,7 +174,7 @@ class TimingQuality:
         if self.media_clock:
             out.append(
                 "Timing estimated from the video clock (older GoPro without GPS9) — "
-                "lap times may drift ~0.1%.")
+                f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off.")
         if self.low_gps_quality:
             out.append(
                 f"GPS quality low — {self.dropped_pct()}% of fixes were rejected; "
@@ -180,7 +199,9 @@ class TimingQuality:
             return (f"Timing estimated (video clock) and GPS quality low — "
                     f"{self.dropped_pct()}% of fixes rejected; times may be less accurate.")
         if media:
-            return "Timing estimated from the video clock — lap times may drift ~0.1%."
+            # 62 characters: the banner is setWordWrap(False), and this may not outgrow the 66 it
+            # had ("Timing estimated from …" + the bound would be 72).
+            return f"Timing from the video clock — a lap may read {MEDIA_CLOCK_LAP_ERROR} off."
         if low:
             return (f"GPS quality low — {self.dropped_pct()}% of fixes rejected; "
                     "times may be less accurate.")
@@ -201,7 +222,9 @@ class TimingQuality:
                     "before the car moved. The bar under the scrubber shows which it was.")
         if media:
             base = ("Lap times are estimated from the video clock (an older GoPro without GPS9), "
-                    "which runs ~0.1% fast — treat the absolute times as approximate.")
+                    "which places each GPS fix only to about ±0.05 s, so a lap can read "
+                    f"{MEDIA_CLOCK_LAP_ERROR} off. Not measured on such a camera — treat the "
+                    "absolute times as approximate.")
             if low:
                 base += (f" GPS quality is also low: {self.dropped_pct()}% of fixes were rejected, "
                          "so the positions are less accurate too.")
@@ -219,18 +242,19 @@ class TimingQuality:
         all it said: "video clock (estimated) · 0% of moving fixes rejected" and "GPS9 true clock ·
         12% of moving fixes rejected" are the clean row's own shape with a different word or number
         in it, so a reader sent there by the lap panel's amber chip found nothing saying why the
-        chip was lit. This is the missing half, in the same words summary() and detail() use (the
-        ~0.1% drift, "GPS quality low"), so the card cannot drift from the banner and the chip's
-        hover. Empty when not degraded — and for the no-GPS state, whose row is a sentence of its
-        own because there is no clock to qualify."""
+        chip was lit. This is the missing half, in the same words summary() and detail() use
+        (MEDIA_CLOCK_LAP_ERROR, "GPS quality low"), so the card cannot drift from the banner and
+        the chip's hover. Empty when not degraded — and for the no-GPS state, whose row is a
+        sentence of its own because there is no clock to qualify."""
         media, low = self.media_clock, self.low_gps_quality
         if self.no_gps:
             return ""
         if media and low:
-            return ("lap times may drift ~0.1%, and GPS quality is low, so the positions are less "
-                    "accurate too")
+            return (f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off, and GPS quality is low, so the "
+                    "positions are less accurate too")
         if media:
-            return "lap times may drift ~0.1%, so treat the absolute times as approximate"
+            return (f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off, so treat the absolute times as "
+                    "approximate")
         if low:
             return ("GPS quality low, so the positions and the times derived from them may be "
                     "less accurate")
@@ -727,8 +751,11 @@ MARK_ORDER = (MARK_PROVISIONAL, MARK_ESTIMATED, MARK_BREAK_IN_SERIES, MARK_LOW_R
 MARK_MEANING = {
     MARK_PROVISIONAL: ("provisional: the start/finish line was auto-fitted and not confirmed, so "
                        "this time is measured from an arbitrary point and will change if it moves"),
+    # The app's media-clock warning in ASCII: the one bound, hedged, and no "runs fast" (the
+    # clocks' rates agree to ~27 ppm; see MEDIA_CLOCK_LAP_ERROR).
     MARK_ESTIMATED: ("estimated: timing came from the video clock (an older camera with no GPS9), "
-                     "which runs slightly fast"),
+                     f"so a lap may read {MEDIA_CLOCK_LAP_ERROR} off; not measured on such a "
+                     "camera"),
     MARK_BREAK_IN_SERIES: ("break in series: the recording is not continuous, so times either "
                            "side of the break are not on the same footing"),
     MARK_LOW_RELIABILITY: ("low reliability: a GPS dropout inside this lap, or a recording whose "
