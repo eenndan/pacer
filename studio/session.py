@@ -88,6 +88,22 @@ _UNSET = object()  # sentinel for "cache not yet computed" where None is a valid
 
 _EMPTY = np.empty(0)  # the `speed` slot for a LapCurve whose speed series isn't needed (Δ family)
 
+
+def _same_inputs(a, b) -> bool:
+    """Whether two input sets of a memoized derivation are the SAME inputs: tuples element-wise, a
+    number / string / None by value, anything else (an array, a list, a warp — each one an entry
+    of an upstream memo) by IDENTITY.
+
+    THE KEY IS THE WHOLE DEPENDENCY SET, like `CornerModel.lap_alignment`'s, so a memo checked by
+    it needs no invalidation of its own: re-segmenting, a reference change or a test re-seeding a
+    cache replaces an upstream object, and the next read misses. The memo holds the old objects,
+    so a new one can never reuse an old one's id."""
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(_same_inputs(x, y) for x, y in zip(a, b, strict=True))
+    if a is None or isinstance(a, (bool, int, float, str)):
+        return type(a) is type(b) and a == b
+    return a is b
+
 # Sentinel "lap id" for the cross-recording reference lap (F7): negative, so it can never
 # collide with a real lap id (>= 0). Exposed so plots_view can request/label the reference
 # curve without importing the ReferenceLap type.
@@ -2672,8 +2688,12 @@ class Session:
         split into thirds via the SAME per-lap-aligned coaching.corner_phase_losses the coaching
         reasons use — then the per-corner MEDIAN triple + the positive-part session share
         (stats_service.phase_matrix). Generalizes the D2 extraction that previously ran for
-        the median lap only. None without corners / a best lap / any comparable lap. Not
-        cached (read on load / re-segment only, never per-tick).
+        the median lap only. None without corners / a best lap / any comparable lap.
+
+        Since COACHING-2 it is also every coaching row's Entry·Apex·Exit triple, read once per
+        `coaching_opportunities` call — five of those a refresh — so it is MEMOIZED on the whole
+        set of its inputs (`_same_inputs`: every lap's arrays and memoized warp, the best lap's, the
+        corner partition, the counted cells). Nothing invalidates it; any upstream change misses.
 
         C4: a lap's triple for a corner counts only where that corner was matched on track at both
         edges on the lap AND on the best lap it is subtracted from — the cells the CORNERS table's
@@ -2691,7 +2711,8 @@ class Session:
             return None
         # The corner windows live in the BEST lap's frame — its trace is the fixed reference
         # half of every (ref, comparison) pair (the same pairing coaching_opportunities builds).
-        _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
+        best_cols = self._lap_columns(best)
+        _bt, best_xs, best_ys, _bv, best_cum = best_cols
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         best_total = self.best_lap_total_distance()
         # Every lap's spatial warp is built from the WHOLE partition (corners.project_boundaries'
@@ -2702,29 +2723,38 @@ class Session:
         phase_frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
         best_align = (self.corners.lap_alignment(best, best_total)
                       if corner_dist_total and best_total else None)
-        # The BEST lap's own three third-times per corner — the subtrahend of every phase triple
-        # below, and identical for all of them. Hoisted out of the lap loop: it was being
-        # re-integrated once per (lap, corner), which is half of this report's integration work
-        # done 37 times over on the D24 0060 pair (coaching.corner_best_thirds).
         best_resolved = self.corners.lap_corner_resolved(best)
-        best_thirds = [coaching.corner_best_thirds(
-            best_dist, best_elapsed, float(c.enter), float(c.exit),
-            corner_dist_total=corner_dist_total, best_total=best_total,
-            best_traces=best_traces, frame=phase_frame, best_align=best_align)
-            for c in corner_list]
-        triples_by_lap: list[list[tuple[float, float, float]]] = []
+        # Every comparison lap's inputs, gathered before any arithmetic so they can key the memo.
+        laps = []
         for i in ids:
             if i == best:
                 continue
             dist, _speed_kmh, lap_elapsed = self._lap_arrays(i)
             if len(dist) < 2:
                 continue
-            _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
+            lap_total = float(dist[-1])
+            laps.append((i, dist, lap_elapsed, self._lap_columns(i),
+                         self.corners.lap_alignment(i, lap_total) if corner_dist_total else None,
+                         tuple(self.corners.lap_corner_resolved(i))))
+        key = (corner_list, corner_dist_total, best, best_dist, best_elapsed, best_cols,
+               best_total, best_align, tuple(best_resolved), tuple(laps))
+        memo = getattr(self, "_phase_report_memo", None)
+        if memo is not None and _same_inputs(memo[0], key):
+            return memo[1]
+        # The BEST lap's own three third-times per corner — the subtrahend of every phase triple
+        # below, and identical for all of them. Hoisted out of the lap loop: it was being
+        # re-integrated once per (lap, corner), which is half of this report's integration work
+        # done 37 times over on the D24 0060 pair (coaching.corner_best_thirds).
+        best_thirds = [coaching.corner_best_thirds(
+            best_dist, best_elapsed, float(c.enter), float(c.exit),
+            corner_dist_total=corner_dist_total, best_total=best_total,
+            best_traces=best_traces, frame=phase_frame, best_align=best_align)
+            for c in corner_list]
+        triples_by_lap: list[list[tuple[float, float, float]]] = []
+        for _i, dist, lap_elapsed, (_lt, lap_xs, lap_ys, _lv, lap_cum), lap_align, lap_resolved \
+                in laps:
             lap_traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
             lap_total = float(dist[-1])
-            lap_align = (self.corners.lap_alignment(i, lap_total)
-                         if corner_dist_total else None)
-            lap_resolved = self.corners.lap_corner_resolved(i)
             row: list[tuple[float, float, float]] = []
             for k, (c, thirds) in enumerate(zip(corner_list, best_thirds, strict=True)):
                 if not (k < len(lap_resolved) and lap_resolved[k]
@@ -2740,9 +2770,10 @@ class Session:
                     lap_align=lap_align, best_align=best_align, best_thirds=thirds)
                 row.append((ph.entry, ph.apex, ph.exit))
             triples_by_lap.append(row)
-        if not triples_by_lap:
-            return None
-        return stats_service.phase_matrix([c.cid for c in corner_list], triples_by_lap)
+        report = (stats_service.phase_matrix([c.cid for c in corner_list], triples_by_lap)
+                  if triples_by_lap else None)
+        self._phase_report_memo = (key, report)
+        return report
 
     def _brake_rows(self) -> list[dict]:
         """The per-lap D4 brake-point rows every braking surface reads: one dict per clean lap,
@@ -2923,14 +2954,15 @@ class Session:
         """The ranked coaching opportunities (F10): per corner, the MEDIAN time lost vs the
         best lap over the consistency laps (biggest first), with the dominant measured reason
         attached to every ranked row — its apex / braking / coasting levers medians over the same
-        laps too (`_coaching_lap_inputs`, ADV-1). Deterministic and explainable (see
+        laps too (`_coaching_lap_inputs`, ADV-1), and its Entry·Apex·Exit thirds the phase
+        report's median row (`phase_report`, COACHING-2). Deterministic and explainable (see
         studio/coaching.py).
 
         Returns an Opportunities with `enough=False` (empty rows) when there are fewer than
         coaching.MIN_LAPS valid, dropout-free laps — the friendly "need more laps" state, no
         crash. Composes only existing accessors: corners(), lap_corner_stats(),
         consistency_lap_ids(), corner_consistency(), lap_brake_events(), lap_coasting_spans(),
-        best_lap_id(), lap_time().
+        best_lap_id(), lap_time(), phase_report().
 
         C5: only cells matched on track at both edges, on this lap AND on the best lap it is
         subtracted from, count towards a row (`CornerModel.lap_corner_resolved` — the rule in
@@ -2968,9 +3000,6 @@ class Session:
                                           median_lap_id=None, rows=[])
         best_corner_times = [s.time for s in best_stats]
 
-        # The median-time lap — the lap the phase thirds read (the reasons read every lap, below).
-        med_id = coaching.median_lap_id(cand_ids, lap_times)
-
         # Cross-lap σ of time-in-corner per cid (from the F6 ranking), as the LINE signal.
         sigmas_by_cid = {sp.cid: sp.sigma for sp in self.corner_consistency()}
 
@@ -2979,35 +3008,11 @@ class Session:
         # candidate lap's cells go in, not the median-time lap's alone.
         cells = self._coaching_lap_inputs(cand_ids)
 
-        # Odometer totals so summarize can project each corner window onto the median and best laps'
-        # own odometers for the phase thirds. The corner edges (c.enter/c.exit) are in the corner
-        # basis' reference total. Mirrors lap_corner_grip's projection.
-        basis = self.corners.basis()
-        corner_dist_total = float(basis[1]) if basis is not None else None
-        best_lap_total = self.best_lap_total_distance()
-        med_td = self._lap_time_dist(med_id) if med_id is not None else None
-        median_lap_total = float(med_td[1][-1]) if med_td is not None else None
-
-        # D2: the typical lap's + best lap's distance/elapsed traces so summarize can decompose
-        # each corner's Δt-vs-best into entry/apex/exit thirds (each third's time read off the
-        # lap's OWN clock at the odometer edges, the typical lap vs best). Same projection as
-        # lap_corner_stats.
-        med_dist, _med_speed_kmh, med_elapsed = (
-            self._lap_arrays(med_id) if med_id is not None else (None, None, None))
-        best_dist, _best_speed_kmh, best_elapsed = self._lap_arrays(best)
-
-        # Spatial traces for the phase decomposition (the same alignment lap_corner_stats
-        # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
-        # reference half of each (ref, comparison) pair. The best lap matches its own trace, so its
-        # warp is the identity (7e-15 m at worst); the typical lap is warped onto it. A degenerate
-        # trace → None → normalized (unchanged). Same xy basis as the map.
-        _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
-        best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
-        if med_id is not None:
-            _mt, med_xs, med_ys, _mv, med_cum = self._lap_columns(med_id)
-            median_traces = (best_xs, best_ys, best_cum, med_xs, med_ys, med_cum)
-        else:
-            median_traces = None
+        # COACHING-2: the Entry·Apex·Exit thirds are the median over the laps too — the phase
+        # report's per-corner row, the numbers the Stats CORNERS tooltip shows, so the two surfaces
+        # state one quantity. It used to be the median-time lap's thirds alone.
+        report = self.phase_report()
+        phases_by_cid = dict(zip(report.cids, report.rows, strict=True)) if report else {}
 
         return coaching.summarize(
             corners=corner_list,
@@ -3022,22 +3027,7 @@ class Session:
             best_brake_time=cells[best][0],
             best_coast_time=cells[best][1],
             best_apex=cells[best][2],
-            corner_dist_total=corner_dist_total,
-            median_lap_total=median_lap_total,
-            best_lap_total=best_lap_total,
-            median_dist=med_dist,
-            median_elapsed=med_elapsed,
-            best_dist=best_dist,
-            best_elapsed=best_elapsed,
-            median_traces=median_traces,
-            best_traces=best_traces,
-            # The corner service's memoized warps for these two laps — the same objects the
-            # Corners table and the phase matrix read, so the coaching rows cannot drift into a
-            # separately-derived alignment (and the spatial match does not run a third time).
-            median_align=(self.corners.lap_alignment(med_id, median_lap_total)
-                          if med_id is not None and median_lap_total else None),
-            best_align=(self.corners.lap_alignment(best, best_lap_total)
-                        if best_lap_total else None),
+            phases_by_cid=phases_by_cid,
             # C5: which cells the loss, the evidence and the reach may count — this lap's matched
             # corners and the best lap's, since every one of those is a difference between the two.
             resolved_by_lap=resolved_by_lap,
@@ -3056,13 +3046,19 @@ class Session:
         warp (`CornerModel.lap_alignment`) — never a derived one, and never the normalized scale
         (#289). The best lap's total is `best_lap_total_distance()`, the one its phase thirds and
         the old best-lap subtrahend used. Apex speed is `lap_corner_stats`' on the local best
-        baseline (not `apex_speed_delta`, which follows the reference baseline — D13)."""
+        baseline (not `apex_speed_delta`, which follows the reference baseline — D13).
+
+        MEMOIZED PER LAP on the whole set of its inputs (`_same_inputs`), because
+        `coaching_opportunities` runs five times a refresh and these cells were most of its cost
+        (one `brake_time_on` per lap per corner). Nothing invalidates the memo: a re-segment or a
+        reference change replaces the upstream objects and the next read recomputes."""
         corner_list = self.corners.corner_list()
         n = len(corner_list)
         best = self.best_lap_id()
         basis = self.corners.basis()
         corner_dist_total = float(basis[1]) if basis is not None else None
         frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        memo = self.__dict__.setdefault("_coaching_cells_memo", {})
         out: dict[int, tuple[list[float], list[float], list[float]]] = {}
         for i in list(lap_ids) + ([best] if best is not None else []):
             if i in out:
@@ -3076,12 +3072,20 @@ class Session:
                 td = self._lap_time_dist(i)
                 lap_total = float(td[1][-1]) if td is not None else None
             dist, _speed_kmh, elapsed = self._lap_arrays(i)
+            events, spans = self.driving.lap_brake_events(i), self.driving.lap_coasting_spans(i)
+            brake_on = self.driving.lap_brake_on(i)
+            align = self.corners.lap_alignment(i, lap_total) if lap_total else None
+            key = (corner_list, corner_dist_total, lap_total, st, dist, elapsed, events, spans,
+                   brake_on, align)
+            got = memo.get(i)
+            if got is not None and _same_inputs(got[0], key):
+                out[i] = got[1]
+                continue
             brake, coast = coaching.lap_window_inputs(
-                corner_list, self.driving.lap_brake_events(i), self.driving.lap_coasting_spans(i),
-                dist, elapsed, self.driving.lap_brake_on(i),
-                corner_dist_total=corner_dist_total, lap_total=lap_total, frame=frame,
-                align=self.corners.lap_alignment(i, lap_total) if lap_total else None)
+                corner_list, events, spans, dist, elapsed, brake_on,
+                corner_dist_total=corner_dist_total, lap_total=lap_total, frame=frame, align=align)
             out[i] = (brake, coast, [float(s.apex_speed) for s in st])
+            memo[i] = (key, out[i])
         return out
 
     def coaching_brake_direction(self) -> dict:

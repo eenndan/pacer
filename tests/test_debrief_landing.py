@@ -205,18 +205,33 @@ def _corners(cids) -> str:
     return ", ".join(f"C{c}" for c in cids)
 
 
+# The generated demo recording, ONCE PER PROCESS (GATES-3): its arguments -> (the private directory
+# holding it, its path). A generation costs 1.5-2 s, and the journey files built from this helper
+# called it up to five times each, for byte-identical bytes. The directory object sits in the value
+# so it lives as long as this module; a local would be finalised, and its file deleted, under the
+# next caller. Per process only: sharing across CTest processes would need a fixed temp name,
+# which tests/test_temp_isolation.py forbids.
+_GEN: dict[tuple, tuple[tempfile.TemporaryDirectory, str]] = {}
+
+
 def _two_recordings(folder: str) -> tuple[str, str]:
     """Two recordings of the built-in demo circuit, byte-identical telemetry under two recording
-    numbers — two library identities (GX9001, GX9002), so the second open is a first open too."""
+    numbers — two library identities (GX9001, GX9002), so the second open is a first open too.
+    Two FRESH copies in `folder` on every call: journeys write sidecars and library rows beside
+    them, so only the generation is shared."""
     from studio.dev import make_demo as md
     from studio.dev import synth_gopro as sg
-    rec = sg.generate(os.path.join(folder, "gen"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
-                      origin=md.DEMO_ORIGIN)
+    key = (md.DEMO_SEED, md.DEMO_LAPS, 1, md.DEMO_ORIGIN)
+    if key not in _GEN:
+        gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
+        rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
+                          origin=key[3])
+        _GEN[key] = (gen, rec.paths[0])
     out = []
     for n in ("9001", "9002"):
         os.makedirs(os.path.join(folder, n))
         out.append(os.path.join(folder, n, f"GX01{n}.MP4"))
-        shutil.copyfile(rec.paths[0], out[-1])
+        shutil.copyfile(_GEN[key][1], out[-1])
     return out[0], out[1]
 
 

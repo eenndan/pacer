@@ -18,6 +18,7 @@ Run:  QT_QPA_PLATFORM=offscreen python tests/test_coaching.py
 """
 import math
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -240,9 +241,7 @@ def test_braking_extra_measures_only_the_in_window_part():
     best_brake = K.lap_window_inputs(corners, best_brakes, [], dist, elapsed)[0]
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03},
-                      **_levers(times, best, brake=lap_brake, best_brake=best_brake),
-                      median_dist=dist, median_elapsed=elapsed,
-                      best_dist=dist, best_elapsed=elapsed)
+                      **_levers(times, best, brake=lap_brake, best_brake=best_brake))
     r = opp.rows[0]
     assert r.reason.kind == K.REASON_BRAKING, r.reason
     assert abs(r.reason.brake_extra_s - 0.4) < 1e-6, r.reason  # 1.4 − 1.0, not 1.4 − 0.0
@@ -442,6 +441,54 @@ def test_session_levers_equal_an_independent_median_over_the_laps():
     print(f"ok session levers == independent median over {len(ids)} laps on {len(rows)} rows")
 
 
+def test_the_coaching_cells_and_thirds_are_derived_once_and_follow_every_upstream_change():
+    """COACHING-2: `coaching_opportunities` runs five times a refresh, and it now reads the phase
+    report too, so its per-lap lever cells (`_coaching_lap_inputs`) and the report's per-lap thirds
+    are MEMOIZED — a warm call runs neither `lap_window_inputs` nor `corner_phase_losses`. The memo
+    is keyed on its whole input set instead of being invalidated, so the teeth are the other way
+    round: the invalidations `set_timing_lines` fires (the corner and driving services') make the
+    next call derive everything again, and after the best lap moves the warm session answers
+    exactly what a fresh one does."""
+    s = _braking_stadium_session()
+    calls = {"cells": 0, "thirds": 0}
+    real_cells, real_thirds = K.lap_window_inputs, K.corner_phase_losses
+
+    def cells(*a, **k):
+        calls["cells"] += 1
+        return real_cells(*a, **k)
+
+    def thirds(*a, **k):
+        calls["thirds"] += 1
+        return real_thirds(*a, **k)
+
+    K.lap_window_inputs, K.corner_phase_losses = cells, thirds
+    try:
+        first = repr(s.coaching_opportunities())
+        cold = dict(calls)
+        assert cold["cells"] > 0 and cold["thirds"] > 0, cold
+        for _ in range(4):
+            assert repr(s.coaching_opportunities()) == first
+        assert calls == cold, f"a warm call derived its inputs again: {calls} after {cold}"
+        s.corners.invalidate()
+        s.driving.invalidate()
+        assert repr(s.coaching_opportunities()) == first
+        assert calls == {k: 2 * v for k, v in cold.items()}, (
+            f"after the re-segment's invalidations the memo still answered: {calls}, cold {cold}")
+    finally:
+        K.lap_window_inputs, K.corner_phase_losses = real_cells, real_thirds
+
+    fresh = _braking_stadium_session()
+    for sess in (s, fresh):          # the best lap moves, as a test seeds it
+        sess._best_cache = 1
+        sess.corners.invalidate()
+        sess.driving.invalidate()
+    moved = repr(s.coaching_opportunities())
+    assert moved != first, "moving the best lap changed nothing — the comparison below is vacuous"
+    assert moved == repr(fresh.coaching_opportunities()), "the warm session kept a stale answer"
+    print(f"ok coaching memo: cold {cold}, warm 0, re-derived after invalidation, follows the best")
+
+
+
 def test_the_line_row_states_the_iqr_its_gate_reads_never_sigma():
     """ADV-4 (QA r4). "laps vary ±1.28 s" printed σ on SD3h C1 while the row's own evidence gate
     reads the interquartile range (0.31 s there): 90 % of the laps sat inside the printed band. The
@@ -609,28 +656,23 @@ def test_phase_losses_projected_onto_each_laps_own_odometer():
 
 
 def test_summarize_attaches_phase_decomposition():
-    """summarize wires the typical-lap vs best speed traces into each row's PhaseLoss, and the
-    decomposition is consistent with the row's measured loss sign (slow corner ⇒ positive sum)."""
+    """summarize takes each row's PhaseLoss from `phases_by_cid` exactly as handed in (the phase
+    report's median triple — COACHING-2); a corner absent from it, or None there, gets zero phases
+    and so no "most of it on" clause."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)
-    # one corner enter=50, exit=90 (see _corners). Best fast, typical slower over the window.
-    best_dist, best_t = _flat_trace(0.0, 200.0, 80.0)
-    med_dist, med_t = _flat_trace(0.0, 200.0, 70.0)
-    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                      sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=97.0),
-                      median_dist=med_dist, median_elapsed=med_t,
-                      best_dist=best_dist, best_elapsed=best_t)
-    row = opp.rows[0]
-    pl = row.phases
-    assert abs(pl.total - sum(pl.as_tuple())) < 1e-9
-    assert pl.total > 0, ("typical lap slower than best ⇒ positive Δt", pl)
-    # absent traces ⇒ zero phases (back-compat path)
-    opp0 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                       sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=97.0))
-    assert opp0.rows[0].phases.as_tuple() == (0.0, 0.0, 0.0)
-    # the dominant-phase clause shows up in the sentence when one third dominates
-    flat_sentence = K.reason_sentence(opp0.rows[0])  # no phases -> no clause
-    assert "most of it on" not in flat_sentence
-    print(f"ok summarize-phases: row Δt={pl.total:.3f}s (thirds {pl.as_tuple()}); absent⇒zero")
+    args = (corners, list(range(len(lap_times))), lap_times, times, best)
+    triple = (0.021, 0.094, -0.013)
+    opp = K.summarize(*args, sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=97.0),
+                      phases_by_cid={1: triple})
+    pl = opp.rows[0].phases
+    assert pl.as_tuple() == triple, pl
+    assert "most of it on the apex" in K.reason_sentence(opp.rows[0]), K.reason_sentence(opp.rows[0])
+    for absent in (None, {}, {1: None}):
+        opp0 = K.summarize(*args, sigmas_by_cid={1: 0.03}, **_levers(times, best, apex=97.0),
+                           phases_by_cid=absent)
+        assert opp0.rows[0].phases.as_tuple() == (0.0, 0.0, 0.0), absent
+        assert "most of it on" not in K.reason_sentence(opp0.rows[0])
+    print(f"ok summarize-phases: row thirds {pl.as_tuple()} as handed in; absent ⇒ zero")
 
 
 def _opp_with(reason_kind: str, phases: "K.PhaseLoss", *, time_lost: float = 0.30,
@@ -1145,8 +1187,9 @@ def _full_window_page(opp, directions=None, size=_FULL_WINDOW):
 def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
     """R11: the Coaching page replaced the modal that rendered its ranking a second time. Full-window
     it carries that modal's two extra columns — the D2 Entry·Apex·Exit bar and a Jump per row — and
-    a Jump emits (cid, entry_dist) for the app to act on. The header's hover names the typical lap
-    the modal's title used to, as the 1-based lap NUMBER (M9), not the raw id."""
+    a Jump emits (cid, entry_dist) for the app to act on. The header's hover says what the modal's
+    title used to — since COACHING-2 that the reasons AND the bars are medians over the clean laps,
+    so it names no lap (it named the typical lap, as the 1-based lap NUMBER, M9)."""
     _qapp()
     from studio.coaching_panel import (
         _PANEL_COL_GO,
@@ -1168,9 +1211,9 @@ def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
         t.item(0, _PANEL_COL_REACH).text()
     assert isinstance(t.cellWidget(0, _PANEL_COL_PHASES), PhaseBar)
     assert "apex speed" in t.item(0, _PANEL_COL_REASON).text()
-    assert opp.median_lap_id is not None
     tip = page.summary_label.toolTip()
-    assert f"typical lap, lap {opp.median_lap_id + 1}." in tip, tip
+    assert "the Entry·Apex·Exit bars are medians over your clean laps." in tip, tip
+    assert not re.search(r"\blap \d", tip), f"the hover names a lap: {tip}"
     calls = []
     page.jump_requested.connect(lambda c, d: calls.append((c, d)))
     go = t.cellWidget(0, _PANEL_COL_GO)
@@ -1322,32 +1365,30 @@ def test_full_window_reason_column_outweighs_the_bars_and_jump():
 
 
 def test_m4_phasebar_tooltip_does_not_claim_time_lost_and_guards_sign_flip():
-    """M4: the Entry·Apex·Exit PhaseBar is a WHERE-in-the-corner Δt PROFILE of the typical lap, a
-    DIFFERENT statistic from the row's "Time lost" (a cross-lap median). Its tooltip must NOT label
-    itself "time lost", and when its net is <= 0 (the typical lap is net FASTER over the window) on
-    a row whose headline shows a positive loss, the tooltip must not read as if the corner were net
-    faster overall — it says so plainly and points back to Time lost as the different measure."""
+    """M4: the Entry·Apex·Exit PhaseBar is a WHERE-in-the-corner Δt PROFILE, a DIFFERENT statistic
+    from the row's "Time lost". Since COACHING-2 each third is its own median over the laps, so the
+    bar states NO sum at all — three medians add up to no lap's net and not to Time lost — and
+    never says "net faster" (the claim nothing measured). Its tooltip says what the three are and
+    still names the slowest third; the face and the tooltip name no lap."""
     _qapp()
-    from studio.coaching_panel import _PHASE_LABEL, PhaseBar  # noqa: F401
-    # The C12-shaped case: headline +0.31 s loss (cross-lap median) but the typical-lap phase net is
-    # NEGATIVE (−0.21 s, net faster over the window). The tooltip must not read as "time lost".
-    flip = K.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04)   # total = -0.21
-    assert flip.total < 0
-    tip = PhaseBar(flip).toolTip()
-    assert "Time lost" not in tip.split(":")[0].title() or "NOT the same" in tip, tip
-    # It must NOT claim to BE the time lost — the header line explicitly distances itself.
-    assert "NOT the same as the row's Time lost" in tip, tip
-    # A negative net is stated as "net faster than best here", never as a loss.
-    assert "net faster than best here" in tip, tip
-    assert "Typical-lap net \u22120.21 s" in tip, tip
-    # And a positive net still names the slowest third (the normal case), still not "time lost".
-    pos = K.PhaseLoss(entry=0.05, apex=0.20, exit=0.03)     # total +0.28, apex slowest
-    tip_pos = PhaseBar(pos).toolTip()
-    assert "Typical-lap net +0.28 s" in tip_pos, tip_pos
-    assert "slowest third: apex" in tip_pos, tip_pos
-    assert "Time lost vs your best lap, split" not in tip_pos, ("old 'time lost' label removed",
-                                                                tip_pos)
-    print("ok M4: phase-bar tooltip is a profile (not 'time lost') + guards the net-faster sign flip")
+    from PySide6.QtWidgets import QLabel
+
+    from studio.coaching_panel import PhaseBar
+    # The C12-shaped case: the entry third's median faster, the other two slower.
+    flip = K.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04)   # sum = -0.21
+    pos = K.PhaseLoss(entry=0.05, apex=0.20, exit=0.03)     # sum +0.28, apex slowest
+    for ph, sum_text in ((flip, "0.21"), (pos, "0.28")):
+        bar = PhaseBar(ph)
+        tip = bar.toolTip()
+        text = " ".join([tip] + [lb.text() for lb in bar.findChildren(QLabel)])
+        assert "need not add up to the row's Time lost" in tip, tip
+        assert sum_text not in text, f"the bar states the thirds' sum: {text}"
+        assert "net" not in text.lower(), f"the bar claims a net: {text}"
+        assert not re.search(r"\blap \d", text), f"the bar names a lap: {text}"
+        assert "Time lost vs your best lap, split" not in tip, ("old 'time lost' label", tip)
+    assert "Slowest third: apex." in PhaseBar(pos).toolTip()
+    assert "Slowest third: apex." in PhaseBar(flip).toolTip()   # the apex median is the largest
+    print("ok M4: phase-bar states three medians, no sum, no net, no lap")
 
 
 def test_l2_zero_rounding_rows_are_not_shown_opportunities():
@@ -1648,8 +1689,10 @@ def test_l5_05_all_faster_phase_bar_is_visible_not_a_border_sliver():
     """L5-05: a corner whose typical lap is FASTER than best through all three thirds used to paint
     three `C.border` slivers — 1.19:1 against the row — so a row headlined "+0.08 s" (a cross-lap
     median, a different statistic) looked self-contradictory with nothing on screen to reconcile it
-    but a tooltip. The thirds now take the palette's ahead colour, are sized by |Δt|, and the
-    window's net is stated on the row face."""
+    but a tooltip. The thirds now take the palette's ahead colour, are sized by |Δt|, and the row
+    face says so in the ahead hue. Since COACHING-2 the thirds are medians over the laps and the
+    face names that statistic, never a lap or a net (a sum of three medians is neither), while the
+    tooltip reconciles it with Time lost in words."""
     _qapp()
     from PySide6.QtWidgets import QLabel
 
@@ -1667,11 +1710,18 @@ def test_l5_05_all_faster_phase_bar_is_visible_not_a_border_sliver():
     assert all(C.border not in c for c in colours), f"never the 1.19:1 border grey: {colours}"
     # sized by |Δt|: the apex (biggest |Δ|) takes the widest stretch, the exit the narrowest.
     assert widths[1] > widths[0] > widths[2], widths
-    # …and the net sign is on the row FACE, not only in the tooltip.
-    # VIEW-9: the face names WHOSE net it is — the typical lap's, not the row's Time lost.
-    face = [lb.text() for lb in bar.findChildren(QLabel) if lb.text().startswith("typical lap ")]
-    assert face == ["typical lap \u22120.09 s"], face
-    assert "net faster than best here" in bar.toolTip()
+    # …and the all-quicker state is on the row FACE, not only in the tooltip. VIEW-9/JOURNEY-8:
+    # the face names WHOSE numbers the bars are — the laps' medians, not a lap's, with no number of
+    # its own to be read against the row's Time lost.
+    face = [lb for lb in bar.findChildren(QLabel) if lb.text() == PhaseBar.FACE]
+    assert len(face) == 1 and ahead in face[0].styleSheet(), [lb.text() for lb in face]
+    assert "Every third's median is quicker than your best lap's" in bar.toolTip(), bar.toolTip()
+    assert "net" not in bar.toolTip().lower(), bar.toolTip()
+    # A row with a slower third keeps the face muted: the ahead hue means "every third quicker".
+    mixed_bar = PhaseBar(K.PhaseLoss(-0.03, 0.02, -0.01))
+    mixed = [lb for lb in mixed_bar.findChildren(QLabel) if lb.text() == PhaseBar.FACE]
+    assert mixed and ahead not in mixed[0].styleSheet(), mixed[0].styleSheet()
+    face = [face[0].text()]
     print(f"ok L5-05: faster thirds {ahead} sized {widths}, row face says {face[0]!r}")
 
 

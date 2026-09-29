@@ -72,10 +72,11 @@ set(_ctest test_app_support_jail test_footage_checks)
 # started, and so finished, 154th-155th of 157 in CI (41-44 s there), and test_export_pipeline (#412,
 # 46-53 s in CI). test_export_video lost its VideoToolbox checks to registrations of their own. The
 # footage checks (100) and the soaks (200) sit above these on purpose; their functions below say
-# why, and where they are skipped, starting first costs a second.
+# why, and where they are skipped, starting first costs a second. test_stats_ideal (60) left the
+# table when its sweep stopped building a page per draw (GATES-3: 54 s -> 3 s alone, load ~8).
 set(_cost
-    test_stats_ideal 60  test_export_pipeline 58  test_central_view_realqt 55  test_pb_toast 55
-    test_export_e2e 40  test_export_video 38  test_charts_header_budget 33  test_load_lifecycle 29
+    test_export_pipeline 58  test_central_view_realqt 55  test_pb_toast 55  test_export_e2e 40
+    test_export_video 38  test_charts_header_budget 33  test_load_lifecycle 29
     test_export_pill_budget 27  test_first_run_path 19  test_quality_chip_trust 18  test_stats 16)
 # ==========================================================================================
 

@@ -21,6 +21,9 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
 - **App code never writes into the repo** (`tests/test_repo_write_safety.py`), and nothing here
   opens a network connection.
 - **Generated bindings are regenerated, never edited** (`pixi run gen-bindings`).
+- **The machine's guardrails** (a deny list, the sandbox, a command hook) live in untracked
+  config. [AGENT-GUARDRAILS.md](AGENT-GUARDRAILS.md) is their reference copy and restore recipe;
+  where the two differ, the live rules win.
 - **Temporary files come from `TemporaryDirectory()` or `mkdtemp()`, never a fixed name.** Tests
   run four at a time. One test's cleanup deleting another's half-read clip surfaces inside
   `ffprobe`, and reads exactly like an export defect.
