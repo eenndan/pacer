@@ -212,11 +212,13 @@ def _top_opportunity(session, unit: str) -> TopOpp | None:
         # QA W1 REG-1: the Coaching page will not crown a lead its corners' own lap-to-lap spread
         # cannot separate ("Start with C5, C2 or C8: … so this cannot rank them"), and the card
         # printed "BIGGEST OPPORTUNITY C5" under it, on three of the four working-set recordings.
-        # The page's rule, not a copy of it: `lead_ties` off the same rows and the same lead, and
-        # the same names capped the same way ("C1, C4, C7 or 1 more").
+        # The page's rule, not a copy of it: `lead_ties` off the same rows and the same lead, named
+        # in the page's order. The page names every tied corner; this one fixed-width row names
+        # the first `_OPP_TIE_NAMES` and counts the rest (see there), so its names are always the
+        # page's first ones and "N more" is exactly how many the page names after them.
         tied = coaching.lead_ties(list(opps.rows), opp.cid)
         if len(tied) > 1:
-            named = tied[:coaching._TIE_NAME_CAP]
+            named = tied if len(tied) <= _OPP_TIE_NAMES + 1 else tied[:_OPP_TIE_NAMES]
             extra = len(tied) - len(named)
             label = " · ".join(f"C{r.cid}" for r in named) + (f" · {extra} more" if extra else "")
             return TopOpp(corner_label=label, time_lost_s=float(tied[0].time_lost), reason="",
@@ -322,6 +324,14 @@ _REASON_PX_STEPS = (30, 27, 24)
 # it draws whole at 46. A pathological "C99 · C99 · C99 · 99 more" (576 px) takes the second step.
 _OPP_PX_STEPS = (46, 40, 34)
 _OPP_GAP = 24     # the least clear space between the corner line and the loss figure
+# A tie's corner row names at most this many corners and counts the rest: "C1 · C4 · C7 · 2 more".
+# The CARD's cap, not the page's. The Coaching page's "Start with" names every tied corner
+# (`coaching.corner_names`), but this row is fixed-width. Measured beside the widest span, a
+# 12-corner track's tie named in full fits whole up to 5 corners at 46 px, 6 at 40 and 7 at 34;
+# 8+ elide at 34, silently dropping corners, which a count never does. A lone remaining corner
+# is named, not counted (even "C12" is narrower than "1 more"), so Sandown 3h's four-corner tie
+# reads "C1 · C4 · C7 · C6" (355 px at 46), word for word the page's four.
+_OPP_TIE_NAMES = 3
 
 # Map plate: the thumbnail scales to this width; the plate's height then hugs the scaled thumbnail
 # (L5 — a wide landscape grab no longer letterboxes into a fixed-tall plate), within these bounds.
