@@ -446,6 +446,13 @@ def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
     for other in (None, {**beat, "kind": "first"}, {**beat, "kind": "behind", "gap": 0.2},
                   {**beat, "best": 46.9}):               # ...and the last: another lap's verdict
         assert share_card.card_data(session, unit="kmh", pb_standing=other).pb == "", other
+    # DOMAIN-6: a beat inside timing precision is LEVEL on the debrief, so the card claims no PB —
+    # it said "NEW PB · 0.00 s" for a 0.004 s beat. The floor itself still earns the mark.
+    level = {**beat, "prior": 46.812, "improvement": 0.004}
+    assert share_card.card_data(session, unit="kmh", pb_standing=level,
+                                prior_date="2026-08-30").pb == "", "a sub-floor beat is no PB"
+    floor = {**beat, "prior": 46.878, "improvement": 0.07}
+    assert share_card.pb_mark(floor, 46.808, "2026-08-30") == "NEW PB · −0.07 s vs 30 Aug"
     # Drawn: the ahead hue's ink on the BEST LAP row, right of the label, only with the mark.
     ahead = QColor(theme.ahead_colour())
 

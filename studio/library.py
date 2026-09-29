@@ -735,6 +735,41 @@ def restore(path: str | None = None) -> dict:
         return load(path)
 
 
+# TWO BEST LAPS CLOSER THAN THE TIMING CAN TELL APART ARE LEVEL, IN WORDS (DOMAIN-6). A PB beaten by
+# 0.001 s or 0.004 s read "New personal best! … 0.00 s faster than your previous best", and the lap
+# card said "NEW PB · 0.00 s": a celebration of a difference the instrument cannot resolve, printed
+# to a precision the sentence itself rounded away. The floor is the difference of two laps timed by
+# the BEST instrument measured, at 2σ: 2 × √2 × σ, with σ = 0.0247 s from docs/ACCURACY.md row C (the
+# MK sprint against Club Speed timing) → 0.0699 s, rounded to 0.07 (tests/test_measured_figures.py
+# re-derives it from that row, so a re-measured row C fails loudly here). FLAT on purpose: a floor
+# scaled by each recording's own σ class was measured against the owner's real steps and rejected as
+# the default — at D24-A's class (2√2 × 0.087 = 0.246 s) his real 0.164 s and 0.104 s Sandown PBs
+# would have read "level". His four real steps (Sandown 1.476 / 0.164 / 0.104 s, MK 0.749 s) all
+# clear 0.07. WORDS ONLY: `pb_moment` and its kinds do not read this, so the row still becomes the
+# track's best, the compare offer and the PB progression are unchanged, and only what the toast,
+# the debrief line and the card say about a sub-floor gap changes.
+PB_PRECISION_S = 0.07
+# A gap below half a millisecond is the same printed time: "level" needs no precision clause then,
+# and the tie sentence the debrief has always printed for it stays exactly as it was.
+_SAME_MS_S = 5e-4
+
+
+def within_timing_precision(gap_s: float) -> bool:
+    """Whether two best laps `gap_s` apart (either sign) are level as far as the timing can tell —
+    closer than ``PB_PRECISION_S``. The one rule every PB sentence and the card's mark apply, in
+    both directions (a beat by less, a best lap behind by less)."""
+    return abs(gap_s) < PB_PRECISION_S
+
+
+def _precision_clause(gap_s: float) -> str:
+    """The words a level PB sentence carries after "level with …": nothing for a gap that prints as
+    the same millisecond, otherwise the floor it is inside. The FLOOR, never the gap: a sub-floor gap
+    printed to the millisecond ("0.004 s apart") would re-assert the precision the sentence denies."""
+    if abs(gap_s) < _SAME_MS_S:
+        return ""
+    return f"within timing precision (under {PB_PRECISION_S:.2f} s apart)"
+
+
 def pb_moment(index: dict, track: str | None, best: float | None,
               fingerprint_key: str | None = None) -> dict | None:
     """Decide the "new personal best" moment for a freshly-analysed session, comparing its `best`
@@ -847,10 +882,18 @@ def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | 
 def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     """(title, body) copy for a ``pb_moment`` result, formatting lap times through the injected
     `fmt_time` (studio._signal.fmt_time — kept out of this pacer-free module so it stays Qt/format-
-    agnostic and testable). A "beat" leads with the celebration + the gap to the old PB; a "first"
-    is a gentler acknowledgement. The one place the celebration wording lives."""
+    agnostic and testable). A "beat" leads with the celebration + the gap to the old PB — unless the
+    gap is inside timing precision, when it says the two are level instead (``PB_PRECISION_S``); a
+    "first" is a gentler acknowledgement. The one place the celebration wording lives."""
     track = moment["track"]
     best = fmt_time(moment["best"])
+    if moment["kind"] == "beat" and within_timing_precision(moment["improvement"]):
+        clause = _precision_clause(moment["improvement"])
+        return (
+            "Level with your personal best",
+            f"{track} — {best}, level with your previous best ({fmt_time(moment['prior'])})"
+            f"{' ' + clause if clause else ''}.",
+        )
     if moment["kind"] == "beat":
         gap = moment["improvement"]
         # NO EMOJI (D1-07). The 🏁 that shipped here was the app's ONLY colour glyph: U+1F3C1
@@ -902,14 +945,20 @@ def pb_standing_for(verified: bool, index: dict, track: str | None, best: float 
 
 def pb_standing_text(standing: dict, fmt_time) -> str:
     """The debrief's PB sentence for a ``pb_standing_for`` result — ``pb_moment_text``'s facts in
-    one line, since the debrief replaces the card rather than repeating it."""
+    one line, since the debrief replaces the card rather than repeating it. A best lap within timing
+    precision of the PB, either side of it, is "level with your personal best there": one rule in
+    both directions, so a 0.004 s beat is not "0.00 s faster" and a 0.03 s deficit not "0.03 s off"."""
     track, best = standing["track"], fmt_time(standing["best"])
+    if standing["kind"] in ("beat", "behind"):
+        gap = standing["improvement" if standing["kind"] == "beat" else "gap"]
+        if within_timing_precision(gap):
+            clause = _precision_clause(gap)
+            return (f"Best lap {best} at {track}, level with your personal best there"
+                    f"{', ' + clause if clause else ''}.")
     if standing["kind"] == "beat":
         return (f"New personal best at {track}: {best}, {standing['improvement']:.2f} s faster "
                 f"than your previous best ({fmt_time(standing['prior'])}).")
     if standing["kind"] == "behind":
-        if round(standing["gap"], 2) == 0:     # a tie is not a beat (pb_moment), nor "0.00 s off"
-            return f"Best lap {best} at {track}, level with your personal best there."
         return (f"Best lap {best} at {track}, {standing['gap']:.2f} s off your personal best "
                 f"there ({fmt_time(standing['prior'])}).")
     return f"First session logged at {track}: best lap {best}, the time to beat next time."
