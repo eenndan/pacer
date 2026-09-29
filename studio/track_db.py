@@ -48,10 +48,10 @@ already auto-detects either circuit with its line — MK's timing is identical t
 entry, and Sandown Park's line is the owner's own saved one (Q2). A third seed is FICTIONAL: the
 circuit the synthetic ``--demo`` session is driven on (``studio/dev/make_demo.py``). It detects like
 the others, but the saved-tracks manager lists it only while the demo is open or the user has
-refined it (``is_demo_only``). The user DB is merged ON TOP of the seed (a user entry of the same name overrides the seed), so
-``Save as track…`` can refine a built-in too. Reusing a name for a DIFFERENT place is a different
-act — it destroys that circuit's stored lines — so it is REFUSED (``TrackNameTaken``) until the
-caller confirms; see ``save_track`` / ``replaces``.
+refined it (``is_demo_only``). The user DB is merged ON TOP of the seed (a user entry of the same
+name overrides the seed), so ``Save as track…`` can refine a built-in too. Reusing a name for a
+DIFFERENT place is a different act — it destroys that circuit's stored lines — so it is REFUSED
+(``TrackNameTaken``) until the caller confirms; see ``save_track`` / ``replaces``.
 
 Schema (version 1) — one JSON object::
 
