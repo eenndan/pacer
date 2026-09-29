@@ -312,10 +312,11 @@ _SUB = ((0.0, 0), (0.025, 1), (0.5, 2), (0.975, 0))    # (lap phase, start-phase
 
 
 def test_the_render_plans_the_finish_frame_it_was_checked_for(monkeypatch_restore):
-    """The real `Renderer` (probes stubbed): its frame plan and its spec are the ones the grid above
-    checked, composite and overlay-only. An overlay-only file snaps its first frame back onto a
-    source frame (`plan_source_sync`), so its run-up is not a whole number of frames and its finish
-    lands at another phase: it must still end on the finish frame."""
+    """The real `Renderer` (probes stubbed) builds its own spec and frame plan; hold THAT plan to
+    the same property, composite and overlay-only, so the pipeline the grid checks is the one that
+    renders. An overlay-only file snaps its first frame back onto a source frame
+    (`plan_source_sync`), so its run-up is not a whole number of frames and its finish lands at
+    another phase: it must still end on the finish frame."""
     tally = _Tally("rendered lap clips")
     clock = CLOCKS["measured"]
     for fps in RATES:
