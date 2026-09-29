@@ -74,7 +74,10 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](../studi
   gates every future Session-math change in CI (~8 s). Regenerate the baseline only after an
   intentional, reviewed change: `python tests/test_golden_synthetic.py --write-baseline` — it
   prints the leaf / `__unsupported__` / null / NaN counts before vs after, how many of the old
-  leaves moved or vanished and how many are new.
+  leaves moved or vanished and how many are new. Above the first 40 leaf lines, a red gate, a
+  re-cut and `golden_compare` print EVERY moved family, uncapped: the path with lap / row indices
+  and lap-id keys collapsed (`lap_rows[].entry`, `per_lap.<id>.lap_time`), its leaf count, max |Δ|
+  and the phases it moved in.
 
 Both halves count a leaf that is NaN on one side only as a difference, and the comparator's summary
 line gives each side's NaN-leaf count. NaN compares false with everything, so until 2026-09 a value
