@@ -264,6 +264,28 @@ def _start_moved(before, after) -> bool:
     return False
 
 
+def _start_seg_moved(before, after) -> bool:
+    """Whether a timing edit MOVED the start line: `before`/`after` in local metres (anything with
+    .x1/.y1/.x2/.y2), moved when an endpoint shifted more than `_START_MOVED_M`. The same line drawn
+    end-to-start is not a move, so the endpoints are compared both ways round.
+
+    It decides whether an edit is the start line's confirmation (`_on_lines`), which is why its
+    unknown answers the opposite way to `_start_moved`: with no line on either side to compare,
+    the edit keeps what every edit did before QA r4 CODE-1 (it confirms), rather than an unseeable
+    state quietly withholding a drag's confirmation."""
+    try:
+        a = ((before.x1, before.y1), (before.x2, before.y2))
+        b = ((after.x1, after.y1), (after.x2, after.y2))
+    except AttributeError:  # None or not a line: no comparison, so the edit confirms as it did
+        return True
+
+    def spread(p, q):
+        return max(math.hypot(p[0][0] - q[0][0], p[0][1] - q[0][1]),
+                   math.hypot(p[1][0] - q[1][0], p[1][1] - q[1][1]))
+
+    return min(spread(a, b), spread(a, b[::-1])) > _START_MOVED_M
+
+
 def undo_summary(outcome: UndoOutcome) -> str:
     """The ONE sentence naming what an undo restored, lower-case and status-bar shaped.
 
@@ -2275,12 +2297,21 @@ class CentralView(QWidget):
         #
         # The whole body is synchronous and costs ~0.5 s on a big session, so it runs under a wait
         # cursor — see _busy().
+        #
+        # Only an edit that MOVED the start line confirms the timing (QA r4 CODE-1). Add sector and
+        # Clear sectors arrive here with the start line untouched, and confirming on them turned a
+        # sector edit at an unknown circuit into the answer to "drag it into place": a verified
+        # Library row and the first-open verdict, decided on the loader's own fit. user_confirm
+        # False never un-confirms (a sector edit after a drag stays Verified); Save as track is
+        # the confirmation that needs no move.
+        prior = getattr(self.session, "start_line", None)
         with _busy():
             if self.session.valid_lap_ids():
                 self.session.push_timing_history()  # pre-edit state, so a bad drag is undoable
             if self._comparing():
                 self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
-            self.session.set_timing_lines(start, sectors)
+            self.session.set_timing_lines(start, sectors,
+                                          user_confirm=_start_seg_moved(prior, start))
             self.rebuild_derived_views(reselect=True)
             self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
             self._save_sidecar()

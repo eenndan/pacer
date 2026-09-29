@@ -421,7 +421,8 @@ def test_auto_fit_notice_retracts_when_the_start_line_is_placed():
     assert win.statusBar().currentMessage() == before
     assert win.session.timing_verified is False
 
-    # The user drags the start/finish line: _on_lines confirms the timing and emits timingEdited.
+    # The user drags the start/finish line: _on_lines confirms the timing (a start line that
+    # MOVED; a sector-only edit does not, QA r4 CODE-1) and emits timingEdited.
     win.session.confirm_timing()
     view.timingEdited.emit()
     _APP.processEvents()
