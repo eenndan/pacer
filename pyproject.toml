@@ -166,6 +166,29 @@ test-footage = { cmd = "caffeinate -si ctest --test-dir build/Release --output-o
 # without it (`test`, `test-fast`, CI on a pull request) each is reported Skipped by name. CI sets
 # it on pushes to main and on tags (.github/workflows/ci.yml). No --timeout: each has a TIMEOUT.
 test-soak = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure -L soak", depends-on = ["build"], env = { PACER_SOAK = "1" } }
+# TWO OPTIONAL INNER LOOPS, NEITHER A GATE: `test` stays the pre-PR gate and `test-fast` the loop.
+# Each is an anchored list of registrations; tests/test_parallel_suite.py fails a name that is not a
+# tests/<name>.py (a misspelt or renamed one would otherwise select nothing and still exit 0), and
+# neither carries -j or caffeinate: ~10-16 s started from the keyboard, like `golden`.
+#
+# `test-core`, between edits to the core math (TEETH-6). The 2026-09-28 review planted 34 defects in
+# timing, geometry, delta, stats and the stores; the whole suite killed 31. These ten registrations
+# are the greedy cover that kills every one of those 31, in 16.3 s wall at -j4 (test_stats 16.3,
+# golden 10.3, measured_figures 8.2). It is FITTED to those 34 mutants, so a green run says nothing
+# about a defect they do not model: run `test` before a PR. Re-derived whenever the mutation run is
+# (PROCESS-10); a changed cover is this one regex. test_measured_figures runs only its non-footage
+# checks here (PACER_FOOTAGE_DEFAULTS=off, as in `test-fast`).
+test-core = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480 -R '^(test_golden_synthetic|test_lap_closure|test_library|test_export_data|test_session_pure|test_stats|test_focus_list|test_jsonstore|test_measured_figures|test_sector_integrity)$'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off", CTEST_PARALLEL_LEVEL = "4" } }
+# `test-ciworld`, before pushing a player or compare change (DELIVERY-6): CI's software-decode world
+# (no VideoToolbox, so Qt's FFmpeg backend decodes on the CPU) over the registrations that build a
+# REAL QMediaPlayer, i.e. every test file that pops PACER_NO_MEDIA (test_parallel_suite holds the
+# list to exactly those). Timing differs there: under software decode a fresh pane's paused frame
+# reached the sink 44 ms after the click, where VideoToolbox took 361 ms, and a test that hooked the
+# sink in between passed here and failed only in CI (367b3ed). 9.2 s wall. It does NOT emulate CI's
+# missing audio device (no local switch exists; tests/test_player_audio.py holds the stand-ins to
+# every signal studio connects instead), nor its encoder: for exports, the playbook's PACER_FFMPEG
+# wrapper stands.
+test-ciworld = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480 -R '^(test_player_audio|test_player_seek_present|test_slider_release_lands|test_video_view_compare)$'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off", QT_FFMPEG_DECODING_HW_DEVICE_TYPES = "none", CTEST_PARALLEL_LEVEL = "4" } }
 # One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
