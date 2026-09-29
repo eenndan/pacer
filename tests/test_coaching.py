@@ -16,6 +16,7 @@ corner_entry_media_time projects the corner entry onto the best lap exactly. The
 offscreen on the real dataclasses: populate, Go→jump_to(cid, entry_dist), the excluded state.
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_coaching.py
 """
+import math
 import os
 import sys
 from types import SimpleNamespace
@@ -1760,13 +1761,13 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
 
 
 def _ranked_row(cid: int, loss: float, iqr: float, reach=K.REACH_REPEAT,
-                kind=K.REASON_BRAKING) -> K.Opportunity:
-    """One RANKED row with a chosen loss and lap-to-lap spread (the two numbers the tie test
-    reads), everything else fixed."""
+                kind=K.REASON_BRAKING, n_laps: int = 65, reach_laps: int = 12) -> K.Opportunity:
+    """One RANKED row with a chosen loss, lap-to-lap spread and lap count (the numbers the tie
+    test reads), everything else fixed."""
     return K.Opportunity(
         cid=cid, direction=1, time_lost=loss, entry_dist=0.0,
         reason=K.Reason(kind, 0.1, 3.0, 0.3, 0.0, 0.1),
-        evidence=K.Evidence(n_laps=65, reach_laps=12, reach=reach, iqr=iqr,
+        evidence=K.Evidence(n_laps=n_laps, reach_laps=reach_laps, reach=reach, iqr=iqr,
                             abstain=K.ABSTAIN_NONE))
 
 
@@ -1807,6 +1808,88 @@ def test_t4_a_lead_that_clears_the_spread_still_reads_exactly_as_before():
     assert acts[-1] == ("Start with C12: +0.33 s, and you have matched it on 12 of 65 laps."), \
         acts[-1]
     print(f"ok T4 clear lead: {acts[-1]!r}")
+
+
+# The working set's RANKED rows, biggest loss first, as the QA r4 ADVICE lane extracted them through
+# the real (jailed) loader on 13099c4 (qa-2026-09-28-r4/ADVICE/adv_<KEY>.pkl):
+# (cid, time lost s, IQR s, counted laps, laps at the target, reach).
+_R, _P = K.REACH_REPEAT, K.REACH_RARE
+_WORKING_SET_RANKED = {
+    "MK_18_09_26": [(5, 0.134780, 0.230944, 19, 6, _R), (2, 0.087096, 0.106218, 16, 3, _R),
+                    (8, 0.064168, 0.107409, 17, 4, _R)],
+    "SD_19_09_26": [(1, 0.146633, 0.200070, 36, 4, _R), (5, 0.093451, 0.064636, 35, 3, _P),
+                    (7, 0.077588, 0.101853, 36, 4, _R), (2, 0.059539, 0.096228, 35, 5, _R),
+                    (3, 0.049277, 0.090632, 36, 9, _R)],
+    "SD_30_08_26": [(7, 0.099327, 0.095077, 37, 5, _R), (5, 0.082542, 0.113700, 37, 6, _R),
+                    (3, 0.046750, 0.078567, 37, 9, _R)],
+    "Sandown 3h 2026": [(1, 0.229400, 0.309380, 61, 3, _P), (4, 0.193470, 0.230531, 61, 5, _P),
+                        (7, 0.177929, 0.304993, 62, 4, _P), (6, 0.167461, 0.187463, 62, 4, _P)],
+}
+
+
+def _working_set_rows(name: str, n_laps: int | None = None) -> list[K.Opportunity]:
+    return [_ranked_row(cid, loss, iqr, reach=reach, n_laps=n if n_laps is None else n_laps,
+                        reach_laps=hit)
+            for cid, loss, iqr, n, hit, reach in _WORKING_SET_RANKED[name]]
+
+
+def test_lead_ties_widen_on_a_short_session():
+    """ADV-2 (QA r4): the tie margin had no lap-count term, so the fewer the laps the more often
+    "Start with" crowned a corner the laps cannot separate. MK_18_09_26 (19 laps): C5 +0.135 s vs
+    C8 +0.064 s — gap 0.071 s, above half the smaller spread (0.054 s), so C8 was left out, while
+    the lane's paired permutation test (20,000) calls the pair a tie at p = 0.190.
+
+    The margin now also takes 1.5 standard errors of the pair's difference (each median's SE from
+    its own IQR and lap count), which is 0.082 s here. The other three recordings' sentences are
+    byte-identical to 13099c4's: SD_19_09_26's C1 stays alone (the permutation separates it from
+    C5 at p = 0.001), SD_30_08_26's C3 stays out (p = 0.010), and the 62-lap Sandown 3h keeps its
+    four-way tie."""
+    spread = "sit closer together than your own lap-to-lap spread"
+    expect = {
+        "MK_18_09_26": f"Start with C5, C2 or C8: +0.13 s down to +0.06 s {spread}, so this "
+                       "cannot rank them.",
+        "SD_19_09_26": "Start with C1: +0.15 s, and you have matched it on 4 of 36 laps.",
+        "SD_30_08_26": f"Start with C7 or C5: +0.10 s and +0.08 s {spread}, so either is the same "
+                       "call.",
+        "Sandown 3h 2026": f"Start with C1, C4, C7 or 1 more: +0.23 s down to +0.17 s {spread}, "
+                           "so this cannot rank them.",
+    }
+    for name, sentence in expect.items():
+        rows = _working_set_rows(name)
+        acts = K.theme_actions(K.session_theme(rows), rows)
+        assert acts[-1] == sentence, (name, acts[-1])
+    # The floor shrinks with √n: MK's same three losses and spreads over 60 laps a corner separate
+    # C8 again (C2 stays, inside half the smaller spread on its own).
+    long = _working_set_rows("MK_18_09_26", n_laps=60)
+    assert [r.cid for r in K.lead_ties(long, 5)] == [5, 2], K.lead_ties(long, 5)
+    print(f"ok ADV-2 short-session ties: {expect['MK_18_09_26']!r}")
+
+
+def test_a_tie_decided_by_the_standard_error_never_outruns_the_spread_it_prints():
+    """The tied sentence says the corners "sit closer together than your own lap-to-lap spread".
+    At n = 3 (MIN_CORNER_LAPS, a 3-lap session) 1.5 standard errors of a difference are 1.14 x a
+    shared IQR, so the SE term is capped at the wider of the two spreads: a gap past it separates
+    even when the uncapped term would have tied it, and every tied gap stays inside a spread."""
+    se3 = 1.5 * math.hypot(*[1.2533 / 1.349 * 0.10 / math.sqrt(3)] * 2)
+    assert se3 > 0.11, se3                     # the uncapped term: 0.114 s on a 0.10 s spread
+    inside = [_ranked_row(1, 0.30, 0.10, n_laps=3), _ranked_row(2, 0.21, 0.10, n_laps=3)]
+    past = [_ranked_row(1, 0.30, 0.10, n_laps=3), _ranked_row(2, 0.195, 0.10, n_laps=3)]
+    assert [r.cid for r in K.lead_ties(inside, 1)] == [1, 2]   # 0.09 s: half a spread is 0.05
+    assert [r.cid for r in K.lead_ties(past, 1)] == [1]        # 0.105 s: past the 0.10 s spread
+    # Asymmetric spreads at n = 3: every tied gap is inside the wider spread of its pair.
+    rows = [_ranked_row(1, 0.40, 0.30, n_laps=3), _ranked_row(2, 0.25, 0.02, n_laps=3),
+            _ranked_row(3, 0.05, 0.02, n_laps=3)]
+    tied = K.lead_ties(rows, 1)
+    assert [r.cid for r in tied] == [1, 2], tied
+    for r in tied[1:]:
+        assert tied[0].time_lost - r.time_lost < max(tied[0].evidence.iqr, r.evidence.iqr)
+    # A row with no counted laps (_NO_EVIDENCE: iqr 0, n 0) still never ties.
+    bare = K.Opportunity(cid=9, direction=1, time_lost=0.30, entry_dist=0.0,
+                         reason=K.Reason(K.REASON_BRAKING, 0.1, 3.0, 0.3, 0.0, 0.1))
+    assert [r.cid for r in K.lead_ties([inside[0], bare], 1)] == [1]
+    # The constants the arithmetic above spells out (SE_MEDIAN_K is public for the focus verdict).
+    assert (K.TIE_SE_K, K.SE_MEDIAN_K) == (1.5, 1.2533 / 1.349)
+    print("ok ADV-2 SE tie capped at the printed spread")
 
 
 def test_the_page_leads_with_the_theme():
