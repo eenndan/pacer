@@ -62,7 +62,7 @@ from PySide6.QtWidgets import (
 from . import chapters, data_quality, gmeter_overlay, theme
 from . import marks as marks_model
 from ._signal import fmt_hms, plural
-from .player_pane import PlayerPane
+from .player_pane import _WINDOW_STOP_TOL_S, PlayerPane
 from .widgets import PanelToolbar, ToggleButton, icon_button
 
 # The g-meter toggle's own line. The dial's two SENTENCES — the felt-force convention and the axis
@@ -1235,8 +1235,10 @@ class VideoView(QWidget):
         self.slider.sliderMoved.connect(self._on_slider_moved)
         # groove clicks are actionTriggered not sliderMoved — route them through the same clamped seek.
         self.slider.actionTriggered.connect(self._on_slider_action)
-        # a handle drag's last target may still be waiting its turn: the release lands it now.
+        # the press pauses the picture under the handle; the release lands it and resumes.
+        self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderReleased.connect(self._on_slider_released)
+        self._slider_was_playing = False
         if self.pane.total_duration > 0:
             self.slider.setRange(0, int(self.pane.total_duration * 1000))
         self.pane.durationChanged.connect(self._on_duration)
@@ -1372,8 +1374,11 @@ class VideoView(QWidget):
             self.secondary.pause()
 
     def toggle(self):
-        # Drive both panes from the PRIMARY's state so they stay in lockstep.
-        if self.pane.is_playing():
+        # Drive both panes from the PRIMARY's state so they stay in lockstep. While the handle is
+        # held they wait under it, and Space decides what the release does.
+        if self.slider.isSliderDown():
+            self._slider_was_playing = not self._slider_was_playing
+        elif self.pane.is_playing():
             self.pause()
         else:
             self.play()
@@ -2004,10 +2009,10 @@ class VideoView(QWidget):
         2026-09-26 round 3, JOURNEY-2). setValue moves the handle as well as the value, and a drag's
         playhead runs behind the pointer: one seek in flight, the newest target held behind it
         (PlayerPane.seek_dragged). A report after the last move left the handle on the lagging
-        playhead, up to 102 s from the pointer (SD19, MK, Sandown 3h), and the release then landed,
-        rightly, at the pointer: "a minute past where he let go". Un-muted it is likely: the clock
-        reports on through a seek, 33-39 times in a 1.5 s drag on SD19 against 8 muted. The
-        telemetry — map, charts, readout — still follows the picture."""
+        playhead, up to 102 s from the pointer, and the release then landed, rightly, at the
+        pointer: "a minute past where he let go". Since the press pauses the panes
+        (_on_slider_pressed), the only reports are the drag's own seeks; this stays as defence in
+        depth. The telemetry — map, charts, readout — still follows the picture."""
         if not self.slider.isSliderDown():
             self.slider.blockSignals(True)
             self.slider.setValue(int(global_s * 1000))
@@ -2065,12 +2070,25 @@ class VideoView(QWidget):
             return
         self._on_slider_moved(self.slider.sliderPosition())
 
+    def _on_slider_pressed(self):
+        """The handle is taken: both panes wait under it, and the release resumes iff they played
+        here, the chart scrub's contract (ScrubController.on_started). Left playing, the picture ran
+        on under a still pointer: 1.21 s past the handle after a hold on MK (QA 2026-09-28, REG2-2)."""
+        self._slider_was_playing = self.is_playing()
+        self.pause_if_playing()
+
     def _on_slider_released(self):
         """The handle is let go: a pane whose drag still holds a newer target behind its in-flight
         seek lands it NOW, as an exact seek, rather than after the in-flight frame it would only
-        replace (PlayerPane.finish_drag). Pane B's is its own distance-locked target."""
+        replace (PlayerPane.finish_drag). Pane B's is its own distance-locked target. Play then
+        resumes iff it did at the press, but not at lap A's end in compare, where PlayerPane.play
+        would rewind the parked panes (read off the HANDLE: pane A's clock can lag a seek)."""
         for pane in self._panes():
             pane.finish_drag()
+        resume, self._slider_was_playing = self._slider_was_playing, False
+        win = self._lap_window
+        if resume and (win is None or self.slider.value() / 1000.0 < win[1] - _WINDOW_STOP_TOL_S):
+            self.play()
 
     def _on_duration(self, ms: int):
         """A per-chapter real video-track duration arrives as each source loads (durationChanged,
