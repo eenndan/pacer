@@ -558,23 +558,28 @@ class Opportunity:
 # 53 % and 0064 chapter 2 from braking 51 % to line 100 %; no other cell did. COACHING-1
 # (2026-09-29) re-measured it when the levers became the laps' habit instead of the median-time
 # lap's (ADV-1): 0068 from line 53 % to line 78 % (its C2 and C3 read coasting off one lap) and
-# 0068 chapter 2 from braking 53 % back to line 74 %; no other cell moved:
+# 0068 chapter 2 from braking 53 % back to line 74 %; no other cell moved. COACHING-5 (2026-09-29)
+# re-measured it when the spread fallback was renamed for its trigger ("line" in the history above
+# is that fallback's old name): every line cell became consistency at the same share — no ranked
+# row of these lap sets carries the measured line signature (LINE_APEX_DELTA_KMH) — and nothing
+# else moved:
 #
 #   lap set           laps  ranked  ranked s  abstained s  execution   pace  top cause
-#   0068                36       5     0.426        0.072       78 %   22 %  line 78 %
-#   0064                62       4     0.768        0.106        0 %  100 %  line 100 %
-#   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  line 61 %
-#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  line 74 %
+#   0068                36       5     0.426        0.072       78 %   22 %  consistency 78 %
+#   0064                62       4     0.768        0.106        0 %  100 %  consistency 100 %
+#   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  consistency 61 %
+#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  consistency 74 %
 #   0064 chapter 1      17       0     0.000        3.738        0 %    0 %  none 0 %
-#   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  line 100 %
+#   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  consistency 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
 #
 # 0068 splits 78 % execution / 22 % pace and 0064 splits 0 % / 100 % — the same track two months
 # apart, and the theme comes out opposite, as it did on D24. That is the finding that justifies the
-# feature. The cause axis names the same top cause on the two full recordings — line holds 78 % of
-# 0068's ranked time and 100 % of 0064's, a theme on each — and that is mostly the absence of a
-# lever: since the levers are the laps' habit (ADV-1), line is the reason on 14 of the 15 ranked
-# rows of the four working-set recordings, and the row says so with the spread it reads. The axis
+# feature. The cause axis names the same top cause on the two full recordings — consistency holds
+# 78 % of 0068's ranked time and 100 % of 0064's, a theme on each — and that is the absence of a
+# lever: since the levers are the laps' habit (ADV-1), consistency is the reason on 14 of the 15
+# ranked rows of the four working-set recordings, none of them carries a measured line difference,
+# and the row says so with the spread it reads. The axis
 # still does not survive every smaller lap set: of the five single chapters, one names no single
 # cause (0064's chapter 1, which ranks nothing), so the cause line is conditional and can read
 # "no single cause dominates".
@@ -723,25 +728,26 @@ _SIGMA_HALF_S = 0.15   # s lap-to-lap σ; below ~0.05 the line is repeatable
 # the same laps, its signature's size the SMALLER of its two halves (apex slowdown, exit gain):
 #
 #   recording  corners  null cells  null P95 km/h
-#   0068             7         242           0.78
-#   0064             7         425           1.00
-#   0065             7         250           0.67
-#   0067            12         200           0.33
-#   all four        33        1117           0.77
+#   0068             7         242          0.777
+#   0064             7         425          0.998
+#   0065             7         250          0.671
+#   0067            12         200          0.329
+#   all four        33        1117          0.773
 #
 # δ = 1.0 km/h on both halves: above the pooled P95 and above every recording's own, and at the
 # ~1 km/h of GPS apex noise `_APEX_HALF_KMH` names. 37 of the null's 1117 cells (3.3 %) clear it.
-# The two halves run AGAINST each other in the null (a lap slow at the apex is slow out, r −0.71),
+# The two halves run AGAINST each other in the null (a lap slow at the apex is slow out, r −0.70),
 # so neither half's own P95 is the test (apex slowdown 6.9 km/h, exit gain 2.1 km/h: at those, 0
 # null cells). Refused §6's confound — every exit speed is read at a projected boundary, and where
 # it lands inside an acceleration zone moves it — is at most 0.58 km/h of implied error on any
 # corner of the four (the speed gradient there × the sd of the exit point's placement; 0067 C10).
 #
-# ON THE BEST LAP it clears both halves on 2 of the 34 rows — 0067 C6 (apex −3.5, exit +1.7 km/h)
-# and 0065 C4 (apex −1.6, exit +1.2 km/h) — both abstained, and reads line on 1 (0065 C4; at 0067
-# C6 the corner's spread is the stronger reason). Sandown 3h's C4 and C7, the rows the QA r4 advice
-# lane called a line difference, do not: at C4 the best lap's apex IS the laps' median (43.7 against
-# 43.7 km/h — its 42.4 was not the habit), and at C7 the exit gain is +0.4 km/h (apex −2.6).
+# ON THE BEST LAP the signature clears both halves on 2 of the 31 rows — 0067 C6 (apex −3.5, exit
+# +1.7 km/h) and 0065 C4 (apex −1.6, exit +1.2 km/h) — both abstained, and reads line on 1 (0065 C4;
+# at 0067 C6 the corner's spread is the stronger reason). Sandown 3h's C4 and C7 (0064), the rows
+# the QA r4 advice lane called a line difference, do not: at C4 the best lap's apex gain is +0.0
+# km/h — its apex IS the laps' median (the lane's 42.4 against 43.9 km/h was not this habit) — and
+# at C7 its exit gain is +0.4 km/h (apex −2.6).
 LINE_APEX_DELTA_KMH = 1.0
 LINE_EXIT_DELTA_KMH = 1.0
 

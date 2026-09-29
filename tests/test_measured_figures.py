@@ -352,7 +352,7 @@ class ThemeRow:
 
 
 _THEME_LINE = re.compile(r"^#\s+(00\d\d(?: chapter \d)?)\s+(\d+)\s+(\d+)\s+(\d\.\d{3})\s+(\d\.\d{3})\s+"
-                         r"(\d+) %\s+(\d+) %\s+(apex|braking|coasting|line|none) (\d+) %\s*$")
+                         r"(\d+) %\s+(\d+) %\s+(apex|braking|coasting|line|consistency|none) (\d+) %\s*$")
 # How the prose names a THEME row's verdict.
 _KIND_WORD = {"execution": "execution", "pace": "pace", "split": "a split", "none": "none"}
 
@@ -410,7 +410,7 @@ def test_the_theme_prose_follows_the_table_and_THEME_SHARE():
     assert "the theme comes out opposite" in text and "split" != t[a].kind != t[b].kind != "split", (t[a], t[b])
 
     # The cause axis: the top cause on each full recording, and which of the two clears THEME_SHARE.
-    m = _need(r"(apex|braking|coasting|line) holds (\d+) % of (00\d\d)'s ranked time and (\d+) % of (00\d\d)'s"
+    m = _need(r"(apex|braking|coasting|line|consistency) holds (\d+) % of (00\d\d)'s ranked time and (\d+) % of (00\d\d)'s"
               r"(, a theme on each| — but only (00\d\d)'s clears THEME_SHARE| — but neither clears THEME_SHARE)",
               text, "the cause-axis sentence")
     assert (m.group(3), m.group(5)) == (a, b), m.groups()
@@ -501,6 +501,49 @@ def test_the_theme_prose_follows_the_table_and_THEME_SHARE():
     c = t[f"{m.group(1)} chapter {m.group(2)}"]
     assert (float(m.group(3)), float(m.group(4))) == (c.ranked_s, c.abstained_s) and c.abstained_s > c.ranked_s > 0, c
     print(f"test_the_theme_prose_follows_the_table_and_THEME_SHARE OK (THEME_SHARE {share})")
+
+
+# ─── coaching.py: the line signature's null table (COACHING-5) ───────────────────────────────────
+# "line" is said only where the best lap is slower at the apex AND faster out than the laps' habit,
+# each by a δ that must sit above what a lap with no line difference shows. The δ is a constant, so
+# it carries its measured table (the pseudo-best null per recording) and this guard; the footage
+# half re-measures the table in test_the_coaching_tables_match_the_footage.
+_LINE_NULL_LINE = re.compile(r"^#\s+(00\d\d|all four)\s+(\d+)\s+(\d+)\s+(\d\.\d{3})\s*$")
+
+
+def _line_null_rows() -> dict[str, tuple[int, int, float]]:
+    """name → (corners, null cells, null P95 km/h), the pooled row under "all four"."""
+    out = {}
+    for line in _read(_COACHING).splitlines():
+        m = _LINE_NULL_LINE.match(line)
+        if m:
+            out[m.group(1)] = (int(m.group(2)), int(m.group(3)), float(m.group(4)))
+    assert len(out) == 5 and "all four" in out, f"the line-null table parsed to {out!r}"
+    return out
+
+
+def test_the_line_signature_delta_clears_its_measured_null():
+    """The line δ is above its null's 95th percentile on every recording and pooled, at or above
+    the GPS apex noise it names, one δ for both halves, and the prose's counts are the table's."""
+    t = _line_null_rows()
+    text = _flatten(_read(_COACHING))
+    da, de = _constant(_COACHING, "LINE_APEX_DELTA_KMH"), _constant(_COACHING, "LINE_EXIT_DELTA_KMH")
+    m = _need(r"δ = (\d\.\d) km/h on both halves: above the pooled P95 and above every recording's own, "
+              r"and at the ~(\d) km/h of GPS apex noise", text, "the δ sentence")
+    delta, noise = float(m.group(1)), float(m.group(2))
+    assert da == de == delta, (da, de, delta)
+    recs = {k: v for k, v in t.items() if k != "all four"}
+    assert all(delta > p95 for _c, _n, p95 in t.values()), (delta, t)
+    assert delta >= noise and "below ~1 is line/GPS noise" in _read(_COACHING), (delta, noise)
+    assert (sum(c for c, _n, _p in recs.values()), sum(n for _c, n, _p in recs.values())) == t["all four"][:2], t
+    m = _need(r"(\d+) of the null's (\d+) cells \((\d+\.\d) %\) clear it", text, "the null's false-line rate")
+    assert int(m.group(2)) == t["all four"][1] and float(m.group(3)) == round(100 * int(m.group(1)) / int(m.group(2)), 1), m.groups()
+    m = _need(r"clears both halves on (\d+) of the (\d+) rows — (.+?) — ", text, "the best-lap sentence")
+    named = re.findall(r"(00\d\d) C(\d+) \(apex −(\d+\.\d), exit \+(\d+\.\d) km/h\)", m.group(3))
+    assert int(m.group(1)) == len(named), (m.groups(), named)
+    assert all(float(a) >= da and float(e) >= de for _r, _c, a, e in named), named
+    print(f"test_the_line_signature_delta_clears_its_measured_null OK (δ {delta} km/h; null P95 "
+          f"{ {k: v[2] for k, v in t.items()} })")
 
 
 # ─── quotes of the coaching figures elsewhere in the tree ────────────────────────────────────────
@@ -610,7 +653,7 @@ def test_every_quote_of_the_coaching_figures_is_coaching_py_s():
             if ra not in t or rb not in t or (int(m.group(2)), int(m.group(4))) != (t[ra].execution, t[rb].pace):
                 problems.append(f"{rel}: {ra} {m.group(2)} % execution / {rb} {m.group(4)} % pace; the THEME "
                                 f"table has {[(r.name, r.execution, r.pace) for r in t.values() if 'chapter' not in r.name]}")
-        for m in re.finditer(r"(apex|braking|coasting|line) holds (\d+) ?% of (00\d\d)'s ranked time[^.]{0,20}?"
+        for m in re.finditer(r"(apex|braking|coasting|line|consistency) holds (\d+) ?% of (00\d\d)'s ranked time[^.]{0,20}?"
                              r"(\d+) ?% of (00\d\d)'s", text):
             found["cause"].append(rel)
             _presented(problems, rel, m, text, "coaching.py's evidence and THEME tables")
@@ -1308,6 +1351,10 @@ def _published() -> list[tuple]:
         ("coaching.py's evidence table", _COACHING, _EV_LINE, lambda: [r.rec for r in _evidence_rows()],
          "test_the_coaching_tables_match_the_footage", current),
         ("coaching.py's THEME table", _COACHING, _THEME_LINE, lambda: list(_theme_rows()),
+         "test_the_coaching_tables_match_the_footage", current),
+        # COACHING-5 measured it on the four working-set recordings, 2026-09-29.
+        ("coaching.py's line-null table", _COACHING, _LINE_NULL_LINE,
+         lambda: [n for n in _line_null_rows() if n != "all four"],
          "test_the_coaching_tables_match_the_footage", current),
         ("coaching.py's brake-habit table", _COACHING, _BRAKE_LINE, lambda: [r.rec for r in _brake_rows()],
          "test_the_brake_habit_table_matches_the_footage", current),
@@ -2165,18 +2212,148 @@ def _coaching_measure(s):
     return rows, theme, z, gaps, one_off, {"kind": opps.theme.kind, "corners": n}
 
 
+# The line-null table's recordings (COACHING-5): the four working-set recordings, whole.
+_LINE_NULL_SETS = ("0068", "0064", "0065", "0067")
+
+
+def _line_measure(s):
+    """The line signature on one real session (COACHING-5): its NULL — every counted lap but the
+    best, in turn a pseudo-best against the same laps over the cells `coaching.summarize` counts (C5:
+    both laps matched at the corner's edges), the signature's size the smaller of its two halves —
+    the app's own rows' signed gains and kinds, and refused §6's implied exit-speed error per corner
+    (p7's boundary readings: the speed gradient at the exit point × the sd of its placement)."""
+    import numpy as np
+
+    from studio.dev.probes import p7_overdrive as p7
+
+    corner_list = s.corners.corner_list()
+    n = len(corner_list)
+    best = s.best_lap_id()
+    cand, apex, exits, res = [], [], [], []
+    for i in s.consistency_lap_ids():
+        st = s.corners.lap_corner_stats(i)
+        if len(st) == n:
+            cand.append(i)
+            apex.append([c.apex_speed for c in st])
+            exits.append([c.exit_speed for c in st])
+            res.append(s.corners.lap_corner_resolved(i))
+    A, E, R = np.asarray(apex, float), np.asarray(exits, float), np.asarray(res, bool)
+
+    def med(x):
+        x = x[np.isfinite(x)]
+        return float(np.median(x)) if len(x) else float("nan")
+    null, slow, gain = [], [], []
+    for j in range(n):
+        for p in range(len(cand)):
+            if cand[p] == best or not R[p, j]:
+                continue
+            ok = R[:, j] & R[p, j]
+            a, e = med(A[p, j] - A[ok, j]), med(E[p, j] - E[ok, j])
+            null.append(min(-a, e))
+            slow.append(-a)
+            gain.append(e)
+    data = p7.extract(s)
+    br = p7.boundary_readings(data)
+    implied = {}
+    for j, c in enumerate(corner_list):
+        k, xk = R[:, j], 2 * j + 1
+        implied[c.cid] = abs(float(np.median(br["grad"][k, xk])) * float(np.std(br["resid"][k, xk])))
+    rows = [(r.cid, r.reason.kind, r.reason.apex_speed_gain, r.reason.exit_speed_gain, r.evidence.ranked)
+            for r in s.coaching_opportunities().rows]
+    return {"corners": n, "null": null, "slow": slow, "gain": gain, "rows": rows, "implied": implied}
+
+
+def _line_null_problems(line: dict[str, dict], text: str) -> list[str]:
+    """The line-null table and every footage figure of its prose, against `_line_measure` on each
+    of `_LINE_NULL_SETS`. Prints the re-measured block in the source's own syntax first."""
+    import numpy as np
+
+    if set(line) != set(_LINE_NULL_SETS):
+        return [f"line null: measured {sorted(line)}, the table names {list(_LINE_NULL_SETS)}"]
+    problems, out = [], ["  re-measured line-null table:"]
+    pooled = [x for rec in _LINE_NULL_SETS for x in line[rec]["null"]]
+    got = {rec: (line[rec]["corners"], len(line[rec]["null"]),
+                 round(float(np.percentile(line[rec]["null"], 95)), 3)) for rec in _LINE_NULL_SETS}
+    got["all four"] = (sum(v[0] for v in got.values()), len(pooled),
+                       round(float(np.percentile(pooled, 95)), 3))
+    for name, (c, n, p95) in got.items():
+        out.append(f"#   {name:<9s}{c:>9d}{n:>12d}{p95:>15.3f}")
+    delta = _constant(_COACHING, "LINE_EXIT_DELTA_KMH")
+    cleared = sum(x >= delta for x in pooled)
+    slow = [x for rec in _LINE_NULL_SETS for x in line[rec]["slow"]]
+    gain = [x for rec in _LINE_NULL_SETS for x in line[rec]["gain"]]
+    r = float(np.corrcoef(slow, gain)[0, 1])
+    marg = (float(np.percentile(slow, 95)), float(np.percentile(gain, 95)))
+    marg_cleared = sum(a >= marg[0] and e >= marg[1] for a, e in zip(slow, gain, strict=True))
+    worst = max(((v, rec, cid) for rec in _LINE_NULL_SETS for cid, v in line[rec]["implied"].items()))
+    rows = [(rec, *row) for rec in _LINE_NULL_SETS for row in line[rec]["rows"]]
+    shaped = [(rec, cid, kind, a, e, ranked) for rec, cid, kind, a, e, ranked in rows
+              if a <= -_constant(_COACHING, "LINE_APEX_DELTA_KMH") and e >= delta]
+    out.append(f"  {cleared} of the null's {len(pooled)} cells clear δ {delta}; r {r:+.2f}; marginal P95 "
+               f"{marg[0]:.1f} / {marg[1]:.1f} km/h ({marg_cleared} cells); worst implied exit error "
+               f"{worst[0]:.2f} km/h at {worst[1]} C{worst[2]}; shaped rows {shaped} of {len(rows)}")
+    by = {(rec, cid): (kind, a, e) for rec, cid, kind, a, e, _r in rows}
+    out.append(f"  0064 C4 {by.get(('0064', 4))}; 0064 C7 {by.get(('0064', 7))}")
+    print("\n".join(out))
+    pub = _line_null_rows()
+    if got != pub:
+        problems.append(f"line null: published {pub}, measured {got}")
+    m = _need(r"(\d+) of the null's (\d+) cells \((\d+\.\d) %\) clear it", text, "the null's false-line rate")
+    if (int(m.group(1)), int(m.group(2))) != (cleared, len(pooled)):
+        problems.append(f"line null: {m.group(1)} of {m.group(2)} cells clear δ; measured {cleared} of {len(pooled)}")
+    m = _need(r"the null \(a lap slow at the apex is slow out, r −(\d\.\d\d)\)", text, "the halves' correlation")
+    if round(-r, 2) != float(m.group(1)):
+        problems.append(f"line null: r −{m.group(1)}, measured {r:+.3f}")
+    m = _need(r"\(apex slowdown (\d+\.\d) km/h, exit gain (\d+\.\d) km/h: at those, (\d+) null cells\)", text,
+              "the marginal percentiles")
+    if (float(m.group(1)), float(m.group(2)), int(m.group(3))) != (round(marg[0], 1), round(marg[1], 1), marg_cleared):
+        problems.append(f"line null: marginal P95 {m.groups()}, measured {marg} ({marg_cleared} cells)")
+    m = _need(r"at most (\d\.\d\d) km/h of implied error on any corner of the four \(.{0,80}?; (00\d\d) C(\d+)\)",
+              text, "§6's implied exit error")
+    if (float(m.group(1)), m.group(2), int(m.group(3))) != (round(worst[0], 2), worst[1], worst[2]):
+        problems.append(f"line null: worst implied exit error {m.groups()}, measured {worst}")
+    m = _need(r"clears both halves on (\d+) of the (\d+) rows — (.+?) — (both|all|none) (abstained|ranked)"
+              r"(?:, and reads line on (\d+) \((00\d\d) C(\d+)[;)])?", text, "the best-lap sentence")
+    named = [(rec, int(cid), float(a), float(e)) for rec, cid, a, e in
+             re.findall(r"(00\d\d) C(\d+) \(apex −(\d+\.\d), exit \+(\d+\.\d) km/h\)", m.group(3))]
+    want = [(rec, cid, round(-a, 1), round(e, 1)) for rec, cid, _k, a, e, _r in shaped]
+    if (int(m.group(1)), int(m.group(2))) != (len(shaped), len(rows)) or sorted(named) != sorted(want):
+        problems.append(f"line rows: the prose names {m.group(1)} of {m.group(2)}: {named}; measured {want} "
+                        f"of {len(rows)}")
+    status = {"abstained": False, "ranked": True}[m.group(5)]
+    if any(r_ != status for *_x, r_ in shaped) and m.group(4) in ("both", "all"):
+        problems.append(f"line rows: the prose says {m.group(4)} {m.group(5)}; measured {shaped}")
+    reads = [(rec, cid) for rec, cid, kind, *_x in shaped if kind == "line"]
+    if m.group(6) is not None and (int(m.group(6)), [(m.group(7), int(m.group(8)))]) != (len(reads), reads):
+        problems.append(f"line rows: the prose reads line on {m.groups()[5:]}; measured {reads}")
+    keys = {(rec, cid) for rec, cid, *_x in shaped}
+    unshaped = [(rec, cid) for rec, cid, kind, *_x in rows if kind == "line" and (rec, cid) not in keys]
+    if unshaped:
+        problems.append(f"rows read line without the signature: {unshaped}")
+    m = _need(r"at C4 the best lap's apex gain is \+?(-?\d\.\d) km/h.{0,120}?at C7 its exit gain is \+(\d\.\d) km/h "
+              r"\(apex −(\d\.\d)\)", text, "Sandown 3h's C4 and C7")
+    c4, c7 = by.get(("0064", 4)), by.get(("0064", 7))
+    if c4 is None or c7 is None or (round(c4[1], 1) + 0.0, round(c7[2], 1), round(-c7[1], 1)) != (
+            float(m.group(1)), float(m.group(2)), float(m.group(3))):
+        problems.append(f"0064 C4/C7: the prose says {m.groups()}, measured C4 {c4}, C7 {c7}")
+    return problems
+
+
 def test_the_coaching_tables_match_the_footage():
     """Re-measure both coaching tables, and the prose figures only footage can give, on every lap
     set the THEME table names."""
     ev, th = _evidence_rows(), _theme_rows()
     text = _flatten(_read(_COACHING))
     problems, ev_lines, th_lines, single_one_off, zs, gaps, corners = [], [], [], [], {}, {}, {}
-    with _Footage(th) as fx:
+    line: dict[str, dict] = {}
+    with _Footage([*th, *_LINE_NULL_SETS]) as fx:
         for name, pub in th.items():
             s = fx.load(name)
             if s is None:
                 problems.append(f"{name}: footage missing under {fx.root}")
                 continue
+            if name in _LINE_NULL_SETS:
+                line[name] = _line_measure(s)
             rows, theme, z, gap, one_off, extra = _coaching_measure(s)
             laps, ranked, rs, ab, ex, pa, cause, cp = theme
             th_lines.append(f"#   {name:<16s}{laps:>6d}{ranked:>8d}{rs:>10.3f}{ab:>13.3f}{ex:>9d} %"
@@ -2202,6 +2379,15 @@ def test_the_coaching_tables_match_the_footage():
                         for c, k, lo, sg, q, rc, nn, g in rows]
             if got_rows != want_rows:
                 problems.append(f"evidence {name}: the table does not match the footage")
+        for name in _LINE_NULL_SETS:
+            if name not in line:
+                s = fx.load(name)
+                if s is None:
+                    problems.append(f"{name}: footage missing under {fx.root}")
+                    continue
+                line[name] = _line_measure(s)
+                del s
+    problems += _line_null_problems(line, text)
     # The re-measured blocks, in the source's own syntax, and every footage-only prose figure,
     # BEFORE any comparison can stop the check.
     print("\n".join(["  re-measured evidence table:"] + ev_lines + ["  re-measured THEME table:"] + th_lines))

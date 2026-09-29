@@ -349,7 +349,7 @@ def test_no_row_says_line_without_its_measured_signature():
         times[0] = list(best)                                  # the best lap is a candidate
         lap_times = [sum(t) for t in times]
 
-        def cells(scale, base):
+        def cells(scale, base, n_c=n_c, n_laps=n_laps):
             return [[base + rng.normal(0.0, scale) for _j in range(n_c)] for _i in range(n_laps)]
         opp = K.summarize(
             corners, list(range(n_laps)), lap_times, times, best,
@@ -2067,10 +2067,10 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does not generalize to every lap set: line holds 78 % of 0068's ranked
-    time and 100 % of 0064's (a theme on each), but one of the five single chapters names no single
-    cause, so the "no single cause" branch is a real case on real recordings and is asserted here as a
-    first-class output, not as a fallback."""
+    Measured, the cause axis does not generalize to every lap set: consistency holds 78 % of
+    0068's ranked time and 100 % of 0064's (a theme on each), but one of the five single chapters
+    names no single cause, so the "no single cause" branch is a real case on real recordings and is
+    asserted here as a first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
     # This test is about the CAUSE axis and the two-action cap, so it keeps a clear lead.

@@ -101,9 +101,9 @@ so corners line up. Scrub the chart and the footage follows; play two laps side 
 the best lap of *another* recording of the same track. A g-meter and the brake / coast / grip
 channels ride along.
 
-**Coaching.** A ranked shortlist of the corners where your *typical* lap gives away the most to
-your *best* one, each with a dominant reason chosen from four measured signals — apex speed,
-braking, coasting, line — and a button that jumps the video to your best lap through that corner.
+**Coaching.** A ranked shortlist of the corners where your laps *typically* give away the most to
+your *best* one, each with a dominant measured reason — apex speed, braking, coasting or a line
+difference, else lap-to-lap consistency — and a button that jumps the video to your best lap there.
 No model, no ML: every number is a reduction of a validated channel.
 
 **The loop it is built around.** A recording's first open, once its timing is trusted, lands on its
