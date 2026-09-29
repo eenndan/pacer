@@ -60,7 +60,10 @@ from studio import (  # noqa: E402  (after the jail, as every load below must be
     session_record,
     track_db,
 )
-from studio.coaching_panel import PANEL_TOP_N, _ranked_shown  # noqa: E402  (the debrief's shortlist)
+from studio.coaching_panel import (  # noqa: E402  (the debrief's shortlist)
+    PANEL_TOP_N,
+    _ranked_shown,
+)
 from studio.session import Session  # noqa: E402
 
 DRAWS = 2000          # noise draws per bias estimate
@@ -366,7 +369,7 @@ def real(only: list[str]) -> None:
             [(r.cid, r.time_lost, r.evidence.ranked) for r in app.rows], "summarize replica drifted"
         lead, lost, top = _lead(app)
         n = len(x["cand"])
-        print(f"  TIME LOST: lead C{lead} {lost:.3f} s, shortlist {['C%d' % c for c in top]} "
+        print(f"  TIME LOST: lead C{lead} {lost:.3f} s, shortlist {[f'C{c}' for c in top]} "
               f"({n} laps)")
         for reselect in (False, True):
             got = [_summarize(x, rng.integers(0, n, n), reselect) for _ in range(BOOT)]
@@ -434,7 +437,7 @@ def real(only: list[str]) -> None:
                 _ids, base = _window_times(s, [(i.enter_frac, i.exit_frac) for i in added])
                 for k, it in enumerate(added):
                     baselines[(track, it.cid, it.fingerprint)] = base[:, k]
-                print(f"  FOCUS: pre-promoted {['C%d' % i.cid for i in added]} onto {track!r} "
+                print(f"  FOCUS: pre-promoted {[f'C{i.cid}' for i in added]} onto {track!r} "
                       f"(the verdict is measured on a later session)")
         elif not items:
             print("  FOCUS: nothing to promote onto (no verified track)")
