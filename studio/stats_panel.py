@@ -465,17 +465,10 @@ SPLITS_TOOLTIP = (
     "best is 15.40 s against a 16.70 s median — one lap 0.8 s clear of every other — and marking "
     "against it flagged 14 of that column's 38 cells for being ordinary. The floor stops the "
     "percentile becoming a rank: where every lap is within a tenth, nothing is marked. Hover any "
-    "cell for both numbers.\n\n"
-    "HOW FINE THE MIDDLE COLUMNS REALLY ARE. A sector boundary is read at the nearest GPS fix, "
-    "so at 10 Hz every INTERIOR sector's time steps in whole samples while the first and last "
-    "are interpolated at the start line and run continuously. Measured with three sector lines "
-    "on the two D24 recordings, the interior columns take 17-18 distinct values across 38 and 65 "
-    "laps; the end columns take a different value on every lap. Differences of a tenth in a "
-    "middle column are one sample, not one tenth of driving.")
+    "cell for both numbers.")
 #: The line under the SPLITS grid — the sample it is over, stated where the grid is read.
 SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best; ▼ is {scale} or more "
-               "slower than that sector's own typical lap, each sector scaled by its own spread. "
-               "Interior sectors are timed to the 10 Hz fix grid (±0.1 s).")
+               "slower than that sector's own typical lap, each sector scaled by its own spread.")
 #: CORNERS BY LAP's lead columns, the lap and its time — frozen at the left edge while the corner
 #: columns scroll under them (LOOK-8, QA 2026-09-26: at the owner's 683 px pane the lap time and
 #: C10-C12 were off-screen together, so no row could be read whole).
@@ -2749,8 +2742,8 @@ class StatsView(QWidget):
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 item.setFont(mono)
                 t.setItem(r, c + 1, item)
-            # The row's own total, from the LAP, never from the row: splits are read at the
-            # nearest fix and summing them back would print a lap time this app does not use.
+            # The row's own total, from the LAP, never from the row: the splits sum to it, but a
+            # sum of the printed cells can land a hundredth off the lap time printed everywhere.
             lt = lap_time(lap_id) if (complete and lap_time is not None) else None
             tail = QTableWidgetItem(fmt_time(lt) if lt is not None else DASH)
             tail.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)

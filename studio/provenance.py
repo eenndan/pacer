@@ -81,9 +81,9 @@ METHODS: dict[str, str] = {
     "sector_split.distance_projection": (
         "A sector split is the elapsed time at its closing boundary minus the elapsed time at "
         "its opening boundary, both read off this lap's (odometer, elapsed) curve by linear "
-        "interpolation. Each boundary's odometer is the cumulative distance of the lap point "
-        "nearest that sector line's midpoint, so a short line that a lap geometrically misses "
-        "still produces a split."
+        "interpolation. Each boundary's odometer is where the lap's GPS chord crosses that sector "
+        "line, extended past its ends so a short line that a lap geometrically misses still "
+        "produces a split."
     ),
     "corner_best.min_over_laps": (
         "A corner best is the quickest time any clean lap spent inside that corner. One lap's "
@@ -148,7 +148,8 @@ def _fmt(fmt: str, v) -> str:
     # population) with a format per column that matches the values it puts there, so a cell that
     # does not format is a builder bug and must be loud. tests/test_provenance.py sweeps it.
     text = fmt.format(v)
-    # A SIGNED column ("vs best") prints the app's one minus (QA REG-3); the CSV keeps raw values.
+    # A SIGNED column prints the app's one minus (QA REG-3); the CSV keeps raw values. None is
+    # signed today: "vs best" was, until its "+0.0000" on the best's own row (CODE-8).
     return text.replace("-", MINUS, 1) if fmt.startswith("{:+") else text
 
 
@@ -665,11 +666,11 @@ def sector_split(*, lap_id: int, sector: int, of: int, value: float, fmt,
         ),
         reconstructed=rebuilt, reconstructed_formatted=fmt(rebuilt),
         notes=(
-            "A boundary is a DISTANCE, not a crossing. The sector line is projected onto this "
-            "lap by its midpoint, because a short line is geometrically missed by some passes — "
-            "so every lap gets a split, and the splits always sum to the lap time.",
-            "Neither boundary falls on a fix. Both elapsed times are linear interpolations "
-            "between the two rows marked as bracketing them.",
+            "A boundary is where this lap's trace crosses the sector line — the line drawn on "
+            "past its ends, because a short line is geometrically missed by some passes — so "
+            "every lap gets a split, and the splits always sum to the lap time.",
+            "A boundary falls between two fixes, not on one. Both elapsed times are linear "
+            "interpolations between the two rows marked as bracketing them.",
         ),
         source="Session.lap_sector_splits (studio/session.py)",
     )
@@ -707,7 +708,9 @@ def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
         caption=f"Time in {label} on each of the {plural(len(per_lap), 'clean lap')}{matched}, "
                 f"quickest first",
         columns=("lap", "time in corner (s)", "vs best (s)"),
-        formats=("{}", "{:.4f}", "{:+.4f}"),
+        # Unsigned: the best is this population's minimum, so no row is quicker than it, and a
+        # "+" would print on the best's own row as "+0.0000" (CODE-8).
+        formats=("{}", "{:.4f}", "{:.4f}"),
         rows=tuple((lap_label(lap), t, t - value) for lap, t in ranked),
         note=note,
     )

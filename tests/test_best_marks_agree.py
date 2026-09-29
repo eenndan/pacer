@@ -4,10 +4,10 @@ Three surfaces put the SAME ★ on the SAME quantity and answered "is this the b
 different ways. Nothing failed; the app simply marked different cells on different pages.
 
   * THE SPLIT ★. `stats.SplitMatrix.is_best` compares what the reader is SHOWN — both values
-    rounded to `MATRIX_DECIMALS` — because a sector split is a difference of two GPS sample
-    times on a ~0.0998 s grid and its column minimum is routinely tied at print. The Laps tab
-    printed the same split to the same 2 dp and compared the raw doubles at 1e-9.
-    MEASURED on the owner's D24 0062 (65 valid laps): with five sector lines the Stats grid
+    rounded to `MATRIX_DECIMALS` — because a column minimum can tie at print with a cell a
+    thousandth slower. The Laps tab printed the same split to the same 2 dp and compared the raw
+    doubles at 1e-9. MEASURED on the owner's D24 0062 (65 valid laps), while interior boundaries
+    still snapped to a fix (which made ties commoner): with five sector lines the Stats grid
     stars 18 cells and the Laps tab stars 13 — five cells whose printed text is IDENTICAL to a
     starred neighbour's wear the mark on one page and nothing on the other (S4 prints 11.40 on
     laps 20, 42, 43, 46 and 51; only lap 51's double is 11.399). With three lines it is 8 vs 6.
@@ -54,9 +54,9 @@ from studio.lap_table import (  # noqa: E402
     LapTable,
 )
 
-# Two laps tie at print in S1 and two more in S2, each pair split by a thousandth — the shape the
-# 10 Hz split grid produces on a real recording (see the module docstring's D24 numbers). Five
-# laps is stats.MATRIX_MIN_LAPS, the fewest the Stats grid will render.
+# Two laps tie at print in S1 and two more in S2, each pair split by a thousandth — the shape
+# measured on a real recording (see the module docstring's D24 numbers). Five laps is
+# stats.MATRIX_MIN_LAPS, the fewest the Stats grid will render.
 _SPLITS = {
     0: [33.800, 36.200],
     1: [33.801, 36.500],
