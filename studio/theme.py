@@ -871,21 +871,31 @@ W_SEMIBOLD = QFont.Weight.DemiBold  # 600
 # D1-01: THE NAMES THIS MAC DOES NOT HAVE STAY AS THE STATED PREFERENCE — BUT A MISSING NAME IS NOT
 # FREE WHERE QT HAS TO LOOK IT UP. QFontDatabase.hasFamily is False here (macOS 26, PySide6
 # 6.11.1) for "-apple-system", "SF Pro Text", "sans-serif", "SF Mono", "JetBrains Mono" and
-# "monospace"; what actually paints is the bundled Inter and, for the mono stack, Menlo. Qt walks a
-# stack in order and stops at the first face it has, so a missing name AFTER a present one is never
-# looked at: the UI stack, led by the bundled Inter, costs nothing. A missing name that LEADS is
-# different. The first lookup of a family Qt does not have starts a one-off scan of every font's
-# aliases on the GUI thread — "Populating font family aliases took 59 ms. Replace uses of missing
-# font family "SF Mono" with one that exists", in the owner's log on 5 launches of 5 (53-64 ms), during
-# the first paint of the loaded session (HEALTH-5, 2026-09-25). So `register_fonts` narrows the mono
-# stack ONCE to the faces this machine has, keeping their order: Menlo here and on the CI runner,
-# where the pixels are unchanged because Menlo is what painted before, and "SF Mono" first on a
-# machine that has it, as the preference always said. That exposure is small: no live NUMBER reads
-# the mono stack since U1 (#DiffBox and #PaneBadge paint mono_font), only the timecode #Readout, the
-# Shortcuts KeyCap and _mono_stack_font's Inter-absent fallback.
-UI_FAMILIES = ("Inter", "-apple-system", "SF Pro Text", "Helvetica Neue", "sans-serif")
+# "monospace"; what actually paints is the bundled Inter and, for the mono stack, Menlo. The first
+# lookup of a family Qt does not have starts a one-off scan of every font's aliases on the GUI
+# thread — "Populating font family aliases took 59 ms. Replace uses of missing font family "SF Mono"
+# with one that exists", in the owner's log on 5 launches of 5 (53-64 ms), during the first paint of
+# the loaded session (HEALTH-5, 2026-09-25). A missing name that LEADS is looked up at once. One
+# AFTER a present face is not free either, though this block once said so: Qt falls back PER
+# CHARACTER, so a glyph the leading face lacks walks on down the stack. Inter has no ▸ (the
+# menu-path connector: "File ▸ Save as track…"), ✕, ⟳ or ⟲, and the first of them painted in the UI
+# face (ui_font, and so the app default) cost the same scan, 62-73 ms, naming "-apple-system"
+# (APP-POLISH-2, 2026-09-29; ▶ ◀ ● ◆ ✓ ⚠ ⌘ ⇧ ▲ ▼ Δ − cost nothing). So `register_fonts` narrows
+# BOTH stacks once to the faces this machine has, keeping their order: Inter then Helvetica Neue,
+# and Menlo, here; Menlo on the CI runner too; "SF Mono" first on a machine that has it, as the
+# preference always said. The dropped names were never painted from, since Qt skipped them to the
+# same fallback, so the pixels are unchanged: md5-identical for 13 glyph strings × 3 fonts (ui_font
+# BODY, ui_font CAPTION semibold, the app default), and tests/test_font_stack.py holds a label of
+# all four glyphs to it. The mono exposure was already small: no live NUMBER reads the mono stack
+# since U1 (#DiffBox and #PaneBadge paint mono_font), only the timecode #Readout, the Shortcuts
+# KeyCap and _mono_stack_font's Inter-absent fallback.
+_UI_PREFERENCE = ("Inter", "-apple-system", "SF Pro Text", "Helvetica Neue", "sans-serif")
 _MONO_PREFERENCE = ("SF Mono", "JetBrains Mono", "Menlo", "monospace")
-MONO_FAMILIES = _MONO_PREFERENCE          # narrowed by register_fonts() to the faces this Mac has
+# Both narrowed by register_fonts() to the faces this Mac has — always from the preference, never
+# from an already-narrowed tuple, which could not give back a face an earlier call dropped
+# (test_contrast re-registers).
+UI_FAMILIES = _UI_PREFERENCE
+MONO_FAMILIES = _MONO_PREFERENCE
 UI_STACK = ",".join(f'"{f}"' for f in UI_FAMILIES)
 MONO_STACK = ",".join(f'"{f}"' for f in MONO_FAMILIES)
 
@@ -950,6 +960,20 @@ def _qt_supports_feature() -> bool:
     return _apply_tnum(QFont())
 
 
+def _narrow_stacks() -> None:
+    """Narrow both stacks to the faces this machine has, keeping their order (the block over
+    UI_FAMILIES says why). `families()` lists the installed names without the alias scan a missing
+    family triggers. It must run AFTER Inter's addApplicationFont, or "Inter" is not in it and every
+    UI surface loses its face. A stack none of whose faces is here keeps its preference, and Qt
+    falls back as it always did."""
+    global UI_FAMILIES, UI_STACK, MONO_FAMILIES, MONO_STACK
+    installed = set(QFontDatabase.families())
+    UI_FAMILIES = tuple(f for f in _UI_PREFERENCE if f in installed) or _UI_PREFERENCE
+    MONO_FAMILIES = tuple(f for f in _MONO_PREFERENCE if f in installed) or _MONO_PREFERENCE
+    UI_STACK = ",".join(f'"{f}"' for f in UI_FAMILIES)
+    MONO_STACK = ",".join(f'"{f}"' for f in MONO_FAMILIES)
+
+
 def register_fonts() -> None:
     """Register the bundled Inter TTFs (assets/fonts/); skip to the system font fallback if absent.
     Also records Qt tnum support.
@@ -958,23 +982,18 @@ def register_fonts() -> None:
     name "Inter", which only exists once the TTFs are in the font DB), and six test files proved
     they can drift apart: they called apply_theme alone, so Qt substituted a family for the one the
     theme names and they measured a layout 7 px narrower than the shipped one."""
-    global _fonts_registered, _inter_available, _supports_feature, MONO_FAMILIES, MONO_STACK
+    global _fonts_registered, _inter_available, _supports_feature
     if _fonts_registered:
         return
     _fonts_registered = True
     _supports_feature = _qt_supports_feature()
-    # The mono stack, narrowed to the faces this machine has (see the block over MONO_FAMILIES):
-    # `families()` lists the installed names without the alias scan a missing family triggers. If
-    # none is here, the preference stays as it was and Qt falls back as it always did.
-    installed = set(QFontDatabase.families())
-    MONO_FAMILIES = tuple(f for f in _MONO_PREFERENCE if f in installed) or _MONO_PREFERENCE
-    MONO_STACK = ",".join(f'"{f}"' for f in MONO_FAMILIES)
 
     have_files = all(os.path.exists(os.path.join(_FONTS_DIR, f)) for f in _INTER_FILES)
     if not have_files:
         # A WARNING, not a note: the TTFs ship in the repo and in the .app, so a build without
         # them is a packaging fault, and every figure on screen then sets in another face.
         _inter_available = False
+        _narrow_stacks()
         _log.warning("Inter not bundled — using system font fallback (%s).", UI_STACK)
         return
 
@@ -984,6 +1003,7 @@ def register_fonts() -> None:
         if fid != -1:
             registered += 1
     _inter_available = registered > 0
+    _narrow_stacks()   # only now: "Inter" is an installed family once the TTFs are in the DB
     if _inter_available:
         _log.info("Inter registered (bundled, %d/%d faces); tabular figures via %s.", registered,
                   len(_INTER_FILES), "tnum feature" if _supports_feature else "mono stack")
@@ -993,10 +1013,10 @@ def register_fonts() -> None:
 
 def ui_font(size: int = BODY, weight: QFont.Weight = W_REGULAR) -> QFont:
     """The UI sans face. Prefers bundled Inter; otherwise the first available system fallback."""
-    family = "Inter" if _inter_available else "-apple-system"
+    family = UI_FAMILIES[0]   # Inter once registered; else the first installed fallback
     f = QFont(family, size)
     f.setWeight(weight)
-    # Fallback families for when `family` itself is missing (Qt walks substitutes).
+    # The fallbacks, walked per CHARACTER for a glyph `family` lacks (the block over UI_FAMILIES).
     f.setFamilies(list(UI_FAMILIES))
     f.setPixelSize(size)
     return f
