@@ -19,7 +19,13 @@ finish frame (TEETH-5). This file sweeps the arithmetic instead:
   * the compare, through `build_compare_spec` + `CompareRenderer`, at the rates it renders (its
     30 fps cap leaves 24, 25, 29.97 and 30), lap B shorter and longer, same and cross recording;
   * the footage: a lap ending within a frame of a chapter seam still has its finish frame inside
-    the source the render reads (`_FINISH_FRAME_REACH_S`).
+    the source the render reads (`_FINISH_FRAME_REACH_S`);
+  * the pickers (FOLLOW-TRUTH4): wherever a picker can quote the rate, its "N frames to render" is
+    the plan's N, padded or not, lap or compare. A lap cut on the line once quoted one frame fewer
+    than it wrote (the W1 close-out QA's REG-4: 2025 for a 2026-frame file);
+  * the line itself: the plan and the overlay call a frame "on the line" with one tolerance,
+    `ev.ON_LINE_S`. At 1e-9 of a FRAME against 1e-9 s, a lap within (1e-9/fps, 1e-9] s of whole
+    frames marked two frames finished and ended a frame late (TRUTH-4's probe_tolerance.py).
 
 THE EXPECTATIONS ARE FIRST PRINCIPLES, never the product's formula typed again: frame i of a clip
 is the picture at t0 + i/fps, and which frames lie before the line is COUNTED on that grid; the
@@ -32,8 +38,8 @@ start`, which can sit an ulp off the table's t; the two print different millisec
 within ~1e-13 s of a half millisecond. The grid's exact frame fractions land there (44 of its 840
 identity-clock laps: 49.0125 s at 24 fps prints 0:49.013 against the table's 0:49.012); a million
 arbitrary lap times never did. So every lap here is timed `OFF_TIE` off its exact fraction, which
-keeps the ties out and moves no frame: 3 ps is inside the 1e-9 of a frame `frame_count` still
-calls on the line (17 ps at 60 fps).
+keeps the ties out and moves no frame: 3 ps is well inside the 1e-9 s (`ev.ON_LINE_S`) that the
+plan and the overlay still call on the line.
 
 ITS OWN FILE, not a third example in test_export_polish or test_export_compare: it is one property
 over both exporters, and it needs no ffmpeg, no window and no encode, where those two drive dialogs
@@ -43,6 +49,7 @@ Run: python tests/test_export_ends_on_finish.py
 """
 import inspect
 import os
+import re
 import sys
 import time
 import types
@@ -64,6 +71,7 @@ from studio import export_compare as ec  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 from studio import media_clock as mc  # noqa: E402
 from studio._signal import fmt_time, lap_label  # noqa: E402
+from studio.export_controller import ExportController  # noqa: E402
 from studio.timeline import nearest_sample  # noqa: E402
 
 RATES = (24.0, 25.0, 30000 / 1001, 30.0, 50.0, 60000 / 1001, 60.0)
@@ -236,6 +244,40 @@ def _finish_problems(session, spec, t_finish, t_before) -> list[str]:
     return out
 
 
+# ------------------------------------------------------------------------------ the pickers
+_QUOTE = re.compile(r"(\d+) frames? to render at ([\d.]+) fps")
+
+
+def _picker(session) -> ExportController:
+    """The export controller with only a session behind it: the two hints read nothing else."""
+    ctl = ExportController.__new__(ExportController)
+    ctl.win = types.SimpleNamespace(session=session)
+    return ctl
+
+
+def _quote_problems(quote, n, fps) -> list[str]:
+    """A picker's "N frames to render at F fps" is the plan's n frames at the plan's rate."""
+    said = _QUOTE.search(quote)
+    if said is None:
+        return [f"the picker quotes no frame count: {quote!r}"]
+    if (int(said[1]), said[2]) != (n, f"{fps:g}"):
+        return [f"the picker quotes {said[1]} frames at {said[2]} fps, the render plans {n}"]
+    return []
+
+
+def _lap_quote_problems(session, fps, pad, n) -> list[str]:
+    """The single-lap picker's quote for this lap off `fps` footage, through the dialog's own two
+    calls; [] at a rate the picker cannot quote (it caps a composite at 30 fps)."""
+    if ev.resolve_fps(ev.OverlayConfig(), fps) != fps:
+        return []
+    ctl = _picker(session)
+    clip, files, _what = ctl._scope_plan(ev.SCOPE_THIS_LAP, session.LAP, pad)
+    # `on_line` is the dialog's rule (`_update_hint`): a lap with no run-off is cut on its line.
+    quote = ctl._export_size_hint(clip, 1080, "high", files=files, source=(1920, 1080, fps),
+                                  on_line=not pad)
+    return _quote_problems(quote, n, fps)
+
+
 class _Tally:
     """Every case's problems, so a failure says how many cases broke and names the first few."""
 
@@ -274,10 +316,12 @@ def _lap_clip(session, fps, pad):
     return spec, ev.frame_times(spec.t0, spec.t1, fps)
 
 
-def test_an_unpadded_lap_clip_ends_on_its_finish_frame():
+def test_an_unpadded_lap_clip_ends_on_its_finish_frame(monkeypatch_restore):
     """EXP-2's property at every rate and phase: exactly one frame at or past the line, less than
     a frame past it, marked finished and printing the table's lap time; the frame before it still
-    running; decode and encode asked for exactly those frames; the last one forced to a keyframe."""
+    running; decode and encode asked for exactly those frames; the last one forced to a keyframe;
+    and the picker quoting exactly those frames."""
+    ev.resolve_encoder = lambda _c: ev.SW_H264          # the hint names one; no ffmpeg probe
     tally = _Tally("unpadded lap clips")
     for fps, _pad, session, case in _lap_clip_cases((0.0,)):
         spec, times = _lap_clip(session, fps, 0.0)
@@ -286,14 +330,16 @@ def test_an_unpadded_lap_clip_ends_on_its_finish_frame():
         if not problems:
             n = len(times)
             problems = (_finish_problems(session, spec, times[-1], times[-2])
-                        + _command_problems(spec, fps, n, n - 1))
+                        + _command_problems(spec, fps, n, n - 1)
+                        + _lap_quote_problems(session, fps, 0.0, n))
         tally.add(case, problems)
     tally.check(len(RATES) * len(LAP_PHASES) * 3 * len(CLOCKS))
 
 
-def test_a_padded_clip_shows_the_finish_on_its_first_run_off_frame():
+def test_a_padded_clip_shows_the_finish_on_its_first_run_off_frame(monkeypatch_restore):
     """A padded clip always had its finish frame, its first run-off frame, and the unpadded one was
     given the same one. Same property, run-up and run-off of 0.5 s and 5 s."""
+    ev.resolve_encoder = lambda _c: ev.SW_H264
     tally = _Tally("padded lap clips")
     for fps, pad, session, case in _lap_clip_cases(PADS[1:]):
         spec, times = _lap_clip(session, fps, pad)
@@ -302,9 +348,39 @@ def test_a_padded_clip_shows_the_finish_on_its_first_run_off_frame():
         if not problems:
             i = _before_line(start - pad, fps, finish)
             problems = (_finish_problems(session, spec, times[i], times[i - 1])
-                        + _command_problems(spec, fps, len(times), None))
+                        + _command_problems(spec, fps, len(times), None)
+                        + _lap_quote_problems(session, fps, pad, len(times)))
         tally.add(case, problems)
     tally.check(len(RATES) * len(LAP_PHASES) * 3 * len(CLOCKS) * 2)
+
+
+def _on_line_offsets(fps):
+    """Seconds past a whole frame to plant the line at: either side of both tolerances the plan
+    and the overlay used to hold apart (1e-9 of a frame, 1e-9 s), and well clear of them."""
+    return (0.0, 1e-12, 0.3e-9 / fps, 3e-9 / fps, 1e-10, 5e-10, 0.9e-9, 2e-9, 1e-6, 0.4 / fps)
+
+
+def test_the_plan_and_the_overlay_agree_on_the_line(monkeypatch_restore):
+    """TRUTH-4's note (a). `frame_count` called a frame within 1e-9 of a FRAME of the line on it,
+    `overlay_values_at` one within 1e-9 s, so a lap within (1e-9/fps, 1e-9] s of whole frames
+    planned one frame past its finish and marked both finished. With one tolerance, a line planted
+    anywhere near a frame gives exactly one finished frame, the clip's last, and the picker quotes
+    the same count."""
+    ev.resolve_encoder = lambda _c: ev.SW_H264
+    tally = _Tally("lines planted near a frame")
+    for name, clock in CLOCKS.items():
+        for fps in RATES:
+            n = round(46.0 * fps)
+            for d in _on_line_offsets(fps):
+                session = _LapSession(BASE, (n / fps + d) / clock.rate, clock)
+                spec, times = _lap_clip(session, fps, 0.0)
+                done = [i for i, t in enumerate(times)
+                        if ev.overlay_values_at(session, float(t), spec).lap_finished]
+                problems = ([] if done == [len(times) - 1] else
+                            [f"frames {done} of a {len(times)}-frame clip are marked finished"])
+                tally.add(f"{fps:.3f} fps, line {d:.1e} s after frame {n}, {name} clock",
+                          problems + _lap_quote_problems(session, fps, 0.0, len(times)))
+    tally.check(len(RATES) * 10 * len(CLOCKS))
 
 
 # ------------------------------------------------------------------ the render's own plan
@@ -345,8 +421,12 @@ def test_the_render_plans_the_finish_frame_it_was_checked_for(monkeypatch_restor
                     problems.append(f"total_frames {r.total_frames} != {len(times)} planned")
                 if not problems:
                     problems = _finish_problems(session, r._spec, times[-1], times[-2])
-                    if not overlay_only:     # ProRes and PNG code every frame whole anyway
+                    # ProRes and PNG code every frame whole anyway. The overlay-only picker is not
+                    # held to the plan: the snap that adds up to a frame reads the source's clock,
+                    # which the picker never probes.
+                    if not overlay_only:
                         problems += _command_problems(r._spec, rate, len(times), len(times) - 1)
+                        problems += _lap_quote_problems(session, rate, 0.0, len(times))
                 tally.add(case, problems)
     tally.check(len(RATES) * len(_SUB) * 2)
 
@@ -418,7 +498,11 @@ def test_a_compare_ends_on_both_finishes(monkeypatch_restore):
                 if r.total_frames != len(r._frames) or len(r._frames) != len(r._times):
                     problems.append(f"{r.total_frames} frames planned, {len(r._frames)} painted")
                 if not problems:
-                    problems = _compare_finish_problems(r, sa, sb, spec, rate)
+                    ctl = _picker(sa)
+                    quote = ctl._compare_size_hint(ctl._export_clip_seconds(LAP_A, 0.0), 1080,
+                                                   "high", ec.LAYOUT_SIDE, (1920, 1080, src_fps))
+                    problems = (_compare_finish_problems(r, sa, sb, spec, rate)
+                                + _quote_problems(quote, r.total_frames, rate))
                 tally.add(case, problems)
     tally.check(len(COMPARE_SOURCES) * 8 * 2)
 
@@ -535,6 +619,7 @@ if __name__ == "__main__":
     tests = [
         test_an_unpadded_lap_clip_ends_on_its_finish_frame,
         test_a_padded_clip_shows_the_finish_on_its_first_run_off_frame,
+        test_the_plan_and_the_overlay_agree_on_the_line,
         test_the_render_plans_the_finish_frame_it_was_checked_for,
         test_a_compare_ends_on_both_finishes,
         test_the_finish_frame_is_inside_the_footage_at_a_chapter_seam,

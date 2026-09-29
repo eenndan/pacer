@@ -11,6 +11,8 @@ WHY IT EXISTS. His overlay exports remember "Source", and both pickers got it wr
     waiting at 10 s. It now waits while it is open, and says it is measuring meanwhile.
   * APP-POLISH-3 (2026-09-29): the single-lap "Source" is held to the same 4K frame, and its
     Output line is the renderer's own frame, cap named (watched failing on main @ 63d1925).
+  * FOLLOW-TRUTH4 (the W1 close-out's REG-4): a lap cut on the line quoted "2025 frames to render"
+    for a 2026-frame file (watched failing on main @ 95694b9).
 Each test was watched failing on main @ d7a741d.
 
 The dialogs are the real ones, answered by patching `exec`; the footage probe is stood in for (a
@@ -19,6 +21,7 @@ The dialogs are the real ones, answered by patching `exec`; the footage probe is
 Run: python tests/test_export_pickers.py
 """
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -213,6 +216,50 @@ def test_the_single_lap_source_row_names_the_4k_cap_exactly_when_it_applies():
     print("ok APP-POLISH-3: the single-lap Output line names the 4K cap exactly when it applies")
 
 
+def test_the_lap_picker_quotes_the_frames_the_render_writes():
+    """REG-4 (W1 close-out QA): at 1080p, cut on the line, the picker said "2025 frames to render"
+    and the file held 2026: the finish frame `with_finish_frame` adds, which the compare hint
+    counted and this one did not. Every Run-up / run-off row of the real dialog is read against the
+    frames the export plans for the spec the same choices build (`_spec_plan`, the Renderer's own
+    `with_finish_frame` + `frame_count`; test_export_ends_on_finish holds the Renderer to it). The
+    count does not depend on the encoder."""
+    real = (ev.probe_video_size, ev.probe_source_duration, ev.resolve_encoder)
+    ev.probe_video_size = lambda _p: (1920, 1080, 30.0)
+    ev.probe_source_duration = lambda _s: 1.0e9
+    ev.resolve_encoder = lambda _choice="auto": ev.SW_H264
+    _reset_prefs()
+    quoted, rendered = {}, {}
+    try:
+        with tempfile.TemporaryDirectory(prefix="pickers-frames-") as td:
+            src = os.path.join(td, "GX010064.MP4")
+            with open(src, "wb") as fh:
+                fh.write(b"not really a video")
+            ev.remember_video_size(src)                 # the frame is known: no wait here
+            win = _window(FakeSession(laps=(0, 1, 2)), paths=(src,))
+
+            def read(dlg):
+                _combo(dlg, "Resolution").setCurrentIndex(1)                        # 1080p
+                for row, (_label, lead) in enumerate(ExportController._EXPORT_LEAD_OPTIONS):
+                    _combo(dlg, "Run-up / run-off").setCurrentIndex(row)
+                    said = re.search(r"(\d+) frames to render at ([\d.]+) fps", _hint(dlg).text())
+                    quoted[lead] = (int(said[1]), float(said[2])) if said else _hint(dlg).text()
+                return QDialog.Rejected
+            _run_options_dialog(win, read)
+            cfg = ev.OverlayConfig(out_height=1080, encoder="libx264", hwaccel_decode=False)
+            for lead in quoted:
+                spec = ev.build_lap_spec(win.session, os.path.join(td, "lap.mp4"), 0, config=cfg,
+                                         src_path=src, lead_in=lead, lead_out=lead)
+                plan = ev._spec_plan(spec, ev.probe_video_size)
+                rendered[lead] = (plan.frames, spec.output_frame(ev.probe_video_size)[2])
+            win.hide()
+    finally:
+        ev.probe_video_size, ev.probe_source_duration, ev.resolve_encoder = real
+        _clear_export_preset()
+    assert quoted == rendered, f"the picker quoted {quoted}, the render plans {rendered}"
+    assert rendered[0.0][0] == ev.frame_count(0.0, 23.231, 30.0) + 1 == 698, rendered
+    print(f"ok REG-4: the lap picker quotes the frames the render writes ({quoted})")
+
+
 def _late_probe(open_dialog, stored: dict) -> list[str]:
     """Open a picker at "Source" on a recording whose footage probe answers only when released,
     with the dialog's clock already past the 10 s it used to wait. Returns the hint as it read
@@ -283,6 +330,7 @@ def _run_all():
     tests = (test_the_compare_opens_on_its_own_1080p_whatever_the_overlay_remembers,
              test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so,
              test_the_single_lap_source_row_names_the_4k_cap_exactly_when_it_applies,
+             test_the_lap_picker_quotes_the_frames_the_render_writes,
              test_the_first_dialog_states_the_size_once_a_slow_probe_lands,
              test_the_compare_dialog_waits_for_a_slow_probe_too)
     failed = []
