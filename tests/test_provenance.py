@@ -185,6 +185,12 @@ def test_a_corner_best_redderives_and_names_the_lap_that_set_it():
         population = [row[1] for row in p.tables[1].rows]
         assert min(population) == p.value, "the minimum of the shown population IS the value"
         assert p.tables[1].rows[0][1] == p.value, "the population is quickest-first"
+        # CODE-8: "vs best" is never negative, so it carries no sign — the best's own row reads
+        # 0.0000, and no row reads "+0.0000" (or any "+").
+        pop = p.tables[1]
+        vs_best = [pop.cell(r, 2) for r in range(len(pop.rows))]
+        assert vs_best[0] == "0.0000", vs_best[0]
+        assert not any(v.startswith(("+", "-", "−")) for v in vs_best), vs_best
         checked += 1
     print(f"test_a_corner_best_redderives_and_names_the_lap_that_set_it OK — {checked} corners, "
           f"all exact, each minimum shown alongside the laps it beat")

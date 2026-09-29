@@ -72,6 +72,10 @@ def test_the_built_in_track_is_the_demo_circuit():
         a, b = np.ravel(seed[key]), np.ravel(want[key])
         assert a.shape == b.shape and np.abs(a - b).max() <= SEED_TOL_DEG, (key, seed[key], want[key])
     assert seed["sectors"] == [] and track_db.is_builtin(md.DEMO_TRACK_NAME)
+    # One name, one source: the track DB owns it, the generator reads it, and the saved-tracks
+    # manager lists the circuit only while the demo is open (LEFT-28, tests/test_track_db.py).
+    assert md.DEMO_TRACK_NAME == track_db.DEMO_TRACK_NAME
+    assert track_db.is_demo_only(md.DEMO_TRACK_NAME)
     with tempfile.TemporaryDirectory() as d:
         db = os.path.join(d, "tracks.json")                       # never written: a first-ever run
         hit = track_db.detect(*seed["centroid"], db)
@@ -141,6 +145,11 @@ def test_demo_opens_verified_in_the_real_window():
         print(f"  coaching: {[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
         assert ranked, "the demo's Coaching page ranks nothing"
         assert "synthetic" in w.win.windowTitle(), w.win.windowTitle()
+        # Tracks… on the open demo lists its circuit (hidden otherwise, LEFT-28): a built-in with
+        # nothing to rename or delete, read through the real window's session.
+        demo_rows = [r for r in w.win.library_ctl._track_rows() if r["name"] == md.DEMO_TRACK_NAME]
+        assert demo_rows == [{"name": md.DEMO_TRACK_NAME, "builtin": True, "editable": False,
+                              "sectors": 0}], demo_rows
     finally:
         w.close()
 

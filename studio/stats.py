@@ -28,8 +28,8 @@ SEGMENTATION: a run on track is what is left between the stretches of recording 
 analysed over. The STINTS block below sets out why that is the only thing this app can see of a
 pit stop, why the threshold is in the track's own units, and why the absolute GPS epoch is not
 consulted. SPLITS (`split_matrix()` -> `SplitMatrix`) is pure presentation over
-`Session.lap_sector_splits`, and its constants exist to keep a heat grid from tinting the 10 Hz
-sample grid its interior columns are quantized to. CORNERS BY LAP (`corner_matrix()` ->
+`Session.lap_sector_splits`, and its constants exist to keep a heat grid from marking a lap for
+less than GPS noise can move a split. CORNERS BY LAP (`corner_matrix()` ->
 `CornerMatrix`) is the same grid over the detected corners with one measured difference: a cell
 whose corner window was not matched on track at both edges is never marked and never sets the
 typical (CornerMatrix says why)."""
@@ -183,19 +183,14 @@ STINT_GAP_MIN_S = 90.0
 VMIN_STEADY_BAND = 0.15
 
 # --------------------------------------------------------------------- the split-time matrix
-# The laps x sectors grid. Two numbers it needs and only measurement can give.
+# The laps x sectors grid: the floor under its marks, then its two anchors.
 #
-# THE 10 Hz FLOOR IS NOT UNIFORM ACROSS THE ROW. A split is read by projecting the sector line's
-# midpoint onto the lap and taking the elapsed time at the NEAREST TRACE POINT (see
-# Session.lap_sector_splits), so every interior boundary lands on a GPS sample while the lap's own
-# start and finish are interpolated along the chord. The first and last sub-sector are therefore
-# continuous and the ones between them step in whole samples: with three sector lines the two
-# interior columns take 17-18 distinct values across 38 and 65 laps, stepping ~0.05-0.10 s over a
-# total spread of 1.2-3.6 s, while the two end columns take a different value on every single lap.
-# A grid that tinted those middle columns finely would be painting the sample grid.
-#
-# So the tint saturates no finer than this, ~3 sample steps — the smallest difference the
-# measurement can actually resolve in its coarsest column.
+# THE FLOOR ON THE TINT SCALE (why a floor at all is under "So:" below). Its VALUE is a design
+# floor, not a measured resolution: a lap is marked behind in a sector only when it gave away at
+# least 0.30 s there, clear of the GPS noise on one split (a tenth or two at the owner's noise
+# levels, tests/test_truth_matrix.py row 2). It once rested on interior splits stepping in whole
+# 10 Hz samples; since a boundary is where the lap crosses the line, they do not. The corner grid
+# shares it, and there it was checked against the marks it makes (CornerMatrix).
 MATRIX_SCALE_MIN_S = 0.30
 # TWO ANCHORS, AND THEY ARE DIFFERENT ON PURPOSE. The ★ marks each column's BEST — a fact, the
 # quickest anyone went through that sector, and the target. The behind mark is measured against
@@ -509,8 +504,8 @@ class SplitMatrix:
     projection produced no comparable row (never 0 — a missing split is missing). `bests` /
     `medians` / `scales` are per COLUMN, and `best_lap[c]` is the lap that owns column c's best.
     `scales[c]` is how far ABOVE THAT COLUMN'S MEDIAN a cell has to be to read as behind — a
-    robust percentile of the column's own upper spread, floored at what the 10 Hz projection can
-    resolve. See MATRIX_SCALE_MIN_S for why the mark is anchored on the median while the ★ is
+    robust percentile of the column's own upper spread, floored at MATRIX_SCALE_MIN_S. See
+    MATRIX_SCALE_MIN_S for that floor, and why the mark is anchored on the median while the ★ is
     anchored on the best, and why neither is one number for the whole grid."""
 
     lap_ids: list[int]
@@ -526,8 +521,8 @@ class SplitMatrix:
     # READER IS SHOWN, rounded to MATRIX_DECIMALS, and never the float behind it.
     #
     # It is not a theoretical nicety, and both halves were caught on the owner's own recordings by
-    # rendering the grid. Interior splits are differences of two GPS sample times, so they live on
-    # a ~0.0998 s grid:
+    # rendering the grid — while interior splits still stepped on a ~0.0998 s grid (a boundary was
+    # then the nearest fix), which made them commoner; a print tie needs no grid:
     #
     #   * a threshold derived from those same values lands exactly ON one of its steps — D24 0060
     #     with three lines put S2's at 17.1000 with cells at both 17.099 and 17.100, so two cells
@@ -565,11 +560,11 @@ class CornerMatrix:
     no answer short of clicking through 38 or 65 laps.
 
     THE MARK IS THE SPLIT GRID'S RULE, NOT A NEW ONE: the column's MEDIAN is the anchor and a
-    cell is ▼ at `_typical_and_scale`'s threshold, floored at MATRIX_SCALE_MIN_S. The floor's
-    reason there is the 10 Hz sample grid; corner times are interpolated and have no such grid, so
-    it was re-measured here as what it does to the marks. The check is independent of the time
-    itself: a lap that really lost time in a corner should usually carry a lower minimum speed
-    through it, and the minimum speed is read off the Doppler channel, not off the window edges.
+    cell is ▼ at `_typical_and_scale`'s threshold, floored at MATRIX_SCALE_MIN_S. That floor is a
+    design value, so it was measured here as what it does to the marks. The check is independent
+    of the time itself: a lap that really lost time in a corner should usually carry a lower
+    minimum speed through it, and the minimum speed is read off the Doppler channel, not off the
+    window edges.
 
     ⚠ STALE — NOT RE-MEASURABLE (T16). Both tables in this docstring were measured on D24 before
     #335 changed corner matching, which moved which cells are resolved: 220 → 422 of 456 on the
@@ -577,7 +572,8 @@ class CornerMatrix:
     the app, and their other cells were never re-measured. D24 is no longer available, so neither
     table can be. They are the record of that measurement, not what the app computes today. The
     first is what checked MATRIX_SCALE_MIN_S's 0.30 on corner times; that check is carried forward
-    unverified (the constant's own reason, the SPLITS grid's 10 Hz floor, does not depend on it).
+    unverified (the constant's own reason, a design floor above one split's noise, does not
+    depend on it).
 
     Resolved cells only, both D24 recordings, floor → marks · share with a below-typical minimum:
 

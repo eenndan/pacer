@@ -5,8 +5,9 @@ WHY. Until this file no test compared a sector split, the ideal lap, the gap to 
 or minimum speed, the rise of the Δ trace through a corner or the time on the brakes with TRUTH:
 `test_synth_gopro.py` holds lap times at one seed and noise 0/1, the corner count and direction,
 and whether the Stats tiles are "populated". A number can be populated and wrong. The review found
-three that are (sector splits snap to the 10 Hz fixes; the ideal lap reads fast under noise; the Δ
-trace puts half of a corner's line loss elsewhere), none of which any test could see.
+three that are (sector splits snapped to the 10 Hz fixes until TRUTH-5; the ideal lap reads fast
+under noise; the Δ trace puts half of a corner's line loss elsewhere), none of which any test could
+see.
 
 THE GRID. `studio/dev/synth_gopro.py`'s recording through the REAL loader (`discover_siblings` ->
 `Session.load`), at SEEDS × NOISES: three seeds (the CI seed is among the least biased for the ideal
@@ -79,6 +80,7 @@ from _synthetic import line_change_delta, line_change_session  # noqa: E402
 
 import pacer  # noqa: E402  (app-local metres -> GPS, the Session's own coordinate system)
 from studio import chapters, driving  # noqa: E402
+from studio import session as session_mod  # noqa: E402
 from studio import stats as stats_service  # noqa: E402
 from studio._signal import speed_long_g  # noqa: E402
 from studio.corner_model import SegmentBests  # noqa: E402
@@ -104,9 +106,9 @@ class Row:
     fixed_by: str = ""
 
 
-MEASURED_ON = "2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical)"
+MEASURED_ON = ("2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical); row 2 on "
+               "TRUTH-5's tree")
 G, R, S = "green", "known-red", "stated"
-_T5 = "TRUTH-5 (sector boundary at the true line crossing)"
 _T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
 _T10 = "TRUTH-10 (the Δ family on the warp frame)"
 _T11 = "TRUTH-11 (de-bias the ideal; TRUTH-6 says it in words)"
@@ -121,21 +123,21 @@ ROWS: tuple[Row, ...] = (
     Row("lap_time.mean", 0.0, 0.000161181, G, tol=0.00024),
     Row("lap_time.mean", 2.0, 0.00157637, G, tol=0.0023),
     Row("lap_time.mean", 4.5, 0.00357036, G, tol=0.0053),
-    # 2 · sector split at the golden placement. The interior split (S2) sits between two
-    # boundaries snapped to the nearest 10 Hz fix, so it is quantized to 0.1 s steps: noise 2 and
-    # 4.5 snap the same laps a whole fix apart, which is why their pooled column means coincide.
-    # The spread is the snap's at noise 0 only. At noise 2 and 4.5 it is the GPS noise's (the
-    # crossing fix gains little there: TRUTH-5's scope measured sd 48-101 -> 27-88 ms), so those
-    # rows bound today's spread and are not TRUTH-5's targets.
-    Row("sector.interior_sd", 0.0, 0.0539754, R, tol=0.0010, ceiling=0.080, fixed_by=_T5),
-    Row("sector.interior_sd", 2.0, 0.127539, G, tol=0.19),
-    Row("sector.interior_sd", 4.5, 0.224982, G, tol=0.33),
-    Row("sector.max", 0.0, 0.0846015, R, tol=0.010, ceiling=0.125, fixed_by=_T5),
-    Row("sector.max", 2.0, 0.230441, G, tol=0.34),
-    Row("sector.max", 4.5, 0.430441, G, tol=0.64),
-    Row("sector.col_mean", 0.0, 0.00711365, G, tol=0.0105),
-    Row("sector.col_mean", 2.0, 0.0237803, G, tol=0.035),
-    Row("sector.col_mean", 4.5, 0.0237803, G, tol=0.035),
+    # 2 · sector split at the golden placement. Each boundary is where the lap crosses the line,
+    # between two fixes (TRUTH-5). Snapped to the nearest 10 Hz fix, as it was, the interior
+    # split (S2) read 54 ms sd and 85 ms worst at noise 0 (`test_every_row_has_teeth` plants that
+    # snap back). Left at noise 0: a bias of a few ms at each line, the same on every lap (the
+    # column mean) — ~3.5 ms early at both as loaded, 1-3 ms either way with the boxcar off, so
+    # not all the boxcar's. At noise 2 and 4.5 the spread is the GPS noise's.
+    Row("sector.interior_sd", 0.0, 0.000929368, G, tol=0.0010),
+    Row("sector.interior_sd", 2.0, 0.106567, G, tol=0.155),
+    Row("sector.interior_sd", 4.5, 0.241378, G, tol=0.33),
+    Row("sector.max", 0.0, 0.00861417, G, tol=0.010),
+    Row("sector.max", 2.0, 0.192723, G, tol=0.28),
+    Row("sector.max", 4.5, 0.428262, G, tol=0.64),
+    Row("sector.col_mean", 0.0, 0.0042235, G, tol=0.0060),
+    Row("sector.col_mean", 2.0, 0.010792, G, tol=0.016),
+    Row("sector.col_mean", 4.5, 0.0240203, G, tol=0.035),
     # 3 · the ideal lap: |mean over the seeds| of app − true ideal (an order statistic of noisy
     # cells reads fast; the target is TRUTH-11's 30 ms)
     Row("ideal.mean_bias", 0.0, 0.00739398, G, tol=0.011),
@@ -750,8 +752,9 @@ def test_row10_g_cross_check_gain():
 def test_every_row_has_teeth():
     """Each known-red row, and each stated row with a floor, fails if its status is flipped to
     green, and a planted defect turns a green row red: +20 ms on every lap time (row 1, noise 0),
-    a +20 ms shift of the first sector boundary (row 2's column mean, noise 0) and +3 % on every
-    lap's Vmax (row 8, noise 0) — exercised through the same statistics."""
+    a +20 ms shift of the first sector boundary (row 2's column mean and worst split, noise 0),
+    the boundaries snapped back to the nearest fix (row 2's interior spread and worst split) and
+    +3 % on every lap's Vmax (row 8, noise 0) — exercised through the same statistics."""
     st = stats()
     for r in ROWS:
         if r.status == R or (r.status == S and r.tol is not None):
@@ -771,6 +774,19 @@ def test_every_row_has_teeth():
     finally:
         Session.lap_sector_splits = splits
     assert check(rows["sector.col_mean", 0.0], float(np.abs(sec.mean(axis=0)).max()))
+    assert check(rows["sector.max", 0.0], float(np.abs(sec).max()))
+    # The defect row 2 was built for: each boundary snapped back to the fix nearest the line's
+    # midpoint (the two helpers stood down so the projection keeps only that vertex).
+    cross, near = session_mod.polyline_line_crossing, session_mod.nearest_on_polyline
+    session_mod.polyline_line_crossing = lambda *_: None
+    session_mod.nearest_on_polyline = lambda xs, ys, p: (
+        int(np.argmin((np.asarray(xs) - p[0]) ** 2 + (np.asarray(ys) - p[1]) ** 2)), 0.0)
+    try:
+        snap = [_sector_errors(_case(seed, 0.0)) for seed in SEEDS]
+    finally:
+        session_mod.polyline_line_crossing, session_mod.nearest_on_polyline = cross, near
+    assert check(rows["sector.interior_sd", 0.0], max(float(e[:, 1].std()) for e in snap))
+    assert check(rows["sector.max", 0.0], float(np.abs(np.concatenate(snap)).max()))
     lap_stats = stats_service.SessionStats.lap_stats
     stats_service.SessionStats.lap_stats = lambda self: [
         dataclasses.replace(r, vmax_kmh=1.03 * r.vmax_kmh) for r in lap_stats(self)]

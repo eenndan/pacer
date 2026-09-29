@@ -1732,11 +1732,16 @@ def test_session_best_splits_not_poisoned_by_degenerate_lap():
         return poisoned if lid == lap_c else orig(lid)
 
     s.lap_sector_splits = patched
+    # The bests service holds the splits accessor it was BUILT with, and `clean_bests` above built
+    # it: without a rebuild the patch never reached it, and lap C's own real splits were compared
+    # instead (a pass by luck while splits snapped to a fix; a fail once they did not).
+    s._bests = None
     try:
         poisoned_bests = s.session_best_splits()
         poisoned_theo = float(sum(poisoned_bests))
     finally:
         s.lap_sector_splits = orig
+        s._bests = None
         s._valid_cache = [lap_a, lap_b]
 
     # The degenerate lap's 0 s column is filtered, so the per-column bests + theoretical best are

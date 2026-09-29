@@ -46,11 +46,12 @@ centroid + bbox so a fresh recording auto-detects the track on load.
 The Daytona Milton Keynes and Sandown Park lines are BUILT-IN SEEDS (``SEED``), so a first-ever run
 already auto-detects either circuit with its line — MK's timing is identical to the old hardcoded
 entry, and Sandown Park's line is the owner's own saved one (Q2). A third seed is FICTIONAL: the
-circuit the synthetic ``--demo`` session is driven on (``studio/dev/make_demo.py``). The
-user DB is merged ON TOP of the seed (a user entry of the same name overrides the seed), so
-``Save as track…`` can refine a built-in too. Reusing a name for a DIFFERENT place is a different
-act — it destroys that circuit's stored lines — so it is REFUSED (``TrackNameTaken``) until the
-caller confirms; see ``save_track`` / ``replaces``.
+circuit the synthetic ``--demo`` session is driven on (``studio/dev/make_demo.py``). It detects like
+the others, but the saved-tracks manager lists it only while the demo is open or the user has
+refined it (``is_demo_only``). The user DB is merged ON TOP of the seed (a user entry of the same
+name overrides the seed), so ``Save as track…`` can refine a built-in too. Reusing a name for a
+DIFFERENT place is a different act — it destroys that circuit's stored lines — so it is REFUSED
+(``TrackNameTaken``) until the caller confirms; see ``save_track`` / ``replaces``.
 
 Schema (version 1) — one JSON object::
 
@@ -104,6 +105,8 @@ EARTH_RADIUS_M = 6_371_000.0
 # tests/test_track_db.py drives the same line both ways round to hold that. His saved copy keeps
 # overriding it by NAME (`all_tracks`), so his app shows one "Sandown Park" and times it on his line
 # either way; with the two identical, the answer is also the same.
+# The third seed's name, owned here and read by the generator (studio/dev/make_demo.py).
+DEMO_TRACK_NAME = "Synthetic demo circuit"
 SEED: list[dict] = [
     {
         "name": "Daytona Milton Keynes",
@@ -127,7 +130,7 @@ SEED: list[dict] = [
     # tests/test_demo_session.py holds the two equal, so this line cannot drift from the circuit it
     # times.
     {
-        "name": "Synthetic demo circuit",
+        "name": DEMO_TRACK_NAME,
         "centroid": [45.9989659, -30.9991256],
         "bbox": [45.9979319, -31.0014026, 46.0, -30.9968485],
         "start": [[45.9998111, -30.9985263], [46.0000806, -30.9985057]],
@@ -513,6 +516,15 @@ def is_builtin(name: str) -> bool:
     """True when `name` is one of the built-in ``SEED`` circuits — the ones that ship with the app
     and are layered UNDER the user's own file by ``all_tracks``."""
     return any(e["name"] == name for e in SEED)
+
+
+def is_demo_only(name: str) -> bool:
+    """True for the one built-in that exists only for ``--demo``: the fictional circuit, which no
+    real recording can be detected on (nothing real sits within DETECT_RADIUS_M of the open
+    Atlantic). It stays in ``all_tracks`` and ``detect`` like any built-in, so the demo still opens
+    with verified timing; only the saved-tracks LIST leaves it out while the demo is not the open
+    session and the user holds no refined copy (``LibraryController._track_rows``)."""
+    return name == DEMO_TRACK_NAME
 
 
 def user_names(path: str | None = None) -> list[str]:

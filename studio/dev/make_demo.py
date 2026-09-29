@@ -53,12 +53,13 @@ import tempfile
 
 import numpy as np
 
+from studio import track_db
 from studio.dev import synth_gopro as sg
 
 DEMO_SEED = sg.DEFAULT_SEED
 DEMO_LAPS = 14
 DEMO_ORIGIN = (46.0, -31.0)       # deg: open Atlantic, ~135 km from synth_gopro.ORIGIN
-DEMO_TRACK_NAME = "Synthetic demo circuit"
+DEMO_TRACK_NAME = track_db.DEMO_TRACK_NAME   # one source: the built-in this circuit ships as
 # The start/finish line's half-length (m each side of the centreline): the unknown-track
 # heuristic's own 15 m (load._HEURISTIC_HALF_M), so the line spans any GPS scatter across the straight.
 LINE_HALF_M = 15.0
