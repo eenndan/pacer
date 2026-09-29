@@ -592,7 +592,7 @@ The **Help-menu dialogs** + the app's **command registry**. `COMMANDS` is the si
 
 ## `track_dialog.py`
 
-The **saved-tracks manager** (`Library… ▸ Saved tracks…`): lists the merged built-in + user circuits and renames or deletes the ones the user's own file holds. File-op-free and pacer-free like `library_dialog` — every act is an injected callback the app owns, and the REFUSAL messages come from `track_db` rather than being re-decided here. Built-ins are listed but not selectable.
+The **saved-tracks manager** (`Library… ▸ Saved tracks…`): lists the merged built-in + user circuits (the fictional `--demo` circuit only while it is open or refined) and renames or deletes the ones the user's own file holds. File-op-free and pacer-free like `library_dialog` — every act is an injected callback the app owns, and the REFUSAL messages come from `track_db` rather than being re-decided here. Built-ins are listed but not selectable.
 
 ## `widgets.py`
 

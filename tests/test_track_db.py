@@ -48,6 +48,9 @@ _SP_START = [[51.37617427563954, -0.3616823772388991], [51.376337128483875, -0.3
 # Every built-in, in the order the merged view lists them. The third is the `--demo` recording's
 # fictional circuit (studio/dev/make_demo.py; tests/test_demo_session.py pins its fields).
 _BUILTIN_NAMES = ["Daytona Milton Keynes", "Sandown Park", "Synthetic demo circuit"]
+# The built-ins the saved-tracks manager lists when the demo is neither open nor refined (LEFT-28):
+# the two real circuits. Detection and the merged view keep all three.
+_LISTED_BUILTINS = ["Daytona Milton Keynes", "Sandown Park"]
 
 
 def _pacer_available() -> bool:
@@ -172,10 +175,64 @@ def test_a_saved_sandown_park_overrides_the_built_in_and_is_never_rewritten(monk
             sandown = [r for r in rows if r["name"] == "Sandown Park"]
             assert len(sandown) == 1, f"{label}: the manager lists {len(sandown)} Sandown Parks"
             assert sandown[0]["builtin"] and sandown[0]["editable"], sandown
-            assert [r["name"] for r in rows] == [*_BUILTIN_NAMES, "Croft"]
+            assert [r["name"] for r in rows] == [*_LISTED_BUILTINS, "Croft"]
 
             assert _fingerprint(p) == before, f"{label}: reading the user's tracks rewrote the file"
             assert not os.path.exists(p + ".bak"), f"{label}: reading the user's tracks backed it up"
+
+
+def test_the_demo_circuit_is_listed_only_while_it_is_open(monkeypatch):
+    """LEFT-28: Tracks… listed the `--demo` recording's FICTIONAL circuit on every install, beside
+    the real ones, as a built-in nobody can delete. The manager now lists it only while the demo is
+    the open session, or once the user has refined it (their own copy, which they can delete). What
+    it must NOT take with it: the merged view and DETECTION still hold all three, so the demo keeps
+    opening with verified timing (tests/test_demo_session.py drives that on the real window)."""
+    from types import SimpleNamespace
+
+    from studio.library_controller import LibraryController
+    demo = track_db.DEMO_TRACK_NAME
+    seed = next(e for e in track_db.SEED if e["name"] == demo)
+
+    def open_on(track_name):
+        """A stand-in controller whose window has `track_name` open (None: no session yet)."""
+        session = None if track_name is None else SimpleNamespace(track_name=track_name)
+        return SimpleNamespace(win=SimpleNamespace(session=session))
+
+    def names(rows):
+        return [r["name"] for r in rows]
+
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")          # never written until the refine below
+        monkeypatch.setattr(track_db, "_app_support_dir", lambda _d=d: _d)
+
+        # A fresh install: the manager lists the two real circuits…
+        assert names(LibraryController._track_rows(None)) == _LISTED_BUILTINS
+        assert names(LibraryController._track_rows(open_on(None))) == _LISTED_BUILTINS
+        assert names(LibraryController._track_rows(open_on("Sandown Park"))) == _LISTED_BUILTINS
+        # …while the merged view and detection keep the demo circuit, so --demo still opens verified.
+        assert names(track_db.all_tracks()) == _BUILTIN_NAMES
+        hit = track_db.detect(*seed["centroid"])
+        assert hit is not None and hit["name"] == demo, hit
+        assert not os.path.exists(p), "listing or detecting a track wrote the user's file"
+
+        # The demo open: its circuit is listed, as the built-in it is — nothing to rename or delete.
+        rows = LibraryController._track_rows(open_on(demo))
+        assert names(rows) == _BUILTIN_NAMES, rows
+        assert rows[-1] == {"name": demo, "builtin": True, "editable": False, "sectors": 0}, rows
+
+        # Refined by the user (Save as track… at the demo's location, ~1 m along): their own copy is
+        # listed with the demo closed, deletable, and a delete brings the shipped line back.
+        refined = [[pt[0], pt[1] + 1e-5] for pt in seed["start"]]
+        track_db.save_track({**seed, "start": refined})
+        rows = LibraryController._track_rows(None)
+        assert names(rows) == _BUILTIN_NAMES, rows
+        assert rows[-1]["builtin"] and rows[-1]["editable"], rows
+        assert track_db.reverts_to_builtin(demo) is not None
+
+        # Deleted again: back to the shipped (hidden) built-in, still detected.
+        track_db.remove_track(demo)
+        assert names(LibraryController._track_rows(None)) == _LISTED_BUILTINS
+        assert track_db.detect(*seed["centroid"])["start"] == seed["start"]
 
 
 def test_renaming_a_refined_built_in_is_refused():
@@ -1352,7 +1409,8 @@ def test_app_delete_leaves_every_analysed_session_alone(monkeypatch):
         ctl = LibraryController(win, studio_app.STATUS_MS)
         rows = ctl._delete_track("Sonoma")
 
-        assert [r["name"] for r in rows] == _BUILTIN_NAMES, rows
+        # A bare window has no session at all: the demo-row rule must read that as "not open".
+        assert [r["name"] for r in rows] == _LISTED_BUILTINS, rows
         assert track_db.load()["tracks"] == []
         idx = library.load()
         assert len(idx["entries"]) == 3, "deleting a circuit dropped analysed sessions"
