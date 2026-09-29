@@ -162,9 +162,14 @@ opposite, and worse.
   per-recording empirical constants into shipping copy.
 
 **Why the headline ideal needs no uncertainty band at all:** it is exactly the minimum over the laps
-driven — an **order statistic**, with no sampling uncertainty. Its only instability is in **N**, and
-N is a monotone ladder, not a distribution. That ladder is what `corner_model.IdealSample` publishes
-and what the Stats page's sample disclosure states.
+driven — an **order statistic**, with no sampling uncertainty over which laps were driven. Its only
+instability in that sense is in **N**, and N is a monotone ladder, not a distribution. That ladder
+is what `corner_model.IdealSample` publishes and what the Stats page's sample disclosure states.
+*Wording corrected 2026-09-29 (TRUTH-1):* it is exact of the laps **as measured**, and every cell
+carries GPS measurement noise, which a minimum picks the lucky side of. Against synthetic truth
+(`tests/test_truth_matrix.py`, row 3) the ideal reads +7 ms at noise 0 but 161 ms and 698 ms fast
+at noise 2 and 4.5 (mean of 3 seeds). That is a bias with one sign, a point correction's job
+(TRUTH-11), not a spread a band would draw, so the band stays refused.
 
 ---
 

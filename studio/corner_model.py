@@ -451,8 +451,8 @@ class SegmentBests:
         IT IS AN ORDER STATISTIC, NOT A FLOOR, and every surface that prints it must print
         `sample` beside it. A minimum over more laps is never larger, so this number keeps falling
         as the session grows and moves again when the partition is re-cut — measured, tabulated
-        and sourced in `IdealSample`. Nothing here is wrong; what would be wrong is showing the
-        number without the counts that set it."""
+        and sourced in `IdealSample`. And each cell carries GPS noise, which the minimum picks the
+        fast side of: 161 ms fast at synthetic noise 2 (tests/test_truth_matrix.py, row 3)."""
         return float(sum(self.bests))
 
     @property

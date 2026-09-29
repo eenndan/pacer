@@ -203,6 +203,19 @@ def to_local(lat, lon, origin=ORIGIN):
     return (np.radians(np.asarray(lon) - origin[1]) * p, np.radians(np.asarray(lat) - origin[0]) * m)
 
 
+def true_s(circuit: Circuit, px, py) -> np.ndarray:
+    """Lap distance of the foot of each point (`px`, `py`: local metres, `to_local`'s frame) on the
+    true centreline: the nearest centreline node, then along its heading (exact to well under a
+    centimetre on this DS grid)."""
+    cx, cy = circuit.x[:-1], circuit.y[:-1]
+    out = np.empty(len(px))
+    for k in range(len(px)):
+        j = int(np.argmin((cx - px[k]) ** 2 + (cy - py[k]) ** 2))
+        h = circuit.heading[j]
+        out[k] = circuit.s[j] + (px[k] - cx[j]) * math.cos(h) + (py[k] - cy[j]) * math.sin(h)
+    return np.mod(out, circuit.length)
+
+
 # ------------------------------------------------------------------------------ the session
 @dataclass
 class Truth:
@@ -237,20 +250,36 @@ class Truth:
             t = ((x1 - px) * sy - (y1 - py) * sx) / den
             u = ((x1 - px) * ry - (y1 - py) * rx) / den
         hit = np.flatnonzero((den != 0) & (t >= 0) & (t < 1) & (u >= 0) & (u <= 1))
-        out = []
-        for i in hit:
-            s_hit = c.s[i] + t[i] * DS
-            first = math.ceil((self.d_nodes[0] + self.s_start - s_hit) / c.length)
-            for k in range(first, first + 10_000):
-                d = s_hit + k * c.length - self.s_start
-                if d > self.d_nodes[-1]:
-                    break
-                if d >= self.d_nodes[0]:
-                    out.append(float(np.interp(d, self.d_nodes, self.t_nodes)))
-        return np.sort(np.array(out))
+        out = [self.times_at(c.s[i] + t[i] * DS) for i in hit]
+        return np.sort(np.concatenate(out)) if out else np.array([])
 
     def lap_times(self, line_latlon) -> np.ndarray:
         return np.diff(self.crossings(line_latlon))
+
+    # The readers below turn what the app measured into the truth it should have measured. They
+    # take arrays, never a Session, so this module stays free of the app it tests.
+    def times_at(self, s_lap: float) -> np.ndarray:
+        """True times, in order, of every pass of lap distance `s_lap` (m along the centreline from
+        the start of the main straight) — the crossing times of a line square across it."""
+        first = math.ceil((self.d_nodes[0] + self.s_start - s_lap) / self.circuit.length)
+        out = []
+        for k in range(first, first + 10_000):
+            d = s_lap + k * self.circuit.length - self.s_start
+            if d > self.d_nodes[-1]:
+                break
+            if d >= self.d_nodes[0]:
+                out.append(float(np.interp(d, self.d_nodes, self.t_nodes)))
+        return np.array(out)
+
+    def speed_at(self, tau) -> np.ndarray:
+        """The kart's true speed (m/s) at true times `tau` (exact: constant acceleration between
+        nodes, 0 before it moves and after it stops)."""
+        return _kinematics(self, tau)[1]
+
+    def s_at_latlon(self, lat, lon) -> np.ndarray:
+        """True lap distance of the centreline point nearest each GPS position (`true_s` in the
+        circuit's own frame): where on the circuit a position the app reports actually is."""
+        return true_s(self.circuit, *to_local(lat, lon, self.origin))
 
     def line_at(self, s_lap: float, half_width: float = 15.0) -> list:
         """A timing line square across the circuit at lap distance `s_lap`, as [[lat, lon], [lat,
