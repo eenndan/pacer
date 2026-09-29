@@ -4166,6 +4166,66 @@ def test_the_coast_copy_states_the_window_the_coast_was_measured_on():
           f"driving.COAST_SMOOTH_S, and neither denies it")
 
 
+def test_the_onset_quantization_is_one_constant_and_the_brake_time_states_its_gps_noise():
+    """TRUTH-7. Two things the braking copy states, each now held by what it states.
+
+    THE ONSET'S QUANTIZATION (TEETH-7). "10 Hz GPS quantizes the onset by ~1.5 m" was typed three
+    times — the BRAKING tooltip, the peak-braking tile and `BrakeConsistency`'s docstring — with
+    no constant behind it, and the TEETH run's mutant T2 ("~1.5 m" -> "~2.5 m" in the BRAKING
+    tooltip) survived five test files. The figure is `driving.ONSET_QUANT_M` now, derived and
+    measured once where it is defined: both tooltips print it and no other "~N m" onset figure,
+    the docstring names the constant instead of a figure, and no Stats source line types it.
+
+    THE TIME ON THE BRAKES READS MORE ON NOISIER GPS (MOAT-4). With the truth known, GPS noise
+    lengthens it on almost every lap (tests/test_truth_matrix.py row 7, `brake.mean`, stated), so
+    a session compared with a noisier one reads more braking for the same driving. Both DRIVING
+    tooltips — the IMU one and the GPS-derived one, which compose the same brake paragraph — say
+    so, in words: the sentence carries no figure, because the synthetic's seconds are not a real
+    recording's."""
+    _app()
+    import re
+
+    from studio import driving, stats
+    from studio.stats_braking import BRAKING_TOOLTIP
+    from studio.stats_panel import DRIVING_TOOLTIP, PEAK_BRAKE_TOOLTIP, driving_tooltip_gps
+
+    figure = f"~{driving.ONSET_QUANT_M:g} m"
+    onset_figure = re.compile(r"~\s*\d+(?:\.\d+)?\s*m(?![\w/])")     # "~1.5 m", not "~15 m/s"
+    for name, tip in (("BRAKING_TOOLTIP", BRAKING_TOOLTIP), ("PEAK_BRAKE_TOOLTIP", PEAK_BRAKE_TOOLTIP)):
+        assert figure in tip, (
+            f"{name} no longer states the onset quantization {figure} (driving.ONSET_QUANT_M): "
+            f"{tip!r}")
+        others = [m for m in onset_figure.findall(tip) if m != figure]
+        assert not others, (
+            f"{name} states the onset quantization as {others}, not driving.ONSET_QUANT_M's "
+            f"{figure} — one figure, one source")
+    doc = stats.BrakeConsistency.__doc__ or ""
+    assert "driving.ONSET_QUANT_M" in doc and not onset_figure.findall(doc), (
+        f"BrakeConsistency's honesty floor must name driving.ONSET_QUANT_M, not type a figure: "
+        f"{doc!r}")
+    import pathlib
+    src = _stats_page_source() + pathlib.Path(stats.__file__).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        if figure in line and "ONSET_QUANT_M" not in line:
+            raise AssertionError(f"{figure!r} is typed as a literal — it must read "
+                                 f"driving.ONSET_QUANT_M: {line.strip()!r}")
+
+    noise = "GPS noise adds time on the brakes"
+    for name, tip in (("DRIVING_TOOLTIP", DRIVING_TOOLTIP),
+                      ("driving_tooltip_gps", driving_tooltip_gps("no usable accelerometer"))):
+        # Split on a period FOLLOWED BY SPACE, so the constants ("0.5 s") stay inside a sentence.
+        said = next((s for s in re.split(r"(?<=\.)\s+", tip) if noise in s), None)
+        assert said, f"{name} never says GPS noise lengthens the time on the brakes: {tip!r}"
+        assert "similar GPS quality" in said, (
+            f"{name} states the noise but not what to do about it (compare like with like): "
+            f"{said!r}")
+        assert not re.search(r"\d", said), (
+            f"{name}'s noise sentence carries a figure — the only measured one is the "
+            f"synthetic's, not a real recording's: {said!r}")
+    print(f"ok braking copy: the onset quantization is driving.ONSET_QUANT_M ({figure}) at all "
+          f"three sites; both DRIVING tooltips say GPS noise adds time on the brakes, no figure")
+
+
 def test_the_stats_page_names_the_lateral_axis_this_recording_actually_has():
     """FOUR texts on this page named the accelerometer as the lateral channel, on every recording.
 

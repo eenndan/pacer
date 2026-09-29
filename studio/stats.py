@@ -340,8 +340,9 @@ class BrakeConsistency:
     """One corner's braking repeatability + commitment over the included laps (the BRAKING
     table). Onsets are compared in the REFERENCE odometer (each lap's onset scaled by
     ref_total/lap_total — the house normalized projection), so cross-lap σ measures the
-    DRIVER's scatter, not lap-length drift. Honesty floor: at 10 Hz a ~15 m/s kart moves
-    ~1.5 m per fix, so a σ at or below that is measurement quantization, not driving."""
+    DRIVER's scatter, not lap-length drift. Honesty floor: an onset lands on a 10 Hz fix, so it
+    is quantized by one fix of travel (`driving.ONSET_QUANT_M`, derived there), and a σ at or
+    below that is measurement quantization, not driving."""
 
     cid: int                        # Corner.cid (1-based, track order)
     n: int                          # laps with a matched brake event into this corner

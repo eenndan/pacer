@@ -51,6 +51,14 @@ BRAKE_SAMPLE_FLOOR = 0.05 # decel above this counts toward the braking-decel dis
 RELEASE_RATIO = 0.35      # Schmitt release at theta_b*this; low so one zone with a mid-dip or a
 #                           trailing light decel stays a single event (less fragmentation)
 MIN_BRAKE_S = 0.25        # drop brake runs shorter than the shortest real brake application
+# THE ONSET'S QUANTIZATION, stated in copy and derived here once. An onset lands ON a fix
+# (`_brake_runs` walks back sample by sample), so it moves in steps of one fix period of travel: a
+# ~15 m/s kart x the 0.1 s GPS9 period. Measured at every onset on the working set, the step from
+# the fix before is a median 1.49 m (Sandown 3h 2026, 472 onsets) and 1.69 m (MK_18_09_26, 200).
+# The BRAKING and peak-braking tooltips and `stats.BrakeConsistency` read it from here (TEETH-7:
+# typed three times, a changed copy survived every test): a cross-lap onset σ at or below it is
+# measurement, not driving.
+ONSET_QUANT_M = 1.5       # m
 COAST_DRAG_MIN = 0.03     # g; below this |decel| is steady-state cruise, not coasting
 # THE COAST BAND IS NARROWER THAN THE NOISE ON THE SIGNAL IT WAS TESTED AGAINST, WHICH IS WHY THIS
 # WINDOW IS FIVE TIMES THE BRAKE DETECTOR'S. `coasting_spans` asks for SUSTAINED membership of
