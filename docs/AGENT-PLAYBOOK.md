@@ -126,15 +126,20 @@ Packages go out in waves: dispatched together, merged, then checked by QA. These
   per merged pull request.
 - **Briefs** quote the one QA or review paragraph a package needs, never a report's path: finding
   the paragraph costs every agent several calls.
-- **Pre-push**, on a built tree: `pixi run ctest --test-dir build/Release -R
-  '^(test_landing_page|test_inline_styles|test_plural_copy|test_layering)$'`. These four fail on
-  a forgotten doc or copy edit, not on code, and cost seconds rather than a CI round.
+- **Pre-push**, on a built tree, run these four checks. They fail on a forgotten doc or copy edit,
+  not on code, and cost seconds rather than a CI round:
+
+  ```bash
+  pixi run ctest --test-dir build/Release -R '^(test_landing_page|test_inline_styles|test_plural_copy|test_layering)$'
+  ```
+
 - **QA rounds.** No owner-journey round (a simulated first open or new recording) until the owner
   has used a build: those rounds kept finding the previous wave's own work. After any wave, and
   before the showcase tag, run REG (regressions) plus an EVAL front-door pass, nothing else; a
-  JOURNEY-style run comes once per capability release. Report rework (fix PRs whose defect a PR
-  of the previous 7 days introduced) as Y-only beside Y+P (partly so), because partial verdicts
-  on few PRs carried its rise. "Stop when every P0/P1 is a regression" would never have fired.
+  JOURNEY-style run comes once per capability release. Report rework (fix PRs whose defect a PR of
+  the previous 7 days introduced) as Y-only beside Y+P (partly so), because partial verdicts on few
+  PRs carried its rise. Do not use a "stop when every P0/P1 is a regression" rule: it would never
+  have fired.
 - **Tags** only on (a) the owner's use of the previous loop, (b) a capability an evaluator can
   see, or (c) a P0/P1 on an evaluator's path. At most one per race day, never one per QA wave: a
   release list that moves daily reads as churn. The next tag is the showcase release: five-bullet
