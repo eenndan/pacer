@@ -121,9 +121,9 @@ Packages go out in waves: dispatched together, merged, then checked by QA. These
   at most 3 heavy lanes (footage, export, full-suite or manual golden runs) at once; at most 2
   findings per package on one surface, so one agent run can finish a package.
 - **Hand-off.** At ~100 tool calls an agent commits, pushes, writes "State at hand-off" in the
-  pull request body (what is done, what is left, the next command) and stops. There is no
-  call-count target: cost is the context each call re-reads, so it is judged by the context per
-  merged pull request.
+  pull request body (what is done, what is left, the next command) and stops. There is
+  no call-count target: cost is the context each call re-reads, so it is judged by the context
+  per merged pull request.
 - **Briefs** quote the one QA or review paragraph a package needs, never a report's path: finding
   the paragraph costs every agent several calls.
 - **Pre-push**, on a built tree: `pixi run ctest --test-dir build/Release -R
