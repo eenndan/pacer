@@ -3661,9 +3661,9 @@ def test_split_matrix_columns_bests_and_the_robust_tint_scale():
     # column 0 does not set the threshold column 1 is read against, and vice versa.
     assert len(m.scales) == 2 and all(s >= MATRIX_SCALE_MIN_S for s in m.scales)
     assert m.scales[0] < 3.0 and m.scales[1] < 2.0, m.scales
-    # A hyper-consistent session cannot drive the scale below the measurement's own resolution —
-    # this is what stops a percentile from being a rank (10 % of anything is always the worst
-    # 10 %), so a session where nothing is off gets nothing marked.
+    # A hyper-consistent session cannot drive the scale below the design floor — this is what
+    # stops a percentile from being a rank (10 % of anything is always the worst 10 %), so a
+    # session where nothing is off gets nothing marked.
     flat = split_matrix(ids, [[20.0, 24.0]] * 6, columns=2)
     assert flat.scales == [MATRIX_SCALE_MIN_S, MATRIX_SCALE_MIN_S]
 
@@ -3699,12 +3699,12 @@ def test_split_matrix_columns_bests_and_the_robust_tint_scale():
 def test_split_matrix_marks_never_split_a_tie_the_display_cannot_show():
     """Both defects this rule exists for, as the exact shapes that produced them on D24.
 
-    Interior splits are differences of two GPS sample times, so they sit on a ~0.0998 s grid —
-    which is where BOTH marks went wrong. A threshold derived from those values lands on one of
-    its own steps (0060, three lines: S2's came out at 17.1000 with cells at 17.099 and 17.100, so
-    two cells printing the identical `17.10` came out one marked and one plain), and a column
-    minimum is routinely tied at print (0062, five lines: SIX cells read 11.30 in S3, one of them
-    0.001 s quicker than the rest)."""
+    Interior splits then sat on a ~0.0998 s grid (a boundary was the nearest fix), which is where
+    BOTH marks went wrong; a print tie needs no grid, so the rule stays. A threshold derived from
+    those values landed on one of its own steps (0060, three lines: S2's came out at 17.1000 with
+    cells at 17.099 and 17.100, so two cells printing the identical `17.10` came out one marked
+    and one plain), and a column minimum was tied at print (0062, five lines: SIX cells read
+    11.30 in S3, one of them 0.001 s quicker than the rest)."""
     quantum = 0.0998
     # Seven laps around a median, two of which straddle the threshold by a thousandth.
     col = [16.40, 16.50, 16.70, 16.70, 16.80, 17.099, 17.100]
@@ -3820,11 +3820,12 @@ def test_stats_view_split_matrix_marks_the_best_and_the_behind_cells():
     mid = v.splits_table.item(1, 1)
     assert "\u22120.05 s against your typical S1" in mid.toolTip(), mid.toolTip()
     assert "+0.40 s against the sector best" in mid.toolTip(), mid.toolTip()
-    # The note states the SAMPLE and the two things a reader cannot see: what the ▼ is measured
-    # against, and the 10 Hz floor the interior columns are quantized to.
+    # The note states the SAMPLE and what the ▼ is measured against. It no longer claims a 10 Hz
+    # floor: a boundary is where the lap crosses the line, not a fix (TRUTH-5).
     assert "8 clean laps × 3 sectors" in v.splits_note.text()
     assert "typical lap" in v.splits_note.text()
-    assert "10 Hz" in v.splits_note.text()
+    assert "10 Hz" not in v.splits_note.text() and "±0.1" not in v.splits_note.text()
+    assert "10 Hz" not in v.splits_table.toolTip(), "the tooltip's 10 Hz paragraph is gone"
     print("test_stats_view_split_matrix_marks_the_best_and_the_behind_cells OK")
 
 

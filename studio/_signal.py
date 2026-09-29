@@ -164,20 +164,20 @@ def is_best_at_print(value, best, decimals: int = PRINT_DECIMALS) -> bool:
     """Does `value` read as the session best — at the resolution it is PRINTED to?
 
     THE ONE TIE RULE FOR THE ★, and it has to be one rule because three surfaces put the same
-    mark on the same quantity. `stats.SplitMatrix.is_best` reasoned it out first: an interior
-    sector split is the difference of two GPS sample times on a ~0.0998 s grid, so a column's
-    minimum is routinely TIED at two decimals, and a mark that singles out the copy whose double
-    happens to be a thousandth quicker draws a distinction the measurement does not support and
-    the page cannot show. The Laps tab and the Corners page printed to the same two decimals and
-    compared the raw doubles at 1e-9, so they marked a strict subset of the same cells.
+    mark on the same quantity. A time printed to two decimals cannot show a thousandth, so when
+    two cells print the column's best, a mark on the one whose double happens to be a thousandth
+    quicker draws a distinction the page cannot show — and GPS noise on a sector or corner time
+    is far above a thousandth, so the measurement does not support it either. The Laps tab and
+    the Corners page printed to the same two decimals and compared the raw doubles at 1e-9, so
+    they marked a strict subset of the same cells.
 
-    MEASURED on the owner's D24 recordings. Sector splits, 0062 (65 valid laps): with five sector
-    lines the Stats grid stars 18 cells and the Laps tab 13 — S4 prints 11.40 on laps 20, 42, 43,
-    46 and 51 and only lap 51 (11.399) was starred; with three lines it is 8 against 6. Corner
-    times, same recording: C1's best is 2.7478 and laps 34, 42 and 51 all print 2.75 with only 34
-    starred; C6's is 5.5595 with laps 44 and 53 both printing 5.56. On the 0060 pair the two rules
-    agree at one, three and five lines — one recording alone would have "proved" the exact
-    comparison safe.
+    MEASURED on the owner's D24 recordings, the splits while a boundary still snapped to a fix
+    (which made ties commoner). Sector splits, 0062 (65 valid laps): with five sector lines the
+    Stats grid stars 18 cells and the Laps tab 13 — S4 prints 11.40 on laps 20, 42, 43, 46 and 51
+    and only lap 51 (11.399) was starred; with three lines it is 8 against 6. Corner times, same
+    recording: C1's best is 2.7478 and laps 34, 42 and 51 all print 2.75 with only 34 starred;
+    C6's is 5.5595 with laps 44 and 53 both printing 5.56. On the 0060 pair the two rules agree
+    at one, three and five lines — one recording alone would have "proved" the exact compare safe.
 
     `<=` and not `==` on purpose: everything that rounds to the printed best IS the printed best.
     A None or non-finite value on either side is never a best (a missing split is missing, and a
@@ -500,6 +500,43 @@ def _lap_closure(xs, ys) -> tuple[float, float]:
         return gap, 0.0
     cos = max(-1.0, min(1.0, (ax * bx + ay * by) / (na * nb)))
     return gap, math.degrees(math.acos(cos))
+
+
+# --- where a lap's trace meets a sector line (Session._project_sector_lines) ---
+# Both return `(k, u)`: chord k, from vertex k to vertex k + 1, at fraction u in [0, 1] — a place
+# BETWEEN fixes, which the caller turns into an odometer as cum[k] + u * (cum[k + 1] - cum[k]).
+def polyline_line_crossing(xs, ys, a, b) -> tuple[int, float] | None:
+    """Where the polyline crosses the INFINITE line through `a` and `b`; of several crossings,
+    the one nearest the segment's midpoint. None when no chord crosses it.
+
+    The line, not the segment: a sector line is drawn a few metres across the track and a pass
+    just beyond one end still crossed it. A chord parallel to the line, or of zero length (a
+    repeated fix), crosses nothing."""
+    xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+    (x1, y1), (x2, y2) = a, b
+    ax, ay, vx, vy = xs[:-1], ys[:-1], np.diff(xs), np.diff(ys)
+    sx, sy = x2 - x1, y2 - y1
+    den = vx * sy - vy * sx
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = ((x1 - ax) * sy - (y1 - ay) * sx) / den
+    hit = np.flatnonzero((den != 0.0) & (u >= 0.0) & (u <= 1.0))
+    if not len(hit):
+        return None
+    px, py = ax[hit] + u[hit] * vx[hit], ay[hit] + u[hit] * vy[hit]
+    k = int(hit[np.argmin((px - (x1 + x2) / 2.0) ** 2 + (py - (y1 + y2) / 2.0) ** 2)])
+    return k, float(u[k])
+
+
+def nearest_on_polyline(xs, ys, p) -> tuple[int, float]:
+    """The point of the polyline nearest `p`: the foot of the perpendicular where it lands on a
+    chord, else the nearer vertex. A zero-length chord is its own vertex. Needs two points."""
+    xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+    ax, ay, vx, vy = xs[:-1], ys[:-1], np.diff(xs), np.diff(ys)
+    n2 = vx * vx + vy * vy
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = np.clip(np.where(n2 > 0.0, ((p[0] - ax) * vx + (p[1] - ay) * vy) / n2, 0.0), 0.0, 1.0)
+    k = int(np.argmin((ax + u * vx - p[0]) ** 2 + (ay + u * vy - p[1]) ** 2))
+    return k, float(u[k])
 
 
 def _is_open_lap(cols) -> bool:
