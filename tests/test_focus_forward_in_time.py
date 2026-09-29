@@ -182,11 +182,19 @@ def test_the_session_stamps_its_start_on_the_item_and_the_check():
 
 # ------------------------------------------------------------------ the real window
 def test_an_older_session_never_rewrites_a_newer_list_on_the_real_window():
-    from test_debrief_landing import _fresh_app_support, _open, _settle, _two_recordings
+    from test_debrief_landing import (
+        _fresh_app_support,
+        _loop_log,
+        _open,
+        _said,
+        _settle,
+        _two_recordings,
+    )
 
     from studio.app import StudioWindow
 
-    with tempfile.TemporaryDirectory(prefix="focusfwd_") as folder, _fresh_app_support():
+    with tempfile.TemporaryDirectory(prefix="focusfwd_") as folder, _fresh_app_support(), \
+            _loop_log() as said:
         a, _b = _two_recordings(folder)
         win = StudioWindow([])
         win.resize(1440, 900)
@@ -210,6 +218,7 @@ def test_an_older_session_never_rewrites_a_newer_list_on_the_real_window():
             ctl.focus_replace([listed[0].cid])
             assert focus.for_track(focus.load(), track) == later[:2], "an older session replaced it"
             assert "older" in win.statusBar().currentMessage(), win.statusBar().currentMessage()
+            assert not _said(said, "by hand"), "a refused Replace logged an edit by hand"
             assert ctl.pre_promote_focus([listed[-1].cid]) == [], "a default filled a newer list"
             assert focus.for_track(focus.load(), track) == later[:2]
         finally:

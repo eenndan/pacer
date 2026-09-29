@@ -26,7 +26,15 @@ os.environ.setdefault("PACER_NO_MEDIA", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from test_debrief_landing import _fresh_app_support, _open, _settle, _two_recordings  # noqa: E402
+from test_debrief_landing import (  # noqa: E402
+    _corners,
+    _fresh_app_support,
+    _loop_log,
+    _open,
+    _said,
+    _settle,
+    _two_recordings,
+)
 
 from studio import focus  # noqa: E402
 
@@ -131,7 +139,8 @@ def test_one_click_replaces_the_list_with_todays_top_corners():
     boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information", "question")}
     for k in boxes:
         setattr(QMessageBox, k, staticmethod(lambda *a, **k2: QMessageBox.Ok))
-    with tempfile.TemporaryDirectory(prefix="focusrep_") as folder, _fresh_app_support():
+    with tempfile.TemporaryDirectory(prefix="focusrep_") as folder, _fresh_app_support(), \
+            _loop_log() as said:
         a, b = _two_recordings(folder)
         win = StudioWindow([])
         win.resize(1440, 900)
@@ -143,6 +152,10 @@ def test_one_click_replaces_the_list_with_todays_top_corners():
             other = next(c.cid for c in win.session.corners.corner_list() if c.cid not in short)
             win.library_ctl.focus_remove(short[-1])      # the driver's own edit of the list
             win.library_ctl.focus_add(other)
+            # Each edit is one session-log line, the gesture and the list it left (FIRST-OPEN-LOOP-3).
+            assert [ln.split(": ", 1)[1] for ln in _said(said, "by hand")] == [
+                f"removed C{short[-1]} by hand -> {_corners(short[:-1])}",
+                f"added C{other} by hand -> {_corners(short[:-1] + [other])}"], said
             _open(win, b)
             panel = win.view.opportunities
             block = panel.focus_block
@@ -157,6 +170,9 @@ def test_one_click_replaces_the_list_with_todays_top_corners():
             items = focus.for_track(focus.load(), track)
             assert [i.cid for i in items] == short, (items, short)
             assert {i.fingerprint for i in items} == {"GX9002"}, "baselines not from this session"
+            (replaced,) = _said(said, "replaced with")
+            assert replaced == (f"INFO focus list for GX9002 ({track}): replaced with "
+                                f"{_corners(short)} by hand -> {_corners(short)}"), replaced
             assert block.replace_button.isHidden(), "still offered after the replace"
         finally:
             win.close()
