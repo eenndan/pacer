@@ -71,7 +71,12 @@ from .command_palette import CommandPalette
 # returns it, and `studio.app.ExportChoice` is the name the export tests already reach for.
 from .export_controller import ExportChoice, ExportController  # noqa: F401
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
-from .library_controller import LibraryController, previous_pb_missing_text
+from .library_controller import (
+    LibraryController,
+    corner_list_text,
+    loop_subject,
+    previous_pb_missing_text,
+)
 from .marks_panel import MarkDialog
 from .overlays import (
     BUSY_DEMO_LABEL,
@@ -1264,10 +1269,15 @@ class StudioWindow(QMainWindow):
             view.show_debrief(self.library_ctl.debrief_pb_line(), promoted,
                               self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing),
                               saved=not self.library_ctl.demo_preview)
-            return True
         except Exception:  # noqa: BLE001 — see the docstring
             _log.warning("debrief not shown", exc_info=True)
             return False
+        # The pre-fill is Pacer's default, made with no click: this line is what tells it apart
+        # from the driver's own edits ("by hand") in the session log (FIRST-OPEN-LOOP-3).
+        _log.info("first open %s: debrief shown; %s", self.library_ctl.gesture_subject(),
+                  f"focus list pre-filled with {corner_list_text(promoted)} (Pacer's default)"
+                  if promoted else "focus list left as it was (no default added)")
+        return True
 
     def _announce_stage(self, headline: str) -> bool:
         """Rename the loading card's headline to the stage that is ABOUT to run, and force one
@@ -3854,13 +3864,19 @@ class StudioWindow(QMainWindow):
             return
         paths = [p for p in row.get("paths") or [] if p]
         missing = [p for p in paths if not os.path.exists(p)]
+        running = getattr(self, "_pb_compare_token", None)
+        again = running is not None and running == getattr(self, "_ref_load_token", None)
+        # One session-log line per click, before any modal (FIRST-OPEN-LOOP-3): the row it loads.
+        _log.info("compare with previous PB: %s — %s",
+                  loop_subject(row.get("fingerprint"), row.get("track")),
+                  "footage missing" if missing or not paths
+                  else "already loading" if again else "loading")
         if missing or not paths:
             QMessageBox.information(
                 self, f"{APP_NAME} — previous PB not found",
                 previous_pb_missing_text(row, missing[0] if missing else None))
             return
-        running = getattr(self, "_pb_compare_token", None)
-        if running is not None and running == self._ref_load_token:
+        if again:
             return  # this gesture's load is already running; a second click would only restart it
         # The row's own paths, not their siblings: the recording as it was when it set that best.
         self._start_reference_load(paths)

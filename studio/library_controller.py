@@ -85,6 +85,23 @@ DEMO_DEBRIEF_LINE = ("This is the synthetic demo, so nothing is saved: no Librar
                      "best, and a focus list that lasts only while the demo is open.")
 
 
+# THE LOOP'S GESTURES IN THE SESSION LOG (FIRST-OPEN-LOOP-3). The debrief pre-fills the focus list
+# with no click (`pre_promote_focus`), so a focus.json on disk cannot say whether the driver ever
+# touched it — and whether he did is what the race-day read asks. So each gesture writes one INFO
+# line: the debrief shown with its default ("Pacer's default"), a focus edit and a Mark-dry click
+# ("by hand"), and Compare with your previous PB. Lines name identities the log already holds —
+# a fingerprint and a track, never a path — and are written on the success path only (a failure
+# has its own WARNING/ERROR line, `_focus_failed`).
+def loop_subject(fingerprint: str | None, track: str | None) -> str:
+    """How a loop line names a recording: "GX0068 (Sandown Park)"."""
+    return f"{fingerprint or 'unnamed recording'} ({track or 'no track'})"
+
+
+def corner_list_text(cids) -> str:
+    """How a loop line names corners: "C3, C5, C7", or "nothing"."""
+    return ", ".join(f"C{int(c)}" for c in cids) or "nothing"
+
+
 def previous_pb_missing_text(entry: dict, missing_path: str | None) -> str:
     """What "Compare with your previous PB" says when that PB's footage is not on disk any more —
     plainly, naming the file and where it was, instead of a load failing on it (4 of the owner's 8
@@ -936,6 +953,7 @@ class LibraryController:
                 "~/Library/Application Support/pacer", self._status_ms)
             return
         n = len(written)
+        _log.info("session records: %d marked dry by hand (%s)", n, ", ".join(written) or "none")
         self.win.statusBar().showMessage(
             f"{n} session record{'' if n == 1 else 's'} saved: Dry — File ▸ Session record… adds "
             "the rest" if n else "those sessions already have a record — nothing was changed",
@@ -1029,6 +1047,24 @@ class LibraryController:
         else:
             focus.save_for_track(track, items)
 
+    def gesture_subject(self, entry: dict | None = None) -> str:
+        """`loop_subject` for the LOADED recording (its focus `entry`, built if not given), or
+        "demo": the demo's gestures keep nothing, and the race-day read skips them by that word.
+        Never raises — a log line must not break the gesture it records."""
+        try:
+            if self._demo_loaded():
+                return "demo"
+            entry = self._focus_entry() if entry is None else entry
+            return loop_subject(entry.get("fingerprint"), entry.get("track"))
+        except Exception:  # noqa: BLE001 — see the docstring
+            return loop_subject(None, None)
+
+    def _log_focus_edit(self, entry: dict, what: str, items: list[focus.FocusItem]) -> None:
+        """A focus-list edit's INFO line, after its save: "focus list for GX0068 (Sandown Park):
+        removed C4 by hand -> C7, C5" — the gesture, then the list it left."""
+        _log.info("focus list for %s: %s by hand -> %s", self.gesture_subject(entry), what,
+                  corner_list_text(i.cid for i in items))
+
     def update_focus_list(self) -> None:
         """Push the focus list + THIS session's verdict on it onto the Coaching page.
 
@@ -1091,6 +1127,7 @@ class LibraryController:
             _log.exception("focus list not updated")
             self._focus_failed(f"the focus list could not be updated ({exc!r})", logging.ERROR)
             return
+        self._log_focus_edit(entry, f"added C{int(cid)}", items + added)
         self.update_focus_list()
 
     def pre_promote_focus(self, cids: list[int]) -> list[int]:
@@ -1163,6 +1200,8 @@ class LibraryController:
             _log.exception("focus list not replaced")
             self._focus_failed(f"the focus list could not be replaced ({exc!r})", logging.ERROR)
             return
+        self._log_focus_edit(entry, f"replaced with {corner_list_text(i.cid for i in items)}",
+                             items)
         self.update_focus_list()
         who = ", ".join(i.label for i in items)
         self.win.statusBar().showMessage(
@@ -1185,6 +1224,7 @@ class LibraryController:
             _log.exception("focus list not updated")
             self._focus_failed(f"the focus list could not be updated ({exc!r})", logging.ERROR)
             return
+        self._log_focus_edit(entry, f"removed C{int(cid)}", items)
         self.update_focus_list()
 
     def _focus_failed(self, why: str, level: int = logging.WARNING) -> None:
