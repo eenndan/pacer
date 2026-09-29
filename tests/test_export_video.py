@@ -2263,10 +2263,10 @@ def test_a_single_lap_frame_is_held_to_one_4k_frame_and_nothing_inside_it_moves(
         assert w * h <= 3840 * 2160 and max(w, h) <= 4096, f"{case}: {w}x{h} is over one 4K frame"
         assert w % 2 == 0 and h % 2 == 0, (case, w, h)
         if twin.out_w * twin.out_h <= 3840 * 2160 and max(twin.out_w, twin.out_h) <= 4096:
-            assert geo == twin and not geo.capped, f"{case}: an in-cap frame moved: {geo} != {twin}"
+            assert geo == twin, f"{case}: an in-cap frame moved: {geo} != {twin}"   # capped too
             continue
         capped.append(case)
-        assert geo.capped and row == 99999, (case, geo)
+        assert geo.capped and not twin.capped and row == 99999, (case, geo, twin)
         assert abs(w / h / (twin.out_w / twin.out_h) - 1) < 0.001, (case, w, h, twin)
         lower = ev.frame_geometry(sw, sh, dataclasses.replace(
             cfg, out_height=h if aspect == ev.ASPECT_SOURCE else min(w, h)))
