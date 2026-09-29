@@ -18,8 +18,9 @@ ruling below was put to him: every default applied that day, not after the week 
 row can be traced to where it came from, and they name items in the maintainers' private notes,
 which are not in this repository:
 
-- R1-R14 (R11, R13 here) and item 15-V1: the recommendations of the board review of 2026-09-23,
-  and a part of item 15 on its list of owner acts.
+- R1-R14 (R11 here, R13 in [AGENT-GUARDRAILS.md](AGENT-GUARDRAILS.md)) and item 15-V1: the
+  recommendations of the board review of 2026-09-23, and a part of item 15 on its list of owner
+  acts.
 - The FOLLOW ledger (called the board ledger in section 4) and PRODUCT-n: the ledger that tracked
   what came of the board review, and the product findings, both from the review of 2026-09-28.
 - O5 and O6: two of the questions the 2026-09-28 review put to the owner; RUL-6 and RUL-7 here.

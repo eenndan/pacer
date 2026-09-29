@@ -915,7 +915,8 @@ def test_the_clip_check_fails_on_each_planted_defect():
 #     .github/workflows/ci.yml still ran PyInstaller on every tag;
 #   * it cited ids (R11, PRODUCT-8, O5, ADV-1, the fix plan's packages) that only the maintainers'
 #     private notes define, and so did docs/AGENT-GUARDRAILS.md (R13);
-#   * its owner-acts table said each recording "exists once": his backup state, published.
+#   * its owner-acts table stated what exists of the owner's recordings, which is not ours to
+#     publish.
 # So RUL-11 reads "Pending" exactly while CI still builds the `.app` (the package that removes the
 # build rewords the row, or this fails), every id family either page cites is glossed at the top of
 # DECISIONS.md, and no public page says what exists of his recordings.
