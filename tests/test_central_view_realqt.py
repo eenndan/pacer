@@ -675,6 +675,12 @@ def test_quality_banner_is_informational_and_independent():
     assert view.quality_banner.isVisibleTo(view), "degraded timing must show the FYI line"
     assert view._trust_strip.isVisibleTo(view), "a live concern shows the strip"
     assert "video clock" in view.quality_banner.text().lower(), view.quality_banner.text()
+    # Its hover quotes the ONE media-clock bound the banner line does, and no longer claims the
+    # clock "runs ~0.1% fast and compresses every lap" (measured: the rates agree to ~27 ppm).
+    tip = view.quality_banner.toolTip()
+    assert data_quality.MEDIA_CLOCK_LAP_ERROR in tip and data_quality.MEDIA_CLOCK_LAP_ERROR in \
+        view.quality_banner.text(), (view.quality_banner.text(), tip)
+    assert "0.1%" not in tip and "compresses" not in tip, tip
     # Compact: a single line, not the multi-line per-concern paragraph it used to stack.
     assert "\n" not in view.quality_banner.text(), "the FYI line must stay a single compact line"
     # Independent of the start-line trust: the fixture is still a verified track, so the amber

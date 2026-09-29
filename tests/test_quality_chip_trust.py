@@ -114,7 +114,7 @@ def _synthetic(quality):
 def _states():
     return (
         ("ESTIMATED (hero6.mp4, media clock)", lambda: _loaded("hero6.mp4"), "ESTIMATED",
-         ("estimated", "~0.1%")),
+         ("estimated", data_quality.MEDIA_CLOCK_LAP_ERROR)),
         ("GPS LOW (synthetic, 12 % rejected)", lambda: _synthetic(_LOW), "GPS LOW",
          ("GPS quality low", "12%")),
         ("NO GPS (karma.mp4)", lambda: _loaded("karma.mp4"), "NO GPS",
