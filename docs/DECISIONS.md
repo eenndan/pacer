@@ -20,15 +20,15 @@ ruling below was put to him: every default applied that day, not after the week 
 |---|---|---|---|---|
 | RUL-1 | North-star: adopt "a craft showcase whose proof is that its author races with it", or keep July's | keep July's "portfolio / craft showcase" | default applied 2026-09-28 on the owner's instruction not to be asked | The README and landing page keep today's wording. |
 | RUL-2 | A circuit results sheet as an optional input (one DATA TRUST line, plus his kart number) | no | default applied 2026-09-28 on the owner's instruction not to be asked | No circuit-timing row is built. |
-| RUL-3 | Facts: are his sprints arrive-and-drive (a different fleet kart each time)? Did the Sandown 3h camera stay in one kart across driver changes? | none — facts | unanswered 2026-09-28 — nothing is built on them | The kart-number record and the pre-promoted focus rest on the arrive-and-drive premise, still unconfirmed (section 4). |
+| RUL-3 | Facts: are his sprints arrive-and-drive (a different fleet kart each time)? Did the Sandown 3h camera stay in one kart across driver changes? | none — facts | unanswered 2026-09-28; nothing further is built on them | The kart-number record and the pre-promoted focus rest on the arrive-and-drive premise, still unconfirmed (section 4). |
 | RUL-4 | A per-stint driver label on an endurance recording | no | default applied 2026-09-28 on the owner's instruction not to be asked | No stint labels. |
 | RUL-5 | The race-day agreement: a 10-minute talk, plus two counts he pastes from the app's log | the store listing only: no talk, no counts | default applied 2026-09-28 on the owner's instruction not to be asked | The race-day read reports S2 and S4 as not observable, and holds no talk (S6); section 3. |
 | RUL-6 | The focus loop: keep it, demote it, or turn it off | frozen as is until the freeze end; then keep it | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | At the freeze end the loop's held fixes build. |
 | RUL-7 | Lead the debrief with the lap ("Export best lap" and "Compare with your PB" on any day) | frozen as is until the freeze end; then no | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | The lap-first debrief buttons are not built. |
 | RUL-8 | The theme sentence names the one corner that decides it | frozen as is until the freeze end; then build it | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | The sentence changes after the freeze. |
-| RUL-9 | Footage consent: publish a telemetry slice, a 6-8 minute sample, or neither | neither; the demo stays synthetic | default applied 2026-09-28 on the owner's instruction not to be asked | Nothing real is published; the next demo is synthetic too. |
+| RUL-9 | Footage consent: publish a telemetry slice, a 6-8 minute sample, or neither | neither; the demo stays synthetic | default applied 2026-09-28 on the owner's instruction not to be asked | No recording or telemetry is published beyond the approved stills and the 20 s clip (§4 item 6); the next demo is synthetic too. |
 | RUL-10 | Track the agents' `.claude/settings.json` in git, or keep it untracked | untracked | default applied 2026-09-28 on the owner's instruction not to be asked | The settings stay out of git. |
-| RUL-11 | Packaging: keep the macOS `.app` (CI launches it on every tag) or drop it (source only) | drop the step and every claim of a working `.app` | default applied 2026-09-28 on the owner's instruction not to be asked | The tag job stops building an `.app`, and nothing claims one works. |
+| RUL-11 | Packaging: keep the macOS `.app` (then CI would launch it on every tag) or drop it (source only) | drop the step and every claim of a working `.app` | default applied 2026-09-28 on the owner's instruction not to be asked: drop | The tag job stops building an `.app`, and nothing claims one works. |
 | RUL-12 | The showcase release: 0.6 or 1.0 | 0.6 | default applied 2026-09-28 on the owner's instruction not to be asked | The next release is 0.6.0. |
 
 RUL-6 to RUL-8 are not re-asked (his instruction of 2026-09-28). At the freeze end the race-day
@@ -44,7 +44,7 @@ shows, and his word for what only he can report.
 |---|---|---|
 | A second copy of every original recording, wherever it lives, plus the transponder CSV | open (no word from him yet) | Until then each recording exists once. |
 | Save the Sandown Club Speed heat pages of 19 Jul, 30 Aug and 19 Sep, whole days | open (no page saved yet) | Three accuracy rows at a second circuit wait on them. |
-| Upload `docs/media/og.png` as the social preview, and pin the repository | open (`gh`: no custom preview, nothing pinned) | The upload is a copy: re-upload whenever `og.png` changes. |
+| Upload `docs/media/og.png` as the social preview, and pin the repository | open (`gh`: no custom preview, nothing pinned) | The upload waits for the showcase release's final `og.png` and is asked after that release; the pin waits on nothing. The upload is a copy: re-upload whenever `og.png` changes. |
 | A profile name and bio, or a stated choice to stay anonymous | open (`gh`: no name, no bio) | |
 | A private backup target for the agents' notes and memory | open (no word from him yet) | Never named here. |
 | Turn off the unused desktop-app connectors for this project; remove gitnexus | open (no word from him yet) | |
@@ -131,8 +131,8 @@ them:
 
 ### The board review's restraint pass (R11)
 
-Closed 2026-09-28: the tile target is met. No further restraint pass; the 13-section ceiling on the
-demo still binds.
+Closed 2026-09-28 on the FOLLOW ledger's count of the tile target, not re-verified independently
+(PRODUCT-8 is unverified). No further restraint pass; the 13-section ceiling on the demo still binds.
 
 ## 4. Decided for the owner, 2026-09-24 to 09-28
 
@@ -146,9 +146,10 @@ questions, run until done" (2026-09-28). Each is open to his overrule.
 3. A branch ruleset on `main`: a pull request and green CI (2026-09-24).
 4. Merged branches deleted on merge, and the old ones pruned (2026-09-24).
 5. The repository's website field set to the landing page (2026-09-24).
-6. The Sandown stills approved for the public pages (#385; re-shot in #441).
-7. Footage consent: nothing real published; the demo and the CI fixture are synthetic (#371). Now
-   RUL-9.
+6. The Sandown stills and a 20 s clip of the best lap approved for the public pages (#385; the
+   stills re-shot in #441).
+7. Footage consent: no recording or telemetry published; the demo and the CI fixture are synthetic
+   (#371). Now RUL-9.
 8. v0.3.0 approved and published (#390).
 9. The engineering notes' candour kept at summary level (#388).
 10. Exports stay beside the footage (2026-09-24).
