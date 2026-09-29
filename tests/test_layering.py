@@ -34,7 +34,8 @@ this contract per module (its Imports column), so it is held to the same sets: o
 `studio/*.py` (a module FAMILY — the Stats page's `stats_*.py` — shares its head's row, each member
 linked there by name), the layer each row claims is the one pinned here, the test it names exists,
 and the map stays a map — it had grown to 130,636 characters of measurement history before ARCH-9
-moved that to `studio/docs/module-notes.md`. Run:
+moved that to `studio/docs/module-notes.md`: each row is capped, and so is the prose around the
+rows (`MAP_PROSE_MAX_CHARS`), so a new module costs its own row and can never trip a total. Run:
     python tests/test_layering.py
 """
 import ast
@@ -461,7 +462,11 @@ _MAP = os.path.join(_STUDIO, "README.md")
 # ARCH-9: the map was 130,636 characters when it went back to one line per module, and 28 % of
 # September's PRs edited it. A row is a map entry; what a module does in detail, and why, goes in
 # its docstring or its section of studio/docs/module-notes.md.
-MAP_MAX_CHARS = 20_000
+# The budget is split (PROCESS-3). Each module row is held by MAP_ROW_MAX_CHARS, and everything
+# else, the PROSE, by MAP_PROSE_MAX_CHARS. A whole-file cap of 20,000 stood at 19,940, so the next
+# module's own row would have failed it; yet what grew the map, and its one real failure (d591162,
+# a sentence), was prose. A new module now costs its row and never trips a total.
+MAP_PROSE_MAX_CHARS = 10_000
 MAP_ROW_MAX_CHARS = 200
 # A module link in a row's first cell: `[text](name.py)`.
 _MAP_LINK = r"\[([^\]]+)\]\(([^)]+)\.py\)"
@@ -476,19 +481,32 @@ def _layer(name: str) -> str:
     return "→Qt" if name in QT_REACHING else "—"
 
 
+def _map_prose_chars(text: str) -> int:
+    """The map's prose: every character of every line that is not a module row, newlines included."""
+    return sum(len(line) for line in text.splitlines(keepends=True) if not line.startswith("| ["))
+
+
+def _map_size_problems(text: str) -> list[str]:
+    """The prose budget; the rows are each held by MAP_ROW_MAX_CHARS in `_map_problems`."""
+    prose = _map_prose_chars(text)
+    if prose <= MAP_PROSE_MAX_CHARS:
+        return []
+    return [f"the map's prose (every line outside a module row) is {prose:,} characters, over "
+            f"{MAP_PROSE_MAX_CHARS:,}: a prose addition pays for itself by trimming — move detail to "
+            f"the module's docstring or studio/docs/module-notes.md"]
+
+
 def _map_problems(text: str) -> list[str]:
     """Everything wrong with a module map, one sentence each — empty when the map is right."""
-    problems, rows = [], {}
-    if len(text) > MAP_MAX_CHARS:
-        problems.append(f"the map is {len(text):,} characters, over {MAP_MAX_CHARS:,}: move the "
-                        f"detail to the module's docstring or studio/docs/module-notes.md")
+    problems, rows = _map_size_problems(text), {}
     for line in text.splitlines():
         if not line.startswith("| ["):
             continue
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
         # A FAMILY row: after its own module, the first cell may link further modules of the same
         # family — the Stats page's `stats_*.py` sections after `stats_panel.py` (ARCH-3 splits it
-        # one section per module, and a row per section would not fit under MAP_MAX_CHARS). Each
+        # one section per module; the page stays one row, chosen when a whole-file cap could not
+        # hold a row per section, and the prose budget does not count rows either way). Each
         # member is a ONE-WORD link to a module sharing the head's prefix, so its file name is in
         # the raw text a grep lands on and no prose hides in a link; the row cap counts the row
         # without those links (a member costs its link, not a row); every member gets every check.
@@ -540,7 +558,7 @@ def test_every_studio_module_is_on_the_map_at_its_real_layer():
     assert not problems, "studio/README.md, the module map:\n  " + "\n  ".join(problems)
     rows = sum(line.startswith("| [") for line in text.splitlines())
     print(f"test_every_studio_module_is_on_the_map_at_its_real_layer OK — {rows} rows, "
-          f"{len(text):,} characters")
+          f"{len(text):,} characters, prose {_map_prose_chars(text):,} of {MAP_PROSE_MAX_CHARS:,}")
 
 
 def test_the_map_check_fails_on_each_planted_defect():
@@ -558,7 +576,7 @@ def test_the_map_check_fails_on_each_planted_defect():
             row, row.replace("`test_map_render`", "`test_map_rendr`")),
         "a row that grew a history": real.replace(row, row.replace(" | →Qt |", " " + "x" * 80 + " | →Qt |")),
         "a row missing a cell": real.replace(row, row.replace(" | →Qt", "")),
-        "a map that grew": real + "\n" + "x" * MAP_MAX_CHARS,
+        "a map whose prose grew": real + "\n" + "x" * MAP_PROSE_MAX_CHARS,
         # ...and the FAMILY row (the Stats page's): each member is held to what a row is.
         "a family member dropped from its row": real.replace(" [ideal](stats_ideal.py)", ""),
         "a family member that does not exist": real.replace(
@@ -573,7 +591,16 @@ def test_the_map_check_fails_on_each_planted_defect():
     for what, text in plants.items():
         assert text != real, f"the plant for {what} changed nothing — the map's row moved"
         assert _map_problems(text), f"the map check passed a map with {what}"
-    print(f"test_the_map_check_fails_on_each_planted_defect OK — {len(plants)} plants, each caught")
+    # ...and the size budget is the PROSE's alone. The plant above trips the budget itself, not
+    # only some row check; 40 more module rows of the full 200 characters trip nothing there (a
+    # whole-file cap of 20,000 failed at the first of them): a row is held by its own cap.
+    assert _map_size_problems(plants["a map whose prose grew"]), "the prose budget passed a map " \
+        f"with {MAP_PROSE_MAX_CHARS:,} more characters of prose"
+    rows = real + "".join("\n| [" + "x" * (MAP_ROW_MAX_CHARS - 3) for _ in range(40))
+    assert not _map_size_problems(rows), f"40 added module rows tripped the prose budget: " \
+        f"{_map_size_problems(rows)}"
+    print(f"test_the_map_check_fails_on_each_planted_defect OK — {len(plants)} plants, each caught; "
+          f"40 added rows cost no prose")
 
 
 if __name__ == "__main__":
