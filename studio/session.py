@@ -249,10 +249,11 @@ class Session:
         # don't know the named track's geometry and the name is trusted on its own (legacy path).
         self._track_lines: tuple[list, list] | None = None
         # Data-quality signal (the timing-ACCURACY axis, orthogonal to the timing-TRUST surface
-        # above): which per-sample time clock the load built (GPS9 true clock vs the ~0.1%-fast
-        # media-clock fallback on an older GPS5 camera) + the gate's dropped-fix fraction. Set by
-        # Session.load from the load pipeline; a from-scratch Session() defaults to high quality
-        # (no degradation), so the no-__init__ test path reads clean. See studio/data_quality.py.
+        # above): which per-sample time clock the load built (GPS9 true clock vs the media-clock
+        # (packet-spread) fallback on an older GPS5 camera) + the gate's dropped-fix fraction. Set
+        # by Session.load from the load pipeline; a from-scratch Session() defaults to high
+        # quality (no degradation), so the no-__init__ test path reads clean. See
+        # studio/data_quality.py.
         self._timing_quality = data_quality.TimingQuality()
         # The SAME quality fact per SECOND of recording (the scrub bar's strip) — one verdict for
         # the whole recording cannot say WHERE it went bad, and on both D24 recordings "where" is
@@ -1390,11 +1391,12 @@ class Session:
         """The recording's data-quality verdict (the timing-ACCURACY axis — see
         studio/data_quality.py). Orthogonal to ``timing_verified`` (the start-line TRUST surface):
         a media-clock recording can be fully Verified yet still have degraded timing accuracy
-        (~0.1% drift on an older GPS5 camera), and a low-DOP trace renders authoritative laps with
-        no in-app cue today. ``timing_quality.degraded`` is what the data-quality banner + the
-        lap-table de-emphasis read; a normal GPS9, clean-fix recording reports not-degraded so the
-        UI is unchanged. getattr-guarded (defaults to high quality) for the bare-Session
-        (no-__init__) test path — see ``_ref``."""
+        (a lap may read up to ~0.1 s off on an older GPS5 camera's media-clock fallback), and a
+        low-DOP trace renders authoritative laps with no in-app cue today.
+        ``timing_quality.degraded`` is what the data-quality banner + the lap-table de-emphasis
+        read; a normal GPS9, clean-fix recording reports not-degraded so the UI is unchanged.
+        getattr-guarded (defaults to high quality) for the bare-Session (no-__init__) test path —
+        see ``_ref``."""
         return getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
 
     # ----------------------------------------------------------- timing lines

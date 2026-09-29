@@ -468,7 +468,7 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         return laps, empty, video_path, chapter_map, None, None, quality, strip
 
     # Per-sample timing clock: GPS9 true-clock spacing when the stream carries it, else the
-    # (~0.1%-fast) media clock — the recording's headline timing-accuracy provenance.
+    # media-clock (packet-spread) fallback — the recording's headline timing-accuracy provenance.
     clock = (data_quality.GPS9_TRUECLOCK if _used_gps9_trueclock(samples)
              else data_quality.MEDIA_CLOCK_FALLBACK)
     quality = data_quality.TimingQuality(clock=clock, dropped_fraction=dropped_fraction)
