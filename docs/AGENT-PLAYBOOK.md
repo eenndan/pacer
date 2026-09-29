@@ -85,7 +85,8 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
   stays green through it. So prove a new gate can fail, by reverting a real fix or planting one. A
   new dependency tends to delete a leaf rather than move it: look for an accessor reaching for
   state the fixture never had. A re-cut is its own commit, with a leaf-by-leaf diff, and the moved
-  set must be exactly the one you predicted. The session dump never imports `app.py`, so a
+  set must be exactly the one you predicted, as the re-cut's family report names it: paste that
+  report in the commit message. The session dump never imports `app.py`, so a
   window-level change needs a real `StudioWindow` probe that you have seen fail on a planted defect.
 
 ## 4. Delivering
