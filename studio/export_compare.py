@@ -220,13 +220,6 @@ def pane_scale_filter(src_w: int, src_h: int, dst_w: int, dst_h: int,
             f"pad={dst_w}:{dst_h}:(ow-iw)/2:(oh-ih)/2:color=black")
 
 
-# THE TWO-PANE FRAME IS HELD TO ONE 4K FRAME like every H.264 frame this app writes: two 4K panes
-# stacked are 3840x4320, H.264 level 6.0, which VideoToolbox's hardware encoder refuses and no phone
-# plays (JOURNEY-3; the limits and their measurement are at `export_video.MAX_FRAME_PIXELS`). "Source"
-# means the largest panes whose frame fits (2714x3052 for two stacked 4K panes, 4096x1152 side by
-# side), and a row already inside the cap is untouched.
-
-
 def _pane_size(short: int, aw: int, ah: int) -> tuple[int, int]:
     """(pane_w, pane_h) of a pane in pane A's shape whose SHORT side is `short` (16:9 when the
     footage's frame is unknown), both even."""
@@ -243,10 +236,6 @@ def _frame_of(pane_w: int, pane_h: int, layout: str) -> tuple[int, int]:
     return (2 * pane_w, pane_h) if layout == LAYOUT_SIDE else (pane_w, 2 * pane_h)
 
 
-def _fits_the_cap(pane_w: int, pane_h: int, layout: str) -> bool:
-    return fits_one_frame(*_frame_of(pane_w, pane_h, layout))
-
-
 def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
                      cfg: CompareConfig) -> CompareGeometry:
     """Resolve the two-pane frame for sources `src_a` / `src_b` (each a (w, h)).
@@ -258,21 +247,22 @@ def compare_geometry(src_a: tuple[int, int], src_b: tuple[int, int],
 
     The pane's SHORT side is `cfg.out_height`, never upscaled past pane A's own footage — the same
     rule and the same reason as the single-lap export, applied one level down because here the
-    frame is two panes. The FRAME is then held inside one 4K frame (`MAX_FRAME_PIXELS`,
-    `MAX_FRAME_SIDE`), shrinking both panes alike when it would not fit."""
+    frame is two panes. The FRAME is then held inside one 4K frame like every H.264 frame the app
+    writes (`export_video.fits_one_frame`, measured there), shrinking both panes alike when it would
+    not fit: two 4K panes stacked, 3840x4320, become 2714x3052 (JOURNEY-3)."""
     aw, ah = int(src_a[0]), int(src_a[1])
     want = max(2, int(cfg.out_height))
     short = want if aw <= 0 or ah <= 0 else min(want, ah if aw >= ah else aw)
     layout = cfg.layout if cfg.layout in LAYOUT_CHOICES else LAYOUT_STACK
     pane_w, pane_h = _pane_size(short, aw, ah)
-    capped = not _fits_the_cap(pane_w, pane_h, layout)
+    capped = not fits_one_frame(*_frame_of(pane_w, pane_h, layout))
     if capped:
         out_w, out_h = _frame_of(pane_w, pane_h, layout)
         scale = min(math.sqrt(MAX_FRAME_PIXELS / (out_w * out_h)), MAX_FRAME_SIDE / max(out_w, out_h))
         short = _even_down(short * scale)
         pane_w, pane_h = _pane_size(short, aw, ah)
         # The long side rounds UP to even, so the first guess can be a pixel or two over.
-        while short > 2 and not _fits_the_cap(pane_w, pane_h, layout):
+        while short > 2 and not fits_one_frame(*_frame_of(pane_w, pane_h, layout)):
             short -= 2
             pane_w, pane_h = _pane_size(short, aw, ah)
     out_w, out_h = _frame_of(pane_w, pane_h, layout)

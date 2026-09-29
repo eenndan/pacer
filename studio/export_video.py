@@ -1163,8 +1163,7 @@ class FrameGeometry:
     `out_w`/`out_h` are the final, EVEN pixel dimensions. `scale_filter` is the `-vf` chain
     (without the trailing `fps=`) that turns a decoded source frame into one output frame:
     a plain `scale` for the source's own aspect, a cover-then-crop for CROP, a
-    contain-then-pad for FIT. `capped` says the frame was held to one 4K frame (`fits_one_frame`),
-    so the picker can say why "Source" is not the footage's own size."""
+    contain-then-pad for FIT. `capped`: held to one 4K frame (`fits_one_frame`)."""
     out_w: int
     out_h: int
     scale_filter: str
@@ -1196,18 +1195,15 @@ def frame_geometry(src_w: int, src_h: int, cfg: OverlayConfig) -> FrameGeometry:
     onto a solid blue and chroma-keyed it in Premiere to get it rescaled for 9:16; the point of
     doing the reflow in the renderer is that there is nothing left to key.
 
-    AN H.264 FRAME IS THEN HELD TO ONE 4K FRAME (`fits_one_frame`). Only "Source" gets past it:
-    5.3K and 4K 4:3 footage at its own aspect, and 4K 16:9 fitted whole into 9:16 (3840x6828) or
-    1:1. Such a frame is resolved again at the largest short side that fits, so it is exactly the
-    frame a lower row would give, same shape and same chain. The overlay-only formats are exempt:
-    ProRes and PNG have no H.264 level, and a layer at the footage's own aspect must match it."""
+    AN H.264 FRAME IS HELD TO ONE 4K FRAME (`fits_one_frame`): an over-sized "Source" (5.3K, 4K
+    4:3, 4K fitted whole into 9:16 or 1:1) is the frame a lower row would give, same shape and
+    chain. Overlay-only is exempt: ProRes and PNG have no H.264 level."""
     src_w, src_h = int(src_w), int(src_h)
     geo = _frame_at(src_w, src_h, cfg, max(2, int(cfg.out_height)))
     if cfg.overlay_only or fits_one_frame(geo.out_w, geo.out_h):
         return geo
-    # `want` sets the height on the source-aspect path and the short side on the others. `_even`
-    # rounds a derived side UP, which can put the scaled guess a pixel either way of the largest
-    # frame that fits: start just above it and step down (a 9:16 fit lands on 2160x3840, not 2158).
+    # Scale the side `want` sets (the height at source aspect, else the short side), start just
+    # above it and step down: `_even` rounds up, and 9:16 then lands on 2160x3840, not 2158x3836.
     source_aspect = ASPECT_RATIOS.get(cfg.aspect) is None or not (src_w > 0 and src_h > 0)
     side = geo.out_h if source_aspect else min(geo.out_w, geo.out_h)
     want = 4 + _even_down(side * min(math.sqrt(MAX_FRAME_PIXELS / (geo.out_w * geo.out_h)),
@@ -1220,8 +1216,7 @@ def frame_geometry(src_w: int, src_h: int, cfg: OverlayConfig) -> FrameGeometry:
 
 
 def _frame_at(src_w: int, src_h: int, cfg: OverlayConfig, want: int) -> FrameGeometry:
-    """`frame_geometry`'s frame for `want` (the height at the source's aspect, else the short
-    side), before the 4K cap."""
+    """`frame_geometry`'s frame for a `want` of `cfg.out_height`'s kind, before the 4K cap."""
     ratio = ASPECT_RATIOS.get(cfg.aspect)
     if ratio is None or not (src_w > 0 and src_h > 0):
         # SOURCE ASPECT — the historic path, byte-for-byte: height controls, width follows.
@@ -1338,24 +1333,19 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     ]
 
 
-# NO H.264 FRAME THIS APP WRITES HOLDS MORE PIXELS THAN ONE 4K FRAME, NOR IS IT WIDER OR TALLER THAN
-# 4096, whatever the resolution row asks for. Two 4K panes stacked are 3840x4320: 64,800 macroblocks
-# a frame, H.264 level 6.0, past the 5.1/5.2 that phones, TVs and messaging apps decode. It is past
-# what the Mac's hardware encoder takes, too. Measured 2026-09-27 on the M1 Pro this is developed
-# on: a VideoToolbox HARDWARE session opens for every frame up to 36,864 macroblocks with neither
-# side over 4096 (1280x1440 is L4.0, 1920x2160 L5.0, 2560x2880 and 3840x2160 L5.1, 4096x2304 and
-# 2304x4096 L5.2, all writing 0.69-0.71 of their bitrate target), and refuses 3840x4320, 7680x2160
-# and even 5120x1440 (28,800 macroblocks, but 5120 wide). `-allow_sw 1` then hands the frame to
-# Apple's SOFTWARE H.264 encoder without a word, which is slower and writes 1.02-1.10 of its target
-# where the hardware writes 0.70: the owner's compare at his remembered "Source" rendered for 3:41
-# against the 1:41 its picker quoted, and wrote 299 MB against 205 MB (JOURNEY-3). Its level-6.0
-# file does not even decode in this Mac's own hardware; the capped 2714x3052 one does.
-#
-# A warning could not fix that, because the file itself is the problem: nothing he shares it to
-# plays it. So the cap is a rule, not a caveat, for the compare's two panes (`export_compare`) and a
-# single lap's frame (`frame_geometry`) alike, and a frame already inside it is untouched.
-# 3840x2160's pixel count is level 5.1 at the export's 30 fps; the rule holds 4096x2160 to it too,
-# though the hardware would take that frame (34,560 macroblocks).
+# NO H.264 FRAME THIS APP WRITES HOLDS MORE PIXELS THAN ONE 4K FRAME, OR IS WIDER OR TALLER THAN
+# 4096. Measured on the M1 Pro this is developed on (2026-09-27): a VideoToolbox HARDWARE session
+# opens for every frame up to 36,864 macroblocks with neither side over 4096 (1280x1440 is L4.0,
+# 1920x2160 L5.0, 2560x2880 and 3840x2160 L5.1, 4096x2304 and 2304x4096 L5.2, all writing 0.69-0.71
+# of their bitrate target), and refuses 3840x4320 (two 4K panes stacked), 7680x2160, 5120x1440 and
+# (2026-09-29) 5312x2988 and 3840x6828 (4K fitted whole into 9:16). `-allow_sw 1` then hands the
+# frame to Apple's SOFTWARE H.264 without a word: 1.02-1.10 of target, a single lap's 2 s 22-26x
+# slower, and the owner's compare at "Source" took 3:41 against the 1:41 quoted and wrote 299 MB
+# against 205 (JOURNEY-3). Where the hardware does open over the cap (4000x3000, 47,000 macroblocks)
+# the file is level 6.0, past the 5.1/5.2 phones, TVs and messaging apps decode; a level-6.0 compare
+# did not decode in this Mac's own hardware. So the cap is a rule, not a caveat, for the compare's
+# panes and a single lap's frame alike, and a frame inside it is untouched. 3840x2160 is level 5.1
+# at 30 fps; the rule holds 4096x2160 (34,560 macroblocks) to it too.
 MAX_FRAME_PIXELS = 3840 * 2160
 MAX_FRAME_SIDE = 4096
 

@@ -462,9 +462,7 @@ class ExportController:
     _COMPARE_RES_OPTIONS = [
         ("720p", 720), ("1080p", 1080), ("1440p", 1440), ("Source — up to a 4K frame", 99999),
     ]
-    # What both pickers' Output line adds when "Source" is held to one 4K frame
-    # (`export_video.fits_one_frame`); the single-lap row keeps its remembered "(no downscale)"
-    # label, true of the 16:9 4K it was made for, and this is where a capped frame says why.
+    # Both Output lines' reason when "Source" is held to one 4K frame (`export_video.fits_one_frame`).
     _CAP_NOTE = " — capped at one 4K frame, the biggest H.264 picture phones and messaging apps play"
     _PREF_COMPARE_RES = "export_compare_res_idx"
     _COMPARE_RES_DEFAULT = 1                       # 1080p panes
@@ -522,10 +520,8 @@ class ExportController:
             return float("nan")
         return (win[1] - win[0]) if win is not None else float("nan")
     def _estimate_frame_size(self, out_height: int, aspect: str) -> tuple[int, int]:
-        """The (W, H) the size estimate reasons about, from the resolution row's SHORT side and
-        the chosen shape. Not `export_video.frame_geometry`, because that needs the source's real
-        dimensions and this dialog deliberately runs no ffprobe — the never-upscale clamp is the
-        one thing the estimate cannot know, so it is the one thing the copy does not claim."""
+        """The (W, H) the estimate reasons about until the footage's frame is known (then it is
+        `frame_geometry`'s): the resolution row's SHORT side in the chosen shape."""
         ratio = export_video.ASPECT_RATIOS.get(aspect) or self._SOURCE_ASPECT_GUESS
         if ratio <= 1:                       # portrait or square: the short side is the WIDTH
             return int(out_height), int(round(out_height / ratio))
@@ -870,8 +866,7 @@ class ExportController:
                    "the sides cropped off" if fit == export_video.FIT_CROP
                    else "the whole picture, with bars")
             if source is not None:
-                # THE FRAME THE RENDER WRITES, from the renderer's own rule: never upscaled, and
-                # an H.264 "Source" held to one 4K frame, which the row's label cannot say.
+                # The frame the render writes; a capped one says why, as the row's label cannot.
                 geo = export_video.frame_geometry(source[0], source[1], export_video.OverlayConfig(
                     out_height=h, aspect=aspect, frame_fit=fit, overlay_only=overlay_only))
                 own = (geo.out_w, geo.out_h) == (source[0], source[1])
