@@ -404,8 +404,8 @@ def _unsafe_reason(ok: bool, data: dict | None) -> str | None:
     simply be rewritten: see ``_backup_unsafe``. Takes the raw ``read_object`` result, before any
     migration."""
     version = data.get("version") if ok and data is not None else None
-    stamped = isinstance(version, int) and not isinstance(version, bool)
-    if not ok or not stamped or version > VERSION or not isinstance(data.get("entries"), list):
+    if (not ok or data is None or not isinstance(version, int) or isinstance(version, bool)
+            or version > VERSION or not isinstance(data.get("entries"), list)):
         return "an unreadable/newer index"
     if version < VERSION and _migration_rewrites_rows(data):
         return f"the version-{version} index its migration merges rows of"
@@ -417,7 +417,7 @@ def _parse(path: str) -> tuple[dict, bool]:
     state without a backup)."""
     ok, data = _jsonstore.read_object(path)
     safe = _unsafe_reason(ok, data) is None
-    if not ok:
+    if not ok or data is None:
         return empty_index(), safe
     version = data.get("version")
     # A missing / non-int version is untrustworthy shape (not a real schema number) -> corruption.
