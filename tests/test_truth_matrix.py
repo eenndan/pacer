@@ -507,7 +507,7 @@ def _true_bands(case: Case, report, values_of) -> np.ndarray:
 
 
 def _session_errors(case: Case) -> dict:
-    """Row 9 and 10, one recording: app minus truth for each session-level Stats value."""
+    """Rows 9 and 10, one recording: app minus truth for each session-level Stats value."""
     s, t = case.s, case.truth
     st = s.stats
     out = {}
