@@ -27,6 +27,9 @@ Headless offscreen Qt (the painter builds a QImage + a headless g-meter dial); f
 
 Run: python tests/test_export_video.py
 """
+import dataclasses
+import hashlib
+import itertools
 import os
 import subprocess
 import sys
@@ -2235,6 +2238,49 @@ def test_crop_cuts_before_it_scales_and_fit_pads_without_a_rounding_edge():
     argv = ev.build_decode_cmd(spec, 1080, 1920, 30.0, scale_filter=crop)
     assert f"fps=30.000000,{crop}" in argv, argv
     print("ok frame_geometry: crop cuts before it scales; fit pads")
+
+
+def test_a_single_lap_frame_is_held_to_one_4k_frame_and_nothing_inside_it_moves():
+    """APP-POLISH-3. "Source" wrote the footage's frame whatever it was: 5312x2988 off 5.3K, and
+    3840x6828 off the owner's own 4K fitted whole into 9:16. VideoToolbox's hardware encoder refuses
+    a frame over 36,864 macroblocks or 4096 a side, and `-allow_sw 1` hands it to Apple's software
+    H.264, slower and writing a level-6.0 file phones do not play (`export_video.MAX_FRAME_PIXELS`).
+    On main 24 frames of this grid were over, all at "Source". Now an H.264 frame is held to one 4K
+    frame (the compare's rule), is the frame a lower row would give (same shape, same chain), and
+    says so (`capped`). Every other frame is untouched: the overlay-only frames, which the cap never
+    reaches, hash to what main made over the whole grid, and every in-cap composite equals its twin."""
+    sources = ((3840, 2160), (2704, 1520), (4000, 3000), (5312, 2988), (5312, 4648), (3840, 3360),
+               (2704, 2028), (4096, 2160))    # GoPro 16:9, 4:3 and 8:7 modes, and DCI 4K
+    shapes = ((ev.ASPECT_SOURCE, ev.FIT_CROP), (ev.ASPECT_9_16, ev.FIT_CROP),
+              (ev.ASPECT_9_16, ev.FIT_FIT), (ev.ASPECT_1_1, ev.FIT_CROP), (ev.ASPECT_1_1, ev.FIT_FIT))
+    digest, capped = hashlib.sha256(), []
+    for (sw, sh), (aspect, fit), row in itertools.product(sources, shapes, (99999, 1440, 1080, 720)):
+        cfg = ev.OverlayConfig(out_height=row, aspect=aspect, frame_fit=fit)
+        geo = ev.frame_geometry(sw, sh, cfg)
+        twin = ev.frame_geometry(sw, sh, dataclasses.replace(cfg, overlay_only=True))
+        digest.update(f"{twin.out_w}x{twin.out_h} {twin.scale_filter};".encode())
+        case, (w, h) = (sw, sh, aspect, fit, row), (geo.out_w, geo.out_h)
+        assert w * h <= 3840 * 2160 and max(w, h) <= 4096, f"{case}: {w}x{h} is over one 4K frame"
+        assert w % 2 == 0 and h % 2 == 0, (case, w, h)
+        if twin.out_w * twin.out_h <= 3840 * 2160 and max(twin.out_w, twin.out_h) <= 4096:
+            assert geo == twin, f"{case}: an in-cap frame moved: {geo} != {twin}"   # capped too
+            continue
+        capped.append(case)
+        assert geo.capped and not twin.capped and row == 99999, (case, geo, twin)
+        assert abs(w / h / (twin.out_w / twin.out_h) - 1) < 0.001, (case, w, h, twin)
+        lower = ev.frame_geometry(sw, sh, dataclasses.replace(
+            cfg, out_height=h if aspect == ev.ASPECT_SOURCE else min(w, h)))
+        assert geo == dataclasses.replace(lower, capped=True), (case, geo, lower)
+    assert digest.hexdigest() == "a78c1d4a8bb41337f270c0bf028e9c031706e2523796dbefd6af561c82ee2f2d", \
+        "an overlay-only frame moved: the cap is for H.264 frames only"
+    assert len(capped) == 24, capped
+    fit = ev.frame_geometry(3840, 2160, ev.OverlayConfig(out_height=99999, aspect=ev.ASPECT_9_16,
+                                                         frame_fit=ev.FIT_FIT))
+    assert (fit.out_w, fit.out_h) == (2160, 3840) and "pad=2160:3840" in fit.scale_filter, fit
+    assert "force_divisible_by=2" in fit.scale_filter, fit      # a pad under its input is an error
+    assert ev.frame_geometry(5312, 2988, ev.OverlayConfig(out_height=99999)) == ev.FrameGeometry(
+        3840, 2160, "scale=3840:2160", capped=True)
+    print("ok frame_geometry: an H.264 frame is held to one 4K frame; nothing inside it moved")
 
 
 # ===================================================== the overlay's unit is the frame's SHORT side
