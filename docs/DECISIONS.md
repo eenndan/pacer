@@ -14,6 +14,20 @@ committed. This file is the tracked record. Three rules:
 On 2026-09-28 the owner said "implement the plan … don't ask me questions, run until done". So no
 ruling below was put to him: every default applied that day, not after the week the plan allowed.
 
+**The ids this page cites.** RUL-n and S1-S6 are defined on this page. The others are kept so a
+row can be traced to where it came from, and they name items in the maintainers' private notes,
+which are not in this repository:
+
+- R1-R14 (R11, R13 here) and item 15-V1: the recommendations of the board review of 2026-09-23,
+  and a part of item 15 on its list of owner acts.
+- The FOLLOW ledger (called the board ledger in section 4) and PRODUCT-n: the ledger that tracked
+  what came of the board review, and the product findings, both from the review of 2026-09-28.
+- O5 and O6: two of the questions the 2026-09-28 review put to the owner; RUL-6 and RUL-7 here.
+- ADV-n: the coaching-advice findings of the hands-on QA round of 2026-09-28.
+- FIRST-OPEN-LOOP-n, TRUTH-n, COACHING-n, GATES-n, PROCESS-n, LONGEVITY-n: the work packages of
+  the 2026-09-28 fix plan. A package that has merged is the pull request whose title starts with
+  its id.
+
 ## 1. Rulings
 
 | Id | Ruling | Default | Status | What follows |
@@ -28,7 +42,7 @@ ruling below was put to him: every default applied that day, not after the week 
 | RUL-8 | The theme sentence names the one corner that decides it | frozen as is until the freeze end; then build it | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | The sentence changes after the freeze. |
 | RUL-9 | Footage consent: publish a telemetry slice, a 6-8 minute sample, or neither | neither; the demo stays synthetic | default applied 2026-09-28 on the owner's instruction not to be asked | No recording or telemetry is published beyond the approved stills and the 20 s clip (§4 item 6); the next demo is synthetic too. |
 | RUL-10 | Track the agents' `.claude/settings.json` in git, or keep it untracked | untracked | default applied 2026-09-28 on the owner's instruction not to be asked | The settings stay out of git; [AGENT-GUARDRAILS.md](AGENT-GUARDRAILS.md) is their deny rules' reference copy. |
-| RUL-11 | Packaging: keep the macOS `.app` (then CI would launch it on every tag) or drop it (source only) | drop the step and every claim of a working `.app` | default applied 2026-09-28 on the owner's instruction not to be asked: drop | The tag job stops building an `.app`, and nothing claims one works. |
+| RUL-11 | Packaging: keep the macOS `.app` (then CI would launch it on every tag) or drop it (source only) | drop the step and every claim of a working `.app` | default applied 2026-09-28 on the owner's instruction not to be asked: drop | Pending: LONGEVITY-2 will stop the tag job building an `.app` and take out every claim that one works. Until it merges, the tag job still builds one (build-only; nothing launches it). |
 | RUL-12 | The showcase release: 0.6 or 1.0 | 0.6 | default applied 2026-09-28 on the owner's instruction not to be asked | The next release is 0.6.0. |
 
 RUL-6 to RUL-8 are not re-asked (his instruction of 2026-09-28). At the freeze end the race-day
@@ -42,7 +56,7 @@ shows, and his word for what only he can report.
 
 | Act | Status (evidence) | Note |
 |---|---|---|
-| A second copy of every original recording, wherever it lives, plus the transponder CSV | open (no word from him yet) | Until then each recording exists once. |
+| A second copy of the originals (the recordings and the transponder CSV) | open (no word from him yet) | |
 | Save the Sandown Club Speed heat pages of 19 Jul, 30 Aug and 19 Sep, whole days | open (no page saved yet) | Three accuracy rows at a second circuit wait on them. |
 | Upload `docs/media/og.png` as the social preview, and pin the repository | open (`gh`: no custom preview, nothing pinned) | The upload waits for the showcase release's final `og.png` and is asked after that release; the pin waits on nothing. The upload is a copy: re-upload whenever `og.png` changes. |
 | A profile name and bio, or a stated choice to stay anonymous | open (`gh`: no name, no bio) | |

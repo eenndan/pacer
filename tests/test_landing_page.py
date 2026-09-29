@@ -908,6 +908,100 @@ def test_the_clip_check_fails_on_each_planted_defect():
     print(f"test_the_clip_check_fails_on_each_planted_defect OK ({len(plants)} defects caught)")
 
 
+# ------------------------------------------------------------------ 8. the decisions record
+# docs/DECISIONS.md is the tracked record of the owner's rulings (#447), and it is public. The W1
+# close-out QA (2026-09-29, EVAL-1 and EVAL-3) found it written for the maintainers instead:
+#   * RUL-11 said in the present tense that the tag job no longer builds an `.app`, while
+#     .github/workflows/ci.yml still ran PyInstaller on every tag;
+#   * it cited ids (R11, PRODUCT-8, O5, ADV-1, the fix plan's packages) that only the maintainers'
+#     private notes define, and so did docs/AGENT-GUARDRAILS.md (R13);
+#   * its owner-acts table said each recording "exists once": his backup state, published.
+# So RUL-11 reads "Pending" exactly while CI still builds the `.app` (the package that removes the
+# build rewords the row, or this fails), every id family either page cites is glossed at the top of
+# DECISIONS.md, and no public page says what exists of his recordings.
+_DECISIONS = os.path.join(_DOCS, "DECISIONS.md")
+_GLOSS_LEAD = "**The ids this page cites.**"
+# An id is a family and a number: an upper-case word or hyphenated words and a hyphen
+# ("RUL-11", "FIRST-OPEN-LOOP-3"), or one capital ("R13", "O5", "S1"; the V of "item 15-V1").
+_ID = re.compile(r"\b([A-Z]+(?:-[A-Z]+)*-|[A-Z])\d+\b")
+
+
+def _rul11_problem(follows: str, ci_builds_app: bool) -> str | None:
+    """What is wrong with RUL-11's "What follows" cell, given whether CI still builds an `.app`."""
+    pending = follows.startswith("Pending")
+    if ci_builds_app and not pending:
+        return (f"RUL-11 says {follows!r}, but .github/workflows/ci.yml still builds an `.app`: "
+                "say it is pending, and what happens until it lands")
+    if pending and not ci_builds_app:
+        return ("RUL-11 still says the `.app` build is pending, but .github/workflows/ci.yml no "
+                "longer runs one: say what happened, and in which pull request")
+    return None
+
+
+def _id_families(text: str) -> set[str]:
+    """The id families `text` cites. Inline code is not prose: `git diff -U0` cites no id."""
+    return {m.group(1) for m in _ID.finditer(re.sub(r"`[^`\n]*`", "", text))}
+
+
+def _unglossed(text: str, gloss: str) -> list[str]:
+    """The id families and named ledgers `text` cites that `gloss` does not name."""
+    missing = [f"{fam}n" for fam in sorted(_id_families(text))
+               if not re.search(rf"\b{re.escape(fam)}(?:n\b|\d)", gloss)]
+    return missing + [f"the {w} ledger" for w in sorted(set(re.findall(r"\bthe (\w+) ledger\b",
+                                                                        text, re.I)))
+                      if f"the {w.lower()} ledger" not in gloss.lower()]
+
+
+def test_decisions_says_what_is_true_and_public():
+    with open(_DECISIONS, encoding="utf-8") as f:
+        decisions = f.read()
+    with open(os.path.join(_REPO, ".github", "workflows", "ci.yml"), encoding="utf-8") as f:
+        ci_builds_app = bool(re.search(r"\bpyinstaller\b[^\n]*\.spec\b", f.read(), re.I))
+    row = re.search(r"^\| RUL-11 \|(.*)\|[ \t]*$", decisions, re.M)
+    assert row, "docs/DECISIONS.md has no RUL-11 row — if that was deliberate, update this check"
+    follows = row.group(1).split("|")[-1].strip()
+    problem = _rul11_problem(follows, ci_builds_app)
+    assert problem is None, problem
+
+    at = decisions.find(_GLOSS_LEAD)
+    assert at >= 0, f"docs/DECISIONS.md lost its {_GLOSS_LEAD!r} paragraph"
+    end = decisions.find("\n## ", at)
+    gloss, rest = decisions[at:end], decisions[:at] + decisions[end:]
+    with open(os.path.join(_DOCS, "AGENT-GUARDRAILS.md"), encoding="utf-8") as f:
+        guardrails = f.read()
+    missing = [f"docs/DECISIONS.md: {m}" for m in _unglossed(rest, gloss)]
+    missing += [f"docs/AGENT-GUARDRAILS.md: {m}" for m in _unglossed(guardrails, gloss)]
+    assert not missing, ("ids a public reader cannot resolve — gloss each family in "
+                         f"docs/DECISIONS.md's {_GLOSS_LEAD!r} list:\n  " + "\n  ".join(missing))
+
+    pages = ["README.md", *(os.path.join("docs", n) for n in sorted(os.listdir(_DOCS))
+                            if n.endswith((".md", ".html")))]
+    said = []
+    for rel in pages:
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            if "exists once" in " ".join(f.read().split()).lower():
+                said.append(rel)
+    assert not said, f"a public page says what exists of the owner's recordings: {said}"
+
+    # Both directions, on planted text: each shape EVAL-1 and EVAL-3 found fails, the fixed ones
+    # pass, and the live page cites ids at all (or the gloss check is vacuous).
+    done = "The tag job stops building an `.app`, and nothing claims one works."
+    pending = "Pending: LONGEVITY-2 will stop the tag job building an `.app`."
+    assert _rul11_problem(done, True) and not _rul11_problem(done, False)
+    assert not _rul11_problem(pending, True) and _rul11_problem(pending, False)
+    for text, want in (("COACHING-4 builds after the freeze (ADV-5).", ["ADV-n", "COACHING-n"]),
+                       ("Closed on the FOLLOW ledger's count (R11).", ["Rn", "the FOLLOW ledger"]),
+                       ("item 15-V1", ["Vn"]),
+                       ("RUL-6 (O5)", ["On"])):
+        got = _unglossed(text, "RUL-n is defined here")
+        assert got == want, (text, got)
+    assert _unglossed(rest, "") and _unglossed(guardrails, ""), "no ids found: the check is vacuous"
+    print(f"test_decisions_says_what_is_true_and_public OK (RUL-11 "
+          f"{'pending' if ci_builds_app else 'done'}, "
+          f"{len(_id_families(rest + guardrails))} id families glossed, "
+          f"{len(pages)} pages)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -923,4 +1017,5 @@ if __name__ == "__main__":
     test_no_public_page_uses_a_retired_ui_word()
     test_the_clip_is_silent_small_and_still_on_request()
     test_the_clip_check_fails_on_each_planted_defect()
+    test_decisions_says_what_is_true_and_public()
     print("ALL OK")
