@@ -22,7 +22,6 @@
     "studio/demo.py",
     "studio/driving.py",
     "studio/export_palette.py",
-    "studio/focus.py",
     "studio/gapfill.py",
     "studio/gearing.py",
     "studio/ingest.py",

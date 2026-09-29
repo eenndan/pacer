@@ -376,7 +376,7 @@ def load(path: str | None = None) -> dict:
     corruption falls back to ``empty_store()``."""
     path = focus_path(path)
     ok, data = _jsonstore.read_object(path)
-    if not ok or data is None:
+    if not ok:
         return empty_store()
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
@@ -413,9 +413,9 @@ def _backup_unsafe(path: str) -> None:
     if not os.path.exists(path):
         return
     ok, data = _jsonstore.read_object(path)
-    version = data.get("version") if ok and data is not None else None
-    unsafe = (not ok or data is None or not isinstance(version, int) or isinstance(version, bool)
-              or version > VERSION or not isinstance(data.get("lists"), list))
+    version = data.get("version") if ok else None
+    stamped = isinstance(version, int) and not isinstance(version, bool)
+    unsafe = not ok or not stamped or version > VERSION or not isinstance(data.get("lists"), list)
     if not unsafe:
         return
     try:
