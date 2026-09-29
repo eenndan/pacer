@@ -541,23 +541,29 @@ class Opportunity:
 # the built-in Sandown Park line, the owner's own (Q2). K (2026-09-26) re-measured the cause column
 # when the braking reason began counting time on the brakes instead of the brake events' spans
 # (`_window_brake_time`): two chapters' top cause moved, 0068 chapter 2 from line 74 % to braking
-# 53 % and 0064 chapter 2 from braking 51 % to line 100 %; no other cell did:
+# 53 % and 0064 chapter 2 from braking 51 % to line 100 %; no other cell did. COACHING-1
+# (2026-09-29) re-measured it when the levers became the laps' habit instead of the median-time
+# lap's (ADV-1): 0068 from line 53 % to line 78 % (its C2 and C3 read coasting off one lap) and
+# 0068 chapter 2 from braking 53 % back to line 74 %; no other cell moved:
 #
 #   lap set           laps  ranked  ranked s  abstained s  execution   pace  top cause
-#   0068                36       5     0.426        0.072       78 %   22 %  line 53 %
+#   0068                36       5     0.426        0.072       78 %   22 %  line 78 %
 #   0064                62       4     0.768        0.106        0 %  100 %  line 100 %
 #   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  line 61 %
-#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  braking 53 %
+#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  line 74 %
 #   0064 chapter 1      17       0     0.000        3.738        0 %    0 %  none 0 %
 #   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  line 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
 #
 # 0068 splits 78 % execution / 22 % pace and 0064 splits 0 % / 100 % — the same track two months
 # apart, and the theme comes out opposite, as it did on D24. That is the finding that justifies the
-# feature. The cause axis names the same top cause on the two full recordings — line holds 53 % of
-# 0068's ranked time and 100 % of 0064's — but only 0064's clears THEME_SHARE, and the axis does
-# not survive a smaller lap set either: of the five single chapters, two name no single cause, so
-# the cause line is conditional and will often read "no single cause dominates".
+# feature. The cause axis names the same top cause on the two full recordings — line holds 78 % of
+# 0068's ranked time and 100 % of 0064's, a theme on each — and that is mostly the absence of a
+# lever: since the levers are the laps' habit (ADV-1), line is the reason on 14 of the 15 ranked
+# rows of the four working-set recordings, and the row says so with the spread it reads. The axis
+# still does not survive every smaller lap set: of the five single chapters, one names no single
+# cause (0064's chapter 1, which ranks nothing), so the cause line is conditional and can read
+# "no single cause dominates".
 #
 # AND THE HONEST CAVEAT, also measured: the theme is a property of the LAP SET, and it moves with
 # it. Loading only chapter 2 of each recording (9 and 31 laps instead of 36 and 62) leaves 0068's at

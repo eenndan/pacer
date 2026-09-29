@@ -1909,9 +1909,9 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does NOT generalize: line holds 53 % of 0068's ranked time and 100 % of
-    0064's (a cause on 0064 only), and two of the five single chapters name no single cause, so the
-    "no single cause" branch is a common case on real recordings and is asserted here as a
+    Measured, the cause axis does not generalize to every lap set: line holds 78 % of 0068's ranked
+    time and 100 % of 0064's (a theme on each), but one of the five single chapters names no single
+    cause, so the "no single cause" branch is a real case on real recordings and is asserted here as a
     first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
