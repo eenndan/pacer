@@ -378,7 +378,7 @@ def load(path: str | None = None) -> dict:
     if path is None:
         path = marks_path()
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         return empty_store()
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
@@ -462,12 +462,12 @@ def _backup_unsafe(path: str) -> None:
     if not os.path.exists(path):
         return
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         _copy_to_backup(path, "an unreadable marks store")
         return
     version = data.get("version")
-    usable_version = isinstance(version, int) and not isinstance(version, bool)
-    if (not usable_version) or version > VERSION or not isinstance(data.get("recordings"), dict):
+    if (not isinstance(version, int) or isinstance(version, bool) or version > VERSION
+            or not isinstance(data.get("recordings"), dict)):
         _copy_to_backup(path, "a marks store this build could not read back")
 
 
