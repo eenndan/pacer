@@ -89,7 +89,8 @@ Run:  QT_QPA_PLATFORM=offscreen python tests/test_golden_synthetic.py
 Regenerate the baseline (only after an INTENTIONAL, reviewed Session-math change):
       python tests/test_golden_synthetic.py --write-baseline
 It prints the leaf / __unsupported__ / null / NaN counts before vs after and how many leaves moved:
-a leaf that became NaN or fell to a placeholder shows there, not only in a diff nobody runs.
+a leaf that became NaN or fell to a placeholder shows there, not only in a diff nobody runs. It and
+a red gate then name EVERY moved family (golden_compare.family_report) before the first 40 leaves.
 """
 import contextlib
 import copy
@@ -97,6 +98,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -131,7 +133,13 @@ from studio import stats as stats_service  # noqa: E402
 from studio.dev import golden_compare, golden_session_dump  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.dev._jail import divert_app_support  # noqa: E402
-from studio.dev.golden_compare import EPS, census, walk  # noqa: E402
+from studio.dev.golden_compare import (  # noqa: E402
+    EPS,
+    census,
+    family_report,
+    leaf_families,
+    walk,
+)
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
 from studio.session import Session  # noqa: E402
 
@@ -366,6 +374,84 @@ def test_nan_leaf_is_a_mismatch():
     assert "NaN leaves: golden 0, candidate 1" in text, text
     print(f"ok NaN: one leaf turned NaN is one MISMATCH either way round at {len(targets)} leaves "
           f"across the phases; NaN on both sides matches; baseline {_census_line(baseline)}")
+
+
+def test_diffs_are_reported_by_family():
+    """A red gate and a re-cut printed their first 40 differing leaves and nothing else, and the
+    baseline holds ~113,000 leaves: a unit slip in one lap-table column fills 28 lines on its own,
+    and anything else the same change moved sat behind the cap. M03 (28 leaves) and S7 (38) were
+    readable only because nothing else moved. So every differing leaf is also counted into its
+    FAMILY — its path with list indices and lap-id / lap-pair dict keys collapsed, the phases it
+    moved in as a column — and every family is printed, uncapped, before the leaf lines. Here: an
+    entry speed divided by 3.6 in two phases is ONE family of 6 leaves, a per-lap dict keyed by lap
+    id one family of 3, a list that grew and a top-level scalar one each, and the untouched `time`
+    column none. The manual real-footage CLI prints the same block."""
+    rows = [{"entry": 90.0, "time": 44.9}, {"entry": 95.0, "time": 45.1},
+            {"entry": 99.0, "time": 45.3}]
+    phase = {"lap_rows": rows, "per_lap": {str(i): {"time": r["time"]} for i, r in enumerate(rows)},
+             "gates": [1, 2, 3]}
+    old = {"p1": copy.deepcopy(phase), "p2": copy.deepcopy(phase), "sha": "1402c701"}
+    new = copy.deepcopy(old)
+    for p in ("p1", "p2"):
+        for row in new[p]["lap_rows"]:
+            row["entry"] /= 3.6                     # M03's shape: the km/h factor dropped
+    for i, lap in new["p1"]["per_lap"].items():
+        lap["time"] += 0.01 * (int(i) + 1)          # one moved leaf per lap id
+    new["p2"]["gates"].append(4)                    # structural: a list that grew
+    new["sha"] = "1402c702"                         # a top-level scalar has no rest
+
+    assert golden_compare.family("root.gopro_sectors.lap_rows[3].entry") == (
+        "gopro_sectors", "lap_rows[].entry")
+    assert golden_compare.family("root.gopro.delta_between.0->13[4]") == (
+        "gopro", "delta_between.<id>[]")
+    assert golden_compare.family("root.gopro_telemetry_sha256") == ("gopro_telemetry_sha256", "")
+
+    diffs, stats = _compare(old, new)
+    assert len(diffs) == 11, diffs
+    lines = family_report(stats)
+    table = [re.split(r"\s{2,}", line.strip()) for line in lines[1:]]
+    assert lines[0] == "4 families moved (11 leaves):", lines
+    assert table == [
+        ["6", "max|Δ| 71.5", "lap_rows[].entry", "[p1, p2]"],   # 99 - 99 / 3.6, the largest
+        ["3", "max|Δ| 0.03", "per_lap.<id>.time", "[p1]"],
+        ["1", "list len", "gates", "[p2]"],
+        ["1", "other", "sha"],
+    ], "\n".join(lines)
+    assert not any("lap_rows[].time" in line for line in lines), "untouched column reported"
+
+    # A re-cut's NEW leaves are counted per family, so a lap id added to a family the old tree
+    # already had is named; a set difference of family keys finds nothing new there.
+    grown = copy.deepcopy(old)
+    grown["p1"]["per_lap"]["3"] = {"time": 45.5}
+    gained = leaf_families(grown) - leaf_families(old)
+    assert gained == {("p1", "per_lap.<id>.time"): 1}, gained
+    assert not set(leaf_families(grown)) - set(leaf_families(old))
+
+    # The manual half's CLI: the same block, whole, before the first leaf line.
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = [os.path.join(tmp, "golden.json"), os.path.join(tmp, "candidate.json")]
+        for path, tree in zip(paths, (old, new), strict=True):
+            with open(path, "w") as f:
+                json.dump(tree, f)
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                golden_compare.main(paths)
+            code = 0
+        except SystemExit as e:
+            code = e.code
+    text = out.getvalue().splitlines()
+    assert code == 1, "\n".join(text)
+    block = [t.strip() for t in text[2:2 + len(lines)]]
+    assert block == [line.strip() for line in lines], "\n".join(text)
+    assert text[2 + len(lines)].startswith("first differing leaves"), "\n".join(text)
+
+    with open(BASELINE) as f:
+        baseline = json.load(f)
+    fams = leaf_families(baseline)
+    print(f"ok families: 11 differing leaves read as 4 families, every one printed before the "
+          f"leaf lines; the baseline's {sum(fams.values())} leaves are "
+          f"{len({rest for _, rest in fams})} families across its phases")
 
 
 def test_synthetic_fingerprint_is_deterministic():
@@ -724,10 +810,14 @@ def test_synthetic_fingerprint_matches_baseline():
     fp = synthetic_fingerprint()
     diffs, stats = _compare(baseline, fp)
     if diffs:
+        # Every moved family first, uncapped: the leaf lines stop at 40, and a re-cut or a
+        # regression that moved one big family hid every other family behind it.
+        families = "\n".join("  " + line for line in family_report(stats))
         msg = "\n".join("  " + d for d in diffs[:40])
         raise AssertionError(
             f"synthetic golden MISMATCH: {len(diffs)} differing leaves "
-            f"(max |Δ|={stats['max']:g} at {stats['max_path']}):\n{msg}\n"
+            f"(max |Δ|={stats['max']:g} at {stats['max_path']})\n{families}\n"
+            f"first differing leaves (up to 40):\n{msg}\n"
             f"If this is an INTENTIONAL Session-math change, regenerate the baseline with "
             f"`python tests/test_golden_synthetic.py --write-baseline` and review the diff.")
     print(f"ok baseline: {stats['n']} leaves match within eps {EPS} (max |Δ|={stats['max']:g}); "
@@ -755,7 +845,17 @@ def _write_baseline():
         diffs, stats = _compare(old, kept)
         print(f"  {len(diffs)} of the old baseline's leaves moved or vanished (max |Δ|="
               f"{stats['max']:g} at {stats['max_path'] or '-'}); "
-              f"{census(fp)['leaves'] - census(kept)['leaves']} leaves are new; showing up to 40:")
+              f"{census(fp)['leaves'] - census(kept)['leaves']} leaves are new")
+        # By family, every one of them (paste this in the re-cut's commit message), then the
+        # first leaves. New leaves are counted per family, so a new lap id inside a family the old
+        # tree already had is named as well as a family that is new altogether.
+        for line in family_report(stats, "moved or vanished"):
+            print("    " + line)
+        new = leaf_families(fp) - leaf_families(kept)
+        for line in family_report({"families": {k: {"n": n} for k, n in new.items()}},
+                                  "gained leaves"):
+            print("    " + line)
+        print("  first moved or vanished leaves (up to 40):")
         for d in diffs[:40]:
             print("    " + d)
 
@@ -775,6 +875,7 @@ if __name__ == "__main__":
         sys.exit(0)
     tests = [
         test_nan_leaf_is_a_mismatch,
+        test_diffs_are_reported_by_family,
         test_synthetic_fingerprint_is_deterministic,
         test_reference_clear_reverts_to_base,
         test_drift_noise_fixture_reaches_the_paths_it_exists_for,
