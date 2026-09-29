@@ -1,8 +1,9 @@
 """The Stats page's IDEAL LAP section (studio/stats_ideal.py), on the real `StatsView`.
 
-Split out of tests/test_stats.py with the section itself (ARCH-3): one of these tests sweeps 240
-composites through a whole `StatsView` each and was 59 % of that file's run time, so as its own
-CTest registration it runs BESIDE the rest of the page's tests under `-j4` instead of after them.
+Split out of tests/test_stats.py with the section itself (ARCH-3), when one of these tests swept
+240 composites through a whole `StatsView` each and was 59 % of that file's run time. The sweep now
+re-feeds ONE page's section (GATES-3: 28-36 s -> ~0.5 s), and the file stays its own registration
+because it is the section's own test file (studio/README.md pairs it with stats_ideal.py).
 
 Pins, on the stub session `test_stats._fake_view_session` builds (offscreen Qt, no telemetry file):
   * the remainder note ADDS UP in the reader's own printed numbers — swept over composites whose
@@ -106,6 +107,11 @@ def test_the_ideal_note_adds_up_in_the_numbers_on_screen():
     idx = np.arange(n_seg)
     old_spelling_failures = 0
     checked = 0
+    # ONE page, re-fed per draw through the section's own refresh — the call `StatsView.refresh`
+    # makes with the page's session. Building a whole `StatsView` per draw rendered 240 pages to
+    # read one block, 28-36 s of this file's ~31-40 s; the same draws and assertions take 0.5 s
+    # this way. The other tests here build their own page: they pin first-build states.
+    v = StatsView(_fake_view_session())
     for _ in range(240):
         gains = np.round(rng.uniform(0.0, 0.30, n_seg), 3)
         base = np.full(n_seg, 3.0)
@@ -129,7 +135,7 @@ def test_the_ideal_note_adds_up_in_the_numbers_on_screen():
         s.ideal_total = lambda sb=sb: sb.total
         s.theoretical_best = lambda sb=sb: sb.total
         s.ideal_donor_lap_id = lambda sb=sb: sb.single_donor_id()
-        v = StatsView(s)
+        v.ideal.refresh(s)
         if v.ideal.table.rowCount() == 0:
             continue               # every gain fell under the display floor: no plan to check
         checked += 1
@@ -138,7 +144,7 @@ def test_the_ideal_note_adds_up_in_the_numbers_on_screen():
         shown = [g for g in gains if g >= IDEAL_GAIN_FLOOR]
         if f"{sum(shown):.2f}" != f"{round(sum(round(float(g), 2) for g in shown), 2):.2f}":
             old_spelling_failures += 1
-        v.deleteLater()
+    v.deleteLater()
     assert checked >= 200, checked
     assert old_spelling_failures >= 20, (
         f"only {old_spelling_failures} of {checked} draws separate the two spellings — this sweep "
