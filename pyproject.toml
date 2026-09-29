@@ -175,8 +175,8 @@ test-soak = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-f
 # timing, geometry, delta, stats and the stores; the whole suite killed 31. These ten registrations
 # are the greedy cover that kills every one of those 31: 16.3 s wall at -j4 on 2026-09-28, load 4
 # (test_stats 16.3, golden 10.3, measured_figures 8.2); 37-44 s at load 19-20 beside other lanes
-# (2026-09-29), test_stats the long pole both times. It is FITTED to those 34 mutants, so a green run
-# says nothing about a defect they do not model: run `test` before a PR. Re-derived whenever the
+# (2026-09-29), test_stats the long pole each time. It is FITTED to those 34 mutants: a green run
+# says nothing about a defect they do not model, so `test` stays the gate. Re-derived whenever the
 # mutation run is (PROCESS-10); a changed cover is this one regex. test_measured_figures runs only
 # its non-footage checks here (PACER_FOOTAGE_DEFAULTS=off, as in `test-fast`).
 test-core = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480 -R '^(test_golden_synthetic|test_lap_closure|test_library|test_export_data|test_session_pure|test_stats|test_focus_list|test_jsonstore|test_measured_figures|test_sector_integrity)$'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off", CTEST_PARALLEL_LEVEL = "4" } }
@@ -191,7 +191,7 @@ test-core = { cmd = "ctest --test-dir build/Release --output-on-failure --timeou
 # plain registration passed 6 of 6 (2026-09-29): a race, so one green run proves little. 8-9 s wall
 # at load 19-20, test_player_seek_present the long pole. It does NOT emulate CI's missing audio
 # device (no local switch exists; tests/test_player_audio.py holds the stand-ins to every signal
-# studio connects instead), nor its encoder: for exports, the playbook's PACER_FFMPEG wrapper stands.
+# studio connects instead), nor its encoder: for exports the PACER_FFMPEG wrapper stands.
 test-ciworld = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480 -R '^(test_player_audio|test_player_seek_present|test_slider_release_lands)$'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off", QT_FFMPEG_DECODING_HW_DEVICE_TYPES = "none", CTEST_PARALLEL_LEVEL = "4" } }
 # One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
