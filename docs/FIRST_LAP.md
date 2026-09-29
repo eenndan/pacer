@@ -97,8 +97,9 @@ divider between them drags.
 
 The **Coaching** tab (press **4**; the same rows in a resizable window under **Coaching ▸
 Opportunities**) ranks your corners by **time lost vs your best**, taken as the *median* over
-your clean laps, each with a **reason** (apex speed, braking, coasting, or line) read off those
-same laps, and a count of how many of them already matched your best there — one row telling you
+your clean laps, each with a **reason** (apex speed, braking, coasting, a line difference, or else
+consistency) read off those same laps, and a count of how many of them already matched your best
+there — one row telling you
 *how much* time and whether you have *already done it*. It does not
 follow your lap selection; the **Corners** tab is the per-lap view. Where your own laps show it,
 a row also says which way your braking went with your quicker passes through that corner

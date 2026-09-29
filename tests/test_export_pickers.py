@@ -9,6 +9,8 @@ WHY IT EXISTS. His overlay exports remember "Source", and both pickers got it wr
   * REG-4 (EXP-11): the first dialog of a session quoted no size and no time at "Source". The
     footage probe behind it answered after 13.7 s on a loaded Mac, and the dialog had stopped
     waiting at 10 s. It now waits while it is open, and says it is measuring meanwhile.
+  * APP-POLISH-3 (2026-09-29): the single-lap "Source" is held to the same 4K frame, and its
+    Output line is the renderer's own frame, cap named (watched failing on main @ 63d1925).
 Each test was watched failing on main @ d7a741d.
 
 The dialogs are the real ones, answered by patching `exec`; the footage probe is stood in for (a
@@ -155,6 +157,62 @@ def test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so():
     print("ok JOURNEY-3: the comparison's Source is one 4K frame, and says so")
 
 
+def test_the_single_lap_source_row_names_the_4k_cap_exactly_when_it_applies():
+    """APP-POLISH-3. Off 5.3K footage the Output line said "5312x2988, the footage's own
+    resolution", straight from the probe; off his 4K fitted whole into 9:16 it said "source
+    resolution" and priced a 9:16 CROP, while the render wrote 3840x6828. The line is now the
+    renderer's own frame (`frame_geometry`, the Crop/Fit row included), names the one-4K-frame cap
+    exactly when it applies, and the size is priced on that frame. Overlay-only is never capped.
+    The encoder is pinned both ways: the size depends on it."""
+    frames = {"GX010053.MP4": (5312, 2988, 60000 / 1001), "GX010099.MP4": _E5_FRAME}
+    real = (ev.probe_video_size, ev.resolve_encoder)
+    ev.probe_video_size = lambda p: frames[os.path.basename(p)]
+    seen, clip = {}, {}
+    _reset_prefs(**{ExportController._PREF_EXPORT_RES: ExportController._EXPORT_RES_SOURCE})
+    try:
+        with tempfile.TemporaryDirectory(prefix="pickers-cap-") as td:
+            for name in frames:
+                src = os.path.join(td, name)
+                with open(src, "wb") as fh:
+                    fh.write(b"not really a video")
+                ev.remember_video_size(src)             # the frame is known: no wait here
+                win = _window(FakeSession(laps=(0, 1, 2)), paths=(src,))
+                clip["s"] = win.exports._export_clip_seconds(0, 0.0)
+                for codec in (ev.VT_H264, ev.SW_H264):
+                    ev.resolve_encoder = lambda _choice="auto", c=codec: c
+
+                    def read(dlg, key=(name, codec)):
+                        seen[key] = {"source": _hint(dlg).text()}
+                        _combo(dlg, "Shape").setCurrentIndex(1)                 # 9:16
+                        _combo(dlg, "Source frame").setCurrentIndex(1)          # fit, with bars
+                        seen[key]["fit"] = _hint(dlg).text()
+                        _combo(dlg, "Contents").setCurrentIndex(1)              # ProRes 4444
+                        seen[key]["prores"] = _hint(dlg).text()
+                        return QDialog.Rejected
+                    _run_options_dialog(win, read)
+                win.hide()
+    finally:
+        ev.probe_video_size, ev.resolve_encoder = real
+        _clear_export_preset()
+
+    def about(text):
+        return text.split("About ")[1].split(" —")[0]
+    for codec in (ev.VT_H264, ev.SW_H264):
+        k53, k4k = seen[("GX010053.MP4", codec)], seen[("GX010099.MP4", codec)]
+        cap = " — capped at one 4K frame, the biggest H.264 picture phones and messaging apps play."
+        assert f"Output: 3840x2160, source aspect{cap}" in k53["source"], k53["source"]
+        assert about(k53["source"]) == about(k4k["source"]), "5.3K was not priced on its 4K frame"
+        assert "Output: 3840x2160, the footage's own resolution." in k4k["source"], k4k["source"]
+        for text in (k4k["source"], k4k["prores"], k53["prores"]):
+            assert "capped" not in text, text
+        size = ev.fmt_bytes(ev.estimate_output_bytes(2160, 3840, 30.0, clip["s"], "high", codec))
+        for k in (k53, k4k):
+            assert f"Output: 2160x3840, the whole picture, with bars{cap}" in k["fit"], k["fit"]
+            assert f"About {size} — " in k["fit"], (size, k["fit"])
+        assert "Output: 3840x6828, the whole picture, with bars." in k4k["prores"], k4k["prores"]
+    print("ok APP-POLISH-3: the single-lap Output line names the 4K cap exactly when it applies")
+
+
 def _late_probe(open_dialog, stored: dict) -> list[str]:
     """Open a picker at "Source" on a recording whose footage probe answers only when released,
     with the dialog's clock already past the 10 s it used to wait. Returns the hint as it read
@@ -224,6 +282,7 @@ def test_the_compare_dialog_waits_for_a_slow_probe_too():
 def _run_all():
     tests = (test_the_compare_opens_on_its_own_1080p_whatever_the_overlay_remembers,
              test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so,
+             test_the_single_lap_source_row_names_the_4k_cap_exactly_when_it_applies,
              test_the_first_dialog_states_the_size_once_a_slow_probe_lands,
              test_the_compare_dialog_waits_for_a_slow_probe_too)
     failed = []

@@ -245,9 +245,9 @@ thing were **slower** through that corner. On the top row of each recording the 
 is the confound #265 already named. One partition of the nine is significant, and it is a 6th-ranked
 apex row, not a braking one. A range built on this would print a number whose **sign** is not stable.
 
-Two rows carry `REASON_LINE`, which has no behavioural lever at all, so the partition cannot even be
-formed for them — a "range" feature that abstains on the reason the app falls back to is not a
-feature.
+Two rows carry `REASON_LINE` (the spread fallback, named `REASON_CONSISTENCY` since COACHING-5),
+which has no behavioural lever at all, so the partition cannot even be formed for them — a "range"
+feature that abstains on the reason the app falls back to is not a feature.
 
 ### Controls
 

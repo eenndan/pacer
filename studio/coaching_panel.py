@@ -235,7 +235,7 @@ class ThemeBlock(QWidget):
     WHY IT LEADS. Twelve ranked corners is a report, not coaching; the compression into one theme
     and a short action list is the part a human coach does and the part every surveyed tool skips.
     Everything here comes from ``coaching.session_theme`` — which clusters only over what this app
-    MEASURES (the reach axis and the four driving signals) and says "no single theme" rather than
+    MEASURES (the reach axis and the five reason signals) and says "no single theme" rather than
     inventing one. Empty (and hidden) when nothing is ranked.
 
     AND IT YIELDS (``fit_into``), the vertical twin of the page's column budget: it sheds its second
@@ -830,9 +830,13 @@ _REASON_TIP = {
     coaching.REASON_COASTING: "Across your clean laps, you typically coast here (neither braking "
                               "nor on throttle) longer than your best lap does (the median over "
                               "those laps) — get back to throttle sooner.",
-    coaching.REASON_LINE: "The loss here is mostly inconsistency (lap-to-lap spread) rather than "
-                          "one fixable input — repeat the same line. The spread is the middle "
-                          "half of your clean laps through this corner.",
+    coaching.REASON_LINE: "Across your clean laps, your best lap takes a different line here: a "
+                          "slower apex than the laps' median and a faster exit — it gives up "
+                          "minimum speed to get out quicker. Try its line.",
+    # COACHING-5: this tip said "repeat the same line" under a reason nothing positional measured.
+    coaching.REASON_CONSISTENCY: "The loss here is lap-to-lap spread, not one input: no brake, "
+                                 "coast, apex or line difference explains it. The spread is the "
+                                 "middle half of your clean laps through this corner.",
     coaching.REASON_NONE: "Time is available here versus your best lap.",
 }
 
@@ -1145,8 +1149,9 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
     coaching.py's evidence table, T16b), so the column
     that mattered most was the one asking for arithmetic. This states the conclusion instead —
     and states it as a COUNT OVER ITS DENOMINATOR, so it stays checkable. σ itself is not lost: the
-    Stats ▸ CORNERS table has a σ column, and the Consistency panel ranks on it. (The REASON_LINE
-    sentence used to spell it too; since ADV-4 it states the IQR its own evidence gate reads.)
+    Stats ▸ CORNERS table has a σ column, and the Consistency panel ranks on it. (The spread
+    reason's sentence — REASON_CONSISTENCY's since COACHING-5 — used to spell it too; since ADV-4
+    it states the IQR its own evidence gate reads.)
 
     An unmeasured row (a legacy/synthetic Opportunity with no per-lap times) reads the em-dash
     rather than inventing a count."""
