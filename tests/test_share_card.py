@@ -363,8 +363,10 @@ def _reason_fit(text: str, avail: int = share_card.CARD_W - 2 * 72):
 # The app's own longest opportunity sentences, produced by the REAL formatter rather than typed out
 # — a phrasing change in studio/coaching.py must reach this guard. The braking lever plus the
 # "carries to" consequence clause is the widest combination the model can emit, and since ADV-4 the
-# line row's IQR clause (at 9.99 s, the widest the 2-dp format prints below ten seconds) with the
-# apex third's clause is the widest line sentence — drawn as the card draws it, the lever alone.
+# spread row's IQR clause (at 9.99 s, the widest the 2-dp format prints below ten seconds) with the
+# apex third's clause is the widest consistency sentence — drawn as the card draws it, the lever
+# alone. Since COACHING-5 the measured line's two speeds (two digits each, in both units) with the
+# entry third's consequence clause is the widest line sentence.
 def _longest_real_reasons():
     long_brake = coaching.Opportunity(
         cid=1, direction=1, time_lost=0.9, entry_dist=100.0,
@@ -378,18 +380,27 @@ def _longest_real_reasons():
                                apex_speed_deficit=0.0, brake_extra_s=0.0, coast_extra_s=1.25,
                                sigma=0.1),
         phases=coaching.PhaseLoss(entry=0.40, apex=0.05, exit=0.05))
-    long_line = coaching.Opportunity(
+    long_spread = coaching.Opportunity(
         cid=3, direction=1, time_lost=5.5, entry_dist=100.0,
-        reason=coaching.Reason(kind=coaching.REASON_LINE, contribution=0.4,
+        reason=coaching.Reason(kind=coaching.REASON_CONSISTENCY, contribution=0.4,
                                apex_speed_deficit=0.0, brake_extra_s=0.0, coast_extra_s=0.0,
                                sigma=12.5),
         phases=coaching.PhaseLoss(entry=0.05, apex=0.40, exit=0.05),
         evidence=coaching.Evidence(n_laps=62, reach_laps=4, reach=coaching.REACH_RARE, iqr=9.99,
                                    abstain=coaching.ABSTAIN_NONE))
+    spread = coaching.reason_sentence(long_spread, reach=False)
+    assert spread == "consistency: middle half of laps within 9.99 s — most of it on the apex", spread
+    long_line = coaching.Opportunity(
+        cid=4, direction=-1, time_lost=0.9, entry_dist=100.0,
+        reason=coaching.Reason(kind=coaching.REASON_LINE, contribution=0.4,
+                               apex_speed_deficit=0.0, brake_extra_s=0.0, coast_extra_s=0.0,
+                               sigma=0.1, apex_speed_gain=-99.94, exit_speed_gain=99.94),
+        phases=coaching.PhaseLoss(entry=0.40, apex=0.05, exit=0.05))
     line = coaching.reason_sentence(long_line, reach=False)
-    assert line == "repeat your best line (middle half of laps within 9.99 s) — most of it on the apex"
-    return [coaching.reason_sentence(o, u) for o in (long_brake, long_coast)
-            for u in ("kmh", "mph")] + [line]
+    assert line == ("take your best lap's line (its apex −99.9, exit +99.9 km/h), and it "
+                    "carries to entry"), line
+    return [coaching.reason_sentence(o, u) for o in (long_brake, long_coast, long_line)
+            for u in ("kmh", "mph")] + [spread]
 
 
 def test_the_coaching_reason_is_fitted_like_every_other_line_on_the_card():
@@ -436,7 +447,8 @@ def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
     times = [5.0] * 4 + [5.05] * 6 + [5.15] * 14 + [5.25] * 12
     c1 = coaching.Opportunity(
         cid=1, direction=1, time_lost=0.147, entry_dist=100.0,
-        reason=coaching.Reason(kind=coaching.REASON_LINE, contribution=0.1, apex_speed_deficit=0.0,
+        reason=coaching.Reason(kind=coaching.REASON_CONSISTENCY, contribution=0.1,
+                               apex_speed_deficit=0.0,
                                brake_extra_s=0.0, coast_extra_s=0.0, sigma=0.46),
         phases=coaching.PhaseLoss(entry=0.02, apex=0.02, exit=0.07),
         evidence=coaching.corner_evidence(times, 5.0, 0.147))
@@ -444,7 +456,7 @@ def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
     session = FakeSession(track="Sandown Park", best_time=46.808, ideal=46.196, opps=(
         coaching.Opportunities(enough=True, n_laps=36, median_lap_id=3, rows=[c1])))
     reason = share_card.card_data(session, unit="kmh").top_opp.reason
-    assert reason == "repeat your best line (middle half of laps within 0.20 s) — most of it on exit", \
+    assert reason == "consistency: middle half of laps within 0.20 s — most of it on exit", \
         reason
     txt, px, _width = _reason_fit(reason)
     assert txt == reason and px in share_card._REASON_PX_STEPS, (txt, px)

@@ -6,12 +6,15 @@ math; it COMPOSES the values Session already caches into a ranked, explainable s
 
 What it does: per corner, the median time lost vs your own best over the consistency laps
 (valid, dropout-free); corners ranked by that loss, biggest first. For every ranked corner a
-dominant reason (apex / braking / coasting / line) is picked from four signals, each mapped to a
-comparable strength; the strongest wins (ties → a fixed reason priority), REASON_NONE when none
-fires. The three lever signals are the driver's HABIT, like the loss beside them: per corner, the
-median over the same counted laps of each lap's apex speed, time on the brakes and time coasting
-against the best lap's (`lap_window_inputs`), never one lap's. summarize returns enough=False under
-MIN_LAPS consistency laps. Pure + deterministic (corners in cid order, candidate laps ascending).
+dominant reason (apex / braking / coasting / line / consistency) is picked from five signals, each
+mapped to a comparable strength; the strongest wins (ties → a fixed reason priority), REASON_NONE
+when none fires. The lever signals are the driver's HABIT, like the loss beside them: per corner,
+the median over the same counted laps of each lap's apex speed, exit speed, time on the brakes and
+time coasting against the best lap's (`lap_window_inputs`), never one lap's. "Line" is a MEASURED
+signature (the best lap slower at the apex AND faster out, `LINE_APEX_DELTA_KMH`); "consistency" is
+the lap-to-lap spread the row falls back on when no input explains the loss. summarize returns
+enough=False under MIN_LAPS consistency laps. Pure + deterministic (corners in cid order, candidate
+laps ascending).
 
 Each row also carries `Evidence` — how many of your laps have ALREADY matched that corner's
 target and how wide the corner's own interquartile spread is — which decides two things a bare
@@ -47,13 +50,19 @@ PHASES = (PHASE_ENTRY, PHASE_APEX, PHASE_EXIT)
 BRAKE_APPROACH_M = 30.0
 
 # Reason ids, ordered by the tie-break PRIORITY when two signals tie: a directly-actionable input
-# (apex) over a process cue (braking, coasting); raw inconsistency (line) last.
+# (apex) over a process cue (braking, coasting), then the measured line signature; raw
+# inconsistency last. CONSISTENCY is the id the lap-to-lap-spread fallback fires under — it was
+# stored and shown as "line" until COACHING-5, a word nothing positional had measured (DOMAIN-5).
+# "line" is kept, not renamed: a focus entry promoted under it keeps its id (`focus.py` stores the
+# kind), and from now on the id means a MEASURED line difference (`LINE_APEX_DELTA_KMH`).
 REASON_APEX = "apex"
 REASON_BRAKING = "braking"
 REASON_COASTING = "coasting"
 REASON_LINE = "line"
+REASON_CONSISTENCY = "consistency"
 REASON_NONE = "none"  # a ranked corner with no positive signal (still shows the time lost)
-_REASON_PRIORITY = (REASON_APEX, REASON_BRAKING, REASON_COASTING, REASON_LINE, REASON_NONE)
+_REASON_PRIORITY = (REASON_APEX, REASON_BRAKING, REASON_COASTING, REASON_LINE, REASON_CONSISTENCY,
+                    REASON_NONE)
 
 
 @dataclass(frozen=True)
@@ -69,6 +78,11 @@ class Reason:
     brake_extra_s: float         # median of (lap − best) time on the brakes in the window (s)
     coast_extra_s: float         # median of (lap − best) coasting inside the corner (s)
     sigma: float                 # cross-lap σ of time-in-corner (s)
+    # The line signature's two halves (COACHING-5), the same medians NOT floored: a best lap that
+    # is SLOWER at the apex than the laps' habit reads < 0 here where `apex_speed_deficit` reads 0.
+    # Defaults keep the positional constructors (kind … sigma) valid.
+    apex_speed_gain: float = 0.0  # median of (best apex − lap apex), signed (km/h)
+    exit_speed_gain: float = 0.0  # median of (best exit − lap exit), signed (km/h, > 0: best exits faster)
 
 
 @dataclass(frozen=True)
@@ -529,7 +543,7 @@ class Opportunity:
 # ------------------------------------------------------------------------- the session theme
 #
 # Twelve findings is not coaching; one theme plus at most two actions is. The clustering runs over
-# what this app can MEASURE — the reach axis above and the four driving signals — and over SHARE OF
+# what this app can MEASURE — the reach axis above and the five reason signals — and over SHARE OF
 # RANKED TIME rather than a row count, because the ranking's own unit is seconds and a count lets
 # six trivial corners outvote the one that matters.
 #
@@ -610,7 +624,7 @@ _NO_THEME = Theme(kind=THEME_NONE, share=0.0, execution_s=0.0, pace_s=0.0, n_ran
 
 def session_theme(rows: list[Opportunity]) -> Theme:
     """Cluster the rows into ONE theme. Pure, deterministic, and it only ever reads the reach axis
-    and the four measured reasons — this app cannot see vision or reference points and must not
+    and the five measured reasons — this app cannot see vision or reference points and must not
     name a cause it cannot measure.
 
     Only RANKED rows vote: an abstained row has no claim, so letting it weigh on the theme would
@@ -691,10 +705,50 @@ _BRAKE_HALF_S = 0.30   # s longer/earlier than best; sub-0.1 is threshold ripple
 _COAST_HALF_S = 0.30   # ~ the shortest coast the channel reports
 _SIGMA_HALF_S = 0.15   # s lap-to-lap σ; below ~0.05 the line is repeatable
 
+# ------------------------------------------------------------------- the line signature
+#
+# WHY THIS EXISTS (COACHING-5, DOMAIN-5). The "line" reason used to fire on the cross-lap σ of the
+# corner's time alone — nothing positional entered it — and once the levers became the laps' habit
+# (ADV-1) it was the reason on 14 of the 15 ranked rows of the working set, printed as "repeat your
+# best line". That fallback now fires, unchanged, as REASON_CONSISTENCY. REASON_LINE is reserved
+# for a line-SHAPED difference in the habit: over the counted cells, the best lap is SLOWER at the
+# apex than the laps by at least LINE_APEX_DELTA_KMH and FASTER out by at least
+# LINE_EXIT_DELTA_KMH — it gives up minimum speed for the exit. A slower apex with no exit gain is
+# not a line, and a faster apex is REASON_APEX (the two are exclusive by sign). Its strength is the
+# exit gain, saturating at LINE_EXIT_DELTA_KMH, and it competes with the other reasons as they do.
+#
+# MEASURED (COACHING-5, 2026-09-29) on the four working-set recordings, over the cells a row counts
+# (C5: the lap and its baseline both matched at the corner's edges). The NULL is a lap with no line
+# difference to find: every counted lap other than the best, taken in turn as a pseudo-best against
+# the same laps, its signature's size the SMALLER of its two halves (apex slowdown, exit gain):
+#
+#   recording  corners  null cells  null P95 km/h
+#   0068             7         242           0.78
+#   0064             7         425           1.00
+#   0065             7         250           0.67
+#   0067            12         200           0.33
+#   all four        33        1117           0.77
+#
+# δ = 1.0 km/h on both halves: above the pooled P95 and above every recording's own, and at the
+# ~1 km/h of GPS apex noise `_APEX_HALF_KMH` names. 37 of the null's 1117 cells (3.3 %) clear it.
+# The two halves run AGAINST each other in the null (a lap slow at the apex is slow out, r −0.71),
+# so neither half's own P95 is the test (apex slowdown 6.9 km/h, exit gain 2.1 km/h: at those, 0
+# null cells). Refused §6's confound — every exit speed is read at a projected boundary, and where
+# it lands inside an acceleration zone moves it — is at most 0.58 km/h of implied error on any
+# corner of the four (the speed gradient there × the sd of the exit point's placement; 0067 C10).
+#
+# ON THE BEST LAP it clears both halves on 2 of the 34 rows — 0067 C6 (apex −3.5, exit +1.7 km/h)
+# and 0065 C4 (apex −1.6, exit +1.2 km/h) — both abstained, and reads line on 1 (0065 C4; at 0067
+# C6 the corner's spread is the stronger reason). Sandown 3h's C4 and C7, the rows the QA r4 advice
+# lane called a line difference, do not: at C4 the best lap's apex IS the laps' median (43.7 against
+# 43.7 km/h — its 42.4 was not the habit), and at C7 the exit gain is +0.4 km/h (apex −2.6).
+LINE_APEX_DELTA_KMH = 1.0
+LINE_EXIT_DELTA_KMH = 1.0
+
 
 def _saturate(evidence: float, half: float) -> float:
     """A unitless strength in [0, 1): evidence/(evidence + half), 0 for non-positive evidence.
-    Half-strength at `evidence == half`, →1 for evidence ≫ half. Makes the four reasons'
+    Half-strength at `evidence == half`, →1 for evidence ≫ half. Makes the five reasons'
     different-unit evidence directly comparable without a magic unit conversion."""
     e = max(float(evidence), 0.0)
     return e / (e + half) if e > 0 else 0.0
@@ -957,21 +1011,26 @@ def corner_best_thirds(
                  for k in range(3))
 
 
-def _pick_reason(time_lost: float, apex_deficit: float, brake_extra: float, coast_extra: float,
-                 sigma: float) -> Reason:
-    """Choose the dominant reason for one corner: the strongest of the four comparable strengths
+def _pick_reason(time_lost: float, apex_gain: float, brake_extra: float, coast_extra: float,
+                 sigma: float, exit_gain: float = 0.0) -> Reason:
+    """Choose the dominant reason for one corner: the strongest of the five comparable strengths
     (largest wins, ties → _REASON_PRIORITY order). All raw evidence is carried on the Reason; the
     contribution is time_lost × the winning strength (≤ time_lost — never overclaims).
 
-    `apex_deficit` (km/h slower than best at the apex), `brake_extra` and `coast_extra` (s longer
-    than best) are the corner's habit medians, already floored at 0 (`summarize`).
+    `apex_gain` and `exit_gain` (km/h, best − lap) are the corner's SIGNED habit medians: the apex
+    lever reads the gain floored at 0 (its `apex_speed_deficit`), and the LINE signature reads both
+    signs (see LINE_APEX_DELTA_KMH). `brake_extra` and `coast_extra` (s longer than best) are
+    already floored at 0 (`summarize`).
 
-    LINE is the fallback (real spread but no concrete input fires); REASON_NONE when nothing fires
-    (the row still shows the time lost)."""
-    apex_deficit = max(float(apex_deficit), 0.0)
+    CONSISTENCY is the fallback (real spread but no concrete input fires); REASON_NONE when nothing
+    fires (the row still shows the time lost)."""
+    apex_gain = float(apex_gain)
+    exit_gain = float(exit_gain)
+    apex_deficit = apex_gain if apex_gain > 0 else 0.0  # never max(): it keeps a −0.0
     brake_extra = max(float(brake_extra), 0.0)
     coast_extra = max(float(coast_extra), 0.0)
     sig = max(float(sigma), 0.0)
+    line_shaped = apex_gain <= -LINE_APEX_DELTA_KMH and exit_gain >= LINE_EXIT_DELTA_KMH
 
     # Comparable strengths in [0,1). A reason can only win when the corner is actually losing
     # time (time_lost > 0) — these explain a measured loss, they don't manufacture one.
@@ -980,7 +1039,8 @@ def _pick_reason(time_lost: float, apex_deficit: float, brake_extra: float, coas
         REASON_APEX: _saturate(apex_deficit, _APEX_HALF_KMH) if lossy else 0.0,
         REASON_BRAKING: _saturate(brake_extra, _BRAKE_HALF_S) if lossy else 0.0,
         REASON_COASTING: _saturate(coast_extra, _COAST_HALF_S) if lossy else 0.0,
-        REASON_LINE: _saturate(sig, _SIGMA_HALF_S) if lossy else 0.0,
+        REASON_LINE: _saturate(exit_gain, LINE_EXIT_DELTA_KMH) if lossy and line_shaped else 0.0,
+        REASON_CONSISTENCY: _saturate(sig, _SIGMA_HALF_S) if lossy else 0.0,
     }
     # Largest strength; ties broken by the fixed reason priority (apex first). The contribution
     # reported is time_lost × strength (so it is bounded by the corner's own loss).
@@ -998,6 +1058,8 @@ def _pick_reason(time_lost: float, apex_deficit: float, brake_extra: float, coas
         brake_extra_s=brake_extra,
         coast_extra_s=coast_extra,
         sigma=sig,
+        apex_speed_gain=apex_gain,
+        exit_speed_gain=exit_gain,
     )
 
 
@@ -1016,6 +1078,8 @@ def summarize(
     best_brake_time: list[float] | None = None,
     best_coast_time: list[float] | None = None,
     best_apex: list[float] | None = None,
+    exit_by_lap: list[list[float]] | None = None,
+    best_exit: list[float] | None = None,
     phases_by_cid: dict | None = None,
     resolved_by_lap: list[list[bool]] | None = None,
     best_resolved: list[bool] | None = None,
@@ -1036,6 +1100,10 @@ def summarize(
     The order matters: for an even count median(max(x, 0)) is not max(median(x), 0). A lever whose
     inputs are absent (None) reads 0. Each lap's brake and coast cells were measured on its own
     corner windows, projected through that lap's spatial warp (`lap_window_inputs`).
+    THE LINE SIGNATURE (COACHING-5): exit_by_lap / best_exit are the laps' exit speeds (km/h,
+    `CornerStat.exit_speed`, same baseline); the apex and exit medians of best − lap are carried
+    UNFLOORED onto the Reason (`apex_speed_gain`, `exit_speed_gain`), because a line difference is
+    the best lap SLOWER at the apex (see LINE_APEX_DELTA_KMH). Absent → 0, which never fires it.
     THE THIRDS (COACHING-2): phases_by_cid maps a cid to its median (entry, apex, exit) Δt-vs-best
     triple — `Session.phase_report`'s row, each lap's thirds read through its own memoized spatial
     warp (`corner_phase_losses`), the numbers the Stats CORNERS tooltip shows — and becomes the
@@ -1103,7 +1171,7 @@ def summarize(
     # anecdote (QA r4, ADVICE).
     counted = np.isfinite(times)
 
-    def _habit(by_lap, best_row, sign: float) -> np.ndarray:
+    def _signed_habit(by_lap, best_row, sign: float) -> np.ndarray:
         if by_lap is None or best_row is None:
             return np.zeros(n_corners)
         m = np.asarray(by_lap, float)
@@ -1113,11 +1181,18 @@ def summarize(
                              f"the best lap, got {m.shape} and {b.shape}")
         d = sign * (m - b[None, :])
         med = [_finite_median(d[counted[:, j], j]) for j in range(n_corners)]
-        return np.asarray([v if v > 0 else 0.0 for v in med], float)  # NaN (no cell) → 0
+        # NaN (no cell) → 0; `+ 0.0` turns the −0.0 a best-lap cell's `−1 × 0` leaves into 0.0.
+        return np.asarray([v + 0.0 if np.isfinite(v) else 0.0 for v in med], float)
+
+    def _habit(by_lap, best_row, sign: float) -> np.ndarray:
+        return np.asarray([v if v > 0 else 0.0 for v in _signed_habit(by_lap, best_row, sign)],
+                          float)
 
     brake_extra = _habit(brake_time_by_lap, best_brake_time, 1.0)
     coast_extra = _habit(coast_time_by_lap, best_coast_time, 1.0)
-    apex_deficit = _habit(apex_by_lap, best_apex, -1.0)
+    # The apex lever floors this (`_pick_reason`); the line signature reads its sign.
+    apex_gain = _signed_habit(apex_by_lap, best_apex, -1.0)
+    exit_gain = _signed_habit(exit_by_lap, best_exit, -1.0)
 
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
@@ -1133,10 +1208,11 @@ def summarize(
         if top_n is None or rank < top_n:
             reason = _pick_reason(
                 time_lost=float(losses[i]),
-                apex_deficit=float(apex_deficit[i]),
+                apex_gain=float(apex_gain[i]),
                 brake_extra=float(brake_extra[i]),
                 coast_extra=float(coast_extra[i]),
                 sigma=float(sigmas_by_cid.get(c.cid, 0.0)),
+                exit_gain=float(exit_gain[i]),
             )
         else:
             reason = Reason(kind=REASON_NONE, contribution=0.0, apex_speed_deficit=0.0,
@@ -1168,13 +1244,15 @@ _PHASE_WORD = {PHASE_ENTRY: "entry", PHASE_APEX: "the apex", PHASE_EXIT: "exit"}
 # a FIX LOCATION, so it only makes sense appended to a reason whose lever acts on that phase — a
 # braking (entry/approach) fix pointed at the EXIT third reads as nonsense. When the dominant third
 # is NOT in a reason's compatible set the clause is rephrased as a CONSEQUENCE ("…and it carries to
-# exit"), not a fix location. LINE/NONE have no single lever phase → they take the plain clause on
-# any dominant third (the σ/"find time" sentence is phase-agnostic, so a location cue is fine).
+# exit"), not a fix location. CONSISTENCY/NONE have no single lever phase → they take the plain
+# clause on any dominant third (the spread/"find time" sentence is phase-agnostic, so a location cue
+# is fine).
 _REASON_PHASES = {
     REASON_APEX: {PHASE_APEX},              # apex speed is an apex-third lever
     REASON_BRAKING: {PHASE_ENTRY},          # brake later/shorter acts on entry/approach
     REASON_COASTING: {PHASE_APEX, PHASE_EXIT},  # coasting → back-to-throttle is apex/exit
-    REASON_LINE: set(PHASES),               # phase-agnostic → any dominant third is fine
+    REASON_LINE: {PHASE_APEX, PHASE_EXIT},  # the line trades apex speed for the exit
+    REASON_CONSISTENCY: set(PHASES),        # phase-agnostic → any dominant third is fine
     REASON_NONE: set(PHASES),
 }
 
@@ -1292,14 +1370,25 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
         # M6 (same pathology): coast_extra_s is a raw cause, not recoverable time — phrase as cause.
         base = f"back to throttle sooner (~{r.coast_extra_s:.2f} s longer coasting)"
     elif r.kind == REASON_LINE:
-        # Copy #1: the instruction first, then the spread it is about. ADV-4 (QA r4): that spread
-        # is the IQR the row's own evidence gate reads, not σ — "laps vary ±1.28 s" on a corner
-        # whose middle half spans 0.31 s put 90 % of the laps inside the printed band. A row with
-        # no measured evidence (n_laps 0) has no spread to state and prints none, never "0.00 s".
+        # COACHING-5: only a MEASURED line difference says "line" — both halves of it, in the
+        # habit's own numbers: the BEST lap's apex against the laps' (−, slower) and its exit (+,
+        # faster), km/h at the display boundary like the apex lever. "its" says whose numbers they
+        # are; the plan's "(slower apex −x, faster exit +y km/h)" was elided on the share card at
+        # its smallest size with two-digit speeds and a phase clause (tests/test_share_card.py).
+        slower = units.convert_speed(-r.apex_speed_gain, unit)
+        faster = units.convert_speed(r.exit_speed_gain, unit)
+        base = (f"take your best lap's line (its apex −{slower:.1f}, exit +{faster:.1f} "
+                f"{units.speed_label(unit)})")
+    elif r.kind == REASON_CONSISTENCY:
+        # Named by what fires it (DOMAIN-5): the lap-to-lap spread, not a line nothing measured —
+        # it read "repeat your best line" until COACHING-5. ADV-4 (QA r4): the spread stated is the
+        # IQR the row's own evidence gate reads, not σ — "laps vary ±1.28 s" on a corner whose
+        # middle half spans 0.31 s put 90 % of the laps inside the printed band. A row with no
+        # measured evidence (n_laps 0) has no spread to state and prints none, never "0.00 s".
         # The strength behind the pick still reads σ (`_pick_reason`), so the ranking is unchanged.
         ev = opp.evidence
-        base = ("repeat your best line" if ev.n_laps == 0 else
-                f"repeat your best line (middle half of laps within {ev.iqr:.2f} s)")
+        base = ("consistency" if ev.n_laps == 0 else
+                f"consistency: middle half of laps within {ev.iqr:.2f} s")
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)
@@ -1317,7 +1406,8 @@ _CAUSE_WORD = {
     REASON_APEX: "Apex speed",
     REASON_BRAKING: "Braking",
     REASON_COASTING: "Coasting",
-    REASON_LINE: "Consistency",
+    REASON_LINE: "Line",
+    REASON_CONSISTENCY: "Consistency",
 }
 
 
