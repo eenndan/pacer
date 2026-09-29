@@ -93,6 +93,7 @@ import logging
 import math
 import os
 import shutil
+from typing import Any
 
 from . import _jsonstore, app_support
 
@@ -174,7 +175,7 @@ def blank_record() -> dict:
     """An all-empty record in canonical shape: every text field "", every number None, the
     conditions tag untagged and the pressure unit at its default. The starting point the form
     binds to, and the thing ``is_empty`` reports True for."""
-    rec = {"conditions": "", "pressure_unit": DEFAULT_PRESSURE_UNIT}
+    rec: dict[str, Any] = {"conditions": "", "pressure_unit": DEFAULT_PRESSURE_UNIT}
     rec.update({k: "" for k in TEXT_FIELDS})
     rec.update({k: None for k in (*NUM_FIELDS, *INT_FIELDS)})
     rec.update({k: None for k in AUTO_FIELDS})
@@ -354,7 +355,7 @@ def load(path: str | None = None) -> dict:
     if path is None:
         path = records_path()
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         return empty_store()
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
@@ -420,7 +421,7 @@ def _backup_unsafe(path: str) -> None:
     if not os.path.exists(path):
         return
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         _copy_to_backup(path, "an unreadable session-record store")
         return
     # ENUMERATE AGAINST `load`'s OWN FALL-BACKS, not a shorter list. `load` returns `empty_store()`
@@ -430,10 +431,8 @@ def _backup_unsafe(path: str) -> None:
     # be rebuilt from the footage. The docstring on `load` already promised this backup; only the
     # predicate was short.
     version = data.get("version")
-    bad_version = isinstance(version, bool) or not isinstance(version, int)
-    newer = (not bad_version) and version > VERSION
-    bad_records = not isinstance(data.get("records"), dict)
-    if bad_version or newer or bad_records:
+    if (isinstance(version, bool) or not isinstance(version, int) or version > VERSION
+            or not isinstance(data.get("records"), dict)):
         _copy_to_backup(path, "an unreadable/newer session-record store")
 
 

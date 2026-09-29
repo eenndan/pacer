@@ -202,6 +202,23 @@ def test_band_lap_ids_distance_band_noop_on_clean_recording():
     print("test_band_lap_ids_distance_band_noop_on_clean_recording OK")
 
 
+def test_threshold_edge_lap_distance_band():
+    """The lap filter's distance band AT ITS EDGES: a lap 1 % inside either edge of ±10 % of the
+    median distance counts, a lap 1 % outside does not. The tests above place their laps far from
+    the edges and derive their bounds from LAP_DIST_BAND_LO/HI, so the band could widen to ±20 %
+    under them: the mutation lane moved it and every one still passed.
+
+    The edges are LITERALS on purpose (see `_ADMISSION_BAND` below for the same rule and the
+    guard it once failed): computed from the imported constants they would move with the very
+    band they exist to hold. Five laps at 1000 m pin the median to 1000 m whatever lap 5 reads."""
+    for dist, kept in ((890.0, False), (910.0, True), (1090.0, True), (1110.0, False)):
+        got = _band_lap_ids(_FakeBandLaps([68.0] * 6, dists=[1000.0] * 5 + [dist]))
+        assert got == [0, 1, 2, 3, 4] + ([5] if kept else []), (
+            f"a {dist:.0f} m lap against a 1000 m median was {'dropped' if kept else 'kept'}: "
+            f"{got} — has the ±10 % distance band moved?")
+    print("test_threshold_edge_lap_distance_band OK")
+
+
 def test_band_lap_ids_falls_back_when_no_distance_accessor():
     """CRITICAL back-compat: a `laps` double with NO get_lap_distance (the pre-distance-band
     fake, and any caller that never exposed distances) falls back to the unchanged time-only
@@ -1357,6 +1374,59 @@ def test_a_shrunken_window_cannot_win_a_segment_however_fast_it_reads():
     print(f"test_a_shrunken_window_cannot_win_a_segment_however_fast_it_reads OK "
           f"(shrunken cell {col[row]:.3f}s beat every other lap and was still refused; "
           f"{checked} winners within {_ADMISSION_BAND * 100:.0f} %, worst {worst * 100:.2f} %)")
+
+
+def _shrunken_cell(shrink, j=2, victim=1):
+    """(admitted?, window deviation) of lap `victim`'s segment-`j` cell once its window is narrowed
+    by `shrink` of its own projected span, at the projection seam the two tests above use. The
+    deviation is recomputed from the stub's own edges against the lap's expected span, the width
+    `SegmentBests.admitted` compares a window with."""
+    _base_s, _ids, totals = _distinct_total_ideal_session()
+    real_project = corners_mod.project_boundaries
+    seen = {}
+
+    def shrinking(d_ref, total_ref, total_lap, **kw):   # **kw verbatim: see the collapse test
+        out = np.asarray(real_project(d_ref, total_ref, total_lap, **kw), float)
+        if abs(total_lap - totals[victim]) < 1e-6 and len(out) > j:
+            out = out.copy()
+            out[j] -= shrink * (out[j] - out[j - 1])
+            seen["span"] = float(out[j] - out[j - 1])
+        return out
+
+    corners_mod.project_boundaries = shrinking
+    try:
+        s, _ids2, _t = _distinct_total_ideal_session()
+        got = s.ideal_segment_bests()
+    finally:
+        corners_mod.project_boundaries = real_project
+    assert got is not None and "span" in seen, "the fixture must project the victim's window"
+    total_ref = s.corners.basis()[1]
+    ref_span = np.diff(np.asarray(got.s_edges, float) * total_ref)[j]
+    expected = ref_span * totals[victim] / total_ref
+    return bool(got.admitted[got.lap_ids.index(victim), j]), abs(seen["span"] - expected) / expected
+
+
+def test_threshold_edge_donor_admission():
+    """The donor admission band AT ITS EDGE: a window 1 % inside `_ADMISSION_BAND` of the lap's
+    expected span is admitted, one 1 % outside is refused. The two tests above sit far from the
+    edge (a collapse, a 20 % shrink), so `MAX_DONOR_SPAN_DEV` could double under them: the mutation
+    lane planted 0.10 and 22 test files still passed.
+
+    The admission MASK is what is asserted, not the ideal total: on this fixture the victim never
+    wins segment 2 at either shrink, so the total does not move across the edge. Only cell j is
+    asserted: segment j+1 opens early by the same width, a larger share of its own span, and is
+    refused already at a 4 % shrink, so asserting it would pin the fixture's geometry, not the band.
+    The measured deviation is asserted first, so a fixture whose shrink stopped mapping onto the
+    band fails here by name instead of passing for the wrong reason."""
+    inside, dev_in = _shrunken_cell(_ADMISSION_BAND - 0.01)
+    outside, dev_out = _shrunken_cell(_ADMISSION_BAND + 0.01)
+    assert dev_in < _ADMISSION_BAND < dev_out, (
+        f"the fixture's windows sit {dev_in * 100:.2f} % and {dev_out * 100:.2f} % off their "
+        f"expected span: they no longer straddle the {_ADMISSION_BAND * 100:.0f} % band")
+    assert inside, f"a window {dev_in * 100:.2f} % off its expected span was refused"
+    assert not outside, f"a window {dev_out * 100:.2f} % off its expected span was admitted"
+    print(f"test_threshold_edge_donor_admission OK ({dev_in * 100:.2f} % admitted, "
+          f"{dev_out * 100:.2f} % refused)")
 
 
 # --- the DECOMPOSITION: from taunt into plan (N8) -----------------------------------------

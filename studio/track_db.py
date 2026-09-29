@@ -336,7 +336,7 @@ def load(path: str | None = None) -> dict:
     if path is None:
         path = db_path()
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         return empty_db()
     version = _schema_version(data)
     if version is None:
@@ -382,7 +382,7 @@ def unreadable(path: str | None = None) -> bool:
     if not os.path.exists(path):
         return False
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         return True
     if _schema_version(data) is None:
         return True
@@ -404,7 +404,7 @@ def _lossy_to_overwrite(path: str) -> bool:
         the survivors. Healing the file is defensible; doing it without keeping the original
         is not."""
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         return True
     if _schema_version(data) != VERSION:
         return True

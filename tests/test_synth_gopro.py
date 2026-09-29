@@ -49,6 +49,8 @@ EXACT_S = 0.002        # noise-free, mid-straight line: measured max 0.41 ms
 AUTO_LINE_S = 0.003    # noise-free, the app's own line: measured max 0.80 ms (13.1 ms before X1)
 NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 16.9 ms (23.4 before X1)
 NOISY_BIAS_S = 0.010   # …and its mean: measured +1.8 ms (+2.6 before X1)
+ENTRY_KMH = 2.0        # lap-table entry speed vs 3.6 × the true speed at the crossing: measured max
+                       # 0.893 km/h (0.92 %), default noise, the app's own line
 
 _LOADED: dict = {}
 
@@ -123,6 +125,25 @@ def test_the_auto_fitted_line_is_off_the_braking_point():
         f"is the unknown-track line back on the braking point?")
 
 
+def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():
+    """The lap table's `entry` column (and laps.csv's, which reads the same row) is km/h at the
+    moment the lap began: within ENTRY_KMH of 3.6 × the TRUE speed where the kart crossed the app's
+    own start line. Until this test the unit factor was held by the golden fingerprint alone —
+    tests/test_units.py feeds a fake row — so a dropped ×3.6 (m/s under a km/h header) failed no
+    other test. Rows are paired with crossings by their lap id (lap i starts at crossing i), and
+    the ids are asserted to be every generated lap, so an excluded row cannot shift the pairing."""
+    rec, s = _load()
+    rows = s.lap_rows()
+    ids = [r["idx"] for r in rows]
+    assert sorted(ids) == list(range(rec.truth.laps)), f"lap-table ids {ids}"
+    cross = rec.truth.crossings(s.timing_lines_latlon()[0])
+    v_true = sg._kinematics(rec.truth, cross[ids])[1]
+    d = np.array([r["entry"] for r in rows]) - 3.6 * v_true
+    print(f"  entry speed vs truth: max|Δ| {np.abs(d).max():.3f} km/h, mean {d.mean():+.3f}")
+    assert np.abs(d).max() <= ENTRY_KMH, (
+        f"entry speed off 3.6 × the true crossing speed by {np.round(d, 2)} km/h — a unit factor?")
+
+
 def test_the_corners_are_the_circuits():
     rec, s = _load()
     found = s.corners.corner_list()
@@ -193,6 +214,7 @@ def _run_all():
     for fn in (test_the_real_loader_times_every_lap_on_the_gps9_clock,
                test_noise_free_laps_are_exact_to_the_millisecond,
                test_the_auto_fitted_line_is_off_the_braking_point,
+               test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing,
                test_the_corners_are_the_circuits,
                test_the_stats_tiles_and_the_coaching_page_are_populated,
                test_the_imu_is_one_rigid_motion_with_the_gps,
