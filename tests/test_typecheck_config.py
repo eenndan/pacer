@@ -37,10 +37,11 @@ sys.path.insert(0, _TESTS)
 from test_layering import QT_REACHING, _modules  # the one definition of "Qt-free"
 
 # Qt-free core modules that pyright (basic) does not pass yet. This set only shrinks. 14 modules
-# with 146 errors between them when the gate landed (2026-09-24).
+# with 146 errors between them when the gate landed (2026-09-24); 8 left after GATES-4 took the
+# six JSON stores off it (2026-09-29).
 NOT_YET = {
-    "coaching", "corner_model", "corners", "driving_channels", "export_data", "focus", "gmeter",
-    "library", "marks", "prefs", "session", "session_record", "stats", "track_db",
+    "coaching", "corner_model", "corners", "driving_channels", "export_data", "gmeter", "session",
+    "stats",
 }
 
 _ENTRY = re.compile(r"studio/(\w+)\.py")
