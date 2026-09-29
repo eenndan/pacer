@@ -1588,9 +1588,9 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     # counted laps, the share of its time on offer (median → best lap) that lies beyond the laps'
     # fast quartile, i.e. NOT inside their own spread, on 95694b9:
     #
-    #   lap set             theme        cause              rows  beyond the fast quartile
-    #   Sandown 3h (0064)   pace 100 %   consistency 100 %     4  51 % 56 % 52 % 51 %
-    #   0064 chapter 2      pace 100 %   consistency 100 %     2  54 % 41 %
+    #   lap set             theme        cause              beyond the fast quartile, per row
+    #   Sandown 3h (0064)   pace 100 %   consistency 100 %  C1 56 %  C4 51 %  C7 52 %  C6 51 %
+    #   0064 chapter 2      pace 100 %   consistency 100 %  C7 54 %  C6 41 %
     #
     # About half of every gap is the spread. These are the only two of the 13 lap sets (four
     # recordings, nine chapters) with a pace theme; 9 are execution + consistency, which the line
