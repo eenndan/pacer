@@ -196,7 +196,8 @@ class LibraryController:
         nothing and writes no row either (`waiting_for_line`); the drag that places the line, or
         File ▸ Save as track…, decides it once (`refresh_library_entry`), and the row is written
         then, with the verified best. A line placed at a circuit with no name leaves the PB and
-        the focus list to the name (`waiting_for_name`).
+        the focus list to the name (`waiting_for_name`), unless the timing is degraded: then no
+        name brings either (`degraded_first_open`), so none is waited for (QA r4 CODE-2).
 
         THE SYNTHETIC DEMO IS A FIRST OPEN THAT KEEPS NOTHING (QA EVAL-2). #424 kept it out of every
         store (QA NEW-6: it is not his driving), but by returning before `opened_new`, so the demo
@@ -237,7 +238,8 @@ class LibraryController:
             # the debrief again on every open.
             self.opened_new, self.pb_standing = new, standing
             self.degraded_first_open = new and bool(entry.get("degraded"))
-            self.waiting_for_name = new and not entry.get("track")
+            # A name brings nothing to degraded timing (QA r4 CODE-2): no PB and no focus list.
+            self.waiting_for_name = new and not entry.get("track") and not self.degraded_first_open
             self.win._library_unwritable = False
         except OSError:
             # The DISK said no. That is the one library failure the user can act on, so it is the
@@ -321,8 +323,15 @@ class LibraryController:
 
     def degraded_notice(self) -> str | None:
         """The session notice's clause for a first open on degraded timing (QA REG-2): what rules
-        the verdicts out, with its measure, and what that withholds. None otherwise."""
-        if not self.degraded_first_open:
+        the verdicts out, with its measure, and what that withholds. None otherwise.
+
+        Also while such a first open still waits for its start line (`waiting_for_line`, QA r4
+        CODE-2): the drag is still asked for, since lap times depend on it, but it will decide
+        nothing, and the notice used to leave the driver to find that out after placing it.
+        `degraded_first_open` itself stays unset until the row is written, so the landing reads
+        exactly what it read before."""
+        degraded = self.waiting_for_line and self.win.session.timing_quality.degraded
+        if not (self.degraded_first_open or degraded):
             return None
         why = self.win.session.timing_quality.untrusted() or "timing estimated"
         return f"{why}: too uncertain to judge a PB or set a focus list, so no debrief"
