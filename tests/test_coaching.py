@@ -54,13 +54,14 @@ def _coast(start_dist, end_dist, duration=0.6):
 
 
 def _levers(times, best, *, brake=None, coast=None, apex=None,
-            best_brake=None, best_coast=None, best_apex=None) -> dict:
+            best_brake=None, best_coast=None, best_apex=None, exit=None, best_exit=None) -> dict:
     """summarize's per-lap lever inputs (ADV-1) for a fixture shaped like `_plan_times`: every lap
     SLOWER than the best through a corner carries that corner's planted cell (`brake` / `coast`
     seconds, `apex` km/h), and every lap ON the baseline carries the best lap's own (`best_*`;
     0 s and 100 km/h by default). The laps' habit — the median over the cells of lap − best — is
     then the planted difference wherever the slow laps are the majority. A scalar applies to every
-    corner; None means "the same as the best lap"."""
+    corner; None means "the same as the best lap". `exit` / `best_exit` (km/h, the line signature's
+    second half, COACHING-5) are passed only when either is given."""
     n = len(best)
 
     def row(v, default):
@@ -75,9 +76,13 @@ def _levers(times, best, *, brake=None, coast=None, apex=None,
     def per_lap(slow, base):
         return [[slow[j] if t[j] > best[j] else base[j] for j in range(n)] for t in times]
 
-    return dict(brake_time_by_lap=per_lap(lb, bb), coast_time_by_lap=per_lap(lc, bc),
-                apex_by_lap=per_lap(la, ba), best_brake_time=bb, best_coast_time=bc,
-                best_apex=ba)
+    out = dict(brake_time_by_lap=per_lap(lb, bb), coast_time_by_lap=per_lap(lc, bc),
+               apex_by_lap=per_lap(la, ba), best_brake_time=bb, best_coast_time=bc,
+               best_apex=ba)
+    if exit is not None or best_exit is not None:
+        be = row(best_exit, [60.0] * n)
+        out.update(exit_by_lap=per_lap(row(exit, be), be), best_exit=be)
+    return out
 
 
 # ------------------------------------------------------------------ median-lap selection
@@ -260,23 +265,112 @@ def test_every_ranked_row_is_analysed_not_only_the_first_three():
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, **kw)
     assert len(opp.rows) == 5
     kinds = [r.reason.kind for r in opp.rows]
-    assert kinds == [K.REASON_LINE] * 5, kinds
+    assert kinds == [K.REASON_CONSISTENCY] * 5, kinds
     assert all("find time here" not in K.reason_sentence(r) for r in opp.rows)
     capped = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, top_n=3, **kw)
-    assert [r.reason.kind for r in capped.rows] == [K.REASON_LINE] * 3 + [K.REASON_NONE] * 2
+    assert [r.reason.kind for r in capped.rows] == [K.REASON_CONSISTENCY] * 3 + [K.REASON_NONE] * 2
     print(f"ok all rows analysed: {kinds} (top_n=3 still caps at 3)")
 
 
-def test_line_sigma_is_the_fallback_reason():
+def test_the_sigma_fallback_is_named_consistency_not_line():
+    """DOMAIN-5 (COACHING-5). The fallback fires on the corner's lap-to-lap spread alone — nothing
+    positional enters it — and it was stored and printed as "line" ("repeat your best line"), the
+    reason on 14 of the 15 ranked working-set rows. It is named by its trigger now; the stored id
+    and the words both say consistency, and neither says line."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)
-    # no apex/brake/coast signal at all, but real cross-lap spread -> LINE
+    # no apex/brake/coast/line signal at all, but real cross-lap spread -> the spread fallback
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.20})
     r = opp.rows[0]
-    assert r.reason.kind == K.REASON_LINE, r.reason
+    assert r.reason.kind == "consistency", r.reason
     assert abs(r.reason.sigma - 0.20) < 1e-9
-    assert "repeat your best line" in K.reason_sentence(r)   # copy #1 (QA 2026-09-26)
-    print(f"ok line reason (fallback): {K.reason_sentence(r)}")
+    sent = K.reason_sentence(r)
+    assert sent.startswith("consistency: middle half of laps within 0.50 s"), sent
+    assert "line" not in sent, f"a spread nothing positional measured reads as a line: {sent!r}"
+    print(f"ok consistency reason (fallback): {sent}")
+
+
+def _line_fixture(*, apex_gain: float, exit_gain: float, sigma: float = 0.03):
+    """`_one_corner_lossy`'s five laps with the best lap's apex and exit planted `apex_gain` /
+    `exit_gain` km/h against the three slower laps (best − lap; the two baseline laps carry the
+    best lap's own speeds), so the habit medians are exactly the planted numbers."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5)
+    lev = _levers(times, best, apex=100.0 - apex_gain, best_apex=100.0,
+                  exit=60.0 - exit_gain, best_exit=60.0)
+    return K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                       sigmas_by_cid={1: sigma}, **lev)
+
+
+def test_line_needs_a_measured_slower_apex_and_faster_exit():
+    """COACHING-5: "line" is said only where the laps' habit shows a line-shaped difference — the
+    best lap SLOWER at the apex by LINE_APEX_DELTA_KMH or more AND faster out by LINE_EXIT_DELTA_KMH
+    or more. Each half alone is not a line, a faster apex is the apex lever (exclusive by sign), and
+    the row's numbers are the habit's, signed."""
+    da, de = K.LINE_APEX_DELTA_KMH, K.LINE_EXIT_DELTA_KMH
+    r = _line_fixture(apex_gain=-3.0, exit_gain=2.0).rows[0].reason
+    assert r.kind == K.REASON_LINE == "line", r
+    assert (r.apex_speed_gain, r.exit_speed_gain, r.apex_speed_deficit) == (-3.0, 2.0, 0.0), r
+    assert abs(r.contribution - 0.5 * K._saturate(2.0, de)) < 1e-12, r
+    opp = _line_fixture(apex_gain=-3.0, exit_gain=2.0).rows[0]
+    kmh = K.reason_sentence(opp, reach=False)
+    assert kmh == "take your best lap's line (its apex −3.0, exit +2.0 km/h)", kmh
+    mph = K.reason_sentence(opp, "mph", reach=False)
+    assert mph == "take your best lap's line (its apex −1.9, exit +1.2 mph)", mph
+    # Exactly at both thresholds it fires; a hair under either, it does not.
+    assert _line_fixture(apex_gain=-da, exit_gain=de).rows[0].reason.kind == K.REASON_LINE
+    for a, e in ((-da + 0.01, 5.0), (-5.0, de - 0.01), (-5.0, 0.0), (0.0, 5.0), (-5.0, -2.0)):
+        got = _line_fixture(apex_gain=a, exit_gain=e).rows[0].reason
+        assert got.kind == K.REASON_CONSISTENCY, (a, e, got)
+        assert abs(got.apex_speed_gain - a) < 1e-9 and abs(got.exit_speed_gain - e) < 1e-9, got
+    # A FASTER apex with the same exit is the apex lever, never a line.
+    fast = _line_fixture(apex_gain=4.0, exit_gain=0.0).rows[0].reason
+    assert fast.kind == K.REASON_APEX and fast.apex_speed_deficit == 4.0, fast
+    # It competes like every reason: a spread far wider than the exit gain still wins the row.
+    wide = _line_fixture(apex_gain=-3.0, exit_gain=1.2, sigma=1.0).rows[0].reason
+    assert wide.kind == K.REASON_CONSISTENCY and abs(wide.exit_speed_gain - 1.2) < 1e-9, wide
+    print(f"ok line signature: {kmh!r} / {mph!r}")
+
+
+def test_no_row_says_line_without_its_measured_signature():
+    """COACHING-5 pass criterion 1, as a property: across a seeded sweep of habit inputs (apex and
+    exit gains either side of the thresholds, every lever and spread) and the three drift phases of
+    the golden gate, a row whose kind is "line" always carries the signature — apex gain ≤
+    −LINE_APEX_DELTA_KMH and exit gain ≥ LINE_EXIT_DELTA_KMH — and nothing else ever reads "line"."""
+    from _synthetic import drift_band_session, drift_median_session, drift_noise_session
+
+    da, de = K.LINE_APEX_DELTA_KMH, K.LINE_EXIT_DELTA_KMH
+    rng = np.random.default_rng(5)
+    seen = {}
+    for _ in range(400):
+        n_laps, n_c = int(rng.integers(3, 9)), int(rng.integers(1, 5))
+        corners = _corners(n_c)
+        best = [5.0] * n_c
+        times = [[5.0 + max(0.0, rng.normal(0.2, 0.2)) for _j in range(n_c)] for _i in range(n_laps)]
+        times[0] = list(best)                                  # the best lap is a candidate
+        lap_times = [sum(t) for t in times]
+
+        def cells(scale, base, n_c=n_c, n_laps=n_laps):
+            return [[base + rng.normal(0.0, scale) for _j in range(n_c)] for _i in range(n_laps)]
+        opp = K.summarize(
+            corners, list(range(n_laps)), lap_times, times, best,
+            {c.cid: float(abs(rng.normal(0.0, 0.3))) for c in corners},
+            apex_by_lap=cells(3.0, 60.0), best_apex=list(60.0 + rng.normal(0, 3.0, n_c)),
+            exit_by_lap=cells(3.0, 80.0), best_exit=list(80.0 + rng.normal(0, 3.0, n_c)),
+            brake_time_by_lap=cells(0.2, 1.0), best_brake_time=[1.0] * n_c)
+        for row in opp.rows:
+            r = row.reason
+            seen[r.kind] = seen.get(r.kind, 0) + 1
+            shaped = r.apex_speed_gain <= -da and r.exit_speed_gain >= de
+            assert r.kind != K.REASON_LINE or shaped, r
+    for make in (drift_band_session, drift_median_session, drift_noise_session):
+        for row in make().coaching_opportunities().rows:
+            r = row.reason
+            seen[r.kind] = seen.get(r.kind, 0) + 1
+            assert r.kind != K.REASON_LINE or (r.apex_speed_gain <= -da
+                                               and r.exit_speed_gain >= de), (make.__name__, r)
+    # The sweep must reach the branch it guards, and the other kinds beside it.
+    assert seen.get(K.REASON_LINE, 0) >= 10 and seen.get(K.REASON_CONSISTENCY, 0) >= 10, seen
+    print(f"ok no line without its signature: {seen}")
 
 
 def test_dominant_reason_is_the_largest_contribution():
@@ -323,7 +417,7 @@ def test_the_lever_is_the_habit_not_one_lap():
                       coast_time_by_lap=coast, best_coast_time=[0.0])
     r = opp.rows[0]
     assert r.reason.coast_extra_s == 0.0, r.reason
-    assert r.reason.kind == K.REASON_LINE, (
+    assert r.reason.kind == K.REASON_CONSISTENCY, (
         f"one lap's 1.5 s coast became the instruction: {K.reason_sentence(r)}", r.reason)
 
     brake = [[0.0], [0.30], [0.0], [0.30], [0.30], [0.30]]         # 4 of 6, not the median lap
@@ -336,7 +430,7 @@ def test_the_lever_is_the_habit_not_one_lap():
     opp = K.summarize(corners, list(range(6)), lap_times, times, best, sigmas_by_cid={1: 0.03},
                       apex_by_lap=apex, best_apex=[100.0])
     assert opp.rows[0].reason.apex_speed_deficit == 0.0, opp.rows[0].reason
-    print(f"ok ADV-1 habit: a lone 1.5 s coast on the median-time lap -> {K.REASON_LINE}; "
+    print(f"ok ADV-1 habit: a lone 1.5 s coast on the median-time lap -> {K.REASON_CONSISTENCY}; "
           f"4 of 6 laps +0.30 s on the brakes -> {K.REASON_BRAKING} {r.reason.brake_extra_s:.2f} s")
 
 
@@ -488,21 +582,22 @@ def test_the_coaching_cells_and_thirds_are_derived_once_and_follow_every_upstrea
     print(f"ok coaching memo: cold {cold}, warm 0, re-derived after invalidation, follows the best")
 
 
-
-def test_the_line_row_states_the_iqr_its_gate_reads_never_sigma():
+def test_the_consistency_row_states_the_iqr_its_gate_reads_never_sigma():
     """ADV-4 (QA r4). "laps vary ±1.28 s" printed σ on SD3h C1 while the row's own evidence gate
     reads the interquartile range (0.31 s there): 90 % of the laps sat inside the printed band. The
-    line sentence now states the middle half; a row with no measured evidence states no spread."""
+    spread sentence ("line" until COACHING-5) states the middle half; a row with no measured
+    evidence states no spread."""
     import dataclasses
 
     ev = K.Evidence(n_laps=62, reach_laps=4, reach=K.REACH_RARE, iqr=0.309, abstain=K.ABSTAIN_NONE)
-    opp = dataclasses.replace(_opp_with(K.REASON_LINE, K._NO_PHASES, sigma=1.278), evidence=ev)
+    opp = dataclasses.replace(_opp_with(K.REASON_CONSISTENCY, K._NO_PHASES, sigma=1.278),
+                              evidence=ev)
     sent = K.reason_sentence(opp, reach=False)
-    assert sent == "repeat your best line (middle half of laps within 0.31 s)", sent
+    assert sent == "consistency: middle half of laps within 0.31 s", sent
     assert "1.28" not in sent and "±" not in sent, sent
-    bare = _opp_with(K.REASON_LINE, K._NO_PHASES, sigma=1.278)      # _NO_EVIDENCE, n_laps 0
-    assert K.reason_sentence(bare) == "repeat your best line", K.reason_sentence(bare)
-    print(f"ok ADV-4 line copy: {sent!r}; unmeasured: {K.reason_sentence(bare)!r}")
+    bare = _opp_with(K.REASON_CONSISTENCY, K._NO_PHASES, sigma=1.278)  # _NO_EVIDENCE, n_laps 0
+    assert K.reason_sentence(bare) == "consistency", K.reason_sentence(bare)
+    print(f"ok ADV-4 consistency copy: {sent!r}; unmeasured: {K.reason_sentence(bare)!r}")
 
 
 # ----------------------------------------------- D2: entry/apex/exit Δt-vs-best decomposition
@@ -683,7 +778,9 @@ def _opp_with(reason_kind: str, phases: "K.PhaseLoss", *, time_lost: float = 0.3
                       apex_speed_deficit=reason_kw.pop("apex_speed_deficit", 0.0),
                       brake_extra_s=reason_kw.pop("brake_extra_s", 0.0),
                       coast_extra_s=reason_kw.pop("coast_extra_s", 0.0),
-                      sigma=reason_kw.pop("sigma", 0.05))
+                      sigma=reason_kw.pop("sigma", 0.05),
+                      apex_speed_gain=reason_kw.pop("apex_speed_gain", 0.0),
+                      exit_speed_gain=reason_kw.pop("exit_speed_gain", 0.0))
     return K.Opportunity(cid=1, direction=-1, time_lost=time_lost, entry_dist=50.0,
                          reason=reason, phases=phases)
 
@@ -709,9 +806,20 @@ def test_m5_phase_clause_is_reason_aware():
     apex_dom = K.PhaseLoss(entry=0.02, apex=0.20, exit=0.02)
     apex_opp = _opp_with(K.REASON_APEX, apex_dom, apex_speed_deficit=5.0)
     assert "most of it on the apex" in K.reason_sentence(apex_opp), K.reason_sentence(apex_opp)
-    # A LINE reason is phase-agnostic -> the plain fix-location clause on any dominant third.
-    line_opp = _opp_with(K.REASON_LINE, exit_dom, sigma=0.2)
-    assert "most of it on exit" in K.reason_sentence(line_opp), K.reason_sentence(line_opp)
+    # The CONSISTENCY (spread) reason is phase-agnostic -> the plain fix-location clause on any
+    # dominant third.
+    spread_opp = _opp_with(K.REASON_CONSISTENCY, exit_dom, sigma=0.2)
+    assert "most of it on exit" in K.reason_sentence(spread_opp), K.reason_sentence(spread_opp)
+    spread_entry = _opp_with(K.REASON_CONSISTENCY, entry_dom, sigma=0.2)
+    assert "most of it on entry" in K.reason_sentence(spread_entry)
+    # A measured LINE trades apex speed for the exit (COACHING-5): apex/exit are its phases, and an
+    # entry-dominant loss reads as where it shows, not where the line is fixed.
+    line_exit = _opp_with(K.REASON_LINE, exit_dom, apex_speed_gain=-2.0, exit_speed_gain=1.5)
+    assert K.reason_sentence(line_exit).endswith("km/h) — most of it on exit"), \
+        K.reason_sentence(line_exit)
+    line_entry = _opp_with(K.REASON_LINE, entry_dom, apex_speed_gain=-2.0, exit_speed_gain=1.5)
+    assert K.reason_sentence(line_entry).endswith("km/h), and it carries to entry"), \
+        K.reason_sentence(line_entry)
     print("ok M5 reason-aware clause: entry fix never 'most of it on exit'; compatible phases keep it")
 
 
@@ -734,20 +842,20 @@ def test_brake_approach_window_and_coast_only_when_best_lacks_it():
     """A brake/coast that the BEST lap matches is NOT a loss (the difference is what counts);
     and a brake event OUTSIDE the corner approach window is ignored."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)
-    # identical brake on both laps -> brake contribution 0 (falls back to line)
+    # identical brake on both laps -> brake contribution 0 (falls back to consistency)
     same_brake = [_brake(onset_dist=35.0, duration=0.7)]
     same_s = K.lap_window_inputs(corners, same_brake, [])[0]
     assert same_s == [0.7], same_s   # the application IS counted — on both laps alike
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, sigmas_by_cid={1: 0.10},
                       **_levers(times, best, brake=same_s, best_brake=same_s))
-    assert opp.rows[0].reason.kind == K.REASON_LINE, opp.rows[0].reason
+    assert opp.rows[0].reason.kind == K.REASON_CONSISTENCY, opp.rows[0].reason
     # a brake far before the approach window (outside [enter-30, exit]) is ignored
     far_brake = [_brake(onset_dist=-100.0, duration=2.0)]
     far_s = K.lap_window_inputs(corners, far_brake, [])[0]
     assert far_s == [0.0], far_s
     opp2 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, sigmas_by_cid={1: 0.10},
                        **_levers(times, best, brake=far_s))
-    assert opp2.rows[0].reason.kind == K.REASON_LINE, opp2.rows[0].reason
+    assert opp2.rows[0].reason.kind == K.REASON_CONSISTENCY, opp2.rows[0].reason
     print("ok windows: matched brake/coast not a loss; out-of-window brake ignored")
 
 
@@ -817,12 +925,12 @@ def test_brake_window_projected_onto_each_laps_own_odometer():
     assert r.reason.kind == K.REASON_BRAKING, r.reason
     assert abs(r.reason.brake_extra_s - 0.6) < 1e-9  # 0.9 - 0.3
     # control: the SAME events WITHOUT the totals (identity projection) leave the brake outside the
-    # un-projected window -> it does NOT count -> the row falls back to LINE.
+    # un-projected window -> it does NOT count -> the row falls back to CONSISTENCY.
     raw_s = K.lap_window_inputs(corners, med_brakes, [])[0]
     assert raw_s == [0.0], raw_s
     opp0 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=raw_s, best_brake=best_s))
-    assert opp0.rows[0].reason.kind == K.REASON_LINE, opp0.rows[0].reason
+    assert opp0.rows[0].reason.kind == K.REASON_CONSISTENCY, opp0.rows[0].reason
     print("ok D13 odometer-frame: corner window projected onto each lap's own odometer for braking")
 
 
@@ -875,7 +983,7 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=warped[0]))
     row = opp.rows[0]
-    assert row.reason.brake_extra_s == 0.0 and row.reason.kind == K.REASON_LINE, row.reason
+    assert row.reason.brake_extra_s == 0.0 and row.reason.kind == K.REASON_CONSISTENCY, row.reason
 
     # CONTROL, the normalized projection (align=None): the out-of-corner brake counts.
     normal = K.lap_window_inputs(corners, med_brakes, [], med_dist, med_elapsed, align=None, **kw)
@@ -988,8 +1096,8 @@ def test_session_coaching_opportunities_ranks_the_slow_corner():
     best_c2 = best_stats[1].time
     losses = [s.corners.lap_corner_stats(i)[1].time - best_c2 for i in (1, 2, 3)]
     assert abs(top.time_lost - float(np.median(losses))) < 1e-9, (top.time_lost, losses)
-    # no g signal -> the reason falls back to apex (the slow half drops the apex speed) or line
-    assert top.reason.kind in (K.REASON_APEX, K.REASON_LINE), top.reason
+    # no g signal -> the reason falls back to apex (the slow half drops the apex speed) or consistency
+    assert top.reason.kind in (K.REASON_APEX, K.REASON_CONSISTENCY), top.reason
     print(f"ok session: C{top.cid} ranked first, lost {top.time_lost:.3f}s, "
           f"reason {top.reason.kind}")
 
@@ -1959,10 +2067,10 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does not generalize to every lap set: line holds 78 % of 0068's ranked
-    time and 100 % of 0064's (a theme on each), but one of the five single chapters names no single
-    cause, so the "no single cause" branch is a real case on real recordings and is asserted here as a
-    first-class output, not as a fallback."""
+    Measured, the cause axis does not generalize to every lap set: consistency holds 78 % of
+    0068's ranked time and 100 % of 0064's (a theme on each), but one of the five single chapters
+    names no single cause, so the "no single cause" branch is a real case on real recordings and is
+    asserted here as a first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
     # This test is about the CAUSE axis and the two-action cap, so it keeps a clear lead.
@@ -1973,7 +2081,7 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     assert acts[0].startswith("Braking is the common thread"), acts[0]
     assert acts[1].startswith("Start with C1:"), acts[1]
     mixed_rows = _themed([K.REACH_REPEAT] * 4,
-                         kinds=[K.REASON_BRAKING, K.REASON_APEX, K.REASON_LINE,
+                         kinds=[K.REASON_BRAKING, K.REASON_APEX, K.REASON_CONSISTENCY,
                                 K.REASON_COASTING])
     mixed = K.session_theme(mixed_rows)
     mixed_acts = K.theme_actions(mixed, mixed_rows)
@@ -2267,7 +2375,7 @@ def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent(
     def row(k, n, reach):
         ev = K.Evidence(n_laps=n, reach_laps=k, reach=reach, iqr=0.02,
                                abstain=K.ABSTAIN_NONE)
-        reason = K.Reason(kind=K.REASON_LINE, contribution=0.05,
+        reason = K.Reason(kind=K.REASON_CONSISTENCY, contribution=0.05,
                                  apex_speed_deficit=0.0, brake_extra_s=0.0, coast_extra_s=0.0,
                                  sigma=0.3)
         return K.Opportunity(cid=1, direction=1, time_lost=0.1, entry_dist=0.0,
@@ -2277,7 +2385,7 @@ def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent(
     assert two == " 2 of 19 laps matched your best lap here.", two
     assert one == " 1 of 19 laps matched your best lap here.", one
     whole = K.Theme(kind=K.THEME_EXECUTION, share=1.0, execution_s=0.28,
-                           pace_s=0.0, n_ranked=3, n_abstained=8, cause=K.REASON_LINE,
+                           pace_s=0.0, n_ranked=3, n_abstained=8, cause=K.REASON_CONSISTENCY,
                            cause_share=0.78)
     sentence = K.theme_sentence(whole)
     assert sentence.startswith("All of the time on offer") and "Most" not in sentence, sentence

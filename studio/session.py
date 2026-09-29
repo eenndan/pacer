@@ -3027,6 +3027,9 @@ class Session:
             best_brake_time=cells[best][0],
             best_coast_time=cells[best][1],
             best_apex=cells[best][2],
+            # COACHING-5: the line signature's second half, the exit speed beside the apex.
+            exit_by_lap=[cells[i][3] for i in cand_ids],
+            best_exit=cells[best][3],
             phases_by_cid=phases_by_cid,
             # C5: which cells the loss, the evidence and the reach may count — this lap's matched
             # corners and the best lap's, since every one of those is a difference between the two.
@@ -3035,18 +3038,19 @@ class Session:
         )
 
     def _coaching_lap_inputs(self, lap_ids) -> dict[int, tuple[list[float], list[float],
-                                                               list[float]]]:
-        """Per lap in `lap_ids` AND the best lap, keyed by lap id: the three per-corner cells the
+                                                               list[float], list[float]]]:
+        """Per lap in `lap_ids` AND the best lap, keyed by lap id: the four per-corner cells the
         coaching levers take their median over (ADV-1) — (time on the brakes, time coasting, apex
-        speed km/h), each aligned to `corners.corner_list()`. Laps whose `lap_corner_stats` do not
+        speed km/h, exit speed km/h; the last for the line signature, COACHING-5), each aligned to
+        `corners.corner_list()`. Laps whose `lap_corner_stats` do not
         cover every corner are skipped (`coaching_opportunities` drops them from its candidates).
 
         The brake and coast cells are `coaching.lap_window_inputs` on the lap's own odometer,
         clock and `driving.brake_on`, each corner window projected through that lap's MEMOIZED
         warp (`CornerModel.lap_alignment`) — never a derived one, and never the normalized scale
         (#289). The best lap's total is `best_lap_total_distance()`, the one its phase thirds and
-        the old best-lap subtrahend used. Apex speed is `lap_corner_stats`' on the local best
-        baseline (not `apex_speed_delta`, which follows the reference baseline — D13).
+        the old best-lap subtrahend used. Apex and exit speed are `lap_corner_stats`' on the local
+        best baseline (not `apex_speed_delta`, which follows the reference baseline — D13).
 
         MEMOIZED PER LAP on the whole set of its inputs (`_same_inputs`), because
         `coaching_opportunities` runs five times a refresh and these cells were most of its cost
@@ -3059,7 +3063,7 @@ class Session:
         corner_dist_total = float(basis[1]) if basis is not None else None
         frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
         memo = self.__dict__.setdefault("_coaching_cells_memo", {})
-        out: dict[int, tuple[list[float], list[float], list[float]]] = {}
+        out: dict[int, tuple[list[float], list[float], list[float], list[float]]] = {}
         for i in list(lap_ids) + ([best] if best is not None else []):
             if i in out:
                 continue
@@ -3084,7 +3088,8 @@ class Session:
             brake, coast = coaching.lap_window_inputs(
                 corner_list, events, spans, dist, elapsed, brake_on,
                 corner_dist_total=corner_dist_total, lap_total=lap_total, frame=frame, align=align)
-            out[i] = (brake, coast, [float(s.apex_speed) for s in st])
+            out[i] = (brake, coast, [float(s.apex_speed) for s in st],
+                      [float(s.exit_speed) for s in st])
             memo[i] = (key, out[i])
         return out
 
