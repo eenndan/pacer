@@ -1,3 +1,3 @@
 ### Fixed
-- An older GoPro's timing warning no longer says the video clock drifts 0.1 %: every surface and the
-  exported report now say a lap may read up to ~0.1 s off, the video clock's packet-timing error.
+- An older GoPro's timing warning no longer says the video clock drifts or runs fast: the app, the
+  report and laps.csv's [e] key say a lap may read up to ~0.1 s off, the packet-timing error.

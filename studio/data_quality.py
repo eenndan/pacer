@@ -244,8 +244,8 @@ class TimingQuality:
         in it, so a reader sent there by the lap panel's amber chip found nothing saying why the
         chip was lit. This is the missing half, in the same words summary() and detail() use
         (MEDIA_CLOCK_LAP_ERROR, "GPS quality low"), so the card cannot drift from the banner and
-        the chip's hover. Empty when not degraded — and for the no-GPS state, whose row is a sentence of its
-        own because there is no clock to qualify."""
+        the chip's hover. Empty when not degraded — and for the no-GPS state, whose row is a
+        sentence of its own because there is no clock to qualify."""
         media, low = self.media_clock, self.low_gps_quality
         if self.no_gps:
             return ""
@@ -751,8 +751,11 @@ MARK_ORDER = (MARK_PROVISIONAL, MARK_ESTIMATED, MARK_BREAK_IN_SERIES, MARK_LOW_R
 MARK_MEANING = {
     MARK_PROVISIONAL: ("provisional: the start/finish line was auto-fitted and not confirmed, so "
                        "this time is measured from an arbitrary point and will change if it moves"),
+    # The app's media-clock warning in ASCII: the one bound, hedged, and no "runs fast" (the
+    # clocks' rates agree to ~27 ppm; see MEDIA_CLOCK_LAP_ERROR).
     MARK_ESTIMATED: ("estimated: timing came from the video clock (an older camera with no GPS9), "
-                     "which runs slightly fast"),
+                     f"so a lap may read {MEDIA_CLOCK_LAP_ERROR} off; not measured on such a "
+                     "camera"),
     MARK_BREAK_IN_SERIES: ("break in series: the recording is not continuous, so times either "
                            "side of the break are not on the same footing"),
     MARK_LOW_RELIABILITY: ("low reliability: a GPS dropout inside this lap, or a recording whose "
