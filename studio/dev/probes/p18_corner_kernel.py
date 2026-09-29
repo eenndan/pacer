@@ -122,22 +122,12 @@ def symmetric() -> None:
 
 # ------------------------------------------------------------------------------------ synthetic
 def _to_truth(s, truth, xs, ys):
+    """App-local points -> the circuit's own frame (the Session half; `sg.true_s` reads it)."""
     lat, lon = np.empty(len(xs)), np.empty(len(xs))
     for k, (x, y) in enumerate(zip(xs, ys, strict=True)):
         g = s.cs.global_(pacer.Vec3f(float(x), float(y), 0.0))
         lat[k], lon[k] = g.lat, g.lon
     return sg.to_local(lat, lon, truth.origin)
-
-
-def _true_s(circuit, px, py):
-    """Lap distance of the foot of each point on the true centreline."""
-    cx, cy = circuit.x[:-1], circuit.y[:-1]
-    out = np.empty(len(px))
-    for k in range(len(px)):
-        j = int(np.argmin((cx - px[k]) ** 2 + (cy - py[k]) ** 2))
-        h = circuit.heading[j]
-        out[k] = circuit.s[j] + (px[k] - cx[j]) * math.cos(h) + (py[k] - cy[j]) * math.sin(h)
-    return np.mod(out, circuit.length)
 
 
 def _synthetic_case(rec, name: str, smooth: int) -> dict:
@@ -172,7 +162,7 @@ def _synthetic_case(rec, name: str, smooth: int) -> dict:
         for cn in clist:
             px, py = _to_truth(s, truth, np.interp([cn.enter, cn.apex, cn.exit], bcum, bx),
                                np.interp([cn.enter, cn.apex, cn.exit], bcum, by))
-            se, sa, sx = _true_s(c, np.asarray(px), np.asarray(py))
+            se, sa, sx = sg.true_s(c, np.asarray(px), np.asarray(py))
             at_true = min(apex_true.values(), key=functools.partial(_gap, sa, L))
             width = float(np.mod(sx - se, L))
             out["apex"].append(float(wrap(sa - at_true)))

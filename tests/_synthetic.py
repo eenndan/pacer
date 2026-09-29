@@ -368,8 +368,9 @@ def _dn_straight_speed(along, vc, vt, coast_s):
 def drift_noise_laps(t0: float = 100.0, specs=_DN_LAPS) -> list[dict]:
     """The drift + noise fixture's laps, contiguous on one media clock from `t0`. Each dict holds
     `cols` — the `_cols_cache` 5-tuple (times, xs, ys, full_speed m/s WITH noise, cum) exactly as
-    `Session._lap_columns` serves it — and `clean_speed`, the same speed before the noise, which is
-    what lets a test measure the noise it was given. See the block above for every choice.
+    `Session._lap_columns` serves it — `clean_speed`, the same speed before the noise, which is
+    what lets a test measure the noise it was given, and `dense`, the lap's true motion on the fine
+    grid (`_dn_sampled`). See the block above for every choice.
 
     `specs` is the per-lap recipe list; `_DM_LAPS` builds the median-drift variant and `_DB_LAPS`
     the sub-gate drift ladder off the SAME builder (see their blocks above)."""
@@ -388,31 +389,44 @@ def drift_noise_laps(t0: float = 100.0, specs=_DN_LAPS) -> list[dict]:
         if spec["run_wide_m"]:
             bumps.append((_DN_STRAIGHT_M + arc, DN_RUN_WIDE_HALF_M, spec["run_wide_m"]))
         if bumps:
-            tx, ty = np.gradient(xs), np.gradient(ys)
-            norm = np.hypot(tx, ty)
-            push = np.zeros_like(u)
-            for centre, half, amp in bumps:
-                rel = u - centre
-                push = push + np.where(np.abs(rel) < half,
-                                       amp * 0.5 * (1.0 + np.cos(np.pi * rel / half)), 0.0)
-            xs, ys = xs + push * ty / norm, ys - push * tx / norm  # outward normal of a CCW loop
+            xs, ys = _dn_pushed(u, xs, ys, bumps)
         odo = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))))
         v = np.full_like(u, spec["vc"])
         for k, (vt, coast_s) in enumerate(spec["straights"]):
             start = k * (_DN_STRAIGHT_M + arc)
             on = (u >= start) & (u < start + _DN_STRAIGHT_M)
             v[on] = _dn_straight_speed(u[on] - start, spec["vc"], vt, coast_s)
-        clock = np.concatenate(([0.0], np.cumsum(np.diff(odo) / (0.5 * (v[:-1] + v[1:])))))
-        tk = np.linspace(0.0, clock[-1], int(round(clock[-1] / DN_DT_S)) + 1)
-        uk = np.interp(tk, clock, u)
-        clean = np.interp(uk, u, v)
-        noisy = clean + np.random.default_rng(spec["seed"]).normal(0.0, DN_SPEED_SIGMA_MPS, tk.size)
-        times = t0 + tk
-        laps.append({"cols": (times, np.interp(uk, u, xs), np.interp(uk, u, ys), noisy,
-                              np.interp(uk, u, odo)),
-                     "clean_speed": clean})
-        t0 = float(times[-1])  # the next lap starts on this lap's finish crossing
+        laps.append(_dn_sampled(u, xs, ys, odo, v, spec["seed"], t0))
+        t0 = float(laps[-1]["cols"][0][-1])  # the next lap starts on this lap's finish crossing
     return laps
+
+
+def _dn_pushed(u, xs, ys, bumps):
+    """(xs, ys) displaced by each (centre, half-length, amplitude) raised cosine along the RIGHT-hand
+    normal — outward on a CCW loop, so a positive amplitude runs a left-hander wide."""
+    tx, ty = np.gradient(xs), np.gradient(ys)
+    norm = np.hypot(tx, ty)
+    push = np.zeros_like(u)
+    for centre, half, amp in bumps:
+        rel = u - centre
+        push = push + np.where(np.abs(rel) < half,
+                               amp * 0.5 * (1.0 + np.cos(np.pi * rel / half)), 0.0)
+    return xs + push * ty / norm, ys - push * tx / norm
+
+
+def _dn_sampled(u, xs, ys, odo, v, seed, t0):
+    """One lap driven along (xs, ys) at speed `v` (m/s at each reference station `u`), sampled every
+    DN_DT_S from `t0`: `cols` and `clean_speed` (see `drift_noise_laps`), plus `dense` — (u,
+    odometer, clock from 0) on the fine grid, the lap's TRUE motion, which a truth test reads."""
+    clock = np.concatenate(([0.0], np.cumsum(np.diff(odo) / (0.5 * (v[:-1] + v[1:])))))
+    tk = np.linspace(0.0, clock[-1], int(round(clock[-1] / DN_DT_S)) + 1)
+    uk = np.interp(tk, clock, u)
+    clean = np.interp(uk, u, v)
+    noisy = clean + np.random.default_rng(seed).normal(0.0, DN_SPEED_SIGMA_MPS, tk.size)
+    times = t0 + tk
+    return {"cols": (times, np.interp(uk, u, xs), np.interp(uk, u, ys), noisy,
+                     np.interp(uk, u, odo)),
+            "clean_speed": clean, "dense": (u, odo, clock)}
 
 
 def drift_median_laps(t0: float = 100.0) -> list[dict]:
@@ -483,6 +497,68 @@ def drift_band_session():
     fastest, the other three at 0.118 / 0.289 / 0.460 % line-length drift — the sub-gate band the
     two sessions above have no lap in, with every corner boundary spatially matched."""
     return _drift_session(drift_band_laps())
+
+
+# ------------------------------------------ a ONE-CORNER LINE CHANGE, on the stadium and off it
+# The Δ trace and the Corners table against a known answer (TRUTH-1, row 6; review move 10). Lap 1
+# is lap 0 driven `amp_m` WIDE through ONE corner only — a raised cosine spanning exactly that
+# corner's arc, at the SAME speed at the same station — so every millisecond it loses is lost in
+# that corner and the true Δ is flat everywhere else. Laps 2-3 are slower laps on the reference
+# line, so the session geometry (corners.DRIFT_MIN_LAPS = 3) is fitted as on a real session. The
+# truth is each lap's `dense` clock read at the physical station of a reference odometer
+# (`line_change_delta`). Two layouts, because a fix proven on one shape can be a fix for that
+# shape: the stadium (every straight's normal has no x component — the degenerate conditioning a
+# rigid-shift fit sees there) and the synthetic GoPro's own 7-corner circuit (turns of -130 … +70°,
+# both directions), driven at its generator's own flying-lap speed.
+_LC_REF = dict(offset=0.0, vc=12.5, straights=((22.0, 2.0), (22.0, 2.0)), run_wide_m=0.0)
+_LC_CIRCUIT_PACE = (1.0, 1.0, 0.99, 0.985)   # lap 1 carries the line change at lap 0's own pace
+_LC_CIRCUIT_SEEDS = (51, 52, 53, 54)
+
+
+def line_change_laps(amp_m: float = 1.0, corner: int = 1, layout: str = "stadium",
+                     t0: float = 100.0) -> list[dict]:
+    """The four laps of the line-change fixture (block above): lap 1 runs `amp_m` wide through
+    `corner` (1-based, track order) of `layout` — "stadium" (2 turns) or "circuit" (the synthetic
+    GoPro's 7). Each dict is `drift_noise_laps`' shape, `dense` included."""
+    if layout == "stadium":
+        centre = _DB_TURN1 if corner == 1 else _DB_TURN2
+        return drift_noise_laps(t0, specs=(
+            dict(_LC_REF, seed=41),
+            dict(_LC_REF, seed=42, bumps=((centre, _DB_ARC / 2.0, amp_m),)),
+            dict(_LC_REF, vc=12.3, straights=((21.8, 2.2), (21.8, 2.2)), seed=43),
+            dict(_LC_REF, vc=12.2, straights=((21.7, 2.3), (21.7, 2.3)), seed=44)))
+    from studio.dev import synth_gopro as sg   # the generator's circuit and its driver
+
+    c = sg.build_circuit()
+    kart = sg.simulate(laps=2)                 # flying lap 1 spans d in [L - s_start, 2L - s_start)
+    v = np.interp(c.s + c.length - kart.s_start, kart.d_nodes, kart.v_nodes)
+    k = c.corners[corner - 1]
+    arc = abs(np.radians(k.turn_deg)) * k.radius
+    laps = []
+    for j, (pace, seed) in enumerate(zip(_LC_CIRCUIT_PACE, _LC_CIRCUIT_SEEDS, strict=True)):
+        xs, ys = c.x, c.y
+        if j == 1:   # wide = away from the corner's centre: right of a left-hander, left of a right
+            xs, ys = _dn_pushed(c.s, xs, ys, ((k.apex_s, arc / 2.0, amp_m * np.sign(k.turn_deg)),))
+        odo = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))))
+        laps.append(_dn_sampled(c.s, xs, ys, odo, v * pace, seed, t0))
+        t0 = float(laps[-1]["cols"][0][-1])
+    return laps
+
+
+def line_change_session(amp_m: float = 1.0, corner: int = 1, layout: str = "stadium"):
+    """(session, laps): the real bare Session over `line_change_laps(...)` (lap 0 the best), and
+    the laps themselves, whose `dense` clocks `line_change_delta` reads the truth from."""
+    laps = line_change_laps(amp_m, corner, layout)
+    return _drift_session(laps), laps
+
+
+def line_change_delta(laps: list[dict], lap: int, b_ref) -> np.ndarray:
+    """The TRUE Δ of `lap` against lap 0 at lap 0's odometer `b_ref` (m): the time `lap` reached
+    that physical station minus the time lap 0 did, each from its own lap start."""
+    u0, odo0, clock0 = laps[0]["dense"]
+    u, _odo, clock = laps[lap]["dense"]
+    station = np.interp(b_ref, odo0, u0)
+    return np.interp(station, u, clock) - np.interp(station, u0, clock0)
 
 
 # ------------------------------------------------------------------ a circuit that crosses itself
