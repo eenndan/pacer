@@ -28,21 +28,43 @@ app output (review §7), and every bound is the measured value with at most 1.5�
                 `ceiling` is today's value with headroom, so the row is strict BOTH ways: a fix
                 that turns it green fails here until it flips the status, and a change that makes
                 it worse fails too.
-  * stated    — a known effect pinned under its ceiling, to be said in words on its surface.
+  * stated    — a known effect pinned under its ceiling, to be said in words on its surface. A
+                stated row whose size is already written somewhere also carries a floor (`tol`,
+                stat > tol), so the words cannot outlive the effect.
 Braking truth (row 7) is the app's OWN pipeline — its session threshold, its COAST_SMOOTH_S
 boxcar, its event detector — run on the noise-free TRUE speed at the same instants, so the row
-isolates what GPS noise adds and nothing definitional.
+isolates what GPS noise adds and nothing definitional. It is therefore blind to the detector's own
+logic, which tests/test_driving.py's known-answer tests hold.
 
 Rows: 1 lap time · 2 sector split · 3 ideal lap (mean bias over seeds) · 4 gap to ideal · 5 corner
 time and minimum speed (p18's truth window) · 6 rise of Δ through each corner, on the GoPro and on
 the line-change fixtures (trace, Corners table, and the two against each other) · 7 time on the
-brakes. The Stats rows are TRUTH-2's.
+brakes and brake events per lap · 8-10 the Stats page (TRUTH-2), below.
+
+THE STATS PAGE (rows 8-10), against every `SessionStats` field the golden `stats` leaf carries:
+  lap_stats  Vmax, average, Vmin, peak lateral g, peak braking g → row 8 (`lap.*`); brake_s and
+             brake_n → row 7; coast_s → `coast.per_lap`. The lap table's distance and entry speed
+             (`Session.lap_rows`) are row 8 too; the average reads that same odometer.
+  totals     distance_m, moving_s → row 9 (`session.*`). duration_s, start_clock and end_clock
+             have no measured truth: the file's own span and its GPS9 clock read back.
+  speed_bands_kmh, lateral_g_bands → row 9 (`bands.*`), each binned on the APP's own edges for
+             the same laps, so the row measures the channel and not the binning. speed_bands_mph
+             is the same `_band_report` path in another unit and follows from the km/h row.
+  gg_envelope (and the gg_cloud under it) → `gg.envelope`, truth from v²κ and dv/dt.
+  longest_coast_s → `coast.longest`. The generator has no coast phase and the app's pipeline on
+             the true speed finds none, so every coasting second is GPS noise: stated per noise.
+  session_vmax, slowest_corner, and the SPEED · G peak tiles are maxima and medians of row 8's
+             per-lap values; pace, pace_trend, race_pace, stints, stint_break_s, stint_count,
+             pace_cov and laps_within_1pct are functions of row 1's lap times and windows.
+  The DATA TRUST card's lateral gain → row 10 (`gcheck.lat_gain`), stated with a floor: the
+             comment at `studio/gmeter.py`'s _GAIN_* constants states its size and cause.
 
 Run: python tests/test_truth_matrix.py [--measure]   (--measure prints every statistic, for a
-re-measure after an intentional change; ~20 s, needs the pixi env's ffmpeg)
+re-measure after an intentional change; ~10 s alone on a quiet Mac, needs the pixi env's ffmpeg)
 """
 import dataclasses
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -57,7 +79,9 @@ from _synthetic import line_change_delta, line_change_session  # noqa: E402
 
 import pacer  # noqa: E402  (app-local metres -> GPS, the Session's own coordinate system)
 from studio import chapters, driving  # noqa: E402
+from studio import stats as stats_service  # noqa: E402
 from studio._signal import speed_long_g  # noqa: E402
+from studio.corner_model import SegmentBests  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.session import Session  # noqa: E402
 
@@ -74,13 +98,14 @@ class Row:
     level: object                # a GPS noise level, or a line-change fixture's name
     measured: float              # this tree's value (see MEASURED_ON)
     status: str                  # green | known-red | stated
-    tol: float | None = None     # green: stat <= tol; known-red: the fix's target, stat > tol
+    tol: float | None = None     # green: stat <= tol; known-red: the fix's target, stat > tol;
+                                 # stated: an optional floor, stat > tol
     ceiling: float | None = None  # known-red / stated: stat <= ceiling
     fixed_by: str = ""
 
 
-MEASURED_ON = "2026-09-29 on main 6301923 (GATES-6 #462, COACHING-5 #465 in)"
-G, R = "green", "known-red"
+MEASURED_ON = "2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical)"
+G, R, S = "green", "known-red", "stated"
 _T5 = "TRUTH-5 (sector boundary at the true line crossing)"
 _T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
 _T10 = "TRUTH-10 (the Δ family on the warp frame)"
@@ -99,8 +124,15 @@ ROWS: tuple[Row, ...] = (
     # 2 · sector split at the golden placement. The interior split (S2) sits between two
     # boundaries snapped to the nearest 10 Hz fix, so it is quantized to 0.1 s steps: noise 2 and
     # 4.5 snap the same laps a whole fix apart, which is why their pooled column means coincide.
+    # The spread is the snap's at noise 0 only. At noise 2 and 4.5 it is the GPS noise's (the
+    # crossing fix gains little there: TRUTH-5's scope measured sd 48-101 -> 27-88 ms), so those
+    # rows bound today's spread and are not TRUTH-5's targets.
     Row("sector.interior_sd", 0.0, 0.0539754, R, tol=0.0010, ceiling=0.080, fixed_by=_T5),
+    Row("sector.interior_sd", 2.0, 0.127539, G, tol=0.19),
+    Row("sector.interior_sd", 4.5, 0.224982, G, tol=0.33),
     Row("sector.max", 0.0, 0.0846015, R, tol=0.010, ceiling=0.125, fixed_by=_T5),
+    Row("sector.max", 2.0, 0.230441, G, tol=0.34),
+    Row("sector.max", 4.5, 0.430441, G, tol=0.64),
     Row("sector.col_mean", 0.0, 0.00711365, G, tol=0.0105),
     Row("sector.col_mean", 2.0, 0.0237803, G, tol=0.035),
     Row("sector.col_mean", 4.5, 0.0237803, G, tol=0.035),
@@ -145,11 +177,76 @@ ROWS: tuple[Row, ...] = (
         fixed_by=_T10),
     Row("line_change.trace_vs_table", "circuit", 0.0824724, R, tol=0.010, ceiling=0.12,
         fixed_by=_T10),
-    # 7 · time on the brakes per lap, |mean| of app − the app's own pipeline on the true speed:
-    # exactly what GPS noise adds
+    # 7 · time on the brakes per lap (s), and brake events per lap (the Stats tile's count), |mean|
+    # of app − the app's own pipeline on the true speed: exactly what GPS noise adds. The row
+    # isolates GPS noise and is blind to the detector's own logic (tests/test_driving.py has that).
     Row("brake.mean", 0.0, 0.00238095, G, tol=0.0035),
     Row("brake.mean", 2.0, 0.696424, R, tol=0.30, ceiling=1.04, fixed_by=_T12),
     Row("brake.mean", 4.5, 0.76616, R, tol=0.30, ceiling=1.14, fixed_by=_T12),
+    Row("brake.count", 0.0, 0.0, G, tol=0.0),
+    Row("brake.count", 2.0, 0.0238095, G, tol=0.035),
+    Row("brake.count", 4.5, 0.261905, G, tol=0.39),
+    # 8 · the Stats page per lap: every matched lap pooled over the seeds, max |app − truth|. Speeds
+    # in km/h against Truth.v_nodes over the lap's true window (exact extremes: speed is linear in
+    # time between nodes); peak g against v²κ and dv/dt; distance (m) against the centreline the
+    # kart drives. The load-time position boxcar rounds every corner off, so the odometer — the lap
+    # table's distance and the average speed both read it — is ~1.1 % short at noise 0 (10.4 m of
+    # 971 m; noise adds length back): stated. Nothing says it on a surface yet.
+    Row("lap.vmax", 0.0, 0.0787918, G, tol=0.118),
+    Row("lap.vmax", 2.0, 1.46684, G, tol=2.2),
+    Row("lap.vmax", 4.5, 3.80899, G, tol=5.7),
+    Row("lap.vmin", 0.0, 0.0179453, G, tol=0.026),
+    Row("lap.vmin", 2.0, 1.5606, G, tol=2.3),
+    Row("lap.vmin", 4.5, 3.5406, G, tol=5.3),
+    Row("lap.avg", 0.0, 0.859496, S, ceiling=1.28),
+    Row("lap.avg", 2.0, 0.898457, S, ceiling=1.34),
+    Row("lap.avg", 4.5, 0.880122, S, ceiling=1.32),
+    Row("lap.dist", 0.0, 10.7419, S, ceiling=16.1),
+    Row("lap.dist", 2.0, 12.3037, S, ceiling=18.4),
+    Row("lap.dist", 4.5, 12.7748, S, ceiling=19.1),
+    Row("lap.entry", 0.0, 0.017847, G, tol=0.026),
+    Row("lap.entry", 2.0, 1.86739, G, tol=2.8),
+    Row("lap.entry", 4.5, 2.68017, G, tol=4.0),
+    Row("lap.peak_lat_g", 0.0, 0.0541882, G, tol=0.081),
+    Row("lap.peak_lat_g", 2.0, 0.0493137, G, tol=0.073),
+    Row("lap.peak_lat_g", 4.5, 0.0470888, G, tol=0.070),
+    Row("lap.peak_brake_g", 0.0, 0.105356, G, tol=0.158),
+    Row("lap.peak_brake_g", 2.0, 0.11971, G, tol=0.179),
+    Row("lap.peak_brake_g", 4.5, 0.249212, G, tol=0.37),
+    # 9 · the Stats page per session, worst seed: the recording's distance (m; the same rounded
+    # odometer, stated) and moving time (s); the speed and lateral-g bands (s/lap, the worst band,
+    # on the app's own edges); the p98 grip envelope (g); coasting (s/lap and the longest span,
+    # truth 0 — every second of it is GPS noise, stated). The lateral bands move ~1.4 s/lap into
+    # the next 0.2 g bar at noise 0: the IMU lateral reads 0.98 of v²κ, and the corner plateaus
+    # (1.6 g × grip) sit on the 1.5 and 1.7 g edges, so a 2 % scale moves whole corners across.
+    Row("session.distance", 0.0, 161.828, S, ceiling=242),
+    Row("session.distance", 2.0, 160.347, S, ceiling=240),
+    Row("session.distance", 4.5, 141.971, S, ceiling=212),
+    Row("session.moving", 0.0, 0.0644998, G, tol=0.096),
+    Row("session.moving", 2.0, 0.101238, G, tol=0.15),
+    Row("session.moving", 4.5, 0.1355, G, tol=0.20),
+    Row("bands.speed", 0.0, 0.188678, G, tol=0.28),
+    Row("bands.speed", 2.0, 0.248832, G, tol=0.37),
+    Row("bands.speed", 4.5, 0.347876, G, tol=0.52),
+    Row("bands.lat_g", 0.0, 1.42037, G, tol=2.1),
+    Row("bands.lat_g", 2.0, 1.37467, G, tol=2.0),
+    Row("bands.lat_g", 4.5, 1.35097, G, tol=2.0),
+    Row("gg.envelope", 0.0, 0.0660399, G, tol=0.099),
+    Row("gg.envelope", 2.0, 0.0748052, G, tol=0.112),
+    Row("gg.envelope", 4.5, 0.071656, G, tol=0.107),
+    Row("coast.per_lap", 0.0, 0.0, S, ceiling=0.0),
+    Row("coast.per_lap", 2.0, 0.0997296, S, ceiling=0.149),
+    Row("coast.per_lap", 4.5, 0.453987, S, ceiling=0.68),
+    Row("coast.longest", 0.0, 0.0, S, ceiling=0.0),
+    Row("coast.longest", 2.0, 0.4, S, ceiling=0.6),
+    Row("coast.longest", 4.5, 0.6, S, ceiling=0.89),
+    # 10 · the g cross-check's lateral gain − 1, mean over the seeds. The IMU here IS the GPS
+    # trajectory (truth 1.0), yet it reads 1.14-1.15: the GPS reference is what is low (studio/
+    # gmeter.py's _GAIN_* comment has the cause). Stated with a floor, because that comment
+    # states its size; no correction (it would move the 0.8-1.25 verdict gate on real mounts).
+    Row("gcheck.lat_gain", 0.0, 0.146912, S, tol=0.10, ceiling=0.20),
+    Row("gcheck.lat_gain", 2.0, 0.146248, S, tol=0.10, ceiling=0.20),
+    Row("gcheck.lat_gain", 4.5, 0.141493, S, tol=0.10, ceiling=0.20),
 )
 
 
@@ -336,10 +433,11 @@ def _delta_rise_errors(case: Case) -> np.ndarray:
 
 
 def _brake_errors(case: Case) -> np.ndarray:
-    """Per matched lap: the app's time on the brakes minus the SAME pipeline on the true speed."""
+    """(laps, 2) per matched lap: the app's time on the brakes and its brake-event count, each
+    minus the SAME pipeline's on the true speed."""
     s = case.s
     theta = s.driving.thresholds().theta_b
-    rows = {r.idx: r.brake_s for r in s.stats.lap_stats()}
+    rows = {r.idx: r for r in s.stats.lap_stats()}
     out = []
     for i in case.match:
         dists, _kmh, elapsed = s._lap_arrays(i)
@@ -347,8 +445,95 @@ def _brake_errors(case: Case) -> np.ndarray:
         g = speed_long_g(3.6 * case.truth.speed_at(t_true), elapsed)
         events = driving.brake_events(dists, elapsed, g, theta,
                                       corner_windows=s.driving._corner_windows(i, float(dists[-1])))
-        out.append(rows[i] - driving.brake_time(elapsed, g, theta, events))
-    return np.array(out)
+        out.append((rows[i].brake_s - driving.brake_time(elapsed, g, theta, events),
+                    rows[i].brake_n - len(events)))
+    return np.array(out, float)
+
+
+# ------------------------------------------------------------------------------ the Stats rows
+GRID_S = 0.002                   # the truth's time step for time-weighted statistics
+
+
+def _true_motion(case: Case, tau) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(speed m/s, lateral g + left, longitudinal g) at true times `tau`: v, v²κ and dv/dt, exact
+    between the truth's nodes (the IMU the generator writes is this same motion)."""
+    s_abs, v, acc = sg._kinematics(case.truth, tau)
+    return v, v * v * case.truth.circuit.at(s_abs)[3] / sg.G, acc / sg.G
+
+
+def _lap_grid(case: Case, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """True lap k cut into GRID_S steps: (midpoint times, durations) — the truth's own
+    time-weighting, to set against the app's trapezoidal `sample_durations`."""
+    a, b = case.tl[k], case.tl[k + 1]
+    edges = np.linspace(a, b, int(np.ceil((b - a) / GRID_S)) + 1)
+    return 0.5 * (edges[:-1] + edges[1:]), np.diff(edges)
+
+
+def _lap_stat_errors(case: Case) -> dict:
+    """Row 8, per matched lap: app minus truth for each per-lap Stats value (see ROWS)."""
+    s, t = case.s, case.truth
+    L = t.circuit.length
+    rows = {r.idx: r for r in s.stats.lap_stats()}
+    table = {r["idx"]: r for r in s.lap_rows()}
+    out: dict = {k: [] for k in ("vmax", "vmin", "avg", "dist", "entry", "peak_lat_g",
+                                 "peak_brake_g", "coast")}
+    for i, k in case.match.items():
+        a, b = case.tl[k], case.tl[k + 1]
+        # The truth's nodes inside the lap plus its two ends: speed is linear in time and dv/dt
+        # constant between nodes, so the extremes of both are among these instants (κ, smoothed
+        # over SMOOTH_M on a 0.25 m grid, varies well inside a node's step).
+        at = np.concatenate([t.t_nodes[(t.t_nodes > a) & (t.t_nodes < b)], [a, b]])
+        v, lat, lon = _true_motion(case, at)
+        r = rows[i]
+        out["vmax"].append(r.vmax_kmh - 3.6 * v.max())
+        out["vmin"].append(r.vmin_kmh - 3.6 * v.min())
+        out["avg"].append(r.avg_kmh - 3.6 * L / (b - a))
+        out["dist"].append(table[i]["dist"] - L)
+        out["entry"].append(table[i]["entry"] - 3.6 * float(v[-2]))    # v at the start crossing
+        out["peak_lat_g"].append(r.peak_lat_g - float(np.abs(lat).max()))
+        out["peak_brake_g"].append(r.peak_brake_g - max(0.0, -float(lon.min())))
+        out["coast"].append(r.coast_s)
+    return {key: np.array(vals, float) for key, vals in out.items()}
+
+
+def _true_bands(case: Case, report, values_of) -> np.ndarray:
+    """The truth's mean seconds per lap in each of `report`'s bands, over the SAME laps, binned on
+    the SAME edges by the app's own `band_seconds`: only the channel can differ, not the binning."""
+    got = []
+    for i in report.lap_ids:
+        tau, w = _lap_grid(case, case.match[i])
+        got.append(stats_service.band_seconds(values_of(tau), w, report.edges))
+    return np.mean(got, axis=0)
+
+
+def _session_errors(case: Case) -> dict:
+    """Rows 9 and 10, one recording: app minus truth for each session-level Stats value."""
+    s, t = case.s, case.truth
+    st = s.stats
+    out = {}
+    tot = st.totals()
+    out["distance"] = tot.distance_m - float(t.d_nodes[-1] - t.d_nodes[0])
+    # moving time: speed is linear in time between nodes, so each interval's share at or above
+    # the threshold is exact (0 before the kart moves and after it stops)
+    v0, v1, dt = t.v_nodes[:-1], t.v_nodes[1:], np.diff(t.t_nodes)
+    lo, hi, thr = np.minimum(v0, v1), np.maximum(v0, v1), stats_service.MOVING_MS
+    share = np.where(hi > lo, np.clip((hi - thr) / np.maximum(hi - lo, 1e-12), 0.0, 1.0),
+                     (lo >= thr).astype(float))
+    out["moving"] = tot.moving_s - float(np.sum(share * dt))
+    speed = st.speed_bands().all
+    out["bands.speed"] = speed.seconds - _true_bands(
+        case, speed, lambda tau: 3.6 * _true_motion(case, tau)[0])
+    lat = st.lateral_g_bands().all
+    out["bands.lat_g"] = lat.seconds - _true_bands(case, lat, lambda tau: _true_motion(case, tau)[1])
+    cloud = []
+    for i in s.valid_lap_ids():
+        _v, la, lo_g = _true_motion(case, _lap_grid(case, case.match[i])[0])
+        cloud.append(np.hypot(la, lo_g))
+    out["envelope"] = st.gg_envelope() - float(np.percentile(np.concatenate(cloud),
+                                                            stats_service.ENVELOPE_PCT))
+    out["longest_coast"] = st.longest_coast_s()
+    out["lat_gain"] = s.gmeter_cross().lat_gain - 1.0
+    return out
 
 
 def _line_change_errors(name: str) -> dict:
@@ -377,6 +562,23 @@ def _pool(fn, noise):
     return np.concatenate([np.ravel(fn(_case(seed, noise))) for seed in SEEDS])
 
 
+def _stats_rows(noise) -> dict:
+    """Rows 8-10 at one noise level (their reductions are in ROWS' comments)."""
+    out = {}
+    laps = [_lap_stat_errors(_case(seed, noise)) for seed in SEEDS]
+    for key in ("vmax", "vmin", "avg", "dist", "entry", "peak_lat_g", "peak_brake_g"):
+        out[f"lap.{key}", noise] = float(np.abs(np.concatenate([e[key] for e in laps])).max())
+    out["coast.per_lap", noise] = float(np.concatenate([e["coast"] for e in laps]).mean())
+    ses = [_session_errors(_case(seed, noise)) for seed in SEEDS]
+    for key, name in (("distance", "session.distance"), ("moving", "session.moving"),
+                      ("bands.speed", "bands.speed"), ("bands.lat_g", "bands.lat_g"),
+                      ("envelope", "gg.envelope"), ("longest_coast", "coast.longest")):
+        out[name, noise] = max(float(np.abs(e[key]).max()) for e in ses)
+    out["gcheck.lat_gain", noise] = float(np.mean([e["lat_gain"] for e in ses]))
+    out["_gain_by_seed", noise] = [round(1.0 + e["lat_gain"], 4) for e in ses]
+    return out
+
+
 def stats() -> dict:
     """{(stat, level): value} — every statistic the table rows, computed once per process."""
     if _STATS:
@@ -389,9 +591,8 @@ def stats() -> dict:
         sec = [_sector_errors(_case(seed, noise)) for seed in SEEDS]
         allsec = np.concatenate(sec)
         out["sector.col_mean", noise] = float(np.abs(allsec.mean(axis=0)).max())
-        if noise == 0.0:
-            out["sector.interior_sd", noise] = max(float(e[:, 1].std()) for e in sec)
-            out["sector.max", noise] = float(np.abs(allsec).max())
+        out["sector.interior_sd", noise] = max(float(e[:, 1].std()) for e in sec)
+        out["sector.max", noise] = float(np.abs(allsec).max())
         ideal = np.array([_ideal(_case(seed, noise)) for seed in SEEDS])
         out["ideal.mean_bias", noise] = abs(float(ideal[:, 0].mean()))
         out["gap.max", noise] = float(np.abs(ideal[:, 1]).max())
@@ -402,7 +603,10 @@ def stats() -> dict:
         rise = np.concatenate([_delta_rise_errors(_case(seed, noise)) for seed in SEEDS])
         for j, key in enumerate(("delta.trace", "delta.table", "delta.trace_vs_table")):
             out[key, noise] = float(np.abs(rise[:, j]).max())
-        out["brake.mean", noise] = abs(float(_pool(_brake_errors, noise).mean()))
+        brake = np.concatenate([_brake_errors(_case(seed, noise)) for seed in SEEDS])
+        out["brake.mean", noise] = abs(float(brake[:, 0].mean()))
+        out["brake.count", noise] = abs(float(brake[:, 1].mean()))
+        out.update(_stats_rows(noise))
     for name in LINE_CHANGES:
         got = _line_change_errors(name)
         for key in ("line_change.trace", "line_change.table", "line_change.trace_vs_table"):
@@ -423,8 +627,11 @@ def check(row: Row, stat: float) -> str | None:
     if row.status == R and not stat > row.tol:
         return (f"{where} is within {row.tol:g} now: {row.fixed_by or 'a fix'} turned it green — "
                 f"flip its status to green and re-measure")
-    if row.status == "stated" and not stat <= row.ceiling:
+    if row.status == S and not stat <= row.ceiling:
         return f"{where} is past its ceiling {row.ceiling:g} — the stated effect grew"
+    if row.status == S and row.tol is not None and not stat > row.tol:
+        return (f"{where} is at or below its floor {row.tol:g} — the stated effect shrank: "
+                f"re-measure it, and the words that state its size")
     return None
 
 
@@ -433,8 +640,9 @@ def _check_rows(prefix: str) -> None:
     rows = [r for r in ROWS if r.stat.startswith(prefix)]
     assert rows, f"no row for {prefix}"
     for r in rows:
-        print(f"  {r.stat:28s} {r.level!s:>8}  {st[r.stat, r.level]:10.6g}  {r.status:9s} "
-              f"tol {r.tol:g}" + (f"  ceiling {r.ceiling:g}" if r.ceiling is not None else ""))
+        print(f"  {r.stat:28s} {r.level!s:>8}  {st[r.stat, r.level]:10.6g}  {r.status:9s}"
+              + (f"  tol {r.tol:g}" if r.tol is not None else "")
+              + (f"  ceiling {r.ceiling:g}" if r.ceiling is not None else ""))
     failed = [msg for r in rows if (msg := check(r, st[r.stat, r.level]))]
     assert not failed, "\n".join(failed)
 
@@ -442,20 +650,59 @@ def _check_rows(prefix: str) -> None:
 def test_the_table_keeps_its_own_rules():
     """Every statistic has exactly one row and every row a statistic; every bound is the measured
     value with at most 1.5× headroom (a green tol, a known-red or stated ceiling); a known-red
-    row names its fix and its target lies below today's value."""
+    row names its fix and its target lies below today's value, and so does a stated floor."""
     keys = [(r.stat, r.level) for r in ROWS]
     assert len(keys) == len(set(keys)), "a statistic has two rows"
     computed = {k for k in stats() if not k[0].startswith("_")}
     assert computed == set(keys), (f"no row: {sorted(computed - set(keys), key=str)}; "
                                    f"no statistic: {sorted(set(keys) - computed, key=str)}")
     for r in ROWS:
-        assert r.status in (G, R, "stated"), r
+        assert r.status in (G, R, S), r
         if r.status == G:
             assert r.ceiling is None and r.measured <= r.tol <= 1.5 * r.measured, r
         else:
             assert r.measured <= r.ceiling <= 1.5 * r.measured, r
         if r.status == R:
             assert r.fixed_by and r.tol < r.measured, r
+        if r.status == S and r.tol is not None:
+            assert r.tol < r.measured, r
+
+
+# Figures written in prose elsewhere, quoted from row 3: (where, the text it sits in, a pattern
+# whose groups are integer milliseconds, the rows they quote). TRUTH-11 moves row 3 and must move
+# these with it; this is what makes it.
+_PROSE_QUOTES = (
+    ("studio/docs/refused-2026-09.md §2",
+     lambda: open(os.path.join(_REPO, "studio", "docs", "refused-2026-09.md"),
+                  encoding="utf-8").read().split("\n## 2.", 1)[1].split("\n## 3.", 1)[0],
+     r"reads\s+\+(\d+)\s+ms\s+at\s+noise\s+0\s+but\s+(\d+)\s+ms\s+and\s+(\d+)\s+ms\s+fast",
+     (("ideal.mean_bias", 0.0), ("ideal.mean_bias", 2.0), ("ideal.mean_bias", 4.5))),
+    ("studio/corner_model.py SegmentBests.total",
+     lambda: SegmentBests.total.__doc__ or "",
+     r"(\d+)\s+ms\s+fast\s+at\s+synthetic\s+noise\s+2",
+     (("ideal.mean_bias", 2.0),)),
+)
+
+
+def test_the_prose_quotes_the_rows():
+    """The ideal-lap bias written in refusal §2 and in `SegmentBests.total`'s docstring is row 3's
+    measured value, in whole milliseconds, so a re-measure cannot leave the words behind. A
+    plant: the same check fails on a sentence one millisecond off."""
+    rows = {(r.stat, r.level): r for r in ROWS}
+
+    def misquotes(text, pattern, keys):
+        m = re.search(pattern, text)
+        assert m, f"the sentence quoting row 3 is gone: /{pattern}/"
+        return [f"{k[0]} @ {k[1]}: quoted {q} ms, measured {1000 * rows[k].measured:.1f} ms"
+                for q, k in zip(m.groups(), keys, strict=True)
+                if int(q) != round(1000 * rows[k].measured)]
+    for where, text, pattern, keys in _PROSE_QUOTES:
+        bad = misquotes(text(), pattern, keys)
+        assert not bad, f"{where} misquotes row 3:\n  " + "\n  ".join(bad)
+    ms = [round(1000 * rows[k].measured) for k in _PROSE_QUOTES[0][3]]
+    assert misquotes(f"the ideal reads +{ms[0]} ms at noise 0 but {ms[1] + 1} ms and {ms[2]} ms "
+                     f"fast", _PROSE_QUOTES[0][2], _PROSE_QUOTES[0][3]), "it passes a misquote"
+    print(f"  {len(_PROSE_QUOTES)} texts quote row 3's measured values")
 
 
 def test_row1_lap_time():
@@ -487,13 +734,27 @@ def test_row7_time_on_the_brakes():
     _check_rows("brake.")
 
 
+def test_row8_stats_per_lap():
+    _check_rows("lap.")
+
+
+def test_row9_stats_per_session():
+    for prefix in ("session.", "bands.", "gg.", "coast."):
+        _check_rows(prefix)
+
+
+def test_row10_g_cross_check_gain():
+    _check_rows("gcheck.")
+
+
 def test_every_row_has_teeth():
-    """Each known-red row fails if its status is flipped to green, and a planted defect turns a
-    green row red: +20 ms on every lap time (row 1, noise 0) and a +20 ms shift of the first
-    sector boundary (row 2's column mean, noise 0) — exercised through the same statistics."""
+    """Each known-red row, and each stated row with a floor, fails if its status is flipped to
+    green, and a planted defect turns a green row red: +20 ms on every lap time (row 1, noise 0),
+    a +20 ms shift of the first sector boundary (row 2's column mean, noise 0) and +3 % on every
+    lap's Vmax (row 8, noise 0) — exercised through the same statistics."""
     st = stats()
     for r in ROWS:
-        if r.status == R:
+        if r.status == R or (r.status == S and r.tol is not None):
             assert check(dataclasses.replace(r, status=G), st[r.stat, r.level]), r
     rows = {(r.stat, r.level): r for r in ROWS}
     lap_time, splits = Session.lap_time, Session.lap_sector_splits
@@ -510,13 +771,23 @@ def test_every_row_has_teeth():
     finally:
         Session.lap_sector_splits = splits
     assert check(rows["sector.col_mean", 0.0], float(np.abs(sec.mean(axis=0)).max()))
+    lap_stats = stats_service.SessionStats.lap_stats
+    stats_service.SessionStats.lap_stats = lambda self: [
+        dataclasses.replace(r, vmax_kmh=1.03 * r.vmax_kmh) for r in lap_stats(self)]
+    try:
+        vmax = np.concatenate([_lap_stat_errors(_case(seed, 0.0))["vmax"] for seed in SEEDS])
+    finally:
+        stats_service.SessionStats.lap_stats = lap_stats
+    assert check(rows["lap.vmax", 0.0], float(np.abs(vmax).max()))
 
 
 def _run_all():
-    for fn in (test_the_table_keeps_its_own_rules, test_row1_lap_time, test_row2_sector_split,
-               test_row3_ideal_lap, test_row4_gap_to_ideal, test_row5_corner_time_and_minimum_speed,
+    for fn in (test_the_table_keeps_its_own_rules, test_the_prose_quotes_the_rows,
+               test_row1_lap_time, test_row2_sector_split, test_row3_ideal_lap,
+               test_row4_gap_to_ideal, test_row5_corner_time_and_minimum_speed,
                test_row6_delta_rise_through_each_corner, test_row7_time_on_the_brakes,
-               test_every_row_has_teeth):
+               test_row8_stats_per_lap, test_row9_stats_per_session,
+               test_row10_g_cross_check_gain, test_every_row_has_teeth):
         t0 = time.time()
         fn()
         print(f"ok {fn.__name__} ({time.time() - t0:.1f} s)")
@@ -526,9 +797,11 @@ def measure() -> None:
     t0 = time.time()
     st = stats()
     for (stat, level), v in sorted(st.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))):
-        if stat.startswith("_"):
+        if stat == "_line_change":
             print(f"  {stat} {level}: planted C{v['planted']}; truth {np.round(v['truth'], 3)}; "
                   f"trace {np.round(v['trace'], 3)}; table {np.round(v['table'], 3)}")
+        elif stat.startswith("_"):
+            print(f"  {stat} {level}: {v}")
         else:
             print(f"  {stat:28s} {level!s:>8}: {v:.6g}")
     print(f"({time.time() - t0:.1f} s)")
