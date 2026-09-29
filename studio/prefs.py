@@ -148,7 +148,7 @@ def load(path: str | None = None) -> dict:
     if path is None:
         path = prefs_path()
     ok, data = _jsonstore.read_object(path)
-    if not ok:
+    if not ok or data is None:
         return {}
     version = _stored_version(data)
     if version < VERSION:
