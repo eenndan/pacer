@@ -16,9 +16,18 @@ so it runs everything up to `main()` and opens no window.
     stderr line as each module finishes loading. With both streams on one pipe, the note must come
     before the first line for a Qt module.
   * A second run with the same prefix finds the cache the first run wrote, and must print nothing.
+
+The same file is also the .app's entry, and there it runs differently. PyInstaller runs the script
+that `packaging/pacer.spec` hands `Analysis` as a TOP-LEVEL script, with no parent package, so a
+relative import in it raises. `from .app import main` did exactly that, and every build from June
+to QA round 4 (REG2-1) died at launch. No test saw it, because each one imported the entry as the
+package module `studio.__main__`. So one test runs the spec's entry file the way the bootloader
+does: by path, in a fresh interpreter, from a directory that is not the repo, with `sys.frozen`
+set. Its run_name is not "__main__", so it stops short of `main()` and opens no window.
 No telemetry, no window, no network.
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -76,9 +85,45 @@ def test_a_frozen_app_never_says_so():
     print("test_a_frozen_app_never_says_so OK")
 
 
+def _frozen_entry() -> str:
+    """The script the .app runs: the first path in pacer.spec's `Analysis([...])`, off disk."""
+    with open(os.path.join(_REPO, "packaging", "pacer.spec"), encoding="utf-8") as f:
+        m = re.search(r"\bAnalysis\(\s*\[\s*_repo\(([^)]*)\)", f.read())
+    assert m, ("packaging/pacer.spec has no `Analysis([_repo(...)` entry any more: this check "
+               "lost its subject; point _frozen_entry at the script the spec now bundles")
+    parts = [p.strip().strip("\"'") for p in m.group(1).split(",")]
+    entry = os.path.join(_REPO, *parts)
+    assert os.path.isfile(entry), f"pacer.spec's entry {entry} does not exist"
+    return entry
+
+
+def test_the_entry_runs_as_a_top_level_script():
+    """The bundle's entry resolves `main` with no parent package, the way the .app runs it."""
+    entry = _frozen_entry()
+    child = ("import runpy, sys\n"
+             "sys.frozen = True\n"  # what the bootloader sets; the entry reads it
+             f"sys.path.insert(0, {_REPO!r})\n"  # pacer.spec's pathex: `studio` is importable
+             f"g = runpy.run_path({entry!r}, run_name='__pacer_frozen_entry__')\n"
+             "import studio.app\n"
+             "print('main is studio.app.main:', g.get('main') is studio.app.main)\n")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    with tempfile.TemporaryDirectory(prefix="pacer-frozen-entry-") as cwd:
+        out = subprocess.run([sys.executable, "-c", child], cwd=cwd, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             timeout=240)
+    assert out.returncode == 0, (f"{os.path.relpath(entry, _REPO)} failed as a top-level script "
+                                 f"(rc {out.returncode}), which is how the .app runs it:\n"
+                                 f"{out.stdout[-3000:]}")
+    assert "main is studio.app.main: True" in out.stdout, (
+        f"the entry ran but its `main` is not studio.app.main:\n{out.stdout[-3000:]}")
+    assert _note() not in out.stdout, "the frozen entry printed the first-launch note"
+    print("test_the_entry_runs_as_a_top_level_script OK")
+
+
 def _run_all():
     test_a_first_launch_says_so_before_the_slow_import()
     test_a_frozen_app_never_says_so()
+    test_the_entry_runs_as_a_top_level_script()
     print("all first-launch tests OK")
 
 

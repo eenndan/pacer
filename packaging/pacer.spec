@@ -102,8 +102,10 @@ for _bin in ("ffmpeg", "ffprobe"):
         print(f"pacer.spec: WARNING {_bin} not found on PATH — export video will be disabled in "
               f"the .app until it is bundled.")
 
+# The entry is NOT `python -m studio`: PyInstaller runs this file as a top-level script with no
+# parent package, so studio/__main__.py must import absolutely (QA r4 REG2-1).
 a = Analysis(
-    [_repo("studio", "__main__.py")],                   # entry == `python -m studio`
+    [_repo("studio", "__main__.py")],
     pathex=[REPO_ROOT],
     binaries=pacer_binaries + pyside_binaries + pg_binaries + qta_binaries + ffmpeg_binaries,
     datas=pacer_datas + studio_datas + pyside_datas + pg_datas + qta_datas,
