@@ -78,12 +78,13 @@ The **load pipeline** behind `Session.load` (one of the four modules that may na
 - **Timing uses the GPS9 true wall clock by default** (`load._gps9_times`). The old `naive`
   axis spread each GPMF payload's MEDIA span across `i/n`: a 1.001 s payload of 10 fixes runs ~0.1%
   off the true rate (~9.990 Hz) until a payload of 11 resets it, so the naive axis **mis-placed
-  fixes by up to ±0.05 s** (28 ms rms, `media_clock.py`) and a lap could read up to ~0.1 s off,
-  with no average bias. The GPS9 stream carries the true GPS fix time (`timestamp_ms`) — a clean
-  10.000 Hz **wall clock** (the transponder's clock). We take only its per-sample SPACING and re-anchor each
-  contiguous run to that run's media time, so video sync / chapter offsets are unchanged while
-  inter-sample spacing is the real wall-clock spacing. Degrades to naive wherever no contiguous
-  GPS9 run is found — which is what a GPS5-era stream does, but **not** because its fixes are
+  fixes by about ±0.05 s** (28 ms rms, up to 73 ms; `media_clock.py`) and a lap could read up to
+  ~0.1 s off, with no average bias. The GPS9 stream carries the true GPS fix time
+  (`timestamp_ms`) — a clean 10.000 Hz **wall clock** (the transponder's clock). We take only its
+  per-sample SPACING and re-anchor each contiguous run to that run's media time, so video sync /
+  chapter offsets are unchanged while inter-sample spacing is the real wall-clock spacing.
+  Degrades to naive wherever no contiguous GPS9 run is found — which is what a GPS5-era stream
+  does, but **not** because its fixes are
   unstamped: they carry the ~1 s GPSU, so it is the SPACING that rejects them, never `ts == 0`
   (measured on all nine bundled GPS5-era clips). (A C++ Adam timestamp-fit path was tried here but **diverged**
   on long/noisy sessions and has since been removed — GPS9's true per-fix clock supersedes it.)
