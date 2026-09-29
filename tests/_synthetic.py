@@ -527,7 +527,7 @@ def line_change_laps(amp_m: float = 1.0, corner: int = 1, layout: str = "stadium
             dict(_LC_REF, seed=42, bumps=((centre, _DB_ARC / 2.0, amp_m),)),
             dict(_LC_REF, vc=12.3, straights=((21.8, 2.2), (21.8, 2.2)), seed=43),
             dict(_LC_REF, vc=12.2, straights=((21.7, 2.3), (21.7, 2.3)), seed=44)))
-    from studio.dev import synth_gopro as sg   # the generator's circuit and its driver
+    from studio.dev import synth_gopro as sg  # the generator's circuit and its driver
 
     c = sg.build_circuit()
     kart = sg.simulate(laps=2)                 # flying lap 1 spans d in [L - s_start, 2L - s_start)

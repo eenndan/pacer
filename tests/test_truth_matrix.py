@@ -42,7 +42,6 @@ Run: python tests/test_truth_matrix.py [--measure]   (--measure prints every sta
 re-measure after an intentional change; ~20 s, needs the pixi env's ffmpeg)
 """
 import dataclasses
-import math
 import os
 import shutil
 import sys
@@ -54,9 +53,9 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
 import numpy as np  # noqa: E402
+from _synthetic import line_change_delta, line_change_session  # noqa: E402
 
 import pacer  # noqa: E402  (app-local metres -> GPS, the Session's own coordinate system)
-from _synthetic import line_change_delta, line_change_session  # noqa: E402
 from studio import chapters, driving  # noqa: E402
 from studio._signal import speed_long_g  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
@@ -80,7 +79,7 @@ class Row:
     fixed_by: str = ""
 
 
-MEASURED_ON = "2026-09-29, main 9a1e3db + #462 (GATES-6)"
+MEASURED_ON = "2026-09-29 on main 6301923 (GATES-6 #462, COACHING-5 #465 in)"
 G, R = "green", "known-red"
 _T5 = "TRUTH-5 (sector boundary at the true line crossing)"
 _T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
