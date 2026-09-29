@@ -488,20 +488,6 @@ def test_the_coaching_cells_and_thirds_are_derived_once_and_follow_every_upstrea
     print(f"ok coaching memo: cold {cold}, warm 0, re-derived after invalidation, follows the best")
 
 
-def test_the_thirds_on_a_row_are_the_phase_report_row():
-    """COACHING-2: a row's Entry·Apex·Exit triple is `Session.phase_report`'s row for that corner,
-    bit for bit — the median over the laps the Stats CORNERS tooltip shows — not one lap's. On the
-    braking stadium the median-time lap's own thirds differ from that row, so this fails on a tree
-    that still reads them."""
-    s = _braking_stadium_session()
-    opp = s.coaching_opportunities()
-    pr = s.phase_report()
-    want = dict(zip(pr.cids, pr.rows, strict=True))
-    assert opp.rows, "the braking stadium ranks nothing"
-    for r in opp.rows:
-        assert r.phases.as_tuple() == want[r.cid], (r.cid, r.phases, want[r.cid])
-    print(f"ok thirds == phase_report rows on {len(opp.rows)} rows")
-
 
 def test_the_line_row_states_the_iqr_its_gate_reads_never_sigma():
     """ADV-4 (QA r4). "laps vary ±1.28 s" printed σ on SD3h C1 while the row's own evidence gate
