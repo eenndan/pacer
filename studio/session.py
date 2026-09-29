@@ -65,6 +65,8 @@ from ._signal import (
     _lap_closure,
     exclusion_detail,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
+    nearest_on_polyline,
+    polyline_line_crossing,
 )
 from .load import load_recording
 
@@ -2034,14 +2036,14 @@ class Session:
         """Per-sub-sector split times (seconds) for a lap, in order. With N sector lines a
         lap has N+1 sub-sectors and these sum to the lap time.
 
-        Mapped by DISTANCE PROJECTION, not pacer's geometric crossing list: the short sector
-        lines miss a pass on many laps (the GPS step over the line lands just past an endpoint),
-        leaving blank columns and fusing sub-sectors into splits that exceed the lap time. So
-        instead project each sector line's MIDPOINT onto this lap's trace — the cum_distance of
-        the nearest trace point is that boundary's lap distance d_k — then read elapsed time at
-        each boundary by interpolating on (cum_distance, elapsed). With the lap start (d=0) and
-        finish (d=total) the boundaries give one more split than there are boundaries, all
-        positive and SUMMING to the lap time for every lap (no blanks, none exceeding it)."""
+        Mapped by DISTANCE, not pacer's geometric crossing list: the short sector lines miss a
+        pass on many laps (the GPS step over the line lands just past an endpoint), leaving blank
+        columns and fusing sub-sectors into splits that exceed the lap time. So each line's lap
+        distance d_k is where this lap's trace crosses the line's infinite extension, between two
+        fixes (`_project_sector_lines`), and the elapsed time at each boundary is interpolated on
+        (cum_distance, elapsed) — the same chord interpolation that times the lap itself. With the
+        lap start (d=0) and finish (d=total) that gives one more split than there are boundaries,
+        all positive and SUMMING to the lap time for every lap (no blanks, none exceeding it)."""
         # times + cum_distances from the one bulk lap_columns crossing (both length lap.count(),
         # so the former m = min(len(points), len(cum_distances)) is just that length).
         times, _xs, _ys, _full_speed, cum = self._lap_columns(lap_id)
@@ -2051,7 +2053,7 @@ class Session:
         cum_distance = cum[:m]
         elapsed = times[:m] - times[0]
 
-        # Each sector line's lap distance = cum_distance of the lap point nearest its midpoint —
+        # Each sector line's lap distance = where the lap crosses it —
         # single-sourced (ascending, windowed + DEDUPED) via sector_boundary_distances, so the
         # boundary guide lines (F2) sit exactly where these splits are measured. The split count
         # follows the DEDUPED boundary count (not len(sector_lines)): a duplicate / wrong-pass
@@ -2071,36 +2073,41 @@ class Session:
     # out-of-order splits and poison the theoretical best.
     _SECTOR_DEDUPE_FRAC = 0.002
 
-    def _sector_line_midpoints(self) -> list[tuple[float, float]] | None:
-        """The (x, y) local-metre MIDPOINT of every sector line, index-aligned to
-        `laps.sectors.sector_lines` — the point every projection below snaps to the trace.
+    def _sector_line_endpoints(self) -> list[tuple[float, float, float, float]] | None:
+        """The (x1, y1, x2, y2) local-metre ends of every sector line, index-aligned to
+        `laps.sectors.sector_lines` — what every projection below crosses the trace with.
 
         None when a line does not expose pacer's Seg geometry. That is the bare-Session test path
         (which stubs opaque objects purely to set the sector COUNT); "geometry unknown" makes the
         session-wide collapse check stand down, so those sessions behave exactly as they did
         before the check existed."""
-        mids: list[tuple[float, float]] = []
+        ends: list[tuple[float, float, float, float]] = []
         for seg in self.laps.sectors.sector_lines:
             a, b = getattr(seg, "first", None), getattr(seg, "second", None)
             if a is None or b is None:
                 return None
-            mids.append(((a.x + b.x) / 2.0, (a.y + b.y) / 2.0))
-        return mids
+            ends.append((a.x, a.y, b.x, b.y))
+        return ends
 
-    def _project_sector_lines(self, lap_id: int,
-                              mids: list[tuple[float, float]]) -> tuple[list[float], float] | None:
-        """Project every sector-line midpoint onto ONE lap's trace: `(distances, tol)` where
+    def _project_sector_lines(self, lap_id: int, lines: list[tuple[float, float, float, float]]
+                              ) -> tuple[list[float], float] | None:
+        """Where ONE lap's trace crosses every sector line: `(distances, tol)` where
         `distances[k]` is line k's odometer metres on this lap (INDEX order, not sorted) and `tol`
         is that lap's `_SECTOR_DEDUPE_FRAC` collapse tolerance. None when the lap is too short to
         project onto (< 2 samples).
 
-        WINDOWED projection — a plain global argmin over the whole lap snaps a line to its
-        globally-nearest trace point, which on an out-and-back / hairpin (the line's midpoint sits
-        near two passes) or two lines placed close together can pick the WRONG pass and put the
-        boundary at a bogus odometer. So each line is first projected globally to find its lap
-        fraction, then RE-projected within a window around that fraction, breaking wrong-pass ties
-        toward the expected location while leaving a normal, well-separated line on a single-pass
-        section byte-identical to a plain global argmin.
+        WHICH PASS: a plain global argmin over the whole lap finds the trace point nearest the
+        line's midpoint, which on an out-and-back / hairpin (the midpoint sits near two passes) or
+        two lines placed close together can pick the WRONG pass. So each midpoint is first
+        projected globally to find its lap fraction, then RE-projected within a window around that
+        fraction, breaking wrong-pass ties toward the expected location.
+
+        WHERE ON IT, inside that same window: the chord that crosses the line's INFINITE
+        extension, at the crossing nearest the midpoint (a pass just past an end still crossed
+        it), else the window's nearest point to the midpoint. Both fall between fixes, not on
+        one: the nearest fix put an interior split up to 85 ms off a noise-free truth (the truth
+        matrix's row 2), the crossing within 5 ms. The crossing, not the midpoint's foot, is what
+        makes a SLANTED line right: the foot sits e·tanθ off for a pass e metres from the midpoint.
 
         The ONE projection both `sector_boundary_distances` (what the user sees) and
         `_collapsed_sector_lines` (what decides a line is degenerate) read, so the collapse
@@ -2121,8 +2128,9 @@ class Session:
         # best_rolling_lap in studio/bests.py — one source shared here.
         half = max(1, int(round(bests_service.ROLLING_SEARCH_FRAC * m)))
         dists: list[float] = []
-        for mx, my in mids:
-            d2 = (xs - mx) ** 2 + (ys - my) ** 2
+        for x1, y1, x2, y2 in lines:
+            mid = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+            d2 = (xs - mid[0]) ** 2 + (ys - mid[1]) ** 2
             j_global = int(np.argmin(d2))
             # Re-pick the nearest point WITHIN a window around the global hit. On a single-pass
             # section the window minimum IS the global hit, so this is a no-op; on an out-and-back
@@ -2131,7 +2139,12 @@ class Session:
             lo = max(0, j_global - half)
             hi = min(m, j_global + half + 1)
             j = lo + int(np.argmin(d2[lo:hi]))
-            dists.append(float(cum[j]))
+            # …then read the boundary off the chords of that pass only (half >= 1, m >= 2, so the
+            # window always holds a chord).
+            lo, hi = max(0, j - half), min(m, j + half + 1)
+            k, u = (polyline_line_crossing(xs[lo:hi], ys[lo:hi], (x1, y1), (x2, y2))
+                    or nearest_on_polyline(xs[lo:hi], ys[lo:hi], mid))
+            dists.append(float(cum[lo + k] + u * (cum[lo + k + 1] - cum[lo + k])))
         return dists, (self._SECTOR_DEDUPE_FRAC * total if total > 0 else 0.0)
 
     def _collapsed_sector_lines(self) -> frozenset[int]:
@@ -2139,12 +2152,14 @@ class Session:
         indices `sector_boundary_distances` refuses to emit a boundary for, on EVERY lap.
 
         Why session-wide (the MAP-08-ESC defect). The collapse tolerance is a fraction of the lap
-        odometer (~2.1 m on a 1068 m lap) but each lap projects the lines onto its OWN samples, so
-        in a narrow band a line lands on the same sample as its neighbour on SOME laps and one
-        sample away on others. A per-lap decision then hands different laps a different number of
-        boundaries — and the S columns stop meaning the same stretch of track from row to row:
-        one lap's S2 is a 17 s sector while another's is a 0.2 s sliver, `session_best_splits`
-        takes a per-column min across those incomparable pieces, and `theoretical_best` sums them.
+        odometer (~2.1 m on a 1068 m lap) but each lap meets the lines on its OWN trace, so in a
+        narrow band two lines fall inside it on SOME laps and just outside on others (a slanted
+        pair meets each lap at a different point across the track; before boundaries were line
+        crossings, the fix a line snapped to did it too). A per-lap decision then hands different
+        laps a different number of boundaries — and the S columns stop meaning the same stretch of
+        track from row to row: one lap's S2 is a 17 s sector while another's is a 0.2 s sliver,
+        `session_best_splits` takes a per-column min across those incomparable pieces, and
+        `theoretical_best` summed them.
         Deciding ONCE for the whole session makes that mixed state unreachable: every lap emits
         the same boundaries, so every S column is the same stretch of track on every row.
 
@@ -2160,19 +2175,19 @@ class Session:
         it owns no purple cell and feeds no theoretical best (`best_candidate_ids`).
 
         Memoized per (valid-lap set, line count); cleared with the rest on re-segmentation."""
-        mids = self._sector_line_midpoints()
-        if not mids or len(mids) < 2:
+        lines = self._sector_line_endpoints()
+        if not lines or len(lines) < 2:
             return frozenset()
         laps = tuple(self.valid_lap_ids())
-        key = (laps, len(mids))
+        key = (laps, len(lines))
         cached = getattr(self, "_sector_collapse_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
-        per_lap = [pr for pr in (self._project_sector_lines(lid, mids) for lid in laps)
+        per_lap = [pr for pr in (self._project_sector_lines(lid, lines) for lid in laps)
                    if pr is not None]
         kept: list[int] = []
         dropped: set[int] = set()
-        for k in range(len(mids)):
+        for k in range(len(lines)):
             if any(abs(d[k] - d[j]) <= tol for d, tol in per_lap for j in kept):
                 dropped.add(k)
             else:
@@ -2202,9 +2217,9 @@ class Session:
 
     def sector_boundary_distances(self, lap_id: int) -> list[float]:
         """Per-lap odometer distance (metres) of each sector line, found the SAME way
-        `lap_sector_splits` measures the splits: project each sector line's midpoint onto this
-        lap's trace and take the nearest point's cum_distance, then return them ASCENDING. So the
-        boundary guide lines on the charts (F2) land exactly where the split times are measured.
+        `lap_sector_splits` measures the splits — where this lap's trace crosses each line — then
+        returned ASCENDING. So the boundary guide lines on the charts (F2) land exactly where the
+        split times are measured.
 
         Two robustness guards live here (the single source of every consumer's boundaries):
           * WINDOWED projection — see `_project_sector_lines`, which owns it.
@@ -2217,11 +2232,11 @@ class Session:
             list, and the table simply shows a blank in the trailing S-columns the collapsed lines
             would have filled — now uniformly blank for every lap rather than ragged (its
             highlight/best-split paths already tolerate a short per-lap split list)."""
-        mids = self._sector_line_midpoints()
-        if not mids:
+        lines = self._sector_line_endpoints()
+        if not lines:
             return []
         dropped = self._collapsed_sector_lines()
-        projected = self._project_sector_lines(lap_id, mids)
+        projected = self._project_sector_lines(lap_id, lines)
         if projected is None:
             return []
         dists, _tol = projected
@@ -2413,8 +2428,8 @@ class Session:
     def sector_plot_positions(self, mode: str) -> list[tuple[str, float]]:
         """(label, plot-x) for the sector BOUNDARIES on the speed+delta charts' SHARED axis (F2).
 
-        Boundary FRACTIONS are measured on the primary best lap (same midpoint→trace projection
-        as the splits), then mapped onto the active Δ baseline's distance/time axis:
+        Boundary FRACTIONS are measured on the primary best lap (the same line crossing as the
+        splits), then mapped onto the active Δ baseline's distance/time axis:
           * 'distance': x = (d_k / primary_lap_total) × baseline_distance
           * 'time':     x = baseline elapsed at that same track fraction
         Dormant => the baseline IS the primary best lap. Returns [] if there's no best lap."""
