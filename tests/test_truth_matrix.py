@@ -112,7 +112,7 @@ G, R, S = "green", "known-red", "stated"
 _T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
 _T10 = "TRUTH-10 (the Δ family on the warp frame)"
 _T11 = "TRUTH-11 (de-bias the ideal; TRUTH-6 says it in words)"
-_T12 = "TRUTH-12 (noise-aware brake threshold, noise 0-2), else stated by TRUTH-7"
+_T12 = "TRUTH-12 (noise-aware brake threshold, noise 0-2; row 7's stated floor is its target)"
 # Seconds unless named; `level` is the GPS noise, or the line-change fixture. Every value is an
 # ERROR against truth (app − truth), so it is the size of the error that is bounded.
 ROWS: tuple[Row, ...] = (
@@ -182,9 +182,13 @@ ROWS: tuple[Row, ...] = (
     # 7 · time on the brakes per lap (s), and brake events per lap (the Stats tile's count), |mean|
     # of app − the app's own pipeline on the true speed: exactly what GPS noise adds. The row
     # isolates GPS noise and is blind to the detector's own logic (tests/test_driving.py has that).
+    # Noise adds time on the brakes on almost every lap (42 of 42 at noise 2, 41 of 42 at 4.5):
+    # stated, in words and with no figure, by both DRIVING tooltips (TRUTH-7; tests/test_stats.py
+    # holds the sentence). The floor is TRUTH-12's target, so a noise-aware threshold that reaches
+    # it fails here until the row goes green and that sentence is re-read.
     Row("brake.mean", 0.0, 0.00238095, G, tol=0.0035),
-    Row("brake.mean", 2.0, 0.696424, R, tol=0.30, ceiling=1.04, fixed_by=_T12),
-    Row("brake.mean", 4.5, 0.76616, R, tol=0.30, ceiling=1.14, fixed_by=_T12),
+    Row("brake.mean", 2.0, 0.696424, S, tol=0.30, ceiling=1.04, fixed_by=_T12),
+    Row("brake.mean", 4.5, 0.76616, S, tol=0.30, ceiling=1.14, fixed_by=_T12),
     Row("brake.count", 0.0, 0.0, G, tol=0.0),
     Row("brake.count", 2.0, 0.0238095, G, tol=0.035),
     Row("brake.count", 4.5, 0.261905, G, tol=0.39),

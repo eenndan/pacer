@@ -4191,7 +4191,8 @@ def test_the_onset_quantization_is_one_constant_and_the_brake_time_states_its_gp
 
     figure = f"~{driving.ONSET_QUANT_M:g} m"
     onset_figure = re.compile(r"~\s*\d+(?:\.\d+)?\s*m(?![\w/])")     # "~1.5 m", not "~15 m/s"
-    for name, tip in (("BRAKING_TOOLTIP", BRAKING_TOOLTIP), ("PEAK_BRAKE_TOOLTIP", PEAK_BRAKE_TOOLTIP)):
+    for name, tip in (("BRAKING_TOOLTIP", BRAKING_TOOLTIP),
+                      ("PEAK_BRAKE_TOOLTIP", PEAK_BRAKE_TOOLTIP)):
         assert figure in tip, (
             f"{name} no longer states the onset quantization {figure} (driving.ONSET_QUANT_M): "
             f"{tip!r}")
