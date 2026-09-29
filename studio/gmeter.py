@@ -588,7 +588,12 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         R, reflect, cross = (np.eye(2), False, None)
         have_ref = long_gps is not None and moving is not None
         seg_g = ((gps_t >= t0) & (gps_t < t1)) if have_ref else None
-        if have_ref and np.any(moving & seg_g):
+        # The five GPS reference series are None together (fewer than 4 fixes) or not at all, and
+        # `cross` is set only here, where they exist. The `is not None` runs below spell that
+        # invariant out name by name, which is what pyright can narrow on; they change no path.
+        if (seg_g is not None and long_gps is not None and lat_gps is not None
+                and fwd is not None and left is not None and moving is not None
+                and np.any(moving & seg_g)):
             R, reflect, cross = _fit_segment(
                 ta[seg], h1[seg], h2[seg], gps_t[seg_g],
                 long_gps[seg_g], lat_gps[seg_g], fwd[seg_g], left[seg_g],
@@ -601,7 +606,9 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         # this the single fit above is only right near the drift's midpoint; the first and last
         # laps come out rotated by 60-110 deg, which is what shrank the lateral g the driver reads
         # by cos(error) and eventually inverted it.
-        if cross is not None:
+        if (cross is not None and seg_g is not None and long_gps is not None
+                and lat_gps is not None and fwd is not None and left is not None
+                and moving is not None):
             drift = _yaw_drift_correction(
                 ta[seg], P_enu, gps_t[seg_g], long_gps[seg_g], lat_gps[seg_g],
                 fwd[seg_g], left[seg_g], moving[seg_g])
@@ -609,7 +616,7 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
                 P_enu = _rotate(P_enu, drift)
                 # Report the yaw this chapter actually used at its midpoint, drift included.
                 cross.align_yaw_deg += float(np.degrees(drift[len(drift) // 2]))
-        if fwd_a is not None:
+        if fwd_a is not None and left_a is not None:  # None together
             long_g[seg] = np.sum(P_enu * fwd_a[seg], axis=1)
             lat_g[seg] = np.sum(P_enu * left_a[seg], axis=1)
         else:
@@ -617,7 +624,8 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         # Re-derive the trust verdict from the CORRECTED series: the pre-correction correlation was
         # averaged over a chapter whose ends were badly rotated, so it understated a good mount and
         # its reported rms described a signal nobody ever sees.
-        if cross is not None and fwd_a is not None:
+        if (cross is not None and fwd_a is not None and long_gps is not None
+                and lat_gps is not None and moving is not None):
             fixed = _cross_check(
                 long_g[seg], lat_g[seg],
                 np.interp(ta[seg], gps_t, long_gps), np.interp(ta[seg], gps_t, lat_gps),
