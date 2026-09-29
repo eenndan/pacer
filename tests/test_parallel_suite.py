@@ -81,7 +81,7 @@ def _selected_names(argv: list[str]) -> list[tuple[str, str]]:
     of names — `^(a|b)$`, `a|b` or a bare `a` — or it comes back whole, and fails the name check:
     a pattern cannot be checked against the files."""
     out = []
-    for flag, regex in zip(argv, argv[1:]):
+    for flag, regex in zip(argv, argv[1:], strict=False):
         if flag in _NAME_FLAGS:
             body = regex.removeprefix("^").removesuffix("$")
             if body.startswith("(") and body.endswith(")"):
@@ -124,7 +124,7 @@ def _builds_a_real_player(source: str) -> bool:
                                                  for t in stmt.targets)
                 and isinstance(stmt.value, (ast.Tuple, ast.List))):
             footage |= {e.id for e in stmt.value.elts if isinstance(e, ast.Name)}
-    todo = list(tree.body)
+    todo: list[ast.AST] = list(tree.body)
     while todo:
         node = todo.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in footage:
