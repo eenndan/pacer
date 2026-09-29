@@ -1483,8 +1483,8 @@
       "exit": 0.08451925096291824
      },
      "reason": {
-      "apex_speed_deficit": 1.3865607765171646,
-      "brake_extra_s": 0.0479882858084153,
+      "apex_speed_deficit": 1.8096666762741016,
+      "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.21268967243694722,
       "kind": "line",
@@ -1509,11 +1509,11 @@
       "exit": 0.01901631668371806
      },
      "reason": {
-      "apex_speed_deficit": 0.6237493782508707,
+      "apex_speed_deficit": 1.039464485158156,
       "brake_extra_s": 0.0,
-      "coast_extra_s": 0.5994156835610909,
-      "contribution": 0.10965837198655481,
-      "kind": "coasting",
+      "coast_extra_s": 0.0,
+      "contribution": 0.09594814799148348,
+      "kind": "line",
       "sigma": 0.20982100195223838
      },
      "time_lost": 0.16454100602196142
@@ -20812,9 +20812,9 @@
       "exit": 0.09316497678999802
      },
      "reason": {
-      "apex_speed_deficit": 0.04086444778853604,
+      "apex_speed_deficit": 1.2212922838740603,
       "brake_extra_s": 0.0,
-      "coast_extra_s": 0.19979720957964275,
+      "coast_extra_s": 0.0,
       "contribution": 0.166616401860087,
       "kind": "line",
       "sigma": 0.3396830907938038
@@ -20839,8 +20839,8 @@
      },
      "reason": {
       "apex_speed_deficit": 1.3212774590587841,
-      "brake_extra_s": 0.27266619096455,
-      "coast_extra_s": 0.3998895714379671,
+      "brake_extra_s": 0.0,
+      "coast_extra_s": 0.30021600269654414,
       "contribution": 0.14515511295622216,
       "kind": "line",
       "sigma": 0.2303372952666341
@@ -36513,7 +36513,7 @@
      "reason": {
       "apex_speed_deficit": 0.6442676583967923,
       "brake_extra_s": 0.0,
-      "coast_extra_s": 0.30000936292242386,
+      "coast_extra_s": 0.2996778129776203,
       "contribution": 0.11452745904321159,
       "kind": "line",
       "sigma": 0.22132165568074855
@@ -36537,8 +36537,8 @@
       "exit": 0.06635863427613486
      },
      "reason": {
-      "apex_speed_deficit": 0.9249186228047819,
-      "brake_extra_s": 0.24972161149268857,
+      "apex_speed_deficit": 0.46245931140239094,
+      "brake_extra_s": 0.12486080574634428,
       "coast_extra_s": 0.0,
       "contribution": 0.04836739713726447,
       "kind": "line",
@@ -52335,7 +52335,7 @@
       "exit": -0.0025500242186495825
      },
      "reason": {
-      "apex_speed_deficit": 0.036000000000001364,
+      "apex_speed_deficit": 0.3059999999999903,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.008999463434568568,
@@ -52361,7 +52361,7 @@
       "exit": 0.012882097886818045
      },
      "reason": {
-      "apex_speed_deficit": 0.21600000000000819,
+      "apex_speed_deficit": 0.4680000000000035,
       "brake_extra_s": 0.10000000000002274,
       "coast_extra_s": 0.0,
       "contribution": 0.00787598902420018,
@@ -52387,7 +52387,7 @@
       "exit": 0.005513249462872238
      },
      "reason": {
-      "apex_speed_deficit": 0.5400000000000063,
+      "apex_speed_deficit": 0.522000000000002,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.004580541508771405,
@@ -52413,10 +52413,10 @@
       "exit": 0.017973297055416282
      },
      "reason": {
-      "apex_speed_deficit": 2.087999999999994,
-      "brake_extra_s": 0.0,
+      "apex_speed_deficit": 3.617999999999995,
+      "brake_extra_s": 0.025000000000034106,
       "coast_extra_s": 0.0,
-      "contribution": 0.031899232624422305,
+      "contribution": 0.04249507926944961,
       "kind": "apex",
       "sigma": 0.041185905831429864
      },
@@ -52439,10 +52439,10 @@
       "exit": 0.01397637960582987
      },
      "reason": {
-      "apex_speed_deficit": 1.6920000000000002,
+      "apex_speed_deficit": 1.205999999999996,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.0021615282352276752,
+      "contribution": 0.0017186862287388615,
       "kind": "apex",
       "sigma": 0.02084789346814394
      },
@@ -52465,7 +52465,7 @@
       "exit": 0.036185504705503746
      },
      "reason": {
-      "apex_speed_deficit": 3.2760000000000105,
+      "apex_speed_deficit": 0.7019999999999982,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.0033084668127785545,
@@ -52492,7 +52492,7 @@
      },
      "reason": {
       "apex_speed_deficit": 0.0,
-      "brake_extra_s": 0.0,
+      "brake_extra_s": 8.526512829121202e-14,
       "coast_extra_s": 0.0,
       "contribution": 0.0026579622437849473,
       "kind": "line",
@@ -86814,7 +86814,7 @@
       "exit": -0.0025500239769300492
      },
      "reason": {
-      "apex_speed_deficit": 0.036000000000001364,
+      "apex_speed_deficit": 0.3059999999999903,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.008999463537583881,
@@ -86840,7 +86840,7 @@
       "exit": 0.012882097968332396
      },
      "reason": {
-      "apex_speed_deficit": 0.21600000000000819,
+      "apex_speed_deficit": 0.4680000000000035,
       "brake_extra_s": 0.10000000000002274,
       "coast_extra_s": 0.0,
       "contribution": 0.00787598894075615,
@@ -86866,7 +86866,7 @@
       "exit": 0.005513249447901103
      },
      "reason": {
-      "apex_speed_deficit": 0.5400000000000063,
+      "apex_speed_deficit": 0.522000000000002,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.0045805417910012,
@@ -86892,10 +86892,10 @@
       "exit": 0.01797329638219125
      },
      "reason": {
-      "apex_speed_deficit": 2.087999999999994,
-      "brake_extra_s": 0.0,
+      "apex_speed_deficit": 3.617999999999995,
+      "brake_extra_s": 0.025000000000034106,
       "coast_extra_s": 0.0,
-      "contribution": 0.03189923231858052,
+      "contribution": 0.042495078862017525,
       "kind": "apex",
       "sigma": 0.04118590560273945
      },
@@ -86918,10 +86918,10 @@
       "exit": 0.013976380137548983
      },
      "reason": {
-      "apex_speed_deficit": 1.6920000000000002,
+      "apex_speed_deficit": 1.205999999999996,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.0021615282913619166,
+      "contribution": 0.0017186862733726284,
       "kind": "apex",
       "sigma": 0.020847893659377423
      },
@@ -86944,7 +86944,7 @@
       "exit": 0.03618550369341733
      },
      "reason": {
-      "apex_speed_deficit": 3.2760000000000105,
+      "apex_speed_deficit": 0.7019999999999982,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
       "contribution": 0.0033084665831560308,
@@ -86971,7 +86971,7 @@
      },
      "reason": {
       "apex_speed_deficit": 0.0,
-      "brake_extra_s": 0.0,
+      "brake_extra_s": 8.526512829121202e-14,
       "coast_extra_s": 0.0,
       "contribution": 0.0026579624340659306,
       "kind": "line",
