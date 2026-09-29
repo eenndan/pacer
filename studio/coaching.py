@@ -73,23 +73,23 @@ class Reason:
 
 @dataclass(frozen=True)
 class PhaseLoss:
-    """D2: the entry / apex(mid) / exit Δt-vs-best decomposition of ONE corner on the TYPICAL
-    (median) lap (s). This is a WHERE-IN-THE-CORNER profile of the typical lap vs best — it is NOT
-    the Opportunity's ``time_lost`` and does NOT sum to it. ``time_lost`` is the cross-lap MEDIAN
-    per-corner delta over the consistency laps; these thirds are a single-lap clock difference over
-    the typical lap alone, so the two are different statistics and can disagree in sign (a typical lap
-    can be net faster over the window than the corner's median loss). Each third is positive when
-    the typical lap is slower than best over that third, negative when faster."""
+    """D2: the entry / apex(mid) / exit Δt-vs-best decomposition of ONE corner (s): per third, the
+    MEDIAN over the counted laps of that lap's clock over the third minus the best lap's
+    (`Session.phase_report`'s row — COACHING-2; it was the median-TIME lap's thirds alone). A
+    WHERE-IN-THE-CORNER profile, NOT the Opportunity's ``time_lost``: each third is its own median,
+    so the three need not sum to it, nor even agree with it in sign (every third's median can sit
+    below the best lap's while the corner's median time still loses). Each third is positive when
+    the laps are typically slower than best over it, negative when faster."""
 
-    entry: float             # Δt over the entry third (first 1/3 of the corner window, s)
-    apex: float              # Δt over the apex/mid third (s)
-    exit: float              # Δt over the exit third (s)
+    entry: float             # median Δt over the entry third (first 1/3 of the corner window, s)
+    apex: float              # median Δt over the apex/mid third (s)
+    exit: float              # median Δt over the exit third (s)
 
     @property
     def total(self) -> float:
-        """The typical lap's NET Δt-vs-best across the whole corner window (the thirds telescope to
-        it). NOT the same statistic as the Opportunity's ``time_lost`` (a cross-lap median) — do not
-        present it as 'time lost'; it is the typical-lap net over the window and can be negative."""
+        """The sum of the three medians — the scale `dominant_phase_clause` weighs the worst third
+        against. It is no lap's net and not ``time_lost`` (a median of whole-corner times): never
+        present it as either."""
         return self.entry + self.apex + self.exit
 
     @property
@@ -519,8 +519,8 @@ class Opportunity:
     time_lost: float         # median time lost vs the best lap's same corner (s, > 0)
     entry_dist: float        # the corner's enter odometer on the BEST lap (m) — the jump-to seek
     reason: Reason           # the dominant measured reason + numbers (REASON_NONE = none fired)
-    # D2: typical-lap entry/apex/exit Δt-vs-best thirds (s) — a WHERE-in-the-corner profile, a
-    # DIFFERENT statistic from time_lost (their sum is the typical lap's net, not the median loss).
+    # D2: the median entry/apex/exit Δt-vs-best thirds over the laps (s) — a WHERE-in-the-corner
+    # profile, a DIFFERENT statistic from time_lost (three medians need not sum to it).
     phases: PhaseLoss = _NO_PHASES
     # Whether this corner is execution work or pace work, and whether it carries a claim at all.
     evidence: Evidence = _NO_EVIDENCE
@@ -654,7 +654,7 @@ class Opportunities:
 
     enough: bool
     n_laps: int                              # consistency laps the summary ran over
-    median_lap_id: int | None                # the median-time lap the phase thirds read off
+    median_lap_id: int | None                # the median-time lap (no row reads it since COACHING-2)
     rows: list[Opportunity] = field(default_factory=list)
     # The clustered one-line story over `rows` (THEME_NONE when nothing is ranked). Computed once
     # by summarize() so the panel, the modal and any export state the SAME theme.
@@ -832,9 +832,9 @@ def lap_window_inputs(corners, events, spans, dist: np.ndarray | None = None,
 # A corner window [enter, exit] is split into three equal-distance thirds (entry, apex/mid, exit).
 # The time each lap spends in a third is READ OFF THAT LAP'S OWN CLOCK at the two odometer edges,
 # and the loss is the difference of two such readings (positive ⇒ slower than best, negative ⇒
-# faster), so the three telescope EXACTLY to the typical lap's net Δt-vs-best across the window (a
-# WHERE-in-the-corner profile of one lap; NOT the Opportunity's cross-lap-median time_lost, which
-# is a different statistic and need not agree).
+# faster), so one lap's three telescope EXACTLY to its net Δt-vs-best across the window. A row's
+# `PhaseLoss` is the per-third MEDIAN of those over the laps (`Session.phase_report`), which no
+# longer telescopes to anything — and never to the Opportunity's cross-lap-median time_lost.
 #
 # It used to compute the span time as ∫ds/v over the smoothed speed channel. That is the only
 # option WITHOUT a per-sample clock, and `_span_clock` below records what it cost when measured
@@ -1016,17 +1016,7 @@ def summarize(
     best_brake_time: list[float] | None = None,
     best_coast_time: list[float] | None = None,
     best_apex: list[float] | None = None,
-    corner_dist_total: float | None = None,
-    median_lap_total: float | None = None,
-    best_lap_total: float | None = None,
-    median_dist: np.ndarray | None = None,
-    median_elapsed: np.ndarray | None = None,
-    best_dist: np.ndarray | None = None,
-    best_elapsed: np.ndarray | None = None,
-    median_traces: tuple | None = None,
-    best_traces: tuple | None = None,
-    median_align=corners_mod.DERIVE_ALIGNMENT,
-    best_align=corners_mod.DERIVE_ALIGNMENT,
+    phases_by_cid: dict | None = None,
     resolved_by_lap: list[list[bool]] | None = None,
     best_resolved: list[bool] | None = None,
     top_n: int | None = None,
@@ -1044,20 +1034,17 @@ def summarize(
     the median, over exactly the cells `time_lost` is a median of, of the SIGNED per-lap difference
     from the best lap (lap − best for brake and coast, best − lap for the apex), THEN floored at 0.
     The order matters: for an even count median(max(x, 0)) is not max(median(x), 0). A lever whose
-    inputs are absent (None) reads 0.
-    corner_dist_total / median_lap_total / best_lap_total project each corner window onto the
-    median and best laps' own odometers for the phase thirds; any None → identity projection.
-    median_dist + best_dist are the typical-lap and best-lap odometers; with the matching elapsed
-    arrays each row gets the D2 entry/apex/exit Δt-vs-best decomposition (the median-time lap vs
-    best) — absent → zero phases.
-    median_elapsed/best_elapsed are the seconds-from-lap-start arrays the decomposition READS ITS
-    TIMES FROM (see `_span_clock`: it used to integrate ds/v instead, which disagreed with the
-    corner's own time by up to 0.49 s at the slowest corner).
-    median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
-    lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the spatial boundary
-    alignment in the phase decomposition (omitted → the normalized projection).
-    median_align/best_align are those two laps' warps ALREADY BUILT (Session hands over the corner
-    service's memoized ones); omitted → derived here from the traces, exactly as before.
+    inputs are absent (None) reads 0. Each lap's brake and coast cells were measured on its own
+    corner windows, projected through that lap's spatial warp (`lap_window_inputs`).
+    THE THIRDS (COACHING-2): phases_by_cid maps a cid to its median (entry, apex, exit) Δt-vs-best
+    triple — `Session.phase_report`'s row, each lap's thirds read through its own memoized spatial
+    warp (`corner_phase_losses`), the numbers the Stats CORNERS tooltip shows — and becomes the
+    row's `PhaseLoss`; a cid absent or None → zero phases. It used to be ONE lap's thirds, the
+    median-time lap's, disagreeing with that row on every synthetic row. Its lap set is not quite
+    the loss's: it leaves the best lap out (its own zero row) where `time_lost` counts the best
+    lap's zero cell, and the Session drops a lap whose `lap_corner_stats` do not cover every corner
+    from the candidates here, a check the report does not make. Accepted, not aligned: moving
+    `phase_report` would move a second surface.
     resolved_by_lap/best_resolved are `CornerModel.lap_corner_resolved` for the candidate laps
     (rows aligned to candidate_lap_ids) and for the best lap — WHICH CELLS COUNT, see the block
     below; omitted → every cell counts, the pure-caller default.
@@ -1132,40 +1119,15 @@ def summarize(
     coast_extra = _habit(coast_time_by_lap, best_coast_time, 1.0)
     apex_deficit = _habit(apex_by_lap, best_apex, -1.0)
 
-    # D2: the typical lap's (odometer, elapsed) trace + best lap's, for the entry/apex/exit Δt
-    # decomposition — the CLOCK, not the speed channel (`_span_clock`). Both must be present (and
-    # usable) to attach phases; otherwise zero phases.
-    have_phases = (median_dist is not None and median_elapsed is not None
-                   and best_dist is not None and best_elapsed is not None)
-
-    # The WHOLE partition's reference boundaries: each lap's spatial warp is built from all of
-    # them, so a per-corner phase window is the same window the Corners table measured. The two
-    # warps are built ONCE here, not once per corner inside the loop below — and when the caller
-    # passes them in (Session reads them off the corner service's memo) not even once.
-    phase_frame = [b for c in corners for b in (float(c.enter), float(c.exit))]
-    if median_align is corners_mod.DERIVE_ALIGNMENT:
-        median_align = (corners_mod.lap_alignment(phase_frame, corner_dist_total,
-                                                  median_lap_total, traces=median_traces)
-                        if corner_dist_total and median_lap_total else None)
-    if best_align is corners_mod.DERIVE_ALIGNMENT:
-        best_align = (corners_mod.lap_alignment(phase_frame, corner_dist_total, best_lap_total,
-                                                traces=best_traces)
-                      if corner_dist_total and best_lap_total else None)
-
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
 
     rows: list[Opportunity] = []
     for rank, i in enumerate(ranked_idx):
         c = corners[i]
-        phases = (corner_phase_losses(
-            median_dist, median_elapsed, best_dist, best_elapsed,
-            float(c.enter), float(c.exit),
-            corner_dist_total=corner_dist_total, lap_total=median_lap_total,
-            best_total=best_lap_total,
-            lap_traces=median_traces, best_traces=best_traces, frame=phase_frame,
-            lap_align=median_align, best_align=best_align,
-        ) if have_phases else _NO_PHASES)
+        # D2: the corner's median thirds over the laps (COACHING-2), exactly as handed in.
+        triple = (phases_by_cid or {}).get(c.cid)
+        phases = PhaseLoss(*triple) if triple is not None else _NO_PHASES
         # L5-04: every ranked row is analysed unless a cap is asked for, so the "How to find it"
         # cell of a row below any cut is a MEASURED "nothing fired" rather than an un-run analysis.
         if top_n is None or rank < top_n:
@@ -1221,7 +1183,8 @@ def dominant_phase_clause(opp: Opportunity) -> str:
     """A short clause naming the corner's worst (slowest-vs-best) third, or "" when the
     decomposition is absent/flat or no phase is clearly losing time. Surfaces the D2 attribution in
     the human sentence without overclaiming: only when the dominant third is positive AND holds a
-    clear majority (≥ half) of the typical-lap window Δt.
+    clear majority (≥ half) of the three medians' sum (`PhaseLoss.total`). The thirds are medians
+    over the laps (COACHING-2), so "most of it on exit" is the laps' habit, not one lap's.
 
     M5: the clause is REASON-AWARE. When the dominant third matches the reason's natural lever phase
     (_REASON_PHASES) it reads as the fix location ("… — most of it on entry"). When it does NOT

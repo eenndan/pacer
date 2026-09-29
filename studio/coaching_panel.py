@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import coaching, data_quality, focus, theme, units
-from ._signal import DASH, fmt_signed, lap_label, plural
+from ._signal import DASH, fmt_signed, plural
 from .lap_table import set_corner_direction
 from .theme import C
 from .widgets import ActionChip, EmptyState, PanelHeader, WrapLabel
@@ -48,9 +48,9 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 _COL_CORNER, _COL_LOST = 0, 1
 _PANEL_COL_REACH, _PANEL_COL_REASON, _PANEL_COL_PHASES, _PANEL_COL_GO = 2, 3, 4, 5
 # NB (M4): "Time lost" is the cross-lap MEDIAN per-corner delta; the Entry·Apex·Exit column is a
-# DIFFERENT statistic — the typical lap's Δt profile across the corner (where in the corner it wins
-# or loses), which does NOT sum to "Time lost" and can even net faster. Its header must not also
-# claim to be "time lost", or the two columns read as self-contradictory.
+# DIFFERENT statistic — per third of the corner, the median Δt over the laps (where in the corner
+# the time goes), three medians that need not sum to "Time lost" or share its sign. Its header must
+# not also claim to be "time lost", or the two columns read as self-contradictory.
 PHASE_COL_PX = 150   # the proportional bar's stable width (its segments are shares of it)
 
 # L5-06/L5-08: how a header sits over its own column, and what it says on hover.
@@ -63,10 +63,10 @@ PHASE_COL_PX = 150   # the proportional bar's stable width (its segments are sha
 # hover for the full label. Keyed by the header TEXT so the dialog's six and the panel's four share
 # one definition and can't drift.
 _HEADER_ALIGN = {"Time lost": Qt.AlignRight, "Done it?": Qt.AlignRight}
-# VIEW-9 (QA 2026-09-25): the bar column is the TYPICAL LAP's Δt, the Time lost column a cross-lap
-# median; on MK_18_09 C5 read +0.13 s lost beside "net −0.01 s" and C8 +0.06 beside +0.19. Its
-# header and its sum now say whose number it is, so the two cannot be read as one quantity.
-PHASE_HEADER = "Typical lap Δt"
+# VIEW-9 (QA 2026-09-25): on MK_18_09 C5 read +0.13 s lost beside "net −0.01 s" and C8 +0.06
+# beside +0.19, so the header says whose number it is. Since COACHING-2 the bars are medians over
+# the laps, not the typical lap's clock, and there is no net: a sum of three medians is no lap's.
+PHASE_HEADER = "Median Δt"
 _HEADER_TIPS = {
     "Corner": "The corner's number in track order, with an arrow for its direction — "
               "anticlockwise is a left-hander, clockwise a right.",
@@ -77,10 +77,10 @@ _HEADER_TIPS = {
                 "through this corner, out of the laps matched on track there. Many of them — "
                 "repeat what you have already driven. Few — this is pace you have not "
                 "established yet, and it needs something new.",
-    PHASE_HEADER: "Where in the corner your TYPICAL LAP is faster/slower than your best lap (Δt "
-                  "per third, seconds, and their sum under the bar) — ONE lap's profile, not the "
-                  "row's Time lost, which is the median over all your laps. The two can differ in "
-                  "sign.",
+    PHASE_HEADER: "Where in the corner your laps are faster/slower than your best lap: per third, "
+                  "the MEDIAN Δt over your clean laps matched on track there (seconds). Each third "
+                  "is its own median, so the three need not add up to the row's Time lost, and "
+                  "can differ from it in sign.",
     "How to find it": "The dominant MEASURED reason this corner is losing time, with its numbers — "
                       "plus the ESTIMATED brake-point line when one is available for the corner.",
 }
@@ -838,18 +838,19 @@ _REASON_TIP = {
 
 
 class PhaseBar(QWidget):
-    """A tiny horizontal entry/apex/exit Δt-profile for one corner on the TYPICAL lap (D2): three
-    proportional segments (widths ∝ each third's |Δt| vs best) over the row's three numbers. This is
-    a WHERE-in-the-corner profile of the typical lap vs best — NOT the row's "Time lost" (a cross-lap
-    median), which it need not sum to or even agree in sign with. Read-only; the segment widths are
-    the visual cue, the small numbers underneath the precise values, the net line the sign of the
-    whole window, the tooltip the full breakdown.
+    """A tiny horizontal entry/apex/exit Δt-profile for one corner (D2): three proportional
+    segments (widths ∝ each third's |Δt| vs best) over the row's three numbers, each third the
+    MEDIAN over the laps (`coaching.PhaseLoss`, COACHING-2). A WHERE-in-the-corner profile — NOT the
+    row's "Time lost" (the median of the whole corner's time), which three medians need not sum to
+    or even agree in sign with. Read-only; the segment widths are the visual cue, the small numbers
+    underneath the precise values, the face the statistic's name, the tooltip the full breakdown.
 
     L5-05: a FASTER-than-best third is a real, readable state, not an absence of one. It used to
     render as a `C.border` sliver — 1.19:1 against the row, i.e. invisible — so a corner whose three
     thirds were ALL faster than best looked empty beside its "+0.08 s" Time lost, and only the
     tooltip reconciled the two measures. Faster thirds now take the palette's ahead colour, are
-    sized by |Δt| like the losing ones, and the window's net is stated on the row face."""
+    sized by |Δt| like the losing ones, and a row whose every third is quicker says so on its face
+    in the ahead hue."""
 
     #: The proportional bar's INK, not a gap — the same category as the scrollbar track's width or
     #: the slider groove's, which is why the spatial guard's stylesheet half deliberately leaves
@@ -857,7 +858,11 @@ class PhaseBar(QWidget):
     #: CAPTION type; a spacing step would be choosing it for the wrong reason.
     _BAR_H = 6  # px; the proportional bar's height (the numbers sit below it)
 
-    def __init__(self, phases: coaching.PhaseLoss, parent=None, *, lap: int | None = None):
+    #: The face: the statistic's name, never a lap's (JOURNEY-8 asked whose number the bars are)
+    #: and never a sum — a sum of three medians is neither a lap's net nor the row's Time lost.
+    FACE = "median over laps"
+
+    def __init__(self, phases: coaching.PhaseLoss, parent=None):
         super().__init__(parent)
         self._phases = phases
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -910,32 +915,25 @@ class PhaseBar(QWidget):
             nums.addWidget(lbl, 1)
         lay.addLayout(nums)
 
-        # M4: this bar is the TYPICAL lap's Δt profile across the corner (where in the corner it is
-        # faster/slower than best), a DIFFERENT statistic from the row's "Time lost" (a cross-lap
-        # median). Label it as a profile, call the sum the typical-lap NET (not "time lost"), and —
-        # when that net is ≤ 0 (the typical lap is net faster over the window) — say so plainly so a
-        # positive-loss headline row never reads as if the corner were net faster overall.
-        net = phases.total
-        if net > 1e-6:
-            net_line = (f"Typical-lap net {fmt_signed(net, 2)} s over the window "
-                        f"— slowest third: {_PHASE_LABEL[dominant].lower()}.")
-        elif net < -1e-6:
-            net_line = (f"Typical-lap net {fmt_signed(net, 2)} s over the window (net faster than "
-                        "best here) — the row's Time lost is the cross-lap median, a different "
-                        "measure.")
+        # M4: the bar is a WHERE-in-the-corner profile, a DIFFERENT statistic from the row's "Time
+        # lost". Since COACHING-2 each third is its own median over the laps, so there is no net
+        # line any more: the thirds' sum is no lap's clock (it was the typical lap's net) and not
+        # the Time lost beside it, and "net faster" would claim what nothing measured. The tooltip
+        # says what the three are instead, and — L5-05 — states the all-quicker case in words.
+        quicker = all(v < -1e-6 for v in vals)
+        if any(v > 1e-6 for v in vals):
+            state_line = f"Slowest third: {_PHASE_LABEL[dominant].lower()}."
+        elif quicker:
+            state_line = ("Every third's median is quicker than your best lap's — the row's Time "
+                          "lost is the median of the whole corner's time, a different measure.")
         else:
-            net_line = "Typical-lap net ~0 s over the window (on your best-lap pace here)."
+            state_line = "On your best-lap pace in every third."
 
-        # L5-05: the sign of the WINDOW on the row face, not only on hover — a row headlined
-        # "+0.08 s lost" whose typical lap is net faster across the corner must say so where it is
-        # read. Faster reads in the palette's ahead hue, slower stays muted (the accent is reserved
-        # for the dominant losing third above).
-        # QA JOURNEY-8: "typical lap +0.12 s" beside a Time lost of "+0.15 s" still read as one
-        # quantity stated twice. The thirds are ONE lap's clock (`lap`, the session's typical lap:
-        # `Opportunities.median_lap_id`), Time lost the median over every counted lap, so the face
-        # names the lap by number — which also says why the two may differ.
-        who = f"lap {lap_label(lap)}" if lap is not None else "typical lap"
-        face = QLabel(f"{who} {fmt_signed(net, 2, 's')}" if abs(net) > 1e-6 else f"{who} ~0 s")
+        # QA JOURNEY-8: "typical lap +0.12 s" beside a Time lost of "+0.15 s" read as one quantity
+        # stated twice, so the face names whose numbers the bars are — the laps' medians, not a
+        # lap, and with no number of its own to be read against Time lost. L5-05: a row whose every
+        # third is quicker than best says so where it is read, in the palette's ahead hue.
+        face = QLabel(self.FACE)
         face.setFont(theme.mono_font(theme.CAPTION))
         face.setAlignment(Qt.AlignCenter)
         face.setProperty("role", "Note")     # the muted default; the ahead case tints over it
@@ -944,17 +942,17 @@ class PhaseBar(QWidget):
         # a rule here would freeze this label in the standard green while every other ahead/behind
         # surface followed the colour-blind flip. One of the merges tests/test_inline_styles.py
         # lists by owner.
-        if net < -1e-6:
+        if quicker:
             face.setStyleSheet(f"color:{theme.ahead_colour()};")
         lay.addWidget(face)
 
-        whose = f" (lap {lap_label(lap)})" if lap is not None else ""
         self.setToolTip(
-            f"Where in the corner your typical lap{whose} is faster/slower than your best lap "
-            "(Δt per third, s) — NOT the same as the row's Time lost:\n"
+            "Where in the corner your laps are faster/slower than your best lap — per third, the "
+            "median Δt over your clean laps (s). Each third is its own median, so the three need "
+            "not add up to the row's Time lost:\n"
             + "   ".join(f"{_PHASE_LABEL[p]} {fmt_signed(v, 2)}"
                          for p, v in zip(ids, vals, strict=True))
-            + "\n" + net_line)
+            + "\n" + state_line)
 
     @staticmethod
     def _phase_colour(pid: str, v: float, dominant: str) -> str:
@@ -1310,8 +1308,9 @@ class OpportunitiesPanel(QWidget):
     corners"), because the Stats page's digest tile states the same total from the same constant.
 
     SCOPE — WHOLE SESSION, NOT THE SELECTED LAP (IA-01). ``coaching_opportunities()`` takes no lap:
-    every row is the MEDIAN loss vs best over the clean laps, ±σ is the cross-lap σ, and the reason
-    is read off the median lap — none of which a single lap can answer. Its sibling Corners tab IS
+    every row is the MEDIAN loss vs best over the clean laps, and its reason, its IQR and its
+    Entry·Apex·Exit bars are medians or spreads over the same laps — none of which a single lap can
+    answer. Its sibling Corners tab IS
     the per-lap surface (it renames itself "Corners · L6"), so this page must SAY it does not follow
     the selection rather than look like it silently failed to: the headline leads with the scope and
     the tab tooltip names it. Do not wire this to ``laps_selected`` — ``refresh()`` recomputes the
@@ -1367,7 +1366,6 @@ class OpportunitiesPanel(QWidget):
         self._debrief_lead: tuple = (None, [], False, True)
         self._brake_dirs: dict = {}  # cid -> coaching.BrakeDirection (refresh)
         self._n_clean: int | None = None  # the session's clean laps, for the "Done it?" hover
-        self._typical_lap: int | None = None  # the lap the reasons + bars read (median_lap_id)
         self._tuning = False         # re-entrancy guard: a re-render fires resizeEvent
         self._tuned_key: tuple | None = None   # the viewport the current row count was tuned for
         self._budgeting = False        # re-entrancy guard: hiding a column fires resizeEvent
@@ -1604,7 +1602,6 @@ class OpportunitiesPanel(QWidget):
         self._all_rows = _shown_rows(opps)
         self._brake_dirs = directions
         self._n_clean = opps.n_laps
-        self._typical_lap = opps.median_lap_id
         self._tuned_key = None       # a new ranking: re-tune the row count against the viewport
         # The headline shortlist is the top RANKED rows, not the top rows: an abstained corner is
         # displayed but its number is not a claim, so summing it into "time available" would put
@@ -1682,7 +1679,7 @@ class OpportunitiesPanel(QWidget):
                                                      self._n_clean))
                 self.table.setItem(r, 3, self._reason_item(opp, directions))
                 self.table.setCellWidget(r, _PANEL_COL_PHASES,  # D2
-                                         PhaseBar(opp.phases, lap=self._typical_lap))
+                                         PhaseBar(opp.phases))
                 self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
@@ -2010,10 +2007,9 @@ class OpportunitiesPanel(QWidget):
         story = "\n\n".join(t for t in (self.debrief_block.full_text(),
                                         self.focus_block.full_text(),
                                         self.theme_block.full_text()) if t)
-        # The retired modal's title named the typical lap; it is said here now. Since ADV-1 the
-        # reasons are medians over the clean laps; only the bars still read that one lap.
-        typical = (f" The reasons are medians over your clean laps; the Entry·Apex·Exit bars read "
-                   f"your typical lap, lap {lap_label(self._typical_lap)}."
-                   if self._typical_lap is not None and self._headline else "")
+        # The retired modal's title named the typical lap, and until COACHING-2 this line did: the
+        # reasons (ADV-1) and the bars are medians over the clean laps now, and no lap is named.
+        typical = (" The reasons and the Entry·Apex·Exit bars are medians over your clean laps."
+                   if self._headline else "")
         scope = _SCOPE_TOOLTIP + typical
         self.summary_label.setToolTip(f"{story}\n\n{scope}" if story else scope)
