@@ -134,8 +134,8 @@ class CornersSection:
         phase_tip = ("Each clean lap's Δt-vs-best through each corner — where the lap and your "
                      "best lap were both matched on track at its entry and exit, the laps the "
                      "CORNERS table counts — split into "
-                     "equal-distance entry / apex / exit thirds (the same decomposition the "
-                     "coaching reasons use), medianed per corner, positive parts summed. "
+                     "equal-distance entry / apex / exit thirds (the numbers the Coaching page's "
+                     "Entry·Apex·Exit bars show), medianed per corner, positive parts summed. "
                      "Seconds = what a typical lap gives away in that phase across the whole "
                      "track; hover a corner's loss cell for its own triple.")
         # ONE TILE, NOT THREE (R11 / PS-5). The three were one fact — how the corner loss splits —

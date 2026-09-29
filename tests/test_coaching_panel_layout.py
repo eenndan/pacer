@@ -96,7 +96,7 @@ def _evidence(i: int) -> coaching.Evidence:
 def _rows(n: int) -> list[coaching.Opportunity]:
     """n ranked corners, descending loss, each with a genuinely long reason sentence (the wrapped
     cell is what drives the row height this whole batch is measured in)."""
-    kinds = (coaching.REASON_BRAKING, coaching.REASON_APEX, coaching.REASON_LINE)
+    kinds = (coaching.REASON_BRAKING, coaching.REASON_APEX, coaching.REASON_CONSISTENCY)
     return [coaching.Opportunity(
         cid=i + 1, direction=(1 if i % 2 else -1), time_lost=0.20 - 0.01 * i,
         entry_dist=100.0 * i, reason=_reason(kinds[i % 3], sigma=0.10 + 0.01 * i),
@@ -551,7 +551,7 @@ def test_reach_cell_never_states_a_count_without_its_denominator():
             "the reach cell must carry the count AND the sample it came out of", r, text)
     # An UNMEASURED row (no per-lap times behind it) states nothing rather than inventing a count.
     bare = coaching.Opportunity(cid=9, direction=1, time_lost=0.07, entry_dist=800.0,
-                                reason=_reason(coaching.REASON_LINE, sigma=0.24))
+                                reason=_reason(coaching.REASON_CONSISTENCY, sigma=0.24))
     p2 = _panel([bare], (900, 600))
     assert p2.table.item(0, _PANEL_COL_REACH).text() == "—", \
         p2.table.item(0, _PANEL_COL_REACH).text()
