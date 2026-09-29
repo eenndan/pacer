@@ -221,22 +221,32 @@ def _page_twin() -> dict:
 
 
 def _working_set_session(name: str) -> FakeSession:
-    """A card session whose coaching rows are one working-set recording's real ranked rows (the
-    reason is `_apex_opp`'s: the tie rule reads only the losses, spreads and lap counts)."""
+    """A card session whose coaching rows are one working-set recording's real ranked rows."""
+    return _ranked_session(_WORKING_SET_RANKED[name])
+
+
+def _ranked_session(ranked: list[tuple]) -> FakeSession:
+    """A card session over these ranked rows, `_WORKING_SET_RANKED`'s tuple shape (the reason is
+    `_apex_opp`'s: the tie rule reads only the losses, spreads and lap counts)."""
     rows = [coaching.Opportunity(
         cid=cid, direction=1, time_lost=loss, entry_dist=100.0, reason=_apex_opp().reason,
         evidence=coaching.Evidence(n_laps=n, reach_laps=hit, reach=reach, iqr=iqr,
                                    abstain=coaching.ABSTAIN_NONE))
-        for cid, loss, iqr, n, hit, reach in _WORKING_SET_RANKED[name]]
+        for cid, loss, iqr, n, hit, reach in ranked]
     return FakeSession(opps=coaching.Opportunities(
         enough=True, n_laps=max(r.evidence.n_laps for r in rows), median_lap_id=3, rows=rows))
 
 
 def _named(text: str) -> tuple[list[str], int]:
-    """(the corners a line names, in order; how many more it counts) — "C1, C4, C7 or 1 more" and
-    "C1 · C4 · C7 · 1 more" both read (["C1", "C4", "C7"], 1)."""
+    """(the corners a line names, in order; how many more it counts) — "C1, C4, C7 or C6" reads
+    (["C1", "C4", "C7", "C6"], 0) and "C3 · C1 · C4 · 3 more" (["C3", "C1", "C4"], 3)."""
     more = re.search(r"(\d+) more", text)
     return re.findall(r"C\d+", text), int(more.group(1)) if more else 0
+
+
+# A tie wider than the card's row names: six corners the page cannot rank (the spreads dwarf the
+# 0.005 s steps), so the page names all six and the card its first three and "3 more".
+_WIDE_TIE = [(c, 0.40 - 0.005 * i, 0.3, 30, 4, _R) for i, c in enumerate((3, 1, 4, 5, 9, 2))]
 
 
 def test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card():
@@ -244,31 +254,41 @@ def test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card():
     +0.06 s sit closer together than your own lap-to-lap spread, so this cannot rank them.", and
     the shared lap card said "BIGGEST OPPORTUNITY C5 +0.13 s" — the one surface that leaves the
     app overclaiming the one ranking the page refuses. The same on SD_30_08_26 (C7 vs "C7 or C5")
-    and Sandown 3h (C1 vs "C1, C4, C7 or 1 more").
+    and Sandown 3h (C1 vs "C1, C4, C7 or C6").
 
     The card now asks the page's own rule (`coaching.lead_ties`, off the same rows and lead) and
-    names the same corners, capped the same way; SD_19_09_26, whose lead stands alone on the page,
-    keeps the single-lead block word for word."""
+    names the same corners in the same order; SD_19_09_26, whose lead stands alone on the page,
+    keeps the single-lead block word for word. The page names EVERY tied corner (QA1-THEME-CLASH);
+    the card's fixed-width row names at most `_OPP_TIE_NAMES` of them and counts the rest, so its
+    names are the page's first ones and its "N more" is exactly how many the page names after
+    them — checked on a six-corner tie too, since no working-set tie is that wide."""
     assert _WORKING_SET_RANKED == _page_twin(), "this table drifted from test_coaching.py's twin"
     TIE = "TOP OPPORTUNITIES · too close to rank"
     expect = {  # (heading, corner line, loss figure) on the card
         "MK_18_09_26": (TIE, "C5 · C2 · C8", "+0.13 to +0.06 s"),
         "SD_30_08_26": (TIE, "C7 · C5", "+0.10 to +0.08 s"),
-        "Sandown 3h 2026": (TIE, "C1 · C4 · C7 · 1 more", "+0.23 to +0.17 s"),
+        "Sandown 3h 2026": (TIE, "C1 · C4 · C7 · C6", "+0.23 to +0.17 s"),
         "SD_19_09_26": ("BIGGEST OPPORTUNITY", "C1 ⟲", "+0.15 s"),
+        "six-corner tie": (TIE, "C3 · C1 · C4 · 3 more", "+0.40 to +0.38 s"),
     }
     for name, (heading, label, loss) in expect.items():
-        session = _working_set_session(name)
+        session = (_ranked_session(_WIDE_TIE) if name == "six-corner tie"
+                   else _working_set_session(name))
         top = share_card.card_data(session, unit="kmh").top_opp
         assert top is not None, name
         assert top.corner_label == label, (name, top.corner_label)
         assert (share_card.opp_heading(top), share_card.opp_loss(top)) == (heading, loss), \
             (name, share_card.opp_heading(top), share_card.opp_loss(top))
-        # The card names exactly the corner set the page's "Start with" sentence names.
+        # The card names the page's "Start with" corners: a prefix of them, and a count of the rest.
         opps = session.coaching_opportunities()
         page = coaching.theme_actions(coaching.session_theme(opps.rows), opps.rows)[-1]
         assert page.startswith("Start with "), page
-        assert _named(page.split(":")[0]) == _named(top.corner_label), (name, page, top)
+        (page_names, page_more), (card_names, card_more) = (
+            _named(page.split(":")[0]), _named(top.corner_label))
+        assert page_more == 0, (name, page)                  # the page counts nothing
+        assert card_names == page_names[:len(card_names)], (name, page, top)
+        assert card_more == len(page_names) - len(card_names), (name, page, top)
+        assert card_more != 1, (name, top)    # a lone corner is named: "C6", never "1 more"
         if heading == TIE:
             assert top.reason == "", (name, top.reason)   # no one corner's reason under a tie
         else:                                             # ...and the single lead is unchanged
@@ -292,7 +312,7 @@ def test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss():
     """Rendered: a tie's block has its heading, its corners and its span, and NOTHING on the reason
     row (the single-lead card of the same lead does ink it — the control); and a tie's corner line,
     sized beside a right-aligned span, never runs into it — swept over the widest a real track makes
-    (12 corners, the cap, the widest span) and a pathological 99-corner, 99-more line."""
+    (12 corners, the card's cap, the widest span) and a pathological 99-corner, 99-more line."""
     import dataclasses
 
     from PySide6.QtGui import QPainter
@@ -312,7 +332,8 @@ def test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss():
     p = QPainter(img)
     try:
         widest = []
-        for label in ("C12 · C10 · C11 · 9 more", "C99 · C99 · C99 · 99 more", "C5 · C2 · C8"):
+        for label in ("C12 · C10 · C11 · 9 more", "C99 · C99 · C99 · 99 more", "C5 · C2 · C8",
+                      "C12 · C10 · C11 · C9"):   # ...and the widest tie with its lone 4th named
             for hi, lo in ((9.99, 9.98), (0.13, 0.06), (0.15, 0.15)):
                 opp = share_card.TopOpp(label, hi, "", tied_low_s=lo)
                 p.setFont(share_card._font(46, theme.W_SEMIBOLD))
