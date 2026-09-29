@@ -11,11 +11,12 @@ Coordinate ordering: the trace and timing lines live in LOCAL meters (cs.local),
 from __future__ import annotations
 
 import datetime
+import enum
 import logging
 import math
 import os
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import numpy as np
 
@@ -84,7 +85,14 @@ def _default_sample_path() -> str:
 
 DEFAULT_SAMPLE = _default_sample_path()  # a clip with real motion
 
-_UNSET = object()  # sentinel for "cache not yet computed" where None is a valid cached value
+# Sentinel for "cache not yet computed" where None is a valid cached value. An enum member rather
+# than a bare object() so that `is _UNSET` narrows a cache's type for pyright; it is compared only
+# by identity, as the object() was (Bests receives this same member as its `unset`).
+class _Unset(enum.Enum):
+    TOKEN = 0
+
+
+_UNSET: Final = _Unset.TOKEN
 
 _EMPTY = np.empty(0)  # the `speed` slot for a LapCurve whose speed series isn't needed (Δ family)
 
@@ -1628,7 +1636,9 @@ class Session:
         there is nothing to revert to, when the line is already there, or when the replay is refused
         by ``apply_timing_lines_latlon``'s revert guard — in which case the phantom history entry is
         popped, because the revert the user asked for never happened."""
-        if not self.can_revert_timing():
+        # The `is None` half never decides anything (can_revert_timing is False without a fitted
+        # line); it is there so the checker sees the subscript below is safe.
+        if not self.can_revert_timing() or self._fitted_lines is None:
             return False
         start = self._fitted_lines[0]              # the loader's start line…
         sectors = self.timing_lines_latlon()[1]    # …under the user's own sector lines
@@ -3258,7 +3268,7 @@ class Session:
             "fingerprint": str(entry.get("fingerprint") or ""),
             "date": entry.get("date"),
             "start_ms": int(self._wall_clock_ms()[0]),
-            "lap_total": float(self.corners.basis()[1]) if self.corners.basis() else 0.0,
+            "lap_total": float(basis[1]) if (basis := self.corners.basis()) else 0.0,
             **self.focus_trust(entry),
         }
 

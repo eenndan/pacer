@@ -1013,8 +1013,9 @@ def corner_best_thirds(
     best0, best1 = _project_window(c_enter, c_exit, corner_dist_total, best_total,
                                    traces=best_traces, frame=frame, alignment=best_align)
     best_edges = np.linspace(best0, best1, 4)
-    return tuple(_span_clock(best_dist, best_elapsed, best_edges[k], best_edges[k + 1])
-                 for k in range(3))
+    thirds = [_span_clock(best_dist, best_elapsed, best_edges[k], best_edges[k + 1])
+              for k in range(3)]
+    return thirds[0], thirds[1], thirds[2]
 
 
 def _pick_reason(time_lost: float, apex_gain: float, brake_extra: float, coast_extra: float,
