@@ -157,5 +157,5 @@ Lap-timer makers publish a resolution, such as 0.01 s; this page publishes the *
 against official timing — a per-lap σ of 0.025-0.087 s over 121 clean laps — and the margin that
 makes each lock unique. Two more things are **measured, not assumed**: the video sync (the gyroscope
 found the GPS 0.46 s behind the picture), and the coaching's brake-timing line, which prints only
-where a family-wise (Holm) correction over the recording's corners lets it. All from a GoPro you already
-have, timed on its **GPS true-clock**, for free — with the receipts to prove it.
+where a family-wise (Holm) correction over the recording's corners lets it. All from a GoPro you
+already have, timed on its **GPS true-clock**, for free — with the receipts to prove it.
