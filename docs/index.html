@@ -371,7 +371,7 @@
     <div class="section-head">
       <p class="eyebrow">The claim, and the receipt</p>
       <h2>Lap timing, validated out-of-sample against official timing.</h2>
-      <p class="muted">Most consumer and phone tools time laps off the video or sample clock, which drifts on the order of 0.1% — enough to quietly bias every lap in a session. Pacer times on the camera's own <strong>GPS true-clock</strong>, where every GPS sample carries its own timestamp, and interpolates each start/finish crossing along the chord between the two real fixes that straddle the line.</p>
+      <p class="muted">A GoPro writes GPS in ~1 s packets; spreading a packet's fixes evenly places each only to about ±0.05 s (28 ms rms), so a lap timed that way can read up to ~0.1 s off, with no average bias. Pacer times on the camera's <strong>GPS true-clock</strong>, which stamps every fix, and interpolates each crossing along the chord between the two fixes that straddle the line.</p>
     </div>
 
     <div class="split">
@@ -439,7 +439,7 @@
   <div class="wrap">
     <div class="section-head">
       <p class="eyebrow">What it does</p>
-      <h2>The analysis a dedicated data logger would give you.</h2>
+      <h2>What one GoPro file gives you.</h2>
     </div>
 
     <div class="grid-2">

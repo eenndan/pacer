@@ -56,9 +56,12 @@ to well under a hundredth of a second.
 ## How it's measured
 
 - **True-clock timing.** On a **GPS9 camera — a Hero 11 or a Hero 13**, every GPS sample carries its
-  own timestamp on the camera's clock. Pacer times laps on *that* clock — not the video/sample clock,
-  which drifts (~0.1% fast). A lap time is `(finish crossing instant) − (start crossing instant)`,
-  where each instant is interpolated along the chord between the two real GPS samples straddling the
+  own timestamp on the camera's clock. Pacer times laps on *that* clock, not the video clock. A GoPro
+  writes GPS in ~1 s packets, and spreading a packet's fixes evenly places each only to about
+  ±0.05 s (28 ms rms against GPS9), so a lap timed that way can read up to ~0.1 s off, with no
+  average bias; no GPS5 camera has been timed against official timing. The two clocks' rates differ
+  by only ~27 ppm. A lap time is `(finish crossing instant) − (start crossing instant)`, where each
+  instant is interpolated along the chord between the two real GPS samples straddling the
   start/finish line. GPS9 is narrower than it sounds: GoPro's metadata spec introduces it with the
   Hero 11, records it *removed* on the Hero 12 ("No GPS receiver in HERO12" — that camera cannot be
   lap-timed at all), and brings it back on the Hero 13. Hero 5 through Hero 10 and the Max emit GPS5
@@ -150,9 +153,9 @@ with every technique evaluated and rejected on evidence, is in
 
 ## Why this matters
 
-Most consumer and phone telemetry tools time laps off the **video or sample clock**, which drifts on
-the order of 0.1% — enough to quietly bias every lap in a session. Pacer times off the camera's own
-**GPS true-clock** and has **validated that timing against a real transponder and a circuit's own
-official timing**, out-of-sample, on footage of the kind you already own. That is the defensible
-differentiator: transponder-grade lap
-timing, from a GoPro you already have, for free — with the receipts to prove it.
+Lap-timer makers publish a resolution, such as 0.01 s; this page publishes the **residuals**
+against official timing — a per-lap σ of 0.025-0.087 s over 121 clean laps — and the margin that
+makes each lock unique. Two more things are **measured, not assumed**: the video sync (the gyroscope
+found the GPS 0.46 s behind the picture), and the coaching's brake-timing line, which prints only
+where a family-wise (Holm) correction over the recording's corners lets it. All from a GoPro you
+already have, timed on its **GPS true-clock**, for free — with the receipts to prove it.
