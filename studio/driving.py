@@ -498,6 +498,15 @@ def brake_on(elapsed, long_g, theta_b: float) -> np.ndarray:
     return (boxcar(g, _coast_window(elapsed)) <= -float(theta_b)).astype(float)
 
 
+def outside_window(e, t_from: float, t_to: float) -> bool:
+    """True when brake event `e` lies wholly outside [t_from, t_to] on its lap's clock, by the
+    bounds of `brake_time_on`'s own sample scan — so such an event contributes exactly nothing
+    there, and skipping it first leaves that sum bit-identical. The coaching levers clip every
+    lap's events to every corner window (COACHING-1), and the whole-lap scan per event was most
+    of their cost."""
+    return e.onset_time + e.duration + 1e-9 < t_from or e.onset_time - 1e-9 > t_to
+
+
 def brake_time_on(elapsed, on, events, t_from: float = -np.inf, t_to: float = np.inf) -> float:
     """Seconds ON THE BRAKES inside `events`, from the lap's `brake_on` indicator: the trapezoid
     of `on` over each event's onset->release samples. [t_from, t_to] (seconds on the same clock)
@@ -511,6 +520,8 @@ def brake_time_on(elapsed, on, events, t_from: float = -np.inf, t_to: float = np
     elapsed, on = elapsed[:n], on[:n]
     total = 0.0
     for e in events:
+        if outside_window(e, t_from, t_to):
+            continue
         # onset_time IS elapsed[onset] and onset_time + duration lands on elapsed[release] (the
         # detector's own span), so the event's samples are recovered from its two times.
         idx = np.flatnonzero((elapsed >= e.onset_time - 1e-9)
