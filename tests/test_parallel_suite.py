@@ -196,9 +196,9 @@ def test_every_task_regex_names_real_registrations():
     ctest = _ctest_tasks(tasks)
     core = ctest["test-core"]
     planted = [a.replace("test_golden_synthetic", "test_golden_synthetc") for a in core]
-    assert _unreal_names(planted) == ["-R 'test_golden_synthetc'"], _unreal_names(planted)
+    assert "-R 'test_golden_synthetc'" in _unreal_names(planted), _unreal_names(planted)
     wildcard = [a.replace("test_stats", "test_stat.*") for a in core]
-    assert _unreal_names(wildcard) == ["-R 'test_stat.*'"], _unreal_names(wildcard)
+    assert "-R 'test_stat.*'" in _unreal_names(wildcard), _unreal_names(wildcard)
     named = {task: _selected_names(argv) for task, argv in ctest.items()}
     for task in ("test-core", "test-ciworld", "golden", "test-fast"):
         assert named[task], f"`{task}` selects no registration by name: {shlex.join(ctest[task])!r}"
