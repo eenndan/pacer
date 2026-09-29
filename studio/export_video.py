@@ -773,14 +773,25 @@ def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
     return t0, t1
 
 
+ON_LINE_S = 1e-9    # s: a frame this close before a line is ON it, for the plan and the overlay alike
+
+
 def frame_count(t0: float, t1: float, fps: float) -> int:
     """How many output frames a [t0, t1) window holds at `fps`: the number of frame STARTS inside
-    the half-open window, i.e. ceil(duration*fps). The plan every other number here is derived
-    from — `frame_times`, the progress bar's denominator, and the clip length both ffmpeg commands
-    are asked for."""
+    the half-open window, i.e. ceil(duration*fps), less `ON_LINE_S`, the tolerance the overlay's
+    finished test uses too: at 1e-9 of a FRAME against its 1e-9 s, a lap within (1e-9/fps, 1e-9] s
+    of whole frames ended a frame late, both frames finished. The plan every other number here is
+    derived from — `frame_times`, the progress bar's denominator, and the clip length both ffmpeg
+    commands are asked for."""
     if fps <= 0:
         raise ValueError("fps must be positive")
-    return max(int(np.ceil((t1 - t0) * fps - 1e-9)), 0)
+    return max(int(np.ceil((t1 - t0 - ON_LINE_S) * fps)), 0)
+
+
+def planned_frames(seconds: float, fps: float, ends_on_finish: bool) -> int:
+    """The frames a render of a clip `seconds` long writes: `frame_count`, plus the finish frame
+    (`with_finish_frame`) of one cut on its line. Both pickers quote it (REG-4)."""
+    return frame_count(0.0, seconds + (1.0 / float(fps) if ends_on_finish else 0.0), fps)
 
 
 def clip_seconds(t0: float, t1: float, fps: float) -> float:
@@ -808,10 +819,9 @@ def clip_seconds(t0: float, t1: float, fps: float) -> float:
 
 
 def frame_times(t0: float, t1: float, fps: float) -> np.ndarray:
-    """The media-clock timestamp of each output frame for a [t0, t1) window at `fps`: ceil(dur*fps)
-    frames starting at t0, spaced 1/fps apart, so the i-th frame we composite is stamped with the
-    time ffmpeg decoded it from. Used to drive the per-frame overlay lookups and to size the
-    progress bar. `clip_seconds` asks ffmpeg for exactly these frames and no others."""
+    """The media-clock timestamp of each of a [t0, t1) window's `frame_count` frames: t0 + i/fps,
+    the time ffmpeg decoded frame i from, which drives the per-frame overlay lookups.
+    `clip_seconds` asks ffmpeg for exactly these frames and no others."""
     return t0 + np.arange(frame_count(t0, t1, fps)) / fps
 
 
@@ -1125,10 +1135,10 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
         started, finished, clock_t = lap_id is not None, False, tt
     else:
         lap_id = spec.lap_id
-        started = t >= spec.lap_t0 - 1e-9
-        # The same tolerance as `started`: the finish frame (`with_finish_frame`) lands ON the line
-        # when the lap is a whole number of frames long, and float addition can put it an ulp short.
-        finished = t >= spec.lap_t1 - 1e-9
+        # `frame_count`'s tolerance: the finish frame (`with_finish_frame`) lands ON the line when
+        # the lap is a whole number of frames long, and float addition can put it an ulp short.
+        started = t >= spec.lap_t0 - ON_LINE_S
+        finished = t >= spec.lap_t1 - ON_LINE_S
         clock_t = _telemetry_time(
             session, min(max(t, spec.lap_t0), max(spec.lap_t0, spec.lap_t1 - _LAP_CLOCK_EPS)))
     i = session.index_at_time(tt)

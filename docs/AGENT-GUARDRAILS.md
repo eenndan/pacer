@@ -88,7 +88,9 @@ holds a pattern with the Write tool.
 ## 4. Restore on a fresh machine
 
 The board review's restore test (R13: a fresh clone plus one private pull brings back the agents'
-working setup in under 30 minutes) times these steps:
+working setup in under 30 minutes) times these steps. R13 is recommendation 13 of the board
+review of 2026-09-23; like every id [DECISIONS.md](DECISIONS.md) glosses at its top, it names an
+item in the maintainers' private notes, which are not in this repository.
 
 1. `git clone https://github.com/eenndan/pacer.git` into a new directory, never over a live
    checkout.
