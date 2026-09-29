@@ -192,6 +192,14 @@ _LAT_CORR_MIN = 0.4
 # tight cluster a little above 1, because the 200 Hz IMU keeps the kerb/bump content the 10 Hz GPS
 # derivative smooths away. The band leaves that cluster ~0.28 of margin below and ~0.14 above,
 # while a x0.5 fault lands at 0.56 and a x2 at 2.2.
+# AGAINST TRUTH the gain of an exact mount is not 1 either. On the synthetic GoPro, whose IMU is the
+# GPS trajectory itself and which has no kerbs, it reads 1.138-1.148 at GPS noise 0, 2 and 4.5 over
+# three seeds (tests/test_truth_matrix.py, row 10). The reference is what reads low: the ACCL
+# lateral's RMS is 0.98 of the true v^2*kappa, the GPS-derived lateral's 0.855-0.861, because the
+# load-time position boxcar and _gps_derived_g's own median and boxcars round every corner off
+# (fed the true, unsmoothed positions it still reads 0.894). Checked against the true lateral
+# instead, the same samples give 0.98 (TRUTH-2, 2026-09-29). So kerb content is not needed to put a
+# true mount above 1. The band is not re-centred on it: nothing, synthetic or real, is misjudged.
 _GAIN_MIN = 0.8
 _GAIN_MAX = 1.25
 # ...but a ratio of two noise floors measures nothing. Below this much GPS lateral RMS the span
