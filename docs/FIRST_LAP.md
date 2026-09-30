@@ -25,7 +25,9 @@ Your personal best and focus list wait for the whole recording, so part of one n
 > orientation. No person, kart, place or camera footage is in it. Its video is a rendered slate that
 > says so on every frame, with a running timecode and a dot at the kart's true position, so you can
 > check Pacer's map against the picture yourself. The circuit is one Pacer ships, so step 2 below
-> is done for you and the timing opens verified. After that first run the welcome screen offers
+> is done for you and the timing opens verified. One habit is planted in it on purpose — on 8 of
+> its 14 laps the kart brakes early into C1 and carries less speed through it — so its debrief has
+> a real call to make, and one you can check. After that first run the welcome screen offers
 > **Open demo** too; offline, `--demo` says plainly that the download failed.
 
 ## 2 · Set where a lap begins (only on a new track)

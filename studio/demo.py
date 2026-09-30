@@ -13,10 +13,12 @@ the ideal lap and a ranked Coaching page with nobody's footage but its own. The 
 
   1. PACER_DEMO_MP4 env var      — an explicit path (a dev who already has a recording; also the
      test seam).
-  2. a cached copy under <app-support>/pacer/demo/  — downloaded once, reused forever.
-  3. a one-time download of the pinned asset on the `demo-data-v1` pre-release into that cache
-     (best-effort), kept only if its sha256 is `_DEMO_SHA256`. PACER_DEMO_URL overrides the URL
-     (a mirror of the same file: the checksum still applies).
+  2. a cached copy under <app-support>/pacer/demo/<_DEMO_TAG>/ — downloaded once, reused forever.
+     The cache is per TAG: a copy of an older demo (fetched from an older pre-release) is never
+     found again, so a re-pinned demo cannot hide behind one.
+  3. a one-time download of the pinned asset on the pinned demo-data pre-release (`_DEMO_TAG`)
+     into that cache (best-effort), kept only if its sha256 is `_DEMO_SHA256`. PACER_DEMO_URL
+     overrides the URL (a mirror of the same file: the checksum still applies).
 
 If none resolve (offline first run, no env, download failed) `resolve_demo_recording` returns None
 and the caller falls back to the normal empty welcome state — the app still launches.
@@ -36,17 +38,18 @@ from . import app_support
 _log = logging.getLogger(__name__)
 
 # The pinned demo asset: `pixi run make-demo`'s single-chapter synthetic session, attached to the
-# `demo-data-v1` pre-release — kept OUT of the git tree on purpose (see docs/PACKAGING.md "Demo
+# `_DEMO_TAG` pre-release — kept OUT of the git tree on purpose (see docs/PACKAGING.md "Demo
 # data"). Override with PACER_DEMO_URL for a local mirror. A download is kept only if it is THIS
 # file, byte for byte: a truncated fetch, or anything else answering at the URL, must never open
-# as the demo. Re-publishing a changed demo means a new tag, and bumping all four together.
-_DEMO_URL = (
-    "https://github.com/eenndan/pacer/releases/download/demo-data-v1/pacer-demo.mp4"
-)
-_DEMO_SHA256 = "60a15d28a7085a8bd1c433c5c25a3c521563bd68008cb3cd76053b0c74b1b560"
+# as the demo. Re-publishing a changed demo means a NEW tag (an older one stays up: older clones
+# pin it) and moving the three pins below together, with `make_demo.PUBLISHED_LAP_MS`. Since v2
+# the demo carries one planted habit at C1 (`make_demo.DEMO_HABIT`): its debrief has a call to make.
+_DEMO_TAG = "demo-data-v2"
+_DEMO_URL = f"https://github.com/eenndan/pacer/releases/download/{_DEMO_TAG}/pacer-demo.mp4"
+_DEMO_SHA256 = "d769608b1d8a4f48e93829ce024af9beb4ab9a2d84c15322d4ce5735676069ca"
 # ...and its size, which the sha fixes: what the download line tells a first `--demo` it is waiting
-# for, and the "about 11 MB" the public pages quote (tests/test_landing_page.py holds them to it).
-_DEMO_BYTES = 11_061_721
+# for, and the "about N MB" the public pages quote (tests/test_landing_page.py holds them to it).
+_DEMO_BYTES = 11_130_046
 # The CACHE's name, which is what the window title shows for a non-GoPro file: it says what the
 # recording is, so the title bar keeps saying so while the video pane is collapsed.
 _DEMO_FILENAME = "pacer-synthetic-demo.mp4"
@@ -63,9 +66,11 @@ def _app_support_dir() -> str:
 
 
 def demo_cache_path() -> str:
-    """Absolute path the demo recording is cached at (<app-support>/pacer/demo/<file>). Does NOT
-    create the directory — the fetch makes it lazily."""
-    return os.path.join(_app_support_dir(), "demo", _DEMO_FILENAME)
+    """Absolute path the demo recording is cached at (<app-support>/pacer/demo/<_DEMO_TAG>/<file>).
+    Per tag, because the cache is trusted by EXISTENCE (`_resolve_local` hashes nothing): one
+    shared path would keep opening whichever demo the machine fetched first. An older tag's copy
+    is left where it is, unused. Does NOT create the directory — the fetch makes it lazily."""
+    return os.path.join(_app_support_dir(), "demo", _DEMO_TAG, _DEMO_FILENAME)
 
 
 def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = None) -> bool:
@@ -143,7 +148,7 @@ def demo_available() -> bool:
         release asset that was never published, so on a machine with neither the env var nor a
         cache the button could only ever end at "Demo clip unavailable…" — the FIRST thing a
         portfolio reviewer who builds from source would see. The synthetic demo is published now
-        (`demo-data-v1`), but an offline machine is still exactly that machine.
+        (`_DEMO_TAG`), but an offline machine is still exactly that machine.
       * A REACHABILITY PROBE IS NOT FREE AND NOT HONEST EITHER. Asking the network whether the asset
         exists means a blocking HEAD (or a worker + a button that changes its mind a second after
         the window opens), and the app's promise is that it reaches the network only when asked

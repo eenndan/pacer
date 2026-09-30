@@ -231,6 +231,45 @@ def test_the_same_seed_gives_the_same_recording():
     assert not np.allclose(other.lap_times(line), t1.lap_times(line)), "the seed changes nothing"
 
 
+def test_a_habit_moves_only_its_corner_on_its_laps():
+    """`synth_gopro.Habit` (the demo's planted C1 habit, `make_demo.DEMO_HABIT`) is opt-in and local:
+    with none the kart's motion is the default's to the bit (so is the telemetry: the golden gate's
+    `gopro_telemetry_sha256` pins it); with one, the kart's speed changes ONLY on the habit's laps and
+    only between the timing line and the next corner — timed lap k is the generator's lap k — every
+    clean lap's true time is the habit-free one, and each habit lap costs 0.3-0.7 s (0.505-0.523 s
+    measured). truth.json names the habit only when there is one."""
+    from studio.dev import make_demo as md
+
+    habit, args = md.DEMO_HABIT, (md.DEMO_SEED, md.DEMO_LAPS)
+    base = sg.simulate(*args, origin=md.DEMO_ORIGIN)
+    none = sg.simulate(*args, origin=md.DEMO_ORIGIN, habit=None)
+    for key in ("d_nodes", "t_nodes", "v_nodes"):
+        assert np.array_equal(getattr(base, key), getattr(none, key)), key
+    assert "habit" not in base.to_json()
+    planted = sg.simulate(*args, origin=md.DEMO_ORIGIN, habit=habit)
+    assert planted.to_json()["habit"]["cid"] == habit.cid
+    c = planted.circuit
+    line_s = sum(c.straights[0]) / 2.0
+    line = planted.line_at(line_s)
+    d = planted.lap_times(line) - base.lap_times(line)
+    clean = [k - 1 for k in habit.clean_laps]
+    others = [i for i in range(md.DEMO_LAPS) if i not in clean]
+    print(f"  habit laps +{d[others].min():.3f}..+{d[others].max():.3f} s, clean laps "
+          f"max|Δ| {np.abs(d[clean]).max() * 1e6:.3f} µs")
+    assert np.abs(d[clean]).max() <= 1e-6, f"a clean lap moved: {np.round(d[clean], 7)}"
+    assert ((d[others] >= 0.3) & (d[others] <= 0.7)).all(), f"habit laps: {np.round(d[others], 3)}"
+    assert np.array_equal(base.d_nodes, planted.d_nodes)                  # one distance grid
+    s_abs = planted.s_start + planted.d_nodes
+    lap = np.floor(s_abs / c.length).astype(int)
+    s_lap = s_abs - lap * c.length
+    moved = np.abs(planted.v_nodes - base.v_nodes) > 1e-9
+    assert set(lap[moved].tolist()) == {i + 1 for i in others}, sorted(set(lap[moved].tolist()))
+    after = next(k for k in c.corners if k.cid == habit.cid + 1)
+    assert line_s < s_lap[moved].min() and s_lap[moved].max() < after.apex_s, (
+        f"the habit moved the speed from {s_lap[moved].min():.1f} m to {s_lap[moved].max():.1f} m, "
+        f"outside the line ({line_s:.1f} m) .. C{after.cid} ({after.apex_s:.1f} m)")
+
+
 def _run_all():
     for fn in (test_the_real_loader_times_every_lap_on_the_gps9_clock,
                test_noise_free_laps_are_exact_to_the_millisecond,
@@ -239,7 +278,8 @@ def _run_all():
                test_the_corners_are_the_circuits,
                test_the_stats_tiles_and_the_coaching_page_are_populated,
                test_the_imu_is_one_rigid_motion_with_the_gps,
-               test_the_same_seed_gives_the_same_recording):
+               test_the_same_seed_gives_the_same_recording,
+               test_a_habit_moves_only_its_corner_on_its_laps):
         t0 = time.time()
         fn()
         print(f"ok {fn.__name__} ({time.time() - t0:.1f} s)")

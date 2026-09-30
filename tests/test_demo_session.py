@@ -5,8 +5,9 @@ none and `--demo` downloaded an asset that was never uploaded. The demo is now S
 not filmed (`studio/dev/make_demo.py`) — and it must open as the product at its best: laps, VERIFIED
 timing, a ranked Coaching page. Network-free; everything the app resolves lands in this test's jail.
 
-  1. THE CODE STILL MAKES THE PUBLISHED DEMO: the demo's true lap times are the ones `demo-data-v1`
-     was generated with (`make_demo.PUBLISHED_LAP_MS`), timed at the built-in line.
+  1. THE CODE STILL MAKES THE PUBLISHED DEMO: the demo's true lap times are the ones the pinned
+     demo-data pre-release (`studio/demo._DEMO_TAG`) was generated with
+     (`make_demo.PUBLISHED_LAP_MS`), timed at the built-in line.
   2. THE BUILT-IN TRACK IS THE DEMO'S CIRCUIT: `track_db`'s "Synthetic demo circuit" is exactly
      `make_demo.track_entry()`, and the test recording `synth_gopro` writes at its own ORIGIN stays
      an UNKNOWN track (it exists to exercise that path).
@@ -14,7 +15,11 @@ timing, a ranked Coaching page. Network-free; everything the app resolves lands 
      nothing here decodes a frame — is cached where `--demo` caches it; `resolve_demo_recording`
      finds it offline and the real `StudioWindow` opens it offscreen: >= 7 valid laps, timing
      verified on the built-in circuit, no provisional banner or "unknown track" notice, a ranked
-     Coaching row, and a window title that says the recording is synthetic.
+     Coaching row, and a window title that says the recording is synthetic. And THE DEBRIEF MAKES
+     THE PLANTED CALL (`make_demo.DEMO_HABIT`, FOLLOW-6): its corner is ranked first, worth
+     >= 0.30 s, matched on >= 3 laps, >= 5x the next row, first of the three on the focus list —
+     and the best lap stands >= 0.10 s clear of the next, so the default compare reads a gap (v1:
+     four corners inside 0.05 s, the two fastest laps 0.002 s apart).
   4. THE PICTURE: two payloads render to exactly 60 frames at 29.97 fps with no B-frames (the frame
      contract `synth_gopro` builds the video trak on), and the label is on the frame in its amber.
 
@@ -60,8 +65,8 @@ def test_the_code_still_makes_the_published_demo():
     truth = md.simulate()
     got = tuple(int(round(t * 1000)) for t in truth.lap_times(_seed_entry()["start"]))
     assert got == md.PUBLISHED_LAP_MS, (
-        "the generator no longer makes the demo that was published (demo-data-v1): re-publish it "
-        f"under a new tag and re-pin studio/demo.py, or keep the change off the demo.\n  now "
+        f"the generator no longer makes the demo that was published ({demo._DEMO_TAG}): re-publish "
+        f"it under a new tag and re-pin studio/demo.py, or keep the change off the demo.\n  now "
         f"{got}\n  published {md.PUBLISHED_LAP_MS}")
     assert len(got) >= MIN_LAPS
 
@@ -117,6 +122,29 @@ class _Window:
         self.app.processEvents()
 
 
+def _assert_the_planted_call(s, ranked, shortlist):
+    """The demo's debrief finds the habit `make_demo.DEMO_HABIT` planted, by the margins FOLLOW-6
+    asked for (measured on v2: C1 0.361 s, 6 of 14 laps at the best lap's time, 9.9x the next row,
+    best lap 0.215 s clear). v1 had no habit: C7 led at 0.046 s and its best two laps sat 0.002 s
+    apart, which is what an evaluator saw — a debrief with nothing to say."""
+    habit, top = md.DEMO_HABIT, ranked[0]
+    assert top.cid == habit.cid == 1, (
+        f"the planted C{habit.cid} habit is not the first ranked row: "
+        f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
+    assert top.time_lost >= 0.30, f"C{top.cid} is worth only {top.time_lost:.3f} s"
+    assert top.evidence.reach_laps >= 3 and top.evidence.reach == "repeat", top.evidence
+    assert len(ranked) > 1 and top.time_lost >= 5 * ranked[1].time_lost, (
+        f"C{top.cid} {top.time_lost:.3f} s is not 5x the next row: "
+        f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
+    # The debrief pre-promotes its shortlist onto the focus list; README's and FIRST_LAP's alt text
+    # for docs/media/debrief.png says "the three corners Pacer put on the focus list".
+    assert shortlist[:1] == [habit.cid] and len(shortlist) == 3, shortlist
+    times = sorted(s.lap_time(i) for i in s.valid_lap_ids())
+    # The compare's default pair is the best lap and the next-fastest: both CLEAN laps here, so the
+    # compare reads a real gap, but not the habit's — it is not at C1.
+    assert times[1] - times[0] >= 0.10, f"the two fastest laps are {times[1] - times[0]:.3f} s apart"
+
+
 def test_demo_opens_verified_in_the_real_window():
     cache = demo.demo_cache_path()
     assert not os.path.realpath(cache).startswith(os.path.realpath(app_support.real_dir())), \
@@ -144,6 +172,7 @@ def test_demo_opens_verified_in_the_real_window():
         ranked = s.coaching_opportunities().ranked_rows()
         print(f"  coaching: {[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
         assert ranked, "the demo's Coaching page ranks nothing"
+        _assert_the_planted_call(s, ranked, w.win.view.opportunities.shortlist_cids())
         assert "synthetic" in w.win.windowTitle(), w.win.windowTitle()
         # Tracks… on the open demo lists its circuit (hidden otherwise, LEFT-28): a built-in with
         # nothing to rename or delete, read through the real window's session.
