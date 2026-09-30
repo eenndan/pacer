@@ -112,7 +112,7 @@ MEASURED_ON = ("2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical
 G, R, S = "green", "known-red", "stated"
 _T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
 _T10 = "TRUTH-10 (the Δ family on the warp frame)"
-_T11 = "TRUTH-11 (de-bias the ideal; TRUTH-6 says it in words)"
+_T6 = "TRUTH-6 (said in words on the IDEAL LAP tooltips; TRUTH-11's de-bias closed)"
 _T12 = "TRUTH-12 (noise-aware brake threshold, noise 0-2; row 7's stated floor is its target)"
 # Seconds unless named; `level` is the GPS noise, or the line-change fixture. Every value is an
 # ERROR against truth (app − truth), so it is the size of the error that is bounded.
@@ -140,14 +140,18 @@ ROWS: tuple[Row, ...] = (
     Row("sector.col_mean", 2.0, 0.010792, G, tol=0.016),
     Row("sector.col_mean", 4.5, 0.0240203, G, tol=0.035),
     # 3 · the ideal lap: |mean over the seeds| of app − true ideal (an order statistic of noisy
-    # cells reads fast; the target is TRUTH-11's 30 ms)
+    # cells reads fast). Stated, in words and with no figure, by both IDEAL LAP tooltips
+    # (TRUTH-6: stats_ideal.IDEAL_NOISE_SENTENCE). The de-bias that was to fix it (TRUTH-11) is
+    # closed: its size is not estimable per recording (studio/docs/falsification-2026-09.md §1).
+    # The floor is that fix's old 30 ms target, so an effect that shrinks under it fails here
+    # until the sentence and refusal §2's figures are re-read.
     Row("ideal.mean_bias", 0.0, 0.00739398, G, tol=0.011),
-    Row("ideal.mean_bias", 2.0, 0.160903, R, tol=0.030, ceiling=0.240, fixed_by=_T11),
-    Row("ideal.mean_bias", 4.5, 0.698047, R, tol=0.030, ceiling=1.04, fixed_by=_T11),
-    # 4 · the gap to ideal (best lap − ideal): worst seed
+    Row("ideal.mean_bias", 2.0, 0.160903, S, tol=0.030, ceiling=0.240, fixed_by=_T6),
+    Row("ideal.mean_bias", 4.5, 0.698047, S, tol=0.030, ceiling=1.04, fixed_by=_T6),
+    # 4 · the gap to ideal (best lap − ideal): worst seed. Stated with row 3, by the same sentence.
     Row("gap.max", 0.0, 0.00946271, G, tol=0.014),
-    Row("gap.max", 2.0, 0.302574, R, tol=0.030, ceiling=0.45, fixed_by=_T11),
-    Row("gap.max", 4.5, 0.799545, R, tol=0.030, ceiling=1.19, fixed_by=_T11),
+    Row("gap.max", 2.0, 0.302574, S, tol=0.030, ceiling=0.45, fixed_by=_T6),
+    Row("gap.max", 4.5, 0.799545, S, tol=0.030, ceiling=1.19, fixed_by=_T6),
     # 5 · corner time (s) and minimum speed (km/h) per (lap, corner) over p18's truth window: rms
     Row("corner.time_rms", 0.0, 0.02221, G, tol=0.033),
     Row("corner.time_rms", 2.0, 0.0936704, G, tol=0.14),
@@ -677,8 +681,8 @@ def test_the_table_keeps_its_own_rules():
 
 
 # Figures written in prose elsewhere, quoted from row 3: (where, the text it sits in, a pattern
-# whose groups are integer milliseconds, the rows they quote). TRUTH-11 moves row 3 and must move
-# these with it; this is what makes it.
+# whose groups are integer milliseconds, the rows they quote). A re-measure that moves row 3 must
+# move these with it; this is what makes it.
 _PROSE_QUOTES = (
     ("studio/docs/refused-2026-09.md §2",
      lambda: open(os.path.join(_REPO, "studio", "docs", "refused-2026-09.md"),

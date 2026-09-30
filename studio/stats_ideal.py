@@ -42,13 +42,26 @@ from .widgets import DASH, Tile, WrapLabel
 # D24 and 7↔8 on Sandown_09_05_2026, and the headline gap by up to +69 % (measured before #300 on
 # recordings no longer here, not since). The full table and its sources are in
 # corner_model.IdealSample; this is the version a reader gets on hover.
+#
+# The noise sentence (TRUTH-6, MOAT-3): a minimum over noisy cells keeps their lucky side, and
+# against synthetic truth the ideal reads fast from GPS noise 1 upward (tests/test_truth_matrix.py,
+# row 3, `stated`). Words only: TRUTH-3 found its size NOT ESTIMABLE from a real recording
+# (studio/docs/falsification-2026-09.md §1), and a synthetic's seconds are not a recording's. Here
+# once, so both tiles say it; tests/test_stats_ideal.py pins it to that verdict. The laps.csv
+# trailer and the HTML report print `IdealSample.sentence()` and not this mechanism paragraph, so
+# they do not carry it, and neither does the debrief's frozen `vs ideal` chip.
+IDEAL_NOISE_SENTENCE = (
+    "Every piece is also timed off GPS, and a GPS error at a piece's edge makes a lap read quick "
+    "on one side of it and slow on the other. A minimum keeps the quick side, so the ideal tends "
+    "to read faster than your quickest pieces really were, and the gap larger than the time on "
+    "the table: more so on a noisier recording, by an amount no single recording can measure.")
 IDEAL_SAMPLE_TOOLTIP = (
     "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
     "of how many laps you recorded: measured on the owner's recordings, it falls 0.16–0.74 s "
     "per doubling of lap count and keeps falling — there is no floor it settles on. It also "
     "moves when the corners are re-detected, which happens every time you drag the start/finish "
-    "line. Compare it with another session only when the two have a similar lap count and "
-    "corner count.")
+    f"line. {IDEAL_NOISE_SENTENCE} Compare it with another session only when the two have a "
+    "similar lap count, corner count and GPS quality.")
 THEORETICAL_TOOLTIP = ("Ideal lap — your quickest time through each corner and each "
                        "straight, stitched into one lap. A reference target, not a lap you "
                        "drove: no single lap was this fast all the way round, but every piece "
@@ -80,6 +93,22 @@ IDEAL_TOOLTIP = (
     "Ranked by gain × the share of laps that already matched it — so a smaller gain you make "
     "routinely sits above a bigger one you made once. Both factors are columns, so you can check "
     "the order by eye. Click a row to ring that corner on the map.")
+# A give-back under a penny is the rounding of the 2 dp the row prints, not a trade.
+GIVE_BACK_FLOOR = 0.01
+
+
+def _give_back(sb, row, subject_id) -> str:
+    """The row's last clause (ADV-6): what the lap that set this segment's minimum gave back in
+    the segments either side (`SegmentBests.donor_net`), or "" when it kept its gain. A row can
+    rank high on a gain its donor paid for next door, and the ranking cannot see that."""
+    got = sb.donor_net(row.index, subject_id)
+    if got is None or got[0] >= row.gain - GIVE_BACK_FLOOR:
+        return ""
+    net, around = got
+    lap, where = f"Lap {row.donor + 1}", " and ".join(sb.display_label(j) for j in around)
+    if net <= 0:
+        return f" {lap} gave all of it back in {where}: a line trade-off, not free time."
+    return f" {lap} gave {row.gain - net:.2f} s of it back in {where}."
 
 
 class IdealSection:
@@ -242,7 +271,7 @@ class IdealSection:
                    f"did"
                    + ("" if row.donor is None else f"; the quickest was lap {row.donor + 1}")
                    + f". Ranked {r + 1} of {len(shown)} by {row.gain:.2f} × {row.beat}/{row.n} = "
-                     f"{row.priority:.3f}.")
+                     f"{row.priority:.3f}." + _give_back(sb, row, best_id))
             for c, cell in enumerate(cells):
                 cell.setToolTip(tip)
                 t.setItem(r, c, cell)

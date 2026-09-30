@@ -12,6 +12,8 @@ Pins, on the stub session `test_stats._fake_view_session` builds (offscreen Qt, 
     are 1-based; a row rings its corner on the map; every cell carries its row's arithmetic;
   * the `IdealSample` disclosure (lap count on the tile, donors and partition on the line under
     the tiles, the mechanism on both tooltips) moves with the number;
+  * both tooltips say what GPS noise does to a minimum, in words, with no figure, on the branch
+    TRUTH-3's verdict took (TRUTH-6); a row names the gain its donor gave back either side;
   * the block hides as a unit when one lap won every segment, with no corner partition, and on a
     zero-lap recording;
   * both tiles take the provisional / degraded timing mute; the measured PACE tiles do not.
@@ -25,7 +27,8 @@ from types import SimpleNamespace
 import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO)
 
 from _qtapp import themed_app  # noqa: E402
 
@@ -369,6 +372,174 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
     assert abs(float(v.ideal.t_gap.value.text()[:-2])) < abs(float(was_gap[:-2])), (
         was_gap, v.ideal.t_gap.value.text())
     print("test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it OK")
+
+
+# TRUTH-3's verdict on the ideal lap's GPS-noise bias, as studio/docs/falsification-2026-09.md
+# records it in its first line: "within ~25 ms" (row C's lap σ), "larger", or "not estimable".
+# The noise sentence takes its branch (plan TRUTH-6): within ~25 ms, the words may say the minimum
+# reads fast by about the measurement noise; otherwise they say what noise does and give it no
+# size. A de-bias would have been TRUTH-11's, and this verdict closed it.
+TRUTH3_VERDICT = "not estimable"
+_VERDICT_IN_DOC = {"within ~25 ms": "WITHIN ~25 MS", "larger": "LARGER",
+                   "not estimable": "NOT ESTIMABLE"}
+# The "larger" / "not estimable" branch's sentence, verbatim.
+_PLAIN_NOISE_SENTENCE = (
+    "Every piece is also timed off GPS, and a GPS error at a piece's edge makes a lap read quick "
+    "on one side of it and slow on the other. A minimum keeps the quick side, so the ideal tends "
+    "to read faster than your quickest pieces really were, and the gap larger than the time on "
+    "the table: more so on a noisier recording, by an amount no single recording can measure.")
+
+
+def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
+    """TRUTH-6 (MOAT-3). Both ideal tooltips said the gap "is time you have already demonstrated,
+    one segment at a time" and nothing about the GPS every one of those segments is timed by. A
+    minimum over noisy cells keeps the lucky side of the noise: against synthetic truth the ideal
+    reads fast from noise 1 upward (tests/test_truth_matrix.py, row 3), and TRUTH-3 found the size
+    NOT ESTIMABLE from a real recording. So the tooltips now say what noise does, in words:
+      (1) the sentence is the one TRUTH-3's recorded verdict calls for, pinned verbatim;
+      (2) it carries no figure, and no tooltip, caption or line of the block prints a bias figure
+          or a value from the truth matrix's table (a synthetic's seconds are not a recording's,
+          review §7); the tiles print the raw ideal, no correction;
+      (3) every "time you have already demonstrated" is followed by it.
+    Each check carries a plant it must catch."""
+    _app()
+    import test_truth_matrix as tm
+
+    from studio import stats_ideal
+    from studio._signal import fmt_time
+    from studio.stats_ideal import (
+        IDEAL_GAP_TOOLTIP,
+        IDEAL_NOISE_SENTENCE,
+        IDEAL_SAMPLE_TOOLTIP,
+        THEORETICAL_TOOLTIP,
+    )
+    from studio.stats_panel import StatsView
+    with open(os.path.join(_REPO, "studio", "docs", "falsification-2026-09.md"),
+              encoding="utf-8") as f:
+        doc = f.read()
+    m = re.search(r"its noise bias is (NOT ESTIMABLE|WITHIN ~25 MS|LARGER)", doc)
+    assert m, "TRUTH-3's verdict line is gone from falsification-2026-09.md: re-read the verdict"
+    assert m[1] == _VERDICT_IN_DOC[TRUTH3_VERDICT], (
+        f"TRUTH-3 now says {m[1]!r}, and this file branches on {TRUTH3_VERDICT!r}: move "
+        f"TRUTH3_VERDICT and the noise sentence with it")
+    # (1) THE BRANCH, verbatim.
+    if TRUTH3_VERDICT == "within ~25 ms":
+        assert "about the measurement noise" in IDEAL_NOISE_SENTENCE, IDEAL_NOISE_SENTENCE
+    else:
+        assert IDEAL_NOISE_SENTENCE == _PLAIN_NOISE_SENTENCE, IDEAL_NOISE_SENTENCE
+    assert IDEAL_NOISE_SENTENCE in IDEAL_SAMPLE_TOOLTIP, "the one place the sentence lives"
+    # …and it is what the truth matrix's noisy ideal and gap rows are `stated` by.
+    noisy = [r for r in tm.ROWS if r.stat in ("ideal.mean_bias", "gap.max") and r.level != 0.0]
+    assert noisy and all(r.status == tm.S for r in noisy), noisy
+    for name, tip in (("THEORETICAL_TOOLTIP", THEORETICAL_TOOLTIP),
+                      ("IDEAL_GAP_TOOLTIP", IDEAL_GAP_TOOLTIP)):
+        assert tip.count(IDEAL_NOISE_SENTENCE) == 1, f"{name} must say it once: {tip!r}"
+
+    # (2) NO FIGURE. Every value the truth matrix's table holds, as seconds to 3 dp and as whole
+    # milliseconds, and any "N ms" at all. Not 2 dp: the sample paragraph's measured lap-count
+    # rate, 0.16–0.74 s per doubling, meets row 3's 0.161 s there by coincidence.
+    table = [v for r in tm.ROWS for v in (r.measured, r.tol, r.ceiling) if v is not None]
+
+    def bias_figures(text):
+        return (re.findall(r"\d+(?:\.\d+)?\s*ms\b", text)
+                + [f"{v:.3f}" for v in table if re.search(rf"(?<![\d.]){v:.3f}(?!\d)", text)])
+    assert not re.search(r"\d", IDEAL_NOISE_SENTENCE), IDEAL_NOISE_SENTENCE
+    v = StatsView(_fake_view_session())
+    sb = v.session.ideal_segment_bests()
+    surfaces = {"IDEAL_SAMPLE_TOOLTIP": IDEAL_SAMPLE_TOOLTIP,
+                "the ideal tile": (v.ideal.t_theoretical.toolTip() + "\n"
+                                   + v.ideal.t_theoretical.caption.text()),
+                "the gap tile": v.ideal.t_gap.toolTip() + "\n" + v.ideal.t_gap.caption.text(),
+                "the sample line": v.ideal.sample.text()}
+    for name, text in surfaces.items():
+        assert not bias_figures(text), f"{name} prints a bias figure: {bias_figures(text)}"
+    # The tiles print the RAW minimum and its raw gap, no correction subtracted.
+    best = float(sb.times[sb.lap_ids.index(1)].sum())
+    assert v.ideal.t_theoretical.value.text() == fmt_time(sb.total), (
+        v.ideal.t_theoretical.value.text(), fmt_time(sb.total))
+    assert v.ideal.t_gap.value.text() == f"{best - sb.total:.2f} s", v.ideal.t_gap.value.text()
+    row3 = next(r for r in tm.ROWS if (r.stat, r.level) == ("ideal.mean_bias", 2.0))
+    for plant in (f"{round(1000 * row3.measured)} ms", f"{row3.measured:.3f} s"):
+        planted = IDEAL_SAMPLE_TOOLTIP.replace("tends to read faster",
+                                               f"tends to read {plant} faster")
+        assert planted != IDEAL_SAMPLE_TOOLTIP and bias_figures(planted), plant
+
+    # (3) EVERY "time you have already demonstrated" IS FOLLOWED BY THE NOISE SENTENCE — in the
+    # module's copy and in both tiles' rendered tooltips (which set_target_tile composes).
+    phrase = "time you have already demonstrated"
+    texts = {k: s for k, s in vars(stats_ideal).items() if isinstance(s, str) and k.isupper()}
+    texts.update({"ideal tile": v.ideal.t_theoretical.toolTip(),
+                  "gap tile": v.ideal.t_gap.toolTip()})
+
+    def unqualified(text):
+        return [m.start() for m in re.finditer(phrase, text)
+                if IDEAL_NOISE_SENTENCE not in text[m.end():]]
+    assert any(phrase in t for t in texts.values()), f"no {phrase!r} left: this check is vacuous"
+    bad = {k: unqualified(t) for k, t in texts.items() if unqualified(t)}
+    assert not bad, f"{phrase!r} with no noise sentence after it: {bad}"
+    assert unqualified(IDEAL_GAP_TOOLTIP.replace(IDEAL_NOISE_SENTENCE, "")), "plant not caught"
+    v.deleteLater()
+    print("test_the_ideal_says_what_gps_noise_does_to_it_in_words OK")
+
+
+def _give_back_fixture():
+    """Three corners, seven segments, the subject lap id 1 (the stub's best lap), each corner
+    owned by another lap and each donor's neighbours set to one case (donors 1-based, as a row
+    prints them):
+
+        row  segment  donor   gain   donor vs subject either side    net     the row says
+        C1   seg 1    lap 1   0.13   0.25 s slower on both            -0.37   all of it back
+        C2   seg 3    lap 3   0.20   level before, 0.06 s slower after  0.14   0.06 s of it back
+        C3   seg 5    lap 4   0.15   level on both                     0.15   nothing
+    """
+    from studio.corner_model import SegmentBests
+    base = np.array([1.0, 5.0, 3.0, 5.0, 3.0, 5.0, 2.0])
+    times = np.stack([base + [0.25, 0.00, 0.25, 0.40, 0.40, 0.40, 0.40],   # lap 0: owns C1
+                      base + [0.00, 0.13, 0.00, 0.20, 0.00, 0.15, 0.00],   # lap 1: the subject
+                      base + [0.30, 0.40, 0.00, 0.00, 0.06, 0.40, 0.30],   # lap 2: owns C2
+                      base + [0.30, 0.40, 0.30, 0.40, 0.00, 0.00, 0.00]])  # lap 3: owns C3
+    return SegmentBests(
+        labels=["start", "C1", "C1-C2", "C2", "C2-C3", "C3", "C3-finish"], cids=[1, 2, 3],
+        lap_ids=[0, 1, 2, 3], times=times, admitted=np.ones(times.shape, bool),
+        resolved=np.ones(times.shape, bool), bests=[float(c.min()) for c in times.T],
+        donors=[int(c.argmin()) for c in times.T], s_edges=list(np.linspace(0.0, 1.0, 8)),
+        donor_span=[(0.0, 0.0)] * 7)
+
+
+def test_a_row_names_the_gain_its_donor_gave_back():
+    """ADV-6 (TRUTH-6). A decomposition row said "your best lap gave away 0.13 s here … the
+    quickest was lap 1" and stopped, while lap 1 had lost 0.50 s on the two straights beside that
+    corner: the minimum booked its gain and not its price. The row's tooltip now names it, from
+    `SegmentBests.donor_net`: the amount given back when the donor's lead over the segment and its
+    neighbours is under the gain by more than a penny, and "all of it … a line trade-off, not free
+    time" when that lead is gone. A row whose donor kept its gain says nothing new. On the real
+    page, through the section's own refresh."""
+    _app()
+    from studio.stats_panel import StatsView
+    sb = _give_back_fixture()
+    assert sb.donors[1::2] == [0, 2, 3] and sb.single_donor_id() is None, sb.donors
+    s = _fake_view_session()
+    s.ideal_segment_bests = lambda: sb
+    s.ideal_total = lambda: sb.total
+    s.theoretical_best = lambda: sb.total
+    s.ideal_donor_lap_id = lambda: sb.single_donor_id()
+    v = StatsView(s)
+    t = v.ideal.table
+    tips = {t.item(r, 0).text(): t.item(r, 0).toolTip() for r in range(t.rowCount())}
+    assert set(tips) == {"C1", "C2", "C3"}, tips
+    assert tips["C1"].endswith(
+        " Lap 1 gave all of it back in S/F → C1 and C1 → C2: a line trade-off, not free "
+        "time."), tips["C1"]
+    assert tips["C2"].endswith(" Lap 3 gave 0.06 s of it back in C1 → C2 and C2 → C3."), \
+        tips["C2"]
+    assert "gave" not in tips["C3"].split("here.", 1)[1], tips["C3"]
+    assert tips["C3"].endswith("Ranked 2 of 3 by 0.15 × 2/4 = 0.075."), tips["C3"]
+    # Every cell of a row carries the row's tooltip, the give-back included.
+    for r in range(t.rowCount()):
+        assert {t.item(r, c).toolTip() for c in range(t.columnCount())} == {
+            t.item(r, 0).toolTip()}
+    v.deleteLater()
+    print("test_a_row_names_the_gain_its_donor_gave_back OK")
 
 
 def test_ideal_block_hides_when_it_would_duplicate_a_lap_you_drove():

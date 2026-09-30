@@ -618,6 +618,26 @@ class SegmentBests:
                 for j in range(len(self.bests)) if self.admitted[i, j]]
         return sorted(rows, key=lambda r: -r.priority)
 
+    def donor_net(self, seg: int, lap_id: int) -> tuple[float, list[int]] | None:
+        """(net, around): what segment `seg`'s donor still leads `lap_id` by across `seg` and the
+        neighbours in `around` — Σ (lap_id's time − the donor's) over the cells BOTH laps drove
+        admitted and resolved. None on a POINT segment, on the donor's own row, for a lap with no
+        row, or when `seg` itself fails that mask. Segments 0 and 2N have one neighbour.
+
+        A minimum books a donor's gain and not its price (ADV-6): a late brake is quick into the
+        corner and slow out of it, and the row shows the quick half. The three-segment sum also
+        has only its OUTER edges, so time that GPS error or a corner edge moved across `seg`'s own
+        edges moves the gain and not the net."""
+        donor = self.donors[seg]
+        if donor is None or donor == lap_id or lap_id not in self.lap_ids:
+            return None
+        a, b = self.lap_ids.index(lap_id), self.lap_ids.index(donor)
+        ok = self.admitted[[a, b]] & self.resolved[[a, b]]
+        if not ok[:, seg].all():
+            return None
+        around = [j for j in (seg - 1, seg + 1) if 0 <= j < len(self.bests) and ok[:, j].all()]
+        return float(sum(self.times[a, j] - self.times[b, j] for j in (seg, *around))), around
+
 
 class CornerModel:
     """Corner detection + per-corner per-lap stats over Session-bound primitives.
