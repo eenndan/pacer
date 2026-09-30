@@ -196,7 +196,7 @@ caches + delegates.
 | [marks_panel.py](marks_panel.py) | The Marks page and mark editor; emits intents, owns no store | Qt | `test_marks` |
 | [provenance_panel.py](provenance_panel.py) | The read-only "inspect this number" panel over one `Provenance` | Qt | `test_provenance_panel` |
 | [gmeter_overlay.py](gmeter_overlay.py) | The g-meter dial, live and burned into exports (`paint_dial`) | Qt | `test_gmeter_overlay` |
-| [overlays.py](overlays.py) | The welcome state (Open demo only when one resolves) and the PB toast | Qt | `test_first_run_path` |
+| [overlays.py](overlays.py) | The welcome state (Get demo · N MB, or Open demo once cached) and the PB toast | Qt | `test_first_run_path` |
 | [help_dialog.py](help_dialog.py) | `COMMANDS`, the one command registry, and the Help-menu dialogs | Qt | `test_help_dialog` |
 | [command_palette.py](command_palette.py) | ⌘K, generated from the live menu bar and `COMMANDS` | Qt | `test_command_palette` |
 | [library_dialog.py](library_dialog.py) | File ▸ Library…: sessions, PB chart, session records; writes nothing | Qt | `test_library` |
