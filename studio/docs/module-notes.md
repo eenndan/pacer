@@ -397,7 +397,7 @@ The **session record** (pacer-free AND Qt-free): one record per recording — co
 
 ## `demo.py`
 
-**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache → the `demo-data-v1` release asset, kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — it was born while the asset was unpublished, and it still keeps the app off the network unless `--demo` asks.
+**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache (one folder per pinned tag, so an older demo's copy is never found again) → the pinned demo-data pre-release's asset (`_DEMO_TAG`), kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — it was born while the asset was unpublished, and it still keeps the app off the network unless `--demo` asks.
 
 ## `playback_state.py`
 

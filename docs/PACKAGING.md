@@ -120,18 +120,27 @@ python -m studio --demo            # open the synthetic demo session on startup
 Resolution order (`studio/demo.py`):
 
 1. **`PACER_DEMO_MP4`** — an explicit path to a recording you already have.
-2. a cached copy under `~/Library/Application Support/pacer/demo/`.
-3. a **one-time download** of `pacer-demo.mp4` from the `demo-data-v1` pre-release into that
-   cache, kept only if its sha256 matches `_DEMO_SHA256` (override the URL with `PACER_DEMO_URL`).
-   If offline / the download fails, the app falls back to the empty welcome state — it still
-   launches.
+2. a cached copy under `~/Library/Application Support/pacer/demo/<tag>/`, one folder per pinned
+   pre-release (`_DEMO_TAG`): the cache is trusted by existence, so a copy of an older demo is
+   never found again once the pin moves.
+3. a **one-time download** of `pacer-demo.mp4` from the pinned demo-data pre-release
+   (`studio/demo._DEMO_TAG`) into that cache, kept only if its sha256 matches `_DEMO_SHA256`
+   (override the URL with `PACER_DEMO_URL`). If offline / the download fails, the app falls back
+   to the empty welcome state — it still launches.
 
 **The welcome screen's "Open demo" button is gated on steps 1–2 only** (`demo.demo_available()`, an
 offline path lookup), so the app never probes the network on its own; `--demo` on the command line
 runs the full order, download included, and the cache then offers the button on every later
 launch. **Recording the demo video: set `PACER_DEMO_MP4`** and the button points at your clip.
 
+The demo is not a clean session on purpose: since `demo-data-v2` it carries one planted habit
+(`make_demo.DEMO_HABIT`: C1, on 8 of its 14 flying laps), so its debrief has a real call to make
+and a reader can check it against the truth.
+
 To re-publish the demo: `pixi run make-demo -- --out pacer-demo.mp4` (deterministic: the same code
-and pixi env give the same bytes), attach it to a NEW `demo-data-vN` pre-release, and move
-`_DEMO_URL` and `_DEMO_SHA256` in `studio/demo.py` (and `make_demo.PUBLISHED_LAP_MS` if the
-telemetry changed) in the same PR. Do **not** commit it to git.
+and pixi env give the same bytes), attach it to a NEW `demo-data-vN` pre-release as an asset named
+exactly `pacer-demo.mp4`, and in the same PR move the three pins in `studio/demo.py` —
+`_DEMO_TAG` (the URL is built from it, and so is the cache folder), `_DEMO_SHA256` and
+`_DEMO_BYTES` — plus `make_demo.PUBLISHED_LAP_MS` if the telemetry changed. **Never delete or
+replace an older `demo-data-vN`:** older clones pin its exact bytes. Do **not** commit the file to
+git.

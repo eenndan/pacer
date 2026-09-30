@@ -15,7 +15,8 @@ the painted point onto the circuit's true centreline and dividing by the true sp
 
 MEASURED (fixed seed, every 3rd frame while moving; one frame at 29.97 fps is 33.4 ms). "Before" is
 this test with both of X2's defects planted back (lag 0.2 s case; the harness stops at the first
-failure), and it reproduces what B2 measured on the published demo, +125 ms (p10 +79, p90 +171):
+failure), and it reproduces what B2 measured on the first published demo (demo-data-v1), +125 ms
+(p10 +79, p90 +171):
 
                                 before X2                       after X2 (all three cases)
     map dot, median             +122.5 ms (p10 +76, p90 +171)   +17.7 .. +19.0 ms
