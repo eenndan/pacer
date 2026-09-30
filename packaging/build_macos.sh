@@ -38,7 +38,7 @@ cd "${REPO_ROOT}"
 
 # --- sanity: the env must have the things the spec bundles --------------------------------------
 command -v pyinstaller >/dev/null 2>&1 || {
-  echo "error: pyinstaller not found. Inside the pixi env, install the pins in this script's header." >&2
+  echo "error: pyinstaller not found. Install the pins in this script's header (pixi env)." >&2
   exit 1
 }
 python -c "import pacer, PySide6" 2>/dev/null || {
