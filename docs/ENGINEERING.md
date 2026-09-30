@@ -192,6 +192,11 @@ A real-footage check now re-runs that lock every time and holds the published ro
 adapter that reads the timing pages never reads a driver's name. The other circuit's recordings
 still wait for their timing sheets, and the page says so.
 
+The count was corrected the same way. The claim rests on 121 laps actually compared, not the span
+of lap IDs in a 24-hour transponder log: an earlier version of the landing page printed “1,150+
+laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering
+direction.
+
 Receipt: [#382](https://github.com/eenndan/pacer/pull/382) · [docs/ACCURACY.md](ACCURACY.md) ·
 `studio/dev/_validate_wallclock.py`.
 
@@ -222,6 +227,25 @@ Receipt: `studio/dev/golden_session_dump.py::_resolve_out_path` ·
 `tests/test_app_support_jail.py`.
 
 ---
+
+## Guards that fail the build
+
+The landing page names the design system's four guards; each walks the app's own source rather
+than a snapshot:
+
+- a **dimensional** guard: every padding, radius and height in the stylesheet must be a declared
+  step;
+- a **glyph** guard: every character in a user-visible string must be drawn by the app's own face
+  — Qt silently falls back per character, and eight marks were resolving into five foreign fonts;
+- an **inline-style** guard: every `setStyleSheet` call left is behind a named exemption, each with
+  prose saying whose decision it is;
+- a **contrast** guard holding every text role to WCAG AA and every step of the map's colour ramp
+  apart by more than the CIE76 JND *under a deuteranopia simulation*.
+
+The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel
+ratios behind a **write tripwire on every write path Python and Qt expose** — because the app had
+been silently re-saving a tracked asset on every launch, and the suite missed it for running at
+exactly the one DPI that reproduced the committed bytes.
 
 ## A citable marker vocabulary on the way out
 
