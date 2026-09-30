@@ -31,7 +31,7 @@ eleven resets it, so each fix lands within about ±0.05 s of its true time and a
 ~0.1 s off, with no average bias. The upstream project Pacer was forked from fitted a per-sample
 clock to those payloads instead, and a port of that fit lived in this repo for a while.
 
-On a Hero 11 or a Hero 13, the GPS9 stream stamps every fix with the receiver's own time, so there
+On a camera that writes it, the GPS9 stream stamps every fix with the receiver's own time, so there
 is nothing to fit. Against the transponder log of a 24-hour race, the fitted clock matched GPS9 on
 the cleaner of two recordings. On the noisier one it diverged, with a per-lap spread 4.5 times
 GPS9's, and it cut one lap nearly five seconds short. One recording would have called the two

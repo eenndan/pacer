@@ -127,10 +127,10 @@ that session's debrief (step 3) says whether your focus corners moved.
 
 ---
 
-**Trust, honestly labelled.** Timing from a GPS9 camera (a Hero 11 or a Hero 13) is validated
-against a real transponder; GPS5 cameras — Hero 5 through Hero 10, and the Max — fall back to the
-video clock and are flagged as approximate. A Hero 12 has no GPS receiver at all and cannot be
-lap-timed.
+**Trust, honestly labelled.** Timing from a GPS9 camera (a Hero 11, Hero 13, MAX2 or MISSION 1, by
+GoPro's spec) is validated against a real transponder on a Hero 13; GPS5 cameras — Hero 5 through
+Hero 10, the Fusion and the original Max — fall back to the video clock and are flagged as
+approximate. A Hero 12 has no GPS receiver at all and cannot be lap-timed.
 Inferred channels (brake/throttle/grip) and braking-point hints carry an `(est)` / `EST` label.
 Provisional (unset start line) timing is muted until you place the line. When in doubt, the number
 tells you how much to trust it.

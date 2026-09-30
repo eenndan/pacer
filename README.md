@@ -51,9 +51,9 @@ window leaves a residual at least **44×** larger.
 
 Why it works: a GoPro writes GPS in ~1 s packets, and spreading a packet's fixes evenly places
 each only to about ±0.05 s (28 ms rms on two GPS9 recordings), so a lap timed that way can read up
-to ~0.1 s off, with no average bias. GPS9 (a Hero 11 or 13) stamps every fix, and Pacer times on
-that **true clock**. The error budget, and the sensor fusion, Kalman/RTS smoothing, Doppler-aided
-positioning and map-matching **rejected on evidence**, are in
+to ~0.1 s off, with no average bias. GPS9 (a Hero 11, 13, MAX2 or MISSION 1) stamps every fix,
+and Pacer times on that **true clock**. The error budget, and the sensor fusion, Kalman/RTS
+smoothing, Doppler-aided positioning and map-matching **rejected on evidence**, are in
 **[docs/ACCURACY.md](docs/ACCURACY.md)**.
 
 **Verify it yourself:** `pixi run verify` times a synthetic GoPro recording with known truth
@@ -73,10 +73,10 @@ and a test fails if an estimator comes back.
 
 ## What it does
 
-**Lap and sector timing you can audit.** True-clock timing needs the GPS9 stream, and by GoPro's
-own metadata spec that means a **Hero 11 or a Hero 13**: GPS9 arrived with the Hero 11, the Hero 12
-has no GPS receiver at all and cannot be lap-timed, and GPS returned with the Hero 13. Every earlier
-GPS-equipped model — Hero 5 through Hero 10, and the Max — carries GPS5 only, which has no
+**Lap and sector timing you can audit.** True-clock timing needs the GPS9 stream, which GoPro's
+metadata spec lists for a **Hero 11, Hero 13, MAX2 or MISSION 1** (tested on a Hero 13; a spec entry
+is not a tested file). The Hero 12 has no GPS receiver at all and cannot be lap-timed. Hero 5
+through Hero 10, the Fusion and the original Max carry GPS5 only, which has no
 per-sample clock, so Pacer times those recordings on the video clock, mutes every duration it
 derives and labels it estimated. Nothing is keyed off the model name: the loader looks for the
 stream and reports which clock it actually built. On an unknown track it fits a start/finish line
