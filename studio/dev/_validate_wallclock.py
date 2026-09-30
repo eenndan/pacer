@@ -533,7 +533,7 @@ def run_lock_only(recording: str, csv_path: str, dump: str | None = None) -> dic
         print("  clean mean's 95 % interval: " + (
             f"±{iv['half_width']:.4f} s (lag-1 {iv['lag1']:+.3f}, used as {iv['rho1']:+.3f}; "
             f"σ/√n {iv['sigma_over_sqrt_n']:.4f} s)" if iv
-            else "none — the clean laps are not one consecutive run"))
+            else f"none — the clean laps are not one run of {INTERVAL_MIN_N}+ consecutive laps"))
         entry.update(
             row=list(key), sheet_laps=[start, start + len(ids) - 1],
             heat_printed_start=starts.get(key[0]), stats=stats, interval=iv,

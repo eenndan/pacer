@@ -46,10 +46,10 @@ reads −0.348 s; the 14 clean residuals all lie between −0.033 s and +0.044 s
 lap, all 15 aligned laps give σ 0.0903 s. C's mean is a point estimate too: consecutive laps share
 a line crossing, so an interval has to model how that crossing's error carries from lap to lap,
 and C's 14 clean laps cannot pin it — their lag-1 autocorrelation is +0.03, where independent
-crossing noise alone would give −0.5 and none at all 0. The recording also
-holds a four-lap qualifying run, with a single lap under the cap — too short a fingerprint to lock,
-so it is not measured at all. The receiver gated 10.4% of the recording's fixes, every one of them
-in its first seven minutes while it acquired; inside the race none were gated, and the median DOP
+crossing noise alone would give −0.5 and purely per-lap noise 0. The recording also holds a
+four-lap qualifying run, with a single lap under the cap — too short a fingerprint to lock, so it
+is not measured at all. The receiver gated 10.4% of the recording's fixes, every one of them in
+its first seven minutes while it acquired; inside the race none were gated, and the median DOP
 there was 1.15.
 
 The rows tell the whole story: **recording-level GPS quality sets the floor.** Recording B has
