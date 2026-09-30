@@ -6,6 +6,107 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-30
+
+The showcase release: 63 pull requests, #445 to #507, from the fix plan of the 2026-09-28 review.
+Each line names its pull request (`github.com/eenndan/pacer/pull/<N>`), where the measurements
+behind it live.
+
+### Highlights
+
+- **Check the timing yourself, with no footage.** `pixi run verify` times a synthetic GoPro file of
+  known truth through the real loader (noise-free, every lap within 0.41 ms at a line mid-straight);
+  a truth matrix measures the core at three GPS noise levels (#468, #482)
+- **Coaching reasons come from your laps' habit.** A reason's lever and the Entry·Apex·Exit bars are
+  the median over your clean laps, not one lap's; "line" needs a measured slower-apex, faster-exit
+  signature, and lap-to-lap spread is called "Consistency" (#454, #460, #465)
+- **Sector times at the true line crossing.** A split is interpolated where the lap crosses its
+  sector line, not at the nearest fix: σ under 1 ms noise-free, 0.11 s and 0.24 s at two recordings'
+  GPS noise; no official timing has checked a split (#477, #489)
+- **The demo shows the loop.** A fresh launch offers "Get demo", downloaded on that click; the demo
+  (demo-data-v2) plants one fixable habit, so its debrief ranks that corner first and lands with the
+  focus list filled (#491, #500)
+- **One checked number up front.** The README and landing lead with lap times that match official
+  timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check. The demo is
+  three commands in; the landing is lighter, more accessible (#495, #496, #498, #499, #501, #504)
+
+### Added
+
+- `pixi run verify` times a synthetic GoPro recording against its known truth (noise-free laps
+  within 0.41 ms at a line mid-straight), then runs the golden gate: a timing check with no footage.
+  (#482)
+
+### Changed
+
+- A fresh launch offers the demo: the welcome's second button says "Get demo" with its size and
+  downloads it on that click ("Open demo" once cached); a failed download keeps the button. (#500)
+- Camera support names the MAX2 and MISSION 1, which GoPro's spec now lists with GPS9 (neither is
+  tested with a real file), and the Fusion among the GPS5 cameras that time on the video clock.
+  (#493)
+- The `--demo` session carries one planted, fixable habit (C1, on 8 of 14 laps), so its debrief
+  ranks C1 first at 0.36 s against 0.04 s for the next; an older cached demo is not reused. (#491)
+- Lap distance, average speed and session distance now say they read about 1-3% short of the
+  distance driven: the load-time smoothing rounds every corner off (Stats, lap table, exports).
+  (#485)
+- The ideal-lap tooltips say GPS noise makes a minimum read fast, and the gap large, by an amount
+  one recording cannot size; an ideal-lap row says when its donor lap gave the gain back next door.
+  (#484)
+- The published accuracy gives each recording's mean error as a point estimate, +0.001 to +0.003 s,
+  no longer as a bound; the accuracy chart's caption says the same. (#482)
+- The Stats page's DRIVING tooltip says GPS noise adds time on the brakes, so compare that time only
+  between sessions of similar GPS quality. (#481)
+- Saved tracks… no longer lists the fictional demo circuit unless the demo is open (or you refined
+  its line); `--demo` still opens with verified timing. (#478)
+- Coaching names lap-to-lap spread "Consistency"; it said "line", which nothing measured. "Line" now
+  needs your best lap slower at the apex and faster out than your laps, both by ≥ 1 km/h. (#465)
+- Coaching's Entry·Apex·Exit bars and "most of it on …" are the median over your clean laps, the
+  numbers the Stats CORNERS tooltip shows, not one typical lap's; the bars name no lap or net.
+  (#460)
+- A best lap within timing precision of your PB (under 0.07 s, either side) now reads "level with
+  your personal best", not "0.00 s faster"; the lap card drops its "NEW PB" mark there. (#451)
+
+### Fixed
+
+- On a Retina screen the welcome's chevron mark is now whole: it was drawn at twice its size, so
+  only its top-left quarter showed. (#507)
+- The Stats STRAIGHTS note no longer ranks a slow exit on a straight whose IDEAL LAP row says the
+  lap that set its best gave all of that time back in the corners beside it; it says so instead.
+  (#488)
+- Sector times are read where the lap crosses a sector line, not at the nearest fix. Noise-free, the
+  worst synthetic split error drops from 85 to 9 ms; at a real recording's GPS noise, 193 ms (#477)
+- The lap export picker's "N frames to render" counts the finish frame a clip cut on the line ends
+  on, as the render does: it said 2025 frames for a 2026-frame file. (#476)
+- A "needs new speed, not repetition" theme no longer sits above "Consistency is the common thread":
+  under a pace theme the spread fallback states no cause line (Sandown 3h's debrief). (#475)
+- "Start with" names every corner it cannot rank ("C1, C4, C7 or C6", not "or 1 more"), and the
+  Stats straights note names them the same way. (#475)
+- The lap card names a tie's fourth corner as the page does ("C1 · C4 · C7 · C6", not "1 more"); a
+  wider tie still names three and counts the rest. (#475)
+- The lap card no longer crowns one "BIGGEST OPPORTUNITY" when the Coaching page cannot rank the top
+  corners: it names the same tied set ("TOP OPPORTUNITIES · too close to rank", "C5 · C2 · C8").
+  (#474)
+- An older GoPro's timing warning no longer says the video clock drifts or runs fast: the app, the
+  report and laps.csv's [e] key say a lap may read up to ~0.1 s off, the packet-timing error. (#469)
+- Holding the video slider still while it plays no longer lets the picture run on: it pauses under
+  the handle and resumes from it on release (Space while holding decides whether it resumes). (#466)
+- A "Source" video export larger than one 4K frame (5.3K, 4K 4:3, or 4K in 9:16 or 1:1 "whole
+  picture") is held to one, so the hardware encoder takes it and phones play it; the hint says so.
+  (#464)
+- A menu-path arrow (▸), ✕, ⟳ or ⟲ no longer costs about 65 ms of font lookup on the UI thread the
+  first time one is painted; the text looks exactly as before. (#463)
+- A coaching reason's lever (apex speed, braking, coasting) is the median over your clean laps, not
+  one median-time lap's: four of five concrete instructions on the working set were one lap's.
+  (#454)
+- The line reason states the middle half of your laps (the spread its gate reads), not ±σ. (#454)
+- On a short session, "Start with" names every corner the laps cannot separate from the lead: the
+  tie margin now widens with fewer laps (a 19-lap MK session names C5, C2 or C8, not C5 or C2).
+  (#448)
+- At a circuit Pacer doesn't know, Add sector or Clear sectors no longer confirms the fitted start
+  line: your PB, the Library row and the debrief still wait for a start line you actually moved
+  (#446)
+- On a low-GPS first open at an unnamed circuit, the status bar says why placing the line decides
+  nothing, and no longer promises a PB and focus list that saving the track cannot bring (#445)
+
 ## [0.5.1] — 2026-09-27
 
 Everything merged since v0.5.0: 8 pull requests, #436 to #443, from the round-3 QA of v0.5.0: its
@@ -1680,7 +1781,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/eenndan/pacer/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/eenndan/pacer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/eenndan/pacer/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/eenndan/pacer/compare/v0.4.1...v0.4.2

@@ -2,13 +2,13 @@
   "about": "One entry per file in this directory, written by studio/dev/media_capture.py after each capture and checked by tests/test_version.py. version and commit: the app the pixels came from (commit is the HEAD the capture ran on, '+dirty' when studio/ or pacer/ had uncommitted changes; entries backfilled on 2026-09-30 name the commit that added the file). source: a label, never a path. derived: the published file this one was cut from, whose version, commit and waiver it carries. waiver: why a file older than this minor release stays, and the version it was granted at; it lapses at the next minor release.",
   "files": {
     "accuracy.png": {
-      "captured": "2026-09-29",
-      "commit": "ed41297",
+      "captured": "2026-09-30",
+      "commit": "52fe638",
       "derived": null,
       "sha256": "5401cd4772397fb2bc6177d66a90729da19e7ce4d66d3d664e6499c2b9b0f1fe",
       "shot": "accuracy",
       "source": "numbers in code",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "waiver": null
     },
     "best-lap.jpg": {
@@ -20,8 +20,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.5.1",
-        "reason": "captured at 0.2.0 (acf6b0c); re-captured at 0.5.0 (#441) and kept, as overlay.png from the same export renderer moved 0.008 % of pixels; a re-shoot needs the Sandown 3h recording"
+        "granted_at": "0.6.0",
+        "reason": "captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differs from it only in the track-map inset (0.48 % of decoded pixels), and the clip was not re-rendered to check; not re-shot, as the 0.6.0 release re-shoots no footage shot"
       }
     },
     "best-lap.mp4": {
@@ -33,8 +33,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.5.1",
-        "reason": "captured at 0.2.0 (acf6b0c); re-captured at 0.5.0 (#441) and kept, as overlay.png from the same export renderer moved 0.008 % of pixels; a re-shoot needs the Sandown 3h recording"
+        "granted_at": "0.6.0",
+        "reason": "captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differs from it only in the track-map inset (0.48 % of decoded pixels), and the clip was not re-rendered to check; not re-shot, as the 0.6.0 release re-shoots no footage shot"
       }
     },
     "data-trust.png": {
@@ -45,16 +45,19 @@
       "shot": "trust",
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
-      "waiver": null
+      "waiver": {
+        "granted_at": "0.6.0",
+        "reason": "0.6.0 renders this shot with 41 of 1,632,416 pixels changed (0.003 %): the minus of the friction circle's two −2.0 axis labels, drawn differently (the font stack of #463 or the Qt of #494, not bisected); not re-shot, as the 0.6.0 release re-shoots no footage shot"
+      }
     },
     "debrief.png": {
       "captured": "2026-09-30",
-      "commit": "ec62f94",
+      "commit": "52fe638",
       "derived": null,
       "sha256": "0e3d6c79007142f909846d93460fa722e56141e87fe901ee1cf6148a796c1f21",
       "shot": "debrief",
       "source": "synthetic demo",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "waiver": null
     },
     "hero.png": {
@@ -65,36 +68,39 @@
       "shot": "hero",
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
-      "waiver": null
+      "waiver": {
+        "granted_at": "0.6.0",
+        "reason": "0.6.0 renders this shot with 84 of 5,184,000 pixels changed (0.002 %): one small triangle glyph, drawn differently (the font stack of #463 or the Qt of #494, not bisected); not re-shot, as the 0.6.0 release re-shoots no footage shot, and og.png is composed from this file"
+      }
     },
     "ideal-lap.png": {
-      "captured": "2026-09-27",
-      "commit": "9e8083f",
+      "captured": "2026-09-30",
+      "commit": "52fe638",
       "derived": null,
       "sha256": "d9153c68ffbc95d826025cd7df0eeddf1818d56f314192e54f60705dfc5c9ef0",
       "shot": "ideal",
       "source": "Sandown 3h 2026 (GX010064)",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "waiver": null
     },
     "map.png": {
-      "captured": "2026-09-27",
-      "commit": "9e8083f",
+      "captured": "2026-09-30",
+      "commit": "52fe638",
       "derived": null,
       "sha256": "eb0f67caeec456f3c1ef9ee91eef85b77314f02db1fa596d2ba4163a338e0e90",
       "shot": "map",
       "source": "Sandown 3h 2026 (GX010064)",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "waiver": null
     },
     "og.png": {
       "captured": "2026-09-30",
-      "commit": "32c3710",
+      "commit": "52fe638",
       "derived": null,
       "sha256": "9152aa3c3ab8c769ef71b403e98d41bba3ef3ab959b2b37c283759e64d90d247",
       "shot": "og",
       "source": "hero.png",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "waiver": null
     },
     "overlay.jpg": {
@@ -106,8 +112,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.5.1",
-        "reason": "captured at 0.2.0 (acf6b0c); the 0.5.0 re-capture (#441) moved 0.008 % of its pixels (map-tail anti-aliasing), so it was kept; a re-shoot needs the Sandown 3h recording"
+        "granted_at": "0.6.0",
+        "reason": "captured at 0.2.0 (acf6b0c); 0.6.0's export of the same frame differs in 5,566 of 1,166,400 decoded pixels (0.48 %; JPEG blocks spread a small change), all in the track-map inset by the marker; not re-shot, as the 0.6.0 release re-shoots no footage shot"
       }
     }
   }
