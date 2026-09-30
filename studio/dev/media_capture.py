@@ -172,8 +172,8 @@ _EXPORT_FRAME_FRACTION = 0.42
 # (`OverlayConfig.strip_h_frac` etc.), so they scale with it and stay legible.
 OVERLAY_WIDTH = 1440
 # …and it is saved as a JPEG, because it is a photograph: as a PNG the committed frame was
-# 1,226,599 B, the heaviest image on the landing page; the same pixels at quality 85 are a seventh
-# of that. hero.png stays a PNG — it is mostly UI text, which JPEG smears.
+# 1,226,599 B, the heaviest image on the landing page; the same pixels at quality 85 are 190,926 B.
+# hero.png stays a PNG — it is mostly UI text, which JPEG smears.
 OVERLAY_NAME, OVERLAY_QUALITY = "overlay.jpg", 85
 
 
@@ -681,8 +681,8 @@ CLIP_SECONDS = 20.0
 # The budget is the landing page's FIRST VIEW, not the clip's own: the clip autoplays beside the
 # page, hero.png and the poster, and tests/test_landing_page.py holds those four under 5 MB. At
 # 8 MB the first view weighed 9.1 MB. 3.6 MB leaves ~140 KB of that budget for the page to grow.
-# The committed clip is a re-encode of the 7.9 MB cut (`encode_clip` on it, CRF 33 at veryslow,
-# SSIM 0.95 against it), not a re-shoot; a fresh capture from an export starts at CRF 29.
+# The committed clip is a re-encode of the 7.9 MB cut (`encode_clip` on it: CRF 33 at veryslow,
+# 3,510,294 B, SSIM 0.946 against it), not a re-shoot; a fresh capture from an export starts at 29.
 CLIP_MAX_BYTES = 3_600_000
 # x264 CRFs tried in order until the cut fits CLIP_MAX_BYTES: the best quality that fits, rather
 # than a bitrate guessed ahead of the footage. Each try is ~35 s at `veryslow`, hence a short list.

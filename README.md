@@ -127,7 +127,7 @@ a mis-scaled channel).
 as an image, and the telemetry burned onto the footage as an MP4 (via ffmpeg) —
 [20 seconds of one](docs/media/best-lap.mp4), the best lap's, cut for the web.
 
-<img src="docs/media/overlay.png" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.04 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
+<img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.04 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 
 **And the window is yours.** Four resizable panels with a tabbed lap panel (Laps · Corners · Stats ·
 Coaching · Marks, digits `1`–`5`), a maximize button on every panel header, `⌘⌃F` for full screen,
