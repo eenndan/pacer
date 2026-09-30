@@ -3501,18 +3501,19 @@ class Session:
         if total_lap <= 0 or total_best <= 0:
             return None
         align = None if lap_id == best else self.corners.lap_alignment(lap_id, total_lap)
-        key = (best, total_lap, total_best, align)
         memo = getattr(self, "_warp_memo", None)
         if memo is None:  # bare-Session (no-__init__) test path
             memo = self._warp_memo = {}
         got = memo.get(lap_id)
-        if got is not None and _same_inputs(got[0], key):
-            return got[1]
+        # `_same_inputs` spelled out: this runs per frame, and the generic walk cost ~2 µs of it.
+        if (got is not None and got[3] is align and got[0] == best and got[1] == total_lap
+                and got[2] == total_best):
+            return got[4]
         if align is not None and abs(float(align[0][-1]) - total_best) <= 1e-6:
             out = align
         else:  # the identity (best lap) or the normalized map: one straight segment
             out = (np.array([0.0, total_best]), np.array([0.0, total_lap]))
-        memo[lap_id] = (key, out)
+        memo[lap_id] = (best, total_lap, total_best, align, out)
         return out
 
     def _reads_traces(self) -> bool:
@@ -3567,12 +3568,27 @@ class Session:
         if memo is None:
             memo = self._base_warp_memo = {}
         got = memo.get(lap_id)
-        if got is not None and _same_inputs(got[0], (w, rw)):
+        if got is not None and got[0][0] is w and got[0][1] is rw:
             return got[1]
         kb = np.union1d(w[0], rw[0])
         out = (np.interp(kb, rw[0], rw[1]), np.interp(kb, w[0], w[1]))
         memo[lap_id] = ((w, rw), out)
         return out
+
+    def _grid_on_lap(self, lap_id: int, warp: corners_alg.Alignment, x_grid: np.ndarray):
+        """`lap_id`'s odometer at each baseline odometer of `x_grid` (`delta`'s x_dist), through
+        its `warp` — memoized per lap on the warp object and the grid's end, so a redraw pays two
+        interps per lap as it did before the warp rather than three."""
+        memo = getattr(self, "_grid_memo", None)
+        if memo is None:
+            memo = self._grid_memo = {}
+        got = memo.get(lap_id)
+        end = float(x_grid[-1])
+        if got is not None and got[0] is warp and got[1] == end:
+            return got[2]
+        d_lap = np.interp(x_grid, warp[0], warp[1])
+        memo[lap_id] = (warp, end, d_lap)
+        return d_lap
 
     def lap_distance_on_baseline(self, lap_id: int, d):
         """Where `lap_id`'s odometer position(s) `d` (m, scalar or array) sit on the ACTIVE Δ
@@ -3660,7 +3676,7 @@ class Session:
                 spd_on_grid = np.interp(s_grid, s_lap, speed_kmh)
                 elapsed_on_grid = np.interp(s_grid, s_lap, elapsed)
             else:  # this lap's odometer at the baseline's grid positions, through its warp
-                d_lap = np.interp(x_dist, warp[0], warp[1])
+                d_lap = self._grid_on_lap(lid, warp, x_dist)
                 spd_on_grid = np.interp(d_lap, dist, speed_kmh)
                 elapsed_on_grid = np.interp(d_lap, dist, elapsed)
             # Time mode: each lap's own elapsed time at each s (time-into-lap, starts at 0).
