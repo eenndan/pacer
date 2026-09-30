@@ -40,8 +40,9 @@ logic, which tests/test_driving.py's known-answer tests hold.
 
 Rows: 1 lap time · 2 sector split · 3 ideal lap (mean bias over seeds) · 4 gap to ideal · 5 corner
 time and minimum speed (p18's truth window) · 6 rise of Δ through each corner, on the GoPro and on
-the line-change fixtures (trace, Corners table, and the two against each other) · 7 time on the
-brakes and brake events per lap · 8-10 the Stats page (TRUTH-2), below.
+the line-change fixtures (trace, Corners table, and the two against each other), and 6c the
+de-drift's tilt from a line change against the leave-one-window-out noise floor (refusal §21) · 7
+time on the brakes and brake events per lap · 8-10 the Stats page (TRUTH-2), below.
 
 THE STATS PAGE (rows 8-10), against every `SessionStats` field the golden `stats` leaf carries:
   lap_stats  Vmax, average, Vmin, peak lateral g, peak braking g → row 8 (`lap.*`); brake_s and
@@ -80,7 +81,7 @@ import numpy as np  # noqa: E402
 from _synthetic import line_change_delta, line_change_session  # noqa: E402
 
 import pacer  # noqa: E402  (app-local metres -> GPS, the Session's own coordinate system)
-from studio import chapters, driving  # noqa: E402
+from studio import chapters, corners, driving  # noqa: E402
 from studio import session as session_mod  # noqa: E402
 from studio import stats as stats_service  # noqa: E402
 from studio._signal import speed_long_g  # noqa: E402
@@ -93,6 +94,7 @@ NOISES = (0.0, 2.0, 4.5)
 SECTOR_STRAIGHTS = (2, 5)        # the golden gate's placement (test_golden_synthetic)
 LINE_CHANGES = {"stadium": dict(amp_m=1.0, corner=1, layout="stadium"),
                 "circuit": dict(amp_m=2.0, corner=4, layout="circuit")}
+LINE_CHANGE_GRID_AMPS = (0.5, 1.0, 2.0)   # row 6c: metres wide, through every circuit corner
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,9 +110,11 @@ class Row:
 
 
 MEASURED_ON = ("2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical); row 2 on "
-               "TRUTH-5's tree; row 6's Δ trace 2026-09-30 on TRUTH-10's tree (main 696cb81)")
+               "TRUTH-5's tree; row 6c 2026-09-30 on main cc725ac; row 6's Δ trace 2026-09-30 on "
+               "TRUTH-10's tree (main 696cb81)")
 G, R, S = "green", "known-red", "stated"
-_T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
+_T9 = ("refused: the leave-one-window-out refit (TRUTH-9) cannot tell the stadium's two turns "
+       "apart (studio/docs/refused-2026-09.md §21)")
 _T6 = "TRUTH-6 (said in words on the IDEAL LAP tooltips; TRUTH-11's de-bias closed)"
 _T12 = "TRUTH-12 (noise-aware brake threshold, noise 0-2; row 7's stated floor is its target)"
 # Seconds unless named; `level` is the GPS noise, or the line-change fixture. Every value is an
@@ -177,15 +181,26 @@ ROWS: tuple[Row, ...] = (
     Row("delta.trace_vs_table", 4.5, 0.0111334, R, tol=0.010, ceiling=0.0167,
         fixed_by="none scheduled: the drawn Δ's 400-point grid, not its frame (6a's comment)"),
     # 6b · the planted one-corner line change (truth: stadium C1 0.128 s, circuit C4 0.114 s),
-    # worst corner. Off the stadium the table is already true; on it the de-drift absorbs half.
-    # Since TRUTH-10 the trace IS the table (trace vs table ≤ 0.5 ms on both): off the stadium it
-    # is true, and on it it carries exactly the table's de-drift error (_T9), nothing of its own.
+    # worst corner. Off the stadium the table is already true; on it the de-drift absorbs half,
+    # and stays red: the refit that was to fix it was measured and refused (_T9). Since TRUTH-10
+    # the trace IS the table (trace vs table ≤ 0.5 ms on both): off the stadium it is true, and on
+    # it it carries exactly the table's de-drift error, nothing of its own.
     Row("line_change.trace", "stadium", 0.0627058, R, tol=0.010, ceiling=0.094, fixed_by=_T9),
     Row("line_change.trace", "circuit", 0.0033264, G, tol=0.0049),
     Row("line_change.table", "stadium", 0.0627417, R, tol=0.010, ceiling=0.094, fixed_by=_T9),
     Row("line_change.table", "circuit", 0.00285145, G, tol=0.0042),
     Row("line_change.trace_vs_table", "stadium", 8.30489e-05, G, tol=0.00012),
     Row("line_change.trace_vs_table", "circuit", 0.000474952, G, tol=0.0007),
+    # 6c · refusal §21's evidence, noise-free. A line change of 0.5, 1 and 2 m through EACH of the
+    # circuit's 7 corners: the Corners table's worst corner, and the tilt the de-drift puts on the
+    # changed lap's shift (m) — against the leave-one-window-out change GPS noise alone makes on
+    # the GoPro's clean laps (m, the largest per noise level), which a detector for that tilt
+    # would have to clear. The tilt is under the noise-2 floor: `test_row6_...` holds that.
+    Row("line_change.grid_table", "circuit", 0.00782267, G, tol=0.010),
+    Row("line_change.grid_tilt", "circuit", 0.082135, S, tol=0.055, ceiling=0.12),
+    Row("drift.loo_floor", 0.0, 0.0657999, S, tol=0.044, ceiling=0.098),
+    Row("drift.loo_floor", 2.0, 0.180677, S, tol=0.12, ceiling=0.27),
+    Row("drift.loo_floor", 4.5, 0.37258, S, tol=0.25, ceiling=0.55),
     # 7 · time on the brakes per lap (s), and brake events per lap (the Stats tile's count), |mean|
     # of app − the app's own pipeline on the true speed: exactly what GPS noise adds. The row
     # isolates GPS noise and is blind to the detector's own logic (tests/test_driving.py has that).
@@ -569,6 +584,54 @@ def _line_change_errors(name: str) -> dict:
             "line_change.trace_vs_table": float(np.abs(trace - table).max())}
 
 
+def _line_change_grid(amps=LINE_CHANGE_GRID_AMPS) -> dict:
+    """Row 6c: a line change of each amplitude in `amps` through each of the circuit's corners in
+    turn (noise-free): the Corners table's worst |table − truth| over every detected corner, and
+    the tilt the de-drift absorbs — |lap 1's applied shift|, since every other lap drives the
+    reference line, so a rigid receiver shift here is zero."""
+    table_err, tilt = 0.0, 0.0
+    for corner in range(1, len(sg.build_circuit().corners) + 1):
+        for amp in amps:
+            s, laps = line_change_session(amp, corner, "circuit")
+            table = np.array([st.delta for st in s.corners.lap_corner_stats(1)])
+            true = np.array([float(line_change_delta(laps, 1, cn.exit)
+                                   - line_change_delta(laps, 1, cn.enter))
+                             for cn in s.corners.basis()[0]])
+            table_err = max(table_err, float(np.abs(table - true).max()))
+            tilt = max(tilt, float(np.hypot(*s.corners.lap_shift(1))))
+    return {"line_change.grid_table": table_err, "line_change.grid_tilt": tilt}
+
+
+def _loo_change(cm, lap_id: int) -> float:
+    """max over the corner windows of ||T_-w − T||: lap `lap_id`'s shift relative to the reference
+    lap (a fit of its offsets FROM that lap, so the consensus cancels), refitted with each
+    `basis()` corner window's stations left out in turn — the test refusal §21's refit was built
+    on. A pure function of the model's own geometry; nothing is patched."""
+    geom = cm.geometry()
+    _t, xs, ys, _v, cum = cm._lap_columns(lap_id)
+    off = geom.offsets(xs, ys, cum)
+    nx, ny = geom.frame[4], geom.frame[5]
+    whole = corners._rigid_shift(off, nx, ny)[0]
+    out = 0.0
+    for cn in cm.basis()[0]:
+        cut = (geom.stations >= cn.enter) & (geom.stations <= cn.exit)
+        out = max(out, float(np.hypot(*(corners._rigid_shift(np.where(cut, np.nan, off), nx,
+                                                              ny)[0] - whole))))
+    return out
+
+
+def _loo_floor(noise) -> float:
+    """Row 6c: the largest leave-one-window-out change over the GoPro's clean non-reference laps,
+    pooled over the seeds. The kart drives the centreline, so every metre of it is GPS noise (and,
+    noise-free, the load-time boxcar blurring laps of different speed differently)."""
+    out = 0.0
+    for seed in SEEDS:
+        cm = _case(seed, noise).s.corners
+        best = cm._best_lap_id()
+        out = max([out] + [_loo_change(cm, int(i)) for i in cm._clean_lap_ids() if i != best])
+    return out
+
+
 # ------------------------------------------------------------------------------------ statistics
 _STATS: dict = {}
 
@@ -622,6 +685,9 @@ def stats() -> dict:
         out["brake.mean", noise] = abs(float(brake[:, 0].mean()))
         out["brake.count", noise] = abs(float(brake[:, 1].mean()))
         out.update(_stats_rows(noise))
+        out["drift.loo_floor", noise] = _loo_floor(noise)
+    for key, value in _line_change_grid().items():
+        out[key, "circuit"] = value
     for name in LINE_CHANGES:
         got = _line_change_errors(name)
         for key in ("line_change.trace", "line_change.table", "line_change.trace_vs_table"):
@@ -743,6 +809,15 @@ def test_row5_corner_time_and_minimum_speed():
 def test_row6_delta_rise_through_each_corner():
     _check_rows("delta.")
     _check_rows("line_change.")
+    _check_rows("drift.")
+    # Refusal §21's argument, held: the tilt a 0.5-2 m line change off the stadium puts on the
+    # de-drift's shift is smaller than the leave-one-window-out change noise 2 alone makes, so no
+    # absolute threshold can see the one without acting on the other. If this fails, a detector
+    # may now be possible: re-measure §21 before believing either row.
+    st = stats()
+    tilt, floor = st["line_change.grid_tilt", "circuit"], st["drift.loo_floor", 2.0]
+    assert tilt < floor, (f"a line change's tilt {tilt:.3f} m now clears the noise-2 "
+                          f"leave-one-out floor {floor:.3f} m: refusal §21's premise moved")
 
 
 def test_row7_time_on_the_brakes():
@@ -820,6 +895,18 @@ def test_every_row_has_teeth():
         Session._baseline_warp = warp
     assert check(rows["delta.trace_vs_table", 0.0], float(np.abs(rise[:, 2]).max()))
     assert check(rows["line_change.trace", "circuit"], changed["line_change.trace"])
+    # Row 6c: a de-drift that absorbs three times the tilt it does (every applied shift × 3)
+    # turns the circuit grid's table red, and its tilt clears the noise-2 floor §21 rests on
+    # (the 2 m changes are the grid's worst, so they are enough to show it).
+    relative = corners.SessionGeometry.relative_shift
+    corners.SessionGeometry.relative_shift = lambda self, t, ref: tuple(
+        3.0 * v for v in relative(self, t, ref))
+    try:
+        grid = _line_change_grid(amps=(2.0,))
+    finally:
+        corners.SessionGeometry.relative_shift = relative
+    assert check(rows["line_change.grid_table", "circuit"], grid["line_change.grid_table"])
+    assert grid["line_change.grid_tilt"] > st["drift.loo_floor", 2.0], grid
 
 
 def _run_all():

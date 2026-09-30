@@ -1,9 +1,9 @@
 # Features measured and refused — 2026-09
 
-Twenty features were built far enough to **measure**, and the measurement said not to ship them. The
-work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
-would ever look. It is written down here so the next person to suggest one of these starts from the
-numbers instead of from the idea.
+Twenty-one features were built far enough to **measure**, and the measurement said not to ship
+them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
+the idea would ever look. It is written down here so the next person to suggest one of these starts
+from the numbers instead of from the idea.
 
 **These stay refused unless someone brings NEW evidence.** "It would be nice to have" is not new
 evidence. What would be: a recording whose numbers come out differently from the ones below, or a
@@ -1722,6 +1722,80 @@ points instead:
 (the C1 scatter then leaves the merge's reach); or a rule that gives each application to exactly one
 corner and, on these four recordings, moves no corner's brake point onto another corner's brake and
 drops none.
+
+---
+
+## 21. A leave-one-window-out refit of the de-drift's receiver shift — refused (TRUTH-9)
+
+**The idea.** The session geometry removes each lap's receiver bias as ONE rigid shift, a plain
+least-squares fit over 256 stations (`corners._rigid_shift`). A lap that runs wide through one corner
+tilts that fit. On a stadium, a 1 m wide line through C1 (truth 0.128 s) reads 0.065 s at C1 and
+0.030 s at C2 in the Corners table (DOMAIN-1). The proposed fix was to refit the lap's shift with
+each corner window left out in turn. When one window moves the shift by more than a threshold set
+above the noise, drop it and refit without it.
+
+**How it was measured.** The need was measured first, against a rule written into the PR (#509)
+before any number came back.
+- **Fixtures.** Line changes of 0.5, 1 and 2 m were planted through every corner of the synthetic
+  GoPro's 7-corner circuit and both turns of the stadium (`tests/_synthetic.line_change_laps`). They
+  were run at GPS noise 0, 2 and 4.5 (the generator's own position noise, then the load-time
+  boxcar), with three noise seeds, each paired with the same noise and no change. The de-drift's
+  share of the Corners table's error is today's error minus the error with the changed lap's shift
+  held at its no-change value.
+- **The leave-one-window-out change** ‖T₋w − T‖ of every clean lap's applied shift. It was measured
+  on the synthetic GoPro through the real loader (3 seeds; the kart drives the centreline, so every
+  metre of it is noise) and on the four working-set recordings, read-only and jailed.
+- **The refit itself** was prototyped exactly as specified: vector change, one absolute threshold,
+  the relative shift refitted over the kept stations, and a conditioning guard. It was measured
+  against the package's pass criteria and, on footage, against `p8_corner_anchor`'s curvature
+  witness, which a translation cannot move. The probes are in the TRUTH-9 evidence folder.
+
+| | stadium (2 turns) | circuit (7 corners) |
+|---|---|---|
+| tilt the de-drift absorbs, 0.5 / 1 / 2 m change | 0.21 / 0.42 / 0.85 m | ≤ 0.02 / 0.04 / 0.08 m |
+| Corners table error, noise-free, worst corner | 31 / 63 / 126 ms | ≤ 1.9 / 3.8 / 7.8 ms |
+| the de-drift's share of it, worst, noise 2 / 4.5 | 116 / 109 ms | 7.2 / 4.7 ms |
+
+| leave-one-window-out change, largest per lap | median | max |
+|---|---|---|
+| synthetic GoPro, noise 0 / 2 / 4.5 (39 laps each) | 0.006 / 0.075 / 0.153 m | **0.066 / 0.18 / 0.37 m** |
+| Sandown 3h / SD_19_09 / SD_30_08 / MK_18_09 | 0.31 / 0.32 / 0.30 / 0.18 m | 0.98 / 0.71 / 0.58 / 1.07 m |
+
+**The rule fired, and the fix does not reach what fired it.** On 8 of the 168 circuit cells, all at
+noise 2 or 4.5, the table is 10.5-12.3 ms off a line change, and the de-drift contributes 1.3-7.2
+ms of that. On 49 of the 150 real laps the change is over the noise-4.5 maximum, and dropping the
+window moves one of the lap's corner times by more than 10 ms. Built, the refit fails its own pass
+criteria.
+- **Off the stadium the signal is under the noise.** A line change's tilt, ≤ 0.08 m, is smaller
+  than the change noise 2 alone makes, 0.18 m. Even noise-free it is barely above the 0.066 m
+  produced by the load-time boxcar, which blurs laps of different speed differently. At the
+  noise-4.5 threshold the refit acts on 0 of the 168 circuit cells. At 0.03 m it acts on every lap
+  and still leaves 3 of the 6 noise-2 trigger cells and 1 of the 2 noise-4.5 ones over 10 ms; at
+  noise 4.5 the cells over 10 ms go from 17 to 19.
+- **On the stadium the evidence is symmetric.** Each turn alone fixes the shift's component along
+  the straights, so leaving out either one moves the shift by the same amount, and the refit picks
+  between them on a numerical tie. With 1 m at C2 the error goes 0.063 → 0.000 s; with 1 m at C1
+  it goes 0.063 → 0.126 s. 28 of the 32 stadium trigger cells stay over 10 ms. With a rigid bias
+  and noise and no line change at all, it acts on the noise and undoes the de-drift: at noise 4.5,
+  seed 103, the three laps' misalignment goes 0.02 / 0.04 / 0.16 → 0.66 / 0.78 / 1.03 m.
+- **On footage it would move a third of the laps, and not clearly towards the track.** It acts on
+  20/61, 14/35, 9/36 and 6/18 laps and moves their corner times by a median 59, 56, 68 and 75 ms
+  (up to 0.22 s). On those laps the curvature witness goes 1.00 → 1.00 m (126 boundaries better,
+  114 worse) on Sandown 3h, 0.79 → 0.68 m (111/66) on SD_19_09, 0.81 → 0.78 m (58/62) on SD_30_08
+  and 1.95 → 1.75 m (57/38) on MK_18_09.
+- **No one absolute threshold is one noise floor.** The change grows with a window's share of the
+  lap. Sandown's C1 is the 175 m kink and hairpin (§20), 24 % of the lap, and it is the window
+  dropped on 34 of 61, 23 of 35 and 31 of 36 laps.
+
+**What moves because of this refusal: nothing in the app.** The shift stays plain least squares
+(`corners._rigid_shift` points here). In `tests/test_truth_matrix.py` the stadium's line-change
+rows stay known-red with this section as their reason. Row 6c holds the circuit grid within 10 ms,
+the tilt and the three noise floors, and asserts that the tilt stays under the noise-2 floor.
+
+**What would be new evidence:** a way to name the window that moved that does not come from the
+shift's own residuals, such as the curvature witness above or a surveyed centreline. Or a recording
+with a known, marked line change in one corner whose Corners table the de-drift mis-states by more
+than 10 ms.
 
 ---
 
