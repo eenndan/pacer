@@ -520,8 +520,9 @@ def test_provisional_banner_shows_and_clears_with_trust_state():
         for r in range(tbl.rowCount()) for c in range(tbl.columnCount()))
     assert not painted, "provisional timing must paint no purple/green bests in the lap table"
 
-    # Confirm the timing (what a start-line drag does) and rebuild → Verified → strip clears.
-    s.confirm_timing()
+    # Confirm the timing (the flag a start-line drag's set_timing_lines sets; this fixture's stub
+    # laps cannot re-segment) and rebuild → Verified → strip clears.
+    s._timing_user_confirmed = True
     view.rebuild_derived_views(reselect=True)
     assert s.timing_verified is True
     assert not view.provisional_banner.isVisibleTo(view), "confirming the timing must clear the banner"

@@ -314,7 +314,7 @@ def test_timing_trust_state_transitions():
     """The Session timing-trust model (Provisional ↔ Verified):
       * a detected track (track_name set) is Verified on its own;
       * an unknown track with an auto-fitted, unconfirmed start line is Provisional;
-      * a user edit (set_timing_lines) OR confirm_timing() flips it Verified;
+      * a user edit (set_timing_lines, what a start-line drag calls) flips it Verified;
       * apply_timing_lines_latlon restores the persisted `confirmed` marker on success."""
     session = _make_session()
     # _make_session ends with a set_timing_lines() (a user edit), so it's confirmed here; reset
@@ -331,11 +331,6 @@ def test_timing_trust_state_transitions():
     # An explicit start-line edit confirms it.
     session.set_timing_lines(session.start_line, session.sector_lines)
     assert session.timing_user_confirmed is True and session.timing_verified is True
-
-    # confirm_timing() is the same flip, idempotent.
-    session._timing_user_confirmed = False
-    session.confirm_timing()
-    assert session.timing_verified is True
 
     # Restoring a sidecar carries the persisted marker: confirmed=False stays Provisional...
     start, sectors = session.timing_lines_latlon()
