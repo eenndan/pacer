@@ -43,17 +43,22 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | task | does |
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`), binding codegen included |
-| `pixi run test` | **the pre-PR gate**: every CTest registration — ~281 s on the dev Mac with the 16 real-footage checks and the 6 `videotoolbox.*` export checks, which CI reports Skipped; the crash soak is reported Skipped (see `test-soak`) |
-| `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (CI reports them Skipped) — ~143 s |
-| `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) — ~139 s |
-| `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak, ~146 s. CI runs it on pushes to main and tags |
+| `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 16 real-footage checks and the 6 `videotoolbox.*` export checks run (CI reports the footage Skipped, and 4 of the 6: it runs the 2 ProRes ones); the crash soak is reported Skipped (see `test-soak`) |
+| `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (CI reports 4 of them Skipped) |
+| `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) |
+| `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak. CI runs it on pushes to main and tags |
+| `pixi run test-core` | optional, not a gate: between core-math edits, the 11 registrations that kill all 34 planted core defects (the mutant cover; why: `pyproject.toml`) |
+| `pixi run test-ciworld` | optional, not a gate: before pushing a player or compare change, the registrations that build a real `QMediaPlayer`, in CI's software-decode world |
 | `pixi run golden` | only the core-math equivalence gate (`test_golden_synthetic`: seeded sessions + the synthetic GoPro through the real loader) — ~8 s |
+| `pixi run verify` | the truth test a visitor runs, no footage: the real loader on a synthetic two-chapter GoPro with known truth, then the golden gate, measurements printed |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample |
 | `pixi run studio [-- files]` | the app, on the recordings you name |
 | `pixi run gen-bindings` | regenerate the bindings |
 | `pixi run lint` · `fmt` · `fmt-check` | `ruff check .` · clang-format in place · its non-mutating CI check (both skip the generated `nanobind_pacer.cpp`) |
 | `pixi run typecheck` | pyright (basic) over the allow-listed Qt-free core modules in `pyrightconfig.json` — ~7 s, no build needed. A module joins the list in the PR that makes it clean, a new Qt-free module in the PR that creates it; `pixi run typecheck studio/<m>.py` lists one module's errors |
 
+- **Suite timings**, each with its date, registration count and load, are in
+  [tests/README.md](tests/README.md): the suite grows every week, and a time typed here went stale.
 - **`test` and `test-fast` run four tests at once** (`CTEST_PARALLEL_LEVEL=4` in the task env).
   Append `-j1` for a serial run to rule an interaction between tests in or out; never put a `-j`
   inside a task — ctest 4 rejects a second one. Why four: `pyproject.toml`.
@@ -156,12 +161,15 @@ locally first:
 ## Key dependencies
 
 pixi (conda-forge, osx-arm64) · CMake ≥ 3.28 + Ninja · scikit-build-core · litgen (git) →
-nanobind ≥ 1.3.2 · gpmf-parser (submodule) · Catch2 · PySide6 + pyqtgraph + qtawesome (Phosphor
-icons, `studio/theme.py`) · Python 3.13 + numpy. `ninja` and `catch2` are **explicit** pixi deps:
-an interrupted `pixi add` once pruned them and broke the build.
+nanobind 2.x (`>=2.7,<3`; the 1.3.2 in `[build-system]` is only the sdist build floor) ·
+gpmf-parser (submodule) · Catch2 · PySide6 + pyqtgraph + qtawesome (Phosphor icons,
+`studio/theme.py`) · Python 3.13 + numpy. `ninja` and `catch2` are **explicit** pixi deps: an
+interrupted `pixi add` once pruned them and broke the build.
 
 ## gitnexus (optional code-graph index)
 
-Index in `.gitnexus/`, not always current: `gitnexus status` first, `gitnexus analyze` to refresh;
-then `gitnexus query "<concept>"`, `gitnexus context "<symbol>"`, `gitnexus impact "<symbol>"`.
-The engine is LadybugDB/Kùzu, not Neo4j — use `labels(n)` and `(n:Label)`; `type(r)` is unsupported.
+Often unavailable: its MCP server may not connect, and the index (`.gitnexus/`, only in the owner's
+checkout, not in a worktree) may be months stale — read the code when it fails. Otherwise:
+`gitnexus status` first, `gitnexus analyze` to refresh; then `gitnexus query "<concept>"`,
+`gitnexus context "<symbol>"`, `gitnexus impact "<symbol>"`. The engine is LadybugDB/Kùzu, not
+Neo4j — use `labels(n)` and `(n:Label)`; `type(r)` is unsupported.

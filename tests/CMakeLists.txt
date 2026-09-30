@@ -175,11 +175,12 @@ endfunction()
 add_soak_test(test_compare_lifecycle test_toggle_compare_repeatedly_does_not_crash)
 
 # ---- VIDEOTOOLBOX CHECKS (HEALTH-4) ------------------------------------------------------------
-# The export paths only the Apple media engine runs — h264_videotoolbox, the ProRes VideoToolbox
-# encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox` — which CI's runner
-# cannot run. `videotoolbox.<check>` runs `<file>.py --videotoolbox <check>`: without VideoToolbox
-# it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where it used to return
-# early and report PASSED. On the dev Mac it runs, in `test-fast` as well as `test`. A file's
+# The export paths that run through VideoToolbox — h264_videotoolbox, the ProRes VideoToolbox
+# encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox`. CI's runner opens
+# no H.264 session, so it reports the 4 checks that need one SKIPPED and runs the 2 ProRes ones
+# (tests/README.md). `videotoolbox.<check>` runs `<file>.py --videotoolbox <check>`: without the
+# session it needs it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where
+# it used to return early and report PASSED. On the dev Mac it runs, in `test-fast` as well as `test`. A file's
 # VIDEOTOOLBOX_CHECKS and these lines are held one to one by test_videotoolbox_checks.
 function(add_videotoolbox_test file check)
     add_test(NAME videotoolbox.${check}

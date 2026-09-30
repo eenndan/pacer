@@ -2,12 +2,27 @@
 
 Every test here is a CTest registration in [CMakeLists.txt](CMakeLists.txt); the pixi tasks that
 run them, and the measurements behind their levels, exclusions and timeouts, are in
-[pyproject.toml](../pyproject.toml). [AGENTS.md](../AGENTS.md) has the everyday commands. Its
-timings were each measured once on the M1 Pro dev Mac: `test` 281.3 s with all 16 footage checks
-and the 6 VideoToolbox checks running (2026-09-25, 165 registrations, load ~3; 206.0 s on
-2026-09-24 with 14 footage checks and 157 registrations, load ~5), `test-fast` 142.9 s (2026-09-23, quiet machine; 420 s
-serial on the same commit), `test-footage` 139.1 s (2026-09-23, warm page cache;
-`footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s) and `test-soak` 146.1 s.
+[pyproject.toml](../pyproject.toml). [AGENTS.md](../AGENTS.md) has the everyday commands; their
+timings are kept here, each with its date, on the M1 Pro dev Mac: `test` 281.3 s with all 16
+footage checks and the 6 VideoToolbox checks running (2026-09-25, 165 registrations, load ~3;
+206.0 s on 2026-09-24 with 14 footage checks and 157 registrations, load ~5), `test-fast`
+183–215 s on quiet gate runs (2026-09-26/27, 167–180 registrations; up to 488 s under load),
+`test-footage` 139.1 s (2026-09-23, warm page cache;
+`footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s), `test-soak`
+92.0–100.3 s (2026-09-27, the two release gates; 116.6 s at load ~10 on 2026-09-30), `golden`
+8–14 s (2026-09-27, README.md's figure; 11.9 s at load ~11 on 2026-09-30) and `typecheck`
+6.7–9.2 s (2026-09-29, 40 modules, load ~6; 12.5 s for 43 at load ~11 on 2026-09-30).
+
+**Inner loops, not gates.** `pixi run test-core`, between edits to the core math, runs the 11
+registrations that kill every one of the 34 core defects the 2026-09-28 review planted (re-run
+2026-09-30: all 34; a nine-test greedy cover, plus `test_focus_list` and `test_truth_matrix`):
+16.3 s wall at -j4 (2026-09-28, load 4). It is fitted to those mutants, so `test` stays the gate.
+`pixi run test-ciworld`, before pushing a player or compare change, runs the registrations that
+build a real `QMediaPlayer` in CI's software-decode world
+(`QT_FFMPEG_DECODING_HW_DEVICE_TYPES=none`): 8–9 s wall (2026-09-29, load 19–20). It catches a
+race, so one green run proves little, and it emulates neither CI's missing audio device nor its
+encoder. `test_parallel_suite` holds both lists to real registrations; why each is built so:
+[pyproject.toml](../pyproject.toml).
 
 **Adding a test.** A fix's test extends the existing test file of the surface it fixes. A new
 `tests/test_<name>.py` is for a surface with none, and its pull request says why: after the board
@@ -197,13 +212,16 @@ it is reported *Skipped* by name. There is one: the compare-toggle crash soak in
 
 ## VideoToolbox checks
 
-The export paths only the Apple media engine runs — h264_videotoolbox, the ProRes VideoToolbox
-encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox` — are checks CI's
-runner cannot run. Each is its own registration, `videotoolbox.<check>` (`<file>.py --videotoolbox
+The export paths that run through VideoToolbox — h264_videotoolbox, the ProRes VideoToolbox
+encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox` — are checks of
+their own. Each is its own registration, `videotoolbox.<check>` (`<file>.py --videotoolbox
 <check>`, `add_videotoolbox_test` in [CMakeLists.txt](CMakeLists.txt), `LABELS videotoolbox`):
-without VideoToolbox it exits 77 and is reported *Skipped* by name, where it used to return early
-and read as a pass. On the dev Mac it runs in `test-fast` and `test`; a file lists them in its
-`VIDEOTOOLBOX_CHECKS` and leaves them out of its ordinary run, and a check with a software half
-keeps that half there. [_videotoolbox.py](_videotoolbox.py) is the mechanism;
-`test_videotoolbox_checks` holds the declarations and registrations one to one. To see the CI
-shape here, point `PACER_FFMPEG` at an ffmpeg wrapper that hides VideoToolbox.
+without the session it needs it exits 77 and is reported *Skipped* by name, where it used to
+return early and read as a pass. 4 of them need an H.264 VideoToolbox session (the decode relay
+among them), which CI's runner cannot open; the 2 ProRes checks open a ProRes VideoToolbox session
+on macos-14 and run there (CI run 36680230363, 2026-09-30: 2 Passed, 4 Skipped). On the dev Mac
+all six run, in `test-fast` and `test`; a file lists them in its `VIDEOTOOLBOX_CHECKS` and leaves
+them out of its ordinary run, and a check with a software half keeps that half there.
+[_videotoolbox.py](_videotoolbox.py) is the mechanism; `test_videotoolbox_checks` holds the
+declarations and registrations one to one. To see CI's H.264 shape here, point `PACER_FFMPEG` at
+an ffmpeg wrapper that hides VideoToolbox (it hides the ProRes encoder too, which CI has).
