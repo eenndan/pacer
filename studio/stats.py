@@ -831,7 +831,9 @@ def moving_time_s(times, speed_ms, threshold_ms: float = MOVING_MS) -> float:
 def path_distance(xs, ys, times=None, speed_ms=None) -> PathDistance:
     """Path length of a local-metre trace: the sum of chords between consecutive samples — the
     same convention as the core's cum_distances odometer. A dropout gap contributes its
-    straight-line chord (a slight under-count of the real path, never an over-count).
+    straight-line chord (an under-count of the real path, never an over-count, and not always a
+    slight one: MK_18_09_26's 15 gaps bridge 867 m where the speed at their ends puts ~1470 m — see
+    ODOMETER_SHORT_PCT, which also states the smoothing's own shortfall).
 
     With `times` and `speed_ms` supplied, each chord is GATED against what the trace's own speed
     channel allows over that interval (`CHORD_SPEED_TOL × max(v_i, v_i+1) × dt`): a GPS fix that
