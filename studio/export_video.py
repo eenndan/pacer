@@ -1400,9 +1400,10 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
     (+0.72 dB and +0.0011 on the synthetic). It also makes a random seek decode five times further:
     on the hardware decoder, an accurate seek to one frame
     (`ffmpeg -hwaccel videotoolbox -ss T -i F -frames:v 1`) costs about 4 ms per frame past the
-    keyframe, so the median over 20 seeks rose from 23 to 138 ms beyond a frame-0 decode on the real
-    lap (23 to 133 on the synthetic). The rule fixed before measuring allowed at most 100 ms, so the
-    default stays; the rule and the full table are in the PR (#503)."""
+    keyframe, so the median over 20 seeks rose from 25 to 135 ms beyond a frame-0 decode on the real
+    lap (23 to 133 on the synthetic, and 133-146 ms over four runs at load averages of 5 to 20). The
+    rule fixed before measuring allowed at most 100 ms, so the default stays; the rule and the full
+    table are in the PR (#503)."""
     bpp, crf = quality_params(quality)
     if encoder == VT_H264:
         br = vt_target_bitrate(out_w, out_h, fps, bpp)
