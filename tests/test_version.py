@@ -872,8 +872,8 @@ def test_published_media_has_a_current_capture_record():
         assert check({}) == [f"{name}: no entry in CAPTURED.json — capture it with "
                              "studio.dev.media_capture, which records what it writes"], check({})
         caught = check({name: clean, "ghost.jpg": clean})
-        assert len(caught) == 1 and caught[0].startswith("ghost.jpg: CAPTURED.json records it, "
-                                                         "but the directory no longer holds"), caught
+        assert len(caught) == 1 and caught[0].startswith(
+            "ghost.jpg: CAPTURED.json records it, but the directory no longer holds"), caught
         # An unwaived entry a minor behind: recorded at 0.4.2 while the release is 0.5.1...
         caught = check({name: dict(clean, version="0.4.2")})
         assert len(caught) == 1 and caught[0].startswith(
