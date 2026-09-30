@@ -1081,6 +1081,72 @@ def test_overlay_gate_refuses_a_mis_sized_reference():
           f"[{1/tol:.4f}, {tol:.4f}]")
 
 
+def _offset_start_reference(s, lap_id: int, offset_m: float):
+    """`lap_id`'s own drive, cut at a start line `offset_m` further round the track (the part
+    before it moved to the end, one lap time later): the same line at the same speed, only cut
+    somewhere else — what a second recording of the same kart gives when its start line was placed
+    a few metres away. Built through `cross_reference.build` against `lap_id`'s own loop."""
+    times, xs, ys, speed, cum = s._lap_columns(lap_id)
+    lap_t, total = float(times[-1] - times[0]), float(cum[-1])
+    a = np.flatnonzero(cum >= offset_m)
+    b = np.flatnonzero((cum > 0.0) & (cum <= float(cum[a[0]])))
+    tt = np.concatenate([times[a], times[b] + lap_t])
+    dist = np.concatenate([cum[a], cum[b] + total]) - float(cum[a[0]])
+    loop = np.column_stack([np.concatenate([xs[a], xs[b]]), np.concatenate([ys[a], ys[b]])])
+    return xr.build(dist=dist, speed_kmh=np.concatenate([speed[a], speed[b]]) * 3.6,
+                    elapsed=tt - tt[0], loop_xy=loop,
+                    primary_loop_xy=np.column_stack([xs, ys]), source_label="offset", lap_id=0)
+
+
+def test_a_reference_cut_five_metres_later_is_matched_on_track():
+    """A CROSS-RECORDING REFERENCE IS COMPARED AT THE SAME PLACE ON TRACK (TRUTH-10). The reference
+    is the best lap's own drive cut at a start line 5 m further on, so at every corner it is the
+    same kart in the same place and the Δ through each corner is zero. The equal-FRACTION pairing
+    this replaced read every corner ~5 m apart on the two laps, so the Δ trace rose or fell through
+    each one and the Corners table's reference column was off by as much. Through the reference's
+    warp (`CornerModel.reference_alignment`, matched on its trace moved into this frame) both are
+    within 5 ms, and the finish is still the lap-time difference.
+
+    The two start lines' 5 m is a real difference of the two laps' own clocks, and it has to show
+    somewhere: the warp anchors both lines, so it sits between the last matched boundary and the
+    finish — here inside C7, whose window ends ON the line. Only corners with both edges inside
+    the lap are held to the 5 ms; C7 is held to carrying that offset, and nothing more."""
+    from tests._synthetic import line_change_session
+    s, _laps = line_change_session(2.0, 4, "circuit")
+    ref = _offset_start_reference(s, 0, 5.0)
+    assert ref.overlay_xy is not None, "the fit must be drawable for the test to mean anything"
+    s._reference = ref
+    s.corners.invalidate_stats()
+    corner_list = s.corners.basis()[0]
+    _b, _spd, delta = s.delta([0])
+    x, dl = delta[0]
+    total = float(s.corners.basis()[1])
+    inner = [c for c, cn in enumerate(corner_list) if cn.exit < total - 1.0]
+    assert len(inner) == len(corner_list) - 1 == 6, [(cn.enter, cn.exit) for cn in corner_list]
+    # The chart's x is the REFERENCE's odometer: read each corner where the reference passes it.
+    knots = s.corners.reference_alignment()
+    assert knots is not None and len(knots[0]) == 2 * len(corner_list) + 1, knots
+
+    def at(d_best):
+        return float(np.interp(np.interp(d_best, *knots), x, dl))
+    rise = [at(cn.exit) - at(cn.enter) for cn in corner_list]
+    own = [st.time for st in s.corners.lap_corner_stats(0)]
+    theirs = [st.time for st in s.corners.reference_corner_stats()]
+    worst_rise = max(abs(rise[c]) for c in inner)
+    worst_table = max(abs(own[c] - theirs[c]) for c in inner)
+    # C7 carries the start lines' offset and nothing more: at every interior place the reference
+    # is behind by the time lap 0 took to reach its line (`head`), and at the finish by nothing.
+    times, _xs, _ys, _v, cum = s._lap_columns(0)
+    head = float(times[np.flatnonzero(cum >= 5.0)[0]] - times[0])
+    assert abs(rise[len(corner_list) - 1] + head) < 0.005, (rise[-1], head)
+    assert worst_rise < 0.005, [round(r, 4) for r in rise]
+    assert worst_table < 0.005, (own, theirs)
+    lap_t = float(s._lap_time_dist_elapsed(0)[2][-1])
+    assert abs(float(dl[-1]) - (lap_t - ref.total_time)) < 1e-9
+    print(f"test_a_reference_cut_five_metres_later_is_matched_on_track OK: worst corner rise "
+          f"{worst_rise * 1e3:.2f} ms, worst table cell {worst_table * 1e3:.2f} ms")
+
+
 if __name__ == "__main__":
     for fn in list(globals().values()):
         if callable(fn) and getattr(fn, "__name__", "").startswith("test_"):

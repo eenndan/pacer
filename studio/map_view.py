@@ -1947,13 +1947,21 @@ class MapView(QWidget):
         # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent. BOTH
         # Δ channels are fed from this one call — the rate channel is that curve's slope, so it
         # must never be computed against a different baseline than the cumulative one shows.
-        delta_grid = None
+        delta_grid = delta_frac = None
         if mode in ("delta", "delta_rate"):
             got = self.session.delta([lap_id])
             if got is not None and lap_id in got[2]:
                 delta_grid = got[2][lap_id][1]
+                # Each point's place on that grid: the baseline's odometer where the lap's warp
+                # puts it (TRUTH-10), so a point is coloured with the Δ at ITS place on track.
+                on_base = self.session.lap_distance_on_baseline(lap_id, cum)
+                total = (self.session.active_baseline_total_distance() if on_base is not None
+                         else None)
+                if total:
+                    delta_frac = np.asarray(on_base, float) / float(total)
         result = rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
-                                 self._speed_unit, elevation=elevation, pedal=pedal)
+                                 self._speed_unit, elevation=elevation, pedal=pedal,
+                                 delta_frac=delta_frac)
         if result is None:
             return "none"
         seg_buckets, lo_txt, hi_txt = result

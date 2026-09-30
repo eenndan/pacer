@@ -587,7 +587,7 @@ def make_delta_session():
     lap_a, lap_b = 3, 7
     ta, da = odometer(120, 0.1, 100.0, 520.0)
     tb, db = odometer(110, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)
-    s = bare_session({lap_a: (ta, da), lap_b: (tb, db)}, best=lap_b)
+    s = bare_session({lap_a: (ta, da), lap_b: (tb, db)}, best=lap_b, valid=[lap_a, lap_b])
     seed_cols(s, lap_a, ta, da)
     seed_cols(s, lap_b, tb, db)
     s.laps = SimpleNamespace(laps_count=lambda: 8)

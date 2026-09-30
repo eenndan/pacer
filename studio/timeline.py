@@ -86,8 +86,12 @@ def trace_point_at(times, xs, ys, t: float, gap_s: float = GAP_TIME_S):
 
 class Timeline:
     def __init__(self, *, lap_time_dist, lap_trace_xyt, valid_lap_ids, lap_window,
-                 trace_times, trace_xs, trace_ys):
+                 trace_times, trace_xs, trace_ys, baseline_warp=None):
         self._lap_time_dist = lap_time_dist      # (lap_id) -> (times, dists) | None
+        # (lap_id) -> (knot_base, knot_lap) | None: the lap's odometer as a function of the Δ
+        # baseline's (`Session._baseline_warp`), the frame `delta()` draws on. None → the
+        # normalized fraction (a double built without one, or no baseline).
+        self._baseline_warp = baseline_warp
         self._lap_trace_xyt = lap_trace_xyt      # (lap_id) -> (xs, ys, times) local metres
         self._valid_lap_ids = valid_lap_ids      # () -> list[int] (memoized on Session)
         self._lap_window = lap_window            # (lap_id) -> (start_ts, start_ts + lap_time)
@@ -105,8 +109,9 @@ class Timeline:
     # ----------------------------------------- cursor scrub: plot-x <-> telemetry time
     # Speed + delta share one x-linked axis:
     #   * TIME mode:     x = t − lap_start
-    #   * DISTANCE mode: x = s × baseline_total, s = dist_in_lap(t)/lap_total — the same axis
-    #     delta() draws on, so the cursor sits on its curve. The caller passes
+    #   * DISTANCE mode: x = s × baseline_total, s = the BASELINE lap's fraction at the place on
+    #     track the lap is at t (its warp, TRUTH-10; dist_in_lap(t)/lap_total without one) — the
+    #     same axis delta() draws on, so the cursor sits on its curve. The caller passes
     #     active_baseline_total_distance() as best_distance so both halves use the SAME total.
     # 'distance' and 'delta' are the same shared-distance mode; all clamp to the lap window.
     def media_time_at_plot_x(self, lap_id: int, x: float, mode: str,
@@ -140,7 +145,11 @@ class Timeline:
             if not best_distance:
                 return None
             s = float(x) / float(best_distance)            # normalized fraction [0,1]
-            d = s * float(dists[-1])                        # → this lap's odometer (m)
+            warp = self._baseline_warp(lap_id) if self._baseline_warp is not None else None
+            if warp is None or len(warp[0]) <= 2:  # no warp (session._is_fraction): the fraction
+                d = s * float(dists[-1])                    # → this lap's odometer (m)
+            else:  # the baseline's odometer there → this lap's at the same place on track
+                d = float(np.interp(s * float(warp[0][-1]), warp[0], warp[1]))
             # Invert distance→time within the lap on the monotonic odometer.
             t = float(np.interp(d, dists, times))
         return min(max(t, t0), t1)
@@ -164,7 +173,11 @@ class Timeline:
         if dists[-1] <= 0:  # zero-length odometer (≥2 stationary points): degenerate → no x
             return None     # (same `<= 0` convention as delta() / sector_plot_positions)
         d = float(np.interp(t, times, dists))  # distance-into-lap at t
-        s = d / float(dists[-1])               # normalized fraction [0,1]
+        warp = self._baseline_warp(lap_id) if self._baseline_warp is not None else None
+        if warp is None or len(warp[0]) <= 2:  # no warp (session._is_fraction): the fraction
+            s = d / float(dists[-1])           # normalized fraction [0,1]
+        else:  # the baseline's fraction at the same place on track
+            s = float(np.interp(d, warp[1], warp[0])) / float(warp[0][-1])
         return s * float(best_distance)
 
     # -------------------------------------------------- telemetry time -> trace index / lap

@@ -203,6 +203,90 @@ def test_reference_baseline_is_just_a_lapcurve():
     print(f"test_reference_baseline_is_just_a_lapcurve OK: finish Δ={fin:+.4f}s")
 
 
+# ------------------------------------------------ the warp frame (TRUTH-10, review move 10)
+def _rise(x, dl, a, b):
+    """The drawn Δ curve's rise between reference odometers a and b."""
+    return float(np.interp(b, x, dl) - np.interp(a, x, dl))
+
+
+def test_trace_rise_through_each_corner_is_the_tables_time_lost():
+    """THE Δ TRACE PUTS A CORNER'S LOSS AT THAT CORNER. Lap 1 of the circuit line-change fixture
+    (`tests/_synthetic.line_change_session`) runs 2 m wide through C4 only; the Corners table
+    reads its warp (`CornerModel.lap_alignment`) and puts ~0.11 s there and ~0 elsewhere. The Δ
+    trace paired laps at equal odometer FRACTION until TRUTH-10, which spreads lap 1's extra metres
+    round the lap: on main its rise through C4 missed the table by 0.082 s and C1-C3 each showed a
+    loss that is not there. Now every Δ path reads the same warp, so the drawn trace's rise equals
+    the table within its 400-point grid (0.01 s), and the per-frame readout (`delta_at_lap`) and
+    the compare badge (`delta_between`), evaluated at the corner edges, equal it exactly."""
+    from tests._synthetic import line_change_session
+    s, _laps = line_change_session(2.0, 4, "circuit")
+    corner_list = s.corners.basis()[0]
+    table = s.corners.lap_corner_stats(1)
+    _b, _spd, delta = s.delta([1])
+    x, dl = delta[1]
+    times, dists, _el = s._lap_time_dist_elapsed(1)
+    warp = s.corners.lap_alignment(1, float(dists[-1]))   # the table's own warp
+
+    def t_at(d_best):  # lap 1's clock where its warp puts the best lap's odometer d_best
+        return float(np.interp(np.interp(d_best, warp[0], warp[1]), dists, times))
+    for c, cn in enumerate(corner_list):
+        drawn = _rise(x, dl, cn.enter, cn.exit)
+        assert abs(drawn - table[c].delta) <= 0.010, (cn.label, drawn, table[c].delta)
+        tick = s.delta_at_lap(1, t_at(cn.exit)) - s.delta_at_lap(1, t_at(cn.enter))
+        badge = s.delta_between(1, 0, t_at(cn.exit)) - s.delta_between(1, 0, t_at(cn.enter))
+        assert abs(tick - table[c].delta) < 1e-9, (cn.label, tick, table[c].delta)
+        assert abs(badge - table[c].delta) < 1e-9, (cn.label, badge, table[c].delta)
+    print(f"test_trace_rise_through_each_corner_is_the_tables_time_lost OK: C4 drawn "
+          f"{_rise(x, dl, corner_list[3].enter, corner_list[3].exit):.4f} s, table "
+          f"{table[3].delta:.4f} s")
+
+
+def test_the_warp_keeps_the_finish_the_lap_time_difference():
+    """The warp anchors both timing lines, so every Δ path still ENDS at the lap-time difference
+    (to 1e-9), in both x-modes, and the best lap against itself stays exactly zero."""
+    from tests._synthetic import line_change_session
+    s, _laps = line_change_session(2.0, 4, "circuit")
+    lap_time = {i: float(s._lap_time_dist_elapsed(i)[2][-1]) for i in (0, 1, 2, 3)}
+    for mode in ("distance", "time"):
+        _b, _spd, delta = s.delta([1, 2, 3], mode)
+        for i in (1, 2, 3):
+            assert abs(float(delta[i][1][-1]) - (lap_time[i] - lap_time[0])) < 1e-9, (mode, i)
+        assert not np.any(delta[0][1]), mode
+    for i in (1, 2, 3):
+        end = float(s._lap_time_dist_elapsed(i)[0][-1])
+        assert abs(s.delta_at_lap(i, end) - (lap_time[i] - lap_time[0])) < 1e-9, i
+        assert abs(s.delta_between(i, 2 if i != 2 else 3, end)
+                   - (lap_time[i] - lap_time[2 if i != 2 else 3])) < 1e-9, i
+    print("test_the_warp_keeps_the_finish_the_lap_time_difference OK")
+
+
+def test_the_per_frame_paths_never_rebuild_a_warp():
+    """`delta_at_lap` (and `delta_between`, `delta_to_ideal_at`) run per frame in playback and in
+    the export, so each reads the memoized warp and never the spatial search: after one warm
+    call per lap, the search (`corners.lap_alignment`) is made unreachable and 300 more calls
+    must return the same values."""
+    from studio import corners
+    from tests._synthetic import line_change_session
+    s, _laps = line_change_session(2.0, 4, "circuit")
+    ts = np.linspace(*s.lap_window(1), 100)
+    warm = ([s.delta_at_lap(1, float(t)) for t in ts], [s.delta_between(1, 2, float(t)) for t in ts],
+            [s.delta_to_ideal_at(1, float(t)) for t in ts])
+    assert s._warp_to_best(1) is s._warp_to_best(1), "the warp is rebuilt, not memoized"
+    real = corners.lap_alignment
+
+    def refuse(*_a, **_k):
+        raise AssertionError("a per-frame Δ path rebuilt a lap's warp")
+    corners.lap_alignment = refuse
+    try:
+        again = ([s.delta_at_lap(1, float(t)) for t in ts],
+                 [s.delta_between(1, 2, float(t)) for t in ts],
+                 [s.delta_to_ideal_at(1, float(t)) for t in ts])
+    finally:
+        corners.lap_alignment = real
+    assert again == warm
+    print("test_the_per_frame_paths_never_rebuild_a_warp OK")
+
+
 def main():
     test_lapcurve_primitives_match_closed_form()
     test_lapcurve_built_from_session_cache_matches_open_form()
@@ -211,6 +295,9 @@ def main():
     test_delta_at_lap_equals_delta_between_vs_best()
     test_scrub_roundtrip_both_modes()
     test_reference_baseline_is_just_a_lapcurve()
+    test_trace_rise_through_each_corner_is_the_tables_time_lost()
+    test_the_warp_keeps_the_finish_the_lap_time_difference()
+    test_the_per_frame_paths_never_rebuild_a_warp()
     print("\nall test_delta_engine tests OK")
 
 
