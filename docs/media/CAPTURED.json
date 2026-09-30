@@ -48,13 +48,13 @@
       "waiver": null
     },
     "debrief.png": {
-      "captured": "2026-09-27",
-      "commit": "3d270d7",
+      "captured": "2026-09-30",
+      "commit": "ec62f94",
       "derived": null,
-      "sha256": "2e3d0c987631ddd50ccc7b97a9a902fbbe2f694960680cb3de20c21c05a98c0e",
+      "sha256": "0e3d6c79007142f909846d93460fa722e56141e87fe901ee1cf6148a796c1f21",
       "shot": "debrief",
       "source": "synthetic demo",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "waiver": null
     },
     "hero.png": {
