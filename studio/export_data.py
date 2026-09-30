@@ -457,8 +457,10 @@ class SummarySection:
     caption on. An EMPTY value is the em-dash case: the accessor returned None, and the renderers
     print `DASH`, never a 0 (the None-not-zero rule the whole Stats layer is built on).
 
-    `note` is the group's disclosure paragraph, printed under its table. Only the IDEAL LAP group
-    has one today, and it is `IdealSample.sentence()` verbatim."""
+    `note` is the group's disclosure paragraph, printed under its table. SESSION's is the distance
+    note (`_distance_note`: `stats.ODOMETER_NOTE` under a printed distance, or why it is withheld),
+    IDEAL LAP's is `IdealSample.sentence()` verbatim, and DRIVING's names its braking and coasting
+    instruments; the other groups carry none."""
 
     title: str
     rows: list[tuple[str, str]]

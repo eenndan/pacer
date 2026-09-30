@@ -203,7 +203,8 @@ ROWS: tuple[Row, ...] = (
     # time between nodes); peak g against v²κ and dv/dt; distance (m) against the centreline the
     # kart drives. The load-time position boxcar rounds every corner off, so the odometer — the lap
     # table's distance and the average speed both read it — is ~1.1 % short at noise 0 (10.4 m of
-    # 971 m; noise adds length back): stated. Nothing says it on a surface yet.
+    # 971 m; noise adds length back): stated, and since TRUTH2-ODO every surface that quotes a
+    # distance or an average speed says so (`stats.ODOMETER_NOTE`, "about 1-3% short").
     Row("lap.vmax", 0.0, 0.0787918, G, tol=0.118),
     Row("lap.vmax", 2.0, 1.46684, G, tol=2.2),
     Row("lap.vmax", 4.5, 3.80899, G, tol=5.7),
