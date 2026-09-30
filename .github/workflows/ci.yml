@@ -5,9 +5,9 @@ on:
   # unrestricted push trigger would run every PR's CI twice.
   push:
     branches: [main]
-    tags: ['v*']          # a release tag also fires the packaging smoke below
+    tags: ['v*']          # a release tag re-runs the required job, soak included (the release step)
   pull_request:
-  workflow_dispatch:      # manual trigger for the (slow) packaging smoke
+  workflow_dispatch:      # a manual run carries the soak, the lock notice and next-runner below
   # WEEKLY, ON MAIN (Mondays 05:23 UTC). A showcase is read months after its last push, and a lock,
   # a runner image or a download can rot with no commit at all, so the required job below re-runs
   # in full every week, soak included, and `next-runner` tries the newest macOS image.
@@ -201,59 +201,3 @@ jobs:
         run: QT_QPA_PLATFORM=offscreen pixi run smoke
       - name: Golden equivalence gate (synthetic)
         run: pixi run golden
-
-  package-smoke:
-    name: package .app build-only smoke (tag / manual)
-    # A full PyInstaller build is slow and only matters at release, so this runs ONLY on a version
-    # tag or a manual dispatch — never on a PR. BUILD-ONLY: it does NOT launch the .app (the app
-    # blocks in exec(), it would hang) and does NOT build/upload a .dmg — it just proves the bundle
-    # is well-formed, so spec rot (a hidden-import miss, a datas typo, a dropped QtMultimedia plugin)
-    # can't ship a .app that crashes on launch with the rest of CI green.
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    runs-on: macos-14
-    timeout-minutes: 30
-    steps:
-      - name: Checkout (with submodules)
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - name: Set up pixi
-        uses: prefix-dev/setup-pixi@v0.9.6
-        with:
-          pixi-version: v0.70.1
-          cache: true
-      - name: Build the C++ core + bindings
-        run: pixi run build
-      - name: Build the .app (PyInstaller — no .dmg)
-        # PYTHONPATH pins the spec's `import pacer` to the in-tree bindings/pacer package, as CTest
-        # does. Since 2026-09-27 the build also deploys that same package into site-packages, so
-        # a run without it bundles identical files; it stays because this job runs only on a tag
-        # and cannot be re-verified from a pull request.
-        #
-        # ensurepip first: `pip` is NOT in [tool.pixi.dependencies], so a fresh env solved from the
-        # lockfile has no pip and `python -m pip install` dies with "No module named pip". A dev box
-        # hides this — the editable install pulls pip in — which is why it survived review. This job
-        # only runs on a v* tag or a manual dispatch, and there had been NO tag since the job was
-        # added, so the very first time it ever executed was v0.2.0, where it failed on this line.
-        # Bootstrapping keeps PyInstaller opt-in (docs/PACKAGING.md: "intentionally not a project
-        # dependency") rather than adding it to the env for everyone.
-        #
-        # PINNED to what built v0.4.1 (its log: PyInstaller 6.22.3, contrib hooks 2026.7): an
-        # unpinned install let any PyInstaller release change the tag build silently (HEALTH-10).
-        env:
-          PYTHONPATH: ${{ github.workspace }}/bindings/pacer
-        run: |
-          pixi run python -m ensurepip --upgrade
-          pixi run python -m pip install "pyinstaller==6.22.3" "pyinstaller-hooks-contrib==2026.7"
-          pixi run pyinstaller --noconfirm --clean packaging/pacer.spec
-      - name: Assert the .app bundle is well-formed
-        run: |
-          APP="dist/Pacer Studio.app"
-          test -d "$APP" || { echo "::error::PyInstaller produced no $APP"; exit 1; }
-          find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm +111 | grep -q . \
-            || { echo "::error::no executable in $APP/Contents/MacOS"; exit 1; }
-          find "$APP" -name '_pacer*.so' | grep -q . \
-            || { echo "::error::the compiled _pacer core is missing from the bundle"; exit 1; }
-          find "$APP" -name 'ffmpeg' | grep -q . \
-            || { echo "::error::ffmpeg is missing from the bundle (video export would break)"; exit 1; }
-          echo "bundle OK ($(du -sh "$APP" | cut -f1))"

@@ -1,19 +1,28 @@
 # Packaging Pacer Studio for macOS
 
-This builds a standalone, double-clickable **`Pacer Studio.app`** (and a drag-to-install `.dmg`)
-from the `studio` desktop app, with **no pixi / no Python install required** on the target Mac.
+**An ungated local recipe, not a distribution.** No CI job builds or launches this bundle and no
+test runs it, so a build is untested until you launch it yourself. It crashed at launch on every
+build from June 2026 until #450, and nothing noticed: the tag job that built it never launched it,
+and that job is gone (RUL-11 in [DECISIONS.md](DECISIONS.md)). Source is the only supported way to
+run Pacer.
+
+The recipe is meant to build an unsigned **`Pacer Studio.app`** (and a drag-to-install `.dmg`) from
+the `studio` desktop app, carrying its own Python, Qt and ffmpeg so the target Mac needs no pixi.
 
 Target: macOS 12+ on Apple Silicon (`osx-arm64` — the only platform this repo supports).
 
-> The build is **unsigned**. It runs locally immediately; distributing it to other Macs past
-> Gatekeeper needs **codesign + notarize + staple** with your Apple Developer ID (steps below). You
-> cannot notarize without that ID — there is no way around it.
+> The build is **unsigned**. Launch it yourself before you rely on it; distributing it to other
+> Macs past Gatekeeper needs **codesign + notarize + staple** with your Apple Developer ID (steps
+> below). You cannot notarize without that ID — there is no way around it.
 
 ## What ships inside the .app
 
-`packaging/pacer.spec` is a [PyInstaller](https://pyinstaller.org) spec. The entry point is
-`studio/__main__.py` (i.e. `python -m studio`). It bundles everything the app loads at runtime that
-isn't a plain importable module:
+`packaging/pacer.spec` is a [PyInstaller](https://pyinstaller.org) spec. Its entry point is
+`studio/__main__.py`, which PyInstaller runs as a top-level script with no parent package, not as
+`python -m studio`: the entry must import absolutely, and its one relative import is what kept
+every build from starting until #450 (`tests/test_first_launch_says_so.py` now runs the entry that
+way, without building a bundle). It bundles everything the app loads at runtime that isn't a
+plain importable module:
 
 | Bundled | Why |
 | --- | --- |
@@ -54,10 +63,14 @@ One-time, **inside the pixi env** (PyInstaller is intentionally **not** a projec
 packaging is opt-in):
 
 ```bash
-pixi run build          # build the C++ core + editable bindings (only needed once / after C++ changes)
-pixi shell              # enter the env so `import pacer`, PySide6, ffmpeg all resolve
-pip install pyinstaller # only needed when cutting a build
+pixi run build                  # build the C++ core + bindings (once, and after C++ changes)
+pixi shell                      # enter the env so `import pacer`, PySide6, ffmpeg all resolve
+python -m ensurepip --upgrade   # a fresh env has no pip: pip is not a pixi dependency
+python -m pip install "pyinstaller==6.22.3" "pyinstaller-hooks-contrib==2026.7"
 ```
+
+The pins are the last versions known to build the bundle: the removed tag job's, which built
+v0.4.1. An unpinned install lets any PyInstaller release change the build silently.
 
 Then:
 
@@ -67,7 +80,8 @@ packaging/build_macos.sh
 
 Output:
 
-- `dist/Pacer Studio.app` — run locally with `open "dist/Pacer Studio.app"`
+- `dist/Pacer Studio.app` — launch it with `open "dist/Pacer Studio.app"` and open a recording
+  before you trust the build: nothing else runs it
 - `dist/Pacer-Studio-<version>.dmg` — the drag-to-Applications disk image
 
 To run the spec directly (what the script does): `pyinstaller --noconfirm packaging/pacer.spec`.

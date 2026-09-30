@@ -1001,9 +1001,17 @@ def test_the_clip_check_fails_on_each_planted_defect():
 #     private notes define, and so did docs/AGENT-GUARDRAILS.md (R13);
 #   * its owner-acts table stated what exists of the owner's recordings, which is not ours to
 #     publish.
-# So RUL-11 reads "Pending" exactly while CI still builds the `.app` (the package that removes the
-# build rewords the row, or this fails), every id family either page cites is glossed at the top of
-# DECISIONS.md, and no public page says what exists of his recordings.
+# So RUL-11 read "Pending" exactly while CI still built the `.app`, every id family either page
+# cites is glossed at the top of DECISIONS.md, and no public page says what exists of his
+# recordings.
+#
+# RUL-11's default (drop) has since been applied (LONGEVITY-2, 2026-09-30), so its check is
+# inverted: the build must be ABSENT. ci.yml names neither PyInstaller nor a package-smoke job,
+# RUL-11 no longer reads "Pending", and no page still claims a working `.app` in the phrases the
+# old docs used. Why absent rather than merely recorded: the tag job built the bundle and never
+# launched it, and that bundle crashed at launch on every build from June until #450 while every
+# tag went green (QA r4 REG2-1). A build that comes back must launch what it builds, on the
+# owner's ruling ("keep"), with RUL-11 reworded; invert this check back in that pull request.
 #
 # The W2 close-out QA (2026-09-30, EVAL-2 and EVAL-4) found #473's fix partial: it dropped "each
 # recording exists once" but kept the row, and the row's "open" status said the same thing, twice
@@ -1022,16 +1030,47 @@ _GLOSS_LEAD = "**The ids this page cites.**"
 _ID = re.compile(r"\b([A-Z]+(?:-[A-Z]+)*-|[A-Z])\d+\b")
 
 
+# The build, as ci.yml would name it: the pass criterion LONGEVITY-2 was held to, so even a comment
+# naming PyInstaller brings the question back to this check.
+_CI_APP_BUILD = re.compile(r"\bpyinstaller\b|\bpackage-smoke\b", re.I)
+# The works-claims the docs made about the `.app` and its CI job, before RUL-11 dropped the job.
+_APP_CLAIMS = re.compile(r"build-verif|package-smoke|double-clickable|locally-runnable"
+                         r"|runnable-locally|runs locally immediately")
+# Where a claim would be read: the public pages, the agents' map, the recipe itself, and the
+# changelog fragments still to be folded (CHANGELOG.md's released sections are history).
+_CLAIM_PAGES = ("README.md", "AGENTS.md", "docs", "packaging", "changes")
+
+
 def _rul11_problem(follows: str, ci_builds_app: bool) -> str | None:
-    """What is wrong with RUL-11's "What follows" cell, given whether CI still builds an `.app`."""
-    pending = follows.startswith("Pending")
-    if ci_builds_app and not pending:
-        return (f"RUL-11 says {follows!r}, but .github/workflows/ci.yml still builds an `.app`: "
-                "say it is pending, and what happens until it lands")
-    if pending and not ci_builds_app:
+    """What is wrong with RUL-11's "What follows" cell, or with ci.yml, now that the ruling's
+    default (drop the `.app` build) is applied."""
+    if ci_builds_app:
+        return (".github/workflows/ci.yml builds an `.app` again (PyInstaller, or a package-smoke "
+                "job), but RUL-11 dropped that build: it built a bundle nothing launched, which "
+                "crashed at launch from June until #450 with every tag green. Bring one back only "
+                "on the owner's 'keep', with a step that launches it, and reword RUL-11")
+    if follows.startswith("Pending"):
         return ("RUL-11 still says the `.app` build is pending, but .github/workflows/ci.yml no "
                 "longer runs one: say what happened, and in which pull request")
     return None
+
+
+def _app_claims(repo: str) -> list[str]:
+    """Every line under `_CLAIM_PAGES` that still claims a working `.app` or a CI job for one."""
+    files = []
+    for rel in _CLAIM_PAGES:
+        path = os.path.join(repo, rel)
+        if os.path.isfile(path):
+            files.append(rel)
+        else:
+            files += [os.path.join(rel, n) for n in sorted(os.listdir(path))
+                      if n.endswith((".md", ".html", ".sh", ".spec", ".py"))]
+    hits = []
+    for rel in files:
+        with open(os.path.join(repo, rel), encoding="utf-8") as f:
+            hits += [f"{rel}:{i}: {m.group(0)!r}" for i, line in enumerate(f, 1)
+                     for m in [_APP_CLAIMS.search(line)] if m]
+    return hits
 
 
 def _id_families(text: str) -> set[str]:
@@ -1067,12 +1106,15 @@ def test_decisions_says_what_is_true_and_public():
     with open(_DECISIONS, encoding="utf-8") as f:
         decisions = f.read()
     with open(os.path.join(_REPO, ".github", "workflows", "ci.yml"), encoding="utf-8") as f:
-        ci_builds_app = bool(re.search(r"\bpyinstaller\b[^\n]*\.spec\b", f.read(), re.I))
+        ci_builds_app = bool(_CI_APP_BUILD.search(f.read()))
     row = re.search(r"^\| RUL-11 \|(.*)\|[ \t]*$", decisions, re.M)
     assert row, "docs/DECISIONS.md has no RUL-11 row — if that was deliberate, update this check"
     follows = row.group(1).split("|")[-1].strip()
     problem = _rul11_problem(follows, ci_builds_app)
     assert problem is None, problem
+    claims = _app_claims(_REPO)
+    assert not claims, ("RUL-11 dropped the `.app` build, but a page still claims one works or "
+                        "that CI builds it:\n  " + "\n  ".join(claims))
 
     at = decisions.find(_GLOSS_LEAD)
     assert at >= 0, f"docs/DECISIONS.md lost its {_GLOSS_LEAD!r} paragraph"
@@ -1117,7 +1159,18 @@ def test_decisions_says_what_is_true_and_public():
     done = "The tag job stops building an `.app`, and nothing claims one works."
     pending = "Pending: LONGEVITY-2 will stop the tag job building an `.app`."
     assert _rul11_problem(done, True) and not _rul11_problem(done, False)
-    assert not _rul11_problem(pending, True) and _rul11_problem(pending, False)
+    assert _rul11_problem(pending, True) and _rul11_problem(pending, False)
+    # The build as the dropped job ran it, and as a job header, is caught; a CI file that builds
+    # only the core is not. So are the old docs' claims, and the ungated wording is not.
+    for text in ('run: pixi run pyinstaller --noconfirm --clean packaging/pacer.spec',
+                 "  package-smoke:\n    name: package .app build-only smoke (tag / manual)"):
+        assert _CI_APP_BUILD.search(text), f"the planted build {text!r} was not caught"
+    assert not _CI_APP_BUILD.search("run: pixi run build\nrun: pixi run golden\n")
+    for text in ("CI build-verifies the bundle on every release tag",
+                 "This builds a standalone, double-clickable Pacer Studio.app",
+                 "Produces a locally-runnable macOS app", "It runs locally immediately;"):
+        assert _APP_CLAIMS.search(text), f"the planted claim {text!r} was not caught"
+    assert not _APP_CLAIMS.search("an ungated local recipe: no CI job builds or launches it")
     for text, want in (("COACHING-4 builds after the freeze (ADV-5).", ["ADV-n", "COACHING-n"]),
                        ("Closed on the FOLLOW ledger's count (R11).", ["Rn", "the FOLLOW ledger"]),
                        ("item 15-V1", ["Vn"]),
@@ -1125,8 +1178,8 @@ def test_decisions_says_what_is_true_and_public():
         got = _unglossed(text, "RUL-n is defined here")
         assert got == want, (text, got)
     assert _unglossed(rest, "") and _unglossed(guardrails, ""), "no ids found: the check is vacuous"
-    print(f"test_decisions_says_what_is_true_and_public OK (RUL-11 "
-          f"{'pending' if ci_builds_app else 'done'}, "
+    print(f"test_decisions_says_what_is_true_and_public OK (RUL-11 done: no `.app` build, "
+          f"no claim of one, "
           f"{len(_id_families(rest + guardrails))} id families glossed, "
           f"{len(pages)} pages)")
 

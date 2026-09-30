@@ -2,15 +2,18 @@
 #
 # build_macos.sh — build an UNSIGNED "Pacer Studio.app" + a .dmg from the repo.
 #
-# Produces a locally-runnable macOS app from the `studio` desktop app via PyInstaller
-# (packaging/pacer.spec), then wraps it in a drag-to-Applications .dmg with hdiutil.
+# Produces an untested, ungated macOS app from the `studio` desktop app via PyInstaller
+# (packaging/pacer.spec), then wraps it in a drag-to-Applications .dmg with hdiutil. No CI job
+# runs this script or launches what it builds: launch the result yourself before relying on it.
 #
 # Prerequisites (NOT installed by this script):
 #   * the pixi env built + the pacer extension importable: `pixi run build` once, then run this
 #     from inside `pixi shell` (or with the pixi env's bin on PATH) so `import pacer`, PySide6 and
 #     ffmpeg/ffprobe all resolve. The spec bundles whatever ffmpeg/ffprobe is first on PATH.
-#   * PyInstaller in that env:  pip install pyinstaller   (intentionally NOT a project dep —
-#     packaging is opt-in; CI/dev installs it only when cutting a build).
+#   * PyInstaller in that env, at the last versions known to build the bundle (intentionally NOT
+#     a project dep — packaging is opt-in; a fresh env has no pip, so bootstrap it first):
+#       python -m ensurepip --upgrade
+#       python -m pip install "pyinstaller==6.22.3" "pyinstaller-hooks-contrib==2026.7"
 #
 # Usage (from anywhere; paths are resolved from the script location):
 #   packaging/build_macos.sh
@@ -35,7 +38,7 @@ cd "${REPO_ROOT}"
 
 # --- sanity: the env must have the things the spec bundles --------------------------------------
 command -v pyinstaller >/dev/null 2>&1 || {
-  echo "error: pyinstaller not found. Run inside the pixi env and: pip install pyinstaller" >&2
+  echo "error: pyinstaller not found. Inside the pixi env, install the pins in this script's header." >&2
   exit 1
 }
 python -c "import pacer, PySide6" 2>/dev/null || {

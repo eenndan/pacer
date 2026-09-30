@@ -472,7 +472,8 @@ def test_the_product_name_follows_its_three_form_convention():
         "is the owner's decision, not a refactor")
 
     # FORMAL — the .app (bundle, executable, and the two Info.plist keys the menu bar and Finder
-    # read), the .dmg, CI's bundle check, the running app's own names, and the landing page.
+    # read), the .dmg, the running app's own names, and the landing page. (CI no longer builds the
+    # bundle, RUL-11: tests/test_landing_page.py holds that no job does.)
     spec = _read("packaging", "pacer.spec")
     for key in ("CFBundleName", "CFBundleDisplayName"):
         m = re.search(rf'"{key}":\s*"([^"]+)"', spec)
@@ -483,8 +484,6 @@ def test_the_product_name_follows_its_three_form_convention():
     m = re.search(r'^APP_NAME="([^"]+)"', sh, re.MULTILINE)
     assert m and m.group(1) == _FORMAL, f"build_macos.sh APP_NAME={m and m.group(1)!r}"
     assert f"/dist/{_DMG_STEM}${{VERSION}}.dmg" in sh, "build_macos.sh's .dmg name drifted"
-    ci = re.search(r'APP="dist/([^"]+)\.app"', _read(".github", "workflows", "ci.yml"))
-    assert ci and ci.group(1) == _FORMAL, f"ci.yml checks dist/{ci and ci.group(1)}.app"
     app_py = _read("studio", "app.py")
     for call in ("setApplicationName", "setApplicationDisplayName"):
         m = re.search(rf'app\.{call}\((?:"([^"]+)"|APP_NAME)\)', app_py)

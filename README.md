@@ -239,9 +239,8 @@ Most were measured on D24 and say so at the top.
 Stating what Pacer deliberately *isn't* is part of the design.
 
 - **Source is the only distribution.** No signed build, no notarization, no `.dmg`, no App Store, no
-  Homebrew. `packaging/` can build an unsigned `.app` locally ([docs/PACKAGING.md](docs/PACKAGING.md))
-  and CI build-verifies the bundle on every release tag, but nothing is published and nothing is
-  planned to be.
+  Homebrew. `packaging/` holds an ungated local `.app` recipe ([docs/PACKAGING.md](docs/PACKAGING.md));
+  no CI job builds or launches it, nothing is published and nothing is planned to be.
 - **macOS Apple Silicon only.** No Windows, no Linux.
 - **Not a mobile app** — an offline desktop deep-analysis tool, for sitting down with a session
   afterwards.

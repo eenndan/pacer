@@ -23,13 +23,13 @@ This file is loaded into every session; the rest is read on demand:
 
 ```
 pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi manifest: deps + tasks),
-│                     #   pixi.lock (osx-arm64 ONLY), .github/ (CI; package-smoke on a tag or manual run)
+│                     #   pixi.lock (osx-arm64 ONLY), .github/ (CI)
 ├── pacer/            # C++ core — one folder = one static lib pacer::<name>: datatypes, geometry,
 │                     #   gps-source (GPMF: GPS5/GPS9 + ACCL/GYRO/GRAV/CORI), laps
 ├── studio/           # THE APP; dev/ = probes and validation scripts; docs/ = write-ups + refusals
 ├── bindings/pacer/   # the `pacer` Python package (litgen-generated, nanobind runtime)
 ├── tests/            # Catch2 C++ suites + Python studio tests, all CTest registrations
-├── packaging/        # the .app/.dmg build (pacer.spec, build_macos.sh) — see PACKAGING.md
+├── packaging/        # an ungated .app recipe (pacer.spec, build_macos.sh) — see docs/PACKAGING.md
 ├── docs/             # the PUBLIC pages: ACCURACY.md, FIRST_LAP.md, index.html + media/
 └── 3rdparty/         # submodules gpmf-parser + nanobind: `git submodule update --init --recursive`
 ```

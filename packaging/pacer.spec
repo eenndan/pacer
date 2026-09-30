@@ -6,7 +6,8 @@ Run from the repo root via packaging/build_macos.sh (which sets the pixi env on 
     pyinstaller --noconfirm packaging/pacer.spec
 
 What this bundles (the things the app loads at runtime that are NOT plain importable modules):
-  * the entry is studio/__main__.py — i.e. `python -m studio` (StudioWindow + app.main()).
+  * the entry is studio/__main__.py, run as a top-level script (not `python -m studio`; see the
+    Analysis below) — StudioWindow + app.main().
   * the compiled nanobind extension `pacer._pacer` (a .so) + the `pacer` package, found via the
     installed `pacer` package rather than hard-coding the build path.
   * PySide6 + QtMultimedia: collected wholesale so the multimedia/AVFoundation backend plugins
@@ -16,8 +17,9 @@ What this bundles (the things the app loads at runtime that are NOT plain import
   * ffmpeg + ffprobe binaries at the bundle root; a runtime hook (rthook_ffmpeg.py) exports
     PACER_FFMPEG / PACER_FFPROBE so studio.export_video finds them with no PATH ffmpeg.
 
-UNSIGNED: this spec produces a runnable-locally .app. Distribution requires codesign + notarize +
-staple with the user's Apple Developer ID — see docs/PACKAGING.md / build_macos.sh.
+UNSIGNED and UNGATED: no CI job builds this spec or launches the .app it produces, so launch a
+build yourself before relying on it. Distribution requires codesign + notarize + staple with the
+user's Apple Developer ID — see docs/PACKAGING.md / build_macos.sh.
 """
 
 import os
