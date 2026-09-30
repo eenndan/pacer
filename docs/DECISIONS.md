@@ -25,9 +25,11 @@ which are not in this repository:
   what came of the board review, and the product findings, both from the review of 2026-09-28.
 - O5 and O6: two of the questions the 2026-09-28 review put to the owner; RUL-6 and RUL-7 here.
 - ADV-n: the coaching-advice findings of the hands-on QA round of 2026-09-28.
-- FIRST-OPEN-LOOP-n, TRUTH-n, COACHING-n, GATES-n, PROCESS-n, LONGEVITY-n: the work packages of
-  the 2026-09-28 fix plan. A package that has merged is the pull request whose title starts with
-  its id.
+- FIRST-OPEN-LOOP-n, TRUTH-n, COACHING-n, GATES-n, PROCESS-n, LONGEVITY-n, FRONT-DOOR-n: the work
+  packages of the 2026-09-28 fix plan. A package that has merged is the pull request whose title
+  starts with its id.
+- D8: that plan's decision to check each input only the owner can give once, when the batch that
+  needs it is dispatched (section 5).
 
 ## 1. Rulings
 
@@ -180,3 +182,24 @@ records as unconfirmed.
 **Two corrections**: the north-star was logged as "adopted in docs as a hierarchy" on 2026-09-24
 but never committed (RUL-1 now records it); and no GitHub social preview was ever uploaded, though
 #441's description assumed one (checked 2026-09-28).
+
+## 5. Recorded before the 0.6.0 release, 2026-09-30
+
+The showcase release (RUL-12) is cut with these outcomes, each recorded 2026-09-30. D8's checks
+look for an input once; what is missing then rides the next release, so no act holds this one.
+
+- **The Sandown timing sheets (D8, first check):** not in hand at their check, so FRONT-DOOR-12's
+  three accuracy rows at a second circuit ride the next release, and 0.6.0 says "at one circuit".
+- **The demo (D8, second check):** `demo-data-v2` was published 2026-09-30 as a pre-release beside
+  `demo-data-v1`, which stays, under the permission section 2 records as taken: a decision taken
+  for him, not his answer. The plan's demo measure, a corner worth at least 0.3 s, is met: the
+  demo's debrief ranks its planted corner first, at 0.36 s.
+- **The clip's upload URL (D8, third check):** not given, so FRONT-DOOR-9 (a player on the README's
+  first screen) closed at its gate; the README keeps its text link to the clip.
+- **The author box (D8, fourth check):** its wording was not approved, so FRONT-DOOR-13 (five lines
+  on who built Pacer, and how) closed at its gate; the pages keep today's wording.
+- **PROCESS-8** (R13's restore test): not run before this release; it is recorded here when it runs.
+- **PROCESS-10** (the mutation teeth, re-run 2026-09-30): the core suites kill all 34 planted core
+  defects, up from 31 at the 2026-09-28 review.
+- **Owner acts and late replies:** none reached this record between 2026-09-28 and this release
+  beyond the four checks above, and no reply overrules a default of section 1: every row stands.
