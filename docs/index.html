@@ -489,7 +489,7 @@
     <div class="grid-2">
       <div class="built-card">
         <h3>A 2,199-line C++23 core</h3>
-        <p>Everything load-bearing — GPMF ingest, geometry, lap and sector segmentation, GPS9 true-clock timing — lives in <code>pacer/</code>, a clean-room, independently authored implementation.</p>
+        <p>Everything load-bearing — GPMF ingest, geometry, lap and sector segmentation, GPS9 true-clock timing — lives in <a href="https://github.com/eenndan/pacer/tree/main/pacer"><code>pacer/</code></a>, a clean-room, independently authored implementation.</p>
       </div>
       <div class="built-card">
         <h3>Generated bindings, gated against drift</h3>
@@ -505,7 +505,7 @@
       </div>
       <div class="built-card wide">
         <h3>The real app, driven offscreen, on real footage</h3>
-        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. <strong>160+ CTest registrations</strong> run on every change (the 16+ <code>footage.*</code> checks that need a real recording report themselves skipped, by name, without one; so do 4 of the 6 <code>videotoolbox.*</code> export checks on a machine without Apple's H.264 hardware encoder, CI's included, and one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens, its own images and the counts it quotes.</p>
+        <p>Dev harnesses in <a href="https://github.com/eenndan/pacer/tree/main/studio/dev"><code>studio/dev/</code></a> boot the actual window offscreen on an actual recording. <strong>160+ CTest registrations</strong> run on every change (the 16+ <code>footage.*</code> checks that need a real recording report themselves skipped, by name, without one; so do 4 of the 6 <code>videotoolbox.*</code> export checks on a machine without Apple's H.264 hardware encoder, CI's included, and one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens, its own images and the counts it quotes.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>
@@ -513,7 +513,7 @@
       </div>
       <div class="built-card wide">
         <h3>Built, measured, not shipped</h3>
-        <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it. The longer investigations are kept the same way, and listed in the engineering notes.</p>
+        <p>An idea here gets built far enough to measure, and the measurement is allowed to say no. <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">Features measured and refused</a> is the record of every one that said no, each with the number that killed it. The longer investigations are kept the same way, and listed in <a href="https://github.com/eenndan/pacer/blob/main/docs/ENGINEERING.md#6-features-measured-and-refused">the engineering notes</a>.</p>
       </div>
     </div>
   </div>
@@ -600,7 +600,7 @@ pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
       <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">License</a>
     </div>
     <p>Pacer © 2025–2026 eenndan, licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. NonCommercial use only; derivatives must be shared alike.</p>
-    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page, and the clip, is produced by one command, <code>studio/dev/media_capture.py</code>: the app shots are the real window rendered offscreen on a real recording. One caveat, stated because this page is about stating them: the hero's video pane is a real frame from the same recording composited into the window's own render, because an offscreen Qt render cannot capture a macOS video surface.</p>
+    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page, and the clip, is produced by one command, <a href="https://github.com/eenndan/pacer/blob/main/studio/dev/media_capture.py"><code>studio/dev/media_capture.py</code></a>: the app shots are the real window rendered offscreen on a real recording. One caveat, stated because this page is about stating them: the hero's video pane is a real frame from the same recording composited into the window's own render, because an offscreen Qt render cannot capture a macOS video surface.</p>
   </div>
 </footer>
 

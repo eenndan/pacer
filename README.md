@@ -53,7 +53,8 @@ by a real-footage check. The Sandown recordings wait for timing sheets behind a 
 
 No lap is hand-matched: the session's per-lap *duration* sequence is correlated against every
 candidate window of the timing. Because the winning window is *chosen* to maximise `r`, that `r` is
-not an accuracy statistic — the **margin** is.
+not an accuracy statistic — the **margin** is, and
+[docs/ACCURACY.md](docs/ACCURACY.md#how-its-measured) tabulates it.
 
 Why it works: a GoPro writes GPS in packets, so a lap timed by spreading a packet's fixes evenly
 can read up to ~0.1 s off, with no average bias. GPS9 stamps every fix, and Pacer times on that
