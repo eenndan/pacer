@@ -198,7 +198,14 @@ def _rigid_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray) -> tuple[np.nd
     stadium loop are its two STRAIGHTS, where n̂ has no x component at all — and the refit on that
     rank-deficient subset returned |T| = 53.9 m for a lap whose largest offset was 0.12 m. A
     robust weighting that cannot become singular would need a conditioning guard as well, and the
-    bound above says there is nothing for it to buy."""
+    bound above says there is nothing for it to buy.
+
+    A LEAVE-ONE-CORNER-OUT REFIT was measured and refused too (studio/docs/refused-2026-09.md §21).
+    It would stop one corner's line change from tilting T, and on a stadium that tilt costs the
+    other turn up to half the change's time. Off the stadium, though, a 2 m line change tilts T by
+    at most 0.08 m, while noise alone moves a leave-one-out T by 0.18 m at synthetic noise 2. On a
+    stadium the two turns are equally good evidence, so the refit drops the wrong one about half
+    the time."""
     ok = np.isfinite(off)
     if int(ok.sum()) < DRIFT_MIN_STATIONS:
         return np.zeros(2), 0.0
