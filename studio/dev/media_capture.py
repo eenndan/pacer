@@ -23,6 +23,11 @@ primary recording since D24 left the machine. `accuracy` needs no recording (it 
 synthetic demo's first open, so anyone can re-shoot it (`--only debrief`, no recording named;
 `PACER_DEMO_MP4` skips the one-time download).
 
+Every file written is recorded in `<out>/CAPTURED.json` — shot, app version, commit, date, sha256
+and a source LABEL — and `tests/test_version.py` holds docs/media to that record. At each minor
+release a shot is re-captured or waived in writing there. Without a recording, `accuracy`, `og`
+(from hero.png) and `debrief` can always be re-captured; the rest need footage.
+
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
   hero.png        four-panel main window       "one window, everything, from one MP4"
@@ -68,6 +73,9 @@ capture's library seam is empty on every run, so it fires every time and covers 
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -96,7 +104,7 @@ from PySide6.QtGui import (  # noqa: E402
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
-from studio import APP_NAME, chapters, demo, export_video, theme  # noqa: E402
+from studio import APP_NAME, __version__, chapters, demo, export_video, theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
 from studio.dev import _jail  # noqa: E402
 from studio.theme import C  # noqa: E402
@@ -190,11 +198,11 @@ OVERLAY_WIDTH = 1440
 #
 # σ-as-a-percentage deliberately quotes the WORST recording.
 #
-# Rows A and B are D24's, recorded in June 2026 and not re-measurable (A's footage no longer exists,
-# B's is kept off the machine, and neither's per-lap residuals were kept). Row C is RE-MEASURED: the MK sprint of 18 Sep 2026, locked by the lock-only mode of
-# `_validate_wallclock.py` against the circuit's Club Speed sheet for the day. `footage.accuracy_mk`
-# (tests/test_validate_wallclock.py) re-runs it and fails if this row, docs/ACCURACY.md's row C or
-# its lock line stops being what the footage and the sheet give.
+# Rows A and B are D24's, recorded in June 2026; they cannot be re-run from this repository, and
+# neither's per-lap residuals were kept. Row C is RE-MEASURED: the MK sprint of 18 Sep 2026, locked
+# by the lock-only mode of `_validate_wallclock.py` against the circuit's Club Speed sheet for the
+# day. `footage.accuracy_mk` (tests/test_validate_wallclock.py) re-runs it and fails if this row,
+# docs/ACCURACY.md's row C or its lock line stops being what the footage and the sheet give.
 LAP_S = 68.0                  # a representative kart lap at this circuit, for the σ-as-% claim
 ACCURACY = [
     {"name": "Recording A", "note": "D24 · transponder · noisier GPS",
@@ -923,6 +931,94 @@ def shot_debrief(app: QApplication, out_dir: str) -> str:
     return save(img, os.path.join(out_dir, "debrief.png"))
 
 
+# ====================================================================== the capture record
+# Every published file gets an entry in `<out>/CAPTURED.json`: which shot made it, from which app
+# version and commit, on which day, from what, and its sha256. The v0.5.0 media went stale with
+# nothing to say so; a QA lane found it by eye. `tests/test_version.py` now holds docs/media to
+# the record: every file has an entry and every entry a file, the bytes match the sha, and at each
+# minor release every shot is re-captured or waived in writing (the check's docstring says how).
+CAPTURED = "CAPTURED.json"
+CAPTURED_ABOUT = (
+    "One entry per file in this directory, written by studio/dev/media_capture.py after each "
+    "capture and checked by tests/test_version.py. version and commit: the app the pixels came "
+    "from (commit is the HEAD the capture ran on, '+dirty' when studio/ or pacer/ had uncommitted "
+    "changes; entries backfilled on 2026-09-30 name the commit that added the file). source: a "
+    "label, never a path. derived: the published file this one was cut from, whose version, "
+    "commit and waiver it carries. waiver: why a file older than this minor release stays, and "
+    "the version it was granted at; it lapses at the next minor release.")
+# The repository, for git: the record names the code that made the pixels, so git runs HERE and
+# never in --out (which may be a scratch directory outside any repository).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _source_label(recording: str) -> str:
+    """The recording as a LABEL, never a path: its folder's name and chapter 1's stem, e.g.
+    'Sandown 3h 2026 (GX010064)'. The record is published; the operator's directory tree is not."""
+    folder = os.path.basename(os.path.dirname(os.path.abspath(recording)))
+    return f"{folder} ({os.path.splitext(os.path.basename(recording))[0]})"
+
+
+def _git(*args: str) -> str | None:
+    try:
+        return subprocess.run(["git", "-C", _REPO_ROOT, *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _capture_commit() -> str:
+    """HEAD's short hash, plus '+dirty' when the code that draws the pixels (studio/, and the core
+    under pacer/ that times the laps) differs from it; 'unknown' outside a git checkout."""
+    head = _git("rev-parse", "--short", "HEAD")
+    if not head:
+        return "unknown"
+    return head + ("+dirty" if _git("status", "--porcelain", "--", "studio", "pacer") else "")
+
+
+def write_record(out_dir: str, record: dict) -> str:
+    """Write `record` as `<out_dir>/CAPTURED.json` in its one canonical form (sorted keys, two-space
+    indent, a final newline), so a re-run with nothing new leaves no diff. Through a temporary file
+    and `os.replace`, so an interrupted run never leaves half a record."""
+    out_dir = os.path.abspath(out_dir)
+    path = os.path.join(out_dir, CAPTURED)
+    fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".CAPTURED.", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    # mkstemp makes the file owner-only; the record is as public as the images beside it.
+    os.chmod(tmp, os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644)
+    os.replace(tmp, path)
+    return path
+
+
+def _record(out_dir: str, filename: str, shot: str, source: str,
+            derived: str | None = None) -> dict:
+    """Add or replace `filename`'s entry in `<out_dir>/CAPTURED.json`. A fresh capture is current,
+    so it carries no waiver. A DERIVED file (a poster frame of the clip, a re-encode of a PNG) is
+    only as current as the file it was cut from, so it takes that entry's version, commit and
+    waiver when the record holds it."""
+    path = os.path.join(out_dir, CAPTURED)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+    except FileNotFoundError:
+        record = {}
+    files = record.setdefault("files", {})
+    record["about"] = CAPTURED_ABOUT
+    with open(os.path.join(out_dir, filename), "rb") as fh:
+        sha = hashlib.sha256(fh.read()).hexdigest()
+    entry = {"shot": shot, "version": __version__, "commit": _capture_commit(),
+             "captured": datetime.date.today().isoformat(), "sha256": sha, "source": source,
+             "derived": derived, "waiver": None}
+    parent = files.get(derived) if derived else None
+    if parent:
+        entry.update(version=parent["version"], commit=parent["commit"], waiver=parent["waiver"])
+    files[filename] = entry
+    write_record(out_dir, record)
+    print(f"recorded {filename} in {path}: {shot}, {entry['version']} @ {entry['commit']}, "
+          f"sha256 {sha[:12]}…")
+    return entry
+
+
 # ====================================================================== driver
 SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief")
 # The shots that need the recording named on the command line: `accuracy` is drawn from numbers
@@ -947,33 +1043,40 @@ def capture(recording: str | None, out_dir: str, only: set[str], work_dir: str,
     # is a bug, not a variant.
     _jail.divert_app_support("pacer-media-")
 
+    def record(path: str, shot: str, source: str, derived: str | None = None) -> None:
+        _record(out_dir, os.path.basename(path), shot, source, derived)
+
     needs_app = only & _RECORDING_SHOTS
     hero_png = os.path.join(out_dir, "hero.png")
     if needs_app and recording is None:
         raise SystemExit(f"{', '.join(sorted(needs_app))} need a recording: name it first")
     if needs_app:
+        label = _source_label(recording)
         w = open_window(app, recording, WINDOW)
         print(f"media_capture: {w.session.lap_count()} laps, "
               f"{len(w.session.valid_lap_ids())} clean, best lap {w.session.best_lap_id()}")
         _settle_ui(app, w)
         if "ideal" in only:
-            shot_ideal(app, w, out_dir)
+            record(shot_ideal(app, w, out_dir), "ideal", label)
         if "trust" in only:
-            shot_data_trust(app, w, out_dir)
+            record(shot_data_trust(app, w, out_dir), "trust", label)
         if "map" in only:
-            shot_map(app, w, out_dir)
+            record(shot_map(app, w, out_dir), "map", label)
         if "hero" in only:
             hero_png = shot_hero(app, w, out_dir, work_dir, with_video=with_video)
+            record(hero_png, "hero", label)
         if "overlay" in only:
-            shot_overlay(w, out_dir, work_dir)
+            record(shot_overlay(w, out_dir, work_dir), "overlay", label)
         if "clip" in only:
-            shot_clip(w, out_dir, work_dir)
+            record(shot_clip(w, out_dir, work_dir), "clip", label)
+            record(os.path.join(out_dir, CLIP_POSTER), "clip", label, derived=CLIP_NAME)
     if "accuracy" in only:
-        draw_accuracy(out_dir)
+        record(draw_accuracy(out_dir), "accuracy", "numbers in code")
     if "og" in only:
-        build_og(out_dir, hero_png)
+        hero_used = os.path.basename(hero_png) if os.path.exists(hero_png) else "no hero.png"
+        record(build_og(out_dir, hero_png), "og", hero_used)
     if "debrief" in only:
-        shot_debrief(app, out_dir)
+        record(shot_debrief(app, out_dir), "debrief", "synthetic demo")
 
 
 def main(argv: list[str] | None = None) -> None:
