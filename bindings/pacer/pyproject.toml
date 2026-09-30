@@ -6,7 +6,7 @@ name = "pacer"
 requires-python = ">= 3.11"
 # Keep in lockstep with studio/__init__.py __version__ (canonical) and the root pyproject.toml.
 # Pinned by tests/test_version.py.
-version = "0.5.1"
+version = "0.6.0"
 
 # `pixi install` builds this editable package in an isolated env whose requirements are resolved
 # from PyPI at install time and are NOT in pixi.lock. With the backend below commented out, the
