@@ -54,9 +54,12 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
 - **Headless means themed.** Use `QT_QPA_PLATFORM=offscreen PACER_NO_MEDIA=1`, and call
   `theme.apply_theme` before the first widget. Without it everything renders in Qt's default light
   palette, which is a harness artefact, not a product bug.
-- **Exports depend on the machine.** CI has no VideoToolbox, and a Mac usually does. Pin the
+- **Exports depend on the machine.** CI's runner opens a ProRes VideoToolbox session but no H.264
+  one, so it runs 2 of the `videotoolbox.*` checks and skips 4; a Mac usually opens both. Pin the
   encoder in any test whose expected value depends on it, and cover both paths. Before pushing, run
   `test_export_video` once with `PACER_FFMPEG` pointing at a wrapper that hides VideoToolbox.
+  Playback depends on it too: `pixi run test-ciworld` runs the real-player tests in CI's
+  software-decode world.
 - **A skip is not a pass.** A real-footage check (`footage.<check>`) without its recording is
   reported Skipped by name. Name every one that skipped when you report gates, and call a figure you
   could not re-measure unverified. The mechanics are in [tests/README.md](../tests/README.md).
