@@ -187,8 +187,9 @@ add_soak_test(test_compare_lifecycle test_toggle_compare_repeatedly_does_not_cra
 # no H.264 session, so it reports the 4 checks that need one SKIPPED and runs the 2 ProRes ones
 # (tests/README.md). `videotoolbox.<check>` runs `<file>.py --videotoolbox <check>`: without the
 # session it needs it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where
-# it used to return early and report PASSED. On the dev Mac it runs, in `test-fast` as well as `test`. A file's
-# VIDEOTOOLBOX_CHECKS and these lines are held one to one by test_videotoolbox_checks.
+# it used to return early and report PASSED. On the dev Mac all six run, in `test-fast` as well as
+# `test`. A file's VIDEOTOOLBOX_CHECKS and these lines are held one to one by
+# test_videotoolbox_checks.
 function(add_videotoolbox_test file check)
     add_test(NAME videotoolbox.${check}
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --videotoolbox ${check})
