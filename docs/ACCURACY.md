@@ -12,8 +12,8 @@ worst recording's σ is about **0.13%**. That is at the noise floor of 10 Hz GPS
 error is per-fix positional noise on the samples that straddle the finish line, and we can show —
 with data — that it is irreducible from the streams a GoPro records.
 
-That is a modest sample, and it is the honest one: 121 is the number of laps actually compared,
-not the span of lap IDs they occupied in a 24-hour transponder log.
+That is a modest sample, and the honest one: 121 laps actually compared, not the span of their lap
+IDs in a 24-hour transponder log.
 
 ## The validated numbers
 
@@ -116,9 +116,9 @@ are under four milliseconds, as point estimates.
   overwrote it). Rows A and B are historical measurements, reported as they were recorded in
   [`studio/docs/`](../studio/docs/gps-accuracy-research.md) at the time.
 - **Verify it yourself, no footage needed.** `pixi run verify` times a synthetic two-chapter GoPro
-  recording with known truth through the real loader — noise-free, every lap within 0.41 ms — then
-  runs the golden gate. It proves the clock, the chapter seam and the crossing interpolation, not a
-  receiver's noise floor: that is what the rows above measure.
+  recording with known truth through the real loader — noise-free, every lap within 0.41 ms at a
+  line mid-straight (0.80 ms at the app's own line) — then runs the golden gate. It proves the
+  clock, chapter seam and crossing interpolation; the rows above measure the noise floor.
 - **Still to come: Sandown Park**, the other circuit the working footage comes from, run clockwise.
   It is timed on Club Speed too, but its heat pages sit behind a sign-in, so its three recordings
   have no row until the owner fetches their sheets.
@@ -162,11 +162,11 @@ caught precisely because we refuse to validate on a single recording. The full r
 with every technique evaluated and rejected on evidence, is in
 [`studio/docs/gps-accuracy-research.md`](../studio/docs/gps-accuracy-research.md).
 
-**Sector splits are read the same way.** Each boundary is interpolated where the lap crosses the
-sector line, not taken at the nearest fix. On a noise-free synthetic recording the interior split's
-spread against truth is under 1 ms, and every sector's mean error is within about 4 ms (row 2 of
-[`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)); no official timing has checked a
-split yet.
+**Sector splits are read the same way**, interpolated where the lap crosses each sector line, not
+at the nearest fix. On a synthetic recording (row 2 of
+[`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)) the interior split's σ is under 1 ms
+noise-free, but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: several times a lap's.
+No official timing has checked a split.
 
 ## Why this matters
 
