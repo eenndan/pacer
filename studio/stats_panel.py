@@ -619,6 +619,10 @@ _DRIVING_INTRO = (
 _DRIVING_IMU_CONTRAST = (
     f", unlike the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking tile and the friction circle "
     "above are drawn on")
+# Its noise sentence (TRUTH-7, MOAT-4): where the truth is known, GPS noise lengthens the time on
+# the brakes on almost every lap, and tests/test_truth_matrix.py's row 7 (`brake.mean`, stated)
+# pins how much per noise level. No figure on screen: the synthetic's seconds are not a real
+# recording's. The GPS-derived variant below composes the same tail, and the noise is as real there.
 _DRIVING_BRAKE_TAIL = (
     ": an onset is a step, and a centred window smears exactly the thing being detected.\n\n"
     "ON THE BRAKES is NOT an event's length: the hysteresis holds an event open until the "
@@ -626,7 +630,9 @@ _DRIVING_BRAKE_TAIL = (
     "lead-in and the lift-off tail, and one event can bridge two applications. The time counts "
     "only where the deceleration, smoothed over the "
     f"{driving.COAST_SMOOTH_S:g} s window the coasting figures use, is at or past the threshold "
-    "— the other side of the coast band, so no moment is both. BRAKE EVENTS counts the events, "
+    "— the other side of the coast band, so no moment is both. GPS noise adds time on the "
+    "brakes, so the same driving reads more on a noisier recording: compare it only between "
+    "sessions of similar GPS quality. BRAKE EVENTS counts the events, "
     "one per brake glyph on the map: two applications with no hard return to power between them "
     "can count once, and a brief dab counts too.\n\n")
 # _DRIVING_COAST, the fourth piece, is in `stats_common`: the COASTING section's tooltip closes
@@ -754,7 +760,8 @@ PEAK_BRAKE_TOOLTIP = (
     f"longitudinal; the raw IMU forward axis is vibration-inflated), smoothed over "
     f"{gmeter.LONG_SMOOTH_S:g} s. A {gmeter.LONG_SMOOTH_S:g} s window lowers a peak, "
     f"so this reads under the instantaneous spike on purpose: the spike is GPS "
-    f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.\n\n"
+    f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by "
+    f"~{driving.ONSET_QUANT_M:g} m.\n\n"
     f"IT IS NOT THE NUMBER THE BRAKE COUNTS COME FROM. Every brake event on this page — "
     f"the two braking DRIVING tiles, the Brake s column, the BRAKING table, the map's "
     f"glyphs — is detected on the SAME axis with no window at all, so an individual "
