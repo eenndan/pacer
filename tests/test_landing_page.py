@@ -746,7 +746,7 @@ def _try_it_problems(readme: str, page: str) -> list[str]:
     if not fence or not first_section or fence.start() > first_section.start():
         problems.append("README.md's first code block is not above its first section")
     elif len(readme_cmds) != len(_TRY_IT) or not all(
-            c.startswith(w) for c, w in zip(readme_cmds, _TRY_IT)):
+            c.startswith(w) for c, w in zip(readme_cmds, _TRY_IT, strict=True)):
         problems.append(f"README.md's first code block is {readme_cmds}, not the three commands "
                         f"ending on the demo")
     elif "](#run-it-from-source)" not in readme[fence.end():first_section.start()]:
