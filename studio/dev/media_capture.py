@@ -1020,7 +1020,7 @@ def _record(out_dir: str, filename: str, shot: str, source: str,
 
 
 # ====================================================================== driver
-SHOTS =("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief")
+SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief")
 # The shots that need the recording named on the command line: `accuracy` is drawn from numbers
 # and `og` from hero.png, and `debrief` opens the synthetic demo instead.
 _RECORDING_SHOTS = {"hero", "ideal", "trust", "map", "overlay", "clip"}

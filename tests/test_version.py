@@ -761,7 +761,7 @@ def _entry_problems(name, entry, data, version, shots):
         got = sorted(entry) if isinstance(entry, dict) else type(entry).__name__
         return [f"{name}: its entry must hold exactly {sorted(_ENTRY_KEYS)}, not {got}"]
     problems = []
-    if entry["shot"] not in shots:
+    if not isinstance(entry["shot"], str) or entry["shot"] not in shots:
         problems.append(f"{name}: shot {entry['shot']!r} is not one of media_capture's "
                         f"{sorted(shots)}")
     if entry["sha256"] != hashlib.sha256(data).hexdigest():
@@ -796,11 +796,13 @@ def _entry_problems(name, entry, data, version, shots):
                 f"{name}: captured at {entry['version']}, older than {now} — re-capture it "
                 f"(python -m studio.dev.media_capture --only {entry['shot']}) or waive it: "
                 f"\"waiver\": {{\"reason\": \"<why it stays>\", \"granted_at\": \"{version}\"}}")
-        elif _minor(waiver["granted_at"]) < _minor(version):
+        elif _minor(waiver["granted_at"]) != _minor(version):
+            # A waiver holds for the minor release it was granted at: an older one has lapsed,
+            # and one dated ahead of this release would never lapse at all.
             problems.append(
                 f"{name}: captured at {entry['version']} under a waiver granted at "
-                f"{waiver['granted_at']}, which lapsed at {now} — re-capture it or renew the "
-                f"waiver (\"granted_at\": \"{version}\")")
+                f"{waiver['granted_at']}, which does not hold at {now} — re-capture it or renew "
+                f"the waiver (\"granted_at\": \"{version}\")")
     return problems
 
 
@@ -848,41 +850,55 @@ def test_published_media_has_a_current_capture_record():
     record = json.loads(text)
     files = record["files"]
 
-    # Both directions, each planted defect caught by NAME, on files picked from the record so the
-    # plants survive a renamed shot. One byte of a copy flipped (a hand edit or a re-encode), and a
-    # file the record does not know (a new shot, saved by hand).
+    # Both directions, each planted defect caught by NAME. Each plant runs on ONE copied file under
+    # one entry, pinned at 0.5.1 against a 0.5.1 release, so it holds whatever the real record
+    # holds after later bumps; the file is the smallest in the record, so a renamed shot is fine.
     import tempfile
-    a, b, c = sorted(files)[:3]
-    small = min(files, key=lambda n: os.path.getsize(os.path.join(_MEDIA, n)))
+    name = min(files, key=lambda n: os.path.getsize(os.path.join(_MEDIA, n)))
+    clean = dict(files[name], version="0.5.1", waiver=None)
+    reason = "a reason long enough to count as one"
     with tempfile.TemporaryDirectory(prefix="pacer-captured-") as tmp:
-        with open(os.path.join(_MEDIA, small), "rb") as fh:
+        with open(os.path.join(_MEDIA, name), "rb") as fh:
             data = bytearray(fh.read())
-        data[len(data) // 2] ^= 0x01
-        with open(os.path.join(tmp, small), "wb") as fh:
+        with open(os.path.join(tmp, name), "wb") as fh:
             fh.write(data)
-        caught = capture_record_problems(tmp, _dump({"files": {small: files[small]}}), version,
-                                         shots)
+
+        def check(entries):
+            return capture_record_problems(tmp, _dump({"files": entries}), "0.5.1", shots)
+
+        assert check({name: clean}) == [], check({name: clean})
+        # A file the record does not know (a new shot, saved by hand), and an entry whose file
+        # is gone (a shot re-encoded under a new name, its old entry left behind).
+        assert check({}) == [f"{name}: no entry in CAPTURED.json — capture it with "
+                             "studio.dev.media_capture, which records what it writes"], check({})
+        caught = check({name: clean, "ghost.jpg": clean})
+        assert len(caught) == 1 and caught[0].startswith("ghost.jpg: CAPTURED.json records it, "
+                                                         "but the directory no longer holds"), caught
+        # An unwaived entry a minor behind: recorded at 0.4.2 while the release is 0.5.1...
+        caught = check({name: dict(clean, version="0.4.2")})
         assert len(caught) == 1 and caught[0].startswith(
-            f"{small}: its bytes no longer match the recorded sha256"), caught
-        caught = capture_record_problems(tmp, _dump({"files": {}}), version, shots)
-        assert caught == [f"{small}: no entry in CAPTURED.json — capture it with "
-                          "studio.dev.media_capture, which records what it writes"], caught
-    # An entry whose file is gone: a shot re-encoded under a new name, its old entry left behind.
-    ghost = dict(record, files=dict(files, **{"ghost.jpg": files[small]}))
-    caught = capture_record_problems(_MEDIA, _dump(ghost), version, shots)
-    assert _named(caught) == {"ghost.jpg"} and "no longer holds it" in caught[0], caught
-    # An unwaived entry a minor behind: recorded at 0.4.2 while the release is 0.5.1.
-    old = dict(record, files=dict(files, **{a: dict(files[a], version="0.4.2", waiver=None)}))
-    caught = capture_record_problems(_MEDIA, _dump(old), "0.5.1", shots)
-    assert _named(caught) == {a} and f"{a}: captured at 0.4.2, older than 0.5" in caught[0], caught
-    # A waiver too short to be a reason, and a source that is a path, not a label.
-    bad = dict(record, files=dict(files, **{
-        b: dict(files[b], version="0.4.2", waiver={"reason": "later", "granted_at": "0.5.1"}),
-        c: dict(files[c], source="/Users/someone/Desktop/x.MP4")}))
-    caught = capture_record_problems(_MEDIA, _dump(bad), "0.5.1", shots)
-    assert _named(caught) == {b, c}, caught
-    assert any(p.startswith(f"{b}: a waiver is") for p in caught), caught
-    assert any(p.startswith(f"{c}: source") for p in caught), caught
+            f"{name}: captured at 0.4.2, older than 0.5 — re-capture it"), caught
+        # ...which a waiver granted at 0.5.x holds, and none of these does: one too short to be a
+        # reason, and one dated ahead of the release (it would never lapse).
+        waived = dict(clean, version="0.4.2", waiver={"reason": reason, "granted_at": "0.5.0"})
+        assert check({name: waived}) == [], check({name: waived})
+        caught = check({name: dict(waived, waiver={"reason": "later", "granted_at": "0.5.1"})})
+        assert len(caught) == 2 and caught[0].startswith(f"{name}: a waiver is") and (
+            caught[1].startswith(f"{name}: captured at 0.4.2, older than 0.5")), caught
+        caught = check({name: dict(waived, waiver={"reason": reason, "granted_at": "0.9.0"})})
+        assert len(caught) == 1 and caught[0].startswith(
+            f"{name}: captured at 0.4.2 under a waiver granted at 0.9.0, which does not "
+            "hold at 0.5"), caught
+        # A source that is a path, not a label.
+        caught = check({name: dict(clean, source="/Users/someone/Desktop/GX010001.MP4")})
+        assert len(caught) == 1 and caught[0].startswith(f"{name}: source "), caught
+        # One byte flipped (a hand edit, or a re-encode nobody recorded).
+        data[len(data) // 2] ^= 0x01
+        with open(os.path.join(tmp, name), "wb") as fh:
+            fh.write(data)
+        caught = check({name: clean})
+        assert len(caught) == 1 and caught[0].startswith(
+            f"{name}: its bytes no longer match the recorded sha256"), caught
     # The next minor release: EVERY entry goes red, waived or not, until each shot is re-captured
     # or its waiver renewed — and og.png's failure says to re-upload the social preview.
     major, minor = _minor(version)
