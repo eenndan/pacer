@@ -1510,6 +1510,9 @@ def _selects(selector: str, chain: list[tuple[str, set[str]]]) -> bool | None:
     return True
 
 
+_STATE = re.compile(r":(?:hover|focus|focus-visible|focus-within|active|visited)\b")
+
+
 def _hue_only_links(html: str) -> list[str]:
     """Links in running text that the stylesheet leaves told apart from it by hue alone."""
     rules = _css_rules(_style_block(html))
@@ -1526,8 +1529,10 @@ def _hue_only_links(html: str) -> list[str]:
             if dec is None or "underline" in dec:
                 continue
             for s in sels:
-                hit = None if ":" in s else _selects(s, page.chain(i))
-                if hit is None and ":" not in s:
+                if _STATE.search(s):
+                    continue            # hover/focus: not how a reader finds the link at rest
+                hit = _selects(s, page.chain(i))
+                if hit is None:
                     problems.append(f"cannot read the selector {s!r} to rule it out")
                 elif hit:
                     problems.append(f"`{s} {{ text-decoration: {dec} }}` takes the underline off "
@@ -1580,13 +1585,17 @@ def test_links_in_running_text_are_more_than_a_hue():
     assert len(inline) >= 10 and any("pixi" in t for t in inline), (
         f"only {len(inline)} links read as running text — the block walk has gone vacuous")
     assert any("Source on GitHub" in t for t in rows), "the bar's button reads as running text"
-    base = re.search(r"\n  a \{[^}]*\}", html).group(0)
+    m = re.search(r"\n  a \{[^}]*\}", html)
+    assert m, "the page has no top-level `a` rule"
+    base = m.group(0)
     plants = {
         "the underline removed": html.replace(base, base.replace("underline", "none")),
         "a callout opting out": html.replace("</style>", "  .callout a { text-decoration: none; }\n"
                                                          "</style>"),
         "an unreadable opt-out": html.replace("</style>", "  .callout > a { text-decoration: none; }"
                                                           "\n</style>"),
+        "a pseudo-class opt-out": html.replace("</style>", "  .callout a:not(.x) { text-decoration: "
+                                                           "none; }\n</style>"),
     }
     for what, planted in plants.items():
         assert planted != html, f"{what!r} planted nothing"
