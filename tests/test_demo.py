@@ -97,6 +97,41 @@ def test_a_download_that_is_not_the_published_demo_is_refused():
     print("ok demo download: a file that is not the pinned demo is refused, nothing cached")
 
 
+def test_a_cached_older_demo_is_not_the_pinned_one():
+    """The cache is trusted by EXISTENCE (`_resolve_local` hashes nothing — a hash of 11 MB on every
+    launch would be the price), so it is versioned by the pinned tag instead. Until demo-data-v2 it
+    was one path, `<app-support>/demo/pacer-synthetic-demo.mp4`: every machine that had run `--demo`
+    on v1 would have gone on opening v1 after the re-pin, with the welcome button offering it. A copy
+    at that old path, or under an older tag, must resolve to nothing; the pinned tag's copy is found,
+    under the same file name (the window title says "synthetic" from it)."""
+    orig_dir, orig_env = demo._app_support_dir, os.environ.pop("PACER_DEMO_MP4", None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            demo._app_support_dir = lambda: d
+            older = [os.path.join(d, "demo", "pacer-synthetic-demo.mp4"),          # v1's cache
+                     os.path.join(d, "demo", "demo-data-v1", "pacer-synthetic-demo.mp4")]
+            for path in older:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(b"AN-OLDER-DEMO")
+                got = demo.resolve_demo_recording(allow_download=False)
+                assert got is None, f"an older pre-release's demo opened as the pinned one: {got}"
+                assert demo.demo_available() is False, f"the welcome would offer {path}"
+            pinned = demo.demo_cache_path()
+            want = os.path.join(d, "demo", demo._DEMO_TAG, "pacer-synthetic-demo.mp4")
+            assert pinned == want, (pinned, want)
+            os.makedirs(os.path.dirname(pinned), exist_ok=True)
+            with open(pinned, "wb") as f:
+                f.write(b"THE-PINNED-DEMO")
+            assert demo.resolve_demo_recording(allow_download=False) == pinned
+            assert demo.demo_available() is True
+    finally:
+        demo._app_support_dir = orig_dir
+        if orig_env is not None:
+            os.environ["PACER_DEMO_MP4"] = orig_env
+    print("ok demo cache: an older demo's copy is never the pinned one")
+
+
 def test_ci_checks_the_fetch_the_app_makes():
     """CI's non-blocking "demo asset" step used to probe its OWN copy of the URL ("keep in sync"),
     which is how a check can go on passing for a URL the app no longer fetches. It now runs the
@@ -115,5 +150,6 @@ if __name__ == "__main__":
     test_download_passes_a_finite_timeout_and_is_atomic()
     test_download_timeout_degrades_and_leaves_no_partial()
     test_a_download_that_is_not_the_published_demo_is_refused()
+    test_a_cached_older_demo_is_not_the_pinned_one()
     test_ci_checks_the_fetch_the_app_makes()
-    print("\n4 demo tests passed")
+    print("\n5 demo tests passed")

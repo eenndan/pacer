@@ -11,11 +11,19 @@ WHAT IS IN THE FILE:
     in-lap (one of them slow), GPS9 at the clean end of a HERO13's noise, ACCL/GYRO/GRAV/CORI as one
     rigid-body motion, the measured 0.46 s GPS lag and 27 ppm media clock. One chapter, because the
     release asset is one file;
+  * ONE PLANTED HABIT (DEMO_HABIT), so the debrief has a real call to make and a reader can check it
+    against the truth: on 8 of the 14 flying laps the kart brakes early and soft into C1 and carries
+    less speed through it; on the other 6 (laps 7-10, 12 and 13, the best among them) it does not.
+    That costs each habit lap ~0.51 s, and the Coaching page ranks C1 first at 0.361 s ("apex",
+    7.6 km/h short; 6 of 14 laps matched the best lap there) against 0.036 s for the next corner —
+    where the first published demo (`demo-data-v1`, no habit) ranked four corners inside 0.05 s and
+    its two fastest laps sat 0.002 s apart. Every clean lap's TRUE time is the habit-free one; the
+    GPS noise differs, because the habit laps make the recording ~4.1 s longer;
   * a picture — RENDERED, and labelled on every frame "SYNTHETIC DEMO SESSION — Generated, not
     filmed.", with a running timecode (the video's own clock) and a top-down map of the circuit with
     the kart's TRUE position on it. The picture and the IMU share the media clock, so the video's
     dot and the marker on Pacer's map can be compared wherever you scrub — video sync against
-    ground truth. Measured on the published file (2026-09-24, 1,784 moving probes): Pacer's marker
+    ground truth. Measured on `demo-data-v1` (2026-09-24, 1,784 moving probes): Pacer's marker
     ran +125 ms ahead along track (p10 +79, p90 +171; 2.65 m median) — +75 ms of it the GPS-lag
     correction's overshoot #371 predicted, the rest `index_at_time` taking the sample at or after t.
     X2 fixed both (the nearest sample; a centred lag reference): the same probe reads +20 ms (p10
@@ -64,12 +72,27 @@ DEMO_TRACK_NAME = track_db.DEMO_TRACK_NAME   # one source: the built-in this cir
 # heuristic's own 15 m (load._HEURISTIC_HALF_M), so the line spans any GPS scatter across the straight.
 LINE_HALF_M = 15.0
 
-# The truth the published demo (`demo-data-v1`) was generated with: every flying lap's true time, ms,
-# at the built-in line. If the generator changes, the published file does not — so
+# The planted habit (module doc): C1, grip ×0.76 and braking ×0.85 on every flying lap but six.
+# WHY THESE NUMBERS — a search through the real loader and Coaching page (2026-09-30, jailed):
+#   * the clean set: coaching gives a corner no ranked claim unless >= 2 laps matched the best lap's
+#     time there (`coaching.MIN_REACH_LAPS`), and the loss is measured from the MEDIAN lap, so the
+#     clean laps must be at least 2 and at most 6 of 14 — a 7th puts the median between a clean and
+#     a habit lap and C1 fell to unranked (0.041 s lead row, C7). Five clean laps gave reach 2-4
+#     (the gate is 2); six give 4-6. Laps 4 and 13 are v1's two fastest (0.010 s apart): 4
+#     carries the habit, so the best lap (13) stands 0.215 s clear of the next (12), both clean;
+#   * the size: the corner window holds ~70 % of what a habit lap costs (its exit straight lies
+#     outside it); with five clean laps grip 0.80 ranked C1 at 0.307 s, on the 0.30 s the demo
+#     test asks for, and 0.74 at 0.417 s. Every neighbour of the pick (grip 0.75-0.77 at brake
+#     0.85, brake 0.80-0.90 at grip 0.76, this clean set) ranks C1 first at 0.35-0.39 s, >= 8x the
+#     next row, with 4-6 laps matching the best there.
+DEMO_HABIT = sg.Habit(cid=1, grip=0.76, brake=0.85, clean_laps=(7, 8, 9, 10, 12, 13))
+
+# The truth the pinned demo (`studio/demo._DEMO_TAG`) was generated with: every flying lap's true
+# time, ms, at the built-in line. If the generator changes, the published file does not — so
 # tests/test_demo_session.py fails here until the demo is re-published (a new release tag,
 # `studio/demo.py` re-pinned) or the change is kept away from the demo's parameters.
-PUBLISHED_LAP_MS = (45684, 45289, 45391, 44966, 45355, 50590, 45300, 45331, 45183, 45234, 45258,
-                    45161, 44956, 45253)
+PUBLISHED_LAP_MS = (46189, 45795, 45914, 45479, 45863, 51112, 45300, 45331, 45183, 45234, 45766,
+                    45161, 44956, 45762)
 
 # ------------------------------------------------------------------------------ the picture
 W, H = 960, 540
@@ -196,8 +219,9 @@ def main_straight_mid(truth) -> float:
 
 
 def simulate():
-    """The demo's ground truth (no files): the circuit, the kart's motion, the clocks."""
-    return sg.simulate(DEMO_SEED, DEMO_LAPS, origin=DEMO_ORIGIN)
+    """The demo's ground truth (no files): the circuit, the kart's motion (DEMO_HABIT in it), the
+    clocks."""
+    return sg.simulate(DEMO_SEED, DEMO_LAPS, origin=DEMO_ORIGIN, habit=DEMO_HABIT)
 
 
 def track_entry(truth=None) -> dict:
@@ -229,7 +253,7 @@ def make(out_path: str, render: bool = True, ffmpeg: str | None = None):
     with tempfile.TemporaryDirectory(prefix="make_demo_rec_") as tmp:
         rec = sg.generate(os.path.join(tmp, "rec"), DEMO_SEED, DEMO_LAPS, chapters=1,
                           origin=DEMO_ORIGIN, ffmpeg=ffmpeg,
-                          video=render_video if render else None)
+                          video=render_video if render else None, habit=DEMO_HABIT)
         (src,) = rec.paths
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         with open(src, "rb") as fin, open(out_path, "xb") as fout:

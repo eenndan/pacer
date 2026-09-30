@@ -217,6 +217,35 @@ def true_s(circuit: Circuit, px, py) -> np.ndarray:
 
 
 # ------------------------------------------------------------------------------ the session
+@dataclass(frozen=True)
+class Habit:
+    """One driving habit, planted: at corner `cid` the kart over-slows (its grip factor × `grip`) and
+    brakes early and soft (its braking factor × `brake`) on every flying lap except `clean_laps`
+    (timed laps, 1-based). A known, repeatable loss at a known corner — the call a debrief should
+    make (studio/dev/make_demo.py plants one in the demo). It draws no random numbers, so each lap's
+    TRUE kinematics away from the habit's laps are the habit-free ones; the sensor noise still
+    shifts, because the habit laps lengthen the recording and the noise stream is drawn over it."""
+
+    cid: int
+    grip: float
+    brake: float
+    clean_laps: tuple[int, ...] = ()
+
+
+def _apply_habit(habit: Habit | None, grip: np.ndarray, brake: np.ndarray, laps: int):
+    """`_driver`'s (grip, brake) with `habit` applied — new arrays; the inputs are untouched. Grid lap
+    k IS timed lap k: the out-lap is grid lap 0 and every corner lies past the main straight's line,
+    so grid laps 1..`laps` are the flying laps and the in-lap (`laps` + 1) is never changed."""
+    if habit is None:
+        return grip, brake
+    grip, brake = grip.copy(), brake.copy()
+    for k in range(1, laps + 1):
+        if k not in habit.clean_laps:
+            grip[k, habit.cid - 1] *= habit.grip
+            brake[k, habit.cid - 1] *= habit.brake
+    return grip, brake
+
+
 @dataclass
 class Truth:
     """Everything the recording was generated from. Times are TRUE (GPS) seconds from the start of
@@ -235,6 +264,7 @@ class Truth:
     media_ppm: float
     chapter_payloads: list[int] = field(default_factory=list)
     origin: tuple[float, float] = ORIGIN   # where the circuit's local frame is anchored (lat, lon)
+    habit: Habit | None = None             # the planted habit, if any (`Habit`)
 
     def crossings(self, line_latlon) -> np.ndarray:
         """True times the kart crossed the segment [[lat, lon], [lat, lon]] (e.g. the app's own
@@ -292,11 +322,14 @@ class Truth:
 
     def to_json(self) -> dict:
         c = self.circuit
-        return {"seed": self.seed, "laps": self.laps, "slow_lap": self.slow_lap,
-                "circuit_length_m": c.length, "origin": self.origin, "start_utc": START_UTC.isoformat(),
-                "corners": [vars(k) for k in c.corners], "gps_lag_s": self.gps_lag_s,
-                "media_ppm": self.media_ppm, "chapter_payloads": self.chapter_payloads,
-                "duration_s": self.t_end}
+        out = {"seed": self.seed, "laps": self.laps, "slow_lap": self.slow_lap,
+               "circuit_length_m": c.length, "origin": self.origin, "start_utc": START_UTC.isoformat(),
+               "corners": [vars(k) for k in c.corners], "gps_lag_s": self.gps_lag_s,
+               "media_ppm": self.media_ppm, "chapter_payloads": self.chapter_payloads,
+               "duration_s": self.t_end}
+        if self.habit is not None:          # only when set: a habit-free truth.json is unchanged
+            out["habit"] = vars(self.habit)
+        return out
 
 
 def _driver(rng, circuit: Circuit, n_laps: int):
@@ -317,14 +350,15 @@ def _driver(rng, circuit: Circuit, n_laps: int):
 
 def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
-             origin: tuple[float, float] = ORIGIN) -> Truth:
+             origin: tuple[float, float] = ORIGIN, *, habit: Habit | None = None) -> Truth:
     """The kart's motion: out of the pits, `laps` timed laps (one of them slow), an in-lap, a stop.
 
     Speed comes from the classic two-pass limit on a distance grid — the corner limit
     sqrt(grip / |kappa|), an engine that fades to V_TOP, braking at ~1.15 g — per lap, with each
     lap's grip varying per corner. Distance and time are exact under constant acceleration between
     nodes, so the time at any distance (and back) is known to microseconds. `origin` anchors the
-    circuit's local frame: the same circuit, driven the same way, placed somewhere else."""
+    circuit's local frame: the same circuit, driven the same way, placed somewhere else. `habit`
+    (opt-in) plants one repeatable loss at one corner (`Habit`)."""
     rng = np.random.default_rng(seed)
     c = build_circuit(mirror)
     length = c.length
@@ -345,6 +379,7 @@ def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
     idx = np.minimum((s_lap / DS).astype(int), len(c.s) - 2)
     kappa = np.abs(c.kappa[idx])
     nearest, grip, brake = _driver(rng, c, laps + 2)
+    grip, brake = _apply_habit(habit, grip, brake, laps)
     corner = nearest[idx]
     g_lat = LAT_G * G * grip[lap, corner]
     a_brk = BRAKE_G * G * brake[lap, corner]
@@ -376,7 +411,7 @@ def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
     t = T_LEAD + np.concatenate([[0.0], np.cumsum(2.0 * DS / (v[:-1] + v[1:]))])
     return Truth(circuit=c, seed=seed, laps=laps, slow_lap=SLOW_LAP, s_start=s_start, d_nodes=d,
                  t_nodes=t, v_nodes=v, t_end=float(t[-1] + T_TAIL), gps_lag_s=gps_lag_s,
-                 media_ppm=media_ppm, origin=tuple(origin))
+                 media_ppm=media_ppm, origin=tuple(origin), habit=habit)
 
 
 def _kinematics(truth: Truth, tau):
@@ -736,10 +771,11 @@ class Recording:
 
 def build(seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2, gps_noise: float = 1.0,
           mirror: bool = False, gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
-          origin: tuple[float, float] = ORIGIN) -> tuple[Truth, list[list[bytes]]]:
+          origin: tuple[float, float] = ORIGIN, *,
+          habit: Habit | None = None) -> tuple[Truth, list[list[bytes]]]:
     """The recording's telemetry — one list of GPMF payloads per chapter — and its ground truth.
     Pure and deterministic: no files, no ffmpeg; the same arguments give the same bytes."""
-    truth = simulate(seed, laps, mirror, gps_lag_s, media_ppm, origin)
+    truth = simulate(seed, laps, mirror, gps_lag_s, media_ppm, origin, habit=habit)
     rng = np.random.default_rng([seed, 1])
     total = math.ceil(truth.t_end * (1.0 + truth.media_ppm * 1e-6) / PAYLOAD_S)
     gps = _gps_rows(truth, rng, gps_noise)
@@ -754,7 +790,7 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
              origin: tuple[float, float] = ORIGIN, video=None, *,
              frames_per_payload: int = FRAMES_PER_PAYLOAD, audio: bool = False,
-             timecode: str | None = None) -> Recording:
+             timecode: str | None = None, habit: Habit | None = None) -> Recording:
     """Write the synthetic recording into `out_dir` (created; must not already hold files) and return
     its chapter paths and ground truth. Only the video bytes depend on the ffmpeg build.
 
@@ -765,7 +801,8 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
 
     OPT-IN, and off by default so the default files stay byte for byte what they were: `audio` adds
     a TONE_HZ tone as each chapter's sound track, and `timecode` ("HH:MM:SS:FF", NDF) a GoPro-style
-    `tmcd` track starting chapter 1 there, each later chapter continuing the count."""
+    `tmcd` track starting chapter 1 there, each later chapter continuing the count; `habit` plants
+    one repeatable loss at one corner (`Habit`)."""
     # PATH first (a `pixi run` puts the env's bin there), then the running interpreter's own env.
     ffmpeg = (ffmpeg or os.environ.get("PACER_FFMPEG") or shutil.which("ffmpeg")
               or shutil.which("ffmpeg", path=os.path.join(sys.prefix, "bin")))
@@ -775,7 +812,7 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
     if os.listdir(out_dir):
         raise FileExistsError(f"{out_dir} is not empty; synth_gopro never writes over anything")
     truth, per_chapter = build(seed, laps, chapters, gps_noise, mirror, gps_lag_s, media_ppm,
-                               origin)
+                               origin, habit=habit)
     paths = []
     first = 0
     with tempfile.TemporaryDirectory(prefix="synth_gopro_") as tmp:
