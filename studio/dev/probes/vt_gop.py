@@ -6,7 +6,7 @@ default of 12 becomes the encoder's MaxKeyFrameInterval: 150 keyframes a minute 
 libx264 fallback runs x264's 250-frame default. At a fixed bitrate a keyframe costs several P-frames,
 so a longer interval could put those bytes into the picture, or buy nothing and make every random
 seek decode further. The decision rule was fixed before this ran; the verdict and its numbers are
-written in `_video_codec_args`.
+written in `_video_codec_args`, and the refusal is `studio/docs/refused-2026-09.md` §22.
 
 WHAT IT DOES, per source:
   1. ONE render of a <= 20 s window (the lap's first WINDOW_S) through the real `Renderer` at 1080p30
