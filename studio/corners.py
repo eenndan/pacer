@@ -203,10 +203,9 @@ def _rigid_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray) -> tuple[np.nd
     A LEAVE-ONE-CORNER-OUT REFIT was measured and refused too (studio/docs/refused-2026-09.md §21).
     It would stop one corner's line change from tilting T, and on a stadium that tilt takes half
     the change's time off the changed turn and gives about a quarter of it to the other. Off the
-    stadium, though, a 2 m line change tilts T by
-    at most 0.08 m, while noise alone moves a leave-one-out T by 0.18 m at synthetic noise 2. On a
-    stadium the two turns are equally good evidence, so the refit drops the wrong one about half
-    the time."""
+    stadium, though, a 2 m line change tilts T by at most 0.08 m, while noise alone moves a
+    leave-one-out T by 0.18 m at synthetic noise 2. On a stadium the two turns are equally good
+    evidence, so the refit drops the wrong one about half the time."""
     ok = np.isfinite(off)
     if int(ok.sum()) < DRIFT_MIN_STATIONS:
         return np.zeros(2), 0.0
