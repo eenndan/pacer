@@ -281,8 +281,8 @@ losing time?"; for a code change, start at [AGENTS.md](AGENTS.md).
 
 The demo is generated, not filmed, on a circuit Pacer ships, so its laps open with verified
 timing. `pixi run smoke` needs no download: it builds the real app headless on a bundled sample
-clip and ends in `SMOKE OK`. That clip holds no complete lap, so it proves the build and the load, not the
-analysis.
+clip and ends in `SMOKE OK`. That clip holds no complete lap, so it proves the build and the
+load, not the analysis.
 
 ## Acknowledgements
 
