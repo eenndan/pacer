@@ -81,6 +81,7 @@ from .marks_panel import MarkDialog
 from .overlays import (
     BUSY_DEMO_LABEL,
     DEMO_FETCH_TITLE,
+    DEMO_GET_LABEL,
     DEMO_LABEL,
     WelcomeView,
     column_metrics,
@@ -164,14 +165,22 @@ LOAD_LOG_LINE = "To open the log, paste this path into Finder ▸ Go ▸ Go to F
 # that can reach this state (the CLI flag at startup and a resolve that came back None), because
 # they are the same sentence and they had drifted into two copies of it.
 #
-# IT OFFERS NO RETRY BUTTON: the one to retry WITH is not on the welcome screen (studio.demo.
-# demo_available gates it), so the sentence must not name a control that is not there. It used to
-# say "Pacer doesn't ship one", true while the asset had never been published; since the synthetic
-# demo was (demo-data-v1), the only way here is a download that failed — offline, or not the pinned
-# file — so it names that, and the one door that is on screen.
+# IT NAMES THE RETRY BY ITS LABEL, because the retry is on the screen: the welcome it lands on
+# carries the demo button in every state now (LEFT-24), and with no clip on the machine that
+# button says "Get demo · N MB" (overlays.DEMO_GET_LABEL). It used to say "Pacer doesn't ship
+# one", true while the asset had never been published, and then to offer no retry at all while
+# `demo_available` took the button away. The only way here is a download that failed — offline,
+# or not the pinned file — so it names that, the button to try again, and the door that always
+# works.
 DEMO_UNAVAILABLE_MESSAGE = (
-    "The demo session couldn't be downloaded — it is fetched once, the first time. Use Open "
-    "recording… below, or drop a GoPro .mp4 on this window, to get your laps.")
+    "The demo session couldn't be downloaded — check the connection and try Get demo again, or "
+    "use Open recording… below, or drop a GoPro .mp4 on this window.")
+# The demo button's tooltip, per label: what the click does, and — for the one that reaches the
+# network, the app's only fetch — where it goes and how much it brings back, before it does.
+DEMO_GET_TIP = (f"Downloads Pacer's synthetic demo session from GitHub, once "
+                f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
+DEMO_OPEN_TIP = ("Opens Pacer's synthetic demo session, already on this computer — generated, "
+                 "not filmed.")
 
 
 _log = logging.getLogger("studio.app")
@@ -473,8 +482,8 @@ class StudioWindow(QMainWindow):
         # a result, plus the single-shot timer that installs the card if it is still waiting.
         self._loading_token = None
         self._placeholder_timer = None
-        # The in-flight demo-clip fetch (welcome ▸ Open demo), which reaches the network and so runs
-        # off the UI thread like every other multi-second load. None when nothing is fetching.
+        # The in-flight demo-clip fetch (the welcome's demo button), which reaches the network and
+        # so runs off the UI thread like every other multi-second load. None when nothing fetches.
         self._demo_worker = None
         # The ONE untimed status-bar line describing the loaded session (see _session_notice): the
         # multi-drop warning carried through the load that started it, whether a sidecar restore was
@@ -751,19 +760,22 @@ class StudioWindow(QMainWindow):
         Both syncs derive from live state (`hasattr(self, "session")` / `self.view`), so calling them
         from every welcome path can never over-disable anything.
 
-        THE SECOND CTA IS OFFERED ONLY IF IT CAN LAND SOMEWHERE. `demo.demo_available()` is the
-        offline half of the resolver (env var or cache — no network), and passing None instead of
-        the handler is what leaves the demo button off the card entirely. The button used to be
-        unconditional, so on any machine without the env var or a cache — i.e. every machine, while
-        the release asset it would otherwise download was unpublished — the obvious low-commitment
-        click on a first run produced an apology (§6.7). Asked for at the CLI with `--demo` it is
-        ATTEMPTED, download and all, and caches the demo for every later launch; this decides only
-        what the UI offers."""
+        THE SECOND CTA IS ALWAYS OFFERED, AND ITS LABEL SAYS WHAT THE CLICK WILL DO.
+        `demo.demo_available()` is the offline half of the resolver (env var or cache — no
+        network), and it decides the LABEL: "Open demo" when the clip is on this machine, "Get demo
+        · N MB" when the click downloads it (the size from the pinned asset). It used to decide
+        whether the button existed at all — born while the release asset was unpublished, when the
+        click on a first run could only apologise (§6.7) — which after the synthetic demo WAS
+        published left a fresh launch with one action and no mention of a demo (LEFT-24). The app
+        still reaches the network only on that click, which says it downloads; a failed fetch
+        comes back here with the button, and `--demo` on the CLI runs the same resolve."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
-        on_demo = self._open_demo if demo.demo_available() else None
-        self.setCentralWidget(WelcomeView(self._open_file, on_demo, error,
-                                          error_path=error_path, parent=self))
+        cached = demo.demo_available()
+        view = WelcomeView(self._open_file, self._open_demo, error, error_path=error_path,
+                           parent=self, demo_label=DEMO_LABEL if cached else DEMO_GET_LABEL)
+        view.demo_btn.setToolTip(DEMO_OPEN_TIP if cached else DEMO_GET_TIP)
+        self.setCentralWidget(view)
         if getattr(self, "_full_action", None) is not None:
             # Through the gate, not a bare setEnabled: a welcome screen reached by a FAILED reload
             # would otherwise keep the clause the previous session left on this item.
@@ -772,8 +784,8 @@ class StudioWindow(QMainWindow):
         self._sync_view_menu()
 
     def _open_demo(self):
-        """Welcome-screen "Open demo": resolve the synthetic demo session OFF the UI thread
-        (env / cache / a one-time release download — see studio.demo), then load it.
+        """Welcome-screen "Open demo" / "Get demo · N MB": resolve the synthetic demo session OFF
+        the UI thread (env / cache / a one-time release download — see studio.demo), then load it.
 
         The resolve used to run inline in this slot, so a first run with no cache did a network
         fetch on the UI thread: the window froze with the welcome screen still painted, the button
@@ -807,14 +819,17 @@ class StudioWindow(QMainWindow):
         and stops accepting clicks. This is the affordance the synchronous version had none of —
         and it is on screen for the whole fetch, not just after it. No-op once the welcome view has
         been replaced (the load it started is now the thing on screen)."""
-        btn = getattr(self.centralWidget(), "demo_btn", None)
+        view = self.centralWidget()
+        btn = getattr(view, "demo_btn", None)
         if btn is None:
             return
         btn.setEnabled(not busy)
-        # BOTH labels are WelcomeView's constants, because that is where the button is sized to fit
-        # them — the row used to re-centre on the click and slide the primary CTA 39 px (D4-06),
-        # and the resting label was a second copy of a string the view already owns.
-        btn.setText(BUSY_DEMO_LABEL if busy else DEMO_LABEL)
+        # BOTH labels are WelcomeView's, because that is where the button is sized to fit them —
+        # the row used to re-centre on the click and slide the primary CTA 39 px (D4-06), and the
+        # resting label was a second copy of a string the view already owns. The RESTING one is
+        # the view's own (`demo_label`), not a constant: there are two since LEFT-24, and writing
+        # "Open demo" back onto a fresh launch's "Get demo · N MB" would claim the clip is here.
+        btn.setText(BUSY_DEMO_LABEL if busy else getattr(view, "demo_label", DEMO_LABEL))
 
     def _arm_demo_placeholder(self, token: int):
         """Install the loading card only if the demo fetch is still running LOAD_PLACEHOLDER_MS
@@ -866,9 +881,10 @@ class StudioWindow(QMainWindow):
             return  # superseded: something else is loading, don't yank the window to the demo
         self._set_demo_busy(False)
         if path is None:
-            # Reachable now only if the clip the button was offered FOR went away between the check
-            # and the click (the env var's file deleted, the cache cleared) — say the true thing and
-            # come back to a welcome screen that no longer offers it.
+            # A download that failed (offline, or not the pinned file) — the usual way here since
+            # the button is offered on a fresh launch — or a clip that went away between the check
+            # and the click. Say the true thing and come back to a welcome screen whose button,
+            # now saying "Get demo · N MB", is the retry the message names.
             self._show_welcome(error=DEMO_UNAVAILABLE_MESSAGE)
             return
         self._load([path])
@@ -1543,12 +1559,13 @@ class StudioWindow(QMainWindow):
             "Open recording…" 97 px left of a centred Cancel. Reserving the same second slot here
             puts Cancel in the primary's place instead of in the pair's centre.
 
-            THE SECOND SLOT IS RESERVED ONLY WHEN THE FRAME BEFORE IT HAD ONE. The welcome column
-            carries the demo button only when a demo resolves (see _show_welcome), so the same
-            predicate has to reach this card: reserving a slot for an action that was not there
-            would put Cancel 55 px left of the primary it is standing in for — the exact offset
-            this reservation exists to remove, in the other direction."""
-        m = column_metrics(demo.demo_available())
+            THE SECOND SLOT IS RESERVED BECAUSE THE FRAME BEFORE IT ALWAYS HAS ONE. The welcome
+            column carries the demo button in every state (see _show_welcome; until LEFT-24 only
+            when a clip was cached, and this card asked the same predicate), and `column_metrics`
+            floors it at the widest of its labels, so the column is one shape whatever the cache
+            holds. Reserving a slot for an action that was not there would put Cancel 55 px left
+            of the primary it stands in for — the offset this reservation exists to remove."""
+        m = column_metrics(has_demo=True)
         label = chapters.recording_label(paths)
         headline = title or "Loading telemetry…"
         container = QWidget()
@@ -1588,8 +1605,7 @@ class StudioWindow(QMainWindow):
         # frames two milliseconds apart, and the headline moved with it. Both layouts are centred
         # and shrink-wrap to their content, so the measure has to be set on the CONTENT (the card's
         # margins are the zone's plus its border, so the same measure gives the same card width).
-        content_w = welcome_card_width(demo.demo_available()) - 2 * (theme.SPACE_3XL
-                                                                     + theme.SPACE_XXS)
+        content_w = welcome_card_width(has_demo=True) - 2 * (theme.SPACE_3XL + theme.SPACE_XXS)
         outer.addWidget(card, 0, Qt.AlignCenter)
         bar = QProgressBar()
         bar.setObjectName("LoadingBar")

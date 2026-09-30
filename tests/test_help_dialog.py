@@ -457,6 +457,16 @@ def test_privacy_card_names_every_store_it_writes():
     removal = [p for p in PRIVACY_PARAGRAPHS if p.startswith("How to remove")]
     assert len(removal) == 1, removal
     assert "Application Support/pacer" in removal[0], removal[0]
+    # DEMO-4 / LEFT-24: the welcome offers "Get demo · N MB" on a fresh launch, so the demo's cache
+    # is one first-screen click away — an 11 MB file the app writes, under the folder that route
+    # deletes. Its folder is derived from the store's own path, never typed here.
+    from studio import demo
+    cache_dir = os.path.relpath(demo.demo_cache_path(), demo._app_support_dir()).split(os.sep)[0]
+    assert f"({cache_dir}/)" in removal[0], f"the demo cache ({cache_dir}/) is not disclosed"
+    # …and that click is the app's one network fetch, so the card may not open by denying it.
+    opening = PRIVACY_PARAGRAPHS[0]
+    assert "no network," not in opening and "no network." not in opening, opening
+    assert "no network unless you ask for the demo" in opening, opening
     print("test_privacy_card_names_every_store_it_writes OK")
 
 

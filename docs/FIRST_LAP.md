@@ -27,8 +27,9 @@ Your personal best and focus list wait for the whole recording, so part of one n
 > check Pacer's map against the picture yourself. The circuit is one Pacer ships, so step 2 below
 > is done for you and the timing opens verified. One habit is planted in it on purpose — on 8 of
 > its 14 laps the kart brakes early into C1 and carries less speed through it — so its debrief has
-> a real call to make, and one you can check. After that first run the welcome screen offers
-> **Open demo** too; offline, `--demo` says plainly that the download failed.
+> a real call to make, and one you can check. The welcome screen offers it too, from the first
+> launch: **Get demo** states the size and downloads it on that click, and reads **Open demo**
+> once it is here; offline, either way says plainly that the download failed.
 
 ## 2 · Set where a lap begins (only on a new track)
 

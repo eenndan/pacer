@@ -1,4 +1,4 @@
-"""Demo recording resolution for `python -m studio --demo`.
+"""Demo recording resolution for `python -m studio --demo` and the welcome screen's demo button.
 
 The clips bundled inside the .app (3rdparty/gpmf-parser/samples) are tiny GoPro test clips with NO
 real laps (Session reports 0 valid laps on them) — fine as a "the app launched" smoke fixture, but
@@ -21,7 +21,8 @@ the ideal lap and a ranked Coaching page with nobody's footage but its own. The 
      overrides the URL (a mirror of the same file: the checksum still applies).
 
 If none resolve (offline first run, no env, download failed) `resolve_demo_recording` returns None
-and the caller falls back to the normal empty welcome state — the app still launches.
+and the caller falls back to the normal empty welcome state — the app still launches, and its demo
+button (on every welcome screen) is the retry.
 
 PACER-FREE: pure path resolution + a best-effort urllib fetch. No Qt, no pacer, so it is unit
 testable with the network stubbed.
@@ -58,6 +59,13 @@ _DEMO_FILENAME = "pacer-synthetic-demo.mp4"
 _DEMO_TIMEOUT_S = 15.0
 
 
+def download_mb() -> int:
+    """The pinned demo's size in whole MB (`_DEMO_BYTES`, rounded): what the welcome's "Get demo"
+    button and the one-time download line say a first click will fetch. Derived, never typed — the
+    sha fixes the bytes, and a re-pin moves this with them."""
+    return round(_DEMO_BYTES / 1e6)
+
+
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). A separate seam from
     library._app_support_dir so a test can divert the demo cache without touching the library.
@@ -88,7 +96,7 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
         # much of it there is — and this is the app's one network fetch, so the session log
         # records where it went.
         _log.info("downloading the synthetic demo session, once (%s MB) from %s …",
-                  f"{_DEMO_BYTES / 1e6:.0f}", url)
+                  download_mb(), url)
         # urlopen (unlike urlretrieve) takes a timeout, so a stalled connection fails instead of
         # hanging the UI thread; stream to a temp sibling then rename so a partial/failed download
         # never looks like a valid cache hit.
@@ -140,22 +148,25 @@ def resolve_demo_recording(allow_download: bool = True) -> str | None:
 def demo_available() -> bool:
     """Is there a demo recording ON THIS MACHINE, RIGHT NOW, that a click could open?
 
-    This is what the welcome screen's second button is gated on, and it is deliberately the OFFLINE
-    half of `resolve_demo_recording` — the env var or the cache, no network. Two reasons, and both
-    are about not lying to the first-touch screen:
+    This decides what the welcome screen's demo button SAYS — "Open demo" when it is, "Get demo · N
+    MB" (`download_mb`) when the click will download it — and it is deliberately the OFFLINE half
+    of `resolve_demo_recording`: the env var or the cache, no network. Two reasons, both about not
+    lying to the first-touch screen:
 
-      * THE GATE WAS BORN WHEN THE THIRD STEP WAS A PROMISE NOBODY KEPT. `_DEMO_URL` pointed at a
-        release asset that was never published, so on a machine with neither the env var nor a
-        cache the button could only ever end at "Demo clip unavailable…" — the FIRST thing a
-        portfolio reviewer who builds from source would see. The synthetic demo is published now
-        (`_DEMO_TAG`), but an offline machine is still exactly that machine.
+      * IT WAS BORN AS A GATE, WHEN THE THIRD STEP WAS A PROMISE NOBODY KEPT. `_DEMO_URL` pointed
+        at a release asset that was never published, so on a machine with neither the env var nor
+        a cache the button could only ever end at "Demo clip unavailable…", and it was hidden
+        there. Once the synthetic demo WAS published (`_DEMO_TAG`), hiding it left a fresh launch
+        with one action and no mention of a demo (LEFT-24), so the gate became a label: the
+        button always exists, and says whether its click fetches.
       * A REACHABILITY PROBE IS NOT FREE AND NOT HONEST EITHER. Asking the network whether the asset
         exists means a blocking HEAD (or a worker + a button that changes its mind a second after
         the window opens), and the app's promise is that it reaches the network only when asked
-        to. The offline answer is exact, instant, and true.
+        to. The offline answer is exact, instant, and true — and the click that reaches the network
+        is one whose label says it downloads.
 
-    `--demo` on the CLI is that request — it tries the download and says plainly if it can't (the
-    README's `pixi run studio -- --demo`); once it has, the cache offers the button on every later
-    launch. This only decides whether the UI OFFERS it.
+    `--demo` on the CLI makes the same request as that click — it tries the download and says
+    plainly if it can't (the README's `pixi run studio -- --demo`); once either has, the cache
+    turns the label to "Open demo" on every later launch.
     """
     return _resolve_local() is not None

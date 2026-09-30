@@ -1618,9 +1618,10 @@ def test_welcome_state_when_no_recording():
     path. It must NOT fall back to the lapless bundled sample when the demo can't be resolved —
     that produced a blank-looking studio (the honest-first-run-UX fix).
 
-    The button is only OFFERED when a demo clip actually resolves (studio.demo.demo_available),
-    so the env seam points at a real file for the length of this test — the availability question
-    and the resolve-what-to-load question are deliberately separate seams now.
+    The button is on every welcome screen (LEFT-24); a demo clip that resolves locally
+    (studio.demo.demo_available) makes it say "Open demo", so the env seam points at a real file
+    for the length of this test — the label question and the resolve-what-to-load question are
+    deliberately separate seams.
 
     The resolve runs on a DemoResolveWorker (QA L10-03), so each click is awaited rather than
     asserted on the next line."""

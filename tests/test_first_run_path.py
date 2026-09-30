@@ -105,7 +105,12 @@ from studio.app import (  # noqa: E402
     TRACKS_UNREADABLE_NOTICE,
     StudioWindow,
 )
-from studio.overlays import BUSY_DEMO_LABEL, WelcomeView  # noqa: E402
+from studio.overlays import (  # noqa: E402
+    BUSY_DEMO_LABEL,
+    DEMO_GET_LABEL,
+    DEMO_LABEL,
+    WelcomeView,
+)
 
 # PySide6 does NOT take ownership of a QMimeData or a QDragEnterEvent you construct: letting either
 # fall out of scope segfaults the process the instant the handler reads event.mimeData(). Held for
@@ -506,30 +511,37 @@ def test_every_production_failure_message_fits_the_reserved_error_slot():
 def test_clicking_open_demo_does_not_move_the_primary_button():
     """D4-06: `_set_demo_busy` swaps the label to BUSY_DEMO_LABEL, which grew the button 98 -> 177 px
     in a centred row — so the PRIMARY "Open recording…" slid 39 px left in response to a click on
-    the OTHER button. The button is floored at its busy width, so nothing moves.
+    the OTHER button. The button is floored at the widest thing it says, so nothing moves.
 
-    Driven in the only state where the button exists at all (a resolvable demo clip)."""
-    with _demo_available():
-        win = StudioWindow([])
-        win.resize(1440, 900)
-        win.show()
-        _settle(8)
-        try:
-            view = win.centralWidget()
-            names = ("open_btn", "demo_btn", "drop_zone")
-            before = {a: _rect_in(getattr(view, a), win) for a in names}
-            win._set_demo_busy(True)
-            _settle()
-            assert view.demo_btn.text() == BUSY_DEMO_LABEL
-            after = {a: _rect_in(getattr(view, a), win) for a in names}
-            assert before == after, f"the busy label moved the row: {before} -> {after}"
-            win._set_demo_busy(False)
-            _settle()
-            assert {a: _rect_in(getattr(view, a), win) for a in names} == before
-        finally:
-            win.close()
-            _settle()
-    print("test_clicking_open_demo_does_not_move_the_primary_button OK")
+    Driven in BOTH demo states, because the button is in both now (LEFT-24) and says a different
+    thing at rest in each: "Open demo" with a clip on the machine, "Get demo · N MB" without — the
+    frame a fresh launch clicks."""
+    for demo_on in (True, False):
+        with _demo_available() if demo_on else _nothing():
+            win = StudioWindow([])
+            win.resize(1440, 900)
+            win.show()
+            _settle(8)
+            try:
+                view = win.centralWidget()
+                resting = DEMO_LABEL if demo_on else DEMO_GET_LABEL
+                assert view.demo_btn.text() == resting, (demo_on, view.demo_btn.text())
+                names = ("open_btn", "demo_btn", "drop_zone")
+                before = {a: _rect_in(getattr(view, a), win) for a in names}
+                win._set_demo_busy(True)
+                _settle()
+                assert view.demo_btn.text() == BUSY_DEMO_LABEL
+                after = {a: _rect_in(getattr(view, a), win) for a in names}
+                assert before == after, (
+                    f"demo={demo_on}: the busy label moved the row: {before} -> {after}")
+                win._set_demo_busy(False)
+                _settle()
+                assert view.demo_btn.text() == resting, (demo_on, view.demo_btn.text())
+                assert {a: _rect_in(getattr(view, a), win) for a in names} == before
+            finally:
+                win.close()
+                _settle()
+    print("test_clicking_open_demo_does_not_move_the_primary_button OK (both demo states)")
 
 
 def test_the_primary_cta_is_never_the_smaller_twin():
@@ -540,16 +552,18 @@ def test_the_primary_cta_is_never_the_smaller_twin():
     from studio.overlays import BUSY_DEMO_LABEL as BUSY
     from studio.overlays import busy_button_width, column_metrics
 
-    with _demo_available():
-        v = WelcomeView(lambda: None, lambda: None)
+    # Both resting labels the app builds the button with (see app._show_welcome): the download one
+    # is the longest thing the twin says, so it is the one that could invert the pair.
+    for resting in (DEMO_LABEL, DEMO_GET_LABEL):
+        v = WelcomeView(lambda: None, lambda: None, demo_label=resting)
         v.resize(1440, 900)
         v.show()
         _settle()
         try:
-            assert v.demo_btn is not None
+            assert v.demo_btn is not None and v.demo_btn.text() == resting
             assert v.open_btn.width() >= v.demo_btn.width(), (
-                f"the primary is the smaller twin: {v.open_btn.width()} px vs "
-                f"{v.demo_btn.width()} px")
+                f"the primary is the smaller twin beside {resting!r}: {v.open_btn.width()} px "
+                f"vs {v.demo_btn.width()} px")
             # …and it stays that way through the one label swap the row can do.
             wide = busy_button_width(v.demo_btn, BUSY)
             assert v.open_btn.width() >= wide, (v.open_btn.width(), wide)
@@ -669,12 +683,12 @@ def test_the_two_frames_of_one_wait_are_anchored_to_each_other():
     sizes: the columns are vertically centred, so the failure mode is an odd/even parity in
     `(window - column) / 2` that a two-size test walks straight past.
 
-    SWEPT IN BOTH DEMO STATES, because the welcome row is one button or two now: the loading card
-    reserves the second slot only when the frame it replaces had one (`column_metrics(demo)`), and
-    getting that wrong moves Cancel by half the secondary's width — the D4-06 offset again, in the
-    other direction. The one-button state (the shipping default) takes the full 1 px sweep; the
-    two-button state samples it, because the parity being hunted is a property of the column's
-    width, not of which state produced it."""
+    SWEPT IN BOTH DEMO STATES. The row was one button or two depending on a cached clip until
+    LEFT-24; it is two in both now, saying "Get demo · N MB" or "Open demo", and the loading card
+    reserves the second slot in both — so a state whose label or floor diverged would move Cancel
+    by half the secondary's width, the D4-06 offset again. The no-clip state (the shipping
+    default) takes the full 1 px sweep; the cached state samples it, because the parity being
+    hunted is a property of the column's width, not of which state produced it."""
     win = StudioWindow([])
     win.show()
     swept = 0
@@ -718,14 +732,22 @@ def test_the_loading_cards_reserved_lines_are_the_welcome_columns_own():
       * `SECONDARY_LINES` is the number of lines the welcome tagline actually takes at the card's
         own measure. The loading card's one-line recording label reserves the same, which is what
         makes the two columns the same height under a centred layout.
-      * `column_metrics(demo).primary_w` is what "Open recording…" is floored at, and Cancel is
+      * `column_metrics().primary_w` is what "Open recording…" is floored at, and Cancel is
         floored at it, so the one button on screen lands in the primary's slot rather than in the
         centred pair's middle (D4-06 floored the demo button, which slid that pair 40 px left).
 
-    Checked in BOTH demo states, because `column_metrics` now answers a different secondary_w for
-    each and the view has to have been built on the same answer."""
-    from studio.overlays import SECONDARY_LINES, column_metrics
+    Checked in BOTH demo states. Until LEFT-24 `column_metrics` answered a different secondary_w
+    for each (0 with no clip); the welcome carries the demo button in both now, floored at the
+    widest of every label it can say, so the two states must be the SAME column — and the second
+    button must not be what sets the card's width (the wrapping tagline does, as it did when a
+    fresh launch had one button)."""
+    from studio.overlays import SECONDARY_LINES, column_metrics, welcome_card_width
 
+    m = column_metrics()   # ONE answer for both states: the loop below holds each view to it
+    assert m.secondary_w > 0, m
+    one_action = welcome_card_width(False)
+    assert welcome_card_width() == one_action, (
+        f"the demo button widens the card {one_action} -> {welcome_card_width()} px")
     for demo_on in (False, True):
         with _demo_available() if demo_on else _nothing():
             win = StudioWindow([])
@@ -736,19 +758,18 @@ def test_the_loading_cards_reserved_lines_are_the_welcome_columns_own():
                 welcome = win.centralWidget()
                 subtitle = next(q for q in welcome.findChildren(QLabel)
                                 if q.property("role") == "WelcomeSubtitle")
-                m = column_metrics(demo_on)
                 assert subtitle.height() == m.secondary_h, (
                     f"the tagline is {subtitle.height()} px but the loading card reserves "
                     f"{m.secondary_h} ({SECONDARY_LINES} lines)")
                 assert welcome.open_btn.width() == m.primary_w, (welcome.open_btn.width(),
                                                                  m.primary_w)
-                if demo_on:
-                    assert welcome.demo_btn.width() == m.secondary_w, (welcome.demo_btn.width(),
-                                                                       m.secondary_w)
-                else:
-                    # No demo, no second slot — for the view AND for the card built on it.
-                    assert welcome.demo_btn is None
-                    assert m.secondary_w == 0, m
+                # The second slot is there in both states, with the state's own label.
+                assert welcome.demo_btn is not None, demo_on
+                assert welcome.demo_btn.text() == (DEMO_LABEL if demo_on else DEMO_GET_LABEL)
+                assert welcome.demo_btn.width() == m.secondary_w, (welcome.demo_btn.width(),
+                                                                   m.secondary_w)
+                assert welcome.drop_zone.width() == one_action, (welcome.drop_zone.width(),
+                                                                 one_action)
                 assert welcome.error_label.height() == m.error_h, (welcome.error_label.height(),
                                                                    m.error_h)
                 assert welcome.drop_icon.height() == m.glyph_h, (welcome.drop_icon.height(),

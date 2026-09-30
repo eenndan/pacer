@@ -220,8 +220,13 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = shortcut_groups()
 # Kept here (with the shortcuts / about copy) as the single source of the app's Help-menu text.
 PRIVACY_TITLE = "Your data & privacy"
 PRIVACY_PARAGRAPHS = [
+    # "NO NETWORK" STOPPED BEING TRUE BY CONSTRUCTION when the welcome screen began offering the
+    # demo on a fresh launch (LEFT-24): "Get demo · N MB" is one click from the first screen, and
+    # it is the app's one fetch. So the claim names its exception — reworded inside the same three
+    # lines, measured (the body stays 667 px of its 680 px cap); ", offline" paid for it.
     "Pacer Studio runs entirely on your Mac. It does not upload, sync or share anything — no "
-    "account, no network, no telemetry. Everything below stays on this computer, offline.",
+    "account, no telemetry, no network unless you ask for the demo. Everything below stays on "
+    "this computer.",
     "What it stores, and where:",
     "•  Timing-line sidecar — when you place or drag a start/finish or sector line, Pacer saves "
     "those lines next to your video as a small \"<name>.pacer.json\" file, so your lap timing "
@@ -259,8 +264,12 @@ PRIVACY_PARAGRAPHS = [
     # the card on a scrollbar. The words added below land on this paragraph's last line, so the card
     # is exactly as tall as it was; longer wordings ("the app's warnings log …") measured one line
     # over. What the log holds is said where it is needed: the crash dialog names it.
-    "\"Clear library\" to wipe the whole index. That covers a recording's own data only — "
-    "to remove everything, including your preferences, saved tracks and log file "
+    # THE DEMO'S CACHE (demo/, the 11 MB clip "Get demo" downloads) is named the same way and for
+    # the same reason, and it had even less room: this paragraph's last line was full, so "the
+    # whole index", "your preferences" and "log file" gave back the characters "the demo (demo/)"
+    # costs. Measured: 7 lines before and after, the body still 667 px.
+    "\"Clear library\" to wipe the index. That covers a recording's own data only — to remove "
+    "everything, including preferences, saved tracks, the demo (demo/) and the log "
     "(logs/pacer.log), quit Pacer and delete the folder \"~/Library/Application Support/pacer\". "
     "Your video files are never touched.",
 ]

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import demo, theme
 from .theme import C
 
 # What the welcome screen's "Open demo" button says while its resolve is in flight. Owned HERE
@@ -38,18 +38,24 @@ from .theme import C
 # The button is floored at this label's width so a click on it cannot move the row (D4-06), so the
 # sentence made the SECONDARY action 178 px against the PRIMARY's 133 — the amber CTA was the
 # smaller of the two twins, which is the one thing a primary may never be. The sentence bought that
-# 45 px for a frame that, since the button is only shown when the clip is ALREADY on this machine
-# (studio.demo.demo_available), resolves in microseconds. The card behind it still says the whole
-# thing (DEMO_FETCH_TITLE) — a headline has room, a button does not.
+# 45 px for a frame that is up for microseconds with the clip on this machine, and for a download
+# on a fresh launch — which is exactly when the card behind it comes up and says the whole thing
+# (DEMO_FETCH_TITLE): a headline has room, a button does not.
 BUSY_DEMO_LABEL = "Fetching…"
 # The loading card's headline for the same wait. Not the button's label: the card is the surface
 # with room for the full sentence, and it is the one that is up long enough to be read.
 DEMO_FETCH_TITLE = "Fetching the demo clip…"
-# The welcome column's two action labels, owned here for the same reason: `column_metrics` floors
-# the loading card's Cancel at the width THIS string asks for, so the one button on screen does not
+# The welcome column's action labels, owned here for the same reason: `column_metrics` floors the
+# loading card's Cancel at the width THESE strings ask for, so the one button on screen does not
 # move between the two frames of one wait.
 OPEN_LABEL = "Open recording…"
+# The demo button's two resting labels. It is on every welcome screen (LEFT-24: a fresh launch used
+# to show one action and no mention of a demo), and `studio.demo.demo_available()` — the offline
+# question, env var or cache — picks which one it says: OPEN when the clip is on this machine, GET
+# when the click will download it, with the size stated, because a click that reaches the network
+# should say so before it does. The size is the pinned asset's (`demo.download_mb()`), never typed.
 DEMO_LABEL = "Open demo"
+DEMO_GET_LABEL = f"Get demo · {demo.download_mb()} MB"
 # The drop glyph's pixmap side. Named because the loading card reserves a leading row of exactly
 # this height for its busy bar, so the shared 22 px headline lands on the same baseline in both
 # frames instead of 52 px higher in the second one.
@@ -83,10 +89,10 @@ class ColumnMetrics(NamedTuple):
     error_h: int       # the reserved error slot ABOVE the card, on the canvas
     secondary_h: int   # the reserved height of the column's secondary line
     primary_w: int     # what the PRIMARY action is floored at ("Open recording…")
-    secondary_w: int   # what the secondary action is floored at (its busy label); 0 with no demo
+    secondary_w: int   # what the secondary action is floored at (its widest label); 0 with none
 
 
-def column_metrics(demo_available: bool = True) -> ColumnMetrics:
+def column_metrics(has_demo: bool = True) -> ColumnMetrics:
     """Measure the welcome column from throwaway widgets polished against the live stylesheet.
 
     Throwaway, and deliberately so: the second frame is built when the first one is already gone
@@ -95,10 +101,12 @@ def column_metrics(demo_available: bool = True) -> ColumnMetrics:
     busy width — the app stylesheet reaches every widget, shown or not, so `sizeHint()` here is the
     size the real control takes.
 
-    `demo_available` is the SAME question `WelcomeView` answers by being handed an `on_demo` or a
-    None (see studio.demo.demo_available): with no demo on this machine the column has one action,
-    so there is no second slot to reserve and the loading card must not reserve one either — or its
-    Cancel lands in the centre of a pair that is not there.
+    `has_demo` is the SAME question `WelcomeView` answers by being handed an `on_demo` or a None:
+    whether the column HAS a second action. It is no longer "is a demo on this machine" — that only
+    picks the button's label now (studio.demo.demo_available), and the floor below covers every
+    label, so the column is one shape whatever the cache holds and the app always passes True. A
+    caller that builds the view with `on_demo=None` passes False: no second slot to reserve, or a
+    loading card built on it puts Cancel in the centre of a pair that is not there.
 
     PRIMARY_W IS A FLOOR, NOT A HINT, and the max() is the whole of it: the primary is the amber
     CTA, so it may never be narrower than the secondary beside it. Deriving that here (rather than
@@ -116,14 +124,17 @@ def column_metrics(demo_available: bool = True) -> ColumnMetrics:
     primary.ensurePolished()
     secondary = QPushButton(DEMO_LABEL)
     secondary.ensurePolished()
-    # THE WIDEST OF THE TWO THINGS THE BUTTON WILL EVER SAY, in either direction. The floor used to
-    # be the busy width alone, which was only ever the wider one because the busy label was a whole
+    # THE WIDEST OF THE THINGS THE BUTTON WILL EVER SAY, in either direction. The floor used to be
+    # the busy width alone, which was only ever the wider one because the busy label was a whole
     # sentence; with a busy label SHORTER than the resting one ("Fetching…" against "Open demo") the
     # same floor let the button SHRINK 7 px on the click, and the centred row slid 3 px — D4-06
     # again, one seventh the size and just as much a moving target. Measured, not reasoned about:
-    # the sweep in tests/test_first_run_path.py caught it on the first run.
+    # the sweep in tests/test_first_run_path.py caught it on the first run. BOTH resting labels are
+    # in it (LEFT-24), so a cached clip and a fresh launch build the same column: the loading card
+    # built on it never has to know which of the two frames it replaced.
     secondary_w = (max(secondary.sizeHint().width(),
-                       busy_button_width(secondary, BUSY_DEMO_LABEL)) if demo_available else 0)
+                       busy_button_width(secondary, DEMO_GET_LABEL),
+                       busy_button_width(secondary, BUSY_DEMO_LABEL)) if has_demo else 0)
     return ColumnMetrics(
         glyph_h=DROP_GLYPH_PX,
         error_h=WelcomeView.ERROR_LINES * err.fontMetrics().height(),
@@ -133,7 +144,7 @@ def column_metrics(demo_available: bool = True) -> ColumnMetrics:
     )
 
 
-def welcome_card_width(demo_available: bool = True) -> int:
+def welcome_card_width(has_demo: bool = True) -> int:
     """The width WelcomeView's dashed card takes — measured off a throwaway one.
 
     NOT a ColumnMetrics field, and that is a constraint rather than a preference: ColumnMetrics is
@@ -143,12 +154,13 @@ def welcome_card_width(demo_available: bool = True) -> int:
     It exists because the card's width is not a number anyone chose. It is whatever the widest row
     inside it asks for, and WHICH row that is moves: with the demo button floored at a whole
     sentence the action row was 327 px and set the card's 427; with an honest button row the
-    WRAPPING TAGLINE sets it instead (303 px + margins = 403), in both demo states. The loading card
-    — the same screen's second frame — is only ~320 px of content, so it used to match by accident
-    and now has to be told. Measured, not derived: a formula that re-adds margins and spacing here
+    WRAPPING TAGLINE sets it instead (303 px + margins = 403), with one action or two, the download
+    label included (tests/test_first_run_path.py holds the two-action card to the one-action one).
+    The loading card — the same screen's second frame — is only ~320 px of content, so it used to
+    match by accident and now has to be told. Measured, not derived: a formula that re-adds margins and spacing here
     would be a second implementation of the layout, and the 1 px sweep in
     tests/test_first_run_path.py is exactly a hunt for the pixel such a formula loses."""
-    probe = WelcomeView(lambda: None, (lambda: None) if demo_available else None)
+    probe = WelcomeView(lambda: None, (lambda: None) if has_demo else None)
     return probe.drop_zone.sizeHint().width()
 
 
@@ -173,17 +185,17 @@ class WelcomeView(QWidget):
     offending `error_path`) is shown when this stands in for a failed first load. The buttons are
     exposed (`open_btn`/`demo_btn`) and so is `error_label`, for tests.
 
-    `on_demo` IS OPTIONAL, AND None MEANS "THERE IS NO DEMO" — the same protocol PBToast already
-    uses for its two actions (a None callback hides that action), because the alternative is a
-    button that can only apologise. The demo clip resolves from `PACER_DEMO_MP4`, a local cache, or
-    a release asset that had never been published (until the synthetic demo, demo-data-v1), so on
-    a machine with none of them the second, lower-commitment, obvious-to-click CTA was a guaranteed
-    dead end — and the FIRST thing anyone who builds this from source ever saw; offline, it still
-    would be. `StudioWindow._show_welcome` passes its
-    handler only when `studio.demo.demo_available()` says a click could land somewhere; with no
-    demo the card carries ONE action and `demo_btn` is None (never a disabled twin: a control that
-    is disabled at every moment of the app's life, with no state the user can change to enable it,
-    is advertising, not an affordance).
+    `on_demo` IS OPTIONAL, AND None MEANS "NO DEMO ACTION" — the same protocol PBToast already
+    uses for its two actions (a None callback hides that action; never a disabled twin: a control
+    disabled at every moment of the app's life is advertising, not an affordance). The app passes
+    it on every welcome screen, and `demo_label` says what the click will do. The history is why
+    both halves exist: the button was first unconditional while the release asset it downloads had
+    never been published — a guaranteed apology on the first screen anyone who built from source
+    saw — then gated on `studio.demo.demo_available()`, which after the synthetic demo WAS published
+    left a fresh launch with one action and no mention of a demo (LEFT-24). So the gate became a
+    label: `StudioWindow._show_welcome` passes DEMO_LABEL when the clip is on this machine and
+    DEMO_GET_LABEL ("Get demo · N MB") when the click downloads it. The label is kept on the view
+    (`demo_label`) because `_set_demo_busy` swaps it out and has to hand back the one it replaced.
 
     THE FAILURE STATE IS THE SAME SHAPE AS THE FIRST-RUN STATE, which it was not. `_show_welcome`
     DESTROYS and rebuilds this view to show an error, so the two are consecutive frames of one
@@ -207,7 +219,7 @@ class WelcomeView(QWidget):
     ERROR_LINES = 3
 
     def __init__(self, on_open, on_demo, error: str | None = None, parent=None,
-                 error_path: str | None = None):
+                 error_path: str | None = None, demo_label: str = DEMO_LABEL):
         super().__init__(parent)
         # ONE measurement of the column, for the error slot AND the two action floors — the column
         # the loading card is anchored to (see app._show_loading_placeholder), so the two frames
@@ -269,16 +281,19 @@ class WelcomeView(QWidget):
         # width — the rank the theme already declares, made true in the other dimension too.
         self.open_btn.setMinimumWidth(m.primary_w)
         buttons.addWidget(self.open_btn)
-        # The second action exists only when a demo does (see the class docstring).
+        # The second action exists whenever a handler does (see the class docstring), saying
+        # `demo_label` — the resting text `_set_demo_busy` restores after its busy label.
         self.demo_btn = None
+        self.demo_label = demo_label
         if on_demo is not None:
-            self.demo_btn = QPushButton(DEMO_LABEL)
+            self.demo_btn = QPushButton(demo_label)
             self.demo_btn.clicked.connect(on_demo)
-            # FLOOR THE DEMO BUTTON AT ITS BUSY WIDTH. `StudioWindow._set_demo_busy` swaps the label
-            # to BUSY_DEMO_LABEL the moment it is clicked, which grew the button in a CENTRED row —
-            # the PRIMARY "Open recording…" slid 39 px left and the drop zone widened and moved with
-            # it: 9,151 px changed, in response to a click on the OTHER button (QA D4-06). Sizing
-            # the button for the widest thing it will ever say buys a row that does not move.
+            # FLOOR THE DEMO BUTTON AT ITS WIDEST LABEL. `StudioWindow._set_demo_busy` swaps the
+            # label to BUSY_DEMO_LABEL the moment it is clicked, which grew the button in a CENTRED
+            # row — the PRIMARY "Open recording…" slid 39 px left and the drop zone widened and
+            # moved with it: 9,151 px changed, in response to a click on the OTHER button (QA
+            # D4-06). Sizing the button for the widest thing it will ever say (either resting label
+            # or the busy one, `column_metrics`) buys a row that does not move.
             self.demo_btn.setMinimumWidth(m.secondary_w)
             buttons.addWidget(self.demo_btn)
         zone.addLayout(buttons)

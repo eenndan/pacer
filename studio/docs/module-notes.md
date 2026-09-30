@@ -397,7 +397,7 @@ The **session record** (pacer-free AND Qt-free): one record per recording — co
 
 ## `demo.py`
 
-**Demo recording resolution** for `--demo` / the welcome "Open demo": resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache (one folder per pinned tag, so an older demo's copy is never found again) → the pinned demo-data pre-release's asset (`_DEMO_TAG`), kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and is what gates the welcome button — it was born while the asset was unpublished, and it still keeps the app off the network unless `--demo` asks.
+**Demo recording resolution** for `--demo` / the welcome's demo button: resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache (one folder per pinned tag, so an older demo's copy is never found again) → the pinned demo-data pre-release's asset (`_DEMO_TAG`), kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and picks the welcome button's LABEL — "Open demo", or "Get demo · N MB" (`download_mb()`, from the pinned size) when the click will download it. It was born as a gate while the asset was unpublished; once the demo was published, hiding the button left a fresh launch with no demo at all (LEFT-24). The app still reaches the network only on that click or `--demo`.
 
 ## `playback_state.py`
 
@@ -572,7 +572,7 @@ The **"G meter"** dial (pacer-free Qt): **two rings** (a `1.0 g` reference + the
 
 ## `overlays.py`
 
-Presentational overlay widgets over StudioWindow: the first-run empty state (**WelcomeView** — drop-zone + the brand mark + Open recording…, plus "Open demo" **only when a demo resolves**: `on_demo=None` hides it, the same None-hides-this-action protocol PBToast uses) and the personal-best share toast (**PBToast**). Also owns `column_metrics` / `welcome_card_width` — the measurements the loading card is anchored to. Self-contained (DI callbacks; no reach into StudioWindow internals).
+Presentational overlay widgets over StudioWindow: the first-run empty state (**WelcomeView** — drop-zone + the brand mark + Open recording…, plus the demo button on every launch, whose `demo_label` the app picks — "Get demo · N MB" or, once cached, "Open demo"; `on_demo=None` still hides it, the same None-hides-this-action protocol PBToast uses) and the personal-best share toast (**PBToast**). Also owns `column_metrics` / `welcome_card_width` — the measurements the loading card is anchored to. Self-contained (DI callbacks; no reach into StudioWindow internals).
 
 ## `help_dialog.py`
 

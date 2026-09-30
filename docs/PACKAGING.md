@@ -142,10 +142,12 @@ Resolution order (`studio/demo.py`):
    (override the URL with `PACER_DEMO_URL`). If offline / the download fails, the app falls back
    to the empty welcome state — it still launches.
 
-**The welcome screen's "Open demo" button is gated on steps 1–2 only** (`demo.demo_available()`, an
-offline path lookup), so the app never probes the network on its own; `--demo` on the command line
-runs the full order, download included, and the cache then offers the button on every later
-launch. **Recording the demo video: set `PACER_DEMO_MP4`** and the button points at your clip.
+**The welcome screen's demo button is on every launch; its LABEL is gated on steps 1–2 only**
+(`demo.demo_available()`, an offline path lookup): "Open demo" when one resolves, "Get demo · N MB"
+(`demo.download_mb()`) when the click will run step 3. So the app never probes the network on its
+own — only that click, which says it downloads, and `--demo` on the command line reach it; either
+one caches the demo, and the button reads "Open demo" on every later launch. **Recording the demo
+video: set `PACER_DEMO_MP4`** and the button points at your clip.
 
 The demo is not a clean session on purpose: since `demo-data-v2` it carries one planted habit
 (`make_demo.DEMO_HABIT`: C1, on 8 of its 14 flying laps), so its debrief has a real call to make
