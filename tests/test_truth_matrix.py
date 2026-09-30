@@ -6,8 +6,8 @@ or minimum speed, the rise of the Δ trace through a corner or the time on the b
 `test_synth_gopro.py` holds lap times at one seed and noise 0/1, the corner count and direction,
 and whether the Stats tiles are "populated". A number can be populated and wrong. The review found
 three that are (sector splits snapped to the 10 Hz fixes until TRUTH-5; the ideal lap reads fast
-under noise; the Δ trace puts half of a corner's line loss elsewhere), none of which any test could
-see.
+under noise; the Δ trace put half of a corner's line loss elsewhere until TRUTH-10), none of which
+any test could see.
 
 THE GRID. `studio/dev/synth_gopro.py`'s recording through the REAL loader (`discover_siblings` ->
 `Session.load`), at SEEDS × NOISES: three seeds (the CI seed is among the least biased for the ideal
@@ -108,10 +108,9 @@ class Row:
 
 
 MEASURED_ON = ("2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical); row 2 on "
-               "TRUTH-5's tree")
+               "TRUTH-5's tree; row 6's Δ trace 2026-09-30 on TRUTH-10's tree (main 696cb81)")
 G, R, S = "green", "known-red", "stated"
 _T9 = "TRUTH-9 (the de-drift stops absorbing a line change)"
-_T10 = "TRUTH-10 (the Δ family on the warp frame)"
 _T6 = "TRUTH-6 (said in words on the IDEAL LAP tooltips; TRUTH-11's de-bias closed)"
 _T12 = "TRUTH-12 (noise-aware brake threshold, noise 0-2; row 7's stated floor is its target)"
 # Seconds unless named; `level` is the GPS noise, or the line-change fixture. Every value is an
@@ -160,30 +159,33 @@ ROWS: tuple[Row, ...] = (
     Row("corner.vmin_rms", 2.0, 0.994005, G, tol=1.49),
     Row("corner.vmin_rms", 4.5, 2.26322, G, tol=3.39),
     # 6a · rise of Δ through each corner on the GoPro, worst (lap, corner): the Δ trace, the
-    # Corners table, and the two against each other. Noise-free, the table (warp frame) is within
-    # 27 ms and the trace (odometer fraction) is 121 ms off — on the slow lap, whose half-spin at
-    # C5 changes its odometer where the others' does not. The trace's target is the table's own
-    # accuracy; trace vs table is TRUTH-10's 10 ms at every noise.
-    Row("delta.trace", 0.0, 0.121476, R, tol=0.040, ceiling=0.18, fixed_by=_T10),
-    Row("delta.trace", 2.0, 0.144103, G, tol=0.21),
-    Row("delta.trace", 4.5, 0.236005, G, tol=0.35),
+    # Corners table, and the two against each other. Since TRUTH-10 the trace reads the table's
+    # own warp, so trace vs table is only the DRAWN curve's 400-point grid (2.5 m) read at the
+    # corner edges: the same warp evaluated at the edges (`delta_at_lap`, the per-frame readout)
+    # equals the table to 1e-9 at every noise (tests/test_delta_engine.py). Before it the trace
+    # paired laps at equal odometer fraction and read 121 / 128 / 386 ms off the table — the slow
+    # lap's half-spin at C5 changes its odometer where the others' does not. At noise 4.5 the grid
+    # alone puts 2 of 273 cells past 10 ms (10.3, 11.1): stated here, no fix scheduled.
+    Row("delta.trace", 0.0, 0.0285749, G, tol=0.040),
+    Row("delta.trace", 2.0, 0.112088, G, tol=0.168),
+    Row("delta.trace", 4.5, 0.210539, G, tol=0.31),
     Row("delta.table", 0.0, 0.0267495, G, tol=0.040),
     Row("delta.table", 2.0, 0.113373, G, tol=0.17),
     Row("delta.table", 4.5, 0.211276, G, tol=0.31),
-    Row("delta.trace_vs_table", 0.0, 0.0967454, R, tol=0.010, ceiling=0.145, fixed_by=_T10),
-    Row("delta.trace_vs_table", 2.0, 0.127973, R, tol=0.010, ceiling=0.19, fixed_by=_T10),
-    Row("delta.trace_vs_table", 4.5, 0.385544, R, tol=0.010, ceiling=0.57, fixed_by=_T10),
+    Row("delta.trace_vs_table", 0.0, 0.00271514, G, tol=0.0040),
+    Row("delta.trace_vs_table", 2.0, 0.0041819, G, tol=0.0062),
+    Row("delta.trace_vs_table", 4.5, 0.0111334, R, tol=0.010, ceiling=0.0167,
+        fixed_by="none scheduled: the drawn Δ's 400-point grid, not its frame (6a's comment)"),
     # 6b · the planted one-corner line change (truth: stadium C1 0.128 s, circuit C4 0.114 s),
     # worst corner. Off the stadium the table is already true; on it the de-drift absorbs half.
-    Row("line_change.trace", "stadium", 0.0973711, R, tol=0.010, ceiling=0.145,
-        fixed_by=f"{_T9} + {_T10}"),
-    Row("line_change.trace", "circuit", 0.0853238, R, tol=0.010, ceiling=0.125, fixed_by=_T10),
+    # Since TRUTH-10 the trace IS the table (trace vs table ≤ 0.5 ms on both): off the stadium it
+    # is true, and on it it carries exactly the table's de-drift error (_T9), nothing of its own.
+    Row("line_change.trace", "stadium", 0.0627058, R, tol=0.010, ceiling=0.094, fixed_by=_T9),
+    Row("line_change.trace", "circuit", 0.0033264, G, tol=0.0049),
     Row("line_change.table", "stadium", 0.0627417, R, tol=0.010, ceiling=0.094, fixed_by=_T9),
     Row("line_change.table", "circuit", 0.00285145, G, tol=0.0042),
-    Row("line_change.trace_vs_table", "stadium", 0.0346295, R, tol=0.010, ceiling=0.051,
-        fixed_by=_T10),
-    Row("line_change.trace_vs_table", "circuit", 0.0824724, R, tol=0.010, ceiling=0.12,
-        fixed_by=_T10),
+    Row("line_change.trace_vs_table", "stadium", 8.30489e-05, G, tol=0.00012),
+    Row("line_change.trace_vs_table", "circuit", 0.000474952, G, tol=0.0007),
     # 7 · time on the brakes per lap (s), and brake events per lap (the Stats tile's count), |mean|
     # of app − the app's own pipeline on the true speed: exactly what GPS noise adds. The row
     # isolates GPS noise and is blind to the detector's own logic (tests/test_driving.py has that).
@@ -764,8 +766,9 @@ def test_every_row_has_teeth():
     """Each known-red row, and each stated row with a floor, fails if its status is flipped to
     green, and a planted defect turns a green row red: +20 ms on every lap time (row 1, noise 0),
     a +20 ms shift of the first sector boundary (row 2's column mean and worst split, noise 0),
-    the boundaries snapped back to the nearest fix (row 2's interior spread and worst split) and
-    +3 % on every lap's Vmax (row 8, noise 0) — exercised through the same statistics."""
+    the boundaries snapped back to the nearest fix (row 2's interior spread and worst split),
+    +3 % on every lap's Vmax (row 8, noise 0) and the Δ back on the equal-fraction pairing (row
+    6's trace) — exercised through the same statistics."""
     st = stats()
     for r in ROWS:
         if r.status == R or (r.status == S and r.tol is not None):
@@ -806,6 +809,17 @@ def test_every_row_has_teeth():
     finally:
         stats_service.SessionStats.lap_stats = lap_stats
     assert check(rows["lap.vmax", 0.0], float(np.abs(vmax).max()))
+    # Row 6: the Δ family put back on the equal-fraction pairing (no lap has a warp — the frame
+    # before TRUTH-10) turns the GoPro's trace-vs-table and the circuit line change's trace red.
+    warp = Session._baseline_warp
+    Session._baseline_warp = lambda self, lap_id: None
+    try:
+        rise = np.concatenate([_delta_rise_errors(_case(seed, 0.0)) for seed in SEEDS])
+        changed = _line_change_errors("circuit")
+    finally:
+        Session._baseline_warp = warp
+    assert check(rows["delta.trace_vs_table", 0.0], float(np.abs(rise[:, 2]).max()))
+    assert check(rows["line_change.trace", "circuit"], changed["line_change.trace"])
 
 
 def _run_all():
