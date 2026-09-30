@@ -961,6 +961,17 @@ def test_the_clip_check_fails_on_each_planted_defect():
 # So RUL-11 reads "Pending" exactly while CI still builds the `.app` (the package that removes the
 # build rewords the row, or this fails), every id family either page cites is glossed at the top of
 # DECISIONS.md, and no public page says what exists of his recordings.
+#
+# The W2 close-out QA (2026-09-30, EVAL-2 and EVAL-4) found #473's fix partial: it dropped "each
+# recording exists once" but kept the row, and the row's "open" status said the same thing, twice
+# (the originals, and the agents' notes). RUL-3 asked "are his sprints arrive-and-drive", and
+# ENGINEERING.md §8 closed on "the first had no second copy". So the owner-acts table carries no
+# status column (what is done is tracked privately), and no public page states a backup's state or
+# a person's habits in any of the shapes below. The mechanisms stay public: a freeze that ends at
+# the next new recording, a read that lists store names and dates.
+_PRIVATE = re.compile(r"\b(?:no|without a|without any) (?:second copy|backups?)\b"
+                      r"|\bexists? once\b|\bnot backed up\b|\bhis sprints\b")
+_ACTS = "## 2. Owner acts"
 _DECISIONS = os.path.join(_DOCS, "DECISIONS.md")
 _GLOSS_LEAD = "**The ids this page cites.**"
 # An id is a family and a number: an upper-case word or hyphenated words and a hyphen
@@ -994,6 +1005,21 @@ def _unglossed(text: str, gloss: str) -> list[str]:
                       if f"the {w.lower()} ledger" not in gloss.lower()]
 
 
+def _private_statements(text: str) -> list[str]:
+    """The backup-state and owner-habit phrases `text` states, line breaks and case folded."""
+    return sorted({m.group(0) for m in _PRIVATE.finditer(" ".join(text.split()).lower())})
+
+
+def _acts_status_columns(decisions: str) -> list[str]:
+    """The header cells of DECISIONS.md's owner-acts table that carry a status."""
+    at = decisions.find(_ACTS)
+    assert at >= 0, f"docs/DECISIONS.md lost its {_ACTS!r} section — if deliberate, update this"
+    end = decisions.find("\n## ", at + len(_ACTS))
+    header = next((ln for ln in decisions[at:end].splitlines() if ln.startswith("|")), "")
+    assert header, f"docs/DECISIONS.md's {_ACTS!r} section has no table — if deliberate, update this"
+    return [c.strip() for c in header.strip("|").split("|") if "status" in c.lower()]
+
+
 def test_decisions_says_what_is_true_and_public():
     with open(_DECISIONS, encoding="utf-8") as f:
         decisions = f.read()
@@ -1021,9 +1047,27 @@ def test_decisions_says_what_is_true_and_public():
     said = []
     for rel in pages:
         with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
-            if "exists once" in " ".join(f.read().split()).lower():
-                said.append(rel)
-    assert not said, f"a public page says what exists of the owner's recordings: {said}"
+            said += [f"{rel}: {p!r}" for p in _private_statements(f.read())]
+    assert not said, ("a public page states a backup's state or the owner's habits — say the "
+                      "mechanism, not the person:\n  " + "\n  ".join(said))
+    status = _acts_status_columns(decisions)
+    assert not status, (f"docs/DECISIONS.md's owner-acts table has a status column {status}: which "
+                        "acts are done is tracked privately (an open backup act says there is none)")
+
+    # Both directions, on planted text: each shape the W2 QA found fails, and its fixed wording
+    # passes; a status column fails, and the act/note table passes.
+    for text in ("The other two chapters survived; the first had no second copy.",
+                 "Until then each recording exists once.",
+                 "The agents' notes have no backup yet.", "His notes are not backed up.",
+                 "Facts: are his sprints arrive-and-drive?"):
+        assert _private_statements(text), f"the planted {text!r} was not caught"
+    for text in ("If a private copy of the agents' notes and memory is configured, pull it.",
+                 "The other two chapters survived.", "A second copy of the originals.",
+                 "Until the next new recording or 2026-11-09, whichever comes first.",
+                 "Premise: a sprint is driven in a different fleet kart each time."):
+        assert not _private_statements(text), f"the neutral {text!r} was flagged"
+    assert _acts_status_columns(f"{_ACTS}\n\n| Act | Status (evidence) | Note |\n|---|---|---|\n")
+    assert not _acts_status_columns(f"{_ACTS}\n\n| Act | What waits on it |\n|---|---|\n")
 
     # Both directions, on planted text: each shape EVAL-1 and EVAL-3 found fails, the fixed ones
     # pass, and the live page cites ids at all (or the gloss check is vacuous).
