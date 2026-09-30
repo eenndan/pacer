@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pacer Studio — a race-telemetry workstation validated against a transponder</title>
-<meta name="description" content="Case study: a macOS desktop app that turns one GoPro recording into validated lap times, a racing line, deltas and synced video. Lap times validated against official timing over 121 clean laps. Built as an engineering showcase; source is the only distribution.">
+<title>Pacer Studio — a race-telemetry workstation validated against official timing</title>
+<meta name="description" content="Case study: a macOS desktop app that turns one GoPro recording into validated lap times, a racing line, deltas and synced video. Lap times match official timing to σ 0.025 s over 14 laps at one circuit. Built as an engineering showcase; source is the only distribution.">
 
 <!-- The mark is the app's own icon (studio/assets/pacer.icns, drawn by studio/dev/make_icon.py):
      two right-pointing chevrons, the darker accent_press one BEHIND, the accent one in front.
@@ -13,8 +13,8 @@
 
 <!-- Open Graph / Twitter — a case study still wants to render when it is shared. -->
 <meta property="og:type" content="article">
-<meta property="og:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
-<meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Lap times validated against official timing over 121 clean laps. An engineering case study.">
+<meta property="og:title" content="Pacer Studio — a race-telemetry workstation validated against official timing">
+<meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Lap times match official timing to σ 0.025 s over 14 laps at one circuit. An engineering case study.">
 <meta property="og:image" content="https://eenndan.github.io/pacer/media/og.png">
 <meta property="og:image:width" content="2560">
 <meta property="og:image:height" content="1280">
@@ -24,8 +24,8 @@
 
 <meta property="og:url" content="https://eenndan.github.io/pacer/">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
-<meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Lap times validated against official timing over 121 clean laps. An engineering case study.">
+<meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against official timing">
+<meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Lap times match official timing to σ 0.025 s over 14 laps at one circuit. An engineering case study.">
 <meta name="twitter:image" content="https://eenndan.github.io/pacer/media/og.png">
 <meta name="twitter:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
 
@@ -333,9 +333,8 @@
 <section class="hero">
   <div class="wrap">
     <p class="eyebrow">Case study · race telemetry · macOS</p>
-    <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against a real transponder.</span></h1>
-    <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware.</p>
-    <p class="lead">It is also an engineering showcase, and this page is the case study: what it claims, how each claim is checked, and where the limits are.</p>
+    <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against official timing.</span></h1>
+    <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware. Its lap times match official timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check.</p>
 
     <div class="callout">
       <strong>There is no download.</strong> Source is the only distribution — <a href="#build">three commands with pixi</a>. Code signing, notarization, a <code>.dmg</code>, and any platform other than Apple&nbsp;Silicon macOS are deliberate <a href="#non-goals">non-goals</a>, not a to-do list.
@@ -384,7 +383,7 @@
           <li><span class="stat-val">0.13 %</span><span class="stat-label">that worst σ, as a fraction of a ~68 s kart lap</span></li>
           <li><span class="stat-val">121 clean laps</span><span class="stat-label">of 137 aligned, across three recordings</span></li>
         </ul>
-        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 121 is the number of laps actually compared, not the span of lap IDs in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction. Two recordings are D24's — the Daytona 24-hour race at Milton Keynes in May 2026, which Pacer was built on — checked against that log in June 2026 and reported as recorded: one's footage no longer exists, the other's is kept off the development machine. The third, a sprint there on 18 September 2026, is re-measured against the circuit's Club Speed timing by a real-footage check. The Sandown recordings wait for timing sheets behind a Club Speed sign-in.</p>
+        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 121 is the number of laps actually compared, not the span of lap IDs in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction. Two recordings are D24's — the Daytona 24-hour race at Milton Keynes in May 2026, which Pacer was built on — checked against that log in June 2026 and reported as recorded; neither can be re-run from this repository. The third, a sprint there on 18 September 2026, is re-measured against the circuit's Club Speed timing by a real-footage check. The Sandown recordings wait for timing sheets behind a Club Speed sign-in.</p>
       </div>
       <figure class="figure">
         <img src="media/accuracy.png" width="2400" height="1080" loading="lazy" decoding="async"

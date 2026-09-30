@@ -3,8 +3,9 @@
 *The case study as a web page: [eenndan.github.io/pacer](https://eenndan.github.io/pacer/) · how
 it was built, in eight measured stories: [docs/ENGINEERING.md](docs/ENGINEERING.md)*
 
-**A macOS race-telemetry workstation built from a single GoPro file, with its lap timing validated
-against a real transponder — and the engineering case study behind it.**
+**A macOS race-telemetry workstation built from a single GoPro file, whose lap times match official
+timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check — and the
+engineering case study behind it.**
 
 Open a GoPro `.MP4`. Pacer reads the 10 Hz GPS and 200 Hz IMU the camera already recorded and gives
 you lap and sector times, the racing line, an **ideal lap** stitched from your own best segments,
@@ -14,7 +15,6 @@ cloud, no extra hardware.
 It is a real, working app — and it is a **portfolio piece**, so this page is written as a case
 study: what it claims, how each claim was measured, and the gates that keep it true. **Source is
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
-Building it is one command; reading it is the other intended use.
 
 <img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
 
@@ -35,10 +35,10 @@ log, the ground truth a series scores a session with, and a circuit's published 
 - **σ 0.0247 s**, **0.0527 s** and **0.0871 s** — the worst about **0.13 %** of a ~68 s kart lap.
 
 Two recordings are D24's — the Daytona 24-hour race at Milton Keynes, May 2026, that Pacer was
-built on — checked against the race's transponder log in June 2026 and reported as recorded: one's
-footage no longer exists, the other's is kept off the development machine. The third, a sprint
-there on 18 September 2026, is re-measured against the circuit's Club Speed timing by a real-footage
-check. The Sandown recordings wait for timing sheets behind a Club Speed sign-in.
+built on — checked against the race's transponder log in June 2026 and reported as recorded;
+neither can be re-run from this repository. The third, a sprint there on 18 September 2026, is
+re-measured against the circuit's Club Speed timing by a real-footage check. The Sandown
+recordings wait for timing sheets behind a Club Speed sign-in.
 
 <img src="docs/media/accuracy.png" width="880" alt="Lap-time error against official timing: recording A (D24, transponder) mean +0.0030 s, σ 0.0871 s, 48 clean of 57 aligned laps, median DOP 2.4; recording B (D24, transponder) mean +0.0015 s, σ 0.0527 s, 59 clean of 65 aligned, median DOP 1.4; recording C (MK sprint, Club Speed, September 2026) mean +0.0010 s, σ 0.0247 s, 14 clean of 15 aligned, median DOP 1.25">
 
