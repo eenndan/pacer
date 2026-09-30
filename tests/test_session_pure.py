@@ -27,6 +27,7 @@ Pins five math-dense invariants that had no coverage, each driven on synthetic i
     them (it satisfied every one of the seven lower-envelope invariants that used to live there).
 Run: python tests/test_session_pure.py
 """
+import dataclasses
 import math
 import os
 import sys
@@ -1581,6 +1582,69 @@ def test_decomposition_drops_a_segment_the_subject_never_drove():
     # …and lap 1, which IS admitted everywhere, still gets all three.
     assert len(sb.decomposition(1)) == 3
     print("test_decomposition_drops_a_segment_the_subject_never_drove OK")
+
+
+def test_donor_net_counts_what_the_donor_gave_back_either_side():
+    """ADV-6 (TRUTH-6). A segment's minimum books the donor's gain there and not its price: a lap
+    that brakes late into C2 is quicker in C2 and slower on the straights either side, and the
+    decomposition row shows only the quicker half. `SegmentBests.donor_net` is the donor's lead
+    over the subject across the segment AND its neighbours, so a surface can say when the gain
+    was paid back.
+
+    Hand-built, subject lap 0: lap 2 owns C2 by 0.13 s and is 0.25 s slower on each straight
+    beside it, so its net is 0.13 - 0.50 = -0.37 s. A neighbour either lap did not drive admitted
+    and resolved is skipped, never read as 0; an end segment has one neighbour; a POINT segment
+    and the donor's own row have nothing to give back. Moving time across C2's edges on the donor
+    moves its gain and leaves its net alone: the three segments' sum has only the outer edges."""
+    times = np.array([
+        [2.00, 5.00, 3.00, 6.13, 4.00],     # lap 0, the subject
+        [2.10, 4.90, 3.10, 6.30, 3.95],     # lap 1: owns C1 (0.10 s) and C2 → S/F (0.05 s)
+        [2.00, 5.10, 3.25, 6.00, 4.25],     # lap 2: owns C2 (0.13 s), 0.25 s slower either side
+    ])
+
+    def composite(t, admitted=None, resolved=None):
+        return SegmentBests(
+            labels=["start", "C1", "C1-C2", "C2", "C2-finish"], cids=[1, 2], lap_ids=[0, 1, 2],
+            times=t, admitted=np.ones(t.shape, bool) if admitted is None else admitted,
+            resolved=np.ones(t.shape, bool) if resolved is None else resolved,
+            bests=[float(c.min()) for c in t.T], donors=[int(c.argmin()) for c in t.T],
+            s_edges=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0], donor_span=[(0.0, 0.0)] * t.shape[1])
+
+    sb = composite(times)
+    assert sb.donors == [0, 1, 0, 2, 1], sb.donors
+    net, around = sb.donor_net(3, 0)
+    assert around == [2, 4] and abs(net - (-0.37)) < 1e-9, (net, around)
+    net, around = sb.donor_net(1, 0)                       # C1: lap 1 gains 0.10, loses 0.20
+    assert around == [0, 2] and abs(net - (-0.10)) < 1e-9, (net, around)
+    net, around = sb.donor_net(4, 0)                       # the last segment: one neighbour
+    assert around == [3] and abs(net - (0.05 - 0.17)) < 1e-9, (net, around)
+    # A MISSING NEIGHBOUR is skipped: the donor's C2 → S/F interpolated at an edge, the subject's
+    # C1 → C2 outside its own span. Both gone, the net is the gain itself: nothing to say.
+    resolved = np.ones(times.shape, bool)
+    resolved[2, 4] = False
+    net, around = composite(times, resolved=resolved).donor_net(3, 0)
+    assert around == [2] and abs(net - (0.13 - 0.25)) < 1e-9, (net, around)
+    admitted = np.ones(times.shape, bool)
+    admitted[0, 2] = False
+    net, around = composite(times, admitted=admitted, resolved=resolved).donor_net(3, 0)
+    assert around == [] and abs(net - 0.13) < 1e-9, (net, around)
+    # Nothing to give back: a POINT segment (no donor), the donor's own row, a lap with no row,
+    # and a segment the subject's own cell is not admitted on (the decomposition drops it).
+    point = dataclasses.replace(sb, donors=[0, 1, None, 2, 1])
+    assert point.donor_net(2, 0) is None
+    assert sb.donor_net(3, 2) is None and sb.donor_net(3, 9) is None
+    admitted = np.ones(times.shape, bool)
+    admitted[0, 3] = False
+    assert composite(times, admitted=admitted).donor_net(3, 0) is None
+    # The edges cancel: 0.10 s moved from the donor's C2 into the straight after it (an edge the
+    # GPS put 0.10 s early) turns a 0.13 s gain into 0.23 s, and the net does not move.
+    shifted = times.copy()
+    shifted[2, 3] -= 0.10
+    shifted[2, 4] += 0.10
+    sb2 = composite(shifted)
+    assert abs(sb2.gains_vs(0)[3] - 0.23) < 1e-9, sb2.gains_vs(0)
+    assert abs(sb2.donor_net(3, 0)[0] - (-0.37)) < 1e-9, sb2.donor_net(3, 0)
+    print("test_donor_net_counts_what_the_donor_gave_back_either_side OK")
 
 
 def test_display_labels_are_the_straights_tables_own_spelling():
