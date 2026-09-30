@@ -14,8 +14,9 @@ A FRAGMENT is a piece of changelog in the changelog's own shape:
 
 One or more `### Added` / `### Changed` / `### Fixed` groups of `- ` bullets. A bullet continues
 on lines indented by two spaces and is at most 2 lines of at most 100 characters; the long form
-belongs in the PR description. End it with `(#PR)` if you know the number. If you do not, the fold
-finds it: on `main`, the first-parent commit that added the fragment is "Merge pull request #N".
+belongs in the PR description. End it with `(#PR)` if you know the number (a full stop after it
+moves before it: `… 9 ms (#477).` folds as `… 9 ms. (#477)`). If you do not, the fold finds it:
+on `main`, the first-parent commit that added the fragment is "Merge pull request #N".
 
 Every section after 0.2.0 keeps that short shape (`changelog_problems`): only Highlights / Added /
 Changed / Fixed groups, entries of at most 3 lines (a fragment's 2 plus room for the PR number the
@@ -56,6 +57,9 @@ _SECTION = re.compile(r"^## \[([^\]]+)\]")
 _GROUP = re.compile(r"^### (.*?)\s*$")
 _LINK_DEF = re.compile(r"^\[[^\]]+\]:\s*\S")
 _PR_REF = re.compile(r"\(#\d+(?:, #\d+)*\)$")
+# A fragment that closes its sentence after its own number, `… 9 ms (#477).`: without this the
+# fold saw no number at the end and appended a second one (0.6.0's `(#477). (#477)`, #505).
+_PR_REF_THEN_STOP = re.compile(r"\s*(\(#\d+(?:, #\d+)*\))\.$")
 _SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _UNRELEASED_LINK = re.compile(r"^\[Unreleased\]:\s*(\S+)/compare/v(\S+)\.\.\.HEAD\s*$")
 
@@ -117,7 +121,11 @@ def _shape_problems(groups, allowed, max_lines, need_ref, ordered):
             for k, line in enumerate(text):
                 if len(line) > WIDTH:
                     problems.append(f"{m + k}: {len(line)} characters (at most {WIDTH})")
-            if need_ref and name in FRAGMENT_GROUPS and not _PR_REF.search(text[-1].rstrip()):
+            last = text[-1].rstrip()
+            if need_ref and name in FRAGMENT_GROUPS and _PR_REF_THEN_STOP.search(last):
+                problems.append(f"{m}: an entry with a full stop after its PR number — end it "
+                                f"`… sentence. (#N)`, as the fold does: {text[0][:60]!r}…")
+            elif need_ref and name in FRAGMENT_GROUPS and not _PR_REF.search(last):
                 problems.append(f"{m}: an entry that does not end in its PR number, `(#N)`: "
                                 f"{text[0][:60]!r}…")
     return problems
@@ -190,8 +198,16 @@ def merged_pr(repo, path):
 
 
 def _entry(lines, pr):
-    """One fragment bullet as changelog lines: its PR number appended, re-wrapped to WIDTH."""
+    """One fragment bullet as changelog lines: its PR number appended, re-wrapped to WIDTH.
+
+    A bullet ending `… (#477).` already carries its number: its full stop moves before it,
+    `… 9 ms. (#477)`, exactly what `… 9 ms.` merged as #477 folds to, and the way entries that
+    keep their stop end (16 of 0.6.0's 29 Added/Changed/Fixed; none ended `(#N).`)."""
     text = " ".join(line.strip() for line in lines)[2:].strip()
+    m = _PR_REF_THEN_STOP.search(text)
+    if m:
+        head = text[:m.start()]
+        text = f"{head}{'' if head.endswith(('.', '!', '?')) else '.'} {m.group(1)}"
     if pr is not None and not _PR_REF.search(text):
         text += f" (#{pr})"
     return textwrap.wrap(text, WIDTH, initial_indent="- ", subsequent_indent="  ",

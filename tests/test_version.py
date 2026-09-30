@@ -401,6 +401,59 @@ def test_the_fold_finds_a_fragments_pr_from_the_merge_that_added_it():
     print("test_the_fold_finds_a_fragments_pr_from_the_merge_that_added_it OK")
 
 
+def test_a_fragment_that_ends_its_sentence_after_its_pr_folds_to_one_ref():
+    """A fragment may close its sentence after its own number, `… 9 ms (#477).`. The fold read a
+    reference only at the very end, so it appended a second one: the 0.6.0 fold wrote
+    `(#477). (#477)` and the release removed it by hand (#505); with no merge to name the PR, it
+    refused an entry that already carried its number. It now keeps the author's full stop BEFORE
+    the reference, the way 16 of 0.6.0's 29 Added/Changed/Fixed entries end (none ends `(#N).`),
+    so `… 9 ms (#477).` folds byte for byte as `… 9 ms.` merged as #477 does."""
+    import tempfile
+    cl = _changelog_module()
+    merges = {"a-ref-then-stop.md": 477, "b-stop-only.md": 477, "c-two-refs.md": 9102,
+              "d-no-merge.md": None, "e-stopped-twice.md": 9104}
+    fragments = {
+        "a-ref-then-stop.md": "### Fixed\n\n- Sector times are read where the lap crosses a sector"
+                              " line: the worst\n  split error falls from 85 ms to 9 ms (#477).\n",
+        "b-stop-only.md": "### Fixed\n\n- Sector times are read where the lap crosses a sector"
+                          " line: the worst\n  split error falls from 85 ms to 9 ms.\n",
+        "c-two-refs.md": "### Changed\n\n- One sentence that names two pull requests (#9101, #9102).\n",
+        "d-no-merge.md": "### Added\n\n- Its own number, and no merge to find one from (#9103).\n",
+        "e-stopped-twice.md": "### Added\n\n- A stop on each side of its number. (#9104).\n",
+    }
+    real_merged_pr = cl.merged_pr
+    cl.merged_pr = lambda _repo, path: merges[os.path.basename(path)]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(os.path.join(tmp, "CHANGELOG.md"), _read("CHANGELOG.md"))
+            for name, text in fragments.items():
+                _write(os.path.join(tmp, "changes", name), text)
+            _text, target, problems = cl.fold(tmp)
+    finally:
+        cl.merged_pr = real_merged_pr
+    assert not problems, problems
+    _intro, groups = _unreleased(target + "\n")
+    entries = [e for es in groups.values() for e in es]
+    want = ["- Sector times are read where the lap crosses a sector line: the worst split error "
+            "falls from 85 ms\n  to 9 ms. (#477)",
+            "- One sentence that names two pull requests. (#9101, #9102)",
+            "- Its own number, and no merge to find one from. (#9103)",
+            "- A stop on each side of its number. (#9104)"]
+    for entry in want:
+        assert entry in entries, f"not folded as {entry!r}:\n" + "\n".join(entries)
+    # One reference each: the one the fragment wrote, never a second copy the fold appended.
+    doubled = [e for e in entries if e.count("(#") != 1]
+    assert not doubled, doubled
+    # The fragment that wrote its own `(#477).` and the one that left it to the merge fold alike.
+    assert entries.count(want[0]) == 2, entries
+    # CHANGELOG.md itself keeps the shape the fold writes; one typed in by hand as `(#N).` is
+    # named for what it is, not as an entry "that does not end in its PR number".
+    planted = cl.section_problems(["### Fixed", "", "- A stop after its number (#1)."])
+    assert len(planted) == 1 and "a full stop after its PR number" in planted[0], planted
+    print(f"test_a_fragment_that_ends_its_sentence_after_its_pr_folds_to_one_ref OK "
+          f"({len(entries)} entries, one reference each)")
+
+
 # ------------------------------------------------------------------------------ the product name
 # THE NAME CONVENTION (written down beside APP_NAME in studio/__init__.py): three forms, one job each.
 #   FORMAL   "Pacer Studio": APP_NAME, the macOS bundle, the .dmg, the application/display names,
