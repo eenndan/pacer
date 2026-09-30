@@ -1,0 +1,114 @@
+{
+  "about": "One entry per file in this directory, written by studio/dev/media_capture.py after each capture and checked by tests/test_version.py. version and commit: the app the pixels came from (commit is the HEAD the capture ran on, '+dirty' when studio/ or pacer/ had uncommitted changes; entries backfilled on 2026-09-30 name the commit that added the file). source: a label, never a path. derived: the published file this one was cut from, whose version, commit and waiver it carries. waiver: why a file older than this minor release stays, and the version it was granted at; it lapses at the next minor release.",
+  "files": {
+    "accuracy.png": {
+      "captured": "2026-09-29",
+      "commit": "ed41297",
+      "derived": null,
+      "sha256": "5401cd4772397fb2bc6177d66a90729da19e7ce4d66d3d664e6499c2b9b0f1fe",
+      "shot": "accuracy",
+      "source": "numbers in code",
+      "version": "0.5.1",
+      "waiver": null
+    },
+    "best-lap.jpg": {
+      "captured": "2026-09-24",
+      "commit": "acf6b0c",
+      "derived": "best-lap.mp4",
+      "sha256": "f6a733931e4d4f9a0dd5bfcad6950bf7aabaeca8b49ffb5c5f0956011928fced",
+      "shot": "clip",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.2.0",
+      "waiver": {
+        "granted_at": "0.5.1",
+        "reason": "captured at 0.2.0 (acf6b0c); re-captured at 0.5.0 (#441) and kept, as overlay.png from the same export renderer moved 0.008 % of pixels; a re-shoot needs the Sandown 3h recording"
+      }
+    },
+    "best-lap.mp4": {
+      "captured": "2026-09-24",
+      "commit": "acf6b0c",
+      "derived": null,
+      "sha256": "8f4a6650336506bcc306a24bd31e984575495dfacfcd3b5d6f3ebb93d945643d",
+      "shot": "clip",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.2.0",
+      "waiver": {
+        "granted_at": "0.5.1",
+        "reason": "captured at 0.2.0 (acf6b0c); re-captured at 0.5.0 (#441) and kept, as overlay.png from the same export renderer moved 0.008 % of pixels; a re-shoot needs the Sandown 3h recording"
+      }
+    },
+    "data-trust.png": {
+      "captured": "2026-09-27",
+      "commit": "9e8083f",
+      "derived": null,
+      "sha256": "c92ff9c2687fba6779941f49e1193e32baa02a32a1a6d41a95b30302bbb0522d",
+      "shot": "trust",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.5.0",
+      "waiver": null
+    },
+    "debrief.png": {
+      "captured": "2026-09-27",
+      "commit": "3d270d7",
+      "derived": null,
+      "sha256": "2e3d0c987631ddd50ccc7b97a9a902fbbe2f694960680cb3de20c21c05a98c0e",
+      "shot": "debrief",
+      "source": "synthetic demo",
+      "version": "0.5.0",
+      "waiver": null
+    },
+    "hero.png": {
+      "captured": "2026-09-27",
+      "commit": "9e8083f",
+      "derived": null,
+      "sha256": "58d83b62fbcd7cdf90feb11a2c97f4e125c6ef4fea5defe92ec1e38901159ea8",
+      "shot": "hero",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.5.0",
+      "waiver": null
+    },
+    "ideal-lap.png": {
+      "captured": "2026-09-27",
+      "commit": "9e8083f",
+      "derived": null,
+      "sha256": "d9153c68ffbc95d826025cd7df0eeddf1818d56f314192e54f60705dfc5c9ef0",
+      "shot": "ideal",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.5.0",
+      "waiver": null
+    },
+    "map.png": {
+      "captured": "2026-09-27",
+      "commit": "9e8083f",
+      "derived": null,
+      "sha256": "eb0f67caeec456f3c1ef9ee91eef85b77314f02db1fa596d2ba4163a338e0e90",
+      "shot": "map",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.5.0",
+      "waiver": null
+    },
+    "og.png": {
+      "captured": "2026-09-27",
+      "commit": "9e8083f",
+      "derived": null,
+      "sha256": "be4aa924c2b9c883f47d4d3be775ec82990dd3df915d153624875fea3dc561e2",
+      "shot": "og",
+      "source": "hero.png",
+      "version": "0.5.0",
+      "waiver": null
+    },
+    "overlay.png": {
+      "captured": "2026-09-24",
+      "commit": "acf6b0c",
+      "derived": null,
+      "sha256": "ce3abbc0dffd5dd0cfa58809c548643d1831a4e1b83fc988862997a09d4453d5",
+      "shot": "overlay",
+      "source": "Sandown 3h 2026 (GX010064)",
+      "version": "0.2.0",
+      "waiver": {
+        "granted_at": "0.5.1",
+        "reason": "captured at 0.2.0 (acf6b0c); the 0.5.0 re-capture (#441) moved 0.008 % of its pixels (map-tail anti-aliasing), so it was kept; a re-shoot needs the Sandown 3h recording"
+      }
+    }
+  }
+}
