@@ -88,13 +88,13 @@
       "waiver": null
     },
     "og.png": {
-      "captured": "2026-09-27",
-      "commit": "9e8083f",
+      "captured": "2026-09-30",
+      "commit": "32c3710",
       "derived": null,
-      "sha256": "be4aa924c2b9c883f47d4d3be775ec82990dd3df915d153624875fea3dc561e2",
+      "sha256": "9152aa3c3ab8c769ef71b403e98d41bba3ef3ab959b2b37c283759e64d90d247",
       "shot": "og",
       "source": "hero.png",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "waiver": null
     },
     "overlay.jpg": {
