@@ -121,8 +121,9 @@ and MODULE linker flags; build only the five Catch2 suites and `_pacer`. UBSan i
 (no `-fno-sanitize-recover`), so `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0` lists every
 report and `=1` gates (a suppressions file works only on a recoverable check);
 `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:detect_container_overflow=0` (no LSan on arm64; Catch2,
-Qt and numpy are uninstrumented). Python: a scratch `pacer/` (this package's init + stub + the ASan
-module) on `PYTHONPATH`, the env's `python3.13` run directly (`pixi run` may drop the variable) with
+Qt and numpy are uninstrumented). Building `_pacer` re-runs the binding codegen into the source
+tree, so check `git status` stays clean. Python: a scratch `pacer/` (the bindings package's
+`__init__.py` and its stub, from `bindings/pacer/pacer/`, + the ASan module) on `PYTHONPATH`, the env's `python3.13` run directly (`pixi run` may drop the variable) with
 `DYLD_INSERT_LIBRARIES=$(xcrun clang -print-file-name=libclang_rt.asan_osx_dynamic.dylib)`, jailed;
 print `pacer._pacer.__file__`. Clean: the suites, golden (EQUIVALENT), and the `stco` mutant above
 plus the 10 bundled samples through `ingest` + `Session.load`. At 479bcdb the same run reports
