@@ -994,8 +994,9 @@ def test_delta_to_ideal_is_non_negative_at_the_partition_edges():
     information, and the reason nothing here clamps or asserts pointwise ≥ 0.
 
     Measured on the real recordings at 25 ms of media clock (the table above
-    theme.format_ideal_run): the most negative value is −0.255 s, on SD_30_08, and at most
-    8.32 % of samples are negative on any recording, against end-of-lap values of +0.50 … +43.82 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
+    theme.format_ideal_run): the most negative value is −0.050 s, on SD_19_09 1 chapter, and at
+    most 1.17 % of samples are negative on any recording, against end-of-lap values of
+    +0.50 … +43.82 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
     small in between — so a future change that makes the interior wander gets caught."""
     s, ids = make_ideal_session()
     sb = s.ideal_segment_bests()

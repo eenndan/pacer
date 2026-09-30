@@ -3816,9 +3816,11 @@ class Session:
 
         The excursions are SMALL, and the measured numbers are the ones in `theme.py`'s
         `format_ideal_run` note (the single place this sweep is tabulated per recording): the
-        floor is **−0.255 s**, on SD_30_08 (on its built-in line and on the one the owner saved
-        beside it, which are one line since Q2), and 0.00 % of samples on Sandown 3h 3 chapters /
-        8.32 % on SD_30_08 are negative at all, against end-of-lap values of +0.50 … +43.82 s.
+        floor is **−0.050 s**, on SD_19_09 1 chapter, and 0.14 % of samples on Sandown 3h 3
+        chapters / 1.17 % on SD_30_08 are negative at all, against end-of-lap values of
+        +0.50 … +43.82 s. It was −0.255 s (SD_30_08, 8.32 %) until TRUTH-10 read the lap side on
+        its warp: most of that was the lap's equal-fraction place disagreeing with the ideal's
+        grid on the best lap's odometer, not the donor's pace.
         Drawing the ideal's interior as a straight
         line instead — which is what a partition composite does if it does not consult its donors
         — put that at −0.87 s on 18.4 % of samples when #211 measured it; see

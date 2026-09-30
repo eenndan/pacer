@@ -772,19 +772,21 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # printed before the clamp below existed, a raw Δ under -DELTA_EVEN_EPS_S. Re-measured on the working
 # set on 2026-09-23 (T16b), after the edition measured on D24 and Sandown_09_05_2026 went stale when
 # #335 changed corner matching and those recordings left the owner's machine (that edition is kept in
-# studio/docs/coaching-tables-on-d24.md), and again the same day once Q2 made Sandown Park a
-# built-in track:
+# studio/docs/coaching-tables-on-d24.md), again the same day once Q2 made Sandown Park a built-in
+# track, and on 2026-09-30 by TRUTH-10, when the lap side moved from equal odometer fraction onto
+# its on-track warp. That took the floor from -0.255 s (SD_30_08, 8.32 % negative) to -0.050 s: most
+# of the old wobble was the two frames disagreeing about where the lap was, not the donor's pace:
 #
 #   recording              laps  samples     floor   raw Δ < 0   prints a minus sign
-#   Sandown 3h 1 chapter     17    42921  -0.050 s     0.74 %        0.65 %
-#   Sandown 3h 3 chapters    62   125212  -0.000 s     0.00 %        0.00 %
-#   SD_19_09 1 chapter       26    49666  -0.009 s     0.22 %        0.12 %
-#   SD_19_09 2 chapters      36    68632  -0.103 s     2.40 %        2.06 %
-#   SD_30_08                 23    44408  -0.255 s     8.32 %        7.59 %
-#   MK_18_09 1 chapter       11    31623   0.000 s     0.00 %        0.00 %
-#   MK_18_09 2 chapters      19    53682  -0.030 s     0.88 %        0.37 %
+#   Sandown 3h 1 chapter     17    42921  -0.015 s     0.27 %        0.19 %
+#   Sandown 3h 3 chapters    62   125212  -0.017 s     0.14 %        0.07 %
+#   SD_19_09 1 chapter       26    49666  -0.050 s     0.26 %        0.20 %
+#   SD_19_09 2 chapters      36    68632  -0.035 s     0.54 %        0.35 %
+#   SD_30_08                 23    44408  -0.022 s     1.17 %        0.41 %
+#   MK_18_09 1 chapter       11    31623  -0.014 s     0.54 %        0.20 %
+#   MK_18_09 2 chapters      19    53682  -0.009 s     0.20 %        0.08 %
 #   and on the start line the owner saved beside the recording (its .pacer.json), as the app opens it:
-#   SD_30_08 †               23    44408  -0.255 s     8.32 %        7.59 %
+#   SD_30_08 †               23    44408  -0.022 s     1.17 %        0.41 %
 #
 # The first seven rows are each circuit's built-in line as the loader places it — Daytona Milton
 # Keynes', and Sandown Park's, which since Q2 is the owner's own saved line — so every row is the
@@ -801,7 +803,7 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # the one recording not at Sandown, and the one driven anticlockwise. tests/test_measured_figures.py
 # re-measures every row from them.
 #
-# against end-of-lap values of +0.50 … +43.82 s. So it is a wobble of at most 0.26 s (0.26 s on the
+# against end-of-lap values of +0.50 … +43.82 s. So it is a wobble of at most 0.05 s (0.02 s on the
 # owner's saved line) on a number whose job is to read 0 … +1.5 s, and the next partition edge always
 # takes it back: over a segment, and over the lap, you cannot be ahead of the ideal. A two-way ramp
 # would flash the "ahead" hue on the app's LARGEST text for a tenth of a second to report something
