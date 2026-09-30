@@ -84,9 +84,46 @@ def test_the_smoke_run_ends_with_smoke_ok():
     print(f"test_the_smoke_run_ends_with_smoke_ok OK ({len(lines)} lines, the last is its verdict)")
 
 
+# The smoke, with its load worker's QThread held for half a second AFTER it has handed the Session
+# over: its `finished` then reaches the GUI thread only after the window is built — the order CI
+# drew once in seven runs on 2026-09-30 (PR #494), forced here on every run.
+_SLOW_WORKER_TAIL_SMOKE = """
+import runpy, sys, time
+from studio import workers
+_run = workers.SessionLoadWorker.run
+def _run_then_linger(self):
+    _run(self)
+    time.sleep(0.5)
+workers.SessionLoadWorker.run = _run_then_linger
+sys.argv = ["_smoke", "--no-video"]
+runpy.run_module("studio.dev._smoke", run_name="__main__", alter_sys=True)
+"""
+
+
+def test_the_smoke_waits_for_its_load_worker_before_the_teardown_check():
+    """The smoke's last check — the Session must not outlive its closed, deleted window — holds
+    however late the load worker's `finished` arrives.
+
+    `finished` is emitted from the worker thread after run() returns, so it can land a pump AFTER
+    `loaded` built the view. The smoke used to stop pumping the moment the view existed; the
+    worker's `finished` then stayed queued, the worker was never released, and its `finished`
+    connection — a lambda holding the window, in Qt's connection table where gc cannot reach —
+    kept the window's Python side, and so its Session, alive: "SMOKE FAILED — the Session outlived
+    its closed, deleted window", a harness race and not a leak (the app's own event loop always
+    delivers `finished`)."""
+    p = _python("-c", _SLOW_WORKER_TAIL_SMOKE, timeout=300)
+    out = p.stdout + p.stderr
+    assert p.returncode == 0 and "SMOKE OK (no-video)" in p.stdout, (
+        f"with a load worker whose QThread finishes after the view is built, the smoke failed "
+        f"(exit {p.returncode}):\n{out[-3000:]}")
+    print("test_the_smoke_waits_for_its_load_worker_before_the_teardown_check OK (a worker that "
+          "lingers 0.5 s past its result still leaves no Session behind)")
+
+
 if __name__ == "__main__":
     for fn in (test_importing_and_using_the_bindings_exits_silently,
-               test_the_smoke_run_ends_with_smoke_ok):
+               test_the_smoke_run_ends_with_smoke_ok,
+               test_the_smoke_waits_for_its_load_worker_before_the_teardown_check):
         fn()
         print(f"ok  {fn.__name__}")
-    print("\n2 clean-shutdown tests passed")
+    print("\n3 clean-shutdown tests passed")
