@@ -53,7 +53,8 @@ ENTRY_KMH = 2.0        # lap-table entry speed vs 3.6 × the true speed at the c
                        # 0.893 km/h (0.92 %), default noise, the app's own line
 # The noise-free figures the public pages quote, each with its line, and `pixi run verify` prints
 # for a visitor to check. EXACT_S and AUTO_LINE_S leave them room to drift unseen, so each is held
-# to its own 0.05 ms; tests/test_measured_figures.py holds every page's quote to these constants.
+# to its measurement (the first to 0.05 ms, the second to its printed digit: 0.8033 measured);
+# tests/test_measured_figures.py holds every page's quote to these constants.
 PUBLISHED_NOISE_FREE_MS = 0.41   # at a line mid-straight
 PUBLISHED_AUTO_LINE_MS = 0.80    # at the app's own line
 _QUOTED_ON = ("README.md", "docs/ACCURACY.md", "docs/index.html", "docs/ENGINEERING.md",
@@ -134,8 +135,8 @@ def test_the_auto_fitted_line_is_off_the_braking_point():
     assert np.abs(d).max() <= AUTO_LINE_S, (
         f"lap times off truth at the auto-fitted line on a noise-free trace: {np.round(d, 5)} — "
         f"is the unknown-track line back on the braking point?")
-    max_ms = float(np.abs(d).max()) * 1e3
-    assert abs(max_ms - PUBLISHED_AUTO_LINE_MS) < 0.05, (
+    max_ms = float(np.abs(d).max()) * 1e3        # half a printed digit: the quote is what verify prints
+    assert abs(max_ms - PUBLISHED_AUTO_LINE_MS) <= 0.005, (
         f"noise-free max|Δ| at the app's own line is {max_ms:.3f} ms, but README.md and "
         f"docs/ACCURACY.md quote {PUBLISHED_AUTO_LINE_MS} ms — re-measure and update them together")
 
