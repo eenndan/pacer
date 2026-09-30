@@ -127,10 +127,10 @@ Each ingredient was shown necessary, and both reverts now fail the gate.
 
 The same idea, pushed further, is a synthetic GoPro recording with known truth. It is a chaptered
 MP4 with real GPMF streams: GPS noise and glitches, the measured GPS lag and media-clock rate, and
-an IMU on a misaligned mount. It goes through the real loader in CI, and the noise-free laps land
-within 0.41 ms of the truth. Four defects were planted in the real loader in #371, and each failed
-it by name: timing on the media clock, a 500 ppm clock error, a step at a chapter seam, a gravity
-axis left unpermuted. `pixi run verify` runs it, and the golden gate, in one command.
+an IMU on a misaligned mount. It goes through the real loader in CI, and its noise-free laps land
+within 0.41 ms of truth, timed mid-straight. Four defects planted in the real loader in #371 each
+failed it by name: timing on the media clock, a 500 ppm clock error, a step at a chapter seam, a
+gravity axis left unpermuted. `pixi run verify` runs it, and the golden gate, in one command.
 
 Receipt: [#286](https://github.com/eenndan/pacer/pull/286) ·
 [#371](https://github.com/eenndan/pacer/pull/371) · `tests/test_golden_synthetic.py` ·

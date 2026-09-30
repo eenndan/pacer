@@ -51,9 +51,11 @@ NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 16.9 ms
 NOISY_BIAS_S = 0.010   # …and its mean: measured +1.8 ms (+2.6 before X1)
 ENTRY_KMH = 2.0        # lap-table entry speed vs 3.6 × the true speed at the crossing: measured max
                        # 0.893 km/h (0.92 %), default noise, the app's own line
-# The noise-free figure the public pages quote, and `pixi run verify` prints for a visitor to check.
-# EXACT_S leaves it room to drift fivefold unseen, so it is held to its own 0.05 ms.
-PUBLISHED_NOISE_FREE_MS = 0.41
+# The noise-free figures the public pages quote, each with its line, and `pixi run verify` prints
+# for a visitor to check. EXACT_S and AUTO_LINE_S leave them room to drift unseen, so each is held
+# to its own 0.05 ms; tests/test_measured_figures.py holds every page's quote to these constants.
+PUBLISHED_NOISE_FREE_MS = 0.41   # at a line mid-straight
+PUBLISHED_AUTO_LINE_MS = 0.80    # at the app's own line
 _QUOTED_ON = ("README.md", "docs/ACCURACY.md", "docs/index.html", "docs/ENGINEERING.md",
               "tests/README.md")
 
@@ -98,7 +100,7 @@ def test_the_real_loader_times_every_lap_on_the_gps9_clock():
     for c, n in zip(cmap.chapters, rec.truth.chapter_payloads, strict=True):
         assert abs(c.duration - n * sg.PAYLOAD_S) < 1e-6, (c.duration, n)
     got, truth, d = _residuals(rec, s, s.timing_lines_latlon()[0])
-    print(f"  app's own line: {len(got)} laps vs truth — {_describe(d)}")
+    print(f"  with GPS noise, the app's own line: {len(got)} laps vs truth — {_describe(d)}")
     assert np.abs(d).max() <= NOISY_MAX_S, f"lap times off truth: {np.round(d, 4)}"
     assert abs(d.mean()) <= NOISY_BIAS_S, f"lap times biased by {d.mean():+.4f} s"
     slow = int(np.argmax(got))
@@ -132,6 +134,10 @@ def test_the_auto_fitted_line_is_off_the_braking_point():
     assert np.abs(d).max() <= AUTO_LINE_S, (
         f"lap times off truth at the auto-fitted line on a noise-free trace: {np.round(d, 5)} — "
         f"is the unknown-track line back on the braking point?")
+    max_ms = float(np.abs(d).max()) * 1e3
+    assert abs(max_ms - PUBLISHED_AUTO_LINE_MS) < 0.05, (
+        f"noise-free max|Δ| at the app's own line is {max_ms:.3f} ms, but README.md and "
+        f"docs/ACCURACY.md quote {PUBLISHED_AUTO_LINE_MS} ms — re-measure and update them together")
 
 
 def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():

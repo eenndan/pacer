@@ -32,8 +32,7 @@ log, the ground truth a series scores a session with, and a circuit's published 
 **121 clean laps** across three recordings — a modest sample, and the honest one:
 
 - mean error **+0.0010 to +0.0030 s** per recording — point estimates, not a bound;
-- **σ 0.0247 s**, **0.0527 s** and **0.0871 s** — the worst about **0.13 %** of a ~68 s kart lap,
-  quoting the worst on purpose.
+- **σ 0.0247 s**, **0.0527 s** and **0.0871 s** — the worst about **0.13 %** of a ~68 s kart lap.
 
 Two recordings are D24's — the Daytona 24-hour race at Milton Keynes, May 2026, that Pacer was
 built on — checked against the race's transponder log in June 2026 and reported as recorded: one's
@@ -58,9 +57,9 @@ positioning and map-matching **rejected on evidence**, are in
 **[docs/ACCURACY.md](docs/ACCURACY.md)**.
 
 **Verify it yourself:** `pixi run verify` times a synthetic GoPro recording with known truth
-through the real loader (noise-free: `max|Δ| 0.41 ms`) and runs the golden gate. That proves the
-clock, the chapter seam and the interpolation — not a receiver's noise floor, which official timing
-measures.
+through the real loader (noise-free: `max|Δ| 0.41 ms` at a line mid-straight, `0.80 ms` at the
+app's own line) and runs the golden gate. It proves the clock, chapter seam and interpolation;
+official timing measures the noise floor.
 
 A **delta** is measured on the clock too, not estimated. Pacer's own corner phase bars once priced
 a stretch by integrating `∫ds/v` along it — and `1/v` amplifies any speed error where the car is
