@@ -15,10 +15,15 @@ refuse — say AMBIGUOUS once that row is gone and when a near-twin row explains
 `studio/dev/clubspeed.py` is exercised on a synthetic heat page whose driver names must not
 survive into anything it writes.
 
+The interval of a mean lap error (`mean_interval`) is simulated over a DECLARED grid of how the
+error splits between the line crossings two laps share and each lap's own noise, and asserted at
+the coverage it actually reaches there, not at the nominal 95 %.
+
 `accuracy_mk` is a REAL-FOOTAGE check (`footage.accuracy_mk`, tests/_footage.py): it re-runs the
 lock-only validation of docs/ACCURACY.md's row C — MK_18_09_26 against the circuit's Club Speed
-sheet for 18 Sep 2026 — and holds the table, its lock line and the chart's data to what it
-measures. Without the recording or the sheet (never committed) it is reported SKIPPED by name.
+sheet for 18 Sep 2026 — and holds the table, its lock line, the row's paragraph and the chart's
+data to what it measures. Without the recording or the sheet (never committed) it is reported
+SKIPPED by name.
 
 Run: python tests/test_validate_wallclock.py
 """
@@ -104,6 +109,67 @@ def test_residual_stats():
     assert abs(s["median"]) < 1e-9
     assert abs(s["rms"] - float(np.sqrt(np.mean(r ** 2)))) < 1e-12
     print("test_residual_stats OK")
+
+
+# The mean interval's declared data-generating grid, fixed before the estimator was run on it:
+# r_k = c_{k+1} − c_k + e_k, crossing errors c at σc and per-lap noise e at σe — pure crossing
+# (lag-1 −0.5), the synthetic GoPro's mix (σe = σc, lag-1 −1/3; the review measured −0.34) and iid
+# (lag-1 0, which row C's real laps are closest to) — 2,000 draws of 14 laps, row C's count.
+_GRID = {"pure crossing": (1.0, 0.0), "synthetic mix": (1.0, 1.0), "iid": (0.0, 1.0)}
+_GRID_SEED, _GRID_DRAWS, _GRID_N = 20260930, 2000, 14
+
+
+def _grid_coverage() -> dict:
+    """{grid point: (coverage of the true mean 0, mean half-width over the same-quantile σ/√n)}."""
+    rng = np.random.default_rng(_GRID_SEED)
+    out = {}
+    for name, (sc, se) in _GRID.items():
+        hit, ratio = 0, 0.0
+        for _ in range(_GRID_DRAWS):
+            c = rng.normal(0.0, sc, _GRID_N + 1)
+            r = c[1:] - c[:-1] + rng.normal(0.0, se, _GRID_N)
+            iv = vw.mean_interval(r)
+            hit += bool(abs(r.mean()) <= iv["half_width"])
+            ratio += iv["half_width"] / (iv["t"] * iv["sigma_over_sqrt_n"])
+        out[name] = (hit / _GRID_DRAWS, ratio / _GRID_DRAWS)
+    return out
+
+
+def test_mean_interval_is_structural():
+    """What the interval of a mean lap error achieves over the declared grid (above), asserted as
+    it is: the lag-1 from 14 laps is noisy, so it covers MORE than 95 % where crossing noise
+    dominates and less where there is none — at least 85 % everywhere, 97 % at pure crossing — and
+    where crossing noise dominates it is well under the σ/√n interval the review refused."""
+    got = _grid_coverage()
+    assert min(cov for cov, _ in got.values()) >= 0.85, got
+    assert got["pure crossing"][0] >= 0.97, got
+    assert got["pure crossing"][1] <= 0.7 and got["synthetic mix"][1] <= 0.7, got
+    print("test_mean_interval_is_structural OK (" + ", ".join(
+        f"{k} {cov:.1%} at {r:.2f}× σ/√n" for k, (cov, r) in got.items()) + ")")
+
+
+def test_mean_interval_clips_to_the_structure_and_needs_one_run():
+    assert abs(vw._t975(13) - 2.160369) < 1e-5 and abs(vw._t975(4) - 2.776445) < 1e-3
+    # A positive lag-1 is outside what laps sharing crossings can produce: clipped to 0, the
+    # interval is the plain t·s/√n one — never narrower for a correlation the structure forbids.
+    trend = vw.mean_interval(np.linspace(-0.05, 0.05, 14))
+    assert trend["rho1"] == 0.0, trend
+    assert abs(trend["half_width"] - trend["t"] * trend["sigma_over_sqrt_n"]) < 1e-15, trend
+    assert vw.mean_interval([0.02, -0.02] * 7)["rho1"] == -0.5
+    for short in ([0.01] * 4, []):
+        try:
+            vw.mean_interval(short)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"an interval from {len(short)} residuals")
+    r = np.random.default_rng(1).normal(0.0, 0.03, 15)
+    whole = np.ones(15, bool)
+    assert vw.clean_interval(r, whole) == vw.mean_interval(r)
+    assert vw.clean_interval(r, ~(np.arange(15) == 0)) == vw.mean_interval(r[1:])
+    assert vw.clean_interval(r, ~(np.arange(15) == 7)) is None  # a hole mid-run
+    assert vw.clean_interval(r, np.arange(15) < 4) is None      # too short to say anything
+    print("test_mean_interval_clips_to_the_structure_and_needs_one_run OK")
 
 
 def test_parse_when_handles_z_and_naive():
@@ -301,7 +367,15 @@ def _published_row_c() -> dict:
                  and any(isinstance(t, ast.Name) and t.id == "ACCURACY" for t in n.targets))
     c = next(r for r in chart if r["name"] == "Recording C")
     searched = [int(x) for x in re.findall(r"\d+", lock[1])]
+    flat = " ".join(text.split())
+    every = re.search(r"With the opening lap, all (\d+) aligned laps give σ (\d\.\d{4}) s", flat)
+    lag = re.search(r"C's (\d+) clean laps cannot pin it — their lag-1 autocorrelation is "
+                    r"([+\-−]\d\.\d\d),", flat)
+    assert every and lag, ("docs/ACCURACY.md's row C paragraph no longer states its all-aligned σ "
+                           "and why its mean has no interval, in the words this check reads")
     return {
+        "prose": {"aligned": int(every[1]), "all_sigma": float(every[2]), "clean": int(lag[1]),
+                  "lag1": _num(lag[2])},
         "table": {"dop": _num(res[2]), "aligned": int(_num(res[3])), "clean": int(_num(res[4])),
                   "mean": _num(res[5]), "sigma": _num(res[6])},
         "chart": {k: c[k] for k in ("dop", "aligned", "clean", "mean", "sigma")},
@@ -315,8 +389,9 @@ def accuracy_mk():
     """docs/ACCURACY.md's row C, re-measured: MK_18_09_26 (both chapters) locked, with no race start
     and no hand-matching, against every driver row of the circuit's Club Speed sheet for the day.
     Exactly one stint must LOCK; its clean-lap mean, σ, counts and the recording's median DOP must be
-    what the table and the chart publish, and its lock figures what the lock table publishes. And
-    the lock must not be the only thing left: without the row it locked to, the stint is AMBIGUOUS."""
+    what the table and the chart publish, its lock figures what the lock table publishes, and its
+    all-aligned σ and clean-lap lag-1 what the row's paragraph says. And the lock must not be the
+    only thing left: without the row it locked to, the stint is AMBIGUOUS."""
     root = _footage.directory("PACER_MEASURED_FIGURES_DIR", "the accuracy table's row C (MK_18_09_26)",
                               _MK_CHAPTERS)
     sheet = _footage.timing_sheet(_MK_SHEET)
@@ -335,13 +410,22 @@ def accuracy_mk():
             "r": round(s["lock_r"], 4), "rival_r": round(s["best_rival_r"], 2),
             "margin": round(s["margin"], 2), "separation": int(s["separation"])}
     assert lock == pub["lock"], f"row C's lock re-measured {lock}; docs/ACCURACY.md says {pub['lock']}"
+    # The prose's two figures: σ over every aligned lap, the −0.348 s opening lap included, and the
+    # clean laps' lag-1 — the reason the page gives the mean no interval (FRONT-DOOR-4).
+    iv = s["interval"]
+    assert iv is not None, "row C's clean laps are no longer one consecutive run"
+    prose = {"aligned": s["stats"]["all"]["n"], "all_sigma": round(s["stats"]["all"]["std"], 4),
+             "clean": iv["n"], "lag1": round(iv["lag1"], 2)}
+    assert prose == pub["prose"], (
+        f"row C's prose re-measured {prose}; docs/ACCURACY.md says {pub['prose']}")
 
     rows, _starts = vw.load_rows(sheet)
     del rows[tuple(s["row"])]
     app = np.array([p["app_s"] for p in s["per_lap"]])
     rest = vw.lock_verdict(vw.lock_all(app, rows))
     assert not rest["locked"], f"the stint still locks without its own row: {rest['lock']}"
-    print(f"accuracy_mk: re-measured {measured}, lock {lock}; without its row: {rest['why']}")
+    print(f"accuracy_mk: re-measured {measured}, lock {lock}, prose {prose} (interval "
+          f"±{iv['half_width']:.4f} s, not published); without its row: {rest['why']}")
 
 
 FOOTAGE_CHECKS = (accuracy_mk,)

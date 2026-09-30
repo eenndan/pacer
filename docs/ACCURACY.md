@@ -7,10 +7,10 @@ ground truth a race series or a circuit scores a session with: a real transponde
 circuit's own published timing sheet. Over **121 clean laps** across three recordings, the per-lap
 spread against that ground truth is **σ 0.025 s, 0.053 s and 0.087 s**, and the mean error is
 **+0.0010 to +0.0030 s** per recording — point estimates, not a bound: no interval is computed for
-A or B, whose per-lap residuals were not kept. On a ~68 s kart lap the worst recording's σ is about
-**0.13%**. That is at the noise floor of 10 Hz GPS: the remaining error is per-fix positional noise
-on the samples that straddle the finish line, and we can show — with data — that it is irreducible
-from the streams a GoPro records.
+A or B, whose per-lap residuals were not kept, nor given for C (below). On a ~68 s kart lap the
+worst recording's σ is about **0.13%**. That is at the noise floor of 10 Hz GPS: the remaining
+error is per-fix positional noise on the samples that straddle the finish line, and we can show —
+with data — that it is irreducible from the streams a GoPro records.
 
 That is a modest sample, and it is the honest one: 121 is the number of laps actually compared,
 not the span of lap IDs they occupied in a 24-hour transponder log.
@@ -42,7 +42,11 @@ non-racing laps on top of that. The correction is a factor of ten, in the unflat
 Row C's window is the race itself: its 15 laps are laps 2–16 of one driver's row on the sheet (lap
 1 there runs from the start, before the first line crossing a recording can time). The one aligned
 lap left out of the clean 14 is the race's opening flying lap, over the 72 s racing cap, and it
-reads −0.348 s; the 14 clean residuals all lie between −0.033 s and +0.044 s. The recording also
+reads −0.348 s; the 14 clean residuals all lie between −0.033 s and +0.044 s. With the opening
+lap, all 15 aligned laps give σ 0.0903 s. C's mean is a point estimate too: consecutive laps share
+a line crossing, so an interval has to model how that crossing's error carries from lap to lap,
+and C's 14 clean laps cannot pin it — their lag-1 autocorrelation is +0.03, where independent
+crossing noise alone would give −0.5 and none at all 0. The recording also
 holds a four-lap qualifying run, with a single lap under the cap — too short a fingerprint to lock,
 so it is not measured at all. The receiver gated 10.4% of the recording's fixes, every one of them
 in its first seven minutes while it acquired; inside the race none were gated, and the median DOP
@@ -64,12 +68,13 @@ are under four milliseconds, as point estimates.
   clocks' rates differ by only ~27 ppm. The GPS lag the gyroscope measures (about 0.46 s, below) is
   taken out of the video, not the clock: no lap time changes with it. A lap time is
   `(finish crossing instant) − (start crossing instant)`, where each instant is interpolated along
-  the chord between the two real GPS samples straddling the start/finish line. GPS9 is narrower than it sounds: GoPro's metadata spec introduces it with the
-  Hero 11, records it *removed* on the Hero 12 ("No GPS receiver in HERO12" — that camera cannot be
-  lap-timed at all), and brings it back on the Hero 13. Hero 5 through Hero 10 and the Max emit GPS5
-  only, which carries no per-sample clock; those recordings fall back to the video clock and every
-  duration derived from it is muted and labelled estimated. The detection is per recording, off the
-  stream itself (`studio/load.py::_used_gps9_trueclock`), not off a model name.
+  the chord between the two real GPS samples straddling the start/finish line. GPS9 is narrower
+  than it sounds: GoPro's metadata spec introduces it with the Hero 11, records it *removed* on the
+  Hero 12 ("No GPS receiver in HERO12" — that camera cannot be lap-timed at all), and brings it
+  back on the Hero 13. Hero 5 through Hero 10 and the Max emit GPS5 only, which carries no
+  per-sample clock; those recordings fall back to the video clock and every duration derived from
+  it is muted and labelled estimated. The detection is per recording, off the stream itself
+  (`studio/load.py::_used_gps9_trueclock`), not off a model name.
 - **Default pipeline, nothing special.** These numbers come from the shipping configuration —
   GPS9 true-clock, clock rate = 1.0, boxcar smoothing w=13 — not a tuned-for-the-benchmark variant.
   Row C was timed on the built-in Daytona Milton Keynes start/finish line, exactly as a first open
