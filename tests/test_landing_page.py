@@ -651,19 +651,15 @@ def _sentence(flat: str, anchor: str, rel: str) -> str:
 def test_the_pages_date_their_timings_and_agree_on_them():
     """A duration on the README carries the date it was measured, and agrees with its sources.
 
-    CI's minutes must bracket the seconds range quoted beside them. The golden gate's range must
-    hold AGENTS.md's figure for the same task. "N tests at a time" is the CTEST_PARALLEL_LEVEL of
-    the `test` task that CI runs. The install size is dated, and the landing page quotes the
-    same number of GB."""
+    The golden gate's range must hold AGENTS.md's figure for the same task. "N tests at a time" is
+    the CTEST_PARALLEL_LEVEL of the `test` task that CI runs. The install size is dated, and the
+    landing page quotes the same number of GB. (CI's own minutes were a fourth half: the README's
+    word diet, FRONT-DOOR-11, deleted that per-run sentence, and only its half went with it.)"""
     with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
         readme = " ".join(f.read().split())
-    ci = _sentence(readme, "CI runs all of it on every pull request", "README.md")
-    m = re.search(r"in (\w+) to (\w+) minutes .*?(\d+)–(\d+) s\)", ci)
-    assert m and _MEASURED.search(ci), f"README.md's CI time is undated or unparsed: {ci!r}"
-    lo_min, hi_min, lo_s, hi_s = (_count_value(m.group(1)), _count_value(m.group(2)),
-                                  int(m.group(3)), int(m.group(4)))
-    assert lo_min * 60 <= lo_s <= hi_s <= hi_min * 60, (
-        f"README.md says CI takes {m.group(1)} to {m.group(2)} minutes but quotes {lo_s}–{hi_s} s")
+    at = readme.find("CI runs all of it on every pull request")
+    assert at >= 0, "README.md no longer says how CI runs the suite — if deliberate, update this check"
+    ci = readme[at:readme.find(". ", at) + 1]
 
     golden = _sentence(readme, "`pixi run golden`, the gate you actually run", "README.md")
     g = re.search(r"\((\d+)–(\d+) s on the development Mac, (measured [^)]*)\)", golden)
@@ -687,7 +683,7 @@ def test_the_pages_date_their_timings_and_agree_on_them():
     page = " ".join(_page().split())
     assert f"about {gb.group(1)} GB on disk" in page, (
         f"docs/index.html does not quote README.md's install size (about {gb.group(1)} GB)")
-    print(f"test_the_pages_date_their_timings_and_agree_on_them OK (CI {lo_s}–{hi_s} s, golden "
+    print(f"test_the_pages_date_their_timings_and_agree_on_them OK (golden "
           f"{g.group(1)}–{g.group(2)} s vs AGENTS.md ~{row.group(1)} s, -j{level.group(1)}, "
           f"{gb.group(1)} GB)")
 
