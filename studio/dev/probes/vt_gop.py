@@ -84,6 +84,8 @@ YIELD, YIELD_TOL = 0.70, 0.03
 GAIN_SSIM, GAIN_PSNR = 0.002, 0.3          # the gain the real footage must show (either)
 LOSS_SSIM, LOSS_PSNR = -0.0005, -0.05      # "no loss" on the synthetic (both)
 SEEK_NET_MS, SEEK_GROSS_RATIO = 100.0, 2.0
+USAGE = ("usage: python -m studio.dev.probes.vt_gop synthetic | mk [RECORDING] "
+         "| verdict SYNTH.json MK.json")
 
 
 def _run(cmd, **kw) -> subprocess.CompletedProcess:
@@ -150,7 +152,10 @@ def _synthetic_session(work: str):
     rec = sg.generate(_out(work, "rec"), laps=2, chapters=1, video=_synthetic_picture,
                       frames_per_payload=60)
     session = Session.load(chapters.discover_siblings(rec.paths[0]))
-    return session, session.best_lap_id(), rec.paths
+    lap = session.best_lap_id()
+    if lap is None:
+        raise SystemExit("the synthetic recording segmented into no valid lap")
+    return session, int(lap), rec.paths
 
 
 def _mk_session(recording: str):
@@ -166,6 +171,8 @@ def _render_intermediate(session, lap: int, out: str):
     cfg = ev.OverlayConfig(out_height=OUT_H, quality=QUALITY)
     spec = ev.build_lap_spec(session, out, lap, config=cfg)
     spec = replace(spec, t1=min(spec.t1, spec.t0 + WINDOW_S), lead_out=0.0, ends_on_finish=False)
+    source = spec.source
+    assert source is not None, "build_lap_spec always resolves a source"
     real = ev._video_codec_args
     ev._video_codec_args = lambda *a, **k: list(LOSSLESS)       # type: ignore[assignment]
     try:
@@ -173,7 +180,7 @@ def _render_intermediate(session, lap: int, out: str):
         res = renderer.run()
     finally:
         ev._video_codec_args = real                             # type: ignore[assignment]
-        spec.source.cleanup()
+        source.cleanup()
     return res.fps, res.out_w, res.out_h, res.frames, renderer._encoder
 
 
@@ -261,6 +268,7 @@ def measure(mode: str, recording: str | None) -> dict:
             session, lap, _ = _synthetic_session(work)
             label = "synthetic GoPro (synth_gopro, 1920x1080 testsrc2 at 59.94)"
         else:
+            assert recording is not None, "mk mode names its recording"
             paths = chapters.discover_siblings(recording)
             before = _snapshot(paths)
             session, lap, _ = _mk_session(recording)
@@ -376,7 +384,7 @@ def main(argv=None) -> int:
         if not os.path.isfile(recording):
             raise SystemExit(f"no recording at {recording}")
     else:
-        raise SystemExit(__doc__.split("ARGV CONTRACT")[1].split("RECORDING is")[0])
+        raise SystemExit(USAGE)
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     theme.apply_theme(app)

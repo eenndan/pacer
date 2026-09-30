@@ -1387,7 +1387,22 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
     encoder does have a working constant-quality knob, `-q:v` on an inverse 1-100 scale: 20 / 50 /
     80 gave 42,768 / 75,774 / 187,394 bytes. This module is bitrate-targeted (`-b:v` + `-maxrate`
     + `-bufsize`) and so was never exposed to the trap; `tests/test_export_video.py` pins that no
-    `-qp` creeps in later. See `alpha_codec_args` for the one path that has no bitrate at all."""
+    `-qp` creeps in later. See `alpha_codec_args` for the one path that has no bitrate at all.
+
+    NOR DOES THE VIDEOTOOLBOX PATH CARRY A `-g`, AND THAT IS MEASURED TOO (APP-POLISH-4). Without
+    one, ffmpeg's `gop_size` default of 12 is VideoToolbox's MaxKeyFrameInterval: 150 keyframes a
+    minute at 30 fps, against x264's 250-frame default on the libx264 path. `-g` is only a maximum
+    there, and the encoder put its keyframes exactly on it, at 12 as at 30, 60 or 120.
+    `studio/dev/probes/vt_gop.py` rendered 20 s of MK_18_09_26's lap 14, and of a synthetic
+    1080p59.94 recording, through the real renderer into a lossless file, then encoded each with
+    this argv at 1080p30 "high", plus `-g` 30, 60 and 120 (M1 Pro, 2026-09-30). Every interval kept
+    the 0.700 yield. A 2 s interval (`-g 60`) bought +0.35 dB PSNR and +0.0005 SSIM on the real lap
+    (+0.72 dB and +0.0011 on the synthetic). It also makes a random seek decode five times further:
+    on the hardware decoder, an accurate seek to one frame
+    (`ffmpeg -hwaccel videotoolbox -ss T -i F -frames:v 1`) costs about 4 ms per frame past the
+    keyframe, so the median over 20 seeks rose from 23 to 138 ms beyond a frame-0 decode on the real
+    lap (23 to 133 on the synthetic). The rule fixed before measuring allowed at most 100 ms, so the
+    default stays; the rule and the full table are in the PR (#503)."""
     bpp, crf = quality_params(quality)
     if encoder == VT_H264:
         br = vt_target_bitrate(out_w, out_h, fps, bpp)
