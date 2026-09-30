@@ -1477,7 +1477,7 @@ def test_straights_note_does_not_rank_a_best_its_lap_gave_back():
     report[2] = replace(report[2], exit_delta_kmh=1.0, leverage=0.0)
     v.refresh()
     assert v.straights.note.text() == (
-        "No slow exit ranks here: after C1, the lap that set the straight's best gave all of "
+        "No slow exit to rank: after C1, the lap that set the straight's best gave all of "
         "that time back in the corners beside it."), v.straights.note.text()
     # A best the ideal did not take (another lap set this table's minimum) is ranked as before.
     report[1] = replace(report[1], best_s=2.99)

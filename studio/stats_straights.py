@@ -136,7 +136,7 @@ class StraightsSection:
         why = ("the lap that set the straight's best gave all of that time back in the corners "
                "beside it.")
         if top is None:
-            return f"No slow exit ranks here: after {coaching.corner_names(above)}, {why}" \
+            return f"No slow exit to rank: after {coaching.corner_names(above)}, {why}" \
                 if above else ""
         exit_gap = abs(units.convert_speed(top.exit_delta_kmh, unit))
         # Copy #7 (QA 2026-09-26): what it costs, in words; "leverage" and "median" are named on
