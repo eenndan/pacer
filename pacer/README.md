@@ -112,6 +112,23 @@ it through `OpenMP4Source` + `GetNumberPayloads` in a driver built with
 AGENTS.md) and this reproducer. `git pull` never moves a submodule: until
 `git submodule update --init --recursive`, a checkout keeps compiling the old parser.
 
+**Sanitizer run** (ASan + UBSan; 2026-09-30 at this pin: 0 reports). Configure out of tree with
+`-DSKBUILD=ON -DCMAKE_INSTALL_PREFIX=<scratch>` and check `--target help` lists no `*deploy*`
+target: a normal configure's `all` copies the instrumented `_pacer` into `bindings/pacer/pacer/`
+and site-packages, where every later Python in the env loads it. `RelWithDebInfo`, C/CXX flags
+`-fsanitize=address,undefined -fno-omit-frame-pointer`, the same `-fsanitize` on the EXE, SHARED
+and MODULE linker flags; build only the five Catch2 suites and `_pacer`. UBSan is left recoverable
+(no `-fno-sanitize-recover`), so `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0` lists every
+report and `=1` gates (a suppressions file works only on a recoverable check);
+`ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:detect_container_overflow=0` (no LSan on arm64; Catch2,
+Qt and numpy are uninstrumented). Building `_pacer` re-runs the binding codegen into the source
+tree, so check `git status` stays clean. Python: a scratch `pacer/` (the bindings package's
+`__init__.py` and its stub, from `bindings/pacer/pacer/`, + the ASan module) on `PYTHONPATH`, the env's `python3.13` run directly (`pixi run` may drop the variable) with
+`DYLD_INSERT_LIBRARIES=$(xcrun clang -print-file-name=libclang_rt.asan_osx_dynamic.dylib)`, jailed;
+print `pacer._pacer.__file__`. Clean: the suites, golden (EQUIVALENT), and the `stco` mutant above
+plus the 10 bundled samples through `ingest` + `Session.load`. At 479bcdb the same run reports
+RISK-8 inside `pacer.GPMFSource`, so it can fail.
+
 ## Conventions
 
 - **One module = one folder = one static lib.** The `add_pacer_library` macro
