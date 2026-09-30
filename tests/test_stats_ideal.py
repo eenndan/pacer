@@ -394,8 +394,8 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
     """TRUTH-6 (MOAT-3). Both ideal tooltips said the gap "is time you have already demonstrated,
     one segment at a time" and nothing about the GPS every one of those segments is timed by. A
     minimum over noisy cells keeps the lucky side of the noise: against synthetic truth the ideal
-    reads fast from noise 1 upward (tests/test_truth_matrix.py, row 3), and TRUTH-3 found the size
-    NOT ESTIMABLE from a real recording. So the tooltips now say what noise does, in words:
+    reads fast from noise 1 upward (studio/docs/falsification-2026-09.md §1), and TRUTH-3 found
+    the size NOT ESTIMABLE from a real recording. So the tooltips now say what noise does, in words:
       (1) the sentence is the one TRUTH-3's recorded verdict calls for, pinned verbatim;
       (2) it carries no figure, and no tooltip, caption or line of the block prints a bias figure
           or a value from the truth matrix's table (a synthetic's seconds are not a recording's,

@@ -167,9 +167,9 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   widgets and measure them. CI runs all of it on every pull request, four tests at a time, plus an
   end-to-end offscreen smoke, in five to eight minutes (the whole job on the last five pull
   requests, measured 27 September 2026: 315–452 s). It skips what its runner cannot run: the 16+
-  `footage.*` checks, which need a real recording, the 6+ `videotoolbox.*` export checks, which
-  need Apple's hardware encoder, and one crash soak that runs on every push to `main` instead.
-  CTest lists every one of them by name as *Skipped*. `pixi run golden`, the gate you actually run
+  `footage.*` checks, which need a real recording, 4 of the 6 `videotoolbox.*` export checks,
+  which need Apple's hardware encoder, and one crash soak that runs on every push to `main`
+  instead. CTest lists each by name as *Skipped*. `pixi run golden`, the gate you actually run
   after every maths change, takes seconds, not minutes (8–14 s on the development Mac, measured
   27 September 2026).
 
