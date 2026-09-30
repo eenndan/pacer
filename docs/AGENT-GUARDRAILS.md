@@ -96,13 +96,13 @@ item in the maintainers' private notes, which are not in this repository.
    checkout.
 2. `git submodule update --init --recursive`.
 3. `pixi install`, then `pixi run build`. Both need the network, so they run outside the sandbox.
-4. Pull the owner's private backup (choice recorded in [DECISIONS.md](DECISIONS.md#2-owner-acts))
-   into a scratch directory, never over a live `.claude/` or memory folder: a stale backup would
-   overwrite newer notes.
+4. If a private copy of the agents' notes and memory is configured, pull it into a scratch
+   directory, never over a live `.claude/` or memory folder: a stale copy would overwrite newer
+   notes. Without one, the new checkout starts with this page's guardrails and no notes.
 5. Put each file in place:
-   - the agents' notes (briefs, reviews, execution logs, `ops/` scripts) into `.claude/` of the new
-     checkout;
-   - the agents' memory into Claude Code's per-project memory folder for the new checkout's path;
+   - from that copy, if there is one: the agents' notes (briefs, reviews, execution logs, `ops/`
+     scripts) into `.claude/` of the new checkout, and the agents' memory into Claude Code's
+     per-project memory folder for the new checkout's path;
    - §1's JSON into `.claude/settings.local.json`, merged with any keys already there;
    - §2's patterns into a `PreToolUse` hook in the Claude Code host.
 6. Check: `permissions.deny` and `sandbox` in `.claude/settings.local.json` equal §1's block (the
