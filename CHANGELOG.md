@@ -21,8 +21,8 @@ behind it live.
   the median over your clean laps, not one lap's; "line" needs a measured slower-apex, faster-exit
   signature, and lap-to-lap spread is called "Consistency" (#454, #460, #465)
 - **Sector times at the true line crossing.** A split is interpolated where the lap crosses its
-  sector line, not read at the nearest fix: noise-free its σ is under 1 ms, at real GPS noise up to
-  0.11 s, and no official timing has checked a split (#477, #489)
+  sector line, not at the nearest fix: σ under 1 ms noise-free, but at two recordings' GPS noise
+  0.11 s and 0.24 s, several times a lap's; no official timing has checked a split (#477, #489)
 - **The demo shows the loop.** A fresh launch offers "Get demo", downloaded on that click; the demo
   (demo-data-v2) plants one fixable habit, so its debrief ranks that corner first and lands with the
   focus list filled (#491, #500)

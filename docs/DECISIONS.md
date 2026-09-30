@@ -187,6 +187,7 @@ but never committed (RUL-1 now records it); and no GitHub social preview was eve
 
 The showcase release (RUL-12) is cut with these outcomes, each recorded 2026-09-30. D8's checks
 look for an input once; what is missing then rides the next release, so no act holds this one.
+These are what each check found when its batch was dispatched, not a status of section 2's acts.
 
 - **The Sandown timing sheets (D8, first check):** not in hand at their check, so FRONT-DOOR-12's
   three accuracy rows at a second circuit ride the next release, and 0.6.0 says "at one circuit".
