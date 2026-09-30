@@ -96,6 +96,22 @@ Each `pacer/<name>/` is a static lib `pacer::<name>`, built by the `add_pacer_li
 > GPS9 true clock, so it was removed. The investigation is preserved in
 > [studio/docs/upstream-20ms-investigation.md](../studio/docs/upstream-20ms-investigation.md).
 
+## Vendored parser
+
+`3rdparty/gpmf-parser` (submodule) is pinned at upstream **9a71506** (2026-08-18). **RISK-8:** at
+the previous pin, 479bcdb, a corrupted GPMF sample table (`stco` entry count below the `stsz` sample
+count) made `OpenMP4Source` read 4 bytes past a heap buffer at `demo/GPMF_mp4reader.c:649`
+(allocated `:627`) — found under ASan 2026-09-23, silent in release builds, corrupted files only.
+Upstream bdd8a46 (2026-01-15) fixed it: the table is allocated max(stco, stsz) entries (`:628-632`,
+read at `:654`), yet only the first stco entries are read or used, so a valid file yields identical
+offsets. Residue: past the stco count a corrupted file's offsets are uninitialised (garbage for its
+tail, never an out-of-bounds read). Reproducer, clean at this pin: copy `samples/hero6.mp4` to
+scratch (never into `samples/`), decrement its GPMF trak's `stco` count by one (23 → 22), and open
+it through `OpenMP4Source` + `GetNumberPayloads` in a driver built with
+`-fsanitize=address,undefined` on the pin's three sources. A pin move re-runs golden (both halves,
+AGENTS.md) and this reproducer. `git pull` never moves a submodule: until
+`git submodule update --init --recursive`, a checkout keeps compiling the old parser.
+
 ## Conventions
 
 - **One module = one folder = one static lib.** The `add_pacer_library` macro
