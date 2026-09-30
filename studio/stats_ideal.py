@@ -43,13 +43,11 @@ from .widgets import DASH, Tile, WrapLabel
 # recordings no longer here, not since). The full table and its sources are in
 # corner_model.IdealSample; this is the version a reader gets on hover.
 #
-# The noise sentence (TRUTH-6, MOAT-3): a minimum over noisy cells keeps their lucky side, and
-# against synthetic truth the ideal reads fast from GPS noise 1 upward (tests/test_truth_matrix.py,
-# row 3, `stated`). Words only: TRUTH-3 found its size NOT ESTIMABLE from a real recording
-# (studio/docs/falsification-2026-09.md §1), and a synthetic's seconds are not a recording's. Here
-# once, so both tiles say it; tests/test_stats_ideal.py pins it to that verdict. The laps.csv
-# trailer and the HTML report print `IdealSample.sentence()` and not this mechanism paragraph, so
-# they do not carry it, and neither does the debrief's frozen `vs ideal` chip.
+# The noise sentence (TRUTH-6, MOAT-3): against synthetic truth the ideal reads fast from GPS
+# noise 1 up (tests/test_truth_matrix.py row 3, `stated`), and TRUTH-3 found the size NOT
+# ESTIMABLE from a real recording (studio/docs/falsification-2026-09.md §1): words, no figure.
+# Once, here, so both tiles say it. laps.csv and the HTML report print `IdealSample.sentence()`,
+# not this mechanism paragraph, and the frozen debrief `vs ideal` chip prints neither.
 IDEAL_NOISE_SENTENCE = (
     "And every piece is timed off GPS: an error at a piece's edge makes a lap read quick on one "
     "side of it and slow on the other. A minimum keeps the quick side, so the ideal tends to read "
