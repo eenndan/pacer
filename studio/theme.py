@@ -1125,7 +1125,10 @@ def brand_mark(px: int, front: str | None = None, back: str | None = None) -> QP
     xs = [cx + x for cx, _w in BRAND_CHEVRONS for x, _y in BRAND_CHEVRON_POINTS]
     ys = [y for _x, y in BRAND_CHEVRON_POINTS]
     span = max(max(xs) - min(xs), max(ys) - min(ys)) + 2 * half
-    k = (px * dpr) / span
+    # `px`, not `px * dpr`: a QPainter on a DPR-tagged pixmap already paints in device-independent
+    # pixels (its base transform carries the ratio), so a second dpr here drew the mark dpr times
+    # too big and a Retina panel showed only its top-left 1/dpr (QA3-BRANDMARK).
+    k = px / span
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing, True)
     p.scale(k, k)
