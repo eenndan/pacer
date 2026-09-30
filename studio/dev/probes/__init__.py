@@ -113,4 +113,15 @@ and the four working-set recordings, jailed and tripwired. Its verdict is
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel synthetic --controls
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel real
+
+`vt_gop` asks whether a 2 s keyframe interval would buy VideoToolbox's H.264 exports quality per
+byte. It renders one 20 s window through the real `Renderer` into a lossless intermediate, encodes
+that with `_video_codec_args`' exact VideoToolbox argv at four intervals, and scores each encode's
+yield, keyframes, SSIM and PSNR and the cost of an accurate hardware seek. Everything it writes goes
+into one `mkdtemp` under $TMPDIR; the recording is only read. Its verdict is
+`studio/docs/refused-2026-09.md` §22.
+
+    pixi run python -m studio.dev.probes.vt_gop synthetic
+    pixi run python -m studio.dev.probes.vt_gop mk
+    pixi run python -m studio.dev.probes.vt_gop verdict SYNTH.json MK.json
 """

@@ -2376,12 +2376,12 @@ def test_no_encoder_argv_ever_carries_the_qp_that_videotoolbox_ignores():
 
 def test_videotoolbox_keeps_ffmpegs_keyframe_interval_a_2s_gop_was_measured_and_refused():
     """NO `-g` ON THE VIDEOTOOLBOX PATH, at any rate or quality (APP-POLISH-4; the numbers are in
-    `_video_codec_args`' docstring). `studio/dev/probes/vt_gop.py` measured a 2 s interval
-    (`-g 60` at 30 fps) on MK_18_09_26's lap 14: +0.35 dB PSNR and +0.0005 SSIM at the same 0.700
-    yield, and a random hardware seek decoding five times further, 135 ms past a frame-0 decode
-    against 25. The rule fixed before measuring allowed 100 ms. So ffmpeg's gop_size default (12)
-    stays VideoToolbox's MaxKeyFrameInterval. A `-g` here needs the probe re-run and its rule met,
-    not this pin edited.
+    `_video_codec_args`' docstring; the refusal is `studio/docs/refused-2026-09.md` §22).
+    `studio/dev/probes/vt_gop.py` measured a 2 s interval (`-g 60` at 30 fps) on MK_18_09_26's
+    lap 14: +0.35 dB PSNR and +0.0005 SSIM at the same 0.700 yield, and a random hardware seek
+    decoding five times further, 135 ms past a frame-0 decode against 25. The rule fixed before
+    measuring allowed 100 ms. So ffmpeg's gop_size default (12) stays VideoToolbox's
+    MaxKeyFrameInterval. A `-g` here needs the probe re-run and its rule met, not this pin edited.
 
     The finish frame's forced keyframe (`_finish_keyframe_args`) is not a `-g`, and it stays."""
     for fps in (25.0, 30000 / 1001, 30.0, 60000 / 1001, 60.0):

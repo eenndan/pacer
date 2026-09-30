@@ -2015,7 +2015,10 @@ _SECTION_REF = re.compile(r"§(\d+)\b(?!\.\d)")          # "§4.5" is another do
 # A citation's § numbers are the ones after the doc's name, up to the end of that sentence or the
 # next file named in it, whichever comes first.
 _CITATION_END = re.compile(r"[.;:!?][*_)\]`'\"]*(?=\s|$)|\.(?:md|py)\b")
-_PROBE_NAME = re.compile(r"\bp\d+_[a-z0-9_]+")
+_PROBE_NAME = r"\bp\d+_[a-z0-9_]+"
+# A public module in studio/dev/probes/ is a probe whether or not it carries a p-number (#503's
+# vt_gop does not): it speaks for itself, and the index paragraph that names it speaks for it.
+_PROBE_MODULE = re.compile(r"studio/dev/probes/([a-z][a-z0-9_]*)\.py")
 _ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
          "fifteen sixteen seventeen eighteen nineteen").split()
 _TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
@@ -2076,11 +2079,13 @@ def _refused_citations(files: dict[str, str]) -> list[tuple[str, int, set[str]]]
     … §N" in `files`. Scanned a paragraph at a time, because the probes index names each probe at the
     head of the paragraph that cites its section; a probe module also speaks for itself."""
     out = []
+    modules = sorted({m.group(1) for rel in files if (m := _PROBE_MODULE.fullmatch(rel))})
+    named = re.compile("|".join([_PROBE_NAME] + [rf"\b{re.escape(m)}\b" for m in modules]))
     for rel, raw in files.items():
-        own = re.fullmatch(r"studio/dev/probes/(p\d+_[a-z0-9_]+)\.py", rel)
+        own = _PROBE_MODULE.fullmatch(rel)
         for para in re.split(r"\n[ \t#]*\n", raw):
             flat = _flatten(para)
-            probes = set(_PROBE_NAME.findall(flat)) | ({own.group(1)} if own else set())
+            probes = set(named.findall(flat)) | ({own.group(1)} if own else set())
             cited = set()
             for m in _REFUSED_NAME.finditer(flat):
                 window = flat[m.end():m.end() + 240]
@@ -2173,8 +2178,9 @@ def test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen():
         assert problems, f"the numbering check missed: {label}"
     p15 = "studio/dev/probes/p15_gps_gap_census.py"
     p4 = "studio/dev/probes/p4_corner_gps_quality.py"
-    p15_text = _read(os.path.join(_REPO, p15))
-    p4_text = _read(os.path.join(_REPO, p4))
+    vt, index = "studio/dev/probes/vt_gop.py", "studio/dev/probes/__init__.py"
+    originals = {rel: _read(os.path.join(_REPO, rel)) for rel in (p15, p4, vt, index)}
+    p15_text, p4_text, vt_text, index_text = originals.values()
     planted_cites = {
         "#351: p15 still citing §12 after its refusal became §13":
             {p15: p15_text.replace("refused-2026-09.md`\n§13", "refused-2026-09.md`\n§12")},
@@ -2184,9 +2190,16 @@ def test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen():
             {"studio/x.py": f"# The numbers are in `studio/docs/refused-2026-09.md` §{n + 1}.\n"},
         "the § wrapped onto the next comment line":
             {"studio/x.py": f"# Its verdict is `refused-2026-09.md`\n# §{n + 1} (a new refusal).\n"},
+        # A probe with no p-number (#503's vt_gop) is a probe too: its own citation, and the
+        # index paragraph that names it, must land on the section that names it.
+        "vt_gop pointing at the section before its own":
+            {vt: vt_text.replace("refused-2026-09.md` §22", "refused-2026-09.md` §21")},
+        "the probes index sending vt_gop to another refusal":
+            {index: index_text.replace("refused-2026-09.md` §22", "refused-2026-09.md` §21"),
+             vt: vt_text},
     }
     for label, files in planted_cites.items():
-        assert all(text not in (p15_text, p4_text) for text in files.values()), \
+        assert any(text != originals.get(rel) for rel, text in files.items()), \
             f"the plant for {label!r} changed nothing — the fixture moved"
         _found, problems = _refused_citation_problems(doc, files)
         assert problems, f"the citation check missed: {label}"
