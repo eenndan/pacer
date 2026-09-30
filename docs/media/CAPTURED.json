@@ -25,10 +25,10 @@
       }
     },
     "best-lap.mp4": {
-      "captured": "2026-09-24",
+      "captured": "2026-09-30",
       "commit": "acf6b0c",
-      "derived": null,
-      "sha256": "8f4a6650336506bcc306a24bd31e984575495dfacfcd3b5d6f3ebb93d945643d",
+      "derived": "best-lap.mp4",
+      "sha256": "9b614ecb007c2636cf24dfc9a60958bf45fe057e562cc60cabf418e26e2c546f",
       "shot": "clip",
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
@@ -88,20 +88,20 @@
       "waiver": null
     },
     "og.png": {
-      "captured": "2026-09-27",
-      "commit": "9e8083f",
+      "captured": "2026-09-30",
+      "commit": "32c3710",
       "derived": null,
-      "sha256": "be4aa924c2b9c883f47d4d3be775ec82990dd3df915d153624875fea3dc561e2",
+      "sha256": "9152aa3c3ab8c769ef71b403e98d41bba3ef3ab959b2b37c283759e64d90d247",
       "shot": "og",
       "source": "hero.png",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "waiver": null
     },
-    "overlay.png": {
-      "captured": "2026-09-24",
+    "overlay.jpg": {
+      "captured": "2026-09-30",
       "commit": "acf6b0c",
-      "derived": null,
-      "sha256": "ce3abbc0dffd5dd0cfa58809c548643d1831a4e1b83fc988862997a09d4453d5",
+      "derived": "overlay.png",
+      "sha256": "0422417964afe9203fcf20e8a7b6c5aba5a0da94211e2b429a1d0b2bb8d0d1d9",
       "shot": "overlay",
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",

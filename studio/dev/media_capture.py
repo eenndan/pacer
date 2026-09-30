@@ -39,7 +39,7 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
                                                catch a mis-scaled channel)
   map.png         map maximised, key open      "the racing line is a data channel, and every mark
                                                on it is named"
-  overlay.png     a frame of a real export     "the analysis leaves the app as something you can
+  overlay.jpg     a frame of a real export     "the analysis leaves the app as something you can
                                                post"
   best-lap.mp4    20 s of a real export, silent the same claim, moving: the best lap's own
   + best-lap.jpg  + its poster frame           overlay export, cut for the landing page
@@ -171,6 +171,10 @@ _EXPORT_FRAME_FRACTION = 0.42
 # a page that renders it under 1000 px, and every burned-in element is a FRACTION of frame height
 # (`OverlayConfig.strip_h_frac` etc.), so they scale with it and stay legible.
 OVERLAY_WIDTH = 1440
+# …and it is saved as a JPEG, because it is a photograph: as a PNG the committed frame was
+# 1,226,599 B, the heaviest image on the landing page; the same pixels at quality 85 are 190,926 B.
+# hero.png stays a PNG — it is mostly UI text, which JPEG smears.
+OVERLAY_NAME, OVERLAY_QUALITY = "overlay.jpg", 85
 
 
 # ====================================================================== the transponder numbers
@@ -227,11 +231,18 @@ ACCURACY_SUB = ("Pacer lap time − official lap time (transponder log, Club Spe
 ACCURACY_AXIS = "difference from the official lap time  (seconds)"
 
 OG_TAGLINE = "Race telemetry from your GoPro"
-OG_BODY = ("Transponder-validated true-clock lap timing, a synthesised ideal lap,\n"
-           "a speed-coloured track map, synced video and corner-by-corner coaching.")
+# The card says what the first screens say: OFFICIAL TIMING, not a transponder (the row that
+# headlines is checked against the circuit's Club Speed sheet; the transponder rows A and B never
+# headline), and THE headline above, word for word. A literal rather than a formula so that
+# tests/test_landing_page.py reads it with ast as one more headline surface: when ACCURACY
+# re-headlines, that check names this line, and og.png is re-drawn from it (`--only og`, which
+# needs no recording) and re-uploaded as the repository's social preview.
+OG_BODY = ("Lap times match official timing to σ 0.025 s over 14 laps at one circuit.\n"
+           "A synthesised ideal lap, a speed-coloured track map, synced video\n"
+           "and corner-by-corner coaching.")
 # Four FACTS, not four promises. The July card's chips ("free", "private") were product-launch
 # copy for a page that is now a case study; these are things the repo can be checked against.
-OG_CHIPS = ("transponder-validated", "100 % local", "GoPro GPMF", "source-available")
+OG_CHIPS = ("checked vs official timing", "100 % local", "GoPro GPMF", "source-available")
 
 
 # ====================================================================== app plumbing
@@ -393,9 +404,11 @@ def matte(img: QImage, pad: int = PAD, colour: str = C.canvas) -> QImage:
     return out
 
 
-def save(img: QImage, path: str) -> str:
+def save(img: QImage, path: str, quality: int = -1) -> str:
+    """Write `img` in the format its extension names; `quality` (0-100) is for a JPEG, and -1 is
+    Qt's default for the format."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    if not img.save(path):
+    if not img.save(path, None, quality):
         raise RuntimeError(f"failed to write {path}")
     print(f"wrote {path}  {img.width()}x{img.height()}  {os.path.getsize(path):,} B")
     return path
@@ -646,7 +659,7 @@ def shot_overlay(w: StudioWindow, out_dir: str, work_dir: str) -> str:
     _ffmpeg_frame(mp4, _EXPORT_FRAME_FRACTION * dur, png, width=OVERLAY_WIDTH)
     img = QImage(png)
     img.setDevicePixelRatio(1.0)
-    return save(img, os.path.join(out_dir, "overlay.png"))
+    return save(img, os.path.join(out_dir, OVERLAY_NAME), quality=OVERLAY_QUALITY)
 
 
 # ====================================================================== 7 — the landing-page clip
@@ -662,15 +675,42 @@ def shot_overlay(w: StudioWindow, out_dir: str, work_dir: str) -> str:
 # an audio track, whatever the page's markup says.
 CLIP_HEIGHT = 720
 # 20 s, not 25, and it is a size measurement: onboard kart footage is expensive to code (the whole
-# frame shakes), and on Sandown 3h's best lap 25 s fitted CLIP_MAX_BYTES only at CRF 29 (CRF 27 was
-# 8.83 MB), where 20 s fits at CRF 26 (7.9 MB). A sharper 20 s beat a softer 25.
+# frame shakes), and on Sandown 3h's best lap 25 s fitted the old 8 MB budget only at CRF 29 (CRF
+# 27 was 8.83 MB), where 20 s fitted at CRF 26 (7.9 MB). A sharper 20 s beat a softer 25.
 CLIP_SECONDS = 20.0
-CLIP_MAX_BYTES = 8_000_000
+# The budget is the landing page's FIRST VIEW, not the clip's own: the clip autoplays beside the
+# page, hero.png and the poster, and tests/test_landing_page.py holds those four under 5 MB. At
+# 8 MB the first view weighed 9.1 MB. 3.6 MB leaves ~140 KB of that budget for the page to grow.
+# The committed clip is a re-encode of the 7.9 MB cut (`encode_clip` on it: CRF 33 at veryslow,
+# 3,510,294 B, SSIM 0.946 against it), not a re-shoot; a fresh capture from an export starts at 29.
+CLIP_MAX_BYTES = 3_600_000
 # x264 CRFs tried in order until the cut fits CLIP_MAX_BYTES: the best quality that fits, rather
 # than a bitrate guessed ahead of the footage. Each try is ~35 s at `veryslow`, hence a short list.
-CLIP_CRF = (26, 27, 28, 29, 30)
+CLIP_CRF = (29, 30, 31, 32, 33, 34)
 CLIP_POSTER_FRACTION = 0.40     # where in the cut the poster frame is taken: past the line, at speed
 CLIP_NAME, CLIP_POSTER = "best-lap.mp4", "best-lap.jpg"
+
+
+def encode_clip(src: str, out: str, crfs=CLIP_CRF) -> int:
+    """Cut `src`'s first `CLIP_SECONDS` into `out` as a silent, fast-start H.264 MP4 at the first
+    CRF in `crfs` that fits CLIP_MAX_BYTES; returns its size. `src` is an export, or the committed
+    clip itself when only the budget moved (a re-encode: no footage, no export)."""
+    ffmpeg = export_video._resolve_binary("ffmpeg", "PACER_FFMPEG")
+    for crf in crfs:
+        # `-an -sn -dn`: video only. `-map_metadata -1`: no creation time or encoder tags carried
+        # over from the export. `+faststart`: the index up front, so the page starts playing
+        # before the whole file has arrived.
+        subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", src,
+                        "-t", f"{CLIP_SECONDS:.3f}", "-an", "-sn", "-dn", "-map_metadata", "-1",
+                        "-c:v", "libx264", "-preset", "veryslow", "-crf", str(crf),
+                        "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart",
+                        out], check=True, capture_output=True)
+        size = os.path.getsize(out)
+        print(f"media_capture: clip at crf {crf} = {size:,} B")
+        if size <= CLIP_MAX_BYTES:
+            return size
+    raise RuntimeError(f"no CRF in {tuple(crfs)} brings {CLIP_SECONDS:.0f} s under "
+                       f"{CLIP_MAX_BYTES:,} B")
 
 
 def shot_clip(w: StudioWindow, out_dir: str, work_dir: str) -> str:
@@ -689,22 +729,7 @@ def shot_clip(w: StudioWindow, out_dir: str, work_dir: str) -> str:
           f"{CLIP_HEIGHT}p -> {result.out_path} in {time.time() - t0:.1f} s")
     ffmpeg = export_video._resolve_binary("ffmpeg", "PACER_FFMPEG")
     out = os.path.join(out_dir, CLIP_NAME)
-    for crf in CLIP_CRF:
-        # `-an -sn -dn`: video only. `-map_metadata -1`: no creation time or encoder tags carried
-        # over from the export. `+faststart`: the index up front, so the page starts playing
-        # before the whole file has arrived.
-        subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", mp4,
-                        "-t", f"{CLIP_SECONDS:.3f}", "-an", "-sn", "-dn", "-map_metadata", "-1",
-                        "-c:v", "libx264", "-preset", "veryslow", "-crf", str(crf),
-                        "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart",
-                        out], check=True, capture_output=True)
-        size = os.path.getsize(out)
-        print(f"media_capture: clip at crf {crf} = {size:,} B")
-        if size <= CLIP_MAX_BYTES:
-            break
-    else:
-        raise RuntimeError(f"no CRF in {CLIP_CRF} brings {CLIP_SECONDS:.0f} s under "
-                           f"{CLIP_MAX_BYTES:,} B")
+    size = encode_clip(mp4, out)
     poster = os.path.join(out_dir, CLIP_POSTER)
     subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                     "-ss", f"{CLIP_POSTER_FRACTION * CLIP_SECONDS:.3f}", "-i", out,
@@ -878,15 +903,24 @@ def build_og(out_dir: str, hero_png: str) -> str:
     p.drawPixmap(QRect(theme.SPACE_3XL, theme.SPACE_3XL, 96, 96), QPixmap.fromImage(mark))
 
     x = theme.SPACE_3XL
+    # The words must end before the screenshot starts: a line or a chip that runs under the veil
+    # is cut off at the column's edge on every share. Measured, like the accuracy chart's gutters,
+    # and refused rather than drawn clipped.
+    room = split - theme.SPACE_XL
+    f_body = theme.ui_font(15)
     _text(p, x, 214, APP_NAME, theme.ui_font(58, theme.W_SEMIBOLD), C.text)
     _text(p, x, 268, OG_TAGLINE, theme.ui_font(24, theme.W_SEMIBOLD), C.accent)
     for i, line in enumerate(OG_BODY.split("\n")):
-        _text(p, x, 320 + i * 26, line, theme.ui_font(15), C.text_dim)
+        if x + QFontMetrics(f_body).horizontalAdvance(line) > room:
+            raise RuntimeError(f"og.png: {line!r} runs past the text column ({room} px)")
+        _text(p, x, 320 + i * 26, line, f_body, C.text_dim)
 
     cx = x
     for chip in OG_CHIPS:
         f = theme.ui_font(theme.BODY, theme.W_SEMIBOLD)
         wchip = QFontMetrics(f).horizontalAdvance(chip) + 2 * theme.SPACE_L
+        if cx + wchip > room:
+            raise RuntimeError(f"og.png: the chip {chip!r} runs past the text column ({room} px)")
         box = QRectF(cx, H - 108, wchip, 34)
         path = QPainterPath()
         path.addRoundedRect(box, theme.pill_radius(int(box.height())), theme.pill_radius(int(box.height())))
@@ -894,6 +928,7 @@ def build_og(out_dir: str, hero_png: str) -> str:
         _text(p, box.x(), box.center().y(), chip, f, C.text,
               Qt.AlignHCenter | Qt.AlignVCenter, box.width())
         cx += wchip + theme.SPACE_S
+    print(f"media_capture: og text column {room} px; chips end at {cx - theme.SPACE_S:.0f} px")
     p.end()
     return save(img, os.path.join(out_dir, "og.png"))
 

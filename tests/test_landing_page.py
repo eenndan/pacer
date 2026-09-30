@@ -107,6 +107,13 @@ def _png_size(path: str) -> tuple[int, int]:
     return struct.unpack(">II", head[16:24])
 
 
+def _image_size(path: str) -> tuple[int, int]:
+    """(width, height) of a PNG or a JPEG, by its extension: the page's one photograph, the export
+    frame, is a JPEG, and every UI shot is a PNG. Each reader asserts the bytes are what the name
+    says."""
+    return _jpeg_size(path) if path.lower().endswith((".jpg", ".jpeg")) else _png_size(path)
+
+
 def _theme_hues() -> dict[str, str]:
     """Every colour token on `theme.C`, by its Python name."""
     return {k: v for k, v in vars(theme.C).items()
@@ -244,7 +251,7 @@ def test_images_resolve_and_declare_their_real_size():
         assert w and h, (
             f"docs/{src.group(1)} has no width/height — the page must reserve its box, or the "
             "layout reflows when it loads")
-        real = _png_size(path)
+        real = _image_size(path)
         assert real == (int(w.group(1)), int(h.group(1))), (
             f"docs/{src.group(1)} is {real[0]}x{real[1]} but the page declares "
             f"{w.group(1)}x{h.group(1)}")
@@ -739,11 +746,17 @@ def test_no_public_page_uses_a_retired_ui_word():
 # ------------------------------------------------------------------ 7. the clip
 # The page's one video (board review 2026-09-23, bet B4): the app's own overlay export of a best
 # lap, cut by studio/dev/media_capture.py's `clip` shot. What can go wrong with it is what went
-# wrong with the images, plus three things a video adds: its weight (the budget is 8 MB), its
-# SOUND (the export carries the camera's audio; a `muted` attribute is only a request, so the file
-# must have no audio track at all), and MOTION for a reader who asked the system for less of it.
-# All of it is read off the files themselves — the MP4's own boxes, the JPEG's own frame header.
-_CLIP_BUDGET = 8_000_000
+# wrong with the images, plus three things a video adds: its weight, its SOUND (the export carries
+# the camera's audio; a `muted` attribute is only a request, so the file must have no audio track
+# at all), and MOTION for a reader who asked the system for less of it. All of it is read off the
+# files themselves — the MP4's own boxes, the JPEG's own frame header.
+#
+# THE WEIGHT IS THE FIRST VIEW'S. The clip autoplays in the hero, so a visitor pays for it before
+# they scroll, with the page, every image not marked `loading="lazy"` and the poster: 9.1 MB when
+# the clip's own budget was 8 MB (SHOWCASE-9). The first view is held to 5 MB, and the clip's
+# budget is what that leaves the page room to grow in.
+_CLIP_BUDGET = 3_600_000
+_FIRST_VIEW_BUDGET = 5_000_000
 _CLIP_SECONDS = (20.0, 30.0)
 _REDUCED_MOTION = "(prefers-reduced-motion: no-preference)"
 _SOF = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
@@ -869,10 +882,24 @@ def _clip_problems(html: str, docs: str) -> list[str]:
     return problems
 
 
+def _first_view(html: str, docs: str) -> dict[str, int]:
+    """Bytes a visitor fetches before scrolling, by file: the page itself, every `<img>` the page
+    does not mark `loading="lazy"`, and the clip's poster and source (it autoplays)."""
+    live = _without_comments(html)
+    parts = {"index.html": len(html.encode("utf-8"))}
+    eager = [t for t in re.findall(r"<img\b[^>]*>", live) if 'loading="lazy"' not in t]
+    video = re.findall(r"<video\b.*?</video>", live, re.S)
+    for src in ([re.search(r'src="([^"]+)"', t).group(1) for t in eager]
+                + [m for v in video for m in re.findall(r'(?:poster|src)="(media/[^"]+)"', v)]):
+        parts[src] = os.path.getsize(os.path.join(docs, src))
+    return parts
+
+
 def test_the_clip_is_silent_small_and_still_on_request():
     """The page's clip: one `<video>`, autoplaying muted in a loop, with a poster the page reserves
     the right box for, a reduced-motion `media` query on its only source, and an MP4 that is under
-    budget, 720p, 20-30 s, indexed up front — and has NO audio track. The README links it too."""
+    budget, 720p, 20-30 s, indexed up front — and has NO audio track. The README links it too, and
+    the page's first view — the page, its eager images, the poster and the clip — stays under 5 MB."""
     problems = _clip_problems(_page(), _DOCS)
     assert not problems, "docs/index.html's clip:\n  " + "\n  ".join(problems)
     tree = ast.parse(open(os.path.join(_REPO, "studio", "dev", "media_capture.py"),
@@ -884,8 +911,22 @@ def test_the_clip_is_silent_small_and_still_on_request():
         f"{_CLIP_BUDGET}: the tool that cuts the clip and the check on it must agree")
     with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
         assert "(docs/media/best-lap.mp4)" in f.read(), "README.md no longer links the clip"
+    page = _page()
+    first = _first_view(page, _DOCS)
+    assert {"media/best-lap.mp4", "media/best-lap.jpg", "media/hero.png"} <= set(first), (
+        f"the first view counts {sorted(first)}: the clip, its poster or the hero went uncounted")
+    assert sum(first.values()) <= _FIRST_VIEW_BUDGET, (
+        f"the landing page's first view is {sum(first.values()):,} B, over its "
+        f"{_FIRST_VIEW_BUDGET:,} B budget: " + ", ".join(f"{k} {v:,}" for k, v in first.items()))
+    # The control: an image below the fold loses its `loading="lazy"` and is counted.
+    lazy = next(t for t in re.findall(r"<img\b[^>]*>", _without_comments(page))
+                if 'loading="lazy"' in t)
+    src = re.search(r'src="([^"]+)"', lazy).group(1)
+    planted = _first_view(page.replace(lazy, lazy.replace(' loading="lazy"', "")), _DOCS)
+    assert src not in first and src in planted, (src, sorted(first), sorted(planted))
     print(f"test_the_clip_is_silent_small_and_still_on_request OK "
-          f"({os.path.getsize(os.path.join(_DOCS, 'media', 'best-lap.mp4')):,} B)")
+          f"({os.path.getsize(os.path.join(_DOCS, 'media', 'best-lap.mp4')):,} B; first view "
+          f"{sum(first.values()):,} B of {_FIRST_VIEW_BUDGET:,})")
 
 
 def _box(kind: bytes, payload: bytes) -> bytes:
@@ -1120,14 +1161,28 @@ def _headline(rows: list[dict]) -> tuple[str, list[str]]:
     return head, barred + ["±0.003", str(sum(r["clean"] for r in rows))]
 
 
-def _headline_surfaces(readme: str, page: str) -> dict[str, str]:
+_OG_CARD = "og.png's words (media_capture.OG_BODY, OG_CHIPS; re-draw it with --only og)"
+
+
+def _og_card_text() -> str:
+    """The words media_capture draws onto og.png, read with ast (that module imports Qt)."""
+    tree = ast.parse(open(_MEDIA_CAPTURE, encoding="utf-8").read())
+    found = {t.id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+             for t in n.targets if isinstance(t, ast.Name) and t.id in ("OG_BODY", "OG_CHIPS")}
+    assert set(found) == {"OG_BODY", "OG_CHIPS"}, f"media_capture lost its og words: {found}"
+    return found["OG_BODY"] + "\n" + " · ".join(found["OG_CHIPS"])
+
+
+def _headline_surfaces(readme: str, page: str, og_card: str) -> dict[str, str]:
     """Each first-screen surface as flat visible text: README above its first image, the landing
-    hero before its first figure, and the page's three share descriptions."""
+    hero before its first figure, the page's three share descriptions, and the social card's words
+    — the image every one of those shares shows beside them."""
     hero = page[page.index('<section class="hero">'):]
     surfaces = {"README.md above its first <img": readme[:readme.index("<img")].replace("**", ""),
                 "index.html hero before its first <figure":
                     _unescape(re.sub(r"<[^>]+>", " ", hero[:hero.index("<figure")]))}
     surfaces.update((f"index.html {k}", _unescape(v)) for k, v in _META.findall(page))
+    surfaces[_OG_CARD] = og_card
     return {k: " ".join(v.split()) for k, v in surfaces.items()}
 
 
@@ -1144,15 +1199,16 @@ def _headline_problems(rows: list[dict], surfaces: dict[str, str], cmake: str) -
 
 
 def test_the_headline_is_the_re_runnable_rows():
-    """README's first screen, the landing hero and the meta, og and twitter descriptions carry the
-    headline media_capture.ACCURACY derives, and no figure of a row nothing re-measures. The same
-    helper fails on each planted defect: a re-measure that moved σ with the pages left stale, row A
-    headlining, a surface quoting A's σ or the retired bound, the circuit count dropped, and a
-    rerun that names no registered footage check."""
+    """README's first screen, the landing hero, the meta, og and twitter descriptions and the words
+    drawn onto og.png carry the headline media_capture.ACCURACY derives, and no figure of a row
+    nothing re-measures. The same helper fails on each planted defect: a re-measure that moved σ
+    with the pages left stale, row A headlining, a surface quoting A's σ or the retired bound, the
+    circuit count dropped, the card left on its old copy, and a rerun that names no registered
+    footage check."""
     rows, cmake = _accuracy_rows(), open(_CMAKE, encoding="utf-8").read()
     readme = open(os.path.join(_REPO, "README.md"), encoding="utf-8").read()
-    surfaces = _headline_surfaces(readme, _page())
-    assert len(surfaces) == 5, f"expected 5 headline surfaces, found {sorted(surfaces)}"
+    surfaces = _headline_surfaces(readme, _page(), _og_card_text())
+    assert len(surfaces) == 6, f"expected 6 headline surfaces, found {sorted(surfaces)}"
     problems = _headline_problems(rows, surfaces, cmake)
     assert not problems, ("the first screen does not carry ACCURACY's headline:\n  "
                           + "\n  ".join(problems))
@@ -1175,6 +1231,10 @@ def test_the_headline_is_the_re_runnable_rows():
         ("the circuit count dropped", rows,
          {"index.html description": surfaces["index.html description"].replace(
              head, head.replace(" at one circuit", ""))}, "index.html description: no"),
+        ("the card on its pre-headline copy", rows,
+         {_OG_CARD: "Transponder-validated true-clock lap timing, a synthesised ideal lap, a "
+                    "speed-coloured track map, synced video and corner-by-corner coaching."},
+         f"{_OG_CARD}: no"),
         ("a rerun with no footage check", row("Recording C", rerun="accuracy_nowhere"), {},
          "'accuracy_nowhere' is no add_footage_test"))
     for what, planted_rows, edits, named in plants:
