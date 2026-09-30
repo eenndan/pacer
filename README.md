@@ -23,6 +23,16 @@ debrief, which is the synthetic demo's; all are captured by one command,
 [`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
 [20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4) (MP4, no sound).*
 
+**Try it** on an Apple Silicon Mac with [pixi](https://pixi.sh) — the demo needs no GoPro:
+
+```bash
+git clone --recursive https://github.com/eenndan/pacer && cd pacer
+pixi install                 # environment + editable Python bindings, about 2 GB, once
+pixi run studio -- --demo    # build + launch on a synthetic session: about 11 MB, downloaded once
+```
+
+Your own recording: [Run it from source](#run-it-from-source).
+
 ---
 
 ## Accuracy — the claim everything else rests on
@@ -248,16 +258,12 @@ Stating what Pacer deliberately *isn't* is part of the design.
 
 ## Run it from source
 
-A Mac (Apple Silicon) and a GoPro recording. [pixi](https://pixi.sh) manages every external
-dependency — `cmake`, `ninja`, `catch2`, and `ffmpeg` for video export — pinned by its lockfile.
-The C++ compiler is the one Apple's Xcode command-line tools provide, the same install that
-provides `git`.
+[pixi](https://pixi.sh) manages every external dependency — `cmake`, `ninja`, `catch2`, and
+`ffmpeg` for video export — pinned by its lockfile. The C++ compiler is the one Apple's Xcode
+command-line tools provide, the same install that provides `git`.
 
 ```bash
-git clone --recursive https://github.com/eenndan/pacer && cd pacer
-pixi install                                # environment + editable Python bindings (~2 GB, once)
-pixi run studio -- /path/to/GX010062.MP4    # build + launch on a recording
-pixi run studio -- --demo                   # no footage? a synthetic session, generated not filmed
+pixi run studio -- /path/to/GX010062.MP4    # your own recording, after the clone and install above
 ```
 
 Cloned without `--recursive`? `git submodule update --init --recursive` fetches `3rdparty/`.
@@ -273,10 +279,9 @@ chapter; `--full` or `File ▸ Load full recording` chains the rest. The
 **[first-lap walkthrough](docs/FIRST_LAP.md)** is the 30-second path from footage to "where am I
 losing time?"; for a code change, start at [AGENTS.md](AGENTS.md).
 
-**No GoPro footage?** `pixi run studio -- --demo` (above) downloads a synthetic session once and
-opens it: generated, not filmed, on a circuit Pacer ships, so its laps open with verified timing.
-`pixi run smoke` needs no download: it builds the real app headless on a bundled sample clip and
-ends in `SMOKE OK`. That clip holds no complete lap, so it proves the build and the load, not the
+The demo is generated, not filmed, on a circuit Pacer ships, so its laps open with verified
+timing. `pixi run smoke` needs no download: it builds the real app headless on a bundled sample
+clip and ends in `SMOKE OK`. That clip holds no complete lap, so it proves the build and the load, not the
 analysis.
 
 ## Acknowledgements

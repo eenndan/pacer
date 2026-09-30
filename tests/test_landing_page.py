@@ -712,6 +712,96 @@ def test_the_pages_quote_the_demo_s_real_size():
     print(f"test_the_pages_quote_the_demo_s_real_size OK ({len(found)} claims, {want} MB)")
 
 
+# THE WAY IN SITS ON THE FIRST SCREEN, AND IT IS THE DEMO (SHOWCASE-4). README's first command was
+# 256 lines down, under eight sections of case study, and the landing's build section asked for "a
+# GoPro file" and ended on YOUR_RECORDING.MP4, with `--demo` in a callout below it: a visitor with
+# no footage, which is most of them, read both as "not for me". So README's first code block sits
+# above its first section and is the three commands ending on the demo, the landing's build block
+# gives the same three before the own-recording line and its headline names the demo, and every
+# in-page link of README's lands on a heading (the Try-it line links #run-it-from-source).
+_TRY_IT = ("git clone --recursive https://github.com/eenndan/pacer", "pixi install",
+           "pixi run studio -- --demo")
+
+
+def _github_anchor(heading: str) -> str:
+    """The id GitHub gives a markdown heading: lower case, every character but a word character, a
+    '-' or a space dropped, each space a '-' ("Accuracy — the claim" → "accuracy--the-claim")."""
+    return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+
+
+def _commands(block: str) -> list[str]:
+    """The shell commands of a code block: comment lines and trailing `  # …` comments dropped."""
+    return [c for c in (re.sub(r"\s+#.*", "", ln).strip() for ln in block.splitlines())
+            if c and not c.startswith("#")]
+
+
+def _try_it_problems(readme: str, page: str) -> list[str]:
+    """What keeps a first-time visitor from the demo: a function of the two texts, so the planted
+    pages below exercise exactly the rule the real ones are held to."""
+    problems = []
+    prose = re.sub(r"^```.*?^```", "", readme, flags=re.S | re.M)
+    fence = re.search(r"^```\w*\n(.*?)^```", readme, re.S | re.M)
+    first_section = re.search(r"^## ", readme, re.M)
+    readme_cmds = _commands(fence.group(1)) if fence else []
+    if not fence or not first_section or fence.start() > first_section.start():
+        problems.append("README.md's first code block is not above its first section")
+    elif len(readme_cmds) != len(_TRY_IT) or not all(
+            c.startswith(w) for c, w in zip(readme_cmds, _TRY_IT)):
+        problems.append(f"README.md's first code block is {readme_cmds}, not the three commands "
+                        f"ending on the demo")
+    elif "](#run-it-from-source)" not in readme[fence.end():first_section.start()]:
+        problems.append("README.md's Try-it block does not link #run-it-from-source")
+    headings = {_github_anchor(h) for h in re.findall(r"^#{1,6} (.+)$", prose, re.M)}
+    problems += [f"README.md links #{a}, which no heading of it has"
+                 for a in sorted(set(re.findall(r"\]\(#([^)\s]+)\)", prose)) - headings)]
+
+    build = re.search(r'<section id="build">(.*?)</section>', page, re.S)
+    if not build:
+        return problems + ["docs/index.html has no build section"]
+    h2 = re.search(r"<h2>(.*?)</h2>", build.group(1), re.S)
+    if not h2 or "demo" not in h2.group(1).lower():
+        problems.append(f"docs/index.html's build headline does not name the demo: "
+                        f"{h2 and h2.group(1)!r}")
+    pre = re.search(r"<pre><code>(.*?)</code></pre>", build.group(1), re.S)
+    page_cmds = _commands(_unescape(re.sub(r"<[^>]+>", "", pre.group(1)))) if pre else []
+    if page_cmds[:len(_TRY_IT)] != readme_cmds[:len(_TRY_IT)] or len(readme_cmds) < len(_TRY_IT):
+        problems.append(f"docs/index.html's build block opens {page_cmds[:len(_TRY_IT)]}, "
+                        f"README.md's Try-it {readme_cmds}")
+    return problems
+
+
+def test_the_first_screen_offers_the_demo_in_three_commands():
+    """README's first code block is the Try-it block above its first section, the landing's build
+    block opens with the same three commands and its headline names the demo, and every in-page
+    link of README's resolves. The same helper fails on each planted page: the block moved back
+    down, one ending on a recording path, a renamed section, and the landing's old build block."""
+    readme = open(os.path.join(_REPO, "README.md"), encoding="utf-8").read()
+    page = _page()
+    problems = _try_it_problems(readme, page)
+    assert not problems, "the demo is not on the first screen:\n  " + "\n  ".join(problems)
+
+    try_it = re.search(r"^```\w*\n.*?^```\n", readme, re.S | re.M).group(0)
+    plants = (  # (what, readme, page, a fragment the problems must name)
+        ("the block back at the bottom", readme.replace(try_it, "", 1), page,
+         "not above its first section"),
+        ("the block ending on a recording", readme.replace(
+            "pixi run studio -- --demo", "pixi run studio -- /path/to/GX010062.MP4", 1), page,
+         "not the three commands"),
+        ("the section it links renamed", readme.replace("## Run it from source", "## Build it"),
+         page, "links #run-it-from-source, which no heading"),
+        ("the landing asking for a GoPro file", readme, page.replace(
+            "An Apple Silicon Mac and three commands. The demo needs no GoPro.",
+            "A Mac with Apple Silicon, a GoPro file, and three commands."), "does not name the demo"),
+        ("the landing ending on YOUR_RECORDING", readme, page.replace(
+            "pixi run studio -- --demo\n", "", 1), "build block opens"))
+    for what, r, p, named in plants:
+        assert (r, p) != (readme, page), f"{what!r}: a no-op"
+        caught = _try_it_problems(r, p)
+        assert any(named in c for c in caught), f"{what!r} not caught as {named!r}: {caught}"
+    print(f"test_the_first_screen_offers_the_demo_in_three_commands OK (README line "
+          f"{readme[:readme.index(try_it)].count(chr(10)) + 1}; {len(plants)} plants caught)")
+
+
 # Words v0.5.0 retired from the UI (#425 named the ideal lap one thing everywhere, and the chart
 # legend followed), and that the public pages kept using in prose and alt text until QA round 3
 # (EVAL-3). Alt text counts: it is what a reader who cannot see the image is told the image says.
@@ -1324,6 +1414,7 @@ if __name__ == "__main__":
     test_the_pages_count_what_ci_skips()
     test_the_pages_date_their_timings_and_agree_on_them()
     test_the_pages_quote_the_demo_s_real_size()
+    test_the_first_screen_offers_the_demo_in_three_commands()
     test_no_public_page_uses_a_retired_ui_word()
     test_the_clip_is_silent_small_and_still_on_request()
     test_the_clip_check_fails_on_each_planted_defect()
