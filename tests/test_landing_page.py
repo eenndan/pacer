@@ -45,6 +45,8 @@ THE FIVE CHECKS
 Plus check 6, the one that would have caught the seven-week-broken image: every markdown image
 under docs/ resolves on disk. And check 7, the page's one clip: small, 720p, 20-30 s, still for a
 reader who asked for reduced motion, and with no audio track in the file (with its own control).
+And check 8, reach without hue or mouse: a link inside a sentence is underlined, not told apart by
+hue alone, and anything that scrolls takes keyboard focus.
 
 Pure stdlib apart from importing `studio.theme` for the token values (Pacer-free, no QApplication,
 no telemetry file), so it needs neither the offscreen env nor the bindings PYTHONPATH.
@@ -58,6 +60,7 @@ import re
 import struct
 import sys
 from html import unescape as _unescape
+from html.parser import HTMLParser
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -762,7 +765,7 @@ def _try_it_problems(readme: str, page: str) -> list[str]:
     if not h2 or "demo" not in h2.group(1).lower():
         problems.append(f"docs/index.html's build headline does not name the demo: "
                         f"{h2 and h2.group(1)!r}")
-    pre = re.search(r"<pre><code>(.*?)</code></pre>", build.group(1), re.S)
+    pre = re.search(r"<pre\b[^>]*><code>(.*?)</code></pre>", build.group(1), re.S)
     page_cmds = _commands(_unescape(re.sub(r"<[^>]+>", "", pre.group(1)))) if pre else []
     if page_cmds[:len(_TRY_IT)] != readme_cmds[:len(_TRY_IT)] or len(readme_cmds) < len(_TRY_IT):
         problems.append(f"docs/index.html's build block opens {page_cmds[:len(_TRY_IT)]}, "
@@ -1401,6 +1404,214 @@ def test_the_headline_is_the_re_runnable_rows():
           f"{len(plants)} plants caught)")
 
 
+# ------------------------------------------------------------------ 8. reachable without hue or mouse
+# FRONT-DOOR-14 measured the page in headless Chrome at 1440 and 390 px (no download: the DevTools
+# protocol over a pipe): every text/background pair clears WCAG AA (lowest 5.9:1), every link,
+# image and the clip is named, and Tab reaches every link in DOM order with a visible ring. What it
+# found were the two things a stylesheet gets wrong that a contrast table cannot show — 15 links in
+# running text told apart by hue alone, and a code block that scrolls sideways where a keyboard
+# could not reach it. These two checks hold both from the markup and the CSS, with no browser.
+_BLOCKS = {"p", "li", "div", "figcaption", "figure", "footer", "header", "section", "td", "th",
+           "dd", "dt", "blockquote", "pre", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"}
+_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
+         "track", "wbr"}
+_COMPOUND = re.compile(r"([a-z][a-z0-9]*)?((?:\.[\w-]+)*)")
+
+
+class _Outline(HTMLParser):
+    """Every element as (tag, classes, attrs, parent), each link's text, and for each block the
+    text outside and inside its links — the markup half of axe-core's is-in-text-block."""
+
+    def __init__(self, html: str):
+        super().__init__(convert_charrefs=True)
+        self.nodes: list[tuple[str, set[str], dict, int]] = []
+        self.stack: list[int] = []
+        self.links: dict[int, str] = {}
+        self.text: dict[int, list[str]] = {}
+        self.hidden = 0
+        self.feed(_without_comments(html))
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        self.nodes.append((tag, set((a.get("class") or "").split()), a,
+                           self.stack[-1] if self.stack else -1))
+        if tag == "a" and "href" in a:
+            self.links[len(self.nodes) - 1] = ""
+        if tag not in _VOID:
+            self.stack.append(len(self.nodes) - 1)
+            self.hidden += tag == "svg" or a.get("aria-hidden") == "true"
+
+    def handle_endtag(self, tag):
+        while self.stack:
+            t, _, a, _ = self.nodes[self.stack.pop()]
+            self.hidden -= t == "svg" or a.get("aria-hidden") == "true"
+            if t == tag:
+                break
+
+    def handle_data(self, data):
+        link = next((i for i in reversed(self.stack) if i in self.links), None)
+        if link is not None:
+            self.links[link] += data
+        block = next((i for i in reversed(self.stack) if self.nodes[i][0] in _BLOCKS), None)
+        if block is not None and not self.hidden:
+            self.text.setdefault(block, ["", ""])[link is not None] += data
+
+    def chain(self, i: int) -> list[tuple[str, set[str]]]:
+        """(tag, classes) of node `i`, then of each ancestor, innermost first."""
+        out = []
+        while i >= 0:
+            out.append(self.nodes[i][:2])
+            i = self.nodes[i][3]
+        return out
+
+    def in_running_text(self, i: int) -> bool:
+        """axe-core's rule: the link's block has more text outside its links than inside them."""
+        b = self.nodes[i][3]
+        while b >= 0 and self.nodes[b][0] not in _BLOCKS:
+            b = self.nodes[b][3]
+        out, inside = (" ".join(s.split()) for s in self.text.get(b, ["", ""]))
+        return len(out) > len(inside)
+
+
+def _css_rules(css: str) -> list[tuple[list[str], str]]:
+    """(selectors, declarations) of every style rule, those inside @media included."""
+    return [([s.strip() for s in sel.split(",")], body)
+            for sel, body in re.findall(r"([^{}@]+)\{([^{}]*)\}", _strip_css_comments(css))]
+
+
+def _decoration(body: str) -> str | None:
+    m = re.search(r"text-decoration(?:-line)?\s*:\s*([^;]+)", body)
+    return m.group(1).strip() if m else None
+
+
+def _selects(selector: str, chain: list[tuple[str, set[str]]]) -> bool | None:
+    """Does `selector` — tag/class compounds joined by the descendant combinator — select
+    chain[0]? None for a selector this reader does not speak (`>`, ids, pseudo-classes), so a
+    rule it cannot read is reported rather than passed."""
+    comps = []
+    for part in selector.split():
+        m = _COMPOUND.fullmatch(part)
+        if not m or not (m.group(1) or m.group(2)):
+            return None
+        comps.append((m.group(1), set(m.group(2).split(".")) - {""}))
+
+    def fits(comp, node):
+        return (comp[0] is None or node[0] == comp[0]) and comp[1] <= node[1]
+
+    if not chain or not fits(comps[-1], chain[0]):
+        return False
+    j = 1
+    for comp in reversed(comps[:-1]):
+        while j < len(chain) and not fits(comp, chain[j]):
+            j += 1
+        if j == len(chain):
+            return False
+        j += 1
+    return True
+
+
+def _hue_only_links(html: str) -> list[str]:
+    """Links in running text that the stylesheet leaves told apart from it by hue alone."""
+    rules = _css_rules(_style_block(html))
+    problems = []
+    if not any("underline" in (_decoration(b) or "") for sels, b in rules if "a" in sels):
+        problems.append("the `a` rule does not underline links: amber on the page's dim prose is "
+                        "1.28:1, so a link inside a sentence is told apart by hue alone (WCAG 1.4.1)")
+    page = _Outline(html)
+    for i, text in page.links.items():
+        if not page.in_running_text(i):
+            continue                    # a row of links (the bar, the footer), not a sentence
+        for sels, body in rules:
+            dec = _decoration(body)
+            if dec is None or "underline" in dec:
+                continue
+            for s in sels:
+                hit = None if ":" in s else _selects(s, page.chain(i))
+                if hit is None and ":" not in s:
+                    problems.append(f"cannot read the selector {s!r} to rule it out")
+                elif hit:
+                    problems.append(f"`{s} {{ text-decoration: {dec} }}` takes the underline off "
+                                    f"a link in running text: {' '.join(text.split())!r}")
+    return problems
+
+
+def _unreachable_scrollers(html: str) -> list[str]:
+    """Elements the stylesheet lets scroll that a keyboard cannot reach: no tabindex="0" and
+    nothing focusable inside to scroll them by."""
+    page = _Outline(html)
+    problems = []
+    for sels, body in _css_rules(_style_block(html)):
+        if not re.search(r"overflow(?:-[xy])?\s*:\s*(?:auto|scroll)", body):
+            continue
+        for s in sels:
+            for i, (tag, _, attrs, _) in enumerate(page.nodes):
+                hit = _selects(s, page.chain(i))
+                if hit is None:
+                    problems.append(f"cannot read the selector {s!r} of a scrolling rule")
+                    break
+                inner = any(i in _ancestors(page, j) for j in page.links)
+                if hit and attrs.get("tabindex") != "0" and not inner:
+                    problems.append(f"<{tag}> (selected by {s!r}) can scroll, and nothing in it "
+                                    "takes focus: give it tabindex=\"0\"")
+    return problems
+
+
+def _ancestors(page: _Outline, i: int):
+    i = page.nodes[i][3]
+    while i >= 0:
+        yield i
+        i = page.nodes[i][3]
+
+
+def test_links_in_running_text_are_more_than_a_hue():
+    """A link inside a sentence is underlined; only rows made of links (the bar, the footer) drop it.
+
+    THE BUG: `a { text-decoration: none }`. The links are amber (C.accent), the prose around them
+    is C.text_dim, and the two differ by 1.28:1 in luminance — so in 15 places ("three commands
+    with pixi" in the hero's callout, the nine write-ups in "Built, measured, not shipped", the
+    licence in the footer) a reader without full colour vision could not see there was a link.
+    axe-core rates that "serious" (link-in-text-block, WCAG 1.4.1 Use of Color, level A)."""
+    html = _page()
+    problems = _hue_only_links(html)
+    assert not problems, "docs/index.html:\n  " + "\n  ".join(problems)
+    page = _Outline(html)
+    inline = [t for i, t in page.links.items() if page.in_running_text(i)]
+    rows = [t for i, t in page.links.items() if not page.in_running_text(i)]
+    assert len(inline) >= 10 and any("pixi" in t for t in inline), (
+        f"only {len(inline)} links read as running text — the block walk has gone vacuous")
+    assert any("Source on GitHub" in t for t in rows), "the bar's button reads as running text"
+    base = re.search(r"\n  a \{[^}]*\}", html).group(0)
+    plants = {
+        "the underline removed": html.replace(base, base.replace("underline", "none")),
+        "a callout opting out": html.replace("</style>", "  .callout a { text-decoration: none; }\n"
+                                                         "</style>"),
+        "an unreadable opt-out": html.replace("</style>", "  .callout > a { text-decoration: none; }"
+                                                          "\n</style>"),
+    }
+    for what, planted in plants.items():
+        assert planted != html, f"{what!r} planted nothing"
+        assert _hue_only_links(planted), f"{what!r} was not caught"
+    print(f"test_links_in_running_text_are_more_than_a_hue OK ({len(inline)} links in running "
+          f"text, {len(rows)} in rows; {len(plants)} plants caught)")
+
+
+def test_what_scrolls_is_reachable_by_keyboard():
+    """The build block scrolls sideways on a narrow screen, so it takes focus itself.
+
+    THE BUG: at 390 px the `<pre>` of build commands is 523 px of text in a 340 px box. Chrome and
+    Firefox make a scroller focusable on their own; Safari does not, so a keyboard reader — at
+    400 % zoom a 1280 px window is 320 px — could not scroll it. axe-core rates that "serious"
+    (scrollable-region-focusable, WCAG 2.1.1). A keyboard-only scroller needs `tabindex="0"`."""
+    html = _page()
+    problems = _unreachable_scrollers(html)
+    assert not problems, "docs/index.html:\n  " + "\n  ".join(problems)
+    pres = [n for n in _Outline(html).nodes if n[0] == "pre"]
+    assert pres, "no <pre> on the page — the scrolling rule this check exists for has gone"
+    planted = re.sub(r'<pre tabindex="0">', "<pre>", html)
+    assert planted != html and _unreachable_scrollers(planted), "a <pre> without tabindex passed"
+    print(f"test_what_scrolls_is_reachable_by_keyboard OK ({len(pres)} scrolling <pre>)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -1420,4 +1631,6 @@ if __name__ == "__main__":
     test_the_clip_check_fails_on_each_planted_defect()
     test_decisions_says_what_is_true_and_public()
     test_the_headline_is_the_re_runnable_rows()
+    test_links_in_running_text_are_more_than_a_hue()
+    test_what_scrolls_is_reachable_by_keyboard()
     print("ALL OK")

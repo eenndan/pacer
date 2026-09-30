@@ -98,13 +98,20 @@
     text-rendering: optimizeLegibility;
   }
 
-  a { color: var(--accent); text-decoration: none; }
+  /* A link inside a sentence is underlined: amber on the dim prose around it is 1.28:1, so hue was
+     its only cue, and WCAG 1.4.1 wants one that survives without colour vision. The rows made of
+     nothing but links (the brand, the bar, the footer's list) opt out. */
+  a {
+    color: var(--accent);
+    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.2em;
+  }
+  .brand, .nav-links a, .foot-links a { text-decoration: none; }
   a:hover { color: var(--accent-hover); }
-  a:focus-visible {
+  a:focus-visible, pre:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-    border-radius: var(--radius-s);
   }
+  a:focus-visible { border-radius: var(--radius-s); }
 
   /* Alt text has to be readable when an image 404s or the network drops — this page's whole
      argument is carried by seven PNGs. */
@@ -574,7 +581,9 @@
       <h2>An Apple Silicon Mac and three commands. The demo needs no GoPro.</h2>
       <p class="muted"><a href="https://pixi.sh">pixi</a> brings CMake, Ninja, Python, Qt, Catch2 and ffmpeg, pinned by a lockfile, so there is no manual toolchain step. The C++ compiler is the one already on the machine — Apple's Xcode command-line tools.</p>
     </div>
-<pre><code><span class="comment"># the source, with its 3rdparty deps (gpmf-parser, nanobind)</span>
+<!-- tabindex: on a narrow screen the block scrolls sideways, and Safari, unlike Chrome and
+     Firefox, gives a scroller no focus of its own, so a keyboard could not reach it. -->
+<pre tabindex="0"><code><span class="comment"># the source, with its 3rdparty deps (gpmf-parser, nanobind)</span>
 git clone --recursive https://github.com/eenndan/pacer &amp;&amp; cd pacer
 
 <span class="comment"># environment + editable Python bindings: about 2 GB on disk, once</span>
