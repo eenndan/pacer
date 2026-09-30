@@ -99,12 +99,13 @@ _UNSET: Final = _Unset.TOKEN
 _EMPTY = np.empty(0)  # the `speed` slot for a LapCurve whose speed series isn't needed (Δ family)
 
 
-def _is_fraction(warp) -> bool:
-    """Whether a Δ-frame warp (`Session._warp_to_best` / `_baseline_warp`) is no warp at all — None,
-    or the two timing-line anchors alone, i.e. the normalized fraction (the identity for the
-    baseline lap itself). A real `corners.lap_alignment` has at least one interior knot. Every Δ
-    path then keeps the equal-fraction arithmetic it had before the warp, bit for bit."""
-    return warp is None or len(warp[0]) <= 2
+def _real_warp(warp: corners_alg.Alignment | None) -> corners_alg.Alignment | None:
+    """`warp` (from `Session._warp_to_best` / `_baseline_warp` / `_best_to_reference`) when it is a
+    real warp, else None: None, or the two timing-line anchors alone, is the normalized fraction
+    (the identity for the baseline lap itself). A real `corners.lap_alignment` has at least one
+    interior knot. On None every Δ path keeps the equal-fraction arithmetic it had before the
+    warp, bit for bit."""
+    return None if warp is None or len(warp[0]) <= 2 else warp
 
 
 def _same_inputs(a, b) -> bool:
@@ -1326,11 +1327,12 @@ class Session:
         own = None
         if ref_lap_id is not None and ref_lap_id != ref.lap_id:
             ref_sess = self.reference_session()
-            to_best = getattr(ref_sess, "_warp_to_best", None)
-            own = to_best(ref_lap_id) if to_best is not None else None
-            if own is None or ref_sess.best_lap_id() != ref.lap_id:
+            if ref_sess is None or ref_sess.best_lap_id() != ref.lap_id:
                 return None
-        if _is_fraction(rw) and _is_fraction(w) and _is_fraction(own):
+            own = ref_sess._warp_to_best(ref_lap_id)
+            if own is None:
+                return None
+        if _real_warp(rw) is None and _real_warp(w) is None and _real_warp(own) is None:
             return None  # no warp on any link: the fraction, as before
         if own is not None:
             d_ref = float(np.interp(d_ref, own[1], own[0]))  # → the adopted lap's odometer
@@ -2505,9 +2507,9 @@ class Session:
         base = self.baseline_curve()  # the reference lap's curve (ref is non-None here)
         if base is None or base.total <= 0:
             return []
-        rw = self._best_to_reference()
+        rw = _real_warp(self._best_to_reference())
         for label, d in zip(labels, edge_dists, strict=True):
-            if _is_fraction(rw):  # no warp: the fraction, as before
+            if rw is None:  # no warp: the fraction, as before
                 frac = d / total
                 positions.append((label, project(frac, base) if mode == "time"
                                   else frac * base.total))
@@ -3577,10 +3579,10 @@ class Session:
         baseline's odometer — the distance-mode x of the speed/Δ charts (`delta`'s x grid is
         s × that baseline's total). None when there is no baseline. The brake glyphs, coast bands
         and pedal band use it, so they sit where the Δ and speed curves put the same place. None
-        too when the lap has no warp (`_is_fraction`): the caller's own fraction × the baseline
+        too when the lap has no warp (`_real_warp`): the caller's own fraction × the baseline
         total is then that place, bit for bit what it drew before."""
-        w = self._baseline_warp(lap_id)
-        if _is_fraction(w):
+        w = _real_warp(self._baseline_warp(lap_id))
+        if w is None:
             return None
         return np.interp(d, w[1], w[0])
 
@@ -3652,8 +3654,8 @@ class Session:
 
         speed, delta = {}, {}
         for lid, (dist, speed_kmh, elapsed) in arrays.items():
-            warp = None if lid == best else self._baseline_warp(lid)
-            if _is_fraction(warp):  # the baseline itself, or a lap with no warp: the fraction
+            warp = None if lid == best else _real_warp(self._baseline_warp(lid))
+            if warp is None:  # the baseline itself, or a lap with no warp: the fraction
                 s_lap = dist / dist[-1]  # this lap's own distance fraction, spans [0,1]
                 spd_on_grid = np.interp(s_grid, s_lap, speed_kmh)
                 elapsed_on_grid = np.interp(s_grid, s_lap, elapsed)
@@ -3766,8 +3768,8 @@ class Session:
         if len(b_dist) < 2 or b_dist[-1] <= 0:
             return None
         s_grid = self._DELTA_S_GRID
-        rw = self._best_to_reference() if self._ref is not None else None
-        if not _is_fraction(rw):
+        rw = _real_warp(self._best_to_reference()) if self._ref is not None else None
+        if rw is not None:
             # The ideal lives on the LOCAL best lap's odometer; a cross-recording baseline is read
             # at the same places on track (`_best_to_reference`), and x is the baseline's odometer.
             d_base = np.interp(s_grid * float(rw[0][-1]), rw[0], rw[1])
@@ -3833,14 +3835,15 @@ class Session:
         # The ideal is on the LOCAL best lap's odometer grid, so each lap is read there through
         # its warp (`_warp_to_best`) — the same places `delta()` reads it — and, with a
         # cross-recording reference loaded, drawn at those places on the reference's axis.
-        rw = self._best_to_reference() if (self._ref is not None and base_total) else None
+        rw = _real_warp(self._best_to_reference()) if (self._ref is not None and base_total) \
+            else None
         out: LapSeries = {}
         for lid in ids:
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
             if len(dist) < 2 or dist[-1] <= 0:
                 continue
-            warp = None if lid == best else self._warp_to_best(lid)
-            if _is_fraction(warp):
+            warp = None if lid == best else _real_warp(self._warp_to_best(lid))
+            if warp is None:
                 s_lap = dist / dist[-1]
                 elapsed_on_grid = np.interp(s_grid, s_lap, elapsed)
             else:
@@ -3848,7 +3851,7 @@ class Session:
                                             dist, elapsed)
             if x_mode == "time":
                 x = elapsed_on_grid
-            elif not _is_fraction(rw):
+            elif rw is not None:
                 x = np.interp(s_grid * float(rw[0][-1]), rw[0], rw[1])
             elif base_total:
                 x = s_grid * float(base_total)
@@ -4149,14 +4152,14 @@ class Session:
         being driven at `t` is versus the GLOBAL best lap, AT THE SAME TRACK POSITION. None if
         `t` isn't inside a valid lap (lead-in / between laps) or there's no best lap.
 
-        Consistent with the delta plot's curve (same normalized-distance alignment): find the
-        lap containing `t`, take its distance fraction s = dist_in_lap(t)/lap_total, then
-        Δ = elapsed_lap(s) − elapsed_best(s). At the lap finish (s=1) this equals the laptime
-        difference. Drives the always-on readout box, which reflects the current playback/scrub
+        Consistent with the delta plot's curve (the same on-track warp, TRUTH-10): find the lap
+        containing `t`, its odometer there, the baseline's odometer at that place (the lap's
+        warp), then Δ = elapsed_lap(t) − elapsed_baseline(there). At the lap finish this equals
+        the laptime difference. Drives the always-on readout box, which reflects the current playback/scrub
         moment — so the cursor on the delta curve and the boxed number always agree.
 
         Single-sourced through `delta_at_lap`: resolve the lap containing `t`, then delegate to
-        the shared normalized-distance alignment against the active baseline (the local best, or
+        the shared on-track alignment against the active baseline (the local best, or
         the cross-recording reference when one is loaded). For the dormant case this equals the
         old delta_between(lap, best, t) (cross-checked equal in test_compare)."""
         lap_id = self.lap_at_time(t)
@@ -4172,12 +4175,14 @@ class Session:
 
         The baseline is the local best lap normally, or the CROSS-RECORDING reference lap when
         one is loaded (F7) — both are just a `LapCurve` (via `baseline_curve()`), consumed the
-        SAME way, so the only change with a reference active is which curve `s` is inverted onto.
-        DORMANT: with no reference, the baseline is the best lap's curve, byte-identical to before.
+        SAME way, so the only change with a reference active is which curve the place is read on.
 
-        F2: open-coded `s = interp(t, times, dists)/dists[-1]` then `interp(s × baseline_total,
-        baseline_dists, baseline_elapsed)` is now `src.fraction_at_time` + `project(s, baseline)`
-        — same arithmetic, no behaviour change."""
+        THE PLACE IS THE LAP'S WARP (TRUTH-10), the single source of the Δ family's frame: this
+        lap's odometer at `t`, mapped onto the baseline's by `_baseline_warp`, the knots the
+        Corners table's windows are projected through — so the readout at a corner's exit minus
+        its entry is that corner's time lost in the table, exactly. The warp is memoized per lap;
+        this runs per frame in playback and export and never rebuilds it. A lap with no warp keeps
+        the equal-fraction `project(src.fraction_at_time(t), baseline)`, bit for bit."""
         baseline = self.baseline_curve()  # reference lap's curve when loaded, else local best's
         src = self._lap_curve(lap_id)
         if src is None or baseline is None:
@@ -4187,8 +4192,8 @@ class Session:
         elapsed_lap = src.elapsed_at_time(t)  # = t − lap_start, clamped
         if baseline.total <= 0:
             return None
-        warp = self._baseline_warp(lap_id)  # memoized: never the spatial search on this path
-        if _is_fraction(warp):
+        warp = _real_warp(self._baseline_warp(lap_id))  # memoized: never the spatial search
+        if warp is None:
             # Baseline's elapsed time at the SAME track fraction s (invert s→distance→time).
             return elapsed_lap - project(src.fraction_at_time(t), baseline)
         # This lap's odometer at t → the baseline's odometer at the same place → its elapsed.
@@ -4232,8 +4237,8 @@ class Session:
         src = self._lap_curve(lap_id)
         if src is None or src.total <= 0:
             return None
-        warp = self._warp_to_best(lap_id)        # memoized, like delta_at_lap's
-        if _is_fraction(warp):
+        warp = _real_warp(self._warp_to_best(lap_id))  # memoized, like delta_at_lap's
+        if warp is None:
             s = src.fraction_at_time(t)          # normalized fraction [0,1]
         else:  # the best lap's odometer fraction at this lap's place on track (the ideal's grid)
             d_lap = float(np.interp(t, src.times, src.dist))
@@ -4246,19 +4251,19 @@ class Session:
 
     def delta_between(self, lap_a: int, lap_b: int, t_in_a: float) -> float | None:
         """Δ (seconds) of lap_a vs lap_b at the SAME track position lap_a is at time `t_in_a`:
-        how far ahead (−) / behind (+) lap_a is relative to lap_b at that normalized distance.
+        how far ahead (−) / behind (+) lap_a is relative to lap_b at that place on track.
         None if either lap is degenerate or `t_in_a` falls outside lap_a's window.
 
-        The compare-mode "Δ vs other" badge. Mirrors `delta_at_time`'s normalized-distance
-        alignment (s = distance_in_lap / lap_total_distance), but compares against an ARBITRARY
-        `lap_b` instead of the hardcoded GLOBAL best: take lap_a's distance fraction s at
-        `t_in_a`, then interpolate lap_b's elapsed-into-lap at the SAME fraction s and subtract.
+        The compare-mode "Δ vs other" badge. Mirrors `delta_at_time`'s on-track alignment
+        (TRUTH-10), but compares against an ARBITRARY `lap_b` instead of the active baseline: lap_a's
+        odometer at `t_in_a` → the best lap's at that place (lap_a's warp) → lap_b's there (lap_b's
+        warp), then lap_b's elapsed-into-lap there, subtracted. Both warps hang off the best lap,
+        so the pair is compared where they both were, whatever their lengths.
         For `lap_b == best_lap_id()` this equals `delta_at_time(t_in_a)` (cross-checked in the
         unit test). At the finish (s=1) it is exactly lap_a's time minus lap_b's time.
 
-        O(1) on the cached per-lap arrays — cheap enough for the 30 Hz tick. F2: the same
-        `LapCurve` source-fraction → `project()` onto baseline `b` the whole Δ family shares; here
-        the baseline is just an ARBITRARY lap rather than the active baseline."""
+        O(1) on the cached per-lap arrays and the memoized warps — cheap enough for the 30 Hz
+        tick. With no warp on either lap it is F2's `project()` of lap_a's fraction onto lap_b."""
         curve_a = self._lap_curve(lap_a)
         curve_b = self._lap_curve(lap_b)
         if curve_a is None or curve_b is None:
@@ -4269,7 +4274,7 @@ class Session:
         if curve_b.total <= 0:
             return None
         wa, wb = self._warp_to_best(lap_a), self._warp_to_best(lap_b)
-        if wa is None or wb is None or (_is_fraction(wa) and _is_fraction(wb)):
+        if wa is None or wb is None or (_real_warp(wa) is None and _real_warp(wb) is None):
             # lap_b's elapsed time at the SAME track fraction s (invert s → b's distance → time).
             return elapsed_a - project(curve_a.fraction_at_time(t_in_a), curve_b)
         # lap_a's odometer at t → the best lap's at that place → lap_b's at that place (both warps

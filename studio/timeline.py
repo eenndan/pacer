@@ -146,7 +146,7 @@ class Timeline:
                 return None
             s = float(x) / float(best_distance)            # normalized fraction [0,1]
             warp = self._baseline_warp(lap_id) if self._baseline_warp is not None else None
-            if warp is None or len(warp[0]) <= 2:  # no warp (session._is_fraction): the fraction
+            if warp is None or len(warp[0]) <= 2:  # no warp (session._real_warp): the fraction
                 d = s * float(dists[-1])                    # → this lap's odometer (m)
             else:  # the baseline's odometer there → this lap's at the same place on track
                 d = float(np.interp(s * float(warp[0][-1]), warp[0], warp[1]))
@@ -174,7 +174,7 @@ class Timeline:
             return None     # (same `<= 0` convention as delta() / sector_plot_positions)
         d = float(np.interp(t, times, dists))  # distance-into-lap at t
         warp = self._baseline_warp(lap_id) if self._baseline_warp is not None else None
-        if warp is None or len(warp[0]) <= 2:  # no warp (session._is_fraction): the fraction
+        if warp is None or len(warp[0]) <= 2:  # no warp (session._real_warp): the fraction
             s = d / float(dists[-1])           # normalized fraction [0,1]
         else:  # the baseline's fraction at the same place on track
             s = float(np.interp(d, warp[1], warp[0])) / float(warp[0][-1])
