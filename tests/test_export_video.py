@@ -2374,6 +2374,29 @@ def test_no_encoder_argv_ever_carries_the_qp_that_videotoolbox_ignores():
     print("ok encoders: no path passes the -qp VideoToolbox swallows")
 
 
+def test_videotoolbox_keeps_ffmpegs_keyframe_interval_a_2s_gop_was_measured_and_refused():
+    """NO `-g` ON THE VIDEOTOOLBOX PATH, at any rate or quality (APP-POLISH-4; the numbers are in
+    `_video_codec_args`' docstring). `studio/dev/probes/vt_gop.py` measured a 2 s interval
+    (`-g 60` at 30 fps) on MK_18_09_26's lap 14: +0.35 dB PSNR and +0.0005 SSIM at the same 0.700
+    yield, and a random hardware seek decoding five times further, 135 ms past a frame-0 decode
+    against 25. The rule fixed before measuring allowed 100 ms. So ffmpeg's gop_size default (12)
+    stays VideoToolbox's MaxKeyFrameInterval. A `-g` here needs the probe re-run and its rule met,
+    not this pin edited.
+
+    The finish frame's forced keyframe (`_finish_keyframe_args`) is not a `-g`, and it stays."""
+    for fps in (25.0, 30000 / 1001, 30.0, 60000 / 1001, 60.0):
+        for quality in ("high", "standard"):
+            args = ev._video_codec_args(ev.VT_H264, 1920, 1080, fps, quality)
+            assert args[:2] == ["-c:v", ev.VT_H264], args
+            assert "-g" not in args and "-keyint_min" not in args, (
+                f"VideoToolbox's keyframe interval moved off ffmpeg's default at {fps:g} fps: {args}")
+    spec = ev.with_finish_frame(_spec(ends_on_finish=True), 30.0)
+    enc = ev.build_encode_cmd(spec, 1920, 1080, 30.0, encoder=ev.VT_H264)
+    assert "-g" not in enc, f"a -g reached the VideoToolbox encode argv: {enc}"
+    assert enc[enc.index("-force_key_frames") + 1] == "expr:gte(n,2100)", enc
+    print("ok encoders: VideoToolbox keeps ffmpeg's 12-frame keyframe interval (measured)")
+
+
 def test_alpha_codec_args_ask_for_a_real_alpha_plane():
     """ProRes 4444 through `prores_ks` (the encoder that offers yuva444p10le; VideoToolbox's
     ProRes does 4444 but only in bgra/ayuv64le), and RGBA PNG for the sequence."""
