@@ -150,6 +150,8 @@ Packages go out in waves: dispatched together, merged, then checked by QA. These
   see, or (c) a P0/P1 on an evaluator's path. At most one per race day, never one per QA wave: a
   release list that moves daily reads as churn. The next tag is the showcase release: five-bullet
   notes, cut after REG and EVAL on the candidate, named by RUL-12 in [DECISIONS.md](DECISIONS.md).
+- **Release media.** At the version bump, re-capture or re-waive each `docs/media` file per
+  `docs/media/CAPTURED.json`: `tests/test_version.py` turns every entry red at a minor release.
 - **Product.** Until the race-day experiment reports, a product pull request needs a defect the
   owner hit or a ruling he made, and holds `studio/*.py` net lines at 0 or fewer: the code had
   grown faster than its use. The first-open freeze runs until his next new recording or
