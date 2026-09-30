@@ -1,3 +1,3 @@
 ### Fixed
-- The Stats STRAIGHTS note no longer ranks a slow exit on a straight's best when the lap that set it
-  gave all of that time back in the corners beside it, the IDEAL LAP table's own rule; it says so.
+- The Stats STRAIGHTS note no longer ranks a slow exit on a straight whose IDEAL LAP row says the
+  lap that set its best gave all of that time back in the corners beside it; it says so instead.

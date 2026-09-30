@@ -94,6 +94,29 @@ IDEAL_TOOLTIP = (
     "the order by eye. Click a row to ring that corner on the map.")
 
 
+def _listed(row) -> bool:
+    """Whether the decomposition table prints `row`: from IDEAL_GAIN_FLOOR up; the note under it
+    accounts for the rest."""
+    return row.gain >= IDEAL_GAIN_FLOOR
+
+
+def _given_back(sb, row, subject_id) -> tuple[float, list[int]] | None:
+    """`SegmentBests.donor_net`'s (net, around) for a row the table prints whose donor gave
+    IDEAL_GAIN_FLOOR or more of its gain back, else None: the rows `_give_back` names."""
+    got = sb.donor_net(row.index, subject_id)
+    if not _listed(row) or got is None or row.gain - got[0] < IDEAL_GAIN_FLOOR:
+        return None
+    return got
+
+
+def gave_all_back(sb, row, subject_id) -> bool:
+    """Whether this table says the lap that set `row`'s minimum "gave all of it back … not free
+    time". The STRAIGHTS note asks it before ranking a straight (W2FIX-STRAIGHTS), so one page
+    names a give-back on both blocks or on neither."""
+    got = _given_back(sb, row, subject_id)
+    return got is not None and got[0] <= 0
+
+
 def _give_back(sb, row, subject_id) -> str:
     """The row's last clause (ADV-6): what the lap that set this segment's minimum gave back in
     the segments either side (`SegmentBests.donor_net`), or "" when it kept its gain. A row can
@@ -105,8 +128,8 @@ def _give_back(sb, row, subject_id) -> str:
     moves; this floor names 8, the six QA round 4 listed (ADV-6) among them. A give-back is a line
     trade-off or an edge the GPS put in the wrong place (the same error moves the gain), and
     either way it is not free time."""
-    got = sb.donor_net(row.index, subject_id)
-    if got is None or row.gain - got[0] < IDEAL_GAIN_FLOOR:
+    got = _given_back(sb, row, subject_id)
+    if got is None:
         return ""
     net, around = got
     lap, where = f"Lap {row.donor + 1}", " and ".join(sb.display_label(j) for j in around)
@@ -252,8 +275,8 @@ class IdealSection:
         # that include the best one).
         set_target_tile(self.t_gap, gap, IDEAL_GAP_TOOLTIP, session, text=f"{gap:.2f} s")
 
-        shown = [r for r in rows if r.gain >= IDEAL_GAIN_FLOOR]
-        rest = [r for r in rows if r.gain < IDEAL_GAIN_FLOOR]
+        shown = [r for r in rows if _listed(r)]
+        rest = [r for r in rows if not _listed(r)]
         t = self.table
         t.blockSignals(True)
         t.clearSelection()

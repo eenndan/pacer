@@ -18,7 +18,7 @@ from ._signal import fmt_signed, plural
 from .coaching_panel import _ranked_shown
 from .lap_table import NUM_ROLE, _NumItem
 from .stats_common import RING_ROLE, ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
-from .stats_ideal import _give_back
+from .stats_ideal import gave_all_back
 from .widgets import DASH, WrapLabel
 
 
@@ -57,9 +57,9 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
 STRAIGHTS_NOTE_TOOLTIP = (
     "The straight whose preceding corner's exit deficit × the straight's median − best time is "
     "largest (its exit leverage: the one times the other) — measured, not modelled. It leaves "
-    "out a straight whose best is the IDEAL LAP's minimum there when the lap that set it gave "
-    "all of that time back in the corners beside it, by that table's own rule: a line trade-off "
-    "or a misplaced GPS edge, not time a slow exit costs. \"Usual\" is the median over the clean "
+    "out a straight whose best is the IDEAL LAP's minimum there when that table's row says the "
+    "lap that set it gave all of that time back in the corners beside it: a line trade-off or a "
+    "misplaced GPS edge, not time a slow exit costs. \"Usual\" is the median over the clean "
     "laps. It is time down the STRAIGHT after a slow exit, which the Coaching tab's ranking does "
     "not contain: Coaching ranks the time lost inside each corner against your best lap, and the "
     "corner/straight partition keeps the two apart (together they sum to the lap). So the two "
@@ -112,16 +112,17 @@ class StraightsSection:
 
     @staticmethod
     def _given_back(session, report) -> set[int]:
-        """The straights whose best is the IDEAL LAP's own minimum there and whose lap gave all of
-        it back beside it, by that table's rule (`stats_ideal._give_back`): one page must not rank
-        a minimum its other block calls "not free time" (QA W2 REG-1, MK's C7 on lap 16's best)."""
+        """The straights whose best is the IDEAL LAP's own minimum there and whose row in that
+        table says its lap "gave all of it back" (`stats_ideal.gave_all_back`, its floor included):
+        one page must not rank a minimum its other block calls "not free time" (QA W2 REG-1, MK's
+        C7 on lap 16's best), nor leave one out that the table does not name."""
         sb = getattr(session, "ideal_segment_bests", lambda: None)()
         best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
         rows = sb.decomposition(best) if sb is not None and best is not None else None
         by_label = {st.label: st for st in report}
         return {st.index for row in rows or () if (st := by_label.get(row.label)) is not None
                 and st.best_s == sb.bests[row.index]    # the same minimum, to the bit
-                and _give_back(sb, row, best) and sb.donor_net(row.index, best)[0] <= 0}
+                and gave_all_back(sb, row, best)}
 
     def _note_text(self, session, report, unit, u_label) -> str:
         """The top exit-leverage straight a lap kept (`_given_back`) as what it measures, those
@@ -136,8 +137,12 @@ class StraightsSection:
         why = ("the lap that set the straight's best gave all of that time back in the corners "
                "beside it.")
         if top is None:
-            return f"No slow exit to rank: after {coaching.corner_names(above)}, {why}" \
-                if above else ""
+            if not above:
+                return ""
+            names = [f"C{c}" for c in above]    # every one, so "and", not Coaching's "or"
+            after = names[0] if len(names) == 1 else (
+                "each of " + ", ".join(names[:-1]) + f" and {names[-1]}")
+            return f"No slow exit to rank: after {after}, {why}"
         exit_gap = abs(units.convert_speed(top.exit_delta_kmh, unit))
         # Copy #7 (QA 2026-09-26): what it costs, in words; "leverage" and "median" are named on
         # the hover (STRAIGHTS_NOTE_TOOLTIP).
