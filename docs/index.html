@@ -191,6 +191,8 @@
   .hero { padding-top: var(--space-2xl); }
   .hero .accent { color: var(--accent); }
   .hero .figure { margin-top: var(--space-xl); }
+  /* The clip shares the headline's row, so it starts level with the eyebrow, not a step below. */
+  .hero .split .figure { margin-top: 0; }
 
   .callout {
     border-left: 3px solid var(--accent);
@@ -332,9 +334,32 @@
 <!-- ===================== HERO ===================== -->
 <section class="hero">
   <div class="wrap">
-    <p class="eyebrow">Case study · race telemetry · macOS</p>
-    <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against official timing.</span></h1>
-    <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware. Its lap times match official timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check.</p>
+    <!-- The headline and the clip side by side, so the clip is in the first view: below the
+         screenshot it sat at y 1,233 on a 1440 × 900 screen, under the fold (SHOWCASE-3). It is
+         the accuracy section's .split grid, which stacks the headline over the clip at ≤ 860 px. -->
+    <div class="split">
+      <div>
+        <p class="eyebrow">Case study · race telemetry · macOS</p>
+        <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against official timing.</span></h1>
+        <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware. Its lap times match official timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check.</p>
+      </div>
+
+      <!-- THE CLIP. Twenty seconds of the app's own overlay export of Sandown 3h's best lap, cut by
+           studio/dev/media_capture.py (the `clip` shot) — a real export, not a screen recording.
+           Still for a reader who asks for reduced motion, with no script: the one <source> carries
+           `media="(prefers-reduced-motion: no-preference)"`, so under `reduce` no source matches and
+           the element shows its poster and nothing else. Safari never dropped `media` on a video
+           <source>, and Chrome and Firefox restored it in late 2023. The file has no audio stream at
+           all, so `muted` is what lets it autoplay, not what keeps it quiet. -->
+      <figure class="figure clip">
+        <video width="1280" height="720" autoplay muted loop playsinline poster="media/best-lap.jpg"
+               aria-label="Twenty seconds of Pacer's own overlay export of lap 31, the best lap of the Sandown 3h session: onboard kart footage with the lap clock and a BEST mark top-left, a g-meter top-right, a mini track map bottom-right and the speed bottom-left.">
+          <source src="media/best-lap.mp4" type="video/mp4" media="(prefers-reduced-motion: no-preference)">
+          <a href="media/best-lap.mp4">The best lap as the app exports it (MP4, 20 s, no sound)</a>
+        </video>
+        <figcaption><strong>The best lap, as the app exports it</strong> — the first twenty seconds of lap 31 (0:47.076) through <strong>File ▸ Export overlay video</strong>, with no sound, and a still frame if your system asks for reduced motion.</figcaption>
+      </figure>
+    </div>
 
     <div class="callout">
       <strong>There is no download.</strong> Source is the only distribution — <a href="#build">three commands with pixi</a>. Code signing, notarization, a <code>.dmg</code>, and any platform other than Apple&nbsp;Silicon macOS are deliberate <a href="#non-goals">non-goals</a>, not a to-do list.
@@ -344,22 +369,6 @@
       <img src="media/hero.png" width="2880" height="1800"
            alt="The Pacer Studio window on a real kart session, Sandown 3h: GoPro video with its own transport, a speed-coloured track map with brake points, seven named corners and a key, the SPEED · Δ TO IDEAL charts reading Δideal +0.26 s at 46 km/h, and the tabbed lap panel with lap 31 starred as the session best at 0:47.076.">
       <figcaption>One window on one recording — Sandown 3h, three hours at Sandown Park in July 2026, as is every screenshot on this page. The four panels are independently resizable and any one of them maximises to the whole window; the lap panel below the video is five full-height pages — <strong>Laps, Corners, Stats, Coaching, Marks</strong> — on one tab bar.</figcaption>
-    </figure>
-
-    <!-- THE CLIP. Twenty seconds of the app's own overlay export of that session's best lap, cut by
-         studio/dev/media_capture.py (the `clip` shot) — a real export, not a screen recording.
-         Still for a reader who asks for reduced motion, with no script: the one <source> carries
-         `media="(prefers-reduced-motion: no-preference)"`, so under `reduce` no source matches and
-         the element shows its poster and nothing else. Safari never dropped `media` on a video
-         <source>, and Chrome and Firefox restored it in late 2023. The file has no audio stream at
-         all, so `muted` is what lets it autoplay, not what keeps it quiet. -->
-    <figure class="figure clip">
-      <video width="1280" height="720" autoplay muted loop playsinline poster="media/best-lap.jpg"
-             aria-label="Twenty seconds of Pacer's own overlay export of lap 31, the best lap of the Sandown 3h session: onboard kart footage with the lap clock and a BEST mark top-left, a g-meter top-right, a mini track map bottom-right and the speed bottom-left.">
-        <source src="media/best-lap.mp4" type="video/mp4" media="(prefers-reduced-motion: no-preference)">
-        <a href="media/best-lap.mp4">The best lap as the app exports it (MP4, 20 s, no sound)</a>
-      </video>
-      <figcaption><strong>The best lap, as the app exports it.</strong> The first twenty seconds of lap 31 (0:47.076), the fastest of the session's 62 clean laps, through <strong>File ▸ Export overlay video</strong> at 720p: the lap clock and <strong>★ BEST</strong>, a g-meter, a mini-map and the speed, drawn onto the GoPro footage by the app. No sound — the file carries no audio track — and a still frame if your system asks for reduced motion.</figcaption>
     </figure>
   </div>
 </section>
