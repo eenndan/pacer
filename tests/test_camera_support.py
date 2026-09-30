@@ -10,20 +10,31 @@ this repo at `3rdparty/gpmf-parser/README.md`, says otherwise:
     AND `| GPS5 | removed |` — that camera emits no GPS at all and cannot be lap-timed;
   * "### HERO13 changes" brings it back ("GPS returns for HERO13").
 
-So true-clock timing is a Hero 11 or a Hero 13, and the claim overstated it by three whole models
+So true-clock timing was a Hero 11 or a Hero 13, and the claim overstated it by three whole models
 in the flattering direction — including one that cannot produce a lap time at all. The CODE was
 never wrong: `studio/load.py::_used_gps9_trueclock` looks for the stream at runtime and falls back
 to the media clock, and `studio/data_quality.py` classifies the result. Only the prose lied, which
 is exactly the class of defect nothing in this repo was checking.
 
+The 2026 spec (gpmf-parser 9a71506) added two cameras that are not HEROs: "### MAX2 changes,
+otherwise supports All HERO13 metadata" and "### MISSION 1 changes, otherwise supports All HERO13
+metadata" — both GPS9. The first version of check 1 named a section only by `HERO<n>` or `MAX\b`,
+so on that spec it derived the same ten models and PASSED, blind to both, and the docs went on
+saying "a Hero 11 or a Hero 13". Check 1 now walks EVERY model section and fails on one it cannot
+name, so the next camera cannot slip past it the same way.
+
 THE FOUR CHECKS
 
   1. THE PINNED TABLE IS THE SPEC'S. `_MODELS` below is DERIVED from the vendored spec when the
-     submodule is checked out (CI checks out `submodules: recursive`), by walking the per-model
-     `### HERO<n>` sections in order and carrying GPS5/GPS9 state forward across the "Otherwise
-     Supports All HERO<n-1> metadata" inheritance the spec is written in. When the submodule is
-     absent — a bare worktree, which is the common local case — the check prints SKIP and the
-     pinned table stands alone. So the guard runs everywhere and cannot rot where it matters.
+     submodule is checked out (CI checks out `submodules: recursive`), by walking every `### `
+     model section from the first `### HERO5` one to the next `## ` chapter ("Header metadata",
+     whose own `###`s are DVIDs, not cameras). Each section starts from the parent its heading
+     names ("Otherwise Supports All HERO<n> metadata" — the MAX and MAX2 branch off the line
+     rather than following it), or from the section before it when it names none, and applies
+     its own GPS5/GPS9 rows. A heading it cannot name, or a parent it has not derived, FAILS by
+     name. When the submodule is absent — a bare worktree, which is the common local case — the
+     check prints SKIP and the pinned table stands alone. So the guard runs everywhere and cannot
+     rot where it matters.
   2. NO OPEN-ENDED CLAIM. "Hero 9 and newer", "Hero 9+", "Hero 11 or later" — an open-ended model
      range in a sentence that also makes a GPS9/true-clock claim is banned outright, whatever
      models it happens to cover today. It is the exact shape the original defect took, and it is
@@ -37,7 +48,10 @@ THE FOUR CHECKS
 
 Plus check 5, the anti-vacuity one: the scan must still FIND a claim in every file known to make
 one (so a reword cannot silently empty the guard), and the guard must still FAIL the original
-defect's exact wording, which is asserted directly against the string that shipped.
+defect's exact wording, which is asserted directly against the string that shipped. Its planted-
+spec half runs check 1's derivation on small spec texts with a known defect planted in each — a
+camera heading it cannot name, a parent it cannot resolve, a model section removed — and requires
+each to fail or to show; and a `### DVID` heading below "## Header metadata" to pass.
 
 Pure stdlib, no Qt, no pacer, no telemetry file — it reads text. Needs neither the offscreen env
 nor the bindings PYTHONPATH.
@@ -53,22 +67,26 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SPEC = os.path.join(_REPO, "3rdparty", "gpmf-parser", "README.md")
 
 # --- THE PINNED TRUTH TABLE ------------------------------------------------------------------
-# model -> (has_gps5, has_gps9). Derived from 3rdparty/gpmf-parser/README.md, sections
-# "### HERO5 Black with GPS Enabled Adds" (line ~536) through "### HERO13 changes" (line ~634).
+# model -> (has_gps5, has_gps9). Derived from 3rdparty/gpmf-parser/README.md at 9a71506, sections
+# "### HERO5 Black and Session" (line ~527) through "### MISSION 1 changes" (line ~651). Names are
+# the spec's spelling ("MAX2", "MISSION 1"), because check 4 looks for them verbatim in the docs.
 # TO RE-DERIVE: check out the submodule (`git submodule update --init 3rdparty/gpmf-parser`) and
 # run this file — check 1 recomputes the table from the spec and asserts it equals this literal.
 # A new camera in an updated spec therefore fails HERE, not silently in the prose.
 _MODELS: dict[str, tuple[bool, bool]] = {
-    "Hero 5":  (True,  False),
-    "Hero 6":  (True,  False),
-    "Hero 7":  (True,  False),
-    "Hero 8":  (True,  False),
-    "Hero 9":  (True,  False),
-    "Hero 10": (True,  False),
-    "Hero 11": (True,  True),
-    "Hero 12": (False, False),   # "No GPS receiver in HERO12" — cannot be lap-timed at all
-    "Hero 13": (False, True),    # GPS9 returns; GPS5 stayed removed
-    "Max":     (True,  False),   # "Otherwise Supports All HERO7 metadata"
+    "Hero 5":    (True,  False),
+    "Fusion":    (True,  False),   # names no parent: follows HERO5-with-GPS (Fusion.mp4 has fixes)
+    "Hero 6":    (True,  False),
+    "Hero 7":    (True,  False),
+    "Hero 8":    (True,  False),
+    "Max":       (True,  False),   # "Otherwise Supports All HERO7 metadata"
+    "Hero 9":    (True,  False),
+    "Hero 10":   (True,  False),
+    "Hero 11":   (True,  True),
+    "Hero 12":   (False, False),   # "No GPS receiver in HERO12" — cannot be lap-timed at all
+    "Hero 13":   (False, True),    # GPS9 returns; GPS5 stayed removed
+    "MAX2":      (False, True),    # "otherwise supports All HERO13 metadata"
+    "MISSION 1": (False, True),    # "otherwise supports All HERO13 metadata"
 }
 
 _GPS9_MODELS = [m for m, (_, g9) in _MODELS.items() if g9]
@@ -122,7 +140,9 @@ def _models_in(fragment: str) -> set[str]:
     """Every camera model a fragment names, with ranges and open-ended forms expanded.
 
     Ordered alternation: the multi-model forms must be tried before the bare `Hero N`, or
-    "Hero 5 through Hero 10" would read as two unrelated singles."""
+    "Hero 5 through Hero 10" would read as two unrelated singles — and "MAX2" before the bare
+    "Max", or "MAX 2" would read as the original Max. "Fusion" is matched case-sensitively: the
+    same pages say "sensor fusion", which is not a camera."""
     found: set[str] = set()
     nums = sorted(int(m.split()[-1]) for m in _MODELS if m.startswith("Hero "))
     hi = max(nums)
@@ -134,6 +154,9 @@ def _models_in(fragment: str) -> set[str]:
         r"Hero\s*(?P<open>\d+)\s*(?:\+|and\s+(?:newer|later|up)|or\s+(?:newer|later|up))"
         r"|Hero\s*(?P<lo>\d+)\s*(?:–|—|-|through|to)\s*(?:Hero\s*)?(?P<hi>\d+)"
         r"|Hero\s*(?P<one>\d+)"
+        r"|(?P<max2>\bMAX\s*2\b)"
+        r"|(?P<mission1>\bMISSION\s*1\b)"
+        r"|(?P<fusion>(?-i:\bFusion\b))"
         r"|(?P<max>\bMax\b)", re.I)
     for m in pattern.finditer(fragment):
         if m.group("open"):
@@ -145,47 +168,93 @@ def _models_in(fragment: str) -> set[str]:
             name = _name(int(m.group("one")))
             if name:
                 found.add(name)
+        elif m.group("max2"):
+            found.add("MAX2")
+        elif m.group("mission1"):
+            found.add("MISSION 1")
+        elif m.group("fusion"):
+            found.add("Fusion")
         elif m.group("max"):
             found.add("Max")
     return found
 
 
 # ------------------------------------------------------------------ 1. the table is the spec's
-def _derive_from_spec() -> dict[str, tuple[bool, bool]]:
-    """Walk the spec's per-model sections, carrying GPS5/GPS9 forward through its inheritance."""
-    with open(_SPEC, encoding="utf-8") as f:
-        spec = f.read()
-    # Section headings: "### HERO9 Changes, …", "### GoPro MAX (v2.0) …". Body = up to the next ###.
-    parts = re.split(r"^###\s+", spec, flags=re.M)[1:]
-    sections: list[tuple[str, str]] = []
-    for part in parts:
-        head, _, body = part.partition("\n")
-        hero = re.match(r"(?:GoPro\s+)?HERO\s*(\d+)", head, re.I)
-        if hero:
-            sections.append((f"Hero {int(hero.group(1))}", body))
-        elif re.match(r"(?:GoPro\s+)?MAX\b", head, re.I):
-            sections.append(("Max", body))
+# How a spec heading (or the parent it names) spells each model, tried in order and anchored at the
+# start: "MAX2" before the bare "MAX", which must not swallow a "MAX 3"; "MISSION 1" exactly, so a
+# MISSION 2 is a heading this guard cannot name — and fails check 1 — rather than a MISSION 1.
+_SPEC_NAMES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?:GoPro\s+)?HERO\s*(\d+)\b", re.I), "Hero {}"),
+    (re.compile(r"(?:GoPro\s+)?MAX\s*2\b", re.I), "MAX2"),
+    (re.compile(r"(?:GoPro\s+)?MAX\b(?!\s*\d)", re.I), "Max"),
+    (re.compile(r"(?:GoPro\s+)?MISSION\s*1\b", re.I), "MISSION 1"),
+    (re.compile(r"(?:GoPro\s+)?Fusion\b", re.I), "Fusion"),
+)
+_UNREADABLE = "the spec has a model section this guard cannot read"
 
-    def _row(body: str, fourcc: str) -> str | None:
-        m = re.search(rf"^\|\s*{fourcc}\s*\|\s*([^|]*)\|", body, re.M)
-        return m.group(1).strip() if m else None
+
+def _spec_model(text: str) -> str | None:
+    """The model a spec heading, or a parent it names, starts with; None when it names none."""
+    for pattern, name in _SPEC_NAMES:
+        m = pattern.match(text.strip())
+        if m:
+            return name.format(int(m.group(1))) if m.groups() else name
+    return None
+
+
+def _derive_from_spec(spec: str | None = None) -> dict[str, tuple[bool, bool]]:
+    """Walk every model section of the spec (the vendored one unless `spec` is given), each
+    starting from its named parent's GPS5/GPS9 state, and apply its own rows."""
+    if spec is None:
+        with open(_SPEC, encoding="utf-8") as f:
+            spec = f.read()
+    lines = spec.splitlines()
+    start = next((i for i, line in enumerate(lines)
+                  if re.match(r"###\s+(?:GoPro\s+)?HERO\s*5\b", line, re.I)), None)
+    assert start is not None, (
+        f"{_UNREADABLE}: no '### HERO5' section, where the per-model sections have always begun")
+    # The model block runs to the next '## ' chapter: "## Header metadata" follows it, and its
+    # '### DVID …' headings are header fields, not cameras. '#### BONES …' is a note inside HERO10.
+    sections: list[tuple[str, list[str]]] = []
+    for line in lines[start:]:
+        if re.match(r"##\s", line):
+            break
+        if re.match(r"###\s", line):
+            sections.append((line[3:].strip(), []))
+        else:
+            sections[-1][1].append(line)
+
+    def _row(body: list[str], fourcc: str) -> str | None:
+        for line in body:
+            m = re.match(rf"\|\s*{fourcc}\s*\|\s*([^|]*)\|", line)
+            if m:
+                return m.group(1).strip()
+        return None
 
     derived: dict[str, tuple[bool, bool]] = {}
-    gps5 = gps9 = False           # nothing carries GPS before the HERO5-with-GPS section
-    for model, body in sections:
-        if model == "Max":        # "Otherwise Supports All HERO7 metadata" — a branch, not a step
-            derived["Max"] = derived.get("Hero 7", (gps5, gps9))
-            continue
+    state = (False, False)        # nothing carries GPS before the HERO5-with-GPS section
+    for head, body in sections:
+        model = _spec_model(head)
+        assert model is not None, f"{_UNREADABLE}: '### {head}' names no camera it knows"
+        parent = re.search(r"supports\s+all\s+(.+?)\s+metadata", head, re.I)
+        if parent:
+            # A branch, not a step: the MAX follows HERO7 though HERO8 comes before it in the file.
+            base = _spec_model(parent.group(1))
+            assert base in derived, (
+                f"{_UNREADABLE}: '### {head}' inherits from '{parent.group(1)}', which no section "
+                f"above it derives")
+            state = derived[base]
+        gps5, gps9 = state        # no parent named: the section builds on the one before it
         for fourcc in ("GPS5", "GPS9"):
             val = _row(body, fourcc)
             if val is None:
                 continue                    # no row: this model inherits the state carried in
-            state = not val.lower().startswith("removed")
+            present = not val.lower().startswith("removed")
             if fourcc == "GPS5":
-                gps5 = state
+                gps5 = present
             else:
-                gps9 = state
-        derived[model] = (gps5, gps9)
+                gps9 = present
+        derived[model] = state = (gps5, gps9)
     return derived
 
 
@@ -311,6 +380,64 @@ def test_guard_still_fails_the_wording_that_shipped():
             f"the guard no longer rejects the wording that actually shipped — it has gone "
             f"vacuous (open_ended={open_ended}, wrong_models={wrong_models}):\n  {text}")
     print(f"test_guard_still_fails_the_wording_that_shipped OK ({len(shipped)} historic claims)")
+
+
+# The model block's shape, cut to the rows check 1 reads: the chapter before it, both HERO5
+# sections, a parent-named step, the Hero 12's hole, the 2026 branch off HERO13, and the header
+# chapter's DVID headings after it. Runs without the submodule, so the plants guard every worktree.
+_MINI_SPEC = """\
+## Where to find GPMF data
+### IMU Orientation Uses These Axis Labels
+### HERO5 Black and Session
+| ACCL | 3-axis accelerometer | 200 | m/s² | |
+### HERO5 Black with GPS Enabled Adds
+| GPS5 | latitude, longitude, altitude, 2D ground speed, and 3D speed | 18 | deg | |
+### HERO11 changes, otherwise supports All HERO5 metadata
+| GPS9 | lat, long, alt, 2D speed, 3D speed, days since 2000 | 10 | deg | |
+### HERO12 changes, otherwise supports All HERO11 metadata
+| GPS5 | removed | --- | --- | --- |
+| GPS9 | removed | --- | --- | No GPS receiver in HERO12 |
+### HERO13 changes, otherwise supports All HERO12 metadata
+| GPS9 | lat, long, alt, 2D speed, 3D speed, days since 2000 | 10 | deg | GPS returns |
+### MAX2 changes, otherwise supports All HERO13 metadata
+| MAGN | Raw Hall sensor Magnetometer data | 24 | µT | |
+## Header metadata
+### DVID 1, Global Settings
+"""
+
+
+def test_derivation_fails_a_spec_it_cannot_read():
+    """Check 1's derivation against planted specs: a camera it cannot name and a parent it
+    cannot resolve must each FAIL by name (the 9a71506 spec's MAX2 and MISSION 1 passed the old
+    walk silently); a model section taken out must be missing from what it derives; and the
+    header chapter's `### DVID` headings, which are not cameras, must not fail it."""
+    clean = _derive_from_spec(_MINI_SPEC)
+    assert clean == {"Hero 5": (True, False), "Hero 11": (True, True), "Hero 12": (False, False),
+                     "Hero 13": (False, True), "MAX2": (False, True)}, clean
+
+    def _fails(spec: str, needle: str) -> None:
+        try:
+            _derive_from_spec(spec)
+        except AssertionError as e:
+            assert _UNREADABLE in str(e) and needle in str(e), f"failed, but not by name: {e}"
+            return
+        raise AssertionError(f"the derivation read a spec it cannot read ({needle!r} planted)")
+
+    header = "## Header metadata\n"
+    _fails(_MINI_SPEC.replace(header, "### GoPro NEWCAM changes, otherwise supports All HERO13 "
+                                      "metadata\n| GPS9 | lat | 10 | deg | |\n" + header),
+           "GoPro NEWCAM")
+    _fails(_MINI_SPEC.replace(header, "### HERO14 changes, otherwise supports All HERO99 "
+                                      "metadata\n" + header), "HERO99")
+    # The stop is what spares the DVIDs: the same heading inside the model block fails.
+    _fails(_MINI_SPEC.replace(header, "### DVID 1, Global Settings\n" + header), "DVID 1")
+    _fails(_MINI_SPEC.replace("### MAX2", "### MAX 3"), "MAX 3")
+    without_max2 = _MINI_SPEC.replace(
+        "### MAX2 changes, otherwise supports All HERO13 metadata\n"
+        "| MAGN | Raw Hall sensor Magnetometer data | 24 | µT | |\n", "")
+    assert without_max2 != _MINI_SPEC and "MAX2" not in _derive_from_spec(without_max2)
+    print("test_derivation_fails_a_spec_it_cannot_read OK (4 plants fail by name, 1 section "
+          "removed is missed, the header chapter's DVIDs pass)")
 
 
 # ------------------------------------------------------------------------------------- runner
