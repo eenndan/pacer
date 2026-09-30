@@ -235,12 +235,17 @@ def bucket_polylines(xs, ys, seg_buckets, n_buckets: int):
     return out
 
 
-def resample_grid_to_points(cum_dist, grid_values):
-    """Resample a value-on-uniform-[0,1]-grid curve onto a lap's normalized odometer distances
-    (cum/cum[-1]) via np.interp. Caller guarantees cum_dist[-1] > 0."""
-    cum = np.asarray(cum_dist, dtype=float)
+def resample_grid_to_points(cum_dist, grid_values, grid_frac=None):
+    """Resample a value-on-uniform-[0,1]-grid curve onto a lap's points via np.interp. The grid is
+    the Δ BASELINE's normalized distance; `grid_frac` is each point's position on it — the place
+    on track the lap's warp puts the point (TRUTH-10; `Session.lap_distance_on_baseline` / the
+    baseline total). Without it, the lap's own normalized odometer (cum/cum[-1]), which is what
+    the Δ grid meant before the warp. Caller guarantees cum_dist[-1] > 0."""
     g = np.asarray(grid_values, dtype=float)
-    return np.interp(cum / cum[-1], np.linspace(0.0, 1.0, len(g)), g)
+    if grid_frac is None:
+        cum = np.asarray(cum_dist, dtype=float)
+        grid_frac = cum / cum[-1]
+    return np.interp(np.asarray(grid_frac, dtype=float), np.linspace(0.0, 1.0, len(g)), g)
 
 
 def _seg_buckets(times, vals, lo=None, hi=None):
@@ -303,7 +308,7 @@ def _pedal_channel(times, n_points, pedal):
 
 
 def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
-                    speed_unit=None, elevation=None, pedal=None):
+                    speed_unit=None, elevation=None, pedal=None, delta_frac=None):
     """Compute the per-segment bucket ids + legend texts for one rainbow channel. Pure numpy.
 
     Inputs are the lap's already-fetched per-sample arrays (the map fetches them from Session):
@@ -311,7 +316,8 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
         km/h / gap-aware odometer), all index-aligned;
       * `grip_util` — the per-sample grip utilization (lap_grip_channel), or None (no g signal);
       * `delta_grid` — the lap's Δ-vs-best curve ON THE 400-POINT GRID (delta()'s y-series), or
-        None (no best lap for Δ);
+        None (no best lap for Δ); `delta_frac` — each point's place on that grid (see
+        `resample_grid_to_points`), or None for the lap's own normalized odometer;
       * `pedal` — the D3 brake/throttle intensity in [-1, 1] (lap_brake_throttle), or None (no g
         signal). Painted as fetched: see `_pedal_channel`.
 
@@ -383,7 +389,7 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     # so they can never disagree about the baseline, the alignment or the best-lap gate.
     if delta_grid is None or float(cum[-1]) <= 0:
         return None
-    d_pts = resample_grid_to_points(cum, delta_grid)
+    d_pts = resample_grid_to_points(cum, delta_grid, delta_frac)
     # Negated so ahead (negative Δ) lands in the high (green) buckets.
     vals = -d_pts
     d_min, d_max = -float(np.max(vals)), -float(np.min(vals))  # signed Δ extremes (min ≤ max)

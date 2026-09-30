@@ -7,9 +7,10 @@ windows next to each other" — because they are locked to the CLOCK. Ten second
 is at the next corner and the two pictures are of different places, so the frame stops being a
 comparison at the moment it starts being interesting.
 
-THE PRIMITIVE IS THE RESAMPLE. For each output frame this asks pane A where it is on the lap — the
-normalized track fraction s = distance_into_lap / lap_total, the same axis the Δ engine and the
-charts align on — and then asks pane B for the instant IT was at that same s. Both panes are
+THE PRIMITIVE IS THE RESAMPLE. For each output frame this asks pane A where it is on the lap — its
+place on the Δ baseline's track fraction s, through the lap's on-track warp (TRUTH-10), the same
+axis the Δ engine and the charts align on — and then asks pane B for the instant IT was at that
+same s. Both panes are
 therefore always at the same corner, both clocks run visibly apart, and the gap between them IS the
 delta. That is a resample of B onto A's frame grid, not an offset: the faster lap's footage is
 consumed slightly fast through the parts it was quick in and slightly slow through the rest,
@@ -17,7 +18,8 @@ continuously, and no single time shift can stand in for it.
 
 WHAT THE TWO LAPS BEING DIFFERENT LENGTHS MEANS, SAID PLAINLY. They always are — in seconds AND in
 metres (a wide line round a kart track measures tens of metres longer than a tight one). Locking on
-NORMALIZED distance is what makes that a non-issue: both laps traverse s in [0, 1] exactly once, so
+the TRACK POSITION is what makes that a non-issue: each lap's warp anchors both timing lines and
+puts its extra metres where they were driven, and both laps traverse s in [0, 1] exactly once, so
 the export starts with both panes on the start line and ends with both on the finish line, whatever
 either lap measured. Neither pane can "run out" of lap, because the mapping is onto the other lap's
 OWN window. The clip's length is lap A's time, because lap A is the lap the frames are stamped
@@ -132,8 +134,8 @@ LAYOUT_SIDE = "side"
 LAYOUT_CHOICES = (LAYOUT_STACK, LAYOUT_SIDE)
 
 # `plot_x_at_media_time` returns s * best_distance and `media_time_at_plot_x` divides by the same
-# number, so passing 1.0 on BOTH sides makes the plot-x coordinate literally the normalized track
-# fraction s. The two laps' differing totals then cancel by construction rather than by a shared
+# number, so passing 1.0 on BOTH sides makes the plot-x coordinate literally the track fraction s
+# (the Δ baseline's, where each lap's warp puts it). The two laps' differing totals then cancel by construction rather than by a shared
 # constant a caller has to remember to pass twice. (It must be non-zero: both accessors read a
 # falsy `best_distance` as "no distance axis" and answer None.)
 _UNIT_TOTAL = 1.0
@@ -315,11 +317,12 @@ class LockedTrack:
     """The per-output-frame answer to "where are both panes, and how far apart are they".
 
     Every array holds one entry per OUTPUT frame, on pane A's frame grid:
-      * `fraction`   — s in [0, 1], the normalized track position BOTH panes are held at;
+      * `fraction`   — s in [0, 1], the track position (the baseline's fraction) BOTH panes are
+        held at;
       * `t_b_media`  — pane B's media time, on pane B's session's OWN media clock;
       * `elapsed_a` / `elapsed_b` — seconds into each lap at that s. Their difference is the gap,
         and it is `Session.delta_between(lap_a, lap_b, t)` by construction: the same
-        normalized-distance projection, spelled with the public cursor mappers.
+        on-track warp, spelled with the public cursor mappers.
     """
 
     fraction: np.ndarray
@@ -376,8 +379,9 @@ def lock_to_track(session_a, lap_a: int, session_b, lap_b: int, media_times_a) -
     """Lock lap B onto lap A's frame grid by TRACK POSITION.
 
     `media_times_a` are the output frames' media times on session A's clock (what `frame_times`
-    produced). For each, this walks A's media time -> A's telemetry time -> the normalized track
-    fraction s -> lap B's telemetry time at the SAME s -> pane B's media time on SESSION B's clock.
+    produced). For each, this walks A's media time -> A's telemetry time -> the track fraction s
+    (the Δ baseline's, through lap A's warp) -> lap B's telemetry time at the SAME place -> pane
+    B's media time on SESSION B's clock.
 
     THE THREE CLOCK CROSSINGS ARE THE WHOLE CORRECTNESS. A frame time is a MEDIA time and every
     Session series is indexed on the TELEMETRY (GPS9 true) clock; the two drift apart by up to

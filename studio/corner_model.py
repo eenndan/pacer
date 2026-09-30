@@ -677,6 +677,8 @@ class CornerModel:
         # corners.SessionGeometry or None — see geometry()
         self._geometry_cache: corners.SessionGeometry | None | _Unset = _UNSET
         self._shift_cache: dict[int, np.ndarray] = {}  # lap id -> its fitted rigid shift
+        # (the ReferenceLap it was built for, its warp) — see reference_alignment
+        self._ref_align_cache: tuple | None = None
 
     def invalidate(self) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
@@ -689,6 +691,7 @@ class CornerModel:
         self._align_cache.clear()
         self._geometry_cache = _UNSET
         self._shift_cache.clear()
+        self._ref_align_cache = None
 
     def invalidate_stats(self) -> None:
         """Drop ONLY the per-lap stats (not the corner detection) — called from
@@ -711,6 +714,7 @@ class CornerModel:
         self._align_cache.clear()
         self._geometry_cache = _UNSET
         self._shift_cache.clear()
+        self._ref_align_cache = None
 
     # -------------------------------------------------------- spatial traces for the per-lap warp
     def _best_trace(self) -> tuple | None:
@@ -876,6 +880,40 @@ class CornerModel:
         self._align_cache[key] = align
         return align
 
+    def reference_alignment(self) -> corners.Alignment | None:
+        """The CROSS-RECORDING reference lap's warp onto the best lap's odometer, (knot_best,
+        knot_ref) — `lap_alignment`'s search at the same corner boundaries, run against the
+        reference's own trace moved into this session's frame (`ReferenceLap.trace_xy`, by the
+        overlay's similarity fit). MEMOIZED per adopted reference and dropped with the warps.
+
+        None — the normalized projection — when no reference is loaded, the fit was too poor to
+        draw (`trace_xy` None), there is no corner basis, or no boundary matched. No rigid shift
+        and no anchor offset: the similarity fit has already put the reference on the best lap's
+        loop, and the two recordings share no consensus line.
+
+        WHY (TRUTH-10): two recordings are cut at their own start lines and drive their own lines,
+        so equal odometer FRACTION is not the same place on track; the Δ trace and this table's
+        reference column must compare the same place, as they do for a local lap."""
+        ref = self._reference()
+        if ref is None:
+            return None
+        got = self._ref_align_cache
+        if got is not None and got[0] is ref:
+            return got[1]
+        align = None
+        basis = self.basis()
+        ref_trace = self._best_trace()
+        trace_xy = getattr(ref, "trace_xy", None)
+        dist = np.asarray(ref.dist, float)
+        if (basis is not None and basis[0] and ref_trace is not None and trace_xy is not None
+                and len(dist) >= 2 and float(dist[-1]) > 0 and len(trace_xy) == len(dist)):
+            corner_list, total_ref = basis
+            frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+            align = corners.lap_alignment(frame, total_ref, float(dist[-1]),
+                                          traces=(*ref_trace, trace_xy[:, 0], trace_xy[:, 1], dist))
+        self._ref_align_cache = (ref, align)
+        return align
+
     # ------------------------------------------------------------------ basis + corners
     def basis(self) -> tuple[list[corners.Corner], float] | None:
         """The cached (corner list, reference total distance) pair, or None when there is no
@@ -910,7 +948,8 @@ class CornerModel:
     # ------------------------------------------------------------------ per-lap stats
     def reference_corner_stats(self) -> list[corners.CornerStat] | None:
         """The cross-recording reference lap's per-corner stats projected onto THIS session's
-        corner windows (the same normalized-distance projection any local lap uses), or None
+        corner windows (through `reference_alignment`, the on-track warp; normalized without
+        one), or None
         when no reference is loaded. Cached under the reference sentinel key; invalidated when
         the reference or the segmentation changes (invalidate_stats / invalidate)."""
         ref = self._reference()
@@ -926,9 +965,10 @@ class CornerModel:
         dist, speed_kmh, elapsed = ref.arrays()
         if len(dist) < 2 or float(dist[-1]) <= 0:
             return None
-        # ref=None: the reference IS the baseline (self-deltas 0).
+        # ref=None: the reference IS the baseline (self-deltas 0). Its windows are the corners'
+        # places on ITS lap (reference_alignment), as a local lap's are on its own.
         stats = corners.lap_corner_stats(corner_list, total_ref, dist, speed_kmh, elapsed,
-                                         ref=None)
+                                         ref=None, alignment=self.reference_alignment())
         self._stats_cache[self._reference_id] = stats
         return stats
 
@@ -1268,12 +1308,13 @@ class CornerModel:
         time) instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the
         Sandown recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is
         nowhere near anything anybody drove — and following the donor cut that to −0.159 s.
-        Re-measured on the working set (T16b, and again once Q2 made Sandown Park a built-in), the
-        worst excursion is **−0.255 s**, on SD_30_08, where the built-in line and the line saved
-        beside the recording are one line (8.32 % of samples on SD_30_08 are negative, 2.40 % on
-        SD_19_09 2 chapters and 0.00 % on Sandown 3h 3 chapters — the per-recording table is in
-        `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
-        here" rather than an artefact of the drawing.
+        Re-measured on the working set (T16b, again once Q2 made Sandown Park a built-in, and by
+        TRUTH-10 once the lap side is read on its on-track warp), the worst excursion is
+        **−0.050 s**, on SD_19_09 1 chapter (1.17 % of samples on SD_30_08 are negative, 0.54 % on
+        SD_19_09 2 chapters and 0.14 % on Sandown 3h 3 chapters — the per-recording table is in
+        `theme.format_ideal_run`'s note; −0.255 s and 8.32 % on SD_30_08 before the warp), which is
+        then a real "you were up on the ideal through here" rather than an artefact of the
+        drawing.
 
         Those figures read −0.052 s / "under 1 %" until #211 redid this sweep: the original was
         measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the

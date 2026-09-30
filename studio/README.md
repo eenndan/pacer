@@ -142,7 +142,7 @@ caches + delegates.
 | [render_cache.py](render_cache.py) | Per-lap map-draw cache: gap-aware trace segments, the reference-centerline donor | — | `test_reference` |
 | [gapfill.py](gapfill.py) | Map-only GPS-gap fill: cross-lap borrow, reference centerline or spline, tagged inferred | — | `test_gapfill` |
 | [reference.py](reference.py) | The georeferenced MK centerline ([`mk_centerline.json`](mk_centerline.json)), loop-to-loop fit | — | `test_reference` |
-| [cross_reference.py](cross_reference.py) | Another recording's best lap as the reference, aligned by normalized distance | — | `test_cross_reference` |
+| [cross_reference.py](cross_reference.py) | Another recording's best lap as the reference, matched on track (corner-boundary warp; normalized-distance fallback) | — | `test_cross_reference` |
 | [track_match.py](track_match.py) | Same-circuit test from two GPS footprints: the cross-recording gate | — | `test_track_match` |
 | [gmeter.py](gmeter.py) | Kart-frame g from ACCL/GRAV/CORI (de-drifted yaw fit): IMU lateral, GPS longitudinal | — | `test_gmeter` |
 | [rotation.py](rotation.py) | Measured yaw rate from GYRO, its check against the path, the GPS-behind-gyro lag | — | `test_rotation` |

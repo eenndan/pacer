@@ -1098,7 +1098,7 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
       * lap        = session.lap_at_time(tt)
       * marker idx = session.index_at_time(tt)       (nearest trace sample)
       * speed km/h = session.tv[idx]                 (the per-sample km/h array)
-      * Δ-to-best  = session.delta_at_lap(lap, tt)   (normalized-distance vs the best/ref lap)
+      * Δ-to-best  = session.delta_at_lap(lap, tt)   (on-track warp vs the best/ref lap)
       * g          = session.g_at_time(tt)           (kart-frame lat/long/total in g)
 
     THE CONVERSION IS THE SECOND HALF OF THE FIX `lap_window_for_export` starts. Once the window is

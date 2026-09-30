@@ -5,11 +5,15 @@ primary session can use it wherever it would use its own best lap: the Δ-to-bes
 map best-lap overlay, the chart sector guide lines, and the lap-table per-corner Δ columns.
 
 WHY this is a thin value object and NOT a second live Session wired into the views:
-  * The delta machinery aligns laps by NORMALIZED distance fraction (s = cum_dist / total),
-    so a reference lap only needs its arc-length curves — `(dist, speed_kmh, elapsed)` — in
-    its OWN metres/seconds. The two recordings' lap lengths and start lines differ slightly;
-    normalized-distance alignment handles that exactly (the same machinery `Session.delta`
-    already uses), so no new alignment is invented here.
+  * The delta machinery aligns laps ON TRACK (TRUTH-10): a position on the reference lap is
+    the point of the primary best lap it passes, found by the same heading-gated nearest-point
+    search that warps every local lap onto the best lap (`corners.lap_alignment`), at the corner
+    boundaries, and linear between them. So a reference lap needs its arc-length curves —
+    `(dist, speed_kmh, elapsed)` in its OWN metres/seconds — plus its trace in the PRIMARY
+    frame (`trace_xy`, below). Where no trace could be fitted, or no boundary matched, the
+    alignment falls back to the normalized distance fraction (s = cum_dist / total), which is
+    NOT exact: two recordings' lap lengths and start lines differ, and the fraction spreads that
+    difference evenly around the lap instead of putting it where it happened.
   * For the MAP overlay the reference racing line must be drawn in the PRIMARY session's
     LOCAL frame. The two recordings have independent coordinate systems (each centred on its
     own cleaned-trace bbox), so the reference loop is aligned onto the primary best lap's loop
@@ -82,8 +86,9 @@ class ReferenceLap:
 
     `dist`/`speed_kmh`/`elapsed` are the reference lap's own arc-length curves (metres, km/h,
     seconds-from-its-own-start), index-aligned and monotonic in `dist` — identical in shape to
-    what `Session._lap_arrays` returns for a local lap, so the normalized-distance alignment in
-    `Session.delta` / `delta_at_lap` consumes them unchanged. `total_time` is the reference
+    what `Session._lap_arrays` returns for a local lap, so `Session.delta` / `delta_at_lap`
+    consume them unchanged, through the on-track warp `CornerModel.reference_alignment` builds
+    from `trace_xy`. `total_time` is the reference
     lap's full time (`elapsed[-1]`), the value the Δ endpoint must equal minus the primary lap.
 
     `overlay_xy` is the reference racing line already transformed into the PRIMARY session's
@@ -100,6 +105,11 @@ class ReferenceLap:
     lap_id: int
     overlay_xy: np.ndarray | None
     map_fit_rms: float | None  # RMS (m) of the overlay fit, or None when no fit was attempted
+    # The reference lap's OWN trace points (index-aligned with `dist`) moved into the PRIMARY
+    # session's local frame by the same similarity transform as `overlay_xy`, so every point keeps
+    # its odometer — what the on-track Δ alignment matches against the primary best lap. None
+    # exactly when `overlay_xy` is None: a fit too poor to draw is too poor to align on.
+    trace_xy: np.ndarray | None = None
     # True when the reference was admitted by GEOMETRY (unknown track name — matched on GPS
     # location/size) rather than a confirmed same-named track. The overlay is valid, but neither
     # recording's start line is known-good, so the aligned Δ phase may be off until the user sets
@@ -158,6 +168,7 @@ def build(
     total_time = float(elapsed[-1]) if len(elapsed) else 0.0
 
     overlay_xy = None
+    trace_xy = None
     fit_rms = None
     fit_scale = None
     if (primary_loop_xy is not None and len(primary_loop_xy) >= 10
@@ -169,10 +180,15 @@ def build(
         fit_scale = float(info["scale"])
         if fit_is_drawable(fit_rms, fit_scale):
             overlay_xy = fitted
+            # The same transform on the raw points (the fit's ring is a resampling of them, so
+            # its index is not the odometer's): `fit_loop_to_loop` applies scale·R·p + t.
+            pts = np.asarray(loop_xy, float)
+            if len(pts) == len(dist):
+                trace_xy = fit_scale * pts @ np.asarray(info["R"], float).T + np.asarray(info["t"])
 
     return ReferenceLap(
         dist=dist, speed_kmh=speed_kmh, elapsed=elapsed, total_time=total_time,
         source_label=source_label, lap_id=lap_id,
         overlay_xy=overlay_xy, map_fit_rms=fit_rms, is_geometric=is_geometric,
-        map_fit_scale=fit_scale,
+        map_fit_scale=fit_scale, trace_xy=trace_xy,
     )

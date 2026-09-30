@@ -108,8 +108,14 @@ class DrivingChannels:
                  corner_basis: Callable[[], tuple | None],
                  lap_corner_stats: Callable[[int], list],
                  lap_elevation: Callable[[int], np.ndarray] | None = None,
-                 corner_alignment: Callable[[int, float], corners.Alignment | None] | None = None):
+                 corner_alignment: Callable[[int, float], corners.Alignment | None] | None = None,
+                 lap_distance_on_baseline: Callable[[int, np.ndarray], np.ndarray | None]
+                 | None = None):
         self._gmeter = gmeter
+        # (lap_id, lap odometer m) -> the Δ baseline's odometer at the same place on track
+        # (`Session.lap_distance_on_baseline`, TRUTH-10): the distance-mode x the speed and Δ
+        # curves are drawn at. Optional: a bare/old construction keeps the normalized fraction.
+        self._lap_distance_on_baseline = lap_distance_on_baseline
         # Per-sample altitude for the lap (for the OPT-IN hill-compensated braking, driving.py);
         # optional so a bare/old construction still works — a None just keeps braking flat-ground.
         self._lap_elevation = lap_elevation
@@ -624,10 +630,19 @@ class DrivingChannels:
         my = np.interp(onsets, cum, ys)
         return [(float(mx[i]), float(my[i]), e.peak_decel) for i, e in enumerate(events)]
 
+    def _baseline_x(self, lap_id: int, dists, total_lap: float, best_total: float) -> np.ndarray:
+        """Lap odometer positions `dists` as distance-mode chart x: the Δ baseline's odometer at the
+        same place on track (TRUTH-10), or, without that seam, the lap's normalized fraction scaled
+        to `best_total` — the same x `Session.delta` draws the speed and Δ curves at."""
+        d = np.asarray(dists, float)
+        on_base = (self._lap_distance_on_baseline(lap_id, d)
+                   if self._lap_distance_on_baseline is not None else None)
+        return d / total_lap * best_total if on_base is None else np.asarray(on_base, float)
+
     def lap_brake_plot_positions(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
         """(plot-x, peak_decel) per brake onset on one lap, on the speed chart's SHARED axis
         for `mode` ('distance' or 'time'). [] when no brake events / no best lap (distance mode).
-          * 'distance': x = (onset_dist / lap_total) * baseline_distance
+          * 'distance': x = the Δ baseline's odometer at onset_dist (`_baseline_x`)
           * 'time':     x = onset_time (elapsed into the lap)"""
         events = self.lap_brake_events(lap_id)
         if not events:
@@ -645,14 +660,15 @@ class DrivingChannels:
         best_total = self._active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return []
-        return [(e.onset_dist / total_lap * best_total, e.peak_decel) for e in events]
+        xs = self._baseline_x(lap_id, [e.onset_dist for e in events], total_lap, best_total)
+        return [(float(x), e.peak_decel) for x, e in zip(xs, events, strict=True)]
 
     def lap_brake_throttle_plot(self, lap_id: int, mode: str):
         """D3: (plot_x, intensity) for the synthetic brake/throttle band on one lap, on the speed
         chart's SHARED axis for `mode`. Same x projection as the brake glyphs / coast bands so the
         band lines up under the speed curve. (None, None) when no g signal / no best lap (distance
         mode).
-          * 'distance': x = (dist / lap_total) * active_baseline_total
+          * 'distance': x = the Δ baseline's odometer at dist (`_baseline_x`)
           * 'time':     x = elapsed (into the lap)"""
         dists, elapsed, intensity = self.lap_brake_throttle(lap_id)
         if intensity is None or dists is None:  # None together (lap_brake_throttle)
@@ -663,7 +679,7 @@ class DrivingChannels:
         best_total = self._active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return None, None
-        return dists / total_lap * best_total, intensity
+        return self._baseline_x(lap_id, dists, total_lap, best_total), intensity
 
     def lap_coasting_plot_spans(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
         """(plot-x0, plot-x1) per coasting span on one lap, on the speed chart's SHARED axis
@@ -690,5 +706,6 @@ class DrivingChannels:
         best_total = self._active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return []
-        return [(sp.start_dist / total_lap * best_total, sp.end_dist / total_lap * best_total)
-                for sp in spans]
+        xs = self._baseline_x(lap_id, [v for sp in spans for v in (sp.start_dist, sp.end_dist)],
+                              total_lap, best_total)
+        return [(float(xs[2 * k]), float(xs[2 * k + 1])) for k in range(len(spans))]
