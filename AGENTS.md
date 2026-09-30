@@ -128,8 +128,9 @@ locally first:
   folds every fragment under `## [x.y.z] — today` with its compare link and deletes them. Write its
   Highlights (5–8 bullets), bump the version in its THREE places — `studio/__init__.py`
   `__version__` (canonical: read by `packaging/pacer.spec` and the About card), `pyproject.toml`
-  (names the `.dmg`) and `bindings/pacer/pyproject.toml` — then tag. `tests/test_version.py` fails
-  on any step missed. Run `pixi run test-soak` before tagging; CI runs it again on the tag.
+  (names the `.dmg`) and `bindings/pacer/pyproject.toml` — re-capture or re-waive `docs/media` per
+  its `CAPTURED.json`, then tag. `tests/test_version.py` fails on any step missed. Run
+  `pixi run test-soak` before tagging; CI runs it again on the tag.
 
 ---
 
