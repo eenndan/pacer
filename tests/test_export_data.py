@@ -37,6 +37,7 @@ from _synthetic import (  # noqa: E402
 )
 
 from studio import export_data, gmeter, units  # noqa: E402
+from studio import stats as stats_service  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
 from studio.corners import Corner  # noqa: E402
 
@@ -255,7 +256,12 @@ def test_write_laps_csv_matches_table():
     # the two: the key is not a summary row and must not be zipped against one.
     rest = got[3 + n_data:]
     key_rows = [r for r in rest if r[0].startswith(f"{export_data.SUMMARY_MARKER}: quality ")]
-    trailer = [r for r in rest if r not in key_rows]
+    # …and the dist_m column's note (TRUTH2-ODO): the odometer reads short, said once per file.
+    dist_label = f"{export_data.SUMMARY_MARKER}: {export_data.DIST_COLUMN}"
+    dist_note = [r for r in rest if r[0] == dist_label]
+    assert dist_note == [[f"{export_data.SUMMARY_MARKER}: dist_m", "", "",
+                          stats_service.ODOMETER_NOTE]], dist_note
+    trailer = [r for r in rest if r not in key_rows and r not in dist_note]
     assert [r[0] for r in key_rows] == [f"{export_data.SUMMARY_MARKER}: quality [u]"], key_rows
     summary = export_data.laps_summary(s)
     assert [r.label for r in summary] == ["Best rolling"], (
@@ -388,10 +394,11 @@ def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
                 got = list(csv.reader(f))
         n_data = len(session.valid_lap_ids())
         assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s", "over_laps", "note"]
-        # The quality KEY also lives in the trailer; it is not a summary row (see
-        # test_write_laps_csv_matches_table), so this gate counts only the summary ones.
+        # The quality KEY and the dist_m column's note also live in the trailer; neither is a
+        # summary row (see test_write_laps_csv_matches_table), so this gate counts only those.
         trailer = [r for r in got[3 + n_data:]
-                   if not r[0].startswith(f"{export_data.SUMMARY_MARKER}: quality ")]
+                   if not r[0].startswith(f"{export_data.SUMMARY_MARKER}: quality ")
+                   and r[0] != f"{export_data.SUMMARY_MARKER}: {export_data.DIST_COLUMN}"]
         assert len(trailer) == want, (want, trailer)
         assert trailer[-1][0] == f"{export_data.SUMMARY_MARKER}: Best rolling"
 

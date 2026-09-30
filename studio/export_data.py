@@ -49,6 +49,11 @@ from ._signal import DASH, exclusion_summary, fmt_hms, fmt_time, lap_label
 # dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
 DROPOUT_FLAG = "gps-dropout"
 
+# laps.csv's per-lap distance column. It is the lap odometer, which reads short of the distance
+# driven (`stats.ODOMETER_NOTE`), so the file's trailer carries that note under this label, the
+# way it carries INTERPOLATED_NOTE under INTERPOLATED_COLUMN's.
+DIST_COLUMN = "dist_m"
+
 # laps.csv's C5 disclosure column: which of a lap's corner cells are interpolated rather than
 # measured. One name and one separator, so the writer, the HTML report, the legend under both and
 # the test that pins the column set cannot spell it three ways. A space, like `quality`'s, because
@@ -229,7 +234,7 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
 
     resolved_of = getattr(session.corners, "lap_corner_resolved", None)
 
-    headers = ["lap", "time_s", "dist_m", f"entry_{sfx}", "flag"]
+    headers = ["lap", "time_s", DIST_COLUMN, f"entry_{sfx}", "flag"]
     headers += [f"S{i + 1}_s" for i in range(n_splits)]
     for c in corner_list:
         headers += [f"{c.label}_time_s", f"{c.label}_apex_{sfx}"]
@@ -391,7 +396,10 @@ def write_laps_csv(path: str, session) -> None:
     file's column set — say so wherever this change is announced — and it names corners whose
     cells the app's own tables do not count, so a file that carries one carries a trailer row
     saying what that means. Like the quality key it is derived from the ROWS: a session that
-    matched every corner emits nothing."""
+    matched every corner emits nothing.
+
+    AND THE `dist_m` NOTE (TRUTH2-ODO): the column is the lap odometer, which reads short of the
+    distance driven, so any file with a lap row carries `stats.ODOMETER_NOTE` under that label."""
     headers, rows = laps_table(session)
     summary = laps_summary(session)
     key = quality_key(headers, rows)
@@ -406,6 +414,8 @@ def write_laps_csv(path: str, session) -> None:
         w.writerow([SUMMARY_MARKER, "time_s", "over_laps", "note"])
         for row in summary:
             w.writerow([f"{SUMMARY_MARKER}: {row.label}", row.value, row.over_laps, row.note])
+        if rows:
+            w.writerow([f"{SUMMARY_MARKER}: {DIST_COLUMN}", "", "", stats_service.ODOMETER_NOTE])
         for code, meaning in key:
             w.writerow([f"{SUMMARY_MARKER}: quality {code}", "", "", meaning])
         if interpolated:
@@ -462,14 +472,18 @@ def _sec(v, fmt: str = "{:.2f} s") -> str:
 
 
 def _distance_note(tot) -> str:
-    """The SESSION group's disclosure about its own `distance` row, or "" when there is nothing to
-    disclose — `stats_panel._set_distance`'s tooltip rule, in prose the export can print.
+    """The SESSION group's disclosure about its own `distance` row — `stats_panel._set_distance`'s
+    tooltip rule, in prose the export can print.
 
     The path length is SPEED-GATED in the data layer (a GPS fix that teleports is not distance
     driven), and the page says so in two states: below `stats.MIN_KEPT_FRAC` the value is withheld
     entirely, and from a whole percent of rejected steps up the number stands with the caveat
     attached. Both are disclosures the page makes on hover — so on a surface with no hover they
-    have to be printed, which is the same argument §5.4 makes about the ideal's lap count."""
+    have to be printed, which is the same argument §5.4 makes about the ideal's lap count.
+
+    A PRINTED distance also carries `stats.ODOMETER_NOTE`, in both states, as the tile's tooltip
+    does: the smoothed trace reads short of the distance driven whether or not the gate dropped a
+    step. A withheld one has no number for it to qualify."""
     kept = getattr(tot, "distance_kept_frac", 1.0)
     if tot.distance_m is None:
         return (f"Distance not shown: only {kept * 100:.0f}% of this trace's GPS steps are "
@@ -479,9 +493,10 @@ def _distance_note(tot) -> str:
     # A handful of rejected steps is not worth a caveat that would round to "0%" (a real 26-minute
     # recording rejects 0.02%) — the page uses the same 1% floor.
     if kept >= 0.99:
-        return ""
+        return stats_service.ODOMETER_NOTE
     return (f"Distance: {(1 - kept) * 100:.0f}% of the raw GPS steps were rejected as impossible "
-            "at the speed the same trace reports (dropped fixes) and are not counted.")
+            "at the speed the same trace reports (dropped fixes) and are not counted. "
+            + stats_service.ODOMETER_NOTE)
 
 
 def _timing_meta(session) -> str:
@@ -864,6 +879,9 @@ def write_report_html(path: str, session, source_label: str = "",
         cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
     out.append("</table>")
+    # The distance column's note, as laps.csv's trailer carries it: the odometer reads short.
+    if rows:
+        out.append(f'<p class="note">{esc(stats_service.ODOMETER_NOTE)}</p>')
     # The quality column's KEY, under the table it decodes — the Analysis Function convention, and
     # the reason those codes are usable on a page with no hover. Suppressed entirely on a clean
     # session (see `quality_key`), so a spotless recording's report gains nothing to read past.

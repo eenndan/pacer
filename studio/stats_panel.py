@@ -655,8 +655,9 @@ def driving_tooltip_gps(why: str) -> str:
             + _DRIVING_BRAKE_TAIL + _DRIVING_COAST)
 
 
-LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
-                     "speed. ★ marks the session-best lap.\n\n"
+LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax from the lap's own GPS "
+                     "speed; Avg is its distance over its time. ★ marks the session-best "
+                     f"lap.\n\n{stats_service.ODOMETER_NOTE}\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
                      "accelerometer. Brk g is the GPS speed derivative as the g-meter filters it "
                      f"— boxcarred over {gmeter.LONG_SMOOTH_S:g} s, so it is a SUSTAINED peak. "
@@ -682,8 +683,9 @@ def lap_table_tooltip_gps(why: str) -> str:
     `stats.lap_stats` falls back to the meter's own `long_g`. The brake/coast sentences are
     unchanged and stay true — `driving_channels` rebuilds both detectors from the resampled speed
     when there is no `long_g_gps`, so Coast s still carries its own window."""
-    return ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
-            "speed. ★ marks the session-best lap.\n\n"
+    return ("Per-lap statistics over the valid laps. Vmax from the lap's own GPS "
+            "speed; Avg is its distance over its time. ★ marks the session-best "
+            f"lap.\n\n{stats_service.ODOMETER_NOTE}\n\n"
             f"LAT G AND BRK G ARE BOTH DERIVED FROM THE GPS TRAJECTORY on this recording ({why}): "
             f"Lat g is speed x yaw rate, Brk g the speed derivative, both off this lap's own "
             f"~10 Hz fixes. Neither is an accelerometer reading, and Brk g does not carry the "
@@ -726,8 +728,9 @@ def lap_table_tooltip_no_gmeter() -> str:
 
     The two-filters paragraph is not merely mis-sourced here, it describes columns that are
     empty — so it goes, rather than being re-pointed at a different sensor."""
-    return ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
-            "speed. ★ marks the session-best lap.\n\n"
+    return ("Per-lap statistics over the valid laps. Vmax from the lap's own GPS "
+            "speed; Avg is its distance over its time. ★ marks the session-best "
+            f"lap.\n\n{stats_service.ODOMETER_NOTE}\n\n"
             f"LAT G, BRK G, BRAKE S AND COAST S ARE EM-DASHES ON THIS RECORDING: "
             f"{NO_GMETER_CLAUSE}. Time, Vmax and Avg are measured from the GPS trace and are "
             f"unaffected.")
@@ -2235,13 +2238,15 @@ class StatsView(QWidget):
             return
         self.t_distance.set(f"{tot.distance_m / 1000.0:.1f} km")
         # A handful of rejected steps is not worth a caveat that would round to "0%" — the note
-        # appears from a whole percent up (a real 26-minute recording rejects 0.02%).
+        # appears from a whole percent up (a real 26-minute recording rejects 0.02%). The
+        # odometer's own shortfall is said in both states: it is the smoothing's, not the gate's.
         self.t_distance.setToolTip(
-            "Path length of the recorded trace (the sum of its GPS steps)."
-            if kept >= 0.99 else
-            f"Path length of the recorded trace. {(1 - kept) * 100:.0f}% of the raw steps were "
-            "rejected as impossible at the speed the same trace reports (dropped GPS fixes) and "
-            "are not counted.")
+            ("Path length of the recorded trace (the sum of its GPS steps)."
+             if kept >= 0.99 else
+             f"Path length of the recorded trace. {(1 - kept) * 100:.0f}% of the raw steps were "
+             "rejected as impossible at the speed the same trace reports (dropped GPS fixes) and "
+             "are not counted.")
+            + f"\n\n{stats_service.ODOMETER_NOTE}")
 
     @staticmethod
     def _spark_frame(times: list[float]) -> tuple[float, list[float]]:
