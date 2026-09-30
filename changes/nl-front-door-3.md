@@ -1,6 +1,6 @@
 ### Added
 - `pixi run verify` times a synthetic GoPro recording against its known truth (noise-free laps
-  within 0.41 ms), then runs the golden gate: the timing check anyone can run with no footage.
+  within 0.41 ms at a line mid-straight), then runs the golden gate: a timing check with no footage.
 
 ### Changed
 - The published accuracy gives each recording's mean error as a point estimate, +0.001 to

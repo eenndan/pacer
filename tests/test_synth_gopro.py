@@ -15,7 +15,7 @@ WHAT THE TRUTH COMPARISON MEASURES, and why there are two of them (fixed seed, m
     the chapter seam (lap 7 spans it) and the crossing interpolation, with nothing else in the way —
     so the tolerance is tight and a clock, seam or interpolation defect has nowhere to hide.
   * The default recording (the clean end of a HERO13's GPS noise) at the line the app's unknown-track
-    heuristic places itself: max |Δ| 16.9 ms, mean +1.8 ms. Noise dominates.
+    heuristic places itself: max |Δ| 16.85 ms, mean +1.8 ms. Noise dominates.
   * GPS noise OFF, at that same auto-fitted line: max |Δ| 0.80 ms. This is the line's PLACEMENT alone.
     Until X1 the heuristic took the fastest single fix — the braking point — and the load-time
     position boxcar times a lap that has begun braking there differently from one that has not:
@@ -47,13 +47,17 @@ from studio.session import Session  # noqa: E402
 # Tolerances, each with the measured value it sits over (fixed seed; see the module doc).
 EXACT_S = 0.002        # noise-free, mid-straight line: measured max 0.41 ms
 AUTO_LINE_S = 0.003    # noise-free, the app's own line: measured max 0.80 ms (13.1 ms before X1)
-NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 16.9 ms (23.4 before X1)
+NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 16.85 ms (23.4 before X1)
 NOISY_BIAS_S = 0.010   # …and its mean: measured +1.8 ms (+2.6 before X1)
 ENTRY_KMH = 2.0        # lap-table entry speed vs 3.6 × the true speed at the crossing: measured max
                        # 0.893 km/h (0.92 %), default noise, the app's own line
-# The noise-free figure the public pages quote, and `pixi run verify` prints for a visitor to check.
-# EXACT_S leaves it room to drift fivefold unseen, so it is held to its own 0.05 ms.
-PUBLISHED_NOISE_FREE_MS = 0.41
+# The lap figures `pixi run verify` prints for a visitor to check, each with its line, and the only
+# ones a public page may quote. EXACT_S, AUTO_LINE_S and NOISY_MAX_S leave them room to drift unseen,
+# so each is held to its measurement (the first to 0.05 ms, the others to their printed digit:
+# 0.8033 and 16.8488 measured); tests/test_measured_figures.py holds every page's quote to these.
+PUBLISHED_NOISE_FREE_MS = 0.41   # noise-free, at a line mid-straight
+PUBLISHED_AUTO_LINE_MS = 0.80    # noise-free, at the app's own line
+PUBLISHED_NOISY_MS = 16.85       # with the default GPS noise, at the app's own line
 _QUOTED_ON = ("README.md", "docs/ACCURACY.md", "docs/index.html", "docs/ENGINEERING.md",
               "tests/README.md")
 
@@ -98,8 +102,12 @@ def test_the_real_loader_times_every_lap_on_the_gps9_clock():
     for c, n in zip(cmap.chapters, rec.truth.chapter_payloads, strict=True):
         assert abs(c.duration - n * sg.PAYLOAD_S) < 1e-6, (c.duration, n)
     got, truth, d = _residuals(rec, s, s.timing_lines_latlon()[0])
-    print(f"  app's own line: {len(got)} laps vs truth — {_describe(d)}")
+    print(f"  with GPS noise, the app's own line: {len(got)} laps vs truth — {_describe(d)}")
     assert np.abs(d).max() <= NOISY_MAX_S, f"lap times off truth: {np.round(d, 4)}"
+    max_ms = float(np.abs(d).max()) * 1e3        # half a printed digit: a quote is what verify prints
+    assert abs(max_ms - PUBLISHED_NOISY_MS) <= 0.005, (
+        f"max|Δ| with GPS noise at the app's own line is {max_ms:.3f} ms, but a page may quote "
+        f"PUBLISHED_NOISY_MS {PUBLISHED_NOISY_MS} ms — re-measure and update them together")
     assert abs(d.mean()) <= NOISY_BIAS_S, f"lap times biased by {d.mean():+.4f} s"
     slow = int(np.argmax(got))
     assert slow == rec.truth.slow_lap == int(np.argmax(truth)), (slow, rec.truth.slow_lap)
@@ -132,6 +140,10 @@ def test_the_auto_fitted_line_is_off_the_braking_point():
     assert np.abs(d).max() <= AUTO_LINE_S, (
         f"lap times off truth at the auto-fitted line on a noise-free trace: {np.round(d, 5)} — "
         f"is the unknown-track line back on the braking point?")
+    max_ms = float(np.abs(d).max()) * 1e3        # half a printed digit: the quote is what verify prints
+    assert abs(max_ms - PUBLISHED_AUTO_LINE_MS) <= 0.005, (
+        f"noise-free max|Δ| at the app's own line is {max_ms:.3f} ms, but README.md and "
+        f"docs/ACCURACY.md quote {PUBLISHED_AUTO_LINE_MS} ms — re-measure and update them together")
 
 
 def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():
