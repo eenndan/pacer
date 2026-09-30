@@ -2412,7 +2412,8 @@ def test_an_overlay_only_encode_has_no_source_input_and_no_audio():
 # The owner's "export has become extremely slow" was a remembered overlay-only ProRes at source
 # resolution: MK's best lap took 145 s on prores_ks (15.7 fps) and takes 65 s on VideoToolbox
 # (35.4 fps), measured through the real renderer. These pin the policy, the argv, the retry and the
-# alpha; the VideoToolbox-only assertions skip where no VideoToolbox ProRes session opens (CI).
+# alpha; the VideoToolbox-only assertions skip where no VideoToolbox ProRes session opens (CI's
+# macos-14 runner opens one, so they run there too).
 def test_the_prores_encoder_is_videotoolbox_only_where_its_probe_passes(monkeypatch_restore):
     """`resolve_alpha_encoder` reads the SAME `OverlayConfig.encoder` words as the H.264 path, but
     even a forced "videotoolbox" has to pass the probe: an alpha that comes back premultiplied is a
@@ -2572,8 +2573,8 @@ def test_real_prores_overlay_falls_back_to_prores_ks_and_matches_videotoolbox(mo
 
 def test_real_prores_overlay_on_videotoolbox_matches_the_prores_ks_fallback(monkeypatch_restore):
     """The comparison half of the check above — the same frames through a WORKING VideoToolbox
-    decode to the fallback's picture — which CI cannot run: its own registration, SKIPPED by name
-    where no ProRes VideoToolbox session opens (tests/_videotoolbox.py)."""
+    decode to the fallback's picture: its own registration, SKIPPED by name where no ProRes
+    VideoToolbox session opens (tests/_videotoolbox.py). CI's runner opens one, so it runs there."""
     _videotoolbox.need(ev.ffmpeg_available() and ev.prores_videotoolbox_usable(),
                        "ffmpeg with a ProRes VideoToolbox session")
     _prores_fallback_and_match(on_videotoolbox=True)
@@ -3020,8 +3021,9 @@ def test_a_slow_start_behind_videotoolbox_keeps_the_hardware_encode_if_available
     real lap does: from t0 = 0 the same feed never overflowed. Measured before E4: 4/4 renders
     at 6 fps and 4/4 at 10 fps failed at frame 30-35; at 15 fps and above none did.
 
-    Its own registration, `videotoolbox.<name>`: SKIPPED by name where no VideoToolbox session
-    opens — CI's runner has none, and libx264 never overflowed this queue even fed at 0.5 fps."""
+    Its own registration, `videotoolbox.<name>`: SKIPPED by name where no H.264 VideoToolbox
+    session opens — CI's runner opens none, and libx264 never overflowed this queue even fed at
+    0.5 fps."""
     _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_usable(),
                        "ffmpeg with an H.264 VideoToolbox session")
     import tempfile

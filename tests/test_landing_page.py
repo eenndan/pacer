@@ -426,7 +426,8 @@ def _ctest_registrations() -> int:
 
 
 def _skippable_registrations() -> dict[str, int]:
-    """The registrations CI reports Skipped by name, per form: `footage`, `videotoolbox`, `soak`."""
+    """The registrations that report Skipped by name where they cannot run, per form: `footage`,
+    `videotoolbox` (CI runs 2 of those 6 and skips 4), `soak`."""
     with open(_CMAKE, encoding="utf-8") as f:
         text = f.read()
     got = {kind: len(re.findall(rf"^add_{kind}_test\(", text, re.M))
@@ -541,7 +542,7 @@ def test_public_pages_quote_the_real_core_size():
 # ------------------------------------------------------------------ 7b. what CI skips, and the times
 # QA ROUND 3 (EVAL-6, 2026-09-26) found four published numbers stale, and nothing held any of them:
 #   * "the fifteen `footage.*` checks" CI skips, while tests/CMakeLists.txt registered sixteen, and
-#     no page mentioned the six `videotoolbox.*` export checks CI also reports Skipped;
+#     no page mentioned the six `videotoolbox.*` export checks, 4 of which CI also reports Skipped;
 #   * CI "in about six minutes", while its job ran 7.5-9.7 min on `main`;
 #   * `pixi run golden` "takes about a second", while AGENTS.md said ~8 s and the lane measured 32 s;
 #   * "14 features measured and refused", held in tests/test_measured_figures.py.
