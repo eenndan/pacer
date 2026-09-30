@@ -154,6 +154,58 @@ def residual_stats(r: np.ndarray) -> dict:
     }
 
 
+# The mean error's interval. A lap time is (finish crossing − start crossing), so consecutive laps
+# share a crossing and its error cancels between them: the residuals are MA(1), their lag-1
+# autocorrelation between 0 (all per-lap noise) and −0.5 (all crossing noise), and σ/√n overstates
+# the mean's uncertainty by as much as crossing noise dominates. Whether it does is measured, not
+# assumed: the synthetic GoPro's laps read a lag-1 of −0.34 over 25 seeds, row C's real ones +0.03
+# (docs/ACCURACY.md).
+INTERVAL_MIN_N = 5  # from 4 degrees of freedom `_t975` is within 1e-3 of the tabulated quantile
+
+
+def _t975(dof: int) -> float:
+    """Student's t_{0.975, dof} by the Cornish-Fisher expansion (Abramowitz & Stegun 26.7.5), so
+    the harness needs no SciPy: 2.1604 at 13 degrees of freedom, as tabulated."""
+    x = 1.959963984540054
+    g = ((x ** 3 + x) / 4,
+         (5 * x ** 5 + 16 * x ** 3 + 3 * x) / 96,
+         (3 * x ** 7 + 19 * x ** 5 + 17 * x ** 3 - 15 * x) / 384,
+         (79 * x ** 9 + 776 * x ** 7 + 1482 * x ** 5 - 1920 * x ** 3 - 945 * x) / 92160)
+    return x + sum(gk / dof ** (k + 1) for k, gk in enumerate(g))
+
+
+def mean_interval(r) -> dict:
+    """The 95 % interval of the mean of CONSECUTIVE lap residuals `r` (lap order, no gap): the
+    structural MA(1) variance of the mean, Var = s²·(1 + 2(1 − 1/n)·ρ1)/n, with s² at ddof 1 and ρ1
+    the sample lag-1 autocorrelation (`lag1`) clipped to the structure's own range [−0.5, 0];
+    half-width t_{0.975, n−1}·√Var. `lag1` from a dozen laps is noisy, so the nominal 95 % is not
+    what it covers: `test_mean_interval_is_structural` simulates what it does. The model takes each
+    crossing's error as independent; one that persists from lap to lap also reads a lag-1 near 0
+    yet still telescopes, and there the interval errs wide."""
+    r = np.asarray(r, float)
+    n = len(r)
+    if n < INTERVAL_MIN_N:
+        raise ValueError(f"{n} residuals — an interval needs {INTERVAL_MIN_N}")
+    d = r - r.mean()
+    lag1 = float(np.dot(d[:-1], d[1:]) / np.dot(d, d))
+    rho1 = min(0.0, max(-0.5, lag1))
+    s2 = float(r.var(ddof=1))
+    t = _t975(n - 1)
+    return {"half_width": t * float(np.sqrt(s2 * (1.0 + 2.0 * (1.0 - 1.0 / n) * rho1) / n)),
+            "rho1": rho1, "lag1": lag1, "n": n, "sigma_over_sqrt_n": float(np.sqrt(s2 / n)),
+            "t": t}
+
+
+def clean_interval(r: np.ndarray, clean: np.ndarray) -> dict | None:
+    """`mean_interval` of a stint's clean residuals `r[clean]`, or None when they are not ONE
+    consecutive run of at least `INTERVAL_MIN_N` laps: across a dropped lap two residuals share no
+    crossing, and the MA(1) structure no longer holds."""
+    idx = np.flatnonzero(clean)
+    if len(idx) < INTERVAL_MIN_N or np.any(np.diff(idx) != 1):
+        return None
+    return mean_interval(np.asarray(r, float)[idx])
+
+
 # --------------------------------------------------------------------------- lock-only mode
 def stints(lap_times) -> list[list[int]]:
     """Lap ids split into STINTS: maximal runs of consecutive laps each timed above 0 and under
@@ -477,9 +529,14 @@ def run_lock_only(recording: str, csv_path: str, dump: str | None = None) -> dic
                   f"std={s['std']:.4f} RMS={s['rms']:.4f}")
         rc = r_def[clean]
         a, c = app[clean], csv_t[clean]
+        iv = clean_interval(r_def, clean)
+        print("  clean mean's 95 % interval: " + (
+            f"±{iv['half_width']:.4f} s (lag-1 {iv['lag1']:+.3f}, used as {iv['rho1']:+.3f}; "
+            f"σ/√n {iv['sigma_over_sqrt_n']:.4f} s)" if iv
+            else f"none — the clean laps are not one run of {INTERVAL_MIN_N}+ consecutive laps"))
         entry.update(
             row=list(key), sheet_laps=[start, start + len(ids) - 1],
-            heat_printed_start=starts.get(key[0]), stats=stats,
+            heat_printed_start=starts.get(key[0]), stats=stats, interval=iv,
             k_fit=float(np.sum(a * c) / np.sum(a * a)),
             percentiles={str(q): float(np.percentile(rc, q)) for q in (0, 10, 25, 50, 75, 90, 100)},
             per_lap=[{"app_lap": int(i), "sheet_lap": start + k, "sheet_s": float(csv_t[k]),
