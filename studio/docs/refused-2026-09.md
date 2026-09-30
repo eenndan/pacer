@@ -1,9 +1,9 @@
 # Features measured and refused — 2026-09
 
-Twenty features were built far enough to **measure**, and the measurement said not to ship them. The
-work was real; the evidence lived only in a pull-request body, where nobody re-proposing the idea
-would ever look. It is written down here so the next person to suggest one of these starts from the
-numbers instead of from the idea.
+Twenty-two features were built far enough to **measure**, and the measurement said not to ship
+them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
+the idea would ever look. It is written down here so the next person to suggest one of these starts
+from the numbers instead of from the idea.
 
 **These stay refused unless someone brings NEW evidence.** "It would be nice to have" is not new
 evidence. What would be: a recording whose numbers come out differently from the ones below, or a
@@ -1722,6 +1722,76 @@ points instead:
 (the C1 scatter then leaves the merge's reach); or a rule that gives each application to exactly one
 corner and, on these four recordings, moves no corner's brake point onto another corner's brake and
 drops none.
+
+---
+
+## 22. A 2 s keyframe interval on VideoToolbox's H.264 exports — refused (#503)
+
+**The idea.** The H.264 export through VideoToolbox passes no `-g`, so ffmpeg's `gop_size` default
+of 12 becomes the encoder's maximum keyframe interval: 150 keyframes a minute at 30 fps, where the
+libx264 fallback runs x264's 250 frames. At a fixed bitrate a keyframe costs the bytes of several
+P-frames, so a 2 s interval (`-g 60` at 30 fps) should hand those bytes to the picture.
+
+**How it was measured.** Against a rule written into the PR (#503) before any number came back, on
+an M1 Pro with ffmpeg 7.1.1, 2026-09-30. `studio/dev/probes/vt_gop.py` renders a 20 s window ONCE
+through the real `Renderer`, at 1080p30 "high", into a lossless ffv1 intermediate. It then encodes
+that file with `_video_codec_args`' exact VideoToolbox argv, with `-g` 30, 60 or 120 appended or
+none (ffmpeg's 12), three times each.
+- **Per encode:** the yield (video bits over `vt_target_bitrate` × duration), the keyframes,
+  counted because `-g` is only a maximum on VideoToolbox, and SSIM and PSNR against the
+  intermediate.
+- **Per interval, the scrub cost:** an accurate one-frame seek on the hardware decoder,
+  `ffmpeg -hwaccel videotoolbox -ss T -i FILE -frames:v 1 -f null -`, at 20 seeded random frames.
+  It is taken net of the same command at frame 0, a keyframe, which pays the process start and the
+  decoder set-up and decodes nothing past it. Every call is interleaved in shuffled order across the
+  intervals, so the machine's load lands on all of them alike.
+- **Sources:** MK_18_09_26's lap 14, read-only and jailed; and a synthetic GoPro with a 1920×1080
+  picture, since the default synthetic picture is too small for a 1080p export.
+- **The rule:** adopt `-g round(2 × fps)` only if the real lap gains ≥ 0.002 SSIM or ≥ 0.3 dB PSNR
+  at a yield within 0.70 ± 0.03, the synthetic loses nothing, and on both sources the seek at
+  `-g 60` stays ≤ 100 ms net and ≤ 2× the default's gross.
+
+| MK_18_09_26 lap 14 | keyframes a minute | yield | SSIM | PSNR | seek, net of frame 0 |
+|---|---|---|---|---|---|
+| no `-g` (ffmpeg's 12) | 150 | 0.700 | 0.98255 | 41.47 dB | 25 ms |
+| `-g 30` | 60 | 0.700 | 0.98296 | 41.73 dB | 79 ms |
+| **`-g 60` (2 s)** | 30 | 0.700 | 0.98305 | 41.82 dB | **135 ms** |
+| `-g 120` | 15 | 0.700 | 0.98299 | 41.83 dB | 242 ms |
+
+**The picture gain is real and passed its bar. The seek is what refused it.**
+- At `-g 60` the real lap gains +0.35 dB PSNR and +0.0005 SSIM at the same 0.700 yield, and the
+  synthetic gains +0.72 dB and +0.0011. Both clear their quality criteria.
+- The same interval makes a random seek decode about five times further. At about 4 ms a frame on
+  the hardware decoder, the net seek goes from 25 to 135 ms on the real lap and from 23 to 133 ms
+  on the synthetic: over the 100 ms bound on both. The gross bound held (324 against 215 ms on the
+  real lap, 1.51×).
+- It is not the machine's load. The rule asked for a quiet Mac and none came, so the quietest seek
+  phases decided, at load averages of 7.9 and 10.2. Across all four runs, at loads of 5.5 to 20,
+  the net seek at `-g 60` was 133-146 ms, never within 30 ms of the bound, and the decode cost
+  3.8-4.4 ms a frame.
+- It is not the seeded draw. The 20 targets sit a median 36.5 frames past a `-g 60` keyframe
+  against an expected 29.5, but even 29.5 × ~4 ms is about 120 ms.
+- The encoder put its keyframes exactly on the maximum (600 / G in every 600-frame file), and the
+  three encodes of each setting came out identical in size and in every metric.
+
+**What moves because of this refusal: nothing in the app.** The VideoToolbox branch keeps no `-g`
+(`_video_codec_args`' docstring points here), and `VT_H264_YIELD` stays 0.70. The libx264 path, the
+alpha ProRes path and the finish frame's forced keyframe are untouched.
+`tests/test_export_video.py` pins the absence of `-g` and `-keyint_min` at five frame rates and
+both qualities, and that the forced finish keyframe stays.
+
+**Re-run it** (outputs go to one `mkdtemp` under `$TMPDIR`; the recording is only read):
+
+```bash
+pixi run python -m studio.dev.probes.vt_gop synthetic   # its last line is the JSON: save it
+pixi run python -m studio.dev.probes.vt_gop mk          # the same, for MK_18_09_26 lap 14
+pixi run python -m studio.dev.probes.vt_gop verdict SYNTH.json MK.json   # applies the rule
+```
+
+**What would be new evidence:** a hardware decoder that brings the net seek at `-g 60` within
+100 ms on both sources (today it decodes ~30 frames past the keyframe at ~4 ms each); or footage
+on which the 2 s interval buys far more than +0.35 dB at the same yield, weighed against the seek
+by a rule fixed before measuring.
 
 ---
 
