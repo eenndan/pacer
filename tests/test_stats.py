@@ -1425,6 +1425,70 @@ def test_stats_view_straights_table_and_exit_leverage_note():
     print("test_stats_view_straights_table_and_exit_leverage_note OK")
 
 
+def test_straights_note_does_not_rank_a_best_its_lap_gave_back():
+    """W2FIX-STRAIGHTS (QA W2 REG-1). On MK the note said "Slow exit costing the most: C7 … the
+    C7 → C8 straight after it takes 0.07 s longer than its best", while the IDEAL LAP row for the
+    same 2.881 s minimum said lap 16 "gave all of it back in C7 and C8 … not free time". The note
+    now asks the ideal's own give-back rule (stats_ideal._give_back, #484) and leaves such a
+    straight out, saying so. Here lap 0 sets C1 → C2's best and is 0.20 s behind the best lap
+    over C1, C1 → C2 and C2; lap 2 sets C2 → S/F's and keeps its gain."""
+    _app()
+    from dataclasses import replace
+
+    from studio.corner_model import SegmentBests
+    from studio.stats import StraightStat
+    from studio.stats_panel import StatsView
+    times = np.array([[1.00, 10.30, 3.00, 5.40, 2.00],    # lap 0: C1 → C2's best, paid for
+                      [1.00, 10.20, 3.10, 5.20, 2.00],    # lap 1: the best lap (the subject)
+                      [1.05, 10.25, 3.15, 5.25, 1.90]])   # lap 2: C2 → S/F's best, kept
+    sb = SegmentBests(labels=["start", "C1", "C1-C2", "C2", "C2-finish"], cids=[1, 2],
+                      lap_ids=[0, 1, 2], times=times, admitted=np.ones(times.shape, bool),
+                      resolved=np.ones(times.shape, bool),
+                      bests=[float(c.min()) for c in times.T],
+                      donors=[int(c.argmin()) for c in times.T],
+                      s_edges=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0], donor_span=[(0.0, 0.0)] * 5)
+    report = [
+        StraightStat(index=0, label="S/F → C1", ring_cid=2, n=3, best_s=1.00, median_s=1.00,
+                     sigma_s=0.0, trap_best_kmh=71.0, trap_median_kmh=70.0,
+                     exit_delta_kmh=None, leverage=0.0),
+        StraightStat(index=1, label="C1 → C2", ring_cid=1, n=3, best_s=3.00, median_s=3.10,
+                     sigma_s=0.1, trap_best_kmh=90.0, trap_median_kmh=89.0,
+                     exit_delta_kmh=-2.0, leverage=0.2),
+        StraightStat(index=2, label="C2 → S/F", ring_cid=2, n=3, best_s=1.90, median_s=2.00,
+                     sigma_s=0.1, trap_best_kmh=80.0, trap_median_kmh=79.0,
+                     exit_delta_kmh=-1.0, leverage=0.1),
+    ]
+    sess = _fake_view_session()
+    sess.ideal_segment_bests = lambda: sb
+    sess.ideal_total = lambda: sb.total
+    sess.ideal_donor_lap_id = lambda: sb.single_donor_id()
+    sess.straights_report = lambda: report
+    v = StatsView(sess)
+    tips = {v.ideal.table.item(r, 0).text(): v.ideal.table.item(r, 0).toolTip()
+            for r in range(v.ideal.table.rowCount())}
+    assert "Lap 1 gave all of it back in C1 and C2" in tips["C1 → C2"], tips
+    note = v.straights.note.text()
+    assert note.startswith("Slow exit costing the most: C2. Your usual exit is 1.0 km/h under "
+                           "your best lap's, and the C2 → S/F straight after it takes 0.10 s "
+                           "longer than its best."), note
+    assert note.endswith(" Not C1: after it, the lap that set the straight's best gave all of "
+                         "that time back in the corners beside it."), note
+    # No straight left that a lap kept: the note says why none ranks, rather than nothing.
+    report[2] = replace(report[2], exit_delta_kmh=1.0, leverage=0.0)
+    v.refresh()
+    assert v.straights.note.text() == (
+        "No slow exit ranks here: after C1, the lap that set the straight's best gave all of "
+        "that time back in the corners beside it."), v.straights.note.text()
+    # A best the ideal did not take (another lap set this table's minimum) is ranked as before.
+    report[1] = replace(report[1], best_s=2.99)
+    v.refresh()
+    assert v.straights.note.text().startswith("Slow exit costing the most: C1. "), \
+        v.straights.note.text()
+    assert "Not C" not in v.straights.note.text(), v.straights.note.text()
+    v.deleteLater()
+    print("test_straights_note_does_not_rank_a_best_its_lap_gave_back OK")
+
+
 def test_stats_view_straights_say_how_many_laps_each_column_counted():
     """C4 on the STRAIGHTS table's face: a column that counted fewer laps than the table has says
     how many on hover, and a straight NO lap matched at both ends is a row of dashes that explains

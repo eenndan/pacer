@@ -18,6 +18,7 @@ from ._signal import fmt_signed, plural
 from .coaching_panel import _ranked_shown
 from .lap_table import NUM_ROLE, _NumItem
 from .stats_common import RING_ROLE, ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
+from .stats_ideal import _give_back
 from .widgets import DASH, WrapLabel
 
 
@@ -43,7 +44,8 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "preceding corner's median exit speed vs your best lap's (+ is "
                      "faster). A slow exit costs time down the straight after it, which no "
                      "corner's own time contains: the note under the table names the straight "
-                     "where exit deficit × time spread is largest. Trap speed doubles as a "
+                     "where exit deficit × time spread is largest, leaving out a best that its "
+                     "lap gave back in the corners beside it. Trap speed doubles as a "
                      "gearing/engine-health proxy. "
                      "Each column counts only the laps whose corner edges IT reads were matched "
                      "to your best lap's line on track — the time both ends of the straight, the "
@@ -54,13 +56,15 @@ STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/strai
                      "Click a row to ring the corner feeding that straight.")
 STRAIGHTS_NOTE_TOOLTIP = (
     "The straight whose preceding corner's exit deficit × the straight's median − best time is "
-    "largest (its exit leverage: the one times the other) — measured, not modelled. \"Usual\" is "
-    "the median over the clean laps. It is time down the STRAIGHT after a slow exit, which the "
-    "Coaching tab's ranking does not contain: Coaching ranks the time lost inside each corner "
-    "against your best lap, and the corner/straight partition keeps the two apart (together they "
-    "sum to the lap). So the two can name different corners without either being wrong; Coaching "
-    "is the list of what to work on.")
-
+    "largest (its exit leverage: the one times the other) — measured, not modelled. It leaves "
+    "out a straight whose best is the IDEAL LAP's minimum there when the lap that set it gave "
+    "all of that time back in the corners beside it, by that table's own rule: a line trade-off "
+    "or a misplaced GPS edge, not time a slow exit costs. \"Usual\" is the median over the clean "
+    "laps. It is time down the STRAIGHT after a slow exit, which the Coaching tab's ranking does "
+    "not contain: Coaching ranks the time lost inside each corner against your best lap, and the "
+    "corner/straight partition keeps the two apart (together they sum to the lap). So the two "
+    "can name different corners without either being wrong; Coaching is the list of what to "
+    "work on.")
 
 
 def _signed_1dp(value: float) -> str:
@@ -83,11 +87,7 @@ class StraightsSection:
         self.table.itemSelectionChanged.connect(self._on_row_selected)
         self.table.horizontalHeader().sortIndicatorChanged.connect(keep_blanks_last)
         self.table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
-        # PS-2: the exit-leverage straight, said as what it measures under the table it summarizes
-        # (COASTING's note does the same for its top place) — it was a "fix first" TILE, the most
-        # imperative label in the app, naming a different corner from the Coaching tab's #1 on 3
-        # of the 4 working-set recordings. See _note_text.
-        self.note = WrapLabel()
+        self.note = WrapLabel()   # the exit-leverage note: see _note_text (PS-2)
         self.note.setProperty("role", "TableNote")
         self.note.setToolTip(STRAIGHTS_NOTE_TOOLTIP)
 
@@ -110,24 +110,43 @@ class StraightsSection:
             return []
         return [r.cid for r in coaching.lead_ties(list(opp.rows), lead)] or [lead]
 
-    def _note_text(self, session, top, unit, u_label) -> str:
-        """The STRAIGHTS table's top exit-leverage row, said as what it measures, and whether it is
-        where the Coaching tab starts. "" when no straight has any leverage.
+    @staticmethod
+    def _given_back(session, report) -> set[int]:
+        """The straights whose best is the IDEAL LAP's own minimum there and whose lap gave all of
+        it back beside it, by that table's rule (`stats_ideal._give_back`): one page must not rank
+        a minimum its other block calls "not free time" (QA W2 REG-1, MK's C7 on lap 16's best)."""
+        sb = getattr(session, "ideal_segment_bests", lambda: None)()
+        best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
+        rows = sb.decomposition(best) if sb is not None and best is not None else None
+        by_label = {st.label: st for st in report}
+        return {st.index for row in rows or () if (st := by_label.get(row.label)) is not None
+                and st.best_s == sb.bests[row.index]    # the same minimum, to the bit
+                and _give_back(sb, row, best) and sb.donor_net(row.index, best)[0] <= 0}
 
-        PS-2 (board review 2026-09-23): this was a tile captioned "fix first" — the most imperative
-        label in the app — and measured on the real window it named a different corner from the
-        Coaching tab's #1 on 3 of the 4 working-set recordings (SD_19_09: C2 vs C1, Sandown 3h: C4
-        vs C1, MK: C7 vs C5; SD_30_08 agreed on C7). Neither is wrong: this is time down the
-        straight after a slow exit, which Coaching's corner windows do not contain. So it names
-        its own quantity, and the corner Coaching starts with, instead of a second instruction."""
-        if top.leverage <= 0 or top.exit_delta_kmh is None:
-            return ""
+    def _note_text(self, session, report, unit, u_label) -> str:
+        """The top exit-leverage straight a lap kept (`_given_back`) as what it measures, those
+        left out above it, and whether Coaching starts there; "" when none has leverage. PS-2: a
+        "fix first" tile once, it names its own quantity — it named another corner than Coaching's
+        #1 on 3 of 4 recordings, and neither is wrong: no corner's window holds the straight."""
+        gone = self._given_back(session, report)
+        ranked = sorted((st for st in report if st.leverage > 0 and st.exit_delta_kmh is not None),
+                        key=lambda st: -st.leverage)
+        top = next((st for st in ranked if st.index not in gone), None)
+        above = [st.ring_cid for st in ranked[:ranked.index(top) if top else None]]
+        why = ("the lap that set the straight's best gave all of that time back in the corners "
+               "beside it.")
+        if top is None:
+            return f"No slow exit ranks here: after {coaching.corner_names(above)}, {why}" \
+                if above else ""
         exit_gap = abs(units.convert_speed(top.exit_delta_kmh, unit))
         # Copy #7 (QA 2026-09-26): what it costs, in words; "leverage" and "median" are named on
         # the hover (STRAIGHTS_NOTE_TOOLTIP).
         text = (f"Slow exit costing the most: C{top.ring_cid}. Your usual exit is {exit_gap:.1f} "
                 f"{u_label} under your best lap's, and the {top.label} straight after it takes "
                 f"{top.median_s - top.best_s:.2f} s longer than its best.")
+        if above:
+            text += (f" Not {coaching.corner_names(above)}: after "
+                     f"{'it' if len(above) == 1 else 'each'}, {why}")
         start = self._coaching_start(session)
         if not start:
             return text
@@ -166,8 +185,7 @@ class StraightsSection:
         # The count is derived from the same list, so the two can never drift apart again.
         dropped = f" · {stubs} too short to list" if stubs else ""
         self.heading.setText(f"STRAIGHTS · speeds in {u_label}{dropped}")
-        note = self._note_text(session, max(report, key=lambda s: s.leverage),
-                                         unit, u_label)
+        note = self._note_text(session, report, unit, u_label)
         self.note.setText(note)
         self.note.setVisible(bool(note))
         mono = theme.mono_font(theme.TABLE)
