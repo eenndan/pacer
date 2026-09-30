@@ -172,16 +172,19 @@ test-soak = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-f
 # neither carries -j or caffeinate: a run of seconds, started from the keyboard, like `golden`.
 #
 # `test-core`, between edits to the core math (TEETH-6). The 2026-09-28 review planted 34 defects in
-# timing, geometry, delta, stats and the stores; the whole suite killed 31. These ten registrations
-# are the greedy cover that kills every one of those 31: 16.3 s wall at -j4 on 2026-09-28, load 4
+# timing, geometry, delta, stats and the stores; the whole suite killed 31 then. PROCESS-10 re-ran
+# them on 2026-09-30 (3bebf57): all 34 die, and these eleven registrations alone kill every one.
+# The greedy cover is nine of them. test_focus_list stays although test_measured_figures also kills
+# M11: it is test-core's only behaviour test that does. 16.3 s wall at -j4 on 2026-09-28, load 4
 # (test_stats 16.3, golden 10.3, measured_figures 8.2); 37-44 s at load 19-20 beside other lanes
 # (2026-09-29), test_stats the long pole each time. It is FITTED to those 34 mutants: a green run
 # says nothing about a defect they do not model, so `test` stays the gate. Re-derived whenever the
 # mutation run is (PROCESS-10); a changed cover is this one regex. test_measured_figures runs only
-# its non-footage checks here (PACER_FOOTAGE_DEFAULTS=off, as in `test-fast`). An eleventh rides
-# along outside that cover: test_truth_matrix (TRUTH-1/-2) holds every number above the core to
-# the synthetic GoPro's ground truth, which no mutant modelled. It starts first by its COST and
-# runs beside test_stats (16.3 s alone at load ~20, 2026-09-29), so it adds little to the wall.
+# its non-footage checks here (PACER_FOOTAGE_DEFAULTS=off, as in `test-fast`). The eleventh rides
+# along outside the cover: test_truth_matrix (TRUTH-1/-2) holds every number above the core to the
+# synthetic GoPro's ground truth (on 09-30 it killed 4 of the 34, none alone). It starts first by
+# its COST and runs beside test_stats (16.3 s alone at load ~20, 2026-09-29), so it adds little to
+# the wall.
 test-core = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480 -R '^(test_golden_synthetic|test_lap_closure|test_library|test_export_data|test_session_pure|test_stats|test_focus_list|test_jsonstore|test_measured_figures|test_sector_integrity|test_truth_matrix)$'", depends-on = ["build"], env = { PACER_FOOTAGE_DEFAULTS = "off", CTEST_PARALLEL_LEVEL = "4" } }
 # `test-ciworld`, before pushing a player or compare change (DELIVERY-6): CI's software-decode world
 # (no VideoToolbox, so Qt's FFmpeg backend decodes on the CPU) over the registrations that build a

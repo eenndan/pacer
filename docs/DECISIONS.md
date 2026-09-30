@@ -35,7 +35,7 @@ which are not in this repository:
 |---|---|---|---|---|
 | RUL-1 | North-star: adopt "a craft showcase whose proof is that its author races with it", or keep July's | keep July's "portfolio / craft showcase" | default applied 2026-09-28 on the owner's instruction not to be asked | The README and landing page keep today's wording. |
 | RUL-2 | A circuit results sheet as an optional input (one DATA TRUST line, plus his kart number) | no | default applied 2026-09-28 on the owner's instruction not to be asked | No circuit-timing row is built. |
-| RUL-3 | Facts: are his sprints arrive-and-drive (a different fleet kart each time)? Did the Sandown 3h camera stay in one kart across driver changes? | none — facts | unanswered 2026-09-28; nothing further is built on them | The kart-number record and the pre-promoted focus rest on the arrive-and-drive premise, still unconfirmed (section 4). |
+| RUL-3 | Premises, not choices: a sprint is arrive-and-drive (a different fleet kart each time), and the Sandown 3h recording's camera stayed in one kart across its driver changes | none — premises | unconfirmed 2026-09-28; nothing further is built on them | The kart-number record and the pre-promoted focus rest on the arrive-and-drive premise, still unconfirmed (section 4). |
 | RUL-4 | A per-stint driver label on an endurance recording | no | default applied 2026-09-28 on the owner's instruction not to be asked | No stint labels. |
 | RUL-5 | The race-day agreement: a 10-minute talk, plus two counts he pastes from the app's log | the store listing only: no talk, no counts | default applied 2026-09-28 on the owner's instruction not to be asked | The race-day read reports S2 and S4 as not observable, and holds no talk (S6); section 3. |
 | RUL-6 | The focus loop: keep it, demote it, or turn it off | frozen as is until the freeze end; then keep it | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | At the freeze end the loop's held fixes build. |
@@ -51,21 +51,19 @@ read goes to him as information, and each freeze-end default applies unless he r
 
 ## 2. Owner acts
 
-Only he can do these. They have no default and stay open until he does them; the work goes ahead
-without them. Status as checked read-only on 2026-09-28, with its evidence: `gh` for what GitHub
-shows, and his word for what only he can report.
+Only he can do these. None has a default, and the work goes ahead without them. This public page
+names the acts; which of them are done, and any act that concerns only his own files, are tracked
+in the maintainers' private notes, not here.
 
-| Act | Status (evidence) | Note |
-|---|---|---|
-| A second copy of the originals (the recordings and the transponder CSV) | open (no word from him yet) | |
-| Save the Sandown Club Speed heat pages of 19 Jul, 30 Aug and 19 Sep, whole days | open (no page saved yet) | Three accuracy rows at a second circuit wait on them. |
-| Upload `docs/media/og.png` as the social preview, and pin the repository | open (`gh`: no custom preview, nothing pinned) | The upload waits for the showcase release's final `og.png` and is asked after that release; the pin waits on nothing. The upload is a copy: re-upload whenever `og.png` changes. |
-| A profile name and bio, or a stated choice to stay anonymous | open (`gh`: no name, no bio) | |
-| A private backup target for the agents' notes and memory | open (no word from him yet) | Never named here. |
-| Turn off the unused desktop-app connectors for this project; remove gitnexus | open (no word from him yet) | |
-| The clip's upload URL, when an agent asks | open (not asked yet) | |
-| The About line's headline number, when an agent asks | open (not asked yet) | |
-| The board review's real-screen pass (item 15-V1) | open (backlog) | Nothing waits on it. |
+| Act | Note |
+|---|---|
+| Save the Sandown Club Speed heat pages of 19 Jul, 30 Aug and 19 Sep, whole days | Three accuracy rows at a second circuit wait on them. |
+| Upload `docs/media/og.png` as the social preview, and pin the repository | The upload waits for the showcase release's final `og.png` and is asked after that release; the pin waits on nothing. The upload is a copy: re-upload whenever `og.png` changes. |
+| A profile name and bio, or a stated choice to stay anonymous | |
+| Turn off the unused desktop-app connectors for this project; remove gitnexus | |
+| The clip's upload URL, when an agent asks | |
+| The About line's headline number, when an agent asks | |
+| The board review's real-screen pass (item 15-V1) | Nothing waits on it. |
 
 Two permissions had no default either. Publishing the synthetic `demo-data-v2` beside v1 (a new
 release asset, never replacing it) is taken as granted by his "implement the plan … run until
@@ -77,7 +75,7 @@ two unmerged commits, and nothing needs it gone.
 
 ### The first-open freeze
 
-**(a) Window.** From 2026-09-28 until his next new recording or Monday 2026-11-09, whichever comes first.
+**(a) Window.** From 2026-09-28 until the next new recording or Monday 2026-11-09, whichever comes first.
 Until then the first-open, focus and PB surface below changes only through the allowed list (c).
 
 **(b) Frozen surface, function by function.** A changed line inside any of these, on either side of a diff:
@@ -116,22 +114,23 @@ mapped to their enclosing function with Python's `ast` and compared with (b) and
 a frozen function, from a package not allowed there, holds the PR until the freeze ends. A file name alone
 is not the check.
 
-**(e) The race-day read, registered in advance.** Each signal is reported on its own line. No single signal
-counts as success, and none is inferred from another.
-- S1: `session_records.json` exists (name and date only).
+**(e) The race-day read, registered in advance.** Under RUL-5's default it is a read-only listing of the
+app's store: file names and dates, with nothing opened. Each signal is reported on its own line. No single
+signal counts as success, and none is inferred from another.
+- S1: `session_records.json` exists.
 - S2: the focus list edited by hand (the "by hand" log lines of FIRST-OPEN-LOOP-3) against the app's default
-  left as it was. The log sits in the app's own store, which no agent reads, so this is a count he supplies.
-  Under RUL-5's default (applied 2026-09-28: store listing only, no talk, no counts) it is reported
-  "not observable". If FIRST-OPEN-LOOP-3 has not merged before the race day, it is "not observable", never
+  left as it was. The log sits in the app's store, which no agent reads, so a listing cannot count it: under
+  RUL-5's default (applied 2026-09-28: store listing only, no talk, no counts) it is reported
+  "not observable". If FIRST-OPEN-LOOP-3 has not merged before the freeze ends, it is "not observable", never
   "no edits".
-- S3: `marks.json` exists (name and date only).
+- S3: `marks.json` exists.
 - S4: where the export was started from (today's "export started" log line; its entry field once
-  FIRST-OPEN-LOOP-14 exists). Supplied by him like S2; under RUL-5's default, "not observable".
+  FIRST-OPEN-LOOP-14 exists). A log count like S2; under RUL-5's default, "not observable".
 - S5: a focus verdict. Reachable only with a second session at the same track and session records on both
   sides; otherwise it is reported "not reachable", never "not used".
 - S6: a 10-minute talk, only if RUL-5 is answered yes. Under its default the read is the store listing alone.
 
-**(f) What ends it, and what follows.** The first of his next new recording or 2026-11-09 ends the freeze.
+**(f) What ends it, and what follows.** The first of the next new recording or 2026-11-09 ends the freeze.
 The read (e) is then recorded and sent to him as information. RUL-6..RUL-8 are not re-asked (his
 instruction of 2026-09-28); their re-ask defaults apply at the freeze end, and any reply of his overrules
 them:
@@ -142,7 +141,7 @@ them:
 - Needing only the freeze end: FIRST-OPEN-LOOP-6, -7, -9, -11, -13, -16, -17, TRUTH-8, TRUTH-12,
   COACHING-5, and PROCESS-5 (two frozen-surface docstrings).
 - Not bound by the freeze: TRUTH-9, TRUTH-10 and TRUTH-11 (outside (b)). TRUTH-9 and -10 change what the
-  debrief shows, so they merge before his next race day or wait until after it.
+  debrief shows, so they merge before the next new recording or wait until the read (e) is recorded.
 
 ### The board review's restraint pass (R11)
 
@@ -175,7 +174,8 @@ measurement that refused it (#395); and the braking-direction line shown only wh
 per-recording Holm correction.
 
 **Built on his mandate, on an unconfirmed premise**: the kart-number session record (#386) and the
-focus list pre-promoted at a first open (#391) assume arrive-and-drive sprints, which RUL-3 asks.
+focus list pre-promoted at a first open (#391) assume arrive-and-drive sprints, the premise RUL-3
+records as unconfirmed.
 
 **Two corrections**: the north-star was logged as "adopted in docs as a hierarchy" on 2026-09-24
 but never committed (RUL-1 now records it); and no GitHub social preview was ever uploaded, though

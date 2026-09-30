@@ -2,7 +2,8 @@
 
 THE PROBLEM THIS FIXES (HEALTH-4, 2026-09-25). The owner's exports run h264_videotoolbox, the
 `-hwaccel videotoolbox` decode and, since #412, the decode relay that switches itself on over that
-hardware decode. CI's runner has no VideoToolbox. The checks of those paths each opened with
+hardware decode. CI's runner opens no H.264 VideoToolbox session (a ProRes one, yes: the two
+ProRes checks run there). The checks of those paths each opened with
 `if not ev.videotoolbox_usable(): print("skip …"); return`, so in CI they reported PASSED having
 run nothing; the relay tests forced `_relay_ok` on over a SOFTWARE decode; and `pixi run test-fast`
 leaves the whole of `test_export_video` out. So the path he exports through was checked only by a
@@ -33,7 +34,7 @@ class VideoToolboxMissing(Exception):
 def need(available: bool, what: str) -> None:
     """Raise `VideoToolboxMissing` unless `available`; `what` names the missing piece."""
     if not available:
-        raise VideoToolboxMissing(f"no {what} on this machine (CI's runner has no VideoToolbox)")
+        raise VideoToolboxMissing(f"no {what} on this machine (CI's runner opens no H.264 one)")
 
 
 def requested(argv: list[str] | None = None) -> bool:

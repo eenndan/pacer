@@ -186,7 +186,7 @@ Receipt: [#382](https://github.com/eenndan/pacer/pull/382) · [docs/ACCURACY.md]
 
 A developer tool, the golden-gate dump, took its output path as its first positional argument. A
 coding agent passed it the path of a recording, reading that argument as the input. The tool did
-exactly what it was told. The other two chapters survived; the first had no second copy.
+exactly what it was told. The other two chapters survived.
 
 The fix went to the interface, not to whoever typed. A positional argument reads as an input, and
 a tool that lets one slip clobber any path is the defect. The changes are structural:

@@ -22,8 +22,9 @@ TWO LAYERS, deliberately split so the numbers are testable without Qt:
 Honesty rules (single-sourced here so both the menu action and the toast obey them):
   * PROVISIONAL start line (``not session.timing_verified``) OR no valid best lap ⇒ ``blocked``
     (no shareable card — an unverified lap time is not a brag).
-  * DATA-QUALITY DEGRADED timing (``session.timing_quality.degraded``, e.g. media-clock drift /
-    low GPS) ⇒ a card, but STAMPED "estimated timing" so the number is never passed off as exact.
+  * DATA-QUALITY DEGRADED timing (``session.timing_quality.degraded``, e.g. the media-clock
+    fallback, which places each fix only within its ~1 s GPS packet, or low GPS) ⇒ a card, but
+    STAMPED "estimated timing" so the number is never passed off as exact.
 
 Palette + units: the Δ-to-ideal and the opportunity colour route through ``theme``'s palette
 accessors (so the colour-blind option recolours the card too); the apex-speed deficit in the
@@ -279,7 +280,7 @@ def card_data(session, *, unit: str | None = None, pb_standing: dict | None = No
     # HONESTY: an unverified (provisional) start line or no valid lap ⇒ no shareable card.
     provisional = not session.timing_verified
     blocked = provisional or best_id is None
-    # A data-quality-degraded (media-clock drift / low-GPS) time still renders, but stamped.
+    # A data-quality-degraded (media-clock packet spread / low-GPS) time still renders, but stamped.
     stamp = "estimated timing" if session.timing_quality.degraded else ""
 
     return CardData(

@@ -416,8 +416,8 @@ def _ffprobe_json(path, *args):
 
 def test_a_real_overlay_only_render_carries_the_source_timecode_if_ffmpeg():
     """End to end through the REAL renderer and ffmpeg: a 59.94 source stamped 10:51:06:25 (the
-    MK chapter-1 start), a lap window from 1.0 s, rendered overlay-only on prores_ks (pinned: CI has
-    no VideoToolbox). Read back with ffprobe, the .mov carries a tmcd equal to the source's own TC
+    MK chapter-1 start), a lap window from 1.0 s, rendered overlay-only on prores_ks (pinned, so
+    every machine encodes it alike). Read back with ffprobe, the .mov carries a tmcd equal to the source's own TC
     plus the frames to its first frame, counted at 30000/1001, and frame n sits at n*1001/30000."""
     if not ev.ffmpeg_available():
         print("skip: no ffmpeg")
