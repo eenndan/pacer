@@ -1631,7 +1631,7 @@ def _landmark_problems(html: str) -> list[str]:
     if mains != 1:
         problems.append(f"{mains} <main> elements: a page has exactly one (landmark-one-main)")
     body = next((i for i, n in enumerate(page.nodes) if n[0] == "body"), None)
-    for tag, classes, attrs, parent in page.nodes:
+    for tag, _, attrs, parent in page.nodes:
         if parent == body and tag not in _LANDMARKS:
             what = attrs.get("id") or attrs.get("class") or ""
             problems.append(f"<{tag}> {what!r} sits outside every landmark (region)")
