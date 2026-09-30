@@ -6,7 +6,8 @@ run them, and the measurements behind their levels, exclusions and timeouts, are
 timings are kept here, each with its date, on the M1 Pro dev Mac: `test` 281.3 s with all 16
 footage checks and the 6 VideoToolbox checks running (2026-09-25, 165 registrations, load ~3;
 206.0 s on 2026-09-24 with 14 footage checks and 157 registrations, load ~5), `test-fast`
-183–215 s on quiet gate runs (2026-09-26/27, 167–180 registrations; up to 488 s under load),
+183–215 s on quiet gate runs (2026-09-26/27, 167–180 registrations; up to 488 s under load;
+408 s at -j2 and load 7–10 on 2026-09-30, 182 of 184),
 `test-footage` 139.1 s (2026-09-23, warm page cache;
 `footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s), `test-soak`
 92.0–100.3 s (2026-09-27, the two release gates; 116.6 s at load ~10 on 2026-09-30), `golden`

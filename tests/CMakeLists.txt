@@ -76,11 +76,18 @@ set(_ctest test_app_support_jail test_footage_checks)
 # table when its sweep stopped building a page per draw (GATES-3: 54 s -> 3 s alone, load ~8).
 # test_truth_matrix (TRUTH-1): 7.8 s alone under ctest on 2026-09-29, load ~5 — nine synthetic
 # recordings, so it starts ahead of the one-second suites.
+# Re-checked 2026-09-30 (PROCESS-2, 184 registrations) in one `pixi run test-fast -j2` at load 7-10
+# (182 run, 408 s): every plain registration of 17 s or more had a COST but test_debrief_lands_right
+# (22.7 s). It joins, with the three first-open suites the 2026-09-28 review timed at 17.6-21.0 s
+# (test_debrief_landing, test_design_system, test_plan_in_reach; 11-12 s in that run). Their values
+# are that run's seconds over its median ratio to the costed suites it also timed (0.78, range
+# 0.40-1.54), so they rank on the 09-25 scale rather than a loaded run's.
 set(_cost
     test_export_pipeline 58  test_central_view_realqt 55  test_pb_toast 55  test_export_e2e 40
-    test_export_video 38  test_charts_header_budget 33  test_load_lifecycle 29
-    test_export_pill_budget 27  test_first_run_path 19  test_quality_chip_trust 18  test_stats 16
-    test_truth_matrix 8)
+    test_export_video 38  test_charts_header_budget 33  test_debrief_lands_right 29
+    test_load_lifecycle 29  test_export_pill_budget 27  test_first_run_path 19
+    test_quality_chip_trust 18  test_debrief_landing 16  test_stats 16  test_design_system 15
+    test_plan_in_reach 14  test_truth_matrix 8)
 # ==========================================================================================
 
 # A name in the table that is not a tests/test_*.py would silently configure nothing: fail instead.
