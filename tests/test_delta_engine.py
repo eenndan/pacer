@@ -229,9 +229,10 @@ def test_trace_rise_through_each_corner_is_the_tables_time_lost():
 
     def t_at(d_best):  # lap 1's clock where its warp puts the best lap's odometer d_best
         return float(np.interp(np.interp(d_best, warp[0], warp[1]), dists, times))
+    drawn = {cn.label: round(_rise(x, dl, cn.enter, cn.exit) - table[c].delta, 4)
+             for c, cn in enumerate(corner_list)}
+    assert max(map(abs, drawn.values())) <= 0.010, f"drawn rise − table time lost (s): {drawn}"
     for c, cn in enumerate(corner_list):
-        drawn = _rise(x, dl, cn.enter, cn.exit)
-        assert abs(drawn - table[c].delta) <= 0.010, (cn.label, drawn, table[c].delta)
         tick = s.delta_at_lap(1, t_at(cn.exit)) - s.delta_at_lap(1, t_at(cn.enter))
         badge = s.delta_between(1, 0, t_at(cn.exit)) - s.delta_between(1, 0, t_at(cn.enter))
         assert abs(tick - table[c].delta) < 1e-9, (cn.label, tick, table[c].delta)

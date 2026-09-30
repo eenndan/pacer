@@ -1102,8 +1102,9 @@ def test_a_reference_cut_five_metres_later_is_matched_on_track():
     """A CROSS-RECORDING REFERENCE IS COMPARED AT THE SAME PLACE ON TRACK (TRUTH-10). The reference
     is the best lap's own drive cut at a start line 5 m further on, so at every corner it is the
     same kart in the same place and the Δ through each corner is zero. The equal-FRACTION pairing
-    this replaced read every corner ~5 m apart on the two laps, so the Δ trace rose or fell through
-    each one and the Corners table's reference column was off by as much. Through the reference's
+    this replaced read every corner ~5 m apart on the two laps: the Δ trace fell by 17.5-48.8 ms
+    through the six interior corners and the Corners table's reference column was off by
+    17.8-49.4 ms (measured on the tree before TRUTH-10). Through the reference's
     warp (`CornerModel.reference_alignment`, matched on its trace moved into this frame) both are
     within 5 ms, and the finish is still the lap-time difference.
 
