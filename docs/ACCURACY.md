@@ -122,7 +122,7 @@ are under four milliseconds, as point estimates.
   clock, chapter seam and crossing interpolation; the rows above measure the noise floor.
 - **Still to come: Sandown Park**, the other circuit the working footage comes from, run clockwise.
   It is timed on Club Speed too, but its heat pages sit behind a sign-in, so its three recordings
-  have no row until the owner fetches their sheets.
+  have no row until their sheets are fetched.
 
 ## Three findings that show where the limit actually is
 
@@ -150,10 +150,10 @@ speed integral.)
 
 **3. Sub-tick "refine the millisecond at the line" tricks buy nothing at 10 Hz.** Phone lap-timers
 that run on 1 Hz GPS use IMU acceleration to interpolate the exact instant the car crossed the line,
-because at 1 Hz the chord between fixes is a full second wide. At Pacer's 10 Hz the crossing chord is
-already ~0.05 s (about a 0.5 m car length at speed), so the constant-velocity crossing interpolation
-is already **sub-sample** — a higher-order spline moves the crossing instant by under a millisecond.
-The trick that matters at 1 Hz is moot here; we are already past it.
+because at 1 Hz the chord between fixes is a full second wide. At Pacer's 10 Hz it is a tenth of that,
+so the crossing sits at most ~0.05 s (about 1 m at speed) from a real fix, and the constant-velocity
+crossing interpolation is already **sub-sample** — a higher-order spline moves the crossing instant
+by under a millisecond. The trick that matters at 1 Hz is moot here; we are already past it.
 
 Together these say the same thing three ways: **Pacer's lap timing is at the practical limit for this
 data.** We tested GPS+IMU sensor fusion, Kalman/RTS smoothing, Doppler-aided positioning, and
