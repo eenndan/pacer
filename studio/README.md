@@ -1,9 +1,9 @@
 # Pacer Studio — the module map
 
-A local **PySide6 + pyqtgraph** desktop app for race-telemetry analysis — a greenfield UI
-on top of the existing C++ `pacer` core (reused via its nanobind Python bindings). Chosen
-for a single-language, LLM-editable codebase that still nails draggable map handles and
-frame-accurate video↔telemetry sync (all in Python — see [the spike](dev/spike_video_sync.py)).
+A local **PySide6 + pyqtgraph** desktop app for race-telemetry analysis on the C++ `pacer`
+core, through its nanobind bindings. Chosen for a single-language, LLM-editable codebase that
+still nails draggable map handles and frame-accurate video↔telemetry sync (all in Python — see
+[the spike](dev/spike_video_sync.py)).
 
 This file is the map: the rules, where a change goes, and one line per module. Each module's
 design notes, rationale and measurement history are in [docs/module-notes.md](docs/module-notes.md),
@@ -66,8 +66,8 @@ file headlessly with
    present path, and each tick is a cheap lookup on cached arrays: nothing is recomputed or
    re-plotted per frame. Derived views rebuild on an event (load, re-segment, a lap or mode
    change), never per tick, and a hidden Stats page defers its render; scrub seeks coalesce to
-   ≤ 1 per tick; plot curves are
-   downsampled + clipped with antialias off and autorange frozen; the map draws ≤ 2 laps.
+   ≤ 1 per tick; plot curves are downsampled + clipped with antialias off and autorange frozen;
+   the map draws ≤ 2 laps.
 5. **One quantity, one source.** A number two surfaces show comes from one accessor on `Session`
    or its services; views and exports read it and never re-derive it, and a statistic whose
    signal is absent is `None`, never a fake 0.
@@ -89,6 +89,7 @@ file headlessly with
 | Show the ideal lap somewhere new | read `session.ideal_total` / `delta_to_ideal`, gate on `ideal_donor_lap_id() is None`, caption with `IdealSample.caption()` | `test_session_pure`, `test_export_disclosures` |
 | Change what coaching says or claims | `coaching.py` (`reason_sentence`, `corner_evidence`, `session_theme`); surfaces never re-derive | `test_coaching` |
 | Change a cross-session verdict | `focus.verdict` (a refusal carries `delta=None`) | `test_focus_list` |
+| Change the first-open verdict ([frozen](../docs/DECISIONS.md#the-first-open-freeze)) | `LibraryController.update_library` (flags read by `_land_on_debrief`, `_session_notice`) | `test_debrief_lands_right` + the first-open journeys |
 | Add a lap-table column | `lap_table.py` | `test_studio_features` |
 | Add a session-record field | `session_record.py` (fields, normalizer, `_migrate`) → `session_record_dialog.py` | `test_session_record` |
 | Add a mark type or auto-detector | `marks.py` (an auto mark reads an existing detector) → `theme.mark_colour` | `test_marks` |
@@ -102,17 +103,17 @@ The long form of each row is in [module-notes.md](docs/module-notes.md#common-ch
 ## Modules
 
 One row per `studio/*.py`; each Stats section's `stats_*.py` is a one-word link in `stats_panel`'s.
-**Imports** is the layer in one word, checked against the code by
-`tests/test_layering.py`: `pacer` = imports the C++ core (these four only) · `Qt` = imports Qt ·
-`→Qt` = no Qt of its own, but a studio module it imports loads it · `—` = neither, so it imports
-headless. **Test** is the file under [`tests/`](../tests/) that pins the module (`—`: none).
-A change to what a module does goes in its docstring (and its notes section, if that now says
-otherwise); this map changes when a module is added, removed or renamed, or changes layer.
+**Imports** is the layer in one word, checked by `test_layering`: `pacer` = imports the C++ core
+(these four only) · `Qt` = imports Qt · `→Qt` = no Qt of its own, but a studio module it imports
+loads it · `—` = neither, so it imports headless. **Test** is the file under [`tests/`](../tests/)
+that pins the module (`—`: none). A change to what a module does goes in its docstring (and its
+notes section, if that now says otherwise); this map changes when a module is added, removed or
+renamed, or changes layer.
 
-Note the four **Session-bound service twins** that pair a pure algorithm module with its
-Session-caching service: `corners.py`→`corner_model.py`, `driving.py`→`driving_channels.py`,
-plus `bests.py` and `timeline.py` (extracted straight off the Session facade). Edit the
-algorithm; the service just caches + delegates.
+Four **Session-bound service twins** pair a pure algorithm module with its Session-caching
+service: `corners.py`→`corner_model.py`, `driving.py`→`driving_channels.py`, plus `bests.py` and
+`timeline.py` (extracted straight off the Session facade). Edit the algorithm; the service just
+caches + delegates.
 
 ### Pipeline: ingest → load → session
 
@@ -177,7 +178,7 @@ algorithm; the service just caches + delegates.
 | [scrub_controller.py](scrub_controller.py) | Plot-cursor scrub: lap-scoped drag, ≤ 1 seek per tick | — | `test_controllers` |
 | [compare_controller.py](compare_controller.py) | Dual-lap compare: pinned pair, enter/exit, pane times, Δ badges, map ghost | →Qt | `test_compare` |
 | [export_controller.py](export_controller.py) | The Qt side of every export: File ▸ Export, writers, share card, video flow | Qt | `test_export_gates` |
-| [library_controller.py](library_controller.py) | Library + PB moment, session records, focus list, saved tracks, Open Recent | Qt | `test_library` |
+| [library_controller.py](library_controller.py) | The library, its first-open verdict and PB moment, session records, focus list, saved tracks, Open Recent | Qt | `test_library` |
 
 ### Views
 
@@ -224,6 +225,5 @@ algorithm; the service just caches + delegates.
 
 ## Tests
 
-Pure-Python studio tests live under [`tests/`](../tests/), each registered with CTest, so
-`pixi run test` runs them alongside the C++ Catch2 suites. [tests/README.md](../tests/README.md)
-has the inventory, the golden gate and the real-footage checks; AGENTS.md, how to run one.
+[tests/README.md](../tests/README.md) has the inventory, the golden gate and the real-footage
+checks; AGENTS.md, how to run one.
