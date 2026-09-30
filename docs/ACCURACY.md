@@ -153,8 +153,7 @@ that run on 1 Hz GPS use IMU acceleration to interpolate the exact instant the c
 because at 1 Hz the chord between fixes is a full second wide. At Pacer's 10 Hz it is a tenth of that,
 so the crossing sits at most ~0.05 s (about 1 m at speed) from a real fix, and the constant-velocity
 crossing interpolation is already **sub-sample** — a higher-order spline moves the crossing instant
-by under a millisecond.
-The trick that matters at 1 Hz is moot here; we are already past it.
+by under a millisecond. The trick that matters at 1 Hz is moot here; we are already past it.
 
 Together these say the same thing three ways: **Pacer's lap timing is at the practical limit for this
 data.** We tested GPS+IMU sensor fusion, Kalman/RTS smoothing, Doppler-aided positioning, and
