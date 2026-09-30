@@ -117,7 +117,8 @@ def test_csv_trailer_stays_ascii():
               if line.startswith(f"{marker}: ")}
     want = {f"{marker}: {label}" for label in (
         "Theoretical best", "Best rolling", "quality [p]", "quality [e]", "quality [b]",
-        "quality [u]", export_data.INTERPOLATED_COLUMN, "break in series")}
+        "quality [u]", export_data.INTERPOLATED_COLUMN, "break in series",
+        export_data.DIST_COLUMN)}
     assert want <= labels, f"the trailer never wrote {sorted(want - labels)} — nothing to check"
     bad = [(line.split(",", 1)[0], sorted({ch for ch in line if ord(ch) > 127}))
            for line in text.splitlines() if any(ord(ch) > 127 for ch in line)]

@@ -68,6 +68,31 @@ CHORD_SPEED_TOL = 1.5
 # Below this share of the raw chord LENGTH surviving the gate, what is left is not a measurement
 # of a path — the view says so with a dash instead of printing a number.
 MIN_KEPT_FRAC = 0.5
+# THE ODOMETER READS SHORT OF THE DISTANCE DRIVEN, stated in copy and sized here once (TRUTH2-ODO).
+# `load._smooth_track` boxcars the positions over `_signal.SMOOTH_WINDOW` fixes (~1.3 s) before the
+# core sees them, and a boxcar pulls a corner's fixes toward its inside: the smoothed path is
+# rounder and shorter than the kart's. Every distance printed is a chord sum of it — the lap
+# odometer (the lap table's Dist; `LapStat.avg_kmh` is it over the lap time) and the SESSION
+# `path_distance` — so each reads short, and the average speed low, by the same share. Measured
+# 2026-09-30 per valid dropout-free lap against the GPS Doppler ground speed integrated over the
+# lap's own window (the boxcar smooths positions, never speeds; the same laps loaded with the
+# smoothing off agree with that integral within 0.13 %): 2.63-2.68 % short on the three Sandown
+# recordings (~20 m of a ~760 m lap, lap-to-lap sd 0.1-0.3 %; the session distance 2.6-2.7 %) and
+# 1.96 % on MK_18_09_26 (~21 m of ~1087 m, sd 0.5 %). No check re-measures those. A GPS dropout
+# adds to it: its gap is one straight chord (MK's 15 gaps, 96 s, put its session distance 4.7 %
+# short). On the synthetic GoPro's gentler circuit it is ~1.1 %: tests/test_truth_matrix.py rows
+# lap.dist, lap.avg and session.distance, which tests/test_stats.py ties the LOW end to. So the
+# copy states a range (low = the truth matrix's, high = the working set's). Changing the smoothing
+# is TRUTH-8's, not this constant's.
+ODOMETER_SHORT_PCT = (1.0, 3.0)   # % of the distance actually driven
+# The one sentence every surface that quotes a lap distance, an average speed or the session
+# distance carries (tests/test_stats.py scans for them). Plain ASCII with nothing HTML escapes: it
+# is also a laps.csv trailer note and a report paragraph.
+ODOMETER_NOTE = (
+    f"Distance is measured along the GPS trace as smoothed at load, which rounds every corner off, "
+    f"so it reads about {ODOMETER_SHORT_PCT[0]:g}-{ODOMETER_SHORT_PCT[1]:g}% short of the distance "
+    f"actually driven (more across a GPS dropout, which it bridges with a straight line); an "
+    f"average speed, being that distance over the time, reads low by the same share.")
 # Sample floor for any statistic that describes a DISTRIBUTION of laps (spread, banked-pace
 # count) — the same floor consistency.sigma applies. One lap has no spread and is trivially
 # within 1% of itself; printing "+0.00 s" and "1 / 1" dresses that up as a measurement.
@@ -296,7 +321,7 @@ class LapStat:
     idx: int                    # lap id (0-based, same as LapRow["idx"])
     time: float                 # lap time (s)
     vmax_kmh: float | None      # max full_speed on the lap
-    avg_kmh: float | None       # odometer / lap time — the distance-true average
+    avg_kmh: float | None       # odometer / lap time: low by the odometer's ODOMETER_SHORT_PCT
     vmin_kmh: float | None      # min full_speed on the lap — the slowest-corner speed
     peak_lat_g: float | None    # max |lateral g| (IMU lateral — the trusted axis)
     peak_brake_g: float | None  # max deceleration, reported positive (validated GPS-derived long)

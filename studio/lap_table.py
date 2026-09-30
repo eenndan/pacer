@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import data_quality, provenance_panel, theme, units
+from . import stats as stats_service
 from ._signal import PRINT_DECIMALS, fmt_signed, fmt_time, is_best_at_print, lap_label, plural
 from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
@@ -227,7 +228,9 @@ def _lap_col_tips(unit: str | None) -> list[str]:
     return [
         "Lap number (▶ playing · ★ session best · ⚠ GPS dropout)",
         "Lap time, measured between start/finish crossings",
-        "Lap distance (m), measured between start/finish crossings",
+        # the odometer's shortfall, in the one sentence every distance surface carries
+        "Lap distance (m), measured between start/finish crossings.\n\n"
+        f"{stats_service.ODOMETER_NOTE}",
         f"Speed at the start/finish crossing ({u})",
     ]
 # COLUMN SIZING (P5). The data columns are CONTENT-TIGHT and one blank trailing SPACER column

@@ -30,6 +30,7 @@ Run: QT_QPA_PLATFORM=offscreen python tests/test_stats.py
 import datetime
 import math
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -4226,6 +4227,183 @@ def test_the_onset_quantization_is_one_constant_and_the_brake_time_states_its_gp
             f"synthetic's, not a real recording's: {said!r}")
     print(f"ok braking copy: the onset quantization is driving.ONSET_QUANT_M ({figure}) at all "
           f"three sites; both DRIVING tooltips say GPS noise adds time on the brakes, no figure")
+
+
+# The studio modules that QUOTE the odometer — read a lap row's distance, a lap's average speed or
+# the session's path length to print it — found by a source scan, with what each one prints. A
+# module that starts reading one of them fails the scan until it states `stats.ODOMETER_NOTE` on
+# the surface (and is added here) or is exempted below with its reason.
+_ODOMETER_READ = re.compile(r"\.avg_kmh\b|\.distance_m\b|\[['\"]dist['\"]\]")
+_ODOMETER_SURFACES = {
+    "stats_panel": "the Stats page's SESSION distance tile and the PER LAP grid's Avg column",
+    "lap_table": "the lap table's Dist column (its excluded strip compares an excluded lap's "
+                 "distance with the counted laps', both on the same odometer: the share cancels)",
+    "export_data": "the SESSION group of the report and clipboard summary, the report's laps "
+                   "table and laps.csv's dist_m column",
+}
+_ODOMETER_EXEMPT = {
+    "track_db": "`distance_m` is how far apart two saved tracks' anchors are, not an odometer",
+}
+
+
+def test_every_surface_quoting_the_odometer_says_it_reads_short_from_one_constant():
+    """TRUTH2-ODO. THE ODOMETER READS SHORT OF THE DISTANCE DRIVEN, AND NO SURFACE SAID SO.
+
+    `load._smooth_track` boxcars the GPS positions over `_signal.SMOOTH_WINDOW` fixes, which rounds
+    every corner off, and every distance the app prints is a chord sum of that smoothed path: the
+    lap table's Dist, the PER LAP grid's Avg (odometer / lap time) and the SESSION distance. The
+    truth matrix found it (tests/test_truth_matrix.py rows lap.dist, lap.avg and session.distance,
+    ~1.1 % short on the synthetic GoPro, 'stated') and the working set reads 2.0-2.7 % short
+    (`stats.ODOMETER_SHORT_PCT` has the measurement). The matrix's own rule is that a stated row is
+    said in words on its surface; the SESSION tile said "Path length of the recorded trace", the
+    lap table "Lap distance (m), measured between start/finish crossings", and the PER LAP grid
+    that Avg came "from the lap's own GPS speed", which it does not: it is the odometer over the
+    lap time, and so reads low by the same share.
+
+    EVERY SURFACE, FOUND BY A SOURCE SCAN (`_ODOMETER_SURFACES`), carries `stats.ODOMETER_NOTE`
+    verbatim — on the Stats page in all three g-meter states, in the lap table's Dist header, and
+    in every export: the SESSION group's note (report and clipboard), a note under the report's
+    laps table and laps.csv's `dist_m` trailer row. The figure is typed nowhere else."""
+    _app()
+    import csv
+    import html
+    import pathlib
+    import tempfile
+
+    from test_export_data import make_stitched_session
+
+    import studio
+    from studio import export_data, lap_table, stats
+    from studio.stats import SessionTotals
+    from studio.stats_panel import (
+        LAP_TABLE_TOOLTIP,
+        StatsView,
+        lap_table_tooltip_gps,
+        lap_table_tooltip_no_gmeter,
+    )
+
+    # 1 · the scan: exactly these modules quote the odometer (the data layer computes it)
+    data_layer = {"stats", "session", "_signal"}
+    quoting = {p.stem for p in pathlib.Path(studio.__file__).parent.glob("*.py")
+               if p.stem not in data_layer and _ODOMETER_READ.search(p.read_text(encoding="utf-8"))}
+    assert quoting - set(_ODOMETER_EXEMPT) == set(_ODOMETER_SURFACES), (
+        f"the modules that print a lap distance, an average speed or the session distance are "
+        f"{sorted(quoting - set(_ODOMETER_EXEMPT))}, not {sorted(_ODOMETER_SURFACES)}: a new one "
+        f"must state stats.ODOMETER_NOTE on its surface and join _ODOMETER_SURFACES (or be "
+        f"exempted with its reason)")
+
+    said = "short of the distance actually driven"
+
+    def _says(where, text):
+        assert said in text, f"{where} quotes the odometer and never says it reads short: {text!r}"
+        assert stats.ODOMETER_NOTE in text, (
+            f"{where} words the odometer's shortfall itself instead of stats.ODOMETER_NOTE: "
+            f"{text!r}")
+
+    # 2 · the Stats page: the SESSION distance tile, clean and partly gated
+    session = _fake_view_session()
+    for kept in (1.0, 0.94):
+        session.stats.totals = lambda kept=kept: SessionTotals(
+            duration_s=1549.0, moving_s=1400.0, distance_m=18445.0, distance_kept_frac=kept,
+            start_clock=None, end_clock=None)
+        v = StatsView(session)
+        assert v.t_distance.value.text() == "18.4 km"
+        _says(f"the SESSION distance tile (kept {kept:g})", v.t_distance.toolTip())
+        v.hide()
+    # …and the PER LAP grid's Avg, in each g-meter state
+    for name, tip in (("PER LAP grid (IMU)", LAP_TABLE_TOOLTIP),
+                      ("PER LAP grid (GPS-derived)", lap_table_tooltip_gps("no usable IMU")),
+                      ("PER LAP grid (no g-meter)", lap_table_tooltip_no_gmeter())):
+        _says(name, tip)
+        assert "Vmax/Avg from the lap's own GPS speed" not in tip, (
+            f"{name} says Avg comes from the GPS speed; it is the odometer over the lap time: {tip!r}")
+
+    # 3 · the lap table's Dist header
+    _says("the lap table's Dist header",
+          lap_table._lap_col_tips(None)[lap_table.COLUMNS.index("Dist (m)")])
+
+    # 4 · the exports. The note must survive the report's escaping unchanged (or a substring test
+    # of the page would pass on text the reader never sees) and laps.csv's ASCII.
+    assert html.escape(stats.ODOMETER_NOTE) == stats.ODOMETER_NOTE, stats.ODOMETER_NOTE
+    stats.ODOMETER_NOTE.encode("ascii")
+    s = make_stitched_session()
+    _says("the exported SESSION group",
+          next(sec.note for sec in export_data.stats_summary(s) if sec.title == "SESSION"))
+    _says("the clipboard summary", export_data.stats_summary_text(s, None))
+    with tempfile.TemporaryDirectory() as tmp:
+        report, laps = os.path.join(tmp, "report.html"), os.path.join(tmp, "laps.csv")
+        export_data.write_report_html(report, s, source_label="GX010001")
+        export_data.write_laps_csv(laps, s)
+        with open(report, encoding="utf-8") as f:
+            page = f.read()
+        with open(laps, newline="", encoding="ascii") as f:
+            rows = list(csv.reader(f))
+    laps_part = page[page.index("<h2>Laps"):]
+    end = laps_part.find("<h2>", 1)          # the laps table's own notes, not a later section's
+    _says("the report's laps table", laps_part if end < 0 else laps_part[:end])
+    dist_note = [r for r in rows if r and r[0] == f"{export_data.SUMMARY_MARKER}: dist_m"]
+    assert len(dist_note) == 1, f"laps.csv has no dist_m column note in its trailer: {rows[-6:]}"
+    _says("laps.csv's dist_m trailer row", dist_note[0][3])
+
+    # 5 · one figure, one source: the range is stats.ODOMETER_SHORT_PCT's, typed nowhere
+    lo, hi = stats.ODOMETER_SHORT_PCT
+    figure = f"{lo:g}-{hi:g}%"
+    assert figure in stats.ODOMETER_NOTE, (figure, stats.ODOMETER_NOTE)
+    for p in pathlib.Path(studio.__file__).parent.glob("*.py"):
+        for line in p.read_text(encoding="utf-8").splitlines():
+            assert figure not in line, (
+                f"{p.name} types the odometer's shortfall {figure!r} — it must read "
+                f"stats.ODOMETER_SHORT_PCT: {line.strip()!r}")
+    print(f"ok odometer: {len(_ODOMETER_SURFACES)} quoting modules, every surface states "
+          f"stats.ODOMETER_NOTE ({figure} short)")
+
+
+def test_the_odometer_shortfall_is_the_truth_matrix_s_stated_rows():
+    """TRUTH2-ODO. `stats.ODOMETER_SHORT_PCT` is a RANGE — (low, high) — and its LOW end is the
+    truth matrix's: tests/test_truth_matrix.py rows lap.dist, lap.avg and session.distance at
+    noise 0 measure the load-time boxcar's shortfall against a known truth on the synthetic GoPro.
+    Its HIGH end is the working set's (measured against the GPS Doppler distance; no check
+    re-measures it — the constant's comment has the figures).
+
+    Tied both ways, so the words cannot drift from the rows. Each row, as a share of its truth,
+    must sit inside the range, the low end within the row's own 1.5× headroom of it, and the row's
+    ceiling (the most the matrix lets it grow) under the high end. And the words cannot outlive
+    the effect: the matrix's stated rows carry no floor, so this re-measures the noise-free case
+    through the matrix's own harness (the real loader, ~2 s) and holds its mean shortfall inside
+    the range — a smoothing change that shrinks it (TRUTH-8) fails here until the copy is
+    re-measured."""
+    import test_truth_matrix as truth_matrix
+
+    from studio import stats
+    from studio.dev import synth_gopro as sg
+
+    lo, hi = stats.ODOMETER_SHORT_PCT
+    assert 0 < lo < hi, stats.ODOMETER_SHORT_PCT
+    rows = {(r.stat, r.level): r for r in truth_matrix.ROWS}
+    case = truth_matrix._case(sg.DEFAULT_SEED, 0.0)
+    t = case.truth
+    length = t.circuit.length
+    laps = sorted(case.match.values())
+    true_avg = float(np.median([3.6 * length / (case.tl[k + 1] - case.tl[k]) for k in laps]))
+    truth_of = {"lap.dist": length, "lap.avg": true_avg,
+                "session.distance": float(t.d_nodes[-1] - t.d_nodes[0])}
+    for stat, scale in truth_of.items():
+        row = rows[stat, 0.0]
+        assert row.status == truth_matrix.S, f"{stat} is no longer a stated row: {row}"
+        pct, ceiling = 100 * row.measured / scale, 100 * row.ceiling / scale
+        assert lo <= pct <= hi and pct / 1.5 <= lo, (
+            f"{stat} @ noise 0 measures {pct:.3f} % of its truth; stats.ODOMETER_SHORT_PCT's low "
+            f"end {lo:g} % must lie within its 1.5x headroom — re-measure the copy")
+        assert ceiling <= hi, (
+            f"{stat}'s ceiling allows {ceiling:.2f} %, past the {hi:g} % the copy states")
+    live = -100 * float(np.mean(truth_matrix._lap_stat_errors(case)["dist"])) / length
+    assert lo <= live <= hi, (
+        f"the lap odometer reads {live:.3f} % short on the matrix's noise-free case, outside the "
+        f"{lo:g}-{hi:g} % the copy states — the smoothing changed: re-measure "
+        f"stats.ODOMETER_SHORT_PCT and its words")
+    print(f"ok odometer tie: lap.dist/lap.avg/session.distance at noise 0 are "
+          f"{', '.join(f'{100 * rows[k, 0.0].measured / v:.2f}' for k, v in truth_of.items())} %, "
+          f"live {live:.3f} %, inside stats.ODOMETER_SHORT_PCT {lo:g}-{hi:g} %")
 
 
 def test_the_stats_page_names_the_lateral_axis_this_recording_actually_has():
