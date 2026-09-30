@@ -126,6 +126,19 @@ Every session lands in the **Session Library** (**File ▸ Library…**, or **�
 best progression per track** over time. Beat your previous best on a track and Pacer says so, and
 that session's debrief (step 3) says whether your focus corners moved.
 
+## 8 · The rest of the window
+
+- **Stats** is a full page — PACE, IDEAL LAP, SECTORS, CORNERS, BRAKING, STRAIGHTS, DRIVING,
+  SPEED · G and **DATA TRUST**. The IDEAL LAP's gain column sums to the headline.
+- **Coaching** has a button that jumps the video to your best lap at each corner. No model, no ML:
+  every number is a reduction of a validated channel.
+- A g-meter and the brake / coast / grip channels ride along with the charts.
+- Dragged a start/finish or sector line to the wrong place? `⌘Z` undoes.
+- `⌘⌃F` for full screen, km/h ↔ mph, colour-blind-safe cues, and privacy controls under
+  `Help ▸ Your data & privacy`.
+- Nothing is keyed off the camera's model name: the loader looks for the GPS9 stream and reports
+  which clock it actually built.
+
 ---
 
 **Trust, honestly labelled.** Timing from a GPS9 camera (a Hero 11, Hero 13, MAX2 or MISSION 1, by

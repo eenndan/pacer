@@ -78,7 +78,9 @@ The real cause was an estimator. The bars integrated distance over speed, and `1
 speed error exactly where the kart is slowest, which is where a corner's time is largest. Audited
 against the timing clock on the best lap, every corner's thirds disagreed with the corner's own
 time. The fix reads the clock: the seconds between two points of the lap, interpolated exactly as
-the corner splits are. The thirds now add up to the corner's time by construction.
+the corner splits are. The thirds now add up to the corner's time by construction. Every delta the
+app shows — the Δ trace, sector and corner splits, the ideal lap, the coaching breakdown, the
+exports — is a difference of two clock readings, and a test fails if an estimator comes back.
 
 The golden gate had barely noticed. The phase matrix was in no fingerprint, and the synthetic
 fixture reported zero change for a fix that moved every phase number in the app. It is fingerprinted
@@ -154,6 +156,19 @@ once each, its opening count is derived from them, the count at the top of this 
 landing page is held to it as a floor, and every citation of a section elsewhere in the tree must
 land on one that exists.
 
+The longer investigations are kept the same way:
+
+- [GPS lap-timing accuracy: research and an empirical evaluation](../studio/docs/gps-accuracy-research.md)
+- [An upstream "~20 ms vs transponder" claim, investigated](../studio/docs/upstream-20ms-investigation.md)
+- [Brake-release detection from the friction circle: measured, not shipped](../studio/docs/friction-circle-release-investigation.md)
+- [Sideslip rate, wheel hop and a track bump map, probed as channels](../studio/docs/measured-channels-2026-09.md)
+- [The g-meter: camera-to-kart frame, and the accelerometer against GPS](../studio/docs/gmeter-validation.md)
+- [The Grip (est) column, re-grounded](../studio/docs/grip-regrounding-2026-09.md)
+- [Why one recording matched far fewer of its corners on track](../studio/docs/corner-match-0060-2026-09.md)
+- [Start/finish line verification](../studio/docs/start-line-verification.md)
+
+Most were measured on D24 and say so at the top.
+
 Receipt: [Features measured and refused](../studio/docs/refused-2026-09.md) ·
 `tests/test_measured_figures.py`.
 
@@ -207,6 +222,19 @@ Receipt: `studio/dev/golden_session_dump.py::_resolve_out_path` ·
 `tests/test_app_support_jail.py`.
 
 ---
+
+## A citable marker vocabulary on the way out
+
+In the app a caveat has hover, colour and weight to carry it, so Pacer keeps its own marks —
+`(est)`, the muted provisional demotion, ⚠, ⊘. An exported table has none of those, so `laps.csv`
+and the HTML report use the **UK Government Analysis Function's standard table symbols** instead —
+`[e]` estimated, `[p]` provisional, `[u]` low reliability, `[b]` break in series — each one decoded
+by a key in the same file. The choice is per marker and written down: `[x]`, `[z]`, `[r]`, `[f]`
+and `[c]` are refused with reasons in [studio/data_quality.py](../studio/data_quality.py), and ⊘
+EXCLUDED is named as having no standard equivalent at all — a lap that was measured, is shown, and
+is deliberately not counted is neither "not available" nor "not applicable". Adopting four of nine
+and saying why the rest do not fit is the point; a vocabulary forced onto the last two cases would
+be worse than the house style.
 
 ## A 15-minute code tour
 
