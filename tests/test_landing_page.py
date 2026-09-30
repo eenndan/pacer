@@ -912,6 +912,19 @@ def test_the_clip_is_silent_small_and_still_on_request():
     with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
         assert "(docs/media/best-lap.mp4)" in f.read(), "README.md no longer links the clip"
     page = _page()
+    # Beside the headline (SHOWCASE-3): below hero.png the clip started at y 1,233 on a 1440 x 900
+    # screen, under the fold, and stacked above it in one column it still showed only part of
+    # itself. So it sits in the hero's .split row, ahead of hero.png. Where that lands is measured
+    # in a browser, not here; this pins the order the layout needs.
+    live = _without_comments(page)
+    hero = live.index('<section class="hero">')
+    split, clip = live.find('<div class="split">', hero), live.find('<figure class="figure clip">')
+    shot, hero_end = live.find('src="media/hero.png"'), live.index("</section>", hero)
+    in_split = hero < split < clip and (live[split:clip].count("<div")
+                                        - live[split:clip].count("</div>")) >= 1
+    assert in_split and clip < min(shot, hero_end), (
+        f"the clip figure (at {clip}) must sit in the hero's .split row (hero {hero}–{hero_end}, "
+        f"first .split after it at {split}) and ahead of media/hero.png (at {shot})")
     first = _first_view(page, _DOCS)
     assert {"media/best-lap.mp4", "media/best-lap.jpg", "media/hero.png"} <= set(first), (
         f"the first view counts {sorted(first)}: the clip, its poster or the hero went uncounted")
