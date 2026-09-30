@@ -24,8 +24,8 @@ pyside6 = ">=6.8"
 pyqtgraph = ">=0.13"
 # Phosphor (+ other) icon fonts as QIcons; works with PySide6 via QtPy. See studio/theme.icon.
 qtawesome = ">=1.3"
-# litgen's own dependency, named here only to hold its major line (see `python` below).
-nanobind = ">=2.7,<3"
+# litgen's own dependency, named here only to hold it on its submodule's line (see `python` below).
+nanobind = ">=2.7,<2.8"
 
 [tool.pixi.tasks]
 # `configure` sets up a MISSING build dir and leaves an existing one alone: `cmake --build` re-runs
@@ -240,9 +240,15 @@ changelog = "python -m studio.dev.changelog"
 [tool.pixi.dependencies]
 cmake = ">=4.0.2,<5"
 scikit-build-core = ">=0.11.4,<0.12"
-# Python and nanobind are held to their MINOR / MAJOR line until a deliberate upgrade PR: a routine
+# Python and nanobind are held to their MINOR line until a deliberate upgrade PR: a routine
 # `pixi update` would otherwise move python 3.13.5 -> 3.14.7 and nanobind 2.7.0 -> 3.1.0 (HEALTH-9,
 # `pixi update --dry-run`, 2026-09-25) under a lock touched only to add a tool.
+# The nanobind that is COMPILED into _pacer.so is the 3rdparty/nanobind submodule (v2.7.0-6):
+# 3rdparty/CMakeLists.txt add_subdirectory(nanobind) provides nanobind_add_module. The pypi
+# `nanobind` above is only litgen's declared dependency (bindings/litgen.cmake computes its cmake
+# dir, but its find_package is commented out). So `<2.8` keeps the two on one line, and a bump
+# moves BOTH in one PR: the submodule (the change that alters _pacer.so) and that pin. A `<3` hold
+# let the 2026-09-30 refresh lock 2.15.0 beside a compiled 2.7.
 python = ">=3.13.5,<3.14"
 catch2 = ">=3.15.0,<4"
 ninja = ">=1.13.2,<2"

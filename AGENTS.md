@@ -46,7 +46,7 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 16 real-footage checks and the 6 `videotoolbox.*` export checks run (CI reports the footage Skipped, and 4 of the 6: it runs the 2 ProRes ones); the crash soak is reported Skipped (see `test-soak`) |
 | `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (CI reports 4 of them Skipped) |
 | `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) |
-| `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak. CI runs it on pushes to main and tags |
+| `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak. CI runs it on pushes to main, tags, manual runs and the weekly schedule |
 | `pixi run test-core` | optional, not a gate: between core-math edits, the 11 registrations that kill all 34 planted core defects (the mutant cover; why: `pyproject.toml`) |
 | `pixi run test-ciworld` | optional, not a gate: before pushing a player or compare change, the registrations that build a real `QMediaPlayer`, in CI's software-decode world |
 | `pixi run golden` | only the core-math equivalence gate (`test_golden_synthetic`: seeded sessions + the synthetic GoPro through the real loader) — ~8 s |
@@ -102,7 +102,8 @@ locally first:
 3. `pixi run lint`.
 4. `pixi run fmt-check` (`pixi run fmt` fixes it).
 5. `pixi run typecheck`.
-6. `pixi run test` — green (on a push to main or a tag it includes the soak).
+6. `pixi run test` — green (on a push to main, a tag, a manual run or the weekly schedule it
+   includes the soak).
 7. `pixi run smoke`.
 
 - **One focused change per PR.** Match the surrounding comment density, naming and idiom; favour
@@ -161,10 +162,11 @@ locally first:
 ## Key dependencies
 
 pixi (conda-forge, osx-arm64) · CMake ≥ 3.28 + Ninja · scikit-build-core · litgen (git) →
-nanobind 2.x (`>=2.7,<3`; the 1.3.2 in `[build-system]` is only the sdist build floor) ·
-gpmf-parser (submodule) · Catch2 · PySide6 + pyqtgraph + qtawesome (Phosphor icons,
-`studio/theme.py`) · Python 3.13 + numpy. `ninja` and `catch2` are **explicit** pixi deps: an
-interrupted `pixi add` once pruned them and broke the build.
+nanobind 2.7 (`>=2.7,<2.8`, held on the line of the `3rdparty/nanobind` submodule, the copy
+compiled into `_pacer.so`: a bump moves both in one PR; the 1.3.2 in the root `[build-system]` is
+only the sdist build floor) · gpmf-parser (submodule) · Catch2 · PySide6 + pyqtgraph + qtawesome
+(Phosphor icons, `studio/theme.py`) · Python 3.13 + numpy. `ninja` and `catch2` are **explicit**
+pixi deps: an interrupted `pixi add` once pruned them and broke the build.
 
 ## gitnexus (optional code-graph index)
 

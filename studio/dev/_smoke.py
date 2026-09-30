@@ -78,11 +78,20 @@ w = StudioWindow(["3rdparty/gpmf-parser/samples/hero6.mp4"])
 # C1: Session.load now runs on a worker QThread (the window stays responsive), so the session isn't
 # ready synchronously after __init__. Pump the event loop until the load settles (bounded deadline,
 # the pattern tests/test_video_view_compare.py uses) before touching w.session.
+#
+# SETTLED means the worker is released too, not just the view built. The QThread's `finished` is
+# emitted from the worker thread after run() returns, so it can reach this thread a pump AFTER
+# `loaded`; stopping at the first pump that built the view left it queued for good (this script
+# never pumps again). That worker, never released, then kept the window's Python side alive through
+# its `finished` connection (a lambda holding the window, in Qt's connection table where gc cannot
+# reach), and with it the Session: the teardown check below failed on CI once in seven runs
+# (2026-09-30, PR #494). `_load_workers` empties exactly when `finished` is handled.
 _deadline = time.time() + 30.0
-while w.view is None and time.time() < _deadline:
+while (w.view is None or w._load_workers) and time.time() < _deadline:
     app.processEvents()
     time.sleep(0.01)
 assert w.view is not None, "SMOKE FAILED — session load did not complete within 30 s"
+assert not w._load_workers, "SMOKE FAILED — the load worker's QThread did not finish within 30 s"
 s = w.session
 print("points:", s.laps.point_count(), "laps:", s.lap_count(),
       "valid:", len(s.valid_lap_ids()), "best:", s.best_lap_id())

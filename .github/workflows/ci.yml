@@ -8,10 +8,24 @@ on:
     tags: ['v*']          # a release tag also fires the packaging smoke below
   pull_request:
   workflow_dispatch:      # manual trigger for the (slow) packaging smoke
+  # WEEKLY, ON MAIN (Mondays 05:23 UTC). A showcase is read months after its last push, and a lock,
+  # a runner image or a download can rot with no commit at all, so the required job below re-runs
+  # in full every week, soak included, and `next-runner` tries the newest macOS image.
+  # - GitHub DISABLES a public repo's schedule after 60 days without a commit (the Actions tab
+  #   re-enables it), so this covers about two months past the last push, not "months later".
+  # - The pixi cache is evicted after 7 days unused, so a run after a quiet week installs the lock
+  #   COLD from the channels: the fresh-clone path.
+  # - A scheduled run's check suite attaches to main's HEAD commit, so a red weekly run (a
+  #   next-runner failure, a soak flake, a rotted lock) shows as a failed check on the public
+  #   repo's latest commit; GitHub notifies whoever last changed the cron line below.
+  schedule:
+    - cron: "23 5 * * 1"
 
-# Cancel an in-progress run when a newer commit is pushed to the same ref.
+# Cancel an in-progress run when a newer commit is pushed to the same ref. The event is part of the
+# group so a weekly run on main and a push to main never cancel each other; a pull request's event
+# is always `pull_request`, so its runs still replace each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -90,10 +104,11 @@ jobs:
 
       - name: Test (ctest via pixi)
         env:
-          # The compare-toggle crash soak (`soak.*`, LABELS soak) runs on pushes to main, tags and
-          # manual runs, inside this same step: started first by its COST, it runs beside the rest
-          # of the suite. On a pull request it is reported Skipped by name, and the deterministic
-          # guard for its root cause runs instead (tests/test_compare_lifecycle.py).
+          # The compare-toggle crash soak (`soak.*`, LABELS soak) runs on pushes to main, tags,
+          # manual runs and the weekly schedule, inside this same step: started first by its
+          # COST, it runs beside the rest of the suite. On a pull request it is reported Skipped
+          # by name, and the deterministic guard for its root cause runs instead
+          # (tests/test_compare_lifecycle.py).
           PACER_SOAK: ${{ github.event_name != 'pull_request' && '1' || '' }}
         run: pixi run test
 
@@ -129,6 +144,63 @@ jobs:
           else
             echo "::warning::demo asset unreachable or not the pinned file — 'pixi run studio -- --demo' will fail until the demo-data release carries it (studio/demo.py _DEMO_URL / _DEMO_SHA256)"
           fi
+
+      - name: Lock freshness (weekly schedule / manual, non-blocking)
+        # The prompt for the next quarterly lock refresh (LONGEVITY-4, 2026-09-30): how many locked
+        # packages have a newer release inside pyproject.toml's ranges, as a notice on the run. A
+        # dry run solves within the manifest, so a package it holds (python <3.14, nanobind <2.8)
+        # never shows here. `--dry-run --no-install` writes neither pixi.lock nor the env. LAST in
+        # the job on purpose: it can never run before the build or the tests, and a solver or
+        # network hiccup here is not a code problem (continue-on-error). A manual run takes it
+        # too, so a change to it can be tried on the runner before a Monday finds it broken.
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: |
+          pixi update --dry-run --no-install --json > "$RUNNER_TEMP/pixi-update.json"
+          pixi run python -c '
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          names = sorted({r["name"] for env in d.get("environment", {}).values()
+                          for rows in env.values() for r in rows})
+          listed = (": " + ", ".join(names)) if names else ""
+          print(f"::notice title=pixi.lock::{len(names)} locked packages have a newer release"
+                f" inside pyproject.toml ranges{listed}")
+          ' "$RUNNER_TEMP/pixi-update.json"
+
+  next-runner:
+    name: next runner early warning (macos-latest; schedule / manual)
+    # The required job above runs on macos-14, and GitHub retires images. This job runs the build,
+    # the smoke and the golden gate on macos-latest, the image that job will have to move to, so a
+    # new Xcode clang or a new image breaks HERE, weekly, before it breaks every pull request. It
+    # never runs on a pull request and is not a required check (the ruleset requires the job
+    # above by its exact name, so that job is never renamed or turned into a matrix), so it can
+    # never block a merge.
+    # No continue-on-error, deliberately: it would make the scheduled run conclude success when
+    # this job fails, and the warning would reach no one. A failure here turns the weekly run red,
+    # a failed check on main's HEAD commit (see `schedule:` above): that IS the warning.
+    # It shares the required job's setup-pixi cache key (same lock), so one of the two may warn
+    # "Unable to reserve cache ... another job may be creating this cache". That is harmless:
+    # both install the same lock, and each builds from an empty build dir.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Set up pixi
+        uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          pixi-version: v0.70.1
+          cache: true
+      - name: Build (cmake --build via pixi)
+        run: pixi run build
+      - name: E2E smoke (full StudioWindow offscreen on the bundled GoPro sample)
+        timeout-minutes: 5
+        run: QT_QPA_PLATFORM=offscreen pixi run smoke
+      - name: Golden equivalence gate (synthetic)
+        run: pixi run golden
 
   package-smoke:
     name: package .app build-only smoke (tag / manual)

@@ -8,13 +8,14 @@ requires-python = ">= 3.11"
 # Pinned by tests/test_version.py.
 version = "0.5.1"
 
+# `pixi install` builds this editable package in an isolated env whose requirements are resolved
+# from PyPI at install time and are NOT in pixi.lock. With the backend below commented out, the
+# setuptools legacy backend is what runs, and it needs setuptools alone: the compiled module comes
+# from the CMake build (`pixi run build`), never from this step. The four requires this list once
+# held pulled 16 unlocked packages on every fresh clone (scikit-build-core, nanobind 3.x, PyPI's
+# litgen with black and srcml-caller; `pixi install -vv`, 2026-09-30), none of them used.
 [build-system]
-requires = [
-    "setuptools",
-    "scikit-build-core >=0.10",
-    "nanobind >=1.3.2",
-    "litgen",
-]
+requires = ["setuptools"]
 # build-backend = "scikit_build_core.build"
 
 [tool.pixi.project]
