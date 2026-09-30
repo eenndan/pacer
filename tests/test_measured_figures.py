@@ -1331,32 +1331,54 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
 # the fragments in changes/ are scanned, because they are what the next release prints.
 _SYNTH = os.path.join(_REPO, "tests", "test_synth_gopro.py")
 _MATRIX = os.path.join(_REPO, "tests", "test_truth_matrix.py")
-_LAP_LINE = {"PUBLISHED_NOISE_FREE_MS": r"mid-straight|on the straight",   # each figure's line
-             "PUBLISHED_AUTO_LINE_MS": r"app's own line"}
+_LAP_FIGURE = {   # each lap figure verify prints: (its line, the noise it was measured at)
+    "PUBLISHED_NOISE_FREE_MS": (r"mid-straight|on the straight", "noise-free"),
+    "PUBLISHED_AUTO_LINE_MS": (r"app's own line", "noise-free"),
+    "PUBLISHED_NOISY_MS": (r"app's own line", "GPS noise")}
 _NOISE_FREE = re.compile(r"noise[- ]free", re.I)
-_NOISE_LEVEL = re.compile(r"noise(?![- ]free)", re.I)       # a noise level named: the twin
+_QUALIFIER = re.compile(r"(noise[- ]free)|noise(?! floor)", re.I)   # a noise level, or its absence
 _MS = re.compile(r"(\d+(?:\.\d+)?) ?ms\b")
+_CLAUSE_END = re.compile(r"[,;]|\d+(?:\.\d+)? ?m?s\b")               # a figure's clause: to here
+_TWIN = re.compile(r"noise(?![- ]free| floor)[^.;]*?(\d+(?:\.\d+)?) ?(m?s)\b", re.I)
 _SPLITS = re.compile(r"\bsplits?\b|\bsector", re.I)
 
 
-def _matrix_row(stat: str, level: float) -> float:
-    """The value test_truth_matrix's ROWS measured for (stat, level), read with `ast`: importing
-    that file generates nine recordings."""
+def _row2() -> dict[tuple[str, float], float]:
+    """Row 2 (sector split) of test_truth_matrix's ROWS, {(stat, GPS noise): measured}, read with
+    `ast`: importing that file generates nine recordings."""
+    rows = {}
     for node in ast.walk(ast.parse(_read(_MATRIX))):
         if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Row":
             try:
-                stat_, level_, measured = (ast.literal_eval(a) for a in node.args[:3])
+                stat, level, measured = (ast.literal_eval(a) for a in node.args[:3])
             except ValueError:
                 continue
-            if (stat_, level_) == (stat, level):
-                return float(measured)
-    raise AssertionError(f"tests/test_truth_matrix.py has no row {stat} @ {level}")
+            if str(stat).startswith("sector."):
+                rows[stat, float(level)] = float(measured)
+    missing = {("sector.interior_sd", lv) for lv in (0.0, 2.0, 4.5)} - rows.keys()
+    assert not missing, f"tests/test_truth_matrix.py has no row {sorted(missing)}"
+    return rows
 
 
-def _timing_sources() -> tuple[dict[str, float], dict[float, float]]:
-    """({constant: ms} verify's two noise-free lap figures, {GPS noise: s} row 2's interior-split σ)."""
-    return ({name: float(_constant(_SYNTH, name)) for name in _LAP_LINE},
-            {level: _matrix_row("sector.interior_sd", level) for level in (0.0, 2.0, 4.5)})
+def _timing_sources() -> tuple[dict[str, float], dict[tuple[str, float], float]]:
+    """({constant: ms} verify's three lap figures, {(stat, GPS noise): s} row 2's split figures)."""
+    return {name: float(_constant(_SYNTH, name)) for name in _LAP_FIGURE}, _row2()
+
+
+def _qualifier(block: str, at: int) -> str | None:
+    """The noise a figure at `at` is quoted at: the nearest "noise-free" or noise level named before
+    it in its block, else the first after it ("0.41 ms. That is … a noise-free trace"). The noise
+    floor is not a level."""
+    quals = [(q.start(), "noise-free" if q.group(1) else "GPS noise") for q in _QUALIFIER.finditer(block)]
+    before = [kind for pos, kind in quals if pos < at]
+    after = [kind for pos, kind in quals if pos >= at]
+    return before[-1] if before else (after[0] if after else None)
+
+
+def _is_row2_at_noise(num: str, unit: str, row2: dict[tuple[str, float], float]) -> bool:
+    """Whether `num unit` is one of row 2's figures measured at a GPS noise, to the digits quoted."""
+    places, scale = len(num.partition(".")[2]), 1e3 if unit == "ms" else 1.0
+    return any(level > 0 and round(v * scale, places) == float(num) for (_, level), v in row2.items())
 
 
 def _timing_pages() -> dict[str, str]:
@@ -1379,32 +1401,45 @@ def _blocks(rel: str, text: str) -> list[str]:
 
 
 def _timing_quote_problems(pages: dict[str, str], lap: dict[str, float],
-                           split: dict[float, float]) -> tuple[set[str], list[str]]:
-    """(pages that quote a figure, problems) over every block of every page:
-      1. verify's published lap figure is said to be noise-free and names its own line;
-      2. any other ms figure quoted noise-free at a named lap line is a misquote;
-      3. a noise-free split figure has a figure at a named GPS noise beside it (its twin);
+                           row2: dict[tuple[str, float], float]) -> tuple[set[str], list[str]]:
+    """(pages that quote a figure, problems) over every block of every page. A figure's clause is
+    the text after it up to the next figure, comma or semicolon; its noise is `_qualifier`'s.
+      1. a lap figure verify prints is quoted at the noise it was measured at, and its clause names
+         its own line (so two figures cannot trade lines);
+      2. any other ms figure quoted at a noise, in a block naming a lap line, is a misquote;
+      3. a noise-free split figure has a twin: after a GPS noise named in its block, with no full
+         stop or semicolon between, a figure that is one of row 2's at a GPS noise;
       4. ACCURACY.md's split sentence is row 2's σ, at the noise of the rows whose σ it compares."""
     quoted = {f"{v:.2f}": name for name, v in lap.items()}
+    lines = [line for line, _ in _LAP_FIGURE.values()]
+    split = {level: v for (stat, level), v in row2.items() if stat == "sector.interior_sd"}
     problems, found = [], set()
     for rel, text in pages.items():
         for b in _blocks(rel, text):
-            free, splits = bool(_NOISE_FREE.search(b)), bool(_SPLITS.search(b))
+            splits = bool(_SPLITS.search(b))
             for m in _MS.finditer(b):
-                name = quoted.get(m.group(1))
+                name, noise = quoted.get(m.group(1)), _qualifier(b, m.start())
                 if name:
                     found.add(rel)
-                    if not free or not re.search(_LAP_LINE[name], b):
-                        problems.append(f"{rel}: {m.group(0)} without "
-                                        f"{'its line' if free else 'noise-free'}: {b[:140]}")
-                elif free and not splits and any(re.search(p, b) for p in _LAP_LINE.values()):
+                    line, measured_at = _LAP_FIGURE[name]
+                    clause = _CLAUSE_END.split(b[m.end():], maxsplit=1)[0]
+                    if noise != measured_at:
+                        problems.append(f"{rel}: {m.group(0)} not quoted {measured_at}: {b[:140]}")
+                    if not re.search(line, clause):
+                        problems.append(f"{rel}: {m.group(0)} without its line in its clause "
+                                        f"({m.group(0)}{clause!r}): {b[:140]}")
+                elif noise and not splits and any(re.search(p, b) for p in lines):
                     problems.append(f"{rel}: {m.group(0)} is not what verify prints "
                                     f"({' / '.join(quoted)} ms): {b[:140]}")
-            if free and splits and _MS.search(b):
+            if _NOISE_FREE.search(b) and splits and _MS.search(b):
                 found.add(rel)
-                if not _NOISE_LEVEL.search(b):
+                twins = [f"{t.group(1)} {t.group(2)}" for t in _TWIN.finditer(b)]
+                if not twins:
                     problems.append(f"{rel}: a noise-free split figure with no figure at a named "
                                     f"GPS noise beside it: {b[:140]}")
+                elif not any(_is_row2_at_noise(*t.split(), row2) for t in twins):
+                    problems.append(f"{rel}: the split's GPS-noise figure {' / '.join(twins)} is not "
+                                    f"one of truth-matrix row 2's at a GPS noise: {b[:140]}")
     acc = pages["docs/ACCURACY.md"]
     m = re.search(r"interior split's σ is under (\d+) ms noise-free, but up to (\d\.\d\d) s at "
                   r"recording C's GPS noise and (\d\.\d\d) s at B's: several times a lap's",
@@ -1440,22 +1475,27 @@ def test_every_noise_free_timing_figure_names_its_line_and_its_noise():
     taken out, so on its own it overstates what a recording gets. Each one a public page quotes
     must carry what bounds it: a lap-time figure the line it was timed at, and a split figure the
     same row at a real recording's GPS noise. Every figure is its source's (above)."""
-    lap, split = _timing_sources()
-    found, problems = _timing_quote_problems(_timing_pages(), lap, split)
+    lap, row2 = _timing_sources()
+    found, problems = _timing_quote_problems(_timing_pages(), lap, row2)
     assert not problems, "a noise-free timing figure misquoted or unqualified:\n  " + "\n  ".join(problems)
     missing = {"README.md", "docs/ACCURACY.md", "docs/index.html"} - found
     assert not missing, f"no timing figure found on {sorted(missing)}: is the scan still reading them?"
     print(f"test_every_noise_free_timing_figure_names_its_line_and_its_noise OK ({len(found)} pages, "
           f"verify {' / '.join(f'{v:.2f}' for v in lap.values())} ms, split σ "
-          f"{split[2.0]:.2f} / {split[4.5]:.2f} s)")
+          f"{row2['sector.interior_sd', 2.0]:.2f} / {row2['sector.interior_sd', 4.5]:.2f} s)")
 
 
 def test_the_timing_figure_guard_fails_on_each_planted_misquote():
-    """The check above fails on each way EVAL-1 and EVAL-3 found, or a re-measure could, a quote
-    going wrong: a figure off by one digit, a line dropped, "noise-free" dropped, a split's σ off, a
-    split's noise-level twin dropped, and a changelog fragment quoting a noise-free split alone."""
-    lap, split = _timing_sources()
+    """The check above fails on each way EVAL-1 and EVAL-3 found, a review found, or a re-measure
+    could, a quote going wrong: a figure off by one digit, a line dropped, "noise-free" dropped, a
+    split's σ off, a split's noise-level twin dropped, a changelog fragment quoting a noise-free split
+    alone; README's two figures trading lines, a twin that names GPS noise with no number or with one
+    row 2 never measured, and verify's noisy figure quoted noise-free or off by a digit. It passes
+    that noisy figure quoted as verify prints it, which it once rejected as "not what verify prints"."""
+    lap, row2 = _timing_sources()
     pages = _timing_pages()
+    noisy = ("README.md", "`0.80 ms` at the app's own line)",
+             "`0.80 ms` at the app's own line; with GPS noise, `16.85 ms` at the app's own line)")
     plants = (("README.md", "0.41 ms", "0.42 ms", "a lap figure one digit off"),
               ("README.md", "at a line mid-straight,", ",", "0.41 ms with its line dropped"),
               ("docs/index.html", "noise-free synthetic", "synthetic", "the card without noise-free"),
@@ -1463,16 +1503,29 @@ def test_the_timing_figure_guard_fails_on_each_planted_misquote():
               ("docs/ACCURACY.md", "but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: "
                "several times a lap's", "exactly", "the split's noise-level twin dropped"),
               ("changes/planted.md", "", "### Fixed\n- Noise-free, a split is now within 9 ms (#1).\n",
-               "a fragment quoting a noise-free split alone"))
-    for rel, old, new, what in plants:
+               "a fragment quoting a noise-free split alone"),
+              ("README.md", "0.41 ms` at a line mid-straight, `0.80 ms",
+               "0.80 ms` at a line mid-straight, `0.41 ms", "README's two figures trading lines"),
+              ("changes/planted.md", "", "### Fixed\n- Noise-free, a split is now within 9 ms; with GPS "
+               "noise it is larger (#1).\n", "a split twin that names GPS noise with no number"),
+              ("changes/planted.md", "", "### Fixed\n- Noise-free, a split is now within 9 ms; with GPS "
+               "noise, 150 ms (#1).\n", "a split twin row 2 never measured"),
+              (noisy[0], noisy[1], noisy[2].replace("; with GPS noise,", ","),
+               "verify's noisy figure quoted noise-free"),
+              (noisy[0], noisy[1], noisy[2].replace("16.85", "16.86"), "verify's noisy figure off"))
+    for rel, old, new, what in (*plants, (*noisy, "")):
         planted = dict(pages)
         text = planted.get(rel, "")
         pattern = r"\s+".join(map(re.escape, old.split()))
         assert not old or re.search(pattern, text), f"plant {what!r}: {old!r} is no longer on {rel}"
         planted[rel] = re.sub(pattern, new.replace("\\", r"\\"), text, count=1) if old else new
-        _, problems = _timing_quote_problems(planted, lap, split)
-        assert problems, f"the timing-figure guard passes {what} ({rel})"
-    print(f"test_the_timing_figure_guard_fails_on_each_planted_misquote OK ({len(plants)} plants)")
+        _, problems = _timing_quote_problems(planted, lap, row2)
+        if what:
+            assert problems, f"the timing-figure guard passes {what} ({rel})"
+        else:
+            assert not problems, f"verify's noisy figure, quoted as it prints it, fails: {problems}"
+    print(f"test_the_timing_figure_guard_fails_on_each_planted_misquote OK ({len(plants)} plants, "
+          f"1 correct quote)")
 
 
 # ─── T16: a table no footage here can re-measure says so where it is published ───────────────────
