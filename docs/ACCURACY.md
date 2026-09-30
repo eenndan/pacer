@@ -113,9 +113,8 @@ are under four milliseconds, as point estimates.
   heat pages into that sheet, and never reads a driver's name off them. Row C is re-measured by the
   `footage.accuracy_mk` check on every `pixi run test-footage`, which fails if any figure above
   moves. The ground truth is never committed — the method is public; the transponder CSV and the
-  timing sheets (other drivers' lap times) stay out of the repo. Recording B's footage is intact
-  but kept off the development machine since September 2026; recording A's no longer exists (a tool
-  overwrote it). Rows A and B are historical measurements, reported as they were recorded in
+  timing sheets (other drivers' lap times) stay out of the repo. Rows A and B cannot be re-run from
+  this repository: they are historical measurements, reported as they were recorded in
   [`studio/docs/`](../studio/docs/gps-accuracy-research.md) at the time.
 - **Verify it yourself, no footage needed.** `pixi run verify` times a synthetic two-chapter GoPro
   recording with known truth through the real loader — noise-free, every lap within 0.41 ms at a

@@ -57,6 +57,7 @@ import os
 import re
 import struct
 import sys
+from html import unescape as _unescape
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1089,6 +1090,101 @@ def test_decisions_says_what_is_true_and_public():
           f"{len(pages)} pages)")
 
 
+# ------------------------------------------------------------------------------------ headline
+# SHOWCASE-2 / FRONT-DOOR-5. The first screen carried no figure, and the share cards quoted a bound
+# (±0.003 s) and a lap total (121) that lean on D24's rows A and B, which cannot be re-run from
+# this repository. The headline is now derived from media_capture.ACCURACY by the rule its comment
+# states, the rows a real-footage check re-measures, and every first-screen surface must carry it.
+_MEDIA_CAPTURE = os.path.join(_REPO, "studio", "dev", "media_capture.py")
+_META = re.compile(r'<meta (?:name|property)="((?:og:|twitter:)?description)" content="([^"]*)">')
+
+
+def _accuracy_rows() -> list[dict]:
+    """media_capture.ACCURACY, read with ast: that module imports Qt."""
+    tree = ast.parse(open(_MEDIA_CAPTURE, encoding="utf-8").read())
+    return next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "ACCURACY" for t in n.targets))
+
+
+def _headline(rows: list[dict]) -> tuple[str, list[str]]:
+    """(the headline, the figures no headline surface may carry), by the rule over ACCURACY: σ of
+    the best and worst rerun row at 3 dp, their summed clean laps, the circuits they span. Barred:
+    each other row's σ at 4 and 3 dp, the retired ±0.003 s bound, and the all-rows lap total."""
+    rerun = [r for r in rows if r["rerun"]]
+    assert rerun, "no ACCURACY row has a rerun check: nothing may headline"
+    lo, hi = (f"{f(r['sigma'] for r in rerun):.3f}" for f in (min, max))
+    n = len({r["circuit"] for r in rerun})
+    head = (f"σ {lo if lo == hi else f'{lo}–{hi}'} s over {sum(r['clean'] for r in rerun)} laps "
+            f"at {_WORDS[n]} circuit{'s' if n > 1 else ''}")
+    barred = [f"{r['sigma']:.{dp}f}" for r in rows if not r["rerun"] for dp in (4, 3)]
+    return head, barred + ["±0.003", str(sum(r["clean"] for r in rows))]
+
+
+def _headline_surfaces(readme: str, page: str) -> dict[str, str]:
+    """Each first-screen surface as flat visible text: README above its first image, the landing
+    hero before its first figure, and the page's three share descriptions."""
+    hero = page[page.index('<section class="hero">'):]
+    surfaces = {"README.md above its first <img": readme[:readme.index("<img")].replace("**", ""),
+                "index.html hero before its first <figure":
+                    _unescape(re.sub(r"<[^>]+>", " ", hero[:hero.index("<figure")]))}
+    surfaces.update((f"index.html {k}", _unescape(v)) for k, v in _META.findall(page))
+    return {k: " ".join(v.split()) for k, v in surfaces.items()}
+
+
+def _headline_problems(rows: list[dict], surfaces: dict[str, str], cmake: str) -> list[str]:
+    head, barred = _headline(rows)
+    problems = [f"{name}: no {head!r}" for name, text in surfaces.items() if head not in text]
+    problems += [f"{name}: carries {b!r}, a figure that leans on the rows nothing re-measures"
+                 for name, text in surfaces.items() for b in barred
+                 if re.search(rf"(?<![\d.]){re.escape(b)}(?![\d])", text)]
+    problems += [f"ACCURACY row {r['name']!r}: rerun {r['rerun']!r} is no add_footage_test"
+                 for r in rows if r["rerun"]
+                 and not re.search(rf"(?m)^add_footage_test\(\S+ {r['rerun']}\)", cmake)]
+    return problems
+
+
+def test_the_headline_is_the_re_runnable_rows():
+    """README's first screen, the landing hero and the meta, og and twitter descriptions carry the
+    headline media_capture.ACCURACY derives, and no figure of a row nothing re-measures. The same
+    helper fails on each planted defect: a re-measure that moved σ with the pages left stale, row A
+    headlining, a surface quoting A's σ or the retired bound, the circuit count dropped, and a
+    rerun that names no registered footage check."""
+    rows, cmake = _accuracy_rows(), open(_CMAKE, encoding="utf-8").read()
+    readme = open(os.path.join(_REPO, "README.md"), encoding="utf-8").read()
+    surfaces = _headline_surfaces(readme, _page())
+    assert len(surfaces) == 5, f"expected 5 headline surfaces, found {sorted(surfaces)}"
+    problems = _headline_problems(rows, surfaces, cmake)
+    assert not problems, ("the first screen does not carry ACCURACY's headline:\n  "
+                          + "\n  ".join(problems))
+
+    def row(name: str, **kw) -> list[dict]:
+        return [{**r, **kw} if r["name"] == name else r for r in rows]
+
+    readme_key = "README.md above its first <img"
+    head, _ = _headline(rows)
+    plants = (  # (what, rows, surface edits, a fragment the problems must name)
+        ("C re-measured to σ 0.0312 s, pages stale", row("Recording C", sigma=0.0312), {},
+         "no 'σ 0.031 s over 14 laps"),
+        ("row A headlining", row("Recording A", rerun="accuracy_mk"), {},
+         "no 'σ 0.025–0.087 s over 62"),
+        ("README quoting A's σ", rows, {readme_key: surfaces[readme_key] + " σ 0.0871 s"},
+         "carries '0.0871'"),
+        ("og quoting the retired bound", rows,
+         {"index.html og:description": surfaces["index.html og:description"] + " ±0.003 s"},
+         "og:description: carries '±0.003'"),
+        ("the circuit count dropped", rows,
+         {"index.html description": surfaces["index.html description"].replace(
+             head, head.replace(" at one circuit", ""))}, "index.html description: no"),
+        ("a rerun with no footage check", row("Recording C", rerun="accuracy_nowhere"), {},
+         "'accuracy_nowhere' is no add_footage_test"))
+    for what, planted_rows, edits, named in plants:
+        assert not edits or any(surfaces[k] != v for k, v in edits.items()), f"{what!r}: a no-op"
+        caught = _headline_problems(planted_rows, {**surfaces, **edits}, cmake)
+        assert any(named in p for p in caught), f"{what!r} not caught as {named!r}: {caught}"
+    print(f"test_the_headline_is_the_re_runnable_rows OK ({head!r} on {len(surfaces)} surfaces; "
+          f"{len(plants)} plants caught)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -1106,4 +1202,5 @@ if __name__ == "__main__":
     test_the_clip_is_silent_small_and_still_on_request()
     test_the_clip_check_fails_on_each_planted_defect()
     test_decisions_says_what_is_true_and_public()
+    test_the_headline_is_the_re_runnable_rows()
     print("ALL OK")

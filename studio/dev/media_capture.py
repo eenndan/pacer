@@ -203,14 +203,23 @@ OVERLAY_WIDTH = 1440
 # by the lock-only mode of `_validate_wallclock.py` against the circuit's Club Speed sheet for the
 # day. `footage.accuracy_mk` (tests/test_validate_wallclock.py) re-runs it and fails if this row,
 # docs/ACCURACY.md's row C or its lock line stops being what the footage and the sheet give.
+#
+# THE HEADLINE (README's first screen, the landing hero, the meta/og/twitter descriptions) comes
+# from the rows with a `rerun` only: the real-footage check that re-measures the row, None where
+# nothing can. It is σ of the best and worst such row at 3 dp, their summed clean laps and how many
+# `circuit`s they span: "σ 0.025 s over 14 laps at one circuit" today. A and B never headline.
+# tests/test_landing_page.py derives it from this list and finds it on every one of those surfaces.
 LAP_S = 68.0                  # a representative kart lap at this circuit, for the σ-as-% claim
 ACCURACY = [
     {"name": "Recording A", "note": "D24 · transponder · noisier GPS",
-     "mean": 0.0030, "sigma": 0.0871, "clean": 48, "aligned": 57, "dop": 2.4},
+     "mean": 0.0030, "sigma": 0.0871, "clean": 48, "aligned": 57, "dop": 2.4,
+     "rerun": None, "circuit": "Daytona Milton Keynes"},
     {"name": "Recording B", "note": "D24 · transponder · cleaner GPS",
-     "mean": 0.0015, "sigma": 0.0527, "clean": 59, "aligned": 65, "dop": 1.4},
+     "mean": 0.0015, "sigma": 0.0527, "clean": 59, "aligned": 65, "dop": 1.4,
+     "rerun": None, "circuit": "Daytona Milton Keynes"},
     {"name": "Recording C", "note": "MK sprint · Club Speed · Sep 2026",
-     "mean": 0.0010, "sigma": 0.0247, "clean": 14, "aligned": 15, "dop": 1.25},
+     "mean": 0.0010, "sigma": 0.0247, "clean": 14, "aligned": 15, "dop": 1.25,
+     "rerun": "accuracy_mk", "circuit": "Daytona Milton Keynes"},
 ]
 ACCURACY_TITLE = "Lap timing, validated against official timing"
 ACCURACY_SUB = ("Pacer lap time − official lap time (transponder log, Club Speed) · out-of-sample · "
