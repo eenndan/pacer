@@ -384,10 +384,10 @@ _VERDICT_IN_DOC = {"within ~25 ms": "WITHIN ~25 MS", "larger": "LARGER",
                    "not estimable": "NOT ESTIMABLE"}
 # The "larger" / "not estimable" branch's sentence, verbatim.
 _PLAIN_NOISE_SENTENCE = (
-    "Every piece is also timed off GPS, and a GPS error at a piece's edge makes a lap read quick "
-    "on one side of it and slow on the other. A minimum keeps the quick side, so the ideal tends "
-    "to read faster than your quickest pieces really were, and the gap larger than the time on "
-    "the table: more so on a noisier recording, by an amount no single recording can measure.")
+    "And every piece is timed off GPS: an error at a piece's edge makes a lap read quick on one "
+    "side of it and slow on the other. A minimum keeps the quick side, so the ideal tends to read "
+    "too fast and the gap too large, more so on a noisier recording, by an amount no single "
+    "recording can measure.")
 
 
 def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
@@ -460,8 +460,8 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
     assert v.ideal.t_gap.value.text() == f"{best - sb.total:.2f} s", v.ideal.t_gap.value.text()
     row3 = next(r for r in tm.ROWS if (r.stat, r.level) == ("ideal.mean_bias", 2.0))
     for plant in (f"{round(1000 * row3.measured)} ms", f"{row3.measured:.3f} s"):
-        planted = IDEAL_SAMPLE_TOOLTIP.replace("tends to read faster",
-                                               f"tends to read {plant} faster")
+        planted = IDEAL_SAMPLE_TOOLTIP.replace("tends to read too fast",
+                                               f"tends to read {plant} too fast")
         assert planted != IDEAL_SAMPLE_TOOLTIP and bias_figures(planted), plant
 
     # (3) EVERY "time you have already demonstrated" IS FOLLOWED BY THE NOISE SENTENCE — in the
@@ -487,17 +487,18 @@ def _give_back_fixture():
     owned by another lap and each donor's neighbours set to one case (donors 1-based, as a row
     prints them):
 
-        row  segment  donor   gain   donor vs subject either side    net     the row says
-        C1   seg 1    lap 1   0.13   0.25 s slower on both            -0.37   all of it back
-        C2   seg 3    lap 3   0.20   level before, 0.06 s slower after  0.14   0.06 s of it back
-        C3   seg 5    lap 4   0.15   level on both                     0.15   nothing
+        row  segment  donor   gain   donor vs subject either side      net    the row says
+        C1   seg 1    lap 1   0.13   0.25 s slower on both             -0.37   all of it back
+        C2   seg 3    lap 3   0.20   level before, 0.06 s slower after   0.14   0.06 s of it back
+        C3   seg 5    lap 4   0.15   level before, 0.03 s slower after   0.12   nothing: under the
+                                                                              0.05 s floor
     """
     from studio.corner_model import SegmentBests
     base = np.array([1.0, 5.0, 3.0, 5.0, 3.0, 5.0, 2.0])
     times = np.stack([base + [0.25, 0.00, 0.25, 0.40, 0.40, 0.40, 0.40],   # lap 0: owns C1
                       base + [0.00, 0.13, 0.00, 0.20, 0.00, 0.15, 0.00],   # lap 1: the subject
                       base + [0.30, 0.40, 0.00, 0.00, 0.06, 0.40, 0.30],   # lap 2: owns C2
-                      base + [0.30, 0.40, 0.30, 0.40, 0.00, 0.00, 0.00]])  # lap 3: owns C3
+                      base + [0.30, 0.40, 0.30, 0.40, 0.00, 0.00, 0.03]])  # lap 3: owns C3
     return SegmentBests(
         labels=["start", "C1", "C1-C2", "C2", "C2-C3", "C3", "C3-finish"], cids=[1, 2, 3],
         lap_ids=[0, 1, 2, 3], times=times, admitted=np.ones(times.shape, bool),
@@ -511,9 +512,9 @@ def test_a_row_names_the_gain_its_donor_gave_back():
     quickest was lap 1" and stopped, while lap 1 had lost 0.50 s on the two straights beside that
     corner: the minimum booked its gain and not its price. The row's tooltip now names it, from
     `SegmentBests.donor_net`: the amount given back when the donor's lead over the segment and its
-    neighbours is under the gain by more than a penny, and "all of it … a line trade-off, not free
-    time" when that lead is gone. A row whose donor kept its gain says nothing new. On the real
-    page, through the section's own refresh."""
+    neighbours is under the gain by the table's own 0.05 s floor or more, and "all of it … not
+    free time" when that lead is gone. A give-back under the floor says nothing, and neither does
+    a row whose donor kept its gain. On the real page, through the section's own refresh."""
     _app()
     from studio.stats_panel import StatsView
     sb = _give_back_fixture()
@@ -528,10 +529,13 @@ def test_a_row_names_the_gain_its_donor_gave_back():
     tips = {t.item(r, 0).text(): t.item(r, 0).toolTip() for r in range(t.rowCount())}
     assert set(tips) == {"C1", "C2", "C3"}, tips
     assert tips["C1"].endswith(
-        " Lap 1 gave all of it back in S/F → C1 and C1 → C2: a line trade-off, not free "
-        "time."), tips["C1"]
+        " Lap 1 gave all of it back in S/F → C1 and C1 → C2: a line trade-off or a misplaced "
+        "GPS edge, not free time."), tips["C1"]
     assert tips["C2"].endswith(" Lap 3 gave 0.06 s of it back in C1 → C2 and C2 → C3."), \
         tips["C2"]
+    # C3's donor gave 0.03 s back: a penny's floor (the plan's) would say so, the table's does not.
+    net, around = sb.donor_net(5, 1)
+    assert around == [4, 6] and 0.01 < 0.15 - net < 0.05, (net, around)
     assert "gave" not in tips["C3"].split("here.", 1)[1], tips["C3"]
     assert tips["C3"].endswith("Ranked 2 of 3 by 0.15 × 2/4 = 0.075."), tips["C3"]
     # Every cell of a row carries the row's tooltip, the give-back included.

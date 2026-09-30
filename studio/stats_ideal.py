@@ -51,10 +51,10 @@ from .widgets import DASH, Tile, WrapLabel
 # trailer and the HTML report print `IdealSample.sentence()` and not this mechanism paragraph, so
 # they do not carry it, and neither does the debrief's frozen `vs ideal` chip.
 IDEAL_NOISE_SENTENCE = (
-    "Every piece is also timed off GPS, and a GPS error at a piece's edge makes a lap read quick "
-    "on one side of it and slow on the other. A minimum keeps the quick side, so the ideal tends "
-    "to read faster than your quickest pieces really were, and the gap larger than the time on "
-    "the table: more so on a noisier recording, by an amount no single recording can measure.")
+    "And every piece is timed off GPS: an error at a piece's edge makes a lap read quick on one "
+    "side of it and slow on the other. A minimum keeps the quick side, so the ideal tends to read "
+    "too fast and the gap too large, more so on a noisier recording, by an amount no single "
+    "recording can measure.")
 IDEAL_SAMPLE_TOOLTIP = (
     "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
     "of how many laps you recorded: measured on the owner's recordings, it falls 0.16–0.74 s "
@@ -93,21 +93,27 @@ IDEAL_TOOLTIP = (
     "Ranked by gain × the share of laps that already matched it — so a smaller gain you make "
     "routinely sits above a bigger one you made once. Both factors are columns, so you can check "
     "the order by eye. Click a row to ring that corner on the map.")
-# A give-back under a penny is the rounding of the 2 dp the row prints, not a trade.
-GIVE_BACK_FLOOR = 0.01
 
 
 def _give_back(sb, row, subject_id) -> str:
     """The row's last clause (ADV-6): what the lap that set this segment's minimum gave back in
     the segments either side (`SegmentBests.donor_net`), or "" when it kept its gain. A row can
-    rank high on a gain its donor paid for next door, and the ranking cannot see that."""
+    rank high on a gain its donor paid for next door, and the ranking cannot see that.
+
+    Said from IDEAL_GAIN_FLOOR up, the table's own line between advice and a rounding difference
+    between two laps. Measured on the four working-set recordings (2026-09-30, PR #484), a penny's
+    floor named 16 of the 30 rows shown, 8 of them for 0.01-0.03 s, which one misplaced GPS edge
+    moves; this floor names 8, the six QA round 4 listed (ADV-6) among them. A give-back is a line
+    trade-off or an edge the GPS put in the wrong place (the same error moves the gain), and
+    either way it is not free time."""
     got = sb.donor_net(row.index, subject_id)
-    if got is None or got[0] >= row.gain - GIVE_BACK_FLOOR:
+    if got is None or row.gain - got[0] < IDEAL_GAIN_FLOOR:
         return ""
     net, around = got
     lap, where = f"Lap {row.donor + 1}", " and ".join(sb.display_label(j) for j in around)
     if net <= 0:
-        return f" {lap} gave all of it back in {where}: a line trade-off, not free time."
+        return (f" {lap} gave all of it back in {where}: a line trade-off or a misplaced GPS "
+                "edge, not free time.")
     return f" {lap} gave {row.gain - net:.2f} s of it back in {where}."
 
 
