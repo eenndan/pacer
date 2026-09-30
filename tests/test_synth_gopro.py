@@ -51,6 +51,11 @@ NOISY_MAX_S = 0.050    # default noise, the app's own line: measured max 16.9 ms
 NOISY_BIAS_S = 0.010   # …and its mean: measured +1.8 ms (+2.6 before X1)
 ENTRY_KMH = 2.0        # lap-table entry speed vs 3.6 × the true speed at the crossing: measured max
                        # 0.893 km/h (0.92 %), default noise, the app's own line
+# The noise-free figure the public pages quote, and `pixi run verify` prints for a visitor to check.
+# EXACT_S leaves it room to drift fivefold unseen, so it is held to its own 0.05 ms.
+PUBLISHED_NOISE_FREE_MS = 0.41
+_QUOTED_ON = ("README.md", "docs/ACCURACY.md", "docs/index.html", "docs/ENGINEERING.md",
+              "tests/README.md")
 
 _LOADED: dict = {}
 
@@ -108,6 +113,10 @@ def test_noise_free_laps_are_exact_to_the_millisecond():
     _, _, d = _residuals(rec, s, mid)
     print(f"  noise-free, mid-straight line: {_describe(d)}")
     assert np.abs(d).max() <= EXACT_S, f"lap times off truth on a noise-free trace: {np.round(d, 5)}"
+    max_ms = float(np.abs(d).max()) * 1e3
+    assert abs(max_ms - PUBLISHED_NOISE_FREE_MS) < 0.05, (
+        f"noise-free max|Δ| is {max_ms:.3f} ms, but {', '.join(_QUOTED_ON)} quote "
+        f"{PUBLISHED_NOISE_FREE_MS} ms — re-measure and update them together")
 
 
 def test_the_auto_fitted_line_is_off_the_braking_point():

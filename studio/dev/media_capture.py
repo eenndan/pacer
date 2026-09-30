@@ -190,8 +190,8 @@ OVERLAY_WIDTH = 1440
 #
 # σ-as-a-percentage deliberately quotes the WORST recording.
 #
-# Rows A and B are D24's, recorded in June 2026 and not re-measurable (the footage has left the
-# machine). Row C is RE-MEASURED: the MK sprint of 18 Sep 2026, locked by the lock-only mode of
+# Rows A and B are D24's, recorded in June 2026 and not re-measurable (A's footage no longer exists,
+# B's is kept off the machine, and neither's per-lap residuals were kept). Row C is RE-MEASURED: the MK sprint of 18 Sep 2026, locked by the lock-only mode of
 # `_validate_wallclock.py` against the circuit's Club Speed sheet for the day. `footage.accuracy_mk`
 # (tests/test_validate_wallclock.py) re-runs it and fails if this row, docs/ACCURACY.md's row C or
 # its lock line stops being what the footage and the sheet give.
@@ -748,9 +748,13 @@ def draw_accuracy(out_dir: str) -> str:
     # --- the claim card is laid out FIRST, because the plot's floor sits on top of it. Its height
     # is whatever the wrapped sentence needs, so the copy can grow without colliding with the axis
     # title (it did, the first time the lap counts were corrected and the caption ran to two lines).
+    # The mean errors are three point estimates, drawn from the rows — never a ± bound: no interval
+    # exists for A or B, whose per-lap residuals were not kept (docs/ACCURACY.md, FRONT-DOOR-3).
     worst = max(ACCURACY, key=lambda r: r["sigma"])
     total = sum(r["clean"] for r in ACCURACY)
-    claim = (f"Unbiased to within ±0.003 s. σ {worst['sigma']:.4f} s on the worst recording is "
+    lo, hi = min(r["mean"] for r in ACCURACY), max(r["mean"] for r in ACCURACY)
+    claim = (f"Mean error {lo:+.4f} to {hi:+.4f} s per recording (point estimates). "
+             f"σ {worst['sigma']:.4f} s on the worst recording is "
              f"{worst['sigma'] / LAP_S * 100.0:.2f} % of a ~{LAP_S:.0f} s kart lap — the noise "
              f"floor of 10 Hz GPS. {total} clean laps, paired lap-for-lap by a per-lap duration "
              f"fingerprint that locks at exactly one alignment.")

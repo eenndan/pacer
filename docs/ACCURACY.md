@@ -1,15 +1,16 @@
 # How accurate is Pacer's lap timing — and how do we know?
 
-![Pacer lap-time error vs official timing: σ 0.025 s, 0.053 s and 0.087 s over 121 clean laps across three recordings, mean error within ±0.003 s](media/accuracy.png)
+![Pacer lap-time error vs official timing: σ 0.025 s, 0.053 s and 0.087 s over 121 clean laps across three recordings, mean error +0.0010 to +0.0030 s per recording](media/accuracy.png)
 
 **Pacer's lap times are validated out-of-sample against official timing** — the kind of hard
 ground truth a race series or a circuit scores a session with: a real transponder log, and a
 circuit's own published timing sheet. Over **121 clean laps** across three recordings, the per-lap
-spread against that ground truth is **σ 0.025 s, 0.053 s and 0.087 s**, and the timing is
-essentially **unbiased** (mean error within **±0.003 s**). On a ~68 s kart lap the worst
-recording's σ is about **0.13%**. That is at the noise floor of 10 Hz GPS: the remaining error is
-per-fix positional noise on the samples that straddle the finish line, and we can show — with data
-— that it is irreducible from the streams a GoPro records.
+spread against that ground truth is **σ 0.025 s, 0.053 s and 0.087 s**, and the mean error is
+**+0.0010 to +0.0030 s** per recording — point estimates, not a bound: no interval is computed for
+A or B, whose per-lap residuals were not kept. On a ~68 s kart lap the worst recording's σ is about
+**0.13%**. That is at the noise floor of 10 Hz GPS: the remaining error is per-fix positional noise
+on the samples that straddle the finish line, and we can show — with data — that it is irreducible
+from the streams a GoPro records.
 
 That is a modest sample, and it is the honest one: 121 is the number of laps actually compared,
 not the span of lap IDs they occupied in a 24-hour transponder log.
@@ -50,19 +51,20 @@ there was 1.15.
 The rows tell the whole story: **recording-level GPS quality sets the floor.** Recording B has
 roughly half the spread of A for one reason only — its GPS was cleaner (median DOP 1.4 vs 2.4, ~1%
 vs ~4% of fixes gated). Nothing in the algorithm distinguishes the two; the hardware's fix quality
-does. C, with the lowest median DOP of the three, has the smallest spread. All three are unbiased
-to well under a hundredth of a second.
+does. C, with the lowest median DOP of the three, has the smallest spread. All three mean errors
+are under four milliseconds, as point estimates.
 
 ## How it's measured
 
 - **True-clock timing.** On a **GPS9 camera — a Hero 11 or a Hero 13**, every GPS sample carries its
   own timestamp on the camera's clock. Pacer times laps on *that* clock, not the video clock. A GoPro
   writes GPS in ~1 s packets, and spreading a packet's fixes evenly places each only to about
-  ±0.05 s (28 ms rms against GPS9), so a lap timed that way can read up to ~0.1 s off, with no
-  average bias; no GPS5 camera has been timed against official timing. The two clocks' rates differ
-  by only ~27 ppm. A lap time is `(finish crossing instant) − (start crossing instant)`, where each
-  instant is interpolated along the chord between the two real GPS samples straddling the
-  start/finish line. GPS9 is narrower than it sounds: GoPro's metadata spec introduces it with the
+  ±0.05 s (28 ms rms against GPS9, on two recordings), so a lap timed that way can read up to
+  ~0.1 s off, with no average bias; no GPS5 camera has been timed against official timing. The two
+  clocks' rates differ by only ~27 ppm. The GPS lag the gyroscope measures (about 0.46 s, below) is
+  taken out of the video, not the clock: no lap time changes with it. A lap time is
+  `(finish crossing instant) − (start crossing instant)`, where each instant is interpolated along
+  the chord between the two real GPS samples straddling the start/finish line. GPS9 is narrower than it sounds: GoPro's metadata spec introduces it with the
   Hero 11, records it *removed* on the Hero 12 ("No GPS receiver in HERO12" — that camera cannot be
   lap-timed at all), and brings it back on the Hero 13. Hero 5 through Hero 10 and the Max emit GPS5
   only, which carries no per-sample clock; those recordings fall back to the video clock and every
@@ -108,6 +110,10 @@ to well under a hundredth of a second.
   but kept off the development machine since September 2026; recording A's no longer exists (a tool
   overwrote it). Rows A and B are historical measurements, reported as they were recorded in
   [`studio/docs/`](../studio/docs/gps-accuracy-research.md) at the time.
+- **Verify it yourself, no footage needed.** `pixi run verify` times a synthetic two-chapter GoPro
+  recording with known truth through the real loader — noise-free, every lap within 0.41 ms — then
+  runs the golden gate. It proves the clock, the chapter seam and the crossing interpolation, not a
+  receiver's noise floor: that is what the rows above measure.
 - **Still to come: Sandown Park**, the other circuit the working footage comes from, run clockwise.
   It is timed on Club Speed too, but its heat pages sit behind a sign-in, so its three recordings
   have no row until the owner fetches their sheets.
@@ -115,8 +121,8 @@ to well under a hundredth of a second.
 ## Three findings that show where the limit actually is
 
 The interesting part of this work is not the headline number — it's that we went looking for ways to
-push it lower and found, with out-of-sample evidence, that there is nothing left to win on timing.
-Three results explain why. All three were measured on the two D24 recordings, A and B.
+push it lower and found, with out-of-sample evidence, that there is nothing left to win on lap
+timing. Three results explain why. All three were measured on the two D24 recordings, A and B.
 
 **1. The residual is the raw GPS positional-noise floor.** The remaining error is dominated by
 per-fix positional noise on the (present, clean) samples that straddle the finish line. We confirmed
@@ -150,6 +156,12 @@ The one method that looked best on recording B was the *worst* on recording A: a
 caught precisely because we refuse to validate on a single recording. The full research write-up,
 with every technique evaluated and rejected on evidence, is in
 [`studio/docs/gps-accuracy-research.md`](../studio/docs/gps-accuracy-research.md).
+
+**Sector splits are read the same way.** Each boundary is interpolated where the lap crosses the
+sector line, not taken at the nearest fix. On a noise-free synthetic recording the interior split's
+spread against truth is under 1 ms, and every sector's mean error is within about 4 ms (row 2 of
+[`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)); no official timing has checked a
+split yet.
 
 ## Why this matters
 

@@ -199,6 +199,11 @@ test-ciworld = { cmd = "ctest --test-dir build/Release --output-on-failure --tim
 # One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
+# The truth test a visitor can run, no footage needed (README "Verify it yourself"): the REAL loader
+# on a synthetic two-chapter GoPro with known truth, then the golden gate. The two files run
+# directly, not under ctest, so their measurements print (ctest hides a pass); a test file run by
+# hand is jailed already (studio/app_support.py), and the variable says so for both.
+verify = { cmd = "python tests/test_synth_gopro.py && python tests/test_golden_synthetic.py", depends-on = ["build"], env = { PACER_APP_SUPPORT_JAIL = "1", QT_QPA_PLATFORM = "offscreen" } }
 # The CI E2E gate as a task: build the whole StudioWindow offscreen on the bundled GoPro sample.
 # NO PYTHONPATH, ON PURPOSE: the gate starts Python exactly as `studio` below does, so it fails
 # whenever the README's command would. Until 2026-09-27 it set PYTHONPATH=bindings/pacer, the one

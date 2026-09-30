@@ -37,7 +37,8 @@ THE FIVE CHECKS
   3. EVERY IMAGE RESOLVES AND THE PAGE DECLARES ITS REAL SIZE. Both `<img>` files and the
      Open Graph card, checked against the PNG's own IHDR.
   4. EVERY LINK RESOLVES. In-page anchors against the document's ids; relative paths and
-     `github.com/eenndan/pacer/blob/main/...` links against the working tree.
+     `github.com/eenndan/pacer/blob/main/...` links against the working tree. And every
+     `pixi run <task>` a public page quotes against pyproject.toml's tasks.
   5. THE PAGE STAYS SELF-CONTAINED. No script, no @import, no external stylesheet, no subresource
      on another host. The page's whole design is that it is one file plus its own images.
 
@@ -304,6 +305,46 @@ def test_links_resolve():
     for want in ("README.md", "CHANGELOG.md", "docs/ACCURACY.md", "docs/FIRST_LAP.md"):
         assert want in linked, f"the landing page does not link {want}"
     print(f"test_links_resolve OK ({len(ids)} ids, {len(linked)} repo docs linked)")
+
+
+# The tools the pixi env ships, which `pixi run` runs as plain commands when no task has the name.
+_ENV_COMMANDS = {"python", "ctest"}
+
+
+def _unknown_pixi_commands(pages: dict[str, str], tasks: set[str]) -> list[str]:
+    """The `pixi run <name>` commands `pages` tell a reader to run whose name is neither a task in
+    pyproject.toml nor a tool of the env. A function of the text."""
+    return sorted({f"{rel}: `pixi run {name}`" for rel, text in pages.items()
+                   for name in re.findall(r"pixi run ([a-z][\w-]*)", text)
+                   if name not in tasks and name not in _ENV_COMMANDS})
+
+
+def test_every_quoted_pixi_command_exists():
+    """The links check's twin for commands: a `pixi run <task>` on a public page names a real task.
+
+    The accuracy pages end on `pixi run verify`, the one command a visitor runs to check the timing
+    against a synthetic recording's known truth. A renamed or dropped task would leave them
+    promising a command that fails before it measures anything."""
+    import tomllib
+    with open(os.path.join(_REPO, "pyproject.toml"), "rb") as f:
+        tasks = set(tomllib.load(f)["tool"]["pixi"]["tasks"])
+    rels = ["README.md", os.path.join("docs", "index.html")] + sorted(
+        os.path.join("docs", n) for n in os.listdir(_DOCS) if n.endswith(".md"))
+    pages = {}
+    for rel in rels:
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            pages[rel] = f.read()
+    unknown = _unknown_pixi_commands(pages, tasks)
+    assert not unknown, "public pages quote commands pyproject.toml has no task for:\n  " + \
+        "\n  ".join(unknown)
+    quoted = {n for t in pages.values() for n in re.findall(r"pixi run ([a-z][\w-]*)", t)}
+    assert "verify" in quoted, "no public page offers `pixi run verify` any more: the check is vacuous"
+    # Both directions, on planted text: a misspelt task fails, a real task and an env tool pass.
+    assert _unknown_pixi_commands({"planted": "run `pixi run verfy`"}, tasks) == [
+        "planted: `pixi run verfy`"]
+    assert not _unknown_pixi_commands({"planted": "`pixi run golden`, `pixi run python -m x`"},
+                                      tasks)
+    print(f"test_every_quoted_pixi_command_exists OK ({len(quoted)} commands on {len(pages)} pages)")
 
 
 # ------------------------------------------------------------------ 5. self-contained
@@ -1008,6 +1049,7 @@ if __name__ == "__main__":
     test_palette_is_derived_from_theme()
     test_images_resolve_and_declare_their_real_size()
     test_links_resolve()
+    test_every_quoted_pixi_command_exists()
     test_page_is_self_contained()
     test_markdown_images_resolve()
     test_public_pages_quote_the_real_suite_size()
