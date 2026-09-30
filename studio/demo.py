@@ -58,6 +58,13 @@ _DEMO_FILENAME = "pacer-synthetic-demo.mp4"
 _DEMO_TIMEOUT_S = 15.0
 
 
+def download_mb() -> int:
+    """The pinned demo's size in whole MB (`_DEMO_BYTES`, rounded): what the welcome's "Get demo"
+    button and the one-time download line say a first click will fetch. Derived, never typed — the
+    sha fixes the bytes, and a re-pin moves this with them."""
+    return round(_DEMO_BYTES / 1e6)
+
+
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). A separate seam from
     library._app_support_dir so a test can divert the demo cache without touching the library.
