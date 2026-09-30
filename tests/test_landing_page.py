@@ -46,7 +46,8 @@ Plus check 6, the one that would have caught the seven-week-broken image: every 
 under docs/ resolves on disk. And check 7, the page's one clip: small, 720p, 20-30 s, still for a
 reader who asked for reduced motion, and with no audio track in the file (with its own control).
 And check 8, reach without hue or mouse: a link inside a sentence is underlined, not told apart by
-hue alone, and anything that scrolls takes keyboard focus.
+hue alone, anything that scrolls takes keyboard focus, and the page is one <main> under a named
+<nav>, with nothing outside a landmark.
 
 Pure stdlib apart from importing `studio.theme` for the token values (Pacer-free, no QApplication,
 no telemetry file), so it needs neither the offscreen env nor the bindings PYTHONPATH.
@@ -1407,8 +1408,9 @@ def test_the_headline_is_the_re_runnable_rows():
 # found were the two things a stylesheet gets wrong that a contrast table cannot show — 15 links in
 # running text told apart by hue alone, and a code block that scrolls sideways where a keyboard
 # could not reach it. These two checks hold both from the markup and the CSS, with no browser.
-_BLOCKS = {"p", "li", "div", "figcaption", "figure", "footer", "header", "section", "td", "th",
-           "dd", "dt", "blockquote", "pre", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"}
+_BLOCKS = {"p", "li", "div", "figcaption", "figure", "footer", "header", "main", "nav", "section",
+           "td", "th", "dd", "dt", "blockquote", "pre", "ul", "ol", "h1", "h2", "h3", "h4", "h5",
+           "h6"}
 _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
          "track", "wbr"}
 _COMPOUND = re.compile(r"([a-z][a-z0-9]*)?((?:\.[\w-]+)*)")
@@ -1617,6 +1619,64 @@ def test_what_scrolls_is_reachable_by_keyboard():
     print(f"test_what_scrolls_is_reachable_by_keyboard OK ({len(pres)} scrolling <pre>)")
 
 
+_LANDMARKS = {"header", "nav", "main", "footer", "aside"}
+
+
+def _landmark_problems(html: str) -> list[str]:
+    """What axe-core's landmark-one-main, region and landmark-unique rules report, read from the
+    markup: exactly one <main>, every child of <body> a landmark, and the bar a named <nav>."""
+    page = _Outline(html)
+    problems = []
+    mains = sum(n[0] == "main" for n in page.nodes)
+    if mains != 1:
+        problems.append(f"{mains} <main> elements: a page has exactly one (landmark-one-main)")
+    body = next((i for i, n in enumerate(page.nodes) if n[0] == "body"), None)
+    for tag, _, attrs, parent in page.nodes:
+        if parent == body and tag not in _LANDMARKS:
+            what = attrs.get("id") or attrs.get("class") or ""
+            problems.append(f"<{tag}> {what!r} sits outside every landmark (region)")
+    bar = [n for n in page.nodes if "nav-links" in n[1]]
+    if not bar:
+        problems.append("the bar's .nav-links is gone — if that was deliberate, update this check")
+    for tag, _, _, _ in bar:
+        if tag != "nav":
+            problems.append(f"the bar's links sit in a <{tag}>, not a <nav> (region)")
+    for tag, _, attrs, _ in page.nodes:
+        if tag == "nav" and not (attrs.get("aria-label") or attrs.get("aria-labelledby") or "").strip():
+            problems.append("a <nav> has no accessible name (landmark-unique)")
+    return problems
+
+
+def test_the_page_has_one_main_and_a_named_nav():
+    """Every section sits in one <main>, and the bar's links are a <nav> with a name.
+
+    THE BUG (qa-w3 EVAL-7): FRONT-DOOR-14's probe counted the landmarks a screen reader jumps
+    between — header 1, footer 1, main 0, nav 0. Everything between the bar and the footer, the
+    whole page, was outside any landmark, and the bar's links were a bare <div>. axe-core rates
+    both "moderate" (landmark-one-main, region), so FRONT-DOOR-14's "serious" scope left them."""
+    html = _page()
+    problems = _landmark_problems(html)
+    assert not problems, "docs/index.html:\n  " + "\n  ".join(problems)
+    page = _Outline(html)
+    navs = [i for i, n in enumerate(page.nodes) if n[0] == "nav"]
+    in_nav = [i for i in page.links if any(a in navs for a in _ancestors(page, i))]
+    assert len(in_nav) >= 3, f"only {len(in_nav)} links in the <nav> — the bar has gone vacuous"
+    plants = {
+        "no <main>": html.replace("<main>", "").replace("</main>", ""),
+        "a second <main>": html.replace('<section id="build">', '</main><main><section id="build">'),
+        "a section after </main>": html.replace("</main>", "").replace(
+            '<section id="build">', '</main>\n<section id="build">'),
+        "the bar a <div> again": re.sub(r"<nav ([^>]*)>(.*?)</nav>", r"<div \1>\2</div>", html,
+                                        flags=re.S),
+        "a nameless <nav>": re.sub(r'(<nav [^>]*?) aria-label="[^"]*"', r"\1", html),
+    }
+    for what, planted in plants.items():
+        assert planted != html, f"{what!r} planted nothing"
+        assert _landmark_problems(planted), f"{what!r} was not caught"
+    print(f"test_the_page_has_one_main_and_a_named_nav OK (1 <main>, {len(navs)} named <nav> "
+          f"holding {len(in_nav)} links; {len(plants)} plants caught)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -1638,4 +1698,5 @@ if __name__ == "__main__":
     test_the_headline_is_the_re_runnable_rows()
     test_links_in_running_text_are_more_than_a_hue()
     test_what_scrolls_is_reachable_by_keyboard()
+    test_the_page_has_one_main_and_a_named_nav()
     print("ALL OK")

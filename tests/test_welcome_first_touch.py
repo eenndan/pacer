@@ -17,6 +17,10 @@ Three findings, all measured on the REAL StudioWindow offscreen:
     said the other.
   * (c) THE BRAND MOMENT WAS A STOCK DOWNLOAD-TRAY GLYPH (`ph.download-simple`) while the app's own
     speed chevron — the mark `studio/assets/pacer.icns` is built from — already existed in the tree.
+    And on a Retina screen the mark that replaced it showed only its top-left quadrant: it was
+    scaled by the device pixel ratio twice, and every check here compared it with itself at DPR 1
+    (QA3-BRANDMARK). So one case renders it at DPR 2 in a child process, where Qt reads
+    QT_SCALE_FACTOR, and holds its edges and its shape to the DPR-1 render.
 
 THE THREE AVAILABILITY STATES ARE THE POINT, so all three are driven here: the env var pointing at
 a real local file (the demo-recording path — it must still say "Open demo" AND work), a cached
@@ -26,7 +30,9 @@ is replaced by a tripwire for the whole file, so no test here can reach the netw
 
 Run: QT_QPA_PLATFORM=offscreen PACER_NO_MEDIA=1 python tests/test_welcome_first_touch.py
 """
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -488,6 +494,67 @@ def test_the_mark_is_the_icons_geometry_not_a_second_copy_of_it():
     print("test_the_mark_is_the_icons_geometry_not_a_second_copy_of_it OK")
 
 
+# The mark at one QT_SCALE_FACTOR, rendered in a child: Qt reads the factor once, when the
+# QApplication is built, so this process (DPR 1) cannot render a Retina mark itself. The child
+# prints the pixmap's ratio, size and alpha plane; nothing else is imported, and it is jailed.
+_MARK_CHILD = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from studio import theme
+pm = theme.brand_mark(int(sys.argv[2]))
+img = pm.toImage().convertToFormat(QImage.Format_ARGB32)
+print("EVIDENCE " + json.dumps({"app_dpr": app.devicePixelRatio(), "dpr": pm.devicePixelRatio(),
+      "w": img.width(), "h": img.height(), "alpha": list(bytes(img.constBits())[3::4])}))
+"""
+
+
+def _mark_alpha_at(scale):
+    """(evidence, alpha plane) of theme.brand_mark(DROP_GLYPH_PX) at QT_SCALE_FACTOR=`scale`."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, QT_SCALE_FACTOR=scale, QT_QPA_PLATFORM="offscreen",
+               PACER_APP_SUPPORT_JAIL="1")
+    r = subprocess.run([sys.executable, "-c", _MARK_CHILD, root, str(DROP_GLYPH_PX)], env=env,
+                       capture_output=True, text=True, timeout=120)
+    line = next((ln for ln in r.stdout.splitlines() if ln.startswith("EVIDENCE ")), None)
+    assert line, f"the mark at QT_SCALE_FACTOR={scale} produced no evidence (rc {r.returncode}):\n" \
+                 f"{r.stderr[-2000:]}"
+    ev = json.loads(line[len("EVIDENCE "):])
+    return ev, np.array(ev.pop("alpha"), np.uint8).reshape(ev["h"], ev["w"])
+
+
+def test_the_mark_is_whole_on_a_retina_screen():
+    """QA3-BRANDMARK. At DPR 2 the mark was drawn at twice its size into its own pixmap, so the
+    welcome showed two chevron stubs cut off at the right and the bottom: 68 and 14 ink pixels on
+    the pixmap's last column and row, where DPR 1 has 6 and 0 (the front chevron's round cap is
+    the one stroke that touches an edge). Held two ways: the edges (only the cap, scaled), and the
+    shape — the DPR-2 render averaged down 2x2 must be the DPR-1 render, which also catches a mark
+    drawn too SMALL, where the edge counts alone would pass."""
+    ev1, a1 = _mark_alpha_at("1")
+    ev2, a2 = _mark_alpha_at("2")
+    # An ignored QT_SCALE_FACTOR would silently compare DPR 1 with itself.
+    assert (ev1["app_dpr"], ev2["app_dpr"]) == (1.0, 2.0), (ev1, ev2)
+    assert ev2["dpr"] == 2.0 and a2.shape == (2 * DROP_GLYPH_PX, 2 * DROP_GLYPH_PX), (ev2, a2.shape)
+    assert a1.shape == (DROP_GLYPH_PX, DROP_GLYPH_PX), a1.shape
+
+    def edges(a):
+        ink = a > 0
+        return int(ink[:, -1].sum()), int(ink[-1, :].sum())
+
+    (r1, b1), (r2, b2) = edges(a1), edges(a2)
+    cap = 2  # device px: the cap's antialiased fringe does not scale exactly with the ratio
+    assert r2 <= 2 * r1 + cap and b2 <= 2 * b1 + cap, (
+        f"the DPR-2 mark runs off its pixmap: right/bottom edge ink {r2}/{b2} px, "
+        f"DPR 1 has {r1}/{b1} (allowed {2 * r1 + cap}/{2 * b1 + cap})")
+    down = a2.astype(float).reshape(DROP_GLYPH_PX, 2, DROP_GLYPH_PX, 2).mean(axis=(1, 3))
+    diff = float(np.abs(down - a1.astype(float)).mean())
+    assert diff < 8.0, f"the DPR-2 mark is not the DPR-1 mark's shape: mean |alpha| diff {diff:.1f}"
+    print(f"test_the_mark_is_whole_on_a_retina_screen OK (edge ink DPR 1 {r1}/{b1}, "
+          f"DPR 2 {r2}/{b2}; shape diff {diff:.1f}/255)")
+
+
 def _run_all():
     test_a_fresh_launch_offers_the_demo_and_says_the_click_downloads_it()
     test_the_env_var_lights_the_button_up_and_the_click_works_end_to_end()
@@ -499,6 +566,7 @@ def _run_all():
     test_the_secondary_button_still_cannot_move_the_row()
     test_the_drop_glyph_is_the_apps_own_mark_and_it_composites()
     test_the_mark_is_the_icons_geometry_not_a_second_copy_of_it()
+    test_the_mark_is_whole_on_a_retina_screen()
     print("ALL WELCOME FIRST-TOUCH TESTS OK")
 
 
