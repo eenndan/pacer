@@ -984,6 +984,8 @@ def write_record(out_dir: str, record: dict) -> str:
     fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".CAPTURED.", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    # mkstemp makes the file owner-only; the record is as public as the images beside it.
+    os.chmod(tmp, os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644)
     os.replace(tmp, path)
     return path
 

@@ -22,10 +22,16 @@ Each site is read the way ITS OWN consumer reads it, not with one canonical pars
 Plus the two release-recipe steps that travel with a bump: the changelog's newest released section
 must BE this version, and every released section must have its compare link at the foot. And what
 the .app would carry: the licence the packaging docs give ffmpeg is the family of the build
-pixi.lock pins, and THIRD_PARTY_NOTICES.md names everything the spec bundles whole.
+pixi.lock pins, and THIRD_PARTY_NOTICES.md names everything the spec bundles whole. And what the
+public pages show: every file in docs/media has a capture record, and a minor bump fails until each
+one is re-captured at it or waived in writing.
 
-Pure stdlib — no Qt, no pacer, no telemetry file. Run:  python tests/test_version.py
+Pure stdlib in this process — no Qt, no pacer, no telemetry file; the one check of the capture
+writer runs `studio.dev.media_capture` as a subprocess. Run:  python tests/test_version.py
 """
+import ast
+import hashlib
+import json
 import os
 import re
 import sys
@@ -709,6 +715,215 @@ def test_the_licence_notices_match_what_the_app_bundles():
                       "not name it"], caught
     print(f"test_the_licence_notices_match_what_the_app_bundles OK (ffmpeg-{version}-{build}, "
           f"{family.upper()}; collect_all {_COLLECT_ALL.findall(spec)}; {len(fonts)} fonts)")
+
+
+# ------------------------------------------------- docs/media and the release it was captured at
+# LEFT-25: the v0.5.0 media went stale and nothing said so until a QA lane looked. Every file in
+# docs/media now has an entry in docs/media/CAPTURED.json, written by studio/dev/media_capture.py as
+# it saves (`_record`); a hand edit or a re-encode must re-record. A MINOR bump turns every entry
+# older than it red until the shot is re-captured or waived: a waiver is a written reason granted
+# at a version, and it lapses at the next minor release, so a stale image is re-decided, never
+# carried. Without a recording only accuracy, og (from hero.png) and debrief re-capture; hero,
+# ideal, trust, map, overlay and the clip need footage, so on a machine without it they are waived.
+_MEDIA = _repo("docs", "media")
+_CAPTURED = "CAPTURED.json"
+_ENTRY_KEYS = {"shot", "version", "commit", "captured", "sha256", "source", "derived", "waiver"}
+_WAIVER_MIN_CHARS = 20
+_COMMIT = re.compile(r"^[0-9a-f]{7,40}(\+dirty)?$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# og.png is ALSO the social preview GitHub serves for the repository, an upload no commit touches.
+_OG_HINT = (" — og.png is also the repository's social preview on GitHub: if its pixels changed, "
+            "re-upload it there (Settings > Social preview)")
+
+
+def _media_capture_shots():
+    """media_capture.SHOTS, read with ast: the module imports Qt and this file imports none."""
+    tree = ast.parse(_read("studio", "dev", "media_capture.py"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "SHOTS"
+                                                for t in node.targets):
+            return set(ast.literal_eval(node.value))
+    raise AssertionError("studio/dev/media_capture.py assigns no SHOTS: this guard's reader rotted")
+
+
+def _minor(version):
+    return tuple(int(x) for x in version.split(".")[:2])
+
+
+def _dump(record):
+    """The record's one canonical text: media_capture.write_record's form."""
+    return json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def _entry_problems(name, entry, data, version, shots):
+    """What is wrong with one file's entry, given the file's bytes and the release's version."""
+    if not isinstance(entry, dict) or set(entry) != _ENTRY_KEYS:
+        got = sorted(entry) if isinstance(entry, dict) else type(entry).__name__
+        return [f"{name}: its entry must hold exactly {sorted(_ENTRY_KEYS)}, not {got}"]
+    problems = []
+    if entry["shot"] not in shots:
+        problems.append(f"{name}: shot {entry['shot']!r} is not one of media_capture's "
+                        f"{sorted(shots)}")
+    if entry["sha256"] != hashlib.sha256(data).hexdigest():
+        problems.append(f"{name}: its bytes no longer match the recorded sha256 — re-capture it "
+                        f"(python -m studio.dev.media_capture --only {entry['shot']}), or record a "
+                        f"derived edit with media_capture._record")
+    if not _SEMVER.match(str(entry["version"])):
+        return problems + [f"{name}: version {entry['version']!r} is not x.y.z"]
+    if not _COMMIT.match(str(entry["commit"])):
+        problems.append(f"{name}: commit {entry['commit']!r} is not a short hash (+dirty)")
+    if not _DATE.match(str(entry["captured"])):
+        problems.append(f"{name}: captured {entry['captured']!r} is not a YYYY-MM-DD date")
+    source = entry["source"]
+    if not isinstance(source, str) or not source or re.search(r"[/\\~]", source):
+        problems.append(f"{name}: source {source!r} must be a label, never a path")
+    derived = entry["derived"]
+    if derived is not None and not (isinstance(derived, str) and derived):
+        problems.append(f"{name}: derived must be null or the name of the file it was cut from")
+    waiver = entry["waiver"]
+    if waiver is not None and not (
+            isinstance(waiver, dict) and set(waiver) == {"reason", "granted_at"}
+            and isinstance(waiver["reason"], str)
+            and len(waiver["reason"].strip()) >= _WAIVER_MIN_CHARS
+            and _SEMVER.match(str(waiver["granted_at"]))):
+        problems.append(f"{name}: a waiver is {{\"reason\": <at least {_WAIVER_MIN_CHARS} "
+                        f"characters>, \"granted_at\": <x.y.z>}}, not {waiver!r}")
+        waiver = None
+    now = ".".join(map(str, _minor(version)))
+    if _minor(entry["version"]) < _minor(version):
+        if waiver is None:
+            problems.append(
+                f"{name}: captured at {entry['version']}, older than {now} — re-capture it "
+                f"(python -m studio.dev.media_capture --only {entry['shot']}) or waive it: "
+                f"\"waiver\": {{\"reason\": \"<why it stays>\", \"granted_at\": \"{version}\"}}")
+        elif _minor(waiver["granted_at"]) < _minor(version):
+            problems.append(
+                f"{name}: captured at {entry['version']} under a waiver granted at "
+                f"{waiver['granted_at']}, which lapsed at {now} — re-capture it or renew the "
+                f"waiver (\"granted_at\": \"{version}\")")
+    return problems
+
+
+def capture_record_problems(media_dir, record_text, version, shots):
+    """Everything wrong between `media_dir`'s files and its CAPTURED.json text, at `version`."""
+    try:
+        record = json.loads(record_text)
+    except ValueError as err:
+        return [f"{_CAPTURED} is not JSON: {err}"]
+    files = record.get("files") if isinstance(record, dict) else None
+    if not isinstance(files, dict):
+        return [f"{_CAPTURED} has no \"files\" mapping"]
+    problems = []
+    if record_text != _dump(record):
+        problems.append(f"{_CAPTURED} is not in its one canonical form (sorted keys, 2-space "
+                        "indent, final newline): write it with media_capture.write_record")
+    on_disk = sorted(n for n in os.listdir(media_dir) if n != _CAPTURED and not n.startswith("."))
+    for name in on_disk:
+        if name not in files:
+            problems.append(f"{name}: no entry in {_CAPTURED} — capture it with "
+                            "studio.dev.media_capture, which records what it writes")
+            continue
+        with open(os.path.join(media_dir, name), "rb") as fh:
+            found = _entry_problems(name, files[name], fh.read(), version, shots)
+        problems += [p + _OG_HINT if name == "og.png" else p for p in found]
+    problems += [f"{name}: {_CAPTURED} records it, but the directory no longer holds it — drop "
+                 "its entry (a renamed or re-encoded file is recorded under its new name)"
+                 for name in sorted(files) if name not in on_disk]
+    return problems
+
+
+def _named(problems):
+    return {p.split(":", 1)[0] for p in problems}
+
+
+def test_published_media_has_a_current_capture_record():
+    version, shots = canonical_version(), _media_capture_shots()
+    record_path = os.path.join(_MEDIA, _CAPTURED)
+    assert os.path.exists(record_path), (
+        "docs/media has no CAPTURED.json: nothing records which release its images show")
+    text = _read("docs", "media", _CAPTURED)
+    problems = capture_record_problems(_MEDIA, text, version, shots)
+    assert not problems, ("docs/media disagrees with its capture record (docs/media/CAPTURED.json):"
+                          "\n  " + "\n  ".join(problems))
+    record = json.loads(text)
+    files = record["files"]
+
+    # Both directions, each planted defect caught by NAME, on files picked from the record so the
+    # plants survive a renamed shot. One byte of a copy flipped (a hand edit or a re-encode), and a
+    # file the record does not know (a new shot, saved by hand).
+    import tempfile
+    a, b, c = sorted(files)[:3]
+    small = min(files, key=lambda n: os.path.getsize(os.path.join(_MEDIA, n)))
+    with tempfile.TemporaryDirectory(prefix="pacer-captured-") as tmp:
+        with open(os.path.join(_MEDIA, small), "rb") as fh:
+            data = bytearray(fh.read())
+        data[len(data) // 2] ^= 0x01
+        with open(os.path.join(tmp, small), "wb") as fh:
+            fh.write(data)
+        caught = capture_record_problems(tmp, _dump({"files": {small: files[small]}}), version,
+                                         shots)
+        assert len(caught) == 1 and caught[0].startswith(
+            f"{small}: its bytes no longer match the recorded sha256"), caught
+        caught = capture_record_problems(tmp, _dump({"files": {}}), version, shots)
+        assert caught == [f"{small}: no entry in CAPTURED.json — capture it with "
+                          "studio.dev.media_capture, which records what it writes"], caught
+    # An entry whose file is gone: a shot re-encoded under a new name, its old entry left behind.
+    ghost = dict(record, files=dict(files, **{"ghost.jpg": files[small]}))
+    caught = capture_record_problems(_MEDIA, _dump(ghost), version, shots)
+    assert _named(caught) == {"ghost.jpg"} and "no longer holds it" in caught[0], caught
+    # An unwaived entry a minor behind: recorded at 0.4.2 while the release is 0.5.1.
+    old = dict(record, files=dict(files, **{a: dict(files[a], version="0.4.2", waiver=None)}))
+    caught = capture_record_problems(_MEDIA, _dump(old), "0.5.1", shots)
+    assert _named(caught) == {a} and f"{a}: captured at 0.4.2, older than 0.5" in caught[0], caught
+    # A waiver too short to be a reason, and a source that is a path, not a label.
+    bad = dict(record, files=dict(files, **{
+        b: dict(files[b], version="0.4.2", waiver={"reason": "later", "granted_at": "0.5.1"}),
+        c: dict(files[c], source="/Users/someone/Desktop/x.MP4")}))
+    caught = capture_record_problems(_MEDIA, _dump(bad), "0.5.1", shots)
+    assert _named(caught) == {b, c}, caught
+    assert any(p.startswith(f"{b}: a waiver is") for p in caught), caught
+    assert any(p.startswith(f"{c}: source") for p in caught), caught
+    # The next minor release: EVERY entry goes red, waived or not, until each shot is re-captured
+    # or its waiver renewed — and og.png's failure says to re-upload the social preview.
+    major, minor = _minor(version)
+    bump = f"{major}.{minor + 1}.0"
+    caught = capture_record_problems(_MEDIA, text, bump, shots)
+    assert _named(caught) == set(files), (bump, sorted(set(files) - _named(caught)))
+    assert all("social preview" in p for p in caught if p.startswith("og.png:")), caught
+    waived = sorted(n for n, e in files.items() if e["waiver"])
+    print(f"test_published_media_has_a_current_capture_record OK ({len(files)} files at "
+          f"{version}; waived: {', '.join(waived) or 'none'}; all {len(files)} red at {bump})")
+
+
+def test_media_capture_records_what_it_writes():
+    """The writer and this check agree: `media_capture --only accuracy` (drawn from numbers, so no
+    recording is needed) into a scratch --out writes a CAPTURED.json entry this check accepts, with
+    the sha of the bytes it wrote and the version and commit it ran on. Run as a subprocess, so
+    this file stays Qt-free; git runs in the repository, never in --out."""
+    import subprocess
+    import tempfile
+    version, shots = canonical_version(), _media_capture_shots()
+    with tempfile.TemporaryDirectory(prefix="pacer-captured-") as tmp:
+        out = os.path.join(tmp, "out")
+        run = subprocess.run([sys.executable, "-m", "studio.dev.media_capture",
+                              "--only", "accuracy", "--out", out,
+                              "--work", os.path.join(tmp, "work")],
+                             cwd=_REPO, capture_output=True, text=True, timeout=300)
+        assert run.returncode == 0, f"media_capture failed:\n{run.stdout}\n{run.stderr}"
+        written = sorted(os.listdir(out))
+        assert written == ["CAPTURED.json", "accuracy.png"], (
+            f"media_capture --only accuracy wrote {written}: every file it saves must be recorded")
+        text = _read_abs(out, _CAPTURED)
+        problems = capture_record_problems(out, text, version, shots)
+        assert not problems, problems
+        entry = json.loads(text)["files"]["accuracy.png"]
+    head = subprocess.run(["git", "-C", _REPO, "rev-parse", "--short", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    assert entry["version"] == version and entry["commit"].split("+")[0] == head, entry
+    assert (entry["shot"], entry["source"], entry["derived"], entry["waiver"]) == (
+        "accuracy", "numbers in code", None, None), entry
+    print(f"test_media_capture_records_what_it_writes OK ({entry['commit']}, "
+          f"{entry['sha256'][:12]}…)")
 
 
 # ------------------------------------------------------------------------------------- runner
