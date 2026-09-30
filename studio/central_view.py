@@ -936,12 +936,12 @@ class CentralView(QWidget):
         # measured rate difference is ~27 ppm — see data_quality.MEDIA_CLOCK_LAP_ERROR).
         self.quality_banner.setToolTip(
             "Timing accuracy is degraded for this recording. On a GoPro without GPS9 "
-            "(Hero 5 through Hero 10, and the Max) the lap times come from the video clock, which "
-            "places each GPS fix only to about ±0.05 s, so a lap can read "
+            "(Hero 5 through Hero 10, the Fusion and the original Max) the lap times come from "
+            "the video clock, which places each GPS fix only to about ±0.05 s, so a lap can read "
             f"{data_quality.MEDIA_CLOCK_LAP_ERROR} off; and when many GPS fixes are rejected the "
             "positions are less accurate. The lap times are still shown (and de-emphasized), but "
-            "treat them as estimates — they are most reliable on a GPS9 camera, which means a "
-            "Hero 11 or a Hero 13.")
+            "treat them as estimates — they are most reliable on a GPS9 camera, which by GoPro's "
+            "spec means a Hero 11, Hero 13, MAX2 or MISSION 1 (tested on a Hero 13).")
         # Both tiers live in ONE strip container (a single bottom hairline; the two lines stack
         # tight), so the map sees a compact strip whether one or both concerns apply.
         self._trust_strip = QWidget()

@@ -44,7 +44,10 @@ THE FOUR CHECKS
      the clause immediately following a "GPS9 camera" claim must actually carry GPS9.
   4. THE DOCUMENTS SPELL THE DERIVED SET, AND THE HERO 12. Each public surface that makes the
      claim must name exactly the models check 1 derived, and must state the Hero 12's missing
-     receiver — the one fact a reader holding that camera needs before buying anything.
+     receiver — the one fact a reader holding that camera needs before buying anything. Its
+     sentences about GPS must also name every GPS5-only model (ranges count), so the list of
+     cameras that fall back to the video clock cannot quietly drop one, as it once dropped the
+     Fusion.
 
 Plus check 5, the anti-vacuity one: the scan must still FIND a claim in every file known to make
 one (so a reword cannot silently empty the guard), and the guard must still FAIL the original
@@ -91,6 +94,7 @@ _MODELS: dict[str, tuple[bool, bool]] = {
 
 _GPS9_MODELS = [m for m, (_, g9) in _MODELS.items() if g9]
 _NO_GPS_MODELS = [m for m, (g5, g9) in _MODELS.items() if not g5 and not g9]
+_GPS5_ONLY_MODELS = [m for m, (g5, g9) in _MODELS.items() if g5 and not g9]
 
 # --- the public surfaces that make (or must not make) the claim ------------------------------
 # Every file a reader can see without opening the source: the three markdown documents, the
@@ -342,12 +346,22 @@ def test_public_docs_name_the_derived_models_and_the_hero_12():
                 if model not in plain:
                     missing.append(f"{rel}: makes a GPS9 claim but never mentions {model}, which "
                                    f"has no GPS receiver at all and cannot be lap-timed")
+        # And who falls back: every GPS5-only model, ranges expanded, in the sentences about GPS.
+        # The list once read "every earlier GPS-equipped model — Hero 5 through Hero 10, and the
+        # Max" while the spec also gives the Fusion GPS5. Read from GPS sentences only, so a
+        # stray "max" elsewhere on the page cannot stand in for the camera.
+        named = set().union(*(_models_in(s) for s in _sentences(plain)
+                              if re.search(r"GPS[59]|true[- ]clock", s, re.I)))
+        for model in _GPS5_ONLY_MODELS:
+            if model not in named:
+                missing.append(f"{rel}: says which cameras time on GPS9 but never names {model}, "
+                               f"which the spec gives GPS5 only (it falls back to the video clock)")
     assert not missing, "\n".join(f"  - {m}" for m in missing)
     assert checked == len(_CLAIM_FILES), (
         f"only {checked} of {len(_CLAIM_FILES)} public surfaces still make a camera-support "
         f"claim the guard can see — a reword has emptied the check")
     print(f"test_public_docs_name_the_derived_models_and_the_hero_12 OK "
-          f"(models {_GPS9_MODELS}; no-GPS {_NO_GPS_MODELS})")
+          f"(models {_GPS9_MODELS}; no-GPS {_NO_GPS_MODELS}; GPS5 only {_GPS5_ONLY_MODELS})")
 
 
 # ------------------------------------------------------------------ 5. the guard is not vacuous
