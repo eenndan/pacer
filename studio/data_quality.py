@@ -60,12 +60,14 @@ NO_GPS_TRACE = "no_gps_trace"            # no usable GPS trace survived — no t
 # jitters by about one 10 Hz period. On the nine bundled GPS5 clips (10-34 s each, HERO5 to
 # HERO8, Fusion and MAX; `studio/dev/probes/p20_packet_spread.py`) a fix sits 14-33 ms rms from
 # its place on the receiver's fixed-rate grid, 87 ms at worst, and the error spans up to 138 ms
-# peak to peak (hero7.mp4) — the most the clock can cost a lap inside that clip. That is the GPS9
-# recordings' scale (studio/media_clock.py: 28 ms rms, up to 73 ms a fix), so the bound is the
-# pages' figure, twice media_clock's worst fix: tests/test_measured_figures.py holds it there, and
-# tests/test_load_pipeline.py re-measures every clip against it. Still "up to": no lap from a GPS5
-# camera has been timed against official timing, and a session runs far longer than these clips.
-# One constant carries it so the surfaces cannot drift apart again.
+# peak to peak (hero7.mp4) — the most the clock can cost a lap inside that clip, since a lap time
+# is two placements apart. That is the GPS9 recordings' scale (studio/media_clock.py: 28 ms rms,
+# up to 73 ms a fix; up to 152 ms a lap on the working set), so the bound is the pages' figure,
+# twice media_clock's worst fix: tests/test_measured_figures.py holds it there, and
+# tests/test_load_pipeline.py re-measures every clip against it. Still "up to ~": no lap from a
+# GPS5 camera has been timed against official timing, a session runs far longer than these clips,
+# and twice this stream's own worst fix would be 0.17 s. One constant carries it so the surfaces
+# cannot drift apart again.
 MEDIA_CLOCK_LAP_ERROR = "up to ~0.15 s"
 
 # A dropped-fix fraction at/above this reads as "GPS quality low" in the UI (a few rejected fixes

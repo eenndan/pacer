@@ -10,7 +10,9 @@ point_count>0 / valid_laps==0. This runs the real pipeline via Session.load on t
 
 SCOPE: hero6 is a GPS5-era clip -> media-clock fallback (_used_gps9_trueclock == False), so this
 pins the MEDIA-CLOCK path only. The GPS9 true-clock run-anchoring stays gated by the manual D24 dump
--- this COMPLEMENTS, it does NOT replace, that gate. Run:
+-- this COMPLEMENTS, it does NOT replace, that gate. The two tests at the foot read all nine bundled
+GPS5-era clips: their wall clock, and the bound the media-clock warning quotes against what that
+clock measurably costs a lap on each (data_quality.MEDIA_CLOCK_LAP_ERROR). Run:
     QT_QPA_PLATFORM=offscreen python tests/test_load_pipeline.py
 Regenerate the baseline (only after an INTENTIONAL, reviewed load-pipeline change):
     python tests/test_load_pipeline.py --write-baseline
