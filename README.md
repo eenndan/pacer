@@ -208,10 +208,10 @@ pixi run studio -- /path/to/GX010062.MP4    # your own recording, after the clon
 
 Cloned without `--recursive`? `git submodule update --init --recursive` fetches `3rdparty/`.
 
-The environment `pixi install` puts on disk is about 2 GB (2.2 GiB, over half of it Qt, measured
-30 September 2026). The first `pixi run studio` builds the core first, about 15 s, and the first
-launch after that spends about as long again loading Qt for the first time, and says so; later
-launches start in a second or two.
+The environment `pixi install` puts on disk is about 2 GB (measured 3 October 2026, when clone to
+the demo's debrief took 54 s from an empty cache on the development Mac and a 420 Mbit/s line). The
+first `pixi run studio` builds the core and loads Qt for the first time, and says so; later launches
+start in a second or two.
 
 A path on the command line loads just that chapter of a recording; `--full` or
 `File ▸ Load full recording` chains the rest. The **[first-lap walkthrough](docs/FIRST_LAP.md)** is
