@@ -1397,7 +1397,7 @@ def test_the_naive_clock_guard_fails_on_each_planted_misquote():
     plants = (("README.md", "~0.15 s off", "~0.1 s off", "the nominal ±0.05 s doubled (the old figure)"),
               (_NOTES, "~0.15 s off", "~0.2 s off", "the lap figure rounded up"),
               ("docs/ACCURACY.md", "28 ms rms", "27 ms rms", "the per-fix rms one digit off"),
-              ("docs/ENGINEERING.md", "(73 ms at worst)", "(70 ms at worst)", "the per-fix worst case off"),
+              ("docs/ENGINEERING.md", "(73 ms at worst,", "(70 ms at worst,", "the per-fix worst case off"),
               ("docs/index.html", "can read up to ~0.15 s off", "can read further off",
                "the landing dropping the figure"),
               ("changes/planted.md", "", "### Fixed\n- A lap on the packet clock can read up to ~0.1 s off "
