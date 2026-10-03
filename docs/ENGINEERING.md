@@ -28,8 +28,9 @@ A GoPro stores GPS in payloads of about one second, most holding ten fixes. The 
 say when a payload starts and ends, not when each fix inside it was taken. A tool that spreads the
 fixes evenly across the payload runs about 0.1 % off the true rate until a payload of nine or
 eleven resets it, so each fix lands within about ±0.05 s of its true time (73 ms at worst) and a
-lap, the difference of two, can read up to ~0.15 s off, with no average bias. The upstream project Pacer was forked from fitted a per-sample
-clock to those payloads instead, and a port of that fit lived in this repo for a while.
+lap, the difference of two, can read up to ~0.15 s off, with no average bias. The upstream project
+Pacer was forked from fitted a per-sample clock to those payloads instead, and a port of that fit
+lived in this repo for a while.
 
 On a camera that writes it, the GPS9 stream stamps every fix with the receiver's own time, so there
 is nothing to fit. Against the transponder log of a 24-hour race, the fitted clock matched GPS9 on
