@@ -937,9 +937,10 @@ class CentralView(QWidget):
         self.quality_banner.setToolTip(
             "Timing accuracy is degraded for this recording. On a GoPro without GPS9 "
             "(Hero 5 through Hero 10, the Fusion and the original Max) the lap times come from "
-            "the video clock, which places each GPS fix only to about ±0.05 s, so a lap can read "
-            f"{data_quality.MEDIA_CLOCK_LAP_ERROR} off; and when many GPS fixes are rejected the "
-            "positions are less accurate. The lap times are still shown (and de-emphasized), but "
+            "the video clock, which places each GPS fix only to about ±0.05 s, a few further, so a "
+            f"lap can read {data_quality.MEDIA_CLOCK_LAP_ERROR} off; and when many GPS fixes are "
+            "rejected the positions are less accurate. The lap times are still shown (and "
+            "de-emphasized), but "
             "treat them as estimates — they are most reliable on a GPS9 camera, which by GoPro's "
             "spec means a Hero 11, Hero 13, MAX2 or MISSION 1 (tested on a Hero 13).")
         # Both tiers live in ONE strip container (a single bottom hairline; the two lines stack
