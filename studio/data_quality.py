@@ -7,10 +7,10 @@ SECOND, orthogonal quality axis to the timing-TRUST surface (Session.timing_veri
     whether a "best" measured against the line is meaningful.
   * timing QUALITY — is the per-sample TIMING itself accurate, and were the GPS fixes good? This
     is what `TimingQuality` carries. A media-clock recording produces fully-segmented laps off a
-    trusted line, yet each lap can read up to ~0.1 s off (older GoPro without GPS9: the
-    media-clock fallback places a fix only to about ±0.05 s); and a trace whose DOP/fix gate
-    rejected a large fraction of fixes is geometrically degraded. Both render the
-    lap times with the same de-emphasis the trust surface already provides.
+    trusted line, yet each lap can read up to ~0.15 s off (MEDIA_CLOCK_LAP_ERROR; an older GoPro
+    without GPS9, whose media-clock fallback places a fix only to about ±0.05 s, a few further);
+    and a trace whose DOP/fix gate rejected a large fraction of fixes is geometrically degraded.
+    Both render the lap times with the same de-emphasis the trust surface already provides.
 
 The load pipeline (studio/load.py + studio/_signal.py) computes the raw signals; this module just
 classifies them into UI-facing concerns. The views render them through the shared banner/theme infra.
@@ -48,15 +48,25 @@ NO_GPS_TRACE = "no_gps_trace"            # no usable GPS trace survived — no t
 # says otherwise: the video and GPS clocks' RATES agree to ~27 ppm (studio/load.py's head comment;
 # 1.8 ms on a 68 s lap, where a tenth of a percent would be 68 ms). What the fallback really costs
 # is PLACEMENT.
-# A GoPro writes GPS in ~1 s packets and the fallback spreads a packet's fixes evenly across it,
-# so each fix is placed only to about ±0.05 s (28 ms rms on the GPS9 recordings,
-# studio/media_clock.py), and a lap time is the difference of two such instants.
+# A GoPro writes GPS in ~1 s packets and the fallback spreads a packet's fixes evenly across it
+# (`ingest`'s naive times, which `load` keeps when it finds no GPS9 run), so each fix is placed only
+# approximately, and a lap time is the difference of two such instants.
 #
-# A HEDGED BOUND, NOT A MEASUREMENT. No lap from a GPS5 camera has ever been timed against official
-# timing; a simulation of the packet spread puts a 68 s lap's error at -32/+68 ms (10 Hz) and
-# -43/+12 ms (18 Hz, GPS5's rate), 5th/95th percentile. So the sentences say "up to", and one
-# constant carries it so the surfaces cannot drift apart again.
-MEDIA_CLOCK_LAP_ERROR = "up to ~0.1 s"
+# IT IS THE PAGES' CLOCK, MEASURED ON THE CAMERAS THAT GET THIS LINE (qa-w3c EVAL-1). This read
+# "up to ~0.1 s", twice the nominal ±0.05 s a fix, propped on a simulation that was never in the
+# repo, while the pages said ~0.15 s for the same clock on GPS9 data: GPS5 was taken for a
+# different clock. It is the same clock on a different stream, and the faster stream does not
+# shrink it: a full GPS5 payload holds 17-20 fixes at ~18.2 Hz, so where a payload starts still
+# jitters by about one 10 Hz period. On the nine bundled GPS5 clips (10-34 s each, HERO5 to
+# HERO8, Fusion and MAX; `studio/dev/probes/p20_packet_spread.py`) a fix sits 14-33 ms rms from
+# its place on the receiver's fixed-rate grid, 87 ms at worst, and the error spans up to 138 ms
+# peak to peak (hero7.mp4) — the most the clock can cost a lap inside that clip. That is the GPS9
+# recordings' scale (studio/media_clock.py: 28 ms rms, up to 73 ms a fix), so the bound is the
+# pages' figure, twice media_clock's worst fix: tests/test_measured_figures.py holds it there, and
+# tests/test_load_pipeline.py re-measures every clip against it. Still "up to": no lap from a GPS5
+# camera has been timed against official timing, and a session runs far longer than these clips.
+# One constant carries it so the surfaces cannot drift apart again.
+MEDIA_CLOCK_LAP_ERROR = "up to ~0.15 s"
 
 # A dropped-fix fraction at/above this reads as "GPS quality low" in the UI (a few rejected fixes
 # on an otherwise clean trace is normal and not worth a banner). 8% ≈ a fix every ~12 s on a 10 Hz
@@ -199,8 +209,8 @@ class TimingQuality:
             return (f"Timing estimated (video clock) and GPS quality low — "
                     f"{self.dropped_pct()}% of fixes rejected; times may be less accurate.")
         if media:
-            # 62 characters: the banner is setWordWrap(False), and this may not outgrow the 66 it
-            # had ("Timing estimated from …" + the bound would be 72).
+            # 63 characters: the banner is setWordWrap(False), and this may not outgrow the 66 it
+            # had ("Timing estimated from …" + the bound would be 73).
             return f"Timing from the video clock — a lap may read {MEDIA_CLOCK_LAP_ERROR} off."
         if low:
             return (f"GPS quality low — {self.dropped_pct()}% of fixes rejected; "
@@ -222,9 +232,9 @@ class TimingQuality:
                     "before the car moved. The bar under the scrubber shows which it was.")
         if media:
             base = ("Lap times are estimated from the video clock (an older GoPro without GPS9), "
-                    "which places each GPS fix only to about ±0.05 s, so a lap can read "
-                    f"{MEDIA_CLOCK_LAP_ERROR} off. Not measured on such a camera — treat the "
-                    "absolute times as approximate.")
+                    "which places each GPS fix only to about ±0.05 s, a few further, so a lap can "
+                    f"read {MEDIA_CLOCK_LAP_ERROR} off. Not yet checked against official timing on "
+                    "such a camera — treat the absolute times as approximate.")
             if low:
                 base += (f" GPS quality is also low: {self.dropped_pct()}% of fixes were rejected, "
                          "so the positions are less accurate too.")
@@ -754,8 +764,8 @@ MARK_MEANING = {
     # The app's media-clock warning in ASCII: the one bound, hedged, and no "runs fast" (the
     # clocks' rates agree to ~27 ppm; see MEDIA_CLOCK_LAP_ERROR).
     MARK_ESTIMATED: ("estimated: timing came from the video clock (an older camera with no GPS9), "
-                     f"so a lap may read {MEDIA_CLOCK_LAP_ERROR} off; not measured on such a "
-                     "camera"),
+                     f"so a lap may read {MEDIA_CLOCK_LAP_ERROR} off; not yet checked against "
+                     "official timing on such a camera"),
     MARK_BREAK_IN_SERIES: ("break in series: the recording is not continuous, so times either "
                            "side of the break are not on the same footing"),
     MARK_LOW_RELIABILITY: ("low reliability: a GPS dropout inside this lap, or a recording whose "

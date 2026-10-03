@@ -1429,7 +1429,8 @@ class Session:
         """The recording's data-quality verdict (the timing-ACCURACY axis — see
         studio/data_quality.py). Orthogonal to ``timing_verified`` (the start-line TRUST surface):
         a media-clock recording can be fully Verified yet still have degraded timing accuracy
-        (a lap may read up to ~0.1 s off on an older GPS5 camera's media-clock fallback), and a
+        (a lap may read up to ~0.15 s off on an older GPS5 camera's media-clock fallback —
+        ``data_quality.MEDIA_CLOCK_LAP_ERROR``, measured on the bundled GPS5 clips), and a
         low-DOP trace renders authoritative laps with no in-app cue today.
         ``timing_quality.degraded`` is what the data-quality banner + the lap-table de-emphasis
         read; a normal GPS9, clean-fix recording reports not-degraded so the UI is unchanged.

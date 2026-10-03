@@ -50,7 +50,8 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
   6. A CONSTANT DERIVED FROM A PUBLISHED FIGURE IS ITS ARITHMETIC. `library.PB_PRECISION_S`, the
      floor under which a PB reads "level", is 2√2 × docs/ACCURACY.md row C's σ, read off the row; and
      the pages' "a lap timed that way can read up to ~0.15 s off" is twice the per-fix worst case
-     `media_clock.py` measured on the packet-spread clock, read out of its docstring.
+     `media_clock.py` measured on the packet-spread clock, read out of its docstring — and so is
+     `data_quality.MEDIA_CLOCK_LAP_ERROR`, the bound the app shows a GPS5 camera timed on that clock.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -90,10 +91,11 @@ def _read(path: str) -> str:
     return open(path, encoding="utf-8").read()
 
 
-def _constant(path: str, name: str):
+def _constant(path: str, name: str, text: str | None = None):
     """A module-level literal, read out of the file with `ast` — the value the code applies, with
-    no import (so no numpy, no Qt) and no copy typed into this test."""
-    for node in ast.parse(_read(path)).body:
+    no import (so no numpy, no Qt) and no copy typed into this test. `text` stands in for the
+    file's content: a negative control's planted copy."""
+    for node in ast.parse(_read(path) if text is None else text).body:
         if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets):
             return ast.literal_eval(node.value)
     raise AssertionError(f"{os.path.relpath(path, _REPO)} no longer defines {name}")
@@ -1336,7 +1338,17 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
 # a page `_timing_pages` scans, and in module-notes.md, is twice media_clock's worst case TO THE
 # HUNDREDTH (0.146 s read at one decimal is the "~0.1" this replaced), and any per-fix rms or worst
 # case quoted in its block is media_clock's own. A page that stops quoting it fails by name.
+#
+# THE APP STATES THE SAME BOUND (QA3C-CLOCK-BOUND, qa-w3c EVAL-1). A camera with no GPS9 run — every
+# GPS5-era model — is timed on this very clock (`load.py` keeps `ingest`'s packet-spread times), and
+# the map banner, the lap-table tooltip, the DATA TRUST card, the report and laps.csv's [e] key all
+# quote `data_quality.MEDIA_CLOCK_LAP_ERROR` for it. It still said "up to ~0.1 s" after the pages
+# moved, on the premise that GPS5 was a different clock; it is the same clock on a different stream,
+# and the bundled GPS5 clips spread up to 138 ms peak to peak (tests/test_load_pipeline.py measures
+# them). So the constant is held to the same arithmetic as the pages.
 _MEDIA_CLOCK = os.path.join(_REPO, "studio", "media_clock.py")
+_DATA_QUALITY = os.path.join(_REPO, "studio", "data_quality.py")
+_APP_BOUND = re.compile(r"up to ~(\d+(?:\.\d+)?) s")
 _NOTES = "studio/docs/module-notes.md"
 _NAIVE_SOURCE = re.compile(r"\((\d+) ms rms, up to (\d+) ms, on both recordings\)")
 _NAIVE_LAP = re.compile(r"read up to ~(\d+(?:\.\d+)?) s off")
@@ -1355,10 +1367,21 @@ def _naive_pages() -> dict[str, str]:
     return {**_timing_pages(), _NOTES: _read(os.path.join(_REPO, _NOTES))}
 
 
-def _naive_clock_problems(pages: dict[str, str], rms: float, worst: float) -> tuple[set[str], list[str]]:
+def _app_bound(text: str | None = None) -> str:
+    """data_quality.MEDIA_CLOCK_LAP_ERROR, the bound every media-clock surface in the app quotes."""
+    return _constant(_DATA_QUALITY, "MEDIA_CLOCK_LAP_ERROR", text)
+
+
+def _naive_clock_problems(pages: dict[str, str], rms: float, worst: float,
+                          app_bound: str) -> tuple[set[str], list[str]]:
     """(pages that quote the naive-clock lap figure, problems)."""
     lap = round(2 * worst / 1e3, 2)
     found, problems = set(), []
+    app = _APP_BOUND.fullmatch(app_bound)
+    if app is None or float(app.group(1)) != lap:
+        problems.append(f"studio/data_quality.py: MEDIA_CLOCK_LAP_ERROR = {app_bound!r} is what the app "
+                        f"tells a GPS5 camera timed on this clock, but twice media_clock's {worst:g} ms at "
+                        f"worst is ~{lap:.2f} s, the pages' figure ('up to ~X s', one clock, one bound)")
     for rel, text in pages.items():
         for block in _blocks(rel, text):
             quotes = list(_NAIVE_LAP.finditer(block))
@@ -1382,17 +1405,19 @@ def _naive_clock_problems(pages: dict[str, str], rms: float, worst: float) -> tu
 
 def test_the_naive_clock_lap_figure_is_twice_media_clock_s_worst_fix():
     rms, worst = _naive_source(_read(_MEDIA_CLOCK))
-    found, problems = _naive_clock_problems(_naive_pages(), rms, worst)
+    found, problems = _naive_clock_problems(_naive_pages(), rms, worst, _app_bound())
     assert not problems, "the naive-clock lap figure:\n  " + "\n  ".join(problems)
     print(f"test_the_naive_clock_lap_figure_is_twice_media_clock_s_worst_fix OK (2 × {worst:g} ms → "
-          f"~{round(2 * worst / 1e3, 2):.2f} s, {rms:g} ms rms, on {len(found)} pages)")
+          f"~{round(2 * worst / 1e3, 2):.2f} s, {rms:g} ms rms, on {len(found)} pages and the app's "
+          f"{_app_bound()!r})")
 
 
 def test_the_naive_clock_guard_fails_on_each_planted_misquote():
     """The check above fails on the figure this package replaced, on each per-fix figure beside it
-    going wrong, on a page dropping the sentence, on a changelog fragment quoting the old bound, and
-    on media_clock re-measured to a worst case that moves the lap figure while the pages stand."""
-    source = _read(_MEDIA_CLOCK)
+    going wrong, on a page dropping the sentence, on a changelog fragment quoting the old bound, on
+    media_clock re-measured to a worst case that moves the lap figure while the pages stand, and on
+    the app's own bound left at the old figure while the pages moved (qa-w3c EVAL-1)."""
+    sources = {_MEDIA_CLOCK: _read(_MEDIA_CLOCK), _DATA_QUALITY: _read(_DATA_QUALITY)}
     pages = _naive_pages()
     plants = (("README.md", "~0.15 s off", "~0.1 s off", "the nominal ±0.05 s doubled (the old figure)"),
               (_NOTES, "~0.15 s off", "~0.2 s off", "the lap figure rounded up"),
@@ -1402,17 +1427,17 @@ def test_the_naive_clock_guard_fails_on_each_planted_misquote():
                "the landing dropping the figure"),
               ("changes/planted.md", "", "### Fixed\n- A lap on the packet clock can read up to ~0.1 s off "
                "(#1).\n", "a changelog fragment quoting the old bound"),
-              (_MEDIA_CLOCK, "up to 73 ms,", "up to 60 ms,", "media_clock re-measured, the pages left behind"))
+              (_MEDIA_CLOCK, "up to 73 ms,", "up to 60 ms,", "media_clock re-measured, the pages left behind"),
+              (_DATA_QUALITY, 'MEDIA_CLOCK_LAP_ERROR = "up to ~0.15 s"', 'MEDIA_CLOCK_LAP_ERROR = "up to ~0.1 s"',
+               "the app's bound left at the figure the pages retired"))
     for rel, old, new, what in plants:
-        planted, src = dict(pages), source
-        text = src if rel == _MEDIA_CLOCK else planted.get(rel, "")
+        planted, src = dict(pages), dict(sources)
+        text = src[rel] if rel in src else planted.get(rel, "")
         assert not old or old in text, f"plant {what!r}: {old!r} is no longer in {rel}"
         text = text.replace(old, new, 1) if old else new
-        if rel == _MEDIA_CLOCK:
-            src = text
-        else:
-            planted[rel] = text
-        _, problems = _naive_clock_problems(planted, *_naive_source(src))
+        (src if rel in src else planted)[rel] = text
+        _, problems = _naive_clock_problems(planted, *_naive_source(src[_MEDIA_CLOCK]),
+                                            _app_bound(src[_DATA_QUALITY]))
         assert problems, f"the naive-clock guard passes {what} ({rel})"
     print(f"test_the_naive_clock_guard_fails_on_each_planted_misquote OK ({len(plants)} plants)")
 

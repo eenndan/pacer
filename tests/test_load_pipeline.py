@@ -18,7 +18,10 @@ Regenerate the baseline (only after an INTENTIONAL, reviewed load-pipeline chang
 import datetime
 import json
 import os
+import re
 import sys
+
+import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,6 +194,46 @@ def test_a_gps5_era_clip_is_rejected_by_spacing_and_still_publishes_a_wall_clock
           f"clock={stats.clock_hhmm(w0)}-{stats.clock_hhmm(w1)}")
 
 
+def test_the_media_clock_bound_covers_every_gps5_era_clip():
+    """THE BOUND IS MEASURED ON THE CAMERAS IT IS SHOWN FOR (QA3C-CLOCK-BOUND, qa-w3c EVAL-1).
+
+    Every clip above loads on the media-clock fallback, and the app tells it "a lap may read
+    <data_quality.MEDIA_CLOCK_LAP_ERROR> off". Its times are `ingest`'s packet-spread clock: each
+    ~1 s payload's 17-20 fixes spread evenly over the payload's media span. A receiver delivers its
+    fixes on a fixed-rate grid, so with none dropped the true time of fix k is t0 + k/r, and the
+    residual of that line fitted to the clock's times is how far the clock put each fix from it
+    (`studio/dev/probes/p20_packet_spread.py` checks the method against each payload's GPSU stamp,
+    and against a GPS9 chapter's own per-fix stamps). A lap time is the difference of two instants,
+    so the most the clock can cost a lap inside a clip is that residual's peak to peak.
+
+    The bound said "up to ~0.1 s" while hero7.mp4 spreads 138 ms: it must cover every clip, and
+    data_quality's rationale must quote the widest spread as measured here."""
+    if not _have_fixture():
+        return
+    bound = re.fullmatch(r"up to ~(\d+(?:\.\d+)?) s", data_quality.MEDIA_CLOCK_LAP_ERROR)
+    assert bound, f"the bound is no longer 'up to ~X s': {data_quality.MEDIA_CLOCK_LAP_ERROR!r}"
+    bound_ms = float(bound.group(1)) * 1e3
+    spread = {}
+    for name in GPS5_ERA_CLIPS:
+        samples, _spans, naive, _durations = ingest.read_gpmf([os.path.join(SAMPLES_DIR, name)])
+        assert not load._used_gps9_trueclock(samples), f"{name}: expected the media-clock fallback"
+        t = np.asarray(naive, float)
+        k = np.arange(len(t), dtype=float)
+        spread[name] = float(np.ptp(t - np.polyval(np.polyfit(k, t, 1), k))) * 1e3
+    widest = max(spread, key=spread.__getitem__)
+    table = ", ".join(f"{n} {ms:.0f} ms" for n, ms in spread.items())
+    assert spread[widest] <= bound_ms, (
+        f"the packet-spread clock moves a fix {spread[widest]:.0f} ms peak to peak on {widest}, so a "
+        f"lap there can read further off than the {data_quality.MEDIA_CLOCK_LAP_ERROR!r} the app "
+        f"shows it ({table})")
+    source = open(data_quality.__file__, encoding="utf-8").read()
+    quoted = re.search(r"(\d+) ms peak to peak \((\S+\.mp4)", " ".join(source.replace("#", " ").split()))
+    assert quoted and (int(quoted.group(1)), quoted.group(2)) == (round(spread[widest]), widest), (
+        f"data_quality.py's rationale quotes {quoted.group(0) if quoted else 'no spread'!r}; measured "
+        f"{spread[widest]:.0f} ms peak to peak ({widest}): {table}")
+    print(f"ok media-clock bound: {data_quality.MEDIA_CLOCK_LAP_ERROR!r} covers {table}")
+
+
 def _write_baseline():
     with open(BASELINE, "w") as f:
         json.dump(_load_fingerprint(), f, sort_keys=True, indent=1)
@@ -205,6 +248,7 @@ if __name__ == "__main__":
     for t in (test_load_pipeline_is_deterministic,
               test_load_pipeline_media_clock_invariants,
               test_load_pipeline_matches_baseline,
-              test_a_gps5_era_clip_is_rejected_by_spacing_and_still_publishes_a_wall_clock):
+              test_a_gps5_era_clip_is_rejected_by_spacing_and_still_publishes_a_wall_clock,
+              test_the_media_clock_bound_covers_every_gps5_era_clip):
         t()
     print("\nALL LOAD-PIPELINE TESTS PASSED")

@@ -156,6 +156,16 @@ estimable from a recording.
     pixi run python -m studio.dev.probes.p19_truth_real synthetic
     pixi run python -m studio.dev.probes.p19_truth_real real
 
+`p20_packet_spread` measures the clock a GPS5-era camera is timed on, `ingest`'s packet-spread times,
+on the nine bundled GPS5 clips: each fix's residual off the receiver's fixed-rate grid, checked
+against each payload's GPSU stamp, and with `--control` against a GPS9 chapter's own per-fix stamps.
+It needs no footage but the control, which it only reads, and writes nothing but stdout. Its numbers
+are the rationale above `data_quality.MEDIA_CLOCK_LAP_ERROR`, the bound the app shows those cameras,
+and `tests/test_load_pipeline.py` re-measures the nine clips against that bound on every run.
+
+    pixi run python -m studio.dev.probes.p20_packet_spread
+    pixi run python -m studio.dev.probes.p20_packet_spread --control <a GPS9 chapter .MP4>
+
 `vt_gop` asks whether a 2 s keyframe interval would buy VideoToolbox's H.264 exports quality per
 byte. It renders one 20 s window through the real `Renderer` into a lossless intermediate, encodes
 that with `_video_codec_args`' exact VideoToolbox argv at four intervals, and scores each encode's
