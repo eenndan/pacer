@@ -394,10 +394,11 @@ def test_the_cli_demo_flag_still_tries_the_network():
           "(--demo fetched once; demo_available + the welcome in 3 states: 0 fetches, 0 urlopen)")
 
 
-# Where the fetch goes, per PACER_DEMO_URL: unset (the pinned release asset), a mirror by name, a
-# mirror on this machine with a port (the port is not the host), and a file: mirror, which names no
-# host at all.
+# Where the fetch goes, per PACER_DEMO_URL: unset (the pinned release asset), a mirror by name, one
+# that carries credentials (they are not the host, and a tooltip must not show them), a mirror on
+# this machine with a port, and a file: mirror, which names no host at all.
 _MIRRORS = (None, "https://mirror.example.test/demo/pacer-demo.mp4",
+            "https://dev:s3cret@mirror.example.test/pacer-demo.mp4",
             "http://localhost:8765/pacer-demo.mp4", "file:///srv/mirror/pacer-demo.mp4")
 
 
@@ -434,6 +435,8 @@ def test_the_download_tooltip_names_the_host_the_fetch_really_goes_to():
                 f"the fetch goes to {asked[0]!r} but the tooltip says: {tip!r}")
             if where != "GitHub":
                 assert "GitHub" not in tip, (mirror, tip)
+            secret = urlsplit(asked[0]).password
+            assert not secret or secret not in tip, f"a mirror's password reached the tooltip: {tip!r}"
             said.append(where)
     finally:
         if saved is None:

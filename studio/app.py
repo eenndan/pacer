@@ -178,6 +178,10 @@ DEMO_UNAVAILABLE_MESSAGE = (
     "use Open recording… below, or drop a GoPro .mp4 on this window.")
 # The demo button's tooltip, per label: what the click does, and — for the one that reaches the
 # network, the app's only fetch — where it goes and how much it brings back, before it does.
+DEMO_OPEN_TIP = ("Opens Pacer's synthetic demo session, already on this computer — generated, "
+                 "not filmed.")
+
+
 def demo_get_tip() -> str:
     """The "Get demo" tooltip. WHERE is the host of the URL the fetch will use
     (`demo.download_url()`), read when the welcome is built: "GitHub" for the pinned release
@@ -189,10 +193,6 @@ def demo_get_tip() -> str:
     where = "GitHub" if host == "github.com" else (host or url)
     return (f"Downloads Pacer's synthetic demo session from {where}, once "
             f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
-
-
-DEMO_OPEN_TIP =("Opens Pacer's synthetic demo session, already on this computer — generated, "
-                 "not filmed.")
 
 
 _log = logging.getLogger("studio.app")
