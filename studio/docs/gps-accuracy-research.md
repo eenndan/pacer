@@ -63,6 +63,13 @@ exact millisecond at the line" — the headline trick of phone-GPS lap timers li
 us nothing, because that trick only matters at 1 Hz GPS where the chord is a full second.** At 10 Hz
 we are already past it.
 
+> **Erratum (2026-10-03, #506): the chord is ~0.1 s, not ~0.05 s.** At 10 Hz the two
+> fixes straddling the line are ~0.1 s apart (§1b's "clean ~0.1 s chords"). ~0.05 s is half a
+> chord: the farthest a crossing can sit from a real fix. At the line's median speed, measured in
+> #506 at 17.7–20.5 m/s on three working-set recordings (20.5 on the D24 circuit), that is about
+> 1 m, not 0.5 m. Only the size was wrong. The finding rests on the correlations above, which do
+> not depend on it, and still stands. T6 below repeats the slip and points here.
+
 **1b. The GPS-dropout laps have their gaps MID-LAP, not at S/F.** This is the decisive finding. For
 **every** dropout lap on **both** recordings, the largest interior gap sits deep inside the lap and
 both S/F crossings sit on clean ~0.1 s chords (`diag_gap_irrelevant.py`):
@@ -183,7 +190,9 @@ our "already done / already unbiased" status.
 
 ### T6. Higher-order spline interpolation of the crossing
 - **Critical verdict — pointless given §1a.** The crossing chord is ~0.05 s; linear is already exact
-  to well under the noise floor. A spline changes the crossing instant by <1 ms.
+  to well under the noise floor. A spline changes the crossing instant by <1 ms. *Erratum
+  (2026-10-03, #506): the chord is ~0.1 s, and ~0.05 s is half of it — see the erratum under §1a.
+  The verdict stands.*
 
 ### T7. Multi-lap geometry fusion / cross-lap borrow
 - **Critical verdict — already done** for the map gap-fill (`gapfill.py`), and (per §1b) it cannot

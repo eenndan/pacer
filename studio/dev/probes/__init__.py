@@ -35,13 +35,42 @@ chapter seams against each other. Its verdict is `studio/docs/corner-match-0060-
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause
 
-`p8_corner_anchor` is the only one here that measures a SHIPPED change rather than a channel the
-app does not have: it drives `corners.session_geometry` and the real `_spatial_matches` on both D24
-recordings, prints the fitted receiver drift, plants a translation and a wider racing line on the
-same lap to show the fit separates them, and scores the result against a CURVATURE witness that a
-rigid translation cannot move. Its numbers are the evidence for M7.
+`p6_coast_places` prints the Stats page's COASTING table (`Session.coast_report`) for each
+recording and asks what its order is worth, over exactly the rows the page ranks
+(`Session._coast_rows`): the verdict on odd/even laps and on each half, a shuffled negative control,
+a planted positive control, and the normalized projection beside the warp. Its verdict is the
+comment above `stats.COAST_LEAD_ALPHA`: the order is claimed only where the laps separate it.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_coast_places
+
+`p7_overdrive` builds the overdriving detector F4 proposed (per corner, entry speed against the time
+in the corner, under a within-lap permutation null) and asks what it is worth: shuffled and planted
+controls, a covariate cross-check, replication across halves and recordings, and how often each
+entry and exit speed was read at a boundary matched on track. Its verdict is
+`studio/docs/refused-2026-09.md` §6.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p7_overdrive
+
+`p8_corner_anchor` measures a SHIPPED change rather than a channel the app does not have: it
+drives `corners.session_geometry` and the real `_spatial_matches` on both D24 recordings, prints
+the fitted receiver drift, plants a translation and a wider racing line on the same lap to show the
+fit separates them, and scores the result against a CURVATURE witness that a rigid translation
+cannot move. Its numbers are the evidence for M7.
 
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor
+
+`p9_interpolated_consumers` measures, through the real accessors on both D24 recordings, what
+#331's rule (a corner time needs both its edges matched on track) does to the consumers that still
+counted every cell: coaching, the ideal lap, braking, coasting and the per-lap CSV. Its numbers are
+the evidence for #339, which applied the rule to coaching, the ideal lap and braking and gave the
+CSV a disclosure column; the note under `CornerModel.lap_corner_resolved` gives the measurement
+that kept coasting counting every cell.
+
+    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p9_interpolated_consumers
+
+`p6_coast_places`, `p7_overdrive` and `p9_interpolated_consumers` skip a recording whose footage is
+missing. D24 and Sandown 09-05 are no longer on the development machine, so p6 and p7 run on two
+of their five recordings, and p9, which reads only D24, on none.
 
 `p10_heat_to_heat` loads the three present Sandown recordings and puts every pair through the real
 `focus.verdict`, with the whole lap as the window. It checks once against the owner's own
@@ -113,6 +142,19 @@ and the four working-set recordings, jailed and tripwired. Its verdict is
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel synthetic --controls
     PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel real
+
+`p19_truth_real` asks what would prove the four headline numbers wrong. Its `synthetic` mode holds
+a per-recording estimate of the ideal lap's noise bias (the negative covariance of adjacent
+segments) to the true bias on `tests/test_truth_matrix.py`'s synthetic grid, with a PASS/FAIL
+line. Its `real` mode loads the four working-set recordings in date order, jailed and tripwired,
+and checks the ideal lap, the coaching lead's time lost, the time on the brakes and the focus
+verdict against a seeded bootstrap over the laps and an odd/even holdout. It takes only its mode
+and folder names, and writes nothing but stdout and its jail. Its verdicts are written in
+`studio/docs/falsification-2026-09.md`: the estimator fails its synthetic check, so the bias is not
+estimable from a recording.
+
+    pixi run python -m studio.dev.probes.p19_truth_real synthetic
+    pixi run python -m studio.dev.probes.p19_truth_real real
 
 `vt_gop` asks whether a 2 s keyframe interval would buy VideoToolbox's H.264 exports quality per
 byte. It renders one 20 s window through the real `Renderer` into a lossless intermediate, encodes
