@@ -57,7 +57,7 @@ not an accuracy statistic — the **margin** is, and
 [docs/ACCURACY.md](docs/ACCURACY.md#how-its-measured) tabulates it.
 
 Why it works: a GoPro writes GPS in packets, so a lap timed by spreading a packet's fixes evenly
-can read up to ~0.1 s off, with no average bias. GPS9 stamps every fix, and Pacer times on that
+can read up to ~0.15 s off, with no average bias. GPS9 stamps every fix, and Pacer times on that
 **true clock**. The error budget, and the sensor fusion, Kalman/RTS smoothing, Doppler-aided
 positioning and map-matching **rejected on evidence**, are in
 **[docs/ACCURACY.md](docs/ACCURACY.md)**.

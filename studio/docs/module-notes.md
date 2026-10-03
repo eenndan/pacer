@@ -82,7 +82,7 @@ The **load pipeline** behind `Session.load` (one of the four modules that may na
   axis spread each GPMF payload's MEDIA span across `i/n`: a 1.001 s payload of 10 fixes runs ~0.1%
   off the true rate (~9.990 Hz) until a payload of 11 resets it, so the naive axis **mis-placed
   fixes by about ±0.05 s** (28 ms rms, up to 73 ms; `media_clock.py`) and a lap could read up to
-  ~0.1 s off, with no average bias. The GPS9 stream carries the true GPS fix time
+  ~0.15 s off, with no average bias. The GPS9 stream carries the true GPS fix time
   (`timestamp_ms`) — a clean 10.000 Hz **wall clock** (the transponder's clock). We take only its
   per-sample SPACING and re-anchor each contiguous run to that run's media time, so video sync /
   chapter offsets are unchanged while inter-sample spacing is the real wall-clock spacing.
