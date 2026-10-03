@@ -264,10 +264,10 @@ PRIVACY_PARAGRAPHS = [
     # the card on a scrollbar. The words added below land on this paragraph's last line, so the card
     # is exactly as tall as it was; longer wordings ("the app's warnings log …") measured one line
     # over. What the log holds is said where it is needed: the crash dialog names it.
-    # THE DEMO'S CACHE (demo/, the 11 MB clip "Get demo" downloads) is named the same way and for
-    # the same reason, and it had even less room: this paragraph's last line was full, so "the
-    # whole index", "your preferences" and "log file" gave back the characters "the demo (demo/)"
-    # costs. Measured: 7 lines before and after, the body still 667 px.
+    # THE DEMO'S CACHE (demo/, the clip "Get demo" downloads: the pinned `demo._DEMO_BYTES`) is
+    # named the same way and for the same reason, and it had even less room: this paragraph's last
+    # line was full, so "the whole index", "your preferences" and "log file" gave back the
+    # characters "the demo (demo/)" costs. Measured: 7 lines before and after, the body still 667 px.
     "\"Clear library\" to wipe the index. That covers a recording's own data only — to remove "
     "everything, including preferences, saved tracks, the demo (demo/) and the log "
     "(logs/pacer.log), quit Pacer and delete the folder \"~/Library/Application Support/pacer\". "

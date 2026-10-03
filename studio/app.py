@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from PySide6.QtCore import (
     QEvent,
@@ -177,9 +178,20 @@ DEMO_UNAVAILABLE_MESSAGE = (
     "use Open recording… below, or drop a GoPro .mp4 on this window.")
 # The demo button's tooltip, per label: what the click does, and — for the one that reaches the
 # network, the app's only fetch — where it goes and how much it brings back, before it does.
-DEMO_GET_TIP = (f"Downloads Pacer's synthetic demo session from GitHub, once "
-                f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
-DEMO_OPEN_TIP = ("Opens Pacer's synthetic demo session, already on this computer — generated, "
+def demo_get_tip() -> str:
+    """The "Get demo" tooltip. WHERE is the host of the URL the fetch will use
+    (`demo.download_url()`), read when the welcome is built: "GitHub" for the pinned release
+    asset, else the dev-only PACER_DEMO_URL mirror's host (its whole URL when it names none, as a
+    file: mirror does). It said "from GitHub" while a mirror sent the fetch elsewhere. The host,
+    never the netloc: a mirror URL's user:password@ must not reach a tooltip."""
+    url = demo.download_url()
+    host = urlsplit(url).hostname
+    where = "GitHub" if host == "github.com" else (host or url)
+    return (f"Downloads Pacer's synthetic demo session from {where}, once "
+            f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
+
+
+DEMO_OPEN_TIP =("Opens Pacer's synthetic demo session, already on this computer — generated, "
                  "not filmed.")
 
 
@@ -774,7 +786,7 @@ class StudioWindow(QMainWindow):
         cached = demo.demo_available()
         view = WelcomeView(self._open_file, self._open_demo, error, error_path=error_path,
                            parent=self, demo_label=DEMO_LABEL if cached else DEMO_GET_LABEL)
-        view.demo_btn.setToolTip(DEMO_OPEN_TIP if cached else DEMO_GET_TIP)
+        view.demo_btn.setToolTip(DEMO_OPEN_TIP if cached else demo_get_tip())
         self.setCentralWidget(view)
         if getattr(self, "_full_action", None) is not None:
             # Through the gate, not a bare setEnabled: a welcome screen reached by a FAILED reload

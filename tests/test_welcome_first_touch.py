@@ -26,7 +26,8 @@ THE THREE AVAILABILITY STATES ARE THE POINT, so all three are driven here: the e
 a real local file (the demo-recording path — it must still say "Open demo" AND work), a cached
 clip, and nothing resolvable (the shipping default: "Get demo · N MB"). The seams are diverted so
 the answer is the same on a machine that happens to have a cached clip, and `urllib.request.urlopen`
-is replaced by a tripwire for the whole file, so no test here can reach the network.
+is replaced by a tripwire around every test (`_offline`, put back after each), so no test here can
+reach the network.
 
 Run: QT_QPA_PLATFORM=offscreen PACER_NO_MEDIA=1 python tests/test_welcome_first_touch.py
 """
@@ -56,12 +57,15 @@ for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db
     _mod._app_support_dir = (lambda d=_dir: d)
 os.environ.pop("PACER_DEMO_MP4", None)
 
-# THE NETWORK TRIPWIRE, for the whole file. The button now exists on a machine with no demo and
-# says it downloads, so "nothing here reaches the network" is no longer true by construction: it is
-# held by counting. Every test that clicks the button stubs the fetch one level up
-# (`demo._try_download_demo`), so a call landing here is a path that bypassed that stub.
+# THE NETWORK TRIPWIRE, around every test here (`_offline`). The button now exists on a machine with
+# no demo and says it downloads, so "nothing here reaches the network" is no longer true by
+# construction: it is held by counting. Every test that clicks the button stubs the fetch one level
+# up (`demo._try_download_demo`), so a call landing here is a path that bypassed that stub.
+import functools  # noqa: E402
 import urllib.request  # noqa: E402
+from urllib.parse import urlsplit  # noqa: E402
 
+_URLOPEN_AT_IMPORT = urllib.request.urlopen
 _URLOPEN_CALLS = []
 
 
@@ -70,7 +74,21 @@ def _urlopen_tripwire(url, *args, **kwargs):
     raise OSError(f"tests/test_welcome_first_touch.py reached the network: {url}")
 
 
-urllib.request.urlopen = _urlopen_tripwire
+def _offline(test):
+    """Run `test` with urlopen replaced by the tripwire, and put back what was there — passed or
+    failed. PER TEST, NOT AT IMPORT: installed for the module and never restored, it outlived this
+    file in one pytest process and stood in every later module's way (CTest's one process per file
+    hid that)."""
+    @functools.wraps(test)
+    def run():
+        found = urllib.request.urlopen
+        urllib.request.urlopen = _urlopen_tripwire
+        try:
+            return test()
+        finally:
+            urllib.request.urlopen = found
+    run.offline = True
+    return run
 
 from _qtapp import themed_app  # noqa: E402
 
@@ -161,6 +179,7 @@ def _window(size=(1280, 800)):
 
 
 # ==================================================== (a) the second CTA
+@_offline
 def test_a_fresh_launch_offers_the_demo_and_says_the_click_downloads_it():
     """LEFT-24 / NEW-7, in all three states and at both shipped window sizes: the second button is
     ALWAYS on the card, enabled, and `demo.demo_available()` decides only what it says. With no
@@ -202,6 +221,7 @@ def test_a_fresh_launch_offers_the_demo_and_says_the_click_downloads_it():
           f"1920x1200, 0 network calls)")
 
 
+@_offline
 def test_the_env_var_lights_the_button_up_and_the_click_works_end_to_end():
     """THE DEMO-RECORDING PATH. `PACER_DEMO_MP4` pointing at a local file must still put the button
     on screen and still open THAT file — driven through the production slot chain (click ->
@@ -232,6 +252,7 @@ def test_the_env_var_lights_the_button_up_and_the_click_works_end_to_end():
     print("test_the_env_var_lights_the_button_up_and_the_click_works_end_to_end OK")
 
 
+@_offline
 def test_the_cached_clip_is_the_other_state_that_offers_the_button():
     """Same, one step down the resolution order: no env var, a clip in the app-support cache."""
     try:
@@ -256,6 +277,7 @@ def test_the_cached_clip_is_the_other_state_that_offers_the_button():
     print("test_the_cached_clip_is_the_other_state_that_offers_the_button OK")
 
 
+@_offline
 def test_a_fresh_launch_click_downloads_once_and_a_failure_keeps_the_door():
     """The none-state click, through the production chain (click -> _open_demo ->
     DemoResolveWorker -> the real `demo.resolve_demo_recording` -> `_try_download_demo`), with the
@@ -300,6 +322,7 @@ def test_a_fresh_launch_click_downloads_once_and_a_failure_keeps_the_door():
           "(1 fetch attempted, button kept, message shown, 0 network calls)")
 
 
+@_offline
 def test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works():
     """The message `--demo` and a failed click land on. It read "check your connection and retry"
     while the asset had never been published — a retry that could not work, aimed at a button no
@@ -330,6 +353,7 @@ def test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works(
     print("test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works OK")
 
 
+@_offline
 def test_the_cli_demo_flag_still_tries_the_network():
     """`demo_available()` decides what the button SAYS, not whether the feature works: `--demo`
     (which calls the resolver with `allow_download=True`) must still attempt the download in the
@@ -370,7 +394,97 @@ def test_the_cli_demo_flag_still_tries_the_network():
           "(--demo fetched once; demo_available + the welcome in 3 states: 0 fetches, 0 urlopen)")
 
 
+# Where the fetch goes, per PACER_DEMO_URL: unset (the pinned release asset), a mirror by name, a
+# mirror on this machine with a port (the port is not the host), and a file: mirror, which names no
+# host at all.
+_MIRRORS = (None, "https://mirror.example.test/demo/pacer-demo.mp4",
+            "http://localhost:8765/pacer-demo.mp4", "file:///srv/mirror/pacer-demo.mp4")
+
+
+@_offline
+def test_the_download_tooltip_names_the_host_the_fetch_really_goes_to():
+    """DEMO-4 review: the "Get demo" tooltip said the clip downloads "from GitHub" in every case,
+    while the dev-only PACER_DEMO_URL mirror sends the fetch somewhere else. The tooltip is the
+    app's one statement of where its one fetch goes, so it is held to the URL a planted fetch
+    REALLY asks for — counted at the tripwire, not read back from the code that builds the tip: the
+    pinned asset's host reads "GitHub", a mirror is named by its host (its URL when it has none)."""
+    _none_state()
+    saved = os.environ.pop("PACER_DEMO_URL", None)
+    said = []
+    try:
+        for mirror in _MIRRORS:
+            if mirror is None:
+                os.environ.pop("PACER_DEMO_URL", None)
+            else:
+                os.environ["PACER_DEMO_URL"] = mirror
+            before = len(_URLOPEN_CALLS)
+            planted = os.path.join(_SEAMS, "planted", "pacer-demo.mp4")
+            assert demo._try_download_demo(planted) is False, "the tripwire let a fetch through"
+            asked = _URLOPEN_CALLS[before:]
+            assert len(asked) == 1, asked
+            host = urlsplit(asked[0]).hostname
+            where = "GitHub" if host == "github.com" else (host or asked[0])
+            win = _window()
+            try:
+                tip = win.centralWidget().demo_btn.toolTip()
+            finally:
+                win.close()
+                _settle(0.1)
+            assert f"from {where}," in tip, (
+                f"the fetch goes to {asked[0]!r} but the tooltip says: {tip!r}")
+            if where != "GitHub":
+                assert "GitHub" not in tip, (mirror, tip)
+            said.append(where)
+    finally:
+        if saved is None:
+            os.environ.pop("PACER_DEMO_URL", None)
+        else:
+            os.environ["PACER_DEMO_URL"] = saved
+        _none_state()
+    # The shipping default is the pinned asset, and it still says GitHub.
+    assert said[0] == "GitHub", said
+    print(f"test_the_download_tooltip_names_the_host_the_fetch_really_goes_to OK ({said})")
+
+
+def test_the_network_tripwire_is_per_test_put_back_and_still_trips():
+    """The tripwire used to be installed when this module was imported and never put back: harmless
+    under CTest (one process per file), but one pytest process over several files ran every module
+    collected after this one with `urlopen` raising. It is installed per test now (`_offline`), and
+    this holds both halves: between tests the urlopen this file found is back, and inside a test a
+    planted fetch still trips it — also after a test that failed."""
+    assert urllib.request.urlopen is _URLOPEN_AT_IMPORT, (
+        f"between tests urlopen is {urllib.request.urlopen!r}, not the one this file found")
+    before = len(_URLOPEN_CALLS)
+
+    @_offline
+    def planted_fetch():
+        assert urllib.request.urlopen is not _URLOPEN_AT_IMPORT, "no tripwire inside a test"
+        return demo._try_download_demo(os.path.join(_SEAMS, "planted", "pacer-demo.mp4"))
+
+    assert planted_fetch() is False, "a planted fetch got through"
+    assert len(_URLOPEN_CALLS) == before + 1, _URLOPEN_CALLS[before:]
+    assert urllib.request.urlopen is _URLOPEN_AT_IMPORT, "the tripwire stayed after a test"
+
+    @_offline
+    def failing():
+        raise AssertionError("planted failure")
+
+    try:
+        failing()
+    except AssertionError:
+        pass
+    assert urllib.request.urlopen is _URLOPEN_AT_IMPORT, "the tripwire stayed after a failed test"
+    # Every other test here runs inside it, so none can reach the network.
+    bare = [n for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)
+            and f is not test_the_network_tripwire_is_per_test_put_back_and_still_trips
+            and not getattr(f, "offline", False)]
+    assert not bare, f"tests that run without the network tripwire: {bare}"
+    print("test_the_network_tripwire_is_per_test_put_back_and_still_trips OK "
+          "(put back after a pass and a failure; a planted fetch tripped it once)")
+
+
 # ==================================================== (b) the button weights
+@_offline
 def test_the_primary_is_the_wider_button_in_every_state_it_has_a_twin():
     """§6.7(b). Swept across the states and both window sizes, and checked through the ONE label
     swap the row can do (the busy label), because that swap is what inverted the pair in the first
@@ -404,6 +518,7 @@ def test_the_primary_is_the_wider_button_in_every_state_it_has_a_twin():
           f"(primary {m.primary_w} px ≥ secondary {m.secondary_w} px, resting and busy)")
 
 
+@_offline
 def test_the_secondary_button_still_cannot_move_the_row():
     """The D4-06 guarantee, kept: the floor is the WIDEST of every label the button can carry, in
     either direction. The first cut of the D4-06 fix floored it at the busy width alone, which —
@@ -438,6 +553,7 @@ def test_the_secondary_button_still_cannot_move_the_row():
 
 
 # ==================================================== (c) the brand moment
+@_offline
 def test_the_drop_glyph_is_the_apps_own_mark_and_it_composites():
     """§6.7(c). Two claims, and the second is the one a pixmap comparison alone would miss: the
     label carries `theme.brand_mark`, AND the mark's accent ink is really on the window."""
@@ -473,6 +589,7 @@ def test_the_drop_glyph_is_the_apps_own_mark_and_it_composites():
           f"({DROP_GLYPH_PX}px mark, accent ink present)")
 
 
+@_offline
 def test_the_mark_is_the_icons_geometry_not_a_second_copy_of_it():
     """The mark is worn twice — the welcome glyph and studio/assets/pacer.icns — so the numbers live
     once (theme.BRAND_*) and the icon generator reads them. A second copy is a brand that drifts."""
@@ -525,6 +642,7 @@ def _mark_alpha_at(scale):
     return ev, np.array(ev.pop("alpha"), np.uint8).reshape(ev["h"], ev["w"])
 
 
+@_offline
 def test_the_mark_is_whole_on_a_retina_screen():
     """QA3-BRANDMARK. At DPR 2 the mark was drawn at twice its size into its own pixmap, so the
     welcome showed two chevron stubs cut off at the right and the bottom: 68 and 14 ink pixels on
@@ -562,6 +680,8 @@ def _run_all():
     test_a_fresh_launch_click_downloads_once_and_a_failure_keeps_the_door()
     test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works()
     test_the_cli_demo_flag_still_tries_the_network()
+    test_the_download_tooltip_names_the_host_the_fetch_really_goes_to()
+    test_the_network_tripwire_is_per_test_put_back_and_still_trips()
     test_the_primary_is_the_wider_button_in_every_state_it_has_a_twin()
     test_the_secondary_button_still_cannot_move_the_row()
     test_the_drop_glyph_is_the_apps_own_mark_and_it_composites()
