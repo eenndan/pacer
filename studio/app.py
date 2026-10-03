@@ -189,7 +189,11 @@ def demo_get_tip() -> str:
     file: mirror does). It said "from GitHub" while a mirror sent the fetch elsewhere. The host,
     never the netloc: a mirror URL's user:password@ must not reach a tooltip."""
     url = demo.download_url()
-    host = urlsplit(url).hostname
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:      # a malformed mirror (an unclosed IPv6 bracket) must not stop the welcome
+        return (f"Downloads Pacer's synthetic demo session from the PACER_DEMO_URL mirror, once "
+                f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
     where = "GitHub" if host == "github.com" else (host or url)
     return (f"Downloads Pacer's synthetic demo session from {where}, once "
             f"({demo.download_mb()} MB), and opens it — generated, not filmed.")

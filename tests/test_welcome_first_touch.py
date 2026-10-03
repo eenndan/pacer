@@ -449,6 +449,34 @@ def test_the_download_tooltip_names_the_host_the_fetch_really_goes_to():
     print(f"test_the_download_tooltip_names_the_host_the_fetch_really_goes_to OK ({said})")
 
 
+@_offline
+def test_a_malformed_mirror_does_not_stop_the_welcome():
+    """FOLLOW-DEMO4-NITS review: the tooltip is built when the welcome is, and `urlsplit(...)
+    .hostname` raises ValueError on a malformed bracketed host — so a typo in the dev-only
+    PACER_DEMO_URL took the whole first screen down. The welcome builds, and the tip names the
+    override rather than echoing a URL that may carry credentials."""
+    _none_state()
+    saved = os.environ.pop("PACER_DEMO_URL", None)
+    try:
+        for bad in ("http://[::1/pacer-demo.mp4", "http://dev:s3cret@[abc]/pacer-demo.mp4"):
+            os.environ["PACER_DEMO_URL"] = bad
+            win = _window()
+            try:
+                tip = win.centralWidget().demo_btn.toolTip()
+            finally:
+                win.close()
+                _settle(0.1)
+            assert "from the PACER_DEMO_URL mirror," in tip, (bad, tip)
+            assert "s3cret" not in tip, tip
+    finally:
+        if saved is None:
+            os.environ.pop("PACER_DEMO_URL", None)
+        else:
+            os.environ["PACER_DEMO_URL"] = saved
+        _none_state()
+    print("test_a_malformed_mirror_does_not_stop_the_welcome OK")
+
+
 def test_the_network_tripwire_is_per_test_put_back_and_still_trips():
     """The tripwire used to be installed when this module was imported and never put back: harmless
     under CTest (one process per file), but one pytest process over several files ran every module
@@ -684,6 +712,7 @@ def _run_all():
     test_the_unavailable_copy_names_the_failed_download_and_the_door_that_works()
     test_the_cli_demo_flag_still_tries_the_network()
     test_the_download_tooltip_names_the_host_the_fetch_really_goes_to()
+    test_a_malformed_mirror_does_not_stop_the_welcome()
     test_the_network_tripwire_is_per_test_put_back_and_still_trips()
     test_the_primary_is_the_wider_button_in_every_state_it_has_a_twin()
     test_the_secondary_button_still_cannot_move_the_row()
