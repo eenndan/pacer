@@ -46,8 +46,8 @@ Plus check 6, the one that would have caught the seven-week-broken image: every 
 under docs/ resolves on disk. And check 7, the page's one clip: small, 720p, 20-30 s, still for a
 reader who asked for reduced motion, and with no audio track in the file (with its own control).
 And check 8, reach without hue or mouse: a link inside a sentence is underlined, not told apart by
-hue alone, anything that scrolls takes keyboard focus, and the page is one <main> under a named
-<nav>, with nothing outside a landmark.
+hue alone, anything that scrolls takes keyboard focus, and the page has one <main> and nothing
+outside a landmark (axe's rules) with the bar a named <nav> (the page's own).
 
 Pure stdlib apart from importing `studio.theme` for the token values (Pacer-free, no QApplication,
 no telemetry file), so it needs neither the offscreen env nor the bindings PYTHONPATH.
@@ -1620,30 +1620,49 @@ def test_what_scrolls_is_reachable_by_keyboard():
 
 
 _LANDMARKS = {"header", "nav", "main", "footer", "aside"}
+# Never rendered as content (a script's text, a template's inert tree, a noscript block while
+# scripting is on), so axe's region has nothing in them to flag.
+_UNRENDERED = {"script", "noscript", "template"}
 
 
 def _landmark_problems(html: str) -> list[str]:
-    """What axe-core's landmark-one-main, region and landmark-unique rules report, read from the
-    markup: exactly one <main>, every child of <body> a landmark, and the bar a named <nav>."""
+    """The page's landmarks, read from the markup, each problem named for the rule it breaks.
+
+    Two are axe-core's: one <main> (landmark-one-main when there is none, landmark-no-duplicate-
+    main when there are two), and nothing outside a landmark (region). Region is read stricter
+    than axe reads it: axe flags rendered CONTENT outside every landmark, this flags every child of
+    <body> that is not a landmark, content or not (an empty `<a id="top">` too), bar the three
+    that never render — and a page with no <body> tag is reported, not passed with nothing read.
+    Two are house rules no axe run would report: the bar's links are a <nav> (inside <header>, the
+    banner landmark, a <div> breaks no axe rule), and every <nav> is named (axe's landmark-unique
+    fires only when two landmarks share a role and a name, never on a lone unnamed <nav>)."""
     page = _Outline(html)
     problems = []
     mains = sum(n[0] == "main" for n in page.nodes)
-    if mains != 1:
-        problems.append(f"{mains} <main> elements: a page has exactly one (landmark-one-main)")
+    if mains == 0:
+        problems.append("no <main> element: a page has one (axe landmark-one-main)")
+    elif mains > 1:
+        problems.append(f"{mains} <main> elements: a page has at most one "
+                        "(axe landmark-no-duplicate-main)")
     body = next((i for i, n in enumerate(page.nodes) if n[0] == "body"), None)
+    if body is None:
+        problems.append("no <body> tag: the region check has no children of <body> to read")
     for tag, _, attrs, parent in page.nodes:
-        if parent == body and tag not in _LANDMARKS:
+        if body is not None and parent == body and tag not in _LANDMARKS | _UNRENDERED:
             what = attrs.get("id") or attrs.get("class") or ""
-            problems.append(f"<{tag}> {what!r} sits outside every landmark (region)")
+            problems.append(f"<{tag}> {what!r} sits outside every landmark "
+                            "(axe region, read per element)")
     bar = [n for n in page.nodes if "nav-links" in n[1]]
     if not bar:
         problems.append("the bar's .nav-links is gone — if that was deliberate, update this check")
     for tag, _, _, _ in bar:
         if tag != "nav":
-            problems.append(f"the bar's links sit in a <{tag}>, not a <nav> (region)")
+            problems.append(f"the bar's links sit in a <{tag}>, not a <nav> (house rule: without "
+                            "it the landmark list has no navigation entry)")
     for tag, _, attrs, _ in page.nodes:
         if tag == "nav" and not (attrs.get("aria-label") or attrs.get("aria-labelledby") or "").strip():
-            problems.append("a <nav> has no accessible name (landmark-unique)")
+            problems.append("a <nav> has no accessible name (house rule: the landmark list reads "
+                            "a bare \"navigation\")")
     return problems
 
 
@@ -1652,8 +1671,13 @@ def test_the_page_has_one_main_and_a_named_nav():
 
     THE BUG (qa-w3 EVAL-7): FRONT-DOOR-14's probe counted the landmarks a screen reader jumps
     between — header 1, footer 1, main 0, nav 0. Everything between the bar and the footer, the
-    whole page, was outside any landmark, and the bar's links were a bare <div>. axe-core rates
-    both "moderate" (landmark-one-main, region), so FRONT-DOOR-14's "serious" scope left them."""
+    whole page, was outside any landmark: axe-core rates that "moderate" (landmark-one-main,
+    region), so FRONT-DOOR-14's "serious" scope left it. The bar's links were a bare <div>, which
+    no axe rule flags inside <header>; a named <nav> for them is this page's own rule.
+
+    THE FOLLOW-UP (#506's review): the check called its two house rules axe's, passed a page with
+    no <body> tag having read nothing, and would have flagged a <script> under <body>. So each
+    plant must be reported under the rule it breaks, and the three unrendered children must pass."""
     html = _page()
     problems = _landmark_problems(html)
     assert not problems, "docs/index.html:\n  " + "\n  ".join(problems)
@@ -1661,20 +1685,41 @@ def test_the_page_has_one_main_and_a_named_nav():
     navs = [i for i, n in enumerate(page.nodes) if n[0] == "nav"]
     in_nav = [i for i in page.links if any(a in navs for a in _ancestors(page, i))]
     assert len(in_nav) >= 3, f"only {len(in_nav)} links in the <nav> — the bar has gone vacuous"
+    # Each defect with the rule that must name it: a house rule reported as axe's sends a reader to
+    # an axe run that passes, so the name is checked as well as the catch.
     plants = {
-        "no <main>": html.replace("<main>", "").replace("</main>", ""),
-        "a second <main>": html.replace('<section id="build">', '</main><main><section id="build">'),
-        "a section after </main>": html.replace("</main>", "").replace(
-            '<section id="build">', '</main>\n<section id="build">'),
-        "the bar a <div> again": re.sub(r"<nav ([^>]*)>(.*?)</nav>", r"<div \1>\2</div>", html,
-                                        flags=re.S),
-        "a nameless <nav>": re.sub(r'(<nav [^>]*?) aria-label="[^"]*"', r"\1", html),
+        "no <main>": (html.replace("<main>", "").replace("</main>", ""),
+                      "(axe landmark-one-main)"),
+        "a second <main>": (html.replace('<section id="build">',
+                                         '</main><main><section id="build">'),
+                            "(axe landmark-no-duplicate-main)"),
+        "a section after </main>": (html.replace("</main>", "").replace(
+            '<section id="build">', '</main>\n<section id="build">'), "(axe region"),
+        "the bar a <div> again": (re.sub(r"<nav ([^>]*)>(.*?)</nav>", r"<div \1>\2</div>", html,
+                                         flags=re.S), "not a <nav> (house rule"),
+        "a nameless <nav>": (re.sub(r'(<nav [^>]*?) aria-label="[^"]*"', r"\1", html),
+                             "no accessible name (house rule"),
+        "no <body> tag": (html.replace("<body>", "").replace("</body>", ""), "no <body> tag"),
     }
-    for what, planted in plants.items():
+    missed = []
+    for what, (planted, named) in plants.items():
         assert planted != html, f"{what!r} planted nothing"
-        assert _landmark_problems(planted), f"{what!r} was not caught"
+        caught = _landmark_problems(planted)
+        if not any(named in p for p in caught):
+            missed.append(f"{what}: not reported as {named!r}, got {caught}")
+    # What never renders is no content outside a landmark, so axe's region skips it.
+    unrendered = (("script", "void 0"), ("noscript", "<p>Script is off.</p>"),
+                  ("template", "<p>A row.</p>"))
+    for tag, inner in unrendered:
+        planted = html.replace("</body>", f"<{tag}>{inner}</{tag}>\n</body>")
+        assert planted != html, f"a <{tag}> planted nothing"
+        flagged = _landmark_problems(planted)
+        if flagged:
+            missed.append(f"a <{tag}> under <body>, which never renders, was flagged: {flagged}")
+    assert not missed, "the landmark check on its plants:\n  " + "\n  ".join(missed)
     print(f"test_the_page_has_one_main_and_a_named_nav OK (1 <main>, {len(navs)} named <nav> "
-          f"holding {len(in_nav)} links; {len(plants)} plants caught)")
+          f"holding {len(in_nav)} links; {len(plants)} plants caught by name, "
+          f"{len(unrendered)} unrendered children passed)")
 
 
 if __name__ == "__main__":
