@@ -48,7 +48,9 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      citation must also land on the section that names the probe. It has a negative control built
      from the collisions that really happened (#314/#315, #348/#349/#351).
   6. A CONSTANT DERIVED FROM A PUBLISHED FIGURE IS ITS ARITHMETIC. `library.PB_PRECISION_S`, the
-     floor under which a PB reads "level", is 2√2 × docs/ACCURACY.md row C's σ, read off the row.
+     floor under which a PB reads "level", is 2√2 × docs/ACCURACY.md row C's σ, read off the row; and
+     the pages' "a lap timed that way can read up to ~0.15 s off" is twice the per-fix worst case
+     `media_clock.py` measured on the packet-spread clock, read out of its docstring.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -1319,6 +1321,100 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
     assert round(2 * math.sqrt(2) * sigma, 2) == floor, \
         f"2·√2·σ = {2 * math.sqrt(2) * sigma:.4f} s from row C's σ {sigma} s, but PB_PRECISION_S = {floor}"
     print(f"test_the_pb_floor_is_accuracy_row_c_s_arithmetic OK (σ {sigma} s → {floor} s)")
+
+
+# ─── The naive-clock lap figure is twice media_clock's per-fix worst case ────────────────────────
+# FOLLOW-NAIVE-CLOCK-FIGURE (qa-w2 EVAL-5, qa-w3 EVAL-3). The pages said a lap timed by spreading a
+# GPS packet's fixes evenly "can read up to ~0.1 s off": twice the NOMINAL ±0.05 s a fix. But
+# studio/media_clock.py measured that per-fix error at "28 ms rms, up to 73 ms", and a lap time is
+# the difference of two such instants, so a start line where opposite extremes meet a lap apart
+# costs twice 73 ms. Re-measured on the working set (2026-10-03; each recording's naive stamps
+# against its GPS9 ones, a window of every valid lap's length slid over every fix): 28-29 ms rms and
+# 67-86 ms at worst a fix, and up to 152 ms a lap (SD_19_09_26; 125 ms on Sandown 3h), while the 169
+# laps the real start lines cut read 78 ms at worst. So "~0.15 s" is what a line CAN cost.
+# The figure is read against media_clock's constant, not typed here: every "read up to ~X s off" on
+# a page `_timing_pages` scans, and in module-notes.md, is twice media_clock's worst case TO THE
+# HUNDREDTH (0.146 s read at one decimal is the "~0.1" this replaced), and any per-fix rms or worst
+# case quoted in its block is media_clock's own. A page that stops quoting it fails by name.
+_MEDIA_CLOCK = os.path.join(_REPO, "studio", "media_clock.py")
+_NOTES = "studio/docs/module-notes.md"
+_NAIVE_SOURCE = re.compile(r"\((\d+) ms rms, up to (\d+) ms, on both recordings\)")
+_NAIVE_LAP = re.compile(r"read up to ~(\d+(?:\.\d+)?) s off")
+_NAIVE_RMS = re.compile(r"(\d+(?:\.\d+)?) ms rms")
+_NAIVE_WORST = re.compile(r"up to (\d+(?:\.\d+)?) ms|(\d+(?:\.\d+)?) ms at worst")
+_NAIVE_PAGES = ("README.md", "docs/ACCURACY.md", "docs/ENGINEERING.md", "docs/index.html", _NOTES)
+
+
+def _naive_source(text: str) -> tuple[float, float]:
+    """(rms, worst) in ms: media_clock.py's measured per-fix error of the packet-spread clock."""
+    m = _need(_NAIVE_SOURCE.pattern, _flatten(text), "studio/media_clock.py's naive-clock error")
+    return float(m.group(1)), float(m.group(2))
+
+
+def _naive_pages() -> dict[str, str]:
+    return {**_timing_pages(), _NOTES: _read(os.path.join(_REPO, _NOTES))}
+
+
+def _naive_clock_problems(pages: dict[str, str], rms: float, worst: float) -> tuple[set[str], list[str]]:
+    """(pages that quote the naive-clock lap figure, problems)."""
+    lap = round(2 * worst / 1e3, 2)
+    found, problems = set(), []
+    for rel, text in pages.items():
+        for block in _blocks(rel, text):
+            quotes = list(_NAIVE_LAP.finditer(block))
+            if not quotes:
+                continue
+            found.add(rel)
+            problems += [f"{rel}: a lap on the packet-spread clock 'can read up to ~{q.group(1)} s off', "
+                         f"but twice media_clock's {worst:g} ms at worst is ~{lap:.2f} s: {block[:90]!r}…"
+                         for q in quotes if float(q.group(1)) != lap]
+            problems += [f"{rel}: quotes the per-fix error at {m.group(1)} ms rms beside the lap figure, "
+                         f"media_clock measured {rms:g} ms" for m in _NAIVE_RMS.finditer(block)
+                         if float(m.group(1)) != rms]
+            problems += [f"{rel}: quotes the per-fix worst case at {m.group(1) or m.group(2)} ms beside "
+                         f"the lap figure, media_clock measured {worst:g} ms"
+                         for m in _NAIVE_WORST.finditer(block) if float(m.group(1) or m.group(2)) != worst]
+    problems += [f"{rel} no longer quotes the naive-clock lap figure ('can read up to ~X s off'): "
+                 f"this check reads it there — reword the check with the page" for rel in _NAIVE_PAGES
+                 if rel not in found]
+    return found, problems
+
+
+def test_the_naive_clock_lap_figure_is_twice_media_clock_s_worst_fix():
+    rms, worst = _naive_source(_read(_MEDIA_CLOCK))
+    found, problems = _naive_clock_problems(_naive_pages(), rms, worst)
+    assert not problems, "the naive-clock lap figure:\n  " + "\n  ".join(problems)
+    print(f"test_the_naive_clock_lap_figure_is_twice_media_clock_s_worst_fix OK (2 × {worst:g} ms → "
+          f"~{round(2 * worst / 1e3, 2):.2f} s, {rms:g} ms rms, on {len(found)} pages)")
+
+
+def test_the_naive_clock_guard_fails_on_each_planted_misquote():
+    """The check above fails on the figure this package replaced, on each per-fix figure beside it
+    going wrong, on a page dropping the sentence, on a changelog fragment quoting the old bound, and
+    on media_clock re-measured to a worst case that moves the lap figure while the pages stand."""
+    source = _read(_MEDIA_CLOCK)
+    pages = _naive_pages()
+    plants = (("README.md", "~0.15 s off", "~0.1 s off", "the nominal ±0.05 s doubled (the old figure)"),
+              (_NOTES, "~0.15 s off", "~0.2 s off", "the lap figure rounded up"),
+              ("docs/ACCURACY.md", "28 ms rms", "27 ms rms", "the per-fix rms one digit off"),
+              ("docs/ENGINEERING.md", "(73 ms at worst)", "(70 ms at worst)", "the per-fix worst case off"),
+              ("docs/index.html", "can read up to ~0.15 s off", "can read further off",
+               "the landing dropping the figure"),
+              ("changes/planted.md", "", "### Fixed\n- A lap on the packet clock can read up to ~0.1 s off "
+               "(#1).\n", "a changelog fragment quoting the old bound"),
+              (_MEDIA_CLOCK, "up to 73 ms,", "up to 60 ms,", "media_clock re-measured, the pages left behind"))
+    for rel, old, new, what in plants:
+        planted, src = dict(pages), source
+        text = src if rel == _MEDIA_CLOCK else planted.get(rel, "")
+        assert not old or old in text, f"plant {what!r}: {old!r} is no longer in {rel}"
+        text = text.replace(old, new, 1) if old else new
+        if rel == _MEDIA_CLOCK:
+            src = text
+        else:
+            planted[rel] = text
+        _, problems = _naive_clock_problems(planted, *_naive_source(src))
+        assert problems, f"the naive-clock guard passes {what} ({rel})"
+    print(f"test_the_naive_clock_guard_fails_on_each_planted_misquote OK ({len(plants)} plants)")
 
 
 # ─── A noise-free timing figure names its line and its noise-level twin ──────────────────────────
@@ -3155,6 +3251,8 @@ def _run_all():
     test_the_floor_table_is_consistent_with_its_own_definitions()
     test_every_quote_of_the_floor_is_a_row_of_the_table()
     test_the_pb_floor_is_accuracy_row_c_s_arithmetic()
+    test_the_naive_clock_lap_figure_is_twice_media_clock_s_worst_fix()
+    test_the_naive_clock_guard_fails_on_each_planted_misquote()
     test_every_noise_free_timing_figure_names_its_line_and_its_noise()
     test_the_timing_figure_guard_fails_on_each_planted_misquote()
     test_the_refusal_record_s_verdict_is_derived_from_its_table()

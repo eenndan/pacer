@@ -63,10 +63,11 @@ are under four milliseconds, as point estimates.
 - **True-clock timing.** On a **GPS9 camera — a Hero 11, Hero 13, MAX2 or MISSION 1**, every GPS
   sample carries its own timestamp on the camera's clock. Pacer times laps on *that* clock, not the
   video clock. A GoPro writes GPS in ~1 s packets, and spreading a packet's fixes evenly places each
-  only to about ±0.05 s (28 ms rms against GPS9, on two recordings), so a lap timed that way can
-  read up to ~0.1 s off, with no average bias; no GPS5 camera has been timed against official
-  timing. The two clocks' rates differ by only ~27 ppm. The GPS lag the gyroscope measures (about
-  0.46 s, below) is taken out of the video, not the clock: no lap time changes with it. A lap time
+  only to about ±0.05 s (28 ms rms against GPS9 on two recordings, 73 ms at worst), so a lap timed
+  that way, the difference of two such instants, can read up to ~0.15 s off, with no average bias;
+  no GPS5 camera has been timed against official timing. The two clocks' rates differ by only
+  ~27 ppm. The GPS lag the gyroscope measures (about 0.46 s, below) is taken out of the video, not
+  the clock: no lap time changes with it. A lap time
   is `(finish crossing instant) − (start crossing instant)`, where each instant is interpolated
   along the chord between the two real GPS samples straddling the start/finish line. GPS9 is
   narrower than it sounds: GoPro's metadata spec introduces it with the Hero 11, records it
