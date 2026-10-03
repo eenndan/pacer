@@ -1329,9 +1329,9 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
 # studio/media_clock.py measured that per-fix error at "28 ms rms, up to 73 ms", and a lap time is
 # the difference of two such instants, so a start line where opposite extremes meet a lap apart
 # costs twice 73 ms. Re-measured on the working set (2026-10-03; each recording's naive stamps
-# against its GPS9 ones, a window of every valid lap's length slid over every fix): 28-29 ms rms and
-# 67-86 ms at worst a fix, and up to 152 ms a lap (SD_19_09_26; 125 ms on Sandown 3h), while the 169
-# laps the real start lines cut read 78 ms at worst. So "~0.15 s" is what a line CAN cost.
+# against its GPS9 ones, a window of every valid lap's length slid over every fix): 27.8-29.1 ms rms
+# and 66.5-85.5 ms at worst a fix, and up to 152 ms a lap (SD_19_09_26; 125 ms on Sandown 3h), while
+# the 169 laps the real start lines cut read 78 ms at worst. So "~0.15 s" is what a line CAN cost.
 # The figure is read against media_clock's constant, not typed here: every "read up to ~X s off" on
 # a page `_timing_pages` scans, and in module-notes.md, is twice media_clock's worst case TO THE
 # HUNDREDTH (0.146 s read at one decimal is the "~0.1" this replaced), and any per-fix rms or worst
