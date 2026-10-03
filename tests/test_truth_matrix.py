@@ -195,7 +195,8 @@ ROWS: tuple[Row, ...] = (
     # circuit's 7 corners: the Corners table's worst corner, and the tilt the de-drift puts on the
     # changed lap's shift (m) — against the leave-one-window-out change GPS noise alone makes on
     # the GoPro's clean laps (m, the largest per noise level), which a detector for that tilt
-    # would have to clear. The tilt is under the noise-2 floor: `test_row6_...` holds that.
+    # would have to clear. The tilt is under the noise-2 floor: `test_row6_...` holds that. §21
+    # and `corners._rigid_shift` quote these values (and 6b's stadium table): `_PROSE_QUOTES`.
     Row("line_change.grid_table", "circuit", 0.00782267, G, tol=0.010),
     Row("line_change.grid_tilt", "circuit", 0.082135, S, tol=0.055, ceiling=0.12),
     Row("drift.loo_floor", 0.0, 0.0657999, S, tol=0.044, ceiling=0.098),
@@ -749,41 +750,90 @@ def test_the_table_keeps_its_own_rules():
             assert r.tol < r.measured, r
 
 
-# Figures written in prose elsewhere, quoted from row 3: (where, the text it sits in, a pattern
-# whose groups are integer milliseconds, the rows they quote). A re-measure that moves row 3 must
-# move these with it; this is what makes it.
+def _refused(n: int) -> str:
+    """Section n of studio/docs/refused-2026-09.md, from its heading to the next section's."""
+    with open(os.path.join(_REPO, "studio", "docs", "refused-2026-09.md"), encoding="utf-8") as f:
+        return f.read().split(f"\n## {n}.", 1)[1].split("\n## ", 1)[0]
+
+
+# Figures written in prose elsewhere, quoted from the rows: (where, the text it sits in, a pattern
+# whose groups are the quoted figures, the rows they quote, the unit they are quoted in). Each
+# figure must be its row's measured value rounded to the decimals it is quoted with, so a
+# re-measure that moves a row must move its words with it; this is what makes it. Whitespace is
+# collapsed before matching, so a pattern reads the sentence across its line breaks.
+_UNITS = {"ms": 1000.0, "s": 1.0, "m": 1.0}
+_TILT, _GRID = ("line_change.grid_tilt", "circuit"), ("line_change.grid_table", "circuit")
+_LOO = {noise: ("drift.loo_floor", noise) for noise in NOISES}
+_STADIUM = ("line_change.table", "stadium")
 _PROSE_QUOTES = (
-    ("studio/docs/refused-2026-09.md §2",
-     lambda: open(os.path.join(_REPO, "studio", "docs", "refused-2026-09.md"),
-                  encoding="utf-8").read().split("\n## 2.", 1)[1].split("\n## 3.", 1)[0],
-     r"reads\s+\+(\d+)\s+ms\s+at\s+noise\s+0\s+but\s+(\d+)\s+ms\s+and\s+(\d+)\s+ms\s+fast",
-     (("ideal.mean_bias", 0.0), ("ideal.mean_bias", 2.0), ("ideal.mean_bias", 4.5))),
-    ("studio/corner_model.py SegmentBests.total",
-     lambda: SegmentBests.total.__doc__ or "",
-     r"(\d+)\s+ms\s+fast\s+at\s+synthetic\s+noise\s+2",
-     (("ideal.mean_bias", 2.0),)),
+    # Row 3 · the ideal lap's bias.
+    ("studio/docs/refused-2026-09.md §2", lambda: _refused(2),
+     r"reads \+(\d+) ms at noise 0 but (\d+) ms and (\d+) ms fast",
+     (("ideal.mean_bias", 0.0), ("ideal.mean_bias", 2.0), ("ideal.mean_bias", 4.5)), "ms"),
+    ("studio/corner_model.py SegmentBests.total", lambda: SegmentBests.total.__doc__ or "",
+     r"(\d+) ms fast at synthetic noise 2", (("ideal.mean_bias", 2.0),), "ms"),
+    # Rows 6c and 6b · refusal §21's evidence and the docstring that points to it. Row 6c is the
+    # worst over the grid's amplitudes, which is §21's 2 m column (the error grows with the
+    # change); row 6b plants 1 m at the stadium's C1, and §21 says C2's is the same. §21's other
+    # figures (the stadium's tilt, the 0.5 and 1 m columns, the medians, the noise-grid cells
+    # and the footage) are its probes', not a row's.
+    ("studio/docs/refused-2026-09.md §21 (tilt table)", lambda: _refused(21),
+     r"\| tilt the de-drift absorbs, 0\.5 / 1 / 2 m change \|[^|]*\| "
+     r"≤ [\d.]+ / [\d.]+ / (\d+\.\d+) m \|", (_TILT,), "m"),
+    ("studio/docs/refused-2026-09.md §21 (Corners table)", lambda: _refused(21),
+     r"\| Corners table error, noise-free, worst corner \| \d+ / (\d+) / \d+ ms \| "
+     r"≤ [\d.]+ / [\d.]+ / (\d+\.\d+) ms \|", (_STADIUM, _GRID), "ms"),
+    ("studio/docs/refused-2026-09.md §21 (floor table)", lambda: _refused(21),
+     r"\| synthetic GoPro, noise 0 / 2 / 4\.5 \(\d+ laps each\) \|[^|]*\| "
+     r"\*\*(\d+\.\d+) / (\d+\.\d+) / (\d+\.\d+) m\*\* \|", (_LOO[0.0], _LOO[2.0], _LOO[4.5]),
+     "m"),
+    ("studio/docs/refused-2026-09.md §21 (off the stadium)", lambda: _refused(21),
+     r"A line change's tilt, ≤ (\d+\.\d+) m, is smaller than the change noise 2 alone makes, "
+     r"(\d+\.\d+) m\. Even noise-free it is barely above the (\d+\.\d+) m",
+     (_TILT, _LOO[2.0], _LOO[0.0]), "m"),
+    ("studio/docs/refused-2026-09.md §21 (on the stadium)", lambda: _refused(21),
+     r"with 1 m at C1 it goes (\d+\.\d+) →", (_STADIUM,), "s"),
+    ("studio/corners.py _rigid_shift", lambda: corners._rigid_shift.__doc__ or "",
+     r"a 2 m line change tilts T by at most (\d+\.\d+) m, while noise alone moves a "
+     r"leave-one-out T by (\d+\.\d+) m at synthetic noise 2", (_TILT, _LOO[2.0]), "m"),
 )
 
 
+def _decimals(q: str) -> int:
+    return len(q.partition(".")[2])
+
+
 def test_the_prose_quotes_the_rows():
-    """The ideal-lap bias written in refusal §2 and in `SegmentBests.total`'s docstring is row 3's
-    measured value, in whole milliseconds, so a re-measure cannot leave the words behind. A
-    plant: the same check fails on a sentence one millisecond off."""
+    """Every figure in `_PROSE_QUOTES` is its row's measured value at the precision it is quoted
+    to: the ideal-lap bias in refusal §2 and `SegmentBests.total` (row 3), and the de-drift's
+    tilt, the Corners-table error and the leave-one-window-out floors in refusal §21 and
+    `corners._rigid_shift` (rows 6b and 6c). So a re-measure cannot leave the words behind. The
+    plant: each figure in turn, moved one unit in its last digit inside its own sentence, fails
+    the same check, naming that row and no other."""
     rows = {(r.stat, r.level): r for r in ROWS}
 
-    def misquotes(text, pattern, keys):
+    def misquotes(where, text, pattern, keys, unit):
         m = re.search(pattern, text)
-        assert m, f"the sentence quoting row 3 is gone: /{pattern}/"
-        return [f"{k[0]} @ {k[1]}: quoted {q} ms, measured {1000 * rows[k].measured:.1f} ms"
-                for q, k in zip(m.groups(), keys, strict=True)
-                if int(q) != round(1000 * rows[k].measured)]
-    for where, text, pattern, keys in _PROSE_QUOTES:
-        bad = misquotes(text(), pattern, keys)
-        assert not bad, f"{where} misquotes row 3:\n  " + "\n  ".join(bad)
-    ms = [round(1000 * rows[k].measured) for k in _PROSE_QUOTES[0][3]]
-    assert misquotes(f"the ideal reads +{ms[0]} ms at noise 0 but {ms[1] + 1} ms and {ms[2]} ms "
-                     f"fast", _PROSE_QUOTES[0][2], _PROSE_QUOTES[0][3]), "it passes a misquote"
-    print(f"  {len(_PROSE_QUOTES)} texts quote row 3's measured values")
+        assert m, f"{where}: the sentence quoting {keys} is gone: /{pattern}/"
+        return m, [f"{k[0]} @ {k[1]}: quoted {q} {unit}, measured "
+                   f"{_UNITS[unit] * rows[k].measured:.4g} {unit}"
+                   for q, k in zip(m.groups(), keys, strict=True)
+                   if q != f"{_UNITS[unit] * rows[k].measured:.{_decimals(q)}f}"]
+    figures = 0
+    for where, text, pattern, keys, unit in _PROSE_QUOTES:
+        text = " ".join(text().split())
+        m, bad = misquotes(where, text, pattern, keys, unit)
+        assert not bad, f"{where} misquotes its rows:\n  " + "\n  ".join(bad)
+        for i, k in enumerate(keys, start=1):
+            q = m.group(i)
+            off = f"{float(q) + 10.0 ** -_decimals(q):.{_decimals(q)}f}"
+            planted = text[:m.start(i)] + off + text[m.end(i):]
+            got = misquotes(where, planted, pattern, keys, unit)[1]
+            assert len(got) == 1 and got[0].startswith(f"{k[0]} @ {k[1]}:"), \
+                f"{where} passes {k} quoted {off} instead of {q}: {got}"
+            figures += 1
+    print(f"  {figures} figures in {len(_PROSE_QUOTES)} texts quote rows 3, 6b and 6c; "
+          f"each fails one unit off")
 
 
 def test_row1_lap_time():
