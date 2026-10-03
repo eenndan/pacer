@@ -774,7 +774,7 @@ _PROSE_QUOTES = (
      r"(\d+) ms fast at synthetic noise 2", (("ideal.mean_bias", 2.0),), "ms"),
     # Rows 6c and 6b · refusal §21's evidence and the docstring that points to it. Row 6c is the
     # worst over the grid's amplitudes, which is §21's 2 m column (the error grows with the
-    # change); row 6b plants 1 m at the stadium's C1, and §21 says C2's is the same. Its other
+    # change); row 6b plants 1 m at the stadium's C1, and §21 says C2's is the same. §21's other
     # figures (the stadium's tilt, the 0.5 and 1 m columns, the medians, the noise-grid cells
     # and the footage) are its probes', not a row's.
     ("studio/docs/refused-2026-09.md §21 (tilt table)", lambda: _refused(21),
