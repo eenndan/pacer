@@ -66,6 +66,13 @@ def download_mb() -> int:
     return round(_DEMO_BYTES / 1e6)
 
 
+def download_url() -> str:
+    """The URL a fetch goes to now: PACER_DEMO_URL (dev-only, a mirror of the same file — the
+    checksum still applies) or the pinned asset's. One function, read by the fetch and by the "Get
+    demo" tooltip that says where the click goes, so the two cannot name different places."""
+    return os.environ.get("PACER_DEMO_URL") or _DEMO_URL
+
+
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). A separate seam from
     library._app_support_dir so a test can divert the demo cache without touching the library.
@@ -87,7 +94,7 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
     cache hit — and renames only a file whose sha256 is `sha256` (default: the pinned asset's)."""
     import urllib.request
 
-    url = url or os.environ.get("PACER_DEMO_URL") or _DEMO_URL
+    url = url or download_url()
     want = sha256 or _DEMO_SHA256
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + ".part"
