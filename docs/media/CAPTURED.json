@@ -104,17 +104,14 @@
       "waiver": null
     },
     "overlay.jpg": {
-      "captured": "2026-09-30",
-      "commit": "acf6b0c",
-      "derived": "overlay.png",
-      "sha256": "0422417964afe9203fcf20e8a7b6c5aba5a0da94211e2b429a1d0b2bb8d0d1d9",
+      "captured": "2026-10-03",
+      "commit": "fa96c7f",
+      "derived": null,
+      "sha256": "ce09994cbb836aeeb16071a065b158b87d9182fe90a0f678f73623d68b41c0fa",
       "shot": "overlay",
       "source": "Sandown 3h 2026 (GX010064)",
-      "version": "0.2.0",
-      "waiver": {
-        "granted_at": "0.6.0",
-        "reason": "captured at 0.2.0 (acf6b0c); 0.6.0's export of the same frame differs in 5,566 of 1,166,400 decoded pixels (0.48 %; JPEG blocks spread a small change), all in the track-map inset by the marker; not re-shot, as the 0.6.0 release re-shoots no footage shot"
-      }
+      "version": "0.6.0",
+      "waiver": null
     }
   }
 }
