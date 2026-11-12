@@ -1038,6 +1038,82 @@ def test_the_first_open_verdict_is_one_state_in_one_priority_order():
         assert got == tuple(map(bool, want)), (v, got, want)
 
 
+def _verdict_ctl(verdict, *, degraded=False, cids=(4, 7)):
+    """A controller over a stub window (no Qt, no pacer, no disk) holding `verdict`, for the notice
+    and landing tables below. Its session has valid laps on a verified line unless the row says."""
+    from studio import library_controller
+    shown = []
+    session = SimpleNamespace(
+        valid_lap_ids=lambda: [0, 1], timing_verified=True,
+        timing_quality=SimpleNamespace(degraded=degraded, untrusted=lambda: "GPS fix lost"))
+    view = SimpleNamespace(opportunities=SimpleNamespace(shortlist_cids=lambda: list(cids)),
+                           show_debrief=lambda *a, **k: shown.append((a, k)))
+    ctl = library_controller.LibraryController(SimpleNamespace(session=session, view=view), 0)
+    ctl.verdict = verdict
+    promoted = []
+    ctl.pre_promote_focus = lambda c: promoted.append(list(c)) or list(c)[:1]
+    return ctl, promoted
+
+
+def test_the_session_notice_reads_each_verdicts_clauses_from_the_controller():
+    """FIRST-OPEN-LOOP-7 (QA r4 CODE-3 R3). The notice re-derived the verdict from four flag reads
+    in app.py, so every verdict PR edited both files. Its first-open wording is the controller's
+    now, one `VerdictNotice` per Verdict: the tail the unknown-track clause gets while the verdict
+    waits for the line, the clause of its own (a name wait, or too-uncertain timing), and the tail
+    the "N of M chapters" clause gets while it waits for the whole recording. Wording verbatim."""
+    from studio.library_controller import VerdictNotice
+    V = library.Verdict
+    line = "; your PB and debrief wait for it"
+    whole = "; your PB and focus list wait for it"
+    name = ("unnamed circuit — File ▸ Save as track… names it; your PB and focus list wait for "
+            "that")
+    unsure = "GPS fix lost: too uncertain to judge a PB or set a focus list, so no debrief"
+    rows = {  # verdict -> (on clean timing, on degraded timing)
+        V.EXCLUDED: (VerdictNotice(), VerdictNotice()),
+        V.DEMO: (VerdictNotice(), VerdictNotice()),
+        V.WAIT_WHOLE: (VerdictNotice(whole_wait=whole), VerdictNotice(whole_wait=whole)),
+        V.PART_KNOWN: (VerdictNotice(), VerdictNotice()),
+        V.WAIT_LINE: (VerdictNotice(line_wait=line), VerdictNotice(clause=unsure)),
+        V.DECIDED: (VerdictNotice(), VerdictNotice()),
+        V.WAIT_NAME: (VerdictNotice(clause=name), VerdictNotice(clause=name)),
+        V.DEGRADED: (VerdictNotice(clause=unsure), VerdictNotice(clause=unsure)),
+        V.REOPEN: (VerdictNotice(), VerdictNotice()),
+        V.WRITE_FAILED: (VerdictNotice(), VerdictNotice()),
+    }
+    assert set(rows) == set(V), set(V) - set(rows)
+    for v, (clean, rough) in rows.items():
+        assert _verdict_ctl(v)[0].verdict_notice() == clean, (v, "clean")
+        assert _verdict_ctl(v, degraded=True)[0].verdict_notice() == rough, (v, "degraded")
+    # The name wait stands only where the app put it: valid laps on the trusted line.
+    ctl, _ = _verdict_ctl(V.WAIT_NAME)
+    ctl.win.session.timing_verified = False
+    assert ctl.verdict_notice() == VerdictNotice()
+
+
+def test_the_debrief_landing_is_the_controllers_decision():
+    """FIRST-OPEN-LOOP-7: `_land_on_debrief` re-read opened_new and degraded_first_open and
+    assembled the debrief's four arguments from four controller calls; `landing()` decides it now,
+    a frozen `Landing` or None. Nothing is promoted on a load that does not land."""
+    from studio.library_controller import DEMO_DEBRIEF_LINE, NAME_WAIT_LINE, Landing
+    V = library.Verdict
+    for v in (V.EXCLUDED, V.WAIT_WHOLE, V.PART_KNOWN, V.WAIT_LINE, V.DEGRADED, V.REOPEN,
+              V.WRITE_FAILED):
+        ctl, promoted = _verdict_ctl(v)
+        assert ctl.landing() is None and promoted == [], v
+    ctl, promoted = _verdict_ctl(V.DECIDED, cids=())
+    assert ctl.landing() is None and promoted == [], "nothing ranked: no debrief"
+    ctl, promoted = _verdict_ctl(V.DECIDED)
+    assert ctl.landing() == Landing(pb_line=None, promoted=[4], compare=False, saved=True)
+    assert promoted == [[4, 7]], promoted
+    ctl, _ = _verdict_ctl(V.WAIT_NAME)
+    assert ctl.landing() == Landing(pb_line=NAME_WAIT_LINE, promoted=[4], compare=False,
+                                    saved=True)
+    ctl, _ = _verdict_ctl(V.DEMO)
+    ctl.demo_preview = True
+    assert ctl.landing() == Landing(pb_line=DEMO_DEBRIEF_LINE, promoted=[4], compare=False,
+                                    saved=False)
+
+
 def test_a_refused_row_keeps_the_first_open_verdict_and_a_reopen_stays_one(monkeypatch):
     """CODE-6 at the load: a first open whose row the disk refused is WRITE_FAILED (the drag or the
     next open decides it again: tests/test_debrief_lands_right.py walks the drag), not a load that

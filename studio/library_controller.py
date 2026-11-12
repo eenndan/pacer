@@ -57,6 +57,7 @@ import logging
 import math
 import os
 import shutil
+from dataclasses import dataclass
 
 # The Qt-object liveness probe (PySide6's own runtime): a Python wrapper outlives the C++ object a
 # deleteLater() has collected, and _clear_pb_toast has to tell those two apart.
@@ -83,6 +84,34 @@ NAME_WAIT_LINE = ("This circuit has no name yet, so there is no personal best to
 # says what is kept instead, which is nothing (`update_library`, `_save_focus`).
 DEMO_DEBRIEF_LINE = ("This is the synthetic demo, so nothing is saved: no Library row, no personal "
                      "best, and a focus list that lasts only while the demo is open.")
+
+
+# THE VERDICT'S WORDING AND ITS LANDING, decided here and only shown by the window (QA r4 CODE-3,
+# FIRST-OPEN-LOOP-7). `StudioWindow._session_notice` and `_land_on_debrief` used to re-derive the
+# verdict from flag reads of their own, so a verdict change edited both files.
+@dataclass(frozen=True)
+class VerdictNotice:
+    """The session notice's first-open wording for one verdict (`verdict_notice`). Not one clause:
+    each part qualifies a different clause of the notice, so the window keeps its places.
+    `line_wait`: the tail of the "unknown track" clause while the verdict waits for the line.
+    `clause`: a clause of its own, after the timing one — the name wait, or too-uncertain timing.
+    `whole_wait`: the tail of the "N of M chapters" clause while it waits for the whole recording."""
+
+    line_wait: str = ""
+    clause: str | None = None
+    whole_wait: str = ""
+
+
+@dataclass(frozen=True)
+class Landing:
+    """A first open's debrief, as `CentralView.show_debrief` shows it (`landing`): the PB line, the
+    corners pre-promoted onto the focus list, whether "Compare with your previous PB" is offered,
+    and whether anything was saved (False on the demo)."""
+
+    pb_line: str | None
+    promoted: list[int]
+    compare: bool
+    saved: bool
 
 
 # THE LOOP'S GESTURES IN THE SESSION LOG (FIRST-OPEN-LOOP-3). The debrief pre-fills the focus list
@@ -411,6 +440,38 @@ class LibraryController:
             return None
         why = self.win.session.timing_quality.untrusted() or "timing estimated"
         return f"{why}: too uncertain to judge a PB or set a focus list, so no debrief"
+
+    def verdict_notice(self) -> VerdictNotice:
+        """What the session notice says about this load's first-open verdict, part by part
+        (`VerdictNotice`): what waits for the start line, unless degraded timing means the line will
+        decide nothing (QA NEW-3b, REG-2); the name wait, only where its clause stood, on valid
+        laps over the trusted line; the degraded clause (`degraded_notice`); what waits for the
+        whole recording (QA NEW-1)."""
+        session = self.win.session
+        line_wait = ("; your PB and debrief wait for it"
+                     if self.waiting_for_line and not session.timing_quality.degraded else "")
+        clause = self.degraded_notice()
+        if self.waiting_for_name and session.valid_lap_ids() and session.timing_verified:
+            # The line is placed at a circuit with no name: the PB and focus list are per track.
+            clause = ("unnamed circuit — File ▸ Save as track… names it; your PB and focus list "
+                      "wait for that")
+        whole_wait = "; your PB and focus list wait for it" if self.waiting_for_whole else ""
+        return VerdictNotice(line_wait=line_wait, clause=clause, whole_wait=whole_wait)
+
+    def landing(self) -> Landing | None:
+        """The debrief a load's first open lands on (`StudioWindow._land_on_debrief`), or None: not
+        a first open kept (`opened_new`), a first open on degraded timing (its notice says why
+        instead, QA REG-2), or nothing ranked (the page would be an empty state). Only a landing
+        pre-promotes its corners onto the focus list (`pre_promote_focus`)."""
+        if not self.opened_new or self.degraded_first_open:
+            return None
+        cids = self.win.view.opportunities.shortlist_cids()
+        if not cids:
+            return None
+        promoted = self.pre_promote_focus(cids)
+        return Landing(pb_line=self.debrief_pb_line(), promoted=promoted,
+                       compare=self.offers_pb_compare(self.pb_standing),
+                       saved=not self.demo_preview)
 
     def offers_pb_compare(self, moment: dict | None) -> bool:
         """Whether a PB surface showing `moment` (a ``pb_moment`` or ``pb_standing`` dict) may offer
