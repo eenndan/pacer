@@ -137,9 +137,9 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
 - **160+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
   widgets and measure them. CI runs all of it on every pull request, four tests at a time, plus an
   end-to-end offscreen smoke. It skips what its runner cannot run: the 16+ `footage.*` checks,
-  which need a real recording, 4 of the 6 `videotoolbox.*` export checks, which need Apple's H.264
-  hardware encoder, and one crash soak that runs on every push to `main` instead. CTest lists each
-  by name as *Skipped*. `pixi run golden`, the gate you actually run after every maths change,
+  which need a real recording, and one crash soak that runs on every push to `main` instead. CTest
+  lists each by name as *Skipped*. The 6 `videotoolbox.*` export checks need Apple's hardware
+  encoders, which CI's runner has. `pixi run golden`, the gate you actually run after every maths change,
   takes seconds, not minutes (8–14 s on the development Mac, measured 27 September 2026).
 
 Depth: **[AGENTS.md](AGENTS.md)** (the authoritative developer reference) and
