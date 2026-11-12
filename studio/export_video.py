@@ -4391,10 +4391,28 @@ class Renderer:
     def run(self, progress=None, cancel=None, chunk: int = 48) -> RenderResult:
         """Render to completion. `progress(done, total)` / `cancel()` callbacks. A VideoToolbox
         encode (H.264 or ProRes) that fails (`_EncodeError`) or wedges (RenderTimeoutError) retries
-        ONCE on a fresh software-forced Renderer (`_SOFTWARE_RETRY`); otherwise surfaces a clear
-        RuntimeError. Returns a RenderResult."""
+        ONCE on a fresh software-forced Renderer (`_SOFTWARE_RETRY`); a HARDWARE decode that runs
+        dry (`TruncatedRenderError`) retries ONCE on the software decode; otherwise surfaces a
+        clear RuntimeError. Returns a RenderResult."""
         try:
             return self._run_chunked(progress, cancel, chunk)
+        except TruncatedRenderError as exc:
+            # A SHORT HARDWARE DECODE IS NOT YET SHORT FOOTAGE. The hardware decode runs as a relay
+            # of VideoToolbox sessions (`_DecodeRelay`), and a session that dies after taking its
+            # turn ends the stream as surely as the end of the file does. On CI's macos-15 runner
+            # (a VM, the first runner that opens VideoToolbox) test_export_e2e's 55 s clip read
+            # "the footage ran out" on 2 of 4 runs and rendered whole on the other 2, on the same
+            # synthetic file. So the software decode — the one decode this module had before the
+            # relay — gets the last word: a file that really stops partway stops there too, and the
+            # sentence stands; one that does not renders whole. Same spec, same encoder, and the
+            # retry keeps `run`'s own encoder fallback.
+            if not self._hwaccel:
+                raise
+            _log.warning("the hardware decode ran dry (%s); retrying once on the software decode",
+                         str(exc).splitlines()[0][:200])
+            self.cancel()
+            sw_spec = replace(self._spec, config=replace(self._spec.config, hwaccel_decode=False))
+            return self._respawn(sw_spec).run(progress, cancel, chunk)
         except (_EncodeError, RenderTimeoutError) as exc:
             is_encode_fail = isinstance(exc, _EncodeError) and exc.encoder == self._encoder
             is_vt_wedge = isinstance(exc, RenderTimeoutError)
