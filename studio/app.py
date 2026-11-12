@@ -76,6 +76,7 @@ from .library_controller import (
     LibraryController,
     corner_list_text,
     loop_subject,
+    missing_footage,
     previous_pb_missing_text,
 )
 from .marks_panel import MarkDialog
@@ -2320,6 +2321,9 @@ class StudioWindow(QMainWindow):
         # Opportunities). Named "Coaching" to match the product positioning and the docs/docstrings
         # (studio/README.md, coaching_panel.py) — its items are all coaching/analysis surfaces.
         coaching_menu = self.menuBar().addMenu("&Coaching")
+        # The footage probe first (slots run in connection order), so the sync it feeds reads
+        # this opening's answer — the ⌘K palette primes the same signal.
+        coaching_menu.aboutToShow.connect(self._probe_previous_pb_footage)
         coaching_menu.aboutToShow.connect(self._sync_coaching_menu)
         self._ref_action = coaching_menu.addAction("Load reference recording…")
         self._ref_action.setToolTip(
@@ -2520,9 +2524,13 @@ class StudioWindow(QMainWindow):
                 self._gate_action(action, has, reason)
         pb = getattr(self, "_pb_compare_action", None)
         if pb is not None:
-            known = getattr(getattr(self, "library_ctl", None), "previous_pb", None) is not None
-            self._gate_action(pb, has and known, self._NO_PREVIOUS_PB_REASON if has
-                              else self._NO_SESSION_REFERENCE_REASON)
+            row = getattr(getattr(self, "library_ctl", None), "previous_pb", None)
+            probe = getattr(self, "_pb_footage_probe", None)
+            if has and row is not None and probe is not None and probe[0] is row and probe[1]:
+                self._gate_action(pb, False, self._previous_pb_missing_reason(row, probe[2]))
+            else:
+                self._gate_action(pb, has and row is not None, self._NO_PREVIOUS_PB_REASON
+                                  if has else self._NO_SESSION_REFERENCE_REASON)
         add = getattr(self, "_focus_add_action", None)
         if add is not None:
             block = getattr(getattr(getattr(self, "view", None), "opportunities", None),
@@ -2530,6 +2538,27 @@ class StudioWindow(QMainWindow):
             ok, why = block.add_state() if block is not None else \
                 (False, self._NO_SESSION_COACHING_REASON)
             self._gate_action(add, ok, why)
+
+    def _probe_previous_pb_footage(self) -> None:
+        """Ask the disk, once per opening of the Coaching menu, whether the previous PB's footage
+        is still where Pacer saw it (REG2-3), for `_sync_coaching_menu` to gate on. Here, not in
+        the sync, which also runs on every load and reference change: a path on a disconnected
+        drive can make `exists` slow, and a menu opening is the moment the answer is read. The
+        answer is kept with the row it is about, so a new session's row is never judged by it."""
+        row = getattr(getattr(self, "library_ctl", None), "previous_pb", None)
+        self._pb_footage_probe = None if row is None else (row, *missing_footage(row))
+
+    @staticmethod
+    def _previous_pb_missing_reason(row: dict, missing: str | None) -> str:
+        """The gate reason for "Compare with your previous PB" when its footage is already known
+        missing: the item reads "… — its footage (2026-08-30) is missing", and the tooltip carries
+        the whole sentence the click's modal used to say (which file, missing from where)."""
+        when = f" ({row['date']})" if row.get("date") else ""
+        head = f"its footage{when} is missing" if missing else "no footage on record"
+        tail = previous_pb_missing_text(row, missing)
+        # Lower-case after the dash, as every other gate reason reads ("Open a recording first —
+        # the ranking is over your own laps.").
+        return f"{head[0].upper()}{head[1:]}{MENU_REASON_SEP}{tail[0].lower()}{tail[1:]}"
 
     def _show_focus_list(self):
         """Coaching ▸ Show focus list, and the Coaching page's one-line list: the list WHOLE, on
@@ -3889,30 +3918,32 @@ class StudioWindow(QMainWindow):
         further. An analysis gesture, not a share loop: nothing here writes or sends anything.
 
         THE FOOTAGE MAY BE GONE: 4 of the owner's 8 library rows point at files that were moved or
-        deleted since. That is checked first and said plainly — which file, missing from where —
-        instead of a load failing on it. A refusal by the reference guards (another track, a lap of
+        deleted since. Footage already known missing is not offered at all (the menu item says why
+        on itself, the debrief and the card leave the button out — REG2-3); what reaches here is a
+        file that went after the offer, checked first and said plainly — which file, missing from
+        where — instead of a load failing on it. A refusal by the reference guards (another track, a lap of
         a different length) arrives through the notice every reference pick gets."""
         row = getattr(self.library_ctl, "previous_pb", None)
         if row is None or not hasattr(self, "session"):
             return
-        paths = [p for p in row.get("paths") or [] if p]
-        missing = [p for p in paths if not os.path.exists(p)]
+        # Checked again on the click: the menu's probe and the debrief's offer were answered when
+        # they opened, and the file can go between then and now — the modal is for that case.
+        gone, missing = missing_footage(row)
         running = getattr(self, "_pb_compare_token", None)
         again = running is not None and running == getattr(self, "_ref_load_token", None)
         # One session-log line per click, before any modal (FIRST-OPEN-LOOP-3): the row it loads.
         _log.info("compare with previous PB: %s — %s",
                   loop_subject(row.get("fingerprint"), row.get("track")),
-                  "footage missing" if missing or not paths
+                  "footage missing" if gone
                   else "already loading" if again else "loading")
-        if missing or not paths:
-            QMessageBox.information(
-                self, f"{APP_NAME} — previous PB not found",
-                previous_pb_missing_text(row, missing[0] if missing else None))
+        if gone:
+            QMessageBox.information(self, f"{APP_NAME} — previous PB not found",
+                                    previous_pb_missing_text(row, missing))
             return
         if again:
             return  # this gesture's load is already running; a second click would only restart it
         # The row's own paths, not their siblings: the recording as it was when it set that best.
-        self._start_reference_load(paths)
+        self._start_reference_load([p for p in row.get("paths") or [] if p])
         self._pb_compare_token = self._ref_load_token
 
     def _enter_pb_compare(self):
