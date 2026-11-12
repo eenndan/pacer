@@ -155,6 +155,9 @@ class LibraryController:
         # the items) — held here and never written, so it dies with that session: every load
         # builds a new one.
         self.demo_preview = False
+        # Whether a first open's row refused at a DEFERRED landing withheld its PB card, which the
+        # next retry then shows (`_land_deferred_verdict`). Reset on every `update_library`.
+        self._card_owed = False
         self._demo_focus: tuple[object, list[focus.FocusItem]] | None = None
 
     # THE VERDICT'S VIEWS, under the names their readers have always used. The class default keeps
@@ -265,6 +268,7 @@ class LibraryController:
         decided (the lead says so instead: `debrief_pb_line`), and its focus list lives in memory
         (`_save_focus`)."""
         self.verdict, self.pb_standing, self.previous_pb = library.Verdict.EXCLUDED, None, None
+        self._card_owed = False
         self.demo_preview = self._is_demo(paths)
         if self.demo_preview:
             self.verdict = library.first_open_verdict(
@@ -344,11 +348,16 @@ class LibraryController:
         (`StudioWindow._land_on_debrief`), once, because the row is written here and the recording
         is never new again. A refused write (WRITE_FAILED) lands nothing, not even the card: the
         notice says the library is unwritable, the next such gesture decides it again, and a
-        moment is shown once, with the row it belongs to (QA r4 CODE-6)."""
+        moment is shown once, with the row it belongs to (QA r4 CODE-6). A WRITE_FAILED the LOAD
+        left had its card shown already, by the load's tail, so its retry lands the debrief or
+        nothing; one an earlier retry here left showed none, and owes it (`_card_owed`). The
+        verdict alone cannot tell those two apart, hence the one bool."""
+        shown = self.verdict is library.Verdict.WRITE_FAILED and not self._card_owed
         moment = self.update_library(paths)
+        self._card_owed = self.verdict is library.Verdict.WRITE_FAILED
         self.win._apply_session_notice()
-        if self.verdict is not library.Verdict.WRITE_FAILED and not self.win._land_on_debrief() \
-                and moment is not None:
+        if not self._card_owed and not self.win._land_on_debrief() and moment is not None \
+                and not shown:
             self.show_pb_moment(moment)
         self.update_focus_list()
 
