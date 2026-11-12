@@ -262,6 +262,94 @@ def test_save_as_track_on_the_fitted_line_decides_it_all_at_once():
     print("ok NEW-4: Save as track on the fitted line lands once, PB line and focus list included")
 
 
+def test_a_refused_write_at_the_drag_keeps_the_verdict_for_the_next_one():
+    """CODE-6 (QA r4, FIRST-OPEN-LOOP-6). The drag that placed the line decided the verdict, and the
+    disk refused its row: every flag was already reset, so the NEXT drag took the plain refresh and
+    wrote the row with no verdict. The recording was known from then on and never got its debrief.
+    The refusal is a state now (WRITE_FAILED): the notice says the library is unwritable, nothing
+    lands, and the next drag decides it again, once, writing the row."""
+    from studio import library
+    from studio.app import LIBRARY_UNWRITABLE_NOTICE
+    from studio.library import Verdict
+    real = library.upsert_and_save
+    refusals = []
+
+    def refuse_once(*args, **kwargs):
+        if not refusals:
+            refusals.append(args)
+            raise OSError(28, "No space left on device")
+        return real(*args, **kwargs)
+    with tempfile.TemporaryDirectory(prefix="landsright_") as folder, _fresh_app_support(), \
+            _unknown_circuit() as line, _window() as win:
+        a, _b = _two_recordings(folder)
+        _open(win, a)
+        landings = _count_landings(win)
+        assert win.library_ctl.waiting_for_line and not _rows()
+        library.upsert_and_save = refuse_once
+        try:
+            _drag_start_line(win, line)
+            assert refusals and not _rows(), _rows()
+            assert not win.library_ctl.opened_new
+            assert LIBRARY_UNWRITABLE_NOTICE in (win.statusBar().currentMessage() or ""), \
+                win.statusBar().currentMessage()
+            assert landings == [] and not win.view.is_debrief(), landings
+            assert win._pb_toast is None
+            _drag_start_line(win, line)
+        finally:
+            library.upsert_and_save = real
+        assert len(landings) == 1 and win.view.is_debrief(), (
+            "the verdict the refused write held never landed", landings,
+            getattr(win.library_ctl, "verdict", None))
+        (row,) = _rows().values()
+        assert row["verified"], row
+        assert win.library_ctl.verdict is Verdict.WAIT_NAME, win.library_ctl.verdict
+        assert win.library_ctl.opened_new and win.library_ctl.waiting_for_name
+        assert LIBRARY_UNWRITABLE_NOTICE not in (win.statusBar().currentMessage() or "")
+        _drag_start_line(win, line)
+        assert len(landings) == 1, ("a third drag landed again", landings)
+    print("ok CODE-6: a refused row at the drag says so, lands nothing, and the next drag lands once")
+
+
+def test_a_refused_write_at_the_load_shows_its_card_once():
+    """CODE-6's other door (review of #529): a first open on a KNOWN circuit whose row the disk
+    refused at load. The load's tail already showed the PB card (nothing to land the debrief on
+    yet), so when the next drag decides the verdict again and the debrief has nothing ranked to
+    show, the card must not come back a second time. Its own window: the circuit is known here,
+    where the journey above needs it unknown."""
+    from studio import library
+    from studio.library import Verdict
+    real = library.upsert_and_save
+    refusals = []
+
+    def refuse_once(*args, **kwargs):
+        if not refusals:
+            refusals.append(args)
+            raise OSError(28, "No space left on device")
+        return real(*args, **kwargs)
+    from studio import track_db
+    line = next(e["start"] for e in track_db.SEED if e["name"] == _DEMO_CIRCUIT)
+    with tempfile.TemporaryDirectory(prefix="landsright_") as folder, _fresh_app_support(), \
+            _window() as win:
+        a, _b = _two_recordings(folder)
+        ctl = win.library_ctl
+        cards = []
+        real_card = ctl.show_pb_moment
+        ctl.show_pb_moment = lambda moment: (cards.append(moment), real_card(moment))[1]
+        library.upsert_and_save = refuse_once
+        try:
+            _open(win, a)
+        finally:
+            library.upsert_and_save = real
+        assert refusals and not _rows(), _rows()
+        assert ctl.verdict is Verdict.WRITE_FAILED, ctl.verdict
+        assert len(cards) == 1 and not win.view.is_debrief(), ("the load showed no card", cards)
+        win.view.opportunities.shortlist_cids = lambda: []    # nothing ranked: no debrief
+        _drag_start_line(win, line)
+        assert len(_rows()) == 1 and ctl.verdict is Verdict.DECIDED, (_rows(), ctl.verdict)
+        assert len(cards) == 1, ("the retry showed the load's card a second time", cards)
+    print("ok CODE-6: a refused row at the load shows its card once; the retry writes it, no repeat")
+
+
 # ------------------------------------------------------------------------------ NEW-6 / EVAL-2
 def _files(root: str) -> list[str]:
     """Every file under `root`, relative: the jail's whole state, not just the stores we thought of."""

@@ -983,6 +983,99 @@ def test_the_pb_verdict_runs_forward_in_time_only():
     assert kinds == ["first", "beat", "beat", "beat"], kinds
 
 
+def test_the_first_open_verdict_is_one_state_in_one_priority_order():
+    """QA r4 CODE-3/CODE-6 (FIRST-OPEN-LOOP-6). The first-open verdict was six flags reset and set in
+    turn, read back by name nine times, so a renamed one read False in silence. It is one
+    `library.Verdict` now, decided by a pure function in the r4 review's priority order (S0-S9),
+    and the old names are views of it. Every row of that table, then the view table: which flags
+    each state raises (they are NOT exclusive: a first open at an unnamed circuit is both opened_new
+    and waiting_for_name), and which states the next timing gesture decides again."""
+    V = library.Verdict
+    base = dict(demo=False, excluded=False, new=True, partial=False, verified=True, degraded=False,
+                track="Sandown Park")
+    rows = [  # (what differs from a whole, new, verified, named, clean first open) -> verdict
+        ({"excluded": True}, V.EXCLUDED),                        # S0: the sample, or no valid lap
+        ({"excluded": True, "demo": True}, V.EXCLUDED),          # S0: the demo with no lap
+        ({"demo": True}, V.DEMO),                                # S1
+        ({"demo": True, "new": False, "partial": True}, V.DEMO),  # the demo outranks the rest
+        ({"partial": True}, V.WAIT_WHOLE),                       # S2
+        ({"partial": True, "verified": False}, V.WAIT_WHOLE),    # the whole is asked for first
+        ({"partial": True, "new": False}, V.PART_KNOWN),         # S3
+        ({"verified": False}, V.WAIT_LINE),                      # S4
+        ({"verified": False, "degraded": True, "track": None}, V.WAIT_LINE),
+        ({}, V.DECIDED),                                         # S5
+        ({"track": None}, V.WAIT_NAME),                          # S6
+        ({"degraded": True}, V.DEGRADED),                        # S7
+        ({"degraded": True, "track": None}, V.DEGRADED),         # S8 folds into S7 (CODE-2)
+        ({"new": False}, V.REOPEN),                              # S9
+        ({"new": False, "verified": False, "degraded": True}, V.REOPEN),
+    ]
+    for diff, want in rows:
+        got = library.first_open_verdict(**{**base, **diff})
+        assert got is want, (diff, got, want)
+    # S10 is the write's outcome, never decided before it.
+    decided = {library.first_open_verdict(**{**base, **d}) for d, _ in rows}
+    assert decided == set(V) - {V.WRITE_FAILED}, set(V) - decided
+    assert library.FIRST_OPENS == {V.DECIDED, V.WAIT_NAME, V.DEGRADED}
+    # The views: opened_new, waiting_for_whole, waiting_for_line, waiting_for_name,
+    # degraded_first_open, retries. 1 = raised.
+    views = {
+        V.EXCLUDED:     (0, 0, 0, 0, 0, 0),
+        V.DEMO:         (1, 0, 0, 0, 0, 0),
+        V.WAIT_WHOLE:   (0, 1, 0, 0, 0, 0),
+        V.PART_KNOWN:   (0, 0, 0, 0, 0, 0),
+        V.WAIT_LINE:    (0, 0, 1, 0, 0, 1),
+        V.DECIDED:      (1, 0, 0, 0, 0, 0),
+        V.WAIT_NAME:    (1, 0, 0, 1, 0, 0),
+        V.DEGRADED:     (1, 0, 0, 0, 1, 0),
+        V.REOPEN:       (0, 0, 0, 0, 0, 0),
+        V.WRITE_FAILED: (0, 0, 0, 0, 0, 1),
+    }
+    assert set(views) == set(V), set(V) - set(views)
+    for v, want in views.items():
+        got = (v.opened_new, v.waiting_for_whole, v.waiting_for_line, v.waiting_for_name,
+               v.degraded_first_open, v.retries)
+        assert got == tuple(map(bool, want)), (v, got, want)
+
+
+def test_a_refused_row_keeps_the_first_open_verdict_and_a_reopen_stays_one(monkeypatch):
+    """CODE-6 at the load: a first open whose row the disk refused is WRITE_FAILED (the drag or the
+    next open decides it again: tests/test_debrief_lands_right.py walks the drag), not a load that
+    decided nothing; and a refused re-open is still a re-open, which no later gesture re-decides.
+    The demo rider: any file under <app-support>/demo/ is the demo, the orphaned v1 cache too."""
+    if not _pacer_available():
+        print("skip test_a_refused_row_keeps_the_first_open_verdict_and_a_reopen_stays_one (no pacer)")
+        return
+    from studio import app as studio_app
+    from studio import demo, library_controller
+    from studio.library import Verdict
+
+    def refuse(*_a, **_k):
+        raise OSError(13, "Permission denied")
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        monkeypatch.setattr(demo, "_app_support_dir", lambda: d)
+        monkeypatch.setattr(library, "upsert_and_save", refuse)
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        ctl = library_controller.LibraryController(win, studio_app.STATUS_MS)
+        assert ctl.verdict is Verdict.EXCLUDED and not ctl.opened_new   # before any load
+        win.session = SimpleNamespace(
+            valid_lap_ids=lambda: [0, 1], timing_verified=True,
+            timing_quality=SimpleNamespace(degraded=False),
+            library_entry=lambda paths: _entry("GX010060", track="MK", laps=2))
+        ctl.update_library(["/m/GX010060.MP4"])
+        assert ctl.verdict is Verdict.WRITE_FAILED and win._library_unwritable, ctl.verdict
+        assert not ctl.opened_new and not ctl.waiting_for_name and ctl.pb_standing is None
+        library.save({**library.empty_index(), "entries": [_entry("GX010060", track="MK")]})
+        ctl.update_library(["/m/GX010060.MP4"])
+        assert ctl.verdict is Verdict.REOPEN, ctl.verdict
+        old = os.path.join(d, "demo", "demo-data-v1", "pacer-synthetic-demo.mp4")
+        assert library_controller.LibraryController._is_demo([old]), "the v1 cache is not the demo"
+        assert library_controller.LibraryController._is_demo([demo.demo_cache_path()])
+        assert not library_controller.LibraryController._is_demo(
+            [os.path.join(d, "demo-elsewhere.mp4"), os.path.join(d, "GX010060.MP4")])
+
+
 def test_app_support_path_uses_patched_seam(monkeypatch):
     """library_path() resolves through _app_support_dir — patching that seam (the test idiom)
     fully diverts reads/writes away from the user's real ~/Library."""

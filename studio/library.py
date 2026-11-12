@@ -103,6 +103,7 @@ the sidecar holds, for a confirm that can name both sides of the swap.
 from __future__ import annotations
 
 import copy
+import enum
 import logging
 import math
 import os
@@ -1037,6 +1038,89 @@ def pb_standing_text(standing: dict, fmt_time) -> str:
         return (f"Your fastest session logged at {track}: best lap {best}, recorded "
                 f"{_short_day(standing.get('date'))}, before your later sessions there.")
     return f"First session logged at {track}: best lap {best}, the time to beat next time."
+
+
+class Verdict(enum.Enum):
+    """THE FIRST-OPEN VERDICT, one state per load (QA r4 CODE-3). `LibraryController.update_library`
+    used to decide it as six flags reset and set in turn, and every consumer read a flag back, so a
+    renamed flag read False in silence. It is one value now, decided by ``first_open_verdict`` in
+    the priority order below (the r4 CODE review's section 2, S0-S9), and the old flag names are
+    read-only views of it (``opened_new`` and the rest below), so their readers are unchanged.
+
+    WRITE_FAILED is the tenth, and the one the flags could not say (QA r4 CODE-6): a first open
+    whose verdict was decided but whose row the disk refused. With the flags reset and none set, the
+    next drag took the plain refresh and wrote the row with no verdict, so the recording was "known"
+    from then on and its debrief was lost for good. It is set only in place of DECIDED, WAIT_NAME or
+    DEGRADED, and it clears only on a written row."""
+
+    EXCLUDED = "excluded"          # S0: the bundled sample, no valid lap, or nothing decided
+    DEMO = "demo"                  # S1: the synthetic demo with a valid lap: lands, keeps nothing
+    WAIT_WHOLE = "wait-whole"      # S2: part of a new recording: no row, waits for the whole one
+    PART_KNOWN = "part-known"      # S3: part of a known recording: upserted, decides nothing
+    WAIT_LINE = "wait-line"        # S4: whole, new, on the loader's own line: no row, waits for it
+    DECIDED = "decided"            # S5: whole, new, trusted line, named, not degraded
+    WAIT_NAME = "wait-name"        # S6: as S5 at an unnamed circuit: PB and focus wait for a name
+    DEGRADED = "degraded"          # S7: as S5 or S6 on degraded timing: written, no debrief
+    REOPEN = "reopen"              # S9: a whole recording the index already holds
+    WRITE_FAILED = "write-failed"  # S10: S5-S7 decided, but the row was not written
+
+    @property
+    def opened_new(self) -> bool:
+        """A first-open verdict was decided AND kept: the row is written (DECIDED, WAIT_NAME,
+        DEGRADED), or it is the demo, which is never indexed and lands on every open."""
+        return self in _OPENED_NEW
+
+    @property
+    def waiting_for_whole(self) -> bool:
+        return self is Verdict.WAIT_WHOLE
+
+    @property
+    def waiting_for_line(self) -> bool:
+        return self is Verdict.WAIT_LINE
+
+    @property
+    def waiting_for_name(self) -> bool:
+        return self is Verdict.WAIT_NAME
+
+    @property
+    def degraded_first_open(self) -> bool:
+        return self is Verdict.DEGRADED
+
+    @property
+    def retries(self) -> bool:
+        """Whether the next gesture that trusts the timing (a line drag, Save as track) decides the
+        verdict again instead of writing a plain row: it waits for the line, or its row was refused."""
+        return self in (Verdict.WAIT_LINE, Verdict.WRITE_FAILED)
+
+
+_OPENED_NEW = frozenset({Verdict.DECIDED, Verdict.WAIT_NAME, Verdict.DEGRADED, Verdict.DEMO})
+# The verdicts whose row carries the first open: a refused write turns any of them into WRITE_FAILED.
+FIRST_OPENS = frozenset({Verdict.DECIDED, Verdict.WAIT_NAME, Verdict.DEGRADED})
+
+
+def first_open_verdict(*, demo: bool, excluded: bool, new: bool = False, partial: bool = False,
+                       verified: bool = False, degraded: bool = False,
+                       track: str | None = None) -> Verdict:
+    """The load's verdict, before any write (WRITE_FAILED is the write's outcome, not decided here).
+    `excluded`: the bundled sample or no valid lap (the demo with no lap included); `new`: the index
+    holds no row of this recording's fingerprint; `partial`: a strict subset of its chapters on
+    disk; `verified`: a trusted start line; `degraded`: the row's ESTIMATED-timing flag; `track`:
+    the circuit's name. The arguments after `excluded` are read only for a load that is neither the
+    demo nor excluded. Degraded timing outranks a missing name: a name brings no PB and no focus
+    list to it, so none is waited for (QA r4 CODE-2)."""
+    if excluded:
+        return Verdict.EXCLUDED
+    if demo:
+        return Verdict.DEMO
+    if partial:
+        return Verdict.WAIT_WHOLE if new else Verdict.PART_KNOWN
+    if not new:
+        return Verdict.REOPEN
+    if not verified:
+        return Verdict.WAIT_LINE
+    if degraded:
+        return Verdict.DEGRADED
+    return Verdict.DECIDED if track else Verdict.WAIT_NAME
 
 
 def is_trustworthy(entry: dict) -> bool:
