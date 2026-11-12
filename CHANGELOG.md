@@ -8,7 +8,7 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.6.1] — 2026-11-12
 
-The Δ frame and the follow-ups after the showcase release: 15 pull requests, #509 to #523.
+The Δ frame and the follow-ups after the showcase release: 16 pull requests, #509 to #524.
 
 ### Highlights
 
@@ -29,6 +29,8 @@ The Δ frame and the follow-ups after the showcase release: 15 pull requests, #5
   or a different line no longer shifts its Δ and its Corners column. (#512)
 - The warning on an older GoPro without GPS9 now states the bound measured on such cameras: a lap
   may read up to ~0.15 s off, the same video-clock figure the accuracy pages give. (#521)
+- A video export whose hardware decode stops partway retries once on the software decode, instead
+  of reporting that the footage stops partway through the clip. (#524)
 
 ## [0.6.0] — 2026-09-30
 
