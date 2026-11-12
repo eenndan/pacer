@@ -2554,8 +2554,11 @@ class StudioWindow(QMainWindow):
         missing: the item reads "… — its footage (2026-08-30) is missing", and the tooltip carries
         the whole sentence the click's modal used to say (which file, missing from where)."""
         when = f" ({row['date']})" if row.get("date") else ""
-        return (f"Its footage{when} is missing{MENU_REASON_SEP}"
-                f"{previous_pb_missing_text(row, missing)}")
+        head = f"its footage{when} is missing" if missing else "no footage on record"
+        tail = previous_pb_missing_text(row, missing)
+        # Lower-case after the dash, as every other gate reason reads ("Open a recording first —
+        # the ranking is over your own laps.").
+        return f"{head[0].upper()}{head[1:]}{MENU_REASON_SEP}{tail[0].lower()}{tail[1:]}"
 
     def _show_focus_list(self):
         """Coaching ▸ Show focus list, and the Coaching page's one-line list: the list WHOLE, on
