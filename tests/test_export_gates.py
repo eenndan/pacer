@@ -1724,17 +1724,23 @@ class _E3Encoder:
 
 
 class _E3Decoder:
-    """A fake ffmpeg DECODE process: blank frames of whatever size the renderer asks for."""
+    """A fake ffmpeg DECODE process: blank frames of whatever size the renderer asks for — all of
+    them, or `frames` and then the end of the stream (a decode that runs dry)."""
 
-    def __init__(self):
+    def __init__(self, frames=None):
         self.returncode = 0
         self.stdin = None
         self.stderr = None
         self._dead = False
+        self._left = frames
         self.stdout = SimpleNamespace(read=self._read, close=lambda: None)
 
     def _read(self, n):
-        return b"" if self._dead else bytes(n)
+        if self._dead or self._left == 0:
+            return b""
+        if self._left is not None:
+            self._left -= 1
+        return bytes(n)
 
     def wait(self, *_a, **_k):
         return 0
@@ -1743,7 +1749,7 @@ class _E3Decoder:
         self._dead = True
 
 
-def _e3_export(win, td, *, resolves, fail, free_after):
+def _e3_export(win, td, *, resolves, fail, free_after, decode_frames=None):
     """File ▸ Export overlay video… end to end into `td`.
 
     `resolves` = what this machine's "auto" resolves to: VT_H264 (this Mac) or SW_H264 (a Mac
@@ -1752,12 +1758,15 @@ def _e3_export(win, td, *, resolves, fail, free_after):
     `free_after` = what the disk answers AFTER a failure (the free blocks alone), one value per
     question in order; None = a volume that cannot be asked. Before the render the pre-flight
     guard is always told there is plenty, because the render has to start for any of this to
-    happen. Returns what the user, the renderer and the disk saw."""
+    happen. `decode_frames` = {"hardware": n, "software": m}: the machine opens the hardware
+    decode, and each decode delivers that many frames before its stream ends (None = all of them);
+    the render runs on the serial pump, whose decoder is the plain pipe this fake can stand in for.
+    Returns what the user, the renderer and the disk saw."""
     src = os.path.join(td, "GX010099.MP4")
     if not os.path.exists(src):
         open(src, "wb").close()
     out = os.path.join(td, "GX010099_overlay.mp4")
-    asked, encoders, modals, made = [], [], [], []
+    asked, encoders, modals, made, decodes = [], [], [], [], []
     after = list(free_after)
 
     def _free(path, purgeable=True):
@@ -1768,7 +1777,9 @@ def _e3_export(win, td, *, resolves, fail, free_after):
 
     def _popen(cmd, **_kw):
         if cmd[-1] == "pipe:1":
-            return _E3Decoder()
+            kind = "hardware" if "-hwaccel" in cmd else "software"
+            decodes.append(kind)
+            return _E3Decoder((decode_frames or {}).get(kind))
         encoder = cmd[cmd.index("-c:v") + 1]
         encoders.append(encoder)
         return _E3Encoder(cmd[-1], fail_after=40 if encoder in fail else None)
@@ -1799,8 +1810,9 @@ def _e3_export(win, td, *, resolves, fail, free_after):
         modals.append({"icon": box.icon(), "body": box.text(), "details": box.detailedText()})
         return 0
 
-    choice = studio_app.ExportChoice(config=export_video.OverlayConfig(), lead=0.0,
-                                     scope=export_video.SCOPE_THIS_LAP)
+    config = (export_video.OverlayConfig(workers=1) if decode_frames is not None
+              else export_video.OverlayConfig())
+    choice = studio_app.ExportChoice(config=config, lead=0.0, scope=export_video.SCOPE_THIS_LAP)
     saved = {
         (export_video, "free_bytes"): export_video.free_bytes,
         (export_video.subprocess, "Popen"): export_video.subprocess.Popen,
@@ -1823,7 +1835,8 @@ def _e3_export(win, td, *, resolves, fail, free_after):
     export_video.resolve_encoder = (
         lambda c: export_video.SW_H264 if c in ("libx264", "software", "sw", "x264", "cpu")
         else resolves)
-    export_video.resolve_hwaccel_decode = lambda _choice, _encoder: False
+    export_video.resolve_hwaccel_decode = (
+        lambda choice, _encoder: decode_frames is not None and choice is not False)
     export_video.ffmpeg_available = lambda: True
     export_video.Renderer = _Renderer
     export_controller.VideoExportWorker = _SyncWorker
@@ -1840,7 +1853,7 @@ def _e3_export(win, td, *, resolves, fail, free_after):
             setattr(owner, name, value)
     after_failure = [p for p, purgeable in asked if not purgeable]
     return SimpleNamespace(encoders=encoders, modals=modals, out=out, folder=td,
-                           asked_after_failure=after_failure)
+                           asked_after_failure=after_failure, decodes=decodes)
 
 
 def _e3_least(resolves) -> str:
@@ -1950,6 +1963,43 @@ def test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk
                 f"free={free_after}: the disk was not asked: {seen.asked_after_failure}")
     win.hide()
     print("ok E3: without VideoToolbox the claim is still checked: generic with room, true when full")
+
+
+def test_a_hardware_decode_that_runs_dry_retries_on_the_software_decode():
+    """A HARDWARE DECODE THAT RUNS DRY IS NOT YET SHORT FOOTAGE. On CI's macos-15 runner, the first
+    that opens VideoToolbox, test_export_e2e's synthetic clip read "The footage stops partway
+    through this clip" on 2 of 4 runs and rendered whole on the other 2: a VideoToolbox decode
+    session can end mid-stream on that VM. The render now gives the software decode the last word,
+    once: the export FINISHES when the software decode delivers every frame, and a file that really
+    stops partway still gets its sentence — after both decodes ran dry.
+
+    On main the first short hardware read was the verdict: one decode, and the truncation box."""
+    win = _window(FakeSession())
+    cases = (
+        ("the hardware decode dies, the software one is whole", {"hardware": 100, "software": None},
+         ["hardware", "software"], QMessageBox.Information),
+        ("the file really stops", {"hardware": 100, "software": 100},
+         ["hardware", "software"], QMessageBox.Warning),
+        ("a whole hardware decode needs no retry", {"hardware": None},
+         ["hardware"], QMessageBox.Information),
+    )
+    for name, frames, want, icon in cases:
+        with tempfile.TemporaryDirectory() as td:
+            seen = _e3_export(win, td, resolves=export_video.VT_H264, fail=set(),
+                              free_after=[], decode_frames=frames)
+            assert seen.decodes == want, f"{name}: decodes {seen.decodes}, wanted {want}"
+            assert len(seen.modals) == 1 and seen.modals[0]["icon"] == icon, (name, seen.modals)
+            body = seen.modals[0]["body"]
+            if icon == QMessageBox.Warning:
+                assert "footage stops partway" in body, (name, body)
+                assert not os.path.exists(seen.out), f"{name}: a short file was left behind"
+            else:
+                assert "footage stops partway" not in body, (name, body)
+                assert os.path.exists(seen.out), f"{name}: no file"
+            assert set(seen.encoders) == {export_video.VT_H264}, (
+                f"{name}: a decode retry changed the encoder: {seen.encoders}")
+    win.hide()
+    print("ok: a hardware decode that runs dry retries once on the software decode")
 
 
 # ==================================== E5 — an honest "Source" estimate, and the remembered choices
@@ -2367,6 +2417,7 @@ def _run_all():
     test_a_false_no_space_takes_the_libx264_retry_and_never_says_disk_full()
     test_a_disk_that_really_filled_gets_no_retry_and_a_true_sentence()
     test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk()
+    test_a_hardware_decode_that_runs_dry_retries_on_the_software_decode()
     test_the_source_hint_states_a_size_and_a_time_once_the_frame_is_known()
     test_the_real_dialog_learns_the_source_frame_behind_itself()
     test_remembered_heavy_choices_are_named_and_use_defaults_resets_only_the_rows()
