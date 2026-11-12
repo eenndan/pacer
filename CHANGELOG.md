@@ -8,7 +8,7 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.6.1] — 2026-11-12
 
-The Δ frame and the follow-ups after the showcase release: 16 pull requests, #509 to #523.
+The Δ frame and the follow-ups after the showcase release: 15 pull requests, #509 to #523.
 
 ### Highlights
 
