@@ -40,16 +40,16 @@ which are not in this repository:
 | RUL-3 | Premises, not choices: a sprint is arrive-and-drive (a different fleet kart each time), and the Sandown 3h recording's camera stayed in one kart across its driver changes | none — premises | unconfirmed 2026-09-28; nothing further is built on them | The kart-number record and the pre-promoted focus rest on the arrive-and-drive premise, still unconfirmed (section 4). |
 | RUL-4 | A per-stint driver label on an endurance recording | no | default applied 2026-09-28 on the owner's instruction not to be asked | No stint labels. |
 | RUL-5 | The race-day agreement: a 10-minute talk, plus two counts he pastes from the app's log | the store listing only: no talk, no counts | default applied 2026-09-28 on the owner's instruction not to be asked | The race-day read reports S2 and S4 as not observable, and holds no talk (S6); section 3. |
-| RUL-6 | The focus loop: keep it, demote it, or turn it off | frozen as is until the freeze end; then keep it | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | At the freeze end the loop's held fixes build. |
-| RUL-7 | Lead the debrief with the lap ("Export best lap" and "Compare with your PB" on any day) | frozen as is until the freeze end; then no | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | The lap-first debrief buttons are not built. |
-| RUL-8 | The theme sentence names the one corner that decides it | frozen as is until the freeze end; then build it | default applied 2026-09-28 on the owner's instruction not to be asked: frozen as is; not re-asked, its freeze-end default applies then | The sentence changes after the freeze. |
+| RUL-6 | The focus loop: keep it, demote it, or turn it off | frozen as is until the freeze end; then keep it | default applied 2026-11-12 on the owner's instruction not to be asked: keep (frozen as is from 2026-09-28 to the freeze end, 2026-11-09) | FIRST-OPEN-LOOP-15 changes nothing; FIRST-OPEN-LOOP-8 and -10 build (section 6). |
+| RUL-7 | Lead the debrief with the lap ("Export best lap" and "Compare with your PB" on any day) | frozen as is until the freeze end; then no | default applied 2026-11-12 on the owner's instruction not to be asked: no (frozen as is from 2026-09-28 to the freeze end, 2026-11-09) | The lap-first debrief buttons are not built: FIRST-OPEN-LOOP-12 and -14 are recorded as not built. |
+| RUL-8 | The theme sentence names the one corner that decides it | frozen as is until the freeze end; then build it | default applied 2026-11-12 on the owner's instruction not to be asked: build (frozen as is from 2026-09-28 to the freeze end, 2026-11-09) | COACHING-4 builds: the sentence changes after the freeze. |
 | RUL-9 | Footage consent: publish a telemetry slice, a 6-8 minute sample, or neither | neither; the demo stays synthetic | default applied 2026-09-28 on the owner's instruction not to be asked | No recording or telemetry is published beyond the approved stills and the 20 s clip (§4 item 6); the next demo is synthetic too. |
 | RUL-10 | Track the agents' `.claude/settings.json` in git, or keep it untracked | untracked | default applied 2026-09-28 on the owner's instruction not to be asked | The settings stay out of git; [AGENT-GUARDRAILS.md](AGENT-GUARDRAILS.md) is their deny rules' reference copy. |
 | RUL-11 | Packaging: keep the macOS `.app` (then CI would launch it on every tag) or drop it (source only) | drop the step and every claim of a working `.app` | default applied 2026-09-28 on the owner's instruction not to be asked: drop | Done 2026-09-30 (LONGEVITY-2, #497): the tag job no longer builds an `.app`, and no page claims one works. `packaging/` stays as an ungated local recipe that no CI job builds or launches ([PACKAGING.md](PACKAGING.md)). |
 | RUL-12 | The showcase release: 0.6 or 1.0 | 0.6 | default applied 2026-09-28 on the owner's instruction not to be asked | The next release is 0.6.0. |
 
-RUL-6 to RUL-8 are not re-asked (his instruction of 2026-09-28). At the freeze end the race-day
-read goes to him as information, and each freeze-end default applies unless he replies (section 3).
+RUL-6 to RUL-8 were not re-asked (his instruction of 2026-09-28). The freeze ended on 2026-11-09,
+and their freeze-end defaults were applied 2026-11-12; any reply of his overrules them (section 6).
 
 ## 2. Owner acts
 
@@ -79,6 +79,7 @@ two unmerged commits, and nothing needs it gone.
 
 **(a) Window.** From 2026-09-28 until the next new recording or Monday 2026-11-09, whichever comes first.
 Until then the first-open, focus and PB surface below changes only through the allowed list (c).
+It ended on its date, 2026-11-09 (section 6).
 
 **(b) Frozen surface, function by function.** A changed line inside any of these, on either side of a diff:
 - `studio/library_controller.py`, `LibraryController`: `update_library`, `_pb_decision`,
@@ -204,3 +205,22 @@ These are what each check found when its batch was dispatched, not a status of s
   defects, up from 31 at the 2026-09-28 review.
 - **Owner acts and late replies:** none reached this record between 2026-09-28 and this release
   beyond the four checks above, and no reply overrules a default of section 1: every row stands.
+
+## 6. Recorded after the freeze, 2026-11-12
+
+Each item below is recorded 2026-11-12.
+
+- **The freeze ended on its date, 2026-11-09**, with no new recording opened before it.
+- **The race-day read (S1-S6, section 3 (e)) could not be taken:** no race was recorded, so there
+  is no race day to read. No signal is reported, and none is inferred.
+- **RUL-6 to RUL-8 were not re-asked** (his instruction of 2026-09-28), so their freeze-end
+  defaults apply, each a default applied 2026-11-12 on the owner's instruction not to be asked:
+  - RUL-6, the focus loop: keep it. FIRST-OPEN-LOOP-15 is then a no-op.
+  - RUL-7, lead the debrief with the lap: no. FIRST-OPEN-LOOP-12 and -14 are not built.
+  - RUL-8, the theme sentence names the deciding corner: build. COACHING-4 builds.
+- **What came in since the 0.6.0 release:**
+  - v0.6.1 was released 2026-11-12 (#509 to #525).
+  - CI moved to macos-15 after GitHub stopped accepting macos-14 (#522).
+  - FIRST-OPEN-LOOP-10 waits for a race day.
+  - TRUTH-8 and TRUTH-12 wait for a race day, and for the recordings they measure on to be
+    reachable again: they are not reachable at their configured paths.
