@@ -6,6 +6,32 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-12
+
+The Δ frame and the follow-ups after the showcase release: 16 pull requests, #509 to #524.
+
+### Highlights
+
+- **Δ where the time went.** The Δ trace, readout, map and compare badge read laps on the Corners
+  table's own on-track alignment: on real footage the trace's rise through a corner now matches
+  the table to about 1 ms, where it was ~80-100 ms off (#512)
+- **The older-GoPro warning states its measured bound.** Up to ~0.15 s a lap, measured on nine GPS5
+  clips (138 ms worst), the same figure the accuracy pages give (#518, #521)
+- **Records that hold themselves.** Two more refusals with their numbers (§21 a de-drift refit,
+  §22 a 2 s VideoToolbox keyframe interval), their prose tied to the measurements, and CI on a
+  macos-15 runner that runs all six VideoToolbox export checks (#509, #510, #515, #522, #523)
+
+### Fixed
+
+- The Δ trace now compares laps at the same place on track, so a corner's loss shows at that corner
+  and its rise matches the Corners table; the readout, compare badge and map Δ follow. (#512)
+- A reference lap from another recording is matched on track too, so a start line a few metres away
+  or a different line no longer shifts its Δ and its Corners column. (#512)
+- The warning on an older GoPro without GPS9 now states the bound measured on such cameras: a lap
+  may read up to ~0.15 s off, the same video-clock figure the accuracy pages give. (#521)
+- A video export whose hardware decode stops partway retries once on the software decode, instead
+  of reporting that the footage stops partway through the clip. (#524)
+
 ## [0.6.0] — 2026-09-30
 
 The showcase release: 63 pull requests, #445 to #507, from the fix plan of the 2026-09-28 review.
@@ -1781,7 +1807,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/eenndan/pacer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/eenndan/pacer/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/eenndan/pacer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/eenndan/pacer/compare/v0.4.2...v0.5.0
