@@ -2000,7 +2000,7 @@ class _Encoder:
     """Pin the H.264 encoder `resolve_encoder` answers with, for the length of a `with` block.
 
     THE ENCODER IS A PROPERTY OF THE MACHINE, so any expected size that depends on it has to name
-    it. This Mac opens a VideoToolbox session; the GitHub macos-14 runner does not, and resolves
+    it. This Mac opens a VideoToolbox session; the GitHub macos-14 runner did not, and resolved
     "auto" to libx264 — where an unpinned estimate of the same 60 s lap is 317,260,800 B against
     VideoToolbox's 46,656,000 B. That is exactly how the first version of the test below passed
     here and failed in CI."""
@@ -2436,7 +2436,7 @@ def test_an_overlay_only_encode_has_no_source_input_and_no_audio():
 # resolution: MK's best lap took 145 s on prores_ks (15.7 fps) and takes 65 s on VideoToolbox
 # (35.4 fps), measured through the real renderer. These pin the policy, the argv, the retry and the
 # alpha; the VideoToolbox-only assertions skip where no VideoToolbox ProRes session opens (CI's
-# macos-14 runner opens one, so they run there too).
+# runner opens one, so they run there too).
 def test_the_prores_encoder_is_videotoolbox_only_where_its_probe_passes(monkeypatch_restore):
     """`resolve_alpha_encoder` reads the SAME `OverlayConfig.encoder` words as the H.264 path, but
     even a forced "videotoolbox" has to pass the probe: an alpha that comes back premultiplied is a

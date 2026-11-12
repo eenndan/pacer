@@ -43,8 +43,8 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | task | does |
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`), binding codegen included |
-| `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 16 real-footage checks and the 6 `videotoolbox.*` export checks run (CI reports the footage Skipped, and 4 of the 6: it runs the 2 ProRes ones); the crash soak is reported Skipped (see `test-soak`) |
-| `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (CI reports 4 of them Skipped) |
+| `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 16 real-footage checks and the 6 `videotoolbox.*` export checks run (CI reports the footage Skipped and runs all 6 since its macos-15 runner); the crash soak is reported Skipped (see `test-soak`) |
+| `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (in CI too) |
 | `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) |
 | `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak. CI runs it on pushes to main, tags, manual runs and the weekly schedule |
 | `pixi run test-core` | optional, not a gate: between core-math edits, the 11 registrations that kill all 34 planted core defects (the mutant cover; why: `pyproject.toml`) |

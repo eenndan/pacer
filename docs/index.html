@@ -513,7 +513,7 @@
       </div>
       <div class="built-card wide">
         <h3>The real app, driven offscreen, on real footage</h3>
-        <p>Dev harnesses in <a href="https://github.com/eenndan/pacer/tree/main/studio/dev"><code>studio/dev/</code></a> boot the actual window offscreen on an actual recording. <strong>160+ CTest registrations</strong> run on every change (the 16+ <code>footage.*</code> checks that need a real recording report themselves skipped, by name, without one; so do 4 of the 6 <code>videotoolbox.*</code> export checks on a machine without Apple's H.264 hardware encoder, CI's included, and one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens, its own images and the counts it quotes.</p>
+        <p>Dev harnesses in <a href="https://github.com/eenndan/pacer/tree/main/studio/dev"><code>studio/dev/</code></a> boot the actual window offscreen on an actual recording. <strong>160+ CTest registrations</strong> run on every change (the 16+ <code>footage.*</code> checks that need a real recording report themselves skipped, by name, without one; so do the 6 <code>videotoolbox.*</code> export checks on a machine without Apple's hardware encoders (CI's runner has them), and one crash soak, which runs on every push to <code>main</code> instead) — one of them is this page, checked against the app's own design tokens, its own images and the counts it quotes.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>
