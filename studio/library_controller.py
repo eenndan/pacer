@@ -408,10 +408,11 @@ class LibraryController:
         try:
             cids = view.opportunities.shortlist_cids() if view is not None else []
             promoted = self.pre_promote_focus(cids) if cids else []
-            if view is not None and view.is_debrief():
-                view.opportunities.set_debrief(True, self.debrief_pb_line(), promoted,
-                                               self.offers_pb_compare(self.pb_standing))
-            elif moment is not None:
+            # The view owns the debrief's on/off: it takes the lead only while the debrief is up.
+            landed = view is not None and view.update_debrief_lead(
+                self.debrief_pb_line(), promoted, self.offers_pb_compare(self.pb_standing),
+                saved=not self.demo_preview)
+            if not landed and moment is not None:
                 self.show_pb_moment(moment)
         except Exception:  # noqa: BLE001 — a landing must never break the gesture it ends
             _log.warning("named first-open verdict not shown", exc_info=True)

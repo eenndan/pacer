@@ -1547,7 +1547,9 @@ class OpportunitiesPanel(QWidget):
                     promoted: list[int] | None = None, compare: bool = False,
                     saved: bool = True) -> None:
         """Make this page the first-open debrief (see the class note), or the ordinary page again.
-        The view owns WHEN (``CentralView.show_debrief`` / ``_end_debrief``); this owns what the
+        The view owns WHEN, and is this method's only caller in studio/ (``CentralView.show_debrief``
+        / ``_end_debrief`` set on/off; ``update_debrief_lead`` re-leads an open one), so the page is
+        never the debrief while the view thinks it is not (FIRST-OPEN-LOOP-9); this owns what the
         page shows: the lead, the shortlist-only table, and no braking line. `compare` offers
         "Compare with your previous PB" beside the PB line (``compare_pb_requested``); `saved`
         False words the note for a list that is never written (the demo's, ``debrief_note``)."""

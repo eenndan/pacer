@@ -1669,8 +1669,18 @@ class CentralView(QWidget):
         """Land on the debrief: the Coaching page, maximized the way ``show_coaching_maximized``
         does it, with its lead and shortlist (``OpportunitiesPanel.set_debrief``; `compare` offers
         "Compare with your previous PB" beside a new PB's line, and `saved` False words the lead
-        for the demo's unsaved list). The window calls this on a recording's FIRST open only
-        (``StudioWindow._land_on_debrief``).
+        for the demo's unsaved list). Called only from ``StudioWindow._land_on_debrief``, which
+        shows ``LibraryController.landing`` — a first open kept (``opened_new``), not on degraded
+        timing, with corners ranked — and is reached two ways: at a load's tail
+        (``StudioWindow._on_session_loaded``, after ``update_library``), which covers a whole new
+        recording on a trusted line and every open of the demo that has a valid lap; and from
+        ``LibraryController.refresh_library_entry`` (``_land_deferred_verdict``), fired by the
+        start-line drag (``timingEdited``) and by File ▸ Save as track…, when the untrusted line
+        a new recording's verdict waited for is trusted.
+
+        This and ``_end_debrief`` are the only writers of the debrief's on/off, here and on the
+        page (``OpportunitiesPanel.set_debrief``), so the two cannot disagree; a lead decided
+        while the debrief is up goes through ``update_debrief_lead``.
 
         It is a landing, not a choice, so none of it is remembered: the tab flips are quiet (the
         persisted lap-panel tab stays the driver's), and every way back to the grid returns to the
@@ -1685,6 +1695,17 @@ class CentralView(QWidget):
             self._maximize_debrief()
         else:
             self._debrief_pending = True
+
+    def update_debrief_lead(self, pb_line: str | None, promoted: list[int],
+                            compare: bool = False, saved: bool = True) -> bool:
+        """Give the open debrief a lead decided after it landed (a first open's PB standing that
+        waited for File ▸ Save as track… to name the circuit, ``_land_named_verdict``), in place:
+        no second landing, no tab flip. A no-op outside the debrief — a panel-only on would leave
+        a page ``_end_debrief`` never ends. True when the debrief took it."""
+        if not self.is_debrief():
+            return False
+        self.opportunities.set_debrief(True, pb_line, promoted, compare, saved)
+        return True
 
     def is_debrief(self) -> bool:
         return getattr(self, "_debrief", False)

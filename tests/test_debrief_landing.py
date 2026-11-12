@@ -18,6 +18,8 @@ Pinned here:
   3. while the page is the debrief its table is the headline's shortlist and the ESTIMATED
      brake-point line stays off it (UX-2: "brake later" at every corner, and no relative figure
      survived measurement — refused-2026-09.md §16);
+  3b. one writer of the debrief state (FIRST-OPEN-LOOP-9): only CentralView calls the page's
+     `set_debrief`, and a lead decided later (`update_debrief_lead`) is a no-op outside it;
   4. THE JOURNEY on the real StudioWindow over two synthetic recordings of the built-in demo circuit
      (so the timing is verified), jailed, with the driver's remembered tab Corners and a persisted
      grid. It includes the defect this package found in its own first cut: the view's deferred
@@ -168,6 +170,62 @@ def test_the_debrief_is_the_shortlist_and_keeps_the_braking_line_off_its_rows():
     assert p.table.rowCount() > PANEL_TOP_N and p.debrief_block.isHidden()
     print(f"ok page: debrief = {PANEL_TOP_N} rows, no braking line; after it the ranking and the "
           "line are back")
+
+
+# ------------------------------------------------------------- 3b. one writer of the debrief
+_DEBRIEF_WRITERS = {"show_debrief", "_end_debrief", "update_debrief_lead"}
+
+
+def test_only_the_view_writes_the_page_debrief_state():
+    """FIRST-OPEN-LOOP-9 (QA r4 CODE-5): the view and the page each hold "this is the debrief", and
+    `LibraryController._land_named_verdict` reached past the view into
+    `view.opportunities.set_debrief` — a panel-only on would leave a page `_end_debrief` never
+    ends. In studio/, `OpportunitiesPanel.set_debrief` is called only by CentralView's three
+    debrief methods."""
+    import ast
+
+    studio_dir = os.path.join(_REPO, "studio")
+    strays = []
+    for root, _dirs, files in os.walk(studio_dir):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=path)
+            rel = os.path.relpath(path, _REPO)
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for node in ast.walk(fn):
+                    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "set_debrief"):
+                        continue
+                    if rel == os.path.join("studio", "central_view.py") \
+                            and fn.name in _DEBRIEF_WRITERS:
+                        continue
+                    strays.append(f"{rel}:{node.lineno} ({fn.name})")
+    assert not strays, f"a writer of the page's debrief state outside the view: {strays}"
+    print("ok one writer: set_debrief is called only by CentralView's debrief methods")
+
+
+def test_a_lead_outside_the_debrief_is_a_no_op():
+    """`CentralView.update_debrief_lead` re-leads an OPEN debrief in place (Save as track naming
+    the circuit) and does nothing otherwise — the card is the caller's to raise then."""
+    from types import SimpleNamespace
+
+    from studio.central_view import CentralView
+
+    calls = []
+    page = SimpleNamespace(set_debrief=lambda *a: calls.append(a))
+    view = SimpleNamespace(_debrief=False, opportunities=page)
+    view.is_debrief = lambda: view._debrief
+    assert CentralView.update_debrief_lead(view, "line", [1], True, False) is False
+    assert calls == [], calls
+    view._debrief = True
+    assert CentralView.update_debrief_lead(view, "line", [1], True, False) is True
+    assert calls == [(True, "line", [1], True, False)], calls
+    print("ok lead: a no-op outside the debrief; in place, saved carried, while it is up")
 
 
 # ------------------------------------------------------------------------ 4. the journey
