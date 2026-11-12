@@ -185,16 +185,17 @@ DEMO_OPEN_TIP = ("Opens Pacer's synthetic demo session, already on this computer
 def demo_get_tip() -> str:
     """The "Get demo" tooltip. WHERE is the host of the URL the fetch will use
     (`demo.download_url()`), read when the welcome is built: "GitHub" for the pinned release
-    asset, else the dev-only PACER_DEMO_URL mirror's host (its whole URL when it names none, as a
-    file: mirror does). It said "from GitHub" while a mirror sent the fetch elsewhere. The host,
-    never the netloc: a mirror URL's user:password@ must not reach a tooltip."""
+    asset, else the dev-only PACER_DEMO_URL mirror's host (when it names none, as a file: mirror
+    does, its URL as `demo.shown_url` renders it). It said "from GitHub" while a mirror sent the
+    fetch elsewhere. The host, never the netloc, and never the raw URL: a mirror URL's
+    user:password@ must not reach a tooltip, host-less ("http://dev:pw@/…") or not."""
     url = demo.download_url()
     try:
         host = urlsplit(url).hostname
     except ValueError:      # a malformed mirror (an unclosed IPv6 bracket) must not stop the welcome
         return (f"Downloads Pacer's synthetic demo session from the PACER_DEMO_URL mirror, once "
                 f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
-    where = "GitHub" if host == "github.com" else (host or url)
+    where = "GitHub" if host == "github.com" else (host or demo.shown_url(url))
     return (f"Downloads Pacer's synthetic demo session from {where}, once "
             f"({demo.download_mb()} MB), and opens it — generated, not filmed.")
 

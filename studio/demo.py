@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from . import app_support
 
@@ -73,6 +74,38 @@ def download_url() -> str:
     return os.environ.get("PACER_DEMO_URL") or _DEMO_URL
 
 
+# A mirror URL may carry a user:password@ (or a signed query) even though the fetch can never use
+# it: urllib's http(s) handlers send no userinfo — they read "user:pass@host" as host:port and fail
+# ("nonnumeric port"), or look "user@host" up as a host name — so a credentialed mirror never works
+# and none is supported. What it can still do is leak, so nothing shows or logs a mirror URL whole:
+# the tooltip and the download line go through `shown_url`, a failure's text through `_unsecret`.
+def shown_url(url: str) -> str | None:
+    """`url` as Pacer may show or log it: scheme, host[:port] and path, never its user:password@,
+    nor a query or fragment (where a signed mirror URL keeps its token). None when it does not
+    parse (a malformed bracketed host), so a caller names it without echoing it."""
+    try:
+        parts = urlsplit(url)   # ValueError on an unclosed or invalid bracketed host
+    except ValueError:
+        return None
+    return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
+
+
+def _unsecret(text: str, url: str) -> str:
+    """`text` with `url`'s user:password@, its password and its query cut out wherever they are
+    quoted, raw or percent-decoded: http.client's "nonnumeric port: 's3cret@host'" quotes the
+    password (decoded first: "p%40ss" is quoted as "p@ss"), and urllib's "unknown url type" quotes
+    a scheme-less URL whole. Found without parsing the host, so a malformed URL that `shown_url`
+    refuses still gives its secrets up."""
+    authority = url.partition("//")[2]
+    for end in "/?#":
+        authority = authority.partition(end)[0]
+    userinfo = authority.rpartition("@")[0]
+    found = (userinfo, userinfo.partition(":")[2], url.partition("?")[2].partition("#")[0])
+    for secret in sorted({s for f in found if f for s in (f, unquote(f))}, key=len, reverse=True):
+        text = text.replace(secret, "…")
+    return text
+
+
 def _app_support_dir() -> str:
     """macOS app-support dir for pacer (~/Library/Application Support/pacer). A separate seam from
     library._app_support_dir so a test can divert the demo cache without touching the library.
@@ -101,9 +134,9 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
     try:
         # A first `--demo` blocks here before any window exists, so say what is happening and how
         # much of it there is — and this is the app's one network fetch, so the session log
-        # records where it went.
+        # records where it went (and never a mirror's credentials: `shown_url`).
         _log.info("downloading the synthetic demo session, once (%s MB) from %s …",
-                  download_mb(), url)
+                  download_mb(), shown_url(url) or "a malformed URL")
         # urlopen (unlike urlretrieve) takes a timeout, so a stalled connection fails instead of
         # hanging the UI thread; stream to a temp sibling then rename so a partial/failed download
         # never looks like a valid cache hit.
@@ -116,7 +149,8 @@ def _try_download_demo(dest: str, url: str | None = None, sha256: str | None = N
             raise ValueError(f"not the published demo (sha256 {digest.hexdigest()}, expected {want})")
         os.replace(tmp, dest)
     except Exception as exc:  # network / IO / timeout — degrade gracefully to the empty welcome state
-        _log.warning("demo download failed (%s); launching the empty welcome state", exc)
+        _log.warning("demo download failed (%s); launching the empty welcome state",
+                     _unsecret(str(exc), url))
         if os.path.exists(tmp):
             os.remove(tmp)
         return False

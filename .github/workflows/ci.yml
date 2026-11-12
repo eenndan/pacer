@@ -30,9 +30,13 @@ concurrency:
 
 jobs:
   build-test-lint:
+    # The NAME keeps "macos-14": the ruleset requires this check by its exact name, and renaming
+    # it is a repository setting, not a code change. The image moved to macos-15 on 2026-11-12,
+    # after GitHub stopped accepting macos-14 ("The configuration 'macos-14-arm64-us-default' is
+    # not supported"; the 2026-11-09 weekly run was cancelled before its first step).
     name: build + test + lint (macos-14 / arm64)
-    # macos-14 is Apple-silicon (arm64) — matches the project's only pixi platform (osx-arm64).
-    runs-on: macos-14
+    # macos-15 is Apple-silicon (arm64) — matches the project's only pixi platform (osx-arm64).
+    runs-on: macos-15
     # Hard ceiling for the whole job: a clean run finishes in a few minutes (cold pixi cache
     # included), so anything past this is a hang — fail fast, never burn the 6-hour default.
     timeout-minutes: 20
@@ -169,12 +173,13 @@ jobs:
 
   next-runner:
     name: next runner early warning (macos-latest; schedule / manual)
-    # The required job above runs on macos-14, and GitHub retires images. This job runs the build,
-    # the smoke and the golden gate on macos-latest, the image that job will have to move to, so a
-    # new Xcode clang or a new image breaks HERE, weekly, before it breaks every pull request. It
-    # never runs on a pull request and is not a required check (the ruleset requires the job
-    # above by its exact name, so that job is never renamed or turned into a matrix), so it can
-    # never block a merge.
+    # The required job above runs on macos-15, and GitHub retires images (macos-14 went first).
+    # This job runs the build, the smoke and the golden gate on macos-latest, the image that job
+    # will have to move to, so a new Xcode clang or a new image breaks HERE, weekly, before it
+    # breaks every pull request. It never runs on a pull request and is not a required check (the
+    # ruleset requires the job above by its exact name, so that job is never renamed or turned
+    # into a matrix), so it can never block a merge. It did not warn of macos-14's removal: the
+    # image was refused outright, not broken, and macos-latest was already macos-15.
     # No continue-on-error, deliberately: it would make the scheduled run conclude success when
     # this job fails, and the warning would reach no one. A failure here turns the weekly run red,
     # a failed check on main's HEAD commit (see `schedule:` above): that IS the warning.

@@ -396,10 +396,12 @@ def test_the_cli_demo_flag_still_tries_the_network():
 
 # Where the fetch goes, per PACER_DEMO_URL: unset (the pinned release asset), a mirror by name, one
 # that carries credentials (they are not the host, and a tooltip must not show them), a mirror on
-# this machine with a port, and a file: mirror, which names no host at all.
+# this machine with a port, a file: mirror, which names no host at all, and credentials with no
+# host (QA3C-MIRROR-SECRET: the host-less fallback echoed the whole URL, password included).
 _MIRRORS = (None, "https://mirror.example.test/demo/pacer-demo.mp4",
             "https://dev:s3cret@mirror.example.test/pacer-demo.mp4",
-            "http://localhost:8765/pacer-demo.mp4", "file:///srv/mirror/pacer-demo.mp4")
+            "http://localhost:8765/pacer-demo.mp4", "file:///srv/mirror/pacer-demo.mp4",
+            "http://dev:s3cret@/pacer-demo.mp4")
 
 
 @_offline
@@ -408,7 +410,8 @@ def test_the_download_tooltip_names_the_host_the_fetch_really_goes_to():
     while the dev-only PACER_DEMO_URL mirror sends the fetch somewhere else. The tooltip is the
     app's one statement of where its one fetch goes, so it is held to the URL a planted fetch
     REALLY asks for — counted at the tripwire, not read back from the code that builds the tip: the
-    pinned asset's host reads "GitHub", a mirror is named by its host (its URL when it has none)."""
+    pinned asset's host reads "GitHub", a mirror is named by its host (when it has none, its URL with
+    any user:password@ cut out — never the password, host or no host)."""
     _none_state()
     saved = os.environ.pop("PACER_DEMO_URL", None)
     said = []
@@ -423,20 +426,24 @@ def test_the_download_tooltip_names_the_host_the_fetch_really_goes_to():
             assert demo._try_download_demo(planted) is False, "the tripwire let a fetch through"
             asked = _URLOPEN_CALLS[before:]
             assert len(asked) == 1, asked
-            host = urlsplit(asked[0]).hostname
-            where = "GitHub" if host == "github.com" else (host or asked[0])
+            parts = urlsplit(asked[0])
+            # A host-less URL is named by what is left once its netloc's user:password@ is cut —
+            # a string cut here, not a call to the helper under test.
+            bare = asked[0].replace(f"//{parts.netloc}", f"//{parts.netloc.rpartition('@')[2]}", 1)
+            where = "GitHub" if parts.hostname == "github.com" else (parts.hostname or bare)
             win = _window()
             try:
                 tip = win.centralWidget().demo_btn.toolTip()
             finally:
                 win.close()
                 _settle(0.1)
+            assert not parts.password or parts.password not in tip, (
+                f"a mirror's password reached the tooltip: {tip!r}")
+            assert "@" not in tip, f"a mirror's user:password@ reached the tooltip: {tip!r}"
             assert f"from {where}," in tip, (
                 f"the fetch goes to {asked[0]!r} but the tooltip says: {tip!r}")
             if where != "GitHub":
                 assert "GitHub" not in tip, (mirror, tip)
-            secret = urlsplit(asked[0]).password
-            assert not secret or secret not in tip, f"a mirror's password reached the tooltip: {tip!r}"
             said.append(where)
     finally:
         if saved is None:
