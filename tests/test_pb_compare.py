@@ -16,14 +16,17 @@ Pinned here:
   1. the row is the one behind the PB line's number (`library.previous_pb` vs `pb_moment`'s
      `prior`): same partition by recording, same trustworthy subset, earliest on a tie;
   2. missing footage (4 of the owner's 8 rows point at files moved or deleted since) is said
-     plainly — which file, missing from where — and nothing is loaded;
+     plainly — which file, missing from where — and nothing is loaded; footage ALREADY known
+     missing is not offered (REG2-3): no debrief button, no card action, and the Coaching item
+     off with the reason on itself, so the modal is only for a file gone after the offer;
   3. the card: the compare is the primary action, share a link; without a compare the card is
      what it was; every control clears the pointer floor inside a card no wider than before;
   4. the debrief line carries the button, sized into the page's height budget with the line;
   5. THE JOURNEY on the real StudioWindow, jailed, over two synthetic recordings of the built-in
      demo circuit (verified timing): the debrief's button and the card's, each end to end — pane
      A this session's best lap even with the playhead elsewhere, pane B the previous PB's lap,
-     the debrief ended so the video panel is on screen, the export enabled — and the missing file;
+     the debrief ended so the video panel is on screen, the export enabled — the file moved after
+     the menu opened (a modal), then already known missing (the item off, no modal);
      each click writes one INFO line to the session log naming the row it loads
      (FIRST-OPEN-LOOP-3), before any modal.
 
@@ -99,6 +102,26 @@ def test_missing_footage_is_said_plainly():
     assert none == ("Your previous best at Sandown Park (0:46.912) has no footage on record, so "
                     "there is nothing to compare it with."), none
     print(f"ok missing: {text!r}")
+
+
+def test_footage_known_missing_is_not_offered():
+    """The debrief's button and the PB card offer the compare through `offers_pb_compare`: a row
+    whose footage is already gone is not offered at all (REG2-3), instead of offered and then
+    refused by a modal on the click. A row with its footage on disk still is."""
+    from studio.library_controller import LibraryController
+    ctl = LibraryController.__new__(LibraryController)
+    with tempfile.TemporaryDirectory(prefix="pb_footage_") as folder:
+        clip = os.path.join(folder, "GX010065.MP4")
+        with open(clip, "wb"):
+            pass
+        ctl.previous_pb = _row("GX0065", 46.912, paths=[clip])
+        moment = {"kind": "beat", "prior": 46.912}
+        assert ctl.offers_pb_compare(moment), "footage on disk: the compare is offered"
+        os.replace(clip, clip + ".moved")
+        assert not ctl.offers_pb_compare(moment), "the footage is gone: no button, no card action"
+        ctl.previous_pb = _row("GX0065", 46.912, paths=[])
+        assert not ctl.offers_pb_compare(moment), "no footage on record: nothing to compare"
+    print("ok offered: only while the previous PB's footage is where Pacer saw it")
 
 
 # ------------------------------------------------------------------------------- 3. the card
@@ -247,10 +270,11 @@ def _assert_compare_on_the_two_best_laps(win, slow_path, standing, label):
 
 
 def test_the_journey_on_the_real_window():
-    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtWidgets import QMenu, QMessageBox
     from test_debrief_landing import _fresh_app_support, _loop_log, _open, _said
 
     from studio.app import StudioWindow
+    from studio.coaching_panel import DEBRIEF_COMPARE
 
     shown = []
     real_info = QMessageBox.information
@@ -304,7 +328,15 @@ def test_the_journey_on_the_real_window():
             assert not shown, shown
             assert _said(said, "compare with previous PB") == [asked] * 2, said
 
-            # (c) the previous PB's footage has moved since: said plainly, nothing loaded
+            # Coaching ▸ while the footage is there: the item is on, under its own name.
+            (coaching,) = [m for m in win.menuBar().findChildren(QMenu)
+                           if m.title() == "&Coaching"]
+            item = win._pb_compare_action
+            coaching.aboutToShow.emit()
+            assert item.isEnabled() and item.text() == DEBRIEF_COMPARE, item.text()
+
+            # (c) the previous PB's footage moves AFTER the menu was opened: the click still says
+            # so plainly, and nothing is loaded — the one case the modal is left for.
             win._clear_reference()
             moved = os.path.join(folder, "moved")
             os.replace(os.path.dirname(slow), moved)
@@ -319,6 +351,26 @@ def test_the_journey_on_the_real_window():
             assert missed == [asked] * 2 + [asked.replace(" — loading", " — footage missing")], \
                 missed
             assert not win.session.has_reference()
+
+            # (d) the footage is ALREADY known missing when the menu opens (REG2-3): the item is
+            # off and says why on itself, the full sentence on its tooltip, so there is nothing
+            # to click into a modal; the card offers no compare either.
+            coaching.aboutToShow.emit()
+            row = win.library_ctl.previous_pb
+            assert not item.isEnabled(), "a compare that can only fail is still offered"
+            want = f"{DEBRIEF_COMPARE} — its footage ({row['date']}) is missing"
+            assert item.text() == want, (item.text(), want)
+            assert "GX019001.MP4 is missing from" in item.toolTip(), item.toolTip()
+            item.trigger()
+            assert len(shown) == 1, f"a modal on the known-missing path: {shown}"
+            assert not win.library_ctl.offers_pb_compare(standing)
+            win.library_ctl.show_pb_moment(standing)
+            assert _wait(lambda: win._pb_toast is not None and win._pb_toast.isVisible(), 3)
+            assert win._pb_toast.compare_btn is None, "the card offers a compare that can't load"
+            # Back where Pacer saw it: offered again on the next opening of the menu.
+            os.replace(moved, os.path.dirname(slow))
+            coaching.aboutToShow.emit()
+            assert item.isEnabled() and item.text() == DEBRIEF_COMPARE, item.text()
         finally:
             QMessageBox.information = real_info
             win.close()

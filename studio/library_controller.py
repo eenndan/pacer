@@ -119,6 +119,16 @@ def previous_pb_missing_text(entry: dict, missing_path: str | None) -> str:
             "If you moved it, load it with Coaching ▸ Load reference recording… to compare.")
 
 
+def missing_footage(entry: dict) -> tuple[bool, str | None]:
+    """Whether a library row's footage is gone — (gone, the first recorded path that is missing).
+    Gone when the row recorded no path, or when ANY of its chapters is missing: the compare loads
+    the recording whole, so one missing chapter fails it as surely as all of them. One `stat` per
+    recorded path, so a caller probes it once per gesture or menu opening, not per sync."""
+    paths = [p for p in entry.get("paths") or [] if p]
+    missing = next((p for p in paths if not os.path.exists(p)), None)
+    return (not paths or missing is not None), missing
+
+
 class LibraryController:
     """Owns the library / records / focus / saved-tracks cluster for ONE `StudioWindow`. Built once,
     in the window's constructor, BEFORE `_build_menu` (which wires File ▸ Library…, Open Recent,
@@ -359,11 +369,15 @@ class LibraryController:
         """Whether a PB surface showing `moment` (a ``pb_moment`` or ``pb_standing`` dict) may offer
         "Compare with your previous PB": it is a BEAT, and the row the last `update_library`
         remembered is the one whose best that moment quotes as the previous best — the button
-        loads the lap the sentence beside it names, or it is not offered."""
+        loads the lap the sentence beside it names, or it is not offered. Nor when that row's
+        footage is already known missing (REG2-3): a button that can only answer with a "not
+        found" modal is not an offer. Asked once per surface shown, so the probe is one per
+        landing."""
         row = self.previous_pb
         if not moment or moment.get("kind") != "beat" or row is None or row.get("best") is None:
             return False
-        return abs(float(row["best"]) - float(moment.get("prior", math.nan))) < 1e-9
+        same = abs(float(row["best"]) - float(moment.get("prior", math.nan))) < 1e-9
+        return same and not missing_footage(row)[0]
 
     def _library_excludes(self, paths: list[str]) -> bool:
         """True when this recording must stay OUT of the session library: the bundled DEFAULT_SAMPLE
