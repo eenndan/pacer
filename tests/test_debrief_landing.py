@@ -87,6 +87,31 @@ def test_the_pb_line_is_the_moment_or_where_the_best_lap_stands():
     print("ok pb line:", *texts, sep="\n  ")
 
 
+def test_an_older_faster_first_open_is_the_fastest_not_a_new_pb():
+    """REG2-GAP-1 (FIRST-OPEN-LOOP-13): the controller's verdict passes the session's own date, so a
+    back-catalogue recording faster than a LATER row is the track's fastest — no "New personal
+    best", no "First session", and no "previous PB" pointing forward in time to compare with."""
+    from types import SimpleNamespace
+
+    from studio.library_controller import LibraryController
+
+    session = SimpleNamespace(timing_verified=True, timing_quality=SimpleNamespace(degraded=False))
+    ctl = LibraryController(SimpleNamespace(session=session), 0)
+    later = {**_entry("GX0068", 46.808), "date": "2026-09-19"}
+    older = {**_entry("GX0050", 46.700), "date": "2026-06-01"}
+    moment, standing = ctl._pb_decision(older, {"entries": [later]})
+    assert moment["kind"] == standing["kind"] == "fastest", (moment, standing)
+    assert ctl.previous_pb is None and not ctl.offers_pb_compare(standing), ctl.previous_pb
+    ctl.pb_standing = standing
+    line = ctl.debrief_pb_line()
+    assert "New personal best" not in line and "First session" not in line, line
+    assert line.startswith("Your fastest session logged at Stadium: best lap 0:46.700"), line
+    # The forward order is untouched: the later recording opened after the older row beats it.
+    moment, standing = ctl._pb_decision({**later, "best": 46.6}, {"entries": [older]})
+    assert moment["kind"] == standing["kind"] == "beat", (moment, standing)
+    assert ctl.previous_pb["fingerprint"] == "GX0050", ctl.previous_pb
+
+
 def test_the_lead_says_it_is_a_default_and_how_to_undo_it():
     three, one, none = debrief_note([7, 5, 3]), debrief_note([4]), debrief_note([])
     assert "Pacer put C7, C5 and C3" in three and "a default, not a decision" in three, three

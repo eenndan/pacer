@@ -920,6 +920,69 @@ def test_a_pb_inside_timing_precision_reads_level_not_0_00_s_faster():
     assert library.within_timing_precision(-0.069) and not library.within_timing_precision(0.07)
 
 
+def test_the_pb_verdict_runs_forward_in_time_only():
+    """REG2-GAP-1 (FIRST-OPEN-LOOP-13). The PB verdict partitioned the index by identity only, never
+    by date: the FIRST open of an OLDER recording (1 Jun, 46.700) against a LATER row (19 Sep,
+    46.808) read "New personal best! … 0.11 s faster than your previous best (0:46.808)", and its
+    "previous PB" was the 19 Sep row — forward in time. A row dated strictly after this session is
+    not a prior: a faster back-catalogue session is the track's FASTEST, not a new PB, and nothing
+    is offered as a "previous" one. Rows carry only the calendar day, so a same-day row and an
+    undated one (either side) stay priors, as `focus.recorded_before` keeps them: no guessed order."""
+    T = "Sandown Park"
+    later = _entry("GX010068", track=T, date="2026-09-19", best=46.808)
+    idx = {"entries": [later]}
+    old = library.fingerprint("GX010050")
+    m = library.pb_moment(idx, T, 46.700, fingerprint_key=old, date="2026-06-01")
+    assert m is not None and m["kind"] == "fastest", m
+    assert library.previous_pb(idx, T, old, date="2026-06-01") is None
+    s = library.pb_standing_for(True, idx, T, 46.700, fingerprint_key=old, date="2026-06-01")
+    assert s is not None and s["kind"] == "fastest", s
+    title, body = library.pb_moment_text(m, fmt_time)
+    line = library.pb_standing_text(s, fmt_time)
+    for text in (title, body, line):
+        assert "First session" not in text and "New personal best" not in text, text
+        assert "previous best" not in text, text
+    assert title == "Your fastest session logged here", title
+    assert body == ("Sandown Park — best lap 0:46.700, recorded 1 Jun, before your later "
+                    "sessions here."), body
+    assert line == ("Your fastest session logged at Sandown Park: best lap 0:46.700, recorded "
+                    "1 Jun, before your later sessions there."), line
+    # Inside timing precision of the later best it is level, not "fastest" by 0.005 s.
+    lv = library.pb_standing_for(True, idx, T, 46.803, fingerprint_key=old, date="2026-06-01")
+    assert lv["kind"] == "fastest" and "level with your personal best" in \
+        library.pb_standing_text(lv, fmt_time), lv
+    assert "level with your personal best (0:46.808)" in library.pb_moment_text(lv, fmt_time)[1]
+    # Older and SLOWER: behind today's PB, as before.
+    b = library.pb_standing_for(True, idx, T, 47.2, fingerprint_key=old, date="2026-06-01")
+    assert b is not None and b["kind"] == "behind" and b["prior"] == 46.808, b
+    # Only TRUSTED later rows end the "first"/"beat" story: a provisional later row is no bar.
+    prov = {"entries": [_entry("GX010068", track=T, date="2026-09-19", best=46.0, verified=False)]}
+    assert library.pb_moment(prov, T, 46.7, fingerprint_key=old, date="2026-06-01")["kind"] == "first"
+    # An earlier prior AND a later row: still no beat over the earlier one.
+    mixed = {"entries": [_entry("GX010040", track=T, date="2026-05-01", best=48.0), later]}
+    assert library.pb_moment(mixed, T, 47.0, fingerprint_key=old, date="2026-06-01") is None
+    assert library.previous_pb(mixed, T, old, date="2026-06-01")["date"] == "2026-05-01"
+    assert library.pb_standing_for(True, mixed, T, 47.0, fingerprint_key=old,
+                                   date="2026-06-01")["kind"] == "behind"
+    # Same day, or an undated side: compared as before (a beat over the other row).
+    for row_date, mine in (("2026-06-01", "2026-06-01"), (None, "2026-06-01"),
+                           ("2026-09-19", None)):
+        ix = {"entries": [_entry("GX010068", track=T, date=row_date, best=46.808)]}
+        got = library.pb_moment(ix, T, 46.700, fingerprint_key=old, date=mine)
+        assert got is not None and got["kind"] == "beat", (row_date, mine, got)
+        assert library.previous_pb(ix, T, old, date=mine)["fingerprint"] == later["fingerprint"]
+    # His forward sequence still celebrates three beats, each over the row before it.
+    seq = library.empty_index()
+    kinds = []
+    for i, (date, best) in enumerate((("2026-07-19", 48.552), ("2026-08-30", 47.076),
+                                      ("2026-09-05", 46.912), ("2026-09-19", 46.808))):
+        e = _entry(f"GX01{i:04d}", track=T, date=date, best=best)
+        kinds.append((library.pb_moment(seq, T, best, fingerprint_key=e["fingerprint"],
+                                        date=date) or {}).get("kind"))
+        library.upsert(seq, e)
+    assert kinds == ["first", "beat", "beat", "beat"], kinds
+
+
 def test_app_support_path_uses_patched_seam(monkeypatch):
     """library_path() resolves through _app_support_dir — patching that seam (the test idiom)
     fully diverts reads/writes away from the user's real ~/Library."""

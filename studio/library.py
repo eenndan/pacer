@@ -770,8 +770,42 @@ def _precision_clause(gap_s: float) -> str:
     return f"within timing precision (under {PB_PRECISION_S:.2f} s apart)"
 
 
+# THE PB VERDICT RUNS FORWARD IN TIME ONLY (REG2-GAP-1). A row is a PRIOR of this session unless it
+# was recorded on a LATER calendar day: the first open of a 1 Jun recording at 46.700 against a
+# 19 Sep row at 46.808 used to read "New personal best! … 0.11 s faster than your previous best"
+# and offered the 19 Sep footage as its "previous PB". Rows carry only the day (no start stamp), so
+# a same-day row is not ordered and stays a prior, and so does any pair with an unreadable or
+# missing date — compared as before rather than refused on a guess, as `focus.recorded_before` does.
+_ISO_DAY = re.compile(r"\d{4}-(\d{2})-(\d{2})")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _iso_day(date) -> str | None:
+    """The "YYYY-MM-DD" day of a stored date, or None when it is not one (ISO days order as text)."""
+    m = _ISO_DAY.match(date) if isinstance(date, str) else None
+    if m is None or not (1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31):
+        return None
+    return m.group(0)
+
+
+def _recorded_after(entry: dict, date: str | None) -> bool:
+    """Whether `entry` was recorded on a calendar day strictly AFTER `date` (False when either day
+    is unknown: no order is guessed)."""
+    mine, theirs = _iso_day(date), _iso_day(entry.get("date"))
+    return mine is not None and theirs is not None and theirs > mine
+
+
+def _short_day(date: str | None) -> str:
+    """"1 Jun" from a stored ISO day, the form the focus verdicts use (`focus._when`); the raw
+    string when it is not one."""
+    day = _iso_day(date)
+    if day is None:
+        return str(date or "")
+    return f"{int(day[8:10])} {_MONTHS[int(day[5:7]) - 1]}"
+
+
 def pb_moment(index: dict, track: str | None, best: float | None,
-              fingerprint_key: str | None = None) -> dict | None:
+              fingerprint_key: str | None = None, date: str | None = None) -> dict | None:
     """Decide the "new personal best" moment for a freshly-analysed session, comparing its `best`
     lap (seconds) against `track`'s ``prior_best`` in the CURRENT index (BEFORE this session is
     upserted). Pacer-free — the caller (app) supplies the values from Session accessors and owns the
@@ -822,7 +856,15 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     older number became a "previous best" to beat).
 
     Callers with no identity to offer pass nothing: the partition is then empty and the behaviour is
-    exactly what it always was."""
+    exactly what it always was.
+
+    `date` is this session's own recorded day, and it splits the OTHER recordings once more: a row
+    recorded on a LATER day is not a prior (see ``_recorded_after``). While any trusted later row
+    exists this session can be neither the track's "first" nor a "beat" — it is back-catalogue — so
+    the only moment left is ``{"kind": "fastest", "track", "best", "date", "prior",
+    "improvement"}`` when its best is under EVERY other recording's (``prior`` = the fastest of
+    them, today's PB), with the same own-best rule as a beat. A slower one gets None here and its
+    debrief line reads "behind" today's PB (``pb_standing_for``). No `date` → no split."""
     if not track or best is None or not math.isfinite(best):
         return None
     # Split by identity — by POSITION, never by value: two entries can compare equal.
@@ -830,6 +872,13 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     for e in index.get("entries", []):
         target = mine if fingerprint_key and e.get("fingerprint") == fingerprint_key else others
         target.append(e)
+    if prior_best({"entries": [e for e in others if _recorded_after(e, date)]}, track) is not None:
+        bar = prior_best({"entries": others}, track)
+        own = [float(e["best"]) for e in mine if e.get("best") is not None and is_trustworthy(e)]
+        if bar is None or (own and min(own) < bar) or not best < bar:
+            return None
+        return {"kind": "fastest", "track": track, "best": float(best), "date": date,
+                "prior": float(bar), "improvement": float(bar) - float(best)}
     prior = prior_best({"entries": others}, track)
     if prior is None:
         return None if mine else {"kind": "first", "track": track, "best": float(best)}
@@ -842,7 +891,8 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     return None
 
 
-def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = None) -> dict | None:
+def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = None,
+                date: str | None = None) -> dict | None:
     """The library ROW a new personal best beat — the entry holding `track`'s fastest trustworthy
     best among the OTHER recordings (board review PS-B4: "compare with your previous PB").
 
@@ -850,16 +900,19 @@ def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = No
     row is what carries the footage's paths. Same partition by `fingerprint_key` and the same
     trustworthy subset (``best_entry``), so the row and the number the PB line quotes are one
     fact: a recording can no more be its own previous PB here than there. None when there is no
-    such row (no track, or no other trustworthy best)."""
+    such row (no track, or no other trustworthy best). `date` is this session's day: a row
+    recorded on a LATER day is never its "previous" PB (``_recorded_after``)."""
     if not track:
         return None
     others = [e for e in index.get("entries", [])
-              if not (fingerprint_key and e.get("fingerprint") == fingerprint_key)]
+              if not (fingerprint_key and e.get("fingerprint") == fingerprint_key)
+              and not _recorded_after(e, date)]
     return best_entry({"entries": others}, track)
 
 
 def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | None,
-                  degraded: bool = False, fingerprint_key: str | None = None) -> dict | None:
+                  degraded: bool = False, fingerprint_key: str | None = None,
+                  date: str | None = None) -> dict | None:
     """``pb_moment`` gated on BOTH timing axes: returns None (never celebrates) when either
 
       * `verified` is False (TIMING TRUST) — a lap number referenced to an arbitrary provisional
@@ -873,10 +926,11 @@ def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | 
     + the entry's track/best/fingerprint and the gate stays tested in one spot. `degraded` defaults
     False so the common high-quality path is unchanged; `fingerprint_key` is the entry's identity
     key, forwarded to ``pb_moment``, which partitions the index on it so a recording is compared
-    against the OTHER recordings rather than against itself (see there)."""
+    against the OTHER recordings rather than against itself (see there), and `date` the session's
+    recorded day, which keeps a later row from being one of its priors (see there too)."""
     if not verified or degraded:
         return None
-    return pb_moment(index, track, best, fingerprint_key)
+    return pb_moment(index, track, best, fingerprint_key, date)
 
 
 def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
@@ -887,6 +941,21 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     "first" is a gentler acknowledgement. The one place the celebration wording lives."""
     track = moment["track"]
     best = fmt_time(moment["best"])
+    if moment["kind"] == "fastest":
+        # Back-catalogue, not news: the prior is a LATER session's, so neither "previous" nor
+        # "first" is true of it (REG2-GAP-1). Level inside timing precision, as a beat is.
+        if within_timing_precision(moment["improvement"]):
+            clause = _precision_clause(moment["improvement"])
+            return (
+                "Level with your personal best",
+                f"{track} — {best}, level with your personal best ({fmt_time(moment['prior'])})"
+                f"{' ' + clause if clause else ''}.",
+            )
+        return (
+            "Your fastest session logged here",
+            f"{track} — best lap {best}, recorded {_short_day(moment.get('date'))}, before your "
+            f"later sessions here.",
+        )
     if moment["kind"] == "beat" and within_timing_precision(moment["improvement"]):
         clause = _precision_clause(moment["improvement"])
         return (
@@ -918,7 +987,8 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
 
 
 def pb_standing_for(verified: bool, index: dict, track: str | None, best: float | None,
-                    degraded: bool = False, fingerprint_key: str | None = None) -> dict | None:
+                    degraded: bool = False, fingerprint_key: str | None = None,
+                    date: str | None = None) -> dict | None:
     """Where a session's best lap stands against its track's personal best — the debrief's one
     PB line (board review PS-B1). ``pb_moment_for``'s answer when there is one (``beat`` /
     ``first``), and otherwise, for a recording the index does NOT hold yet, ``{"kind": "behind",
@@ -927,8 +997,10 @@ def pb_standing_for(verified: bool, index: dict, track: str | None, best: float 
 
     A best lap against the best lap, never a median against the last session: that comparison
     was measured and refused (studio/docs/refused-2026-09.md §8). A recording already in the index
-    gets only its moment — its own row may be the PB, and "behind" would then be false."""
-    moment = pb_moment_for(verified, index, track, best, degraded, fingerprint_key)
+    gets only its moment — its own row may be the PB, and "behind" would then be false. A session
+    recorded before a later trusted row (`date`) gets ``fastest`` or "behind" today's PB, never
+    ``first`` or ``beat`` (``pb_moment``)."""
+    moment = pb_moment_for(verified, index, track, best, degraded, fingerprint_key, date)
     if moment is not None or not verified or degraded or not track:
         return moment
     if best is None or not math.isfinite(best):
@@ -949,8 +1021,8 @@ def pb_standing_text(standing: dict, fmt_time) -> str:
     precision of the PB, either side of it, is "level with your personal best there": one rule in
     both directions, so a 0.004 s beat is not "0.00 s faster" and a 0.03 s deficit not "0.03 s off"."""
     track, best = standing["track"], fmt_time(standing["best"])
-    if standing["kind"] in ("beat", "behind"):
-        gap = standing["improvement" if standing["kind"] == "beat" else "gap"]
+    if standing["kind"] in ("beat", "fastest", "behind"):
+        gap = standing["gap" if standing["kind"] == "behind" else "improvement"]
         if within_timing_precision(gap):
             clause = _precision_clause(gap)
             return (f"Best lap {best} at {track}, level with your personal best there"
@@ -961,6 +1033,9 @@ def pb_standing_text(standing: dict, fmt_time) -> str:
     if standing["kind"] == "behind":
         return (f"Best lap {best} at {track}, {standing['gap']:.2f} s off your personal best "
                 f"there ({fmt_time(standing['prior'])}).")
+    if standing["kind"] == "fastest":
+        return (f"Your fastest session logged at {track}: best lap {best}, recorded "
+                f"{_short_day(standing.get('date'))}, before your later sessions there.")
     return f"First session logged at {track}: best lap {best}, the time to beat next time."
 
 

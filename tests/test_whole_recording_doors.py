@@ -83,9 +83,11 @@ def _fresh_app_support(prior_best: float | None = None, track: str | None = None
             m._app_support_dir = lambda d=d: d
         try:
             if prior_best is not None:
+                # Dated BEFORE the synthetic recording (studio/dev/synth_gopro.py: 1 Jun 2026): a
+                # row recorded after the session is not its previous best (FIRST-OPEN-LOOP-13).
                 library.upsert_and_save({
                     "fingerprint": "GX0042", "stem": "GX010042", "track": track,
-                    "date": "2026-09-01", "lap_count": 20, "best": prior_best,
+                    "date": "2026-05-01", "lap_count": 20, "best": prior_best,
                     "theoretical": prior_best - 0.5, "verified": True, "degraded": False,
                     "dropout": False, "paths": ["/nowhere/GX010042.MP4"]})
             yield d
