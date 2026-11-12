@@ -282,14 +282,16 @@ class LibraryController:
         (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
         which is what keeps the chapter it just chained from being its "previous best".
         `previous_pb` comes from the same index: after the upsert this recording's own row is the
-        track's best. Kept even if the write that follows fails, like the moment it belongs to."""
-        key = entry.get("fingerprint")
+        track's best. Kept even if the write that follows fails, like the moment it belongs to.
+        The entry's recorded day keeps a LATER row from being a prior or the previous PB (REG2-GAP-1:
+        an older, faster first open is the track's "fastest", never a beat — `library.pb_moment`)."""
+        key, date = entry.get("fingerprint"), entry.get("date")
         trust = (self.win.session.timing_verified, index, entry.get("track"), entry.get("best"))
         degraded = self.win.session.timing_quality.degraded
-        moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key)
-        standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key)
+        moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key, date=date)
+        standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key, date=date)
         if (moment or {}).get("kind") == "beat":
-            self.previous_pb = library.previous_pb(index, entry.get("track"), key)
+            self.previous_pb = library.previous_pb(index, entry.get("track"), key, date)
         return moment, standing
 
     def _land_deferred_verdict(self, paths: list[str]) -> None:
