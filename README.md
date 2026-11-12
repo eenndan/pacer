@@ -103,7 +103,7 @@ official timing measures the noise floor.
 - **Exports.** Lap times and per-lap channels as CSV, a session report as HTML, a shareable lap
   card as an image, and the telemetry burned onto the footage (via ffmpeg).
 
-<img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.04 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
+<img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 
 The rest of the window is in the **[first-lap walkthrough](docs/FIRST_LAP.md)**.
 
