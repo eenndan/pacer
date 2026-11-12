@@ -52,23 +52,27 @@ def test_the_media_clock_warning_quotes_one_bound_and_no_drift():
     is a hedged bound, and it is one constant so the five surfaces cannot drift apart again.
 
     The exports' [e] key (laps.csv's trailer, the session report) is the same warning in ASCII, and
-    it said the clock "runs slightly fast" after the five had stopped — so it is held here too."""
+    it said the clock "runs slightly fast" after the five had stopped — so it is held here too.
+
+    Nor may a sentence call the clock unmeasured on such a camera: the tooltip and the [e] key said
+    "not measured on such a camera" while the packet-spread clock IS measured on the nine bundled
+    GPS5 clips (tests/test_load_pipeline.py); what no GPS5 lap has met is official timing."""
     bound = dq.MEDIA_CLOCK_LAP_ERROR
-    claims = ("0.1%", "drift", "fast")
+    claims = ("0.1%", "drift", "fast", "measured on such a camera")
     for q in (TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK),
               TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK, dropped_fraction=0.5)):
         texts = {"concerns[0]": q.concerns()[0], "summary": q.summary(), "detail": q.detail(),
                  "cost": q.cost()}
         for name, text in texts.items():
             assert not any(c in text for c in claims), (
-                f"{name} still claims the video clock drifts: {text!r}")
+                f"{name} makes a retired claim {[c for c in claims if c in text]}: {text!r}")
             # The combined one-line summary names both concerns and has no room for the bound;
             # its detail/cost/concern lines carry it.
             if not (name == "summary" and q.low_gps_quality):
                 assert bound in text, f"{name} does not quote the one bound {bound!r}: {text!r}"
     meaning = dq.MARK_MEANING[dq.MARK_ESTIMATED]
     assert bound in meaning and not any(c in meaning for c in claims), (
-        f"the exports' [e] key does not quote the one bound, or claims a drift: {meaning!r}")
+        f"the exports' [e] key does not quote the one bound, or makes a retired claim: {meaning!r}")
     # The map banner is setWordWrap(False): its media-clock line may not grow past the 66
     # characters it had, or it clips on a narrow map.
     summary = TimingQuality(clock=dq.MEDIA_CLOCK_FALLBACK).summary()
