@@ -132,6 +132,88 @@ def test_a_cached_older_demo_is_not_the_pinned_one():
     print("ok demo cache: an older demo's copy is never the pinned one")
 
 
+# QA3C-MIRROR-SECRET: a dev mirror URL as PACER_DEMO_URL may carry a user:password@ or a signed
+# query, and the fetch logs where it goes. (url, what the "downloading" line names) — literals.
+# The secret is "s3cret", or "s3cr%40t", which urllib quotes percent-decoded as "s3cr@t".
+_SECRETS = ("s3cret", "s3cr%40t", "s3cr@t")
+_CREDENTIALED = (
+    ("https://dev:s3cret@mirror.example.test/demo/pacer-demo.mp4",
+     "https://mirror.example.test/demo/pacer-demo.mp4"),
+    ("http://dev:s3cret@/pacer-demo.mp4", "http:///pacer-demo.mp4"),
+    ("http://dev:s3cret@localhost:8765/pacer-demo.mp4", "http://localhost:8765/pacer-demo.mp4"),
+    ("https://dev:s3cr%40t@mirror.example.test/pacer-demo.mp4",
+     "https://mirror.example.test/pacer-demo.mp4"),
+    ("//dev:s3cret@mirror.example.test/pacer-demo.mp4", "//mirror.example.test/pacer-demo.mp4"),
+    ("https://mirror.example.test/pacer-demo.mp4?X-Amz-Signature=s3cret",
+     "https://mirror.example.test/pacer-demo.mp4"),
+    ("http://dev:s3cret@[abc]/pacer-demo.mp4", "a malformed URL"),
+)
+
+
+def test_the_session_log_never_carries_a_mirrors_credentials():
+    """EVAL-3 (qa-w3c): the fetch logged `downloading … from <the URL>` whole, user:password@
+    included, into the session log — and its failure line quoted http.client's own message,
+    "nonnumeric port: 's3cret@mirror.example.test'", which carries the password too (urllib reads
+    the userinfo as host:port, so a credentialed mirror can never be fetched; only its leak was
+    real). Every record of a fetch from each credentialed mirror is held password-free, and the
+    "downloading" line still names where the fetch went: scheme, host[:port] and path.
+
+    urlopen is an OFFLINE stand-in that runs urllib's real parsing — `Request(url)`, then
+    `http.client.HTTPConnection(host)`, whose constructor raises the "nonnumeric port" and opens no
+    socket — so each failure text is the one urllib really produces, and a real urlopen (which a
+    proxy variable would send to the network) is never called."""
+    import http.client
+    import logging
+
+    raw = []
+
+    def parse_only_urlopen(url, timeout=None):
+        try:
+            req = urllib.request.Request(url)
+            if req.type in ("http", "https"):
+                http.client.HTTPConnection(req.host, timeout=timeout)
+        except Exception as exc:
+            raw.append(str(exc))
+            raise
+        raise OSError("offline stand-in: no socket opened")
+
+    class Grab(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.DEBUG)
+            self.lines = []
+
+        def emit(self, record):
+            self.lines.append(record.getMessage())
+
+    grab, logger = Grab(), logging.getLogger("studio.demo")
+    old_level, orig = logger.level, urllib.request.urlopen
+    logger.addHandler(grab)
+    logger.setLevel(logging.DEBUG)
+    urllib.request.urlopen = parse_only_urlopen
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            for url, shown in _CREDENTIALED:
+                grab.lines.clear()
+                assert demo._try_download_demo(os.path.join(d, "clip.mp4"), url=url) is False, url
+                leaked = [ln for ln in grab.lines if any(s in ln for s in _SECRETS)]
+                assert not leaked, f"{url}: the session log got the mirror's secret: {leaked}"
+                assert any(f"from {shown} …" in ln for ln in grab.lines), (url, grab.lines)
+    finally:
+        urllib.request.urlopen = orig
+        logger.removeHandler(grab)
+        logger.setLevel(old_level)
+    # The failure path was really exercised: urllib's own messages quoted the password — raw,
+    # percent-decoded, and inside a scheme-less URL — so the check above held real leaks shut
+    # rather than passing on messages that never had one.
+    quoted = {s for m in raw for s in _SECRETS if s in m}
+    assert {"s3cret", "s3cr@t"} <= quoted, raw
+    for url, shown in _CREDENTIALED:
+        assert (demo.shown_url(url) or "a malformed URL") == shown, (url, demo.shown_url(url))
+    print("ok demo log: no mirror's password or signed query reaches the session log "
+          f"({len(_CREDENTIALED)} mirrors; urllib's own failure text quoted a secret "
+          f"{sum(any(s in m for s in _SECRETS) for m in raw)}×)")
+
+
 def test_ci_checks_the_fetch_the_app_makes():
     """CI's non-blocking "demo asset" step used to probe its OWN copy of the URL ("keep in sync"),
     which is how a check can go on passing for a URL the app no longer fetches. It now runs the
@@ -151,5 +233,6 @@ if __name__ == "__main__":
     test_download_timeout_degrades_and_leaves_no_partial()
     test_a_download_that_is_not_the_published_demo_is_refused()
     test_a_cached_older_demo_is_not_the_pinned_one()
+    test_the_session_log_never_carries_a_mirrors_credentials()
     test_ci_checks_the_fetch_the_app_makes()
-    print("\n5 demo tests passed")
+    print("\n6 demo tests passed")
