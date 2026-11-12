@@ -88,7 +88,7 @@ build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # the long single-threaded suites land on an efficiency core and take twice as long — test_stats is
 # ~56 s of one core's CPU at any level (measured: it is not BLAS threading). And agent lanes
 # overlap: in September two suites ran at once for a quarter of all suite time. Four keeps one lane
-# on performance cores and two lanes at the eight processes one -j8 lane survives. CI's macos-14
+# on performance cores and two lanes at the eight processes one -j8 lane survives. CI's macos-15
 # runner has 3 cores, where four is a mild oversubscription, not a failure mode.
 #
 # WHY A VARIABLE, NOT -j. ctest 4 rejects a second -j ("'-j' given invalid value '4 -j2'"), so a -j
