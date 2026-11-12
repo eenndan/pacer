@@ -92,7 +92,7 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 
 ## PR workflow (the CI sequence)
 
-CI (macos-14) runs these in order on every push and PR, each gating the next — run them
+CI (a macos-15 runner) runs these in order on every push and PR, each gating the next — run them
 locally first:
 
 1. `pixi run build` — compiles the core and regenerates the bindings.
