@@ -1288,21 +1288,18 @@ class StudioWindow(QMainWindow):
         open, keeping nothing (``LibraryController.update_library``, QA EVAL-2). No debrief when
         nothing is ranked: its page would be an empty state. None on degraded timing either (QA
         REG-2): no PB and no focus corner can come of it, so the notice says why instead
-        (``LibraryController.degraded_notice``). Fully guarded — a landing must never break the
-        load it ends."""
+        (``LibraryController.degraded_notice``). Which load lands, and on what, is the controller's
+        decision (``LibraryController.landing``); this shows it. Fully guarded — a landing must
+        never break the load it ends."""
         view = getattr(self, "view", None)
-        if not getattr(self.library_ctl, "opened_new", False) or not hasattr(view, "show_debrief"):
-            return False
-        if getattr(self.library_ctl, "degraded_first_open", False):
+        if not hasattr(view, "show_debrief"):
             return False
         try:
-            cids = view.opportunities.shortlist_cids()
-            if not cids:
+            landing = self.library_ctl.landing()
+            if landing is None:
                 return False
-            promoted = self.library_ctl.pre_promote_focus(cids)
-            view.show_debrief(self.library_ctl.debrief_pb_line(), promoted,
-                              self.library_ctl.offers_pb_compare(self.library_ctl.pb_standing),
-                              saved=not self.library_ctl.demo_preview)
+            promoted = landing.promoted
+            view.show_debrief(landing.pb_line, promoted, landing.compare, saved=landing.saved)
         except Exception:  # noqa: BLE001 — see the docstring
             _log.warning("debrief not shown", exc_info=True)
             return False
@@ -1381,7 +1378,7 @@ class StudioWindow(QMainWindow):
             in the same beat the map does. It used to be decided ONCE at load from `track_name`, so
             it survived byte-identical across the very drag that answered it (QA MAP-06);
           * a FIRST OPEN ON DEGRADED TIMING — why it decided nothing (no PB, no focus list, no
-            debrief), with the measure (``LibraryController.degraded_notice``, QA REG-2);
+            debrief), with the measure (``LibraryController.verdict_notice``, QA REG-2);
           * a SAVED-LINES failure — a sidecar that is on disk and could not be used. Distinct from
             the revert-guard rejection below it and from the (correctly silent) absent case: the
             user's hand-placed start/finish line is being discarded, and the app then goes on to
@@ -1410,6 +1407,9 @@ class StudioWindow(QMainWindow):
         session = getattr(self, "session", None)
         if session is None:
             return None
+        # The first-open verdict's wording is the controller's (FIRST-OPEN-LOOP-7); its places in
+        # the line are this method's.
+        verdict = self.library_ctl.verdict_notice()
         notice = None
         if not session.valid_lap_ids():
             notice = data_quality.NO_LAPS_HEADLINE
@@ -1420,21 +1420,13 @@ class StudioWindow(QMainWindow):
             else:
                 # The start line was auto-fitted, so lap times are arbitrary until the user drags it
                 # into place. To register the track: studio/dev/print_track_entry.py.
-                notice = ("unknown track — start/finish line was auto-fitted; "
-                          "drag it into place to fix lap timing")
                 # A NEW recording's verdict waits for that drag (LibraryController.update_library,
-                # QA NEW-3b): the map that takes it stays on screen, and this says what waits —
-                # unless the timing is degraded, when no drag brings either (QA REG-2).
-                if getattr(getattr(self, "library_ctl", None), "waiting_for_line", False) \
-                        and not session.timing_quality.degraded:
-                    notice += "; your PB and debrief wait for it"
-        elif getattr(getattr(self, "library_ctl", None), "waiting_for_name", False):
-            # The line is placed at a circuit with no name: the PB and focus list are per track.
-            notice = ("unnamed circuit — File ▸ Save as track… names it; your PB and focus list "
-                      "wait for that")
-        # A first open on degraded timing: why it decided nothing, with the measure (QA REG-2).
-        degraded = getattr(getattr(self, "library_ctl", None), "degraded_notice", lambda: None)()
-        notice = " · ".join(p for p in (notice, degraded) if p) or None
+                # QA NEW-3b): the map that takes it stays on screen, and this says what waits.
+                notice = ("unknown track — start/finish line was auto-fitted; "
+                          "drag it into place to fix lap timing") + verdict.line_wait
+        # The first open's own clause: the name its PB and focus list wait for, or why degraded
+        # timing decided nothing, with the measure (QA REG-2).
+        notice = " · ".join(p for p in (notice, verdict.clause) if p) or None
         # Its OWN clause, not a branch of the chain above: a detected track keeps timing_verified
         # True, so a discarded sidecar would otherwise be stated nowhere at all on exactly the
         # recording whose saved lines the user cared enough to place by hand.
@@ -1457,9 +1449,8 @@ class StudioWindow(QMainWindow):
                           "analyse the whole recording") if subset else None
         # A partial FIRST open decides nothing (LibraryController.update_library), so this is the
         # one place that says the verdict is still to come — and what brings it.
-        if chapter_notice and getattr(getattr(self, "library_ctl", None), "waiting_for_whole",
-                                      False):
-            chapter_notice += "; your PB and focus list wait for it"
+        if chapter_notice:
+            chapter_notice += verdict.whole_wait
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
         # The two writes that used to fail into a print (§7.5). The library flag is set by whichever
