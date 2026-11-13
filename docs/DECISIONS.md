@@ -211,8 +211,8 @@ These are what each check found when its batch was dispatched, not a status of s
 Each item below is recorded 2026-11-12.
 
 - **The freeze ended on its date, 2026-11-09**, with no new recording opened before it.
-- **The race-day read (S1-S6, section 3 (e)) could not be taken:** no race was recorded, so there
-  is no race day to read. No signal is reported, and none is inferred.
+- **The race-day read (S1-S6, section 3 (e)) could not be taken:** no new recording was opened in
+  the app, so there is no race day to read. No signal is reported, and none is inferred.
 - **RUL-6 to RUL-8 were not re-asked** (his instruction of 2026-09-28), so their freeze-end
   defaults apply, each a default applied 2026-11-12 on the owner's instruction not to be asked:
   - RUL-6, the focus loop: keep it. FIRST-OPEN-LOOP-15 is then a no-op.
@@ -224,3 +224,11 @@ Each item below is recorded 2026-11-12.
   - FIRST-OPEN-LOOP-10 waits for a race day.
   - TRUTH-8 and TRUTH-12 wait for a race day, and for the recordings they measure on to be
     reachable again: they are not reachable at their configured paths.
+
+## 7. Recorded at the 0.7.0 release, 2026-11-13
+
+- **v0.7.0 was cut 2026-11-13** from #526 to #539: one first-open verdict with a state for a refused
+  Library write, the PB line ordered by when sessions were recorded, a second camera's recording
+  kept apart, no compare offered against footage known missing, one focus-list gate and a theme
+  sentence that names its deciding corner. The real-footage checks and the manual half of the
+  golden gate could not run for it: the recordings are not reachable at their configured paths.
