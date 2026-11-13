@@ -2602,6 +2602,19 @@ def test_a_corner_on_the_two_lap_line_drops_out_rather_than_changing_sides():
     said = K.theme_sentence(theme, rows)
     assert said.endswith("— C1 sits on the line: one lap fewer at its target and it would not "
                          "count."), said
+    # The other direction: a PACE theme decided by a pace corner one lap UNDER its line (3 of 36,
+    # line 4). C1 gaining that lap moves 0.10 s to execution: pace 0.55 of 1.00, a SPLIT. C2 (2 of
+    # 36) is two laps short and is not a candidate.
+    rows = [_corner(1, 0.10, 36, 3), _corner(2, 0.55, 36, 2), _corner(3, 0.35, 36, 9)]
+    theme = K.session_theme(rows)
+    assert (theme.kind, round(theme.share, 2)) == (K.THEME_PACE, 0.65), theme
+    assert K._one_lap_over(rows[0].evidence).reach == K.REACH_REPEAT
+    assert K._one_lap_over(rows[1].evidence) is None
+    assert K.theme_tipping_row(theme, rows).cid == 1
+    pace_said = K.theme_sentence(theme, rows)
+    assert pace_said == ("No single theme: 35% of the time on offer is in corners you have already "
+                         "driven at this pace, 65% in corners you have rarely reached — C1 sits on "
+                         "the line between the two."), pace_said
     # Amendment (2): only an EXECUTION or a PACE theme is hedged — a SPLIT already states both.
     split = [_corner(1, 0.5, 36, 4), _corner(2, 0.5, 36, 0)]
     assert K.session_theme(split).kind == K.THEME_SPLIT
@@ -2629,13 +2642,20 @@ def test_the_theme_block_prints_the_corner_and_fits_its_budget():
         return OpportunitiesPanel(_S())
 
     heights = {}
-    for rec in ("SD19", "MK", "SD3h"):
-        block = panel(_saved(rec)).theme_block
+    # The longest form is the two-lap line's ("… one lap fewer at its target and it would not
+    # count."), on the drop case of the test above.
+    cases = {rec: _saved(rec) for rec in ("SD19", "MK", "SD3h")}
+    cases["two-lap line"] = [_corner(1, 0.4, 19, 2), _corner(2, 0.3, 19, 6),
+                             _corner(3, 0.3, 19, 0)]
+    for rec, rows in cases.items():
+        block = panel(rows).theme_block
         heights[rec] = block._needed_px(640, len(block._lines))
         assert heights[rec] <= THEME_MAX_FRACTION * 600, (rec, heights[rec], block.full_text())
         if rec == "SD19":
             assert block.headline.text().endswith("— C1 sits on the line between the two."), (
                 block.headline.text())
+        if rec == "two-lap line":
+            assert block.headline.text().endswith("it would not count."), block.headline.text()
     print(f"ok COACHING-4 theme block: {heights} px at 640 px wide (budget "
           f"{THEME_MAX_FRACTION * 600:.0f} px)")
 
