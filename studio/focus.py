@@ -536,7 +536,13 @@ def recorded_before(now_ctx: dict, item: FocusItem) -> bool:
     Ordered by the recordings' own clocks: the first GPS fix's instant when both sides carry one,
     which orders two sessions of one day, else the calendar date. An order that cannot be told
     (a side with no date, or a same-day item stored before the stamp) is not "older": the pair is
-    compared as it always was, rather than refused on a guess."""
+    compared as it always was, rather than refused on a guess.
+
+    The session the baseline was measured on (its own fingerprint) is never older than itself,
+    whatever its clock now reads: a pipeline change that moves its first kept fix must not refuse
+    re-opening the very session that set the list."""
+    if item.fingerprint and item.fingerprint == str(now_ctx.get("fingerprint") or ""):
+        return False
     then_ms, now_ms = int(item.start_ms or 0), int(now_ctx.get("start_ms") or 0)
     if then_ms > 0 and now_ms > 0:
         return now_ms < then_ms
@@ -624,7 +630,7 @@ def baseline_refusal(now_ctx: dict, items: list[FocusItem] | None = None) -> str
         return f"{why}, so this session's corners can't be a baseline"
     newer = newer_than(list(items or []), now_ctx)
     if newer:
-        return (f"this session is older than your focus list (set on {set_on(newer)}), so its "
+        return (f"this session is older than your focus list (from {set_on(newer)}), so its "
                 "corners can't join or replace it")
     return ""
 

@@ -150,7 +150,7 @@ def test_the_replace_offer_never_swaps_a_newer_list_for_an_older_sessions_corner
 
 
 # ------------------------------------------------------------------ the manual Add (CODE R4a)
-OLDER_ADD = "this session is older than your focus list (set on 19 Sep), so its corners can't " \
+OLDER_ADD = "this session is older than your focus list (from 19 Sep), so its corners can't " \
             "join or replace it"
 
 
@@ -170,7 +170,13 @@ def test_an_older_session_may_put_no_corner_on_the_list_by_one_predicate():
     assert unstamped.baseline_refusal == "", unstamped.baseline_refusal
     # A list mixing two days names the newer one only; the timing's refusal still comes first.
     mixed = _items(SD30, (7,)) + _items({"fp": "GX0069", "date": "2026-09-26"}, (1,))
-    assert "(set on 26 Sep)" in focus.baseline_refusal(_ctx(SD19), mixed)
+    assert "(from 26 Sep)" in focus.baseline_refusal(_ctx(SD19), mixed)
+    # Re-opening the very session that set the list is never "older" than it, even if its first
+    # kept GPS fix moved (a later pipeline change): same fingerprint, a start 1 s earlier.
+    here = _items(SD19, (1, 5), start_ms=NOON_19)
+    reopened = _ctx(SD19, NOON_19 - 1000)
+    assert focus.newer_than(here, reopened) == [], "the list's own session read as older"
+    assert focus.baseline_refusal(reopened, here) == "", focus.baseline_refusal(reopened, here)
     provisional = {**_ctx(SD30), "verified": False}
     assert "provisional" in focus.baseline_refusal(provisional, _items(SD19)), "order beat trust"
     print("ok Add: an older session's report refuses it with the order's reason; forward stays open")
