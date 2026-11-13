@@ -184,9 +184,6 @@ class LibraryController:
         # the items) — held here and never written, so it dies with that session: every load
         # builds a new one.
         self.demo_preview = False
-        # Whether a first open's row refused at a DEFERRED landing withheld its PB card, which the
-        # next retry then shows (`_land_deferred_verdict`). Reset on every `update_library`.
-        self._card_owed = False
         self._demo_focus: tuple[object, list[focus.FocusItem]] | None = None
 
     # THE VERDICT'S VIEWS, under the names their readers have always used. The class default keeps
@@ -250,8 +247,10 @@ class LibraryController:
         is VERIFIED and NOT data-quality degraded — a PB against an arbitrary provisional start line
         is meaningless, and a PB whose absolute timing the app itself calls ESTIMATED (media-clock /
         low GPS) isn't one to celebrate, so we never celebrate either. The caller shows the
-        celebratory banner from the returned moment; a library-write failure still returns the
-        moment (the comparison already succeeded).
+        celebratory banner from the returned moment. A refused write keeps a re-open's moment (the
+        comparison already succeeded) but not a first open's (WRITE_FAILED): "First session logged
+        here" beside "couldn't be added to your library" claims a row that does not exist (QA W4
+        REG-2), so the moment waits for the retry that writes the row (`_land_deferred_verdict`).
 
         Deciding it BEFORE the upsert is NOT what stops a recording being its own prior PB — that
         line used to claim it did, and the app celebrated exactly that: open one chapter, click
@@ -297,7 +296,6 @@ class LibraryController:
         decided (the lead says so instead: `debrief_pb_line`), and its focus list lives in memory
         (`_save_focus`)."""
         self.verdict, self.pb_standing, self.previous_pb = library.Verdict.EXCLUDED, None, None
-        self._card_owed = False
         self.demo_preview = self._is_demo(paths)
         if self.demo_preview:
             self.verdict = library.first_open_verdict(
@@ -339,6 +337,8 @@ class LibraryController:
             # verdict never given.
             self.verdict = (library.Verdict.WRITE_FAILED if verdict in library.FIRST_OPENS
                             else verdict)
+            if self.verdict is library.Verdict.WRITE_FAILED:
+                moment = None     # shown with its row, by the retry that writes it (QA W4 REG-2)
             self.win._library_unwritable = True
             _log.exception("session library not updated")
         except Exception:  # noqa: BLE001 — the index is additive; never break a load
@@ -361,16 +361,19 @@ class LibraryController:
         (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
         which is what keeps the chapter it just chained from being its "previous best".
         `previous_pb` comes from the same index: after the upsert this recording's own row is the
-        track's best. Kept even if the write that follows fails, like the moment it belongs to.
-        The entry's recorded day keeps a LATER row from being a prior or the previous PB (REG2-GAP-1:
+        track's best. Kept even if the write that follows fails.
+        The entry's day and clock keep a LATER row from being a prior or the previous PB (REG2-GAP-1:
         an older, faster first open is the track's "fastest", never a beat — `library.pb_moment`)."""
-        key, date = entry.get("fingerprint"), entry.get("date")
+        key = entry.get("fingerprint")
+        # The day AND the first-fix clock: two sessions of one day are ordered by the clock, the
+        # rule the focus list uses (`library.recorded_after`, QA W4 REG-1).
+        when = {"date": entry.get("date"), "start_ms": entry.get("start_ms")}
         trust = (self.win.session.timing_verified, index, entry.get("track"), entry.get("best"))
         degraded = self.win.session.timing_quality.degraded
-        moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key, date=date)
-        standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key, date=date)
+        moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key, **when)
+        standing = library.pb_standing_for(*trust, degraded=degraded, fingerprint_key=key, **when)
         if (moment or {}).get("kind") == "beat":
-            self.previous_pb = library.previous_pb(index, entry.get("track"), key, date)
+            self.previous_pb = library.previous_pb(index, entry.get("track"), key, **when)
         return moment, standing
 
     def _land_deferred_verdict(self, paths: list[str]) -> None:
@@ -379,16 +382,17 @@ class LibraryController:
         (`StudioWindow._land_on_debrief`), once, because the row is written here and the recording
         is never new again. A refused write (WRITE_FAILED) lands nothing, not even the card: the
         notice says the library is unwritable, the next such gesture decides it again, and a
-        moment is shown once, with the row it belongs to (QA r4 CODE-6). A WRITE_FAILED the LOAD
-        left had its card shown already, by the load's tail, so its retry lands the debrief or
-        nothing; one an earlier retry here left showed none, and owes it (`_card_owed`). The
-        verdict alone cannot tell those two apart, hence the one bool."""
-        shown = self.verdict is library.Verdict.WRITE_FAILED and not self._card_owed
+        moment is shown once, with the row it belongs to (QA r4 CODE-6). A refused LOAD shows no
+        card either (`update_library` returns no moment under WRITE_FAILED, QA W4 REG-2), so the
+        retry that writes the row always owes it: the debrief carries it, or the card does. (#529's
+        `_card_owed` told a load's shown card from a retry's withheld one; with no card at the
+        load there is nothing left to tell apart.)"""
         moment = self.update_library(paths)
-        self._card_owed = self.verdict is library.Verdict.WRITE_FAILED
         self.win._apply_session_notice()
-        if not self._card_owed and not self.win._land_on_debrief() and moment is not None \
-                and not shown:
+        if self.verdict is library.Verdict.WRITE_FAILED:
+            self.update_focus_list()
+            return
+        if not self.win._land_on_debrief() and moment is not None:
             self.show_pb_moment(moment)
         self.update_focus_list()
 

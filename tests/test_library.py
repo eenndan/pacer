@@ -926,8 +926,9 @@ def test_the_pb_verdict_runs_forward_in_time_only():
     46.808) read "New personal best! … 0.11 s faster than your previous best (0:46.808)", and its
     "previous PB" was the 19 Sep row — forward in time. A row dated strictly after this session is
     not a prior: a faster back-catalogue session is the track's FASTEST, not a new PB, and nothing
-    is offered as a "previous" one. Rows carry only the calendar day, so a same-day row and an
-    undated one (either side) stay priors, as `focus.recorded_before` keeps them: no guessed order."""
+    is offered as a "previous" one. These rows carry only the calendar day, so a same-day row and an
+    undated one (either side) stay priors, as `focus.recorded_before` keeps them: no guessed order
+    (a same-day pair that both carry ``start_ms`` is ordered by it: the test below)."""
     T = "Sandown Park"
     later = _entry("GX010068", track=T, date="2026-09-19", best=46.808)
     idx = {"entries": [later]}
@@ -981,6 +982,35 @@ def test_the_pb_verdict_runs_forward_in_time_only():
                                         date=date) or {}).get("kind"))
         library.upsert(seq, e)
     assert kinds == ["first", "beat", "beat", "beat"], kinds
+
+
+def test_a_same_day_pb_is_ordered_by_the_first_fix_clock():
+    """QA W4 REG-1. Two sessions on one day, the 15:00 one (45.475) opened first, then the faster
+    09:00 one (44.963): its debrief read "New personal best … 0.51 s faster than your previous best
+    (0:45.475)" and offered the 15:00 row as its "previous PB", while the focus block on the same
+    page called it older (`focus.recorded_before` orders a same-day pair by ``start_ms``). The PB
+    order is now that one rule (`library.recorded_after`): both rows carry the clock, so the later
+    afternoon row is no prior — the morning is the track's fastest, with no compare offer."""
+    T, day = "Synthetic demo circuit", "2026-09-05"
+    am_ms, pm_ms = 1788598800000, 1788620400000          # 09:00 and 15:00 UTC, 5 Sep 2026
+    pm = {**_entry("GX019302", track=T, date=day, best=45.475), "start_ms": pm_ms}
+    idx = {"entries": [pm]}
+    am = library.fingerprint("GX019301")
+    m = library.pb_moment(idx, T, 44.963, fingerprint_key=am, date=day, start_ms=am_ms)
+    assert m is not None and m["kind"] == "fastest", m
+    assert library.previous_pb(idx, T, am, date=day, start_ms=am_ms) is None
+    s = library.pb_standing_for(True, idx, T, 44.963, fingerprint_key=am, date=day, start_ms=am_ms)
+    assert s is not None and s["kind"] == "fastest", s
+    assert "New personal best" not in library.pb_standing_text(s, fmt_time)
+    # Forward in time is untouched: the afternoon opened after the morning row beats it.
+    amrow = {**_entry("GX019301", track=T, date=day, best=45.475), "start_ms": am_ms}
+    pmfp = library.fingerprint("GX019302")
+    beat = library.pb_moment({"entries": [amrow]}, T, 44.963, pmfp, date=day, start_ms=pm_ms)
+    assert beat is not None and beat["kind"] == "beat", beat
+    assert library.previous_pb({"entries": [amrow]}, T, pmfp, day, pm_ms)["stem"] == "GX019301"
+    # A legacy same-day row (no clock) cannot be ordered: still a prior, as the focus list keeps it.
+    legacy = {"entries": [_entry("GX019302", track=T, date=day, best=45.475)]}
+    assert library.pb_moment(legacy, T, 44.963, am, date=day, start_ms=am_ms)["kind"] == "beat"
 
 
 def test_the_first_open_verdict_is_one_state_in_one_priority_order():
