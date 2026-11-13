@@ -2476,6 +2476,190 @@ def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent(
     print(f"ok LOOK-9: {two.strip()!r} / {one.strip()!r}; {sentence!r}")
 
 
+# ------------------------------------------------------- COACHING-4: the corner on the reach line
+#
+# The four recordings' rows as the QA round-4 ADVICE lane saved them through the real loader
+# (.claude/qa-2026-09-28-r4/ADVICE/adv_*.pkl, 2026-09-28): (cid, time_lost, n_laps, reach_laps,
+# reach, abstain, iqr), in the app's ranked order. Copied by hand — the footage is not in CI.
+_R, _P, _S, _O = K.REACH_REPEAT, K.REACH_RARE, K.ABSTAIN_SPREAD, K.ABSTAIN_ONE_OFF
+_SAVED_ROWS = {
+    "SD19": [(1, 0.1466, 36, 4, _R, "", 0.2001), (5, 0.0935, 35, 3, _P, "", 0.0646),
+             (7, 0.0776, 36, 4, _R, "", 0.1019), (2, 0.0595, 35, 5, _R, "", 0.0962),
+             (3, 0.0493, 36, 9, _R, "", 0.0906), (4, 0.0716, 35, 10, _R, _S, 0.1709)],
+    "MK": [(5, 0.1348, 19, 6, _R, "", 0.2309), (2, 0.0871, 16, 3, _R, "", 0.1062),
+           (8, 0.0642, 17, 4, _R, "", 0.1074), (7, 0.2504, 19, 1, _P, _O, 0.3194),
+           (11, 0.1872, 19, 2, _R, _S, 0.5614), (6, 0.1373, 19, 6, _R, _S, 0.3237),
+           (9, 0.0697, 17, 8, _R, _S, 0.2826), (4, 0.0528, 17, 7, _R, _S, 0.3083),
+           (10, 0.0367, 18, 7, _R, _S, 0.1344), (12, 0.0304, 19, 9, _R, _S, 0.2577),
+           (1, 0.0197, 16, 7, _R, _S, 0.1221), (3, 0.0032, 16, 8, _R, _S, 0.1004)],
+    "SD30": [(7, 0.0993, 37, 5, _R, "", 0.0951), (5, 0.0825, 37, 6, _R, "", 0.1137),
+             (3, 0.0467, 37, 9, _R, "", 0.0786), (1, 0.0753, 35, 7, _R, _S, 0.2164),
+             (4, 0.0265, 37, 13, _R, _S, 0.0832), (6, 0.0205, 37, 16, _R, _S, 0.1536),
+             (2, 0.0160, 37, 14, _R, _S, 0.0947)],
+    "SD3h": [(1, 0.2294, 61, 3, _P, "", 0.3094), (4, 0.1935, 61, 5, _P, "", 0.2305),
+             (7, 0.1779, 62, 4, _P, "", 0.3050), (6, 0.1675, 62, 4, _P, "", 0.1875),
+             (2, 0.0961, 62, 14, _R, _S, 0.2164), (3, 0.0103, 62, 26, _R, _S, 0.2272)],
+}
+
+
+def _saved(rec: str) -> list:
+    return [K.Opportunity(cid=cid, direction=1, time_lost=lost, entry_dist=0.0,
+                          reason=K.Reason(K.REASON_CONSISTENCY, 0.1, 0.0, 0.0, 0.0, 0.1),
+                          evidence=K.Evidence(n_laps=n, reach_laps=k, reach=reach, iqr=iqr,
+                                              abstain=abstain))
+            for cid, lost, n, k, reach, abstain, iqr in _SAVED_ROWS[rec]]
+
+
+def _corner(cid, lost, n, k, reach=None, abstain=K.ABSTAIN_NONE):
+    reach = reach or (K.REACH_NEVER if k == 0 else
+                      K.REACH_REPEAT if k >= K.reach_line(n) else K.REACH_RARE)
+    return K.Opportunity(cid=cid, direction=1, time_lost=lost, entry_dist=0.0,
+                         reason=K.Reason(K.REASON_CONSISTENCY, 0.1, 0.0, 0.0, 0.0, 0.1),
+                         evidence=K.Evidence(n_laps=n, reach_laps=k, reach=reach, iqr=0.01,
+                                             abstain=abstain))
+
+
+def test_reach_line_is_corner_evidences_own_rule():
+    """COACHING-4 amendment (3): the line rule is shared, not copied. `corner_evidence` now reads
+    `reach_line`, and its REPEAT/RARE/NEVER classification is unchanged from the inline rule it
+    replaced (`k >= MIN_REACH_LAPS and k >= REACH_REPEAT_FRAC * n`) for every n = 1..200 and every
+    reach count 0..n."""
+    for n in range(1, 201):
+        for k in range(n + 1):
+            times = [1.0] * k + [2.0] * (n - k)
+            ev = K.corner_evidence(times, 1.0, 0.5)
+            assert ev.reach_laps == k, (n, k, ev)
+            old = (K.REACH_NEVER if k == 0 else K.REACH_REPEAT
+                   if k >= K.MIN_REACH_LAPS and k >= K.REACH_REPEAT_FRAC * n else K.REACH_RARE)
+            assert ev.reach == old, (n, k, ev.reach, old)
+            assert (k >= K.reach_line(n)) == (old == K.REACH_REPEAT), (n, k)
+    assert (K.reach_line(19), K.reach_line(30), K.reach_line(35), K.reach_line(62)) == (2, 3, 4, 7)
+    print("ok reach_line == corner_evidence's rule for n = 1..200")
+
+
+def test_the_theme_names_the_one_corner_on_the_reach_line():
+    """COACHING-4 (ADV-5, owner's ruling RUL-8): when one ranked corner within one lap of the
+    reach line decides the side, the sentence prints the SPLIT form — both halves — and names it.
+
+    On SD19 the app said "Most of the time on offer is execution, not pace — 78 % …" while its C1
+    (4 of 36, line 4) and C7 (4 of 36) each turn it into a SPLIT one lap the other way, and 1,000
+    resamples reproduced the 78 % in only 56 % of them. On the four saved recordings the rule fires
+    on SD19 alone (pass criterion 1); MK, SD30 and the Sandown 3 h keep their sentences."""
+    fired = {}
+    for rec in _SAVED_ROWS:
+        rows = _saved(rec)
+        theme = K.session_theme(rows)
+        tip = K.theme_tipping_row(theme, rows)
+        fired[rec] = None if tip is None else tip.cid
+        # Theme itself never moves: only the words hedge.
+        assert theme.kind in (K.THEME_EXECUTION, K.THEME_PACE), (rec, theme)
+    assert fired == {"SD19": 1, "MK": None, "SD30": None, "SD3h": None}, fired
+
+    sd19 = _saved("SD19")
+    theme = K.session_theme(sd19)
+    assert (theme.kind, round(theme.share, 2), theme.lead_cid) == (K.THEME_EXECUTION, 0.78, 1), theme
+    said = K.theme_sentence(theme, sd19)
+    assert said == ("No single theme: 78% of the time on offer is in corners you have already "
+                    "driven at this pace, 22% in corners you have rarely reached — C1 sits on the "
+                    "line between the two."), said
+    # Without the rows the sentence is what it always was (every other caller is unchanged).
+    assert K.theme_sentence(theme).startswith("Most of the time on offer is execution"), theme
+    # C7 tips it too (59.9 % < THEME_SHARE): the LARGEST-loss tipping corner is the one named. C5,
+    # one lap under its line (3 of 35, line 4), would only add to execution and is not named.
+    c7_only = [r if r.cid != 1 else _corner(1, r.time_lost, 36, 9) for r in sd19]
+    assert K.theme_tipping_row(K.session_theme(c7_only), c7_only).cid == 7
+
+    for rec, start in (("MK", "All of the time on offer is in corners you have already driven"),
+                       ("SD30", "All of the time on offer is in corners you have already driven"),
+                       ("SD3h", "All of the time on offer is in corners you have rarely been quick")):
+        rows = _saved(rec)
+        assert K.theme_sentence(K.session_theme(rows), rows).startswith(start), rec
+    print(f"ok COACHING-4: fires on {[r for r, c in fired.items() if c]} — {said!r}")
+
+
+def test_a_corner_on_the_two_lap_line_drops_out_rather_than_changing_sides():
+    """COACHING-4 amendment (1): at line == MIN_REACH_LAPS (any corner of a ≤ 20-lap session) a
+    REPEAT corner one lap short does not become pace work — it abstains ABSTAIN_ONE_OFF, exactly as
+    `corner_evidence` would classify 1 of n. So its time leaves the ranked TOTAL (and the lead)
+    instead of moving to the pace side, and only a verdict that the drop changes is hedged."""
+    moved = K._one_lap_over(_corner(1, 0.2, 19, 2).evidence)
+    assert (moved.reach_laps, moved.abstain, moved.ranked) == (1, K.ABSTAIN_ONE_OFF, False), moved
+    assert K.corner_evidence([1.0] + [2.0] * 18, 1.0, 0.2).abstain == K.ABSTAIN_ONE_OFF
+    # 0.2 on the line, 0.5 routine, 0.3 never reached: 70 % execution. MOVING the 0.2 to pace
+    # would read 50 % (a SPLIT); DROPPING it reads 0.5 / 0.8 = 62.5 % — still execution. Not hedged.
+    rows = [_corner(1, 0.2, 19, 2), _corner(2, 0.5, 19, 6), _corner(3, 0.3, 19, 0)]
+    theme = K.session_theme(rows)
+    assert theme.kind == K.THEME_EXECUTION and K.theme_tipping_row(theme, rows) is None, theme
+    assert K.theme_sentence(theme, rows).startswith("Most of the time on offer is execution")
+    # A bigger corner on that line DOES decide it: 0.3 / 0.6 = 50 % once it drops, and the lead
+    # passes to C2 — the sentence names C1 in the words that fit a drop, not "between the two".
+    rows = [_corner(1, 0.4, 19, 2), _corner(2, 0.3, 19, 6), _corner(3, 0.3, 19, 0)]
+    theme = K.session_theme(rows)
+    assert K.theme_tipping_row(theme, rows).cid == 1
+    import dataclasses
+    flipped = [dataclasses.replace(rows[0], evidence=K._one_lap_over(rows[0].evidence)), *rows[1:]]
+    assert (K.session_theme(flipped).kind, K.session_theme(flipped).lead_cid) == (K.THEME_SPLIT, 2)
+    said = K.theme_sentence(theme, rows)
+    assert said.endswith("— C1 sits on the line: one lap fewer at its target and it would not "
+                         "count."), said
+    # The other direction: a PACE theme decided by a pace corner one lap UNDER its line (3 of 36,
+    # line 4). C1 gaining that lap moves 0.10 s to execution: pace 0.55 of 1.00, a SPLIT. C2 (2 of
+    # 36) is two laps short and is not a candidate.
+    rows = [_corner(1, 0.10, 36, 3), _corner(2, 0.55, 36, 2), _corner(3, 0.35, 36, 9)]
+    theme = K.session_theme(rows)
+    assert (theme.kind, round(theme.share, 2)) == (K.THEME_PACE, 0.65), theme
+    assert K._one_lap_over(rows[0].evidence).reach == K.REACH_REPEAT
+    assert K._one_lap_over(rows[1].evidence) is None
+    assert K.theme_tipping_row(theme, rows).cid == 1
+    pace_said = K.theme_sentence(theme, rows)
+    assert pace_said == ("No single theme: 35% of the time on offer is in corners you have already "
+                         "driven at this pace, 65% in corners you have rarely reached — C1 sits on "
+                         "the line between the two."), pace_said
+    # Amendment (2): only an EXECUTION or a PACE theme is hedged — a SPLIT already states both.
+    split = [_corner(1, 0.5, 36, 4), _corner(2, 0.5, 36, 0)]
+    assert K.session_theme(split).kind == K.THEME_SPLIT
+    assert K.theme_tipping_row(K.session_theme(split), split) is None
+    print(f"ok COACHING-4 two-lap line: {said!r}")
+
+
+def test_the_theme_block_prints_the_corner_and_fits_its_budget():
+    """COACHING-4 on the page: ThemeBlock passes the rows, so SD19's block leads with the split form
+    naming C1 — and the three sentence forms it can now print fit THEME_MAX_FRACTION of a 640 × 600
+    page with both actions (pass criterion 3; `fit_into` sheds actions, then itself, below that)."""
+    _qapp()
+    from studio.coaching_panel import THEME_MAX_FRACTION, OpportunitiesPanel
+
+    def panel(rows):
+        opp = K.Opportunities(enough=True, n_laps=36, median_lap_id=4, rows=rows,
+                              theme=K.session_theme(rows))
+
+        class _S:
+            def coaching_opportunities(self):
+                return opp
+
+            def coaching_brake_direction(self):
+                return {}
+        return OpportunitiesPanel(_S())
+
+    heights = {}
+    # The longest form is the two-lap line's ("… one lap fewer at its target and it would not
+    # count."), on the drop case of the test above.
+    cases = {rec: _saved(rec) for rec in ("SD19", "MK", "SD3h")}
+    cases["two-lap line"] = [_corner(1, 0.4, 19, 2), _corner(2, 0.3, 19, 6),
+                             _corner(3, 0.3, 19, 0)]
+    for rec, rows in cases.items():
+        block = panel(rows).theme_block
+        heights[rec] = block._needed_px(640, len(block._lines))
+        assert heights[rec] <= THEME_MAX_FRACTION * 600, (rec, heights[rec], block.full_text())
+        if rec == "SD19":
+            assert block.headline.text().endswith("— C1 sits on the line between the two."), (
+                block.headline.text())
+        if rec == "two-lap line":
+            assert block.headline.text().endswith("it would not count."), block.headline.text()
+    print(f"ok COACHING-4 theme block: {heights} px at 640 px wide (budget "
+          f"{THEME_MAX_FRACTION * 600:.0f} px)")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
