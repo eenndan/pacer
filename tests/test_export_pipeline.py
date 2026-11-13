@@ -293,6 +293,18 @@ def test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_seria
         assert relays and relays[0].handovers == 2 and not relays[0].gave_up, (
             f"the hardware relay did not hand over at both seams: "
             f"{[(x.handovers, x.gave_up) for x in relays]}")
+        if len(serial) == 360 and relayed != serial:
+            # Diagnose before judging: the check's premise is that one machine's hardware decode of
+            # one clip is byte-reproducible. On the dev Mac it is; CI's macos-15 VM once painted
+            # other frames from 196 on with no fallback at all (#534's run). A second SERIAL decode
+            # tells the two apart: if the serial pump does not repeat itself either, the decode is
+            # not reproducible here and the relay cannot be judged (Skipped, by name); if it does,
+            # the relay is wrong and the check fails below.
+            again, ar, err = _render(replace(hw, config=replace(hw.config, workers=1)), s)
+            if err is None and not ar.retried and again != serial:
+                _videotoolbox.unusable(
+                    "this machine's hardware decode is not byte-reproducible: two serial decodes of "
+                    "one clip painted different frames, so the relay's frames cannot be compared")
         assert len(serial) == 360 and relayed == serial, (
             f"the hardware relay painted other frames than the serial pump: "
             f"{[i for i, (a, b) in enumerate(zip(serial, relayed, strict=False)) if a != b][:10]}")
