@@ -34,7 +34,15 @@ class VideoToolboxMissing(Exception):
 def need(available: bool, what: str) -> None:
     """Raise `VideoToolboxMissing` unless `available`; `what` names the missing piece."""
     if not available:
-        raise VideoToolboxMissing(f"no {what} on this machine (CI's runner opens no H.264 one)")
+        raise VideoToolboxMissing(f"no {what} on this machine")
+
+
+def unusable(why: str) -> None:
+    """Raise `VideoToolboxMissing` with `why` as the whole reason: VideoToolbox opened, but this
+    machine's session could not carry the check to its end. CI's macos-15 runner is a VM whose
+    hardware decode can run dry mid-stream (#524); a check of what that decode paints cannot be
+    judged on a decode that stopped, so it reports itself Skipped, by name, never passed."""
+    raise VideoToolboxMissing(why)
 
 
 def requested(argv: list[str] | None = None) -> bool:
