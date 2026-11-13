@@ -225,10 +225,8 @@ load, not the analysis.
 
 ## Acknowledgements
 
-Pacer began as a fork of [dendi239/pacer](https://github.com/dendi239/pacer) by
-Denys Smirnov, whose original C++ core seeded the project. It has since been substantially
-rewritten as a clean-room, independent implementation and is now developed independently. Thanks to
-Denys for the foundation.
+Pacer began as a fork of [dendi239/pacer](https://github.com/dendi239/pacer) by Denys Smirnov with
+original C++ core.
 
 GPS/IMU parsing uses GoPro's [gpmf-parser](https://github.com/gopro/gpmf-parser).
 
