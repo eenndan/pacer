@@ -6,6 +6,54 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-13
+
+The first-open release, after the freeze ended: 14 pull requests, #526 to #539, on the debrief a
+recording's first open lands on, its personal-best line and the focus list.
+
+### Highlights
+
+- **One verdict for a first open.** Whether an open is a first, a re-open or the demo is decided
+  once, in one Qt-free place; a first open whose Library row the disk refused keeps its debrief
+  and is decided again later, with its card shown once (#529, #530, #531, #538)
+- **A personal best is ordered by when you drove it.** First opening an older, faster recording,
+  even one from the same day as a later session, reads as your fastest session there, not "New
+  personal best" with a later session as its "previous" (#527, #538)
+- **Two cameras, one GoPro number, two sessions.** A second camera's recording whose GoPro file
+  number matches the first's gets its own Library row and debrief instead of replacing it (#532)
+- **No compare offered against footage known missing.** "Compare with your previous PB" is greyed
+  with the date of the footage that is gone; the debrief and PB card leave it out (#528)
+- **One gate for the focus list.** Add, the debrief's default and Replace ask the same question,
+  so an older session can no longer put its corners on a focus list set later (#535)
+- **The theme line names the deciding corner.** When one corner on the reach line would tip the
+  Coaching theme, the line gives both halves and names that corner (#536)
+
+### Changed
+
+- The Coaching theme line no longer picks a side that one corner on the reach line decides: it gives
+  both halves and names that corner ("C1 sits on the line between the two"). (#536)
+
+### Fixed
+
+- Opening an older session no longer lets Add put its corners on a focus list set later: the button
+  is off and says why, as the debrief's default and Replace already refused. (#535)
+- A second camera's recording with the same GoPro number gets its own Library row and first-open
+  debrief, instead of replacing the first recording's row and its personal best. (#532)
+- A first open whose Library row the disk refused keeps its debrief: the next open, line drag or
+  Save as track decides it again once the disk allows, instead of saving the session with no
+  debrief. (#529)
+- An older demo copy left in Pacer's app-support folder opens as the demo: no Library row is kept.
+  (#529)
+- "Compare with your previous PB" is no longer offered when that PB's footage is already missing:
+  the Coaching item says "its footage (date) is missing", and the debrief and PB card leave it out.
+  (#528)
+- First opening an older recording that is faster than a later one no longer reads "New personal
+  best": it is your fastest session there, with no forward-in-time "previous PB" to compare. (#527)
+- A faster session opened after a LATER session of the same day is your fastest, not a "New personal
+  best" with the later one as its "previous": the PB line orders them like the focus list. (#538)
+- A session the library couldn't save no longer shows "First session logged here" beside that
+  notice; the card comes once, when a retry saves the row. (#538)
+
 ## [0.6.1] — 2026-11-12
 
 The Δ frame and the follow-ups after the showcase release: 16 pull requests, #509 to #524.
@@ -1807,7 +1855,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/eenndan/pacer/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/eenndan/pacer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/eenndan/pacer/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/eenndan/pacer/compare/v0.5.0...v0.5.1
