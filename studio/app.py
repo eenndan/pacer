@@ -2978,11 +2978,20 @@ class StudioWindow(QMainWindow):
         library excludes the bundled sample and every zero-lap recording from. A session record is
         a note about lap times and has nowhere to live without a library row; a mark is a note about
         the FOOTAGE, and "the GPS never locked here" is exactly the thing worth writing on a
-        recording that produced no laps. "" when there is nothing open."""
+        recording that produced no laps. "" when there is nothing open.
+
+        The one exception is another camera's recording with the same GoPro number: when a library
+        row under this fingerprint is ANOTHER outing, the key is that recording's own library
+        identity (`LibraryController.recording_key`, LEFT-27), and only then."""
         if not getattr(self, "_paths", None):
             return ""
         first = chapters.discover_siblings(self._paths[0])[0]
-        return library.fingerprint(os.path.splitext(os.path.basename(first))[0])
+        key = library.fingerprint(os.path.splitext(os.path.basename(first))[0])
+        try:
+            ctl = self.library_ctl
+        except AttributeError:          # a half-built window (the __new__ test fixtures)
+            return key
+        return ctl.recording_key(key)
 
     @staticmethod
     def _load_marks() -> dict:

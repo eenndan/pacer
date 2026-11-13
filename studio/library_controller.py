@@ -308,8 +308,10 @@ class LibraryController:
         moment = None
         verdict = library.Verdict.EXCLUDED
         try:
-            entry = self.win.session.library_entry(paths)
             prior_index = library.load()
+            # Keyed against the index as it stands: another camera's recording with this GoPro
+            # number is a first open under its own key, never a re-open of that row (LEFT-27).
+            entry = library.keyed(self.win.session.library_entry(paths), prior_index)
             key = entry.get("fingerprint")
             verdict = library.first_open_verdict(
                 demo=False, excluded=False,
@@ -552,7 +554,7 @@ class LibraryController:
             # and neither has a new one on an untrusted line, nor one whose verdict's row was refused:
             # writing one from a drag would turn the whole recording's first load into a re-open.
             if not self.waiting_for_whole and not self.verdict.retries:
-                entry = self.win.session.library_entry(paths)
+                entry = self._keyed_entry(paths)
                 library.upsert_and_save(entry)
                 self.win._library_unwritable = False
                 if self.waiting_for_name and entry.get("track"):
@@ -987,6 +989,27 @@ class LibraryController:
         reason = self._DEMO_RECORD_REASON if self._demo_loaded() else self._NO_RECORD_REASON
         self.win._gate_action(self.win._record_action, ok, reason)
 
+    def _keyed_entry(self, paths: list[str]) -> dict:
+        """The session's library entry under the key the index files it by (`library.identity`):
+        its plain fingerprint, unless another camera's recording with the same GoPro number holds
+        that row (LEFT-27). Raises like `Session.library_entry` / `library.load`; callers guard."""
+        return library.keyed(self.win.session.library_entry(paths), library.load())
+
+    def recording_key(self, fingerprint: str) -> str:
+        """The marks store's key for the loaded recording: `fingerprint` (its plain, filename-only
+        key, `StudioWindow._marks_key`) unless a library row under it is ANOTHER outing, when it is
+        that recording's own `library.identity` — so a second camera's marks never land in the
+        first's. Filename-only whenever nothing collides, which keeps every mark ever written where
+        it was, and on a zero-lap recording the library never indexes. Guarded: never raises."""
+        if not hasattr(self.win, "session") or not getattr(self.win, "_paths", None):
+            return fingerprint
+        try:
+            entry = {**self.win.session.library_entry(self.win._paths), "fingerprint": fingerprint}
+            return library.identity(entry, library.load())
+        except Exception:  # noqa: BLE001 — a mark's key must never raise into a menu
+            _log.warning("marks: keyed on the file name (no library identity)", exc_info=True)
+            return fingerprint
+
     def _current_library_entry(self) -> dict | None:
         """The loaded recording's library entry — the identity a session record hangs off and the
         context the form auto-stamps. None when there is no session, no path, or the library
@@ -997,7 +1020,7 @@ class LibraryController:
         try:
             if self._library_excludes(self.win._paths):
                 return None
-            return self.win.session.library_entry(self.win._paths)
+            return self._keyed_entry(self.win._paths)
         except Exception:  # noqa: BLE001 — a record lookup must never raise into the UI
             _log.exception("session record: could not build the library entry")
             return None

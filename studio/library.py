@@ -15,10 +15,13 @@ Schema (version 4) — one JSON object::
 
     {"version": 4,
      "entries": [
-       {"fingerprint": "GX0062",            # the chapter-invariant identity key (see above)
+       {"fingerprint": "GX0062",            # the chapter-invariant identity key (see above);
+                                            #   "GX0062@<date>" for another camera's (``identity``)
         "stem":        "GX010062",          # first-chapter stem, for display
         "track":       <registry track name or null>,
         "date":        "YYYY-MM-DD" | null,  # GPS9 wall-clock date (Session.session_date)
+        "start_ms":    <int epoch ms>,       # OPTIONAL: the first fix's UTC clock; absent on rows
+                                             #   written before it (see ``identity``)
         "lap_count":   <int>,                # valid lap count — THE SAMPLE both time columns
                                              #   below are a minimum over (see the note)
         "best":        <float seconds> | null,    # best lap time
@@ -103,6 +106,7 @@ the sidecar holds, for a confirm that can name both sides of the swap.
 from __future__ import annotations
 
 import copy
+import datetime
 import enum
 import logging
 import math
@@ -238,11 +242,16 @@ def _norm_entry(e: dict) -> dict:
     best = e.get("best")
     theo = e.get("theoretical")
     stamp = e.get("ideal_version")
+    start = _start_ms(e)
     return {
         "fingerprint": str(e["fingerprint"]),
         "stem": str(e["stem"]),
         "track": e.get("track"),
         "date": e.get("date"),
+        # ADDITIVE, like `ideal_version` but absent rather than null: a row written before it (or
+        # without a wall clock) keeps exactly the keys it had, so it re-saves byte for byte, and an
+        # unusable value costs the row only its start (`identity` then falls back to the date).
+        **({"start_ms": start} if start is not None else {}),
         "lap_count": int(e["lap_count"]),
         "best": None if best is None else float(best),
         "theoretical": None if theo is None else float(theo),
@@ -570,6 +579,74 @@ def upsert(index: dict, entry: dict) -> dict:
             return index
     entries.append(norm)
     return index
+
+
+# TWO CAMERAS, ONE GOPRO NUMBER (LEFT-27). The fingerprint is the camera's recording counter, so a
+# second camera — or the same one after a card format — files its GX010064 under the GX0064 that a
+# July recording already holds. Before this, that open was not a first open, and its upsert
+# replaced July's row (same chapter names, so `_keeps` said no): July's PB left the Library. Keys
+# stay the fingerprint unless a stored row under it is ANOTHER OUTING; only then does the new
+# recording key ``f"{fp}@{date}"`` — no migration, and an index without such a pair is matched,
+# written and re-saved byte for byte as before.
+#
+# Another outing is decided on the first GPS fix's UTC epoch, ``start_ms``, which every row written
+# since carries: the local ``date`` is the ANALYSING machine's calendar day (Session.session_date),
+# so the same recording re-opened in another timezone near midnight changes its date and must not
+# change its key. Two starts further apart than `_OTHER_OUTING_MS` are two outings; closer ones are
+# one — a chapter opened alone starts up to a whole recording later than chapter 1 (a three-hour
+# stint's last chapter), and a GoPro chain this side of half a day is still one recording. A legacy
+# row has no start, so it falls back to its date, which a timezone moves by at most one day: two
+# days apart or more is another outing. A row or entry with neither is never told apart.
+_OTHER_OUTING_MS = 12 * 3600 * 1000
+_OTHER_OUTING_DAYS = 2
+
+
+def _start_ms(e: dict) -> int | None:
+    """The row's first-fix UTC epoch ms, or None when it has none (a legacy row, no wall clock)."""
+    v = e.get("start_ms")
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+def _other_outing(stored: dict, entry: dict) -> bool:
+    """True only when `stored` and `entry`, under one fingerprint, are KNOWN to be two recordings."""
+    a, b = _start_ms(stored), _start_ms(entry)
+    if a is not None and b is not None:
+        return abs(a - b) > _OTHER_OUTING_MS
+    da, db = _iso_day(stored.get("date")), _iso_day(entry.get("date"))
+    if da is None or db is None:
+        return False
+    try:
+        gap = abs((datetime.date.fromisoformat(da) - datetime.date.fromisoformat(db)).days)
+    except ValueError:        # "2026-02-31" passes _iso_day's range check, not the calendar's
+        return False
+    return gap >= _OTHER_OUTING_DAYS
+
+
+def identity(entry: dict, index: dict) -> str:
+    """The key `entry` (built with its plain ``fingerprint``) is stored under in `index`: the key of
+    the stored row that is the SAME outing, else the fingerprint itself while it is free, else
+    ``f"{fp}@{date}"`` (made unique). See ``_OTHER_OUTING_MS``. The one rule every caller that keys
+    on a recording — the load-time upsert, the refresh, the session record, focus and marks — goes
+    through, so all of them follow the second camera's recording to its own row."""
+    fp = str(entry.get("fingerprint") or "")
+    rows = [e for e in index.get("entries", []) if isinstance(e.get("fingerprint"), str)
+            and (e["fingerprint"] == fp or e["fingerprint"].startswith(fp + "@"))]
+    for e in rows:
+        if not _other_outing(e, entry):
+            return e["fingerprint"]
+    taken = {e["fingerprint"] for e in rows}
+    if fp not in taken:
+        return fp
+    day = _iso_day(entry.get("date")) or str(_start_ms(entry) or "undated")
+    key, n = f"{fp}@{day}", 2
+    while key in taken:
+        key, n = f"{fp}@{day}~{n}", n + 1
+    return key
+
+
+def keyed(entry: dict, index: dict) -> dict:
+    """`entry` with its ``fingerprint`` replaced by its ``identity`` in `index` (a copy)."""
+    return {**entry, "fingerprint": identity(entry, index)}
 
 
 def upsert_and_save(entry: dict, path: str | None = None) -> dict:

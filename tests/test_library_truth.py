@@ -294,7 +294,8 @@ def test_reopening_the_recording_from_its_new_folder_repoints_the_row():
         library_json = library.library_path()
         old = [f"/Volumes/pacer-test-old-drive/D24/GX0{i}0060.MP4" for i in (1, 2, 3)]
         library.save({"entries": [_entry("GX010060", old, track="Daytona Milton Keynes",
-                                         best=68.228, theo=None, ideal_version=None)]})
+                                         best=68.228, theo=None, ideal_version=None,
+                                         date="2026-05-23")]})   # the recording's own day
         new = [os.path.join(d, f"GX0{i}0060.MP4") for i in (1, 2, 3)]
         for p in new:
             open(p, "wb").close()
