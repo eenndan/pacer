@@ -14,7 +14,8 @@ WHY, finding by finding, each measured on the owner's own recordings:
     "first session", no focus list, so the between-sessions loop never started at a new circuit.
     The drag is now the verdict's moment (the debrief lands, once), and the name completes it (the
     PB standing against the OTHER recordings at that track, and the focus promotion) without a
-    second landing. A re-open lands nowhere.
+    second landing. A re-open lands nowhere (pinned once, by test_library's verdict table and
+    test_debrief_landing's journey).
   * CODE-1: Add sector (or Clear sectors) re-segments through the same path as the drag, and it
     confirmed the loader's line unmoved: a verified Library row and the debrief, decided on the fit
     NEW-3b had just stopped trusting. Only a start line that moved confirms now.
@@ -224,14 +225,14 @@ def test_an_unknown_circuit_waits_for_the_line_then_lands_once():
             assert f"First session logged at {name}" in lead, lead
             assert [i.cid for i in focus.for_track(focus.load(), name)] == short, short
             assert _rows()[row["fingerprint"]]["track"] == name
-            # 4. A re-open is not a first open.
-            _open(win, a)
-            assert not win.view.is_debrief() and win._pb_toast is None
+            # A re-open is not a first open: no step here (FIRST-OPEN-LOOP-17). The row above is
+            # keyed by the load's own `_keyed_entry`; the rule is test_library's verdict table
+            # (REOPEN even unverified), on the real window test_debrief_landing's journey.
     finally:
         QInputDialog.getText = ask
     print(f"ok NEW-3b/NEW-4/CODE-1: grid + cue on the fitted line through Add and Clear sector, "
           f"one landing on the drag, "
-          f"'First session logged at {name}' and {short} on the name, none on a re-open")
+          f"'First session logged at {name}' and {short} on the name")
 
 
 def test_save_as_track_on_the_fitted_line_decides_it_all_at_once():

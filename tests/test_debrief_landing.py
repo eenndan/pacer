@@ -441,7 +441,8 @@ def test_the_journey_on_the_real_window():
                 line = next(ln for ln in verdict.splitlines() if ln.startswith(f"C{cid} — "))
                 assert "no change you can act on" in line, verdict
 
-            # A re-open is not a first open: the remembered tab, the grid, nothing promoted.
+            # A re-open is not a first open: the remembered tab, the grid, nothing promoted. The one
+            # real-window pin of the rule, beside test_library's verdict table (FIRST-OPEN-LOOP-17).
             before = {i.cid: focus.item_to_dict(i) for i in listed()}
             _open(win, b)
             view = win.view
