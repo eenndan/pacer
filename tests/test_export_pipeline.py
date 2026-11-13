@@ -126,22 +126,26 @@ def _render(spec, session, **enc_kw):
             return encoders[-1]
         return real_popen(cmd, *a, **k)
 
+    # The stand-in covers the WHOLE run, not just this renderer's `_start`: a hardware decode that
+    # runs dry retries on a fresh renderer (`Renderer.run`, #524), and that retry must hash too —
+    # it once escaped to a real libx264 encode of `_spec`'s never-opened out path.
     r = ev.Renderer(session, spec)
-    start = r._start
+    retries = []
+    real_respawn = ev.Renderer._respawn
 
-    def patched_start():
-        ev.subprocess.Popen = popen
-        try:
-            start()
-        finally:
-            ev.subprocess.Popen = real_popen
-    r._start = patched_start
+    def respawn(self, new_spec):
+        retries.append(new_spec)
+        return real_respawn(self, new_spec)
     err = None
+    ev.subprocess.Popen, ev.Renderer._respawn = popen, respawn
     try:
         r.run()
     except Exception as exc:  # noqa: BLE001 — the caller asserts on it
         err = exc
-    return (encoders[0].digests if encoders else []), r, err
+    finally:
+        ev.subprocess.Popen, ev.Renderer._respawn = real_popen, real_respawn
+    r.retried = bool(retries)       # the frames are the retry's, not this renderer's
+    return (encoders[-1].digests if encoders else []), r, err
 
 
 def _moving_clip(path, dur, fps=60):
@@ -273,7 +277,7 @@ def test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_seria
         s = _Session(12.0)
         spec = _spec(src, 12.0, fps_cap=30.0)
         hw = replace(spec, config=replace(spec.config, hwaccel_decode=True))
-        serial, _, err = _render(replace(hw, config=replace(hw.config, workers=1)), s)
+        serial, sr, err = _render(replace(hw, config=replace(hw.config, workers=1)), s)
         assert err is None, err
         ev._DecodeRelay.__init__ = init
         try:
@@ -281,10 +285,26 @@ def test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_seria
         finally:
             ev._DecodeRelay.__init__ = orig_init
         assert err is None, err
+        if sr.retried or r.retried:
+            _videotoolbox.unusable(
+                "the hardware decode ran dry on this machine, so the render fell back to the "
+                "software decode (#524): the relay over the hardware decode could not be checked")
         assert r._hwaccel and r._relay_ok(), "the relay did not choose itself over the hardware decode"
         assert relays and relays[0].handovers == 2 and not relays[0].gave_up, (
             f"the hardware relay did not hand over at both seams: "
             f"{[(x.handovers, x.gave_up) for x in relays]}")
+        if len(serial) == 360 and relayed != serial:
+            # Diagnose before judging: the check's premise is that one machine's hardware decode of
+            # one clip is byte-reproducible. On the dev Mac it is; CI's macos-15 VM once painted
+            # other frames from 196 on with no fallback at all (#534's run). A second SERIAL decode
+            # tells the two apart: if the serial pump does not repeat itself either, the decode is
+            # not reproducible here and the relay cannot be judged (Skipped, by name); if it does,
+            # the relay is wrong and the check fails below.
+            again, ar, err = _render(replace(hw, config=replace(hw.config, workers=1)), s)
+            if err is None and not ar.retried and again != serial:
+                _videotoolbox.unusable(
+                    "this machine's hardware decode is not byte-reproducible: two serial decodes of "
+                    "one clip painted different frames, so the relay's frames cannot be compared")
         assert len(serial) == 360 and relayed == serial, (
             f"the hardware relay painted other frames than the serial pump: "
             f"{[i for i, (a, b) in enumerate(zip(serial, relayed, strict=False)) if a != b][:10]}")
