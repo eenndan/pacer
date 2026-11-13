@@ -92,6 +92,19 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import export_video as ev  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
+
+# ON CI'S VM THE DECODE IS SOFTWARE; EVERYWHERE ELSE IT IS THE OWNER'S OWN PATH. CI's macos-15 runner
+# is a virtual Mac whose VideoToolbox hardware DECODE does not hold: run 43446362470 rendered this
+# test's default export 8 times on it, and 7 of the 8 hardware-decode renders finished only through
+# a fallback (3 by the decode retry of #524, 4 by the encoder's libx264 retry), while all 8 with a
+# software decode kept the VideoToolbox encoder and finished clean. Once (#541's run 43442647442) a
+# hardware decode painted a frame no fallback catches — "matches no source frame". The dev Mac's
+# media engine has never done either, so there `"auto"` stays the owner's VideoToolbox decode + encode
+# + relay; on CI only the decode is pinned to software, and the encoder, the dialog, the worker and
+# every check on the file are unchanged. (The hardware-decode paths keep their own checks:
+# tests/test_export_pipeline.py, tests/test_export_gates.py.)
+if os.environ.get("GITHUB_ACTIONS"):
+    ev.resolve_hwaccel_decode = lambda _choice, _encoder: False
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.session import Session  # noqa: E402
 
