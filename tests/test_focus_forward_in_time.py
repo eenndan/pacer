@@ -93,7 +93,7 @@ def test_a_later_session_is_checked_and_an_older_one_is_not():
     assert all(k == (focus.OUTCOME_NO_VERDICT, OLDER, None) for k in kinds), (
         "a session older than the list was graded against it", kinds)
     assert focus.report_lines(backward) == [
-        "This session is older than your focus list (set on 19 Sep); verdicts compare later "
+        "This session is older than your focus list (from 19 Sep); verdicts compare later "
         "sessions."], focus.report_lines(backward)
     assert focus.report_headline(backward) == \
         "Focus list · 3 corners · no verdict on an older session", focus.report_headline(backward)

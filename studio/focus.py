@@ -856,7 +856,7 @@ def report_lines(report: Report) -> list[str]:
     if blockers == {BLOCK_OLDER}:
         # Looking back at an older session is not a refusal to explain per corner: the whole list
         # is newer than it, and one line says so (QA REG-1).
-        return [f"This session is older than your focus list (set on "
+        return [f"This session is older than your focus list (from "
                 f"{set_on([o.item for o in outcomes])}); verdicts compare later sessions."]
     if len(outcomes) > 1 and kinds == {OUTCOME_NO_VERDICT} and len(blockers) == 1:
         first = outcomes[0]
