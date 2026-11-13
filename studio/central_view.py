@@ -1676,7 +1676,8 @@ class CentralView(QWidget):
         recording on a trusted line and every open of the demo that has a valid lap; and from
         ``LibraryController.refresh_library_entry`` (``_land_deferred_verdict``), fired by the
         start-line drag (``timingEdited``) and by File ▸ Save as track…, when the untrusted line
-        a new recording's verdict waited for is trusted.
+        a new recording's verdict waited for is trusted, or a library row the load could not
+        write (``WRITE_FAILED``) is written on that retry.
 
         This and ``_end_debrief`` are the only writers of the debrief's on/off, here and on the
         page (``OpportunitiesPanel.set_debrief``), so the two cannot disagree; a lead decided
