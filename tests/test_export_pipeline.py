@@ -265,6 +265,18 @@ def test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_seria
     _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_decode_available()
                        and ev.videotoolbox_usable(),
                        "ffmpeg with a VideoToolbox hardware decode and H.264 session")
+    # A CHECK FOR REAL HARDWARE. Its premise is that every VideoToolbox session holds to the end of
+    # its stream, so the relay's frames can equal the serial pump's byte for byte. CI's macos-15
+    # runner is a VM where concurrent sessions do not hold: on 3 of about 9 runs a decode ran dry
+    # (#533), the serial pump did not repeat itself (#537), or a relay leg changed its pixels from
+    # frame 196 on while two serial decodes agreed — ffmpeg falling back to its software decoder
+    # mid-leg, which `-hwaccel` does silently (#538's run 43348339477). So it runs on the dev Mac,
+    # where it passes, and CI reports it Skipped, by name. The relay itself stays checked in CI by
+    # the software-decode relay tests in this file.
+    if os.environ.get("GITHUB_ACTIONS"):
+        _videotoolbox.unusable(
+            "CI's VM: concurrent VideoToolbox decode sessions fall back or end mid-stream there, so "
+            "the hardware relay's byte-for-byte premise cannot hold (it runs on the dev Mac)")
     relays = []
     orig_init = ev._DecodeRelay.__init__
 

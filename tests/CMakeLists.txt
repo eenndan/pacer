@@ -184,7 +184,8 @@ add_soak_test(test_compare_lifecycle test_toggle_compare_repeatedly_does_not_cra
 # ---- VIDEOTOOLBOX CHECKS (HEALTH-4) ------------------------------------------------------------
 # The export paths that run through VideoToolbox — h264_videotoolbox, the ProRes VideoToolbox
 # encoder, and the decode relay that turns itself on over `-hwaccel videotoolbox`. CI's macos-15 runner
-# opens both sessions and runs all six; its macos-14 runner opened no H.264 session and reported the
+# opens both sessions and runs five (the hardware-relay check is real-hardware only:
+# test_export_pipeline.py); its macos-14 runner opened no H.264 session and reported the
 # 4 checks that need one SKIPPED (tests/README.md). `videotoolbox.<check>` runs `<file>.py --videotoolbox <check>`: without the
 # session it needs it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where
 # it used to return early and report PASSED. On the dev Mac all six run, in `test-fast` as well as
