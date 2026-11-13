@@ -18,6 +18,13 @@ list predates the start stamp; the replace offer on a newer list; the store roun
 the Session stamping it; and, on the real window, the replace and the debrief's default refusing
 to put an older session's corners on a newer list.
 
+CODE R4a (FIRST-OPEN-LOOP-8): the manual Add asked only the timing, so from the older session it
+stored that day's corner beside the later day's baselines while the page's Add button stood open.
+One predicate (`LibraryController._baseline_refusal` → `focus.baseline_refusal`, which the check's
+`Report` carries to the button) now gates Add, the default and Replace: pinned by the older Add
+refused on the button and the click, a planted gate in it refusing all three, and a v1-shaped
+focus store reading as before in every case but that Add.
+
 Run: python tests/test_focus_forward_in_time.py   (~15 s)
 """
 import dataclasses
@@ -86,7 +93,7 @@ def test_a_later_session_is_checked_and_an_older_one_is_not():
     assert all(k == (focus.OUTCOME_NO_VERDICT, OLDER, None) for k in kinds), (
         "a session older than the list was graded against it", kinds)
     assert focus.report_lines(backward) == [
-        "This session is older than your focus list (set on 19 Sep); verdicts compare later "
+        "This session is older than your focus list (from 19 Sep); verdicts compare later "
         "sessions."], focus.report_lines(backward)
     assert focus.report_headline(backward) == \
         "Focus list · 3 corners · no verdict on an older session", focus.report_headline(backward)
@@ -140,6 +147,75 @@ def test_the_replace_offer_never_swaps_a_newer_list_for_an_older_sessions_corner
                    _dry(SD30["fp"], SD19["fp"], "GX0069"))
     assert focus.replace_offer(ahead, [2, 4, 6]) == [2, 4, 6], [o.blocker for o in ahead.outcomes]
     print("ok replace offer: never from a session older than any baseline on the list")
+
+
+# ------------------------------------------------------------------ the manual Add (CODE R4a)
+OLDER_ADD = "this session is older than your focus list (from 19 Sep), so its corners can't " \
+            "join or replace it"
+
+
+def test_an_older_session_may_put_no_corner_on_the_list_by_one_predicate():
+    records = _dry(SD30["fp"], SD19["fp"])
+    # 19 Sep's list on 30 Aug: the check's own report carries the order's refusal, which is what
+    # the page's Add button reads — the same words the controller's gestures refuse with.
+    back = _check(_items(SD19, (1, 5)), _ctx(SD30), records)
+    assert back.baseline_refusal == OLDER_ADD, back.baseline_refusal
+    assert focus.baseline_refusal(_ctx(SD30), _items(SD19, (1, 5))) == OLDER_ADD
+    # Forward, or with no list, or an order that cannot be told: Add stays open, as before.
+    assert _check(_items(SD30), _ctx(SD19), records).baseline_refusal == ""
+    assert focus.baseline_refusal(_ctx(SD30)) == "" == focus.baseline_refusal(_ctx(SD30), [])
+    morning = {"fp": "GX0070", "date": "2026-09-19"}
+    unstamped = _check(_items(morning), _ctx({"fp": "GX0071", "date": "2026-09-19"}, NOON_19),
+                       _dry("GX0070", "GX0071"))
+    assert unstamped.baseline_refusal == "", unstamped.baseline_refusal
+    # A list mixing two days names the newer one only; the timing's refusal still comes first.
+    mixed = _items(SD30, (7,)) + _items({"fp": "GX0069", "date": "2026-09-26"}, (1,))
+    assert "(from 26 Sep)" in focus.baseline_refusal(_ctx(SD19), mixed)
+    # Re-opening the very session that set the list is never "older" than it, even if its first
+    # kept GPS fix moved (a later pipeline change): same fingerprint, a start 1 s earlier.
+    here = _items(SD19, (1, 5), start_ms=NOON_19)
+    reopened = _ctx(SD19, NOON_19 - 1000)
+    assert focus.newer_than(here, reopened) == [], "the list's own session read as older"
+    assert focus.baseline_refusal(reopened, here) == "", focus.baseline_refusal(reopened, here)
+    provisional = {**_ctx(SD30), "verified": False}
+    assert "provisional" in focus.baseline_refusal(provisional, _items(SD19)), "order beat trust"
+    print("ok Add: an older session's report refuses it with the order's reason; forward stays open")
+
+
+def test_a_legacy_focus_store_behaves_as_before_except_the_older_add():
+    """The owner's focus.json is his data: a v1-shaped store (no method, no n_of, no start stamp)
+    loads untouched and every check on it reads as before — the only new answer is an older
+    session's refused Add."""
+    legacy = {"version": 1, "lists": [{"track": "Sandown Park", "items": [
+        {"cid": c, "direction": 1, "enter_frac": 0.1 * c, "exit_frac": 0.1 * c + 0.05,
+         "median_s": 4.08, "iqr_s": 0.1, "n_laps": 36, "time_lost": 0.2, "reason": "",
+         "reach": "", "fingerprint": SD19["fp"], "date": SD19["date"], "lap_total": 737.0,
+         "verified": True, "degraded": False} for c in (7, 5, 3)]}]}
+    with tempfile.TemporaryDirectory(prefix="focusfwd_") as d:
+        path = os.path.join(d, "focus.json")
+        with open(path, "w") as fh:
+            json.dump(legacy, fh)
+        with open(path, "rb") as fh:
+            before = fh.read()
+        items = focus.for_track(focus.load(path), "Sandown Park")
+        assert [i.cid for i in items] == [7, 5, 3], items
+        records = _dry(SD30["fp"], SD19["fp"], "GX0069", "GX0070")
+        cases = {"later": _ctx({"fp": "GX0069", "date": "2026-09-26"}),
+                 "same day": _ctx({"fp": "GX0070", "date": "2026-09-19"}, NOON_19),
+                 "set here": _ctx(SD19), "older": _ctx(SD30)}
+        for name, ctx in cases.items():
+            report = _check(items, ctx, records)
+            # Before this change the report's refusal was the timing's alone.
+            was = focus.baseline_refusal(ctx)
+            if name == "older":
+                assert report.baseline_refusal == OLDER_ADD, report.baseline_refusal
+                assert all(o.blocker == OLDER for o in report.outcomes), report.outcomes
+            else:
+                assert report.baseline_refusal == was == "", (name, report.baseline_refusal)
+        assert _check(items, cases["later"], records).n_verdicts == 3
+        with open(path, "rb") as fh:
+            assert fh.read() == before, "reading the owner's list rewrote it"
+    print("ok legacy store: loads untouched; later/same-day/set-here unchanged; older Add refused")
 
 
 # ------------------------------------------------------------------ the store and the Session
@@ -221,6 +297,40 @@ def test_an_older_session_never_rewrites_a_newer_list_on_the_real_window():
             assert not _said(said, "by hand"), "a refused Replace logged an edit by hand"
             assert ctl.pre_promote_focus([listed[-1].cid]) == [], "a default filled a newer list"
             assert focus.for_track(focus.load(), track) == later[:2]
+            # The manual Add (CODE R4a): the page's button is off with the order's reason, and the
+            # gesture from outside the page (menu, ⌘K) stores nothing either.
+            spare = listed[-1].cid
+            block.set_selected_corner(spare)
+            assert not block.add_button.isEnabled(), "Add offered an older session's corner"
+            assert "older than your focus list" in block.add_button.toolTip(), \
+                block.add_button.toolTip()
+            assert block.add_state() == (False, block.add_button.toolTip()), block.add_state()
+            win.statusBar().clearMessage()
+            ctl.focus_add(spare)
+            assert focus.for_track(focus.load(), track) == later[:2], (
+                "a manual Add put an older session's corner on a newer list",
+                [(i.cid, i.date) for i in focus.for_track(focus.load(), track)])
+            assert "older than your focus list" in win.statusBar().currentMessage(), \
+                win.statusBar().currentMessage()
+            assert not _said(said, f"added C{spare}"), "a refused Add logged an edit"
+            # ONE predicate: an extra gate in it refuses all three gestures, on a list that each
+            # would otherwise fill (empty, so nothing is newer than this session).
+            focus.save_for_track(track, [])
+            ctl.update_focus_list()
+            ctl._baseline_refusal = lambda *_a: "a planted gate"
+            try:
+                ctl.focus_add(spare)
+                assert ctl.pre_promote_focus([listed[0].cid]) == []
+                ctl.focus_replace([listed[0].cid])
+                assert focus.for_track(focus.load(), track) == [], (
+                    "a gesture stored a baseline past the shared gate",
+                    [i.cid for i in focus.for_track(focus.load(), track)])
+            finally:
+                del ctl._baseline_refusal
+            # ...and without it the same session fills the empty list again (the gate, not the
+            # setup, refused).
+            ctl.focus_add(spare)
+            assert [i.cid for i in focus.for_track(focus.load(), track)] == [spare]
         finally:
             win.close()
             win.deleteLater()

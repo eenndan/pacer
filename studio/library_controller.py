@@ -1241,6 +1241,21 @@ class LibraryController:
         except Exception:  # noqa: BLE001 — never let the focus block break a load
             _log.warning("focus list not updated", exc_info=True)
 
+    def _baseline_refusal(self, entry: dict, track: str | None,
+                          items: list[focus.FocusItem]) -> str:
+        """Why no corner of the loaded session may go onto `track`'s focus list `items`, or "".
+
+        THE one gate of the three gestures that store a baseline — the manual Add, the debrief's
+        default (`pre_promote_focus`) and Replace (CODE R4a: each spelled it again, and only two
+        asked whether the session was older than the list). No track first (there is nowhere to
+        keep a list), then `focus.baseline_refusal`: the session's timing, then the list's order.
+        The page's Add button reads the same `focus.baseline_refusal` off the check's `Report`, so
+        the button and the click agree."""
+        if not track:
+            return ("this recording has no detected track, so there is nowhere to keep a focus "
+                    "list (File ▸ Save as track… names it)")
+        return focus.baseline_refusal(self.win.session.focus_context(entry, track), items)
+
     def focus_add(self, cid: int) -> None:
         """Promote corner `cid` of the loaded recording onto this track's focus list.
 
@@ -1249,21 +1264,19 @@ class LibraryController:
         corner id alone would have compared two different stretches of track next time (measured:
         C1's window grew 6.1 m between the two working-set recordings focus.py measures, worth
         +0.170 s of imaginary slowing on a corner the driver took quicker). An untracked session
-        cannot hold a list at all — the list is per track."""
+        cannot hold a list at all — the list is per track — and refused like the default and
+        Replace (`_baseline_refusal`), a session older than a baseline on the list adds nothing."""
         entry = self._focus_entry()
         track = entry.get("track")
-        if not track:
-            self._focus_failed("this recording has no detected track, so there is nowhere to keep "
-                               "a focus list (File ▸ Save as track… names it)")
-            return
         try:
-            # Gated like the debrief's default and Replace (QA REG-2): on a GPS-degraded day this
-            # stored a baseline every later check refused, for good.
-            why = focus.baseline_refusal(self.win.session.focus_trust(entry))
+            # Gated like the debrief's default and Replace, by the same predicate: on a GPS-degraded
+            # day this stored a baseline every later check refused, for good (QA REG-2), and from an
+            # older session it put that day's corners beside a later day's (CODE R4a).
+            items = self._focus_items(track) if track else []
+            why = self._baseline_refusal(entry, track, items)
             if why:
                 self._focus_failed(why)
                 return
-            items = self._focus_items(track)
             if any(i.cid == int(cid) for i in items) or len(items) >= focus.MAX_ITEMS:
                 return
             added = self.win.session.focus_items([int(cid)], entry)
@@ -1297,12 +1310,12 @@ class LibraryController:
         recorded after this session (QA REG-1): an older session's corners are not today's plan."""
         entry = self._focus_entry()
         track = entry.get("track")
-        if not track or not entry.get("verified") or entry.get("degraded"):
+        if not track:
             return []
         try:
             items = self._focus_items(track)
-            if focus.newer_than(items, self.win.session.focus_context(entry, track)):
-                return []
+            if self._baseline_refusal(entry, track, items):
+                return []           # a default says nothing: the page's own line says why
             taken = {i.cid for i in items}
             free = focus.MAX_ITEMS - len(items)
             wanted = [int(c) for c in cids if int(c) not in taken][:max(free, 0)]
@@ -1328,16 +1341,11 @@ class LibraryController:
         from a session older than a baseline on the list (QA REG-1), which the offer never makes."""
         entry = self._focus_entry()
         track = entry.get("track")
-        if not track or not entry.get("verified") or entry.get("degraded"):
-            self._focus_failed(focus.baseline_refusal(self.win.session.focus_trust(entry))
-                               or "today's corners can't be the baseline on untrusted timing")
-            return
         try:
-            newer = focus.newer_than(self._focus_items(track),
-                                     self.win.session.focus_context(entry, track))
-            if newer:
-                self._focus_failed(f"this session is older than your focus list (set on "
-                                   f"{focus.set_on(newer)}), so its corners can't replace it")
+            why = self._baseline_refusal(entry, track,
+                                         self._focus_items(track) if track else [])
+            if why:
+                self._focus_failed(why)
                 return
             items = self.win.session.focus_items([int(c) for c in cids], entry)
             if not items:
