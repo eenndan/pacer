@@ -220,7 +220,9 @@ their own. Each is its own registration, `videotoolbox.<check>` (`<file>.py --vi
 without the session it needs it exits 77 and is reported *Skipped* by name, where it used to
 return early and read as a pass. 4 of them need an H.264 VideoToolbox session (the decode relay
 among them), which CI's macos-14 runner could not open (CI run 36680230363, 2026-09-30: 2 Passed, 4
-Skipped); its macos-15 runner opens it, and runs all six (CI run 43304033240, 2026-11-12: 6 Passed). On the dev Mac
+Skipped); its macos-15 runner opens it and ran all six (CI run 43304033240, 2026-11-12: 6 Passed), but as
+a VM its concurrent decode sessions do not always hold, so the hardware-relay check is reported
+Skipped there and runs on the dev Mac (test_export_pipeline.py; #538's run 43348339477). On the dev Mac
 all six run, in `test-fast` and `test`; a file lists them in its `VIDEOTOOLBOX_CHECKS` and leaves
 them out of its ordinary run, and a check with a software half keeps that half there.
 [_videotoolbox.py](_videotoolbox.py) is the mechanism; `test_videotoolbox_checks` holds the
