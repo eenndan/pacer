@@ -2207,6 +2207,176 @@ def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
     print("ok app path: full -> ch2 -> ch1 leaves 36 laps · 0:46.808 · ideal 0:46.196")
 
 
+# ------------------------------------------- two cameras, one GoPro number (LEFT-27, FOL-16)
+_H = 3600 * 1000
+_A_START = 1_784_455_200_000      # 2026-07-19 10:00 UTC — camera A's GX010064
+_B_START = 1_791_108_000_000      # 2026-10-04 10:00 UTC — camera B's GX010064
+
+
+def _camera_open(monkeypatch, paths, *, date, start_ms, best, laps=20):
+    """One load's library half through the REAL `LibraryController.update_library`, over a stub
+    session whose entry is `_entry`'s plus the first fix's clock. Returns the controller."""
+    from studio import app as studio_app
+    from studio.library_controller import LibraryController
+    entry = {**_entry(os.path.splitext(os.path.basename(paths[0]))[0], track="Sandown Park",
+                      date=date, laps=laps, best=best, theo=best - 0.5, paths=paths),
+             "start_ms": start_ms}
+    win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+    win.session = SimpleNamespace(
+        valid_lap_ids=lambda: list(range(laps)), timing_verified=True,
+        timing_quality=SimpleNamespace(degraded=False), library_entry=lambda p: dict(entry))
+    win._paths = paths
+    ctl = LibraryController(win, studio_app.STATUS_MS)
+    ctl.update_library(paths)
+    return ctl
+
+
+def test_second_camera_with_the_same_gopro_number_gets_its_own_row(monkeypatch):
+    """LEFT-27 (probe fol_pb_order_and_key.py): GX010064 from camera A (19 Jul, 47.0) and camera B
+    (4 Oct, 48.0) both fingerprint GX0064. B's open was NOT a first open, and its upsert REPLACED
+    A's row (same chapter names), so A's 47.0 PB left the Library. Now B keys GX0064@2026-10-04: two
+    rows, B is a first open, A's PB stays; a re-open and a chapter of A keep A's key."""
+    if not _pacer_available():
+        print("skip test_second_camera_with_the_same_gopro_number_gets_its_own_row (no pacer)")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        a = _camera_open(monkeypatch, ["/camA/GX010064.MP4"], date="2026-07-19",
+                         start_ms=_A_START, best=47.0)
+        assert a.opened_new
+        b = _camera_open(monkeypatch, ["/camB/GX010064.MP4"], date="2026-10-04",
+                         start_ms=_B_START, best=48.0)
+        idx = library.load()
+        keys = [e["fingerprint"] for e in idx["entries"]]
+        assert keys == ["GX0064", "GX0064@2026-10-04"], f"B displaced or merged into A: {keys}"
+        assert b.opened_new, "camera B's recording is a first open, not a re-open of A's row"
+        assert [e["best"] for e in idx["entries"]] == [47.0, 48.0]
+        assert library.track_summary(idx, "Sandown Park")["best"] == 47.0
+        # Re-opening each keeps its own key and is no first open; nothing is added.
+        again = _camera_open(monkeypatch, ["/camA/GX010064.MP4"], date="2026-07-19",
+                             start_ms=_A_START, best=47.0)
+        again_b = _camera_open(monkeypatch, ["/camB/GX010064.MP4"], date="2026-10-04",
+                               start_ms=_B_START, best=48.0)
+        assert not again.opened_new and not again_b.opened_new
+        # A's chapter 2 alone starts 1.5 h after chapter 1: the same outing, A's key.
+        part = _camera_open(monkeypatch, ["/camA/GX020064.MP4"], date="2026-07-19",
+                            start_ms=_A_START + 90 * 60 * 1000, best=47.3, laps=8)
+        assert part.verdict is not library.Verdict.DECIDED
+        idx = library.load()
+        assert [e["fingerprint"] for e in idx["entries"]] == ["GX0064", "GX0064@2026-10-04"]
+        assert [e["best"] for e in idx["entries"]] == [47.0, 48.0], idx["entries"]
+    print("ok two cameras: GX0064 + GX0064@2026-10-04, A's 47.0 kept, re-open/chapter keep keys")
+
+
+def test_identity_tells_outings_apart_only_on_a_tz_independent_discriminator():
+    """`library.identity`: two starts more than 12 h apart are two outings, closer ones one (a
+    chapter opened alone starts up to a recording later); a LEGACY row (no start_ms) falls back to
+    its date, which a timezone moves by at most one day — so the same recording whose date shifted
+    a day is the same key, and only two days apart or more is another outing. No discriminator on
+    either side never splits a row."""
+    a = {**_entry("GX010064", date="2026-07-19"), "start_ms": _A_START}
+    idx = {"version": library.VERSION, "entries": [library._norm_entry(a)]}
+
+    def key(date, start=None):
+        e = _entry("GX010064", date=date)
+        return library.identity({**e, "start_ms": start} if start else e, idx)
+
+    assert key("2026-07-20", _A_START + 6 * _H) == "GX0064"          # TZ: local day moved
+    assert key("2026-07-19", _A_START + 11 * _H) == "GX0064"         # a long chain's last chapter
+    assert key("2026-07-19", _A_START + 13 * _H) == "GX0064@2026-07-19"   # another camera, same day
+    assert key("2026-10-04", _B_START) == "GX0064@2026-10-04"
+    # The legacy fallback: A's row written before start_ms existed.
+    idx["entries"][0].pop("start_ms")
+    assert key("2026-07-20", _A_START) == "GX0064"                   # TZ shifted it one day
+    assert key("2026-07-18") == "GX0064"
+    assert key("2026-07-21", _A_START) == "GX0064@2026-07-21"        # two days apart: another
+    assert key(None) == "GX0064" and key("not a date") == "GX0064"   # nothing to tell them by
+    # A key already taken by a third outing on that day is made unique, never shared.
+    idx["entries"].append(library._norm_entry(
+        {**_entry("GX010064", date="2026-10-04"), "fingerprint": "GX0064@2026-10-04",
+         "start_ms": _B_START}))
+    assert key("2026-10-04", _B_START + 13 * _H) == "GX0064@2026-10-04~2"
+    assert key("2026-10-04", _B_START + _H) == "GX0064@2026-10-04"
+    print("ok identity: start_ms 12 h, legacy dates >= 2 days, TZ shift keeps the key")
+
+
+def test_a_legacy_library_without_start_ms_loads_matches_and_resaves_as_before(monkeypatch):
+    """THE OWNER'S FILE: a library.json written before `start_ms` existed (synthetic, in the jail)
+    loads and re-saves byte for byte, and re-opening each of its recordings — now WITH a start —
+    matches its own row exactly as before: same key, same position, no new row. The start is
+    added to the re-measured row only; every other row keeps the exact keys it had."""
+    if not _pacer_available():
+        print("skip test_a_legacy_library_without_start_ms_loads_matches_and_resaves_as_before (no pacer)")
+        return
+    legacy = {"version": library.VERSION, "entries": [
+        library._norm_entry(_entry("GX010062", date="2026-09-19", best=46.808,
+                                   track="Sandown Park", paths=["/v/GX010062.MP4"])),
+        library._norm_entry(_entry("GX010064", date="2026-07-19", best=47.0, theo=46.5,
+                                   laps=20, track="Sandown Park", paths=["/v/GX010064.MP4"])),
+        library._norm_entry(_entry("GX010070", date=None, best=50.1, track=None,
+                                   verified=False, paths=["/v/GX010070.MP4"])),
+    ]}
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        p = library.library_path()
+        library.save(legacy, p)
+        with open(p) as f:
+            before = f.read()
+        assert "start_ms" not in before
+        library.save(library.load(p), p)
+        with open(p) as f:
+            assert f.read() == before, "a load + save of a legacy index changed its bytes"
+        # Re-open GX0064, analysed in another timezone (its local day moved by one).
+        _camera_open(monkeypatch, ["/v/GX010064.MP4"], date="2026-07-20",
+                     start_ms=_A_START, best=47.0)
+        after = library.load(p)["entries"]
+        assert [e["fingerprint"] for e in after] == ["GX0062", "GX0064", "GX0070"]
+        assert after[0] == legacy["entries"][0] and after[2] == legacy["entries"][2]
+        assert after[1]["start_ms"] == _A_START
+        assert {k: v for k, v in after[1].items() if k not in ("start_ms", "date")} == \
+            {k: v for k, v in legacy["entries"][1].items() if k != "date"}
+    print("ok legacy index: byte-identical re-save; a re-open matches its row, adds only start_ms")
+
+
+def test_start_ms_is_additive_on_the_stored_row():
+    """`start_ms` is stored when it is a real epoch and ABSENT otherwise (a legacy row, no wall
+    clock, a junk value) — never a null that would change a re-saved legacy row's bytes, and a bad
+    value costs the row only its start."""
+    norm = library._norm_entry
+    assert norm({**_entry("GX010060"), "start_ms": _A_START})["start_ms"] == _A_START
+    for junk in (0, -5, True, "1784455200000", 1.5e12, None):
+        row = {**_entry("GX010060"), "start_ms": junk}
+        assert library._valid_entry(row) and "start_ms" not in norm(row), junk
+    assert "start_ms" not in norm(_entry("GX010060"))
+    print("ok start_ms: stored when real, absent otherwise")
+
+
+def test_marks_follow_the_second_cameras_recording_only_on_a_collision(monkeypatch):
+    """The marks store keys on the file name (`StudioWindow._marks_key`) — also for a zero-lap
+    recording the library never indexes — and keeps doing so unless a library row under that
+    fingerprint is ANOTHER outing: then camera B's marks key on B's own identity, not into A's."""
+    if not _pacer_available():
+        print("skip test_marks_follow_the_second_cameras_recording_only_on_a_collision (no pacer)")
+        return
+    from studio import app as studio_app
+    from studio.library_controller import LibraryController
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        win._paths = [os.path.join(d, "GX010064.MP4")]
+        b = {**_entry("GX010064", date="2026-10-04"), "start_ms": _B_START}
+        win.session = SimpleNamespace(library_entry=lambda p: dict(b))
+        win.library_ctl = LibraryController(win, studio_app.STATUS_MS)
+        assert win._marks_key() == "GX0064"                       # empty library: the file name
+        library.upsert_and_save({**_entry("GX010064", date="2026-07-19"), "start_ms": _A_START})
+        assert win._marks_key() == "GX0064@2026-10-04"            # A holds GX0064: B is its own
+        b.update(date="2026-07-19", start_ms=_A_START + _H)
+        assert win._marks_key() == "GX0064"                       # A itself: unchanged
+        del win.library_ctl
+        assert win._marks_key() == "GX0064"                       # a half-built window
+    print("ok marks key: file name unless another outing holds it")
+
+
 # ---------------------------------------------------- the entry must not freeze at load time (W7-02)
 class _TrustSession:
     """The slice of Session that File ▸ Save as track… and the library upsert actually read, with
