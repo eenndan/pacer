@@ -210,6 +210,16 @@ MIN_REACH_LAPS = 2
 # measurement it would need.
 REACH_REPEAT_FRAC = 0.10
 
+
+def reach_line(n_laps: int) -> int:
+    """The fewest laps at the target that make a corner of `n_laps` counted laps REACH_REPEAT — the
+    one line rule `corner_evidence` classifies by and `theme_tipping_row` reads distances from.
+
+    For integer counts `reach >= max(MIN_REACH_LAPS, ceil(f·n))` is exactly `reach >=
+    MIN_REACH_LAPS and reach >= f·n` (an integer clears a real x iff it clears ceil(x)), with the
+    same float product, so there is one rule and no rounding seam between its two readers."""
+    return max(MIN_REACH_LAPS, math.ceil(REACH_REPEAT_FRAC * n_laps))
+
 # A claim must clear half the corner's own INTERQUARTILE spread to be aimable. Not a significance
 # test — with 36-62 laps the standard error of a median is ~0.03 s and almost nothing would abstain
 # — but an ACTIONABILITY test: a driver cannot aim at 0.03 s inside a band whose middle half is
@@ -301,7 +311,7 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
     iqr = float(q75 - q25)
     if reach_laps == 0:
         reach = REACH_NEVER
-    elif reach_laps >= MIN_REACH_LAPS and reach_laps >= REACH_REPEAT_FRAC * n:
+    elif reach_laps >= reach_line(n):
         reach = REACH_REPEAT
     else:
         reach = REACH_RARE
@@ -594,7 +604,10 @@ class Opportunity:
 # moved 0064 to execution.) Corners cluster near the 1-in-10 reach line, so a different lap set
 # moves several of them across it at once. The sentence therefore always states its own share, and
 # THEME_SPLIT exists so a balanced session is not forced to pick a side. No lap set of the working
-# set lands on a SPLIT — 0068 comes closest, at 78 % execution.
+# set lands on a SPLIT — 0068 comes closest, at 78 % execution. Its Theme.kind stays execution, but
+# since COACHING-4 the page PRINTS the split form for it and names the corner: its C1 sits on the
+# reach line, and one lap the other way through it would be a SPLIT (`theme_tipping_row`; the note
+# above THEME_SHARE has the numbers).
 THEME_EXECUTION = "execution"  # most of the ranked time is in corners already driven at this pace
 THEME_PACE = "pace"            # most of it is in corners the driver has rarely reached
 THEME_SPLIT = "split"          # neither side holds a clear majority — say so, don't invent one
@@ -604,7 +617,8 @@ THEME_NONE = "none"            # nothing ranked (every row abstained, or there a
 # with room to spare; measured on the THEME table above, 0068 lands at 0.78 and 0064 at 1.00. One
 # corner tips 0068:
 # 0068 would fall to a SPLIT if its C1 (reached on 4 of 36 laps; the line is 4) tipped the other
-# way. No single corner tips 0064, whose every ranked corner is pace work; it would take two.
+# way. No single corner tips 0064, whose every ranked corner is pace work; it would take two. Since
+# COACHING-4 the sentence says so when one corner tips it (`theme_tipping_row`).
 THEME_SHARE = 0.60
 
 
@@ -665,6 +679,65 @@ def session_theme(rows: list[Opportunity]) -> Theme:
     return Theme(kind=kind, share=share, execution_s=execution_s, pace_s=pace_s,
                  n_ranked=len(ranked), n_abstained=abstained, cause=cause,
                  cause_share=cause_share, cause_cids=cids, lead_cid=ranked[0].cid)
+
+
+# ------------------------------------------------- the one corner on the line (COACHING-4)
+#
+# WHY. The theme's side is decided per corner by the reach line (`reach_line`), and corners cluster
+# near it: on 0068 (SD_19_09_26 in the QA lanes) C1 and C7 are each reached on exactly 4 of 36 laps
+# with the line at 4, and one lap fewer through EITHER moves 0.15 s or 0.08 s from execution to pace
+# and the session to a SPLIT. The QA round-4 resample (ADV-5) reproduced its "78 % execution" in
+# only 56 % of 1,000 resamples. Printing "Most … is execution" there states a side one lap decides;
+# the owner's ruling RUL-8 (docs/DECISIONS.md) is that the sentence then names that corner.
+#
+# MEASURED (the ADVICE lane's saved rows of the four recordings, QA 2026-09-28): the rule fires on
+# SD19 only (C1, then C7 also tips; C5 at 3 of 35 is one lap under its line of 4 but gaining it
+# leaves the verdict execution). MK (C5 6/19, C2 3/16, C8 4/17 against a line of 2), SD30 (C7 5/37
+# against 4) and the Sandown 3 h (rare corners at 3..5 of 61-62 against 7) have no ranked corner on
+# the line, so their sentences do not change.
+
+
+def _one_lap_over(ev: Evidence) -> Evidence | None:
+    """`ev` with one lap moved across the reach line, or None when this ranked row is not within
+    one lap of it.
+
+    A REPEAT row exactly ON the line loses a lap: it becomes RARE (pace work) — or, when the line is
+    MIN_REACH_LAPS itself (every corner of a session of 20 laps or fewer), it falls under the
+    second-witness rule and abstains ABSTAIN_ONE_OFF, exactly as `corner_evidence` would classify
+    that count. A RARE row one lap UNDER the line gains one and becomes REPEAT. Its spread gate does
+    not move (neither its loss nor its IQR change), so nothing else about the row does."""
+    if not ev.ranked:
+        return None
+    line = reach_line(ev.n_laps)
+    if ev.reach == REACH_REPEAT and ev.reach_laps == line:
+        k = ev.reach_laps - 1
+        if k < MIN_REACH_LAPS:
+            return replace(ev, reach_laps=k, reach=REACH_RARE, abstain=ABSTAIN_ONE_OFF)
+        return replace(ev, reach_laps=k, reach=REACH_RARE)
+    if ev.reach == REACH_RARE and ev.reach_laps == line - 1 >= MIN_REACH_LAPS:
+        return replace(ev, reach_laps=line, reach=REACH_REPEAT)
+    return None
+
+
+def theme_tipping_row(theme: Theme, rows: list[Opportunity]) -> Opportunity | None:
+    """The largest-loss ranked row whose being one lap the other side of the reach line ALONE would
+    change the session's verdict, or None.
+
+    Only an EXECUTION or a PACE theme has a side to lose; a SPLIT already states both halves. The
+    verdict is re-run through `session_theme` itself on the rows with that one row's evidence moved
+    (`_one_lap_over`), so a row that would abstain drops out of the ranked total and out of the lead
+    exactly as it would on the page, rather than its time being moved to the other side."""
+    if theme.kind not in (THEME_EXECUTION, THEME_PACE):
+        return None
+    candidates = []
+    for i, r in enumerate(rows):
+        moved = _one_lap_over(r.evidence)
+        if moved is None:
+            continue
+        flipped = [*rows[:i], replace(r, evidence=moved), *rows[i + 1:]]
+        if session_theme(flipped).kind != theme.kind:
+            candidates.append(r)
+    return max(candidates, key=lambda r: r.time_lost, default=None)
 
 
 @dataclass(frozen=True)
@@ -1419,13 +1492,20 @@ _CAUSE_WORD = {
 }
 
 
-def theme_sentence(theme: Theme) -> str:
+def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     """The session's ONE line — what the twelve findings add up to. "" when nothing is ranked.
 
     Percentages are shares of the RANKED time on offer, which is the same total the panel's
-    headline sums, so the two numbers on the page are two readings of one quantity."""
+    headline sums, so the two numbers on the page are two readings of one quantity.
+
+    With the session's `rows`, a side that one corner on the reach line decides is not stated as a
+    side: the SPLIT form prints instead, both halves, and names that corner (`theme_tipping_row`).
+    `theme` itself is unchanged — only the words hedge."""
     if theme.kind == THEME_NONE:
         return ""
+    tipping = theme_tipping_row(theme, rows) if rows else None
+    if tipping is not None:
+        return _split_sentence(theme, tipping)
     # "the time on offer", not "your time": the shares are over the RANKED rows only, and on a
     # short session most of the measured loss can sit in abstained corners (0064's chapter 3 alone:
     # 0.121 s ranked against 0.444 s abstained). The same words the abstain sentence uses for the
@@ -1449,11 +1529,28 @@ def theme_sentence(theme: Theme) -> str:
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
     # when no side clears THEME_SHARE, and it is a real state: D24's 0060 chapter 2 landed here.
     # No lap set of the working set lands there — 0068 comes closest, at 78 % execution
-    # (the THEME table above coaching.THEME_SHARE).
+    # (the THEME table above coaching.THEME_SHARE). Its kind stays execution, yet since COACHING-4
+    # this is the form its page prints, naming C1, the corner on the reach line that decides it.
+    return _split_sentence(theme)
+
+
+def _split_sentence(theme: Theme, tipping: Opportunity | None = None) -> str:
+    """The SPLIT form — both halves of the ranked time — plus, when one corner on the reach line
+    decides the side, that corner. The halves are the measured ones (`theme`'s own seconds), not the
+    tipped ones: the hedge is about which side, not about the numbers."""
     total = theme.execution_s + theme.pace_s
     exec_pct = theme.execution_s / total if total > 0 else 0.0
-    return (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have already "
-            f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached.")
+    out = (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have already "
+           f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached")
+    if tipping is None:
+        return out + "."
+    moved = _one_lap_over(tipping.evidence)
+    if moved is not None and not moved.ranked:
+        # Amendment (1): at the MIN_REACH_LAPS line a lap fewer does not move the corner to the
+        # other side, it takes it off the ranking — say that, not "between the two".
+        return out + (f" — C{tipping.cid} sits on the line: one lap fewer at its target and it "
+                      "would not count.")
+    return out + f" — C{tipping.cid} sits on the line between the two."
 
 
 # ------------------------------------------------------- when the lead corner is not a lead

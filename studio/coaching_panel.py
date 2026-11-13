@@ -268,8 +268,11 @@ class ThemeBlock(QWidget):
         theme_obj = getattr(opps, "theme", None) or coaching.Theme(
             kind=coaching.THEME_NONE, share=0.0, execution_s=0.0, pace_s=0.0,
             n_ranked=0, n_abstained=0, cause=coaching.REASON_NONE, cause_share=0.0)
-        self._sentence = coaching.theme_sentence(theme_obj)
-        self._lines = coaching.theme_actions(theme_obj, list(opps.rows))
+        rows = list(opps.rows)
+        # The rows ride along so a side one corner on the reach line decides is not stated as a
+        # side (COACHING-4, `coaching.theme_tipping_row`).
+        self._sentence = coaching.theme_sentence(theme_obj, rows)
+        self._lines = coaching.theme_actions(theme_obj, rows)
         self.headline.setText(self._sentence)
         for label, text in zip(self.actions, self._lines + ["", ""], strict=False):
             label.setText(text)
