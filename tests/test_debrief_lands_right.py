@@ -313,17 +313,19 @@ def test_a_refused_write_at_the_drag_keeps_the_verdict_for_the_next_one():
 
 def test_a_refused_write_at_the_load_shows_its_card_once():
     """CODE-6's other door (review of #529): a first open on a KNOWN circuit whose row the disk
-    refused at load. The load's tail already showed the PB card (nothing to land the debrief on
-    yet), so when the next drag decides the verdict again and the debrief has nothing ranked to
-    show, the card must not come back a second time. Its own window: the circuit is known here,
-    where the journey above needs it unknown."""
+    refused at load. QA W4 REG-2: that load showed "First session logged here" beside the notice
+    that the session couldn't be added to the library, and again on every refused open — a claim
+    the row was logged when it was not. A refused load now shows NO card; the moment belongs to the
+    row, so the retry that writes it (here a drag, with nothing ranked: no debrief to carry it)
+    shows the card ONCE. (REG-3, the load's card left over the retry's debrief, goes with it.) Its
+    own window: the circuit is known here, where the journey above needs it unknown."""
     from studio import library
     from studio.library import Verdict
     real = library.upsert_and_save
     refusals = []
 
-    def refuse_once(*args, **kwargs):
-        if not refusals:
+    def refuse_twice(*args, **kwargs):
+        if len(refusals) < 2:
             refusals.append(args)
             raise OSError(28, "No space left on device")
         return real(*args, **kwargs)
@@ -336,19 +338,24 @@ def test_a_refused_write_at_the_load_shows_its_card_once():
         cards = []
         real_card = ctl.show_pb_moment
         ctl.show_pb_moment = lambda moment: (cards.append(moment), real_card(moment))[1]
-        library.upsert_and_save = refuse_once
+        library.upsert_and_save = refuse_twice
         try:
-            _open(win, a)
+            for n in (1, 2):                                 # every refused open, not only the first
+                _open(win, a)
+                assert len(refusals) == n and not _rows(), (refusals, _rows())
+                assert ctl.verdict is Verdict.WRITE_FAILED and win._library_unwritable, ctl.verdict
+                assert not cards and win._pb_toast is None and not win.view.is_debrief(), (
+                    "a refused load claimed the session was logged", n, cards)
         finally:
             library.upsert_and_save = real
-        assert refusals and not _rows(), _rows()
-        assert ctl.verdict is Verdict.WRITE_FAILED, ctl.verdict
-        assert len(cards) == 1 and not win.view.is_debrief(), ("the load showed no card", cards)
         win.view.opportunities.shortlist_cids = lambda: []    # nothing ranked: no debrief
         _drag_start_line(win, line)
         assert len(_rows()) == 1 and ctl.verdict is Verdict.DECIDED, (_rows(), ctl.verdict)
-        assert len(cards) == 1, ("the retry showed the load's card a second time", cards)
-    print("ok CODE-6: a refused row at the load shows its card once; the retry writes it, no repeat")
+        assert len(cards) == 1 and cards[0]["kind"] == "first", (
+            "the retry that wrote the row did not show its card once", cards)
+        _drag_start_line(win, line)                           # decided now: nothing again
+        assert len(cards) == 1, cards
+    print("ok CODE-6: a refused load shows no card; the retry that writes the row shows it once")
 
 
 # ------------------------------------------------------------------------------ NEW-6 / EVAL-2

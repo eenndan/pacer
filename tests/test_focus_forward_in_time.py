@@ -127,6 +127,26 @@ def test_two_sessions_of_one_day_are_ordered_by_their_start():
     print("ok same day: afternoon checked against the morning, never the morning against it")
 
 
+def test_the_focus_list_and_the_pb_line_share_one_order():
+    """QA W4 REG-1: the PB line ordered same-day sessions by the calendar day while this list used
+    the first-fix clock, so one page called a morning session both the newer PB and the older
+    session. Both now ask `library.recorded_after`; pinned on every shape of pair — clocked,
+    same-day legacy, undated — so neither can drift from the other again."""
+    from studio import library
+    cases = [("2026-09-19", NOON_19, "2026-09-19", NOON_19 + 3 * HOUR_MS),   # same day, clocked
+             ("2026-09-19", NOON_19 + 3 * HOUR_MS, "2026-09-19", NOON_19),
+             ("2026-09-19", 0, "2026-09-19", NOON_19),                       # legacy list
+             ("2026-09-19", 0, "2026-08-30", 0), ("2026-08-30", 0, "2026-09-19", 0),
+             (None, 0, "2026-09-19", NOON_19)]                               # undated
+    for then_day, then_ms, now_day, now_ms in cases:
+        item = _items({"fp": "GX0090", "date": then_day}, (7,), start_ms=then_ms)[0]
+        ctx = _ctx({"fp": "GX0091", "date": now_day}, now_ms)
+        row = {"date": then_day, **({"start_ms": then_ms} if then_ms else {})}
+        assert focus.recorded_before(ctx, item) == library._recorded_after(
+            row, now_day, now_ms or None), (then_day, then_ms, now_day, now_ms)
+    print("ok one order: the focus list and the PB line agree on every pair")
+
+
 # ------------------------------------------------------------------ the replace offer (#426)
 def test_the_replace_offer_never_swaps_a_newer_list_for_an_older_sessions_corners():
     records = _dry(SD30["fp"], SD19["fp"], "GX0066")

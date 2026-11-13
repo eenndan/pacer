@@ -114,6 +114,32 @@ def test_an_older_faster_first_open_is_the_fastest_not_a_new_pb():
     assert ctl.previous_pb["fingerprint"] == "GX0050", ctl.previous_pb
 
 
+def test_a_same_day_morning_opened_after_the_afternoon_is_not_a_new_pb():
+    """QA W4 REG-1: the controller passes the entry's first-fix clock too, so a faster 09:00 session
+    opened after the same day's 15:00 row is the track's fastest — the order the focus block on the
+    same page uses — not a "New personal best" with the LATER afternoon offered as its previous."""
+    from types import SimpleNamespace
+
+    from studio import focus
+    from studio.library_controller import LibraryController
+
+    session = SimpleNamespace(timing_verified=True, timing_quality=SimpleNamespace(degraded=False))
+    ctl = LibraryController(SimpleNamespace(session=session), 0)
+    day, am_ms, pm_ms = "2026-09-05", 1788598800000, 1788620400000
+    pm = {**_entry("GX9302", 45.475), "date": day, "start_ms": pm_ms}
+    am = {**_entry("GX9301", 44.963), "date": day, "start_ms": am_ms}
+    moment, standing = ctl._pb_decision(am, {"entries": [pm]})
+    assert moment["kind"] == standing["kind"] == "fastest", (moment, standing)
+    assert ctl.previous_pb is None and not ctl.offers_pb_compare(standing), ctl.previous_pb
+    # One page, one order: the focus list set on the afternoon calls the morning older too.
+    item = focus.item_from_dict({
+        "cid": 7, "direction": 1, "enter_frac": 0.7, "exit_frac": 0.75, "median_s": 4.08,
+        "iqr_s": 0.1, "n_laps": 36, "time_lost": 0.2, "reason": "", "reach": "",
+        "fingerprint": "GX9302", "date": day, "lap_total": 737.0, "verified": True,
+        "degraded": False, "n_of": 36, "method": focus.METHOD_MATCHED, "start_ms": pm_ms})
+    assert focus.recorded_before({"fingerprint": "GX9301", "date": day, "start_ms": am_ms}, item)
+
+
 def test_the_lead_says_it_is_a_default_and_how_to_undo_it():
     three, one, none = debrief_note([7, 5, 3]), debrief_note([4]), debrief_note([])
     assert "Pacer put C7, C5 and C3" in three and "a default, not a decision" in three, three

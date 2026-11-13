@@ -99,7 +99,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import _jsonstore, app_support, session_record
+from . import _jsonstore, app_support, library, session_record
 from ._signal import plural
 from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
 
@@ -543,11 +543,9 @@ def recorded_before(now_ctx: dict, item: FocusItem) -> bool:
     re-opening the very session that set the list."""
     if item.fingerprint and item.fingerprint == str(now_ctx.get("fingerprint") or ""):
         return False
-    then_ms, now_ms = int(item.start_ms or 0), int(now_ctx.get("start_ms") or 0)
-    if then_ms > 0 and now_ms > 0:
-        return now_ms < then_ms
-    then, now = _day(item.date), _day(now_ctx.get("date"))
-    return then is not None and now is not None and now < then
+    # One order with the PB line (`library.recorded_after`), so the page never disagrees with itself.
+    return library.recorded_after(item.date, int(item.start_ms or 0),
+                                  now_ctx.get("date"), now_ctx.get("start_ms"))
 
 
 def newer_than(items: list[FocusItem], now_ctx: dict) -> list[FocusItem]:
