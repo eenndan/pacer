@@ -261,7 +261,9 @@ def test_open_recent_replays_a_reversed_row_in_chapter_order():
     with _fresh_app_support(), _no_modals():
         library.upsert_and_save({
             "fingerprint": _FP, "stem": "GX019001", "track": md.DEMO_TRACK_NAME,
-            "date": "2026-09-18", "lap_count": 13, "best": 45.0, "theoretical": 44.5,
+            # The synthetic recording's own day (synth_gopro.START_UTC): a row two days off it
+            # would be another camera's GX019001 (library.identity), not this one.
+            "date": "2026-06-01", "lap_count": 13, "best": 45.0, "theoretical": 44.5,
             "verified": True, "degraded": False, "dropout": False, "paths": [ch2, ch1]})
         win = StudioWindow([])
         win.resize(1440, 900)
