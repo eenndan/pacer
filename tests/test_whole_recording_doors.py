@@ -362,8 +362,13 @@ def test_part_of_a_new_recording_decides_nothing_until_the_whole_recording_loads
                                          full, dropped)
                 assert not ctl.waiting_for_whole
                 assert "wait for it" not in (win.statusBar().currentMessage() or "")
+                assert full["row"][2] == ["GX019001.MP4", "GX029001.MP4"], full["row"]
 
-                # ...and only once: the same recording again is a re-open.
+                # ...and only once: the same recording again, through its LATER chapter alone, is a
+                # re-open. Kept by FIRST-OPEN-LOOP-17 although the verdict table holds the rule:
+                # this is the one step that drives sibling discovery and the row key together, and
+                # a chapter opened alone under a new key (FIRST-OPEN-LOOP-16's `start_ms`) would
+                # be a second "first open" no table can see.
                 _until_loaded(win, lambda: win._open_recordings([ch2]))
                 again = _verdict(win)
                 assert not again["debrief"] and not again["card"] and not ctl.opened_new, again
@@ -372,7 +377,7 @@ def test_part_of_a_new_recording_decides_nothing_until_the_whole_recording_loads
                 _close(win)
     print(f"ok verdict: chapter 1 alone decided nothing and wrote no row; the full load said "
           f"{full['pb_line']!r} and put {full['focus']} on the list, as the drop did; a re-open "
-          "said nothing")
+          "through chapter 2 alone said nothing")
 
 
 if __name__ == "__main__":
