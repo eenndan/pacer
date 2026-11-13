@@ -1544,13 +1544,14 @@ def _split_sentence(theme: Theme, tipping: Opportunity | None = None) -> str:
            f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached")
     if tipping is None:
         return out + "."
+    corner_label = f"C{tipping.cid}"
     moved = _one_lap_over(tipping.evidence)
     if moved is not None and not moved.ranked:
         # Amendment (1): at the MIN_REACH_LAPS line a lap fewer does not move the corner to the
         # other side, it takes it off the ranking — say that, not "between the two".
-        return out + (f" — C{tipping.cid} sits on the line: one lap fewer at its target and it "
+        return out + (f" — {corner_label} sits on the line: one lap fewer at its target and it "
                       "would not count.")
-    return out + f" — C{tipping.cid} sits on the line between the two."
+    return out + f" — {corner_label} sits on the line between the two."
 
 
 # ------------------------------------------------------- when the lead corner is not a lead
