@@ -587,7 +587,8 @@ class Report:
     # the earlier days first in list order, today last, each once. Exactly what the focus block's
     # one-click "Mark both dry" offers to write — and nothing it may not (`mark_dry_prompt`).
     unrecorded: tuple[tuple[str, str], ...] = ()
-    # Why no corner of THIS session may become a baseline (`baseline_refusal`), or "" when one may.
+    # Why no corner of THIS session may join the list (`baseline_refusal`: its timing, or a baseline
+    # on the list recorded after it), or "" when one may.
     baseline_refusal: str = ""
 
     @property
@@ -600,7 +601,7 @@ class Report:
         return sum(1 for o in self.outcomes if o.has_verdict)
 
 
-def baseline_refusal(now_ctx: dict) -> str:
+def baseline_refusal(now_ctx: dict, items: list[FocusItem] | None = None) -> str:
     """Why no corner of THIS session can become a focus baseline, or "" when one can (QA REG-2).
 
     The two trust facts `_blocker` refuses a stored baseline for (BLOCK_UNVERIFIED, BLOCK_DEGRADED),
@@ -608,12 +609,23 @@ def baseline_refusal(now_ctx: dict) -> str:
     such a session "no verdict", for good. The debrief's pre-promotion and the Replace offer already
     refused one; a manual Add stored it on a GPS-degraded day, and the page invited that Add. Said
     with the measure it rests on, which the session supplies as ``untrusted``
-    (`TimingQuality.untrusted`)."""
+    (`TimingQuality.untrusted`).
+
+    Then the list's ORDER (QA REG-1, CODE R4a): a session older than a baseline already on `items`
+    (`newer_than`) puts no corner on that list — the debrief's default and Replace refused it, and
+    a manual Add stored it, a list mixing a later day's baselines with an earlier day's. ONE
+    predicate for every gesture and the page's Add button (`Report.baseline_refusal`), so the
+    button and the click cannot disagree again. An order that cannot be told is not "older"
+    (`recorded_before`), so a list stored before the start stamp is added to as it always was."""
     if not now_ctx.get("verified", False):
         return "this session's start line is provisional, so its corners can't be a baseline"
     if now_ctx.get("degraded", False):
         why = now_ctx.get("untrusted") or "this session's timing is estimated"
         return f"{why}, so this session's corners can't be a baseline"
+    newer = newer_than(list(items or []), now_ctx)
+    if newer:
+        return (f"this session is older than your focus list (set on {set_on(newer)}), so its "
+                "corners can't join or replace it")
     return ""
 
 
@@ -712,7 +724,8 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
             and session_record.is_empty(rec_now):
         unrecorded.setdefault(now_fp, "today")
     return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes,
-                  unrecorded=tuple(unrecorded.items()), baseline_refusal=baseline_refusal(now_ctx))
+                  unrecorded=tuple(unrecorded.items()),
+                  baseline_refusal=baseline_refusal(now_ctx, items))
 
 
 # ------------------------------------------------------------------------------------- the words
