@@ -139,8 +139,8 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   end-to-end offscreen smoke. It skips what its runner cannot run: the 16+ `footage.*` checks,
   which need a real recording, and one crash soak that runs on every push to `main` instead. CTest
   lists each by name as *Skipped*. The 6 `videotoolbox.*` export checks need Apple's hardware
-  encoders, which CI's runner has. `pixi run golden`, the gate you actually run after every maths change,
-  takes seconds, not minutes (8–14 s on the development Mac, measured 27 September 2026).
+  encoders; CI runs 5, as the hardware decode relay's check needs a real Mac. `pixi run golden`, the
+  gate you actually run after every maths change, takes seconds, not minutes (8–14 s on the development Mac, measured 27 September 2026).
 
 Depth: **[AGENTS.md](AGENTS.md)** (the authoritative developer reference) and
 **[studio/README.md](studio/README.md)** (the module map).
