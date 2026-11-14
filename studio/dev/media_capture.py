@@ -140,6 +140,9 @@ WINDOW_MAP = (1440, 1340)
 # window, the larger they read there. 1024 is refused: the grid's own minimums hold the window
 # at ~1055 px (measured), so this stays clear of that floor, and `shot_debrief` checks it.
 WINDOW_DEBRIEF = (1100, 900)
+# Real seconds of event loop before the debrief grab: its hero paints after a 60 ms settle timer
+# (coaching_panel.HERO_SETTLE_MS), restarted by each layout pass of the landing.
+_DEBRIEF_SETTLE_S = 0.6
 DPR = 2                       # retina; every PNG below is 2x its logical size
 PAD = theme.SPACE_M           # breathing room around a cropped section, in logical px
 
@@ -936,7 +939,8 @@ def build_og(out_dir: str, hero_png: str) -> str:
 # ====================================================================== 8 — the debrief (the demo)
 def shot_debrief(app: QApplication, out_dir: str) -> str:
     """The first-open debrief, the loop the app is built around: the lead, the focus list Pacer
-    pre-filled, and the ranked corners, each one Jump from the video.
+    pre-filled, the ranked corners, each one Jump from the video, and under them the picture: the
+    best lap's time and its speed-coloured line with the focus corners ringed.
 
     SHOT ON THE SYNTHETIC DEMO, NEVER ON THE RECORDING ABOVE. The demo is the one session every
     reader can open (`pixi run studio -- --demo`) and it is nobody's driving, so this image shows
@@ -962,14 +966,31 @@ def shot_debrief(app: QApplication, out_dir: str) -> str:
     view = w.view
     if not view.is_debrief():
         raise RuntimeError("the demo did not land on its debrief (LibraryController.update_library)")
-    panel, table = view._table_panel, view.opportunities.table
+    # THE PICTURE PAINTS ON A TIMER. The debrief's hero (coaching_panel.DebriefHero, 0.8.0) renders
+    # only once its size has held for HERO_SETTLE_MS, so pumping events alone grabs an empty canvas
+    # where the picture goes: run the event loop in real time, well past that timer, first.
+    deadline = time.time() + _DEBRIEF_SETTLE_S
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    settle(app)
+    opp = view.opportunities
+    panel, table, hero = view._table_panel, opp.table, opp.hero
     last = table.rowCount() - 1
     origin = panel.mapTo(w, QPoint(0, 0))
     bottom = table.viewport().mapTo(
         w, QPoint(0, table.rowViewportPosition(last) + table.rowHeight(last))).y()
-    rect = QRect(origin.x(), origin.y(), panel.width(), bottom + PAD - origin.y())
+    # The hero sits UNDER the shortlist, in the canvas it leaves: a crop at the last row would cut
+    # the release's headline picture out of the image. When the hero is up, crop to its bottom.
+    if hero.isVisible() and hero.data() is not None:
+        bottom = max(bottom, hero.mapTo(w, QPoint(0, hero.height())).y())
+    elif table.rowCount():
+        print("media_capture: the debrief hero is not shown — the image is the page without it")
+    rect = QRect(origin.x(), origin.y(), panel.width(),
+                 min(bottom + PAD, w.height()) - origin.y())
     print(f"media_capture: debrief crop {rect.width()}x{rect.height()} logical · "
-          f"{table.rowCount()} rows · lead = {view.opportunities.debrief_block.full_text()[:60]}…")
+          f"{table.rowCount()} rows · hero shown={hero.isVisible()} renders={hero.renders} · "
+          f"lead = {opp.debrief_block.full_text()[:60]}…")
     img = region(w, rect)
     w.close()
     return save(img, os.path.join(out_dir, "debrief.png"))
