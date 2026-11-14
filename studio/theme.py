@@ -153,6 +153,10 @@ FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring sec
 GRID_ROW_H = CTRL_H          # 28 — a grid whose ROW is the primary click/seek target
 GRID_ROW_DENSE_H = HIT_MIN   # 24 — a report grid; still a legal pointer target
 EMPTY_MEASURE_PX = 440       # the widest a column of PROSE may be set (widgets.EmptyState)
+# The Laps tab's Δbest bar (lap_table._TowerDelegate): sizes of a THING, so they sit here.
+LAP_BAR_H = 6                # the bar's thickness, centred on the row
+LAP_BAR_MIN_PX = 56          # the bar's track, added to the Δ column's own text width
+LAP_BAR_ALPHA = 150          # 0-255: the bar is a cue under the digits, not a second number
 
 # EMPTY_MEASURE_PX is an EXTENT, not a gap, which is why it sits with the sizes and not with the
 # SPACE scale — the same argument tests/test_design_system.py's `_CALLS` preamble makes for a
