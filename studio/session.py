@@ -2479,6 +2479,28 @@ class Session:
         best = self.best_lap_id()
         if best is None:
             return []
+        bounds = self.sector_boundary_distances(best)
+        # Start/finish first, then the sector lines in track order.
+        labels = ["S/F"] + [f"S{i + 1}" for i in range(len(bounds))]
+        return self._best_odometer_plot_positions(labels, [0.0, *bounds], mode)
+
+    def corner_plot_positions(self, mode: str) -> list[tuple[str, float]]:
+        """(label, plot-x) for each detected corner's APEX on the charts' shared axis — the same
+        corners (`corners.corner_list()`, best-lap odometer metres) the map labels C1…, placed by
+        the same projection as the sector lines, so a corner label and a sector line can never be
+        on different axes. [] with no corners or no best lap."""
+        found = self.corners.corner_list()
+        if not found:
+            return []
+        return self._best_odometer_plot_positions([c.label for c in found],
+                                                  [c.apex for c in found], mode)
+
+    def _best_odometer_plot_positions(self, labels, edge_dists, mode: str) -> list[tuple[str, float]]:
+        """(label, plot-x) for positions given in BEST-LAP odometer metres (see
+        sector_plot_positions, whose projection this is)."""
+        best = self.best_lap_id()
+        if best is None:
+            return []
         td = self._lap_time_dist(best)
         if td is None:
             return []
@@ -2486,11 +2508,7 @@ class Session:
         total = float(dists[-1])
         if total <= 0:
             return []
-        bounds = self.sector_boundary_distances(best)
-        # Start/finish first, then the sector lines in track order.
         positions: list[tuple[str, float]] = []
-        labels = ["S/F"] + [f"S{i + 1}" for i in range(len(bounds))]
-        edge_dists = [0.0, *bounds]
         if self._ref is None:
             # Dormant: baseline IS the best lap; raw d / interp(d,dists,times)−t0 kept exact (not
             # routed through project(), which would differ in the last ULP).

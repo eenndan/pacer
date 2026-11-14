@@ -114,10 +114,10 @@ def test_no_module_styles_itself_from_a_string():
     cannot live in a stylesheet built once at startup. Anything that is the same on every recording
     is a ROLE now (see the labels-and-roles section of theme.py)."""
     EXEMPT = {
-        # ---- per-tick Δ colour: ahead / behind / neutral, recomputed as the video plays. Both
-        # write a QUALIFIED selector (`QLabel#DiffBox { … }`) over the widget's own themed rule, and
-        # both are guarded so a stable readout costs no re-parse.
-        ("central_view.py", "CentralView._update_diff_box"),
+        # ---- per-tick Δ colour: ahead / behind / neutral, recomputed as the video plays. It
+        # writes a QUALIFIED selector over the widget's own themed rule, guarded so a stable readout
+        # costs no re-parse. (The hero #DiffBox left this list: it paints its Δ run itself, so the
+        # speed beside it keeps the themed neutral colour — cool/chart-corners.)
         ("video_view.py", "_PaneCell.set_badge"),
         # ---- the coaching PhaseBar: the three segment FILLS and the two numbers under them are
         # the datum (entry/mid/exit Δt, coloured by which third is losing, plus the "net" line

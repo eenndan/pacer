@@ -520,7 +520,7 @@ def test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove():
                 if "ideal" in view.diff_box.text().lower():
                     ideal_frames.append((round(t, 3), view.diff_box.text()))
             assert not ideal_frames, ideal_frames[:3]
-            assert view.diff_box.text().startswith("Δ "), view.diff_box.text()
+            assert view.diff_box.text().startswith("Δbest "), view.diff_box.text()
             # ...and the tooltip does not print it one level down either — which is what
             # `theme.format_ideal_run` would have rendered here (`Δideal +0.00 s`).
             tip = view.diff_box.toolTip()

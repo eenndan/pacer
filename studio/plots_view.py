@@ -113,6 +113,19 @@ def legend_pen():
 def sector_line_pen():
     return pg.mkPen(C.text_muted, width=theme.line_width(1), style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
+# The map labels every corner C1…; the speed chart, which a racer reads corner by corner, named
+# none, and the only grey bands on it are COAST spans (see _draw_driving), which read as corners.
+# So each corner gets its map label along the speed plot's TOP edge, centred on the SAME point the
+# map puts it: the corner's geometric apex (`corners.Corner.apex`, the curvature-weighted centre of
+# the bend on the best lap's odometer). That is not the lap's slowest point: on a long compound bend
+# it can sit tens of metres before the speed minimum. The top edge is used because a corner is
+# where the trace dips, so it is usually clear there. Quiet text hue, like the sector labels. An
+# InfLineLabel on an unstroked line keeps it pinned to that edge through
+# any pan or zoom with no per-tick work; _declutter_corner_labels drops (never overlaps) the ones
+# that would collide, re-run only when the x-range or the size changes.
+CORNER_LABEL_COLOR = C.text_dim
+CORNER_LABEL_OPTS = {"position": 0.995, "anchors": [(0.5, 0), (0.5, 0)], "movable": False}
+CORNER_LABEL_GAP_PX = 6   # the air kept between two labels (and a label and a sector caption)
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 def zero_line_pen():
     return pg.mkPen(C.border, width=theme.line_width(1))
@@ -126,6 +139,7 @@ def _ideal_line_pen():
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
+COAST_LEGEND_LABEL = "coasting"
 # D3: the SYNTHETIC brake/throttle band — a thin sub-track in dedicated space BELOW the speed
 # curves. Brake fills toward red (C.behind), throttle toward green (C.ahead); subtle alpha so it
 # reads as a secondary backdrop, never competing with the speed curves. ESTIMATED (legend-labelled).
@@ -375,9 +389,14 @@ class PlotsView(QWidget):
         # axis mode, pushed by app via set_sector_lines.
         self._sector_items: list = []
         self._sector_positions: list[tuple[str, float]] = []
+        # ...and the corner labels (apex x per corner, same axis), pushed by app via
+        # set_corner_labels; the lines they ride, in track order, for the declutter pass.
+        self._corner_positions: list[tuple[str, float]] = []
+        self._corner_items: list = []
         # F5 driving channels (brake glyphs + coast bands); data pushed by app, redrawn on fitted axes.
         self._brake_items: list = []
         self._coast_items: list = []
+        self._coast_sample = None  # the legend's "coasting" swatch while bands are drawn
         self._brake_data: list = []  # [(positions=[(x,decel)], colour)]
         self._coast_data: list = []  # [(spans=[(x0,x1)], colour)]
         # D3 synthetic brake/throttle band: per-lap (plot_x, intensity[-1..1]); drawn as a sub-track
@@ -420,6 +439,7 @@ class PlotsView(QWidget):
         # next refresh the placement is theirs, and nothing re-anchors it or re-ranges the axis.
         self._legend_pinned = False
         self._legend_corner = 0       # LEGEND_CORNERS index the plate is anchored at
+        self._legend_offset = LEGEND_OFFSET   # ...and the offset it was anchored with
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
@@ -538,6 +558,7 @@ class PlotsView(QWidget):
         self._legend_timer.setSingleShot(True)
         self._legend_timer.timeout.connect(self._place_speed_legend)
         speed_vb.sigResized.connect(lambda *_: self._legend_timer.start(0))
+        speed_vb.sigResized.connect(lambda *_: self._declutter_corner_labels())
         speed_vb.sigRangeChangedManually.connect(self._pin_speed_legend)
         if leg is not None:
             self._legend_drag = leg.mouseDragEvent
@@ -810,14 +831,87 @@ class PlotsView(QWidget):
         self._sector_positions = list(positions or [])
         self._draw_sectors()
 
+    def set_corner_labels(self, positions):
+        """Label each corner on the speed chart. positions = [(label, apex plot-x)] in the current
+        mode, from `Session.corner_plot_positions`; [] clears. Pushed with the sector lines (a
+        re-segment or an axis flip), never per tick."""
+        positions = list(positions or [])
+        if [lb for lb, _x in positions] == [lb for lb, _x in self._corner_positions]:
+            # The same corners on a new axis (an x-mode flip): move the lines, build nothing.
+            self._corner_positions = positions
+            for ln, (_label, x) in zip(self._corner_items, positions, strict=True):
+                ln.setValue(float(x))
+            self._declutter_corner_labels()
+            return
+        self._corner_positions = positions
+        for item in self._corner_items:
+            self.p_speed.removeItem(item)
+        self._corner_items = []
+        for label, x in self._corner_positions:
+            ln = pg.InfiniteLine(pos=float(x), angle=90, pen=pg.mkPen(None), label=label,
+                                 labelOpts={"color": CORNER_LABEL_COLOR, **CORNER_LABEL_OPTS})
+            ln.setZValue(-5)  # with the sector guides: behind the curves, the cursor, the legend
+            # Built ONCE per push and kept across refresh(): `ignoreBounds` keeps them out of the
+            # fit the sector lines have to be torn down for, so a lap switch rebuilds nothing.
+            self.p_speed.addItem(ln, ignoreBounds=True)
+            self._corner_items.append(ln)
+        self._declutter_corner_labels()
+
     def _clear_sectors(self):
         for plot, item in self._sector_items:
             plot.removeItem(item)
         self._sector_items = []
 
+    def corner_labels_shown(self) -> list[tuple[str, float]]:
+        """(label, x) of every corner label currently painted (after the declutter)."""
+        return [(ln.label.toPlainText(), float(ln.value()))
+                for ln in self._corner_items if ln.isVisible()]
+
+    def _declutter_corner_labels(self):
+        """Show a corner label only where it is inside the view and clear of the labels already
+        kept, of every sector caption and of the legend plate when it sits on the top edge, walking
+        in track order; the rest are hidden, never overlapped or nudged off their apex. Pixel
+        widths come from the labels themselves (a TextItem ignores the view transform, so its
+        bounding rect IS pixels). Runs on a corner push, a refresh, an x-range change, a resize and
+        a legend placement — never on the playhead tick."""
+        if not self._corner_items:
+            return
+        vb = self.p_speed.getViewBox()
+        (x0, x1), width = vb.viewRange()[0], vb.boundingRect().width()
+        if x1 <= x0 or width <= 0:
+            return
+        px = width / (x1 - x0)
+        taken = []   # [(left_px, right_px)] already occupied along the top edge
+        for plot, ln in self._sector_items:
+            if plot is self.p_speed and getattr(ln, "label", None) is not None:
+                left = (float(ln.value()) - x0) * px      # sector captions sit RIGHT of the line
+                taken.append((left, left + ln.label.boundingRect().width()))
+        leg = self._speed_legend
+        if leg is not None and leg.isVisible():
+            # The plate is opaque: a label under it is a label nobody can read (C7 under the
+            # top-right plate on a real 7-corner lap). Only while the plate reaches the label row.
+            box, plate = vb.sceneBoundingRect(), leg.sceneBoundingRect()
+            row = max((ln.label.boundingRect().height() for ln in self._corner_items), default=0)
+            if plate.top() < box.top() + row + CORNER_LABEL_GAP_PX:
+                taken.append((plate.left() - box.left(), plate.right() - box.left()))
+        for ln in self._corner_items:
+            half = ln.label.boundingRect().width() / 2
+            mid = (float(ln.value()) - x0) * px
+            box = (mid - half - CORNER_LABEL_GAP_PX, mid + half + CORNER_LABEL_GAP_PX)
+            ok = (box[0] >= -CORNER_LABEL_GAP_PX and box[1] <= width + CORNER_LABEL_GAP_PX
+                  and all(box[1] <= a or box[0] >= b for a, b in taken))
+            ln.setVisible(ok)
+            if ok:
+                taken.append((box[0] + CORNER_LABEL_GAP_PX, box[1] - CORNER_LABEL_GAP_PX))
+
     def _draw_sectors(self):
-        """(Re)draw cached sector lines: label on the speed plot top only, behind the cursor."""
+        """(Re)draw cached sector lines: label on the speed plot top only, behind the cursor. The
+        corner labels share that edge, so they are re-decluttered against the new captions."""
         self._clear_sectors()
+        self._draw_sector_lines()
+        self._declutter_corner_labels()
+
+    def _draw_sector_lines(self):
         if not self._sector_positions:
             return
         for label, x in self._sector_positions:
@@ -866,14 +960,17 @@ class PlotsView(QWidget):
             self.p_speed.removeItem(item)
         self._brake_items = []
         self._coast_items = []
+        if self._coast_sample is not None and self._speed_legend is not None:
+            self._speed_legend.removeItem(self._coast_sample)
+        self._coast_sample = None
 
     def _draw_driving(self):
         """(Re)draw brake glyphs (riding the speed curve) + coast bands from cached data."""
         self._clear_driving()
         # Coast bands first so the brake glyphs draw above them.
+        fill = pg.mkColor(C.text_muted)
+        fill.setAlpha(COAST_FILL_ALPHA)
         for spans, _colour in self._coast_data:
-            fill = pg.mkColor(C.text_muted)
-            fill.setAlpha(COAST_FILL_ALPHA)
             for x0, x1 in spans:
                 region = pg.LinearRegionItem(
                     values=(float(x0), float(x1)), orientation="vertical",
@@ -881,6 +978,14 @@ class PlotsView(QWidget):
                 region.setZValue(-4)  # above sector lines, below the curves
                 self.p_speed.addItem(region)
                 self._coast_items.append(region)
+        # The bands are NAMED in the legend: unnamed grey columns on a speed trace read as the
+        # corners (the cooler-2026-11 tour read them exactly so), and they are where the lap
+        # coasted. A square swatch in their own fill, only while there is a band to explain.
+        if self._coast_items and self._speed_legend is not None:
+            self._coast_sample = pg.BarGraphItem(x=[0], height=[0], width=0,
+                                                 brush=pg.mkBrush(fill), pen=COAST_PEN)
+            self._speed_legend.addItem(self._coast_sample, COAST_LEGEND_LABEL)
+            self._legend_timer.start(0)  # the plate grew a row: re-place it
         for entry in self._brake_data:
             # L4: entries are (positions, colour) or (positions, colour, lap_id). With a lap id the
             # glyphs ride THAT lap's own cached curve; without one they fall back to the nearest curve.
@@ -943,10 +1048,16 @@ class PlotsView(QWidget):
         ok = np.isfinite(xs) & np.isfinite(ys)
         xs, ys = xs[ok], ys[ok]
         best = None
+        # The corner labels own the top edge's first row: a TOP-corner plate starts below it, so
+        # it can never blanket them (an opaque plate over C5-C7 hid three of seven at grid size).
+        row = (max(ln.label.boundingRect().height() for ln in self._corner_items)
+               if self._corner_items else 0.0)
         for k, (_item, parent, (ox, oy)) in enumerate(LEGEND_CORNERS):
             bottom = parent[1] == 1
             if bottom and self._bt_band_range is not None:
                 continue
+            if not bottom:
+                oy += row
             left = ox if parent[0] == 0 else width + ox - plate.width()
             lo = x0 + (left - LEGEND_CLEAR_PX) / width * (x1 - x0)
             hi = x0 + (left + plate.width() + LEGEND_CLEAR_PX) / width * (x1 - x0)
@@ -964,18 +1075,19 @@ class PlotsView(QWidget):
                 low = min(y0, (float(under.min()) - r * y1) / (1 - r))
                 grow, rng = y0 - low, (low, y1)
             if best is None or grow < best[0] - 1e-9:
-                best = (grow, k, rng)
+                best = (grow, k, rng, (ox, oy))
             if grow <= 0:
                 break
         if best is None:
             return
-        item, parent, offset = LEGEND_CORNERS[best[1]]
-        if best[1] != self._legend_corner:
-            self._legend_corner = best[1]
-            leg.anchor(item, parent, offset)
+        item, parent, _offset = LEGEND_CORNERS[best[1]]
+        if (best[1], best[3]) != (self._legend_corner, self._legend_offset):
+            self._legend_corner, self._legend_offset = best[1], best[3]
+            leg.anchor(item, parent, best[3])
         now = vb.viewRange()[1]
         if abs(now[0] - best[2][0]) > 1e-6 or abs(now[1] - best[2][1]) > 1e-6:
             vb.setYRange(*best[2], padding=0)
+        self._declutter_corner_labels()   # the plate may have moved onto (or off) a label
 
     def _reserve_brake_throttle_space(self):
         """M8: when the brake/throttle band is on, drop the speed plot's y lower bound so the band
@@ -1232,6 +1344,11 @@ class PlotsView(QWidget):
         self.cur_delta.setVisible(False)
         self.cur_speed_datum.setVisible(False)
         self.cur_delta_datum.setVisible(False)
+        # The corner labels sit out the refit too (they are out of the fit already — ignoreBounds —
+        # but a visible label re-lays itself out on every range step of it); the declutter at the
+        # end of this refresh puts back exactly the ones that fit.
+        for ln in self._corner_items:
+            ln.setVisible(False)
 
         # Re-enable autorange so the new selection's curves are fit before we freeze it again.
         self.p_speed.enableAutoRange()
@@ -1610,6 +1727,7 @@ class PlotsView(QWidget):
         `_delta_curves`, the very arrays that were plotted), never back through the session."""
         self._recompute_window()
         self._update_readouts()
+        self._declutter_corner_labels()  # a zoom changes which corner labels fit
 
     def _readout_lap(self) -> int | None:
         """The ONE lap the readout strip is about: the lap the playhead is in.
