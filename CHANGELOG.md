@@ -8,8 +8,9 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.8.0] — 2026-11-14
 
-The first-look release: @N@ pull requests, #541 to #550, Wave 1 of a campaign to make the app
-cooler and still true: what a first open, the map, the lap table and the charts show first.
+The first-look release: 9 pull requests, #541 to #550 without #549. Seven, #543 on, are Wave 1 of
+a campaign to make the app cooler and still true: what a first open, the map, the lap table and the
+charts show first.
 
 ### Highlights
 

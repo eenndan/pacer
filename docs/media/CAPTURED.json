@@ -21,7 +21,7 @@
       "version": "0.2.0",
       "waiver": {
         "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 (#541-#548) touched no export code"
+        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 (#541-#550) touched no export code"
       }
     },
     "best-lap.mp4": {
@@ -34,7 +34,7 @@
       "version": "0.2.0",
       "waiver": {
         "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 (#541-#548) touched no export code"
+        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 (#541-#550) touched no export code"
       }
     },
     "data-trust.png": {
@@ -122,7 +122,7 @@
       "version": "0.6.0",
       "waiver": {
         "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; since then the export changed only by a software-decode retry (#524), which draws nothing; 0.8.0 (#541-#548) touched no export code, and its map changes (#546) are the app's map view, which the export's inset does not draw with"
+        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; since then the export changed only by a software-decode retry (#524), which draws nothing; 0.8.0 (#541-#550) touched no export code, and its map changes (#546) are the app's map view, which the export's inset does not draw with"
       }
     }
   }
