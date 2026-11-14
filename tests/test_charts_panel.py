@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -597,6 +597,66 @@ def test_legend_sits_clear_of_the_lap_start_and_says_it_can_be_moved():
     print("test_legend_sits_clear_of_the_lap_start_and_says_it_can_be_moved OK")
 
 
+def _corner_boxes(v):
+    """Scene-x boxes of the painted corner labels, [(label, left, right)] in track order."""
+    out = []
+    for ln in v._corner_items:
+        if ln.isVisible():
+            r = ln.label.sceneBoundingRect()
+            out.append((ln.label.toPlainText(), r.left(), r.right()))
+    return out
+
+
+def test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom():
+    """cool/chart-corners. Corners bunch (a chicane is two apexes metres apart), and a label is a
+    ~20 px word on a 1000 m axis: painted as given, C2/C3/C4 below print on top of each other. The
+    chart keeps the first of a crowd and drops the rest — no two painted labels overlap, none is
+    nudged off its apex — and a zoom that gives them room brings them back. The default-size
+    synthetic case (the stadium's real corners) is covered against real corner detection by
+    test_central_view_realqt; this is the crowded one, which needs placement it cannot reach."""
+    v = _view(n=1, best=0, select=[0])
+    crowd = [("C1", 120.0), ("C2", 400.0), ("C3", 405.0), ("C4", 410.0), ("C5", 800.0)]
+    v.set_corner_labels(crowd)
+    _APP.processEvents()
+    shown = _corner_boxes(v)
+    names = [s[0] for s in shown]
+    assert names == ["C1", "C2", "C5"], f"the crowd keeps its first label only: {names}"
+    for (_a, _l0, r0), (_b, l1, _r1) in itertools.pairwise(shown):
+        assert r0 <= l1, f"two painted corner labels overlap: {shown}"
+    vb = v.p_speed.getViewBox()
+    for ln in v._corner_items:          # centred ON the apex: drop, never move
+        r = ln.label.sceneBoundingRect()
+        x_scene = vb.mapViewToScene(QPointF(float(ln.value()), 0.0)).x()
+        assert abs(r.center().x() - x_scene) < 1.5, (ln.label.toPlainText(), r.center().x(), x_scene)
+    v.p_speed.setXRange(395.0, 415.0, padding=0)
+    _APP.processEvents()
+    zoomed = [s[0] for s in _corner_boxes(v)]
+    assert zoomed == ["C2", "C3", "C4"], f"a zoom that gives them room shows them: {zoomed}"
+    # ...and the axis flip path (same corners, new x) moves the SAME items rather than rebuilding.
+    before = list(v._corner_items)
+    v.set_corner_labels([(lb, x / 10.0) for lb, x in crowd])
+    assert v._corner_items == before and float(v._corner_items[0].value()) == 12.0
+    v.deleteLater()
+    print("test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom OK")
+
+
+def test_coast_bands_are_named_in_the_legend():
+    """cool/chart-corners. The grey columns on the speed chart are COAST spans, and nothing said so
+    — the 2026-11 tour read them as the corners. While a band is drawn the legend names it, in its
+    own swatch; with none drawn the row is gone."""
+    v = _view(n=1, best=0, select=[0])
+    rows = lambda: [lab.text for _s, lab in v._speed_legend.items]  # noqa: E731
+    assert plots_view.COAST_LEGEND_LABEL not in rows()
+    v.set_coasting_spans([([(100.0, 140.0), (600.0, 630.0)], "#888888")])
+    assert plots_view.COAST_LEGEND_LABEL in rows(), rows()
+    v.refresh()   # a refresh rebuilds the curves' rows; the coast row must not double up
+    assert rows().count(plots_view.COAST_LEGEND_LABEL) == 1, rows()
+    v.set_coasting_spans([])
+    assert plots_view.COAST_LEGEND_LABEL not in rows(), rows()
+    v.deleteLater()
+    print("test_coast_bands_are_named_in_the_legend OK")
+
+
 def test_legend_hide_threshold_sits_at_the_apps_own_ceiling():
     """The hide guard has to be reachable to mean anything.
 
@@ -733,6 +793,8 @@ def _run_all():
     test_pedal_band_names_itself_on_the_chart()
     test_legend_sits_clear_of_the_lap_start_and_says_it_can_be_moved()
     test_legend_hide_threshold_sits_at_the_apps_own_ceiling()
+    test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom()
+    test_coast_bands_are_named_in_the_legend()
     test_empty_state_offers_a_next_action_and_disables_the_inert_controls()
     print("\nAll charts-panel tests passed.")
 
