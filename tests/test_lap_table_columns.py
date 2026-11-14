@@ -673,15 +673,17 @@ _DELTA_HEADER = "Δbest"
 
 class _TowerSession(_FakeSession):
     """Nine laps with KNOWN gaps to the best (lap 1, 60.000 s): a level lap 0.050 s off (inside
-    the 0.07 s timing precision), a spread of ordinary gaps, one dropout lap that is the SLOWEST
-    (+9.0 s: it must never set the bar scale) and one genuine outlier (+5.0 s: clipped). Plus an
-    excluded lap at 120 s, which is not a row at all and must not reach the scale either."""
+    the 0.07 s timing precision), a spread of ordinary gaps up to +1.0 s, one genuine outlier
+    (+5.0 s: clipped by the fence) and one ⚠ dropout lap at +1.5 s — INSIDE the fence, ABOVE every
+    clean gap, so it would become the scale if the dropout filter went missing (at +9 s the fence
+    clipped it anyway and the filter was untested). Plus an excluded lap at 120 s, which is not a
+    row at all and must not reach the scale either."""
 
     def __init__(self):
         super().__init__()
         self.n_sectors = 0
         self.splits = {i: [] for i in range(9)}
-        self.gaps = [0.050, 0.0, 0.300, 0.412, 0.600, 0.800, 1.000, 5.000, 9.000]
+        self.gaps = [0.050, 0.0, 0.300, 0.412, 0.600, 0.800, 1.000, 5.000, 1.500]
 
     def lap_rows(self):
         return [{"idx": i, "time": 60.0 + g, "dist": 1000.0, "entry": 50.0}
@@ -742,11 +744,12 @@ def test_best_lap_shows_no_delta():
 
 def test_an_excluded_or_dropout_lap_never_sets_the_bar_scale():
     """The bar's full width is the slowest CLEAN lap inside the Tukey fence. The excluded lap
-    (120 s, not a row) and the ⚠ dropout lap (+9 s, the slowest row) must not stretch it — or
-    one bad lap flattens every honest bar to a sliver — and the +5 s outlier is clipped."""
+    (120 s, not a row) and the ⚠ dropout lap (+1.5 s, inside the fence and above every clean gap)
+    must not stretch it — or one bad lap flattens every honest bar — and the +5 s outlier clips.
+    With the dropout lap counted, the fence would be 2.05 s and the scale 1.5 s."""
     from studio import lap_table as LT
     table = LapTable(_TowerSession())
-    # clean gaps (dropout lap 8 left out): 0.05 0 .3 .412 .6 .8 1.0 5.0 -> fence clips 5.0
+    # clean gaps (dropout lap 8 left out): 0 .05 .3 .412 .6 .8 1.0 5.0 -> fence 1.77 clips 5.0
     assert abs(table.delta_scale() - 1.0) < 1e-9, table.delta_scale()
     c = _delta_col(table)
     tb = table.table
@@ -788,11 +791,11 @@ def test_sorting_by_delta_orders_the_tower():
         return [table._lap_id(r) for r in range(tb.rowCount())]
 
     tb.sortByColumn(c, Qt.AscendingOrder)
-    assert _order() == [1, 0, 2, 3, 4, 5, 6, 7, 8], _order()
+    assert _order() == [1, 0, 2, 3, 4, 5, 6, 8, 7], _order()
     tb.sortByColumn(c, Qt.DescendingOrder)
-    assert _order() == [8, 7, 6, 5, 4, 3, 2, 0, 1], _order()
+    assert _order() == [7, 8, 6, 5, 4, 3, 2, 0, 1], _order()
     table.refresh()
-    assert _order() == [8, 7, 6, 5, 4, 3, 2, 0, 1], "the Δ sort must survive a refresh"
+    assert _order() == [7, 8, 6, 5, 4, 3, 2, 0, 1], "the Δ sort must survive a refresh"
     print("test_sorting_by_delta_orders_the_tower OK")
 
 
@@ -820,6 +823,139 @@ def test_the_best_time_stays_green_when_its_row_is_selected():
                 green += 1
     assert green >= 10, f"the selected best lap's Time painted {green} best-colour pixels"
     print("test_the_best_time_stays_green_when_its_row_is_selected OK")
+
+
+def _delta_cell_image(table, lap_id):
+    """The painted Δbest cell of `lap_id` (cell coordinates) and the x where its digits begin."""
+    tb = table.table
+    c = _delta_col(table)
+    r = table._row_for_lap(lap_id)
+    rect = tb.visualRect(tb.model().index(r, c))
+    img = tb.viewport().grab(rect).toImage()
+    text_w = QFontMetrics(table._num_font).horizontalAdvance(tb.item(r, c).text())
+    return img, rect.width() - theme.SPACE_S - text_w
+
+
+def _count(img, x0, x1, pred):
+    n = 0
+    for y in range(img.height()):
+        for x in range(max(0, x0), min(img.width(), x1)):
+            p = img.pixelColor(x, y)
+            if pred(p.red(), p.green(), p.blue()):
+                n += 1
+    return n
+
+
+def _bar_ink(r, g, b):          # the behind hue at LAP_BAR_ALPHA over the dark surface
+    return r > g + 40 and r > b + 40
+
+
+def _break_ink(r, g, b):        # the text_dim slashes: a light, blue-leaning grey
+    return g > 70 and b >= r and abs(r - g) < 25
+
+
+def test_a_clipped_bar_ends_in_a_break_mark():
+    """The outlier's bar is clipped, and the clip is DRAWN: two slashes past the bar's end in the
+    track, where an unclipped bar has none — never a silently saturated bar."""
+    table = LapTable(_TowerSession())
+    _sized(table, 900, 420)               # every row on screen
+    img, digits = _delta_cell_image(table, 7)           # +5.0 s: clipped
+    marks = _count(img, 0, digits - 2, _break_ink)
+    assert marks >= 4, f"the clipped bar drew {marks} break-mark pixels"
+    img, digits = _delta_cell_image(table, 6)           # +1.0 s: exactly the scale, not clipped
+    assert _count(img, 0, digits - 2, _break_ink) == 0, "an unclipped bar must not draw a break"
+    assert _count(img, 0, digits - 2, _bar_ink) > 20, "the full bar must be painted"
+    print("test_a_clipped_bar_ends_in_a_break_mark OK")
+
+
+def test_the_bar_never_runs_under_the_digits():
+    """The bar's track ends before the right-aligned digits begin, so even the longest (clipped)
+    bar leaves the number on plain background."""
+    table = LapTable(_TowerSession())
+    _sized(table, 900, 420)               # every row on screen
+    for lap in (7, 6, 2):
+        img, digits = _delta_cell_image(table, lap)
+        under = _count(img, digits - 2, img.width(), _bar_ink)
+        assert under == 0, f"lap {lap}: {under} bar pixels under its digits (start x={digits})"
+        assert _count(img, 0, digits - 2, _bar_ink) > 0, f"lap {lap}: no bar at all"
+    print("test_the_bar_never_runs_under_the_digits OK")
+
+
+def test_a_squeezed_panel_gives_up_the_bar_before_the_digits():
+    """The bar's track is decoration: the Δ column WANTS digits + LAP_BAR_MIN_PX, but its FLOOR is
+    the digits alone, so a narrow panel drops the bar (the delegate draws none without a track)
+    before any value is cut or pushed off screen."""
+    table = LapTable(_TowerSession())
+    _sized(table, 900, 420)               # every row on screen
+    c = _delta_col(table)
+    digits_px = table.table.sizeHintForColumn(c)
+    natural, floors, _caps = table._column_budget()
+    assert floors[c] == digits_px, (floors[c], digits_px)
+    assert natural[c] >= digits_px + theme.LAP_BAR_MIN_PX, (natural[c], digits_px)
+    # Squeezed to the floors: the column holds its digits and paints no bar.
+    overhead = table.width() - table.table.viewport().width()
+    _sized(table, sum(floors) + overhead + 2, 420)
+    assert table.table.columnWidth(c) < digits_px + theme.LAP_BAR_MIN_PX
+    img, digits = _delta_cell_image(table, 6)
+    assert digits >= 0 and _count(img, 0, img.width(), _bar_ink) == 0, "a squeezed cell drew a bar"
+    print("test_a_squeezed_panel_gives_up_the_bar_before_the_digits OK")
+
+
+def test_provisional_timing_blanks_the_delta_column():
+    """Under provisional timing the table withholds the ★ and the green — a best against an
+    arbitrary start line means nothing — so a gap to that best must not be printed either: every
+    row reads a muted dash, no bar, under the table's own provisional tooltip."""
+    from studio import lap_table as LT
+    sess = _TowerSession()
+    sess.timing_verified = False
+    table = LapTable(sess)
+    c = _delta_col(table)
+    tb = table.table
+    for r in range(tb.rowCount()):
+        it = tb.item(r, c)
+        assert it.text() == LT.SELF_DELTA, (r, it.text())
+        assert it.data(LT.DELTA_BAR_ROLE) is None, (r, it.data(LT.DELTA_BAR_ROLE))
+        # the table's tooltip order: the ⚠ note wins on a dropout lap, else the provisional one
+        want = (LT.DROPOUT_TOOLTIP if table._lap_id(r) in sess.dropout_lap_ids()
+                else PROVISIONAL_TOOLTIP)
+        assert it.font().italic() and it.toolTip() == want, (r, it.toolTip())
+    assert table.delta_scale() is None
+    # ...and confirming the line (Save as track flips the flag with no re-segmentation) fills it.
+    sess.timing_verified = True
+    table.refresh_timing_trust()
+    assert _delta_texts(table)[3] == "+0.412", _delta_texts(table)
+    print("test_provisional_timing_blanks_the_delta_column OK")
+
+
+def test_the_gap_adds_up_to_the_printed_times():
+    """Δbest is the difference of the two strings on screen: 45.0004 s and 45.0016 s print
+    0:45.000 and 0:45.002, so the gap reads +0.002 — not the raw 0.0012 rounded to +0.001."""
+    sess = _TowerSession()
+    sess.lap_rows = lambda: [{"idx": 0, "time": 45.0016, "dist": 1000.0, "entry": 50.0},
+                             {"idx": 1, "time": 45.0004, "dist": 1000.0, "entry": 50.0}]
+    sess.dropout_lap_ids = lambda: set()
+    table = LapTable(sess)
+    tb = table.table
+    r = table._row_for_lap(0)
+    assert tb.item(r, 1).text() == "0:45.002", tb.item(r, 1).text()
+    assert tb.item(table._row_for_lap(1), 1).text() == "0:45.000"
+    assert _delta_texts(table)[0] == "+0.002", _delta_texts(table)
+    print("test_the_gap_adds_up_to_the_printed_times OK")
+
+
+def test_an_all_dropout_session_still_scales_its_bars():
+    """When EVERY lap is ⚠, the ★ falls back to a flagged lap (best_candidate_ids) and the purple
+    split mark is lifted for that case; the bar scale falls back the same way, so the bars do not
+    vanish on exactly the session whose marks are shown."""
+    from studio import lap_table as LT
+    sess = _TowerSession()
+    sess.dropout_lap_ids = lambda: set(range(9))
+    table = LapTable(sess)
+    assert table.delta_scale() is not None and table.delta_scale() > 0, table.delta_scale()
+    tb = table.table
+    bar = tb.item(table._row_for_lap(3), _delta_col(table)).data(LT.DELTA_BAR_ROLE)
+    assert bar is not None and bar[0] > 0, bar
+    print("test_an_all_dropout_session_still_scales_its_bars OK")
 
 
 if __name__ == "__main__":
