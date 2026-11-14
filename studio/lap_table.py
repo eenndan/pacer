@@ -613,6 +613,28 @@ def fit_columns(natural: list[int], floors: list[int], caps: list[int], avail: i
     return widths
 
 
+def fit_columns_staged(natural: list[int], tiers: list[list[int]], caps: list[int],
+                       avail: int) -> list[int]:
+    """`fit_columns` with an ORDER to the squeeze: each list in `tiers` is a set of floors, and a
+    tier is spent to the pixel before the next is touched. `fit_columns` takes slack from every
+    column in proportion, which is right when all slack is alike; in the lap grid it is not — the
+    Δbest bar is decoration, a header's text is a label, and the two must not yield together (see
+    LapTable._squeeze_tiers). Each tier is clamped to never sit above the one before it."""
+    widths = list(natural)
+    total = sum(widths)
+    if total < avail:
+        _grow_to(widths, caps, avail - total)
+        return widths
+    prev = list(natural)
+    for floors in tiers:
+        prev = [min(f, p) for f, p in zip(floors, prev, strict=True)]
+        excess = sum(widths) - avail
+        if excess <= 0:
+            break
+        _shrink_to(widths, prev, excess)
+    return widths
+
+
 def _columns(unit: str | None) -> list[str]:
     """The base column headers with the Entry column named in the current speed unit
     ("Entry (km/h)" / "Entry (mph)"). Length is invariant, so every len(COLUMNS) offset holds."""
@@ -1080,6 +1102,9 @@ class LapTable(QWidget):
         self._ink_rows: set[int] = set()   # rows routed through the delegate (_route_delegate)
         # The Δbest bar's scale (delta_bar_scale) for the rows on screen, set by refresh().
         self._delta_scale: float | None = None
+        # Whether any Δbest cell holds a gap (False under provisional timing: all dashes), so the
+        # column budget reserves the bar's track only when there is a bar to draw.
+        self._delta_has_gaps = False
         self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
         align_headers_over_their_columns(self.table)
         self.table.verticalHeader().setVisible(False)
@@ -1434,18 +1459,88 @@ class LapTable(QWidget):
         cells = [self.table.sizeHintForColumn(c) if self.table.rowCount() else 0
                  for c in range(real)]
         # The Δbest cell's natural width is its digits PLUS the bar's track; its floor (below) is
-        # the digits alone.
-        bar = theme.LAP_BAR_MIN_PX if real > _DELTA_COL and cells[_DELTA_COL] else 0
+        # the digits alone. No gaps (provisional timing: every cell a dash) means no bar to make
+        # room for — the track was reserved anyway, 45-85 px of blank column (REG-1).
+        has_delta = real > _DELTA_COL
+        bar = theme.LAP_BAR_MIN_PX if has_delta and cells[_DELTA_COL] and self._delta_has_gaps \
+            else 0
         if bar:
             cells[_DELTA_COL] += bar
         natural = [max(hdr.sectionSizeHint(c), cells[c]) for c in range(real)]
         floors = [max(MIN_SECTION_PX, cells[c]) for c in range(real)]
         natural[0] = floors[0] = LAP_COL_PX
+        caps = [max(n, MAX_DATA_COL_PX) for n in natural]
         # The Δbest bar is decoration, not a value: a squeezed panel gives up its track (the
         # delegate then draws no bar) before any column's DIGITS are cut or pushed off screen.
         if bar:
             floors[_DELTA_COL] = max(MIN_SECTION_PX, cells[_DELTA_COL] - bar)
-        return natural, floors, [max(n, MAX_DATA_COL_PX) for n in natural]
+        elif has_delta and self.table.rowCount():
+            # BLANK Δbest (provisional): COLLAPSED, not hidden, to the narrowest width at which
+            # its header still names it ("Δb…", full text on the tooltip, which says why it is
+            # blank). Hiding would move the keyboard sort walk and orphan a remembered Δ sort; a
+            # collapsed column keeps both, and refills in place when the line is confirmed.
+            text = self.table.horizontalHeaderItem(_DELTA_COL).text()
+            stem = header_stem_px(QFontMetrics(hdr.font()), text) + _header_pad_px(hdr)
+            natural[_DELTA_COL] = floors[_DELTA_COL] = caps[_DELTA_COL] = \
+                max(cells[_DELTA_COL], stem)
+        return natural, floors, caps
+
+    def _lap_col_floor(self) -> int:
+        """The Lap column's squeeze floor: the widest label THIS session can paint, ▶ assumed on
+        every row (bold, as the playing row is), ★ on the best lap, ⚠ on each dropout lap. Capped
+        at LAP_COL_PX, which is sized for the worst label ANY session can paint ("▶ ★ 100 ⚠").
+
+        A width that holds every row's worst case does not move as the ▶ walks the laps during
+        playback, so it keeps the reason LAP_COL_PX is fixed (no jitter) while giving back the
+        20-odd px a 14- or 37-lap session without dropouts never paints into."""
+        tb = self.table
+        if not tb.rowCount():
+            return LAP_COL_PX
+        painted, worst = 0, 0
+        for r in range(tb.rowCount()):
+            item = tb.item(r, 0)
+            if item is None:
+                continue
+            painted = max(painted, QFontMetrics(item.font()).horizontalAdvance(item.text()))
+            bold = item.font()
+            bold.setBold(True)
+            worst = max(worst, QFontMetrics(bold).horizontalAdvance(
+                self._lap_cell_text(self._lap_id(r), True)))
+        # The cell's own chrome (padding, focus inset), read off Qt's hint rather than the QSS.
+        chrome = max(0, tb.sizeHintForColumn(0) - painted)
+        return min(LAP_COL_PX, worst + chrome)
+
+    def _squeeze_tiers(self, natural: list[int], floors: list[int], final: list[int]):
+        """The ORDER a too-narrow panel takes pixels in (REG-1), each tier spent before the next:
+
+          1. dead slack: every column down to its full header label (and the Δbest bar intact) —
+             the room a section keeps for a sort arrow it is not showing;
+          2. the Δbest bar's track, down to the gap's digits (the bar was designed to yield);
+          3. the Lap column's unused marker room, down to `_lap_col_floor`;
+          4. headers elide toward their two-glyph stems (`final`, from header_floors) — the
+             v0.7.0 behaviour, now reached only after 1-3 are spent.
+
+        A proportional squeeze (fit_columns) took the bar, the headers and the lap identity
+        together, so at 1280x800 with S1/S2 the headers had elided to "Dis…"/"Ent…" while the
+        grid still overflowed its viewport by 17 px — the 92 px Lap column painted 70 px of
+        label and the cell floors, which nothing could cross, summed to 499 of 482."""
+        hdr = self.table.horizontalHeader()
+        fm = QFontMetrics(hdr.font())
+        pad = _header_pad_px(hdr)
+        label = []
+        for c in range(len(natural)):
+            item = self.table.horizontalHeaderItem(c)
+            text = item.text() if item is not None else ""
+            label.append(header_stem_px(fm, text, len(text)) + pad if text else 0)
+        t1 = [min(n, max(f, lab)) for n, f, lab in zip(natural, floors, label, strict=True)]
+        if natural[_DELTA_COL] > floors[_DELTA_COL]:          # a bar track to give up
+            t1[_DELTA_COL] = natural[_DELTA_COL]
+        t2 = list(t1)
+        t2[_DELTA_COL] = min(natural[_DELTA_COL], max(floors[_DELTA_COL], label[_DELTA_COL]))
+        t3 = list(t2)
+        t3[0] = self._lap_col_floor()
+        return [[max(t, f) for t, f in zip(tier, final, strict=True)] for tier in (t1, t2, t3)] \
+            + [final]
 
     def _fit_columns(self):
         """Size the data columns to the panel (see MAX_DATA_COL_PX). Runs after every refresh and
@@ -1457,9 +1552,16 @@ class LapTable(QWidget):
         if width <= 0 or real <= 0:
             return
         natural, floors, caps = self._column_budget()
+        # The Lap column's last-resort floor is the widest label this session paints, not the
+        # fixed LAP_COL_PX (tier 3 of _squeeze_tiers spends the difference).
+        cell_floors = list(floors)
+        if real > 0:
+            cell_floors[0] = self._lap_col_floor()
         # ...with every column at least wide enough for its header to keep naming it, while the
         # panel can afford that (header_floors). The spacer is not in these lists and has no label.
-        fitted = fit_columns(natural, header_floors(self.table, floors, natural, width), caps, width)
+        final = header_floors(self.table, cell_floors, natural, width)
+        fitted = fit_columns_staged(natural, self._squeeze_tiers(natural, floors, final), caps,
+                                    width)
         for c, w in enumerate(fitted):
             hdr.resizeSection(c, w)
         # The spacer takes EXACTLY the slack the capped data columns left (P5: keep them adjacent
@@ -1859,6 +1961,7 @@ class LapTable(QWidget):
             if best_ms is not None else {}
         clean = [g for lid, g in gaps.items() if lid not in dropout_ids] or list(gaps.values())
         self._delta_scale = delta_bar_scale(clean) if gaps else None
+        self._delta_has_gaps = bool(gaps)
         for r in range(rows):
             lid = self._lap_id(r)
             item = self.table.item(r, _DELTA_COL)
@@ -1921,6 +2024,8 @@ class LapTable(QWidget):
             self.table.setSortingEnabled(True)
             self.table.sortByColumn(self._sort_col, self._sort_order)
         self._apply_highlights()
+        # ...and re-fitted: the Δbest column's WIDTH follows the flag too (collapsed while blank).
+        self._fit_columns()
 
     def _lap_cell_text(self, lap_id, on: bool) -> str:
         """The Lap-cell text for `lap_id`: a '▶ ' prefix when it's the current (playing) lap, a '★ '

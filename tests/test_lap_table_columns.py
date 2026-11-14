@@ -27,7 +27,9 @@ These pin that contract AND the wiring it has to leave alone:
   * sorting is untouched: both directions on the numeric keys, a click on the blank spacer header
     is refused, and an S-column sort that outlives its sector lines falls back to lap order.
 
-Pure Qt on a fake session (no pacer, no telemetry file). Run: python tests/test_lap_table_columns.py
+Pure Qt on a fake session (no telemetry file) — except the REG-1 check, which needs the REAL lap
+panel inside a real CentralView (test_central_view_realqt's synthetic fixture, so the bindings).
+Run: python tests/test_lap_table_columns.py
 """
 import os
 import sys
@@ -205,15 +207,153 @@ def test_a_short_panel_squeezes_headers_not_values():
 
 def test_lap_column_fits_its_markers():
     """The Lap column is Interactive (a content-sized one would jitter as the ▶ marker moves with
-    playback), so its fixed width must hold the widest decorated label — '▶ ★ 100 ⚠' — uncut."""
+    playback), so its fixed width must hold the widest decorated label — '▶ ★ 100 ⚠' — uncut.
+
+    REG-1: a squeezed panel may take the Lap column down to the widest label THIS session can
+    paint (▶ assumed on every row, bold), never below it — so no label is cut and the width does
+    not move as the ▶ walks the laps."""
     table = LapTable(_FakeSession())
     widest = f"{CURRENT_PREFIX}{BEST_LAP_MARK}100{DROPOUT_SUFFIX}"
     need = QFontMetrics(table.table.font()).horizontalAdvance(widest)
     assert LAP_COL_PX >= need + 10, f"Lap column {LAP_COL_PX}px clips {widest!r} ({need}px)"
-    # Held at the fixed width on any panel narrow enough that there is nothing to share out.
     _sized(table, 420)
-    assert table.table.columnWidth(0) == LAP_COL_PX
-    print("test_lap_column_fits_its_markers OK")
+    tb = table.table
+    w0 = tb.columnWidth(0)
+    assert w0 <= LAP_COL_PX
+    for r in range(tb.rowCount()):
+        f = tb.item(r, 0).font()
+        f.setBold(True)
+        worst = QFontMetrics(f).horizontalAdvance(table._lap_cell_text(table._lap_id(r), True))
+        assert w0 >= worst + 10, f"Lap column {w0}px clips row {r}'s worst label ({worst}px)"
+    for lap in (0, 1, 2, None):                 # the ▶ walking the laps never moves the column
+        table.set_current_lap(lap)
+        _APP.processEvents()
+        assert tb.columnWidth(0) == w0, (lap, tb.columnWidth(0), w0)
+    print(f"test_lap_column_fits_its_markers OK (squeezed to {w0}px)")
+
+
+def _value_floors(table) -> list[int]:
+    """What each data column's VALUES need, measured here rather than asked of the budget under
+    test: Qt's cell size hint (the Δbest column: its digits, no bar), and for the Lap column the
+    widest label the session can paint — ▶ on any row, bold, ★ on the best lap, ⚠ on a dropout
+    lap — plus the cell chrome Qt's hint adds to the label on screen."""
+    tb = table.table
+    real = table._n_real_cols()
+    floors = [tb.sizeHintForColumn(c) for c in range(real)]
+    painted = max(QFontMetrics(tb.item(r, 0).font()).horizontalAdvance(tb.item(r, 0).text())
+                  for r in range(tb.rowCount()))
+    worst = 0
+    for r in range(tb.rowCount()):
+        f = tb.item(r, 0).font()
+        f.setBold(True)
+        lid = table._lap_id(r)
+        label = (f"{CURRENT_PREFIX}{BEST_LAP_MARK if lid == table._best_lap_id else ''}"
+                 f"{lid + 1}{DROPOUT_SUFFIX if lid in table._dropout_ids else ''}")
+        worst = max(worst, QFontMetrics(f).horizontalAdvance(label))
+    floors[0] = worst + floors[0] - painted
+    return floors
+
+
+def test_the_real_lap_panel_never_scrolls_sideways_beside_its_sector_columns():
+    """REG-1 (#545): at 1280x800 with S1/S2 the grid's columns summed to 499 px in a 482 px
+    viewport — S2 cut off behind a horizontal scrollbar, headers already elided to "Dis…" /
+    "Ent…" — because Δbest's 69 px of digits arrived and nothing gave way: the squeeze was
+    proportional, and the Lap column kept 92 px to paint a 70 px label.
+
+    On the REAL lap panel of a real CentralView, at the view's own minimum and at 1280x800, with
+    0, 2 and 3 sector columns, the lap column is swept by the splitter from its narrowest to past
+    the default split. At every width where the VALUES fit (each column at its own digits, the Lap
+    column at its widest label) the data columns fit the viewport: no horizontal scrollbar. Where
+    they cannot (3 columns in a narrow panel), the grid may scroll, but by no more than those
+    values — nothing above a value's own width is spent. Time and every S column always hold
+    their full digits. The narrowest panel is the stacked pages' minimum, which is content-
+    dependent: 498 px (a 482 px grid) on the synthetic demo, 424 on this fixture."""
+    from test_central_view_realqt import _real_central_view
+    view, s, _t0, _t1 = _real_central_view()
+    view.show()
+    for _ in range(8):
+        _APP.processEvents()
+    table = view.table
+    tb = table.table
+    lap_t = {r["idx"]: r["time"] for r in s.lap_rows()}
+    hint = view.minimumSizeHint()
+    fitted, scrolled = 0, 0
+    for n_cols in (0, 2, 3):
+        n_lines = n_cols - 1 if n_cols else 0
+        splits = {i: [t / n_cols] * n_cols if n_cols else [] for i, t in lap_t.items()}
+        s.sector_count = lambda n=n_lines: n
+        s.lap_sector_splits = lambda lid, sp=splits: sp[lid]
+        s.session_best_splits = lambda sp=splits, n=n_cols: [
+            min(v[i] for v in sp.values()) for i in range(n)]
+        s.sector_sigmas = lambda n=n_cols: [None] * n
+        table.refresh()
+        for size in ((max(hint.width(), 1), max(hint.height(), 1)), (1280, 800)):
+            view.resize(*size)
+            for _ in range(8):
+                _APP.processEvents()
+            total = sum(view._main_splitter.sizes())
+            for ask in range(1, total // 2 + 60, 6):
+                view._main_splitter.setSizes([ask, total - ask])
+                for _ in range(3):
+                    _APP.processEvents()
+                real = table._n_real_cols()
+                widths = [tb.columnWidth(c) for c in range(real)]
+                vp = tb.viewport().width()
+                need = _value_floors(table)
+                where = f"{n_cols} S-cols, window {size}, {vp} px grid"
+                for c in [1, *range(len(COLUMNS), real)]:
+                    assert widths[c] >= need[c], (
+                        f"{where}: {tb.horizontalHeaderItem(c).text()!r} is {widths[c]} px, "
+                        f"under its digits' {need[c]} px", widths)
+                assert widths[0] >= need[0], (where, "the Lap column clips a label", widths, need)
+                if sum(need) <= vp:
+                    fitted += 1
+                    assert sum(widths) <= vp and not tb.horizontalScrollBar().isVisible(), (
+                        f"{where}: the columns sum to {sum(widths)} px though their values need "
+                        f"only {sum(need)} — a sideways scroll nothing had to cause",
+                        widths, need)
+                else:
+                    scrolled += 1
+                    assert sum(widths) <= sum(need), (where, widths, need)
+            view._main_splitter.setSizes([total // 2, total - total // 2])
+            for _ in range(4):
+                _APP.processEvents()
+    view.hide()
+    assert fitted and scrolled, (fitted, scrolled)
+    print(f"test_the_real_lap_panel_never_scrolls_sideways_beside_its_sector_columns OK "
+          f"({fitted} widths fit, {scrolled} too narrow for the values)")
+
+
+def test_the_squeeze_takes_the_bar_before_any_header():
+    """REG-1's degradation ORDER, on a panel exactly as wide as the natural widths minus the bar's
+    track: the Δbest bar yields first and every header keeps its full text. The proportional
+    squeeze this replaced took the bar and the headers together."""
+    sess = _TowerSession()
+    sess.n_sectors, sess.splits = 1, {i: [30.0 + i * 0.01, 30.0] for i in range(9)}
+    table = LapTable(sess)
+    _sized(table, 1200, 420)
+    tb = table.table
+    natural, floors, _caps = table._column_budget()
+    c = _delta_col(table)
+    hdr = tb.horizontalHeader()
+    fm = QFontMetrics(hdr.font())
+    from studio.lap_table import _header_pad_px, header_stem_px
+    pad = _header_pad_px(hdr)
+    # Exactly the room for every header in full and every value, with NO bar: the squeeze has to
+    # spend all of the bar and none of a label.
+    room = 0
+    for col in range(table._n_real_cols()):
+        text = tb.horizontalHeaderItem(col).text()
+        room += min(natural[col], max(floors[col], header_stem_px(fm, text, len(text)) + pad))
+    overhead = table.width() - tb.viewport().width()
+    _sized(table, room + overhead, 420)
+    for col in range(table._n_real_cols()):
+        text = tb.horizontalHeaderItem(col).text()
+        shown = fm.elidedText(text, Qt.ElideRight, tb.columnWidth(col) - pad)
+        assert shown == text, (f"header {text!r} elided to {shown!r} while the Δbest bar still "
+                               f"had {tb.columnWidth(c) - floors[c]} px", [
+                                   tb.columnWidth(i) for i in range(table._n_real_cols())])
+    print("test_the_squeeze_takes_the_bar_before_any_header OK")
 
 
 def test_selecting_a_lap_scrolls_it_into_view():
@@ -920,10 +1060,24 @@ def test_provisional_timing_blanks_the_delta_column():
                 else PROVISIONAL_TOOLTIP)
         assert it.font().italic() and it.toolTip() == want, (r, it.toolTip())
     assert table.delta_scale() is None
+    # REG-1: the blank column COLLAPSES (not hidden: the sort walk and a remembered Δ sort keep
+    # their column) to the narrowest width at which its header still names it — no bar track is
+    # reserved for bars that cannot be drawn, at any panel width.
+    from studio.lap_table import _header_pad_px, header_stem_px
+    hdr = tb.horizontalHeader()
+    stem = header_stem_px(QFontMetrics(hdr.font()), _DELTA_HEADER) + _header_pad_px(hdr)
+    for w in (420, 900, 2400):
+        _sized(table, w, 420)
+        assert not tb.isColumnHidden(c)
+        assert tb.columnWidth(c) <= max(stem, tb.sizeHintForColumn(c)), (
+            f"blank Δbest takes {tb.columnWidth(c)} px at {w}; collapsed is "
+            f"{max(stem, tb.sizeHintForColumn(c))}")
     # ...and confirming the line (Save as track flips the flag with no re-segmentation) fills it.
     sess.timing_verified = True
     table.refresh_timing_trust()
     assert _delta_texts(table)[3] == "+0.412", _delta_texts(table)
+    assert tb.columnWidth(c) > stem + 10, ("confirmed timing must re-open the column",
+                                           tb.columnWidth(c), stem)
     print("test_provisional_timing_blanks_the_delta_column OK")
 
 
