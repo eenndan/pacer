@@ -6,6 +6,58 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-14
+
+The first-look release: @N@ pull requests, #541 to #550, Wave 1 of a campaign to make the app
+cooler and still true: what a first open, the map, the lap table and the charts show first.
+
+### Highlights
+
+- **The debrief leads with a picture.** The best lap's time, large, beside its speed-coloured
+  line, with your focus corners ringed; click a ring to jump to that corner (#544)
+- **Every lap's gap to your best, in the lap table.** A Δbest column with a bar; a gap inside the
+  0.07 s timing precision stays uncoloured (#545)
+- **The map's lap line reads first.** Twice as wide over a dark casing, violet brake points of
+  their own, and a chequered start/finish with an arrow the way the laps run (#546)
+- **CORNERS BY LAP is a heat-map.** Each cell is shaded by its gap to that corner's typical:
+  light from ¾ of the corner's ▼ step, full at the ▼ (#547)
+- **The speed chart names its corners.** C1… sit at the same geometric apex the map labels, and
+  the grey coast bands are named "coasting" in its legend (#548)
+- **Every Δ names its baseline.** The big readout colours only its Δ, not the speed beside it,
+  and reads Δideal, Δbest or Δref (#548)
+
+### Added
+
+- The speed chart labels every corner C1… where the map does (the bend's geometric apex); crowded
+  labels are dropped, never overlapped, and the grey coast bands are named "coasting" in the legend.
+  (#548)
+- Laps: a Δbest column beside Time — each lap's gap to your best, with a bar; a gap inside timing
+  precision (0.07 s) is not coloured, and an outlier lap's bar ends in a break mark. (#545)
+
+### Changed
+
+- The charts' big readout colours only its Δ; the speed beside it stays neutral. With "vs ideal" off
+  it reads "Δbest" (or "Δref" with a reference), so every Δ on the panel names its baseline. (#548)
+- Stats: CORNERS BY LAP is a heat-map — each cell shaded by its gap to that corner's typical as a
+  share of the corner's own ▼ step: light from ¾ of it, full at the ▼; the best lap carries ★.
+  (#547)
+- The map's lap line is a hero stroke: twice as wide, round-capped, over a dark casing so its colour
+  reads against the grey all-laps ribbon in every line mode. (#546)
+- Brake points on the map have one violet of their own, no longer the best lap's green (the Speed
+  line's "fast"); in compare, lap B's are hollow. The map key shows the same. (#546)
+- Start/finish is a chequered mark across the track with an arrow the way the laps run; the drag
+  handles appear when the pointer comes near a timing line, after Add sector, or while provisional.
+  (#546)
+- The Elevation legend says it is GPS altitude and that its noise is not measured. (#546)
+- The first-open debrief leads with a picture: the best lap's time, large, beside its speed-coloured
+  line, with your focus corners ringed (click one to jump to it). (#544)
+- Only the top corner's Jump is the amber button; the others are ordinary buttons. (#544)
+
+### Fixed
+
+- Stats: View ▸ data trust no longer lands with the neighbouring column's heading cut off. (#547)
+- Laps: the best lap keeps its green (and a ★ split its purple) while its row is selected. (#545)
+
 ## [0.7.0] — 2026-11-13
 
 The first-open release, after the freeze ended: 14 pull requests, #526 to #539, on the debrief a
@@ -1855,7 +1907,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/eenndan/pacer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/eenndan/pacer/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/eenndan/pacer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/eenndan/pacer/compare/v0.5.1...v0.6.0
