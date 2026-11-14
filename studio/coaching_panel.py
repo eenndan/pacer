@@ -835,6 +835,10 @@ HERO_LINE_PX = 4.0         # the lap line's width at the hero's size (the card's
 HERO_RING_PX = 7.0         # a focus corner's ring radius
 HERO_LABEL_GAP_PX = 18.0   # apex → label centre, outward from the trace's centroid
 HERO_RAMP_PX = 72          # the speed key's ramp width
+# A landing lays the page out in a few passes (the maximize, the deferred grid restores, the focus
+# line): measured, the hero was 275 px tall for one paint and 291 px for good. It renders once the
+# size has held this long, and blits what it has (or nothing) meanwhile.
+HERO_SETTLE_MS = 60
 _QWIDGETSIZE_MAX = (1 << 24) - 1   # Qt's QWIDGETSIZE_MAX, which PySide6 does not export
 
 
@@ -906,9 +910,9 @@ class DebriefHero(QWidget):
     """The debrief's picture (see the block above): the best lap's time at ``theme.DISPLAY`` beside
     the best lap's speed-coloured line, the focus corners ringed and labelled.
 
-    PAINTED ONCE. The whole hero is one cached pixmap, re-rendered only when its size, its data,
-    its focus corners or the palette change (``renders`` counts them, for the perf pin); a paint
-    event blits it. A ringed corner is a click target: ``corner_clicked(cid)`` — the page answers it
+    PAINTED ONCE. The whole hero is one cached pixmap, re-rendered only when its size (once it has
+    held for ``HERO_SETTLE_MS``), its data, its focus corners or the palette change (``renders``
+    counts them, for the perf pin); a paint event blits it. A ringed corner is a click target: ``corner_clicked(cid)`` — the page answers it
     with that row's Jump."""
 
     corner_clicked = Signal(int)
@@ -921,6 +925,10 @@ class DebriefHero(QWidget):
         self._key: tuple | None = None
         self._targets: list[tuple[int, QPointF]] = []    # (cid, ring centre) of the last render
         self.renders = 0
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.setInterval(HERO_SETTLE_MS)
+        self._settle.timeout.connect(self.update)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.setMinimumHeight(0)
@@ -973,10 +981,15 @@ class DebriefHero(QWidget):
             self._key = key
         return self._pixmap
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._settle.start()
+
     def paintEvent(self, _event):
         if self.height() < HERO_MIN_PX:
             return
-        pm = self._ensure_pixmap()
+        # Mid-layout: the last picture as it stands (or nothing), not a render per pass.
+        pm = self._pixmap if self._settle.isActive() else self._ensure_pixmap()
         if pm is not None:
             p = QPainter(self)
             p.drawPixmap(0, 0, pm)
