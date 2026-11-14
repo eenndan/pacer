@@ -49,8 +49,10 @@ from PySide6.QtWidgets import QHeaderView  # noqa: E402
 # columns 4/5 62 px where the app gives 77/78. See tests/_qtapp.py; W10-05.
 _APP = themed_app()
 
-from studio import data_quality, units  # noqa: E402
+from studio import data_quality, theme, units  # noqa: E402
 from studio.lap_table import (  # noqa: E402
+    _DELTA_COL,
+    _DIST_COL,
     _ENTRY_COL,
     BEST_LAP_MARK,
     COLUMNS,
@@ -252,13 +254,16 @@ def test_provisional_demotes_every_start_line_column():
     splits = {len(COLUMNS), len(COLUMNS) + 1}
 
     assert table._start_line_cols() == set(range(1, real)), table._start_line_cols()
-    assert table._clock_cols() == {1, *splits}, table._clock_cols()
+    assert table._clock_cols() == {1, _DELTA_COL, *splits}, table._clock_cols()
 
     sess.timing_verified = False
     table.refresh()
-    for c in range(1, real):                            # Time, Dist, Entry, S1, S2 — all demoted
+    for c in range(1, real):                      # Time, Δbest, Dist, Entry, S1, S2 — all demoted
         it = tb.item(0, c)
-        assert it.font().italic() and it.toolTip() == PROVISIONAL_TOOLTIP, \
+        # the Δbest cell says its gap first and the trust note after it (_apply_delta_bar)
+        tip_ok = (it.toolTip() == PROVISIONAL_TOOLTIP
+                  or (c == _DELTA_COL and it.toolTip().endswith("\n\n" + PROVISIONAL_TOOLTIP)))
+        assert it.font().italic() and tip_ok, \
             f"column {c} ({tb.horizontalHeaderItem(c).text()}) not demoted under provisional timing"
     assert not tb.item(0, 0).font().italic(), "the Lap NUMBER does not move with the start line"
 
@@ -266,9 +271,9 @@ def test_provisional_demotes_every_start_line_column():
     sess.timing_verified = True
     sess.timing_quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
     table.refresh()
-    for c in (1, *splits):
+    for c in (1, _DELTA_COL, *splits):
         assert tb.item(0, c).font().italic(), f"duration column {c} not demoted by a degraded clock"
-    for c in (2, _ENTRY_COL):
+    for c in (_DIST_COL, _ENTRY_COL):
         assert not tb.item(0, c).font().italic(), \
             f"column {c} must not be demoted by a CLOCK concern — it is not a duration"
     print("test_provisional_demotes_every_start_line_column OK")
@@ -660,6 +665,164 @@ def test_spacer_column_is_not_sortable():
     assert table._sort_col == 0 and table._sort_order == Qt.AscendingOrder
     assert _order() == [0, 1, 2], _order()
     print("test_spacer_column_is_not_sortable OK")
+
+
+# --------------------------------------------------------------------------- the Δbest column
+# The timing-tower read (cool/lap-tower): a gap to the best lap beside every Time, with an in-cell
+# bar. The column sits at index 2, between Time and Dist; these look it up by header text so a
+# failure on a tree WITHOUT the column is an assertion, not an ImportError.
+_DELTA_HEADER = "Δbest"
+
+
+class _TowerSession(_FakeSession):
+    """Nine laps with KNOWN gaps to the best (lap 1, 60.000 s): a level lap 0.050 s off (inside
+    the 0.07 s timing precision), a spread of ordinary gaps, one dropout lap that is the SLOWEST
+    (+9.0 s: it must never set the bar scale) and one genuine outlier (+5.0 s: clipped). Plus an
+    excluded lap at 120 s, which is not a row at all and must not reach the scale either."""
+
+    def __init__(self):
+        super().__init__()
+        self.n_sectors = 0
+        self.splits = {i: [] for i in range(9)}
+        self.gaps = [0.050, 0.0, 0.300, 0.412, 0.600, 0.800, 1.000, 5.000, 9.000]
+
+    def lap_rows(self):
+        return [{"idx": i, "time": 60.0 + g, "dist": 1000.0, "entry": 50.0}
+                for i, g in enumerate(self.gaps)]
+
+    def lap_sector_splits(self, lap_id):
+        return []
+
+    def session_best_splits(self):
+        return []
+
+    def excluded_lap_rows(self):
+        return [{"idx": 9, "time": 120.0, "dist": 400.0, "entry": 20.0, "why": "short"}]
+
+    def dropout_lap_ids(self):
+        return {8}
+
+
+def _delta_col(table) -> int:
+    tb = table.table
+    for c in range(tb.columnCount()):
+        if tb.horizontalHeaderItem(c).text() == _DELTA_HEADER:
+            return c
+    raise AssertionError(f"no {_DELTA_HEADER!r} column: "
+                         f"{[tb.horizontalHeaderItem(c).text() for c in range(tb.columnCount())]}")
+
+
+def _delta_texts(table) -> dict:
+    c = _delta_col(table)
+    tb = table.table
+    return {table._lap_id(r): tb.item(r, c).text() for r in range(tb.rowCount())}
+
+
+def test_delta_column_prints_the_gap_to_the_best_lap():
+    """The column sits right after Time and prints each lap's gap to the best lap to the
+    millisecond the Time column prints, signed with the app's one minus/plus (fmt_signed)."""
+    table = LapTable(_FakeSession())                # 70.0 / 68.4 / 71.2, lap 1 the best
+    assert _delta_col(table) == 2, "Δbest must sit right after Time"
+    texts = _delta_texts(table)
+    assert texts[0] == "+1.600" and texts[2] == "+2.800", texts
+    tip = table.table.horizontalHeaderItem(2).toolTip()
+    assert "best lap" in tip and "0.07" in tip, tip
+    print("test_delta_column_prints_the_gap_to_the_best_lap OK")
+
+
+def test_best_lap_shows_no_delta():
+    """The best lap's gap to itself is not a measurement — it reads as a dash (the Corners
+    table's SELF_DELTA convention), never "+0.000", and wears no bar."""
+    from studio import lap_table as LT
+    table = LapTable(_FakeSession())
+    texts = _delta_texts(table)
+    assert texts[1] == LT.SELF_DELTA, texts
+    r = table._row_for_lap(1)
+    bar = table.table.item(r, _delta_col(table)).data(LT.DELTA_BAR_ROLE)
+    assert bar is None, f"the best lap must carry no bar: {bar}"
+    print("test_best_lap_shows_no_delta OK")
+
+
+def test_an_excluded_or_dropout_lap_never_sets_the_bar_scale():
+    """The bar's full width is the slowest CLEAN lap inside the Tukey fence. The excluded lap
+    (120 s, not a row) and the ⚠ dropout lap (+9 s, the slowest row) must not stretch it — or
+    one bad lap flattens every honest bar to a sliver — and the +5 s outlier is clipped."""
+    from studio import lap_table as LT
+    table = LapTable(_TowerSession())
+    # clean gaps (dropout lap 8 left out): 0.05 0 .3 .412 .6 .8 1.0 5.0 -> fence clips 5.0
+    assert abs(table.delta_scale() - 1.0) < 1e-9, table.delta_scale()
+    c = _delta_col(table)
+    tb = table.table
+    bars = {table._lap_id(r): tb.item(r, c).data(LT.DELTA_BAR_ROLE) for r in range(tb.rowCount())}
+    assert bars[7][1] and bars[8][1], f"the outlier and the dropout lap clip: {bars}"
+    assert bars[7][0] == 1.0 and bars[8][0] == 1.0, bars
+    assert not bars[6][1] and abs(bars[6][0] - 1.0) < 1e-9, bars
+    assert abs(bars[3][0] - 0.412) < 1e-9 and not bars[3][1], bars
+    print("test_an_excluded_or_dropout_lap_never_sets_the_bar_scale OK")
+
+
+def test_a_gap_inside_timing_precision_is_not_coloured():
+    """A gap under library.PB_PRECISION_S (0.07 s: two laps by the best instrument measured, at
+    2σ) is level as far as the timing can tell, so its bar wears the neutral tone and its text the
+    plain row colour; a real gap wears the 'behind' hue on its bar, never on its digits."""
+    from studio import lap_table as LT
+    table = LapTable(_TowerSession())
+    c = _delta_col(table)
+    tb = table.table
+    level = tb.item(table._row_for_lap(0), c)         # +0.050
+    real = tb.item(table._row_for_lap(2), c)          # +0.300
+    assert level.data(LT.DELTA_BAR_ROLE)[2] == LT.TONE_LEVEL, level.data(LT.DELTA_BAR_ROLE)
+    assert real.data(LT.DELTA_BAR_ROLE)[2] == LT.TONE_BEHIND, real.data(LT.DELTA_BAR_ROLE)
+    behind = theme.behind_colour().upper()
+    for it in (level, real):
+        assert it.foreground().color().name().upper() != behind, "the digits stay uncoloured"
+    assert "precision" in level.toolTip(), level.toolTip()
+    print("test_a_gap_inside_timing_precision_is_not_coloured OK")
+
+
+def test_sorting_by_delta_orders_the_tower():
+    """Sorting by Δbest puts the best lap first and the slowest last (both directions), and the
+    sort is remembered across a refresh like any other column."""
+    table = LapTable(_TowerSession())
+    tb = table.table
+    c = _delta_col(table)
+
+    def _order():
+        return [table._lap_id(r) for r in range(tb.rowCount())]
+
+    tb.sortByColumn(c, Qt.AscendingOrder)
+    assert _order() == [1, 0, 2, 3, 4, 5, 6, 7, 8], _order()
+    tb.sortByColumn(c, Qt.DescendingOrder)
+    assert _order() == [8, 7, 6, 5, 4, 3, 2, 0, 1], _order()
+    table.refresh()
+    assert _order() == [8, 7, 6, 5, 4, 3, 2, 0, 1], "the Δ sort must survive a refresh"
+    print("test_sorting_by_delta_orders_the_tower OK")
+
+
+def test_the_best_time_stays_green_when_its_row_is_selected():
+    """The app pre-selects the best lap at launch, and the stylesheet's selected-item colour
+    repainted its green Time in plain text — so on first open the best lap read like every other
+    row (the "before" of this package). The best-lap ink must survive the selection."""
+    from PySide6.QtGui import QColor
+
+    table = LapTable(_FakeSession())
+    _sized(table, 560)
+    table.select([1])
+    _APP.processEvents()
+    tb = table.table
+    r = table._row_for_lap(1)
+    rect = tb.visualRect(tb.model().index(r, 1))
+    img = tb.viewport().grab(rect).toImage()
+    want = QColor(theme.best_lap_colour())
+    green = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            p = img.pixelColor(x, y)
+            if (abs(p.red() - want.red()) < 40 and abs(p.green() - want.green()) < 40
+                    and abs(p.blue() - want.blue()) < 40):
+                green += 1
+    assert green >= 10, f"the selected best lap's Time painted {green} best-colour pixels"
+    print("test_the_best_time_stays_green_when_its_row_is_selected OK")
 
 
 if __name__ == "__main__":

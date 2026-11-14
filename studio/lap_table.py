@@ -3,7 +3,9 @@
 Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68.408 s), from the
 mouse or the keyboard — the header is a tab stop with its own ring (_KeyboardSortHeader).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
-lap, blue Qt selection, purple per-sector session-best cells, ⚠ GPS-dropout flag. The
+lap (kept through the selection, _TowerDelegate), blue Qt selection, purple per-sector session-best
+cells, ⚠ GPS-dropout flag. The Δbest column is the timing-tower read: each lap's gap to the best
+with an in-cell bar on a fenced, clean-lap scale (delta_bar_scale). The
 SESSION-BESTS footer is plain labels below the table, immune to sort/selection. An EXCLUDED
 strip below the table lists substantial laps the median band left out of the times/bests (a
 mis-segmented short/long lap, an out-lap, or an in-lap) — kept out of the sortable rows so a
@@ -19,8 +21,18 @@ import math
 import statistics
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPen
+from PySide6.QtCore import (
+    QEvent,
+    QItemSelection,
+    QItemSelectionModel,
+    QLineF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -32,7 +44,9 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
     QStyleOptionHeader,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -42,6 +56,10 @@ from PySide6.QtWidgets import (
 from . import data_quality, provenance_panel, theme, units
 from . import stats as stats_service
 from ._signal import PRINT_DECIMALS, fmt_signed, fmt_time, is_best_at_print, lap_label, plural
+
+# The ONE "level with your best" rule (DOMAIN-6): two laps closer than the best instrument can
+# separate at 2σ. The PB sentences say "level" under it; the Δ bar refuses to colour under it.
+from .library import PB_PRECISION_S, within_timing_precision
 from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -216,8 +234,65 @@ def estimated_timing_tooltip(timing_quality) -> str:
     detail = getattr(timing_quality, "detail", None)
     text = detail() if callable(detail) else ""
     return text or _ESTIMATED_TIMING_FALLBACK
-COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
+COLUMNS = ["Lap", "Time", "Δbest", "Dist (m)", "Entry (km/h)"]
+_TIME_COL = 1
+# THE TIMING-TOWER COLUMN (cool/lap-tower). A racer reads a lap list for "how far off the best,
+# at a glance"; the grid made him subtract 0:47.4 from 0:46.8 in his head, 36 times. Written
+# CLOSED like the Corners table's "Δbest" (see CORNER_COLUMNS), so the two tabs name one quantity
+# one way. Printed to the millisecond the Time column prints, with a bar in the same cell
+# (_TowerDelegate) rather than a column of its own: the default quadrant could not afford one.
+_DELTA_COL = 2
+_DIST_COL = 3
 _ENTRY_COL = len(COLUMNS) - 1  # the Entry-speed column (last base column); its header names the unit
+# What the Δ cell's bar data says about the gap's colour (DELTA_BAR_ROLE's third field).
+TONE_BEHIND = "behind"   # a gap the timing can resolve: the palette's behind hue
+TONE_LEVEL = "level"     # inside timing precision: neutral, NOT coloured as a difference
+TONE_MUTED = "muted"     # provisional timing: no lap is "behind" an arbitrary start line
+# The bar's full width, as a rule (delta_bar_scale): the slowest CLEAN lap inside Tukey's upper
+# fence, Q3 + 1.5 x IQR of the clean laps' gaps. A plain max lets one slow lap (a spin, traffic,
+# the lap the kart coasted into the pits on) shrink every honest bar to a sliver; a fixed
+# percentile clips laps that are merely the slow end of a tight session. The fence clips only what
+# is out of family, and a clipped bar draws a break mark at its end so it never reads as exact.
+# Fewer than DELTA_FENCE_MIN clean laps cannot estimate quartiles: the max is the scale then.
+DELTA_FENCE_K = 1.5
+DELTA_FENCE_MIN = 4
+
+
+DELTA_HEADER_TIP = (
+    "Gap to the session's best lap (seconds; the best lap reads —). The bar's full width is the "
+    "slowest counted lap that is not an outlier — a slower lap's bar ends in a break mark. "
+    f"A gap under {PB_PRECISION_S:.2f} s is inside timing precision, so it is not coloured as a "
+    "difference.")
+
+
+def delta_bar_scale(gaps: list[float]) -> float | None:
+    """The gap (s) a FULL bar stands for — see DELTA_FENCE_K. `gaps` are the CLEAN laps' gaps to
+    the best (no ⚠ dropout lap; excluded laps are not rows at all). None when no gap is positive,
+    i.e. there is nothing for a bar to show."""
+    pos = sorted(g for g in gaps if math.isfinite(g) and g >= 0)
+    if not pos or pos[-1] <= 0:
+        return None
+    if len(pos) < DELTA_FENCE_MIN:
+        return pos[-1]
+    q1, _, q3 = statistics.quantiles(pos, n=4, method="inclusive")
+    fence = q3 + DELTA_FENCE_K * (q3 - q1)
+    inside = [g for g in pos if g <= fence]
+    return inside[-1] if inside and inside[-1] > 0 else pos[-1]
+
+
+def delta_tip(gap: float, clipped: bool) -> str:
+    """The Δ cell's own sentence: the gap in words, and the two things the cell cannot print —
+    that a sub-precision gap is level, and that a clipped bar is not to scale."""
+    if gap < 0:
+        return (f"{fmt_signed(gap, 3)} s: quicker than the best lap, which this one cannot be "
+                "(its ⚠ GPS dropout keeps it out of the bests).")
+    words = f"{gap:.3f} s slower than the best lap."
+    if within_timing_precision(gap):
+        words += (f" Within timing precision (under {PB_PRECISION_S:.2f} s apart): level with the "
+                  "best as far as the timing can tell.")
+    if clipped:
+        words += " Bar clipped: this lap is far outside the session's spread."
+    return words
 
 
 def _lap_col_tips(unit: str | None) -> list[str]:
@@ -228,6 +303,7 @@ def _lap_col_tips(unit: str | None) -> list[str]:
     return [
         "Lap number (▶ playing · ★ session best · ⚠ GPS dropout)",
         "Lap time, measured between start/finish crossings",
+        DELTA_HEADER_TIP,
         # the odometer's shortfall, in the one sentence every distance surface carries
         "Lap distance (m), measured between start/finish crossings.\n\n"
         f"{stats_service.ODOMETER_NOTE}",
@@ -568,6 +644,86 @@ def align_headers_over_their_columns(table: QTableWidget, numeric_from: int = NU
 # re-declared: the role a cell STORES its key under and the role the comparison READS have to be
 # the same value, and they were two independent `Qt.UserRole` literals in two files.
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
+# On a Δbest cell: (fraction 0..1 of the bar track, clipped?, TONE_*), or None for no bar (the
+# best lap itself, a blank cell). Written by _apply_highlights, read by _TowerDelegate.paint.
+DELTA_BAR_ROLE = Qt.UserRole + 2
+# True on a cell whose "best" ink must survive selection (the best lap's cells, a ★ split): the
+# stylesheet's `::item:selected { color }` otherwise repaints it in plain text, and the app
+# pre-selects the best lap at launch — so on first open the best lap read like any other row.
+KEEP_INK_ROLE = Qt.UserRole + 3
+
+
+class _TowerDelegate(QStyledItemDelegate):
+    """The lap grid's delegate: the Δbest cell's bar, and best-lap ink that survives selection.
+
+    PER-PAINT COST: a Python delegate on every cell put a Python call in front of all ~180 cell
+    paints and ~500 size hints per refresh (measured: refresh 5.9 -> 10.7 ms, a full repaint of 36
+    rows 2.3 -> 3.6 ms). So it is installed only where it has work: on the Δbest COLUMN, and on the
+    few ROWS carrying best ink (`LapTable._route_delegate`); every other cell keeps Qt's C++ default
+    delegate. Every pen, brush and width is built in `restyle` (once per `_apply_highlights`), never
+    in `paint`. The bar lives LEFT of the right-aligned digits, in a track `restyle` reserves from
+    the widest gap text, so it never runs under them; the column budget adds that track
+    (LAP_BAR_MIN_PX) rather than a sizeHint override, which would cost a Python call per cell."""
+
+    _BREAK_PX = 7   # the clipped end: the bar stops this short of the track and two slashes follow
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._text_px = 0
+        self._sel_brush = QBrush()
+        self._bar = {}
+        self._break_pen = QPen()
+
+    def restyle(self, font, texts) -> None:
+        """Re-resolve the palette-dependent colours and the digits' reserved width: the widest
+        gap text in the column now, so the track gets every pixel the digits do not need."""
+        fm = QFontMetrics(font)
+        self._text_px = max((fm.horizontalAdvance(t) for t in texts), default=0) + theme.SPACE_L
+        self._sel_brush = QBrush(QColor(theme.C.sel_bg))
+        self._bar = {}
+        for tone, hexcol in ((TONE_BEHIND, theme.behind_colour()), (TONE_LEVEL, theme.C.text_dim),
+                             (TONE_MUTED, theme.PROVISIONAL_COLOR)):
+            col = QColor(hexcol)
+            col.setAlpha(theme.LAP_BAR_ALPHA)
+            self._bar[tone] = QBrush(col)
+        self._break_pen = QPen(QColor(theme.C.text_dim), theme.BORDER_PX * 1.5)
+        self._break_pen.setCapStyle(Qt.FlatCap)
+
+    def paint(self, painter, option, index):
+        if option.state & QStyle.State_Selected and index.data(KEEP_INK_ROLE):
+            # Paint it as an UNSELECTED cell on the selection's own fill: the item's foreground
+            # then reaches the text (the stylesheet's selected colour would replace it), and the
+            # row still reads as one selected band. A copy, for at most one row's cells.
+            option = QStyleOptionViewItem(option)
+            option.state &= ~QStyle.State_Selected
+            painter.fillRect(option.rect, self._sel_brush)
+        super().paint(painter, option, index)
+        if index.column() != _DELTA_COL:
+            return
+        bar = index.data(DELTA_BAR_ROLE)
+        if not bar:
+            return
+        frac, clipped, tone = bar
+        r = option.rect
+        x0 = r.left() + theme.SPACE_S
+        track = r.right() - self._text_px - x0
+        if track <= self._BREAK_PX:
+            return                      # a column squeezed past its floor: the digits win
+        length = max(theme.BORDER_PX * 2, round(frac * track))
+        h = theme.LAP_BAR_H
+        y = r.top() + (r.height() - h) / 2
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._bar[tone])
+        solid = length - self._BREAK_PX if clipped else length
+        painter.drawRoundedRect(QRectF(x0, y, solid, h), 1.5, 1.5)
+        if clipped:
+            # The axis-break mark: "//" past the end of the bar — the bar does not stop here.
+            painter.setPen(self._break_pen)
+            for dx in (solid + 2, solid + 5):
+                painter.drawLine(QLineF(x0 + dx - 1.5, y + h + 1, x0 + dx + 1.5, y - 1))
+        painter.restore()
 
 # The two stitched targets that used to sit in a SESSION-BESTS footer below this table
 # (theoretical best / best rolling) now live on the Stats page, each beside the data it is derived
@@ -906,6 +1062,11 @@ class LapTable(QWidget):
         # alone would still have been unreachable. A read-only grid (NoEditTriggers) has nothing to
         # tab between cells for; the arrow keys still walk the rows.
         self.table.setTabKeyNavigation(False)
+        self._delegate = _TowerDelegate(self.table)
+        self.table.setItemDelegateForColumn(_DELTA_COL, self._delegate)
+        self._ink_rows: set[int] = set()   # rows routed through the delegate (_route_delegate)
+        # The Δbest bar's scale (delta_bar_scale) for the rows on screen, set by refresh().
+        self._delta_scale: float | None = None
         self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
         align_headers_over_their_columns(self.table)
         self.table.verticalHeader().setVisible(False)
@@ -1259,9 +1420,18 @@ class LapTable(QWidget):
         real = self._n_real_cols()
         cells = [self.table.sizeHintForColumn(c) if self.table.rowCount() else 0
                  for c in range(real)]
+        # The Δbest cell's natural width is its digits PLUS the bar's track; its floor (below) is
+        # the digits alone.
+        bar = theme.LAP_BAR_MIN_PX if real > _DELTA_COL and cells[_DELTA_COL] else 0
+        if bar:
+            cells[_DELTA_COL] += bar
         natural = [max(hdr.sectionSizeHint(c), cells[c]) for c in range(real)]
         floors = [max(MIN_SECTION_PX, cells[c]) for c in range(real)]
         natural[0] = floors[0] = LAP_COL_PX
+        # The Δbest bar is decoration, not a value: a squeezed panel gives up its track (the
+        # delegate then draws no bar) before any column's DIGITS are cut or pushed off screen.
+        if bar:
+            floors[_DELTA_COL] = max(MIN_SECTION_PX, cells[_DELTA_COL] - bar)
         return natural, floors, [max(n, MAX_DATA_COL_PX) for n in natural]
 
     def _fit_columns(self):
@@ -1343,6 +1513,15 @@ class LapTable(QWidget):
         # Per-lap splits + per-column session-best (same accessor the footer sums, so cells/footer agree).
         splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
         best_split = self.session.session_best_splits()
+        # The Δbest reference: the session's best lap (dropout-aware, bests.best_lap_id), read
+        # whatever the trust state — under provisional timing the gaps are shown but muted, the
+        # same demotion the Time column takes. No best lap (a double without one) -> blank cells.
+        best_fn = getattr(self.session, "best_lap_id", None)
+        best_id = best_fn() if callable(best_fn) and rows else None
+        best_time = next((float(r["time"]) for r in rows if r["idx"] == best_id), None)
+        dropout_ids = self.session.dropout_lap_ids()
+        self._delta_scale = (None if best_time is None else delta_bar_scale(
+            [float(r["time"]) - best_time for r in rows if r["idx"] not in dropout_ids]))
 
         # Sorting must be OFF while we populate (else rows reorder mid-fill and setItem(r,…)
         # lands on the wrong row); re-enabled after, preserving the user's chosen sort.
@@ -1360,9 +1539,17 @@ class LapTable(QWidget):
             # (text, numeric-sort-key) per column. The Lap cell DISPLAYS the 1-based lap number
             # (lap_label) but KEEPS the 0-based lap id as its numeric sort key, so the column
             # still sorts by true lap order and the ★/▶/⚠ markers (keyed on lap_id) are unchanged.
+            if best_time is None:
+                delta = ("", float("nan"))                      # sorts LAST, like a blank split
+            elif lap_id == best_id:
+                delta = (SELF_DELTA, 0.0)
+            else:
+                gap = float(row["time"]) - best_time
+                delta = (fmt_signed(gap, 3), gap)
             cells: list[tuple[str, float]] = [
                 (lap_label(lap_id), float(lap_id)),
                 (fmt_time(row["time"]), float(row["time"])),
+                delta,
                 (f"{row['dist']:.0f}", float(row["dist"])),
                 # Entry speed: convert km/h → the display unit for BOTH the shown text and the
                 # numeric sort key so ordering matches what's on screen (identity for km/h).
@@ -1415,7 +1602,7 @@ class LapTable(QWidget):
         self.table.sortByColumn(self._sort_col, self._sort_order)
         self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
-        self._dropout_ids = self.session.dropout_lap_ids()
+        self._dropout_ids = dropout_ids
         self._apply_highlights()
         # Fit AFTER the highlights: they append the ★ best-sector mark to S-split cells, which is
         # part of the width those columns need.
@@ -1442,8 +1629,10 @@ class LapTable(QWidget):
         if session is None or r < 0 or c not in self._clock_cols():
             return None
         lap_id = self._lap_id(r)
-        if c == 1:
+        if c == _TIME_COL:
             return session.lap_time_provenance(lap_id)
+        if c < len(COLUMNS):
+            return None   # Δbest: a difference of two Time cells, each inspectable on its own
         return session.sector_split_provenance(lap_id, c - len(COLUMNS))
 
     def _on_context_menu(self, pos) -> None:
@@ -1487,7 +1676,12 @@ class LapTable(QWidget):
         return set(range(1, self._n_real_cols()))
 
     def _clock_cols(self) -> set[int]:
-        return {1, *(len(COLUMNS) + i for i in range(self._n_split_cols()))}
+        # Δbest is a duration too (a difference of two lap times), so a degraded clock demotes it.
+        return {_TIME_COL, _DELTA_COL, *(len(COLUMNS) + i for i in range(self._n_split_cols()))}
+
+    def delta_scale(self) -> float | None:
+        """The gap (s) a full Δbest bar stands for on the rows shown (delta_bar_scale)."""
+        return self._delta_scale
 
     def _apply_highlights(self):
         """Re-apply ALL row/cell highlights keyed by lap id, so they survive any sort:
@@ -1533,6 +1727,10 @@ class LapTable(QWidget):
         # recolours the cells (green→blue best lap, purple→teal best sector) on the next refresh().
         best_color = QColor(theme.best_lap_colour())
         best_sector_color = QColor(theme.best_sector_colour())
+        # The bar's colours follow the palette too; its track ends where the widest gap begins.
+        self._delegate.restyle(self._num_font, [self.table.item(r, _DELTA_COL).text()
+                                                for r in range(rows)
+                                                if self.table.item(r, _DELTA_COL) is not None])
 
         dropout_ids = self._dropout_ids
         # A ⚠ lap is not eligible for the purple session-best split. `session_best_splits` is a
@@ -1545,6 +1743,7 @@ class LapTable(QWidget):
         # — there `best_candidate_ids` falls back to the flagged set, so the splits really were
         # computed over these laps and suppressing every mark would hide a real answer.
         candidates_clean = any(self._lap_id(r) not in dropout_ids for r in range(rows))
+        ink_rows: set[int] = set()
         self.table.blockSignals(True)
         for r in range(rows):
             lap_id = self._lap_id(r)
@@ -1566,10 +1765,15 @@ class LapTable(QWidget):
                 # Keep the best-lap green there (the italic + estimated tooltip below still carry the
                 # accuracy cue). Provisional muting still wins: it suppresses the bests entirely, so
                 # `is_best` is already False under provisional (best_lap is None while unverified).
+                keep_ink = False
                 if muted_cell and not (estimated_cell and is_best):
                     item.setForeground(PROVISIONAL_COLOR)
                 else:
                     item.setForeground(best_color if is_best else BASE_COLOR)
+                    keep_ink = is_best
+                item.setData(KEEP_INK_ROLE, keep_ink)
+                if keep_ink:
+                    ink_rows.add(r)
                 # Muted+italic on any demoted timing cell (the best-lap cell stays green but still
                 # italic, keeping the estimated cue); the dropout tooltip wins (it flags a per-lap
                 # issue), else the provisional note, else the estimated-timing note, else clear.
@@ -1581,6 +1785,8 @@ class LapTable(QWidget):
                 # the cell carrying it says what it means. Set every pass (the mark moves with the
                 # best lap), and above — never instead of — the trust note.
                 item.setToolTip(_with_star(BEST_LAP_TIP, tip) if is_best and c == 0 else tip)
+                if c == _DELTA_COL:
+                    self._apply_delta_bar(item, tip, muted=provisional_cell)
             # per-sector best → purple+bold + a ★ mark (outranks green for this cell) — but ONLY on
             # verified timing; a "validated best" on an arbitrary start line would mislead. The ★ is
             # the NON-COLOUR redundancy (bold alone is weak); the split text is rebuilt from the
@@ -1607,6 +1813,8 @@ class LapTable(QWidget):
                     item.setText(base + BEST_SECTOR_MARK if is_best_split else base)
                 if is_best_split:
                     item.setForeground(best_sector_color)
+                    item.setData(KEEP_INK_ROLE, True)
+                    ink_rows.add(r)
                     font.setBold(True)
                     # ...and the same legend on the same glyph (IA-07). The loop above has just
                     # rewritten this cell's tooltip, so there is nothing stale to append to.
@@ -1615,7 +1823,39 @@ class LapTable(QWidget):
                     font.setBold(False)
                 item.setFont(font)
         self.table.blockSignals(False)
+        self._route_delegate(ink_rows)
         self._apply_current_lap()
+
+    def _route_delegate(self, rows: set[int]) -> None:
+        """Send exactly `rows` (the ones carrying best ink) through _TowerDelegate; the rest of
+        the grid keeps Qt's C++ default delegate (see _TowerDelegate's per-paint note). Rows are
+        positions, so this re-runs after every sort, like the highlights it follows."""
+        for r in self._ink_rows - rows:
+            self.table.setItemDelegateForRow(r, None)
+        for r in rows - self._ink_rows:
+            self.table.setItemDelegateForRow(r, self._delegate)
+        self._ink_rows = set(rows)
+
+    def _apply_delta_bar(self, item, trust_tip: str, muted: bool) -> None:
+        """One Δbest cell's bar (DELTA_BAR_ROLE) and tooltip, from the gap it stores as its key.
+
+        The tone is decided HERE, once, so the bar can never colour what the tooltip calls level:
+        TONE_LEVEL under PB_PRECISION_S, TONE_MUTED on provisional timing (no lap is behind a guessed
+        start line), else TONE_BEHIND. A ⚠ dropout lap still gets its bar against the clean scale;
+        it just never set that scale. The digits keep the row's own colour in every case."""
+        gap = item.data(NUM_ROLE)
+        scale = self._delta_scale
+        if gap is None or not math.isfinite(float(gap)) or float(gap) <= 0 or not scale:
+            item.setData(DELTA_BAR_ROLE, None)
+            if gap is not None and math.isfinite(float(gap)) and float(gap) < 0:
+                item.setToolTip(_with_star(delta_tip(float(gap), False), trust_tip))
+            return
+        gap = float(gap)
+        clipped = gap > scale * (1 + 1e-9)
+        tone = (TONE_MUTED if muted else TONE_LEVEL if within_timing_precision(gap)
+                else TONE_BEHIND)
+        item.setData(DELTA_BAR_ROLE, (min(gap / scale, 1.0), clipped, tone))
+        item.setToolTip(_with_star(delta_tip(gap, clipped), trust_tip))
 
     def refresh_timing_trust(self):
         """Re-render everything this table keys on the session's TRUST/QUALITY flags — the muted
