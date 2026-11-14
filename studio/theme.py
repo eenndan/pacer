@@ -860,6 +860,11 @@ CAPTION = 11       # a label ABOUT a value, and running notes (banners, readouts
 PANEL_HEADER = 11  # small-caps panel identity — CAPTION's step, its own role (Phase 2 may move it)
 TABLE_HEADER = 11  # column headers and badges — likewise
 
+# --- display (cool/debrief-hero) ---
+# One figure per screen, outside the four-step scale above: the best lap leading the first-open
+# debrief (coaching_panel.DebriefHero). A landing's headline number, read from across the room.
+DISPLAY = 48
+
 # --- weights ---
 W_REGULAR = QFont.Weight.Normal     # 400
 W_SEMIBOLD = QFont.Weight.DemiBold  # 600
