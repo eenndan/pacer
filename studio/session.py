@@ -36,6 +36,7 @@ from . import (
     focus,
     gapfill,
     gmeter,
+    lap_race,
     library,
     media_clock,
     provenance,
@@ -4304,6 +4305,51 @@ class Session:
         d_best = np.interp(float(np.interp(t_in_a, curve_a.times, curve_a.dist)), wa[1], wa[0])
         d_b = float(np.interp(d_best, wb[0], wb[1]))
         return elapsed_a - float(np.interp(d_b, curve_b.dist, curve_b.elapsed))
+
+    def race_tracks(self, lap_ids=None) -> lap_race.RaceTracks | None:
+        """The Lap Race's precomputed field (`studio/lap_race.py`) over `lap_ids` (default: every
+        clean lap, `valid_lap_ids`), or None when fewer than `lap_race.MIN_FIELD` laps survive.
+
+        The one accessor the race needs from the session, because the place on track is read
+        through the PRIVATE warp: each lap's `_warp_to_best`, the frame `delta_between` uses, so a
+        rung's interval is the compare badge's Δ. A lap is left out, with its reason in
+        `.excluded`, when its place would be a guess: an interior GPS dropout (`lap_has_dropout`)
+        or no on-track match (`_real_warp` is None — the normalized fraction — on any lap but the
+        best, whose warp is the identity).
+
+        MEMOIZED on its whole input set (`_same_inputs`: the ids, the best lap, and each lap's
+        cached trace and warp objects), so a re-segment — which replaces every one of those —
+        misses on the next read without an invalidation of its own, and a repeat read is the same
+        object. Not per tick: the race's controller holds the result."""
+        ids = tuple(self.valid_lap_ids() if lap_ids is None else lap_ids)
+        best = self.best_lap_id()
+        if best is None:
+            return None
+        btd = self._lap_time_dist_elapsed(best)
+        inputs = [(i, self._lap_time_dist_elapsed(i), self._warp_to_best(i)) for i in ids]
+        key = (ids, best, btd, tuple(inputs))
+        memo = getattr(self, "_race_memo", None)
+        if memo is not None and _same_inputs(memo[0], key):
+            return memo[1]
+        excluded: dict[int, str] = {}
+        laps = []
+        for i, td, warp in inputs:
+            if td is None or btd is None or warp is None or (i != best and _real_warp(warp) is None):
+                excluded[i] = lap_race.EXCLUDED_UNMATCHED
+                continue
+            if self.lap_has_dropout(i):
+                excluded[i] = lap_race.EXCLUDED_DROPOUT
+                continue
+            times, dist, elapsed = td
+            xs, ys, _t = self._lap_trace_xyt(i)
+            laps.append(lap_race.RaceLap(
+                lap_id=i, lap_time=float(self.lap_time(i)), clock_start=float(times[0]),
+                elapsed=elapsed, dist=dist, xs=np.asarray(xs[:len(times)], float),
+                ys=np.asarray(ys[:len(times)], float), warp=warp))
+        out = (lap_race.build(laps, float(btd[1][-1]), excluded)
+               if btd is not None else None)
+        self._race_memo = (key, out)
+        return out
 
     # Map (x, y) -> trace nearest-point lookups (whole-trace + the lap-scoped variant for the
     # draggable marker) — delegated to session.timeline (studio/timeline.py).
