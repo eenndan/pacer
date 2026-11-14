@@ -436,6 +436,7 @@ class PlotsView(QWidget):
         # next refresh the placement is theirs, and nothing re-anchors it or re-ranges the axis.
         self._legend_pinned = False
         self._legend_corner = 0       # LEGEND_CORNERS index the plate is anchored at
+        self._legend_offset = LEGEND_OFFSET   # ...and the offset it was anchored with
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
@@ -865,10 +866,11 @@ class PlotsView(QWidget):
 
     def _declutter_corner_labels(self):
         """Show a corner label only where it is inside the view and clear of the labels already
-        kept and of every sector caption, walking in track order; the rest are hidden, never
-        overlapped or nudged off their apex. Pixel widths come from the labels themselves (a
-        TextItem ignores the view transform, so its bounding rect IS pixels). Runs on a corner
-        push, a refresh, an x-range change and a resize — never on the playhead tick."""
+        kept, of every sector caption and of the legend plate when it sits on the top edge, walking
+        in track order; the rest are hidden, never overlapped or nudged off their apex. Pixel
+        widths come from the labels themselves (a TextItem ignores the view transform, so its
+        bounding rect IS pixels). Runs on a corner push, a refresh, an x-range change, a resize and
+        a legend placement — never on the playhead tick."""
         if not self._corner_items:
             return
         vb = self.p_speed.getViewBox()
@@ -881,6 +883,14 @@ class PlotsView(QWidget):
             if plot is self.p_speed and getattr(ln, "label", None) is not None:
                 left = (float(ln.value()) - x0) * px      # sector captions sit RIGHT of the line
                 taken.append((left, left + ln.label.boundingRect().width()))
+        leg = self._speed_legend
+        if leg is not None and leg.isVisible():
+            # The plate is opaque: a label under it is a label nobody can read (C7 under the
+            # top-right plate on a real 7-corner lap). Only while the plate reaches the label row.
+            box, plate = vb.sceneBoundingRect(), leg.sceneBoundingRect()
+            row = max((ln.label.boundingRect().height() for ln in self._corner_items), default=0)
+            if plate.top() < box.top() + row + CORNER_LABEL_GAP_PX:
+                taken.append((plate.left() - box.left(), plate.right() - box.left()))
         for ln in self._corner_items:
             half = ln.label.boundingRect().width() / 2
             mid = (float(ln.value()) - x0) * px
@@ -1035,10 +1045,16 @@ class PlotsView(QWidget):
         ok = np.isfinite(xs) & np.isfinite(ys)
         xs, ys = xs[ok], ys[ok]
         best = None
+        # The corner labels own the top edge's first row: a TOP-corner plate starts below it, so
+        # it can never blanket them (an opaque plate over C5-C7 hid three of seven at grid size).
+        row = (max(ln.label.boundingRect().height() for ln in self._corner_items)
+               if self._corner_items else 0.0)
         for k, (_item, parent, (ox, oy)) in enumerate(LEGEND_CORNERS):
             bottom = parent[1] == 1
             if bottom and self._bt_band_range is not None:
                 continue
+            if not bottom:
+                oy += row
             left = ox if parent[0] == 0 else width + ox - plate.width()
             lo = x0 + (left - LEGEND_CLEAR_PX) / width * (x1 - x0)
             hi = x0 + (left + plate.width() + LEGEND_CLEAR_PX) / width * (x1 - x0)
@@ -1056,18 +1072,19 @@ class PlotsView(QWidget):
                 low = min(y0, (float(under.min()) - r * y1) / (1 - r))
                 grow, rng = y0 - low, (low, y1)
             if best is None or grow < best[0] - 1e-9:
-                best = (grow, k, rng)
+                best = (grow, k, rng, (ox, oy))
             if grow <= 0:
                 break
         if best is None:
             return
-        item, parent, offset = LEGEND_CORNERS[best[1]]
-        if best[1] != self._legend_corner:
-            self._legend_corner = best[1]
-            leg.anchor(item, parent, offset)
+        item, parent, _offset = LEGEND_CORNERS[best[1]]
+        if (best[1], best[3]) != (self._legend_corner, self._legend_offset):
+            self._legend_corner, self._legend_offset = best[1], best[3]
+            leg.anchor(item, parent, best[3])
         now = vb.viewRange()[1]
         if abs(now[0] - best[2][0]) > 1e-6 or abs(now[1] - best[2][1]) > 1e-6:
             vb.setYRange(*best[2], padding=0)
+        self._declutter_corner_labels()   # the plate may have moved onto (or off) a label
 
     def _reserve_brake_throttle_space(self):
         """M8: when the brake/throttle band is on, drop the speed plot's y lower bound so the band
