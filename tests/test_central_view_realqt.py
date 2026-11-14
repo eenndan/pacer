@@ -750,7 +750,7 @@ def test_hero_readout_leads_with_labelled_delta_to_ideal():
     view.ideal_readout_btn.setChecked(False)
     best_text = view.diff_box.text()
     assert not best_text.startswith("Δideal"), f"toggle off must lead with Δ-to-best: {best_text!r}"
-    assert best_text.startswith("Δ "), best_text
+    assert best_text.startswith("Δbest "), best_text   # NAMED, like Δideal (cool/chart-corners)
     assert "ideal" in view.diff_box.toolTip().lower(), view.diff_box.toolTip()
     print(f"test_hero_readout_leads_with_labelled_delta_to_ideal OK ({text!r} / {best_text!r})")
 
@@ -769,12 +769,130 @@ def test_hero_names_the_baseline_the_compare_chart_draws():
     view._plots_baseline_kind = plots_view.DELTA_BASELINE_BEST
     view._update_diff_box(view._playback.applied_t, view._last_diff_speed, view._last_diff_lap)
     text = view.diff_box.text()
-    assert text.startswith("Δ ") and not text.startswith("Δideal"), (
+    assert text.startswith("Δbest ") and not text.startswith("Δideal"), (
         "the hero must name the chart's baseline while comparing", text)
     view._plots_baseline_kind = plots_view.DELTA_BASELINE_IDEAL
     view._update_diff_box(view._playback.applied_t, view._last_diff_speed, view._last_diff_lap)
     assert view.diff_box.text().startswith("Δideal"), view.diff_box.text()
     print(f"test_hero_names_the_baseline_the_compare_chart_draws OK ({text!r})")
+
+
+def test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes():
+    """cool/chart-corners. The map labels C1…; the speed chart named no corner at all (its only
+    grey bands are coast spans). Each corner's map label must now ride the speed chart, on ITS
+    corner — between that corner's entry and exit on the chart's own axis — in distance AND time
+    mode, and follow an x-mode flip rather than staying where the old axis put it."""
+    view, s, _t0, _t1 = _real_central_view()
+    found = s.corners.corner_list()
+    assert found, "the stadium synthetic has real corners to label"
+    labels = [c.label for c in found]
+    for idx, mode in ((0, "distance"), (1, "time")):
+        view.plots.x_mode_combo.setCurrentIndex(idx)
+        items = getattr(view.plots, "_corner_items", [])
+        got = [(ln.label.toPlainText(), float(ln.value())) for ln in items]
+        assert [g[0] for g in got] == labels, (mode, got, labels)
+        enters = s._best_odometer_plot_positions(labels, [c.enter for c in found], mode)
+        exits = s._best_odometer_plot_positions(labels, [c.exit for c in found], mode)
+        for (lb, x), (_a, x0), (_b, x1) in zip(got, enters, exits, strict=True):
+            assert x0 <= x <= x1, f"{lb} at {x:.2f} is outside its corner [{x0:.2f}, {x1:.2f}] ({mode})"
+    view.plots.x_mode_combo.setCurrentIndex(0)
+    print(f"test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes OK ({labels})")
+
+
+def _hero_ink(view):
+    """Count the hero's inked pixels in the Δ run and in the speed run, by which colour they are
+    nearest: (delta_run_hues, speed_run_hues) as {colour: n}. Split at the formatters' own join."""
+    from PySide6.QtGui import QColor, QFontMetricsF
+    box = view.diff_box
+    img = box.grab().toImage()
+    head, sep, _tail = box.text().partition("     ")
+    split = box.contentsRect().left() + QFontMetricsF(box.font()).horizontalAdvance(head + sep) - 4
+    cands = {"behind": theme.behind_colour(), "ahead": theme.ahead_colour(), "text": theme.C.text}
+    runs = ({}, {})
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            if c.lightness() < 90:      # background / antialias fringe
+                continue
+            near = min(cands, key=lambda k: sum((a - b) ** 2 for a, b in zip(
+                QColor(cands[k]).getRgb()[:3], c.getRgb()[:3], strict=True)))
+            run = runs[0 if x < split else 1]
+            run[near] = run.get(near, 0) + 1
+    return runs
+
+
+def test_the_hero_colours_only_its_delta_never_the_speed():
+    """cool/chart-corners. The hero was ONE label in ONE colour, so a positive Δ painted the speed
+    beside it red as well ("Δideal +0.09 s   45 km/h", both red) — as if the speed were a loss. The
+    Δ run keeps its gain/loss hue for BOTH signs; the speed run stays the neutral text colour."""
+    view, s, t0, _t1 = _real_central_view()
+    view.resize(1440, 900)
+    view.show()
+    prior = (_APP.styleSheet(), _APP.font(), _APP.palette())
+    theme.apply_theme(_APP)
+    try:
+        view.video.positionChanged.emit(float(t0[len(t0) // 2]))
+        view.tick()
+        view.ideal_readout_btn.setChecked(False)    # Δ-to-best: the run that has both signs
+        for d, hue in ((0.37, "behind"), (-0.37, "ahead")):
+            s.delta_at_lap = lambda _lid, _t, d=d: d
+            view._update_diff_box(view._playback.applied_t, 45.0, view._last_diff_lap)
+            _APP.processEvents()
+            delta_run, speed_run = _hero_ink(view)
+            assert max(delta_run, key=delta_run.get) == hue, (d, delta_run, view.diff_box.text())
+            assert max(speed_run, key=speed_run.get) == "text", (
+                f"the speed must stay neutral beside a Δ of {d:+}", speed_run, view.diff_box.text())
+            assert speed_run.get(hue, 0) < 0.05 * sum(speed_run.values()), (d, speed_run)
+    finally:
+        _APP.setStyleSheet(prior[0])
+        _APP.setFont(prior[1])
+        _APP.setPalette(prior[2])
+    print("test_the_hero_colours_only_its_delta_never_the_speed OK")
+
+
+def test_the_three_delta_surfaces_name_their_baselines_and_agree_when_they_share_one():
+    """cool/chart-corners. Three Δs sit in one panel: the hero (its baseline chosen by the `vs ideal`
+    chip), the lower chart (titled in the header and on its axis) and the readout strip under it.
+    They are different quantities by design — but with the chip OFF the hero printed a BARE
+    `Δ 0.00 s` (it meant Δ to best) under a header reading "Δ TO IDEAL" beside a strip reading
+    `Δ to ideal +0.085 s`: an unnamed Δ the eye gives the panel's baseline, which then disagrees.
+    Every surface must NAME its baseline, the header and the strip must name the chart's, and two
+    surfaces naming the same baseline must print the same number. Driven over both chip states,
+    best-alone and a second lap."""
+    from studio import plots_view
+    view, s, t0, t1 = _real_central_view()
+    best = s.best_lap_id()
+    other = next(i for i in s.valid_lap_ids() if i != best)
+    times = {0: t0, 1: t1}
+    chart_words = {plots_view.DELTA_BASELINE_BEST: ("Δ TO BEST", "Δ to best"),
+                   plots_view.DELTA_BASELINE_IDEAL: ("Δ TO IDEAL", "Δ to ideal")}
+    checked = 0
+    for sel, lap in (([best], best), ([other], other)):
+        view.plots.set_laps(sel)
+        for chip in (True, False, True):
+            view.ideal_readout_btn.setChecked(chip)
+            tt = times[lap]
+            for frac in (0.3, 0.6, 0.9):
+                view.video.positionChanged.emit(float(tt[int(frac * (len(tt) - 1))]))
+                view.tick()
+                kind = view.plots._delta_baseline_kind
+                title_word, strip_word = chart_words[kind]
+                hero, strip = view.diff_box.text(), view.plots.window_label.text()
+                assert title_word in view._plots_label.text(), (kind, view._plots_label.text())
+                assert strip_word in strip, (kind, strip)
+                hero_base = ("ideal" if hero.startswith("Δideal ") else
+                             "best" if hero.startswith("Δbest ") else None)
+                assert hero_base is not None, f"the hero must name its baseline: {hero!r}"
+                assert hero_base == ("ideal" if chip else "best"), (chip, hero)
+                if hero_base == kind:
+                    hv = float(hero.split()[1].replace("−", "-"))
+                    sv = float(strip.split(strip_word)[1].split()[0].replace("−", "-"))
+                    if not (hero_base == "ideal" and sv < 0):   # the hero floors Δideal at 0
+                        assert abs(hv - sv) <= 0.011, (hero, strip)
+                        checked += 1
+    assert checked, "at least one same-baseline pair was compared"
+    print(f"test_the_three_delta_surfaces_name_their_baselines_and_agree_when_they_share_one OK "
+          f"({checked} same-baseline pairs)")
 
 
 def test_hero_readout_keeps_every_character_at_every_column_width():
@@ -1169,6 +1287,9 @@ def _run_all():
     test_provisional_and_degraded_share_one_trust_strip()
     test_hero_readout_leads_with_labelled_delta_to_ideal()
     test_hero_readout_keeps_every_character_at_every_column_width()
+    test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes()
+    test_the_hero_colours_only_its_delta_never_the_speed()
+    test_the_three_delta_surfaces_name_their_baselines_and_agree_when_they_share_one()
     test_delta_to_ideal_tooltips_are_honest_not_best_sector()
     test_grip_map_reachable_via_labelled_combo()
     test_opportunities_panel_is_the_coaching_tab_page()
