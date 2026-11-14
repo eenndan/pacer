@@ -12,37 +12,61 @@ session's on-track alignment (each lap's corner-boundary warp onto the best lap'
 family's frame since TRUTH-10), not by equal odometer fraction. It is computed exactly, not off a
 resampled grid: each lap keeps its own knots (sample times, warp knots) and one tick is a handful of
 `np.interp` calls over all laps at once (`_pack`), which evaluate the same piecewise-linear maps
-`delta_between` does — agreement to float rounding, pinned in tests/test_lap_race.py. The
-design lane's 1/30 s grid agreed to 0.15 ms; the knots cost the same per tick, hold no per-frame
-copy of every lap, and disagree by nothing, so there is no grid. (Positions are the same plain
-linear read as `timeline.trace_point_at`; its hold-across-a-dropout rule never fires because a lap
-with a dropout is not in the field.)
+`delta_between` does — agreement to float rounding, pinned in tests/test_lap_race.py. (Positions
+are the same plain linear read as `timeline.trace_point_at`; its hold-across-a-dropout rule never
+fires because a lap with a dropout is not in the field.)
+
+THE LEADER is the lap furthest along (finished laps first, in lap-time order). At t = 0 every lap
+is on the line and the stable sort makes the field's fastest lap the leader. The leader CHANGES
+during a race — a lap quick through the first corners leads until a quicker lap catches it — and
+every interval's reference changes with it, so an interval can step by a few ms at a leader change.
+`interval_to_best` is the FIXED-reference readout for one chosen lap: its Δ to the session's best
+lap (`delta_between(lap, best, …)`), which never changes reference.
 
 "m back along the best line" (`Rung.back_m`) is a DIFFERENT quantity — the leader's place minus
 this lap's, both on the best lap's odometer — and is named apart so no surface prints one as the
 other.
 
-TIES. A rung whose interval to the rung above is under the tie threshold is marked tied ("≈") and
-given no position. Between two FINISHED laps the interval is their lap-time difference, and the
-app's floor for that is `library.PB_PRECISION_S` (0.07 s: 2·√2·σ of docs/ACCURACY.md row C, the
-lap-time difference the best measured instrument can resolve) — the same rule that colours a lap
-"level" in the Laps table, so the final ladder and the table cannot disagree. While either lap is
-still RUNNING the interval also carries the place match: the design lane measured the interval
-against the synthetic demo's truth at σ 7–12 ms, p95 21–36 ms per pair. `RACE_TIE_S` = 0.10 s sits
-between the floor and that p95 added in quadrature (0.079 s) and added linearly (0.106 s), rounded
-to the 0.1 s the ladder prints. The best five laps of a session sit within it of each other most of
-the race (88 % of adjacent rungs on the owner's recording): an honest blob, so the ladder says "≈".
+PACKS, NOT CHAINED TIES. The ladder is a list of packs. A pack is a run of laps (in ladder order)
+each within the tie threshold of the pack's FIRST lap — never of the lap above it, so ties do not
+chain: laps at +0.00/+0.05/+0.10/+0.15 s at the finish are two packs, not one. Only a pack's leading
+lap has a position (1, then 1 + the number of laps ahead of the next pack's leader); the other laps
+are members, unranked ("≈"). `RaceState.packs` carries them for the pack rows the UI draws.
+  * Between two FINISHED laps the interval is their lap-time difference, and the threshold is
+    `FINISH_TIE_S` = `library.PB_PRECISION_S` (0.07 s: 2·√2·σ of docs/ACCURACY.md row C) — the rule
+    by which the Laps table calls a lap level with the best. So at the finish the FIRST pack is
+    exactly the laps the Laps table calls level with the best (when the best lap is in the field).
+  * While either lap is RUNNING the interval also carries the place match, so `RACE_TIE_S` =
+    `PB_PRECISION_S` + `PLACE_MATCH_ALLOWANCE_S` (0.03 s) = 0.10 s. The allowance is what the place
+    match is allowed to add; on the synthetic truth (a lap 1 m off the line through a corner) its
+    p95 is under 1 ms, and tests/test_lap_race.py asserts the allowance covers it. Real GPS places
+    worse than that synthetic; the allowance is a judgment, not a measured real-world bound.
+On a real 36-lap session most adjacent laps sit inside the threshold most of the race: an honest
+blob, so most of the ladder is packs.
+
+TIMING TRUST, part of the core (carried on `RaceTracks`):
+  * PROVISIONAL start line (`Session.timing_verified` False): every lap time is referenced to an
+    arbitrary point, and the Laps table blanks its Δbest there. `ranked` is False with
+    `unranked_reason`: the state still has every dot (x, y, place, finished) — the controller may
+    draw the race on the map — but NO rungs, packs, positions or intervals, and `interval_to_best`
+    is None. The controller shows the reason where the ladder would be.
+  * ESTIMATED clock (`timing_quality.media_clock`, an older camera's media-clock fallback): every
+    lap time can read up to ~0.15 s off (`data_quality.MEDIA_CLOCK_LAP_ERROR`), so both the running
+    and the finished threshold widen to `ESTIMATED_CLOCK_TIE_S` = 0.15 s. Ranked, with wider packs;
+    the controller should name the clock beside the ladder as the Laps table does.
+  * Otherwise: ranked, the thresholds above.
 
 AT THE FINISH a finished lap's interval is its lap time minus the leader's, by construction, and
 finished laps rank ahead of every running lap in lap-time order — so the final ladder IS lap-time
 order.
 
 THE FIELD (`Session.race_tracks`): every clean lap (`valid_lap_ids`) by default, because the best
-five alone are one blob. A lap is LEFT OUT, with its reason in `RaceTracks.excluded` for the UI to
-count, when its place would be a guess: an interior GPS dropout (`EXCLUDED_DROPOUT`; the dot would
-cross the infield and the interval would read an interpolated odometer), or no on-track match
-(`EXCLUDED_UNMATCHED`: no corner warp could be built, so its place would be an equal-fraction
-guess). Fewer than `MIN_FIELD` laps left → no race (None).
+five alone are one blob. Every lap NOT raced is listed in `RaceTracks.excluded` with its reason, for
+the UI to count: not a clean lap (`EXCLUDED_NOT_CLEAN`: the band left it out, or a caller asked for
+it), an interior GPS dropout (`EXCLUDED_DROPOUT`; the dot would cross the infield and the interval
+would read an interpolated odometer), or no on-track match (`EXCLUDED_UNMATCHED`: no corner warp
+could be built, so its place would be an equal-fraction guess). Fewer than `MIN_FIELD` laps left →
+no race (None).
 """
 from __future__ import annotations
 
@@ -52,11 +76,16 @@ import numpy as np
 
 from .library import PB_PRECISION_S
 
-#: The tie threshold (s) between two rungs while either is still running — see the module doc.
-RACE_TIE_S = 0.10
+#: What the place match may add to a running interval's noise — see the module doc.
+PLACE_MATCH_ALLOWANCE_S = 0.03
+#: The tie threshold (s) to a pack's leader while either lap is still running.
+RACE_TIE_S = round(PB_PRECISION_S + PLACE_MATCH_ALLOWANCE_S, 2)
 #: The tie threshold between two finished laps: their interval is a lap-time difference, and this
 #: is the app's one floor for that (`library.within_timing_precision`).
 FINISH_TIE_S = PB_PRECISION_S
+#: Both thresholds on an estimated (media-clock) recording: the number in
+#: `data_quality.MEDIA_CLOCK_LAP_ERROR` ("up to ~0.15 s"; tests/test_lap_race.py reads it there).
+ESTIMATED_CLOCK_TIE_S = 0.15
 #: Fewer clean, matched laps than this and there is no race.
 MIN_FIELD = 2
 #: The fastest this many laps of the field get their own colour; the rest are drawn neutral.
@@ -64,8 +93,12 @@ COLOURED_LAPS = 5
 #: The ladder shows the top this many rungs, plus the selected lap wherever it is.
 LADDER_TOP = 8
 
+EXCLUDED_NOT_CLEAN = "not a clean lap"
 EXCLUDED_DROPOUT = "dropout"
 EXCLUDED_UNMATCHED = "unmatched"
+
+UNRANKED_PROVISIONAL = ("The start/finish line is not confirmed, so lap times are provisional: "
+                        "the race is drawn but not ranked.")
 
 #: How many `RaceTracks` have been built in this process — a test reads it to prove a tick never
 #: rebuilds one.
@@ -90,29 +123,53 @@ class RaceLap:
 
 @dataclass(frozen=True)
 class Rung:
-    """One ladder rung. `position` is None when `tied` (the rung above is inside the threshold)."""
+    """One lap on the ladder. `position` is set only for a pack's leading lap (`tied` False);
+    a member (`tied` True) is unranked. `pack` indexes `RaceState.packs`."""
 
     lap_id: int
     position: int | None
     tied: bool
-    interval_s: float           # to the leader: the compare badge's Δ (delta_between)
+    pack: int
+    interval_s: float           # to the race leader: the compare badge's Δ (delta_between)
     back_m: float               # metres back along the best line — a different quantity
     finished: bool
     coloured: bool
 
 
 @dataclass(frozen=True)
+class Pack:
+    """A run of laps each within the tie threshold of the first (`laps[0]`, the pack's leader).
+    `position` is the leader's (1 + laps ahead of it); `interval_s` is the leader's interval to the
+    race leader; `spread_s` is the last member's interval minus the leader's (0 for a lone lap)."""
+
+    laps: tuple[int, ...]
+    position: int
+    interval_s: float
+    spread_s: float
+
+    @property
+    def leader(self) -> int:
+        return self.laps[0]
+
+
+@dataclass(frozen=True)
 class RaceState:
-    """The race at time `t`. `x`, `y`, `place_m`, `finished` are aligned with `RaceTracks.ids`;
-    `rungs` is the whole ladder, leader first (`shown_rungs` picks what the ladder draws)."""
+    """The race at time `t`. `ids`, `x`, `y`, `place_m`, `finished` are per lap, aligned with
+    `RaceTracks.ids`. When `ranked`, `rungs` is the whole ladder (leader first) and `packs` its
+    packs; when not, both are empty and `unranked_reason` says why (dots only)."""
 
     t: float
+    ids: tuple[int, ...]
     x: np.ndarray
     y: np.ndarray
     place_m: np.ndarray         # each lap's place on the best lap's odometer
     finished: np.ndarray
     rungs: list[Rung]
+    packs: list[Pack]
     over: bool                  # every lap has finished
+    ranked: bool
+    unranked_reason: str | None
+    to_best: np.ndarray | None = field(repr=False)  # per lap: `interval_to_best`, None unranked
 
 
 def _pack(arrays, step: float) -> tuple[np.ndarray, np.ndarray]:
@@ -126,7 +183,9 @@ def _pack(arrays, step: float) -> tuple[np.ndarray, np.ndarray]:
 @dataclass(frozen=True)
 class RaceTracks:
     """Everything a race tick reads, precomputed once. `ids` is the field in lap-time order;
-    `excluded` maps each lap left out to its reason; `coloured` the fastest `COLOURED_LAPS`."""
+    `excluded` maps every lap not raced to its reason; `coloured` the fastest `COLOURED_LAPS`;
+    `best` the session's best lap (the frame, and `interval_to_best`'s reference — raced or not).
+    Trust: `ranked` / `unranked_reason`, and the two thresholds this recording's clock allows."""
 
     ids: tuple[int, ...]
     lap_times: np.ndarray
@@ -134,6 +193,12 @@ class RaceTracks:
     best_total_m: float
     excluded: dict[int, str]
     coloured: frozenset[int]
+    ranked: bool
+    unranked_reason: str | None
+    clock_estimated: bool
+    race_tie_s: float
+    finish_tie_s: float
+    best: RaceLap = field(repr=False)
     laps: tuple[RaceLap, ...] = field(repr=False)
     _t_xp: np.ndarray = field(repr=False)
     _t_off: np.ndarray = field(repr=False)
@@ -157,9 +222,11 @@ class RaceTracks:
         return self.ids.index(lap_id)
 
 
-def build(laps: list[RaceLap], best_total_m: float, excluded: dict[int, str]) -> RaceTracks | None:
+def build(laps: list[RaceLap], best: RaceLap, excluded: dict[int, str], *,
+          provisional: bool = False, clock_estimated: bool = False) -> RaceTracks | None:
     """A `RaceTracks` over `laps` (each already matched and dropout-free), or None under
-    `MIN_FIELD`. Sorted into lap-time order (lap id breaks an exact tie)."""
+    `MIN_FIELD`. Sorted into lap-time order (lap id breaks an exact tie). `best` is the session's
+    best lap (the warp frame). `provisional` → unranked; `clock_estimated` → the widened ties."""
     global BUILD_COUNT
     if len(laps) < MIN_FIELD:
         return None
@@ -175,9 +242,15 @@ def build(laps: list[RaceLap], best_total_m: float, excluded: dict[int, str]) ->
         ids=tuple(lap.lap_id for lap in laps),
         lap_times=np.array([lap.lap_time for lap in laps]),
         clock_starts=np.array([lap.clock_start for lap in laps]),
-        best_total_m=float(best_total_m),
+        best_total_m=float(best.dist[-1]),
         excluded=dict(excluded),
         coloured=frozenset(lap.lap_id for lap in laps[:COLOURED_LAPS]),
+        ranked=not provisional,
+        unranked_reason=UNRANKED_PROVISIONAL if provisional else None,
+        clock_estimated=clock_estimated,
+        race_tie_s=ESTIMATED_CLOCK_TIE_S if clock_estimated else RACE_TIE_S,
+        finish_tie_s=ESTIMATED_CLOCK_TIE_S if clock_estimated else FINISH_TIE_S,
+        best=best,
         laps=tuple(laps),
         _t_xp=t_xp, _t_off=t_off,
         _x_fp=np.concatenate([lap.xs for lap in laps]),
@@ -189,6 +262,12 @@ def build(laps: list[RaceLap], best_total_m: float, excluded: dict[int, str]) ->
         _w_lo=np.array([float(lap.warp[1][0]) for lap in laps]),
         _w_hi=np.array([float(lap.warp[1][-1]) for lap in laps]),
     )
+
+
+def _elapsed_at_place(lap: RaceLap, place: np.ndarray) -> np.ndarray:
+    """`lap`'s elapsed time where it was at each best-lap odometer `place`: delta_between's lap_b
+    half (place → lap_b's odometer through its warp → its elapsed there)."""
+    return np.interp(np.interp(place, lap.warp[0], lap.warp[1]), lap.dist, lap.elapsed)
 
 
 def race_state(tracks: RaceTracks, t: float) -> RaceState:
@@ -203,31 +282,58 @@ def race_state(tracks: RaceTracks, t: float) -> RaceState:
     d_lap = np.clip(np.interp(q, tracks._t_xp, tracks._d_fp), tracks._w_lo, tracks._w_hi)
     place = np.interp(d_lap + tracks._w_off, tracks._w_xp, tracks._w_fp)
     finished = t >= lt
-    # Finished laps first, in lap-time order; then running laps, furthest along first.
+    over = bool(finished.all())
+    if not tracks.ranked:
+        return RaceState(t=float(t), ids=tracks.ids, x=x, y=y, place_m=place, finished=finished,
+                         rungs=[], packs=[], over=over, ranked=False,
+                         unranked_reason=tracks.unranked_reason, to_best=None)
+    # Finished laps first, in lap-time order; then running laps, furthest along first. At t = 0
+    # every place is 0 and the stable sort leaves the field's fastest lap leading.
     order = np.argsort(np.where(finished, lt - 1e9, -place), kind="stable")
     lead = int(order[0])
-    ll = tracks.laps[lead]
-    # The leader's elapsed time where each lap is now: delta_between's lap_b half, for every lap.
-    e_lead = np.interp(np.interp(place, ll.warp[0], ll.warp[1]), ll.dist, ll.elapsed)
-    interval = tc - e_lead
+    interval = tc - _elapsed_at_place(tracks.laps[lead], place)
     interval[finished] = lt[finished] - lt[lead]   # at the line: the lap-time difference, exactly
     interval[lead] = 0.0
     back = place[lead] - place
     back[finished] = 0.0
+    to_best = tc - _elapsed_at_place(tracks.best, place)
     rungs: list[Rung] = []
-    prev = None
+    groups: list[list[int]] = []
+    head = -1
     for rank, k in enumerate(order.tolist()):
         tied = False
-        if prev is not None:
-            floor = FINISH_TIE_S if finished[k] and finished[prev] else RACE_TIE_S
-            tied = bool(interval[k] - interval[prev] < floor)
+        if head >= 0:
+            floor = tracks.finish_tie_s if finished[k] and finished[head] else tracks.race_tie_s
+            tied = bool(interval[k] - interval[head] < floor)
+        if not tied:
+            head = k
+            groups.append([])
+        groups[-1].append(k)
         lap_id = tracks.ids[k]
         rungs.append(Rung(lap_id=lap_id, position=None if tied else rank + 1, tied=tied,
-                          interval_s=float(interval[k]), back_m=float(back[k]),
-                          finished=bool(finished[k]), coloured=lap_id in tracks.coloured))
-        prev = k
-    return RaceState(t=float(t), x=x, y=y, place_m=place, finished=finished, rungs=rungs,
-                     over=bool(finished.all()))
+                          pack=len(groups) - 1, interval_s=float(interval[k]),
+                          back_m=float(back[k]), finished=bool(finished[k]),
+                          coloured=lap_id in tracks.coloured))
+    packs: list[Pack] = []
+    ahead = 0
+    for g in groups:
+        packs.append(Pack(laps=tuple(tracks.ids[k] for k in g), position=ahead + 1,
+                          interval_s=float(interval[g[0]]),
+                          spread_s=float(interval[g[-1]] - interval[g[0]])))
+        ahead += len(g)
+    return RaceState(t=float(t), ids=tracks.ids, x=x, y=y, place_m=place, finished=finished,
+                     rungs=rungs, packs=packs, over=over, ranked=True, unranked_reason=None,
+                     to_best=to_best)
+
+
+def interval_to_best(state: RaceState, lap_id: int) -> float | None:
+    """The FIXED-reference readout for one lap: its Δ to the session's best lap at its place now,
+    `Session.delta_between(lap, best, start_lap + t)` — unlike `Rung.interval_s`, whose reference
+    (the race leader) changes during the race. None when the race is unranked or the lap is not
+    in the field."""
+    if state.to_best is None or lap_id not in state.ids:
+        return None
+    return float(state.to_best[state.ids.index(lap_id)])
 
 
 def shown_rungs(state: RaceState, selected: int | None = None) -> list[Rung]:
