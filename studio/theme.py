@@ -357,6 +357,27 @@ def ramp_mid_colour() -> str:
     return _PALETTES[_active_palette]["mid"]
 
 
+# ---- heat shades: a cell background graded in the ahead / behind hue (CORNERS BY LAP). Opacity
+# of the ACTIVE palette's hue over C.surface per |level| 1..2 (stats.MATRIX_HEAT_STEPS), measured
+# both ways: the top is capped by legibility (C.text on it ≥ 4.61:1 in both palettes; the standard
+# green binds, 0.42 fell to 4.43), and the two steps are told apart — each is ≥ 1.35:1 against the
+# step below it (the surface, then the lighter shade), where 0.16 had sat at 1.27:1.
+HEAT_ALPHAS = (0.20, 0.40)
+
+
+def heat_fill(level: int) -> str | None:
+    """The opaque background for a heat level (−2 … +2; negative = quicker, the ahead hue), or None
+    at 0 — short of the first step a cell keeps the table's own row tone. Call-time, like every palette
+    accessor, so a colour-blind flip re-shades the grid on its next render."""
+    if not level:
+        return None
+    hue = ahead_colour() if level < 0 else behind_colour()
+    a = HEAT_ALPHAS[min(abs(level), len(HEAT_ALPHAS)) - 1]
+    f, b = QColor(hue), QColor(C.surface)
+    return QColor(round(f.red() * a + b.red() * (1 - a)), round(f.green() * a + b.green() * (1 - a)),
+                  round(f.blue() * a + b.blue() * (1 - a))).name().upper()
+
+
 # Categorical lap-curve palette (amber accent first). These are IDENTITY colours (which lap is
 # which), not the ahead/behind SEMANTIC hues, so they are palette-independent — the map already
 # carries no red/green meaning here. The best lap is NOT in this list: it is drawn in
