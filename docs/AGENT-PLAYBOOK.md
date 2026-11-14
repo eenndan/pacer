@@ -156,6 +156,9 @@ Packages go out in waves: dispatched together, merged, then checked by QA. These
   owner hit or a ruling he made, and holds `studio/*.py` net lines at 0 or fewer: the code had
   grown faster than its use. The first-open freeze runs until his next new recording or
   2026-11-09: [DECISIONS.md](DECISIONS.md#the-first-open-freeze) names what it freezes and allows.
+  The owner's 2026-11-14 instruction lifted the product rule for that campaign: product pull
+  requests may add capability. [DECISIONS.md](DECISIONS.md) section 8 records it, and every other
+  rule here stands.
 - **Tests.** A fix's test extends the existing test file of the surface it fixes. A new
   `tests/test_<name>.py` is for a surface with none, and the pull request says why: after the
   board review, test lines grew more than twice as fast as product lines.
