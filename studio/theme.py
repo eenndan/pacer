@@ -474,6 +474,19 @@ def series_symbol(colour) -> str:
     return SERIES_SYMBOL[series_slot(colour) % len(SERIES_SYMBOL)]
 
 
+# --- the MAP's brake glyphs: one hue of their own (cool/map-hero) ---
+# The map's brake glyphs used to wear their LAP's colour — the best lap's green, which is the Speed
+# ramp's own "fast" end (and the Pedal ramp's "throttle" end), so a brake point painted the colour
+# of flat-out. On the map they now share ONE violet, and lap identity in compare is carried by the
+# SERIES_SYMBOL shape alone (the shapes were built to carry it without hue). Picked by measurement
+# (CIE76, the Machado deuteranopia matrix tests/test_contrast.py uses): >= 52.1 dE (18.2
+# deuteranopic) from all 32 buckets of BOTH ramps and both best-lap hues, >= 41.0 (34.7) from every
+# other ink the map draws (marker magenta, accent, greys, CHART_SERIES), 3.69:1 on C.surface.
+# Palette-INDEPENDENT on purpose, like C.position. The speed chart keeps lap-coloured glyphs: there
+# each glyph rides its own lap's curve, which is what its colour names.
+MAP_BRAKE_COLOR = "#8A5CFF"
+
+
 # Track-map current lap coloured by a channel (speed / Δ-vs-best), quantized into MAP_RAINBOW_N
 # buckets through the behind → mid → ahead ramp so it matches the Δ readout. The ramp anchors
 # follow the ACTIVE palette (see rainbow_colors), so the colour-blind option recolours the map too.

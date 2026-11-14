@@ -49,6 +49,8 @@ from _synthetic import bare_session  # noqa: E402
 from studio import theme  # noqa: E402
 from studio.map_view import (  # noqa: E402
     _RAINBOW_ORDER,
+    HERO_CASING_WIDTH,
+    HERO_WIDTH,
     RAINBOW_WIDTH,
     TRACE_WIDTH,
     MapView,
@@ -311,7 +313,14 @@ def test_map_line_weights_follow_the_device_pixel_ratio():
         assert {it.opts["pen"].widthF() for it in mv._trace_overlay._items} == {2.0 * TRACE_WIDTH}
         # the lap overlays are memoized (they are not rebuilt per tick), so they need re-penning
         # in place — the case a plain "redraw on change" would silently miss
-        assert {it.opts["pen"].widthF() for it in mv._current_overlay._items} == {2.0 * 3}
+        assert {it.opts["pen"].widthF() for it in mv._current_overlay._items} == {2.0 * HERO_WIDTH}
+        # ...and so do the hero casings under the rainbow and the plain line
+        assert mv._rainbow._casing.items, "the painted lap has no casing"
+        assert {it.opts["pen"].widthF() for it in mv._rainbow._casing.items} == {
+            2.0 * HERO_CASING_WIDTH}
+        assert mv._current_overlay._casing.items, "the plain hero line has no casing"
+        assert {it.opts["pen"].widthF() for it in mv._current_overlay._casing.items} == {
+            2.0 * HERO_CASING_WIDTH}
         assert mv.marker.pen.widthF() == 4.0      # a 2 logical-px marker outline
 
         mv.devicePixelRatioF = lambda: 1.0                # ...and back again
@@ -319,7 +328,7 @@ def test_map_line_weights_follow_the_device_pixel_ratio():
         for _ in range(4):
             _APP.processEvents()
         assert {it.opts["pen"].widthF() for it in mv._rainbow._items} == {float(RAINBOW_WIDTH)}
-        assert {it.opts["pen"].widthF() for it in mv._current_overlay._items} == {3.0}
+        assert {it.opts["pen"].widthF() for it in mv._current_overlay._items} == {float(HERO_WIDTH)}
     finally:
         theme.set_pen_scale(1.0)
     print("test_map_line_weights_follow_the_device_pixel_ratio OK")

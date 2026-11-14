@@ -592,14 +592,14 @@ def test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue():
 
 
 def _brake_glyph_brushes(view):
-    """Every brake-point glyph brush currently DRAWN, upper-cased hex — the speed chart's series
-    and the identical glyphs on the map trace, read off the live ScatterPlotItems (not inferred)."""
-    out = []
-    for it in view.plots._brake_items:
-        out.append(it.opts["brush"].color().name().upper())
-    for it in view.map._brake_markers._items:
-        out.append(it.opts["brush"].color().name().upper())
-    return out
+    """Every brake-point glyph brush currently DRAWN on the speed chart, upper-cased hex, read off
+    the live ScatterPlotItems (not inferred). The MAP's glyphs are not lap-coloured since
+    cool/map-hero (theme.MAP_BRAKE_COLOR, palette-independent): `_map_brake_glyph_brushes`."""
+    return [it.opts["brush"].color().name().upper() for it in view.plots._brake_items]
+
+
+def _map_brake_glyph_brushes(view):
+    return [it.opts["brush"].color().name().upper() for it in view.map._brake_markers._items]
 
 
 def test_palette_flip_without_a_selection_recolours_the_brake_glyphs():
@@ -623,6 +623,9 @@ def test_palette_flip_without_a_selection_recolours_the_brake_glyphs():
     # onset per lap. Only the glyph's EXISTENCE is stubbed — its colour still comes from the app's
     # own _driving_lap_colour, which is the thing under test.
     s.driving.lap_brake_map_markers = lambda lid: [(0.0, 0.0, 0.8)]
+    # …and on the speed chart, which since cool/map-hero is the surface whose glyphs follow the
+    # palette (the map's wear their own palette-independent hue — asserted below).
+    s.driving.lap_brake_plot_positions = lambda lid, mode: [(10.0, 0.8)]
     try:
         _theme.set_palette(_theme.PALETTE_STANDARD)
         view.rebuild_derived_views(reselect=True)
@@ -646,6 +649,12 @@ def test_palette_flip_without_a_selection_recolours_the_brake_glyphs():
             f"(theme.best_lap_colour() is now {cb_best}): {after}")
         assert cb_best in after, (
             f"the best lap's glyphs must carry the active palette's {cb_best}: {after}")
+        # The map's glyphs wear their own hue, in either palette — and they were re-pushed (the
+        # seam is complete) rather than left over from before the flip.
+        brake = QColor(_theme.MAP_BRAKE_COLOR).name().upper()
+        on_map = _map_brake_glyph_brushes(view)
+        assert on_map and set(on_map) == {brake}, (
+            f"the map's brake glyphs must be {brake} in the colour-blind palette too: {on_map}")
     finally:
         _theme.set_palette(_theme.PALETTE_STANDARD)
     print("test_palette_flip_without_a_selection_recolours_the_brake_glyphs OK")

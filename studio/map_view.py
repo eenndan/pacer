@@ -13,7 +13,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QTransform
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -55,6 +64,17 @@ SECTOR_COLOR = C.text_dim           # sector lines — visible but quieter than 
 BEST_COLOR = C.text_dim
 BEST_WIDTH = 1.5
 CURRENT_COLOR = C.accent            # highlighted current-lap trace (the racing line — pops)
+# THE HERO STROKE (cool/map-hero). The lap the map follows is the canvas's subject, and at 3 px it
+# read as one more strand of the grey all-laps ribbon it sits on (the ribbon is ~20 laps of
+# hairlines, several px wide at Sandown). It is now twice as wide, with round caps and joins (the
+# rainbow's 16 bucket runs butt-joined with visible notches at every bucket change), over a dark
+# CASING of the canvas colour 1.5 px wider on each side — so its colour reads against the grey
+# whatever bucket it is in, the way a road map outlines its main roads. No glow: it would cost 16
+# more wide translucent items and muddy the ribbon the casing already separates it from.
+# All three are built with the line (lap / mode change), never on the tick.
+HERO_WIDTH = 6
+HERO_CASING_COLOR = C.canvas
+HERO_CASING_WIDTH = HERO_WIDTH + 3
 # Whole-recording trace = the quietest layer of all (muted grey, hairline), drawn UNDER both laps:
 # context and drag target, never competing with the two laps that carry the analysis.
 TRACE_COLOR = C.text_muted
@@ -163,24 +183,55 @@ CORNER_HIGHLIGHT_SIZE = 18
 # the ring reads as a ring on any bucket and still never as the filled video marker.
 GHOST_PLATE = CORNER_LABEL_HALO
 # Brake glyphs (F5): a ▼ at each braking-zone onset; size ramps peak decel (g) via
-# theme.brake_glyph_size (shared with the speed chart).
+# theme.brake_glyph_size (shared with the speed chart). ONE hue of their own, theme.MAP_BRAKE_COLOR
+# (see the note there): they wore their lap's colour, and the best lap's green is the Speed ramp's
+# "fast" end. In compare the two laps keep their SERIES_SYMBOL shapes, and lap B's glyphs are
+# HOLLOW — a violet rim on the dark label plate — the same filled-A / ringed-B language as the video
+# marker and the compare ghost, so the pair stays apart even when both laps map to one shape.
+BRAKE_COLOR = theme.MAP_BRAKE_COLOR
+BRAKE_HOLLOW_PLATE = CORNER_LABEL_HALO
+BRAKE_HOLLOW_PEN_W = 2
+# THE START/FINISH MARK (cool/map-hero): a small chequered bar square across the track where the
+# start line crosses it, and an arrow just past it pointing the way the laps run. It replaces the
+# amber segment + two crosshair handles as the RESTING look; the handles (and the start segment)
+# appear only while the pointer is near a timing line, while the timing is provisional or there are
+# no laps (the states that ask the user to drag), and after "Add sector" until the pointer leaves.
+# Their hit targets are untouched. One pxMode ScatterPlotItem of two spots at the crossing: a dark
+# backing, then the light squares + arrow — sized in px so it reads the same at any zoom.
+FINISH_SQ_PX = 4.0          # one chequer square: the bar is 24 px across a 6 px hero line
+FINISH_COLS, FINISH_ROWS = 6, 2
+FINISH_ARROW_GAP_PX = 5.0   # from the bar's leading edge to the arrow's base
+FINISH_ARROW_LEN_PX = 10.0
+FINISH_ARROW_HALF_PX = 6.0
+FINISH_LIGHT = C.text
+FINISH_DARK = C.canvas
+# Half of the px box a corner label must keep clear of around the mark (the arrow's reach).
+FINISH_CLEAR_PX = 20.0
+# How near (px) the pointer must come to a timing line's handle or segment to reveal the handles.
+TIMING_REVEAL_PX = 28.0
 
 
 class _TimingLine:
     """Two draggable handles + a connecting segment, all in data (local-meter) coords."""
 
-    def __init__(self, plot, seg: Seg, color, on_changed, snap):
+    def __init__(self, plot, seg: Seg, color, on_changed, snap, segment_at_rest: bool = True):
         self.plot = plot
         self.on_changed = on_changed
         # snap(x,y)->(x,y)|None: opt-in snap hook; None (toggle off) = free placement. See _snap_to_trace.
         self.snap = snap
+        # Whether the segment stays drawn while the handles rest hidden: a sector line has no
+        # other mark, the start line has the chequered one (see set_handles_visible).
+        self.segment_at_rest = segment_at_rest
         pen = pg.mkPen(color, width=theme.line_width(2))
         self.line = pg.PlotDataItem([seg.x1, seg.x2], [seg.y1, seg.y2], pen=pen)
         self.h1 = pg.TargetItem((seg.x1, seg.y1), size=11, movable=True, pen=pen)
         self.h2 = pg.TargetItem((seg.x2, seg.y2), size=11, movable=True, pen=pen)
+        for h in (self.h1, self.h2):
+            h.setCursor(Qt.OpenHandCursor)   # the grab affordance, now that the handles hide
         plot.addItem(self.line)
         plot.addItem(self.h1)
         plot.addItem(self.h2)
+        self.handles_visible = True
         # Drag redraws the segment live (_moved); release re-segments once (_released, which emits
         # the handle). TargetItem emits itself on release so _released knows which handle moved.
         self.h1.sigPositionChanged.connect(self._moved)
@@ -212,6 +263,14 @@ class _TimingLine:
         A single accessor so a future timing-line piece can't be missed by grab_clean (H2)."""
         return (self.line, self.h1, self.h2)
 
+    def set_handles_visible(self, on: bool):
+        """Show or hide the drag handles (and, for the start line, its segment). Hidden is the
+        resting look; the hit targets themselves never change size or place."""
+        self.handles_visible = bool(on)
+        self.h1.setVisible(self.handles_visible)
+        self.h2.setVisible(self.handles_visible)
+        self.line.setVisible(self.handles_visible or self.segment_at_rest)
+
     def remove(self):
         for item in self.chrome_items():
             self.plot.removeItem(item)
@@ -224,6 +283,80 @@ def _segs_equal(a: list[Seg], b: list[Seg], tol: float = 1e-6) -> bool:
         abs(u - v) <= tol
         for s, t in zip(a, b, strict=True)
         for u, v in ((s.x1, t.x1), (s.y1, t.y1), (s.x2, t.x2), (s.y2, t.y2)))
+
+
+def _hero_pen(color, width):
+    """A round-capped, round-joined pen at `width` logical px — the hero stroke and its casing."""
+    pen = pg.mkPen(color, width=theme.line_width(width))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    return pen
+
+
+def _painted_runs(xs, ys, seg_buckets, n_buckets: int):
+    """The (xs, ys) runs of consecutive segments the rainbow paints (bucket in [0, n)): exactly the
+    geometry bucket_polylines draws, as whole runs rather than per-bucket pieces."""
+    seg = np.asarray(seg_buckets)
+    idx = np.flatnonzero((seg >= 0) & (seg < n_buckets))
+    if idx.size == 0:
+        return []
+    xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+    return [(xs[r[0]:r[-1] + 2], ys[r[0]:r[-1] + 2])
+            for r in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)]
+
+
+# The casing is CHUNKED, and that is a measured requirement, not tidiness. pyqtgraph strokes a
+# curve item's WHOLE path whenever any part of its bounding rect is repainted, and the 30 Hz marker
+# repaints a small rect that a whole-lap item always contains: one whole-lap casing item cost the
+# playback tick +26 % CPU (1.05 -> 1.32 ms median, offscreen, 6 alternating runs on the demo).
+# In runs of CASING_CHUNK_PTS points (sharing their end points, so round caps close every seam)
+# each item's rect is a short stretch of track, and a tick re-strokes only the one or two under
+# the marker.
+CASING_CHUNK_PTS = 24
+
+
+class _Casing:
+    """The hero stroke's dark casing as a pool of short PlotCurveItems (see CASING_CHUNK_PTS),
+    filled on a lap / mode change and never on the tick."""
+
+    def __init__(self, plot, z: float):
+        self.plot, self.z = plot, z
+        self.items: list = []
+        self.visible = True
+
+    def set_runs(self, runs):
+        pieces = []
+        for xs, ys in runs:
+            xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+            ok = np.isfinite(xs) & np.isfinite(ys)
+            edges = np.flatnonzero(np.diff(np.r_[0, ok.astype(np.int8), 0]))
+            for a, b in zip(edges[::2], edges[1::2], strict=True):   # finite stretches [a, b)
+                for s in range(a, b - 1, CASING_CHUNK_PTS):
+                    e = min(s + CASING_CHUNK_PTS + 1, b)
+                    pieces.append((xs[s:e], ys[s:e]))
+        while len(self.items) < len(pieces):
+            it = pg.PlotCurveItem(pen=_hero_pen(HERO_CASING_COLOR, HERO_CASING_WIDTH))
+            it.setZValue(self.z)
+            it.setVisible(self.visible)
+            self.plot.addItem(it)
+            self.items.append(it)
+        for k, it in enumerate(self.items):
+            if k < len(pieces):
+                it.setData(*pieces[k])
+            else:
+                it.setData(np.empty(0), np.empty(0))
+
+    def clear(self):
+        self.set_runs([])
+
+    def set_visible(self, on: bool):
+        self.visible = on
+        for it in self.items:
+            it.setVisible(on)
+
+    def repen(self):
+        for it in self.items:
+            it.setPen(_hero_pen(HERO_CASING_COLOR, HERO_CASING_WIDTH))
 
 
 def _inferred_pen(color, base_width):
@@ -241,7 +374,7 @@ def _inferred_pen(color, base_width):
 # F3 rainbow: pyqtgraph has no per-vertex pen, so the channel (speed / Δ / Δ rate / grip /
 # elevation) is quantized into MAP_RAINBOW_N buckets, one PlotCurveItem per bucket. Rebuilt only on
 # lap/channel/segment change.
-RAINBOW_WIDTH = 3  # same width as the current-lap overlay, so the painted line reads identically
+RAINBOW_WIDTH = HERO_WIDTH  # same as the current-lap overlay, so the painted line reads identically
 # Cycle order for the channel control: off → speed → Δ → Δ rate → grip → off (kept for the cycle API
 # the tests drive; the labelled combo lists the SAME modes, so no channel is hidden behind a blind
 # cycle). The two Δ channels sit next to each other because they are the same measurement asked two
@@ -268,6 +401,21 @@ _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "L
                          "delta_rate": "Line: Δ rate", "grip": theme.estimated_label("Line: Grip"),
                          "brake_throttle": theme.estimated_label("Line: Pedal"),
                          "elevation": "Line: Elevation"}
+# The Elevation legend says WHAT it is and what is NOT known about it (cool/map-hero). "lowest" →
+# "+5 m" read like a measured relief; it is the GPS receiver's altitude, whose noise Pacer has not
+# measured on the recording in front of you. The only figures in the repo are two other recordings'
+# within-lap wander (studio/docs/corner-match-0060-2026-09.md: 0.57 m and 2.40 m median), cited in
+# the tooltip as exactly that.
+ELEVATION_SOURCE = "GPS altitude"
+ELEVATION_NOISE = "noise not measured"
+# ...and on a narrow map (see LEGEND_STRIP_MIN_SHARE), "GPS: lowest" / "+5 m ±?" — the full wording
+# moves to the tooltip, which always carries ELEVATION_LEGEND_TIP for this channel.
+ELEVATION_SOURCE_SHORT = "GPS"
+ELEVATION_NOISE_SHORT = "±?"
+ELEVATION_LEGEND_TIP = (
+    "Elevation is the GPS receiver's altitude, relative to this lap's lowest point. Its noise is "
+    "not measured on this recording: on two other recordings its within-lap wander measured "
+    "0.57 m and 2.40 m (median), so a rise of a few metres may be mostly noise.")
 # The per-channel rainbow value/bucket math (incl. the grip fixed scale, the Δ-rate SYMMETRIC
 # scale, the Δ/Δ-rate/grip negation and the GPS-dropout NaN-mask) lives in the pure-numpy
 # studio/map_render.py (rainbow_channel + helpers).
@@ -281,14 +429,15 @@ class _RainbowOverlay:
     def __init__(self, plot):
         self.plot = plot
         self._items: list | None = None  # created lazily on the first build (off by default)
+        # The hero casing under the buckets: exactly the geometry they draw, chunked (_Casing).
+        self._casing = _Casing(plot, z=4.5)   # under the buckets, above the lap overlays
         self.rebuilds = 0  # instrumentation for the perf-invariant tests (no rebuild per tick)
 
     def _ensure_items(self):
         if self._items is None:
             self._items = []
             for color in rainbow_colors(MAP_RAINBOW_N):
-                it = pg.PlotCurveItem(pen=pg.mkPen(color, width=theme.line_width(RAINBOW_WIDTH)),
-                                      connect="finite")
+                it = pg.PlotCurveItem(pen=_hero_pen(color, RAINBOW_WIDTH), connect="finite")
                 it.setZValue(5)  # above lap overlays, below the marker (z=10)
                 self.plot.addItem(it)
                 self._items.append(it)
@@ -301,12 +450,14 @@ class _RainbowOverlay:
         polylines = bucket_polylines(xs, ys, seg_buckets, len(items))
         for it, (bx, by) in zip(items, polylines, strict=True):
             it.setData(bx, by)
+        self._casing.set_runs(_painted_runs(xs, ys, seg_buckets, len(items)))
 
     def clear(self):
         if self._items is None:
             return
         for it in self._items:
             it.setData(np.empty(0), np.empty(0))
+        self._casing.clear()
 
     def recolor(self):
         """Re-pen each bucket item from the ACTIVE palette's rainbow (after a colour-blind-palette
@@ -314,7 +465,8 @@ class _RainbowOverlay:
         if self._items is None:
             return
         for it, color in zip(self._items, rainbow_colors(MAP_RAINBOW_N), strict=True):
-            it.setPen(pg.mkPen(color, width=theme.line_width(RAINBOW_WIDTH)))
+            it.setPen(_hero_pen(color, RAINBOW_WIDTH))
+        self._casing.repen()
 
 
 class _GradientStrip(QWidget):
@@ -339,6 +491,12 @@ class _GradientStrip(QWidget):
         p.end()
 
 
+# The legend's colour strip keeps at least this share of its row. The Elevation labels ("GPS altitude:
+# lowest", "+5 m · noise not measured") are 107 and 141 px; at a 380 px map they squeezed the strip
+# to 100 px, so below the width the full labels need they fall back to a short pair (tooltip: full).
+LEGEND_STRIP_MIN_SHARE = 0.45
+
+
 class _RainbowLegend(QWidget):
     """Slim legend shown ONLY while a rainbow is painted: min label · bucket-colour strip ·
     max label (the channel's red/'slow-losing' and green/'fast-gaining' extremes)."""
@@ -350,6 +508,10 @@ class _RainbowLegend(QWidget):
         for lab in (self.lo_label, self.hi_label):
             lab.setProperty("role", "BarLabel")  # the dimmed small header type from the QSS
         self._strip = _GradientStrip([QColor(c) for c in rainbow_colors(MAP_RAINBOW_N)])
+        # The full labels, their short fallback and the tooltip, as last set (see set_labels/_fit).
+        self._full: tuple[str, str] = ("", "")
+        self._short: tuple[str, str] | None = None
+        self._tip = ""
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 2, 8, 2)
         lay.setSpacing(8)
@@ -357,15 +519,53 @@ class _RainbowLegend(QWidget):
         lay.addWidget(self._strip, 1)
         lay.addWidget(self.hi_label)
 
-    def set_labels(self, lo_text: str, hi_text: str):
+    def set_labels(self, lo_text: str, hi_text: str, tip: str = "", short=None):
         """Set the min/max end labels. A HINT (empty hi_text) reads as a single message (e.g. the
         best-lap "no delta" note): the gradient strip + max label are hidden so we don't imply a live
-        colour gradient that isn't painted (L1)."""
+        colour gradient that isn't painted (L1).
+
+        `short` is an optional (lo, hi) pair used when the full labels would leave the strip less
+        than LEGEND_STRIP_MIN_SHARE of the row (see _fit); `tip` is the legend's tooltip."""
         hint = hi_text == ""
-        self.lo_label.setText(lo_text)
-        self.hi_label.setText(hi_text)
+        self._full = (lo_text, hi_text)
+        self._short = short
+        self._tip = tip
         self.hi_label.setVisible(not hint)
         self._strip.setVisible(not hint)
+        self._fit()
+
+    def _fit(self):
+        """Put the end labels on the row so the colour strip keeps at least LEGEND_STRIP_MIN_SHARE
+        of it: the full labels if they fit, else the short pair, else the short pair elided. Every
+        shortened legend carries its full wording in the tooltip. Runs on a label change or a
+        resize — never on the tick."""
+        lo, hi = self._full
+        if hi == "":                                     # a hint: one message, no strip to protect
+            self.lo_label.setText(lo)
+            self.hi_label.setText("")
+            self.setToolTip(self._tip)
+            return
+        m = self.layout().contentsMargins()
+        row = self.width() - m.left() - m.right() - 2 * self.layout().spacing()
+        budget = max(0.0, row * (1.0 - LEGEND_STRIP_MIN_SHARE) / 2.0)
+        fm = QFontMetrics(self.lo_label.font())
+
+        def fits(pair):
+            return all(fm.horizontalAdvance(t) <= budget for t in pair)
+
+        shown = (lo, hi)
+        if not fits(shown) and self._short is not None:
+            shown = self._short
+        if not fits(shown):
+            shown = tuple(fm.elidedText(t, Qt.ElideRight, int(budget)) for t in shown)
+        self.lo_label.setText(shown[0])
+        self.hi_label.setText(shown[1])
+        shortened = shown != (lo, hi)
+        self.setToolTip("\n".join(t for t in ((f"{lo} → {hi}" if shortened else ""), self._tip) if t))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
 
     def recolor(self):
         """Repaint the legend strip in the ACTIVE palette's rainbow (after a palette flip)."""
@@ -424,9 +624,9 @@ class _MapLegend(QWidget):
         self._fits = True                   # room on the canvas for the full plate (set by MapView)
         self._on_resize = on_resize  # MapView re-pins the key when collapse changes its height
         self._on_toggle = on_toggle  # MapView persists the user's choice
-        # The brake glyphs CURRENTLY on the plot, as [(pyqtgraph symbol, colour)] — pushed by
-        # MapView.set_brake_markers. Empty until a lap is drawn; see _paint_glyph.
-        self.brake_glyphs: list[tuple[str, str]] = []
+        # The brake glyphs CURRENTLY on the plot, as [(pyqtgraph symbol, fill hex, edge hex)] —
+        # pushed by MapView.set_brake_markers. Empty until a lap is drawn; see _paint_glyph.
+        self.brake_glyphs: list[tuple[str, str, str]] = []
         self._font = theme.ui_font(theme.CAPTION)
         self._title_font = theme.ui_font(theme.PANEL_HEADER, theme.W_SEMIBOLD)
         # One-entry cache for the title caret (see _caret_pixmap): paintEvent runs whenever the
@@ -499,7 +699,9 @@ class _MapLegend(QWidget):
         hue (theme.SERIES_SYMBOL), a fixed drawing cannot describe them: in compare mode there are
         two, in two different shapes, in neither of those colours. So the key is fed the real
         thing and mirrors it."""
-        glyphs = [(str(s), str(c)) for s, c in glyphs]
+        # (symbol, fill, edge) — a bare (symbol, colour) pair is a filled glyph with a canvas rim.
+        glyphs = [(str(g[0]), QColor(g[1]).name().upper(),
+                   QColor(g[2] if len(g) > 2 else C.canvas).name().upper()) for g in glyphs]
         if glyphs != self.brake_glyphs:
             self.brake_glyphs = glyphs
             self.update()
@@ -584,19 +786,20 @@ class _MapLegend(QWidget):
             p.setBrush(QBrush(fill))
             p.drawEllipse(QPointF(cx, cy), 5, 5)
         elif kind == "brake":  # the brake glyphs on the plot RIGHT NOW, in their own shapes/hues
-            glyphs = self.brake_glyphs or [(theme.series_symbol(theme.CHART_SERIES[0]),
-                                            theme.CHART_SERIES[0])]
+            glyphs = self.brake_glyphs or [
+                (theme.series_symbol(theme.CHART_SERIES[0]), BRAKE_COLOR, C.canvas)]
             # Side by side when compare draws two laps; the cell is _LEGEND_GLYPH_W wide, so the
             # glyph shrinks rather than the plate growing or the two overlapping.
             n = min(len(glyphs), 2)
             box = min(_LEGEND_GLYPH_W / n - 2.0, _LEGEND_ROW_H - 6.0)
-            for i, (sym, colour) in enumerate(glyphs[:n]):
+            for i, (sym, fill, edge) in enumerate(glyphs[:n]):
                 gx = cx + (i - (n - 1) / 2.0) * (box + 2.0)
                 path = QTransform().translate(gx, cy).scale(box, box).map(
                     _SYMBOLS.get(sym, _SYMBOLS["o"]))
-                # Same outline the markers carry (_BrakeMarkers), so two adjacent glyphs read as two.
-                p.setPen(QPen(QColor(C.canvas), 1))
-                p.setBrush(QBrush(QColor(colour)))
+                # Same fill and rim the markers carry (_brake_style): lap B's is hollow.
+                hollow = QColor(edge) != QColor(C.canvas)
+                p.setPen(QPen(QColor(edge), 1.5 if hollow else 1))
+                p.setBrush(QBrush(QColor(fill)))
                 p.drawPath(path)
         elif kind == "corner":  # cyan apex dot (the left/right hues collapse to one in the key)
             qc = QColor(CORNER_LEFT_COLOR)
@@ -623,13 +826,18 @@ class _MapLegend(QWidget):
 class _LapOverlay:
     """Draws one lap as solid measured + dashed inferred gap-fill items; tracks them for clear/redraw."""
 
-    def __init__(self, plot, color, base_width):
+    def __init__(self, plot, color, base_width, hero: bool = False):
         self.plot = plot
         self.color = color
         self.base_width = base_width
+        # hero: the followed lap — round-capped measured runs over a dark casing (see HERO_WIDTH).
+        self.hero = hero
         self.lap_id = None
         self._items: list = []
         self._inferred: list[bool] = []   # per item: dashed gap-fill? (parallel to _items; see repen)
+        # hero only: the dark casing under the measured runs, over the faint best lap (z=0) and
+        # under the hero itself (z=1)
+        self._casing = _Casing(plot, z=0.5) if hero else None
         # Hidden in place (not rebuilt) while the rainbow paints the lap, so toggling it off restores
         # the same items/pens.
         self.visible = True
@@ -639,6 +847,13 @@ class _LapOverlay:
             self.plot.removeItem(it)
         self._items = []
         self._inferred = []
+        if self._casing is not None:
+            self._casing.clear()
+
+    def _solid_pen(self):
+        if self.hero:
+            return _hero_pen(self.color, self.base_width)
+        return pg.mkPen(self.color, width=theme.line_width(self.base_width))
 
     def repen(self):
         """Re-apply the pens to the already-drawn items, at the CURRENT device-pixel ratio.
@@ -646,10 +861,12 @@ class _LapOverlay:
         The geometry never moves — only the widths change — so this is a re-pen, not a rebuild.
         Which of the two pens (measured solid / inferred dashed) an item carries is remembered
         alongside it rather than read back off the item."""
-        solid = pg.mkPen(self.color, width=theme.line_width(self.base_width))
+        solid = self._solid_pen()
         dashed = _inferred_pen(self.color, self.base_width)
         for it, inferred in zip(self._items, self._inferred, strict=True):
             it.setPen(dashed if inferred else solid)
+        if self._casing is not None:
+            self._casing.repen()
 
     def set_visible(self, on: bool):
         """Show/hide the existing items in place — no rebuild. Items created later inherit the
@@ -657,6 +874,8 @@ class _LapOverlay:
         self.visible = on
         for it in self._items:
             it.setVisible(on)
+        if self._casing is not None:
+            self._casing.set_visible(on)
 
     def set_lap(self, session: Session, lap_id: int | None):
         """(Re)draw `lap_id` (or clear if None). No-op if unchanged."""
@@ -666,11 +885,16 @@ class _LapOverlay:
         self.lap_id = lap_id
         if lap_id is None:
             return
-        solid = pg.mkPen(self.color, width=theme.line_width(self.base_width))
+        solid = self._solid_pen()
         dashed = _inferred_pen(self.color, self.base_width)
-        for seg in session.lap_trace_segments(lap_id):
+        segs = list(session.lap_trace_segments(lap_id))
+        if self._casing is not None:
+            self._casing.set_runs([(s.xs, s.ys) for s in segs if s.measured])
+        for seg in segs:
             pen = solid if seg.measured else dashed
             item = self.plot.plot(seg.xs, seg.ys, pen=pen)
+            if self.hero:
+                item.setZValue(1)
             if not self.visible:
                 item.setVisible(False)
             self._items.append(item)
@@ -867,7 +1091,9 @@ class _CornerMarkers:
             dots = pg.ScatterPlotItem(
                 pos=pts, size=7, brush=pg.mkBrush(qc), pxMode=True,
                 pen=pg.mkPen(CORNER_DOT_OUTLINE, width=theme.line_width(1)))
-            dots.setZValue(5)  # above lap traces, below the marker (z=10)
+            # Above the rainbow (z=5): at the same z the lazily-created bucket items, added later,
+            # painted over the dots — invisible under a 3 px line, a hole in a 6 px one.
+            dots.setZValue(5.5)  # below the labels (6) and the marker (z=10)
             self.plot.addItem(dots)
             self._items.append(dots)
         for label, _x, _y, _d in markers:
@@ -1068,6 +1294,16 @@ class _CornerMarkers:
                 return
 
 
+def _brake_style(lap_colour, k: int) -> tuple[str, QColor, QColor]:
+    """(symbol, fill, edge) of the map's brake glyphs for the k-th lap pushed (0 = primary / lap A,
+    1 = compare's lap B): the lap's SERIES_SYMBOL shape, the map's one BRAKE_COLOR — filled with a
+    canvas rim for lap A, a BRAKE_COLOR rim on the dark plate for lap B."""
+    symbol = theme.series_symbol(lap_colour)
+    if k:
+        return symbol, QColor(BRAKE_HOLLOW_PLATE), QColor(BRAKE_COLOR)
+    return symbol, QColor(BRAKE_COLOR), QColor(C.canvas)
+
+
 class _BrakeMarkers:
     """Brake ▼ glyphs at braking-zone onsets, sized by peak decel; one ScatterPlotItem per lap
     (both laps in compare mode). Rebuilt wholesale on lap/compare change; zero per-tick cost."""
@@ -1084,20 +1320,123 @@ class _BrakeMarkers:
         self._items = []
         if not lap_markers:
             return
-        for markers, colour in lap_markers:
+        for k, (markers, colour) in enumerate(lap_markers):
             if not markers:
                 continue
             spots = [{"pos": (x, y), "size": theme.brake_glyph_size(d)} for x, y, d in markers]
-            # Same identity contract as the speed chart's glyphs: shape by CHART_SERIES slot (so
-            # compare's two laps stay apart with no colour vision) plus a canvas outline, which
-            # here also keeps the glyph off the rainbow ribbon it sits on.
+            # The speed chart's identity contract, minus its hue: shape by CHART_SERIES slot, in
+            # the map's own brake colour (BRAKE_COLOR); lap B hollow (see the note there). The
+            # canvas outline keeps a filled glyph off the ribbon it sits on.
+            symbol, fill, edge = _brake_style(colour, k)
             dots = pg.ScatterPlotItem(
-                symbol=theme.series_symbol(colour), brush=pg.mkBrush(colour), pxMode=True,
-                pen=pg.mkPen(C.canvas, width=theme.line_width(1)))
+                symbol=symbol, brush=pg.mkBrush(fill), pxMode=True,
+                pen=pg.mkPen(edge, width=theme.line_width(BRAKE_HOLLOW_PEN_W if k else 1)))
             dots.addPoints(spots)
             dots.setZValue(7)  # above corner dots, below the marker
             self.plot.addItem(dots)
             self._items.append(dots)
+
+
+def _start_crossing(tx, ty, seg: Seg):
+    """Where the driven trace crosses the start line, as (x, y, ux, uy): the crossing point in local
+    metres and the unit direction of travel there — or None when the trace never crosses it.
+
+    Every crossing is found (one vectorised segment-segment test over the trace); the direction is
+    the side most of them run to, so a lone wrong-way wander or a pit-lane pass cannot turn the
+    arrow round; the point drawn is the median of those crossings — the middle of the all-laps
+    ribbon, not one lap's line through it — and the direction is taken at the crossing nearest it."""
+    xs, ys = np.asarray(tx, float), np.asarray(ty, float)
+    if len(xs) < 2 or len(ys) != len(xs):
+        return None
+    ex, ey = seg.x2 - seg.x1, seg.y2 - seg.y1
+    px, py, dx, dy = xs[:-1], ys[:-1], np.diff(xs), np.diff(ys)
+    den = dx * ey - dy * ex                      # cross(trace step, start line)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = ((seg.x1 - px) * ey - (seg.y1 - py) * ex) / den   # along the trace step
+        u = ((seg.x1 - px) * dy - (seg.y1 - py) * dx) / den   # along the start line
+    hit = np.nonzero(np.isfinite(t) & np.isfinite(u) & (t >= 0) & (t < 1) & (u >= 0) & (u <= 1))[0]
+    if not len(hit):
+        return None
+    side = np.sign(den[hit])
+    hit = hit[side == (1.0 if (side > 0).sum() >= (side < 0).sum() else -1.0)]
+    hx, hy = px[hit] + t[hit] * dx[hit], py[hit] + t[hit] * dy[hit]
+    cx, cy = float(np.median(hx)), float(np.median(hy))
+    i = int(hit[int(np.argmin(np.hypot(hx - cx, hy - cy)))])
+    a, b = max(i - 2, 0), min(i + 3, len(xs) - 1)       # a few samples either side: 10 Hz jitter
+    vx, vy = xs[b] - xs[a], ys[b] - ys[a]
+    norm = float(np.hypot(vx, vy))
+    if not np.isfinite(norm) or norm <= 0.0:
+        vx, vy, norm = dx[i], dy[i], float(np.hypot(dx[i], dy[i]))
+    return float(cx), float(cy), float(vx / norm), float(vy / norm)
+
+
+def _finish_paths(ux: float, uy: float):
+    """(backing, light, size) — the chequered bar square across the direction of travel (ux, uy)
+    and the arrow past it, as two QPainterPaths in a pxMode symbol's unit box, plus the symbol size
+    in px. Built in SCREEN space (y down, so the data direction's y flips); the aspect lock keeps
+    angles true, so the mark is pre-rotated once per start-line change."""
+    tx_, ty_ = ux, -uy                            # travel, screen space
+    nx_, ny_ = -ty_, tx_                          # across the track
+    q = FINISH_SQ_PX
+    half_along, half_across = FINISH_ROWS * q / 2.0, FINISH_COLS * q / 2.0
+    base = half_along + FINISH_ARROW_GAP_PX
+    reach = max(base + FINISH_ARROW_LEN_PX, half_across + 1.0)
+    size = 2.0 * (reach + 1.5)
+
+    def pt(along, across):
+        return QPointF((along * tx_ + across * nx_) / size, (along * ty_ + across * ny_) / size)
+
+    def quad(a0, a1, c0, c1):
+        return QPolygonF([pt(a0, c0), pt(a1, c0), pt(a1, c1), pt(a0, c1)])
+
+    backing = QPainterPath()
+    backing.addPolygon(quad(-half_along - 1, half_along + 1, -half_across - 1, half_across + 1))
+    backing.closeSubpath()
+    squares = QPainterPath()
+    for r in range(FINISH_ROWS):
+        for c in range(FINISH_COLS):
+            if (r + c) % 2 == 0:
+                a0, c0 = -half_along + r * q, -half_across + c * q
+                squares.addPolygon(quad(a0, a0 + q, c0, c0 + q))
+                squares.closeSubpath()
+    arrow = QPainterPath()
+    arrow.addPolygon(QPolygonF([pt(base, -FINISH_ARROW_HALF_PX),
+                                pt(base + FINISH_ARROW_LEN_PX, 0.0),
+                                pt(base, FINISH_ARROW_HALF_PX)]))
+    arrow.closeSubpath()
+    return backing, squares, arrow, size
+
+
+class _FinishMark:
+    """The start/finish mark: one pxMode ScatterPlotItem of two spots at the start line's crossing
+    of the trace (see FINISH_SQ_PX). Rebuilt when the start line is set or released; never on the
+    tick. `at` is (x, y, ux, uy) — the crossing and the unit direction of travel — or None."""
+
+    def __init__(self, plot):
+        # Item-level defaults the spots override; set so nothing reads pyqtgraph's stock blue disc.
+        self.item = pg.ScatterPlotItem(pxMode=True, symbol="s", pen=pg.mkPen(None),
+                                       brush=pg.mkBrush(FINISH_DARK))
+        self.item.setZValue(7.5)   # over the brake glyphs (7), under the provisional label (8)
+        plot.addItem(self.item)
+        self.at: tuple[float, float, float, float] | None = None
+
+    def update(self, tx, ty, seg: Seg | None):
+        self.at = None if seg is None else _start_crossing(tx, ty, seg)
+        self.item.clear()
+        if self.at is None:
+            return
+        x, y, ux, uy = self.at
+        backing, squares, arrow, size = _finish_paths(ux, uy)
+        # The squares sit on their own dark backing; the arrow sits on the line, so it carries a
+        # dark rim (the brake glyphs' answer to a light ink over the colour-blind ramp's light mid).
+        self.item.addPoints([
+            {"pos": (x, y), "size": size, "symbol": backing, "pen": pg.mkPen(None),
+             "brush": pg.mkBrush(FINISH_DARK)},
+            {"pos": (x, y), "size": size, "symbol": squares, "pen": pg.mkPen(None),
+             "brush": pg.mkBrush(FINISH_LIGHT)},
+            {"pos": (x, y), "size": size, "symbol": arrow,
+             "pen": pg.mkPen(FINISH_DARK, width=theme.line_width(1)),
+             "brush": pg.mkBrush(FINISH_LIGHT)}])
 
 
 class MapView(QWidget):
@@ -1140,7 +1479,8 @@ class MapView(QWidget):
         # inferred (dashed) segments so GPS dropouts don't show as straight chords across the hole.
         self._best_overlay = _LapOverlay(self.plot, BEST_COLOR, base_width=BEST_WIDTH)
         self._best_lap_id: int | None = None
-        self._current_overlay = _LapOverlay(self.plot, CURRENT_COLOR, base_width=3)
+        self._current_overlay = _LapOverlay(self.plot, CURRENT_COLOR, base_width=HERO_WIDTH,
+                                            hero=True)
 
         # The always-on faint layer under both laps: every point of the drive (see _TraceOverlay).
         self._trace_overlay = _TraceOverlay(self.plot, session)
@@ -1194,8 +1534,19 @@ class MapView(QWidget):
         # The (reference label, ring-missing) state the "no reference line" notice was last posted
         # for — declared before _rebuild/_refresh_best, which consult it. See _note_missing_reference.
         self._ref_note_key: tuple | None = None
+        # The start/finish mark, and the timing-line handles' reveal state (see FINISH_SQ_PX):
+        # the pointer is near a line / "Add sector" just ran (cleared by _pin_timer).
+        self._finish_mark = _FinishMark(self.plot)
+        self._timing_hover = False
+        self._timing_pinned = False
+        self._pin_timer = QTimer(self)
+        self._pin_timer.setSingleShot(True)
+        self._pin_timer.setInterval(NOTICE_MS)
+        self._pin_timer.timeout.connect(self._unpin_timing_chrome)
         self._rebuild(session.start_line, session.sector_lines)
         self._refresh_best()
+        # Pointer moves over the canvas (never the playback tick) reveal the handles near a line.
+        self.widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
         # Sector controls are exposed (not placed here) so app.py mounts them in the map header.
         # GLYPHED, because the map toolbar was the one place in the app where a labelled control on
@@ -1254,7 +1605,8 @@ class MapView(QWidget):
             "sensors; it is the GPS speed's rate of change. "
             "Elevation is RELATIVE within the lap: GPS altitude drifts "
             "by several metres between laps of the same track, so only the shape is meaningful — "
-            "the legend reads 'lowest' → the rise above it, never an altitude above sea level. "
+            "the legend reads 'lowest' → the rise above it, never an altitude above sea level, "
+            "and its noise is not measured. "
             "Off leaves the plain racing line. The faint best-lap reference is unchanged.")
         # Show the default channel in the combo BEFORE wiring the change signal, so the initial
         # selection reads "Line: Speed" without re-entering _on_rainbow_combo.
@@ -1360,6 +1712,12 @@ class MapView(QWidget):
                 and event.button() == Qt.LeftButton):
             self._fit_view()
             return True
+        # Leaving the canvas sends no move, so the hover reveal is cleared here (pins and the
+        # provisional / no-laps rules are untouched: _sync_timing_chrome still honours them).
+        if (event.type() == QEvent.Leave and obj is self.widget.viewport()
+                and getattr(self, "_timing_hover", False)):
+            self._timing_hover = False
+            self._sync_timing_chrome()
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ view fit
@@ -1610,6 +1968,7 @@ class MapView(QWidget):
         if show:
             es.raise_()
             self._reposition_empty_state()
+        self._sync_timing_chrome()        # no laps = the empty state asks for a drag: show handles
 
     # ----------------------------------------------------------- timing lines
     def reload_timing_lines(self) -> None:
@@ -1624,12 +1983,63 @@ class MapView(QWidget):
         for tl in [self._start, *self._sectors]:
             if tl:
                 tl.remove()
-        self._start = _TimingLine(self.plot, start, START_COLOR, self._emit, self._snap_to_trace)
+        self._start = _TimingLine(self.plot, start, START_COLOR, self._emit, self._snap_to_trace,
+                                  segment_at_rest=False)
         self._sectors = [_TimingLine(self.plot, s, SECTOR_COLOR, self._emit, self._snap_to_trace)
                          for s in sectors]
-        # Re-pin the provisional cue (or remove it if the track is known).
+        self._finish_mark.update(self.session.tx, self.session.ty, start)
+        # Re-pin the provisional cue (or remove it if the track is known); it also settles whether
+        # the fresh handles rest hidden (_sync_timing_chrome).
         self.refresh_provisional_cue()
         self._relayout_labels()           # a moved start line moves the cluster labels clear
+
+    # ------------------------------------------------- timing-line chrome: hidden at rest
+    def _timing_chrome_wanted(self) -> bool:
+        """Show the handles? While the pointer is near a line or "Add sector" just ran — and always
+        while the map is asking the user to drag (provisional timing, or no complete laps)."""
+        if self._timing_hover or self._timing_pinned or self._provisional_line is not None:
+            return True
+        valid = getattr(self.session, "valid_lap_ids", None)
+        return valid is not None and not valid()
+
+    def _sync_timing_chrome(self):
+        on = self._timing_chrome_wanted()
+        for tl in [self._start, *self._sectors]:
+            if tl is not None and tl.handles_visible != on:
+                tl.set_handles_visible(on)
+
+    def _pin_timing_chrome(self):
+        self._timing_pinned = True
+        self._pin_timer.start()
+        self._sync_timing_chrome()
+
+    def _unpin_timing_chrome(self):
+        self._timing_pinned = False
+        self._sync_timing_chrome()
+
+    def _near_timing_line(self, scene_pos) -> bool:
+        """Is the scene point within TIMING_REVEAL_PX of any timing line's handle or segment?"""
+        vb = self.plot.getViewBox()
+        px, py = scene_pos.x(), scene_pos.y()
+        for tl in [self._start, *self._sectors]:
+            if tl is None:
+                continue
+            s = tl.seg()
+            a = vb.mapViewToScene(QPointF(s.x1, s.y1))
+            b = vb.mapViewToScene(QPointF(s.x2, s.y2))
+            ax, ay, bx, by = a.x(), a.y(), b.x(), b.y()
+            L2 = (bx - ax) ** 2 + (by - ay) ** 2
+            f = 0.0 if L2 <= 0 else min(max(((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / L2,
+                                            0.0), 1.0)
+            if np.hypot(px - (ax + f * (bx - ax)), py - (ay + f * (by - ay))) <= TIMING_REVEAL_PX:
+                return True
+        return False
+
+    def _on_mouse_moved(self, scene_pos):
+        near = self._near_timing_line(scene_pos)
+        if near != self._timing_hover:
+            self._timing_hover = near
+            self._sync_timing_chrome()
 
     def refresh_provisional_cue(self):
         """Overlay a dashed accent start line + "drag to set start/finish — lap timing provisional"
@@ -1652,6 +2062,7 @@ class MapView(QWidget):
                 if it is not None:
                     self.plot.removeItem(it)
             self._provisional_line = self._provisional_label = None
+            self._sync_timing_chrome()
             return
         seg = self._start.seg()
         mx, my = (seg.x1 + seg.x2) / 2.0, (seg.y1 + seg.y2) / 2.0
@@ -1675,6 +2086,7 @@ class MapView(QWidget):
             self._provisional_line.setData([seg.x1, seg.x2], [seg.y1, seg.y2])
         self._provisional_label.setPos(mx, my)
         self._clamp_provisional_label()
+        self._sync_timing_chrome()
 
     def _clamp_provisional_label(self):
         """Keep the provisional callout's box inside the plot, whatever the start line is near.
@@ -1724,6 +2136,7 @@ class MapView(QWidget):
 
     def _emit(self):
         start, sectors = self._current()
+        self._finish_mark.update(self.session.tx, self.session.ty, start)
         self.refresh_provisional_cue()  # keep the cue glued to the start handle while dragging
         self.timing_lines_changed.emit(start, sectors)
 
@@ -1749,6 +2162,7 @@ class MapView(QWidget):
                     "(Your other sector lines were left where you put them.)")
         self._rebuild(start, sectors)
         self._emit()
+        self._pin_timing_chrome()         # the new line is there to be dragged: show its handles
         self._post_notice(note)
 
     def _reset_sectors(self):
@@ -1965,7 +2379,14 @@ class MapView(QWidget):
         if result is None:
             return "none"
         seg_buckets, lo_txt, hi_txt = result
-        self._legend.set_labels(lo_txt, hi_txt)
+        tip, short = "", None
+        if mode == "elevation" and seg_buckets is not None:
+            # What the ramp is, and what nobody measured about it (map_render's labels say only
+            # "lowest" → "+N m", which reads like a surveyed range).
+            short = (f"{ELEVATION_SOURCE_SHORT}: {lo_txt}", f"{hi_txt} {ELEVATION_NOISE_SHORT}")
+            lo_txt, hi_txt = f"{ELEVATION_SOURCE}: {lo_txt}", f"{hi_txt} · {ELEVATION_NOISE}"
+            tip = ELEVATION_LEGEND_TIP
+        self._legend.set_labels(lo_txt, hi_txt, tip=tip, short=short)
         # A None seg_buckets with a legend = the best-lap Δ hint: don't paint, just show the hint.
         if seg_buckets is None:
             return "hint"
@@ -2118,6 +2539,9 @@ class MapView(QWidget):
         if seg is not None:
             anchors.append((seg.x1, seg.y1, START_HANDLE_CLEAR_PX))
             anchors.append((seg.x2, seg.y2, START_HANDLE_CLEAR_PX))
+        mark = getattr(self, "_finish_mark", None)
+        if mark is not None and mark.at is not None:   # the chequered mark + its arrow
+            anchors.append((mark.at[0], mark.at[1], FINISH_CLEAR_PX))
         marker = getattr(self, "marker", None)
         if marker is not None:
             p = marker.pos()
@@ -2137,5 +2561,6 @@ class MapView(QWidget):
         self._relayout_labels()           # the glyphs are obstacles the labels step around
         # The key describes what is on the canvas, so it is told at the same moment (and from the
         # same argument) rather than drawing a fixed glyph of its own — see _MapLegend.
-        self._map_key.set_brake_glyphs([(theme.series_symbol(colour), colour)
-                                        for markers, colour in lap_markers if markers])
+        self._map_key.set_brake_glyphs([_brake_style(colour, k)
+                                        for k, (markers, colour) in enumerate(lap_markers)
+                                        if markers])
