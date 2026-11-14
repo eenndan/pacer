@@ -232,3 +232,32 @@ Each item below is recorded 2026-11-12.
   kept apart, no compare offered against footage known missing, one focus-list gate and a theme
   sentence that names its deciding corner. The real-footage checks and the manual half of the
   golden gate could not run for it: the recordings are not reachable at their configured paths.
+
+## 8. Recorded at the start of the 2026-11-14 campaign
+
+On 2026-11-14 the owner gave a new instruction for a long autonomous campaign: "The goal: make
+the app much, much cooler." and "I will not be answering questions during the session. Decide,
+write each decision down, and keep going." Each item below is recorded 2026-11-14.
+
+- **What it changes.** The playbook's Product rule (section 5 of
+  [AGENT-PLAYBOOK.md](AGENT-PLAYBOOK.md): a product pull request needs a defect the owner hit or
+  a ruling he made, and holds `studio/*.py` net lines at 0 or fewer, until the race-day
+  experiment reports) is lifted for this campaign by that instruction: product pull requests may
+  add capability. Every other rule stands: measure first, honesty, refusals, one focused change
+  per pull request, the gates. The first-open freeze had already ended (section 6).
+- **Defaults applied 2026-11-14 on the owner's instruction not to be asked**, each open to his
+  overrule:
+  - The first-open debrief may gain a picture (the best lap and the track with the focus
+    corners), but its copy does not change and no lap-first button is added: RUL-7's default
+    stands.
+  - A look that would change the app's or an export's identity ships as an option, with today's
+    look kept as the default.
+  - Nothing is published outside the repository beyond tags and GitHub releases of the app, at
+    most one per wave that a user can see.
+  - The tags rule of the playbook's section 5 ("only on the owner's use / a capability an
+    evaluator can see") is read as met by each such wave's visible capability.
+- **Not built, waiting on the owner:**
+  - A track-surface (bump) map from the vertical accelerometer: a measured, repeatable signal on
+    one recording; whether it earns a surface is his call.
+  - A coaching "line" lever from the apex lateral offset: supported on one recording only, so it
+    needs a second recording at the same circuit to replicate before it may ship.

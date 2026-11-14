@@ -476,9 +476,18 @@ CORNER_GRID_LEAD_COLUMNS = SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS
 # The CORNERS BY LAP grid: the SPLITS grid's idiom over the detected corners, which unlike sector
 # lines exist on every recording the owner has. Its one difference from SPLITS — the muted,
 # never-marked cell — and its missing ★ are measured, not styled: see stats.CornerMatrix.
+_SHARE_WORDS = {0.25: "¼", 0.5: "½", 0.75: "¾"}
+
+
+def heat_share(f: float) -> str:
+    """A MATRIX_HEAT_STEPS fraction as the page prints it — read from the constant, never typed, so
+    the copy moves with the band (¾ for 0.75; a decimal for any fraction without a glyph)."""
+    return _SHARE_WORDS.get(f, f"{f:g}")
+
+
 CORNER_GRID_TOOLTIP = (
     "Every clean lap down the page, every corner across it. A cell is that lap's time through that "
-    "corner — the same number the Corners page shows for the lap. The behind hue and ▼ mark a lap "
+    "corner — the same number the Corners page shows for the lap. The ▼ and the deepest shade mark a lap "
     "that gave away notably more than your TYPICAL lap through the same corner: its median, scaled "
     f"by that corner's own spread (its {stats_service.MATRIX_SCALE_PCT:g}th percentile above the "
     f"median, floored at {stats_service.MATRIX_SCALE_MIN_S:.2f} s) — the SPLITS grid's rule, so a "
@@ -494,8 +503,37 @@ CORNER_GRID_TOOLTIP = (
     "They are shown, because they are the lap's real reading, but they never carry a ▼ and never "
     "count towards the typical. The CORNERS table above counts the same matched cells, so its "
     "Median is this typical wherever a corner has one.\n\n"
-    "NO ★ HERE. The quickest time through each corner is the CORNERS table's Best above; this grid "
-    "answers a different question — which laps lost time, and where.")
+    "THE SHADING is the same rule, graded: a cell's gap to that typical as a SHARE OF THAT "
+    f"CORNER'S ▼ STEP. Light from {heat_share(stats_service.MATRIX_HEAT_STEPS[0])} of the step "
+    "either way, full at the whole step — exactly where the ▼ is, so every ▼ is the deepest shade "
+    "and nothing short of one is. The behind hue is slower than usual, the ahead hue quicker. Where "
+    "a corner's step is above the floor it is that corner's own "
+    f"{stats_service.MATRIX_SCALE_PCT:g}th-percentile deviation, so about "
+    f"{100 - stats_service.MATRIX_SCALE_PCT:g} % of laps carry the ▼ there by construction: the "
+    "shade grades your slowest passes through it, it does not prove a mistake. Muted cells are "
+    "never shaded.\n\n"
+    "NO PER-CORNER ★. The ★ on a lap number is your best lap, as on PER LAP — the lap every corner "
+    "window here is matched to. The quickest time through each corner is the CORNERS table's Best "
+    "above; this grid answers a different question — which laps lost time, and where.")
+# The shade's two hues, NAMED in the note under the grid (one name per palette, never a hex: the
+# colours themselves come from theme.heat_fill at render time).
+HEAT_HUE_WORDS = {theme.PALETTE_STANDARD: ("red", "green"),
+                  theme.PALETTE_COLORBLIND: ("orange", "blue")}
+
+
+def heat_clause(level: int, scale) -> str:
+    """The sentence a CORNERS BY LAP cell's tooltip adds for its shade (stats.CornerMatrix.heat)."""
+    if scale is None:
+        return ""
+    step = f"this corner's ▼ step ({scale:.2f} s)"
+    first = heat_share(stats_service.MATRIX_HEAT_STEPS[0])
+    if level == 0:
+        return f" Less than {first} of {step} either way, so not shaded."
+    way = "slower" if level > 0 else "quicker"
+    if abs(level) == len(stats_service.MATRIX_HEAT_STEPS):
+        return f" {way.capitalize()} by the whole of {step} or more: the deepest shade."
+    share = heat_share(stats_service.MATRIX_HEAT_STEPS[abs(level) - 1])
+    return f" {way.capitalize()} by at least {share} of {step}: the lighter shade."
 
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
               "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
@@ -1919,8 +1957,22 @@ class StatsView(QWidget):
             # request is a POSTED event: without flushing it the heading still reports where it sat
             # before the page's first layout pass, and the scroll lands on a stale position.
             QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
-            heading_y = self.trust.heading.mapTo(scroll.widget(), QPoint(0, 0)).y()
-            scroll.verticalScrollBar().setValue(max(0, heading_y - theme.SPACE_S))
+            content = scroll.widget()
+            heading_y = self.trust.heading.mapTo(content, QPoint(0, 0)).y()
+            top = heading_y
+            # THE BAND, NOT THE HEADING, WHEN IT FITS. On the composed dashboard the card is
+            # second in its column and the other columns' sections start level with the first, so
+            # putting the card's own heading at the top cut the neighbouring column's heading off
+            # mid-table (tests/test_stats.py reproduces it on a stub session). The band's
+            # top is where every column of it starts; it is used whenever the card still lands
+            # whole under it, and the heading alone otherwise (a short window).
+            holder = next((h for h in self._columns if h.isAncestorOf(self.trust.heading)), None)
+            if holder is not None:
+                band_top = holder.mapTo(content, QPoint(0, 0)).y()
+                card_bottom = self.trust.card.mapTo(content, QPoint(0, self.trust.card.height())).y()
+                if card_bottom - band_top + 2 * theme.SPACE_S <= scroll.viewport().height():
+                    top = min(top, band_top)
+            scroll.verticalScrollBar().setValue(max(0, top - theme.SPACE_S))
             row = self.trust.card.row_widgets(term)
             if row is not None:
                 scroll.ensureWidgetVisible(row[1], 0, theme.SPACE_S)
@@ -2783,15 +2835,25 @@ class StatsView(QWidget):
             return
         lead = len(CORNER_GRID_LEAD_COLUMNS)
         t.set_columns(CORNER_GRID_LEAD_COLUMNS + [f"C{cid}" for cid in matrix.cids])
-        behind = QColor(theme.behind_colour())
+        text_ink = QColor(theme.C.text)
         lap_time = getattr(session, "lap_time", None)
+        # The best lap's row stays findable on a shaded grid: the PER LAP grid's ★ on its lap
+        # number, withheld exactly as there while the start line is provisional. It is also the
+        # lap every corner window here is matched to (the muted cells' tooltip names it).
+        best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
+        if not getattr(session, "timing_verified", True):
+            best = None
+        best_colour = QColor(theme.best_lap_colour())
         # The lap time is the one column here the start line moves, so it is demoted exactly as the
         # PER LAP grid below demotes the same number (see _timing_note).
         timing_note = self._timing_note(session)
         d = stats_service.MATRIX_DECIMALS
         t.setRowCount(len(matrix.lap_ids))
         for r, lap_id in enumerate(matrix.lap_ids):
-            t.setItem(r, 0, QTableWidgetItem(str(lap_id + 1)))
+            lap_item = QTableWidgetItem(f"{BEST_LAP_MARK if lap_id == best else ''}{lap_id + 1}")
+            if lap_id == best:
+                lap_item.setForeground(best_colour)
+            t.setItem(r, 0, lap_item)
             complete = True
             for c, cid in enumerate(matrix.cids):
                 val = matrix.cells[r][c]
@@ -2822,13 +2884,21 @@ class StatsView(QWidget):
                             "on track at both edges — too few to say what a typical lap through it "
                             "is.")
                     else:
+                        # THE HEAT SHADE is the ▼ rule graded (stats.CornerMatrix.heat): +2 IS the
+                        # ▼, so the mark and the strongest shade can never disagree. The number
+                        # goes back to the primary ink on a shade — the behind hue on its own tint
+                        # is the one pairing in this grid that would not read (theme.HEAT_ALPHAS).
+                        level = matrix.heat(r, c)
+                        fill = theme.heat_fill(level)
+                        if fill is not None:
+                            item.setBackground(QColor(fill))
+                            item.setForeground(text_ink)
                         if matrix.is_behind(r, c):
-                            item.setForeground(behind)
                             item.setText(theme.DELTA_BEHIND_ARROW + " " + item.text())
                         item.setToolTip(
                             f"{fmt_signed(val - med, d)} s against your typical C{cid} ({med:.{d}f} s, the "
                             f"median of the {matrix.n_resolved[c]} laps matched on track through "
-                            "it).")
+                            "it)." + heat_clause(level, matrix.scales[c]))
                 t.setItem(r, c + lead, item)
             lt = lap_time(lap_id) if (complete and lap_time is not None) else None
             tail = num_item(fmt_time(lt) if lt is not None else DASH)
@@ -2857,6 +2927,17 @@ class StatsView(QWidget):
                 if lo == hi else
                 f"▼ = well off your usual time for that corner ({lo:.2f} s at the steadiest "
                 f"corner, {hi:.2f} s at the most variable).")
+            # THE SHADE'S KEY, in the same per-corner seconds: a share of that step, where the light
+            # shade starts and that its full strength is the ▼ itself (stats.MATRIX_HEAT_STEPS).
+            f0 = stats_service.MATRIX_HEAT_STEPS[0]
+            d = stats_service.MATRIX_DECIMALS
+            h_lo, h_hi = round(f0 * lo, d), round(f0 * hi, d)
+            slower, quicker = HEAT_HUE_WORDS.get(theme.active_palette(),
+                                                 HEAT_HUE_WORDS[theme.PALETTE_STANDARD])
+            parts.append(
+                f"Shading is a share of that step: light from {heat_share(f0)} of it ({h_lo:.2f}"
+                + ("" if h_lo == h_hi else f"–{h_hi:.2f}") + " s), full at the whole step (every "
+                f"▼); {slower} slower than usual, {quicker} quicker.")
         unmarkable = [f"C{cid}" for cid, med in zip(matrix.cids, matrix.medians, strict=True)
                       if med is None]
         if unmarkable and scales:

@@ -153,6 +153,10 @@ FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring sec
 GRID_ROW_H = CTRL_H          # 28 — a grid whose ROW is the primary click/seek target
 GRID_ROW_DENSE_H = HIT_MIN   # 24 — a report grid; still a legal pointer target
 EMPTY_MEASURE_PX = 440       # the widest a column of PROSE may be set (widgets.EmptyState)
+# The Laps tab's Δbest bar (lap_table._TowerDelegate): sizes of a THING, so they sit here.
+LAP_BAR_H = 6                # the bar's thickness, centred on the row
+LAP_BAR_MIN_PX = 56          # the bar's track, added to the Δ column's own text width
+LAP_BAR_ALPHA = 150          # 0-255: the bar is a cue under the digits, not a second number
 
 # EMPTY_MEASURE_PX is an EXTENT, not a gap, which is why it sits with the sizes and not with the
 # SPACE scale — the same argument tests/test_design_system.py's `_CALLS` preamble makes for a
@@ -353,6 +357,27 @@ def ramp_mid_colour() -> str:
     return _PALETTES[_active_palette]["mid"]
 
 
+# ---- heat shades: a cell background graded in the ahead / behind hue (CORNERS BY LAP). Opacity
+# of the ACTIVE palette's hue over C.surface per |level| 1..2 (stats.MATRIX_HEAT_STEPS), measured
+# both ways: the top is capped by legibility (C.text on it ≥ 4.61:1 in both palettes; the standard
+# green binds, 0.42 fell to 4.43), and the two steps are told apart — each is ≥ 1.35:1 against the
+# step below it (the surface, then the lighter shade), where 0.16 had sat at 1.27:1.
+HEAT_ALPHAS = (0.20, 0.40)
+
+
+def heat_fill(level: int) -> str | None:
+    """The opaque background for a heat level (−2 … +2; negative = quicker, the ahead hue), or None
+    at 0 — short of the first step a cell keeps the table's own row tone. Call-time, like every palette
+    accessor, so a colour-blind flip re-shades the grid on its next render."""
+    if not level:
+        return None
+    hue = ahead_colour() if level < 0 else behind_colour()
+    a = HEAT_ALPHAS[min(abs(level), len(HEAT_ALPHAS)) - 1]
+    f, b = QColor(hue), QColor(C.surface)
+    return QColor(round(f.red() * a + b.red() * (1 - a)), round(f.green() * a + b.green() * (1 - a)),
+                  round(f.blue() * a + b.blue() * (1 - a))).name().upper()
+
+
 # Categorical lap-curve palette (amber accent first). These are IDENTITY colours (which lap is
 # which), not the ahead/behind SEMANTIC hues, so they are palette-independent — the map already
 # carries no red/green meaning here. The best lap is NOT in this list: it is drawn in
@@ -468,6 +493,19 @@ def series_slot(colour) -> int:
 def series_symbol(colour) -> str:
     """The pyqtgraph glyph symbol for a lap colour (see SERIES_SYMBOL / series_slot)."""
     return SERIES_SYMBOL[series_slot(colour) % len(SERIES_SYMBOL)]
+
+
+# --- the MAP's brake glyphs: one hue of their own (cool/map-hero) ---
+# The map's brake glyphs used to wear their LAP's colour — the best lap's green, which is the Speed
+# ramp's own "fast" end (and the Pedal ramp's "throttle" end), so a brake point painted the colour
+# of flat-out. On the map they now share ONE violet, and lap identity in compare is carried by the
+# SERIES_SYMBOL shape alone (the shapes were built to carry it without hue). Picked by measurement
+# (CIE76, the Machado deuteranopia matrix tests/test_contrast.py uses): >= 52.1 dE (18.2
+# deuteranopic) from all 32 buckets of BOTH ramps and both best-lap hues, >= 41.0 (34.7) from every
+# other ink the map draws (marker magenta, accent, greys, CHART_SERIES), 3.69:1 on C.surface.
+# Palette-INDEPENDENT on purpose, like C.position. The speed chart keeps lap-coloured glyphs: there
+# each glyph rides its own lap's curve, which is what its colour names.
+MAP_BRAKE_COLOR = "#8A5CFF"
 
 
 # Track-map current lap coloured by a channel (speed / Δ-vs-best), quantized into MAP_RAINBOW_N
@@ -859,6 +897,11 @@ TABLE = 13         # table cell text — BODY's role inside a grid
 CAPTION = 11       # a label ABOUT a value, and running notes (banners, readouts, tile captions)
 PANEL_HEADER = 11  # small-caps panel identity — CAPTION's step, its own role (Phase 2 may move it)
 TABLE_HEADER = 11  # column headers and badges — likewise
+
+# --- display (cool/debrief-hero) ---
+# One figure per screen, outside the four-step scale above: the best lap leading the first-open
+# debrief (coaching_panel.DebriefHero). A landing's headline number, read from across the room.
+DISPLAY = 48
 
 # --- weights ---
 W_REGULAR = QFont.Weight.Normal     # 400

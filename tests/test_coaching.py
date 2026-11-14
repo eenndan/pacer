@@ -16,6 +16,7 @@ corner_entry_media_time projects the corner entry onto the best lap exactly. The
 offscreen on the real dataclasses: populate, Go→jump_to(cid, entry_dist), the excluded state.
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_coaching.py
 """
+import contextlib
 import math
 import os
 import re
@@ -2658,6 +2659,250 @@ def test_the_theme_block_prints_the_corner_and_fits_its_budget():
             assert block.headline.text().endswith("it would not count."), block.headline.text()
     print(f"ok COACHING-4 theme block: {heights} px at 640 px wide (budget "
           f"{THEME_MAX_FRACTION * 600:.0f} px)")
+
+
+# ------------------------------------------------------------------ the debrief hero
+# cool/debrief-hero: the first open led with grey prose over ~60 % of empty page, and the app's best
+# visual — the track with its speed-coloured line — was not on its first screen. The debrief now
+# carries a hero in the canvas the shortlist leaves: the best lap's time, large, with the lap
+# table's own string and demotions, and the best lap's line with the focus corners ringed (a ring
+# answers like its row's Jump). Pinned on the real window over the demo circuit (the demo landing,
+# and an ordinary first open), plus the trust marks on a double.
+@contextlib.contextmanager
+def _hero_window(path: str, size, *, demo_env: str | None):
+    """A real StudioWindow on `path` at `size`, landed, closed on exit. `demo_env` makes `path` the
+    demo (PACER_DEMO_MP4), held for the window's whole life: the app asks again on every focus
+    gesture whether the loaded recording is the demo."""
+    import test_debrief_landing as D
+
+    from studio.app import StudioWindow
+    old = os.environ.get("PACER_DEMO_MP4")
+    if demo_env:
+        os.environ["PACER_DEMO_MP4"] = demo_env
+    else:
+        os.environ.pop("PACER_DEMO_MP4", None)
+    win = None
+    try:
+        win = StudioWindow([])
+        win.resize(*size)
+        win.show()
+        D._open(win, path)
+        yield win
+    finally:
+        if win is not None:
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+        if old is None:
+            os.environ.pop("PACER_DEMO_MP4", None)
+        else:
+            os.environ["PACER_DEMO_MP4"] = old
+
+
+def _check_hero_landing(win):
+    """The hero on a landed debrief: shown, the lap table's time, the focus list ringed, one
+    primary Jump, and nothing of the page below its fold or shed for it."""
+    from studio.coaching_panel import _PANEL_COL_GO, HERO_MIN_PX
+    view, panel = win.view, win.view.opportunities
+    hero = panel.hero
+    assert view.is_debrief() and not panel.debrief_block.isHidden(), "no debrief landing"
+    assert hero.shows_picture(), (hero.isVisible(), hero.height(), hero.data() is not None)
+    # The time is the lap table's Time cell for the best lap, character for character, with its
+    # demotion: a verified, clean clock here, so no mark and no italic on either.
+    best = win.session.best_lap_id()
+    lt = view.table
+    cell = lt.table.item(lt._row_for_lap(best), 1)
+    assert hero.time_text() == cell.text(), (hero.time_text(), cell.text())
+    assert hero.data().trust == "" and not cell.font().italic(), hero.data().trust
+    # The ringed corners ARE the focus list, in its order, and each has a click target.
+    cids = panel.focus_block.cids()
+    assert cids and hero.focus_cids() == cids, (hero.focus_cids(), cids)
+    assert [c for c, _p in hero.target_points()] == cids, hero.target_points()
+    # One primary Jump: the top row's.
+    t = panel.table
+    variants = [t.cellWidget(r, _PANEL_COL_GO).property("variant") for r in range(t.rowCount())]
+    assert variants[0] == "primary" and variants.count("primary") == 1, variants
+    # Nothing below the fold, nothing shed: every shortlist row whole inside the table's viewport,
+    # the hero inside the page, and the lead, the focus list and the theme each whole.
+    for r in range(t.rowCount()):
+        assert t.rowViewportPosition(r) + t.rowHeight(r) <= t.viewport().height(), (
+            "a shortlist row is cut", r, t.viewport().height())
+    assert not t.verticalScrollBar().isVisible(), "the shortlist scrolls"
+    assert hero.geometry().bottom() < panel.height() and hero.height() >= HERO_MIN_PX
+    assert not panel.debrief_block.note.isHidden(), "the lead shed its note for the hero"
+    tb = panel.theme_block
+    assert sum(not a.isHidden() for a in tb.actions) == len(tb._lines), "the theme shed a line"
+    assert not panel.focus_block.isHidden(), "the focus list shed for the hero"
+    # The table is capped at its shortlist on the debrief (the stretch factors alone would leave it
+    # its own size hint), and the hero takes the rest.
+    assert panel.body.height() <= panel._shortlist_px(), (panel.body.height(),
+                                                           panel._shortlist_px())
+    assert panel.body.maximumHeight() == panel._shortlist_px(), (
+        panel.body.maximumHeight(), panel._shortlist_px())
+    # The caption is the circuit and the headline's own sample: "… · N clean laps", where N is the
+    # n in the header's "median of N clean laps".
+    n = panel._n_clean
+    assert f"(median of {n} clean laps)" in panel.summary_label.text(), panel.summary_label.text()
+    assert hero.data().caption == f"{win.session.track_name} · {n} clean laps", (
+        hero.data().caption, n)
+    # Every ring a click can act on has a row; on these recordings every focus corner has one.
+    assert hero._jumpable == {o.cid for o in panel._all_rows}, (hero._jumpable, panel._all_rows)
+    return hero
+
+
+def test_debrief_hero_on_the_demo_landing_and_a_first_open():
+    """The demo landing at the small 1280x800 window, then an ordinary first open at 1728x1117."""
+    import tempfile
+
+    import test_debrief_landing as D
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    with tempfile.TemporaryDirectory(prefix="hero_rec_") as folder, D._fresh_app_support():
+        a, b = D._two_recordings(folder)
+        with _hero_window(a, (1280, 800), demo_env=a) as win:
+            hero = _check_hero_landing(win)
+            panel = win.view.opportunities
+            # PAINTED ONCE: settled, the picture has been rendered once, and a repaint is a blit.
+            renders = hero.renders
+            assert renders == 1, renders
+            hero.repaint()
+            assert hero.renders == renders, "a repaint re-rendered the picture"
+            # The speed key follows the window's unit, then comes back.
+            assert hero.data().speed_hi.endswith("km/h"), hero.data().speed_hi
+            panel.set_speed_unit("mph")
+            assert hero.data().speed_hi.endswith("mph"), hero.data().speed_hi
+            panel.set_speed_unit("kmh")
+            D._settle(0.2)
+            renders = hero.renders
+            # A Remove re-rings the picture: one render more, the corner gone.
+            gone = panel.focus_block.cids()[-1]
+            (drop,) = D._visible(panel.focus_block.drop_buttons, f"Remove C{gone}")
+            drop.click()
+            D._settle(0.2)
+            assert gone not in hero.focus_cids(), hero.focus_cids()
+            assert hero.focus_cids() == panel.focus_block.cids(), hero.focus_cids()
+            assert [c for c, _p in hero.target_points()] == hero.focus_cids()
+            assert hero.renders == renders + 1, hero.renders
+            # A ring does what its row's Jump does (which, like the row's, leaves the debrief).
+            jumps = []
+            panel.jump_requested.connect(lambda c, d: jumps.append((c, d)))
+            cid, at = hero.target_points()[0]
+            entry = next(o.entry_dist for o in panel._all_rows if o.cid == cid)
+            QTest.mouseClick(hero, Qt.LeftButton, Qt.NoModifier, at.toPoint())
+            assert jumps == [(cid, float(entry))], (jumps, cid, entry)
+            D._settle(0.2)
+            # Off the debrief the hero is gone, and the ordinary maximized page has none.
+            if win.view.is_debrief():
+                QTest.keyClick(win, Qt.Key_Escape)
+                D._settle(0.2)
+            assert not win.view.is_debrief() and hero.isHidden() and hero.data() is None
+            win.view.show_coaching_maximized()
+            D._settle(0.2)
+            assert hero.isHidden(), "the ordinary maximized page grew a hero"
+            assert panel.body.maximumHeight() > panel.height(), "the table is still capped"
+        with _hero_window(b, (1728, 1117), demo_env=None) as win:
+            hero = _check_hero_landing(win)
+            assert win.session.track_name in hero.data().caption, hero.data().caption
+    print("ok debrief hero: demo landing 1280x800 + first open 1728x1117 — time = lap table, "
+          "rings = focus list (and follow a Remove), one primary Jump, nothing below the fold")
+
+
+def test_debrief_hero_carries_the_lap_tables_trust_marks():
+    """The largest number in the app never reads as more certain than the cell it repeats."""
+    from studio import lap_table
+    from studio._signal import fmt_time
+    from studio.coaching_panel import HERO_PROVISIONAL, debrief_hero_data
+
+    clean = debrief_hero_data(_hero_session(True), 36)
+    prov = debrief_hero_data(_hero_session(False), 36)
+    media = debrief_hero_data(_hero_session(True, degraded=True, media_clock=True), 36)
+    gps_low = debrief_hero_data(_hero_session(True, degraded=True), 36)
+    no_gps = debrief_hero_data(_hero_session(True, degraded=True, no_gps=True), 36)
+    for d in (clean, media, gps_low, no_gps):
+        assert d.time_text == fmt_time(46.8085), d.time_text
+    # The lap table names no best lap on a provisional line (`best_lap = ... if verified else
+    # None`), so the hero shows no BEST LAP figure there: only the demotion, in words.
+    assert prov.time_text == "" and prov.trust == HERO_PROVISIONAL, prov
+    assert prov.trust_tip == lap_table.PROVISIONAL_TOOLTIP, prov.trust_tip
+    # The lap panel chip's word, never "estimated" for a true clock: ESTIMATED only on the
+    # media-clock fallback (data_quality.timing_word).
+    assert (clean.trust, media.trust, gps_low.trust, no_gps.trust) == (
+        "", "ESTIMATED", "GPS LOW", "NO GPS"), (media.trust, gps_low.trust, no_gps.trust)
+    assert media.trust_tip == "est. detail", media.trust_tip
+    assert clean.caption == "Stadium · 36 clean laps", clean.caption
+    assert debrief_hero_data(_hero_session(True), 1).caption == "Stadium · 1 clean lap"
+    assert clean.corners == {1: (100.0, 0.0), 4: (-100.0, 0.0)}, clean.corners
+    # A double without the accessors (every older panel test) has no hero, and no crash.
+    assert debrief_hero_data(SimpleNamespace(), 36) is None
+    print(f"ok hero trust: {clean.time_text!r} plain / provisional no figure / "
+          f"{media.trust!r} / {gps_low.trust!r} / {no_gps.trust!r}")
+
+
+def _hero_session(verified, *, degraded=False, media_clock=False, no_gps=False):
+    """A Session double with what `debrief_hero_data` reads: an oval best lap, C1 and C4."""
+    n = 50
+    ang = np.linspace(0, 2 * np.pi, n)
+    ch = {"x_m": 100 * np.cos(ang), "y_m": 60 * np.sin(ang), "t_telemetry_s": np.linspace(0, 47, n),
+          "speed_kmh": 50 + 20 * np.sin(3 * ang), "dist_m": np.linspace(0, 520, n)}
+    return SimpleNamespace(
+        best_lap_id=lambda: 3, lap_time=lambda _i: 46.8085, lap_channels=lambda _i: ch,
+        corners=SimpleNamespace(corner_map_markers=lambda: [("C1", 100.0, 0.0, 1),
+                                                             ("C4", -100.0, 0.0, -1)]),
+        timing_verified=verified, track_name="Stadium",
+        timing_quality=SimpleNamespace(degraded=degraded, media_clock=media_clock, no_gps=no_gps,
+                                       detail=lambda: "est. detail"))
+
+
+def test_debrief_hero_rings_every_focus_corner_but_only_a_row_is_a_target():
+    """QA review of #544: a focus corner carried from an earlier session can have no coaching row
+    today. It is ringed (the picture shows the whole list) but takes no hand cursor and no click,
+    where it used to look clickable and do nothing."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from studio.coaching_panel import DebriefHero, debrief_hero_data
+    _qapp()
+    hero = DebriefHero()
+    hero.set_data(debrief_hero_data(_hero_session(True), 36))
+    hero.set_focus([1, 4])
+    hero.set_jumpable([1])          # C1 has a row today; C4 is a carried-over focus corner
+    hero.resize(900, 300)
+    hero.show()
+    _settle()
+    rings = dict(hero.ring_points())
+    assert sorted(rings) == [1, 4], rings
+    assert [c for c, _p in hero.target_points()] == [1], hero.target_points()
+    clicks = []
+    hero.corner_clicked.connect(clicks.append)
+    for cid in (4, 1):
+        QTest.mouseMove(hero, rings[cid].toPoint())
+        _settle(2)
+        want = Qt.PointingHandCursor if cid == 1 else Qt.ArrowCursor
+        assert hero.cursor().shape() == want, (cid, hero.cursor().shape())
+        QTest.mouseClick(hero, Qt.LeftButton, Qt.NoModifier, rings[cid].toPoint())
+    assert clicks == [1], clicks
+    hero.close()
+    print("ok hero targets: C1 and C4 ringed; only C1 (a row) takes the hand and the click")
+
+
+def test_debrief_hero_label_takes_the_least_overlap_when_nothing_is_clear():
+    """When none of the eight positions is clear, the plate goes where it overlaps least — first
+    of the equals, outward from the trace — not wherever the last try happened to land."""
+    from PySide6.QtCore import QPointF, QRectF
+
+    from studio.coaching_panel import _label_rect
+    c = QPointF(200, 200)
+    box = QRectF(0, 0, 400, 400)
+    clear = _label_rect(c, 0.0, 30, 20, [], box)
+    assert clear.center().x() > c.x(), clear       # outward (ang 0 = to the right), when clear
+    # Everything around the ring is taken, equally: the outward position wins the tie. The old
+    # loop fell out with its eighth try, the opposite side (ang + 180°).
+    covered = _label_rect(c, 0.0, 30, 20, [QRectF(100, 100, 200, 200)], box)
+    assert covered.center().x() > c.x(), covered
+    # Only the left is partly free: the least-overlapping position is to the left.
+    partial = _label_rect(c, 0.0, 30, 20, [QRectF(170, 100, 200, 200)], box)
+    assert partial.center().x() < c.x(), partial
+    print("ok hero labels: clear outward; least overlap otherwise")
 
 
 if __name__ == "__main__":

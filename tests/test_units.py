@@ -302,11 +302,10 @@ class _FakeSession:
 
 def test_lap_table_entry_header_and_value_flip():
     """LapTable: default → 'Entry (km/h)' with the raw km/h value; set mph → header + value flip."""
-    from studio.lap_table import LapTable
+    from studio.lap_table import _ENTRY_COL, LapTable
 
     tbl = LapTable(_FakeSession())
-    # Entry is the last base column (index 3).
-    entry_col = 3
+    entry_col = _ENTRY_COL   # the last base column
     assert tbl.table.horizontalHeaderItem(entry_col).text() == "Entry (km/h)"
     assert tbl.table.item(0, entry_col).text() == "100.0"
 
