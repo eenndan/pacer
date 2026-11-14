@@ -1954,8 +1954,6 @@ def test_race_tracks_is_memoized_and_misses_after_a_resegment():
     builds = lap_race.BUILD_COUNT
     assert s.race_tracks() is rt and s.race_tracks(None) is rt
     assert lap_race.BUILD_COUNT == builds
-    sub = s.race_tracks([0, 2])
-    assert sub is not rt and sub is not None and set(sub.ids) == {0, 2}
     # A re-segment: every lap loses its first fix (a start line moved a few metres on).
     s._cols_cache = {i: tuple(np.asarray(c)[1:] for c in cols) for i, cols in s._cols_cache.items()}
     s._cols_cache = {i: (c[0], c[1], c[2], c[3], c[4] - c[4][0]) for i, c in s._cols_cache.items()}
@@ -1967,6 +1965,8 @@ def test_race_tracks_is_memoized_and_misses_after_a_resegment():
     k = fresh.index(0)
     assert fresh.laps[k].elapsed.size == rt.laps[rt.index(0)].elapsed.size - 1
     assert fresh.clock_starts[k] == s._cols_cache[0][0][0]
+    sub = s.race_tracks([0, 2])
+    assert sub is not fresh and sub is not None and set(sub.ids) == {0, 2}
     print("test_race_tracks_is_memoized_and_misses_after_a_resegment OK")
 
 
