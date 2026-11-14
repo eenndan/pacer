@@ -408,6 +408,10 @@ _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "L
 # the tooltip as exactly that.
 ELEVATION_SOURCE = "GPS altitude"
 ELEVATION_NOISE = "noise not measured"
+# ...and on a narrow map (see LEGEND_STRIP_MIN_SHARE), "GPS: lowest" / "+5 m ±?" — the full wording
+# moves to the tooltip, which always carries ELEVATION_LEGEND_TIP for this channel.
+ELEVATION_SOURCE_SHORT = "GPS"
+ELEVATION_NOISE_SHORT = "±?"
 ELEVATION_LEGEND_TIP = (
     "Elevation is the GPS receiver's altitude, relative to this lap's lowest point. Its noise is "
     "not measured on this recording: on two other recordings its within-lap wander measured "
@@ -487,6 +491,12 @@ class _GradientStrip(QWidget):
         p.end()
 
 
+# The legend's colour strip keeps at least this share of its row. The Elevation labels ("GPS altitude:
+# lowest", "+5 m · noise not measured") are 107 and 141 px; at a 380 px map they squeezed the strip
+# to 100 px, so below the width the full labels need they fall back to a short pair (tooltip: full).
+LEGEND_STRIP_MIN_SHARE = 0.45
+
+
 class _RainbowLegend(QWidget):
     """Slim legend shown ONLY while a rainbow is painted: min label · bucket-colour strip ·
     max label (the channel's red/'slow-losing' and green/'fast-gaining' extremes)."""
@@ -498,6 +508,10 @@ class _RainbowLegend(QWidget):
         for lab in (self.lo_label, self.hi_label):
             lab.setProperty("role", "BarLabel")  # the dimmed small header type from the QSS
         self._strip = _GradientStrip([QColor(c) for c in rainbow_colors(MAP_RAINBOW_N)])
+        # The full labels, their short fallback and the tooltip, as last set (see set_labels/_fit).
+        self._full: tuple[str, str] = ("", "")
+        self._short: tuple[str, str] | None = None
+        self._tip = ""
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 2, 8, 2)
         lay.setSpacing(8)
@@ -505,15 +519,53 @@ class _RainbowLegend(QWidget):
         lay.addWidget(self._strip, 1)
         lay.addWidget(self.hi_label)
 
-    def set_labels(self, lo_text: str, hi_text: str):
+    def set_labels(self, lo_text: str, hi_text: str, tip: str = "", short=None):
         """Set the min/max end labels. A HINT (empty hi_text) reads as a single message (e.g. the
         best-lap "no delta" note): the gradient strip + max label are hidden so we don't imply a live
-        colour gradient that isn't painted (L1)."""
+        colour gradient that isn't painted (L1).
+
+        `short` is an optional (lo, hi) pair used when the full labels would leave the strip less
+        than LEGEND_STRIP_MIN_SHARE of the row (see _fit); `tip` is the legend's tooltip."""
         hint = hi_text == ""
-        self.lo_label.setText(lo_text)
-        self.hi_label.setText(hi_text)
+        self._full = (lo_text, hi_text)
+        self._short = short
+        self._tip = tip
         self.hi_label.setVisible(not hint)
         self._strip.setVisible(not hint)
+        self._fit()
+
+    def _fit(self):
+        """Put the end labels on the row so the colour strip keeps at least LEGEND_STRIP_MIN_SHARE
+        of it: the full labels if they fit, else the short pair, else the short pair elided. Every
+        shortened legend carries its full wording in the tooltip. Runs on a label change or a
+        resize — never on the tick."""
+        lo, hi = self._full
+        if hi == "":                                     # a hint: one message, no strip to protect
+            self.lo_label.setText(lo)
+            self.hi_label.setText("")
+            self.setToolTip(self._tip)
+            return
+        m = self.layout().contentsMargins()
+        row = self.width() - m.left() - m.right() - 2 * self.layout().spacing()
+        budget = max(0.0, row * (1.0 - LEGEND_STRIP_MIN_SHARE) / 2.0)
+        fm = QFontMetrics(self.lo_label.font())
+
+        def fits(pair):
+            return all(fm.horizontalAdvance(t) <= budget for t in pair)
+
+        shown = (lo, hi)
+        if not fits(shown) and self._short is not None:
+            shown = self._short
+        if not fits(shown):
+            shown = tuple(fm.elidedText(t, Qt.ElideRight, int(budget)) for t in shown)
+        self.lo_label.setText(shown[0])
+        self.hi_label.setText(shown[1])
+        shortened = shown != (lo, hi)
+        self.setToolTip("\n".join(t for t in ((f"{lo} → {hi}" if shortened else ""), self._tip) if t))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
 
     def recolor(self):
         """Repaint the legend strip in the ACTIVE palette's rainbow (after a palette flip)."""
@@ -1660,6 +1712,12 @@ class MapView(QWidget):
                 and event.button() == Qt.LeftButton):
             self._fit_view()
             return True
+        # Leaving the canvas sends no move, so the hover reveal is cleared here (pins and the
+        # provisional / no-laps rules are untouched: _sync_timing_chrome still honours them).
+        if (event.type() == QEvent.Leave and obj is self.widget.viewport()
+                and getattr(self, "_timing_hover", False)):
+            self._timing_hover = False
+            self._sync_timing_chrome()
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ view fit
@@ -2321,14 +2379,14 @@ class MapView(QWidget):
         if result is None:
             return "none"
         seg_buckets, lo_txt, hi_txt = result
-        tip = ""
+        tip, short = "", None
         if mode == "elevation" and seg_buckets is not None:
             # What the ramp is, and what nobody measured about it (map_render's labels say only
             # "lowest" → "+N m", which reads like a surveyed range).
+            short = (f"{ELEVATION_SOURCE_SHORT}: {lo_txt}", f"{hi_txt} {ELEVATION_NOISE_SHORT}")
             lo_txt, hi_txt = f"{ELEVATION_SOURCE}: {lo_txt}", f"{hi_txt} · {ELEVATION_NOISE}"
             tip = ELEVATION_LEGEND_TIP
-        self._legend.setToolTip(tip)
-        self._legend.set_labels(lo_txt, hi_txt)
+        self._legend.set_labels(lo_txt, hi_txt, tip=tip, short=short)
         # A None seg_buckets with a legend = the best-lap Δ hint: don't paint, just show the hint.
         if seg_buckets is None:
             return "hint"

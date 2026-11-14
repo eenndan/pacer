@@ -32,7 +32,7 @@ import pyqtgraph as pg
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -725,13 +725,25 @@ def test_timing_handles_rest_hidden_and_appear_near_the_pointer():
         scene.sigMouseMoved.emit(_scene_of(mv, 150.0, 0.0))        # far from every line
         assert not st.h1.isVisible() and not st.line.isVisible(), "the handles never re-hid"
 
+        # Leaving the canvas sends no move: the Leave itself must clear the hover reveal.
+        scene.sigMouseMoved.emit(_scene_of(mv, -200.0, 5.0))
+        assert st.h1.isVisible()
+        QApplication.sendEvent(mv.widget.viewport(), QEvent(QEvent.Leave))
+        assert not st.h1.isVisible() and not st.line.isVisible(), (
+            "the pointer left the map and the handles stayed up")
+
         mv._add_sector()                                           # editing is relevant now
         assert all(tl.h1.isVisible() for tl in [mv._start, *mv._sectors]), (
             "after Add sector the new line's handles are hidden")
         assert mv._sectors[0].line.isVisible()
-        mv._unpin_timing_chrome()
+        # …for a while, on a running timer — not forever.
+        assert mv._pin_timer.isActive() and mv._pin_timer.interval() == _mv.NOTICE_MS, (
+            "Add sector pinned the handles up with no timer to take them down")
+        mv._pin_timer.timeout.emit()
+        mv._pin_timer.stop()
         assert not mv._sectors[0].h1.isVisible() and mv._sectors[0].line.isVisible(), (
-            "a resting sector line must keep its segment (it has no other mark)")
+            "the pin timer's timeout must re-hide the handles; a resting sector line keeps its "
+            "segment (it has no other mark)")
     finally:
         mv.hide()
         mv.deleteLater()
@@ -807,6 +819,36 @@ def test_the_elevation_legend_says_it_is_gps_altitude_with_unmeasured_noise():
         mv.hide()
         mv.deleteLater()
     print("test_the_elevation_legend_says_it_is_gps_altitude_with_unmeasured_noise OK")
+
+
+def test_a_narrow_map_keeps_the_legend_strip_and_moves_the_wording_to_the_tooltip():
+    """The Elevation end labels are 107 and 141 px and never shrink, so a 380 px map squeezed the
+    colour strip to 100 px. Below the width they need they fall back to a short pair, the strip
+    keeps its share of the row, and the full wording stays in the tooltip."""
+    s = _session()
+    s.lap_elevation_channel = lambda lid: 10.0 + 30.0 * np.sin(np.linspace(0.0, math.pi, 240))
+    mv = _sized_map(s, w=380, h=300)
+    try:
+        mv.set_current_lap(0)
+        mv.set_rainbow_mode("elevation")
+        _APP.processEvents()
+        lg = mv._legend
+        strip = lg._strip
+        assert strip.width() >= 0.4 * lg.width(), (
+            f"the colour strip got {strip.width()} of a {lg.width()} px legend row")
+        for lab in (lg.lo_label, lg.hi_label):
+            assert lab.width() >= lab.fontMetrics().horizontalAdvance(lab.text()), lab.text()
+        assert "GPS altitude" not in lg.lo_label.text(), "the full label was kept and squeezed"
+        assert "GPS" in lg.lo_label.text() and lg.hi_label.text().startswith("+30 m")
+        assert "GPS altitude" in lg.toolTip() and "not measured" in lg.toolTip(), lg.toolTip()
+        mv.resize(900, 300)                                  # room again: the full wording returns
+        _APP.processEvents()
+        _APP.processEvents()
+        assert "GPS altitude" in lg.lo_label.text(), lg.lo_label.text()
+    finally:
+        mv.hide()
+        mv.deleteLater()
+    print("test_a_narrow_map_keeps_the_legend_strip_and_moves_the_wording_to_the_tooltip OK")
 
 
 def _run_all():

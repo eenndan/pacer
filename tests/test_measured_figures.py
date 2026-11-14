@@ -3257,7 +3257,34 @@ FOOTAGE_CHECKS = (test_the_coaching_tables_match_the_footage,
                   test_the_refusal_record_matches_the_footage)
 
 
+# THE ELEVATION LEGEND CITES TWO OTHER RECORDINGS' ALTITUDE WANDER (cool/map-hero). The map's tooltip
+# says the noise is not measured on the recording in front of you, and quotes the only figures the
+# repo has: the corner-match study's within-lap altitude wander, median, on 0060 and 0062.
+_MAP_VIEW = os.path.join(_REPO, "studio", "map_view.py")
+_CORNER_MATCH = os.path.join(_REPO, "studio", "docs", "corner-match-0060-2026-09.md")
+_WANDER_ROW = r"\*\*altitude\*\*: within-lap wander after that offset, median \| \*\*([\d.]+) m\*\* \| ([\d.]+) m"
+
+
+def _wander_problems(doc: str, tip: str) -> list[str]:
+    a, b = _need(_WANDER_ROW, doc, "corner-match-0060-2026-09.md's altitude-wander row").groups()
+    want = sorted((a, b), key=float)
+    got = re.findall(r"(\d+\.\d+) m and (\d+\.\d+) m \(median\)", tip)
+    return [] if got == [tuple(want)] else [
+        f"studio/map_view.py ELEVATION_LEGEND_TIP quotes {got} as the within-lap altitude wander, the "
+        f"corner-match study measured {want[0]} m and {want[1]} m (median)"]
+
+
+def test_the_elevation_tooltip_quotes_the_corner_match_altitude_wander():
+    doc, tip = _read(_CORNER_MATCH), _constant(_MAP_VIEW, "ELEVATION_LEGEND_TIP")
+    problems = _wander_problems(doc, tip)
+    assert not problems, "\n  ".join(problems)
+    planted = tip.replace("2.40 m", "2.04 m")                    # the negative control
+    assert _wander_problems(doc, planted), "a misquoted wander figure passed the check"
+    print("test_the_elevation_tooltip_quotes_the_corner_match_altitude_wander OK")
+
+
 def _run_all():
+    test_the_elevation_tooltip_quotes_the_corner_match_altitude_wander()
     test_every_table_no_footage_can_re_measure_carries_its_mark()
     test_the_mark_guard_fails_on_each_planted_defect()
     test_every_quote_of_the_interpolated_cell_error_is_dated_and_names_its_measurement()
