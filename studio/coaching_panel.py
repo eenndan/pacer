@@ -829,7 +829,6 @@ class DebriefBlock(QWidget):
 # already say, and it is not an action bar: RUL-7 (no lap-first debrief buttons) stands.
 HERO_BEST_LABEL = "BEST LAP"
 HERO_PROVISIONAL = "provisional timing"     # the lap table's demotion, said in words here
-HERO_ESTIMATED = f"estimated timing {theme.ESTIMATED_MARK}"   # the share card's stamp, verbatim
 HERO_MIN_PX = 150          # below this the picture is a scribble: the hero hides, the page is as before
 HERO_LINE_PX = 4.0         # the lap line's width at the hero's size (the card's 7 px is a 1080-px canvas)
 HERO_RING_PX = 7.0         # a focus corner's ring radius
@@ -846,10 +845,12 @@ _QWIDGETSIZE_MAX = (1 << 24) - 1   # Qt's QWIDGETSIZE_MAX, which PySide6 does no
 class HeroData:
     """What the debrief hero paints — display values off Session accessors only."""
 
-    time_text: str                 # the best lap, fmt_time — the lap table's own string
-    trust: str                     # "", HERO_PROVISIONAL or HERO_ESTIMATED
+    time_text: str                 # the best lap, fmt_time — the lap table's own string; "" while
+    #                                the timing is provisional (the table names no best lap then)
+    trust: str                     # "", HERO_PROVISIONAL, or the chip's word for a degraded clock
+    #                                (data_quality.timing_word: "ESTIMATED", "GPS LOW", "NO GPS")
     trust_tip: str                 # the lap table's tooltip for that demotion ("" when none)
-    caption: str                   # "Sandown Park · 36 clean laps" (the circuit only when known)
+    caption: str                   # "Synthetic demo circuit · 14 clean laps" (circuit when known)
     xs: np.ndarray                 # the best lap's trace, local metres
     ys: np.ndarray
     seg: np.ndarray                # per-segment speed bucket (map_render.rainbow_channel), -1 = gap
@@ -863,10 +864,12 @@ def debrief_hero_data(session, n_clean: int | None, unit: str | None = None) -> 
     double without the accessors) — the hero then stays hidden and the page is what it was.
 
     THE TIME IS THE LAP TABLE'S STRING, WITH THE LAP TABLE'S DEMOTIONS. ``fmt_time(lap_time(best))``
-    is the Time cell's text; an unconfirmed start line demotes it (muted, italic, "provisional
-    timing", the table's tooltip) and a degraded clock stamps it the share card's way
-    ("estimated timing (est)"), so the largest number in the app never reads as more certain than
-    the cell it repeats."""
+    is the Time cell's text. On an unconfirmed start line the table names no best lap (no star, no
+    green), so neither does the hero: no BEST LAP figure, only "provisional timing" and the table's
+    tooltip. A degraded clock keeps the figure, italic, under the lap panel's own chip word
+    (``data_quality.timing_word``: ESTIMATED only on the media-clock fallback, GPS LOW on a true
+    clock with rejected fixes), so the largest number in the app never reads as more — or
+    differently — certain than the cell it repeats."""
     try:
         best = session.best_lap_id()
         if best is None:
@@ -888,22 +891,49 @@ def debrief_hero_data(session, n_clean: int | None, unit: str | None = None) -> 
     if seg is None:     # a flat speed trace: one colour, the middle of the ramp (share_card's rule)
         seg = np.full(len(xs) - 1, theme.MAP_RAINBOW_N // 2)
     lo, hi = (got[1], got[2]) if got is not None and got[0] is not None else ("", "")
+    time_text = fmt_time(lap_s)
     if not verified:
-        trust, tip = HERO_PROVISIONAL, PROVISIONAL_TOOLTIP
-    elif getattr(quality, "degraded", False):
-        trust, tip = HERO_ESTIMATED, estimated_timing_tooltip(quality)
+        trust, tip, time_text = HERO_PROVISIONAL, PROVISIONAL_TOOLTIP, ""
+    elif data_quality.timing_word(quality):
+        trust, tip = data_quality.timing_word(quality), estimated_timing_tooltip(quality)
     else:
         trust, tip = "", ""
     bits = [session.track_name] if getattr(session, "track_name", None) else []
     if n_clean:
-        bits.append(f"{n_clean} clean lap{'' if n_clean == 1 else 's'}")
+        bits.append(plural(n_clean, "clean lap"))
     corners = {}
     for label, x, y, _d in markers:
         if str(label).startswith("C") and str(label)[1:].isdigit():
             corners[int(str(label)[1:])] = (float(x), float(y))
-    return HeroData(time_text=fmt_time(lap_s), trust=trust, trust_tip=tip,
+    return HeroData(time_text=time_text, trust=trust, trust_tip=tip,
                     caption=" · ".join(bits), xs=xs, ys=ys, seg=seg, speed_lo=lo, speed_hi=hi,
                     corners=corners)
+
+
+def _label_rect(c: QPointF, ang: float, tw: float, th: float, placed: list[QRectF],
+                box: QRectF) -> QRectF:
+    """A corner label's plate: outward from the trace's centroid (`ang`), then the other seven
+    compass points, the first clear of every placed plate and inside `box`; when none is, the one
+    that overlaps least (its area over other plates, plus its area outside the box)."""
+    best, best_cost = QRectF(), math.inf
+    for k in range(8):
+        a = ang + (k + 1) // 2 * (math.pi / 4) * (1 if k % 2 else -1)
+        # The centre sits the gap out less a little on each axis (6 px across, 4 px down), so the
+        # plate's near edge, not its centre, lands just clear of the 7-px ring.
+        lc = QPointF(c.x() + math.cos(a) * (HERO_LABEL_GAP_PX + tw / 2 - 6),
+                     c.y() + math.sin(a) * (HERO_LABEL_GAP_PX + th / 2 - 4))
+        rect = QRectF(lc.x() - tw / 2, lc.y() - th / 2, tw, th)
+        cost = (sum(_area(rect.intersected(r)) for r in placed)
+                + _area(rect) - _area(rect.intersected(box)))
+        if cost <= 0:
+            return rect
+        if cost < best_cost:
+            best, best_cost = rect, cost
+    return best
+
+
+def _area(r: QRectF) -> float:
+    return max(r.width(), 0.0) * max(r.height(), 0.0)
 
 
 class DebriefHero(QWidget):
@@ -912,8 +942,16 @@ class DebriefHero(QWidget):
 
     PAINTED ONCE. The whole hero is one cached pixmap, re-rendered only when its size (once it has
     held for ``HERO_SETTLE_MS``), its data, its focus corners or the palette change (``renders``
-    counts them, for the perf pin); a paint event blits it. A ringed corner is a click target: ``corner_clicked(cid)`` — the page answers it
-    with that row's Jump."""
+    counts them, for the perf pin); a paint event blits it.
+
+    EVERY FOCUS CORNER IS RINGED; ONLY A CORNER WITH A ROW IS A TARGET. The picture shows the whole
+    focus list, but a corner carried over from an earlier session can have no coaching row today,
+    and so no Jump to repeat: it takes no hand cursor and a click on it does nothing
+    (``set_jumpable``, from the page's rows). A target emits ``corner_clicked(cid)``.
+
+    The trace drawing repeats ``share_card.lap_map_png``'s (north-up fit, rainbow buckets, no
+    chord across a dropout) at a widget's size with corner rings. FOLLOW-UP: one shared painter
+    for both, once the share-card wave that owns share_card.py has landed."""
 
     corner_clicked = Signal(int)
 
@@ -923,7 +961,8 @@ class DebriefHero(QWidget):
         self._focus: tuple[int, ...] = ()
         self._pixmap: QPixmap | None = None
         self._key: tuple | None = None
-        self._targets: list[tuple[int, QPointF]] = []    # (cid, ring centre) of the last render
+        self._rings: list[tuple[int, QPointF]] = []      # (cid, ring centre) of the last render
+        self._jumpable: frozenset[int] = frozenset()     # corners with a row (a Jump) on the page
         self.renders = 0
         self._settle = QTimer(self)
         self._settle.setSingleShot(True)
@@ -951,6 +990,10 @@ class DebriefHero(QWidget):
             self._key = None
             self.update()
 
+    def set_jumpable(self, cids) -> None:
+        """The corners a ring click may jump to: those with a coaching row on the page."""
+        self._jumpable = frozenset(int(c) for c in cids)
+
     def focus_cids(self) -> list[int]:
         """The corners the picture rings: the focus list's, where the best lap has an apex for it."""
         if self._data is None:
@@ -964,15 +1007,19 @@ class DebriefHero(QWidget):
         """On screen with data and room for it (``HERO_MIN_PX``)."""
         return (self._data is not None and self.isVisible() and self.height() >= HERO_MIN_PX)
 
-    def target_points(self) -> list[tuple[int, QPointF]]:
-        """(cid, ring centre in widget px) of the current picture — rendering it if stale."""
+    def ring_points(self) -> list[tuple[int, QPointF]]:
+        """(cid, ring centre in widget px) of every ringed corner — rendering the picture if stale."""
         self._ensure_pixmap()
-        return list(self._targets)
+        return list(self._rings)
+
+    def target_points(self) -> list[tuple[int, QPointF]]:
+        """The rings a click acts on: those whose corner has a row (``set_jumpable``)."""
+        return [(c, pt) for c, pt in self.ring_points() if c in self._jumpable]
 
     # ---------------------------------------------------------------- painting
     def _ensure_pixmap(self) -> QPixmap | None:
         if self._data is None or self.width() < 2 or self.height() < HERO_MIN_PX:
-            self._targets = []
+            self._rings = []
             return None
         dpr = self.devicePixelRatioF()
         key = (self.width(), self.height(), dpr, self._focus, theme.rainbow_colors(2)[0])
@@ -1020,12 +1067,11 @@ class DebriefHero(QWidget):
         time_f = theme.mono_font(theme.DISPLAY, theme.W_SEMIBOLD)
         body_f = theme.ui_font(theme.BODY)
         cap_f = theme.ui_font(theme.CAPTION)
-        lines = [(HERO_BEST_LABEL, label_f, C.text_muted, False),
-                 (d.time_text, time_f, PROVISIONAL_COLOR if d.trust == HERO_PROVISIONAL else C.text,
-                  bool(d.trust))]
-        if d.trust:
-            lines.append((d.trust, cap_f, C.accent if d.trust == HERO_ESTIMATED else C.text_dim,
-                          False))
+        lines = ([(HERO_BEST_LABEL, label_f, C.text_muted, False),
+                  (d.time_text, time_f, C.text, bool(d.trust))] if d.time_text else [])
+        if d.trust:     # provisional: muted, the table's tone; a degraded clock: the chip's accent
+            lines.append((d.trust, cap_f, PROVISIONAL_COLOR if d.trust == HERO_PROVISIONAL
+                          else C.accent, False))
         if d.caption:
             lines.append((d.caption, body_f, C.text_dim, False))
         width = 0
@@ -1065,13 +1111,15 @@ class DebriefHero(QWidget):
     def _paint_map(self, p: QPainter, d: HeroData, box: QRectF) -> None:
         """The best lap, north up, fitted to `box` with room for the labels; the focus corners
         ringed in the accent (the colour of the first Jump) and labelled on a plate."""
-        self._targets = []
+        self._rings = []
         ok = np.isfinite(d.xs) & np.isfinite(d.ys)
         if box.width() < 40 or box.height() < 40 or ok.sum() < 2:
             return
         x0, x1 = float(d.xs[ok].min()), float(d.xs[ok].max())
         y0, y1 = float(d.ys[ok].min()), float(d.ys[ok].max())
-        inset = HERO_LABEL_GAP_PX + 14     # a label outside the outermost apex still fits
+        # A label outside the outermost apex still fits: the gap to its centre plus half a plate's
+        # height (a BODY line, ~14 px with its padding) — width is the looser axis here.
+        inset = HERO_LABEL_GAP_PX + 14
         scale = min((box.width() - 2 * inset) / ((x1 - x0) or 1.0),
                     (box.height() - 2 * inset) / ((y1 - y0) or 1.0))
         if scale <= 0:
@@ -1105,7 +1153,7 @@ class DebriefHero(QWidget):
         for cid in self.focus_cids():
             ax, ay = d.corners[cid]
             c = QPointF(cx + scale * (ax - (x0 + x1) / 2), cy - scale * (ay - (y0 + y1) / 2))
-            self._targets.append((cid, c))
+            self._rings.append((cid, c))
             # A canvas-filled ring with a canvas rim: the line stops at it rather than crossing it.
             p.setPen(QPen(QColor(C.canvas), 5))
             p.setBrush(QColor(C.canvas))
@@ -1115,15 +1163,7 @@ class DebriefHero(QWidget):
             p.drawEllipse(c, HERO_RING_PX, HERO_RING_PX)
             text = f"C{cid}"
             tw, th = fm.horizontalAdvance(text) + 2 * theme.SPACE_S, fm.height() + theme.SPACE_XS
-            # Outward from the trace's centroid; then the other seven compass points, first clear.
-            ang = math.atan2(c.y() - my, c.x() - mx)
-            for k in range(8):
-                a = ang + (k + 1) // 2 * (math.pi / 4) * (1 if k % 2 else -1)
-                lc = QPointF(c.x() + math.cos(a) * (HERO_LABEL_GAP_PX + tw / 2 - 6),
-                             c.y() + math.sin(a) * (HERO_LABEL_GAP_PX + th / 2 - 4))
-                rect = QRectF(lc.x() - tw / 2, lc.y() - th / 2, tw, th)
-                if not any(rect.intersects(r) for r in placed) and box.contains(rect):
-                    break
+            rect = _label_rect(c, math.atan2(c.y() - my, c.x() - mx), tw, th, placed, box)
             placed.append(rect)
             p.setPen(QPen(QColor(C.border_strong), theme.BORDER_PX))
             p.setBrush(QColor(C.surface))
@@ -1133,7 +1173,10 @@ class DebriefHero(QWidget):
 
     # ---------------------------------------------------------------- interaction
     def _target_at(self, pos) -> int | None:
-        for cid, c in self._targets:
+        for cid, c in self._rings:
+            if cid not in self._jumpable:
+                continue
+            # The ring plus a fingertip's slack: 6 px is the width of the ring's canvas rim and more.
             if math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= HERO_RING_PX + 6:
                 return cid
         return None
@@ -2268,6 +2311,7 @@ class OpportunitiesPanel(QWidget):
         self.hero.set_data(debrief_hero_data(self.session, n_clean, self._speed_unit)
                            if self._debrief else None)
         self.hero.set_focus(self.focus_block.cids())
+        self.hero.set_jumpable(o.cid for o in self._all_rows)
 
     def _apply_hero_budget(self) -> None:
         """On the debrief, cap the table at its shortlist and give the hero the canvas under it.
@@ -2294,8 +2338,9 @@ class OpportunitiesPanel(QWidget):
             self._hero_budgeting = False
 
     def _jump_to_corner(self, cid: int) -> None:
-        """A ringed corner on the hero does what its row's Jump does (the same signal, the same
-        entry odometer); a focus corner with no row on the page is not ringed as a target."""
+        """A ring the hero offers as a target does what its row's Jump does (the same signal, the
+        same entry odometer). Only corners with a row are targets (``DebriefHero.set_jumpable``):
+        a focus corner with no row today is ringed but takes no click."""
         for opp in self._all_rows:
             if opp.cid == cid:
                 self.jump_requested.emit(cid, float(opp.entry_dist))

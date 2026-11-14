@@ -2733,6 +2733,20 @@ def _check_hero_landing(win):
     tb = panel.theme_block
     assert sum(not a.isHidden() for a in tb.actions) == len(tb._lines), "the theme shed a line"
     assert not panel.focus_block.isHidden(), "the focus list shed for the hero"
+    # The table is capped at its shortlist on the debrief (the stretch factors alone would leave it
+    # its own size hint), and the hero takes the rest.
+    assert panel.body.height() <= panel._shortlist_px(), (panel.body.height(),
+                                                           panel._shortlist_px())
+    assert panel.body.maximumHeight() == panel._shortlist_px(), (
+        panel.body.maximumHeight(), panel._shortlist_px())
+    # The caption is the circuit and the headline's own sample: "… · N clean laps", where N is the
+    # n in the header's "median of N clean laps".
+    n = panel._n_clean
+    assert f"(median of {n} clean laps)" in panel.summary_label.text(), panel.summary_label.text()
+    assert hero.data().caption == f"{win.session.track_name} · {n} clean laps", (
+        hero.data().caption, n)
+    # Every ring a click can act on has a row; on these recordings every focus corner has one.
+    assert hero._jumpable == {o.cid for o in panel._all_rows}, (hero._jumpable, panel._all_rows)
     return hero
 
 
@@ -2753,6 +2767,13 @@ def test_debrief_hero_on_the_demo_landing_and_a_first_open():
             assert renders == 1, renders
             hero.repaint()
             assert hero.renders == renders, "a repaint re-rendered the picture"
+            # The speed key follows the window's unit, then comes back.
+            assert hero.data().speed_hi.endswith("km/h"), hero.data().speed_hi
+            panel.set_speed_unit("mph")
+            assert hero.data().speed_hi.endswith("mph"), hero.data().speed_hi
+            panel.set_speed_unit("kmh")
+            D._settle(0.2)
+            renders = hero.renders
             # A Remove re-rings the picture: one render more, the corner gone.
             gone = panel.focus_block.cids()[-1]
             (drop,) = D._visible(panel.focus_block.drop_buttons, f"Remove C{gone}")
@@ -2790,34 +2811,98 @@ def test_debrief_hero_carries_the_lap_tables_trust_marks():
     """The largest number in the app never reads as more certain than the cell it repeats."""
     from studio import lap_table
     from studio._signal import fmt_time
-    from studio.coaching_panel import HERO_ESTIMATED, HERO_PROVISIONAL, debrief_hero_data
+    from studio.coaching_panel import HERO_PROVISIONAL, debrief_hero_data
 
+    clean = debrief_hero_data(_hero_session(True), 36)
+    prov = debrief_hero_data(_hero_session(False), 36)
+    media = debrief_hero_data(_hero_session(True, degraded=True, media_clock=True), 36)
+    gps_low = debrief_hero_data(_hero_session(True, degraded=True), 36)
+    no_gps = debrief_hero_data(_hero_session(True, degraded=True, no_gps=True), 36)
+    for d in (clean, media, gps_low, no_gps):
+        assert d.time_text == fmt_time(46.8085), d.time_text
+    # The lap table names no best lap on a provisional line (`best_lap = ... if verified else
+    # None`), so the hero shows no BEST LAP figure there: only the demotion, in words.
+    assert prov.time_text == "" and prov.trust == HERO_PROVISIONAL, prov
+    assert prov.trust_tip == lap_table.PROVISIONAL_TOOLTIP, prov.trust_tip
+    # The lap panel chip's word, never "estimated" for a true clock: ESTIMATED only on the
+    # media-clock fallback (data_quality.timing_word).
+    assert (clean.trust, media.trust, gps_low.trust, no_gps.trust) == (
+        "", "ESTIMATED", "GPS LOW", "NO GPS"), (media.trust, gps_low.trust, no_gps.trust)
+    assert media.trust_tip == "est. detail", media.trust_tip
+    assert clean.caption == "Stadium · 36 clean laps", clean.caption
+    assert debrief_hero_data(_hero_session(True), 1).caption == "Stadium · 1 clean lap"
+    assert clean.corners == {1: (100.0, 0.0), 4: (-100.0, 0.0)}, clean.corners
+    # A double without the accessors (every older panel test) has no hero, and no crash.
+    assert debrief_hero_data(SimpleNamespace(), 36) is None
+    print(f"ok hero trust: {clean.time_text!r} plain / provisional no figure / "
+          f"{media.trust!r} / {gps_low.trust!r} / {no_gps.trust!r}")
+
+
+def _hero_session(verified, *, degraded=False, media_clock=False, no_gps=False):
+    """A Session double with what `debrief_hero_data` reads: an oval best lap, C1 and C4."""
     n = 50
     ang = np.linspace(0, 2 * np.pi, n)
     ch = {"x_m": 100 * np.cos(ang), "y_m": 60 * np.sin(ang), "t_telemetry_s": np.linspace(0, 47, n),
           "speed_kmh": 50 + 20 * np.sin(3 * ang), "dist_m": np.linspace(0, 520, n)}
+    return SimpleNamespace(
+        best_lap_id=lambda: 3, lap_time=lambda _i: 46.8085, lap_channels=lambda _i: ch,
+        corners=SimpleNamespace(corner_map_markers=lambda: [("C1", 100.0, 0.0, 1),
+                                                             ("C4", -100.0, 0.0, -1)]),
+        timing_verified=verified, track_name="Stadium",
+        timing_quality=SimpleNamespace(degraded=degraded, media_clock=media_clock, no_gps=no_gps,
+                                       detail=lambda: "est. detail"))
 
-    def session(verified, degraded):
-        return SimpleNamespace(
-            best_lap_id=lambda: 3, lap_time=lambda _i: 46.8085, lap_channels=lambda _i: ch,
-            corners=SimpleNamespace(corner_map_markers=lambda: [("C1", 100.0, 0.0, 1),
-                                                                 ("C4", -100.0, 0.0, -1)]),
-            timing_verified=verified, track_name="Stadium",
-            timing_quality=SimpleNamespace(degraded=degraded, detail=lambda: "est. detail"))
 
-    clean = debrief_hero_data(session(True, False), 36)
-    prov = debrief_hero_data(session(False, False), 36)
-    est = debrief_hero_data(session(True, True), 36)
-    for d in (clean, prov, est):
-        assert d.time_text == fmt_time(46.8085), d.time_text
-    assert (clean.trust, prov.trust, est.trust) == ("", HERO_PROVISIONAL, HERO_ESTIMATED)
-    assert prov.trust_tip == lap_table.PROVISIONAL_TOOLTIP, prov.trust_tip
-    assert est.trust_tip == "est. detail" and "(est)" in est.trust, est
-    assert clean.caption == "Stadium · 36 clean laps", clean.caption
-    assert clean.corners == {1: (100.0, 0.0), 4: (-100.0, 0.0)}, clean.corners
-    # A double without the accessors (every older panel test) has no hero, and no crash.
-    assert debrief_hero_data(SimpleNamespace(), 36) is None
-    print(f"ok hero trust: {clean.time_text!r} plain / {prov.trust!r} / {est.trust!r}")
+def test_debrief_hero_rings_every_focus_corner_but_only_a_row_is_a_target():
+    """QA review of #544: a focus corner carried from an earlier session can have no coaching row
+    today. It is ringed (the picture shows the whole list) but takes no hand cursor and no click,
+    where it used to look clickable and do nothing."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from studio.coaching_panel import DebriefHero, debrief_hero_data
+    _qapp()
+    hero = DebriefHero()
+    hero.set_data(debrief_hero_data(_hero_session(True), 36))
+    hero.set_focus([1, 4])
+    hero.set_jumpable([1])          # C1 has a row today; C4 is a carried-over focus corner
+    hero.resize(900, 300)
+    hero.show()
+    _settle()
+    rings = dict(hero.ring_points())
+    assert sorted(rings) == [1, 4], rings
+    assert [c for c, _p in hero.target_points()] == [1], hero.target_points()
+    clicks = []
+    hero.corner_clicked.connect(clicks.append)
+    for cid in (4, 1):
+        QTest.mouseMove(hero, rings[cid].toPoint())
+        _settle(2)
+        want = Qt.PointingHandCursor if cid == 1 else Qt.ArrowCursor
+        assert hero.cursor().shape() == want, (cid, hero.cursor().shape())
+        QTest.mouseClick(hero, Qt.LeftButton, Qt.NoModifier, rings[cid].toPoint())
+    assert clicks == [1], clicks
+    hero.close()
+    print("ok hero targets: C1 and C4 ringed; only C1 (a row) takes the hand and the click")
+
+
+def test_debrief_hero_label_takes_the_least_overlap_when_nothing_is_clear():
+    """When none of the eight positions is clear, the plate goes where it overlaps least — first
+    of the equals, outward from the trace — not wherever the last try happened to land."""
+    from PySide6.QtCore import QPointF, QRectF
+
+    from studio.coaching_panel import _label_rect
+    c = QPointF(200, 200)
+    box = QRectF(0, 0, 400, 400)
+    clear = _label_rect(c, 0.0, 30, 20, [], box)
+    assert clear.center().x() > c.x(), clear       # outward (ang 0 = to the right), when clear
+    # Everything around the ring is taken, equally: the outward position wins the tie. The old
+    # loop fell out with its eighth try, the opposite side (ang + 180°).
+    covered = _label_rect(c, 0.0, 30, 20, [QRectF(100, 100, 200, 200)], box)
+    assert covered.center().x() > c.x(), covered
+    # Only the left is partly free: the least-overlapping position is to the left.
+    partial = _label_rect(c, 0.0, 30, 20, [QRectF(170, 100, 200, 200)], box)
+    assert partial.center().x() < c.x(), partial
+    print("ok hero labels: clear outward; least overlap otherwise")
 
 
 if __name__ == "__main__":
