@@ -808,6 +808,73 @@ def test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes():
     print(f"test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes OK ({labels})")
 
 
+def test_corner_labels_sit_on_the_maps_apex_not_the_middle_of_the_corner():
+    """cool/chart-corners review P2-2. "Inside its span" also passes a label parked at the corner's
+    MIDDLE; the chart label has to sit on the SAME point the map labels (`corner_map_markers`: the
+    corner's apex on the best lap's odometer), in both x modes. The stadium's corners are
+    symmetric, so their apex IS mid-span and could not tell the two apart: the apex is moved to a
+    fifth of the way in, for the map and the chart alike (one corner basis feeds both)."""
+    import dataclasses
+    view, s, _t0, _t1 = _real_central_view()
+    found, total = s.corners.basis()
+    moved = [dataclasses.replace(c, apex=c.enter + 0.2 * (c.exit - c.enter)) for c in found]
+    s.corners._basis_cache = (moved, total)
+    best = s.best_lap_id()
+    _t, bx, by, _v, cum = s._lap_columns(best)
+    times, dists = s._lap_time_dist(best)
+    markers = {m[0]: (m[1], m[2]) for m in s.corners.corner_map_markers()}
+    for idx, mode in ((0, "distance"), (1, "time")):
+        view.plots.x_mode_combo.setCurrentIndex(idx)   # a flip re-pushes the corner labels...
+        view._refresh_sector_lines()                    # ...and the moved basis needs one here
+        got = {ln.label.toPlainText(): float(ln.value()) for ln in view.plots._corner_items}
+        assert set(got) == set(markers), (mode, got, markers)
+        for c in moved:
+            x = got[c.label]
+            mid_d = 0.5 * (c.enter + c.exit)
+            if mode == "distance":
+                # The label's x, walked back onto the best lap's trace, IS the map marker.
+                mx, my = float(np.interp(x, cum, bx)), float(np.interp(x, cum, by))
+                assert abs(mx - markers[c.label][0]) < 1e-6 and abs(my - markers[c.label][1]) < 1e-6, (
+                    c.label, (mx, my), markers[c.label])
+                assert abs(x - mid_d) > 1.0, f"{c.label} sits mid-corner ({x:.2f}), not at the apex"
+            else:
+                want = float(np.interp(c.apex, dists, times)) - float(times[0])
+                mid_t = float(np.interp(mid_d, dists, times)) - float(times[0])
+                assert abs(x - want) < 1e-9, (c.label, x, want)
+                assert abs(x - mid_t) > 0.05, f"{c.label} sits mid-corner ({x:.3f} s), not at the apex"
+    view.plots.x_mode_combo.setCurrentIndex(0)
+    print("test_corner_labels_sit_on_the_maps_apex_not_the_middle_of_the_corner OK")
+
+
+def test_with_a_reference_loaded_the_hero_names_it_and_never_says_best_lap():
+    """cool/chart-corners review P1/P2-2. With a cross-recording reference loaded `delta_at_lap` is
+    measured against THAT lap, so the hero's chip-off run is `Δref`, its chip-on tooltip says "the
+    reference lap", and on the session best it must not append "This IS your best lap … reads
+    exactly zero for the whole lap" — against a reference the best lap's Δ moves like any other."""
+    view, s, t0, t1 = _real_central_view()
+    best = s.best_lap_id()
+    tt = {0: t0, 1: t1}[best]
+    view.video.positionChanged.emit(float(tt[len(tt) // 2]))
+    view.tick()
+    s.has_reference = lambda: True
+    s.delta_at_lap = lambda _lid, _t: 0.42
+    redraw = lambda: view._update_diff_box(view._playback.applied_t, 50.0, best)  # noqa: E731
+    view.ideal_readout_btn.setChecked(True)
+    redraw()
+    tip = view.diff_box.toolTip()
+    assert "the reference lap" in tip and "your best lap" not in tip, tip
+    view.ideal_readout_btn.setChecked(False)
+    redraw()
+    text, tip = view.diff_box.text(), view.diff_box.toolTip()
+    assert text.startswith("Δref "), text
+    assert "IS your best lap" not in tip and "exactly" not in tip, tip
+    s.has_reference = lambda: False   # ...and without one, the best-lap note is still there
+    redraw()
+    assert view.diff_box.text().startswith("Δbest "), view.diff_box.text()
+    assert "IS your best lap" in view.diff_box.toolTip(), view.diff_box.toolTip()
+    print("test_with_a_reference_loaded_the_hero_names_it_and_never_says_best_lap OK")
+
+
 def _hero_ink(view):
     """Count the hero's inked pixels in the Δ run and in the speed run, by which colour they are
     nearest: (delta_run_hues, speed_run_hues) as {colour: n}. Split at the formatters' own join."""
@@ -1297,6 +1364,8 @@ def _run_all():
     test_hero_readout_leads_with_labelled_delta_to_ideal()
     test_hero_readout_keeps_every_character_at_every_column_width()
     test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes()
+    test_corner_labels_sit_on_the_maps_apex_not_the_middle_of_the_corner()
+    test_with_a_reference_loaded_the_hero_names_it_and_never_says_best_lap()
     test_the_hero_colours_only_its_delta_never_the_speed()
     test_the_three_delta_surfaces_name_their_baselines_and_agree_when_they_share_one()
     test_delta_to_ideal_tooltips_are_honest_not_best_sector()

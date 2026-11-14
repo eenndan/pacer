@@ -2094,7 +2094,9 @@ class CentralView(QWidget):
                 _IDEAL_HOVER_REASONS[self._ideal_state]
             # ...and the SAME honesty for the other reference, which had none. Δ-to-best on the
             # best lap is not "near" zero, it is zero: this lap IS the reference. See the note.
-            if on_best:
+            # Not with a cross-recording reference loaded: then the Δ is against THAT lap and
+            # moves on the best lap like on any other, so the note would be false.
+            if on_best and not reference:
                 tip += _BEST_LAP_BEST_NOTE
         if t_delta != t:
             tip += _HERO_AT_REST_NOTE
