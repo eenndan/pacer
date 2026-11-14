@@ -250,6 +250,17 @@ MATRIX_SCALE_PCT = 90.0
 # same kind of quantity and used to decide it on the raw doubles instead. Aliased here (not
 # retyped) so this module's own name for it can never drift from theirs.
 MATRIX_DECIMALS = PRINT_DECIMALS
+# THE HEAT SHADE behind CORNERS BY LAP's cells (CornerMatrix.heat): the ▼ rule, graded, not a
+# second rule. A cell's gap to its corner's median is read in units of that corner's OWN ▼ step
+# (`scales[c]`), so a 0.15 s loss in a corner whose step is 0.30 and a 0.27 s loss in one whose
+# step is 0.53 shade alike. The steps are fractions of that one step: under the first the cell is
+# inside the corner's usual spread and stays UNSHADED; the last is the ▼ itself, so every ▼ cell
+# is the strongest shade and nothing short of a ▼ is. Two-sided because the data has both: on the
+# synthetic demo six laps are a whole step QUICKER through C1 (the planted habit's clean laps),
+# while on a real club session about one cell in nine shades, nearly all of them slower — the rest
+# are within half a step of their typical, and a heat map that coloured them would colour noise.
+# Half a step at the 0.30 s floor is 0.15 s, past the "tenth or two" one split's noise is (above).
+MATRIX_HEAT_STEPS = (0.5, 0.75, 1.0)
 
 # --------------------------------------------------------------------- coasting, by place
 # WHERE THE COASTING IS: every clean lap's coast seconds split over the corner/straight partition —
@@ -665,6 +676,22 @@ class CornerMatrix:
         if val is None or med is None or scale is None or not self.resolved[row][col]:
             return False
         return _behind_at_print(val, med, scale)
+
+    def heat(self, row: int, col: int) -> int:
+        """The cell's heat shade, −3 … +3: how many of MATRIX_HEAT_STEPS (fractions of the column's
+        ▼ step) its gap to the column's median reaches — positive slower, negative quicker, 0 inside
+        the spread. 0 wherever `is_behind` refuses (muted, blank, no typical). Compared at print
+        resolution exactly as `is_behind`, so +3 IS `is_behind`: one rule, never two that can
+        disagree at the edge."""
+        val = self.cells[row][col]
+        med = self.medians[col]
+        scale = self.scales[col]
+        if val is None or med is None or scale is None or not self.resolved[row][col]:
+            return 0
+        gap = round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS)
+        level = sum(1 for f in MATRIX_HEAT_STEPS
+                    if abs(gap) >= round(f * scale, MATRIX_DECIMALS))
+        return level if gap > 0 else -level
 
 
 @dataclass(frozen=True)

@@ -4063,7 +4063,46 @@ def test_corner_and_split_grids_mark_by_one_rule():
     assert cm.medians == sm.medians and cm.scales == sm.scales
     marks = [(r, c) for r in range(40) for c in range(5) if sm.is_behind(r, c)]
     assert marks and marks == [(r, c) for r in range(40) for c in range(5) if cm.is_behind(r, c)]
+    # The heat shade's deepest step IS the ▼, cell for cell (stats.MATRIX_HEAT_STEPS).
+    assert marks == [(r, c) for r in range(40) for c in range(5) if cm.heat(r, c) == 3]
     print("test_corner_and_split_grids_mark_by_one_rule OK")
+
+
+def _corner_heat_fixture():
+    """Thirteen laps through one corner, each planted cell's shade chosen on purpose. The twelve
+    resolved cells have median 5.09 s and a ▼ step of 0.30 s (their p90 deviation is 0.235, so the
+    MATRIX_SCALE_MIN_S floor wins): steps at 0.15 / 0.22 / 0.30 s.
+
+    lap 0  6.00  +0.91  a whole step slower      → +3, and the ▼
+    lap 1  4.60  −0.49  a whole step QUICKER     → −3
+    lap 2  5.28  +0.19  past half a step         → +1
+    lap 3  5.33  +0.24  past three quarters      → +2
+    lap 4  5.14  +0.05  inside the spread        →  0
+    lap 12 7.00  UNRESOLVED, the farthest off of all, and never shaded."""
+    col = [6.00, 4.60, 5.28, 5.33, 5.14, 5.00, 5.02, 5.04, 5.06, 5.08, 5.10, 5.12, 7.00]
+    return list(range(13)), [[v] for v in col], [[True]] * 12 + [[False]]
+
+
+def test_corner_heat_grades_the_mark_by_each_corners_own_spread():
+    """C4 (cool/corner-heat). CORNERS BY LAP shades each cell by its gap to the corner's typical in
+    units of THAT corner's ▼ step, so the strongest shade is exactly the ▼, a cell inside half a
+    step (the corner's usual spread) is not coloured at all, an interpolated cell never is, and a
+    lap quicker than usual by a whole step takes the other hue."""
+    ids, times, resolved = _corner_heat_fixture()
+    m = corner_matrix(ids, [4], times, resolved)
+    assert abs(m.medians[0] - 5.09) < 1e-9 and abs(m.scales[0] - 0.30) < 1e-9, (m.medians, m.scales)
+    got = [m.heat(r, 0) for r in range(13)]
+    assert got[:5] == [3, -3, 1, 2, 0], f"planted shades wrong: {got[:5]}"
+    assert m.is_behind(0, 0) and all(not m.is_behind(r, 0) for r in range(1, 13))
+    assert got[12] == 0, "an interpolated cell was shaded"
+    assert all(g == 0 for g in got[5:12]), f"cells inside the spread were shaded: {got[5:12]}"
+    # Scale-relative: doubling every gap lifts the step off the floor (0.47 s, its own p90), and
+    # the two whole-step laps are still exactly the two deepest shades.
+    wide = [[5.09 + 2 * (v[0] - 5.09)] for v in times]
+    w2 = corner_matrix(ids, [4], wide, resolved)
+    assert w2.scales[0] > 0.30 and [w2.heat(r, 0) for r in range(5)][:2] == [3, -3], (
+        w2.scales, [w2.heat(r, 0) for r in range(5)])
+    print("test_corner_heat_grades_the_mark_by_each_corners_own_spread OK")
 
 
 def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
@@ -4072,6 +4111,7 @@ def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
     is muted italic (the trust tier's PROVISIONAL treatment) with no ▼ however far off it is, and
     the note says what the grid is over — including the ⊘ / ⚠ laps that are not rows at all."""
     _app()
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor
 
     from studio import theme
@@ -4091,33 +4131,145 @@ def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
     assert t.item(6, 1).text() == "1:15.000", t.item(6, 1).text()
     slow = t.item(6, 2)
     assert slow.text() == f"{theme.DELTA_BEHIND_ARROW} 5.00", slow.text()
-    assert slow.foreground().color() == QColor(theme.behind_colour())
+    # The behind hue moved from the ink to the cell (C4's heat shade): the ▼ cell wears the
+    # deepest behind shade, and its number the primary ink, legible on it.
+    assert slow.background().color() == QColor(theme.heat_fill(3)), slow.background().color().name()
+    assert slow.foreground().color() == QColor(theme.C.text)
     assert "+0.97 s against your typical C3 (4.03 s" in slow.toolTip(), slow.toolTip()
+    assert "the deepest shade" in slow.toolTip(), slow.toolTip()
     assert "7 laps matched on track" in slow.toolTip(), slow.toolTip()
     same = t.item(7, 2)
     assert same.text() == "5.00", f"an interpolated cell carries a mark: {same.text()!r}"
     assert same.font().italic() and same.foreground().color() == PROVISIONAL_COLOR, (
         "an interpolated cell is not muted in the trust tier's provisional style")
     assert same.toolTip().startswith("Not marked: on lap 8, C3"), same.toolTip()
+    assert same.data(Qt.BackgroundRole) is None, "a muted cell was shaded"
     plain = t.item(0, 2)
     assert not plain.font().italic() and not plain.text().startswith(theme.DELTA_BEHIND_ARROW)
+    assert plain.data(Qt.BackgroundRole) is None, "a cell inside its corner's spread was shaded"
+    assert "inside your usual spread, so not shaded" in plain.toolTip(), plain.toolTip()
     note = v.corner_grid_note.text()
     assert "8 clean laps × 2 corners." in note, note
     assert ("▼ = well off your usual time for that corner (0.30 s at the steadiest corner, "
             "0.40 s at the most variable)") in note, note
+    # The shade's key, exact and in each corner's own seconds (half of 0.30 and of 0.40).
+    assert ("Shading grades that step: unshaded within half of it (0.15–0.20 s), deeper at ¾, "
+            "full at a whole step (every ▼); red slower than usual, green quicker.") in note, note
     assert "3 of 16 cells are muted" in note, note
     assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded and 1 {DROPOUT_MARK} GPS-dropout laps "
             "(see the Laps tab).") in note, note
-    # No ★ anywhere in it: "quickest" is the CORNERS table's question (stats.CornerMatrix).
+    # No per-corner ★ in it: "quickest" is the CORNERS table's question (stats.CornerMatrix).
     assert not any(BEST_SECTOR_MARK in t.item(r, c).text()
                    for r in range(t.rowCount()) for c in range(t.columnCount()))
     v.hide()
+    # The colour-blind palette shades from ITS ramp, and the key names its hues.
+    theme.set_palette(theme.PALETTE_COLORBLIND)
+    try:
+        cb = StatsView(sess)
+        cell = cb.corner_grid_table.item(6, 2)
+        assert cell.background().color() == QColor(theme.heat_fill(3)) != QColor(
+            _heat_fill_standard(3)), cell.background().color().name()
+        assert "orange slower than usual, blue quicker." in cb.corner_grid_note.text()
+        cb.hide()
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
     # No corner matrix (no corners, or under the floor): the whole band hides.
     bare = StatsView(_fake_view_session())
     assert bare._corner_grid_band.isHidden() and bare.corner_grid_table.isHidden()
     assert bare.corner_grid_note.isHidden()
     bare.hide()
     print("test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out OK")
+
+
+def _heat_fill_standard(level):
+    from studio import theme
+    prev = theme.active_palette()
+    theme.set_palette(theme.PALETTE_STANDARD)
+    try:
+        return theme.heat_fill(level)
+    finally:
+        theme.set_palette(prev)
+
+
+def test_stats_view_corner_grid_is_a_two_sided_heat_map_with_legible_numbers():
+    """C4's page half on the heat fixture: each planted cell wears its own step of the behind or
+    ahead shade, the ▼ only on the deepest behind one; the interpolated cell, however far off, and
+    the cells inside the spread keep the table's own row tone; every shade keeps the number at
+    WCAG AA against the primary ink in BOTH palettes; and the best lap's row carries the ★."""
+    _app()
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+    from test_contrast import contrast
+
+    from studio import theme
+    from studio.lap_table import BEST_LAP_MARK
+    from studio.stats_panel import StatsView
+    ids, times, resolved = _corner_heat_fixture()
+    sess = _fake_view_session()                    # best_lap_id() == 1
+    sess.corner_matrix = lambda: corner_matrix(ids, [4], times, resolved)
+    sess.lap_time = lambda i: 60.0 + i
+    v = StatsView(sess)
+    t = v.corner_grid_table
+    fills = [t.item(r, 2).data(Qt.BackgroundRole) for r in range(13)]
+    want = [theme.heat_fill(lv) for lv in (3, -3, 1, 2)]
+    got = [None if f is None else f.color().name().upper() for f in fills[:4]]
+    assert got == want, f"planted shades: {got} vs {want}"
+    assert QColor(want[1]).green() > QColor(want[1]).red(), "the quick cell is not the ahead hue"
+    assert all(f is None for f in fills[4:]), "a cell inside the spread, or a muted one, was shaded"
+    arrows = [r for r in range(13) if t.item(r, 2).text().startswith(theme.DELTA_BEHIND_ARROW)]
+    assert arrows == [0], arrows
+    assert t.item(1, 0).text() == f"{BEST_LAP_MARK}2", t.item(1, 0).text()
+    assert t.item(1, 0).foreground().color() == QColor(theme.best_lap_colour())
+    v.hide()
+    sess.timing_verified = False                   # a provisional line: no "best" to point at
+    p = StatsView(sess)
+    assert p.corner_grid_table.item(1, 0).text() == "2"
+    p.hide()
+    for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+        theme.set_palette(pal)
+        try:
+            worst = min(contrast(theme.C.text, theme.heat_fill(lv)) for lv in (-3, -2, -1, 1, 2, 3))
+            assert worst >= 4.5, f"{pal}: a shaded number reads at {worst:.2f}:1"
+        finally:
+            theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_stats_view_corner_grid_is_a_two_sided_heat_map_with_legible_numbers OK")
+
+
+def test_the_data_trust_jump_leaves_no_column_heading_cut_off():
+    """C4's second fix. On the composed dashboard DATA TRUST is second in its column and the other
+    columns start level with the first section, so scrolling the card's own heading to the top
+    cut the neighbouring column's heading off mid-table (a real 1728×1117 window: BRAKING 104 px
+    above the fold). The jump now lands on the band's top whenever the card still fits whole."""
+    _app()
+    from PySide6.QtCore import QPoint
+
+    from studio.stats_panel import StatsView
+    from studio.stats_trust import TIMING_TERM
+    v = StatsView(_fake_view_session())
+    v.resize(1728, 700)
+    v.show()
+    _settle()
+    assert len(v._layout) > 1, f"the fixture is meant to compose columns: {v._layout}"
+    scroll = v._scroll
+    bar = scroll.verticalScrollBar()
+    assert bar.maximum() > 0, "the page does not scroll at this size — the test is vacuous"
+    bar.setValue(bar.maximum())
+    _settle()
+    v.reveal_trust(TIMING_TERM)
+    _settle()
+    vp = scroll.viewport()
+    holder = next(h for h in v._columns if h.isAncestorOf(v.trust.heading))
+    band_top = holder.mapTo(vp, QPoint(0, 0)).y()
+    level = [h for h in v._columns if h.isVisible()
+             and h.mapTo(vp, QPoint(0, 0)).y() == band_top]
+    assert len(level) > 1, "no other column starts level with DATA TRUST's band"
+    assert band_top >= 0, f"the band DATA TRUST sits in starts {-band_top} px above the view"
+    head = v.trust.heading.mapTo(vp, QPoint(0, 0)).y()
+    card = v.trust.card
+    assert head >= 0 and card.mapTo(vp, QPoint(0, card.height())).y() <= vp.height(), (
+        "DATA TRUST is not whole in view after the jump")
+    v.hide()
+    print("test_the_data_trust_jump_leaves_no_column_heading_cut_off OK")
 
 
 def test_the_corner_grid_takes_the_page_width_and_never_the_column_packing():
