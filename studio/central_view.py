@@ -22,8 +22,15 @@ import math
 import os
 from typing import NamedTuple
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFontMetrics,
+    QFontMetricsF,
+    QGuiApplication,
+    QPainter,
+)
 from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
@@ -317,8 +324,10 @@ def _hero_templates() -> tuple[str, ...]:
                                               unit)[0])
         out.append(_at_rest(out[-1]))
         for d in (_HERO_WIDEST_DELTA_S, -_HERO_WIDEST_DELTA_S):
-            out.append(theme.format_delta_speed(d, _HERO_WIDEST_SPEED_KMH, 0, unit)[0])
-            out.append(_at_rest(out[-1]))
+            for ref in (False, True):
+                out.append(_name_hero_baseline(
+                    theme.format_delta_speed(d, _HERO_WIDEST_SPEED_KMH, 0, unit)[0], ref))
+                out.append(_at_rest(out[-1]))
     return tuple(out)
 
 
@@ -348,6 +357,67 @@ def _hero_min_width(label: QLabel) -> int:
     finally:
         label.setText(shown)
     return widest
+
+
+# The hero's Δ-to-baseline run when the chip is off, NAMED like its sibling `Δideal`: the shared
+# formatter (export overlay, byte-pinned) prints a bare `Δ +0.37 s`, which on the best lap read
+# `Δ 0.00 s` under a panel titled "Δ TO IDEAL" beside a strip reading `Δ to ideal +0.085 s` — an
+# unnamed Δ the eye assigns to the panel's baseline, and then they disagree. With a cross-recording
+# reference loaded the number is measured against THAT lap (`delta_at_lap`), so it says `Δref`.
+_HERO_BASE_NAMES = {False: "Δbest", True: "Δref"}
+
+
+def _name_hero_baseline(readout: str, reference: bool) -> str:
+    """`format_delta_speed`'s readout with its leading bare `Δ` replaced by the baseline's name."""
+    return _HERO_BASE_NAMES[reference] + readout[1:] if readout.startswith("Δ ") else readout
+
+
+class _HeroReadout(QLabel):
+    """The hero #DiffBox: ONE label (so `text()`, the width floor and every reader stay as they
+    were) that paints its Δ run in the gain/loss colour and the speed after it in the label's own
+    neutral text colour. It used to be one colour for the whole line, so a positive Δ turned the
+    SPEED red too, as if 45 km/h were a loss. The split is the formatters' own five-space join; a
+    readout without a Δ colour is painted by QLabel itself, untouched."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self._delta_colour: str | None = None
+
+    def delta_colour(self) -> str | None:
+        """The colour the Δ run paints in, or None (all neutral)."""
+        return self._delta_colour
+
+    def set_delta_colour(self, colour: str | None):
+        if colour != self._delta_colour:
+            self._delta_colour = colour
+            self.update()
+
+    def paintEvent(self, event):  # noqa: N802 (Qt override)
+        head, sep, tail = self.text().partition("     ")
+        if not self._delta_colour or not sep:
+            super().paintEvent(event)
+            return
+        fm = QFontMetrics(self.font())
+        # Where QLabel itself would start the text: its contents rect, less its margin and its
+        # INDENT — which, left at the default -1 on a framed label (the QSS box makes it one), is
+        # half an "x" (QLabelPrivate::documentRect). Without it the run sits 6 px left of where
+        # the same text paints with no Δ colour.
+        indent = self.indent()
+        if indent < 0:
+            indent = fm.horizontalAdvance("x") // 2 if self.frameWidth() > 0 else 0
+        m = self.margin()
+        rect = self.contentsRect().adjusted(m + indent, m, -m, -m)
+        p = QPainter(self)
+        p.setFont(self.font())
+        align = self.alignment()
+        p.setPen(QColor(self._delta_colour))
+        p.drawText(rect, align, head)
+        # The tail starts at the FRACTIONAL advance Qt itself lays the whole line out at.
+        rect = QRectF(rect)
+        rect.setLeft(rect.left() + QFontMetricsF(self.font()).horizontalAdvance(head + sep))
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.drawText(rect, align, tail)
+        p.end()
 
 
 @contextlib.contextmanager
@@ -682,7 +752,7 @@ class CentralView(QWidget):
         # removed, just re-prioritized (see _update_diff_box).
         # Placeholder text before the first tick — uses the display unit so it never flashes km/h
         # when the app is set to mph (the live readout re-renders on the first _update_diff_box).
-        self.diff_box = QLabel(f"Δideal —    — {units.speed_label(self._speed_unit)}")
+        self.diff_box = _HeroReadout(f"Δideal —    — {units.speed_label(self._speed_unit)}")
         self.diff_box.setObjectName("DiffBox")
         # LEFT-aligned, not centred: a centred QLabel that is squeezed clips at BOTH ends, so the
         # leading "Δ" was the first thing lost. Left alignment spends any residual clip on the tail.
@@ -2001,14 +2071,18 @@ class CentralView(QWidget):
         # the hero leads with the baseline the lower chart is drawing.
         chart_best = (self._comparing()
                       and self._plots_baseline_kind != plots_view.DELTA_BASELINE_IDEAL)
+        reference = self.session.has_reference()
         if stitched and self.ideal_readout_btn.isChecked() and not chart_best:
             text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
             # `sigil=False`: this sentence already says "Δ", and the run used to add its own —
-            # "Δ to your best lap here: Δ +0.00 s" (§5.6).
-            tip = (f"Δ to your best lap here: {theme.format_delta_run(d_best, sigil=False)}"
+            # "Δ to your best lap here: Δ +0.00 s" (§5.6). With a reference loaded `d_best` is
+            # measured against the reference lap, so the sentence says so.
+            whose = "the reference lap" if reference else "your best lap"
+            tip = (f"Δ to {whose} here: {theme.format_delta_run(d_best, sigil=False)}"
                    + self._ideal_clamp_note(d_ideal))
         else:
             text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)
+            text = _name_hero_baseline(text, reference)
             # theme.format_ideal_run, not a local f-string over format_delta_value: that spelling
             # dropped the unit, so the hovered number read `Δideal +1.05` beside a hero that says
             # `Δideal +1.05 s`, and it skipped the display clamp the hero applies. And in the two
@@ -2028,10 +2102,11 @@ class CentralView(QWidget):
         colour = sem_colour or theme.C.text
         self.diff_box.setText(text)
         self.diff_box.setToolTip(tip)
-        # Only restyle when the colour changes (avoids a per-tick stylesheet re-layout).
+        # The colour goes on the Δ run ONLY (the speed stays the label's neutral text colour), and
+        # only when it changes — no per-tick stylesheet re-layout.
         if colour != getattr(self, "_diff_colour", None):
             self._diff_colour = colour
-            self.diff_box.setStyleSheet(f"QLabel#DiffBox {{ color: {colour}; }}")
+            self.diff_box.set_delta_colour(sem_colour)
 
     def _hero_delta_time(self, t: float, lap_id: int | None) -> float:
         """When the hero's deltas are read: `t`, or — while the playhead is still where the
@@ -2067,6 +2142,7 @@ class CentralView(QWidget):
         the dist/time mode flips (positions' units change)."""
         mode = mode or self.plots.axis_mode()
         self.plots.set_sector_lines(self.session.sector_plot_positions(mode))
+        self.plots.set_corner_labels(self.session.corner_plot_positions(mode))  # same axis, C1…
         # The chart x-axis units changed with the mode too, so the F5 brake glyphs / coast bands
         # need re-pushing in the new mode's units (same reason as the sector lines).
         self._refresh_driving_channels()
