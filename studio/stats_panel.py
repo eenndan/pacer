@@ -476,6 +476,15 @@ CORNER_GRID_LEAD_COLUMNS = SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS
 # The CORNERS BY LAP grid: the SPLITS grid's idiom over the detected corners, which unlike sector
 # lines exist on every recording the owner has. Its one difference from SPLITS — the muted,
 # never-marked cell — and its missing ★ are measured, not styled: see stats.CornerMatrix.
+_SHARE_WORDS = {0.25: "¼", 0.5: "½", 0.75: "¾"}
+
+
+def heat_share(f: float) -> str:
+    """A MATRIX_HEAT_STEPS fraction as the page prints it — read from the constant, never typed, so
+    the copy moves with the band (¾ for 0.75; a decimal for any fraction without a glyph)."""
+    return _SHARE_WORDS.get(f, f"{f:g}")
+
+
 CORNER_GRID_TOOLTIP = (
     "Every clean lap down the page, every corner across it. A cell is that lap's time through that "
     "corner — the same number the Corners page shows for the lap. The ▼ and the deepest shade mark a lap "
@@ -494,12 +503,15 @@ CORNER_GRID_TOOLTIP = (
     "They are shown, because they are the lap's real reading, but they never carry a ▼ and never "
     "count towards the typical. The CORNERS table above counts the same matched cells, so its "
     "Median is this typical wherever a corner has one.\n\n"
-    "THE SHADING is the same rule, graded. A cell's gap to that typical is read in that corner's own "
-    "▼ step, so a steady corner and a variable one shade alike for the same share of their spread: "
-    f"unshaded within {stats_service.MATRIX_HEAT_STEPS[0]:g} of a step either way (the corner's "
-    "usual spread), deeper at each further quarter, and full at a whole step — exactly where the ▼ "
-    "is, so every ▼ is the deepest shade and nothing short of one is. The behind hue is slower than "
-    "usual, the ahead hue quicker. Muted cells are never shaded.\n\n"
+    "THE SHADING is the same rule, graded: a cell's gap to that typical as a SHARE OF THAT "
+    f"CORNER'S ▼ STEP. Light from {heat_share(stats_service.MATRIX_HEAT_STEPS[0])} of the step "
+    "either way, full at the whole step — exactly where the ▼ is, so every ▼ is the deepest shade "
+    "and nothing short of one is. The behind hue is slower than usual, the ahead hue quicker. Where "
+    "a corner's step is above the floor it is that corner's own "
+    f"{stats_service.MATRIX_SCALE_PCT:g}th-percentile deviation, so about "
+    f"{100 - stats_service.MATRIX_SCALE_PCT:g} % of laps carry the ▼ there by construction: the "
+    "shade grades your slowest passes through it, it does not prove a mistake. Muted cells are "
+    "never shaded.\n\n"
     "NO PER-CORNER ★. The ★ on a lap number is your best lap, as on PER LAP — the lap every corner "
     "window here is matched to. The quickest time through each corner is the CORNERS table's Best "
     "above; this grid answers a different question — which laps lost time, and where.")
@@ -514,12 +526,14 @@ def heat_clause(level: int, scale) -> str:
     if scale is None:
         return ""
     step = f"this corner's ▼ step ({scale:.2f} s)"
+    first = heat_share(stats_service.MATRIX_HEAT_STEPS[0])
     if level == 0:
-        return f" Within half of {step}: inside your usual spread, so not shaded."
+        return f" Less than {first} of {step} either way, so not shaded."
     way = "slower" if level > 0 else "quicker"
     if abs(level) == len(stats_service.MATRIX_HEAT_STEPS):
-        return f" A whole {step} or more {way}: the deepest shade."
-    return f" At least {stats_service.MATRIX_HEAT_STEPS[abs(level) - 1]:g} of {step} {way}: shaded."
+        return f" {way.capitalize()} by the whole of {step} or more: the deepest shade."
+    share = heat_share(stats_service.MATRIX_HEAT_STEPS[abs(level) - 1])
+    return f" {way.capitalize()} by at least {share} of {step}: the lighter shade."
 
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
               "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
@@ -1949,7 +1963,7 @@ class StatsView(QWidget):
             # THE BAND, NOT THE HEADING, WHEN IT FITS. On the composed dashboard the card is
             # second in its column and the other columns' sections start level with the first, so
             # putting the card's own heading at the top cut the neighbouring column's heading off
-            # mid-table (BRAKING, 104 px above the fold on a real 1728×1117 window). The band's
+            # mid-table (tests/test_stats.py reproduces it on a stub session). The band's
             # top is where every column of it starts; it is used whenever the card still lands
             # whole under it, and the heading alone otherwise (a short window).
             holder = next((h for h in self._columns if h.isAncestorOf(self.trust.heading)), None)
@@ -2870,7 +2884,7 @@ class StatsView(QWidget):
                             "on track at both edges — too few to say what a typical lap through it "
                             "is.")
                     else:
-                        # THE HEAT SHADE is the ▼ rule graded (stats.CornerMatrix.heat): +3 IS the
+                        # THE HEAT SHADE is the ▼ rule graded (stats.CornerMatrix.heat): +2 IS the
                         # ▼, so the mark and the strongest shade can never disagree. The number
                         # goes back to the primary ink on a shade — the behind hue on its own tint
                         # is the one pairing in this grid that would not read (theme.HEAT_ALPHAS).
@@ -2913,17 +2927,17 @@ class StatsView(QWidget):
                 if lo == hi else
                 f"▼ = well off your usual time for that corner ({lo:.2f} s at the steadiest "
                 f"corner, {hi:.2f} s at the most variable).")
-            # THE SHADE'S KEY, in the same per-corner seconds: where it starts (the corner's usual
-            # spread ends) and that its full strength is the ▼ itself (stats.MATRIX_HEAT_STEPS).
+            # THE SHADE'S KEY, in the same per-corner seconds: a share of that step, where the light
+            # shade starts and that its full strength is the ▼ itself (stats.MATRIX_HEAT_STEPS).
             f0 = stats_service.MATRIX_HEAT_STEPS[0]
             d = stats_service.MATRIX_DECIMALS
             h_lo, h_hi = round(f0 * lo, d), round(f0 * hi, d)
             slower, quicker = HEAT_HUE_WORDS.get(theme.active_palette(),
                                                  HEAT_HUE_WORDS[theme.PALETTE_STANDARD])
             parts.append(
-                f"Shading grades that step: unshaded within half of it ({h_lo:.2f}"
-                + ("" if h_lo == h_hi else f"–{h_hi:.2f}") + " s), deeper at ¾, full at a whole "
-                f"step (every ▼); {slower} slower than usual, {quicker} quicker.")
+                f"Shading is a share of that step: light from {heat_share(f0)} of it ({h_lo:.2f}"
+                + ("" if h_lo == h_hi else f"–{h_hi:.2f}") + " s), full at the whole step (every "
+                f"▼); {slower} slower than usual, {quicker} quicker.")
         unmarkable = [f"C{cid}" for cid, med in zip(matrix.cids, matrix.medians, strict=True)
                       if med is None]
         if unmarkable and scales:

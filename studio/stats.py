@@ -252,15 +252,26 @@ MATRIX_SCALE_PCT = 90.0
 MATRIX_DECIMALS = PRINT_DECIMALS
 # THE HEAT SHADE behind CORNERS BY LAP's cells (CornerMatrix.heat): the ▼ rule, graded, not a
 # second rule. A cell's gap to its corner's median is read in units of that corner's OWN ▼ step
-# (`scales[c]`), so a 0.15 s loss in a corner whose step is 0.30 and a 0.27 s loss in one whose
-# step is 0.53 shade alike. The steps are fractions of that one step: under the first the cell is
-# inside the corner's usual spread and stays UNSHADED; the last is the ▼ itself, so every ▼ cell
-# is the strongest shade and nothing short of a ▼ is. Two-sided because the data has both: on the
-# synthetic demo six laps are a whole step QUICKER through C1 (the planted habit's clean laps),
-# while on a real club session about one cell in nine shades, nearly all of them slower — the rest
-# are within half a step of their typical, and a heat map that coloured them would colour noise.
-# Half a step at the 0.30 s floor is 0.15 s, past the "tenth or two" one split's noise is (above).
-MATRIX_HEAT_STEPS = (0.5, 0.75, 1.0)
+# (`scales[c]`): the shade is a SHARE OF THAT CORNER'S ▼ STEP, and claims nothing else. Two shaded
+# levels: from ¾ of the step, and the whole step — the ▼ itself, so every ▼ cell is the deepest
+# shade and nothing short of a ▼ is. Two-sided: on the synthetic demo six laps are a whole step
+# QUICKER through C1 (its planted habit's clean laps).
+#
+# WHAT THE SHADE IS NOT: a mistake detector wherever the step is above the 0.30 s floor. There the
+# step is the column's own p90 deviation, so the ▼ marks about one cell in ten BY CONSTRUCTION and
+# the shading grades your slowest passes rather than detecting errors. Pure noise (40 seeds × 10
+# corners, 40 laps; % of cells shaded slower ≥ ¾ / ▼ / quicker ≥ ¾; 5 and 15 laps read within
+# ~1 pt on the slower side):
+#
+#     Gaussian σ 0.05: 0 / 0 / 0        0.10: 1.5 / 0.1 / 1.7     0.15: 7.4 / 2.3 / 7.5
+#              σ 0.20: 12.9 / 6.4 / 13.4                          0.30: 18.3 / 11.1 / 18.3
+#     skewed   σ 0.05: 0.9 / 0.3 / 0    0.10: 4.4 / 2.2 / 0       0.30: 15.6 / 10.4 / 0.5
+#
+# At the floor (σ ≲ 0.10, a steady corner) the ¾ step is 0.22 s, and noise alone shades ≲ 2 % of
+# cells per side (4.4 % slower on a right-skewed corner); tests/test_stats.py pins σ 0.05 at ~0.
+# A ½ band was measured and dropped: half a p90 step is ~0.64 σ, and it shaded 16-27 % of
+# pure-noise cells per side at σ 0.15-0.30.
+MATRIX_HEAT_STEPS = (0.75, 1.0)
 
 # --------------------------------------------------------------------- coasting, by place
 # WHERE THE COASTING IS: every clean lap's coast seconds split over the corner/straight partition —
@@ -678,10 +689,10 @@ class CornerMatrix:
         return _behind_at_print(val, med, scale)
 
     def heat(self, row: int, col: int) -> int:
-        """The cell's heat shade, −3 … +3: how many of MATRIX_HEAT_STEPS (fractions of the column's
-        ▼ step) its gap to the column's median reaches — positive slower, negative quicker, 0 inside
-        the spread. 0 wherever `is_behind` refuses (muted, blank, no typical). Compared at print
-        resolution exactly as `is_behind`, so +3 IS `is_behind`: one rule, never two that can
+        """The cell's heat shade, −2 … +2: how many of MATRIX_HEAT_STEPS (fractions of the column's
+        ▼ step) its gap to the column's median reaches — positive slower, negative quicker, 0 short
+        of the first. 0 wherever `is_behind` refuses (muted, blank, no typical). Compared at print
+        resolution exactly as `is_behind`, so +2 IS `is_behind`: one rule, never two that can
         disagree at the edge."""
         val = self.cells[row][col]
         med = self.medians[col]
