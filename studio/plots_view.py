@@ -1341,6 +1341,11 @@ class PlotsView(QWidget):
         self.cur_delta.setVisible(False)
         self.cur_speed_datum.setVisible(False)
         self.cur_delta_datum.setVisible(False)
+        # The corner labels sit out the refit too (they are out of the fit already — ignoreBounds —
+        # but a visible label re-lays itself out on every range step of it); the declutter at the
+        # end of this refresh puts back exactly the ones that fit.
+        for ln in self._corner_items:
+            ln.setVisible(False)
 
         # Re-enable autorange so the new selection's curves are fit before we freeze it again.
         self.p_speed.enableAutoRange()
