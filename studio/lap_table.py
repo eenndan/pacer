@@ -1617,22 +1617,24 @@ class LapTable(QWidget):
 
     # --------------------------------------------------- "inspect this number" (provenance)
     # TWO of the app's three inspectable numbers live in this one grid — the lap Time cell and the
-    # S-split cells — which is exactly the pair `_clock_cols` already names as "the DURATIONS".
-    # Reusing that set rather than re-listing the columns is what keeps the menu from appearing on
+    # S-split cells — the DURATIONS `_clock_cols` names, less Δbest, which is a difference of two
+    # Time cells (each inspectable on its own) rather than a measurement with fixes behind it.
+    # Deriving the set rather than re-listing the columns is what keeps the menu from appearing on
     # a column the inspector has nothing to say about, on a table whose column COUNT changes every
     # time a sector line is added or removed.
+
+    def _inspectable_cols(self) -> set[int]:
+        return self._clock_cols() - {_DELTA_COL}
 
     def _provenance_at(self, r: int, c: int):
         """The `Provenance` for the number in cell (r, c), or None when that cell is not one of
         the inspectable numbers (or the lap behind it is too degenerate to explain)."""
         session = self.session
-        if session is None or r < 0 or c not in self._clock_cols():
+        if session is None or r < 0 or c not in self._inspectable_cols():
             return None
         lap_id = self._lap_id(r)
         if c == _TIME_COL:
             return session.lap_time_provenance(lap_id)
-        if c < len(COLUMNS):
-            return None   # Δbest: a difference of two Time cells, each inspectable on its own
         return session.sector_split_provenance(lap_id, c - len(COLUMNS))
 
     def _on_context_menu(self, pos) -> None:
@@ -1842,20 +1844,26 @@ class LapTable(QWidget):
         The tone is decided HERE, once, so the bar can never colour what the tooltip calls level:
         TONE_LEVEL under PB_PRECISION_S, TONE_MUTED on provisional timing (no lap is behind a guessed
         start line), else TONE_BEHIND. A ⚠ dropout lap still gets its bar against the clean scale;
-        it just never set that scale. The digits keep the row's own colour in every case."""
+        it just never set that scale. The digits keep the row's own colour in every case.
+
+        A cell that carries a TRUST note (dropout / provisional / estimated) keeps exactly that
+        note, the way the dropout note already wins over the others: the gap's own sentence would
+        speak with an authority the note has just withdrawn."""
         gap = item.data(NUM_ROLE)
         scale = self._delta_scale
-        if gap is None or not math.isfinite(float(gap)) or float(gap) <= 0 or not scale:
+        finite = gap is not None and math.isfinite(float(gap))
+        if not finite or float(gap) <= 0 or not scale:
             item.setData(DELTA_BAR_ROLE, None)
-            if gap is not None and math.isfinite(float(gap)) and float(gap) < 0:
-                item.setToolTip(_with_star(delta_tip(float(gap), False), trust_tip))
+            if finite and float(gap) < 0 and not trust_tip:
+                item.setToolTip(delta_tip(float(gap), False))
             return
         gap = float(gap)
         clipped = gap > scale * (1 + 1e-9)
         tone = (TONE_MUTED if muted else TONE_LEVEL if within_timing_precision(gap)
                 else TONE_BEHIND)
         item.setData(DELTA_BAR_ROLE, (min(gap / scale, 1.0), clipped, tone))
-        item.setToolTip(_with_star(delta_tip(gap, clipped), trust_tip))
+        if not trust_tip:
+            item.setToolTip(delta_tip(gap, clipped))
 
     def refresh_timing_trust(self):
         """Re-render everything this table keys on the session's TRUST/QUALITY flags — the muted

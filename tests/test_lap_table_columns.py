@@ -260,10 +260,7 @@ def test_provisional_demotes_every_start_line_column():
     table.refresh()
     for c in range(1, real):                      # Time, Δbest, Dist, Entry, S1, S2 — all demoted
         it = tb.item(0, c)
-        # the Δbest cell says its gap first and the trust note after it (_apply_delta_bar)
-        tip_ok = (it.toolTip() == PROVISIONAL_TOOLTIP
-                  or (c == _DELTA_COL and it.toolTip().endswith("\n\n" + PROVISIONAL_TOOLTIP)))
-        assert it.font().italic() and tip_ok, \
+        assert it.font().italic() and it.toolTip() == PROVISIONAL_TOOLTIP, \
             f"column {c} ({tb.horizontalHeaderItem(c).text()}) not demoted under provisional timing"
     assert not tb.item(0, 0).font().italic(), "the Lap NUMBER does not move with the start line"
 

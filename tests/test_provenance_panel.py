@@ -187,8 +187,9 @@ def test_the_lap_table_offers_inspection_on_exactly_the_two_time_columns():
     for c in range(table._n_real_cols()):
         prov = table._provenance_at(0, c)
         (offered if prov is not None else declined).append(c)
-    assert offered == sorted(table._clock_cols()), (offered, table._clock_cols())
-    assert declined == [0, 2, 3], declined            # Lap, Dist, Entry
+    assert offered == sorted(table._inspectable_cols()), (offered, table._inspectable_cols())
+    # Lap, Δbest (a difference of two Time cells, each inspectable itself), Dist, Entry
+    assert declined == [0, 2, 3, 4], declined
     # The Time cell's provenance really is the lap's, and the S cell's really is that sector's.
     lap_id = table._lap_id(0)
     assert table._provenance_at(0, 1).value == s.lap_time(lap_id)
@@ -205,7 +206,7 @@ def test_the_lap_table_panel_headline_is_the_cell_text():
     s = _with_sectors(_session())
     table = LapTable(s)
     table.refresh()
-    for c in sorted(table._clock_cols()):
+    for c in sorted(table._inspectable_cols()):
         for r in range(min(table.table.rowCount(), 3)):
             prov = table._provenance_at(r, c)
             cell = table.table.item(r, c).text().replace(" ★", "")
