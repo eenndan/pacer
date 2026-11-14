@@ -32,6 +32,7 @@ import pyqtgraph as pg
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -39,6 +40,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from _synthetic import bare_session  # noqa: E402
 
+from studio import map_view as _mv  # noqa: E402
 from studio import theme  # noqa: E402
 from studio.map_render import ELEVATION_LO_LABEL, rainbow_channel  # noqa: E402
 from studio.map_view import CORNER_LEFT_COLOR, MapView, _segs_equal  # noqa: E402
@@ -516,11 +518,15 @@ def test_the_map_key_draws_the_brake_glyphs_that_are_on_the_map():
     The key now takes its brake glyphs from the same argument the markers are built from."""
     mv = _compare_map()
     key = mv._map_key
-    assert key.brake_glyphs == [(theme.series_symbol(theme.CHART_SERIES[0]), theme.CHART_SERIES[0]),
-                                (theme.series_symbol(theme.CHART_SERIES[1]), theme.CHART_SERIES[1])], (
+    brake = QColor(theme.MAP_BRAKE_COLOR).name().upper()
+    plate = QColor(_mv.BRAKE_HOLLOW_PLATE).name().upper()
+    canvas = QColor(theme.C.canvas).name().upper()
+    # cool/map-hero: one brake hue on the map; lap A filled, lap B hollow, shapes by slot.
+    assert key.brake_glyphs == [(theme.series_symbol(theme.CHART_SERIES[0]), brake, canvas),
+                                (theme.series_symbol(theme.CHART_SERIES[1]), plate, brake)], (
         f"the key's brake row says {key.brake_glyphs}, the map draws {_scatters(mv)}")
     on_map = {(sym, colour) for sym, colour, z in _scatters(mv) if z == 7.0}
-    assert {(s, QColor(c).name().lower()) for s, c in key.brake_glyphs} == on_map, (
+    assert {(s, f.lower()) for s, f, _e in key.brake_glyphs} == on_map, (
         f"key {key.brake_glyphs} vs map {on_map}")
     # A single-lap map draws one glyph, and clearing the layer must not leave a stale pair behind.
     mv.set_brake_markers([([(0.0, 0.0, 0.3)], theme.CHART_SERIES[0])])
@@ -651,6 +657,156 @@ def test_the_corner_locate_ring_is_not_the_colour_of_the_lap_line_it_rings():
     mv.deleteLater()
     print("test_the_corner_locate_ring_is_not_the_colour_of_the_lap_line_it_rings OK "
           f"— ring {ring_hex} vs lap line {lap_hex}")
+
+
+# ------------------------------------------- cool/map-hero: brake hue, resting chrome, the mark
+def test_brake_glyphs_wear_a_colour_no_line_mode_paints():
+    """The map's brake glyphs wore their LAP's colour, and the app hands the best lap
+    theme.best_lap_colour() — the Speed ramp's own top bucket ("fast"; "throttle" under Pedal). So on
+    the map's default view a brake point was the colour of flat-out. In both palettes, the glyph
+    the app pushes for the best lap (and for any identity lap) must be none of the ramp's colours,
+    neither of its ends and not the best-lap hue."""
+    mv = _sized_map(_session())
+    try:
+        for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+            theme.set_palette(pal)
+            mv.refresh_palette()
+            ramp = [QColor(c).name().lower() for c in theme.rainbow_colors()]
+            forbidden = {*ramp, QColor(theme.best_lap_colour()).name().lower()}
+            for lap_colour in (theme.best_lap_colour(), *theme.CHART_SERIES):
+                mv.set_brake_markers([([(0.0, 0.0, 0.5), (50.0, 10.0, 0.2)], lap_colour)])
+                fills = {colour for _s, colour, z in _scatters(mv) if z == 7.0}
+                assert fills, "no brake glyph was drawn"
+                assert not fills & forbidden, (
+                    f"{pal}: a brake glyph pushed for lap colour {lap_colour} is filled "
+                    f"{sorted(fills)} — a colour the line modes paint (ramp ends {ramp[0]} / "
+                    f"{ramp[-1]}, best lap {theme.best_lap_colour()})")
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        mv.refresh_palette()
+        mv.hide()
+        mv.deleteLater()
+    print("test_brake_glyphs_wear_a_colour_no_line_mode_paints OK")
+
+
+def _verified(s):
+    s.track_name = "Test circuit"     # a Session handed a name with no stored geometry: verified
+    return s
+
+
+def _scene_of(mv, x, y):
+    return mv.plot.getViewBox().mapViewToScene(pg.Point(x, y))
+
+
+def test_timing_handles_rest_hidden_and_appear_near_the_pointer():
+    """The resting map drew the start line as an amber segment between two orange crosshairs. Now
+    the handles (and the start segment) rest hidden and appear when the pointer comes near a line —
+    with the grab cursor — and a drag still moves the line exactly as before."""
+    mv = _sized_map(_verified(_session(start_x=-200.0)))
+    try:
+        assert mv._provisional_line is None, "the fixture must be VERIFIED (no drag prompt)"
+        st = mv._start
+        assert not st.h1.isVisible() and not st.h2.isVisible() and not st.line.isVisible(), (
+            "the start line's handles/segment are drawn on the resting map")
+        assert st.h1.cursor().shape() == Qt.OpenHandCursor
+        assert st.h1.scale == 11, "the handle's hit target changed size"   # TargetItem's `size`
+
+        scene = mv.widget.scene()
+        scene.sigMouseMoved.emit(_scene_of(mv, -200.0, 5.0))       # near the line
+        assert st.h1.isVisible() and st.h2.isVisible() and st.line.isVisible(), (
+            "hovering the start line did not reveal its handles")
+        got = []
+        mv.timing_lines_changed.connect(lambda start, sectors: got.append(start))
+        st.h1.setPos(pg.Point(-210.0, -10.0))                      # the drag itself …
+        st.h1.sigPositionChangeFinished.emit(st.h1)                # … and its release
+        assert got and (round(got[-1].x1, 6), round(got[-1].y1, 6)) == (-210.0, -10.0), got
+        assert mv._finish_mark.at is not None, "the moved line lost its mark"
+
+        scene.sigMouseMoved.emit(_scene_of(mv, 150.0, 0.0))        # far from every line
+        assert not st.h1.isVisible() and not st.line.isVisible(), "the handles never re-hid"
+
+        mv._add_sector()                                           # editing is relevant now
+        assert all(tl.h1.isVisible() for tl in [mv._start, *mv._sectors]), (
+            "after Add sector the new line's handles are hidden")
+        assert mv._sectors[0].line.isVisible()
+        mv._unpin_timing_chrome()
+        assert not mv._sectors[0].h1.isVisible() and mv._sectors[0].line.isVisible(), (
+            "a resting sector line must keep its segment (it has no other mark)")
+    finally:
+        mv.hide()
+        mv.deleteLater()
+    # A PROVISIONAL start line is asking to be dragged: its handles stay up at rest.
+    mv = _sized_map(_session(start_x=-200.0))
+    try:
+        assert mv._provisional_line is not None
+        assert mv._start.h1.isVisible(), "the provisional prompt hides the handles it asks for"
+    finally:
+        mv.hide()
+        mv.deleteLater()
+    print("test_timing_handles_rest_hidden_and_appear_near_the_pointer OK")
+
+
+def _arrow_tip(mv):
+    """The arrow's tip in SCREEN px relative to the mark's centre (y down), off the drawn path."""
+    item = mv._finish_mark.item
+    spots = item.points()
+    assert len(spots) == 3, f"the mark is {len(spots)} spots, not backing + squares + arrow"
+    path, size = spots[2].symbol(), spots[2].size()
+    pts = [path.elementAt(i) for i in range(path.elementCount())]
+    far = max(pts, key=lambda e: e.x * e.x + e.y * e.y)
+    return far.x * size, far.y * size
+
+
+def test_the_start_finish_mark_sits_on_the_crossing_and_points_the_way_the_laps_run():
+    """A chequered mark where the start line crosses the track, and an arrow past it along the
+    direction of travel — checked both ways round the same loop."""
+    for reverse in (False, True):
+        s = _verified(_session(start_x=-200.0))
+        if reverse:
+            s.tx, s.ty = s.tx[::-1].copy(), s.ty[::-1].copy()
+        mv = _sized_map(s)
+        try:
+            at = mv._finish_mark.at
+            assert at is not None, "no mark where the start line crosses the trace"
+            x, y, ux, uy = at
+            assert abs(x + 200.0) < 0.5 and abs(y) < 0.5, f"mark at ({x:.2f}, {y:.2f})"
+            # The loop runs (cos, sin): at x = -200 it heads -y; reversed, +y.
+            want = 1.0 if reverse else -1.0
+            assert abs(ux) < 0.05 and abs(uy - want) < 0.05, (reverse, ux, uy)
+            tx, ty = _arrow_tip(mv)
+            # screen y is down: data -y (heading down the map) is screen +y
+            assert ty * -want > 10.0 and abs(tx) < 2.0, (
+                f"the arrow points ({tx:.1f}, {ty:.1f}) px, not along travel ({ux:.2f}, {uy:.2f})")
+            assert mv._finish_mark.item.isVisible()
+        finally:
+            mv.hide()
+            mv.deleteLater()
+    print("test_the_start_finish_mark_sits_on_the_crossing_and_points_the_way_the_laps_run OK")
+
+
+def test_the_elevation_legend_says_it_is_gps_altitude_with_unmeasured_noise():
+    """"lowest" → "+30 m" read like a surveyed relief. It is the GPS receiver's altitude, and its
+    noise is not measured on the recording: the legend says both, and its tooltip cites the only
+    figures the repo has (two other recordings)."""
+    s = _session()
+    s.lap_elevation_channel = lambda lid: 10.0 + 30.0 * np.sin(np.linspace(0.0, math.pi, 240))
+    mv = _sized_map(s)
+    try:
+        mv.set_current_lap(0)
+        mv.set_rainbow_mode("elevation")
+        lg = mv._legend
+        assert lg.isVisibleTo(mv), "the elevation legend is not shown"
+        lo, hi = lg.lo_label.text(), lg.hi_label.text()
+        assert "GPS altitude" in lo and ELEVATION_LO_LABEL in lo, lo
+        assert hi.startswith("+30 m") and "noise not measured" in hi, hi
+        assert "not measured" in lg.toolTip() and "2.40 m" in lg.toolTip(), lg.toolTip()
+        mv.set_rainbow_mode("speed")
+        assert "GPS altitude" not in mv._legend.lo_label.text() and not lg.toolTip(), (
+            "the elevation wording leaked into another channel's legend")
+    finally:
+        mv.hide()
+        mv.deleteLater()
+    print("test_the_elevation_legend_says_it_is_gps_altitude_with_unmeasured_noise OK")
 
 
 def _run_all():
