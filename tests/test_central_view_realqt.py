@@ -847,7 +847,7 @@ def test_corner_labels_sit_on_the_maps_apex_not_the_middle_of_the_corner():
 
 
 def test_with_a_reference_loaded_the_hero_names_it_and_never_says_best_lap():
-    """cool/chart-corners review P1/P2-2. With a cross-recording reference loaded `delta_at_lap` is
+    """cool/chart-corners review P2-1/P2-2. With a cross-recording reference loaded `delta_at_lap` is
     measured against THAT lap, so the hero's chip-off run is `Δref`, its chip-on tooltip says "the
     reference lap", and on the session best it must not append "This IS your best lap … reads
     exactly zero for the whole lap" — against a reference the best lap's Δ moves like any other."""

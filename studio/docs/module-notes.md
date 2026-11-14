@@ -457,11 +457,13 @@ The **session record** (pacer-free AND Qt-free): one record per recording — co
 
 - **Live Δ/speed readout + delta-plot hover dot:** an always-on box above the plots
   (`central_view._update_diff_box`) shows the **current-moment Δ + speed**, updating live as the
-  video plays or the cursor scrubs — green when meaningfully ahead, red when behind, neutral
-  within ±`theme.DELTA_EVEN_EPS_S` of zero. Its **default reference is the IDEAL lap**
+  video plays or the cursor scrubs. Only the **Δ run** is coloured — green when meaningfully ahead,
+  red when behind, neutral within ±`theme.DELTA_EVEN_EPS_S` of zero; the speed beside it stays the
+  neutral text colour (`central_view._HeroReadout` paints the two runs). Its **default reference is
+  the IDEAL lap**
   (`Δideal`, from `session.delta_to_ideal_at` on the memoized envelope grid), because that is the
   target the rest of the app is built around; a **`vs ideal` chip** flips it to lead with
-  `session.delta_at_lap` (Δ-to-best) instead. **Whichever number is not leading is in the box's
+  `session.delta_at_lap` instead, named `Δbest` (or `Δref` against a loaded reference lap). **Whichever number is not leading is in the box's
   tooltip** — re-prioritized, never removed. The lead is gated on the ideal being a real
   *composite*, and on the **state, not the chip**: where one lap is quickest through every segment
   the "ideal" IS that lap, so leading with it would print `Δideal +0.00 s` on the app's largest

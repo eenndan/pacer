@@ -115,9 +115,12 @@ def sector_line_pen():
 SECTOR_LABEL_COLOR = C.text_dim
 # The map labels every corner C1…; the speed chart, which a racer reads corner by corner, named
 # none, and the only grey bands on it are COAST spans (see _draw_driving), which read as corners.
-# So each corner's apex gets its map label along the speed plot's TOP edge — the apex is the lap's
-# slow point, so the trace is low there and the top is clear — centred on the apex, in the sector
-# labels' quiet text hue. An InfLineLabel on an unstroked line keeps it pinned to that edge through
+# So each corner gets its map label along the speed plot's TOP edge, centred on the SAME point the
+# map puts it: the corner's geometric apex (`corners.Corner.apex`, the curvature-weighted centre of
+# the bend on the best lap's odometer). That is not the lap's slowest point: on a long compound bend
+# it can sit tens of metres before the speed minimum. The top edge is used because a corner is
+# where the trace dips, so it is usually clear there. Quiet text hue, like the sector labels. An
+# InfLineLabel on an unstroked line keeps it pinned to that edge through
 # any pan or zoom with no per-tick work; _declutter_corner_labels drops (never overlaps) the ones
 # that would collide, re-run only when the x-range or the size changes.
 CORNER_LABEL_COLOR = C.text_dim
