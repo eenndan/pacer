@@ -224,10 +224,14 @@ def test_the_honesty_line_is_the_lap_cards_own():
         s = FakeSession({0: 60.0, 1: 60.4, 2: 60.8}, quality=q)
         card, strip = share_card.card_data(s), ls.lapstrip_data(s)
         assert (strip.stamp, strip.blocked) == (card.stamp, card.blocked), q
-        assert strip.provenance == getattr(card, "provenance", ""), q
+        assert strip.provenance == card.provenance, q
         assert (strip.track, strip.date, strip.best_time) == (card.track, card.date, card.best_time)
     assert ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.4}, quality=MEDIA)).stamp == \
         "estimated timing"
+    # the clean footer is the report's own Timing words; a stamped card never also claims them
+    assert ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.4})).provenance == \
+        "verified start line · GPS9 true clock"
+    assert ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.4}, quality=LOW)).provenance == ""
     # a provisional line: the lap card refuses, so does the strip
     prov = ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.4}, verified=False))
     assert prov.blocked and not prov.offered

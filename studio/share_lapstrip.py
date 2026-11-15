@@ -196,7 +196,7 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
         clean_laps=sum(1 for lid in times if lid not in dropouts),
         excluded_note=(exclusion_summary(reasons) or f"{len(excluded)} left out") if excluded else "",
         too_brief=too_brief_note(too_brief_count(session, len(times) + len(excluded))),
-        stamp=card.stamp, provenance=getattr(card, "provenance", ""), blocked=card.blocked)
+        stamp=card.stamp, provenance=card.provenance, blocked=card.blocked)
 
 
 # --------------------------------------------------------------------------- Qt rendering
