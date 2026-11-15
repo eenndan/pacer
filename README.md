@@ -84,7 +84,8 @@ official timing measures the noise floor.
 
 - **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation;
   scrub the chart and the footage follows, or play two laps side by side — including the best lap
-  of *another* recording of the same track.
+  of *another* recording of the same track. **Lap race** (R) sets every clean lap off from the
+  start line together on the map, each on its own lap clock, in packs the timing cannot split.
 
 <img src="docs/media/map.png" width="620" alt="The map panel maximised on Sandown 3h, pictured at v0.7: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven named corner apexes, brake-point markers, the start/finish line, and the map key naming every glyph">
 

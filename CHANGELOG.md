@@ -6,6 +6,56 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-15
+
+The it-moves release: 9 pull requests from #549 to #562, Wave 2 of the campaign to make the app
+cooler and still true: laps that race on the map, a live compare Δ, and a map that moves.
+
+### Highlights
+
+- **Lap race (R): your clean laps race each other on the map.** Each runs on its own lap clock
+  from the start line; the card lists packs, the laps the timing cannot split from their leader,
+  and only a pack's leader has a position (#549, #553)
+- **The race claims only what the timing holds.** On an unconfirmed start line it runs unranked,
+  with no intervals; on a video-clock recording ties widen to 0.15 s; the selected lap's gap is to
+  the best lap, a reference that never changes (#553)
+- **Compare says its gap out loud.** A big live Δ on the seam under the two videos names its pair,
+  "lap 4 vs lap 9", and takes a colour only beyond the 0.07 s timing precision (#552)
+- **See where a lap gains.** With two laps on the distance axis, the speed chart shades between
+  them, green or red, only where the gap is beyond twice the noise of two traces (±1.75 km/h) and
+  the Δ-rate agrees; the time axis shades nothing, and its legend says why (#552)
+- **The map moves with you.** The playhead dot leaves a fading 2.4 s tail of what you just drove;
+  hover a corner label on the speed chart and the map rings that corner, and the other way round
+  (#554, #555)
+- **The Δ readout rolls, and only there.** After a seek within one lap it counts to its new value
+  in 180 ms; never while playing, never across a lap or baseline change (#557)
+- **Reduce motion.** View ▸ Reduce motion turns the roll off; until you choose, it follows macOS's
+  own Reduce Motion setting (#557)
+- **Keys that say why.** R starts a race whenever the map is on screen and otherwise names the
+  reason in the status bar; ⌘Z and ⌘⇧S say why too, instead of doing nothing (#561)
+
+### Added
+
+- The Δ readout counts to its new value after a seek within a lap (never while playing, never on a
+  lap or baseline change); View ▸ Reduce motion turns it off. (#557)
+- Map: the playhead dot leaves a short fading tail of the last 2.4 s driven, the comet the exported
+  clip's map already draws; it starts fresh after a seek. (#555)
+- Hover a corner label on the speed chart and the map rings that corner, and the other way round;
+  the label also follows a Corners, Stats or Coaching row's ring. (#554)
+- View ▸ Lap race (R): every clean lap leaves the start line together on the map, each on its own
+  lap clock, with a card of the packs the timing cannot split; Esc ends it. (#553)
+- Compare shows its Δ big on the seam under the two videos, "lap 4 vs lap 9" and the live gap,
+  coloured only beyond the 0.07 s timing precision. (#552)
+- The speed chart shades where a lap gains: two laps on the distance axis, green/red where the speed
+  gap is beyond twice the noise of two traces (±1.75 km/h). (#552)
+
+### Fixed
+
+- ⌘Z with nothing to undo, and ⌘⇧S before a recording is open, now say why in the status bar instead
+  of doing nothing. (#561)
+- A paused compare no longer shows Δideal beside a chart titled Δ TO BEST: entering or leaving
+  compare re-names the big readout's baseline at once. (#552)
+
 ## [0.8.0] — 2026-11-14
 
 The first-look release: 9 pull requests, #541 to #550 without #549. Seven, #543 on, are Wave 1 of
@@ -1908,7 +1958,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/eenndan/pacer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/eenndan/pacer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/eenndan/pacer/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/eenndan/pacer/compare/v0.6.0...v0.6.1
