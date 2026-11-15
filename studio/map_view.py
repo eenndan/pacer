@@ -190,6 +190,9 @@ CORNER_HIGHLIGHT_COLOR = CORNER_LABEL_COLOR
 CORNER_HIGHLIGHT_PEN_W = 2
 CORNER_HIGHLIGHT_HALO_W = CORNER_HIGHLIGHT_PEN_W + 2   # 1 px of canvas either side of the ring
 CORNER_HIGHLIGHT_SIZE = 18
+# Hovering a corner's label plate, or within this many px of its apex dot, names it to the rest of
+# the app (MapView.cornerHovered): the ring above is what the chart's hover draws here, too.
+CORNER_HOVER_PX = 7.0
 # The compare ghost is lap B's identity cyan (GHOST_COLOR), which is 3.73 deuteranopic dE from the
 # colour-blind ramp's bucket 11 — and it rides lap A's painted line. It used to be a HOLLOW ring,
 # so the line showed straight through it; the hole is now the map's dark label plate instead, so
@@ -1053,7 +1056,9 @@ class _CornerMarkers:
         # Click-to-locate highlight state: marker list (label->apex lookup), ring item, current label.
         self._markers: list = []
         self._highlight_item = None
-        self.highlighted: str | None = None
+        self.highlighted: str | None = None   # the ring shown: the hovered corner, else the pinned
+        self.pinned: str | None = None
+        self.hovered: str | None = None
         # Per-tick marker-avoidance state, parallel lists over the label TextItems (see avoid_point):
         # the item, its LAID-OUT home position (data units), the outward unit vector used to place it
         # (the degenerate-overlap fallback direction), and the position currently applied to the item.
@@ -1083,6 +1088,7 @@ class _CornerMarkers:
         start/finish cluster (``start_anchors`` = local-metre (x,y) points a label must clear — the
         start line's two endpoints + the video-position marker, or None/[]) and of ``obstacles``
         ((x, y, half-extent px) — the brake glyphs). Every label is drawn; dots always are."""
+        self.hovered = None
         self.set_highlight(None)
         self._markers = list(markers)
         for it in self._items:
@@ -1278,7 +1284,31 @@ class _CornerMarkers:
                 self._applied[i] = self._home[i]
 
     def set_highlight(self, label: str | None):
-        """Ring-highlight one corner's apex by label (None / unknown clears). Display-only."""
+        """Ring-highlight one corner's apex by label (None / unknown clears). Display-only. This
+        is the PINNED ring (a Corners/Stats/Coaching row); a hover rings over it (set_hover)."""
+        self.pinned = label
+        self._ring(self.hovered or label)
+
+    def set_hover(self, label: str | None):
+        """Ring the hovered corner (None hands the ring back to the pinned one)."""
+        if label != self.hovered:
+            self.hovered = label
+            self._ring(label or self.pinned)
+
+    def hit(self, scene_pos) -> str | None:
+        """The corner whose label plate or apex dot is under `scene_pos` (a scene point), or
+        None. O(corners): one rect test per label, one mapped point per apex."""
+        vb = self.plot.getViewBox()
+        for text, (label, x, y, _d) in zip(self._texts, self._markers, strict=False):
+            if text.sceneBoundingRect().contains(scene_pos):
+                return label
+            at = vb.mapViewToScene(QPointF(float(x), float(y)))
+            if (abs(at.x() - scene_pos.x()) <= CORNER_HOVER_PX
+                    and abs(at.y() - scene_pos.y()) <= CORNER_HOVER_PX):
+                return label
+        return None
+
+    def _ring(self, label: str | None):
         if self._highlight_item is not None:
             self.plot.removeItem(self._highlight_item)
             self._highlight_item = None
@@ -1560,6 +1590,9 @@ class _RaceLayer:
 class MapView(QWidget):
     # (start: Seg, sectors: list[Seg]) whenever a handle moves or sectors change.
     timing_lines_changed = Signal(object, object)
+    # The corner ("C3") whose label or apex dot is under the pointer, None when it leaves — on
+    # change only, from mouse moves; silent while a Lap Race runs. CentralView owns the state.
+    cornerHovered = Signal(object)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1633,6 +1666,7 @@ class MapView(QWidget):
         # Self-contained overlays; the app pushes corner/brake markers via set_corners /
         # set_brake_markers (both laps for brakes in compare mode).
         self._corner_markers = _CornerMarkers(self.plot)
+        self._corner_hovered: str | None = None   # what cornerHovered last said
         self._brake_markers = _BrakeMarkers(self.plot)
         # Wired AFTER the overlays exist: _marker_dragged also keeps the corner labels clear of the
         # marker, so _corner_markers must be constructed before the first emission can reach it.
@@ -1840,6 +1874,11 @@ class MapView(QWidget):
                 and getattr(self, "_timing_hover", False)):
             self._timing_hover = False
             self._sync_timing_chrome()
+        # ...and so is the corner hover. The VIEWPORT's Leave, not MapView's: the map key, the
+        # notice and the legend are children inside MapView, so a pointer moving onto them leaves
+        # the canvas without ever leaving the view (it also fires when the view itself is left).
+        if event.type() == QEvent.Leave and obj is self.widget.viewport():
+            self._set_corner_hovered(None)
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ view fit
@@ -2171,6 +2210,18 @@ class MapView(QWidget):
         if near != self._timing_hover:
             self._timing_hover = near
             self._sync_timing_chrome()
+        self._set_corner_hovered(None if self._race is not None
+                                 else self._corner_markers.hit(scene_pos))
+
+    def _set_corner_hovered(self, label: str | None):
+        if label != self._corner_hovered:
+            self._corner_hovered = label
+            self.cornerHovered.emit(label)
+
+    def forget_corner_hover(self):
+        """Forget what cornerHovered last said, without emitting (CentralView's state was just
+        reset by a rebuild): the next move over a corner names it again."""
+        self._corner_hovered = None
 
     def refresh_provisional_cue(self):
         """Overlay a dashed accent start line + "drag to set start/finish — lap timing provisional"
@@ -2410,6 +2461,7 @@ class MapView(QWidget):
         self._race_restore = (self.marker.isVisible(), self._map_key.isHidden())
         self.marker.setVisible(False)
         self._map_key.setVisible(False)
+        self._corner_markers.set_hover(None)      # corner hover is inert under the race
         self._race = _RaceLayer(self.plot, tracks, colours, selected)
 
     def update_race(self, state):
@@ -2726,6 +2778,15 @@ class MapView(QWidget):
         """Ring-highlight one corner's apex marker by 1-based cid (None clears) — driven by
         the consistency panel's corner list (F6). Display-only: no selection, no seek."""
         self._corner_markers.set_highlight(None if cid is None else f"C{int(cid)}")
+
+    def pinned_corner(self) -> str | None:
+        """The corner label `highlight_corner` last rang ("C3"), or None."""
+        return self._corner_markers.pinned
+
+    def set_hovered_corner(self, label: str | None):
+        """Ring the corner hovered here or on the chart ("C3"; None hands the ring back to the
+        pinned corner). Pushed by CentralView; inert while a Lap Race owns the canvas."""
+        self._corner_markers.set_hover(None if self._race is not None else label)
 
     # ------------------------------------------------------------- brake glyphs (F5)
     def set_brake_markers(self, lap_markers):

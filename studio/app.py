@@ -3305,7 +3305,7 @@ class StudioWindow(QMainWindow):
             view.select_lap_tab(1)
         finally:
             self._jumping = False
-        view.map.highlight_corner(cid)
+        view._ring_corner(cid)   # the map ring, and the chart label follows it
         self._reveal_jump_corner(cid)
         target = self.session.corners.corner_entry_media_time(best, cid)
         if target is not None:

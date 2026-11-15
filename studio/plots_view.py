@@ -128,6 +128,16 @@ SECTOR_LABEL_COLOR = C.text_dim
 CORNER_LABEL_COLOR = C.text_dim
 CORNER_LABEL_OPTS = {"position": 0.995, "anchors": [(0.5, 0), (0.5, 0)], "movable": False}
 CORNER_LABEL_GAP_PX = 6   # the air kept between two labels (and a label and a sector caption)
+# The corner that is hovered here, on the map, or rung from a Corners/Stats/Coaching row (one state,
+# owned by CentralView): its label goes from the quiet hue to the map ring's own near-primary text
+# colour, and a faint dotted guide drops from it through the speed plot so the eye finds that apex
+# on the trace. Colour only — never bold — so the label keeps the width the declutter measured.
+CORNER_LABEL_HOT_COLOR = C.text
+CORNER_HOVER_PAD_PX = 3   # px of slack around a label's box for the hover hit-test
+
+
+def corner_guide_pen():
+    return pg.mkPen(C.text_muted, width=theme.line_width(1), style=Qt.DotLine)
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 def zero_line_pen():
     return pg.mkPen(C.border, width=theme.line_width(1))
@@ -428,6 +438,10 @@ class PlotsView(QWidget):
     # the KIND rather than an `ideal: bool` for exactly that reason: a two-state flag has nowhere
     # to put the third baseline, so the reference case silently reported itself as "best".
     deltaBaselineChanged = Signal(str)
+    # The corner label under the pointer ("C3"), or None when it leaves them — emitted on CHANGE
+    # only, from mouse moves (never the playhead tick). CentralView owns the hovered-corner state
+    # and pushes it back here (set_corner_emphasis) and to the map; no view talks to another.
+    cornerHovered = Signal(object)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -463,6 +477,8 @@ class PlotsView(QWidget):
         # set_corner_labels; the lines they ride, in track order, for the declutter pass.
         self._corner_positions: list[tuple[str, float]] = []
         self._corner_items: list = []
+        self._corner_hot: str | None = None      # the emphasised corner (pushed by CentralView)
+        self._corner_hovered: str | None = None  # the label under the pointer, last emitted
         # F5 driving channels (brake glyphs + coast bands); data pushed by app, redrawn on fitted axes.
         self._brake_items: list = []
         self._coast_items: list = []
@@ -697,6 +713,7 @@ class PlotsView(QWidget):
         self.p_delta.addItem(self.hover_dot)
         self.p_delta.addItem(self.hover_label)
         self.p_delta.scene().sigMouseMoved.connect(self._on_delta_hover)
+        self.p_speed.scene().sigMouseMoved.connect(self._on_corner_hover)
 
         # E1: empty-state placeholder shown (via the stack) when there are no laps to plot. L6-07:
         # it names the recovery action too, and refresh() switches the three chart controls off with
@@ -932,7 +949,86 @@ class PlotsView(QWidget):
             # fit the sector lines have to be torn down for, so a lap switch rebuilds nothing.
             self.p_speed.addItem(ln, ignoreBounds=True)
             self._corner_items.append(ln)
+        # New items: re-apply the emphasis to the corner that still carries the label, if any.
+        hot, self._corner_hot = self._corner_hot, None
+        self.set_corner_emphasis(hot)
         self._declutter_corner_labels()
+
+    def set_corner_emphasis(self, label: str | None):
+        """Emphasise one corner's label ("C3"; None / unknown clears): the hot colour plus a dotted
+        guide down through the speed plot. Pushed by CentralView on a hover or a corner-row ring —
+        display-only, and a no-op when nothing changes. A label the declutter dropped stays
+        dropped: the emphasis rides the item, so it shows if a zoom brings the label back."""
+        if label == self._corner_hot:
+            return
+        self._corner_hot = label
+        for ln in self._corner_items:
+            hot = ln.label.toPlainText() == label
+            ln.label.setColor(CORNER_LABEL_HOT_COLOR if hot else CORNER_LABEL_COLOR)
+            ln.setPen(corner_guide_pen() if hot else pg.mkPen(None))
+        self._fit_corner_guide()
+
+    def _fit_corner_guide(self):
+        """Run the hot corner's guide from just under its own label (it must not strike its
+        label through) to the bottom of the speed plot — stopping short of the legend plate where
+        the plate sits across it. Re-fitted wherever the labels are re-decluttered (a resize, an
+        x-range change, a legend placement), so the span follows the plate; never per tick."""
+        hot = next((ln for ln in self._corner_items
+                    if ln.label.toPlainText() == self._corner_hot), None)
+        if hot is None:
+            return
+        box = self.p_speed.getViewBox().sceneBoundingRect()
+        if box.height() <= 0:
+            return
+        lab = hot.label.sceneBoundingRect()
+        top, bottom = lab.bottom() + 2.0, box.bottom()
+        leg = self._speed_legend
+        if leg is not None and leg.isVisible():
+            plate = leg.sceneBoundingRect()
+            if plate.left() <= lab.center().x() <= plate.right():
+                if plate.center().y() < box.center().y():
+                    top = max(top, plate.bottom() + 2.0)
+                else:
+                    bottom = min(bottom, plate.top() - 2.0)
+        # A vertical InfiniteLine's span is a fraction of the view's height, from the bottom up.
+        lo = min(max((box.bottom() - bottom) / box.height(), 0.0), 1.0)
+        hi = min(max((box.bottom() - top) / box.height(), lo), 1.0)
+        for ln in self._corner_items:
+            span = (lo, hi) if ln is hot else (0, 1)
+            if ln.span != span:
+                ln.setSpan(*span)
+                # setSpan keeps the cached bounding rect, which is what the line paints along:
+                # without this the span is stored and never drawn.
+                ln.viewTransformChanged()
+
+    def corner_emphasis(self) -> str | None:
+        """The corner label currently emphasised (see set_corner_emphasis)."""
+        return self._corner_hot
+
+    def corner_at(self, scene_pos) -> str | None:
+        """The PAINTED corner label under `scene_pos` (a scene point), or None. O(corners), and
+        cheaper still off the label row: a point outside the speed plot is rejected first."""
+        if not self._corner_items or not self.p_speed.sceneBoundingRect().contains(scene_pos):
+            return None
+        pad = CORNER_HOVER_PAD_PX
+        for ln in self._corner_items:
+            if ln.isVisible() and ln.label.sceneBoundingRect().adjusted(
+                    -pad, -pad, pad, pad).contains(scene_pos):
+                return ln.label.toPlainText()
+        return None
+
+    def forget_corner_hover(self):
+        """Forget what cornerHovered last said, without emitting (CentralView's state was just
+        reset by a rebuild): the next move over a corner names it again."""
+        self._corner_hovered = None
+
+    def _set_corner_hovered(self, label: str | None):
+        if label != self._corner_hovered:
+            self._corner_hovered = label
+            self.cornerHovered.emit(label)
+
+    def _on_corner_hover(self, scene_pos):
+        self._set_corner_hovered(self.corner_at(scene_pos))
 
     def _clear_sectors(self):
         for plot, item in self._sector_items:
@@ -980,6 +1076,7 @@ class PlotsView(QWidget):
             ln.setVisible(ok)
             if ok:
                 taken.append((box[0] + CORNER_LABEL_GAP_PX, box[1] - CORNER_LABEL_GAP_PX))
+        self._fit_corner_guide()
 
     def _draw_sectors(self):
         """(Re)draw cached sector lines: label on the speed plot top only, behind the cursor. The
@@ -1471,6 +1568,8 @@ class PlotsView(QWidget):
                     ln.setPen(datum_pen())
                     ln.setHoverPen(datum_hover_pen())
                 self.hover_dot.setPen(hover_dot_pen())
+                hot, self._corner_hot = self._corner_hot, None   # re-pen the corner guide
+                self.set_corner_emphasis(hot)
                 self.refresh()
         return super().event(ev)
 
@@ -2292,4 +2391,5 @@ class PlotsView(QWidget):
     def leaveEvent(self, event):  # noqa: N802 (Qt override)
         # The widget lost the mouse — hide the hover dot (sigMouseMoved may not fire on exit).
         self._hide_hover()
+        self._set_corner_hovered(None)
         super().leaveEvent(event)
