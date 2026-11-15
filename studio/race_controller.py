@@ -44,6 +44,8 @@ _EXCLUDED_WORDS = {
 NO_RACE_REASON = ("Needs at least two clean laps placed on track — the race lines up every clean "
                   "lap on its own clock, and this recording has fewer.")
 CAPTION = "each clean lap on its own clock from the start line"
+#: How many laps the not-raced line names per reason before it counts the rest ("+N").
+NAMED_PER_REASON = 3
 
 
 @dataclass(frozen=True)
@@ -121,12 +123,19 @@ def excluded_line(excluded: dict[int, str], listed: set[int] | None = None) -> s
     for i, reason in sorted(laps.items()):
         by_reason.setdefault(reason, []).append(i)
     parts = ", ".join(
-        f"{plural(len(ids), *_EXCLUDED_WORDS.get(reason, (reason, reason)))} "
-        f"({', '.join(f'L{lap_label(i)}' for i in ids)})"
+        f"{plural(len(ids), *_EXCLUDED_WORDS.get(reason, (reason, reason)))} ({_named(ids)})"
         for reason, ids in sorted(by_reason.items(), key=lambda kv: -len(kv[1])))
     out = [f"{plural(len(laps), 'lap')} not raced: {parts}." if laps else "",
            too_brief_note(len(brief))]
     return " ".join(p for p in out if p) or None
+
+
+def _named(ids: list[int]) -> str:
+    """At most `NAMED_PER_REASON` lap labels, then "+N": 'L2, L4, L6 +21'. Naming every lap made
+    the line unbounded (24 not clean + 3 dropouts read 247 characters, four wrapped rows), which
+    took the card's pack rows from it on a short map."""
+    shown = ", ".join(f"L{lap_label(i)}" for i in ids[:NAMED_PER_REASON])
+    return shown + (f" +{len(ids) - NAMED_PER_REASON}" if len(ids) > NAMED_PER_REASON else "")
 
 
 def readout_text(model: CardModel) -> str | None:

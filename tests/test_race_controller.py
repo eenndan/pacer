@@ -519,63 +519,148 @@ def test_the_race_on_the_real_window():
           "paused), compare / trust / off-screen / re-segment / load / close end it, gated")
 
 
-def test_the_race_puts_out_corner_hover_and_hides_the_drag_handles():
+def test_the_race_puts_out_the_hovered_corner_label():
     """QA REG-3: a corner hovered on the map when the race starts lost its ring but kept the chart
     label lit (with its dotted guide) until the pointer moved — the map cleared its own hover
-    without saying so. QA REG-4: the start line's drag handles stayed revealed, and draggable,
-    over the race's dimmed map. Both are put back by the race's end."""
+    without saying so."""
     with _window() as (win, _path, _open):
         v, mp = win.view, win.view.map
         assert mp.pinned_corner() is None, "a pinned ring would keep the label lit: tests nothing"
         mp._set_corner_hovered("C1")        # what a pointer move over C1's apex emits
         assert v.plots._corner_hot == "C1"
+        assert v.start_lap_race()
+        assert v.plots._corner_hot is None, "the chart label stayed lit under the race"
+    print("ok race start puts out the chart's hovered corner label")
+
+
+def test_the_race_hides_the_drag_handles():
+    """QA REG-4: the start line's drag handles stayed revealed, and draggable, over the race's
+    dimmed map (corner hover is off under it). The race's end puts them back."""
+    with _window() as (win, _path, _open):
+        mp = win.view.map
         mp._timing_hover = True             # the pointer near the start line reveals its handles
         mp._sync_timing_chrome()
         assert mp._start.handles_visible
-        assert v.start_lap_race()
-        assert v.plots._corner_hot is None, "the chart label stayed lit under the race"
+        assert win.view.start_lap_race()
         assert not mp._start.handles_visible, "the drag handles stayed up under the race"
         mp._sync_timing_chrome()            # a pointer move near the line during the race
         assert not mp._start.handles_visible
-        v.end_lap_race()
+        win.view.end_lap_race()
         assert mp._start.handles_visible, "the handles did not come back after the race"
-    print("ok race start puts out the chart's corner label and hides the drag handles; end restores")
+    print("ok the drag handles hide under the race and come back after it")
+
+
+def _race_at(win, est: bool, excluded: dict | None = None):
+    """Start a race on the open window, the slowest lap selected (its pack is listed last), held
+    mid-race; `est` names an estimated clock, `excluded` replaces the laps not raced."""
+    import dataclasses
+    v = win.view
+    v.end_lap_race()
+    assert v.start_lap_race()
+    r = v.race
+    if est:
+        r.tracks = dataclasses.replace(r.tracks, clock_estimated=True)
+    if excluded is not None:
+        r._excluded = race_controller.excluded_line(excluded, r._listed_laps())
+    r.set_selected(r.tracks.ids[-1])
+    r.playing = False
+    r.scrub(0.5)
+    v.tick()
+    _settle(0.1)
+    return r
+
+
+def _inside(card, mapw) -> bool:
+    return card.geometry().bottom() < mapw.height()
 
 
 def test_the_card_fits_the_map_at_a_small_window():
     """QA REG-2: at a 1280×800 window the card ran off the map's bottom: the selected lap's
     readout and the not-raced line were cut, worse with the estimated-clock line. The rows now
-    give way (into "N more packs"); the card lies inside the map, those lines always show, and a
-    taller map gets its rows back."""
-    import dataclasses
+    give way (into "N more packs"); the card lies inside the map, those lines always show, every
+    pack is either listed or counted, and a taller map gets its rows back."""
     with _window() as (win, _path, _open):
         v = win.view
         card, mapw = v.race_card, v.map.widget
         for est in (False, True):
             win.resize(1280, 800)
             _settle(0.3)
-            v.end_lap_race()
-            assert v.start_lap_race()
-            r = v.race
-            if est:
-                r.tracks = dataclasses.replace(r.tracks, clock_estimated=True)
-            r.set_selected(r.tracks.ids[-1])     # the slowest lap: its pack is listed last
-            r.playing = False
-            r.scrub(0.5)
-            v.tick()
-            _settle(0.1)
+            r = _race_at(win, est)
             m = card.model
             assert len(m.rows) > 2 and m.excluded, "too few rows to overflow: tests nothing"
-            assert card.geometry().bottom() < mapw.height(), \
-                (est, card.geometry(), mapw.height())
+            assert _inside(card, mapw), (est, card.geometry(), mapw.height())
             lines = card.lines()
             assert race_controller.readout_text(m) in lines and m.excluded in lines, lines
             assert any("pack" in ln for ln in lines[2:]), "the dropped packs are not counted"
-        win.resize(1728, 1117)
-        _settle(0.3)
-        assert card.geometry().bottom() < mapw.height()
+        for size in ((1280, 800), (1440, 900), (1728, 1117)):
+            win.resize(*size)
+            _settle(0.3)
+            shown, packs = card._shown, len(r.state().packs)
+            assert len(shown.rows) + shown.hidden_packs == packs, (size, len(shown.rows),
+                                                                   shown.hidden_packs, packs)
+            assert _inside(card, mapw), size
         assert len(card.lines()) > len(lines), "a taller map did not get its rows back"
-    print("ok the card fits the map at 1280×800 (plain and estimated clock); rows return when taller")
+    print("ok the card fits the map at 1280×800 (plain and estimated clock); listed + counted = "
+          "every pack at three sizes; rows return when taller")
+
+
+def test_a_long_not_raced_list_stays_two_rows_and_inside_the_map():
+    """QA review of #561: naming every lap not raced made the line unbounded (24 not clean + 3
+    dropouts + a brief crossing = 247 characters, four wrapped rows), which took every pack row
+    from a 192 px map and, with the estimated-clock line, overflowed it again. Each reason now
+    names three laps and counts the rest; the fit measures the line's real height."""
+    from studio.lap_table import too_brief_note
+    with _window() as (win, _path, _open):
+        s = win.session
+        not_clean, dropouts = list(range(100, 124)), list(range(200, 203))
+        s.excluded_lap_ids = lambda: not_clean + dropouts      # listed in the ⊘ strip
+        big = {**{i: lap_race.EXCLUDED_NOT_CLEAN for i in not_clean},
+               **{i: lap_race.EXCLUDED_DROPOUT for i in dropouts},
+               14: lap_race.EXCLUDED_NOT_CLEAN}                # the demo's brief crossing
+        v = win.view
+        card, mapw = v.race_card, v.map.widget
+        win.resize(1280, 800)
+        _settle(0.3)
+        for est in (False, True):
+            _race_at(win, est, big)
+            line = card._shown.excluded
+            assert _inside(card, mapw), (est, card.geometry(), mapw.height())
+            assert line == ("27 laps not raced: 24 not clean (L101, L102, L103 +21), "
+                            f"3 GPS dropouts (L201, L202, L203). {too_brief_note(1)}"), line
+            from studio.race_ladder import _PAD
+            fm, inner = card._fm, card.width() - 2 * _PAD
+            laps = line[:line.index(too_brief_note(1))].strip()     # the laps sentence alone
+            assert card._wrapped_h(laps, inner) <= 2 * fm.lineSpacing() + 2, laps
+            assert line in card.lines()
+    print("ok a long not-raced list names three laps per reason, wraps to ≤ 2 rows, fits the map")
+
+
+def test_a_very_short_map_drops_the_caption_then_the_bar():
+    """QA review of #561: below ~153 px of map the zero-row card still ran off the bottom. The
+    caption gives way first, then the progress bar, so the readout and the notes stay inside down
+    to the floors measured here; below them the card is clipped (documented in `_fit`)."""
+    with _window() as (win, _path, _open):
+        v = win.view
+        card, mapw = v.race_card, v.map.widget
+        win.resize(1280, 800)
+        _settle(0.3)
+        from studio.race_controller import CAPTION
+        seen = set()
+        # The measured floors (the card's `_fit` docstring): ~120 px plain, ~136 px with the
+        # estimated-clock line, against 153 px before.
+        for est, heights in ((False, (150, 131, 120, 112)), (True, (150, 140, 131))):
+            _race_at(win, est)
+            for h in heights:
+                mapw.resize(mapw.width(), h)       # what a dragged splitter does to the map
+                _APP.processEvents()
+                assert _inside(card, mapw), (est, h, card.geometry())
+                lines = card.lines()
+                assert race_controller.readout_text(card.model) in lines, (h, lines)
+                chrome = getattr(card, "_chrome", 2)
+                assert (CAPTION in lines) == (chrome >= 2), (h, chrome, lines)
+                seen.add(chrome)
+        assert {1, 0} <= seen, seen
+    print("ok a very short map drops the caption, then the bar; the readout stays inside")
 
 
 def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():

@@ -82,6 +82,7 @@ class RaceCard(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.model: CardModel | None = None
+        self._chrome = 2                        # 2: caption + bar, 1: bar only, 0: neither (`_fit`)
         self._shown: CardModel | None = None    # `model` with its rows fitted to the map's height
         self.colours: dict[int, int] = {}      # lap id → series slot (the coloured five)
         self.lap_times: dict[int, float] = {}   # the field's lap times (the finish column)
@@ -138,7 +139,8 @@ class RaceCard(QWidget):
         self._apply(model)
 
     def _apply(self, model: CardModel) -> None:
-        shown = self._shown = self._fit(model)
+        shown, self._chrome = self._fit(model)
+        self._shown = shown
         h = self._height(shown)
         if (self._w, h) != (self.width(), self.height()):
             self.setFixedSize(self._w, h)
@@ -148,28 +150,48 @@ class RaceCard(QWidget):
             self._cache = None
         self.update()
 
-    def _fit(self, m: CardModel) -> CardModel:
-        """`m` with only as many pack rows as the map's height has room for (QA REG-2: at a
-        1280×800 window the card ran off the map's bottom, taking the selected lap's readout and
-        the not-raced line with it). Rows go from the bottom of the top packs; the selected lap's
-        pack goes last, and every dropped pack joins the "N more packs" line. On a map too short
-        for even one row beside its header, the table is that line alone: the readout (the
-        selected lap against the best), the clock and the not-raced lines always show.
+    def _fit(self, m: CardModel) -> tuple[CardModel, int]:
+        """`m` with only as many pack rows as the map's height has room for, and the chrome level
+        that fits (`_chrome`). QA REG-2: at a 1280×800 window the card ran off the map's bottom,
+        taking the selected lap's readout and the not-raced line with it.
+
+        Rows go from the bottom of the top packs; the selected lap's pack goes last, and every
+        dropped pack joins the "N more packs" line. On a map too short for even one row beside its
+        header, the table is that line alone. Every height here is MEASURED (`_height` wraps the
+        clock and not-raced lines at the card's width), never assumed to be one row. If even that
+        card does not fit, the chrome gives way — the caption first, then the progress bar — so
+        the readout (the selected lap against the best), the clock and the not-raced lines stay
+        inside the map down to a map ~120 px tall on the demo (~136 px with the estimated-clock
+        line; 153 px before); below that the card is clipped at the bottom — the documented limit,
+        since the grid has no minimum map height.
         Unparented (a test's bare card), nothing is dropped."""
         host = self.parentWidget()
-        if host is None or m.unranked_reason or not m.rows:
-            return m
-        lines = int((host.height() - self.y() - theme.SPACE_S
-                     - self._height(replace(m, rows=(), hidden_packs=0))) // _ROW_H)
+        if host is None:
+            return m, 2
+        room = host.height() - self.y() - theme.SPACE_S
+        chrome = 2
+        while chrome > 0 and self._height(self._least(m), chrome) > room:
+            chrome -= 1
+        if m.unranked_reason or not m.rows:
+            return m, chrome
+        lines = int((room - self._height(replace(m, rows=(), hidden_packs=0), chrome)) // _ROW_H)
         if lines >= 1 + len(m.rows) + (1 if m.hidden_packs else 0):
-            return m
+            return m, chrome
         fits = max(lines - 2, 0)        # the table's header and its "more" line take two
         rows = list(m.rows)
         while len(rows) > fits:
             drop = next((k for k in range(len(rows) - 1, -1, -1) if not rows[k].selected),
                         len(rows) - 1)
             rows.pop(drop)
-        return replace(m, rows=tuple(rows), hidden_packs=m.hidden_packs + len(m.rows) - len(rows))
+        return (replace(m, rows=tuple(rows), hidden_packs=m.hidden_packs + len(m.rows) - len(rows)),
+                chrome)
+
+    @staticmethod
+    def _least(m: CardModel) -> CardModel:
+        """The smallest card `_fit` can make of `m`: every pack folded into the "more" line."""
+        if m.unranked_reason or not m.rows:
+            return m
+        return replace(m, rows=(), hidden_packs=m.hidden_packs + len(m.rows))
 
     def _content_key(self, m: CardModel):
         return (tuple(self.lines()[1:]), m.over, m.playing, m.speed, m.selected, self.width(),
@@ -180,7 +202,7 @@ class RaceCard(QWidget):
         m = self._shown
         if m is None:
             return []
-        out = [self._title(m), CAPTION]
+        out = [self._title(m), *([CAPTION] if self._chrome >= 2 else [])]
         if m.unranked_reason:
             out.append(m.unranked_reason)
         else:
@@ -224,9 +246,10 @@ class RaceCard(QWidget):
                                   int(Qt.TextWordWrap | Qt.AlignLeft), text)
         return r.height() + 2
 
-    def _height(self, m: CardModel) -> int:
+    def _height(self, m: CardModel, chrome: int | None = None) -> int:
+        chrome = self._chrome if chrome is None else chrome
         inner = self._w - 2 * _PAD
-        h = _PAD + _TITLE_H + _ROW_H + _BAR_H + 4
+        h = _PAD + _TITLE_H + (_ROW_H if chrome >= 2 else 0) + (_BAR_H + 4 if chrome >= 1 else 0)
         if m.unranked_reason:
             h += self._wrapped_h(m.unranked_reason, inner) + 4
         else:
@@ -292,7 +315,9 @@ class RaceCard(QWidget):
         p.setPen(QPen(QColor(C.text_dim)))
         p.drawText(QRectF(x0, y, inner, _TITLE_H), int(Qt.AlignVCenter | Qt.AlignLeft),
                    self._title(m))
-        bar = QRectF(x0, y + _TITLE_H + _ROW_H + 3, inner, _BAR_H - 6)
+        if self._chrome < 1:
+            return
+        bar = QRectF(x0, y + _TITLE_H + (_ROW_H if self._chrome >= 2 else 0) + 3, inner, _BAR_H - 6)
         frac = 0.0 if m.duration <= 0 else min(max(m.t / m.duration, 0.0), 1.0)
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(QColor(C.accent)))
@@ -321,17 +346,20 @@ class RaceCard(QWidget):
         bx -= _BTN + 4
         self._button(p, "restart", QRectF(bx, y, _BTN, _BTN), glyph="ph.arrow-counter-clockwise")
         y += _TITLE_H
-        p.setFont(self._font)
-        p.setPen(QPen(QColor(C.text_dim)))
-        p.drawText(QRectF(x0, y, inner, _ROW_H), int(Qt.AlignVCenter | Qt.AlignLeft), CAPTION)
-        y += _ROW_H
-        # Progress: race time over the slowest lap's; press or drag to scrub.
-        bar = QRectF(x0, y + 3, inner, _BAR_H - 6)
-        self._hits["bar"] = QRectF(x0, y, inner, _BAR_H)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(QColor(C.border)))
-        p.drawRoundedRect(bar, 3, 3)        # the track; its fill is live (_paint_live)
-        y += _BAR_H + 4
+        if self._chrome >= 2:           # a short map drops the caption first (`_fit`)
+            p.setFont(self._font)
+            p.setPen(QPen(QColor(C.text_dim)))
+            p.drawText(QRectF(x0, y, inner, _ROW_H), int(Qt.AlignVCenter | Qt.AlignLeft), CAPTION)
+            y += _ROW_H
+        self._hits.pop("bar", None)
+        if self._chrome >= 1:           # …then the progress bar
+            # Progress: race time over the slowest lap's; press or drag to scrub.
+            bar = QRectF(x0, y + 3, inner, _BAR_H - 6)
+            self._hits["bar"] = QRectF(x0, y, inner, _BAR_H)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(C.border)))
+            p.drawRoundedRect(bar, 3, 3)        # the track; its fill is live (_paint_live)
+            y += _BAR_H + 4
         if m.unranked_reason:
             h = self._wrapped_h(m.unranked_reason, inner)
             p.setFont(self._font)
