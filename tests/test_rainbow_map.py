@@ -964,6 +964,129 @@ def test_marker_tick_never_relayouts_the_corner_labels():
     print("test_marker_tick_never_relayouts_the_corner_labels OK")
 
 
+# ----------------------------------------------------- the playhead's fading tail (cool/playhead-tail)
+def _play(mv, t0, t1, speed=2.0):
+    """Drive the marker the way the 30 Hz playback tick does, at `speed`; returns the last time."""
+    t = t0
+    mv.set_playhead_time(t)
+    while t + speed / 30.0 <= t1:
+        t += speed / 30.0
+        mv.set_playhead_time(t)
+    return t
+
+
+def test_playhead_tail_is_the_export_tail_ending_on_the_marker():
+    """In playback the map's tail IS the export inset's: `timeline.trace_tail` (one function, two
+    callers — export_video imports the same object), TRACE_TAIL_S long, ending exactly on the
+    marker, drawn as TAIL_STEPS steps that tile it oldest → newest, faint and thin → bright and
+    wide, each over a canvas-dark halo (a bare magenta fade was measured lost on the speed line)."""
+    from studio import export_video, timeline
+    from studio.map_view import TAIL_STEPS
+    assert export_video.trace_tail is timeline.trace_tail, "the export carries its own tail copy"
+    s = _stub_session()
+    mv = MapView(s)
+    t = _play(mv, 0.2, 5.0)
+    xs, ys = mv._tail.xy
+    ex, ey = timeline.trace_tail(s.tt, s.tx, s.ty, t)
+    assert np.array_equal(xs, ex) and np.array_equal(ys, ey), "the map's tail is not the export's"
+    m = mv.marker.pos()
+    assert (xs[-1], ys[-1]) == (m.x(), m.y()), "the tail does not end on the marker"
+    bx, by, _ = timeline.trace_point_at(s.tt, s.tx, s.ty, t - timeline.TRACE_TAIL_S)
+    assert (xs[0], ys[0]) == (bx, by), "the tail is not TRACE_TAIL_S long"
+    steps = mv._tail.steps()
+    assert len(steps) == TAIL_STEPS
+    assert (steps[0][0][0], steps[-1][0][-1]) == (xs[0], xs[-1])
+    for (ax, ay), (bx2, by2) in zip(steps, steps[1:], strict=False):
+        assert (ax[-1], ay[-1]) == (bx2[0], by2[0]), "the steps leave a gap"
+    item = mv._tail.item
+    alphas = [p.color().alpha() for p in item.stroke_pens]
+    widths = [p.widthF() for p in item.stroke_pens]
+    assert alphas == sorted(alphas) and alphas[0] < alphas[-1], alphas
+    assert widths == sorted(widths) and widths[0] < widths[-1], widths
+    for halo, stroke in zip(item.halo_pens, item.stroke_pens, strict=True):
+        assert halo.color().name() == theme.C.canvas.lower() and halo.widthF() > stroke.widthF()
+    print("test_playhead_tail_is_the_export_tail_ending_on_the_marker OK")
+
+
+def test_playhead_tail_starts_after_a_jump_and_is_cut_at_a_dropout():
+    """After a JUMP — the first placement, a lap picked (a seek far away), a backward move, a hand
+    drag of the marker — the tail is empty and grows from where the playhead landed: parked on a
+    lap's start line it shows no run-up nobody watched. And it never bridges a GPS dropout."""
+    from studio import timeline
+    s = _stub_session()
+    mv = MapView(s)
+    mv.set_playhead_time(1.0)
+    assert len(mv._tail.xy[0]) == 0 and mv._tail.steps() == [], "a tail at the first placement"
+    t = _play(mv, 1.0, 1.5)
+    xs, _ = mv._tail.xy
+    bx, _, _ = timeline.trace_point_at(s.tt, s.tx, s.ty, 1.0)
+    assert xs[0] == bx and xs[-1] == mv.marker.pos().x(), "a grown tail reaches back to the jump"
+    mv.set_playhead_time(t + 3.0)               # a seek past the tail's length
+    assert mv._tail.steps() == [], "a seek kept the old tail"
+    _play(mv, t + 3.0, t + 3.5)
+    assert mv._tail.steps(), "playback after the seek grows no tail"
+    mv.set_playhead_time(t + 3.2)               # a step backward
+    assert mv._tail.steps() == []
+    _play(mv, t + 3.2, t + 3.6)
+    mv.marker.setPos(pg.Point(0.0, 0.0))        # the user drags the marker
+    assert mv._tail.steps() == [], "a dragged marker kept a tail trailing nothing"
+    # A 1 s dropout at 3.0 s: 0.6 s after it the tail is the 0.6 s since the receiver came back.
+    g = _stub_session()
+    keep = (g.tt <= 3.0 + 1e-9) | (g.tt >= 4.0 - 1e-9)
+    g.tt, g.tx, g.ty = g.tt[keep], g.tx[keep], g.ty[keep]
+    mv = MapView(g)
+    _play(mv, 1.0, 4.6)
+    xs, ys = mv._tail.xy
+    k = int(np.searchsorted(g.tt, 4.0 - 1e-9))
+    assert (xs[0], ys[0]) == (g.tx[k], g.ty[k]), "the tail bridged the dropout"
+    print("test_playhead_tail_starts_after_a_jump_and_is_cut_at_a_dropout OK")
+
+
+def test_playhead_tail_is_one_item_moved_in_place_and_out_of_the_bounds():
+    """The tail runs on the 30 Hz tick: ONE item, built with the map, never re-created or re-added
+    (the plot's item list does not change over a playback sweep; every tick is one placement), and
+    added with ignoreBounds (an item in the view's bounds re-runs auto-range bookkeeping per move)."""
+    s = _stub_session()
+    mv = MapView(s)
+    vb = mv.plot.getViewBox()
+    items = mv.tail_items()
+    assert len(items) == 1 and all(it in mv.plot.items for it in items)
+    assert not any(it in vb.addedItems for it in items), "a tail item joined the view's bounds"
+    before = list(mv.plot.items)
+    n0 = mv._tail.updates
+    mv.set_playhead_time(0.2)
+    t, ticks = 0.2, 1
+    while t < 5.5:
+        t += 2.0 / 30.0
+        mv.set_playhead_time(t)
+        ticks += 1
+    assert list(mv.plot.items) == before, "the tick added or removed plot items"
+    assert mv.tail_items() == items, "the tail's item was re-created"
+    assert mv._tail.updates - n0 == ticks, (mv._tail.updates - n0, ticks)
+    print("test_playhead_tail_is_one_item_moved_in_place_and_out_of_the_bounds OK")
+
+
+def test_playhead_tail_hides_in_a_race_and_in_clean_grabs():
+    """The tail is the video marker's: hidden while a Lap Race runs (race time is not media time;
+    the marker is hidden there) and in the clean map grabs the HTML report, the share card and the
+    docs media are made from — each restored exactly afterwards."""
+    s = _stub_session()
+    mv = MapView(s)
+    _play(mv, 0.2, 4.0)
+    tail = mv.tail_items()
+    assert mv._tail.steps() and all(it.isVisible() for it in tail)
+    with mv.grab_clean():
+        assert not any(it.isVisible() for it in tail), "a clean grab carried the tail"
+    assert all(it.isVisible() for it in tail), "the grab did not give the tail back"
+    tracks = _race_field()
+    colours = {lap: k for k, lap in enumerate(i for i in tracks.ids if i in tracks.coloured)}
+    mv.start_race(tracks, colours, selected=0)
+    assert not any(it.isVisible() for it in tail), "the tail stayed up in a race"
+    mv.end_race()
+    assert all(it.isVisible() for it in tail) and mv.marker.isVisible()
+    print("test_playhead_tail_hides_in_a_race_and_in_clean_grabs OK")
+
+
 # Its own CTest registration, `footage.<name>` (tests/_footage.py): reported SKIPPED by name without
 # its recording, and left out of the ordinary run below.
 FOOTAGE_CHECKS = (test_pedal_mode_paints_the_chart_band,)

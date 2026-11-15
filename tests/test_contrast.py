@@ -508,6 +508,9 @@ def _map_scene():
     mv.set_corners([("C1", 0.0, 30.0, 1), ("C2", 0.0, -30.0, -1)])
     mv.highlight_corner(1)
     mv.set_ghost_pos(25.0, 26.0)
+    # Play 3 s so the playhead's fading tail (map_view._PlayheadTail) is on the canvas too.
+    for t in np.arange(0.2, 3.5, 2.0 / 30.0):
+        mv.set_playhead_time(float(t))
     return mv
 
 
@@ -580,6 +583,8 @@ def _inks(item):
         if item.opts.get("symbol") is not None:
             pen(item.opts.get("symbolPen"), "symbol outline")
             brush(item.opts.get("symbolBrush"), "symbol fill")
+    elif hasattr(item, "ink_colours"):        # a map_view item that paints itself (the tail)
+        out.extend(item.ink_colours())
     else:
         raise AssertionError(f"the marker guard cannot read the colours of a "
                              f"{type(item).__name__} — teach _inks, don't skip it")
@@ -594,6 +599,8 @@ def _has_content(item):
         return item.xData is not None and len(item.xData) > 0
     if isinstance(item, pg.PlotCurveItem):
         return item.xData is not None and len(item.xData) > 0
+    if hasattr(item, "ink_colours"):
+        return bool(getattr(item, "polys", None))
     return True
 
 
@@ -678,7 +685,7 @@ def test_no_map_marker_is_the_colour_of_any_line_mode():
         for need in ("marker", "_ghost", "_start.h1", "_start.line", "_sectors[0].h1",
                      "_provisional_line", "_provisional_label", "_corner_markers._highlight_item",
                      "_corner_markers._items[0]", "_corner_markers._items[1]",
-                     "_corner_markers._items[2]"):
+                     "_corner_markers._items[2]", "_tail.item"):
             assert need in names, f"the guard's scene has no {need}: {sorted(names)}"
         assert set(_data_modes()) >= {"speed", "delta", "delta_rate", "grip", "brake_throttle",
                                       "elevation"}, map_view._RAINBOW_ORDER
