@@ -20,7 +20,13 @@ an element here instead, so the 4,800-line exporter does not grow with every ide
     the recording, and a style may move the caveat but never drop it;
   * the context carries every Classic plate's rectangle (`plates`, read-only, in frame pixels: the
     rect each was painted into) and the frame's `safe` area (the frame inset by the Classic margin),
-    so an element can place itself clear of them — or exactly over the one it replaces.
+    so an element can place itself clear of them — or exactly over the one it replaces;
+  * `occupies` (optional, set by `prepare`: a {plate name: rect} dict) says where a PREPARED element
+    now stands in for a plate: every element prepared AFTER it reads those rects in `plates` (a
+    style's tower is the "strip" a corner card keeps clear of), and an `occupies[STAMP]` moves the
+    honesty stamp there — the same lines, painted by the same function at the same size, in a
+    rect of the Classic stamp's size (`stamp_rect`). Only a style that replaces the strip the stamp
+    hangs under has a reason to move it.
 
 A FAILING ELEMENT FAILS THE EXPORT, LOUDLY, BY NAME. Skipping it would hand the user a file that is
 missing what they asked for with nothing saying so; catching it per frame would hide a defect that
@@ -33,7 +39,8 @@ Qt like the exporter (it paints with QPainter); pacer-free like every view.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from PySide6.QtCore import QPointF, QRectF
@@ -98,7 +105,25 @@ def build(names, ctx: ElementContext) -> list[OverlayElement]:
             raise OverlayElementError(f"the overlay element {name!r} failed to prepare: {exc}") from exc
         if ready:
             out.append(element)
+            occupies = getattr(element, "occupies", None) or {}
+            bad = set(occupies) - set(PLATES) - {STAMP}
+            if bad:
+                raise OverlayElementError(f"the overlay element {name!r} cannot occupy "
+                                          f"{sorted(bad)}: only {[*PLATES, STAMP]}")
+            if occupies:
+                ctx = replace(ctx, plates=MappingProxyType(
+                    {**ctx.plates, **{n: QRectF(r) for n, r in occupies.items()}}))
     return out
+
+
+def stamp_rect(elements, classic: QRectF) -> QRectF:
+    """Where the honesty stamp is painted: the last prepared element's `occupies[STAMP]`, else the
+    Classic rect under the strip."""
+    for element in reversed(elements):
+        moved = (getattr(element, "occupies", None) or {}).get(STAMP)
+        if moved is not None:
+            return QRectF(moved)
+    return classic
 
 
 def replaced(elements) -> frozenset[str]:
@@ -124,10 +149,13 @@ def paint_layer(elements, p: QPainter, vals, layer: str) -> None:
 
 # The registry: element name -> factory. Imported last, because each element module reads the
 # types above. One line per element.
+from studio.overlay.broadcast import BroadcastElement, MapLabelsElement  # noqa: E402
 from studio.overlay.corner_cards import CornerCardsElement  # noqa: E402
 from studio.overlay.ghost import GhostElement  # noqa: E402
 
 REGISTRY: dict[str, Callable[[], OverlayElement]] = {
     GhostElement.name: GhostElement,
     CornerCardsElement.name: CornerCardsElement,
+    BroadcastElement.name: BroadcastElement,
+    MapLabelsElement.name: MapLabelsElement,
 }

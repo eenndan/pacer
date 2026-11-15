@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
 from ._signal import fmt_hms, lap_label, plural
-from .overlay import corner_cards, ghost
+from .overlay import broadcast, corner_cards, ghost
 from .session import fmt_time
 from .workers import VideoExportWorker
 
@@ -433,12 +433,20 @@ class ExportController:
     _PREF_EXPORT_SCOPE = "export_scope_idx"
     _PREF_EXPORT_ASPECT = "export_aspect_idx"
     _PREF_EXPORT_FIT = "export_fit_idx"
+    # The overlay's look: Classic (the default, untouched) or the Broadcast graphic
+    # (`overlay/broadcast.py`) — the same figures, drawn as a tower, a Δ bar and a big speed.
+    _PREF_EXPORT_STYLE = "export_style_idx"
+    _EXPORT_STYLE_OPTIONS = [
+        ("Classic", broadcast.STYLE_CLASSIC),
+        ("Broadcast — timing tower, Δ bar, big speed", broadcast.STYLE_BROADCAST),
+    ]
     # Each remembered row's DEFAULT, by its pref key: what a first launch opens on, and what "Use
     # defaults" puts back — one table, so the two can never disagree about what the defaults are.
     # (Contents' default is its first row, which it opens on every time.)
     _EXPORT_DEFAULT_INDEX = {
         _PREF_EXPORT_SCOPE: 0, _PREF_EXPORT_LEAD: 0, _PREF_EXPORT_ASPECT: 0, _PREF_EXPORT_FIT: 0,
         _PREF_EXPORT_RES: 1, _PREF_EXPORT_QUALITY: 0,   # 1080p, High
+        _PREF_EXPORT_STYLE: 0,                           # Classic
     }
     # The Extras row: opt-in overlay elements (`studio/overlay/`), each a remembered checkbox that
     # opens UNCHECKED until the user ticks it, so the Classic export stays what it was.
@@ -447,6 +455,16 @@ class ExportController:
     _GHOST_TIP = ("A ring on the minimap where your best lap was at the same lap time — the lap "
                   "strip's Δ, drawn as a place on track. No ghost on the best lap's own file.")
     _PREF_EXPORT_CARDS = "export_corner_cards"
+    # THE EXTRAS ARE REMEMBERED PER STYLE (the recorded decision: "OFF in Classic, ON in the
+    # Broadcast style"). Broadcast's ticks live under their own keys and open ON; Classic's keep
+    # the keys above and open OFF. Switching the Style row swaps the two boxes to that style's
+    # ticks, and Export writes only the chosen style's — so nothing ticked in Broadcast can carry
+    # over into a Classic export.
+    _PREF_EXPORT_STYLE_EXTRAS = {
+        broadcast.STYLE_CLASSIC: ((_PREF_EXPORT_GHOST, False), (_PREF_EXPORT_CARDS, False)),
+        broadcast.STYLE_BROADCAST: (("export_broadcast_ghost", True),
+                                    ("export_broadcast_corner_cards", True)),
+    }
     _CARDS_LABEL = "Corner cards"
     _CARDS_TIP = ("As you leave each corner, a card for two seconds: its minimum speed and its time "
                   "against the same corner on your best lap — the Corners table's numbers (its "
@@ -855,16 +873,33 @@ class ExportController:
             content_combo.addItem(label)
         res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES)
         q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY)
+        style_combo = _combo(self._EXPORT_STYLE_OPTIONS, self._PREF_EXPORT_STYLE)
         ghost_box = QCheckBox(self._GHOST_LABEL, dlg)
-        try:
-            ghost_box.setChecked(prefs.get(self._PREF_EXPORT_GHOST, False) is True)
-        except Exception:  # noqa: BLE001 — an unreadable pref opens on the default (off)
-            ghost_box.setChecked(False)
         cards_box = QCheckBox(self._CARDS_LABEL, dlg)
-        try:
-            cards_box.setChecked(prefs.get(self._PREF_EXPORT_CARDS, False) is True)
-        except Exception:  # noqa: BLE001 — an unreadable pref opens on the default (off)
-            cards_box.setChecked(False)
+        # Each style's ticks for this dialog: remembered (or that style's default) until changed.
+        ticks = {}
+        for style, keys in self._PREF_EXPORT_STYLE_EXTRAS.items():
+            got = []
+            for key, default in keys:
+                try:
+                    value = prefs.get(key, default)
+                except Exception:  # noqa: BLE001 — an unreadable pref opens on the default
+                    value = default
+                got.append(value if isinstance(value, bool) else default)
+            ticks[style] = got
+
+        def _style():
+            return self._EXPORT_STYLE_OPTIONS[style_combo.currentIndex()][1]
+        shown = [_style()]
+
+        def _show_style_ticks(_index=None):
+            ticks[shown[0]] = [ghost_box.isChecked(), cards_box.isChecked()]
+            shown[0] = _style()
+            ghost_box.setChecked(ticks[shown[0]][0])
+            cards_box.setChecked(ticks[shown[0]][1])
+        ghost_box.setChecked(ticks[shown[0]][0])
+        cards_box.setChecked(ticks[shown[0]][1])
+        style_combo.currentIndexChanged.connect(_show_style_ticks)
         # One Extras row, the opt-in elements side by side.
         extras = QWidget(dlg)
         extras_row = QHBoxLayout(extras)
@@ -912,6 +947,7 @@ class ExportController:
         form.addRow("Contents", content_combo)
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
+        form.addRow("Style", style_combo)
         form.addRow("Extras", extras)
         col.addLayout(form)
 
@@ -1044,11 +1080,13 @@ class ExportController:
             self._PREF_EXPORT_FIT: fit_combo.currentIndex(),
             self._PREF_EXPORT_RES: res_combo.currentIndex(),
             self._PREF_EXPORT_QUALITY: q_combo.currentIndex(),
+            self._PREF_EXPORT_STYLE: style_combo.currentIndex(),
         }
         self._remember_export_prefs(indices)   # survives this window, and the relaunch
         try:
-            prefs.set(self._PREF_EXPORT_GHOST, ghost_box.isChecked())
-            prefs.set(self._PREF_EXPORT_CARDS, cards_box.isChecked())
+            for (key, _default), box in zip(self._PREF_EXPORT_STYLE_EXTRAS[_style()],
+                                            (ghost_box, cards_box), strict=True):
+                prefs.set(key, box.isChecked())
         except OSError as exc:
             _log.warning("export extras not remembered (%r)", exc)
         scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
@@ -1057,7 +1095,7 @@ class ExportController:
         # Burn the current display unit + semantic palette into the overlay so the export matches the
         # on-screen readout (incl. the colour-blind Δ hue axis — the exported clip is the shared
         # artifact, so it must follow the user's colour-blind choice, not stay red/green).
-        config = export_video.OverlayConfig(
+        config = broadcast.styled(export_video.OverlayConfig(
             out_height=self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1],
             quality=self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
             aspect=self._EXPORT_ASPECT_OPTIONS[aspect_combo.currentIndex()][1],
@@ -1068,7 +1106,7 @@ class ExportController:
             palette=theme.active_palette(),
             elements=tuple(name for name, box in ((ghost.GhostElement.name, ghost_box),
                                                   (corner_cards.CornerCardsElement.name, cards_box))
-                           if box.isChecked() and box.isEnabled()))
+                           if box.isChecked() and box.isEnabled())), _style())
         lead = (0.0 if scope == export_video.SCOPE_SESSION
                 else self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1])
         return ExportChoice(config=config, lead=lead, scope=scope)
