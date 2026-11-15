@@ -2730,9 +2730,11 @@ class MapView(QWidget):
         running ends first (ten arrow-key steps in a second leave one line, never a pile). The
         line that fades is the one on screen: the plain lap line, or — the map's default — the
         rainbow's buckets, which hand their pool over and come back as the spare (no item is
-        created per change). The outgoing items sit just under their layer, so the new lap paints
-        over them. With motion off the end runs right here: the plain items removed (as before),
-        the buckets emptied."""
+        created per change). The outgoing items sit just ABOVE their layer: laps share the track,
+        so a line fading under the new one would be hidden by it (looked at on the demo: nothing
+        showed). Above it, the lap you left — its colours, its line — dissolves into the new one.
+        With motion off the end runs right here: the plain items removed (as before), the buckets
+        emptied."""
         if self._lap_fade is not None:
             self._lap_fade.finish()
         ov = self._current_overlay
@@ -2753,7 +2755,7 @@ class MapView(QWidget):
             done()
             return
         for it in items:
-            it.setZValue(it.zValue() - 0.05)
+            it.setZValue(it.zValue() + 0.05)
 
         def step(p: float):
             for it in items:
