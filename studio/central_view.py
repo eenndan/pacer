@@ -1243,7 +1243,7 @@ class CentralView(QWidget):
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
         self.table.selection_capped.connect(self.statusNotice)
-        self.table.slow_corner_clicked.connect(self._ring_corner)   # a slow lap's "▼ C5" cue
+        self.table.slow_corner_clicked.connect(self._on_slow_corner_clicked)   # the "▼ C5" cue
         # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
         # gesture. False until the user asks for it.
         self._video_focused = False
@@ -1696,7 +1696,24 @@ class CentralView(QWidget):
 
     def _on_user_select(self, ids):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
+        self._drop_cue_ring()
         self._on_laps_selected(ids, seek=True)
+
+    # The ring a slow lap's "▼ C5" cue pins belongs to THAT lap: the next lap the user selects
+    # takes it down (a selection change reaches here before the cue's own click, so a click on the
+    # cue first drops the old ring, then pins its own). A ring pinned by a Corners/Stats row since
+    # is that row's and stays. Not under a Lap Race: corner rings are off on its canvas (#561).
+    def _on_slow_corner_clicked(self, cid: int):
+        if self.is_racing():
+            return
+        self._ring_corner(cid)
+        self._cue_ring = f"C{int(cid)}"
+
+    def _drop_cue_ring(self):
+        ring = getattr(self, "_cue_ring", None)
+        self._cue_ring = None
+        if ring is not None and self.map.pinned_corner() == ring:
+            self._ring_corner(None)
 
     # --------------------------------------------------------- lap-panel tabs
     def _apply_table_mode(self, index: int):

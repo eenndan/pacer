@@ -991,6 +991,9 @@ PAINTED_STYLES = [
     # lap paints #9AA1AD unselected and C.text selected — the demotion is Qt's to drop.)
     ("selected item text", C.text, C.sel_bg, BODY),
     ("table cell (alt row)", C.text, C.surface_alt, BODY),
+    # A slow lap's "▼ C5" cue (lap_table._TowerDelegate): PROVISIONAL_COLOR on either row tone;
+    # on the selection band it paints C.text, the band's own ink (the row above covers it).
+    ("slow-lap cue (lap grid, alt row)", theme.PROVISIONAL_COLOR, C.surface_alt, BODY),
 ]
 
 # WCAG 1.4.3 exempts text in INACTIVE user-interface components. C.text_muted is the ONLY token

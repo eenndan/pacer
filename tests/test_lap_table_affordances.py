@@ -38,7 +38,14 @@ sys.path.insert(0, _REPO)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QHoverEvent, QImage, QKeyEvent, QMouseEvent  # noqa: E402
+from PySide6.QtGui import (  # noqa: E402
+    QColor,
+    QFontMetrics,
+    QHoverEvent,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+)
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -485,6 +492,7 @@ def test_a_slow_lap_says_where_its_time_went():
     assert tb.item(r, _TIME_COL).toolTip() == want, tb.item(r, _TIME_COL).toolTip()
     assert tb.item(r, 0).toolTip() == want, tb.item(r, 0).toolTip()
     assert tb.item(r, 0).text().endswith(f"{lap_label(_SLOW)}  ▼ C5"), tb.item(r, 0).text()
+    assert tb.item(r, 0).data(LT.CUE_ROLE) == "▼ C5", tb.item(r, 0).data(LT.CUE_ROLE)
     assert "Lap 6" not in want and note.text.startswith("Lap 6 · ")
     # A lap without a note: byte-for-byte the table without the read.
     bare = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
@@ -607,23 +615,168 @@ def test_clicking_the_cue_rings_the_culprit_corner():
     print("test_clicking_the_cue_rings_the_culprit_corner OK")
 
 
-def test_no_slow_lap_leaves_the_table_pixel_identical():
-    """A session with no slow lap renders exactly the table without the feature, at the default
-    quadrant and at a squeezed panel: no width, height or glyph moves."""
+def _widths(lt, w):
+    lt.resize(w, 420)
+    lt.show()
+    _settle()
+    return tuple(lt.table.columnWidth(c) for c in range(lt.table.columnCount()))
+
+
+def test_a_cue_never_moves_a_column():
+    """The demo HAS a slow lap: its table's column widths equal the same table's with the notes
+    disabled, at a squeezed panel, the default quadrant and a wide one. (Measured on d70177f: at
+    300 px the Lap column came out 1 px wider with the cue, `sizeHintForColumn` and the floor's
+    `painted` rounding the cue's text differently, and every data column shifted.) And a session
+    with no slow lap renders pixel for pixel the table with the cue path switched off."""
     s = _demo()
-    for w in (447, 300):
-        frames = []
-        a =_keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
-        b = _keep(LT.LapTable(_NoRead(s)))
-        for lt in (a, b):
-            lt.resize(w, 420)
-            lt.show()
-            _settle()
-            frames.append(_rgb(lt))
-        widths = [[t.table.columnWidth(c) for c in range(t.table.columnCount())] for t in (a, b)]
-        assert widths[0] == widths[1], (w, widths)
-        assert frames[0].shape == frames[1].shape and (frames[0] == frames[1]).all(), w
-    print("test_no_slow_lap_leaves_the_table_pixel_identical OK")
+    assert s.slow_lap_notes(), "the demo lost its slow lap — this test would pass vacuously"
+    for w in (300, 447, 900):
+        cued = _widths(_keep(LT.LapTable(s)), w)
+        plain = _widths(_keep(LT.LapTable(_NoRead(s))), w)
+        assert cued == plain, f"at {w} px the cue moved the columns: {cued} vs {plain}"
+    orig = LT.LapTable._read_slow_notes
+    try:
+        LT.LapTable._read_slow_notes = lambda self: setattr(self, "_slow_notes", {})
+        refs = {}
+        for w in (300, 447):
+            ref = _keep(LT.LapTable(s))
+            _widths(ref, w)
+            refs[w] = _rgb(ref)
+    finally:
+        LT.LapTable._read_slow_notes = orig
+    for w in (300, 447):
+        lt = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
+        _widths(lt, w)
+        img = _rgb(lt)
+        assert img.shape == refs[w].shape and (img == refs[w]).all(), (
+            w, int((img != refs[w]).any(axis=2).sum()))
+    print("test_a_cue_never_moves_a_column OK")
+
+
+def test_a_squeezed_cue_never_costs_the_lap_number():
+    """Provisional timing (no ★ to widen the floor), the note planted on the lap with the widest
+    label, that lap playing, a 300 px panel: its row fills the Lap column's floor exactly. Qt's
+    right-elision would have eaten the number first ("▶ …"); the cue is the delegate's to shorten,
+    so the lap's own text paints whole and the cue gets only the room that is left."""
+    import dataclasses
+    s = _demo()
+    probe = _keep(LT.LapTable(_Over(s, timing_verified=False)))
+    bold = probe.table.font()
+    bold.setBold(True)
+    fm = QFontMetrics(bold)
+    lap = max(probe._lap_id(r) for r in range(probe.table.rowCount())
+              if fm.horizontalAdvance(f"{LT.CURRENT_PREFIX}{lap_label(probe._lap_id(r))}") ==
+              max(fm.horizontalAdvance(f"{LT.CURRENT_PREFIX}{lap_label(probe._lap_id(q))}")
+                  for q in range(probe.table.rowCount())))
+    (note,) = s.slow_lap_notes()
+    two = dataclasses.replace(note, lap_id=lap, category="two",
+                              corners=(note.corners[0], note.also[0]), also=())
+    frames = {}
+    for key, notes in (("cue", [two]), ("plain", [])):
+        lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda n=notes: n)))
+        lt.set_current_lap(lap)
+        _widths(lt, 300)
+        r = lt._row_for_lap(lap)
+        item = lt.table.item(r, 0)
+        rect = lt.table.visualItemRect(item)
+        img = _rgb(lt.table.viewport())
+        frames[key] = (lt, item, rect, img)
+    lt, item, rect, img = frames["cue"]
+    want = f"{LT.CURRENT_PREFIX}{lap_label(lap)}"
+    # The lap's own text, painted: the cell's left part matches the render with no cue at all.
+    _, _, prect, pimg = frames["plain"]
+    x1 = rect.left() + QFontMetrics(item.font()).horizontalAdvance(want) + 8
+    a = img[rect.top():rect.bottom(), rect.left():x1]
+    b = pimg[prect.top():prect.bottom(), prect.left():x1]
+    assert a.shape == b.shape and (a == b).all(), "the lap number did not paint whole"
+    assert (a != a[0, 0]).any(), "no glyphs in the number's region — nothing was compared"
+    assert item.text() == f"{want}  ▼ C5 C6", item.text()
+    assert LT.cueless(item.text(), item.data(LT.CUE_ROLE)) == want
+    form = lt._delegate.last_cue.get(lt._row_for_lap(lap))
+    assert form in ("", "▼"), f"the cue claimed room the column does not have: {form!r}"
+    # ...and with room, the forms step down in order, names first.
+    assert LT.cue_forms("▼ C5 C6") == ["▼ C5 C6", "▼ C5…", "▼"]
+    assert LT.cue_forms("▼ C5") == ["▼ C5", "▼"]
+    print(f"test_a_squeezed_cue_never_costs_the_lap_number OK (lap {lap_label(lap)}, cue {form!r})")
+
+
+def test_the_cue_paints_in_muted_ink():
+    """The cue is an annotation, not a mark: the lap number keeps the row's ink and the "▼ C5"
+    beside it paints in PROVISIONAL_COLOR (theme.C.text_dim) — no pixel of the cue's span is the
+    full text colour."""
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    _widths(lt, 447)
+    r = lt._row_for_lap(_SLOW)
+    item = lt.table.item(r, 0)
+    rect = lt.table.visualItemRect(item)
+    assert lt._delegate.last_cue.get(r) == "▼ C5", lt._delegate.last_cue
+    cell = _rgb(lt.table.viewport())[rect.top():rect.bottom(), rect.left():rect.right()]
+    plain = _keep(LT.LapTable(_NoRead(s)))
+    _widths(plain, 447)
+    prect = plain.table.visualItemRect(plain.table.item(plain._row_for_lap(_SLOW), 0))
+    bare = _rgb(plain.table.viewport())[prect.top():prect.bottom(), prect.left():prect.right()]
+
+    def near(px, hexcol):           # `_rgb` planes are the buffer's B, G, R byte order
+        c = QColor(hexcol)
+        return int((np.abs(px.astype(int) - (c.blue(), c.green(), c.red())).sum(axis=-1)
+                    < 30).sum())
+    assert near(cell, theme.C.text) > 0, "the lap number lost its ink"
+    assert near(cell, theme.C.text) == near(bare, theme.C.text), (
+        "the cue added full-ink pixels", near(cell, theme.C.text), near(bare, theme.C.text))
+    assert near(cell, theme.PROVISIONAL_COLOR) > 10 + near(bare, theme.PROVISIONAL_COLOR), \
+        "the cue is not in the muted ink"
+    print("test_the_cue_paints_in_muted_ink OK")
+
+
+def test_a_deselecting_click_rings_nothing():
+    """⌘-clicking a selected cued lap to DESELECT it is not a request to look at its corner."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    rang = []
+    lt.slow_corner_clicked.connect(rang.append)
+    tb = lt.table
+    r = lt._row_for_lap(_SLOW)
+    tb.scrollToItem(tb.item(r, 0))
+    _settle()
+    at = tb.visualItemRect(tb.item(r, 0)).center()
+    QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.NoModifier, at)
+    _settle()
+    QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.ControlModifier, at)
+    _settle()
+    assert lt.selected_lap_ids() == [], lt.selected_lap_ids()
+    assert rang == [5], f"the deselecting click rang a corner: {rang}"
+    print("test_a_deselecting_click_rings_nothing OK")
+
+
+def test_the_cue_ring_leaves_with_its_lap_and_stays_off_a_race():
+    """On a real CentralView: the cue's ring is THAT lap's — the next lap the user selects takes
+    it down (a ring a Corners row pinned since is that row's and stays); under a Lap Race the cue
+    rings nothing, as corner rings are off on the race's canvas (#561)."""
+    from test_central_view_realqt import _real_central_view
+    view, s, _t0, _t1 = _real_central_view()
+    laps = [r["idx"] for r in s.lap_rows()]
+    view.table.slow_corner_clicked.emit(2)
+    assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+    view.table.laps_selected.emit([laps[-1]])
+    assert view.map.pinned_corner() is None, view.map.pinned_corner()
+    view.table.slow_corner_clicked.emit(2)
+    view._ring_corner(1)                     # a Corners/Stats row click, after the cue
+    view.table.laps_selected.emit([laps[0]])
+    assert view.map.pinned_corner() == "C1", view.map.pinned_corner()
+    view._ring_corner(None)
+    view.race.tracks = object()              # racing (RaceController.active), no canvas needed
+    try:
+        assert view.is_racing()
+        view.table.slow_corner_clicked.emit(2)
+        assert view.map.pinned_corner() is None, view.map.pinned_corner()
+    finally:
+        view.race.tracks = None
+    print("test_the_cue_ring_leaves_with_its_lap_and_stays_off_a_race OK")
 
 
 class _NoRead:

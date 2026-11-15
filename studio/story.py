@@ -298,8 +298,9 @@ def row_text(note: SlowLapNote) -> str:
 
 def culprit_cue(note: SlowLapNote) -> str:
     """The in-row cue: the culprit corner(s) behind the grid's mark ("▼ C5", "▼ C5 C6"), or ""
-    where the note names no culprit (`partial`, `spread`) — a bare mark there would say nothing
-    its row's Δbest bar does not already say, and a glyph with nothing to name has no legend."""
+    when no corner holds the culprit share of the excess (`partial` names its ▼ corners, `spread`
+    has none): with nothing that is THE reason, a short cue would overstate one corner of several,
+    and the note on hover says the rest."""
     if note.category not in (OVER_LAP, ONE, TWO):
         return ""
     return f"{BEHIND_MARK} {' '.join(f'C{c.cid}' for c in note.corners)}"

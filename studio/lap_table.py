@@ -4,9 +4,10 @@ Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68
 mouse or the keyboard — the header is a tab stop with its own ring (_KeyboardSortHeader).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap (kept through the selection, _TowerDelegate), blue Qt selection, purple per-sector session-best
-cells, ⚠ GPS-dropout flag, a slow lap's culprit cue ("▼ C5", its story note on hover —
-`story.slow_lap_notes`: it labels the lap, never re-ranks or dims it). The Δbest column is the timing-tower read: each lap's gap to the best
-with an in-cell bar on a fenced, clean-lap scale (delta_bar_scale). The
+cells, ⚠ GPS-dropout flag, a slow lap's culprit cue ("▼ C5" in muted ink, its story note on
+hover — `story.slow_lap_notes`: it labels the lap, never re-ranks or dims it). The Δbest column
+is the timing-tower read: each lap's gap to the best with an in-cell bar on a fenced, clean-lap
+scale (delta_bar_scale). The
 SESSION-BESTS footer is plain labels below the table, immune to sort/selection. An EXCLUDED
 strip below the table lists substantial laps the median band left out of the times/bests (a
 mis-segmented short/long lap, an out-lap, or an in-lap) — kept out of the sortable rows so a
@@ -37,6 +38,7 @@ from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -324,8 +326,9 @@ def _lap_col_tips(unit: str | None) -> list[str]:
     the same contract the Corners table has had since its headers were abbreviated."""
     u = units.speed_label(unit)
     return [
-        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout · {story.BEHIND_MARK} C5 where a "
-        "slow lap lost its time: hover it for the note)",
+        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout · {story.BEHIND_MARK} C5 on a slow "
+        f"lap: the corner marked {story.BEHIND_MARK} against your typical pass (CORNERS BY LAP); "
+        "hover it for the note)",
         "Lap time, measured between start/finish crossings",
         DELTA_HEADER_TIP,
         # the odometer's shortfall, in the one sentence every distance surface carries
@@ -697,6 +700,30 @@ DELTA_BAR_ROLE = Qt.UserRole + 2
 # stylesheet's `::item:selected { color }` otherwise repaints it in plain text, and the app
 # pre-selects the best lap at launch — so on first open the best lap read like any other row.
 KEEP_INK_ROLE = Qt.UserRole + 3
+# On a slow lap's Lap cell: its culprit cue ("▼ C5"), which the item TEXT also ends with (after
+# CUE_SEP) for accessibility and copy. _TowerDelegate paints the text without it and the cue after
+# it in muted ink, shortened to the room left (cue_forms) — Qt's own elision would eat the lap
+# number first — and measures the cell without it, so a cue never moves a column.
+CUE_ROLE = Qt.UserRole + 4
+CUE_SEP = "  "
+
+
+def cue_forms(cue: str) -> list[str]:
+    """The cue's forms, longest first, for the room a cell has left: "▼ C5 C6" → "▼ C5…" → "▼".
+    The corner names go first, the mark last; past the mark there is no cue (the tooltip stays)."""
+    mark, *names = cue.split(" ")
+    forms = [cue]
+    if len(names) > 1:
+        forms.append(f"{mark} {names[0]}…")
+    if names:
+        forms.append(mark)
+    return forms
+
+
+def cueless(text: str, cue: str | None) -> str:
+    """A Lap cell's text without its trailing cue (unchanged when it carries none)."""
+    tail = f"{CUE_SEP}{cue}" if cue else ""
+    return text[:-len(tail)] if tail and text.endswith(tail) else text
 
 
 class _TowerDelegate(QStyledItemDelegate):
@@ -719,6 +746,8 @@ class _TowerDelegate(QStyledItemDelegate):
         self._sel_brush = QBrush()
         self._bar = {}
         self._break_pen = QPen()
+        self._cue_pen = self._cue_sel_pen = QPen()
+        self.last_cue: dict[int, str] = {}
 
     def restyle(self, font, texts) -> None:
         """Re-resolve the palette-dependent colours and the digits' reserved width: the widest
@@ -733,6 +762,44 @@ class _TowerDelegate(QStyledItemDelegate):
             self._bar[tone] = QBrush(col)
         self._break_pen = QPen(QColor(theme.C.text_dim), theme.BORDER_PX * 1.5)
         self._break_pen.setCapStyle(Qt.FlatCap)
+        # The cue's ink: muted, a quiet annotation beside the lap number. On the selection band
+        # it takes the band's own text colour, as Qt does for every selected item (the guard in
+        # tests/test_contrast.py: PROVISIONAL_COLOR is never painted on sel_bg).
+        self._cue_pen = QPen(QColor(theme.PROVISIONAL_COLOR))
+        self._cue_sel_pen = QPen(QColor(theme.C.text))
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        if index.column() == 0:
+            # The cue is painted by `_paint_cue`, never by Qt: measured and drawn without it, the
+            # Lap cell is the cell it was before the cue existed.
+            option.text = cueless(option.text, index.data(CUE_ROLE))
+
+    def _paint_cue(self, painter, option, index, cue: str) -> None:
+        """The cue after the lap's own text, in the room left in the cell: the longest of
+        `cue_forms` that fits, else nothing. Recorded in `last_cue` (row -> form) for the tests."""
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = opt.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget)
+        margin = style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, widget) + 1
+        fm = QFontMetrics(opt.font)
+        used = fm.horizontalAdvance(opt.text)
+        x = rect.left() + margin + used
+        room = rect.right() - margin - x
+        form = next((f for f in cue_forms(cue)
+                     if fm.horizontalAdvance(f"{CUE_SEP}{f}") <= room), "")
+        self.last_cue[index.row()] = form
+        if not form:
+            return
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(self._cue_sel_pen if option.state & QStyle.State_Selected
+                       else self._cue_pen)
+        painter.drawText(QRectF(x, rect.top(), room + 1, rect.height()),
+                         int(Qt.AlignLeft | Qt.AlignVCenter), f"{CUE_SEP}{form}")
+        painter.restore()
 
     def paint(self, painter, option, index):
         if option.state & QStyle.State_Selected and index.data(KEEP_INK_ROLE):
@@ -743,6 +810,11 @@ class _TowerDelegate(QStyledItemDelegate):
             option.state &= ~QStyle.State_Selected
             painter.fillRect(option.rect, self._sel_brush)
         super().paint(painter, option, index)
+        if index.column() == 0:
+            cue = index.data(CUE_ROLE)
+            if cue:
+                self._paint_cue(painter, option, index, cue)
+            return
         if index.column() != _DELTA_COL:
             return
         bar = index.data(DELTA_BAR_ROLE)
@@ -1511,8 +1583,9 @@ class LapTable(QWidget):
         playback, so it keeps the reason LAP_COL_PX is fixed (no jitter) while giving back the
         20-odd px a 14- or 37-lap session without dropouts never paints into.
 
-        A slow lap's culprit cue ("▼ C5") is left OUT of the floor: it is a pointer to the tooltip,
-        and a squeeze may elide it, never the lap's identity — the 20 px it would claim at a 300 px
+        A slow lap's culprit cue ("▼ C5") is left OUT of the floor and of every measure here: it is
+        a pointer to the tooltip, painted in whatever room the cell has left (_TowerDelegate,
+        cue_forms), so no column width ever depends on it — the 20 px it would claim at a 300 px
         panel would otherwise come out of the data columns as a sideways scroll."""
         tb = self.table
         if not tb.rowCount():
@@ -1522,7 +1595,10 @@ class LapTable(QWidget):
             item = tb.item(r, 0)
             if item is None:
                 continue
-            painted = max(painted, QFontMetrics(item.font()).horizontalAdvance(item.text()))
+            # Cue-less, like the delegate's own size hint: the two measures round differently, so
+            # a cue in one of them moved every column by a pixel.
+            painted = max(painted, QFontMetrics(item.font()).horizontalAdvance(
+                cueless(item.text(), item.data(CUE_ROLE))))
             bold = item.font()
             bold.setBold(True)
             worst = max(worst, QFontMetrics(bold).horizontalAdvance(
@@ -1876,6 +1952,8 @@ class LapTable(QWidget):
             is_dropout = lap_id in dropout_ids
             note = self._slow_notes.get(lap_id)
             note_tip = slow_note_tip(note) if note is not None else ""
+            if self._cue(lap_id):
+                ink_rows.add(r)     # the cue is the delegate's to paint (CUE_ROLE)
             time_trust = (PROVISIONAL_TOOLTIP if not verified
                           else estimated_note if degraded else "")
             for c in range(self.table.columnCount()):
@@ -1962,7 +2040,8 @@ class LapTable(QWidget):
         self._apply_current_lap()
 
     def _route_delegate(self, rows: set[int]) -> None:
-        """Send exactly `rows` (the ones carrying best ink) through _TowerDelegate; the rest of
+        """Send exactly `rows` (the ones carrying best ink or a slow lap's cue) through
+        _TowerDelegate; the rest of
         the grid keeps Qt's C++ default delegate (see _TowerDelegate's per-paint note). Rows are
         positions, so this re-runs after every sort, like the highlights it follows."""
         for r in self._ink_rows - rows:
@@ -2068,10 +2147,14 @@ class LapTable(QWidget):
         prefix = CURRENT_PREFIX if on else ""
         best = BEST_LAP_MARK if lap_id == self._best_lap_id else ""
         suffix = DROPOUT_SUFFIX if lap_id in self._dropout_ids else ""
-        note = self._slow_notes.get(lap_id) if cue else None
-        if note is not None and story.culprit_cue(note):
-            suffix += f"  {story.culprit_cue(note)}"
+        if cue and self._cue(lap_id):
+            suffix += f"{CUE_SEP}{self._cue(lap_id)}"
         return f"{prefix}{best}{lap_label(lap_id)}{suffix}"  # 1-based display number
+
+    def _cue(self, lap_id) -> str:
+        """The lap's culprit cue ("▼ C5"), or "" (no note, or a note with no culprit)."""
+        note = self._slow_notes.get(lap_id)
+        return story.culprit_cue(note) if note is not None else ""
 
     def _read_slow_notes(self) -> None:
         """Cache where each slow lap's time went (`Session.slow_lap_notes`), keyed by lap id so the
@@ -2086,7 +2169,10 @@ class LapTable(QWidget):
         """A click on a Lap cell wearing a culprit cue also rings that corner on the map (the
         worst one first); every other click is only the row selection it always was."""
         note = self._slow_notes.get(self._lap_id(row)) if col == 0 else None
-        if note is not None and story.culprit_cue(note):
+        # Only when the click left the row SELECTED: a ⌘-click that deselects the lap is not a
+        # request to look at its corner.
+        if note is not None and story.culprit_cue(note) and \
+                self.table.selectionModel().isRowSelected(row):
             self.slow_corner_clicked.emit(note.corners[0].cid)
 
     def _set_row_current(self, r: int, on: bool):
@@ -2097,6 +2183,7 @@ class LapTable(QWidget):
         if item is None:
             return
         item.setText(self._lap_cell_text(self._lap_id(r), on))
+        item.setData(CUE_ROLE, self._cue(self._lap_id(r)) or None)
         font = item.font()
         font.setBold(on)
         item.setFont(font)
