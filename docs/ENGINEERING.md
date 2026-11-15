@@ -141,7 +141,7 @@ Receipt: [#286](https://github.com/eenndan/pacer/pull/286) ·
 
 ## 6. Features measured and refused
 
-**20+** features were built far enough to measure, and the measurement said no.
+**25+** features were built far enough to measure, and the measurement said no.
 
 An idea here is not refused in a meeting. It is prototyped against real recordings, given a
 statistic that could prove it, and refused only when that statistic says so. One example is a
