@@ -63,7 +63,8 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     window and run off the UI thread. Qt is their drawing library, not their UI.
 #     `export_compare` is `export_video`'s two-pane subclass and is here for exactly the reason
 #     that one is: it paints a frame, and it is the module `export_video` would have grown into.
-#   * overlay/__init__ and overlay/ghost — the export's opt-in overlay elements (`studio/overlay/`):
+#   * overlay/__init__, overlay/ghost and overlay/corner_cards — the export's opt-in overlay
+#     elements (`studio/overlay/`):
 #     they paint into `export_video`'s frame with its QPainter, for the reason that one is here.
 #   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
 #   * export_controller — the export cluster lifted out of `app` (§7.1). It is VIEW code by every
@@ -96,7 +97,8 @@ ALLOWED_QT = {
     "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_controller",
     "library_dialog", "map_view", "motion",
-    "marks_panel", "overlay/__init__", "overlay/ghost", "overlays", "player_pane", "plots_view",
+    "marks_panel", "overlay/__init__", "overlay/corner_cards", "overlay/ghost", "overlays",
+    "player_pane", "plots_view",
     "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "stats_braking", "stats_coasting", "stats_common",
     "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",

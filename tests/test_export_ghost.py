@@ -559,6 +559,12 @@ def _open_dialog(lap, act):
         QDialog.exec = orig
 
 
+def _ghost_box(rows):
+    """The ghost's checkbox in the Extras row (the row holds every opt-in element's box)."""
+    return next(b for b in rows["Extras"].findChildren(QCheckBox)
+                if b.text() == "Ghost of your best lap")
+
+
 def _hint(dlg):
     return " ".join(lab.text() for lab in dlg.findChildren(QLabel) if lab.property("role") == "Hint")
 
@@ -575,7 +581,7 @@ def test_the_dialog_offers_the_ghost_off_by_default_and_says_where_it_cannot_app
     seen = {}
 
     def first(dlg, rows):
-        box, scope = rows["Extras"], rows["Export"]
+        box, scope = _ghost_box(rows), rows["Export"]
         assert isinstance(box, QCheckBox) and isinstance(scope, QComboBox)
         seen["default"] = box.isChecked()
         seen["enabled"] = box.isEnabled()
@@ -599,7 +605,7 @@ def test_the_dialog_offers_the_ghost_off_by_default_and_says_where_it_cannot_app
     again = {}
 
     def second(dlg, rows):
-        again["checked"] = rows["Extras"].isChecked()
+        again["checked"] = _ghost_box(rows).isChecked()
         rows["Export"].setCurrentIndex(2)        # All laps: the best lap's own file has none
         again["all"] = _hint(dlg)
         rows["Export"].setCurrentIndex(1)        # Best lap
@@ -620,7 +626,7 @@ def test_the_dialog_offers_the_ghost_off_by_default_and_says_where_it_cannot_app
         reset = [b for b in dlg.findChildren(QPushButton) if b.text() == "Use defaults"]
         assert reset, "no Use defaults button"
         reset[0].click()
-        again["after_reset"] = rows["Extras"].isChecked()
+        again["after_reset"] = _ghost_box(rows).isChecked()
         return QDialog.Rejected
 
     _open_dialog(lap, third)
