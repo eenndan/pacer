@@ -131,7 +131,7 @@ class RaceCard(QWidget):
 
     @staticmethod
     def _clock_text(m: CardModel) -> str:
-        return f"Timing from the video clock: laps within {m.tie_s:.2f} s share a pack"
+        return f"Timing from the video clock: ties within {m.tie_s:.2f} s"
 
     def _wrapped_h(self, text: str, width: float) -> int:
         r = self._fm.boundingRect(QRectF(0, 0, width, 1000).toRect(),

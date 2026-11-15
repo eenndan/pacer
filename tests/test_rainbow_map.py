@@ -289,6 +289,61 @@ def test_toggle_off_restores_exact_items_and_pens():
     print("test_toggle_off_restores_exact_items_and_pens OK")
 
 
+def _race_field(n=7):
+    """A `lap_race.RaceTracks` of `n` constant-speed laps round the stub's own ellipse."""
+    from studio import lap_race
+    laps = []
+    for k in range(n):
+        lt = 6.0 + 0.2 * k
+        el = np.linspace(0.0, lt, 61)
+        ang = np.linspace(0, 2 * math.pi, 61)
+        d = np.linspace(0.0, 500.0, 61)
+        laps.append(lap_race.RaceLap(lap_id=k, lap_time=lt, clock_start=0.0, elapsed=el, dist=d,
+                                     xs=np.cos(ang) * 50.0, ys=np.sin(ang) * 30.0,
+                                     warp=(np.array([0.0, 500.0]), np.array([0.0, 500.0]))))
+    return lap_race.build(laps, laps[0], {})
+
+
+def test_race_layer_is_one_scatter_with_bounds_ignored_and_exits_clean():
+    """The Lap Race layer (map_view._RaceLayer): one scatter for every dot, a ring, a trail per
+    coloured lap and a veil — all added with ignoreBounds (one that joins the bounds costs ~9 ms an
+    update) — over a hidden marker and key; an update moves the dots to the state and adds no item;
+    the veil sits under the start/finish mark; the exit leaves the plot exactly as it was."""
+    from studio import lap_race
+    mv = MapView(_stub_session())
+    vb = mv.plot.getViewBox()
+    before = list(mv.plot.items)
+    bounded = list(vb.addedItems)
+    key_hidden = mv._map_key.isHidden()
+    tracks = _race_field()
+    colours = {lap: k for k, lap in enumerate(i for i in tracks.ids if i in tracks.coloured)}
+    mv.start_race(tracks, colours, selected=6)
+    items = mv.race_items()
+    assert len(items) == 3 + lap_race.COLOURED_LAPS, len(items)
+    assert all(it in mv.plot.items for it in items) and list(vb.addedItems) == bounded, \
+        "a race item joined the view's bounds"
+    assert not mv.marker.isVisible() and mv._map_key.isHidden()
+    assert mv._race.veil.zValue() < mv._finish_mark.item.zValue() < mv._race.dots.zValue()
+    n = len(mv.plot.items)
+    for t in (0.0, 2.5, 7.0):
+        state = lap_race.race_state(tracks, t)
+        mv.update_race(state)
+        x, y = mv._race.dots.getData()
+        o = mv._race.order
+        assert np.allclose(x, state.x[o]) and np.allclose(y, state.y[o]), t
+        assert list(o[-1:]) == [tracks.index(tracks.ids[0])], "the fastest lap is not on top"
+        rx, ry = mv._race.ring.getData()
+        k = tracks.index(6)
+        assert (rx[0], ry[0]) == (state.x[k], state.y[k]), "the ring is not on the selected lap"
+        tx, ty = mv._race.trails[tracks.ids[0]].getData()
+        assert (tx[-1], ty[-1]) == (state.x[tracks.index(tracks.ids[0])],
+                                    state.y[tracks.index(tracks.ids[0])])
+    assert len(mv.plot.items) == n, "an update added plot items"
+    mv.end_race()
+    assert list(mv.plot.items) == before and mv.race_items() == []
+    assert mv.marker.isVisible() and mv._map_key.isHidden() == key_hidden
+
+
 def test_map_line_weights_follow_the_device_pixel_ratio():
     """W5-01 on the map. pyqtgraph pens are COSMETIC — their width is in DEVICE pixels — so at DPR 2
     the rainbow ribbon (RAINBOW_WIDTH=3) drew 1.5 LOGICAL px and its parallel strands stopped

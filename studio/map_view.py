@@ -1623,7 +1623,7 @@ class MapView(QWidget):
         self.ghost_updates = 0
         # The Lap Race layer while a race runs (start_race / end_race), and what it hid.
         self._race: _RaceLayer | None = None
-        self._race_restore = (True, True)
+        self._race_restore = (True, False)
 
         # E2: provisional start cue; declared before _rebuild (which may refresh it). None = track
         # known, no cue. See refresh_provisional_cue.
@@ -2374,7 +2374,9 @@ class MapView(QWidget):
         remembering both so `end_race` restores them exactly."""
         if self._race is not None:
             self.end_race()
-        self._race_restore = (self.marker.isVisible(), self._map_key.isVisible())
+        # The key's own hidden flag, not isVisible(): that also reads False for an unshown parent,
+        # and restoring it would then hide the key for good.
+        self._race_restore = (self.marker.isVisible(), self._map_key.isHidden())
         self.marker.setVisible(False)
         self._map_key.setVisible(False)
         self._race = _RaceLayer(self.plot, tracks, colours, selected)
@@ -2395,9 +2397,9 @@ class MapView(QWidget):
             return
         self._race.remove()
         self._race = None
-        marker_on, key_on = self._race_restore
+        marker_on, key_hidden = self._race_restore
         self.marker.setVisible(marker_on)
-        self._map_key.setVisible(key_on)
+        self._map_key.setHidden(key_hidden)
 
     def race_items(self) -> list:
         """The race layer's plot items (empty when no race is on) — tests count and inspect them."""
