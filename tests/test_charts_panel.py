@@ -28,6 +28,7 @@ import ast
 import itertools
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -38,7 +39,7 @@ os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QFontMetrics  # noqa: E402
+from PySide6.QtGui import QColor, QFontMetrics, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -640,6 +641,105 @@ def test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom()
     print("test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom OK")
 
 
+def _mouse_move(gv, scene_pt):
+    """A REAL pointer move: a QMouseEvent into the graphics view's viewport, exactly what Qt
+    delivers. Spaced past pyqtgraph's scene rate limit (`mouseRateLimit`), which drops a move that
+    follows the last one too closely — the throttle the chart's hover readouts already ride."""
+    time.sleep(0.025)
+    vp = gv.viewport()
+    p = gv.mapFromScene(scene_pt)
+    QApplication.sendEvent(vp, QMouseEvent(
+        QEvent.Type.MouseMove, QPointF(p), QPointF(vp.mapToGlobal(p)), Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+    _APP.processEvents()
+
+
+def test_hovering_a_corner_label_names_it_and_the_emphasis_lights_only_that_label():
+    """cool/corner-hover-link. A pointer over a corner label emits `cornerHovered("C2")` — once,
+    on the change — and leaving it emits None; a label the declutter DROPPED is not hoverable
+    (nothing is painted there to point at). `set_corner_emphasis` (CentralView's push) turns that
+    one label to the hot colour and drops its dotted guide; every other label stays quiet."""
+    v = _view(n=1, best=0, select=[0])
+    v.set_corner_labels([("C1", 120.0), ("C2", 400.0), ("C3", 405.0), ("C4", 800.0)])
+    _APP.processEvents()
+    assert [lb for lb, _x in v.corner_labels_shown()] == ["C1", "C2", "C4"]
+    seen = []
+    v.cornerHovered.connect(seen.append)
+    gv = v.p_speed.scene().views()[0]
+    by = {ln.label.toPlainText(): ln for ln in v._corner_items}
+    _mouse_move(gv, by["C2"].label.sceneBoundingRect().center())
+    _mouse_move(gv, by["C2"].label.sceneBoundingRect().center() + QPointF(2, 0))
+    assert seen == ["C2"], f"hovering C2 must name C2 once: {seen}"
+    _mouse_move(gv, v.p_speed.getViewBox().sceneBoundingRect().center())
+    assert seen == ["C2", None], f"leaving the label must clear it: {seen}"
+    c3 = by["C3"].label.sceneBoundingRect()     # a spot only the dropped C3 would cover
+    assert c3.right() - 1 > by["C2"].label.sceneBoundingRect().right() + plots_view.CORNER_HOVER_PAD_PX
+    _mouse_move(gv, QPointF(c3.right() - 1, c3.center().y()))
+    assert seen == ["C2", None], f"a dropped label answered a hover: {seen}"
+    _mouse_move(gv, by["C4"].label.sceneBoundingRect().center())
+    v.leaveEvent(QEvent(QEvent.Type.Leave))
+    assert seen[-2:] == ["C4", None], f"leaving the chart must clear the hover: {seen}"
+
+    def colours():
+        return {ln.label.toPlainText(): ln.label.color.name() for ln in v._corner_items}
+    quiet = QColor(plots_view.CORNER_LABEL_COLOR).name()
+    hot = QColor(plots_view.CORNER_LABEL_HOT_COLOR).name()
+    v.set_corner_emphasis("C4")
+    assert colours() == {"C1": quiet, "C2": quiet, "C3": quiet, "C4": hot}, colours()
+    assert by["C4"].pen.style() == Qt.DotLine and by["C1"].pen.style() == Qt.NoPen
+    v.set_corner_emphasis(None)
+    assert set(colours().values()) == {quiet} and by["C4"].pen.style() == Qt.NoPen
+    # A rebuild (re-segment) keeps the emphasis on the corner that still has the label.
+    v.set_corner_emphasis("C1")
+    v.set_corner_labels([("C1", 130.0), ("C2", 600.0)])
+    assert {ln.label.toPlainText(): ln.label.color.name() for ln in v._corner_items} == {
+        "C1": hot, "C2": quiet}
+    v.deleteLater()
+    print("test_hovering_a_corner_label_names_it_and_the_emphasis_lights_only_that_label OK")
+
+
+def _guide_scene_span(v, ln):
+    """(top, bottom) scene y of a corner guide AS PAINTED: its bounding rect, which is what
+    InfiniteLine.paint draws along (its stored span alone proves nothing — setSpan leaves the
+    cached rect stale)."""
+    r = ln.mapRectToScene(ln.boundingRect())
+    return r.top(), r.bottom()
+
+
+def test_the_corner_guide_starts_under_its_label_and_stops_short_of_the_legend():
+    """The emphasised corner's dotted guide must not strike through its own label, and must
+    not run across the legend plate. Checked in both plate positions: a corner whose apex sits
+    under the plate gets a guide that stops above it (plate low) or starts below it (plate high)."""
+    v = _view(n=1, best=0, select=[0])
+    v.set_corner_labels([("C1", 120.0), ("C2", 960.0)])
+    _APP.processEvents()
+    by = {ln.label.toPlainText(): ln for ln in v._corner_items}
+    v.set_corner_emphasis("C1")
+    top, bottom = _guide_scene_span(v, by["C1"])
+    lab = by["C1"].label.sceneBoundingRect()
+    assert top >= lab.bottom(), f"the guide strikes its label: top {top} < label bottom {lab.bottom()}"
+    assert bottom > top + 50, (top, bottom)
+    leg = v._speed_legend
+    assert leg is not None and leg.isVisible()
+    vb = v.p_speed.getViewBox()
+    for corner in ((0, 1), (0, 0)):          # plate at the bottom right, then the top right
+        leg.anchor(itemPos=(1, corner[1]), parentPos=(1, corner[1]), offset=(-8, 8 - 16 * corner[1]))
+        _APP.processEvents()
+        plate = leg.sceneBoundingRect()
+        x_under = vb.mapSceneToView(QPointF(plate.center().x(), plate.center().y())).x()
+        v.set_corner_emphasis(None)
+        v.set_corner_labels([("C1", 120.0), ("C2", float(x_under))])
+        v.set_corner_emphasis("C2")
+        v._declutter_corner_labels()
+        assert v._corner_items == [by["C1"], by["C2"]]   # an x move, not a rebuild
+        top, bottom = _guide_scene_span(v, by["C2"])
+        assert bottom <= plate.top() or top >= plate.bottom(), (
+            f"the guide runs across the legend plate: guide {top:.0f}-{bottom:.0f}, "
+            f"plate {plate.top():.0f}-{plate.bottom():.0f}")
+    v.deleteLater()
+    print("test_the_corner_guide_starts_under_its_label_and_stops_short_of_the_legend OK")
+
+
 def test_coast_bands_are_named_in_the_legend():
     """cool/chart-corners. The grey columns on the speed chart are COAST spans, and nothing said so
     — the 2026-11 tour read them as the corners. While a band is drawn the legend names it, in its
@@ -946,6 +1046,8 @@ def _run_all():
     test_legend_sits_clear_of_the_lap_start_and_says_it_can_be_moved()
     test_legend_hide_threshold_sits_at_the_apps_own_ceiling()
     test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom()
+    test_hovering_a_corner_label_names_it_and_the_emphasis_lights_only_that_label()
+    test_the_corner_guide_starts_under_its_label_and_stops_short_of_the_legend()
     test_coast_bands_are_named_in_the_legend()
     test_empty_state_offers_a_next_action_and_disables_the_inert_controls()
     test_gain_shading_takes_its_sign_from_the_maps_delta_rate()

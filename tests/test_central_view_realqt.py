@@ -46,6 +46,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -1431,6 +1433,16 @@ def _run_all():
     test_tab_bar_switches_pages_and_names_the_corners_lap()
     test_the_chapter_is_named_once_in_the_panel()
     test_corner_row_click_rings_the_map()
+    test_a_hovered_corner_lights_on_the_chart_and_the_map_and_clears_on_leave()
+    test_leaving_the_map_canvas_onto_its_own_overlays_clears_the_hover()
+    test_hovering_an_apex_dot_names_its_corner()
+    test_a_rebuild_under_a_resting_pointer_lets_the_next_move_name_the_corner_again()
+    test_a_coaching_jump_lights_the_chart_label_too()
+    test_the_hovered_corner_travels_through_central_view_only()
+    test_corner_hover_on_the_map_is_inert_during_a_lap_race()
+    test_corner_hover_names_the_right_corner_in_time_mode()
+    test_a_corner_whose_chart_label_was_dropped_still_lights_from_the_map()
+    test_playback_ticks_do_no_corner_hover_work()
     test_the_charts_header_never_has_to_choose_between_identity_and_controls()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
@@ -1723,6 +1735,286 @@ def test_corner_row_click_rings_the_map():
     assert seen == [table._cids[0]]
     assert view.map._corner_markers.highlighted == f"C{table._cids[0]}"
     print("test_corner_row_click_rings_the_map OK")
+
+
+def _pointer_to(gv, scene_pt):
+    """A REAL pointer move into a graphics view (see test_charts_panel._mouse_move): spaced past
+    pyqtgraph's scene rate limit, which drops a move that follows the last too closely."""
+    time.sleep(0.025)
+    vp = gv.viewport()
+    p = gv.mapFromScene(scene_pt)
+    QApplication.sendEvent(vp, QMouseEvent(
+        QEvent.Type.MouseMove, QPointF(p), QPointF(vp.mapToGlobal(p)), Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+    _APP.processEvents()
+
+
+def _hover_rig():
+    """A shown real CentralView and pointer helpers for its chart labels and map labels."""
+    view, s = _shown_view_on_the_laps_tab()
+    plots_gv = view.plots.p_speed.scene().views()[0]
+    cm = view.map._corner_markers
+    assert len(cm._texts) >= 2, "the stadium fixture must detect at least two corners"
+
+    def chart(label):
+        ln = next(ln for ln in view.plots._corner_items if ln.label.toPlainText() == label)
+        assert ln.isVisible(), f"{label} is not painted on the chart"
+        _pointer_to(plots_gv, ln.label.sceneBoundingRect().center())
+
+    def chart_off():
+        _pointer_to(plots_gv, view.plots.p_speed.getViewBox().sceneBoundingRect().center())
+
+    def map_label(label):
+        k = [m[0] for m in cm._markers].index(label)
+        _pointer_to(view.map.widget, cm._texts[k].sceneBoundingRect().center())
+
+    def map_off():
+        _pointer_to(view.map.widget, view.map.plot.getViewBox().sceneBoundingRect().topLeft()
+                    + QPointF(3, 3))
+    return view, s, chart, chart_off, map_label, map_off
+
+
+def test_a_hovered_corner_lights_on_the_chart_and_the_map_and_clears_on_leave():
+    """cool/corner-hover-link: one corner, three surfaces. Hover C2's label on the speed chart →
+    the map rings C2 and the chart emphasises C2; hover C1's label on the MAP → the chart
+    emphasises C1 and the map rings it; leaving clears both. A Corners-row ring is followed by
+    the chart too, a hover wins over it while it lasts, and leaving hands the ring back."""
+    view, _s, chart, chart_off, map_label, map_off = _hover_rig()
+    cm = view.map._corner_markers
+    try:
+        chart("C2")
+        assert cm.highlighted == "C2", f"chart hover C2 rang {cm.highlighted} on the map"
+        assert view.plots.corner_emphasis() == "C2"
+        chart_off()
+        assert cm.highlighted is None and view.plots.corner_emphasis() is None
+        map_label("C1")
+        assert view.plots.corner_emphasis() == "C1", view.plots.corner_emphasis()
+        assert cm.highlighted == "C1"
+        map_off()
+        assert view.plots.corner_emphasis() is None and cm.highlighted is None
+        # A row ring (Corners/Stats/Coaching) is the pinned ring: the chart follows it...
+        view._on_stats_corner_clicked(2)
+        assert cm.highlighted == "C2" and view.plots.corner_emphasis() == "C2"
+        chart("C1")                       # ...a hover wins while it lasts...
+        assert cm.highlighted == "C1" and view.plots.corner_emphasis() == "C1"
+        chart_off()                       # ...and leaving hands both back to the pinned corner.
+        assert cm.highlighted == "C2" and view.plots.corner_emphasis() == "C2"
+        view.opportunities.corner_clicked.emit(None)
+        assert cm.highlighted is None and view.plots.corner_emphasis() is None
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_a_hovered_corner_lights_on_the_chart_and_the_map_and_clears_on_leave OK")
+
+
+def test_leaving_the_map_canvas_onto_its_own_overlays_clears_the_hover():
+    """The map key, the notice and the legend are children INSIDE MapView: a pointer moving from
+    a corner label onto the key leaves the canvas without leaving the view, and Qt tells only the
+    viewport. That Leave must clear the ring and the chart's emphasis (on the demo, C2's label sits
+    under the key's top edge). The timing-handle reveal on the same Leave is untouched."""
+    view, _s, _chart, _chart_off, map_label, _map_off = _hover_rig()
+    cm = view.map._corner_markers
+    try:
+        map_label("C1")
+        assert cm.highlighted == "C1" and view.plots.corner_emphasis() == "C1"
+        QApplication.sendEvent(view.map.widget.viewport(), QEvent(QEvent.Type.Leave))
+        _APP.processEvents()
+        assert cm.highlighted is None, f"the ring stayed on {cm.highlighted} after the canvas Leave"
+        assert view.plots.corner_emphasis() is None
+        assert view.map._timing_hover is False
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_leaving_the_map_canvas_onto_its_own_overlays_clears_the_hover OK")
+
+
+def test_hovering_an_apex_dot_names_its_corner():
+    """The map names a corner from its apex DOT as well as its label plate (within
+    CORNER_HOVER_PX of the dot): the dot under the pointer, not a neighbour's."""
+    from studio import map_view
+    view, _s, _chart, _chart_off, _map_label, map_off = _hover_rig()
+    cm = view.map._corner_markers
+    vb = view.map.plot.getViewBox()
+    try:
+        for label, x, y, _d in cm._markers:
+            at = vb.mapViewToScene(QPointF(float(x), float(y)))
+            assert not any(t.sceneBoundingRect().contains(at) for t in cm._texts), (
+                f"{label}'s apex is under a label plate: the dot branch would not be reached")
+            _pointer_to(view.map.widget, at + QPointF(map_view.CORNER_HOVER_PX - 2.0, 0.0))
+            assert cm.highlighted == label, f"hovering {label}'s apex dot rang {cm.highlighted}"
+            assert view.plots.corner_emphasis() == label
+            map_off()
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_hovering_an_apex_dot_names_its_corner OK")
+
+
+def test_a_rebuild_under_a_resting_pointer_lets_the_next_move_name_the_corner_again():
+    """A re-segment drops both rings and CentralView's hovered corner. Each view must forget what
+    it last said too, or — with the pointer still on C1 — its next move compares equal to the
+    stale "C1" and says nothing, leaving C1 unlit under the pointer."""
+    view, _s, chart, chart_off, map_label, map_off = _hover_rig()
+    cm = view.map._corner_markers
+    try:
+        map_label("C1")
+        assert cm.highlighted == "C1"
+        view.rebuild_derived_views(reselect=True)
+        _APP.processEvents()
+        assert cm.highlighted is None and view.plots.corner_emphasis() is None
+        map_label("C1")
+        assert cm.highlighted == "C1", "the map stayed silent on C1 after a rebuild"
+        assert view.plots.corner_emphasis() == "C1"
+        map_off()
+        chart("C2")
+        view.rebuild_derived_views(reselect=True)
+        _APP.processEvents()
+        chart("C2")
+        assert cm.highlighted == "C2", "the chart stayed silent on C2 after a rebuild"
+        chart_off()
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_a_rebuild_under_a_resting_pointer_lets_the_next_move_name_the_corner_again OK")
+
+
+def test_a_coaching_jump_lights_the_chart_label_too():
+    """Coaching's Jump rings the corner on the map; it went straight to `map.highlight_corner`,
+    so the chart label never followed it. It now rides CentralView's one corner state."""
+    from studio.app import StudioWindow
+    view, s = _shown_view_on_the_laps_tab()
+    try:
+        win = SimpleNamespace(session=s, view=view, _jumping=False,
+                              _reveal_jump_corner=lambda _cid: None)
+        StudioWindow._jump_to_opportunity(win, 2, 0.0)
+        _APP.processEvents()
+        assert view.map._corner_markers.highlighted == "C2"
+        assert view.plots.corner_emphasis() == "C2", (
+            f"a Jump to C2 left the chart on {view.plots.corner_emphasis()}")
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_a_coaching_jump_lights_the_chart_label_too OK")
+
+
+def test_the_hovered_corner_travels_through_central_view_only():
+    """No view holds another: the chart's `cornerHovered` reaches the map ONLY through
+    CentralView's one state. Stub the map's receiver and the id arrives through it; cut
+    CentralView's slot and the same emission reaches nothing (no direct wire was ever made)."""
+    view, _s = _shown_view_on_the_laps_tab()
+    try:
+        got = []
+        view.map.set_hovered_corner = got.append
+        view.plots.cornerHovered.emit("C2")
+        assert got == ["C2"] and view._hovered_corner == "C2"
+        view.plots.cornerHovered.emit(None)
+        assert got == ["C2", None]
+        view.plots.cornerHovered.disconnect(view._on_corner_hovered)
+        view.map.cornerHovered.disconnect(view._on_corner_hovered)
+        view.plots.cornerHovered.emit("C1")
+        assert got == ["C2", None], "the chart reached the map without CentralView"
+        emph = []
+        view.plots.set_corner_emphasis = emph.append
+        view.map.cornerHovered.emit("C1")
+        assert emph == [], "the map reached the chart without CentralView"
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_the_hovered_corner_travels_through_central_view_only OK")
+
+
+def test_corner_hover_on_the_map_is_inert_during_a_lap_race():
+    """While a Lap Race owns the map canvas, hovering a corner there names nothing, and a chart
+    hover rings nothing on it (the chart's own label still lights). Ending the race restores it."""
+    view, _s, chart, chart_off, map_label, map_off = _hover_rig()
+    cm = view.map._corner_markers
+    try:
+        assert view.start_lap_race(), "the two-lap stadium must be raceable"
+        seen = []
+        view.map.cornerHovered.connect(seen.append)
+        map_label("C1")
+        assert seen == [] and view.plots.corner_emphasis() is None, seen
+        chart("C2")
+        assert cm.highlighted is None, f"a chart hover rang {cm.highlighted} under the race"
+        assert view.plots.corner_emphasis() == "C2"
+        chart_off()
+        view.end_lap_race()
+        map_label("C1")
+        assert seen == ["C1"] and cm.highlighted == "C1"
+    finally:
+        view.end_lap_race()
+        view.hide()
+        view.dispose()
+    print("test_corner_hover_on_the_map_is_inert_during_a_lap_race OK")
+
+
+def test_corner_hover_names_the_right_corner_in_time_mode():
+    """The chart labels move to the time axis on an x-mode flip (same items, new x); a hover in
+    time mode must still name the corner under the pointer, and the map ring that corner."""
+    view, s, chart, chart_off, _map_label, _map_off = _hover_rig()
+    try:
+        view.plots.x_mode_combo.setCurrentIndex(1)     # what picking "x: time" does
+        _APP.processEvents()
+        assert view.plots.axis_mode() == "time"
+        want = dict(s.corner_plot_positions("time"))
+        got = {lb: x for lb, x in view.plots.corner_labels_shown()}
+        assert got and all(abs(got[lb] - want[lb]) < 1e-9 for lb in got), (got, want)
+        last = sorted(got, key=got.get)[-1]
+        chart(last)
+        assert view.map._corner_markers.highlighted == last
+        assert view.plots.corner_emphasis() == last
+        chart_off()
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_corner_hover_names_the_right_corner_in_time_mode OK")
+
+
+def test_a_corner_whose_chart_label_was_dropped_still_lights_from_the_map():
+    """The chart drops labels that do not fit (here: zoomed so C1 is off the axis). Hovering C1
+    on the map still rings it there; the chart paints nothing for it — no other label lights up
+    in its place — and the emphasis is on the hidden item, so a zoom back shows it lit."""
+    view, _s, _chart, _chart_off, map_label, map_off = _hover_rig()
+    try:
+        x2 = dict(view.plots._corner_positions)["C2"]
+        view.plots.p_speed.setXRange(x2 - 5.0, x2 + 5.0, padding=0)
+        _APP.processEvents()
+        assert "C1" not in dict(view.plots.corner_labels_shown())
+        map_label("C1")
+        assert view.map._corner_markers.highlighted == "C1"
+        hot = theme.C.text
+        lit = [ln.label.toPlainText() for ln in view.plots._corner_items
+               if ln.isVisible() and ln.label.color.name() == QColor(hot).name()]
+        assert lit == [], f"a dropped C1 lit another painted label: {lit}"
+        map_off()
+        assert view.map._corner_markers.highlighted is None
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_a_corner_whose_chart_label_was_dropped_still_lights_from_the_map OK")
+
+
+def test_playback_ticks_do_no_corner_hover_work():
+    """Hover is event-driven: a 300-tick playback sweep calls neither the chart's hit-test, its
+    emphasis push, nor the map's hover ring — not once (counters, not a clock)."""
+    view, _s, t0, _t1 = _real_central_view()
+    calls = {"corner_at": 0, "emphasis": 0, "map_hover": 0, "map_hit": 0}
+
+    def count(name, fn):
+        def wrapped(*a, **k):
+            calls[name] += 1
+            return fn(*a, **k)
+        return wrapped
+    view.plots.corner_at = count("corner_at", view.plots.corner_at)
+    view.plots.set_corner_emphasis = count("emphasis", view.plots.set_corner_emphasis)
+    view.map.set_hovered_corner = count("map_hover", view.map.set_hovered_corner)
+    cm = view.map._corner_markers
+    cm.hit = count("map_hit", cm.hit)
+    for t in np.linspace(float(t0[0]) + 0.01, float(t0[-1]) - 0.01, 300):
+        view.video.positionChanged.emit(float(t))
+        view.tick()
+    assert calls == {"corner_at": 0, "emphasis": 0, "map_hover": 0, "map_hit": 0}, calls
+    print("test_playback_ticks_do_no_corner_hover_work OK")
 
 
 def test_show_stats_maximized_is_a_true_toggle():
