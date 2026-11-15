@@ -92,6 +92,9 @@ LIBRARY_SIZE = "library_size"
 # real place to keep a window. Shape-guarded on read; app.py then fits whatever comes back to the
 # screens that exist NOW, because the display it was stored on may be gone.
 WINDOW_GEOMETRY = "window_geometry"
+# View ▸ Reduce motion (studio/motion.py): True / False once the user has chosen, absent until then
+# — absent means "follow macOS's own Reduce Motion", so the default is the system's, not ours.
+REDUCE_MOTION = "reduce_motion"
 
 
 def _app_support_dir() -> str:
@@ -254,6 +257,19 @@ def colorblind_palette(path: str | None = None) -> bool:
 def set_colorblind_palette(on: bool, path: str | None = None) -> None:
     """Persist the colour-blind-safe palette toggle."""
     set(COLORBLIND_PALETTE, bool(on), path)
+
+
+def reduce_motion(path: str | None = None) -> bool | None:
+    """The user's View ▸ Reduce motion choice, or None when they never made one (motion then
+    follows the system setting). Anything but a bool reads as None — a corrupt value never forces
+    a choice the user did not make."""
+    val = get(REDUCE_MOTION, None, path)
+    return val if isinstance(val, bool) else None
+
+
+def set_reduce_motion(on: bool | None, path: str | None = None) -> None:
+    """Persist the Reduce motion choice; None clears it (follow the system again)."""
+    set(REDUCE_MOTION, None if on is None else bool(on), path)
 
 
 def lap_panel_tab(path: str | None = None) -> int:
