@@ -15,22 +15,29 @@ map's own (~20 s in all, most of it generating the demo and opening the window).
     recording's median fix interval). A band drawn only where it clears one fix is the design's
     rule; how many zones clear it is the figure, and the widest band's length on the map pinned at
     MAP_SIZE (§28's size). The planted habit's corner is also split by the generator's truth (the
-    habit laps, the clean ones), to say what its band would be made of.
+    habit laps, the clean ones), to say what its band would be made of, beside what the app already
+    says there: its BRAKING row (`Session.brake_report`) and its brake-direction line
+    (`Session.coaching_brake_direction`).
   * nailed — "what you nailed": the mirror of the Coaching page's opportunity gate, a corner whose
     typical pass is within `library.PB_PRECISION_S` (the 0.07 s the app calls level) of its best
-    pass (`Session.corner_report`'s median − best).
+    pass (`Session.corner_report`'s median − best). Then the same rule under ±PB_PRECISION_S / 2 of
+    cell jitter (JITTER_DRAWS seeded draws): how often each corner fires and how often the same
+    number of corners does; and which praised corners the Coaching page ranks as opportunities.
   * film — an ideal-lap film stitched from each segment's best pass (`Session.ideal_segment_bests`):
     donors, cuts, the film's length and a cut's spacing; at every cut between two donors the jump
     in speed and in position (each donor's own lap, at its own odometer edge), against the same
     jumps at SEED-ed random cuts between two clean laps at one partition edge (FILM_BASELINE_CUTS).
-  * moments — "session moments" under the timing's own noise: JITTER_DRAWS seeded draws, every lap
+  * moments — "session moments" under the app's level step: JITTER_DRAWS seeded draws, every lap
     time moved by a uniform ±PB_PRECISION_S and every corner cell by ±PB_PRECISION_S / 2, all
-    independent; per moment, the share of draws in which the lap it names changes. The longest run
+    independent; per moment, the share of draws in which the lap it names changes. The same again
+    at the MEASURED timing noise, Gaussian σ TIMING_SIGMA_S per lap and TIMING_SIGMA_S / √2 per
+    cell (docs/ACCURACY.md row C), which is narrower. The longest run
     without a ▼ recomputes the CORNERS BY LAP grid (`stats.corner_matrix`) from the jittered cells.
     Also each corner's tie group: the passes within PB_PRECISION_S of its quickest, and the 5-lap
     windows within PB_PRECISION_S of the best one. And the longest run without a ▼ on NOISE_DRAWS
-    seeded grids of pure Gaussian noise (the demo's laps, corners, column medians and sample σ),
-    marked by the real rule: a run that is stable under jitter must still beat what noise produces.
+    seeded grids of pure Gaussian noise (the demo's laps, corners and column medians; each column's
+    sample σ, and again its robust σ, 1.4826 × MAD), marked by the real rule, with the ▼ each grid
+    carries against the demo's own: a run that is stable under jitter must still beat noise.
 
 ARGV CONTRACT: nothing names an input or an output. The demo is generated (`make_demo`, a
 placeholder picture: nothing here decodes a frame) into ONE `mkdtemp` under $TMPDIR, removed before
@@ -67,7 +74,9 @@ from studio.session import Session  # noqa: E402
 
 SEED = 7                    # one generator for every random draw below: the probe is deterministic
 JITTER_DRAWS = 1000
-NOISE_DRAWS = 1000          # pure-noise grids for the run with no ▼ (§32): ~1 s
+NOISE_DRAWS = 1000          # pure-noise grids for the run with no ▼ (§32), at two σ: ~2 s
+# docs/ACCURACY.md row C: the measured σ of a lap time against official timing (the test ties it).
+TIMING_SIGMA_S = 0.0247
 FILM_BASELINE_CUTS = 200
 RUNS = (3, 5)               # the run lengths the moments name
 MAP_WINDOW = mc.WINDOW      # 1440x900 logical, as motion_refusals (§28) opens it
@@ -99,8 +108,8 @@ def brake_bands(s: Session, px_per_m: float) -> dict:
             continue
         q1, med, q3 = np.percentile(on, [25, 50, 75])
         fix_m = float(np.interp(med, dist, kmh)) / 3.6 * fix_s
-        zones.append({"cid": int(c.cid), "n": len(on), "iqr_m": round(float(q3 - q1), 2),
-                      "fix_m": round(fix_m, 2), "clears": bool(q3 - q1 > fix_m)})
+        zones.append({"cid": int(c.cid), "n": len(on), "iqr_m": round(float(q3 - q1), 3),
+                      "fix_m": round(fix_m, 3), "clears": bool(q3 - q1 > fix_m)})
     # The planted habit's corner, its laps split by the generator's truth: with the habit, without.
     h = make_demo.DEMO_HABIT
     groups = {}
@@ -109,17 +118,53 @@ def brake_bands(s: Session, px_per_m: float) -> dict:
         q1, med, q3 = np.percentile(on, [25, 50, 75])
         groups[name] = {"n": len(on), "median_m": round(float(med), 1), "iqr_m": round(float(q3 - q1), 2)}
     widest = max(z["iqr_m"] for z in zones)
+    # What the app already says about the habit's corner: its BRAKING row and its brake-direction line.
+    bc = next(r for r in s.brake_report() if r.cid == h.cid)
+    bd = s.coaching_brake_direction().get(h.cid)
     return {"laps": len(rows), "fix_s": round(fix_s, 3), "zones": zones,
             "map_px_per_m": round(px_per_m, 3), "widest_px": round(widest * px_per_m, 1),
-            "clear": [z["cid"] for z in zones if z["clears"]], "habit_cid": h.cid, "habit_groups": groups}
+            "clear": [z["cid"] for z in zones if z["clears"]], "habit_cid": h.cid, "habit_groups": groups,
+            "braking": {"sigma_m": round(float(bc.sigma_m), 2), "span_m": round(float(bc.span_m), 2)},
+            "direction": {"verdict": bd.verdict if bd else None, "rho": round(float(bd.rho), 3) if bd else None,
+                          "p_holm": round(float(bd.p_holm), 4) if bd else None}}
 
 
 # ─── §30 what you nailed ────────────────────────────────────────────────────────────────────────
+def _nailed_from(cells: list, resolved: list, n: int) -> list[int]:
+    """The corner columns whose typical pass (median) is within PB_PRECISION_S of the best one."""
+    out = []
+    for k in range(n):
+        col = [row[k] for row, res in zip(cells, resolved, strict=True) if res[k]]
+        if float(np.median(col)) - min(col) <= PB_PRECISION_S:
+            out.append(k)
+    return out
+
+
 def nailed(s: Session) -> dict:
     rep = s.corner_report()
     loss = {int(r.cid): round(float(r.median_loss_s), 3) for r in rep if r.median_loss_s is not None}
     fires = sorted(k for k, v in loss.items() if v <= PB_PRECISION_S)
-    return {"corners": len(rep), "median_loss": loss, "fires": fires}
+    # Under the corner cells' share of the level step (±PB_PRECISION_S / 2, as §32's jitter), how
+    # often each corner fires, and how often the same NUMBER of corners does.
+    mx = s.corner_matrix()
+    assert mx is not None
+    cells = [[float(c) for c in row] for row in mx.cells]
+    assert [mx.cids[k] for k in _nailed_from(cells, mx.resolved, len(mx.cids))] == fires, \
+        "the grid's median − best is no longer corner_report's"
+    rng = np.random.default_rng([SEED, 30])
+    per = dict.fromkeys(mx.cids, 0)
+    same = 0
+    for _ in range(JITTER_DRAWS):
+        cj = [[c + rng.uniform(-PB_PRECISION_S / 2, PB_PRECISION_S / 2) for c in row] for row in cells]
+        hit = _nailed_from(cj, mx.resolved, len(mx.cids))
+        same += len(hit) == len(fires)
+        for k in hit:
+            per[mx.cids[k]] += 1
+    ranked = [int(o.cid) for o in s.coaching_opportunities().ranked_rows()]
+    return {"corners": len(rep), "median_loss": loss, "fires": fires,
+            "jitter_same_count": round(same / JITTER_DRAWS, 2),
+            "jitter_fires": {str(c): round(v / JITTER_DRAWS, 2) for c, v in per.items()},
+            "coaching_ranked": ranked, "praised_and_ranked": [c for c in fires if c in ranked]}
 
 
 # ─── §31 the ideal-lap film ─────────────────────────────────────────────────────────────────────
@@ -206,13 +251,7 @@ def moments(s: Session, rng) -> dict:
     order = sorted(lt)
     cells = [[float(c) for c in row] for row in mx.cells]
     base = _moments(lt, cells, mx, order)
-    flips = dict.fromkeys(base, 0)
-    for _ in range(JITTER_DRAWS):
-        lj = {i: v + rng.uniform(-PB_PRECISION_S, PB_PRECISION_S) for i, v in lt.items()}
-        cj = [[c + rng.uniform(-PB_PRECISION_S / 2, PB_PRECISION_S / 2) for c in row] for row in cells]
-        for key, val in _moments(lj, cj, mx, order).items():
-            flips[key] += val != base[key]
-    share = {k: round(v / JITTER_DRAWS, 2) for k, v in flips.items()}
+    share = _shares(base, lt, cells, mx, order, rng, lambda g, n: g.uniform(-PB_PRECISION_S, PB_PRECISION_S, n), 0.5)
     ties = {}
     for k, cid in enumerate(mx.cids):
         v = [row[k] for row, res in zip(cells, mx.resolved, strict=True) if res[k]]
@@ -235,7 +274,30 @@ def moments(s: Session, rng) -> dict:
             **tied_runs,
             "best_lap_margin_s": round(srt[1] - srt[0], 3),
             "no_flag_run": list(base["no_flag_run"]),
-            "noise": noise_runs(mx, cells, order, rng)}
+            "noise": noise_runs(mx, cells, order, rng),
+            "timing_sigma_s": TIMING_SIGMA_S,
+            "share_timing": (st := _shares(base, lt, cells, mx, order, np.random.default_rng([SEED, 32]),
+                                           lambda g, n: g.normal(0.0, TIMING_SIGMA_S, n), 1.0 / np.sqrt(2.0))),
+            "tied_share_timing": [min(st[f"best_C{c}"] for c in tied), max(st[f"best_C{c}"] for c in tied)]}
+
+
+def _shares(base: dict, lt: dict, cells: list, mx, order: list[int], rng, draw, cell_scale: float) -> dict:
+    """Per moment, the share of JITTER_DRAWS draws in which the lap it names changes: every lap time
+    moved by draw(rng, n), every corner cell by draw(rng, n) × cell_scale, all independent."""
+    flips = dict.fromkeys(base, 0)
+    ids = list(lt)
+    for _ in range(JITTER_DRAWS):
+        dl = draw(rng, len(ids))
+        lj = {i: lt[i] + float(d) for i, d in zip(ids, dl, strict=True)}
+        cj = [[c + float(d) * cell_scale for c, d in zip(row, draw(rng, len(row)), strict=True)] for row in cells]
+        for key, val in _moments(lj, cj, mx, order).items():
+            flips[key] += val != base[key]
+    return {k: round(v / JITTER_DRAWS, 3) for k, v in flips.items()}
+
+
+def _marks(m) -> int:
+    """How many cells of a CornerMatrix carry a ▼."""
+    return sum(m.is_behind(r, k) for r in range(len(m.lap_ids)) for k in range(len(m.cids)))
 
 
 def noise_runs(mx, cells: list, order: list[int], rng) -> dict:
@@ -244,18 +306,32 @@ def noise_runs(mx, cells: list, order: list[int], rng) -> dict:
     σ, every cell resolved, marked by the real rule (`stats.corner_matrix`). Stability under jitter
     cannot tell a calm stretch from this; the run must beat what noise alone produces."""
     cols = np.array(cells, float).T
-    med, sig = np.median(cols, axis=1), np.std(cols, axis=1, ddof=1)
+    med = np.median(cols, axis=1)
+    sig = np.std(cols, axis=1, ddof=1)
+    mad = 1.4826 * np.median(np.abs(cols - med[:, None]), axis=1)    # the robust σ of each column
     res = [[True] * len(mx.cids)] * len(mx.lap_ids)
-    runs = []
-    for _ in range(NOISE_DRAWS):
-        grid = (med[:, None] + rng.normal(0.0, 1.0, cols.shape) * sig[:, None]).T.tolist()
-        runs.append(_no_flag_run(stats_service.corner_matrix(mx.lap_ids, mx.cids, grid, res), order)[0])
-    a = np.array(runs)
     demo = _no_flag_run(mx, order)[0]
-    return {"draws": NOISE_DRAWS, "sigma_s": [round(float(sig.min()), 3), round(float(sig.max()), 3)],
-            "median": int(np.percentile(a, 50, method="inverted_cdf")),
-            "p90": int(np.percentile(a, 90, method="inverted_cdf")),
-            "at_least_demo": round(float(np.mean(a >= demo)), 2)}
+
+    def grids(scale, g) -> dict:
+        runs, marks = [], []
+        for _ in range(NOISE_DRAWS):
+            grid = (med[:, None] + g.normal(0.0, 1.0, cols.shape) * scale[:, None]).T.tolist()
+            m = stats_service.corner_matrix(mx.lap_ids, mx.cids, grid, res)
+            runs.append(_no_flag_run(m, order)[0])
+            marks.append(_marks(m))
+        a = np.array(runs)
+        return {"sigma_s": [round(float(scale.min()), 3), round(float(scale.max()), 3)],
+                "median": int(np.percentile(a, 50, method="inverted_cdf")),
+                "p90": int(np.percentile(a, 90, method="inverted_cdf")),
+                "at_least_demo": round(float(np.mean(a >= demo)), 2),
+                "marks_mean": round(float(np.mean(marks)), 1)}
+
+    out = {"draws": NOISE_DRAWS, "demo_marks": _marks(mx),
+           "demo_marked_cids": sorted({int(mx.cids[k]) for r in range(len(mx.lap_ids))
+                                       for k in range(len(mx.cids)) if mx.is_behind(r, k)}),
+           **grids(sig, rng)}
+    out["mad"] = grids(mad, np.random.default_rng([SEED, 33]))
+    return out
 
 
 def figures(s: Session, px_per_m: float) -> dict:
