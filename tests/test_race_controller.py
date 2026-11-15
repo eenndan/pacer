@@ -510,6 +510,89 @@ def test_the_race_on_the_real_window():
           "paused), compare / trust / off-screen / re-segment / load / close end it, gated")
 
 
+def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
+    """QA EVAL-1 / REG-1: View ▸ Lap race's enabled state was a cache synced at load — BEFORE the
+    window's layout, so the map read as off screen — and again only when the View menu or ⌘K
+    opened, a race started or ended, or a timing edit landed. A disabled action's key is dropped
+    by Qt in silence, so R did nothing after every load, after Esc left the debrief, and after a
+    maximise was restored. Driven by REAL key presses (`QTest.keyClick`, through Qt's shortcut
+    map) and with no View menu opened, because opening it was what hid the defect."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from test_debrief_landing import _fresh_app_support, _open
+
+    from studio import command_palette, sidecar
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+
+    def press_r():
+        QTest.keyClick(win, Qt.Key_R)
+        _settle(0.05)
+
+    def palette_row():
+        return next(e for e in command_palette.entries(win) if e.action is act)
+
+    reason = StudioWindow._NO_MAP_RACE_REASON
+    no_map = f"Lap race: {reason[0].lower()}{reason[1:]}"
+    saved = sidecar.save
+    sidecar.save = lambda *a, **k: None
+    with tempfile.TemporaryDirectory(prefix="race_key_") as folder, _fresh_app_support():
+        path = os.path.join(folder, "demo", "GX019001.MP4")
+        md.make(path, render=False)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            _open(win, path)            # the demo's first open lands on the debrief
+            v, act, bar = win.view, win._race_action, win.statusBar()
+            assert v._maximized_panel is not None and not v.map_on_screen(), "no debrief landing"
+            # On the debrief: R starts nothing and says why.
+            press_r()
+            assert not v.is_racing(), "R raced with the map off screen"
+            assert bar.currentMessage() == no_map, bar.currentMessage()
+            # The ⌘K row: off, with the same reason (the rule: disabled while the map is hidden).
+            row = palette_row()
+            assert not row.enabled and row.reason == StudioWindow._NO_MAP_RACE_REASON, row
+            # Esc leaves the debrief; the cached action is still off — R must race anyway.
+            QTest.keyClick(win, Qt.Key_Escape)
+            _settle(0.3)
+            assert v.map_on_screen() and not act.isEnabled(), "the stale state is not exercised"
+            press_r()
+            assert v.is_racing(), "R did not race after Esc left the debrief"
+            assert bar.currentMessage() == "", "the refusal outlived the race it refused"
+            # Maximise during the race (it ends), restore: R races again.
+            v._toggle_panel_maximized(v._plots_panel)
+            _settle(0.2)
+            assert not v.is_racing()
+            press_r()
+            assert not v.is_racing() and bar.currentMessage() == no_map, bar.currentMessage()
+            v._restore_splitter_sizes()
+            _settle(0.2)
+            press_r()
+            assert v.is_racing(), "R did not race after the grid was restored"
+            press_r()                   # R again ends it
+            assert not v.is_racing()
+            # The ⌘K row runs it once the map is back.
+            row = palette_row()
+            assert row.enabled, row
+            row.run()
+            assert v.is_racing(), "the palette row did not race"
+            v.end_lap_race()
+            # A plain re-open (no debrief): R races with no menu opened since the load.
+            _open(win, path)
+            v = win.view
+            assert v._maximized_panel is None and v.map_on_screen()
+            press_r()
+            assert v.is_racing(), "R did not race after a plain re-open"
+        finally:
+            sidecar.save = saved
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+    print("ok R: races once the map is back (Esc, restore, re-open) with no menu opened; says why "
+          "on the debrief and under a maximise; the ⌘K row agrees")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
