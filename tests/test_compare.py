@@ -764,6 +764,66 @@ def test_compare_captions_and_picker_labels_are_one_based():
     print("test_compare_captions_and_picker_labels_are_one_based OK")
 
 
+# ------------------------------------------------ cool/compare-live-delta: the seam's live Δ
+def _parse_delta(text):
+    """The signed number out of a formatted Δ run (`Δ +0.12 s ▼`, `Δ −0.30 s`)."""
+    return float(text.split()[1].replace("\u2212", "-"))
+
+
+def test_the_seam_delta_is_pane_as_badge_and_delta_between_at_every_playhead():
+    """The big Δ on the seam is the number pane A's badge already shows — the SAME float, from the
+    same `Session.delta_between(a, b, t_a)` call — at every playhead, not a second measurement that
+    could drift from it. It names the pair in the pickers' 1-based lap labels."""
+    c, video, _plots, _ids = _three_lap_compare()
+    c.enter()
+    a, b = c.lap_a, c.lap_b
+    assert video.seam_pair[0] == f"lap {a + 1} vs lap {b + 1}", video.seam_pair
+    wa, wb = c.session.lap_window(a), c.session.lap_window(b)
+    checked = 0
+    for frac in (0.05, 0.25, 0.5, 0.75, 0.95):
+        t_a = wa[0] + frac * (wa[1] - wa[0])
+        t_b = wb[0] + frac * (wb[1] - wb[0])
+        video.current_pane_time = lambda side, t_a=t_a, t_b=t_b: t_a if side == 0 else t_b
+        c.tick()
+        truth = c.session.delta_between(a, b, t_a)
+        seam_text, _colour = video.seam
+        assert abs(_parse_delta(seam_text) - _parse_delta(video.badges[0][0])) < 1e-9, (
+            frac, seam_text, video.badges[0])
+        assert abs(_parse_delta(seam_text) - round(truth, 2)) < 1e-9, (frac, seam_text, truth)
+        checked += 1
+    assert checked == 5
+    # Repointing a pane renames the pair the seam measures.
+    third = next(lid for lid in _ids if lid not in (a, b))
+    c.on_pane_repoint(1, third)
+    assert video.seam_pair[0] == f"lap {a + 1} vs lap {third + 1}", video.seam_pair
+    print("test_the_seam_delta_is_pane_as_badge_and_delta_between_at_every_playhead OK")
+
+
+def test_the_seam_delta_is_neutral_inside_timing_precision():
+    """At the hero's size a red/green flip at ±0.01 s is a claim the timing cannot make: inside
+    `library.PB_PRECISION_S` the seam prints the number neutral and without its ▲/▼; outside it,
+    exactly the badge's run and colour. (The badges keep their own 5 ms dead band.)"""
+    from studio.compare_controller import CompareController
+    from studio.library import PB_PRECISION_S
+
+    c = CompareController.__new__(CompareController)
+    c.video = _RecordingVideo()
+    inside = PB_PRECISION_S - 0.005
+    for d in (inside, -inside, 0.02, 0.0):
+        c._set_seam(d)
+        text, colour = c.video.seam
+        assert colour is None, (d, c.video.seam)
+        assert "▲" not in text and "▼" not in text, (d, text)
+        assert text == theme.format_delta_run(d, arrow=False), (d, text)
+    for d in (PB_PRECISION_S + 0.01, -(PB_PRECISION_S + 0.01), 0.7):
+        c._set_seam(d)
+        assert c.video.seam == (theme.format_delta_run(d), theme.delta_colour(d)), (d, c.video.seam)
+        assert c.video.seam[1] is not None
+    c._set_seam(None)
+    assert c.video.seam == ("Δ —", None), c.video.seam
+    print("test_the_seam_delta_is_neutral_inside_timing_precision OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
