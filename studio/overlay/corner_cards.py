@@ -42,7 +42,9 @@ the widest.
 
 PLACEMENT: left-aligned with the speed readout and just above it, then moved up past any Classic
 plate it would touch (the minimap is wide in 9:16); it must land inside the safe area clear of
-every plate, or the export fails by name rather than burning a card over another one.
+every plate. Where it cannot (a frame ≲ 300 px wide, QA #565/#558) the cards SIT THE EXPORT OUT
+rather than fail it or burn a card over another plate: an extra is never worth the whole file, and
+the finished box says so (`skipped`, collected by `overlay.build`).
 """
 from __future__ import annotations
 
@@ -228,9 +230,13 @@ def place(size_w: float, size_h: float, plates, safe: QRectF, k: float) -> QRect
     return r
 
 
+SKIPPED_TOO_SMALL = "Corner cards did not fit this frame size, so this export has none."
+
+
 class CornerCardsElement:
     name = "corner_cards"
     layer = LAYER_TOP
+    skipped: str | None = None
 
     def prepare(self, ctx: ElementContext) -> bool:
         spec = ctx.spec
@@ -244,7 +250,11 @@ class CornerCardsElement:
         w = max(card_width(c, h) for c in self.cards)
         avoid = {n: q for n, q in ctx.plates.items() if n in ("gmeter", "map", "readout", "strip",
                                                               STAMP)}
-        self.rect = place(w, h, avoid, ctx.safe, ctx.k)
+        try:
+            self.rect = place(w, h, avoid, ctx.safe, ctx.k)
+        except ValueError:
+            self.skipped = SKIPPED_TOO_SMALL
+            return False
         # Whole pixels, so the blit is a straight copy (no resampling between frames); rounded UP,
         # so the plate (one pixel in from the image's edge) never leaves the placed rect's corner.
         self._at = QPointF(math.ceil(self.rect.x()) - 1.0, math.ceil(self.rect.y()) - 1.0)

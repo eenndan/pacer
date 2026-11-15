@@ -1,4 +1,4 @@
 ### Added
 
-- **Export ▸ Extras ▸ "Ghost of your best lap"** (off by default): a ring on the video's minimap
-  where your best lap was at the same lap time — the lap strip's Δ, as a place on track
+- In File ▸ Export overlay video…, Extras ▸ Ghost of your best lap puts a ring on the minimap where
+  your best lap was at the same lap time. It is off in Classic. (#556)

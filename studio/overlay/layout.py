@@ -36,6 +36,11 @@ TOWER_TIME = 0.064
 TOWER_DELTA = 0.040
 TOWER_PAD = 0.016      # inner left/right padding
 TOWER_PROGRESS = 0.004  # the lap-progress line under the header
+# A whole-recording export's LAST line: a sub-plate under the tower for `broadcast.LAST_HOLD_S`
+# after each crossing — the finished lap's time as the Laps table prints it. Reserved under the
+# tower on such an export (the stamp hangs below it), drawn only during a hold.
+TOWER_LAST = 0.040
+TOWER_LAST_GAP = 0.006
 # The Δ bar (top-centre): a number-free bar, ±scale at its ends.
 DBAR_W = 0.36
 DBAR_H = 0.050         # its scale and baseline name over the bar itself
@@ -83,7 +88,9 @@ class Slot:
       "hang": under the tower, offset by the caller's (dx, dy) from its bottom-left (the stamp's
               place under the Classic strip, translated);
       "under": GAP below everything already placed or kept clear in the frame's top half — at the
-              left margin, or at the tower's x plus dx for a hanging slot.
+              left margin, or at the tower's x plus dx for a hanging slot;
+      a trailing "!" ("hang!"): the same place held only to the FRAME, not the safe area, and
+              slid left as far as it must be to end inside it — the honesty stamp's last resort.
     `w` None = fitted by the painter (a measured size); FULL = the safe area's width."""
     anchors: tuple[str, ...]
     h: float
@@ -93,10 +100,17 @@ class Slot:
 # ---------------------------------------------------------------------------------- the table
 # The honesty stamp is a slot too (its size and offset are the Classic stamp's, `fitted` and
 # `hang`): it hangs under the tower, or — where the Classic g-meter is in the way (a narrow frame
-# with a long stamp) — drops below the top row. It is never dropped and never shrunk.
+# with a long stamp) — drops below the top row. It is never dropped and never shrunk. On a frame
+# too narrow for its longest line inside the safe area (≲ 300 px wide: a 9:16 crop of 540p footage)
+# it takes the same two places held only to the frame, into the margins and slid left until its
+# longest line ends inside the frame (QA, #565: the export used to fail there instead). The Classic
+# stamp runs into the margin on that frame too — and past the frame's edge with three lines, which
+# Classic keeps: its frames are 0.9.0's. On a frame narrower than the stamp itself (≲ 290 px: 9:16
+# from 480p footage) it starts at the frame's left edge and its longest line is cut where the frame
+# ends — exactly as, and less than, the Classic stamp there; never dropped, never shrunk.
 BROADCAST: dict[str, Slot] = {
     "tower": Slot(("tl",), TOWER_HEAD + TOWER_PROGRESS + TOWER_TIME + TOWER_DELTA),
-    "stamp": Slot(("hang", "under"), 0.0),
+    "stamp": Slot(("hang", "under", "hang!", "under!"), 0.0),
     "dbar": Slot(("tc", "under"), DBAR_H, DBAR_W),
     "speed": Slot(("bc", "bl"), SPEED_H),
 }
@@ -109,6 +123,8 @@ BROADCAST_PORTRAIT: dict[str, Slot] = {
     "speed": Slot(("bl", "bc"), SPEED_H),
 }
 ORDER = ("tower", "stamp", "dbar", "speed")
+# What a layout failure calls each slot ("overlay layout: the honesty stamp does not fit …").
+NAMES = {"tower": "timing tower", "stamp": "honesty stamp", "dbar": "Δ bar", "speed": "big speed"}
 
 
 def table(out_w: int, out_h: int) -> dict[str, Slot]:
@@ -131,6 +147,7 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
     u = float(min(out_w, out_h))
     m, gap = MARGIN * u, GAP * u
     safe = Box(m, m, out_w - 2 * m, out_h - 2 * m)
+    frame = Box(0.0, 0.0, float(out_w), float(out_h))
     offsets: dict[str, tuple[float, float]] = dict(hang or {})
     out: dict[str, Box] = {}
     for name in names:
@@ -144,6 +161,8 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
             w = slot.w * u
         why = []
         for anchor in slot.anchors:
+            area = frame if anchor.endswith("!") else safe
+            anchor = anchor.rstrip("!")
             dx, dy = offsets[name] if name in offsets else (0.0, 0.0)
             if anchor == "hang":
                 tw = out["tower"]
@@ -156,9 +175,15 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
             else:
                 x = {"l": m, "c": (out_w - w) / 2.0}[anchor[1]]
                 y = {"t": m, "b": out_h - m - h}[anchor[0]]
+            fits_frame = False
+            if area is frame:
+                x = max(0.0, min(x, out_w - w))    # slid left until every line is whole
+                # Wider than the frame itself: from its left edge, as far as it goes — the
+                # Classic stamp is cut off on that frame too, further in (see the table).
+                fits_frame = w > out_w and y >= 0 and y + h <= out_h
             box = Box(x, y, w, h)
-            if not safe.contains(box):
-                why.append(f"{anchor}: leaves the safe area")
+            if not (area.contains(box) or fits_frame):
+                why.append(f"{anchor}: leaves the {'frame' if area is frame else 'safe area'}")
                 continue
             hit = [o for o, b in (*out.items(), *keep_clear.items()) if box.intersects(b)]
             if hit:
@@ -167,6 +192,6 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
             out[name] = box
             break
         else:
-            raise LayoutError(f"no place for the {name} ({w:.0f}x{h:.0f}) in a {out_w}x{out_h} "
-                              f"frame ({'; '.join(why)})")
+            raise LayoutError(f"the {NAMES.get(name, name)} does not fit a {out_w}×{out_h} frame "
+                              f"({name} {w:.0f}x{h:.0f}: {'; '.join(why)})")
     return out

@@ -17,6 +17,9 @@ WHAT IS CHECKED:
   * the ghost's ring is where `lap_race.race_state` puts the best lap at the frame's lap time,
     mapped through the minimap's own projection, and its gap IS the strip's Δ on every frame;
   * it is drawn UNDER the kart dot (where they overlap, the dot's pixels are untouched);
+  * BESIDE the kart (a lap close to the best: QA #556) it is a ring ROUND the dot that reads —
+    enough cyan round the dot on every such frame — and clear of the dot it is today's ring,
+    pixel for pixel;
   * ZERO ghost pixels on the best lap, with a cross-recording reference loaded, under provisional
     timing, with a lap the Lap Race leaves out (dropout), in the full-session scope and with the
     option off — each beside the positive control that the same mask finds the ring otherwise;
@@ -208,6 +211,65 @@ def test_the_ghost_is_drawn_under_the_kart_dot():
     on.source.cleanup()
     off.source.cleanup()
     print(f"ok the ghost is under the kart dot ({seen} overlapping frames)")
+
+
+def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
+    """On the clean lap closest to the best the ghost sits within a dot radius of the kart for
+    most of the lap; drawn under the dot it vanished there (QA #556). Now every such frame shows a
+    cyan ring round the dot (at least half a ring's ink), still centred on the best lap's place,
+    the dot's own disc untouched; and a frame where the two are clear of each other is exactly the
+    ring it always was."""
+    from studio.overlay import ghost
+    f = _fixture()
+    s, best = f["s"], f["best"]
+    close = min((i for i in s.valid_lap_ids() if i != best),
+                key=lambda i: s.lap_time(i) - s.lap_time(best))
+    # (read with defaults, so the unfixed tree fails on the pixels rather than on a name)
+    near_r, ring_r = getattr(ghost, "_NEAR_R", 7.2), getattr(ghost, "_NEAR_RING_R", 9.0)
+    ring_px = 2 * math.pi * ring_r * ghost._RING_W     # k = 1 at 1080
+    yy, xx = np.mgrid[0:1080, 0:1920]
+    count = {}
+    for lap in (close, f["lap"]):          # the closest lap, and the fixture's slowest
+        spec = _spec(s, lap, elements=("ghost",))
+        off_spec = _spec(s, lap)
+        p = ev.OverlayPainter(s, spec, 1920, 1080, 30.0)
+        off = ev.OverlayPainter(s, off_spec, 1920, 1080, 30.0)
+        el = p.elements[0]
+        near = far = 0
+        for t in _times(spec, 40):
+            vals, a = _painted(p, s, spec, t)
+            kart = p._map.marker_and_tail(vals.tt)[0]
+            want = _ghost_px(p, el, vals)
+            d = float(np.hypot(want[0] - kart.x(), want[1] - kart.y()))
+            if d < 3.0:
+                r = np.hypot(xx + 0.5 - kart.x(), yy + 0.5 - kart.y())
+                ink = int((_cyan(a[..., :3], a[..., 3]) & (r < 20)).sum())
+                assert ink >= 0.5 * ring_px, (f"t={t:.3f}: {ink} cyan px round the dot (a ring "
+                                              f"is {ring_px:.0f}): the ghost is hidden under the "
+                                              "kart")
+                _vals, b = _painted(off, s, off_spec, t)
+                core = r <= 3.5
+                assert (a[core] == b[core]).all(), f"t={t:.3f}: the ring covered the kart dot"
+                near += 1
+            elif d > (near_r + ring_r + 3) * el._k:
+                ghost._NEAR_R = 0.0              # never "beside": the ring as it always was
+                try:
+                    _vals, b = _painted(p, s, spec, t)
+                finally:
+                    ghost._NEAR_R = near_r
+                mb = p._map._box          # (the g-dial's filter moved on: the minimap only)
+                y0, y1 = int(mb.top()), int(mb.bottom()) + 1
+                x0, x1 = int(mb.left()), int(mb.right()) + 1
+                assert (a[y0:y1, x0:x1] == b[y0:y1, x0:x1]).all(), \
+                    f"t={t:.3f}: the ring clear of the dot changed"
+                far += 1
+        count[lap] = (near, far)
+        spec.source.cleanup()
+        off_spec.source.cleanup()
+    assert count[close][0] >= 20, f"only {count[close]} frames beside the kart on lap {close + 1}"
+    assert count[f["lap"]][1] >= 12, f"only {count[f['lap']]} clear frames on lap {f['lap'] + 1}"
+    print(f"ok beside the kart the ghost is a ring round the dot: (beside, clear) frames of 40 "
+          f"{ {k + 1: v for k, v in count.items()} }, the clear ones unchanged")
 
 
 def _ghost_pixels(s, lap, n=6, follow=False, **kw):
@@ -760,6 +822,7 @@ def _run_all():
                test_the_ring_parks_on_the_finish_and_goes_when_the_lap_ends,
                test_an_element_can_replace_a_classic_plate_and_reads_every_plates_rect,
                test_the_ghost_is_drawn_under_the_kart_dot,
+               test_beside_the_kart_the_ghost_is_a_ring_round_the_dot,
                test_no_ghost_where_the_rules_forbid_one,
                test_the_ghost_colour_is_its_own_in_both_palettes,
                test_a_real_render_with_the_ghost_differs_only_inside_the_minimap,

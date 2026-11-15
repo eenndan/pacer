@@ -24,6 +24,16 @@ WHAT EACH PART SHOWS, AND WHERE THE NUMBER COMES FROM:
   * the MINIMAP is the Classic inset at `layout.MAP_H_FRAC` of the short side (it was 0.22), so the
     kart dot, its tail and the ghost ring ride it unchanged; `MapLabelsElement` adds the corners'
     C-labels at the apexes the app's map labels (`corner_map_markers`), under the dot;
+  * the LAST LINE (a whole-recording export only): the running clock cannot show a lap's final
+    time there — the crossing falls between two frames, so the lap's last frame is up to a frame
+    short and the next is already the next lap (QA, #565). For `LAST_HOLD_S` after each crossing
+    a separate sub-plate under the tower reads "LAST  0:46.207  +0.215": the finished lap's Time
+    and Δbest cells as the Laps table prints them (`fmt_time`, `lap_table.delta_best_gaps`,
+    `fmt_signed(·, 3)`), neutral inside the printed 0.07 s, `★` on the best lap, no Δ under
+    provisional timing (the column's dashes). Only for a lap the table has a row for (not an
+    excluded or too-brief piece, so never the out-lap's "previous lap"), and never on a single-lap
+    export, where nothing follows. The running clock above it never stops: a frozen clock would
+    be a false readout;
   * the HONESTY STAMP is the Classic one — the same lines from `data_quality.burned_timing_stamp`,
     painted by the same `_paint_stamp` at the same size — moved to hang under the tower instead of
     under the strip (the seam's `occupies`); it is never dropped and never shrunk.
@@ -49,6 +59,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QFontMetricsF, QImage, QPainter, QPainterPath, QPen
 
 from studio import library, theme, units
+from studio._signal import fmt_signed, fmt_time
 from studio.export_palette import EXPORT
 from studio.overlay import LAYER_MAP, LAYER_TOP, STAMP, ElementContext, layout
 from studio.overlay.corner_cards import baseline_word
@@ -61,6 +72,7 @@ _PLATE_ALPHA = 200
 _PENDING_DELTA = ""
 _CACHE_MAX = 192        # cached text images: a lap's speeds and Δ strings, recent first
 _LABEL_MIN_PX = 11.0   # the C-labels' legibility floor: below it a label is noise
+LAST_HOLD_S = 2.0      # how long the LAST line stays after a crossing
 
 
 def styled(config, style: str):
@@ -99,6 +111,32 @@ def tower_texts(label: str, tail: str, name: str) -> tuple[str, str, str]:
 def delta_scale(max_abs: float) -> float:
     """The bar's half-range: the first round step at or above the largest |Δ| it will show."""
     return next((s for s in _SCALE_STEPS if s >= max_abs), math.ceil(max_abs / 60.0) * 60.0)
+
+
+def last_lap_rows(session, palette) -> dict[int, tuple[str, str, str]]:
+    """{lap id: (time, Δ text, Δ colour)} for every lap the Laps table has a row for: its Time
+    cell, and its Δbest cell by the table's own rule (`delta_best_gaps`) — `★` on the best lap, ""
+    with no best (provisional timing), neutral inside the printed 0.07 s."""
+    from studio import export_video as ev
+    from studio import lap_table
+    rows = {int(r["idx"]): float(r["time"]) for r in session.lap_rows()}
+    verified = bool(getattr(session, "timing_verified", True))
+    best = session.best_lap_id() if rows and verified else None
+    gaps = lap_table.delta_best_gaps(rows, best)
+    star, star_colour = ev.strip_tail(None, True, palette)
+    out = {}
+    for lap, t in rows.items():
+        if lap not in gaps:
+            delta, colour = "", EXPORT.text
+        elif lap == best:
+            delta, colour = star.split()[0], star_colour
+        else:
+            g = gaps[lap]
+            delta = fmt_signed(g, 3)
+            colour = (EXPORT.neutral if library.within_timing_precision(g)
+                      else ev.export_delta_colour(g, palette))
+        out[lap] = (fmt_time(t), delta, colour)
+    return out
 
 
 def _image(w: float, h: float) -> tuple[QImage, QPainter]:
@@ -157,6 +195,20 @@ class BroadcastElement:
                 max_abs[vals.lap_id] = max(max_abs.get(vals.lap_id, 0.0),
                                            abs(printed_delta(vals.delta_s)))
         self._scales = {lap: delta_scale(v) for lap, v in max_abs.items()}
+        # The LAST line's holds (whole-recording only): (crossing, lap) on the telemetry clock, for
+        # each table lap whose crossing falls inside the render.
+        self._last_rows: dict[int, tuple[str, str, str]] = {}
+        self._holds: list[tuple[float, int]] = []
+        if spec.follow_laps:
+            rows = last_lap_rows(s, self._palette)
+            tt0 = ev.overlay_values_at(s, float(spec.t0), spec).tt
+            tt1 = ev.overlay_values_at(s, float(spec.t1), spec).tt
+            for lap in sorted(rows):
+                win = s.lap_window(lap)
+                if win is not None and tt0 is not None and tt1 is not None \
+                        and tt0 <= win[1] < tt1:
+                    self._holds.append((float(win[1]), lap))
+                    self._last_rows[lap] = rows[lap]
         # --- sizes (fractions of the short side, layout.py) and faces
         L = layout
         self._head_h, self._prog_h = L.TOWER_HEAD * u, L.TOWER_PROGRESS * u
@@ -165,10 +217,16 @@ class BroadcastElement:
         self._f_head = ev._font(self._head_h * 0.62, bold=True)
         self._f_time = ev._font(self._time_h * 0.80, bold=True)
         self._f_delta = ev._font(self._delta_h * 0.64, bold=True)
+        self._last_h, self._last_gap = L.TOWER_LAST * u, L.TOWER_LAST_GAP * u
+        self._f_last = ev._font(self._last_h * 0.56, bold=True)
+        self._f_last_tag = ev._font(self._last_h * 0.40, bold=True)
+        self._last_sp = 0.012 * u
+        last_w = [self._last_width(r) for r in self._last_rows.values()]
         tower_w = 2 * self._pad + max(
             [_adv(self._f_head, t) for t in heads] + [_adv(self._f_time, t) for t in clocks]
-            + [_adv(self._f_delta, t) for t in deltas] + [0.18 * u])
-        tower_h = L.BROADCAST["tower"].h * u
+            + [_adv(self._f_delta, t) for t in deltas] + last_w + [0.18 * u])
+        self._main_h = L.BROADCAST["tower"].h * u
+        tower_h = self._main_h + ((self._last_gap + self._last_h) if self._holds else 0.0)
         sp_h = L.SPEED_H * u
         self._f_speed = ev._font(sp_h * 0.80, bold=True)
         self._f_unit = ev._font(sp_h * 0.26, bold=True)
@@ -198,6 +256,7 @@ class BroadcastElement:
         readout.moveTop(self.speed.y())
         self.occupies = {"strip": self.tower.united(self.dbar), "readout": readout, STAMP: moved}
         self._prerender()
+        self._last_imgs = {lap: self._last_image(r) for lap, r in self._last_rows.items()}
         # Bounded (least recently used out): a whole-recording export at 4K once reached 81 MB.
         self._cache: OrderedDict[tuple[tuple[str, str], ...], QImage] = OrderedDict()
         self._glyphs: dict[str, tuple] = {}
@@ -207,10 +266,11 @@ class BroadcastElement:
 
     def _prerender(self) -> None:
         ev, k = self._ev, self._k
-        # The tower's plate, its amber header band and the progress line's track.
+        # The tower's plate, its amber header band and the progress line's track (the main plate:
+        # a LAST line, when the export has one, is its own sub-plate under it).
         r = self.tower
-        img, p = _image(r.width(), r.height())
-        box = QRectF(1, 1, r.width(), r.height())
+        img, p = _image(r.width(), self._main_h)
+        box = QRectF(1, 1, r.width(), self._main_h)
         _plate(p, box, k)
         clip = QPainterPath()
         clip.addRoundedRect(box, 7 * k, 7 * k)
@@ -277,6 +337,46 @@ class BroadcastElement:
         self._bars[scale] = img
         self.bar_labels[scale] = (left, self._name, right)
         return img
+
+    def _last_runs(self, row) -> list[tuple[str, object, str]]:
+        """The LAST line's runs: (text, font, colour)."""
+        time_text, delta, colour = row
+        runs = [("LAST", self._f_last_tag, EXPORT.text_dim), (time_text, self._f_last, EXPORT.text)]
+        if delta:
+            runs.append((delta, self._f_last, colour))
+        return runs
+
+    def _last_width(self, row) -> float:
+        runs = self._last_runs(row)
+        return sum(_adv(f, t) for t, f, _c in runs) + self._last_sp * (len(runs) - 1)
+
+    def _last_image(self, row) -> QImage:
+        """One lap's LAST sub-plate, drawn once: the plate the tower's width, its runs on one
+        baseline."""
+        k, w, h = self._k, self.tower.width(), self._last_h
+        img, p = _image(w, h)
+        _plate(p, QRectF(1, 1, w, h), k)
+        fm = QFontMetricsF(self._f_last)
+        base = 1 + (h + fm.ascent() - fm.descent()) / 2.0
+        x = 1 + self._pad
+        for text, font, colour in self._last_runs(row):
+            self._ev._draw_text(p, QPointF(x, base), text, font, colour, halo=1.8 * k)
+            x += _adv(font, text) + self._last_sp
+        p.end()
+        return img
+
+    def last_lap(self, vals) -> tuple[int, tuple[str, str, str]] | None:
+        """(lap, (time, Δ, colour)) of the LAST line on this frame, or None: within
+        `LAST_HOLD_S` after a table lap's crossing, once the frame is past it."""
+        tt = vals.tt
+        if tt is None or not self._holds:
+            return None
+        for t_cross, lap in reversed(self._holds):
+            if t_cross <= tt:
+                if tt - t_cross < LAST_HOLD_S and vals.lap_id != lap:
+                    return lap, self._last_rows[lap]
+                return None
+        return None
 
     def scale_of(self, lap_id) -> float:
         """The bar's half-range on `lap_id`'s frames."""
@@ -356,6 +456,10 @@ class BroadcastElement:
         head, clock, delta, colour, frac, bar, speed = self.state(vals)
         if head is not None:
             self._paint_tower(p, head, clock, delta, colour, frac)
+            last = self.last_lap(vals)
+            if last is not None:
+                p.drawImage(QPointF(self.tower.x() - 1, self.tower.y() + self._main_h
+                                    + self._last_gap - 1), self._last_imgs[last[0]])
         # --- the Δ bar (not on the best lap: the tower's ★ BEST says why), on this lap's scale
         if bar is not None:
             scale = self.scale_of(vals.lap_id)

@@ -2613,9 +2613,10 @@ class _MapInset:
         return QPointF(float(self._px[marker_index]), float(self._py[marker_index])), QPolygonF()
 
     def paint(self, p: QPainter, tt: float | None, marker_index: int | None = None,
-              opaque: bool = False, under=None) -> None:
+              opaque: bool = False, under=None, over=None) -> None:
         """`under`, when given, is called once the line is down and before the tail and the kart
-        dot: the overlay elements' `LAYER_MAP` (nothing may cover the dot)."""
+        dot: the overlay elements' `LAYER_MAP`; `over` once the dot is down. Both are handed the
+        dot's frame point (None when there is no dot) — see `overlay.paint_layer`."""
         if not self._ok:
             return
         # Blit the baked lap line. The layer runs from the frame's origin to the inset's far
@@ -2631,9 +2632,9 @@ class _MapInset:
             p.drawImage(self._layer_ink.topLeft(), self._layer, self._layer_ink)
         elif not opaque:
             p.drawImage(0, 0, self._layer)
-        if under is not None:
-            under()
         m, tail = self.marker_and_tail(tt, marker_index)
+        if under is not None:
+            under(m)
         if m is None:
             return
         k = self._k
@@ -2673,6 +2674,8 @@ class _MapInset:
         p.setPen(QPen(_c(EXPORT.text, 235), 1.4 * k))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(m, 4.6 * k, 4.6 * k)
+        if over is not None:
+            over(m)
 
 
 # --------------------------------------------------------------------------- HUD pill geometry
@@ -3145,6 +3148,7 @@ class OverlayPainter:
         self._map = _MapInset(session, map_rect, map_lap, scale_k=self._k)
         # The opt-in overlay elements (`studio/overlay/`), each prepared ONCE here; those with
         # nothing to draw in this export sit it out. None asked for = the package is never reached.
+        self.notes: list[str] = []
         self.elements = overlay.build(cfg.elements, overlay.ElementContext(
             session=session, spec=spec, out_w=out_w, out_h=out_h, fps=self._fps, k=self._k,
             map_rect=map_rect, map_point=self._map._proj if self._map._ok else None,
@@ -3153,7 +3157,7 @@ class OverlayPainter:
                 "readout": QRectF(self._readout_rect), "strip": QRectF(self._strip_rect),
                 overlay.STAMP: QRectF(self._stamp_rect)}),
             safe=QRectF(m, m, out_w - 2 * m, out_h - 2 * m),
-        )) if cfg.elements else []
+        ), notes=self.notes) if cfg.elements else []
         self._replaced = overlay.replaced(self.elements)   # Classic plates an element stands in for
         if self.elements:
             # A style that replaces the strip may move the stamp that hangs under it: same lines,
@@ -3250,7 +3254,11 @@ class OverlayPainter:
             p.restore()
         if "map" not in skip:
             self._map.paint(p, vals.tt, vals.marker_index, opaque=not img.hasAlphaChannel(),
-                            under=(lambda: overlay.paint_layer(els, p, vals, overlay.LAYER_MAP))
+                            under=(lambda dot: overlay.paint_layer(els, p, vals, overlay.LAYER_MAP,
+                                                             dot=dot))
+                            if els else None,
+                            over=(lambda dot: overlay.paint_layer(els, p, vals, overlay.LAYER_MAP,
+                                                            dot=dot, over=True))
                             if els else None)
         if "readout" not in skip:
             _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
@@ -3450,6 +3458,9 @@ class RenderResult:
     # Where an overlay-only file starts in its footage (None for a composite): what the finished
     # box states, and the timecode the file carries.
     sync: SourceSync | None = None
+    # What the finished box adds about an asked-for overlay element that sat this export out for a
+    # reason the user should hear ("corner cards did not fit this frame size"): `overlay.build`.
+    notes: tuple[str, ...] = ()
 
 
 class _StderrDrainer:
@@ -4522,7 +4533,8 @@ class Renderer:
         finally:
             self._stop_supervisor()
         return RenderResult(self._spec.out_path, self._i, self._out_w, self._out_h,
-                            self._fps, self._spec.duration, getattr(self, "_sync", None))
+                            self._fps, self._spec.duration, getattr(self, "_sync", None),
+                            tuple(getattr(self._painter, "notes", ())))
 
     def _finish(self) -> None:
         """Finalize: flush + close the encoder's stdin (signals EOF so it writes the trailer), then

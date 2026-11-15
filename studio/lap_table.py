@@ -279,6 +279,16 @@ def printed_ms(seconds: float) -> int:
     return int(m) * 60_000 + round(float(f"{sec:.3f}") * 1000)
 
 
+def delta_best_gaps(times: dict[int, float], best_id: int | None) -> dict[int, float]:
+    """Every lap's Δbest (s) as the Δbest column prints it: the difference of the two Time cells'
+    printed milliseconds (`printed_ms`), so it adds up on screen. Empty without a best lap in
+    `times` (provisional timing: the column is dashes). The Broadcast tower's LAST line reads it."""
+    if best_id not in times:
+        return {}
+    best_ms = printed_ms(times[best_id])
+    return {lid: (printed_ms(t) - best_ms) / 1000 for lid, t in times.items()}
+
+
 def delta_bar_scale(gaps: list[float]) -> float | None:
     """The gap (s) a FULL bar stands for — see DELTA_FENCE_K. `gaps` are the CLEAN laps' gaps to
     the best (no ⚠ dropout lap; excluded laps are not rows at all). None when no gap is positive,
@@ -1956,9 +1966,7 @@ class LapTable(QWidget):
         best_id = best_fn() if callable(best_fn) and rows and verified else None
         times = {self._lap_id(r): float(self.table.item(r, _TIME_COL).data(NUM_ROLE))
                  for r in range(rows)}
-        best_ms = printed_ms(times[best_id]) if best_id in times else None
-        gaps = {lid: (printed_ms(t) - best_ms) / 1000 for lid, t in times.items()} \
-            if best_ms is not None else {}
+        gaps = delta_best_gaps(times, best_id)
         clean = [g for lid, g in gaps.items() if lid not in dropout_ids] or list(gaps.values())
         self._delta_scale = delta_bar_scale(clean) if gaps else None
         self._delta_has_gaps = bool(gaps)
