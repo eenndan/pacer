@@ -5673,18 +5673,55 @@ def test_the_demo_shows_three_moments_and_each_jump_lands():
         assert _shown_moments(v) == [m.text for m in expected], _shown_moments(v)
         assert _shown_moments(v)[1] == ("Biggest single-corner loss: Lap 6 · C5 +2.84 s over your "
                                         "typical pass (▼)")
+        from studio import theme
+        assert _shown_moments(v)[2] == ("Best 5-lap run: Laps 9–13 · median 0:45.182 · every 5-lap "
+                                        "median in Laps 8–14 is level (within 0.07 s)")
+        names = [b.accessibleName() for b in v.moments.buttons]
+        assert names == ["Jump to Lap 13", "Jump to Lap 6, C5", "Jump to Lap 9"], names
+        seeks = []
+        real_seek = view.video.seek
+        view.video.seek = lambda t: (seeks.append(t), real_seek(t))[1]
+        s = win.session
         view.map.highlight_corner(None)
         for btn, m in zip(v.moments.buttons, expected, strict=True):
             assert btn.isVisibleTo(v) and btn.width() >= 28 and btn.height() >= 28, btn.size()
+            seeks.clear()
             btn.click()
             _settle(4)
-            assert view.table.selected_lap_ids() == [m.lap_ids[0]], (
-                m.kind, view.table.selected_lap_ids())
-            assert view._corner_lap == m.lap_ids[0], (m.kind, view._corner_lap)
-            if m.cid is not None:
-                assert view.map.pinned_corner() == f"C{m.cid}", view.map.pinned_corner()
+            lap = m.lap_ids[0]
+            assert view.table.selected_lap_ids() == [lap], (m.kind, view.table.selected_lap_ids())
+            assert view._corner_lap == lap, (m.kind, view._corner_lap)
+            # The seek: the loss to that lap's entry to its corner (the coaching Jump's), the
+            # others to the lap's start nudged inside it (a Laps-table click's).
+            want = (s.corners.corner_entry_media_time(lap, m.cid) if m.cid is not None
+                    else s.lap_window(lap)[0] + theme.LAP_SEEK_NUDGE_S)
+            assert want is not None and seeks == [want], (m.kind, seeks, want)
+            # The ring is the moment's: the loss rings C5, and the Jump after it takes it down.
+            assert view.map.pinned_corner() == (f"C{m.cid}" if m.cid is not None else None), (
+                m.kind, view.map.pinned_corner())
             assert view.table_stack.currentIndex() == 2, "a Jump stays on the Stats page"
+        # ...a lap the user selects takes the moment's ring down too,
+        v.moments.buttons[1].click()
+        _settle(4)
         assert view.map.pinned_corner() == "C5"
+        view._on_user_select([3])
+        assert view.map.pinned_corner() is None, "a user's lap selection keeps the moment's ring"
+        # ...a ring a Corners/Stats row pinned since is that row's and stays,
+        v.moments.buttons[1].click()
+        view._on_stats_corner_clicked(2)
+        v.moments.buttons[0].click()
+        _settle(4)
+        assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+        # ...and under a Lap Race the Jump rings nothing (corner rings are off on its canvas).
+        view.map.highlight_corner(None)
+        view.is_racing = lambda: True
+        try:
+            v.moments.buttons[1].click()
+            _settle(4)
+            assert view.map.pinned_corner() is None, "a Jump rang a corner during a Lap Race"
+        finally:
+            del view.is_racing
+            del view.video.seek
     finally:
         win.close()
         win.deleteLater()
@@ -5707,6 +5744,9 @@ def test_a_tied_best_lap_shows_its_level_clause():
     _settle(6)
     assert _shown_moments(v)[0] == ("Best lap: Lap 1 · 0:45.000 · Lap 2 is level (0.069 s, under "
                                     "the 0.07 s timing precision)"), _shown_moments(v)
+    # No wrapped line may start with "·": the separator is held to the word before it.
+    html = v.moments.labels[0].text()
+    assert "\u00a0·" in html and " ·" not in html, html
     v.close()
     print("test_a_tied_best_lap_shows_its_level_clause OK")
 
@@ -5722,8 +5762,8 @@ def test_no_single_best_run_has_no_jump():
     v = StatsView(_moments_session(sm))
     v.show()
     _settle(6)
-    assert _shown_moments(v) == [sm.best_lap.text, "No single best 5-lap run: 4 stretches within "
-                                 "0.07 s"], _shown_moments(v)
+    assert _shown_moments(v) == [sm.best_lap.text, "No single best 5-lap run: 4 stretches of "
+                                 "level 5-lap medians (within 0.07 s)"], _shown_moments(v)
     assert v.moments.buttons[0].isVisibleTo(v) and not v.moments.buttons[1].isVisibleTo(v)
     v.close()
     print("test_no_single_best_run_has_no_jump OK")
@@ -5750,6 +5790,56 @@ def test_provisional_timing_drops_the_best_lap_and_says_so_once():
     assert all(PROVISIONAL_TOOLTIP not in s for s in shown)
     v.close()
     print("test_provisional_timing_drops_the_best_lap_and_says_so_once OK")
+
+
+def _timing_quality(media_clock: bool):
+    from studio.data_quality import GPS9_TRUECLOCK, MEDIA_CLOCK_FALLBACK, TimingQuality
+    return TimingQuality(clock=MEDIA_CLOCK_FALLBACK if media_clock else GPS9_TRUECLOCK)
+
+
+def test_an_estimated_clock_names_its_bound_and_says_so_once():
+    """Under an estimated clock the row's tie names that clock's 0.15 s bound — the caveat line
+    under it says a lap can read up to ~0.15 s off, and a "0.07 s timing precision" beside it
+    contradicted that — and the page's estimated-timing wording shows once."""
+    _app()
+    from studio import story
+    from studio.lap_table import estimated_timing_tooltip
+    from studio.stats_panel import StatsView
+    times = {0: 45.0, 1: 45.1, 2: 45.5, 3: 45.6, 4: 46.0}
+    sm = story.session_moments(times, None, 0, clock_estimated=True)
+    sess = _moments_session(sm)
+    sess.timing_quality = _timing_quality(True)
+    v = StatsView(sess)
+    v.show()
+    _settle(6)
+    assert _shown_moments(v)[0] == ("Best lap: Lap 1 · 0:45.000 · Lap 2 is level (0.100 s, under "
+                                    "this clock's 0.15 s bound)"), _shown_moments(v)
+    note = estimated_timing_tooltip(sess.timing_quality)
+    assert "0.15 s" in note and v.moments.caveat.isVisibleTo(v), note
+    assert v.moments.caveat.text() == note, v.moments.caveat.text()
+    v.close()
+    print("test_an_estimated_clock_names_its_bound_and_says_so_once OK")
+
+
+def test_provisional_and_estimated_both_say_so_once_each():
+    _app()
+    from test_story import _grid
+
+    from studio import story
+    from studio.lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip
+    from studio.stats_panel import StatsView
+    times, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0)})
+    sm = story.session_moments(times, mx, 0, provisional=True, clock_estimated=True)
+    sess = _moments_session(sm, verified=False)
+    sess.timing_quality = _timing_quality(True)
+    v = StatsView(sess)
+    v.show()
+    _settle(6)
+    lines = v.moments.caveat.text().split("\n")
+    assert lines == [PROVISIONAL_TOOLTIP, estimated_timing_tooltip(sess.timing_quality)], lines
+    assert not any(s.startswith("Best lap") for s in _shown_moments(v))
+    v.close()
+    print("test_provisional_and_estimated_both_say_so_once_each OK")
 
 
 def test_without_a_corner_grid_only_the_moments_that_exist_show():

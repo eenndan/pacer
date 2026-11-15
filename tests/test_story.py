@@ -199,15 +199,16 @@ def test_five_lap_windows_tie_span_and_break():
     assert m is not None and m.lap_ids == (0, 1, 2, 3, 4), m
     assert [t.lap_ids for t in m.tie] == [(10, 11, 12, 13, 14)], m.tie
     assert m.text == ("Best 5-lap run: Laps 1–5 · median 0:45.000 · also level (within 0.07 s): "
-                      "Laps 11–15"), m.text
+                      "every 5-lap median in Laps 11–15"), m.text
     many = _five(0, 45.0) | _five(10, 45.01) | _five(20, 45.02) | _five(30, 45.03)
     m = story.session_moments(many, None, best_lap=0).best_window
     assert m.lap_ids == () and len(m.tie) == 4, m
-    assert m.text == "No single best 5-lap run: 4 stretches within 0.07 s", m.text
+    assert m.text == ("No single best 5-lap run: 4 stretches of level 5-lap medians "
+                      "(within 0.07 s)"), m.text
     flat = {i: 45.0 + 0.001 * i for i in range(10)}
     m = story.session_moments(flat, None, best_lap=0).best_window
     assert [t.lap_ids for t in m.tie] == [tuple(range(10))], m.tie
-    assert m.text.endswith("· level (within 0.07 s) for any 5 consecutive laps in Laps 1–10"), m.text
+    assert m.text.endswith("· every 5-lap median in Laps 1–10 is level (within 0.07 s)"), m.text
     holed = {i: 45.0 + (0.5 if i < 4 else 0.0) for i in range(10) if i != 4}
     m = story.session_moments(holed, None, best_lap=5).best_window
     assert m.lap_ids == (5, 6, 7, 8, 9) and m.tie == (), m
@@ -246,7 +247,9 @@ def test_a_moment_row_joins_back_into_the_moments_text():
             assert row.cid == moment.cid, row
             rows += 1
     w = story.session_moments(shared, None, 4).best_window
-    assert "also level" in w.text and w.lap_ids == (4, 5, 6, 7, 8), w
+    assert w.lap_ids == (4, 5, 6, 7, 8) and w.text == (
+        "Best 5-lap run: Laps 5–9 · median 0:45.030 · also level (within 0.07 s): every 5-lap "
+        "median in Laps 1–6"), w.text
     loss = story.session_moments(*fields[-1][:2], 0).biggest_loss
     assert loss is not None and loss.tie and story.moment_row(loss).cid == loss.cid, loss
     none = story.moment_row(story.session_moments(many, None, 0).best_window)
@@ -260,12 +263,40 @@ def test_timing_trust_one_rule():
     no gap and there is no best-lap moment."""
     times, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0)})
     (prov,) = story.slow_lap_notes(times, mx, 0, provisional=True)
-    assert prov.caveat == "provisional" and prov.gap_to_best_s is None and prov.category == "one"
+    assert prov.caveat == ("provisional",) and prov.gap_to_best_s is None and prov.category == "one"
     (est,) = story.slow_lap_notes(times, mx, 0, clock_estimated=True)
-    assert est.caveat == "estimated" and est.gap_to_best_s is not None, est
+    assert est.caveat == ("estimated",) and est.gap_to_best_s is not None, est
     m = story.session_moments(times, mx, 0, provisional=True)
-    assert m.best_lap is None and m.biggest_loss is not None and m.biggest_loss.caveat == "provisional"
+    assert m.best_lap is None and m.biggest_loss is not None and m.biggest_loss.caveat == ("provisional",)
     print("test_timing_trust_one_rule OK")
+
+
+def test_an_estimated_clock_widens_every_tie_to_its_bound_and_says_so():
+    """Under an estimated clock a lap can read up to ~0.15 s off, so a moment may not call two
+    figures level at the 0.07 s timing precision: the best lap's ties, the 5-lap medians' level
+    rule and the biggest loss's ≈ list all take the Lap race's 0.15 s bound, and the best lap's
+    clause names that bound. Provisional AND estimated carries both states."""
+    from studio import lap_race
+    assert story.tie_floor(("estimated",)) == lap_race.ESTIMATED_CLOCK_TIE_S == 0.15
+    times = {0: 45.0, 1: 45.1, 2: 45.149, 3: 45.15, 4: 46.0}
+    trusted = story.session_moments(times, None, 0).best_lap
+    assert trusted.tie == (), trusted
+    est = story.session_moments(times, None, 0, clock_estimated=True).best_lap
+    assert [t.lap_ids for t in est.tie] == [(1,), (2,)] and est.caveat == ("estimated",), est
+    assert est.text == ("Best lap: Lap 1 · 0:45.000 · Laps 2, 3 are level (0.100–0.149 s, under "
+                        "this clock's 0.15 s bound)"), est.text
+    runs = _five(0, 45.0) | _five(10, 45.12)
+    assert story.session_moments(runs, None, 0).best_window.tie == ()
+    w = story.session_moments(runs, None, 0, clock_estimated=True).best_window
+    assert w.text.endswith("also level (within 0.15 s): every 5-lap median in Laps 11–15"), w.text
+    _, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0), 7: ([0.0, 1.4, 0.0, 0.0], 2.0)}, noise=0.0)
+    times = {i: 45.0 for i in mx.lap_ids}
+    assert story.session_moments(times, mx, 0).biggest_loss.tie == ()
+    assert story.session_moments(times, mx, 0, clock_estimated=True).biggest_loss.tie
+    both = story.session_moments(times, mx, 0, provisional=True, clock_estimated=True)
+    assert both.best_lap is None and both.biggest_loss.caveat == ("provisional", "estimated")
+    assert story.caveat_for(False, False) == ()
+    print("test_an_estimated_clock_widens_every_tie_to_its_bound_and_says_so OK")
 
 
 def test_negative_control_the_note_moves_with_the_corner_times():
@@ -319,8 +350,8 @@ DEMO_NOTE = ("Lap 6 · 5.50 s over your typical lap · C5 +2.84 s of it, over yo
 DEMO_MOMENTS = (
     "Best lap: Lap 13 · 0:44.950",
     "Biggest single-corner loss: Lap 6 · C5 +2.84 s over your typical pass (▼)",
-    "Best 5-lap run: Laps 9–13 · median 0:45.182 · level (within 0.07 s) for any 5 consecutive "
-    "laps in Laps 8–14")
+    "Best 5-lap run: Laps 9–13 · median 0:45.182 · every 5-lap median in Laps 8–14 is level "
+    "(within 0.07 s)")
 
 
 def test_demo_story():

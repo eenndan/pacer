@@ -1,8 +1,8 @@
 """What the Stats page's SECTIONS share — the page shell is `stats_panel.StatsView`.
 
 ARCH-3 (board review 2026-09-23) splits the page one section per module: `stats_trust`,
-`stats_braking`, `stats_straights`, `stats_ideal`, `stats_corners` and `stats_coasting` so far, the
-rest still inside `stats_panel`.
+`stats_braking`, `stats_straights`, `stats_ideal`, `stats_corners`, `stats_coasting` and
+`stats_moments` so far, the rest still inside `stats_panel`.
 What more than one section needs lives here, so a section never imports the page it sits on: the
 report table and its row height, the section heading, the sortable numeric cell and its blanks-last
 sort hook, the stitched-target tile's timing mute (`set_target_tile`), and the values two
