@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from . import theme
 from ._signal import fmt_time, lap_label
+from .library import PB_PRECISION_S, within_timing_precision
 from .video_view import PaneSpec
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
@@ -27,6 +28,11 @@ if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported 
     from .scrub_controller import ScrubController
     from .session import Session
     from .video_view import VideoView
+
+def _printed(d: float) -> float:
+    """The Δ as the seam prints it (2 dp, through the app's one Δ formatter)."""
+    return float(theme.format_delta_value(d).replace("\u2212", "-"))
+
 
 class CompareController:
     def __init__(
@@ -184,17 +190,22 @@ class CompareController:
             # comparison of two laps, not as one lap measured against itself.
             self._set_pane_badge(0, None, same_lap=True)
             self._set_pane_badge(1, None, same_lap=True)
+            self.video.set_seam_delta(self.SAME_LAP_BADGE, None)
         elif self._cross:
             # Cross badge routing: pane A vs the reference, pane B (the reference) vs the primary.
             # Pane A's Δ is against the adopted reference (the session-wide baseline); pane B's is
             # against the lap pane B is actually SHOWING, which is the adopted lap until the picker
             # moves it. Passing `_ref_lap_b` is what stops the badge describing a lap that is not on
             # screen — with it None (never entered through enter_cross) this is the pre-F1 call.
-            self._set_pane_badge(0, self.session.delta_at_lap(a, t_a))
+            d_a = self.session.delta_at_lap(a, t_a)
+            self._set_pane_badge(0, d_a)
             self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b, self._ref_lap_b))
+            self._set_seam(d_a)
         else:
-            self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
+            d_a = self.session.delta_between(a, b, t_a)
+            self._set_pane_badge(0, d_a)
             self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
+            self._set_seam(d_a)
         # F4 map ghost: lap B's kart at the same t_b the badge used (both panes play time-into-lap).
         if self.map is not None:
             if self._cross:
@@ -241,6 +252,48 @@ class CompareController:
             self.video.set_pane_badge(side, self.SAME_LAP_BADGE, None)
         else:
             self.video.set_pane_badge(side, theme.format_delta_run(d), theme.delta_colour(d))
+
+    def _set_seam(self, d: float | None) -> None:
+        """The seam's big live Δ: pane A's badge value, the SAME float, never a second read.
+
+        Coloured only OUTSIDE timing precision (`library.PB_PRECISION_S`, the one rule every
+        "level / ahead / behind" lap verdict in the app applies). The badge's own dead band is
+        5 ms, which is right for 11 px in a corner; at the hero's size a number that flashes red
+        and green at ±0.01 s while two laps are level is a claim the timing cannot make. Inside
+        the band the number is still printed, neutral and without its ▲/▼, so it never hides.
+
+        Decided on the PRINTED value, as the Laps table's Δbest decides on the gap it prints:
+        0.0699 and 0.0700 both print `+0.07`, and two equal strings must not look different."""
+        if d is not None and within_timing_precision(_printed(d)):
+            self.video.set_seam_delta(theme.format_delta_run(d, arrow=False), None)
+        else:
+            self.video.set_seam_delta(theme.format_delta_run(d), theme.delta_colour(d))
+
+    def _sync_seam_pair(self) -> None:
+        """Name the pair the seam Δ measures, in the pickers' own lap labels — once per pair change,
+        never per tick. Cross: pane A's Δ is against the ADOPTED reference lap (see tick), so that
+        is the lap it names, whichever reference lap pane B happens to be playing."""
+        a, b = self._compare_a, self._compare_b
+        if a is None or b is None:
+            return
+        if self._cross:
+            adopted = self.session.reference_lap_id()
+            # Pane B is playing ANOTHER lap of the reference than the one pane A's Δ is measured
+            # against (F1): the seam would then name one lap while the picture under it plays
+            # another, beside pane B's own badge measured against the lap it shows. HIDDEN rather
+            # than re-pointed, because the only Δ against that lap is pane B's badge, read at pane
+            # B's place — a seam figure "following the panes" would be new maths. Pane B's caption
+            # already says the charts and table stay on the adopted lap.
+            self.video.set_seam_shown(self._ref_lap_b is None or self._ref_lap_b == adopted)
+            ref = f"ref lap {lap_label(adopted)}" if adopted is not None else "ref"
+            caption, other = f"lap {lap_label(a)} vs {ref}", "the reference lap"
+        else:
+            self.video.set_seam_shown(True)
+            caption, other = f"lap {lap_label(a)} vs lap {lap_label(b)}", f"lap {lap_label(b)}"
+        tip = (f"Lap {lap_label(a)} against {other} at the same place on track: − is ahead. "
+               f"Coloured only beyond timing precision (±{PB_PRECISION_S:.2f} s); inside it the "
+               "two laps are level and the number stays neutral.")
+        self.video.set_seam_pair(caption, tip)
 
     # ------------------------------------------------------------------ enter / exit
     def on_toggled(self, on: bool) -> None:
@@ -301,6 +354,7 @@ class CompareController:
         self.plots.set_laps([a] if self._cross else [a, b])
         self.video.set_pane_gmeter_lap(0, a)
         self.video.set_pane_gmeter_lap(1, b)
+        self._sync_seam_pair()
         # Freeze followed_lap on A so the per-tick edge never re-points the charts while comparing.
         self.playback.followed_lap = a
         self._compare_last_t = None  # force the next tick() to recompute for the new pair
@@ -413,6 +467,7 @@ class CompareController:
             lap_id, window, self._cross_caption_b(ref_sess, lap_id),
             choices=ids, choice_labels=labels))
         self.video.set_pane_gmeter_lap(1, lap_id)
+        self._sync_seam_pair()
         # Realign the pair at S/F so the two laps roll together from the start line, as on entry.
         self._reset_pair_to_start()
         # The chart overlay stays [A] and auto-follow stays frozen on A — a cross compare draws the
@@ -503,6 +558,7 @@ class CompareController:
             lap_id, window, self._lap_caption(lap_id),
             choices=ids, choice_labels=labels))
         self.video.set_pane_gmeter_lap(side, lap_id)
+        self._sync_seam_pair()
         # The OTHER pane's picker still lists the lap this side just took — refresh it too, or the
         # next pick over there lands both panes on the same lap (which the exclusion exists to stop).
         self._refresh_other_choices(side)

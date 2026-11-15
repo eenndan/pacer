@@ -786,6 +786,56 @@ def test_hero_names_the_baseline_the_compare_chart_draws():
     print(f"test_hero_names_the_baseline_the_compare_chart_draws OK ({text!r})")
 
 
+def test_compare_title_and_hero_agree_in_every_state_without_a_tick():
+    """PRE-1 (cooler-2026-11 QA). Entering compare on a TWO-lap selection keeps the lower chart on
+    Δ-to-best, so no baseline change fired — and LOOK-13's hero re-render rode only that signal.
+    A paused window therefore kept `Δideal +0.21 s` beside `SPEED · Δ TO BEST` until the playhead
+    moved. Driven over vs-ideal on/off × compare on/off × a reference loaded, with NO tick after
+    each change (a paused window gets none): the title always names the chart's own baseline, the
+    hero always names one, and while comparing the two name the SAME one."""
+    from studio import plots_view
+    view, s, t0, t1 = _real_central_view()
+    best = s.best_lap_id()
+    other = next(i for i in s.valid_lap_ids() if i != best)
+    tt = {0: t0, 1: t1}[other]
+    titles = {plots_view.DELTA_BASELINE_BEST: "Δ TO BEST", plots_view.DELTA_BASELINE_IDEAL:
+              "Δ TO IDEAL", plots_view.DELTA_BASELINE_REFERENCE: "Δ TO REF"}
+    heroes = {"Δideal ": plots_view.DELTA_BASELINE_IDEAL, "Δbest ": plots_view.DELTA_BASELINE_BEST,
+              "Δref ": plots_view.DELTA_BASELINE_REFERENCE}
+    states = 0
+    for reference in (False, True):
+        s.has_reference = (lambda: True) if reference else (lambda: False)
+        for chip in (True, False):
+            view.plots.set_laps([other, best])
+            view.ideal_readout_btn.setChecked(chip)
+            view.video.positionChanged.emit(float(tt[len(tt) // 2]))
+            view.tick()
+            for comparing in (False, True):
+                if comparing:
+                    view.compare.on_toggled(True)
+                    _APP.processEvents()
+                    assert view.compare.active
+                if reference:   # what the chart's own refresh emits with a reference loaded
+                    view.plots.deltaBaselineChanged.emit(plots_view.DELTA_BASELINE_REFERENCE)
+                kind = view._plots_baseline_kind
+                title, hero = view._plots_label.text(), view.diff_box.text()
+                assert titles[kind] in title, (reference, chip, comparing, kind, title)
+                hero_kind = next((k for pre, k in heroes.items() if hero.startswith(pre)), None)
+                assert hero_kind is not None, f"the hero must name its baseline: {hero!r}"
+                if comparing:
+                    assert hero_kind == kind, (
+                        "while comparing, the hero and the title must name one baseline",
+                        reference, chip, title, hero)
+                else:   # the chip chooses the hero's reference outside compare (by design)
+                    assert (hero_kind == plots_view.DELTA_BASELINE_IDEAL) == chip, (chip, hero)
+                states += 1
+            view.compare.on_toggled(False)
+            _APP.processEvents()
+    assert states == 8, states
+    s.has_reference = lambda: False
+    print("test_compare_title_and_hero_agree_in_every_state_without_a_tick OK (8 states)")
+
+
 def test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes():
     """cool/chart-corners. The map labels C1…; the speed chart named no corner at all (its only
     grey bands are coast spans). Each corner's map label must now ride the speed chart, on ITS
@@ -1350,6 +1400,7 @@ def test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_stat
 
 def _run_all():
     test_hero_names_the_baseline_the_compare_chart_draws()
+    test_compare_title_and_hero_agree_in_every_state_without_a_tick()
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
     test_the_map_marker_moves_on_every_playback_tick()

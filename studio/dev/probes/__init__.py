@@ -176,4 +176,12 @@ into one `mkdtemp` under $TMPDIR; the recording is only read. Its verdict is
     pixi run python -m studio.dev.probes.vt_gop synthetic
     pixi run python -m studio.dev.probes.vt_gop mk
     pixi run python -m studio.dev.probes.vt_gop verdict SYNTH.json MK.json
+
+`chart_aa` asks what always-on antialiasing would cost the speed and Δ charts. It opens the
+synthetic demo in the real window and times a cursor sweep and a lap switch with antialiasing off,
+on, and on for the selected lap only, interleaved over five rounds. It needs no footage and writes
+nothing but stdout, unless `--png-dir` names where to save the 2x look. Its verdict is
+`studio/docs/refused-2026-09.md` §23.
+
+    pixi run python -m studio.dev.probes.chart_aa
 """
