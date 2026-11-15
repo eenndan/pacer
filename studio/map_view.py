@@ -42,7 +42,7 @@ from .map_render import (
 )
 from .session import Seg
 from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
-from .timeline import trace_point_at
+from .timeline import TRACE_TAIL_S, trace_point_at, trace_tail
 from .widgets import EmptyState, ToggleButton
 
 # The very QPainterPaths pyqtgraph fills for a ScatterPlotItem symbol, in a unit box centred on the
@@ -94,6 +94,16 @@ RACE_TRAIL_ALPHA = 150
 RACE_VEIL_ALPHA = 195
 MARKER_COLOR = C.position           # video position marker — the hue no data line mode paints
 _MARKER_RGB = QColor(C.position)    # for the translucent marker brush below
+# The playhead's fading tail (_PlayheadTail): `timeline.trace_tail`, the export inset's comet, in
+# the marker's hue, cut into TAIL_STEPS equal lengths that grow brighter and wider toward the dot,
+# each over a dark canvas-coloured halo (the export's answer: a bare magenta fade was measured LOST
+# over the speed-coloured line). Widths are logical px, oldest → newest; alphas 0-255 likewise.
+TAIL_STEPS = 6
+TAIL_WIDTH = (2.0, 4.0)
+TAIL_ALPHA = (90, 255)
+TAIL_HALO_PX = 1.5          # halo px each side of the stroke (the hero casing's)
+TAIL_HALO_ALPHA = (60, 220)
+TAIL_Z = 8.5                # over the brake glyphs (7) and corner labels, under the ghost (9)
 # Compare ghost = lap-B accent (cyan), the canonical "other lap" colour.
 GHOST_COLOR = CHART_SERIES[1]
 # Inferred gap-fill segments are drawn dashed + dimmed so they read as distinct from measured GPS.
@@ -1557,6 +1567,147 @@ class _RaceLayer:
         self.items = []
 
 
+def _ramp(lo_hi: tuple[float, float], k: int, n: int) -> float:
+    """Step `k` of `n` along the (oldest, newest) pair."""
+    lo, hi = lo_hi
+    return lo + (hi - lo) * (k / (n - 1) if n > 1 else 1.0)
+
+
+class _TailItem(pg.GraphicsObject):
+    """The tail's ONE graphics item: TAIL_STEPS halo polylines, then TAIL_STEPS stroke polylines,
+    painted in a single `paint` call, aliased like every other line on the map (pyqtgraph's
+    `antialias=False`, plots_view; antialiasing the tail alone measured +0.2 ms a tick). One item,
+    not 2 × TAIL_STEPS PlotCurveItems: the scene repaints each item under the dirty rect through
+    its own Python `paint`, and twelve curves measured +1.6 ms a tick on the demo (+0.13 ms of it
+    the geometry); one item costs one call."""
+
+    def __init__(self):
+        super().__init__()
+        self.halo_pens: list[QPen] = []
+        self.stroke_pens: list[QPen] = []
+        self.polys: list[QPolygonF] = []
+        self._data_rect = QRectF()
+        self._rect = QRectF()
+
+    def ink_colours(self) -> list[tuple[QColor, str]]:
+        """Every colour this item paints (the map's marker-contrast guard reads it)."""
+        return ([(QColor(p.color()), "halo") for p in self.halo_pens]
+                + [(QColor(p.color()), "stroke") for p in self.stroke_pens])
+
+    def set_polys(self, polys: list[QPolygonF]):
+        self.prepareGeometryChange()
+        self.polys = polys
+        self._data_rect = QRectF()
+        for poly in polys:
+            self._data_rect = self._data_rect.united(poly.boundingRect())
+        self._pad()
+        self.update()
+
+    def _pad(self):
+        """The data rect grown by the widest pen — a cosmetic pen's width is in device px, so the
+        pad in data units follows the view's zoom (re-run by `viewTransformChanged`)."""
+        if self._data_rect.isNull():
+            self._rect = QRectF()
+            return
+        widest = max((p.widthF() for p in self.halo_pens), default=0.0) + 2.0
+        vx, vy = self.pixelVectors()
+        per_px = max(np.hypot(vx.x(), vx.y()), np.hypot(vy.x(), vy.y())) if vx is not None else 0.0
+        pad = widest * per_px if np.isfinite(per_px) and per_px > 0 else 1.0
+        self._rect = self._data_rect.adjusted(-pad, -pad, pad, pad)
+
+    def viewTransformChanged(self):
+        self.prepareGeometryChange()
+        self._pad()
+
+    def boundingRect(self) -> QRectF:
+        return self._rect
+
+    def paint(self, p, *_):
+        if not self.polys:
+            return
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for pens in (self.halo_pens, self.stroke_pens):
+            for pen, poly in zip(pens, self.polys, strict=False):
+                p.setPen(pen)
+                p.drawPolyline(poly)
+
+
+class _PlayheadTail:
+    """The playhead marker's fading tail: where the kart has just been, the comet the exported
+    clip's map inset draws (`timeline.trace_tail` — one function, two callers).
+
+    BUILT ONCE, MOVED PER TICK: one `_TailItem`, created with the map, added with
+    `ignoreBounds=True` (an item in the bounds re-runs pyqtgraph's auto-range bookkeeping on every
+    move, +9 ms an update measured on the race layer) and only ever handed new polylines. The path
+    is cut by ARC LENGTH, not by sample, so the fade's steps slide with the kart instead of hopping
+    at the GPS rate; all halos paint before all strokes, so a step's halo never notches the stroke
+    before it. `updates` counts placements for the per-tick tests."""
+
+    def __init__(self, plot):
+        self.plot = plot
+        self.item = _TailItem()
+        self.item.setZValue(TAIL_Z)
+        self.items = [self.item]
+        self.repen()
+        plot.addItem(self.item, ignoreBounds=True)
+        self.updates = 0
+        self.xy: tuple[np.ndarray, np.ndarray] = (np.empty(0), np.empty(0))
+
+    def repen(self):
+        """(Re)build the pens at the current device-pixel ratio (see theme.line_width)."""
+        halos, strokes = [], []
+        for k in range(TAIL_STEPS):
+            w = _ramp(TAIL_WIDTH, k, TAIL_STEPS)
+            halo = QColor(C.canvas)
+            halo.setAlpha(int(round(_ramp(TAIL_HALO_ALPHA, k, TAIL_STEPS))))
+            ink = QColor(MARKER_COLOR)
+            ink.setAlpha(int(round(_ramp(TAIL_ALPHA, k, TAIL_STEPS))))
+            for out, colour, width in ((halos, halo, w + 2 * TAIL_HALO_PX), (strokes, ink, w)):
+                pen = pg.mkPen(colour, width=theme.line_width(width))
+                # Flat caps: two translucent steps meet end to end. Round ones overlap there, and
+                # the doubled alpha read as a row of beads along the tail.
+                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                out.append(pen)
+        self.item.halo_pens, self.item.stroke_pens = halos, strokes
+        self.item.set_polys(self.item.polys)
+
+    def set_path(self, xs, ys):
+        """Show the tail along (`xs`, `ys`), oldest first, ending on the marker; fewer than two
+        distinct points (paused at a seek, an empty trace) clears it."""
+        self.updates += 1
+        xs = np.asarray(xs, float)
+        ys = np.asarray(ys, float)
+        self.xy = (xs, ys)
+        d = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys))))) if len(xs) else xs
+        if len(xs) < 2 or not d[-1] > 0:
+            self.item.set_polys([])
+            return
+        cuts = np.linspace(0.0, d[-1], TAIL_STEPS + 1)
+        cx, cy = np.interp(cuts, d, xs), np.interp(cuts, d, ys)
+        # Each step: its two cut points and the samples strictly between them.
+        lo = np.searchsorted(d, cuts, side="right")
+        hi = np.searchsorted(d, cuts, side="left")
+        polys = []
+        for k in range(TAIL_STEPS):
+            inner = slice(int(lo[k]), int(hi[k + 1]))
+            polys.append(pg.functions.arrayToQPolygonF(
+                np.concatenate(([cx[k]], xs[inner], [cx[k + 1]])),
+                np.concatenate(([cy[k]], ys[inner], [cy[k + 1]]))))
+        self.item.set_polys(polys)
+
+    def steps(self) -> list[tuple[np.ndarray, np.ndarray]]:
+        """The drawn steps as (xs, ys) arrays, oldest first — for tests."""
+        return [(np.array([q.x() for q in poly]), np.array([q.y() for q in poly]))
+                for poly in self.item.polys]
+
+    def clear(self):
+        self.set_path((), ())
+
+    def set_visible(self, on: bool):
+        self.item.setVisible(on)
+
+
 class MapView(QWidget):
     # (start: Seg, sectors: list[Seg]) whenever a handle moves or sectors change.
     timing_lines_changed = Signal(object, object)
@@ -1629,6 +1780,11 @@ class MapView(QWidget):
         )
         self.plot.addItem(self.marker)
         self.marker.setZValue(10)  # canonical z-order: lap overlays/rainbow ≤5, corner/brake 5-7, ghost 9, marker 10
+        # The marker's fading tail (z 8.5), and the continuous stretch of playhead it may span: it
+        # reaches back to the last JUMP (a seek, a lap pick, a backward move), never past it.
+        self._tail = _PlayheadTail(self.plot)
+        self._tail_from: float | None = None
+        self._tail_last: float | None = None
 
         # Self-contained overlays; the app pushes corner/brake markers via set_corners /
         # set_brake_markers (both laps for brakes in compare mode).
@@ -1814,6 +1970,7 @@ class MapView(QWidget):
                 self._best_overlay.repen()
                 self._current_overlay.repen()
                 self.marker.setPen(pg.mkPen(MARKER_COLOR, width=theme.line_width(2)))
+                self._tail.repen()
                 self.refresh_palette()      # re-pens the rainbow buckets + legend strip
         return super().event(ev)
 
@@ -2038,6 +2195,8 @@ class MapView(QWidget):
         items = []
         if getattr(self, "marker", None) is not None:
             items.append(self.marker)
+        if getattr(self, "_tail", None) is not None:
+            items.extend(self._tail.items)      # the marker's tail goes with the marker
         timing_lines = [getattr(self, "_start", None), *(getattr(self, "_sectors", None) or [])]
         for tl in timing_lines:
             if tl is not None:
@@ -2327,6 +2486,7 @@ class MapView(QWidget):
         # don't snap; fall back to whole-trace nearest in the lead-in.
         if self._suppress_marker:
             return
+        self._reset_tail()      # a hand-dragged marker is a jump: its old tail would trail nothing
         t = None
         if self._current_lap is not None:
             t = self.session.nearest_time_in_lap(self._current_lap, p.x(), p.y())
@@ -2351,6 +2511,7 @@ class MapView(QWidget):
         self._suppress_marker = True
         self.marker.setPos(pg.Point(float(self.session.tx[i]), float(self.session.ty[i])))
         self._suppress_marker = False
+        self._reset_tail()
 
     def set_playhead_time(self, t: float):
         """Place the marker where the kart is at TELEMETRY time `t` — the playback tick and the
@@ -2368,6 +2529,34 @@ class MapView(QWidget):
         self._suppress_marker = True
         self.marker.setPos(pg.Point(p[0], p[1]))
         self._suppress_marker = False
+        self._place_tail(t)
+
+    def _place_tail(self, t: float):
+        """Lay the marker's tail (`_PlayheadTail`) to end on it at TELEMETRY time `t`.
+
+        THE EXPORT'S TAIL, ON THE STRETCH THE PLAYHEAD DROVE. In playback or a scrub it is
+        `timeline.trace_tail(t)` exactly — the last TRACE_TAIL_S of the trace, reaching back into the
+        lap before across a lap's start and cut at a dropout, as the clip draws it. After a JUMP — a
+        seek, a lap picked in the table, a backward move, a step forward longer than the tail — it
+        starts empty and grows from where the playhead landed: picking a lap parks the marker on its
+        start line, and a tail there would draw a run-up the user never watched."""
+        last = self._tail_last
+        if self._tail_from is None or last is None or t < last or t - last > TRACE_TAIL_S:
+            self._tail_from = t
+        self._tail_last = t
+        span = min(TRACE_TAIL_S, t - self._tail_from)
+        if span <= 0.0:
+            self._tail.clear()
+            return
+        self._tail.set_path(*trace_tail(self.session.tt, self.session.tx, self.session.ty, t, span))
+
+    def _reset_tail(self):
+        self._tail_from = self._tail_last = None
+        self._tail.clear()
+
+    def tail_items(self) -> list:
+        """The playhead tail's plot items — tests count and inspect them."""
+        return list(self._tail.items)
 
     # --------------------------------------------------------------- compare ghost (F4)
     def set_ghost_index(self, i: int | None):
@@ -2409,6 +2598,7 @@ class MapView(QWidget):
         # and restoring it would then hide the key for good.
         self._race_restore = (self.marker.isVisible(), self._map_key.isHidden())
         self.marker.setVisible(False)
+        self._tail.set_visible(False)       # the tail is the marker's: race time is not media time
         self._map_key.setVisible(False)
         self._race = _RaceLayer(self.plot, tracks, colours, selected)
 
@@ -2430,6 +2620,7 @@ class MapView(QWidget):
         self._race = None
         marker_on, key_hidden = self._race_restore
         self.marker.setVisible(marker_on)
+        self._tail.set_visible(marker_on)
         self._map_key.setHidden(key_hidden)
 
     def attach_race_card(self, card: QWidget) -> None:
