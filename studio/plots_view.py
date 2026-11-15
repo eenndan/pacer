@@ -52,7 +52,8 @@ from .widgets import EmptyState, ToggleButton, budget_plot_gutters, budget_plot_
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
 
-# Antialias off: the cursor re-renders every visible curve each ~30Hz tick.
+# Antialias off: the cursor re-renders every visible curve each ~30Hz tick. Turning it on was
+# measured and refused: studio/docs/refused-2026-09.md §23 (8.0 -> 15.2 ms a cursor step).
 pg.setConfigOptions(antialias=False)
 
 # Lap-curve palette: best is recoloured green at draw time (matches the lap table); rest cycle.

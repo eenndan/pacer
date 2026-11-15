@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Twenty-two features were built far enough to **measure**, and the measurement said not to ship
+Twenty-three features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -1866,6 +1866,60 @@ pixi run python -m studio.dev.probes.vt_gop verdict SYNTH.json MK.json   # appli
 100 ms on both sources (today it decodes ~30 frames past the keyframe at ~4 ms each); or footage
 on which the 2 s interval buys far more than +0.35 dB at the same yield, weighed against the seek
 by a rule fixed before measuring.
+
+---
+
+## 23. Always-on antialiasing on the speed and Δ charts — refused (cool/compare-live-delta)
+
+**The idea.** `plots_view` draws the lap curves with pyqtgraph's antialiasing OFF, so at 2x a speed
+trace looks a little stepped where it climbs out of a corner. Turning it on is one option, and the
+charts are the panel a driver reads longest.
+
+**How it was measured.** On an M1 Pro (8 cores), macOS 26.5, PySide6 6.11.2 and pyqtgraph 0.14.0,
+2026-11-15, at load averages 3.5-3.8. `studio/dev/probes/chart_aa.py` opens the synthetic demo in
+the real `StudioWindow`, offscreen at 1728×1117, with one lap and the best lap on the charts (the
+default two-curve overlay). It times two things the charts do, each step including the repaint
+and one event-loop pass:
+- **a cursor sweep:** `PlotsView.set_playhead_time` at 120 places in the best lap, which is the
+  charts' share of the ~30 Hz tick;
+- **a lap switch:** `set_laps([lap, best])` round six laps, the charts' share of a click in the lap
+  table.
+
+Each variant runs five times, interleaved with the others, and its figure is the median of the five
+per-round medians. The demo is used so that anyone can re-run the probe without the owner's footage.
+
+| synthetic demo, 2 laps on the charts | cursor sweep, per step | lap switch |
+|---|---|---|
+| antialiasing off (shipped) | **8.0 ms** | **23.3 ms** |
+| on, every curve | 15.2 ms (+90 %) | 30.4 ms (+30 %) |
+| on, the selected lap's two curves only | 11.5 ms (+42 %) | — |
+
+The five rounds of every variant agree within 0.6 ms. The design lane measured the same shape on the
+owner's footage: 7.5 → 13.5 ms a sweep step (11.1 ms on the selected lap only), and
+21.5 → 27.5 ms a lap switch.
+
+**The cost is the tick's, and the gain is small.**
+- The ~30 Hz tick has 33 ms. With antialiasing on, the charts' share of each tick goes from a
+  quarter of it to nearly half, before the map, the hero, the video and, in compare, the second
+  pane have drawn anything. That is the budget `studio/README.md`'s perf invariants exist for
+  ("plot curves are downsampled + clipped with antialias off").
+- Antialiasing only the selected lap still adds 3.4 ms to every tick.
+- At 2x the difference is a softer edge on the steepest stretches of a trace, and nothing that
+  changes what a reader takes from the chart. Look at the two captures the probe saves.
+
+**What moves because of this refusal: nothing in the app.** The module-level
+`pg.setConfigOptions(antialias=False)` in `plots_view.py` stays, and its comment points here.
+
+**Re-run it** (the demo is generated into one `mkdtemp` and removed, or read from `PACER_DEMO_MP4`):
+
+```bash
+pixi run python -m studio.dev.probes.chart_aa                       # its last line is the JSON
+pixi run python -m studio.dev.probes.chart_aa --png-dir /tmp/aa     # also the 2x look, off and on
+```
+
+**What would be new evidence:** a pyqtgraph or Qt that draws antialiased polylines within about
+1 ms of the aliased ones on this sweep; or a cursor that repaints without redrawing the curves
+under it (a cached curve layer), which would take the curves out of the tick altogether.
 
 ---
 
