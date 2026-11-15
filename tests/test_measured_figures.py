@@ -60,6 +60,11 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      the map fade and the race-row slide on the demo; the counts (race, pairs, the pinned map's
      pixels) are held exactly, the pixel shares to half a step past their printed last digit. A
      negative control plants ten.
+  9. THE STORY REFUSALS (§29-§32) ARE THEIR PROBE'S. `studio/dev/probes/story_refusals.py`
+     re-measures the brake-onset bands, the "what you nailed" line, the ideal-lap film and the two
+     unstable moments on the demo (seeded, so deterministic); counts are held exactly, metres,
+     seconds and shares to half a step of their printed last digit, and §28's addendum to its own
+     arithmetic. A negative control plants ten.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -2769,6 +2774,222 @@ def test_the_motion_refusal_guard_fails_on_a_wrong_figure():
     print(f"test_the_motion_refusal_guard_fails_on_a_wrong_figure OK ({len(plants)} plants)")
 
 
+# ─── refusals §29-§32: the W4 design pass's four, re-run from their probe ───────────────────────
+# The W4 design pass refused four story features on the owner's footage, which cannot be published.
+# Their sections quote only the synthetic demo, re-measured by `story_refusals` (one Session in the
+# real window, ~20 s; the window only so the map's scale is the map's). Counts are held exactly;
+# metres, seconds and shares to half a step of the digit they print, so a wrong last digit fails and
+# a rounding boundary does not. The map is pinned (MAP_SIZE), so its px-per-metre is held too. The
+# §28 addendum quotes the design pass's unreproduced timings, held to their own arithmetic.
+_STORY_PROBE = os.path.join(_REPO, "studio", "dev", "probes", "story_refusals.py")
+_EXPORT_VIDEO = os.path.join(_REPO, "studio", "export_video.py")
+_STORY_CACHE: dict = {}
+
+
+def _story_figures() -> dict:
+    """The probe's JSON, run once per process (the bindings must be built)."""
+    if "fig" not in _STORY_CACHE:
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PACER_APP_SUPPORT_JAIL="1")
+        out = subprocess.run([sys.executable, "-m", "studio.dev.probes.story_refusals"],
+                             cwd=_REPO, env=env, capture_output=True, text=True, timeout=600)
+        assert out.returncode == 0, f"story_refusals failed:\n{out.stderr[-3000:]}"
+        _STORY_CACHE["fig"] = json.loads(out.stdout.strip().splitlines()[-1])
+    return _STORY_CACHE["fig"]
+
+
+def _half_step(printed: str) -> float:
+    """Half a unit of the last digit `printed` shows (plus float slack): '5.4' → 0.05."""
+    decimals = len(printed.split(".")[1]) if "." in printed else 0
+    return 0.5 * 10.0 ** -decimals + 1e-9
+
+
+def _story_problems(doc: str, fig: dict) -> list[str]:
+    """What in §29-§32 (and §28's addendum) differs from `fig` (the probe's JSON), from the constants
+    the probe and the app apply, or from the sections' own arithmetic. A function of the text, so the
+    negative control can plant."""
+    secs, probs = _refused_sections(doc), []
+    prec = _constant(_LIBRARY, "PB_PRECISION_S")
+    sec = {n: secs.get(n, "") for n in (29, 30, 31, 32)}
+    for n, text in sec.items():
+        if "story_refusals" not in text:
+            probs.append(f"§{n} is gone, or no longer names story_refusals, whose figures it quotes")
+    if probs:
+        return probs
+    flat = {n: _flatten(t) for n, t in sec.items()}
+
+    def near(n: int, what: str, printed: str, want: float) -> None:
+        if abs(float(printed.replace("−", "-")) - want) > _half_step(printed):
+            probs.append(f"§{n} {what}: {printed}, the probe says {want}")
+
+    def row(n: int, label: str, want: list, what: str) -> None:
+        rows = _row_nums(sec[n], label)
+        if not rows or len(rows[0]) != len(want):
+            probs.append(f"§{n}: the row '{label}' reads {rows[0] if rows else None}, the probe says {want}")
+            return
+        for got, w in zip(rows[0], want, strict=True):
+            if isinstance(w, int):
+                if got != str(w):
+                    probs.append(f"§{n} {what}: {got}, the probe says {w}")
+            else:
+                near(n, what, got, w)
+
+    def find(n: int, pattern: str, what: str) -> tuple | None:
+        hit = re.search(pattern, flat[n])
+        if not hit:
+            probs.append(f"§{n}: the sentence for {what} ('{pattern}') is gone or reworded")
+        return hit.groups() if hit else None
+
+    # §29 the brake bands
+    b = fig["brake"]
+    zones = b["zones"]
+    row(29, "middle-half spread of the onset", [z["iqr_m"] for z in zones], "a zone's spread")
+    row(29, "one GPS fix at that speed", [z["fix_m"] for z in zones], "a zone's fix")
+    for label, g in (("laps with the habit", b["habit_groups"]["habit"]),
+                     ("laps without it", b["habit_groups"]["clean"])):
+        row(29, label, [g["n"], g["median_m"], g["iqr_m"]], label)
+    if (hit := find(29, r"the recording's fix interval, (\d\.\d+) s", "the fix interval")):
+        near(29, "the fix interval", hit[0], b["fix_s"])
+    size = _constant(_STORY_PROBE, "MAP_SIZE")
+    if (hit := find(29, r"pinned at (\d+) × (\d+) as in §28, where a metre is (\d\.\d+) px", "the map's scale")):
+        if (int(hit[0]), int(hit[1])) != tuple(size):
+            probs.append(f"§29: the map is pinned at {hit[:2]}, the probe pins {size}")
+        near(29, "px per metre", hit[2], b["map_px_per_m"])
+    if (hit := find(29, r"its band would be (\d+\.\d) px long", "the band's length")):
+        near(29, "the band's px", hit[0], b["widest_px"])
+    inside = len(zones) - len(b["clear"])
+    if (hit := find(29, r"At (\w+) of the (\w+) zones the spread is inside one fix", "the zones inside")):
+        if hit != (_WORDS[inside], _WORDS[len(zones)]):
+            probs.append(f"§29: '{hit[0]} of the {hit[1]} zones', the probe: {inside} of {len(zones)}")
+    if (hit := find(29, r"The one that clears it is C(\d+), the corner of the demo's planted habit", "the zone that clears")):
+        if b["clear"] != [int(hit[0])] or b["habit_cid"] != int(hit[0]):
+            probs.append(f"§29: C{hit[0]} clears one fix, the probe: {b['clear']} (habit C{b['habit_cid']})")
+    gap = b["habit_groups"]["clean"]["median_m"] - b["habit_groups"]["habit"]["median_m"]
+    if (hit := find(29, r"the habit laps brake about (\d+) m before the clean ones", "the habit's gap")):
+        if int(hit[0]) != round(gap):
+            probs.append(f"§29: the habit laps brake {hit[0]} m before, the probe: {gap:.1f} m")
+
+    # §30 what you nailed
+    n_ = fig["nailed"]
+    cids = sorted(n_["median_loss"], key=int)
+    row(30, "typical pass − best pass", [n_["median_loss"][c] for c in cids], "a corner's typical − best")
+    fires = n_["fires"]
+    names = ", ".join(f"C{c}" for c in fires[:-1]) + f" and C{fires[-1]}" if len(fires) > 1 else ""
+    if (hit := find(30, r"it fires at (\d+) of (\d+) corners: (C\d+(?:, C\d+)* and C\d+)", "the count")):
+        if hit != (str(len(fires)), str(n_["corners"]), names):
+            probs.append(f"§30: fires at {hit}, the probe: {len(fires)} of {n_['corners']} ({names})")
+    closest = max(fires, key=lambda c: n_["median_loss"][str(c)]) if fires else None
+    if (hit := find(30, r"and C(\d+) by (\d\.\d{3}) s", "the closest call")) and closest is not None:
+        if int(hit[0]) != closest:
+            probs.append(f"§30: the closest call is C{hit[0]}, the probe: C{closest}")
+        near(30, "the closest margin", hit[1], prec - n_["median_loss"][str(closest)])
+    if (hit := find(30, r"is within (\d\.\d+) s of its best pass", "the step")) and float(hit[0]) != prec:
+        probs.append(f"§30: the step is {hit[0]} s, PB_PRECISION_S is {prec}")
+
+    # §31 the ideal-lap film
+    f = fig["film"]
+    row(31, "segments of the partition", [f["segments"]], "the segments")
+    row(31, "donor laps / cuts between them", [f["donors"], f["cuts"]], "donors / cuts")
+    row(31, "ideal / best lap", [f["ideal_s"], f["best_s"]], "ideal / best")
+    row(31, "a cut every", [f["cut_every_s"]], "a cut's spacing")
+    row(31, "speed jump at a cut", f["seam_kmh"], "a seam's speed jump")
+    row(31, "position jump at a cut", f["seam_m"], "a seam's position jump")
+    row(31, "a random cut between two clean laps", [f["random_kmh_p90"], f["random_m_p90"]], "the random cuts")
+    if (hit := find(31, r"at (\d+) seeded random cuts", "the random cuts' count")):
+        if int(hit[0]) != _constant(_STORY_PROBE, "FILM_BASELINE_CUTS"):
+            probs.append(f"§31: {hit[0]} random cuts, the probe draws FILM_BASELINE_CUTS")
+    if (hit := find(31, r"It cuts every (\d+\.\d) s\.\*\* (\d+) cuts in (\d+\.\d) s, between (\d+) laps", "the cut rate")):
+        near(31, "the cut spacing", hit[0], f["cut_every_s"])
+        if (int(hit[1]), int(hit[3])) != (f["cuts"], f["donors"]):
+            probs.append(f"§31: {hit[1]} cuts between {hit[3]} laps, the probe: {f['cuts']} / {f['donors']}")
+        near(31, "the film's length", hit[2], f["ideal_s"])
+    if (hit := find(31, r"on the demo it is (\d\.\d\d) s under the best lap", "the ideal's gap")):
+        near(31, "the ideal's gap", hit[0], f["best_s"] - f["ideal_s"])
+    if (hit := find(31, r"A film of (\d+) shots", "the shots")) and int(hit[0]) != f["cuts"] + 1:
+        probs.append(f"§31: a film of {hit[0]} shots, the probe cut {f['cuts']} times")
+    if not (f["seam_kmh"][1] < f["random_kmh_p90"] and f["seam_m"][1] < 1.0):
+        probs.append(f"§31 says a cut jumps less than a random one and under a metre: {f}")
+    if not re.search(r"^def resolve_video_source\(", _read(_EXPORT_VIDEO), re.M):
+        probs.append("§31 names export_video.resolve_video_source, which is gone")
+
+    # §32 the two unstable moments
+    m = fig["moments"]
+    sh = m["share"]
+    draws = _constant(_STORY_PROBE, "JITTER_DRAWS")
+    if m["draws"] != draws or not re.search(rf"{draws // 1000},{draws % 1000:03d} seeded draws", flat[32]):
+        probs.append(f"§32: the draw count is not the probe's {draws}")
+    if not re.search(rf"synthetic demo, {m['laps']} clean laps, {draws // 1000},{draws % 1000:03d} draws", flat[32]):
+        probs.append(f"§32: the table's head is not the probe's {m['laps']} laps and {draws} draws")
+    if (hit := find(32, r"within ±(\d\.\d+) s \(`library\.PB_PRECISION_S`.*?by a uniform amount within ±(\d\.\d+) s",
+                    "the jitter model")):
+        if (float(hit[0]), float(hit[1])) != (prec, prec / 2):
+            probs.append(f"§32: the jitter is ±{hit[0]} / ±{hit[1]} s, the probe ±{prec} / ±{prec / 2}")
+    row(32, "best 3-lap run", [sh["run3"], m["run3_tied"], m["run3_windows"], prec], "the 3-lap run")
+    tied_label = f"best pass per corner, at {_WORDS[m['tied_corners']]} of {_WORDS[m['corners']]} corners"
+    row(32, tied_label, [*m["tied_share"], *m["tied_ties"], prec], "the tied corners")
+    for c in m["alone"]:
+        row(32, f"best pass per corner, at C{c}", [sh[f"best_C{c}"]], f"C{c}'s best pass")
+    row(32, "best lap", [sh["best_lap"], m["best_lap_margin_s"]], "the best lap")
+    row(32, "biggest single-corner loss", [sh["worst_corner"]], "the biggest loss")
+    row(32, "longest run with no ▼", [sh["no_flag_run"], m["no_flag_run"][0]], "the run with no ▼")
+    row(32, "best 5-lap run", [sh["run5"], m["run5_tied"], m["run5_windows"], prec], "the 5-lap run")
+    if (hit := find(32, r"The best 3-lap run changes in (\d+) % of the draws, and (\w+) of the (\w+) runs", "the 3-lap prose")):
+        near(32, "the 3-lap share", str(int(hit[0]) / 100), sh["run3"])
+        if hit[1:] != (_WORDS[m["run3_tied"]], _WORDS[m["run3_windows"]]):
+            probs.append(f"§32: '{hit[1]} of the {hit[2]} runs', the probe: {m['run3_tied']} of {m['run3_windows']}")
+    if (hit := find(32, r"a tie at (\w+) corners of (\w+), (\d+) to (\d+) passes", "the corner ties")):
+        if hit != (_WORDS[m["tied_corners"]], _WORDS[m["corners"]], *map(str, m["tied_ties"])):
+            probs.append(f"§32: the corner ties read {hit}, the probe: {m['tied_corners']} of {m['corners']}, {m['tied_ties']}")
+    if (hit := find(32, r"changes in up to (\d+) % of the draws", "the corner share")):
+        near(32, "the largest corner share", str(int(hit[0]) / 100), m["tied_share"][1])
+    if (hit := find(32, r"Only C(\d+)'s stands alone", "the lone corner")) and [int(hit[0])] != m["alone"]:
+        probs.append(f"§32: C{hit[0]} stands alone, the probe: {m['alone']}")
+    kept = ("best_lap", "worst_corner", "no_flag_run", "run5")
+    if "never change" in flat[32] and any(sh[k] for k in kept):
+        probs.append(f"§32 says the kept moments never change: {[(k, sh[k]) for k in kept]}")
+
+    # §28's addendum: the design pass's timings, held to their own arithmetic
+    s28 = _flatten(secs.get(28, ""))
+    hit = re.search(r"\+(\d+\.\d) ms over a plain map repaint \((\d+\.\d) → (\d+\.\d) ms.*?(\w+) times #?557's ~(\d) ms", s28)  # a wrapped '#' is a comment mark to _flatten
+    if not hit:
+        probs.append("§28's addendum: the cross-fade's cost sentence is gone or reworded")
+    else:
+        add, a, z, times, budget = hit.groups()
+        if abs(float(z) - float(a) - float(add)) > 0.05 + 1e-9:
+            probs.append(f"§28's addendum: {a} → {z} ms is not +{add} ms")
+        if _WORDS.get(round(float(add) / float(budget))) != times:
+            probs.append(f"§28's addendum: +{add} ms is not '{times} times' a {budget} ms budget")
+    return probs
+
+
+def test_the_story_refusals_are_their_probe_s_figures():
+    """§29-§32 against a fresh run of `story_refusals`, and §28's addendum against its arithmetic."""
+    doc, fig = _read(_REFUSED), _story_figures()
+    problems = _story_problems(doc, fig)
+    assert not problems, "studio/docs/refused-2026-09.md:\n  " + "\n  ".join(problems)
+    print(f"test_the_story_refusals_are_their_probe_s_figures OK (§29-§32; zones clearing one fix "
+          f"{fig['brake']['clear']}, film cuts {fig['film']['cuts']}, 3-lap run share "
+          f"{fig['moments']['share']['run3']})")
+
+
+def test_the_story_refusal_guard_fails_on_a_wrong_figure():
+    """THE NEGATIVE CONTROL: a wrong figure in each section must be caught."""
+    doc, fig = _read(_REFUSED), _story_figures()
+    plants = {"§29 a fix cell": ("| 2.7 | 2.2 | 2.7 |", "| 2.7 | 2.3 | 2.7 |"),
+              "§29 the band's px": ("would be 6.7 px long", "would be 6.8 px long"),
+              "§29 a habit count": ("| laps with the habit | 8 |", "| laps with the habit | 9 |"),
+              "§30 a corner cell": ("| 0.381 | 0.050 |", "| 0.381 | 0.051 |"),
+              "§30 the count": ("it fires at 3 of 7", "it fires at 4 of 7"),
+              "§31 the cuts": ("between them | 9 / 12 |", "between them | 9 / 11 |"),
+              "§31 a seam figure": ("| 0.6 / 2.9 km/h |", "| 0.6 / 3.0 km/h |"),
+              "§32 a share": ("| best 3-lap run | 0.16 |", "| best 3-lap run | 0.15 |"),
+              "§32 a tie": ("seven, 6 to 11 passes", "seven, 6 to 12 passes"),
+              "§28 addendum arithmetic": ("(7.2 → 17.2 ms", "(7.2 → 17.4 ms")}
+    for label, (old, new) in plants.items():
+        assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
+        assert _story_problems(doc.replace(old, new), fig), f"the story-refusal check missed: {label}"
+    print(f"test_the_story_refusal_guard_fails_on_a_wrong_figure OK ({len(plants)} plants)")
+
+
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
 # WHERE THE LAP SETS ARE FOUND (G2): under the folder PACER_MEASURED_FIGURES_DIR names, else under
 # the Desktop — the working set's home, and where `_LAP_SETS` says every table's recordings are, so by
@@ -3689,6 +3910,8 @@ def _run_all():
     test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section()
     test_the_motion_refusal_is_its_probe_s_figures()
     test_the_motion_refusal_guard_fails_on_a_wrong_figure()
+    test_the_story_refusals_are_their_probe_s_figures()
+    test_the_story_refusal_guard_fails_on_a_wrong_figure()
     print("\nmeasured-figures checks passed")
 
 
