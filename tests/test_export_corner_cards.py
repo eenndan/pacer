@@ -169,10 +169,11 @@ def test_the_cards_say_what_the_corners_table_says():
         for card in el.cards:
             delta_cell, apex_cell = cells[card.cid]
             assert card.unit == units.speed_label(unit)
-            # The speed: the table's Apex value, at a glance's precision.
-            assert abs(float(apex_cell) - float(card.speed)) <= 0.5 + 0.05, (card, apex_cell)
+            # The speed: the table's Apex cell, the same string.
+            assert card.speed == apex_cell, (card.speed, apex_cell)
             raw = next(st for st in stats if st.cid == card.cid).delta
-            if abs(raw) < 0.07:
+            # Level or not is decided on the PRINTED Δ — the table's own cell.
+            if abs(float(delta_cell.replace("−", "-"))) < 0.07:
                 assert card.delta == "≈ best" and card.colour == EXPORT.neutral, (card, raw)
                 approx += 1
             else:
@@ -201,7 +202,7 @@ def test_each_prepared_card_is_a_render_of_the_tables_strings():
     for card, img in zip(el.cards, el.images, strict=True):
         delta_cell, apex_cell = cells[card.cid]
         want = cc.Card(cid=card.cid, t_exit=card.t_exit, label=f"C{card.cid}",
-                       speed=f"{float(apex_cell):.0f}", unit="km/h",
+                       speed=apex_cell, unit="km/h",
                        delta=card.delta if card.delta == "≈ best" else f"{delta_cell} s vs best",
                        colour=card.colour)
         ref = cc.render_card(want, cc.card_width(want, h), h)
@@ -239,16 +240,20 @@ def test_inside_timing_precision_the_card_says_level_beyond_it_the_colour():
     f = _fixture()
     s, lap = f["s"], f["lap"]
     n = len(s.corners.lap_corner_stats(lap))
-    deltas = [0.069, 0.071, -0.069, -0.071] + [0.0] * (n - 4)
+    # Decided on the PRINTED value: 0.0649 prints "+0.06" (level); 0.0651, 0.0674 and 0.0699 all
+    # print "+0.07" — the Corners table's cell in the loss colour — so the card must not say level.
+    assert n >= 7, n
+    deltas = [0.0649, 0.0651, 0.0674, 0.0699, -0.0649, -0.0651, 0.071] + [0.0] * (n - 7)
     with _with_deltas(s, lap, deltas), _Patched(
             (s.corners, "lap_corner_resolved", lambda _lap: [True] * n)):
         for palette in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
             got = {c.cid: c for c in cc.card_rows(s, lap, None, palette)}
             ahead, behind = ev.export_semantic_pair(palette)
-            assert (got[1].delta, got[1].colour) == ("≈ best", EXPORT.neutral), got[1]
-            assert (got[2].delta, got[2].colour) == ("+0.07 s vs best", behind), got[2]
-            assert (got[3].delta, got[3].colour) == ("≈ best", EXPORT.neutral), got[3]
-            assert (got[4].delta, got[4].colour) == ("−0.07 s vs best", ahead), got[4]
+            level, behind_, ahead_ = (("≈ best", EXPORT.neutral), ("+0.07 s vs best", behind),
+                                      ("−0.07 s vs best", ahead))
+            want = {1: level, 2: behind_, 3: behind_, 4: behind_, 5: level, 6: ahead_, 7: behind_}
+            for cid, w in want.items():
+                assert (got[cid].delta, got[cid].colour) == w, (cid, deltas[cid - 1], got[cid])
         # ...and on the burned pixels: the loss card carries red ink, the level one none.
         cards = {c.cid: c for c in cc.card_rows(s, lap, None, theme.PALETTE_STANDARD)}
         lvl, loss = (cc.render_card(cards[i], cc.card_width(cards[i], 43.2), 43.2) for i in (1, 2))
@@ -590,6 +595,33 @@ def test_the_dialog_offers_corner_cards_off_by_default_and_says_where_they_canno
     assert again["checked"] is True
     assert "No corner cards in this export" in again["hint"], again["hint"]
     assert "corner_cards" not in choice.config.elements, "a disabled option reached the render"
+    # All laps: a lap with no corner matched on track gets no cards, and the hint names it the
+    # way it names the ghost's ghostless files.
+    s = f["s"]
+    n_corners = len(s.corners.lap_corner_stats(lap))
+    real = s.corners.lap_corner_resolved
+    third = {}
+
+    def all_laps(dlg, rows):
+        scope = rows["Export"]
+        scope.setCurrentIndex(scope.findText("All laps — one file per lap"))
+        third["hint"] = _hint(dlg)
+        third["tip"] = _cards_box(rows).toolTip()
+        return QDialog.Rejected
+
+    with _Patched((s.corners, "lap_corner_resolved",
+                   lambda i: [False] * n_corners if i == lap else real(i))):
+        _open_dialog(lap, all_laps)
+    n = len(s.valid_lap_ids())
+    assert f"No corner cards in 1 file of {n}: No corner of Lap {lap + 1} was matched on track." \
+        in third["hint"], third["hint"]
+    assert "same corner on your best lap" in third["tip"], third["tip"]
+    assert "provisional" not in third["tip"], third["tip"]
+    # Provisional timing: the cards keep their Δ, and the tooltip says the best lap is chosen from
+    # provisional lap times.
+    with _Patched((Session, "timing_verified", property(lambda _self: False))):
+        _open_dialog(lap, all_laps)
+    assert "best lap these cards compare against is chosen from them" in third["tip"], third["tip"]
     prefs.set(key, False)
     print("ok the dialog: Extras ▸ Corner cards off by default, remembered, disabled with its reason")
 

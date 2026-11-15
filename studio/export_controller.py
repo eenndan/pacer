@@ -449,9 +449,14 @@ class ExportController:
     _PREF_EXPORT_CARDS = "export_corner_cards"
     _CARDS_LABEL = "Corner cards"
     _CARDS_TIP = ("As you leave each corner, a card for two seconds: its minimum speed and its time "
-                  "against your best lap — the Corners table's numbers. Inside timing precision "
+                  "against the same corner on your best lap — the Corners table's numbers (its "
+                  "Δbest column, not the session-best corner time). Inside timing precision "
                   f"({corner_cards.PRECISION_S:.2f} s) it reads \"≈ best\"; a corner not matched "
                   "on track gets no card.")
+    # Added to the tooltip while the start/finish line is unconfirmed: the cards keep their Δ (a
+    # corner time does not depend on the line), but WHICH lap is the best is a lap-time verdict.
+    _CARDS_PROVISIONAL = (" Lap times are provisional until the start/finish line is confirmed, "
+                          "so the best lap these cards compare against is chosen from them.")
     # The index of "Source (no downscale)" in `_EXPORT_RES_OPTIONS`.
     _EXPORT_RES_SOURCE = 3
     # The compare export's own two rows. LAYOUT first because it decides the shape of the file:
@@ -536,20 +541,23 @@ class ExportController:
             _log.warning("corner-card availability unknown", exc_info=True)
             return "Corner cards are not available for this session."
 
-    def _ghostless_files(self, lap: int) -> str:
-        """For an All-laps batch with the ghost ticked: one line naming the files that will carry
-        no ghost and why ("" when every file has one). The best lap's own file is always one."""
+    def _ghostless_files(self, lap: int, reason=ghost.unavailable_reason,
+                         what: str = "ghost") -> str:
+        """For an All-laps batch with an Extras option ticked: one line naming the files that will
+        carry no `what` and why ("" when every file has it). `reason` is the option's own
+        per-lap rule — the ghost's by default (the best lap's own file is always one), the corner
+        cards' for a lap with no corner matched on track."""
         session = getattr(self.win, "session", None)
         try:
             ids = export_video.scope_lap_ids(session, export_video.SCOPE_ALL_LAPS, lap)
-            why = {i: ghost.unavailable_reason(session, i) for i in ids}
+            why = {i: reason(session, i) for i in ids}
         except Exception:  # noqa: BLE001 — a hint never blocks an export
-            _log.warning("ghost availability per lap unknown", exc_info=True)
+            _log.warning("%s availability per lap unknown", what, exc_info=True)
             return ""
         out = [w for w in why.values() if w is not None]
         if not out:
             return ""
-        return (f"No ghost in {plural(len(out), 'file')} of {len(ids)}: " + " ".join(out))
+        return (f"No {what} in {plural(len(out), 'file')} of {len(ids)}: " + " ".join(out))
 
     def _remember_export_prefs(self, indices: dict) -> None:
         """Persist the picker's choices, `{pref key: combo index}`. Fully guarded, like
@@ -947,7 +955,11 @@ class ExportController:
             ghost_box.setToolTip(self._GHOST_TIP if no_ghost is None else f"Off here: {no_ghost}")
             no_cards = self._cards_reason(scope, lap)
             cards_box.setEnabled(no_cards is None)
-            cards_box.setToolTip(self._CARDS_TIP if no_cards is None else f"Off here: {no_cards}")
+            provisional = not bool(getattr(getattr(self.win, "session", None),
+                                           "timing_verified", True))
+            cards_box.setToolTip(
+                (self._CARDS_TIP + (self._CARDS_PROVISIONAL if provisional else ""))
+                if no_cards is None else f"Off here: {no_cards}")
 
             clip, files, what = self._scope_plan(scope, lap, lead)
             lines = [f"Renders {what}."]
@@ -959,6 +971,11 @@ class ExportController:
                     lines.append(missing)
             if no_cards is not None and cards_box.isChecked():
                 lines.append(f"No corner cards in this export: {no_cards}")
+            elif scope == export_video.SCOPE_ALL_LAPS and cards_box.isChecked():
+                missing = self._ghostless_files(lap, corner_cards.unavailable_reason,
+                                                "corner cards")
+                if missing:
+                    lines.append(missing)
             source = export_video.known_video_size(src)
             fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
             how = ("source aspect" if aspect == export_video.ASPECT_SOURCE else

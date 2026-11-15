@@ -1,21 +1,24 @@
-"""CORNER CARDS: as the kart leaves each corner, a card for two seconds — "C2 · min 41 km/h ·
+"""CORNER CARDS: as the kart leaves each corner, a card for two seconds — "C2 · min 41.3 km/h ·
 +0.12 s vs best" — near the bottom-left of a single-lap export.
 
 THE NUMBERS ARE THE CORNERS TABLE'S, read from the SAME source it reads and never recomputed:
 `session.corners.lap_corner_stats(lap)` gives each corner's minimum speed (`apex_speed`, the
 table's Apex column) and its time against the Δ baseline (`delta`, the table's Δbest / Δref
-column), printed by the same `fmt_signed(·, 2)` — so the card's time IS that cell's text
-(tests/test_export_corner_cards.py holds them equal). The speed is the table's value at a glance's
-precision (whole units, the export's own km/h or mph).
+column: the Δ against the SAME CORNER ON THE BEST LAP, not the session-best corner time the ★
+marks), printed by the same `fmt_signed(·, 2)` — so the card's time IS that cell's text — and the
+minimum speed printed as the table prints its Apex cell (one decimal, the export's km/h or mph).
+tests/test_export_corner_cards.py holds both strings equal to the table's.
 
 THE RULES (`card_rows`, the one function the render and the tests read):
   * a corner NOT MATCHED ON TRACK for this lap (`lap_corner_resolved` False: an edge was
     interpolated) gets NO card — its time is the error a minimum over interpolated windows selects
     for, and the table mutes it for the same reason;
   * inside timing precision (`library.within_timing_precision`, |Δ| < 0.07 s — the app's one rule
-    for comparing two timed spans) the card reads "≈ best" in the neutral white, no sign; beyond
-    it, the signed time in the export's gain/loss colours for its palette. Not the Stats ▼ step:
-    the design lane measured that 95 % of cards would then read "≈";
+    for comparing two timed spans), decided on the PRINTED Δ as the compare seam and the Laps
+    table's Δbest decide (a raw 0.0674 prints "+0.07", and the table's cell must not read "+0.07"
+    in the loss colour beside a card saying level), the card reads "≈ best" in the neutral
+    white, no sign; beyond it, the signed time in the export's gain/loss colours for its palette.
+    Not the Stats ▼ step: the design lane measured that 95 % of cards would then read "≈";
   * on the Δ BASELINE lap itself (the best lap; or the reference lap, when a reference loaded from
     this same recording is the baseline) every Δ is a self-zero: the card carries the minimum
     speed only — the table dashes the same cells;
@@ -72,10 +75,16 @@ class Card:
     cid: int
     t_exit: float
     label: str                # "C2"
-    speed: str                # "41" (the export's unit)
+    speed: str                # "41.3" (the export's unit, as the table's Apex cell prints it)
     unit: str                 # "km/h" / "mph"
     delta: str | None         # "+0.12 s vs best" / "≈ best"; None on the baseline lap
     colour: str | None        # the delta run's colour
+
+
+def _printed(d: float) -> float:
+    """The Δ as the card and the Corners table print it (`fmt_signed(d, 2)`, whose minus is U+2212),
+    read back: the value the precision gate decides on."""
+    return float(fmt_signed(d, 2).replace("−", "-"))
 
 
 def _lap_name(lap_id: int) -> str:
@@ -122,13 +131,13 @@ def card_rows(session, lap_id: int, unit: str | None, palette: str | None) -> li
             continue
         if baseline:
             delta, colour = None, None
-        elif library.within_timing_precision(st.delta):
+        elif library.within_timing_precision(_printed(st.delta)):
             delta, colour = f"≈ {word}", EXPORT.neutral
         else:
             delta = f"{fmt_signed(st.delta, 2)} s vs {word}"
             colour = ev.export_delta_colour(st.delta, palette)
         out.append(Card(cid=st.cid, t_exit=float(entry) + float(st.time), label=f"C{st.cid}",
-                        speed=f"{units.convert_speed(st.apex_speed, unit):.0f}",
+                        speed=f"{units.convert_speed(st.apex_speed, unit):.1f}",
                         unit=units.speed_label(unit), delta=delta, colour=colour))
     out.sort(key=lambda c: c.t_exit)
     return out
