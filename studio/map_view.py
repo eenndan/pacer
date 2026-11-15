@@ -1874,6 +1874,11 @@ class MapView(QWidget):
                 and getattr(self, "_timing_hover", False)):
             self._timing_hover = False
             self._sync_timing_chrome()
+        # ...and so is the corner hover. The VIEWPORT's Leave, not MapView's: the map key, the
+        # notice and the legend are children inside MapView, so a pointer moving onto them leaves
+        # the canvas without ever leaving the view (it also fires when the view itself is left).
+        if event.type() == QEvent.Leave and obj is self.widget.viewport():
+            self._set_corner_hovered(None)
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ view fit
@@ -2213,9 +2218,10 @@ class MapView(QWidget):
             self._corner_hovered = label
             self.cornerHovered.emit(label)
 
-    def leaveEvent(self, event):  # noqa: N802 (Qt override)
-        self._set_corner_hovered(None)   # sigMouseMoved does not fire on the way out
-        super().leaveEvent(event)
+    def forget_corner_hover(self):
+        """Forget what cornerHovered last said, without emitting (CentralView's state was just
+        reset by a rebuild): the next move over a corner names it again."""
+        self._corner_hovered = None
 
     def refresh_provisional_cue(self):
         """Overlay a dashed accent start line + "drag to set start/finish — lap timing provisional"

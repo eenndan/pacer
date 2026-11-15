@@ -966,6 +966,40 @@ class PlotsView(QWidget):
             hot = ln.label.toPlainText() == label
             ln.label.setColor(CORNER_LABEL_HOT_COLOR if hot else CORNER_LABEL_COLOR)
             ln.setPen(corner_guide_pen() if hot else pg.mkPen(None))
+        self._fit_corner_guide()
+
+    def _fit_corner_guide(self):
+        """Run the hot corner's guide from just under its own label (it must not strike its
+        label through) to the bottom of the speed plot — stopping short of the legend plate where
+        the plate sits across it. Re-fitted wherever the labels are re-decluttered (a resize, an
+        x-range change, a legend placement), so the span follows the plate; never per tick."""
+        hot = next((ln for ln in self._corner_items
+                    if ln.label.toPlainText() == self._corner_hot), None)
+        if hot is None:
+            return
+        box = self.p_speed.getViewBox().sceneBoundingRect()
+        if box.height() <= 0:
+            return
+        lab = hot.label.sceneBoundingRect()
+        top, bottom = lab.bottom() + 2.0, box.bottom()
+        leg = self._speed_legend
+        if leg is not None and leg.isVisible():
+            plate = leg.sceneBoundingRect()
+            if plate.left() <= lab.center().x() <= plate.right():
+                if plate.center().y() < box.center().y():
+                    top = max(top, plate.bottom() + 2.0)
+                else:
+                    bottom = min(bottom, plate.top() - 2.0)
+        # A vertical InfiniteLine's span is a fraction of the view's height, from the bottom up.
+        lo = min(max((box.bottom() - bottom) / box.height(), 0.0), 1.0)
+        hi = min(max((box.bottom() - top) / box.height(), lo), 1.0)
+        for ln in self._corner_items:
+            span = (lo, hi) if ln is hot else (0, 1)
+            if ln.span != span:
+                ln.setSpan(*span)
+                # setSpan keeps the cached bounding rect, which is what the line paints along:
+                # without this the span is stored and never drawn.
+                ln.viewTransformChanged()
 
     def corner_emphasis(self) -> str | None:
         """The corner label currently emphasised (see set_corner_emphasis)."""
@@ -982,6 +1016,11 @@ class PlotsView(QWidget):
                     -pad, -pad, pad, pad).contains(scene_pos):
                 return ln.label.toPlainText()
         return None
+
+    def forget_corner_hover(self):
+        """Forget what cornerHovered last said, without emitting (CentralView's state was just
+        reset by a rebuild): the next move over a corner names it again."""
+        self._corner_hovered = None
 
     def _set_corner_hovered(self, label: str | None):
         if label != self._corner_hovered:
@@ -1037,6 +1076,7 @@ class PlotsView(QWidget):
             ln.setVisible(ok)
             if ok:
                 taken.append((box[0] + CORNER_LABEL_GAP_PX, box[1] - CORNER_LABEL_GAP_PX))
+        self._fit_corner_guide()
 
     def _draw_sectors(self):
         """(Re)draw cached sector lines: label on the speed plot top only, behind the cursor. The

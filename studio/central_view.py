@@ -2323,6 +2323,8 @@ class CentralView(QWidget):
         self.map.refresh_overlays()
         self.map.set_corners(self.session.corners.corner_map_markers())
         self._hovered_corner = None          # set_corners dropped both rings; the chart follows
+        self.map.forget_corner_hover()       # ...and a pointer still on a label re-names it
+        self.plots.forget_corner_hover()
         self._push_corner_emphasis()
         self.corner_table.refresh()
         # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /

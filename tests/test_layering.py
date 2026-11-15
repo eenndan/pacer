@@ -617,7 +617,39 @@ def test_the_chart_and_the_map_never_reach_each_other():
         assert not bad, f"{name} imports {sorted(bad)}: a view reaching another view"
     planted = ast.parse("from .map_view import MapView\n")
     assert ["studio.map_view"] == _import_names(planted.body[0]), "the scan missed the plant"
+    # An import is not the only way to reach a sibling: a widget-tree walk
+    # (`self.parentWidget()...map.set_hovered_corner(...)`) needs no import at all. So each view
+    # is also scanned for any use of the OTHER view's corner-link API or class name. What this
+    # does not catch: a reach through a generic name both views share (e.g. `refresh`) — the
+    # stubbed-view test in test_central_view_realqt covers the corner path at runtime.
+    for name, banned in _VIEW_FOREIGN_NAMES.items():
+        hits = _foreign_names(_parse(name), banned)
+        assert not hits, f"{name} uses the other view's {sorted(hits)}: a view reaching a view"
+    walk = ast.parse("def f(self):\n    self.parentWidget().map.set_hovered_corner('C1')\n")
+    assert _foreign_names(walk, _VIEW_FOREIGN_NAMES["plots_view"]) == {"set_hovered_corner"}, (
+        "the name scan missed a planted widget-tree walk")
     print("test_the_chart_and_the_map_never_reach_each_other OK")
+
+
+# Each view's corner-link API and class, which only CentralView (and the view itself) may name.
+_VIEW_FOREIGN_NAMES = {
+    "plots_view": {"MapView", "set_hovered_corner", "highlight_corner", "pinned_corner",
+                   "_corner_markers", "CentralView", "_on_corner_hovered", "_ring_corner"},
+    "map_view": {"PlotsView", "set_corner_emphasis", "corner_emphasis", "corner_at",
+                 "CentralView", "_on_corner_hovered", "_ring_corner"},
+}
+
+
+def _foreign_names(tree: ast.AST, banned: set[str]) -> set[str]:
+    """The banned names a module USES (attribute reads, bare names), ignoring its own
+    definitions of a same-named function."""
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in banned:
+            used.add(node.attr)
+        elif isinstance(node, ast.Name) and node.id in banned:
+            used.add(node.id)
+    return used
 
 
 if __name__ == "__main__":

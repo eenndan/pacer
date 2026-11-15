@@ -698,6 +698,48 @@ def test_hovering_a_corner_label_names_it_and_the_emphasis_lights_only_that_labe
     print("test_hovering_a_corner_label_names_it_and_the_emphasis_lights_only_that_label OK")
 
 
+def _guide_scene_span(v, ln):
+    """(top, bottom) scene y of a corner guide AS PAINTED: its bounding rect, which is what
+    InfiniteLine.paint draws along (its stored span alone proves nothing — setSpan leaves the
+    cached rect stale)."""
+    r = ln.mapRectToScene(ln.boundingRect())
+    return r.top(), r.bottom()
+
+
+def test_the_corner_guide_starts_under_its_label_and_stops_short_of_the_legend():
+    """The emphasised corner's dotted guide must not strike through its own label, and must
+    not run across the legend plate. Checked in both plate positions: a corner whose apex sits
+    under the plate gets a guide that stops above it (plate low) or starts below it (plate high)."""
+    v = _view(n=1, best=0, select=[0])
+    v.set_corner_labels([("C1", 120.0), ("C2", 960.0)])
+    _APP.processEvents()
+    by = {ln.label.toPlainText(): ln for ln in v._corner_items}
+    v.set_corner_emphasis("C1")
+    top, bottom = _guide_scene_span(v, by["C1"])
+    lab = by["C1"].label.sceneBoundingRect()
+    assert top >= lab.bottom(), f"the guide strikes its label: top {top} < label bottom {lab.bottom()}"
+    assert bottom > top + 50, (top, bottom)
+    leg = v._speed_legend
+    assert leg is not None and leg.isVisible()
+    vb = v.p_speed.getViewBox()
+    for corner in ((0, 1), (0, 0)):          # plate at the bottom right, then the top right
+        leg.anchor(itemPos=(1, corner[1]), parentPos=(1, corner[1]), offset=(-8, 8 - 16 * corner[1]))
+        _APP.processEvents()
+        plate = leg.sceneBoundingRect()
+        x_under = vb.mapSceneToView(QPointF(plate.center().x(), plate.center().y())).x()
+        v.set_corner_emphasis(None)
+        v.set_corner_labels([("C1", 120.0), ("C2", float(x_under))])
+        v.set_corner_emphasis("C2")
+        v._declutter_corner_labels()
+        assert v._corner_items == [by["C1"], by["C2"]]   # an x move, not a rebuild
+        top, bottom = _guide_scene_span(v, by["C2"])
+        assert bottom <= plate.top() or top >= plate.bottom(), (
+            f"the guide runs across the legend plate: guide {top:.0f}-{bottom:.0f}, "
+            f"plate {plate.top():.0f}-{plate.bottom():.0f}")
+    v.deleteLater()
+    print("test_the_corner_guide_starts_under_its_label_and_stops_short_of_the_legend OK")
+
+
 def test_coast_bands_are_named_in_the_legend():
     """cool/chart-corners. The grey columns on the speed chart are COAST spans, and nothing said so
     — the 2026-11 tour read them as the corners. While a band is drawn the legend names it, in its
@@ -1005,6 +1047,7 @@ def _run_all():
     test_legend_hide_threshold_sits_at_the_apps_own_ceiling()
     test_crowded_corner_labels_are_dropped_never_overlapped_and_return_on_zoom()
     test_hovering_a_corner_label_names_it_and_the_emphasis_lights_only_that_label()
+    test_the_corner_guide_starts_under_its_label_and_stops_short_of_the_legend()
     test_coast_bands_are_named_in_the_legend()
     test_empty_state_offers_a_next_action_and_disables_the_inert_controls()
     test_gain_shading_takes_its_sign_from_the_maps_delta_rate()
