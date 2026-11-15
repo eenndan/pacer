@@ -1607,6 +1607,13 @@ class CentralView(QWidget):
         controls 40 px under the video panel's own ⛶ were tab stops 16 and 17 of 17 — sixteen
         presses away. setTabOrder puts each one immediately after the widget named first."""
         self._compare_chip.setVisible(bool(on))
+        # LOOK-13's hero rule ("in compare, lead with the chart's baseline") depends on THIS flag,
+        # and the only re-render it had was a baseline CHANGE: entering compare on a two-lap
+        # selection keeps the chart on Δ-to-best, so a paused window kept `Δideal` under
+        # `SPEED · Δ TO BEST` until the playhead moved (PRE-1, cooler-2026-11 QA).
+        if getattr(self, "_playback", None) is not None and hasattr(self, "_last_diff_speed"):
+            self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
+                                  self._last_diff_lap)
         picker_a, picker_b = self.video.compare_pickers()
         if on and picker_a is not None and picker_b is not None:
             self.setTabOrder(self._video_max_btn, picker_a)
