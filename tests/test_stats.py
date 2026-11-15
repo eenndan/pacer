@@ -5614,6 +5614,207 @@ def test_the_longest_middle_half_caption_keeps_the_pace_row():
     print("test_the_longest_middle_half_caption_keeps_the_pace_row OK")
 
 
+# ------------------------------------------------------------------- MOMENTS (story.session_moments)
+def _row_text(label) -> str:
+    """A MOMENTS row as read: its rich text's plain words, the no-break spaces read as spaces."""
+    from PySide6.QtGui import QTextDocument
+    doc = QTextDocument()
+    doc.setHtml(label.text())
+    return doc.toPlainText().replace(" ", " ")
+
+
+def _shown_moments(v) -> list[str]:
+    sec = v.moments
+    return [_row_text(lab) for row, lab in zip(sec.rows, sec.labels, strict=True) if row.isVisibleTo(v)]
+
+
+def _moments_session(sm, **kw):
+    """The stub page session with `session_moments` returning `sm` (a story.SessionMoments)."""
+    sess = _fake_view_session(**kw)
+    sess.session_moments = lambda: sm
+    return sess
+
+
+def test_the_demo_shows_three_moments_and_each_jump_lands():
+    """On the shipped demo, through the real window: the Stats page's MOMENTS rows are the core's
+    strings word for word, and each Jump selects its lap in the Laps table (and the plots and the
+    Corners lap with it); the loss's Jump also rings its corner on the map. The 5-lap run's Jump
+    lands on the run's first lap."""
+    import tempfile
+    import time
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    os.environ.setdefault("PACER_NO_MEDIA", "1")
+    tmp = tempfile.TemporaryDirectory(prefix="stats_moments_")
+    path = os.path.join(tmp.name, "demo", "GX019001.MP4")
+    md.make(path, render=False)
+    boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information")}
+    for k in boxes:
+        setattr(QMessageBox, k, staticmethod(lambda *a, **k: QMessageBox.Ok))
+    win = StudioWindow([path])
+    try:
+        deadline = time.time() + 60
+        while win.view is None and time.time() < deadline:
+            _APP.processEvents()
+            time.sleep(0.01)
+        win.resize(1440, 900)
+        win.show()
+        view = win.view
+        view.select_lap_tab(2)
+        _settle(20)
+        sm = win.session.session_moments()
+        expected = [sm.best_lap, sm.biggest_loss, sm.best_window]
+        assert all(m is not None for m in expected), sm
+        v = view.stats_view
+        assert v.moments.heading.isVisibleTo(v) and not v.moments.caveat.isVisibleTo(v)
+        assert _shown_moments(v) == [m.text for m in expected], _shown_moments(v)
+        assert _shown_moments(v)[1] == ("Biggest single-corner loss: Lap 6 · C5 +2.84 s over your "
+                                        "typical pass (▼)")
+        view.map.highlight_corner(None)
+        for btn, m in zip(v.moments.buttons, expected, strict=True):
+            assert btn.isVisibleTo(v) and btn.width() >= 28 and btn.height() >= 28, btn.size()
+            btn.click()
+            _settle(4)
+            assert view.table.selected_lap_ids() == [m.lap_ids[0]], (
+                m.kind, view.table.selected_lap_ids())
+            assert view._corner_lap == m.lap_ids[0], (m.kind, view._corner_lap)
+            if m.cid is not None:
+                assert view.map.pinned_corner() == f"C{m.cid}", view.map.pinned_corner()
+            assert view.table_stack.currentIndex() == 2, "a Jump stays on the Stats page"
+        assert view.map.pinned_corner() == "C5"
+    finally:
+        win.close()
+        win.deleteLater()
+        _settle(4)
+        for k, fn in boxes.items():
+            setattr(QMessageBox, k, fn)
+        tmp.cleanup()
+    print("test_the_demo_shows_three_moments_and_each_jump_lands OK")
+
+
+def test_a_tied_best_lap_shows_its_level_clause():
+    _app()
+    from studio import story
+    from studio.stats_panel import StatsView
+    times = {0: 45.0, 1: 45.069, 2: 45.070, 3: 45.5, 4: 46.0}
+    sm = story.session_moments(times, None, best_lap=0)
+    v = StatsView(_moments_session(sm))
+    v.resize(503, 760)
+    v.show()
+    _settle(6)
+    assert _shown_moments(v)[0] == ("Best lap: Lap 1 · 0:45.000 · Lap 2 is level (0.069 s, under "
+                                    "the 0.07 s timing precision)"), _shown_moments(v)
+    v.close()
+    print("test_a_tied_best_lap_shows_its_level_clause OK")
+
+
+def test_no_single_best_run_has_no_jump():
+    _app()
+    from test_story import _five
+
+    from studio import story
+    from studio.stats_panel import StatsView
+    many = _five(0, 45.0) | _five(10, 45.01) | _five(20, 45.02) | _five(30, 45.03)
+    sm = story.session_moments(many, None, best_lap=0)
+    v = StatsView(_moments_session(sm))
+    v.show()
+    _settle(6)
+    assert _shown_moments(v) == [sm.best_lap.text, "No single best 5-lap run: 4 stretches within "
+                                 "0.07 s"], _shown_moments(v)
+    assert v.moments.buttons[0].isVisibleTo(v) and not v.moments.buttons[1].isVisibleTo(v)
+    v.close()
+    print("test_no_single_best_run_has_no_jump OK")
+
+
+def test_provisional_timing_drops_the_best_lap_and_says_so_once():
+    """Under a provisional start line there is no best lap (the Laps table withholds the ★), the
+    loss and the run stay, and the page's own provisional wording shows ONCE, for the section."""
+    _app()
+    from test_story import _grid
+
+    from studio import story
+    from studio.lap_table import PROVISIONAL_TOOLTIP
+    from studio.stats_panel import StatsView
+    times, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0)})
+    sm = story.session_moments(times, mx, 0, provisional=True)
+    v = StatsView(_moments_session(sm, verified=False))
+    v.show()
+    _settle(6)
+    shown = _shown_moments(v)
+    assert shown == [sm.biggest_loss.text, sm.best_window.text], shown
+    assert not any(s.startswith("Best lap") for s in shown)
+    assert v.moments.caveat.isVisibleTo(v) and v.moments.caveat.text() == PROVISIONAL_TOOLTIP
+    assert all(PROVISIONAL_TOOLTIP not in s for s in shown)
+    v.close()
+    print("test_provisional_timing_drops_the_best_lap_and_says_so_once OK")
+
+
+def test_without_a_corner_grid_only_the_moments_that_exist_show():
+    _app()
+    from studio import story
+    from studio.stats_panel import StatsView
+    times = {i: 45.0 + 0.1 * (i % 3) for i in range(8)}
+    sm = story.session_moments(times, None, best_lap=0)     # no corners matched: no grid
+    assert sm.biggest_loss is None
+    v = StatsView(_moments_session(sm))
+    v.show()
+    _settle(6)
+    assert _shown_moments(v) == [sm.best_lap.text, sm.best_window.text], _shown_moments(v)
+    v.close()
+    print("test_without_a_corner_grid_only_the_moments_that_exist_show OK")
+
+
+def test_no_moments_is_no_section_and_the_page_as_it_was():
+    """With no moment the section is absent, heading included — not an empty box — and the page
+    is pixel-identical to the page without the section at all (its widgets taken out of the
+    layout), at both quadrant widths."""
+    _app()
+    from studio import story
+    from studio.stats_panel import StatsView
+    none = story.SessionMoments(None, None, None)
+    for width in QUADRANT_WIDTHS:
+        v = StatsView(_moments_session(none))
+        v.resize(width, 900)
+        v.show()
+        _settle(8)
+        assert not v.moments.heading.isVisibleTo(v) and not v.moments.body.isVisibleTo(v)
+        with_section = v._scroll.widget().grab().toImage()
+        for w in v.moments.widgets():
+            w.setParent(None)
+        _settle(8)
+        without = v._scroll.widget().grab().toImage()
+        assert with_section == without, f"an absent MOMENTS section moved the page at {width} px"
+        v.close()
+    print(f"test_no_moments_is_no_section_and_the_page_as_it_was OK ({QUADRANT_WIDTHS})")
+
+
+def test_one_moments_read_per_refresh():
+    """`session_moments()` is memoised, and the page reads it once per fill, where the page
+    already refreshes."""
+    _app()
+    from studio.stats_panel import StatsView
+    s = _shipped_demo_session()
+    real = s.session_moments
+    calls = []
+
+    def counted():
+        calls.append(1)
+        return real()
+    s.session_moments = counted
+    try:
+        v = StatsView(s)
+        assert len(calls) == 1, f"{len(calls)} reads to build the page"
+        v.refresh()
+        assert len(calls) == 2, f"{len(calls) - 1} reads in one refresh"
+        v.close()
+    finally:
+        del s.session_moments
+    print("test_one_moments_read_per_refresh OK")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it

@@ -30,6 +30,8 @@ what sections share is in `stats_common` (see its docstring for the contract).""
 
 from __future__ import annotations
 
+import html
+import re
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -42,6 +44,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -55,11 +58,12 @@ from . import (
     driving,
     gmeter,
     provenance,
+    story,
     theme,
     units,
 )
 from . import stats as stats_service
-from ._signal import fmt_hms, fmt_signed, fmt_time, plural
+from ._signal import fmt_hms, fmt_signed, fmt_time, lap_label, plural
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
@@ -72,6 +76,7 @@ from .lap_table import (
     PROVISIONAL_TOOLTIP,
     estimated_timing_tooltip,
 )
+from .library import PB_PRECISION_S
 from .stats_braking import BrakingSection
 from .stats_coasting import CoastingSection
 from .stats_common import (
@@ -88,7 +93,7 @@ from .stats_ideal import IdealSection
 from .stats_straights import StraightsSection
 from .stats_trust import TrustSection
 from .theme import C
-from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters
+from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters, icon_button
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -873,6 +878,111 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
                    "again one lap later (windows spanning a GPS-dropout ⚠ lap are excluded). "
                    "A reference target, not a lap you drove.")
 
+# MOMENTS: three measured moments of the session (`story.session_moments`), each a Jump. Two
+# sentences: what a moment is with its tie rule, and how the 5-lap run differs from the PACE row's
+# race pace a few lines up (a median of five against a mean of three: on the shipped demo the run
+# reads 0:45.182 under the tile's 0:45.246, which without this would read as a contradiction).
+MOMENTS_TOOLTIP = (
+    "Three measurements from this session's clean laps, each with a Jump to where it happened; "
+    f"laps within {PB_PRECISION_S:.2f} s of each other, the timing precision, are named as level "
+    "rather than ranked. The 5-lap run is the best median of 5 consecutive clean laps, not the "
+    "PACE row's race pace, which is the best mean of 3.")
+
+
+def _unbroken(text: str) -> str:
+    """`text` escaped for a rich label with the pairs that must not part kept on one line: a
+    figure and its unit, a lap word and its number, a corner and its loss, the ▼ and its word.
+    Looked at, not guessed: the quadrant wrapped "(within 0.07 / s)" and "pass / (▼)", and the
+    340 px page "C5 / +2.84 s"."""
+    for pattern in (r"(\d) (s\b)", r"\b(Laps?) (\d)", r"\b(C\d+) ([+−-]\d)", r"(\w) (\()"):
+        text = re.sub(pattern, "\\1\u00a0\\2", text)
+    return html.escape(text)
+
+
+class _MomentsSection:
+    """MOMENTS: a heading, up to three rows ("Best lap: Lap 13 · 0:44.950" and a Jump) and, under
+    a provisional line or an estimated clock, the page's own timing wording once. A None moment is
+    an absent row; none at all is an absent section, heading included — never an empty box.
+
+    Each row is ONE wrapping label with its label set dim inline, not a label column: at the 503 px
+    quadrant a column wide enough for "Biggest single-corner loss" left the 5-lap text four lines.
+    The row's words are `story.moment_row`'s, never re-derived or sliced here. `jump(lap_id, cid)`
+    is the page's `moment_jump`; the app selects the lap and rings the corner (CentralView)."""
+
+    def __init__(self, jump):
+        self._jump = jump
+        self.heading = section_heading("MOMENTS")
+        self.heading.setToolTip(MOMENTS_TOOLTIP)
+        # One body under the heading, its bottom margin the tile grids' group separator (`_grid`),
+        # so the section ends where its neighbours' tile rows end.
+        self.body = QWidget()
+        body = QVBoxLayout(self.body)
+        body.setContentsMargins(0, 0, 0, theme.SPACE_S)
+        # SPACE_S between rows, the tile rows' own step: at SPACE_XS a wrapped row's second line
+        # ran into the next row's label.
+        body.setSpacing(theme.SPACE_S)
+        self.rows: list[QWidget] = []
+        self.labels: list[WrapLabel] = []
+        self.buttons: list[QPushButton] = []
+        self._targets: list[tuple[int | None, int | None]] = [(None, None)] * 3
+        for i in range(3):
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(theme.SPACE_S)
+            label = WrapLabel("")
+            label.setTextFormat(Qt.RichText)
+            # The Jump is the app's square arrow button (28 px, the icon-button hit area), not the
+            # coaching page's 88 px "Jump" pill: three pills down the right edge read as a
+            # dashboard of calls to action, and took 96 px of every line from the text.
+            btn = icon_button("ph.arrow-right")
+            btn.clicked.connect(lambda _checked=False, k=i: self._jump(*self._targets[k]))
+            lay.addWidget(label, 1, Qt.AlignVCenter)
+            lay.addWidget(btn, 0, Qt.AlignTop)
+            body.addWidget(row)
+            self.rows.append(row)
+            self.labels.append(label)
+            self.buttons.append(btn)
+        self.caveat = WrapLabel("")
+        self.caveat.setProperty("role", "Note")
+        self.caveat.setFont(theme.ui_font(theme.CAPTION))
+        body.addWidget(self.caveat)
+
+    def widgets(self) -> list:
+        return [self.heading, self.body]
+
+    def tables(self) -> list:
+        return []
+
+    def refresh(self, session) -> None:
+        read = getattr(session, "session_moments", None)
+        sm = read() if read is not None else None
+        moments = [m for m in ((sm.best_lap, sm.biggest_loss, sm.best_window) if sm else ())
+                   if m is not None]
+        self.heading.setVisible(bool(moments))
+        self.body.setVisible(bool(moments))
+        for i, row in enumerate(self.rows):
+            m = moments[i] if i < len(moments) else None
+            row.setVisible(m is not None)
+            if m is None:
+                self._targets[i] = (None, None)
+                continue
+            r = story.moment_row(m)
+            self.labels[i].setText(f'<span style="color:{C.text_dim}">{_unbroken(r.label)}:'
+                                   f"</span> {_unbroken(r.value)}")
+            self.labels[i].setToolTip(m.text)
+            self._targets[i] = (r.lap_id, r.cid)
+            btn = self.buttons[i]
+            btn.setVisible(r.lap_id is not None)
+            if r.lap_id is not None:
+                where = f" and ring C{r.cid} on the map" if r.cid is not None else ""
+                btn.setToolTip(f"Jump: select Lap {lap_label(r.lap_id)}{where}")
+        caveat = next((m.caveat for m in moments if m.caveat), None)
+        self.caveat.setText(
+            "" if caveat is None else PROVISIONAL_TOOLTIP if caveat == story.CAVEAT_PROVISIONAL
+            else estimated_timing_tooltip(getattr(session, "timing_quality", None)))
+        self.caveat.setVisible(caveat is not None)
+
 
 # `_plural` and `_fmt_hms` used to live here. Both moved to `_signal` (plural / fmt_hms) when the
 # exported session report became a second caller: export_data is Qt-free by contract and cannot
@@ -1111,6 +1221,8 @@ class StatsView(QWidget):
     # Clicked CORNERS-table row's cid (None on deselect) -> the map apex ring, via the
     # maximize-aware CentralView handler (restore the grid first, then ring).
     corner_clicked = Signal(object)
+    # A MOMENTS row's Jump: (lap id, cid or None) -> CentralView selects the lap and rings the cid.
+    moment_jump = Signal(int, object)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1368,6 +1480,15 @@ class StatsView(QWidget):
         self.stints_note = WrapLabel()
         self.stints_note.setProperty("role", "TableNote")
         col.addWidget(self.stints_note)
+
+        # --- MOMENTS: the best lap, the biggest single-corner loss, the best 5-lap run, each a
+        # Jump. UNDER PACE AND ITS STINTS, above IDEAL LAP: measured on the shipped demo at the
+        # 503 x 417 quadrant viewport (1440x900) the first screen ends inside DATA TRUST's foot
+        # (326 px) and the PACE tiles already run to 430 px, so here, at 538 px, the section moves
+        # nothing that was on the first screen; above PACE it would have pushed the PACE tiles
+        # down by its own height. It reads the best lap the tile row just printed, then where
+        # the time went and where the pace held.
+        self.moments = self._mount(col, _MomentsSection(self.moment_jump.emit))
 
         # --- the IDEAL LAP, and where it lives
         #
@@ -2256,6 +2377,7 @@ class StatsView(QWidget):
         self.t_runs.set(str(runs) if runs else None,
                         "runs" if runs != 1 else "runs · one continuous")
         self._refresh_stints(st, unit, u_label)
+        self.moments.refresh(session)
         self.ideal.refresh(session)
 
         # SPEED · G — session peaks over the per-lap stats

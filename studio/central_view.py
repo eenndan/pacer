@@ -933,6 +933,7 @@ class CentralView(QWidget):
         # Stats CORNERS/BRAKING/STRAIGHTS rows → the same apex ring, but maximize-aware: restore
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
+        self.stats_view.moment_jump.connect(self._on_stats_moment_jump)
         self.table_stack = QStackedWidget()
         # The Marks page: the driver's own annotations + the derived ones (studio/marks.py). It owns
         # no store and no session — the window feeds it the merged list and acts on its signals, the
@@ -1730,6 +1731,23 @@ class CentralView(QWidget):
         if cid is not None and getattr(self, "_maximized_panel", None) is self._table_panel:
             self._restore_splitter_sizes()
         self._ring_corner(cid)
+
+    def _on_stats_moment_jump(self, lap_id: int, cid):
+        """A Stats MOMENTS row's Jump: select `lap_id` as a Laps-table click does (plots, Corners
+        lap, and the video to the lap — or, with `cid`, to that lap's entry to the corner, the
+        coaching Jump's seek) and ring `cid` on the map. Maximize-aware like a corner row; it stays
+        on the Stats tab, so the next moment is one click away."""
+        if getattr(self, "_maximized_panel", None) is self._table_panel:
+            self._restore_splitter_sizes()
+        self.table.select([lap_id])
+        entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
+                 if cid is not None else None)
+        self._on_laps_selected([lap_id], seek=entry is None)
+        if entry is not None:
+            self.video.seek(entry)
+            self._playback.followed_lap = self.session.lap_at_time(entry)
+        if cid is not None:
+            self._ring_corner(cid)
 
     # ------------------------------------------------------------- the hovered corner
     # ONE corner state across three surfaces. Hovering a corner label on the speed chart, or a

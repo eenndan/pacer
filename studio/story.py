@@ -379,6 +379,57 @@ def _best_window(lap_times, caveat) -> Moment | None:
     return Moment(BEST_WINDOW, best, None, med, tuple(tie), caveat, text)
 
 
+@dataclass(frozen=True)
+class MomentRow:
+    """A moment as a surface's row: `label` and `value`, which join with ": " into the moment's
+    `text` exactly (tests/test_story.py holds that), and where its Jump lands — `lap_id` (None:
+    nothing to jump to, a "no single best" run) and, for a corner moment, `cid` to ring."""
+
+    label: str
+    value: str
+    lap_id: int | None
+    cid: int | None
+
+
+_ROW_LABEL = {BEST_LAP: "Best lap", BIGGEST_LOSS: "Biggest single-corner loss",
+              BEST_WINDOW: f"Best {RUN_WINDOW}-lap run"}
+
+
+def moment_row(m: Moment) -> MomentRow:
+    """`m` split for a row, from its own fields (never by slicing `text`): the same pieces the
+    builders above print, so a surface can set the label apart and wrap the value."""
+    jump = m.lap_ids[0] if m.lap_ids else None
+    if m.kind == BEST_LAP:
+        value = f"{_laps_text(m.lap_ids)} · {fmt_time(m.value)}"
+        if m.tie:
+            best_ms = printed_ms(m.value)
+            gaps = sorted((printed_ms(t.value) - best_ms) / 1000 for t in m.tie)
+            who = (f"Lap {lap_label(m.tie[0].lap_ids[0])} is" if len(m.tie) == 1 else
+                   f"Laps {', '.join(lap_label(t.lap_ids[0]) for t in m.tie)} are")
+            span = f"{gaps[0]:.3f} s" if gaps[0] == gaps[-1] else f"{gaps[0]:.3f}–{gaps[-1]:.3f} s"
+            value += f" · {who} level ({span}, under the {PB_PRECISION_S:.2f} s timing precision)"
+        return MomentRow(_ROW_LABEL[BEST_LAP], value, jump, None)
+    if m.kind == BIGGEST_LOSS:
+        value = (f"{_laps_text(m.lap_ids)} · C{m.cid} {fmt_signed(m.value)} s over your typical "
+                 f"pass ({BEHIND_MARK})" + "".join(
+                     f" · ≈ Lap {lap_label(t.lap_ids[0])} C{t.cid} {fmt_signed(t.value)} s"
+                     for t in m.tie))
+        return MomentRow(_ROW_LABEL[BIGGEST_LOSS], value, jump, m.cid)
+    level = f"within {PB_PRECISION_S:.2f} s"
+    if not m.lap_ids:
+        return MomentRow(f"No single best {RUN_WINDOW}-lap run",
+                         f"{plural(len(m.tie), 'stretch', 'stretches')} {level}", None, None)
+    value = f"{_laps_text(m.lap_ids)} · median {fmt_time(m.value)}"
+    for t in m.tie:
+        # The best window's own span is the one tie holding the whole window: another span can
+        # share a lap with it, never all five (their first windows are at least two laps apart).
+        own = set(m.lap_ids) <= set(t.lap_ids)
+        value += (f" · level ({level}) for any {RUN_WINDOW} consecutive laps in "
+                  f"{_laps_text(t.lap_ids)}" if own else
+                  f" · also level ({level}): {_laps_text(t.lap_ids)}")
+    return MomentRow(_ROW_LABEL[BEST_WINDOW], value, jump, None)
+
+
 def session_moments(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
                     best_lap: int | None, *, provisional: bool = False,
                     clock_estimated: bool = False) -> SessionMoments:

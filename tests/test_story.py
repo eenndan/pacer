@@ -216,6 +216,44 @@ def test_five_lap_windows_tie_span_and_break():
     print("test_five_lap_windows_tie_span_and_break OK")
 
 
+def test_a_moment_row_joins_back_into_the_moments_text():
+    """`moment_row` builds a surface's row from the Moment's fields, never by slicing `text`: its
+    label and value join with ": " into `text` exactly, across every wording the builders have —
+    a lone best and a tied one, a corner loss with ≈ ties, a run with its own span, an "also level"
+    span that SHARES laps with the best window (Laps 1–6 holds laps 5 and 6 of Laps 5–9, so only
+    holding the whole window marks the own span), and no single best, which has no Jump."""
+    many = _five(0, 45.0) | _five(10, 45.01) | _five(20, 45.02) | _five(30, 45.03)
+    shared = {0: 45.06, 1: 45.06, 2: 45.3, 3: 45.6, 4: 45.0, 5: 45.0, 6: 45.6, 7: 45.6, 8: 45.03}
+    _, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0), 7: ([0.0, 1.48, 0.0, 0.0], 2.0)})
+    fields = [
+        ({0: 45.0, 1: 45.069, 2: 45.070, 3: 45.5, 4: 46.0}, None, 0),
+        ({0: 45.0, 1: 45.03, 2: 45.05, 3: 45.5, 4: 46.0, 5: 45.2}, None, 0),
+        (_five(0, 45.0) | _five(10, 45.069), None, 0),
+        ({i: 45.0 + 0.001 * i for i in range(10)}, None, 0),
+        (shared, None, 4),
+        (many, None, 0),
+        ({i: 45.0 + 0.1 * (i % 3) for i in range(20)}, mx, 0),
+    ]
+    rows = 0
+    for times, matrix, best in fields:
+        m = story.session_moments(times, matrix, best)
+        for moment in (m.best_lap, m.biggest_loss, m.best_window):
+            if moment is None:
+                continue
+            row = story.moment_row(moment)
+            assert f"{row.label}: {row.value}" == moment.text, (row, moment.text)
+            assert row.lap_id == (moment.lap_ids[0] if moment.lap_ids else None), row
+            assert row.cid == moment.cid, row
+            rows += 1
+    w = story.session_moments(shared, None, 4).best_window
+    assert "also level" in w.text and w.lap_ids == (4, 5, 6, 7, 8), w
+    loss = story.session_moments(*fields[-1][:2], 0).biggest_loss
+    assert loss is not None and loss.tie and story.moment_row(loss).cid == loss.cid, loss
+    none = story.moment_row(story.session_moments(many, None, 0).best_window)
+    assert (none.label, none.lap_id) == ("No single best 5-lap run", None), none
+    print(f"test_a_moment_row_joins_back_into_the_moments_text OK ({rows} rows)")
+
+
 def test_timing_trust_one_rule():
     """The grid keeps its ▼ under a provisional line or an estimated clock, so notes exist and say
     so; the Laps table blanks Δbest and withholds the ★ under a provisional line, so the note has
