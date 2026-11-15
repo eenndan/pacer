@@ -2582,7 +2582,12 @@ def _clip_problems(doc: str, fig: dict) -> list[str]:
     # §27 — the share card's corner cells.
     cl = fig["cells"]
     cids = sorted(cl["vs_ideal"], key=int)
-    phrase(27, r"\| best lap \(lap (\d+)\), s \|", (str(cl["best_lap"]),), "the best lap")
+    # The lap as the app labels it: the probe's label must be its id's `lap_label`, and the table's
+    # head that label — the section once printed the 0-based id as the lap number (QA EVAL-2).
+    from studio._signal import lap_label
+    if cl["best_lap"] != f"L{lap_label(cl['best_lap_id'])}":
+        probs.append(f"§27: the probe names the best lap {cl['best_lap']}, not its app label")
+    phrase(27, r"\| best lap \((L\d+)\), s \|", (cl["best_lap"],), "the best lap")
     want(27, "gap to the typical lap", [f"{cl['vs_typical'][k][0]:+.3f}" for k in cids])
     want(27, "that corner's ▼ step", [f2(cl["vs_typical"][k][1]) for k in cids])
     want(27, "gap to the ideal lap", [f"{cl['vs_ideal'][k]:.3f}" for k in cids])
