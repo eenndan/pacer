@@ -528,6 +528,12 @@ class _RecordingVideo:
     def set_pane_badge(self, side, text, colour):
         self.badges[side] = (text, colour)
 
+    def set_seam_pair(self, caption, tip):
+        self.seam_pair = (caption, tip)
+
+    def set_seam_delta(self, text, colour):
+        self.seam = (text, colour)
+
     def set_pane_gmeter_lap(self, side, lap_id):
         self.gmeter_laps[side] = lap_id
 

@@ -92,11 +92,15 @@ STAT_LABELS = {
 # gets from the same `session.media_time_at_plot_x` conversion the scrub cursor uses — the true
 # GPS (telemetry) clock whatever that name says, never a ∫ds/v reconstruction of it.
 SLOPE_MIN_INTERVAL_S = 1.0
+# The measured speed-channel noise above (sigma of the 10 Hz residual, median of 24 laps), as the
+# ONE named number: the slope note below prints it, and the speed chart's gain shading (plots_view)
+# leaves a gap between two laps' traces unshaded while it is inside it.
+SPEED_NOISE_KMH = 0.62
 # ...and the sentence the UI says instead of a number, so the reason travels with the refusal.
 SLOPE_FLOOR_NOTE = (
     f"slope needs ≥ {SLOPE_MIN_INTERVAL_S:.1f} s between the cursors. The GPS is 10 Hz and its "
-    "speed noise is ±0.62 km/h, so a shorter interval reports mostly that noise — 10% of the "
-    "value at 1.0 s, 20% at 0.5 s, and over half of it one sample apart.")
+    f"speed noise is ±{SPEED_NOISE_KMH:.2f} km/h, so a shorter interval reports mostly that "
+    "noise — 10% of the value at 1.0 s, 20% at 0.5 s, and over half of it one sample apart.")
 
 
 class Interval(NamedTuple):

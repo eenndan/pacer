@@ -85,6 +85,12 @@ class _FakeVideo:
     def set_pane_badge(self, side, text, colour):
         self.badges.append((side, text, colour))
 
+    def set_seam_pair(self, caption, tip):   # the seam's pair caption (cool/compare-live-delta)
+        self.seam_pair = caption
+
+    def set_seam_delta(self, text, colour):  # the seam's live Δ
+        self.seam = (text, colour)
+
     def exit_compare(self):
         self.exited = True
 

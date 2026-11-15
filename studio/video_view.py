@@ -1074,6 +1074,82 @@ class _PaneCell(QWidget):
             self.repointRequested.emit(self._lap_ids[index])
 
 
+class _SeamValue(QLabel):
+    """The seam's Δ number: a QLabel that paints its own text in a per-datum colour.
+
+    Painted rather than styled because the colour moves with the Δ, and a per-tick
+    `setStyleSheet` is a QSS re-parse (tests/test_inline_styles.py keeps that list short). None
+    leaves the label to QLabel, in the theme's own text colour."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self._colour: str | None = None
+
+    def colour(self) -> str | None:
+        return self._colour
+
+    def set_colour(self, colour: str | None):
+        if colour != self._colour:
+            self._colour = colour
+            self.update()
+
+    def paintEvent(self, event):  # noqa: N802 (Qt override)
+        if not self._colour:
+            super().paintEvent(event)
+            return
+        p = QPainter(self)
+        p.setFont(self.font())
+        p.setPen(QColor(self._colour))
+        p.drawText(self.contentsRect(), self.alignment(), self.text())
+        p.end()
+
+
+class _SeamDelta(QWidget):
+    """Compare mode's LIVE Δ, on the seam under the two panes: what pane A's lap is up or down on
+    pane B's at the same place on track, in the hero's type size, naming the pair it measures.
+
+    It is the number `CompareController.tick` already computes for pane A's badge — nothing here
+    measures anything, and the controller formats it (`theme.format_delta_run`), so the two can
+    never disagree about the value. The badges were the only home of it: 11 px in the corner of
+    each strip, while the two pictures above them were the size of the panel.
+
+    One row, centred on the panel and therefore on the splitter handle while the split is even:
+    `lap 4 vs lap 9` (the pair, in the pickers' own lap labels) and the Δ beside it. A themed bar
+    (`role="PanelHeader"`, the strips' own surface), so it reads as compare chrome rather than as
+    a caption floating on the canvas; mounted only while the two-pane stage is."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setProperty("role", "PanelHeader")
+        self.setAttribute(Qt.WA_StyledBackground, True)   # a subclass must ask (see _PaneStrip)
+        self.caption = QLabel("")
+        self.caption.setProperty("role", "BarLabel")
+        self.caption.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+        self.value = _SeamValue("Δ —")
+        self.value.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
+        self.value.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS)
+        lay.setSpacing(theme.SPACE_S)
+        lay.addStretch(1)
+        lay.addWidget(self.caption, 0, Qt.AlignVCenter)
+        lay.addWidget(self.value, 0, Qt.AlignVCenter)
+        lay.addStretch(1)
+        self.setFixedHeight(self.value.sizeHint().height() + 2 * theme.SPACE_XXS)
+        self._text = "Δ —"
+
+    def set_pair(self, caption: str, tip: str):
+        self.caption.setText(caption)
+        self.setToolTip(tip)
+
+    def set_delta(self, text: str, colour: str | None):
+        """Per tick, guarded: a setText (and its relayout) only when the formatted string moved."""
+        if text != self._text:
+            self._text = text
+            self.value.setText(text)
+        self.value.set_colour(colour)
+
+
 class VideoView(QWidget):
     positionChanged = Signal(float)  # GLOBAL seconds on the session clock (forwarded from the pane)
     chapterChanged = Signal(int)     # current chapter index (forwarded from the PRIMARY pane)
@@ -1142,6 +1218,10 @@ class VideoView(QWidget):
         self._cell_a: _PaneCell | None = None   # primary cell wrapper (compare mode)
         self._cell_b: _PaneCell | None = None   # secondary cell wrapper (compare mode)
         self._splitter: QSplitter | None = None
+        # The compare LIVE Δ under the two panes (see _SeamDelta); built once, mounted in the stage
+        # only while the two-pane stage is.
+        self.seam = _SeamDelta()
+        self.seam.hide()
         # lap-boundary positions (seconds) for the slider's lap ruler; re-applied on range changes.
         self._lap_boundaries_s: list[float] = []
 
@@ -1648,6 +1728,9 @@ class VideoView(QWidget):
         if entering:
             self._stage_lay.removeWidget(self.pane)
             self._stage_lay.addWidget(self._splitter, 1)
+            self._stage_lay.addWidget(self.seam)   # the live Δ, on the seam under both panes
+            self.seam.set_delta("Δ —", None)        # a new compare starts with no stale number
+            self.seam.show()
             self.secondary.show()
             self._splitter.show()
         # equalize now and again next event-loop turn (setSizes needs a real width — see _equalize_panes)
@@ -1678,6 +1761,14 @@ class VideoView(QWidget):
         self._apply_lap_ticks()  # confined to one lap now -> the whole-session lap ruler is cleared
         self._sync_fullscreen_enabled()  # the ⤢ gesture is refused while comparing — say so
 
+    def set_seam_pair(self, caption: str, tip: str):
+        """Name the pair the seam Δ measures (CompareController, once per pair change)."""
+        self.seam.set_pair(caption, tip)
+
+    def set_seam_delta(self, text: str, colour: str | None):
+        """The seam's live Δ (CompareController.tick); re-set only when the string changes."""
+        self.seam.set_delta(text, colour)
+
     def reseed_pane(self, side: int, spec: PaneSpec):
         """Repoint ONE pane (after its lap picker was used) from its new `PaneSpec`: update its lap
         window + caption + keep the picker selection in sync. The app re-seeks this pane to its new
@@ -1707,6 +1798,8 @@ class VideoView(QWidget):
         self._set_compare_visual(False)
         # Restore the single-pane stage: pull the primary pane out of its cell, drop the splitter.
         self._stage_lay.removeWidget(self._splitter)
+        self._stage_lay.removeWidget(self.seam)
+        self.seam.hide()
         # Reparent the primary pane back into the stage (out of _cell_a) BEFORE deleting the cells.
         self._stage_lay.addWidget(self.pane, 1)
         self.pane.show()
