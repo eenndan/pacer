@@ -519,6 +519,29 @@ def test_the_race_on_the_real_window():
           "paused), compare / trust / off-screen / re-segment / load / close end it, gated")
 
 
+def test_the_race_puts_out_corner_hover_and_hides_the_drag_handles():
+    """QA REG-3: a corner hovered on the map when the race starts lost its ring but kept the chart
+    label lit (with its dotted guide) until the pointer moved — the map cleared its own hover
+    without saying so. QA REG-4: the start line's drag handles stayed revealed, and draggable,
+    over the race's dimmed map. Both are put back by the race's end."""
+    with _window() as (win, _path, _open):
+        v, mp = win.view, win.view.map
+        assert mp.pinned_corner() is None, "a pinned ring would keep the label lit: tests nothing"
+        mp._set_corner_hovered("C1")        # what a pointer move over C1's apex emits
+        assert v.plots._corner_hot == "C1"
+        mp._timing_hover = True             # the pointer near the start line reveals its handles
+        mp._sync_timing_chrome()
+        assert mp._start.handles_visible
+        assert v.start_lap_race()
+        assert v.plots._corner_hot is None, "the chart label stayed lit under the race"
+        assert not mp._start.handles_visible, "the drag handles stayed up under the race"
+        mp._sync_timing_chrome()            # a pointer move near the line during the race
+        assert not mp._start.handles_visible
+        v.end_lap_race()
+        assert mp._start.handles_visible, "the handles did not come back after the race"
+    print("ok race start puts out the chart's corner label and hides the drag handles; end restores")
+
+
 def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
     """QA EVAL-1 / REG-1: View ▸ Lap race's enabled state was a cache synced at load — BEFORE the
     window's layout, so the map read as off screen — and again only when the View menu or ⌘K
