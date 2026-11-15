@@ -28,7 +28,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from . import lap_race
-from ._signal import lap_label, plural
+from ._signal import lap_label, plural, too_brief_note
 
 #: How many packs the card lists (plus the selected lap's, wherever it is).
 PACKS_SHOWN = 5
@@ -106,16 +106,27 @@ def pack_rows(state: lap_race.RaceState, coloured: frozenset[int], selected: int
     return rows, len(state.packs) - len(keep)
 
 
-def excluded_line(excluded: dict[int, str]) -> str | None:
-    """'2 laps not raced: 1 GPS dropout, 1 not a clean lap' — or None when every lap raced."""
-    if not excluded:
-        return None
-    counts: dict[str, int] = {}
-    for reason in excluded.values():
-        counts[reason] = counts.get(reason, 0) + 1
-    parts = ", ".join(plural(n, *_EXCLUDED_WORDS.get(reason, (reason, reason)))
-                      for reason, n in sorted(counts.items(), key=lambda kv: -kv[1]))
-    return f"{plural(len(excluded), 'lap')} not raced: {parts}"
+def excluded_line(excluded: dict[int, str], listed: set[int] | None = None) -> str | None:
+    """'2 laps not raced: 1 GPS dropout (L6), 1 not a clean lap (L9)' — or None when every lap
+    raced. Each lap is NAMED, so the reader can find it in the Laps table or its ⊘ strip.
+
+    `listed` is the laps those two surfaces show (clean + excluded); a lap outside it is a
+    start/finish crossing too brief to be a lap, which no table lists, and is said in the Laps
+    tab's own sentence (`too_brief_note`) rather than counted as a lap (QA EVAL-3: the demo's card
+    said "1 lap not raced: 1 not a clean lap" over a table of 14 laps that all raced). None:
+    every lap is listed (a session double without the two lists)."""
+    brief = [i for i in excluded if listed is not None and i not in listed]
+    laps = {i: r for i, r in excluded.items() if i not in brief}
+    by_reason: dict[str, list[int]] = {}
+    for i, reason in sorted(laps.items()):
+        by_reason.setdefault(reason, []).append(i)
+    parts = ", ".join(
+        f"{plural(len(ids), *_EXCLUDED_WORDS.get(reason, (reason, reason)))} "
+        f"({', '.join(f'L{lap_label(i)}' for i in ids)})"
+        for reason, ids in sorted(by_reason.items(), key=lambda kv: -len(kv[1])))
+    out = [f"{plural(len(laps), 'lap')} not raced: {parts}." if laps else "",
+           too_brief_note(len(brief))]
+    return " ".join(p for p in out if p) or None
 
 
 def readout_text(model: CardModel) -> str | None:
@@ -154,6 +165,7 @@ class RaceController:
         self.selected: int | None = None
         self._last: float | None = None
         self._dirty = False
+        self._excluded: str | None = None
         self.ticks = 0              # race ticks that redrew (a test reads it)
 
     @property
@@ -179,6 +191,7 @@ class RaceController:
         if rates:
             self.rates = tuple(rates)
         self.tracks = tracks
+        self._excluded = excluded_line(tracks.excluded, self._listed_laps())
         self.selected = selected if selected in tracks.ids or selected == tracks.best.lap_id \
             else None
         self.speed = min(self.rates, key=lambda r: abs(r - speed)) if self.rates else 1.0
@@ -211,6 +224,15 @@ class RaceController:
         self.card.hide()
         if self._on_change is not None:
             self._on_change(False)
+
+    def _listed_laps(self) -> set[int] | None:
+        """The laps the Laps table and its ⊘ strip list (clean + excluded), or None on a session
+        double that has neither list."""
+        valid = getattr(self.session, "valid_lap_ids", None)
+        excluded = getattr(self.session, "excluded_lap_ids", None)
+        if valid is None or excluded is None:
+            return None
+        return set(valid()) | set(excluded())
 
     def colours(self) -> dict[int, int]:
         """Lap id → its series slot for the coloured five (the fastest, in lap-time order). Colour
@@ -311,7 +333,7 @@ class RaceController:
             best=tr.best.lap_id, to_best=to_best,
             tie_s=tr.finish_tie_s if sel_done else tr.race_tie_s,
             unranked_reason=state.unranked_reason, clock_estimated=tr.clock_estimated,
-            excluded=excluded_line(tr.excluded))
+            excluded=self._excluded)
 
     def _redraw(self) -> None:
         state = self.state()

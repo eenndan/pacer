@@ -253,6 +253,18 @@ def plural(n: int, noun: str, many: str | None = None) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {many or noun + 's'}"
 
 
+def too_brief_note(n: int) -> str:
+    """The sentence that accounts for detected laps in NEITHER the valid nor the excluded list —
+    crossings the coarse gate rejected as slivers. "" for none, so it drops out of the join. Here,
+    beside `plural`, because the Laps tab's ⊘ strip, the DATA TRUST card and the Qt-free Lap race
+    controller all say it, and one sentence is how the three agree (QA EVAL-3)."""
+    if n <= 0:
+        return ""
+    one = n == 1
+    return (f"{n} other start/finish crossing{'' if one else 's'} "
+            f"{'was' if one else 'were'} too brief to count as a lap.")
+
+
 def lap_label(lap_id: int) -> str:
     """The 1-based lap NUMBER for display (`str(lap_id + 1)`). Lap ids are 0-based internally
     (indices, sort keys, sector-split column keys — all left untouched), but racers and every

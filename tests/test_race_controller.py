@@ -243,10 +243,19 @@ def test_provisional_estimated_and_excluded():
     rc, clock, mp, card, _ = _controller(_wide_field(clock_estimated=True))
     rc.enter(selected=2)
     assert card.model.clock_estimated and card.model.tie_s == lap_race.ESTIMATED_CLOCK_TIE_S
-    assert card.model.excluded == "3 laps not raced: 2 not clean, 1 GPS dropout", card.model.excluded
+    assert card.model.excluded == "3 laps not raced: 2 not clean (L11, L12), 1 GPS dropout (L10).", \
+        card.model.excluded
     assert race_controller.excluded_line({1: lap_race.EXCLUDED_NOT_CLEAN}) == \
-        "1 lap not raced: 1 not a clean lap"
+        "1 lap not raced: 1 not a clean lap (L2)."
     assert race_controller.excluded_line({}) is None
+    # QA EVAL-3: a lap no table lists is a crossing too brief to be a lap, said in the Laps tab's
+    # own sentence — not counted as a lap the reader then cannot find.
+    from studio.lap_table import too_brief_note
+    excl = {4: lap_race.EXCLUDED_DROPOUT, 14: lap_race.EXCLUDED_NOT_CLEAN}
+    assert race_controller.excluded_line({14: lap_race.EXCLUDED_NOT_CLEAN}, set(range(14))) == \
+        too_brief_note(1)
+    assert race_controller.excluded_line(excl, set(range(14))) == \
+        f"1 lap not raced: 1 GPS dropout (L5). {too_brief_note(1)}"
     print("ok provisional / estimated / excluded")
 
 
@@ -301,7 +310,7 @@ def test_the_card_paints_the_model():
     assert any(ln.startswith("1 L1") for ln in lines) and any(ln.startswith("9 L9") for ln in lines)
     assert race_controller.readout_text(card.model) in lines
     assert any("video clock" in ln and "0.15 s" in ln for ln in lines), lines
-    assert lines[-1] == "3 laps not raced: 2 not clean, 1 GPS dropout"
+    assert lines[-1] == "3 laps not raced: 2 not clean (L11, L12), 1 GPS dropout (L10).", lines
     card.grab()      # paints without raising
     print("ok card paints the model")
 
@@ -560,6 +569,13 @@ def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
             press_r()
             assert v.is_racing(), "R did not race after Esc left the debrief"
             assert bar.currentMessage() == "", "the refusal outlived the race it refused"
+            # QA EVAL-3: the demo's 15th "lap" is a crossing too brief to be one; the card says
+            # it in the Laps strip's / DATA TRUST card's sentence, not as a lap not raced.
+            from studio.lap_table import too_brief_count, too_brief_note
+            s = win.session
+            brief = too_brief_count(s, len(s.valid_lap_ids()) + len(s.excluded_lap_ids()))
+            assert brief == 1, "the demo's brief crossing is gone: this check tests nothing"
+            assert v.race_card.model.excluded == too_brief_note(brief), v.race_card.model.excluded
             # Maximise during the race (it ends), restore: R races again.
             v._toggle_panel_maximized(v._plots_panel)
             _settle(0.2)
