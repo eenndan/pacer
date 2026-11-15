@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, data_quality, plots_view, sidecar, theme, units
+from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
 from ._signal import plural
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
@@ -1998,7 +1998,8 @@ class CentralView(QWidget):
         self.map.set_playhead_time(t)          # F3: red marker, interpolated between samples
         self._follow_current_lap(lap_id, t)  # charts auto-follow the playhead's lap (vs best)
         self.table.set_current_lap(lap_id)
-        self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map
+        # highlight the current lap's trace on the map; the line you left fades on a user's change
+        self.map.set_current_lap(lap_id, fade_if=self._still_moment)
         sp = float(self.session.tv[i]) if i is not None else None  # F2: speed km/h at that index
         # C6: under-video strip = timecode (+chapter) only; the live Δ/speed/lap lives once in the
         # hero #DiffBox.
@@ -2139,8 +2140,14 @@ class CentralView(QWidget):
         chart_best = (self._comparing()
                       and self._plots_baseline_kind != plots_view.DELTA_BASELINE_IDEAL)
         reference = self.session.has_reference()
+        unit = self._speed_unit
         if stitched and self.ideal_readout_btn.isChecked() and not chart_best:
-            text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
+            lead = d_ideal
+
+            def render(v):
+                return theme.format_ideal_readout(v, sp, lap_id, unit)
+
+            text, sem_colour = render(lead)
             # `sigil=False`: this sentence already says "Δ", and the run used to add its own —
             # "Δ to your best lap here: Δ +0.00 s" (§5.6). With a reference loaded `d_best` is
             # measured against the reference lap, so the sentence says so.
@@ -2148,8 +2155,13 @@ class CentralView(QWidget):
             tip = (f"Δ to {whose} here: {theme.format_delta_run(d_best, sigil=False)}"
                    + self._ideal_clamp_note(d_ideal))
         else:
-            text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)
-            text = _name_hero_baseline(text, reference)
+            lead = d_best
+
+            def render(v):
+                txt, col = theme.format_delta_speed(v, sp, lap_id, unit)
+                return _name_hero_baseline(txt, reference), col
+
+            text, sem_colour = render(lead)
             # theme.format_ideal_run, not a local f-string over format_delta_value: that spelling
             # dropped the unit, so the hovered number read `Δideal +1.05` beside a hero that says
             # `Δideal +1.05 s`, and it skipped the display clamp the hero applies. And in the two
@@ -2165,17 +2177,72 @@ class CentralView(QWidget):
             # moves on the best lap like on any other, so the note would be false.
             if on_best and not reference:
                 tip += _BEST_LAP_BEST_NOTE
-        if t_delta != t:
+        at_rest = t_delta != t
+        if at_rest:
             tip += _HERO_AT_REST_NOTE
-            text = _at_rest(text)
-        colour = sem_colour or theme.C.text
-        self.diff_box.setText(text)
         self.diff_box.setToolTip(tip)
+
+        def paint(v):
+            txt, col = (text, sem_colour) if v is lead else render(v)
+            self._set_diff_text(_at_rest(txt) if at_rest else txt, col)
+
+        self._roll_diff(lead, paint)
+
+    def _set_diff_text(self, text: str, sem_colour: str | None):
+        self.diff_box.setText(text)
         # The colour goes on the Δ run ONLY (the speed stays the label's neutral text colour), and
         # only when it changes — no per-tick stylesheet re-layout.
+        colour = sem_colour or theme.C.text
         if colour != getattr(self, "_diff_colour", None):
             self._diff_colour = colour
             self.diff_box.set_delta_colour(sem_colour)
+
+    def _still_moment(self) -> bool:
+        """True when what just changed was a discrete user move — a seek, a lap click, a reference
+        flip — the only changes that animate (motion.py). Not playback, not a chart scrub or a
+        marker drag (continuous: the readout must follow the hand), not compare or a Lap race."""
+        # getattr-guarded like the view's other reads: view tests build CentralView over doubles.
+        marker = getattr(getattr(self, "map", None), "marker", None)
+        playing = getattr(getattr(self, "video", None), "is_playing", lambda: False)()
+        scrub = getattr(self, "scrub", None)
+        return not (playing or (scrub is not None and scrub.is_active) or self._comparing()
+                    or self.is_racing() or bool(getattr(marker, "moving", False)))
+
+    def _roll_diff(self, lead: float | None, paint):
+        """Show `lead` through `paint(value)`: directly, or — on a discrete jump of at least
+        motion.ROLL_MIN_JUMP_S at a still moment — counted from the value on screen to it over
+        motion.DELTA_ROLL_MS. Every intermediate frame is the SAME formatter fed an intermediate
+        value, so the sign and its colour switch together at the zero crossing, and the last frame
+        is `paint(lead)`: exactly what the direct path prints. The ~30 Hz playback tick takes the
+        direct branch on a float compare and starts nothing."""
+        roll = getattr(self, "_diff_roll", None)
+        shown = getattr(self, "_diff_shown", None)
+        if roll is not None and roll.running:
+            shown = self._diff_rolling_value
+        jump = (lead is not None and shown is not None
+                and abs(lead - shown) >= motion.ROLL_MIN_JUMP_S)
+        if roll is not None:
+            roll.cancel()          # a newer value wins; a roll never queues behind another
+            self._diff_roll = None
+        if not (jump and self._still_moment()):
+            self._diff_shown = lead
+            paint(lead)
+            return
+        start = shown
+        self._diff_rolling_value = start
+
+        def step(p: float):
+            self._diff_rolling_value = start + (lead - start) * p
+            paint(self._diff_rolling_value)
+
+        def end():
+            self._diff_roll = None
+            self._diff_shown = lead
+            paint(lead)
+
+        self._diff_shown = lead
+        tr = motion.start(self.diff_box, motion.DELTA_ROLL_MS, step, end)
+        self._diff_roll = None if tr.done else tr
 
     def _hero_delta_time(self, t: float, lap_id: int | None) -> float:
         """When the hero's deltas are read: `t`, or — while the playhead is still where the
@@ -2321,6 +2388,11 @@ class CentralView(QWidget):
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
         self.map.refresh_overlays()
+        # The playhead's lap under the NEW segmentation, now and without a fade: a lap set that
+        # changed under a still playhead is not a lap the user left (motion.py).
+        playback = getattr(self, "_playback", None)
+        if playback is not None and playback.applied_t is not None:
+            self.map.set_current_lap(self.session.lap_at_time(playback.applied_t))
         self.map.set_corners(self.session.corners.corner_map_markers())
         self._hovered_corner = None          # set_corners dropped both rings; the chart follows
         self.map.forget_corner_hover()       # ...and a pointer still on a label re-names it

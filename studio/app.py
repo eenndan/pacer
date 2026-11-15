@@ -53,6 +53,7 @@ from . import (
     ingest,
     library,
     logsetup,
+    motion,
     prefs,
     share_card,
     sidecar,
@@ -560,6 +561,10 @@ class StudioWindow(QMainWindow):
         # menu checkmark) reflects the persisted choice; the toggle lives in View ▸ Accessibility.
         self._colorblind = prefs.colorblind_palette()
         theme.set_palette(theme.PALETTE_COLORBLIND if self._colorblind else theme.PALETTE_STANDARD)
+        # Motion (studio/motion.py): the system's Reduce Motion read once, then the user's own
+        # View ▸ Reduce motion choice over it (None = never chosen = follow the system).
+        motion.probe_system()
+        motion.set_reduce_pref(prefs.reduce_motion())
         # Every "this leaves the app" flow lives on its own controller (§7.1) — the same shape as
         # CentralView's scrub/compare controllers. Built BEFORE _build_menu, which wires the File ▸
         # Export actions straight to its methods. STATUS_MS is passed rather than imported back:
@@ -2477,6 +2482,18 @@ class StudioWindow(QMainWindow):
             "(± sign, ▲/▼ arrows, ★ best marks) are always shown regardless of this setting.")
         self._colorblind_action.toggled.connect(self._on_colorblind_toggled)
 
+        # View ▸ Reduce motion: the app's three transitions (the lap you left fading on the map,
+        # the Δ readout counting on a jump, race rows sliding) end at once. Checked by default when
+        # macOS's own Reduce Motion is on; a click here is remembered and wins over the system.
+        self._reduce_motion_action = view_menu.addAction("Reduce motion")
+        self._reduce_motion_action.setCheckable(True)
+        self._reduce_motion_action.setChecked(motion.reduce_motion())
+        self._reduce_motion_action.setToolTip(
+            "Turn off the app's few transitions: the lap line you left fading out on the map, the "
+            "Δ readout counting to a new value after a jump, and the Lap race rows sliding into "
+            "place. Follows the system's Reduce Motion until you choose here.")
+        self._reduce_motion_action.toggled.connect(self._on_reduce_motion_toggled)
+
         # Help menu: the shortcut reference (also F1 / ?) and an About card (help_dialog.py).
         #
         # ELLIPSIS CONVENTION (recorded because a QA pass inferred the wrong one and filed against
@@ -3391,6 +3408,16 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             view.set_speed_unit(unit)
+
+    def _on_reduce_motion_toggled(self, on: bool):
+        """View ▸ Reduce motion: switch motion off (or back on) now — finishing anything mid-way —
+        and remember the choice (guarded, like the palette's)."""
+        motion.set_reduce_pref(bool(on))
+        motion.finish_all()
+        try:
+            prefs.set_reduce_motion(bool(on))
+        except OSError as exc:
+            _log.warning("could not persist reduce motion (%r)", exc)
 
     def _on_colorblind_toggled(self, on: bool):
         """View ▸ Colour-blind-safe cues: flip the global semantic palette (theme.set_palette),

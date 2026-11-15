@@ -54,6 +54,7 @@ def _write_every_preference(path):
     prefs.set_map_key_collapsed(True, path)
     prefs.set_library_size(900, 780, path)
     prefs.set_window_geometry(120, 90, 1180, 742, path)
+    prefs.set_reduce_motion(True, path)
     return {
         "speed_unit": units.MPH,
         "colorblind_palette": True,
@@ -64,6 +65,7 @@ def _write_every_preference(path):
         "map_key_collapsed": True,
         "library_size": (900, 780),
         "window_geometry": (120, 90, 1180, 742),
+        "reduce_motion": True,
     }
 
 
@@ -79,6 +81,7 @@ def _read_every_preference(path):
         "map_key_collapsed": prefs.map_key_collapsed(path),
         "library_size": prefs.library_size(path),
         "window_geometry": prefs.window_geometry(path),
+        "reduce_motion": prefs.reduce_motion(path),
     }
 
 
@@ -93,6 +96,7 @@ _DEFAULTS = {
     "map_key_collapsed": False,
     "library_size": None,
     "window_geometry": None,
+    "reduce_motion": None,   # absent = follow the system's Reduce Motion (studio/motion.py)
 }
 
 

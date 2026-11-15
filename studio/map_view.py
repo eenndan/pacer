@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, gapfill, map_render, prefs, theme, units
+from . import data_quality, gapfill, map_render, motion, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -916,6 +916,13 @@ class _LapOverlay:
             self._items.append(item)
             self._inferred.append(not seg.measured)
 
+    def detach(self) -> list:
+        """Hand the drawn line items to the caller (MapView's lap fade, which removes them when it
+        ends) instead of removing them; the next set_lap draws fresh. The casing pool stays: it is
+        re-filled for the new lap, and the fading line is a ghost without one."""
+        items, self._items, self._inferred = self._items, [], []
+        return items
+
     def set_polyline(self, xs, ys, key):
         """(Re)draw one solid polyline (the F7 cross-recording reference ring). `key` gates redraws
         like set_lap's lap_id; honours the hidden-while-rainbow state."""
@@ -1678,6 +1685,8 @@ class MapView(QWidget):
         self.ghost_updates = 0
         # The Lap Race layer while a race runs (start_race / end_race), and what it hid.
         self._race: _RaceLayer | None = None
+        # The lap you left, fading out (motion.LAP_FADE_MS) — at most one at a time; see _fade_out.
+        self._lap_fade: motion.Transition | None = None
         self._race_restore = (True, False)
         self._race_card: QWidget | None = None   # the race card floated on this canvas, if any
 
@@ -2064,6 +2073,8 @@ class MapView(QWidget):
         # reads not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
         # would wrongly leave the key hidden on an off-screen/grab-only map. isHidden is True only when
         # hide() was actually called.
+        # A document never carries a mid-transition frame: a fading lap line, a race row mid-slide.
+        motion.finish_all()
         widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None),
                                getattr(self, "fit_btn", None), getattr(self, "_notice", None),
                                getattr(self, "_race_card", None))
@@ -2456,6 +2467,8 @@ class MapView(QWidget):
         remembering both so `end_race` restores them exactly."""
         if self._race is not None:
             self.end_race()
+        if self._lap_fade is not None:     # the race starts on a still map
+            self._lap_fade.finish()
         # The key's own hidden flag, not isVisible(): that also reads False for an unshown parent,
         # and restoring it would then hide the key for good.
         self._race_restore = (self.marker.isVisible(), self._map_key.isHidden())
@@ -2670,24 +2683,62 @@ class MapView(QWidget):
         self._best_lap_id = best
         self._best_overlay.set_lap(self.session, best)
 
-    def set_current_lap(self, lap_id):
+    def set_current_lap(self, lap_id, fade_if=None):
         """Highlight the lap the video is currently in (measured solid + inferred dashed/dimmed).
         No-op if it hasn't changed; a None id clears the highlight so only the faint best-lap
-        reference remains."""
+        reference remains.
+
+        `fade_if` (a zero-argument callable, asked only on an actual change) says whether this
+        change is one the outgoing line fades out on — CentralView's answer: a user-driven change,
+        not playback crossing the line. The new lap is drawn at full strength at once either way."""
         # The best lap can change when timing lines move; keep its reference line current.
         self._refresh_best()
         changed = lap_id != self._current_lap
         self._current_lap = lap_id  # F3: the lap the marker drag is constrained to
+        if changed:
+            self._fade_out(bool(fade_if is not None and fade_if()))
         self._current_overlay.set_lap(self.session, lap_id)
         # Rainbow: rebuild the bucket items ONLY on an actual lap change. This method runs every
         # 30 Hz tick with an unchanged lap — that path must not touch the rainbow.
         if changed and self._rainbow_mode != "off":
             self._apply_rainbow()
 
+    def _fade_out(self, fade: bool):
+        """The lap change's one motion: the outgoing line fades out over motion.LAP_FADE_MS while
+        the new one is drawn at full strength, so you SEE which line you left. Any fade still
+        running ends first (ten arrow-key steps in a second leave one line, never a pile). Not
+        while the rainbow paints the lap (the plain line is hidden then: nothing to fade), and with
+        motion off the end — the old items removed — runs right here, as it always did."""
+        if self._lap_fade is not None:
+            self._lap_fade.finish()
+        ov = self._current_overlay
+        if not (fade and ov.visible and ov._items):
+            return
+        items = ov.detach()
+
+        def step(p: float):
+            for it in items:
+                it.setOpacity(1.0 - p)
+
+        def end():
+            for it in items:
+                self.plot.removeItem(it)
+            self._lap_fade = None
+
+        self._lap_fade = motion.start(self, motion.LAP_FADE_MS, step, end)
+        if self._lap_fade.done:
+            self._lap_fade = None
+
+    def lap_fading(self) -> bool:
+        """True while an outgoing lap line is still fading (tests and captures read it)."""
+        return self._lap_fade is not None
+
     def refresh_overlays(self):
         """Force both lap overlays to redraw from the session — call after the timing lines
         move (re-segmentation shifts lap ids and clears the session's per-lap segment cache,
         so the cached drawings are stale even when the lap id is nominally unchanged)."""
+        if self._lap_fade is not None:     # a fading line from the old segmentation goes now
+            self._lap_fade.finish()
         self._best_lap_id = None
         self._refresh_best()
         self._current_overlay.refresh(self.session)
