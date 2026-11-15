@@ -2779,8 +2779,8 @@ class Session:
         return self._story()[0]
 
     def session_moments(self) -> story.SessionMoments:
-        """The best lap (with its ties), the biggest single-corner loss, the longest ▼-less run and
-        the best 5-lap run (`studio/story.py`), each None when absent. Memoized (`_story`)."""
+        """The best lap (with its ties), the biggest single-corner loss and the best 5-lap run
+        (`studio/story.py`), each None when absent. Memoized (`_story`)."""
         return self._story()[1]
 
     def _story(self) -> tuple[list[story.SlowLapNote], story.SessionMoments]:
@@ -2802,7 +2802,8 @@ class Session:
         if memo is not None and _same_inputs(memo[0], key):
             return memo[1]
         matrix = self.corner_matrix()
-        out = (story.slow_lap_notes(times, matrix, best, provisional=provisional,
+        # Lap ids are in session order from 0, so lap 0 is the first timed lap (clean or not).
+        out = (story.slow_lap_notes(times, matrix, best, first_lap_id=0, provisional=provisional,
                                     clock_estimated=estimated),
                story.session_moments(times, matrix, best, provisional=provisional,
                                      clock_estimated=estimated))

@@ -8,30 +8,42 @@ reorders or excuses one (refusal §14), scores no consistency and praises nothin
 
 SLOW LAP. A clean lap is slow when it is more than max(the clean laps' IQR, SLOW_MIN_MARGIN_S) over
 their median lap: a DEFAULT, chosen by the W4 design lane on few sessions, and every note carries
-the rule as text (`SlowLapNote.rule`) so a surface can say so. Its EXCESS is its time over that
-median lap. Each corner's share of the excess is the corner's time over its typical pass (the
-grid's median), read at print resolution exactly as the grid's heat shade reads it.
+the rule as text (`SlowLapNote.rule`) so a surface can say so. Where the IQR is over ATYPICAL_IQR_S
+the rule says outright that the median is not a racing lap in this session. A note's EXCESS is the
+lap's time over that median — "your typical lap" — and each corner's share of it is the corner's
+time over its typical pass (the grid's median), read at print resolution as the grid's heat shade
+reads it.
+
+ONE BASELINE IN THE TEXT, the typical lap. The head is "5.50 s over your typical lap", never the
+gap to the best: the corner losses are measured against typical passes, and a sentence that put a
+gap-to-best next to them mixed two baselines and hid the denominator its shares were taken on. The
+gap to the best stays a field (`gap_to_best_s`, the Laps table's Δbest, on printed ms); it is the
+table's column, at its 3 decimals. The head prints 2, like every loss in the note: a different
+quantity from Δbest, not a rounding of it.
 
 WHY CORNERS AGAINST THEIR TYPICAL PASS, NOT AGAINST THE BEST LAP. A lap's corner times are the odd
 pieces of `corners.segment_times`' exact 2N+1 partition (the grid reads the same numbers), so the
 pieces sum to the lap time — but corner Δs against the BEST lap do not sum to the lap gap: the
-straights hold the rest (the design lane: 29 % of it on the demo). And only against the typical pass
-is there a noise gate, the ▼ step.
+straights hold the rest. And only against the typical pass is there a noise gate, the ▼ step.
 
 CATEGORIES (only a corner BEYOND ITS ▼ STEP may be named — `CornerMatrix.is_behind`):
-  * `one`     — the worst ▼ corner holds more than CULPRIT_SHARE of the excess;
-  * `two`     — the two worst ▼ corners together do;
-  * `partial` — a ▼ corner exists, but under that share: it is named, and the rest is "spread";
-  * `spread`  — no corner beyond its ▼ step.
+  * `over_lap` — the worst ▼ corner lost more than the whole excess: time was gained back elsewhere;
+  * `one`      — the worst ▼ corner holds more than CULPRIT_SHARE (strictly) of the excess;
+  * `two`      — the two worst ▼ corners together do;
+  * `partial`  — a ▼ corner exists, but under that share: every ▼ corner is named, the rest "spread";
+  * `spread`   — no corner beyond its ▼ step.
+No ▼ corner is dropped: beside the culprit(s), the others are `also` ("; also C6 ▼ +0.83 s", at most
+ALSO_NAMED of them, then "+N more").
 STRAIGHTS ARE NEVER NAMED. A straight has no ▼ step today (the grid has corner columns only), so
 there is no honest noise gate to say "the time went on the straight after C4" — such a lap reads
 `spread` (or `partial`). Inventing a straight gate here would be a second rule the grid does not
-show.
+show. The session's first timed lap is tagged "(first lap)" (`first_lap`): it is slow for a reason.
 
 WHICH LAPS. Only the grid's rows: a ⊘ excluded or ⚠ dropout lap is never a row (its corner windows
-are cut from a speed-integrated odometer), so it gets no note and is in no moment. A blank row (the
-lap projected no corners) gets no note. A cell the grid mutes (an edge not matched on track) is never
-▼; a `spread` lap with muted cells says which corners were not measured.
+are cut from a speed-integrated odometer), so it gets no note and is in no moment — and a dropout
+lap level with the best is not in the best lap's ≈ list. Such a lap also breaks a 5-lap window. A
+blank row gets no note. A cell the grid mutes (an edge not matched on track) is never ▼; a `spread`
+lap with muted cells says which corners were not measured.
 
 TIMING TRUST, ONE RULE, the grid's: the grid keeps its ▼ under a provisional start line or an
 estimated clock (corner windows are matched on track, not timed from the line) and demotes only
@@ -40,15 +52,19 @@ the Laps table — under a provisional line it blanks Δbest and withholds the �
 `gap_to_best_s` and there is no best-lap moment.
 
 MOMENTS (each None rather than invented): the best lap, with every clean lap the Laps table calls
-level with it (printed gap under `library.PB_PRECISION_S`) named as tied; the biggest single-corner
-loss beyond its ▼ step; the longest run of consecutive clean laps with no ▼; the best 5-lap run by
-median. Not built — the lane measured them unstable under timing jitter: a best 3-lap run, a best
-pass per corner (always a tie of 2-14 passes).
+level with it (printed gap under `library.PB_PRECISION_S`) named with its gap; the biggest
+single-corner loss beyond its ▼ step; the best 5-lap run by median, its level windows merged into
+SPANS (maximal runs of level windows starting on consecutive laps, so "any 5 consecutive laps in
+Laps 8–14 are level" is literally true of every window in the span; more than two spans is "no
+single best"). Not built — measured unstable under timing jitter by the design lane: a best 3-lap
+run, a best pass per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one
+cell in ten by construction, so on pure noise that run is half the session).
 
-STABILITY, held by tests/test_story.py on the demo (200 seeded draws): with lap times ±0.07 s and
-corner cells ±0.035 s the biggest loss and the longest ▼-less run never change. The best lap's tie
-list always holds the true best when each lap moves by up to ±0.035 s (a GAP by up to 0.07 s, the
-floor's own definition); at ±0.07 s per lap it loses it in 22 of 200 draws, so that is not claimed.
+STABILITY, held by tests/test_story.py (200 seeded draws): on the shipped demo, with lap times
+±0.07 s and corner cells ±0.035 s, the biggest loss never changes (its best lap stands 0.215 s clear,
+so its tie list cannot lose it). On a planted 0.001 s near-tie the true best always stays in the
+tie list when each lap moves by up to ±0.035 s (a GAP by up to 0.07 s, the floor's own definition);
+at ±0.07 s per lap it drops out in about 1 draw in 6 (33 of 200), so that is not claimed.
 """
 from __future__ import annotations
 
@@ -57,26 +73,31 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import fmt_signed, fmt_time, lap_label, plural
+from ._signal import fmt_signed, fmt_time, lap_label
 from .library import PB_PRECISION_S, within_timing_precision
 from .stats import MATRIX_DECIMALS, CornerMatrix
 
 #: A lap is slow above its median clean lap by more than the larger of the clean laps' IQR and
 #: this (s). A default picked on few sessions (W4 design lane), stated in every note's `rule`.
 SLOW_MIN_MARGIN_S = 0.5
+#: An IQR above this (twice the floor) means the median clean lap is not a racing lap: the rule
+#: says so outright.
+ATYPICAL_IQR_S = 2 * SLOW_MIN_MARGIN_S
 #: The share of a slow lap's excess one (or two) ▼ corners must hold, STRICTLY, to be its culprit.
 CULPRIT_SHARE = 0.5
+#: How many other ▼ corners a note names beside its culprit(s) before "+N more".
+ALSO_NAMED = 2
 #: The window of the best-run moment, in consecutive clean laps.
 RUN_WINDOW = 5
-#: The shortest run of consecutive ▼-less clean laps that is a moment at all.
-MIN_CLEAN_RUN = 2
+#: More level spans than this and there is no single best 5-lap run.
+MAX_WINDOW_SPANS = 2
 #: The grid's mark, spelled here because `theme.DELTA_BEHIND_ARROW` lives in a Qt module.
 BEHIND_MARK = "▼"
 
-ONE, TWO, PARTIAL, SPREAD = "one", "two", "partial", "spread"
+OVER_LAP, ONE, TWO, PARTIAL, SPREAD = "over_lap", "one", "two", "partial", "spread"
 CAVEAT_PROVISIONAL = "provisional"
 CAVEAT_ESTIMATED = "estimated"
-BEST_LAP, BIGGEST_LOSS, CLEAN_RUN, BEST_WINDOW = "best_lap", "biggest_loss", "clean_run", "best_window"
+BEST_LAP, BIGGEST_LOSS, BEST_WINDOW = "best_lap", "biggest_loss", "best_window"
 
 
 def printed_ms(seconds: float) -> int:
@@ -98,14 +119,16 @@ class CornerLoss:
 
 @dataclass(frozen=True)
 class SlowLapNote:
-    """Where one slow lap's time went. `corners` are the ▼ corners named, worst first (empty for
-    `spread`); `unmeasured` the cids whose cell the grid mutes."""
+    """Where one slow lap's time went. `corners` are the culprit ▼ corners, worst first (empty for
+    `spread`); `also` the lap's other ▼ corners; `unmeasured` the cids whose cell the grid mutes."""
 
     lap_id: int
-    gap_to_best_s: float | None     # on the printed ms, as the Laps table's Δbest; None provisional
+    first_lap: bool                 # the session's first timed lap
+    gap_to_best_s: float | None     # the Laps table's Δbest (printed ms); None while provisional
     excess_s: float                 # over the median clean lap, at print resolution
     category: str
     corners: tuple[CornerLoss, ...]
+    also: tuple[CornerLoss, ...]
     unmeasured: tuple[int, ...]
     caveat: str | None
     rule: str
@@ -114,7 +137,7 @@ class SlowLapNote:
 
 @dataclass(frozen=True)
 class Mention:
-    """A lap (or run of laps) and, for a corner moment, its corner, with the moment's value."""
+    """A lap (or span of laps) and, for a corner moment, its corner, with the moment's value."""
 
     lap_ids: tuple[int, ...]
     cid: int | None
@@ -123,7 +146,9 @@ class Mention:
 
 @dataclass(frozen=True)
 class Moment:
-    """One session moment: the named laps/corner and value, every `tie` named with it, its text."""
+    """One session moment: the named laps/corner and value, every `tie` named with it, its text.
+    For `best_window`, `lap_ids` is the best window — () when there is no single best — and `tie`
+    holds the level spans (see `_best_window`)."""
 
     kind: str
     lap_ids: tuple[int, ...]
@@ -138,7 +163,6 @@ class Moment:
 class SessionMoments:
     best_lap: Moment | None
     biggest_loss: Moment | None
-    clean_run: Moment | None
     best_window: Moment | None
 
 
@@ -156,9 +180,13 @@ def slow_threshold(lap_times: Mapping[int, float]) -> tuple[float, float, float]
 
 
 def slow_rule_text(median: float, iqr: float, margin: float) -> str:
-    return (f"Slow: more than {margin:.2f} s over your median clean lap ({fmt_time(median)}), the "
-            f"larger of the clean laps' IQR ({iqr:.2f} s) and {SLOW_MIN_MARGIN_S:.2f} s. A default "
-            "chosen on few sessions.")
+    text = (f"Slow: more than {margin:.2f} s over your typical lap, the median clean lap "
+            f"({fmt_time(median)}); the margin is the larger of the clean laps' IQR ({iqr:.2f} s) "
+            f"and {SLOW_MIN_MARGIN_S:.2f} s. A default chosen on few sessions.")
+    if iqr > ATYPICAL_IQR_S:
+        text += (f" Your laps are not typical in this session (IQR over {ATYPICAL_IQR_S:.2f} s): the "
+                 "median is not a racing lap here, and the notes compare to it anyway.")
+    return text
 
 
 def _loss(matrix: CornerMatrix, row: int, col: int) -> float | None:
@@ -179,24 +207,40 @@ def _pass(c: CornerLoss) -> str:
     return f"C{c.cid} {fmt_signed(c.loss_s)} s"
 
 
-def _body(category: str, named: tuple[CornerLoss, ...], unmeasured: tuple[int, ...]) -> str:
+def _marked(c: CornerLoss) -> str:
+    return f"C{c.cid} {BEHIND_MARK} {fmt_signed(c.loss_s)} s"
+
+
+def _also(rest: tuple[CornerLoss, ...]) -> str:
+    if not rest:
+        return ""
+    more = f", +{len(rest) - ALSO_NAMED} more" if len(rest) > ALSO_NAMED else ""
+    return f"; also {', '.join(_marked(c) for c in rest[:ALSO_NAMED])}{more}"
+
+
+def _body(category: str, named: tuple[CornerLoss, ...], also: tuple[CornerLoss, ...],
+          unmeasured: tuple[int, ...]) -> str:
+    if category == OVER_LAP:
+        return (f"{_marked(named[0])}, more than the whole lap: time was gained back elsewhere"
+                f"{_also(also)}")
     if category == ONE:
-        return f"{_pass(named[0])} over your typical pass ({BEHIND_MARK})"
+        return f"{_pass(named[0])} of it, over your typical pass ({BEHIND_MARK}){_also(also)}"
     if category == TWO:
-        return f"{_pass(named[0])} and {_pass(named[1])} over your typical passes ({BEHIND_MARK})"
+        return (f"{_pass(named[0])} and {_pass(named[1])} of it, over your typical passes "
+                f"({BEHIND_MARK}){_also(also)}")
     if category == PARTIAL:
-        marks = ", ".join(f"C{c.cid} {BEHIND_MARK} {fmt_signed(c.loss_s)} s" for c in named)
-        return f"{marks}; the rest is spread across the lap"
+        return f"{', '.join(_marked(c) for c in named)}; the rest is spread across the lap"
     tail = (f" ({', '.join(f'C{c}' for c in unmeasured)} not matched on track)"
             if unmeasured else "")
     return f"Spread across the lap: no corner beyond its {BEHIND_MARK} step{tail}"
 
 
 def slow_lap_notes(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
-                   best_lap: int | None, *, provisional: bool = False,
-                   clock_estimated: bool = False) -> list[SlowLapNote]:
+                   best_lap: int | None, *, first_lap_id: int | None = None,
+                   provisional: bool = False, clock_estimated: bool = False) -> list[SlowLapNote]:
     """One note per slow clean lap that is a row of `matrix`, in session order. [] without a grid
-    (fewer than `stats.MATRIX_MIN_LAPS` clean laps, or no corners)."""
+    (fewer than `stats.MATRIX_MIN_LAPS` clean laps, or no corners). `first_lap_id` is the session's
+    first timed lap (tagged "(first lap)")."""
     th = slow_threshold(lap_times)
     if matrix is None or th is None:
         return []
@@ -216,23 +260,27 @@ def slow_lap_notes(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
                         key=lambda c: -(_loss(matrix, row, c) or 0.0))
         losses = [_loss(matrix, row, c) or 0.0 for c in behind]
         if not behind:
-            category, named = SPREAD, ()
+            category, n_named = SPREAD, 0
+        elif losses[0] > excess:
+            category, n_named = OVER_LAP, 1
         elif losses[0] / excess > CULPRIT_SHARE:
-            category, named = ONE, behind[:1]
+            category, n_named = ONE, 1
         elif len(behind) >= 2 and (losses[0] + losses[1]) / excess > CULPRIT_SHARE:
-            category, named = TWO, behind[:2]
+            category, n_named = TWO, 2
         else:
-            category, named = PARTIAL, behind
-        corners = tuple(_corner_loss(matrix, row, c) for c in named)
+            category, n_named = PARTIAL, len(behind)
+        marked = tuple(_corner_loss(matrix, row, c) for c in behind)
+        corners, also = marked[:n_named], marked[n_named:]
         unmeasured = tuple(matrix.cids[c] for c in cols if not matrix.resolved[row][c])
-        gap = (printed_ms(t) - best_ms) / 1000 if best_ms is not None else None
-        head = f"Lap {lap_label(lap)}"
-        if gap is not None:
-            head += f" · {fmt_signed(gap)} s off your best"
+        first = lap == first_lap_id
+        head = (f"Lap {lap_label(lap)}{' (first lap)' if first else ''} · "
+                f"{excess:.2f} s over your typical lap")
         out.append(SlowLapNote(
-            lap_id=lap, gap_to_best_s=gap, excess_s=excess, category=category, corners=corners,
+            lap_id=lap, first_lap=first,
+            gap_to_best_s=(printed_ms(t) - best_ms) / 1000 if best_ms is not None else None,
+            excess_s=excess, category=category, corners=corners, also=also,
             unmeasured=unmeasured, caveat=caveat, rule=rule,
-            text=f"{head} · {_body(category, corners, unmeasured)}"))
+            text=f"{head} · {_body(category, corners, also, unmeasured)}"))
     return out
 
 
@@ -243,10 +291,6 @@ def _laps_text(ids: tuple[int, ...]) -> str:
     return f"Laps {lap_label(ids[0])}–{lap_label(ids[-1])}"
 
 
-def _ties_text(tie: tuple[Mention, ...]) -> str:
-    return f" · ≈ {', '.join(_laps_text(m.lap_ids) for m in tie)}" if tie else ""
-
-
 def _best_lap(lap_times, best_lap, provisional, caveat) -> Moment | None:
     if provisional or best_lap not in lap_times:
         return None
@@ -255,9 +299,14 @@ def _best_lap(lap_times, best_lap, provisional, caveat) -> Moment | None:
                 if lap != best_lap
                 and within_timing_precision((printed_ms(t) - best_ms) / 1000))
     t = float(lap_times[best_lap])
-    note = f" (within {PB_PRECISION_S:.2f} s: timing precision)" if tie else ""
-    return Moment(BEST_LAP, (best_lap,), None, t, tie, caveat,
-                  f"Best lap: Lap {lap_label(best_lap)} · {fmt_time(t)}{_ties_text(tie)}{note}")
+    text = f"Best lap: Lap {lap_label(best_lap)} · {fmt_time(t)}"
+    if tie:
+        gaps = sorted((printed_ms(m.value) - best_ms) / 1000 for m in tie)
+        who = (f"Lap {lap_label(tie[0].lap_ids[0])} is" if len(tie) == 1 else
+               f"Laps {', '.join(lap_label(m.lap_ids[0]) for m in tie)} are")
+        span = f"{gaps[0]:.3f} s" if gaps[0] == gaps[-1] else f"{gaps[0]:.3f}–{gaps[-1]:.3f} s"
+        text += f" · {who} level ({span}, under the {PB_PRECISION_S:.2f} s timing precision)"
+    return Moment(BEST_LAP, (best_lap,), None, t, tie, caveat, text)
 
 
 def _biggest_loss(matrix: CornerMatrix, caveat) -> Moment | None:
@@ -287,45 +336,54 @@ def _runs(ids) -> list[tuple[int, ...]]:
     return [tuple(r) for r in runs]
 
 
-def _clean_run(matrix: CornerMatrix, caveat) -> Moment | None:
-    if all(m is None for m in matrix.medians):
-        return None     # no corner has a typical pass, so "no ▼" would be vacuous
-    cols = range(len(matrix.cids))
-    calm = [lap for r, lap in enumerate(matrix.lap_ids)
-            if any(v is not None for v in matrix.cells[r])
-            and not any(matrix.is_behind(r, c) for c in cols)]
-    runs = [r for r in _runs(calm) if len(r) >= MIN_CLEAN_RUN]
-    if not runs:
-        return None
-    n = max(len(r) for r in runs)
-    longest = [r for r in runs if len(r) == n]
-    tie = tuple(Mention(r, None, float(n)) for r in longest[1:])
-    return Moment(CLEAN_RUN, longest[0], None, float(n), tie, caveat,
-                  f"Longest run with no {BEHIND_MARK}: {_laps_text(longest[0])} "
-                  f"({plural(n, 'lap')}){_ties_text(tie)}")
-
-
 def _best_window(lap_times, caveat) -> Moment | None:
+    """The best RUN_WINDOW-lap run by median (printed ms), consecutive clean laps only. Every
+    window level with it (under PB_PRECISION_S) is merged into SPANS: maximal runs of level windows
+    whose first laps are consecutive, so every window inside a span is level. `lap_ids` is the best
+    window while there are at most MAX_WINDOW_SPANS spans, () beyond; `tie` holds the spans, as
+    Mentions of all their laps with their best median: the best window's own span when it is wider
+    than the window, then the others — every span when there is no single best."""
     windows = [run[k:k + RUN_WINDOW] for run in _runs(lap_times)
                for k in range(len(run) - RUN_WINDOW + 1)]
     if not windows:
         return None
     meds = [float(np.median([printed_ms(lap_times[i]) for i in w])) / 1000 for w in windows]
     k = int(np.argmin(meds))
-    tie = tuple(Mention(w, None, m) for j, (w, m) in enumerate(zip(windows, meds, strict=True))
-                if j != k and within_timing_precision(m - meds[k]))
-    return Moment(BEST_WINDOW, windows[k], None, meds[k], tie, caveat,
-                  f"Best {RUN_WINDOW}-lap run: {_laps_text(windows[k])} · median "
-                  f"{fmt_time(meds[k])}{_ties_text(tie)}")
+    best, med = windows[k], meds[k]
+    spans: list[list[int]] = []     # indices into `windows`
+    for j, w in enumerate(windows):
+        if not (j == k or within_timing_precision(meds[j] - med)):
+            continue
+        if spans and windows[spans[-1][-1]][0] + 1 == w[0]:
+            spans[-1].append(j)
+        else:
+            spans.append([j])
+    as_mention = [Mention(tuple(range(windows[s[0]][0], windows[s[-1]][-1] + 1)), None,
+                          min(meds[j] for j in s)) for s in spans]
+    own = next(i for i, s in enumerate(spans) if k in s)
+    level = f"within {PB_PRECISION_S:.2f} s"
+    if len(spans) > MAX_WINDOW_SPANS:
+        return Moment(BEST_WINDOW, (), None, med, tuple(as_mention), caveat,
+                      f"No single best {RUN_WINDOW}-lap run: {len(spans)} stretches {level}")
+    text = f"Best {RUN_WINDOW}-lap run: {_laps_text(best)} · median {fmt_time(med)}"
+    tie = []
+    if len(spans[own]) > 1:
+        tie.append(as_mention[own])
+        text += (f" · any {RUN_WINDOW} consecutive laps in {_laps_text(as_mention[own].lap_ids)} "
+                 f"are level ({level})")
+    for i, m in enumerate(as_mention):
+        if i != own:
+            tie.append(m)
+            text += f" · also level ({level}): {_laps_text(m.lap_ids)}"
+    return Moment(BEST_WINDOW, best, None, med, tuple(tie), caveat, text)
 
 
 def session_moments(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
                     best_lap: int | None, *, provisional: bool = False,
                     clock_estimated: bool = False) -> SessionMoments:
-    """The four moments over the clean laps (`lap_times`) and their grid; each None when absent."""
+    """The three moments over the clean laps (`lap_times`) and their grid; each None when absent."""
     caveat = caveat_for(provisional, clock_estimated)
     return SessionMoments(
         best_lap=_best_lap(lap_times, best_lap, provisional, caveat),
         biggest_loss=_biggest_loss(matrix, caveat) if matrix is not None else None,
-        clean_run=_clean_run(matrix, caveat) if matrix is not None else None,
         best_window=_best_window(lap_times, caveat))
