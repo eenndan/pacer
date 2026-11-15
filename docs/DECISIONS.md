@@ -287,3 +287,44 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 - **Closed without a change.** A package of four reported window defects found none to fix:
   three were artefacts of the offscreen test screen and did not reproduce in the window itself,
   and the fourth was already fixed on main.
+
+## 10. Recorded at the 0.9.0 release, 2026-11-15
+
+- **v0.9.0 was cut 2026-11-15**, the it-moves release: 9 pull requests from #549 to #562, Wave 2
+  of the campaign section 8 records. The Lap race (#549 its core, #553 the map and its card), a
+  live compare Δ on the seam and gain shading between two speed traces (#552), a corner hover
+  link between the speed chart and the map (#554), a tail behind the map's playhead (#555), a Δ
+  readout that rolls on a seek and a Reduce motion switch (#557), and the keys that now say why
+  they did nothing (#561). #559 and #562 are refusals only.
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **The Lap race shows packs, not a rank ladder** (#549, #553). On a real 36-lap session most
+    adjacent laps sit inside the tie threshold for most of the race, so a pack is the laps within
+    it of the pack's first lap, and only that lap has a position. On an unconfirmed start line the dots still run, but unranked, with
+    no intervals and no gap to the best. On a recording timed on the video clock the threshold
+    widens to 0.15 s. There is no follow-cam and no label on each dot.
+  - **Motion is the Δ roll only** (#557): after a seek within one lap the Δ readout counts to its
+    new value, never while playing and never across a lap or baseline change. View ▸ Reduce
+    motion turns it off, and until the user chooses, it follows macOS's own Reduce Motion. The
+    fade of the lap you left on the map and the slide of the race card's rows were measured and
+    not built: [refused-2026-09.md](../studio/docs/refused-2026-09.md) §28 (#562). The fade can
+    come back as a fade built on the map's own colour buckets whose added frame cost fits the
+    ~2 ms transition budget #557 set; that section names it.
+  - **Chart antialiasing stays off**: [refused-2026-09.md](../studio/docs/refused-2026-09.md)
+    §23, measured in #552.
+  - **Gain shading is drawn only on the distance axis** (#552): at the same time the two karts are
+    at different places, so the time axis shades nothing and its legend says why. Where the speed
+    gap is within twice the noise of two traces (±1.75 km/h), or the Δ-rate disagrees with it,
+    the band stays unshaded.
+  - **The clip and share-card ideas of the design pass were refused with their numbers** (#559):
+    a predicted lap time, a scrolling Δ-trace band, sector chips and per-corner cells on the share
+    card, sections 24 to 27 of the refusals record.
+- **The media.** `accuracy.png` and `debrief.png` were re-captured, both byte-identical to
+  0.8.0's: nothing they show changed. `hero.png`, `map.png` and `og.png` are waived again as
+  stale, for 0.8.0's reasons, and they do not show 0.9.0's map either: the playhead tail, the
+  hovered-corner ring and the Lap race. The other five are renewed: 0.9.0 changed no Stats-page
+  module and not the core, and its one export change moved the map inset's comet tail from
+  `export_video.py` to `timeline.py`, its body the same but for a typing cast. A Lap race still on the demo was tried
+  and not published: its 14 laps run within about 0.9 s of each other, one clump of dots too
+  small to read at the width the pages show it.
+- **Open for the owner.** Re-shoot the landing stills from another recording, or keep the
+  waivers? The one recording on this machine is not one RUL-9 approved for publishing.
