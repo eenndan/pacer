@@ -64,7 +64,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 
 from . import share_card, theme, units
-from ._signal import exclusion_summary, fmt_signed, lap_label, too_brief_note
+from ._signal import exclusion_summary, fmt_signed, lap_label, plural, too_brief_note
 from .lap_table import (
     EXCLUDED_MARK,
     TONE_BEHIND,
@@ -447,7 +447,7 @@ def legend_entries(data: LapStripData) -> list[tuple[str, str]]:
     if cut and data.scale_s:
         # The cut laps BY NAME with their real gap (up to three): the bar no longer says it.
         who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in cut)
-               if len(cut) <= 3 else f"{len(cut)} laps")
+               if len(cut) <= 3 else plural(len(cut), "lap"))
         out.append(("clipped", f"{who}: cut at the +{data.scale_s:.2f} s line"))
     if KIND_EXCLUDED in kinds:
         out.append((KIND_EXCLUDED, f"{EXCLUDED_MARK} left out: {data.excluded_note}"))
