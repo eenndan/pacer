@@ -63,6 +63,8 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     window and run off the UI thread. Qt is their drawing library, not their UI.
 #     `export_compare` is `export_video`'s two-pane subclass and is here for exactly the reason
 #     that one is: it paints a frame, and it is the module `export_video` would have grown into.
+#     `trace_paint` is the lap-line painter `share_card` and the debrief hero share: the same
+#     rasterizer role, lifted out so the two pictures draw one line (cool/share-card).
 #   * overlay/__init__, overlay/ghost, overlay/corner_cards and overlay/broadcast — the export's
 #     opt-in overlay elements (`studio/overlay/`; overlay/layout is Qt-free data):
 #     they paint into `export_video`'s frame with its QPainter, for the reason that one is here.
@@ -103,7 +105,7 @@ ALLOWED_QT = {
     "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "stats_braking", "stats_coasting", "stats_common",
     "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",
-    "track_dialog", "video_view",
+    "trace_paint", "track_dialog", "video_view",
     "widgets", "workers",
 }
 

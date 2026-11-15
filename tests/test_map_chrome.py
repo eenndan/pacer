@@ -796,6 +796,34 @@ def test_the_start_finish_mark_sits_on_the_crossing_and_points_the_way_the_laps_
     print("test_the_start_finish_mark_sits_on_the_crossing_and_points_the_way_the_laps_run OK")
 
 
+def test_the_live_marks_geometry_is_the_shared_one_the_card_and_hero_paint():
+    """cool/share-card: the share card and the debrief hero paint the start/finish mark from
+    `map_render.finish_mark_geometry`; the live map's pxMode symbols must be that same geometry
+    (each symbol's path × its size is the shared polygon, point for point), so the three surfaces
+    draw one mark. A private copy of the geometry in map_view would drift silently."""
+    from studio import map_render
+    s = _verified(_session(start_x=-200.0))
+    mv = _sized_map(s)
+    try:
+        x, y, ux, uy = mv._finish_mark.at
+        assert (x, y, ux, uy) == map_render.start_crossing(s.tx, s.ty, s.start_line)
+        backing, squares, arrow, _reach = map_render.finish_mark_geometry(ux, uy)
+        spots = mv._finish_mark.item.points()
+        want = [[backing], squares, [arrow]]
+        for spot, polys in zip(spots, want, strict=True):
+            path, size = spot.symbol(), spot.size()
+            got = [(path.elementAt(i).x * size, path.elementAt(i).y * size)
+                   for i in range(path.elementCount())]
+            flat = [pt for poly in polys for pt in [*poly, poly[0]]]   # each subpath closes
+            assert len(got) == len(flat), (len(got), len(flat))
+            for (gx, gy), (wx, wy) in zip(got, flat, strict=True):
+                assert abs(gx - wx) < 1e-9 and abs(gy - wy) < 1e-9, ((gx, gy), (wx, wy))
+    finally:
+        mv.hide()
+        mv.deleteLater()
+    print("test_the_live_marks_geometry_is_the_shared_one_the_card_and_hero_paint OK")
+
+
 def test_the_elevation_legend_says_it_is_gps_altitude_with_unmeasured_noise():
     """"lowest" → "+30 m" read like a surveyed relief. It is the GPS receiver's altitude, and its
     noise is not measured on the recording: the legend says both, and its tooltip cites the only
