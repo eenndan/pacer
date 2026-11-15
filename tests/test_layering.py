@@ -603,7 +603,25 @@ def test_the_map_check_fails_on_each_planted_defect():
           f"40 added rows cost no prose")
 
 
+def test_the_chart_and_the_map_never_reach_each_other():
+    """NO VIEW TALKS TO ANOTHER (studio/README.md). The corner hover links the speed chart and
+    the map — and it does it through CentralView, which owns the one hovered-corner state: each
+    view emits `cornerHovered` and is pushed the result. Neither view module may import the other
+    (or the CentralView that holds them), so a shortcut `self.map...` inside PlotsView cannot even
+    find its type. The plant proves the scan sees such an import."""
+    mods = set(_modules())
+    views = ("plots_view", "map_view")
+    for name in views:
+        _qt, deps = _scan(name, mods)
+        bad = deps & (set(views) | {"central_view"})
+        assert not bad, f"{name} imports {sorted(bad)}: a view reaching another view"
+    planted = ast.parse("from .map_view import MapView\n")
+    assert ["studio.map_view"] == _import_names(planted.body[0]), "the scan missed the plant"
+    print("test_the_chart_and_the_map_never_reach_each_other OK")
+
+
 if __name__ == "__main__":
+    test_the_chart_and_the_map_never_reach_each_other()
     test_only_the_data_layer_imports_pacer()
     test_only_the_view_layer_imports_qt()
     test_the_data_core_does_not_reach_qt_through_a_studio_import()
@@ -612,4 +630,4 @@ if __name__ == "__main__":
     test_pytest_and_each_files_runner_run_the_same_tests()
     test_every_studio_module_is_on_the_map_at_its_real_layer()
     test_the_map_check_fails_on_each_planted_defect()
-    print("\n8 layering tests passed")
+    print("\n9 layering tests passed")

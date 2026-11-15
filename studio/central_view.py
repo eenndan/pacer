@@ -920,7 +920,7 @@ class CentralView(QWidget):
         # no strip, no collapse, no height cap. A corner-row click ring-highlights its apex on
         # the map (the Jump-to-corner detail action stays in the modal dialog).
         self.opportunities = OpportunitiesPanel(self.session)
-        self.opportunities.corner_clicked.connect(self.map.highlight_corner)
+        self.opportunities.corner_clicked.connect(self._ring_corner)
         # Stats CORNERS/BRAKING/STRAIGHTS rows → the same apex ring, but maximize-aware: restore
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
@@ -1293,6 +1293,9 @@ class CentralView(QWidget):
         # boundary positions via session and recompute when the axis mode flips (units change).
         self.plots.modeChanged.connect(self._refresh_sector_lines)
         self.plots.deltaBaselineChanged.connect(self._set_delta_baseline_label)
+        self._hovered_corner: str | None = None   # see _on_corner_hovered
+        self.plots.cornerHovered.connect(self._on_corner_hovered)
+        self.map.cornerHovered.connect(self._on_corner_hovered)
         self._build_race()
 
     def _build_race(self):
@@ -1717,7 +1720,28 @@ class CentralView(QWidget):
         the ring paints on actually has pixels; a deselect (None) just clears the ring."""
         if cid is not None and getattr(self, "_maximized_panel", None) is self._table_panel:
             self._restore_splitter_sizes()
+        self._ring_corner(cid)
+
+    # ------------------------------------------------------------- the hovered corner
+    # ONE corner state across three surfaces. Hovering a corner label on the speed chart, or a
+    # corner's label/apex dot on the map, emits `cornerHovered`; this view keeps the one hovered
+    # corner and pushes it to both (the map rings it, the chart emphasises its label). With
+    # nothing hovered, the chart follows the corner a Corners/Stats/Coaching row rang. No view
+    # holds a reference to another; every push is from a mouse event or a row click, never a tick.
+    def _ring_corner(self, cid):
+        """A corner-row click: ring it on the map (the pinned ring) and let the chart follow."""
         self.map.highlight_corner(cid)
+        self._push_corner_emphasis()
+
+    def _on_corner_hovered(self, label):
+        if label == self._hovered_corner:
+            return
+        self._hovered_corner = label
+        self.map.set_hovered_corner(label)
+        self._push_corner_emphasis()
+
+    def _push_corner_emphasis(self):
+        self.plots.set_corner_emphasis(self._hovered_corner or self.map.pinned_corner())
 
     def show_data_trust(self):
         """The data-quality chip's action: open the Stats page on its DATA TRUST card, with the
@@ -2298,6 +2322,8 @@ class CentralView(QWidget):
         # refresh_overlays and before the corner consumers below.
         self.map.refresh_overlays()
         self.map.set_corners(self.session.corners.corner_map_markers())
+        self._hovered_corner = None          # set_corners dropped both rings; the chart follows
+        self._push_corner_emphasis()
         self.corner_table.refresh()
         # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
