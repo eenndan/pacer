@@ -448,6 +448,9 @@ class _RainbowOverlay:
         # The hero casing under the buckets: exactly the geometry they draw, chunked (_Casing).
         self._casing = _Casing(plot, z=4.5)   # under the buckets, above the lap overlays
         self.rebuilds = 0  # instrumentation for the perf-invariant tests (no rebuild per tick)
+        # A second bucket pool for MapView's lap fade: the outgoing lap's buckets fade out while
+        # the new lap fills the other pool, so a lap change never creates items after the first.
+        self._spare: list | None = None
 
     def _ensure_items(self):
         if self._items is None:
@@ -478,11 +481,28 @@ class _RainbowOverlay:
     def recolor(self):
         """Re-pen each bucket item from the ACTIVE palette's rainbow (after a colour-blind-palette
         flip). No-op before the items exist; the caller re-fills their data via _apply_rainbow."""
+        for pool in (self._items, self._spare):
+            for it, color in zip(pool or [], rainbow_colors(MAP_RAINBOW_N), strict=True):
+                it.setPen(_hero_pen(color, RAINBOW_WIDTH))
         if self._items is None:
             return
-        for it, color in zip(self._items, rainbow_colors(MAP_RAINBOW_N), strict=True):
-            it.setPen(_hero_pen(color, RAINBOW_WIDTH))
         self._casing.repen()
+
+    def detach(self) -> list:
+        """Hand the painted bucket items to MapView's lap fade; the next fill uses the spare pool
+        (created lazily, like the first)."""
+        items = self._items or []
+        self._items, self._spare = self._spare, None
+        return items
+
+    def give_back(self, items: list) -> None:
+        """The fade is over: its items, emptied and opaque again, become the spare pool."""
+        for it, color in zip(items, rainbow_colors(MAP_RAINBOW_N), strict=False):
+            it.setData(np.empty(0), np.empty(0))
+            it.setOpacity(1.0)
+            it.setZValue(5)
+            it.setPen(_hero_pen(color, RAINBOW_WIDTH))   # a palette flip mid-fade missed them
+        self._spare = items or None
 
 
 class _GradientStrip(QWidget):
@@ -2706,23 +2726,40 @@ class MapView(QWidget):
     def _fade_out(self, fade: bool):
         """The lap change's one motion: the outgoing line fades out over motion.LAP_FADE_MS while
         the new one is drawn at full strength, so you SEE which line you left. Any fade still
-        running ends first (ten arrow-key steps in a second leave one line, never a pile). Not
-        while the rainbow paints the lap (the plain line is hidden then: nothing to fade), and with
-        motion off the end — the old items removed — runs right here, as it always did."""
+        running ends first (ten arrow-key steps in a second leave one line, never a pile). The
+        line that fades is the one on screen: the plain lap line, or — the map's default — the
+        rainbow's buckets, which hand their pool over and come back as the spare (no item is
+        created per change). The outgoing items sit just under their layer, so the new lap paints
+        over them. With motion off the end runs right here: the plain items removed (as before),
+        the buckets emptied."""
         if self._lap_fade is not None:
             self._lap_fade.finish()
         ov = self._current_overlay
-        if not (fade and ov.visible and ov._items):
+        if not fade:
             return
-        items = ov.detach()
+        if ov.visible:
+            items = ov.detach()
+
+            def done():
+                for it in items:
+                    self.plot.removeItem(it)
+        else:
+            items = self._rainbow.detach()
+
+            def done():
+                self._rainbow.give_back(items)
+        if not items:
+            done()
+            return
+        for it in items:
+            it.setZValue(it.zValue() - 0.05)
 
         def step(p: float):
             for it in items:
                 it.setOpacity(1.0 - p)
 
         def end():
-            for it in items:
-                self.plot.removeItem(it)
+            done()
             self._lap_fade = None
 
         self._lap_fade = motion.start(self, motion.LAP_FADE_MS, step, end)

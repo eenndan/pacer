@@ -126,7 +126,8 @@ def set_clock(clock: Callable[[], float] | None) -> None:
 class Transition:
     """One running transition: `step(eased_progress)` per frame, then `end()` once."""
 
-    __slots__ = ("owner", "duration", "step", "end", "t0", "done", "_conn")
+    # __weakref__: Qt holds the destroyed-signal connection to a bound method weakly.
+    __slots__ = ("owner", "duration", "step", "end", "t0", "done", "_conn", "__weakref__")
 
     def __init__(self, owner: QObject | None, duration_ms: int,
                  step: Callable[[float], None], end: Callable[[], None]):

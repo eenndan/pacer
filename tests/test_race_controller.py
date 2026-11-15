@@ -306,6 +306,91 @@ def test_the_card_paints_the_model():
     print("ok card paints the model")
 
 
+class _MotionClock:
+    def __init__(self):
+        self.now = 500.0
+
+    def __call__(self):
+        return self.now
+
+
+@contextlib.contextmanager
+def _motion_on():
+    """Motion ON offscreen (PACER_MOTION=1, no Reduce motion) on a fake clock the test steps."""
+    from studio import motion
+    clock = _MotionClock()
+    old = os.environ.get("PACER_MOTION")
+    saved = (motion._reduce_pref, motion._system_reduce)
+    os.environ["PACER_MOTION"] = "1"
+    motion.set_reduce_pref(None)
+    motion._system_reduce = False
+    motion.set_clock(clock)
+    try:
+        yield clock
+    finally:
+        motion.finish_all()
+        motion.set_clock(None)
+        motion._reduce_pref, motion._system_reduce = saved
+        if old is None:
+            os.environ.pop("PACER_MOTION", None)
+        else:
+            os.environ["PACER_MOTION"] = old
+
+
+def _reformed(model):
+    """The same card with its 2nd and 3rd packs swapped (positions renumbered): packs re-forming."""
+    from dataclasses import replace
+    rows = list(model.rows)
+    rows[1], rows[2] = rows[2], rows[1]
+    return replace(model, rows=tuple(replace(r, position=k + 1) for k, r in enumerate(rows)))
+
+
+def _final_card():
+    from studio.race_ladder import RaceCard
+    rc, _clock, _mp, _card, _ = _controller(_wide_field())
+    card = RaceCard()
+    card.resize(card.sizeHint())
+    rc.card = card
+    rc.enter(selected=4)
+    rc.toggle_play()
+    rc.scrub(0.5)
+    rc.tick()
+    return card
+
+
+def test_packs_that_re_form_slide_and_end_where_the_motion_off_card_paints():
+    """When packs re-form, the rows that stay on the card slide from where they were to their new
+    places over ROW_SLIDE_MS (strips of the one cached card: no re-render mid-slide), and the slide
+    ends on exactly the pixels the motion-off card paints at once. A new race starts without one."""
+    from studio import motion
+    off = _final_card()
+    m1 = off.model
+    off.show_model(_reformed(m1))
+    assert not off.sliding(), "offscreen motion is off: the reorder must apply at once"
+    want = off.grab().toImage()
+    with _motion_on() as clock:
+        card = _final_card()
+        assert card.model == m1
+        card.grab()
+        renders = card.renders
+        card.show_model(_reformed(m1))
+        assert card.sliding() and motion.active_count() == 1, "re-formed packs did not slide"
+        clock.now += 0.04
+        motion.pump()
+        mid = card.grab().toImage()
+        assert mid != want, "a mid-slide frame painted the end state"
+        assert card.renders == renders + 1, "a slide frame re-rendered the card's pixmap"
+        clock.now += 0.2
+        motion.pump()
+        assert not card.sliding() and motion.active_count() == 0 and not motion.timer_active()
+        assert card.grab().toImage() == want, "the slide ended off the motion-off pixels"
+        # entering a new race: its first rows appear, never slide in
+        card.configure(card.colours, card.lap_times)
+        card.show_model(_reformed(m1))
+        assert not card.sliding()
+    print("ok race rows slide on a re-form and end on the motion-off pixels")
+
+
 # ---------------------------------------------------------------- the real window
 @contextlib.contextmanager
 def _window():

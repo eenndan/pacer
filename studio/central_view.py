@@ -769,6 +769,10 @@ class CentralView(QWidget):
         # as the header's first casualty.
         self.diff_box.setMinimumWidth(_hero_min_width(self.diff_box))
         self._diff_colour = None  # last applied Δ-value colour (per-tick recolor guard)
+        # The Δ roll (_roll_diff): the lead value shown, the running roll and its current value.
+        self._diff_shown: float | None = None
+        self._diff_roll = None
+        self._diff_rolling_value: float | None = None
         # Last (speed, lap) the readout rendered — so toggling the reference re-renders without a tick.
         self._last_diff_speed: float | None = None
         self._last_diff_lap: int | None = None
