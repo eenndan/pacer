@@ -843,7 +843,7 @@ def peak_brake_tooltip_gps(why: str) -> str:
 SIGMA_CAPTION = "σ lap"
 # THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
 # tile taller than its row-mates, and a grid row is as tall as its tallest tile. Measured: the
-# caption runs 161 px ("within 0.59 s") to 171 px ("within < 0.07 s"; "within 10.25 s" 166), past
+# caption runs 161 px ("within 0.59 s") to 171 px ("within < 0.07 s"; a width of ten-odd seconds, 166), past
 # the 134 px of "race pace · best 3-lap run", so the PACE row now fits a pane from 340 px rather
 # than 310; the row stays 37 px tall at every width from 300 to 1440 px.
 SIGMA_TOOLTIP = (
