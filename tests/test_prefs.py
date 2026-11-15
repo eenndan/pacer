@@ -344,7 +344,8 @@ def test_set_keeps_its_sibling_preferences():
         assert set(stored) == {
             "version", prefs.SPEED_UNIT, prefs.COLORBLIND_PALETTE, prefs.LAST_DIR,
             prefs.EXCLUDED_VISIBLE, prefs.LAP_PANEL_TAB, prefs.GRID_SIZES,
-            prefs.MAP_KEY_COLLAPSED, prefs.LIBRARY_SIZE, prefs.WINDOW_GEOMETRY}, sorted(stored)
+            prefs.MAP_KEY_COLLAPSED, prefs.LIBRARY_SIZE, prefs.WINDOW_GEOMETRY,
+            prefs.REDUCE_MOTION}, sorted(stored)
         print("test_set_keeps_its_sibling_preferences OK")
 
 

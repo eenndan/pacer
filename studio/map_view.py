@@ -482,8 +482,9 @@ class _RainbowOverlay:
         """Re-pen each bucket item from the ACTIVE palette's rainbow (after a colour-blind-palette
         flip). No-op before the items exist; the caller re-fills their data via _apply_rainbow."""
         for pool in (self._items, self._spare):
-            for it, color in zip(pool or [], rainbow_colors(MAP_RAINBOW_N), strict=True):
-                it.setPen(_hero_pen(color, RAINBOW_WIDTH))
+            if pool:
+                for it, color in zip(pool, rainbow_colors(MAP_RAINBOW_N), strict=True):
+                    it.setPen(_hero_pen(color, RAINBOW_WIDTH))
         if self._items is None:
             return
         self._casing.repen()
