@@ -63,6 +63,8 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     window and run off the UI thread. Qt is their drawing library, not their UI.
 #     `export_compare` is `export_video`'s two-pane subclass and is here for exactly the reason
 #     that one is: it paints a frame, and it is the module `export_video` would have grown into.
+#     `trace_paint` is the lap-line painter `share_card` and the debrief hero share: the same
+#     rasterizer role, lifted out so the two pictures draw one line (cool/share-card).
 #   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
 #   * export_controller — the export cluster lifted out of `app` (§7.1). It is VIEW code by every
 #     test this file applies: it opens the file dialogs, the options modal, the progress dialog and
@@ -97,7 +99,7 @@ ALLOWED_QT = {
     "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "stats_braking", "stats_coasting", "stats_common",
     "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",
-    "track_dialog", "video_view",
+    "trace_paint", "track_dialog", "video_view",
     "widgets", "workers",
 }
 

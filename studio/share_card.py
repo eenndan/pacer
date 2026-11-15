@@ -33,13 +33,14 @@ reason sentence and any speed reads honour the active km/h ↔ mph unit.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap
 
-from . import coaching, library, map_render, theme, units
+from . import coaching, export_data, library, theme, trace_paint, units
 from ._signal import fmt_signed, fmt_time
 
 # The card is a portrait-ish social image. 1080×1350 is Instagram's 4:5 portrait — the most
@@ -140,6 +141,7 @@ class TopOpp:
     reason: str          # the human, numbers-only reason sentence (unit-aware, ESTIMATED-safe);
     #                      "" for a tie — a reason is one corner's, and no corner leads
     tied_low_s: float | None = None  # a tie: the smallest tied loss; None when one corner leads
+    cids: tuple[int, ...] = ()       # the corner(s) the label names — ringed on the card's map
 
 
 # The heading over a tie. The page's own reason for refusing the crown is "closer together than
@@ -189,6 +191,27 @@ class CardData:
     blocked: bool         # True ⇒ do NOT render a card (provisional / no valid lap)
     stamp: str            # "" or an honesty stamp to burn on the card ("estimated timing")
     pb: str = ""          # the personal-best mark beside "BEST LAP" (`pb_mark`), or ""
+    provenance: str = ""  # what the time is worth, in the exported report's own words
+    #                       (`provenance_line`), or "" — the footer then keeps its tagline
+
+
+def provenance_line(session) -> str:
+    """The card's footer provenance: the exported report's `Timing` row for a clean recording
+    (`export_data._timing_meta`, the one string the report and the clipboard summary share —
+    "verified start line · GPS9 true clock"), or "" for every other state.
+
+    THE APP'S OWN WORDS, NOT A NEW CLAIM. A shared image is read with no Stats page beside it, so
+    it says how the number was timed — but only in the wording the app already prints for that
+    state. Only the clean state: a provisional line never makes a card (`blocked`), and a degraded
+    clock is already stamped "estimated timing (est)" in the header; the report's degraded row is a
+    paragraph, and a footer reading "GPS9 true clock" on a stamped card would contradict the stamp.
+    Guarded like the card's other optional reads."""
+    try:
+        if not session.timing_verified or session.timing_quality.degraded:
+            return ""
+        return export_data._timing_meta(session)
+    except Exception:  # noqa: BLE001 — a card without a provenance line beats no card
+        return ""
 
 
 def _top_opportunity(session, unit: str) -> TopOpp | None:
@@ -223,14 +246,16 @@ def _top_opportunity(session, unit: str) -> TopOpp | None:
             extra = len(tied) - len(named)
             label = " · ".join(f"C{r.cid}" for r in named) + (f" · {extra} more" if extra else "")
             return TopOpp(corner_label=label, time_lost_s=float(tied[0].time_lost), reason="",
-                          tied_low_s=float(tied[-1].time_lost))
+                          tied_low_s=float(tied[-1].time_lost),
+                          cids=tuple(int(r.cid) for r in named))
         glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
         label = f"C{opp.cid} {glyph}".strip()
         # The lever alone (QA JOURNEY-7): the "4 of 36 laps matched your best lap here" count was
         # the tail the card's one line cut mid-word ("4 of 36 laps match…"), and a shared image is
         # read by people for whom the lever is the news.
         return TopOpp(corner_label=label, time_lost_s=float(opp.time_lost),
-                      reason=coaching.reason_sentence(opp, unit, reach=False))
+                      reason=coaching.reason_sentence(opp, unit, reach=False),
+                      cids=(int(opp.cid),))
     except Exception:  # noqa: BLE001 — the card degrades to "no opportunity", never crashes
         return None
 
@@ -296,6 +321,7 @@ def card_data(session, *, unit: str | None = None, pb_standing: dict | None = No
         stamp=stamp,
         pb=pb_mark(pb_standing, session.lap_time(best_id) if best_id is not None else None,
                    prior_date),
+        provenance=provenance_line(session),
     )
 
 
@@ -454,11 +480,13 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
 
     # --- Δ-to-ideal: how far off the achievable envelope, honestly labelled ---
     if data.delta_to_ideal_s is not None:
-        # A gap of 0 reads even (green/ahead), a positive gap reads "time left" (behind hue).
-        gap = data.delta_to_ideal_s
-        colour = theme.behind_colour() if gap > theme.DELTA_EVEN_EPS_S else theme.ahead_colour()
-        gap_txt = hero_delta_line(gap)
-        _draw_text(p, pad, 424, gap_txt, _font(38, theme.W_SEMIBOLD), colour)
+        # NEUTRAL INK, NOT THE LOSS HUE. The ideal is a stitch of the driver's best corners and
+        # straights — the caption under it says "not a single drivable lap" — so the gap is not
+        # time lost to anything that was driven, and the red the card used to paint it in read as
+        # a mistake on the one image that leaves the app. The opportunity's loss below, which IS
+        # measured against a lap that was driven, keeps the behind hue.
+        _draw_text(p, pad, 424, hero_delta_line(data.delta_to_ideal_s),
+                   _font(38, theme.W_SEMIBOLD), theme.C.text)
         _draw_text(p, pad, 460, ideal_sublabel(data.ideal_laps), _font(24), theme.C.text_muted)
 
     # --- map thumbnail (speed-coloured): composited from the grabbed MapView PNG ---
@@ -519,9 +547,14 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     # has been "a subtle 'pacer' wordmark" since the card was introduced (module docstring).
     # The WORDMARK form of the name convention in studio/__init__.py (formal "Pacer Studio",
     # prose "Pacer", wordmark "pacer"), and the only place that form is used.
-    _draw_text(p, pad, CARD_H - 56, "pacer", _font(40, theme.W_SEMIBOLD), theme.C.accent)
-    _draw_text(p, 0, CARD_H - 56, "race telemetry", _font(28), theme.C.text_muted,
-               align_right_at=right)
+    mark_font = _font(40, theme.W_SEMIBOLD)
+    _draw_text(p, pad, CARD_H - 56, "pacer", mark_font, theme.C.accent)
+    # The right of the footer says how the time was taken, in the report's words (`provenance`),
+    # and keeps the tagline when there is nothing clean to say.
+    p.setFont(mark_font)
+    foot_avail = right - pad - p.fontMetrics().horizontalAdvance("pacer") - _OPP_GAP
+    foot, foot_font = _fit_line(p, data.provenance or "race telemetry", foot_avail, (28, 24, 22))
+    _draw_text(p, 0, CARD_H - 56, foot, foot_font, theme.C.text_muted, align_right_at=right)
 
     p.end()
     return img
@@ -536,12 +569,26 @@ def card_to_png(image: QImage) -> bytes:
     return bytes(buf.data())
 
 
-# The thumbnail is drawn at the size the plate shows it (never resampled), inside this margin.
-_MAP_THUMB_PAD = 28
+# The thumbnail is drawn at the size the plate shows it (never resampled), inside this margin. It is
+# the room an outermost corner's label needs outside its apex, and the band the speed key sits in.
+_MAP_THUMB_PAD = 52
 _MAP_LINE_PX = 7.0
+# The live map's start/finish mark at this multiple of its size: 48 px across the 7-px line. At
+# 1.5 (36 px, the live map's own proportion) it read as a speck once a phone shows the 1080-px
+# image at ~400 px wide (looked at on the demo card).
+_MARK_SCALE = 2.0
+# The opportunity corner's ring (the debrief hero's, at the card's scale) and its label plate.
+_RING_PX, _RING_RIM_PX, _RING_W_PX = 13.0, 8.0, 4.0
+_FOCUS_LABEL_PX, _FOCUS_LABEL_GAP = 30, 34.0
+# Every other corner: a small muted name, no plate — orientation, not a call to action.
+_CORNER_LABEL_PX, _CORNER_LABEL_GAP = 22, 16.0
+# The speed key (the hero's: low end, ramp, high end with the unit), in the bottom-left band.
+_KEY_PX, _KEY_RAMP_PX, _KEY_RAMP_H = 22, 120.0, 6.0
+_KEY_INSET = 24
 
 
-def lap_map_png(session, lap_id: int | None, *, unit: str | None = None) -> bytes | None:
+def lap_map_png(session, lap_id: int | None, *, unit: str | None = None,
+                focus: tuple[int, ...] | None = None) -> bytes | None:
     """The card's map: `lap_id`'s own trace, speed-coloured on the live map's speed ramp, as PNG
     bytes sized for the plate. None when the lap has no drawable trace (the card then has no map).
 
@@ -554,42 +601,101 @@ def lap_map_png(session, lap_id: int | None, *, unit: str | None = None) -> byte
     picture whatever the window was doing when Share was pressed.
 
     The colours are the live speed rainbow's own (`map_render.rainbow_channel` + the palette's
-    `rainbow_colors`), GPS-dropout gaps included, so the colour-blind palette recolours it too."""
+    `rainbow_colors`), GPS-dropout gaps included, so the colour-blind palette recolours it too.
+
+    WHERE, NOT ONLY HOW FAST (cool/share-card). The line is `trace_paint`'s, the debrief hero's
+    painter: closed where the lap's two passes over the start line meet, with the live map's
+    chequered start/finish mark and its arrow pointing the way the laps run. The corner(s) the card
+    names as the opportunity are ringed and labelled on the track — the card said "C1" and showed
+    no C1 — and every other corner is named small and muted; the speed key reads the ramp's two
+    measured ends in the active unit. `focus` is the corners to ring; None takes the card's own
+    opportunity (`_top_opportunity`, the very rows `card_data` reads). Corners are drawn only on
+    the session's best lap, the lap their apexes are measured on."""
     try:
-        ch = session.lap_channels(lap_id)
-        xs, ys = np.asarray(ch["x_m"], float), np.asarray(ch["y_m"], float)
-        got = map_render.rainbow_channel("speed", ch["t_telemetry_s"], xs, ys,
-                                         ch["speed_kmh"], ch["dist_m"], None, None, unit)
+        tr = trace_paint.lap_trace(session, lap_id, unit)
     except Exception:  # noqa: BLE001 — a card without its map beats no card
         return None
-    ok = np.isfinite(xs) & np.isfinite(ys)
-    if ok.sum() < 2:
+    if tr is None:
         return None
-    seg = np.asarray(got[0]) if got is not None and got[0] is not None else None
-    if seg is None:           # a flat speed trace: one colour, the middle of the ramp
-        seg = np.full(len(xs) - 1, theme.MAP_RAINBOW_N // 2)
-    x0, x1 = float(xs[ok].min()), float(xs[ok].max())
-    y0, y1 = float(ys[ok].min()), float(ys[ok].max())
+    x0, x1, y0, y1 = trace_paint.bounds(tr.xs, tr.ys)
     w = MAP_PLATE_W - MAP_PLATE_INNER
     h_max, h_min = MAP_PLATE_H_MAX - MAP_PLATE_INNER, MAP_PLATE_H_MIN - MAP_PLATE_INNER
     scale = min((w - 2 * _MAP_THUMB_PAD) / ((x1 - x0) or 1.0),
                 (h_max - 2 * _MAP_THUMB_PAD) / ((y1 - y0) or 1.0))
     h = int(min(h_max, max(h_min, (y1 - y0) * scale + 2 * _MAP_THUMB_PAD)))
-    # Centred, north up: local metres run y-UP, image rows run down.
-    px = w / 2 + scale * (xs - (x0 + x1) / 2)
-    py = h / 2 - scale * (ys - (y0 + y1) / 2)
+    fit = trace_paint.TraceFit(scale, w / 2, h / 2, (x0 + x1) / 2, (y0 + y1) / 2)
     img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
     img.fill(Qt.transparent)
     p = QPainter(img)
     p.setRenderHint(QPainter.Antialiasing, True)
-    colours = [QColor(c) for c in theme.rainbow_colors(theme.MAP_RAINBOW_N)]
-    for i in range(len(seg)):
-        b = int(seg[i])
-        if b < 0 or not (ok[i] and ok[i + 1]):
-            continue            # a GPS dropout, or a sample with no position: no chord across it
-        pen = QPen(colours[b], _MAP_LINE_PX)
-        pen.setCapStyle(Qt.RoundCap)
-        p.setPen(pen)
-        p.drawLine(QPointF(px[i], py[i]), QPointF(px[i + 1], py[i + 1]))
+    p.setRenderHint(QPainter.TextAntialiasing, True)
+    px, py = trace_paint.paint_trace(p, tr, fit, _MAP_LINE_PX)
+    placed: list[QRectF] = []
+    if tr.speed_lo and tr.speed_hi:
+        key_font = _font(_KEY_PX)
+        base = h - _KEY_INSET
+        kw = trace_paint.paint_speed_key(p, _KEY_INSET, base, tr.speed_lo, tr.speed_hi, key_font,
+                                         _KEY_RAMP_PX, _KEY_RAMP_H, gap=12)
+        fm = QFontMetrics(key_font)
+        placed.append(QRectF(_KEY_INSET, base - fm.ascent(), kw, fm.height()))
+    finish = trace_paint.finish_at(session, tr.xs, tr.ys)
+    if finish is not None:
+        at = fit.point(finish[0], finish[1])
+        trace_paint.paint_finish_mark(p, at, finish[2], finish[3], _MARK_SCALE)
+        placed.append(trace_paint.finish_mark_rect(at, _MARK_SCALE))
+    _paint_corners(p, session, lap_id, unit, focus, fit, px, py, QRectF(0, 0, w, h), placed)
     p.end()
     return card_to_png(img)
+
+
+def _paint_corners(p: QPainter, session, lap_id, unit, focus, fit, px, py, box: QRectF,
+                   placed: list[QRectF]) -> None:
+    """The card map's corner names: the focus corner(s) ringed in the accent with a plate, then the
+    rest small and muted, each placed outward from the trace's centroid and clear of what is
+    already down (`trace_paint.label_rect`, the hero's placement). Guarded: a card whose corners
+    cannot be read is a card without names, never a broken card."""
+    try:
+        if lap_id is None or lap_id != session.best_lap_id():
+            return
+        apexes = trace_paint.corner_apexes(session.corners.corner_map_markers())
+        if focus is None:
+            opp = _top_opportunity(session, units.normalize_unit(unit))
+            focus = opp.cids if opp is not None else ()
+    except Exception:  # noqa: BLE001
+        return
+    ok = np.isfinite(px) & np.isfinite(py)
+    mx, my = float(np.mean(px[ok])), float(np.mean(py[ok]))
+    line = (px, py, _MAP_LINE_PX / 2 + 3)    # a name keeps 3 px off the line's edge
+    rings = [(cid, fit.point(*apexes[cid])) for cid in focus if cid in apexes]
+    for _cid, c in rings:
+        trace_paint.paint_ring(p, c, _RING_PX, QColor(theme.C.surface), _RING_RIM_PX, _RING_W_PX)
+        placed.append(QRectF(c.x() - _RING_PX, c.y() - _RING_PX, 2 * _RING_PX, 2 * _RING_PX))
+    focus_font = _font(_FOCUS_LABEL_PX, theme.W_SEMIBOLD)
+    fm = QFontMetrics(focus_font)
+    for cid, c in rings:
+        text = f"C{cid}"
+        tw, th = fm.horizontalAdvance(text) + 24, fm.height() + 8
+        rect = trace_paint.label_rect(c, math.atan2(c.y() - my, c.x() - mx), tw, th, placed, box,
+                                      _FOCUS_LABEL_GAP, line)
+        placed.append(rect)
+        p.setPen(QPen(QColor(theme.C.accent), 2.0))
+        p.setBrush(QColor(theme.C.canvas))
+        p.drawRoundedRect(rect, 10, 10)
+        p.setFont(focus_font)
+        p.setPen(QColor(theme.C.text))
+        p.drawText(rect, Qt.AlignCenter, text)
+    small = _font(_CORNER_LABEL_PX, theme.W_SEMIBOLD)
+    fm = QFontMetrics(small)
+    p.setFont(small)
+    p.setPen(QColor(theme.C.text_muted))
+    ringed = {cid for cid, _c in rings}
+    for cid in sorted(apexes):
+        if cid in ringed:
+            continue
+        c = fit.point(*apexes[cid])
+        text = f"C{cid}"
+        rect = trace_paint.label_rect(c, math.atan2(c.y() - my, c.x() - mx),
+                                      fm.horizontalAdvance(text) + 8, fm.height(), placed, box,
+                                      _CORNER_LABEL_GAP, line)
+        placed.append(rect)
+        p.drawText(rect, Qt.AlignCenter, text)

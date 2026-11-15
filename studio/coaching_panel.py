@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import coaching, data_quality, focus, map_render, theme, units
+from . import coaching, data_quality, focus, theme, trace_paint, units
 from ._signal import DASH, fmt_signed, fmt_time, plural
 from .lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip, set_corner_direction
 from .theme import PROVISIONAL_COLOR, C
@@ -857,6 +857,8 @@ class HeroData:
     speed_lo: str                  # the speed key's two ends ("38", "71 km/h"), "" when flat
     speed_hi: str
     corners: dict                  # cid -> (x, y) apex on the best lap (corner_map_markers)
+    finish: tuple | None = None    # (x, y, ux, uy): the start/finish crossing and the way the lap
+    #                                runs there (trace_paint.finish_at), or None — no mark
 
 
 def debrief_hero_data(session, n_clean: int | None, unit: str | None = None) -> HeroData | None:
@@ -875,22 +877,14 @@ def debrief_hero_data(session, n_clean: int | None, unit: str | None = None) -> 
         if best is None:
             return None
         lap_s = float(session.lap_time(best))
-        ch = session.lap_channels(best)
-        xs, ys = np.asarray(ch["x_m"], float), np.asarray(ch["y_m"], float)
-        got = map_render.rainbow_channel("speed", ch["t_telemetry_s"], xs, ys, ch["speed_kmh"],
-                                         ch["dist_m"], None, None, unit)
+        tr = trace_paint.lap_trace(session, best, unit)   # the share card's own fetch
         markers = session.corners.corner_map_markers()
         verified = bool(session.timing_verified)
         quality = session.timing_quality
     except Exception:  # noqa: BLE001 — a debrief without its picture beats no debrief
         return None
-    ok = np.isfinite(xs) & np.isfinite(ys)
-    if ok.sum() < 2 or not math.isfinite(lap_s):
+    if tr is None or not math.isfinite(lap_s):
         return None
-    seg = np.asarray(got[0]) if got is not None and got[0] is not None else None
-    if seg is None:     # a flat speed trace: one colour, the middle of the ramp (share_card's rule)
-        seg = np.full(len(xs) - 1, theme.MAP_RAINBOW_N // 2)
-    lo, hi = (got[1], got[2]) if got is not None and got[0] is not None else ("", "")
     time_text = fmt_time(lap_s)
     if not verified:
         trust, tip, time_text = HERO_PROVISIONAL, PROVISIONAL_TOOLTIP, ""
@@ -901,39 +895,18 @@ def debrief_hero_data(session, n_clean: int | None, unit: str | None = None) -> 
     bits = [session.track_name] if getattr(session, "track_name", None) else []
     if n_clean:
         bits.append(plural(n_clean, "clean lap"))
-    corners = {}
-    for label, x, y, _d in markers:
-        if str(label).startswith("C") and str(label)[1:].isdigit():
-            corners[int(str(label)[1:])] = (float(x), float(y))
     return HeroData(time_text=time_text, trust=trust, trust_tip=tip,
-                    caption=" · ".join(bits), xs=xs, ys=ys, seg=seg, speed_lo=lo, speed_hi=hi,
-                    corners=corners)
+                    caption=" · ".join(bits), xs=tr.xs, ys=tr.ys, seg=tr.seg,
+                    speed_lo=tr.speed_lo, speed_hi=tr.speed_hi,
+                    corners=trace_paint.corner_apexes(markers),
+                    finish=trace_paint.finish_at(session, tr.xs, tr.ys))
 
 
 def _label_rect(c: QPointF, ang: float, tw: float, th: float, placed: list[QRectF],
                 box: QRectF) -> QRectF:
-    """A corner label's plate: outward from the trace's centroid (`ang`), then the other seven
-    compass points, the first clear of every placed plate and inside `box`; when none is, the one
-    that overlaps least (its area over other plates, plus its area outside the box)."""
-    best, best_cost = QRectF(), math.inf
-    for k in range(8):
-        a = ang + (k + 1) // 2 * (math.pi / 4) * (1 if k % 2 else -1)
-        # The centre sits the gap out less a little on each axis (6 px across, 4 px down), so the
-        # plate's near edge, not its centre, lands just clear of the 7-px ring.
-        lc = QPointF(c.x() + math.cos(a) * (HERO_LABEL_GAP_PX + tw / 2 - 6),
-                     c.y() + math.sin(a) * (HERO_LABEL_GAP_PX + th / 2 - 4))
-        rect = QRectF(lc.x() - tw / 2, lc.y() - th / 2, tw, th)
-        cost = (sum(_area(rect.intersected(r)) for r in placed)
-                + _area(rect) - _area(rect.intersected(box)))
-        if cost <= 0:
-            return rect
-        if cost < best_cost:
-            best, best_cost = rect, cost
-    return best
-
-
-def _area(r: QRectF) -> float:
-    return max(r.width(), 0.0) * max(r.height(), 0.0)
+    """A focus corner's label plate at the hero's gap (`trace_paint.label_rect`, which the share
+    card's corner labels use too)."""
+    return trace_paint.label_rect(c, ang, tw, th, placed, box, HERO_LABEL_GAP_PX)
 
 
 class DebriefHero(QWidget):
@@ -949,9 +922,9 @@ class DebriefHero(QWidget):
     and so no Jump to repeat: it takes no hand cursor and a click on it does nothing
     (``set_jumpable``, from the page's rows). A target emits ``corner_clicked(cid)``.
 
-    The trace drawing repeats ``share_card.lap_map_png``'s (north-up fit, rainbow buckets, no
-    chord across a dropout) at a widget's size with corner rings. FOLLOW-UP: one shared painter
-    for both, once the share-card wave that owns share_card.py has landed."""
+    The trace is ``trace_paint``'s, the painter the share card's map calls too (north-up fit,
+    rainbow buckets, no chord across a dropout, the lap closed where its two ends meet), with the
+    live map's start/finish mark and its arrow at the lap's crossing."""
 
     corner_clicked = Signal(int)
 
@@ -1088,24 +1061,9 @@ class DebriefHero(QWidget):
             width = max(width, fm.horizontalAdvance(text))
         if d.speed_lo and d.speed_hi:     # the line's key: the same ramp, its two measured ends
             fm = QFontMetrics(cap_f)
-            p.setFont(cap_f)
             base = min(y + theme.SPACE_M + fm.ascent(), h - pad - fm.descent())
-            lo_w = fm.horizontalAdvance(d.speed_lo)
-            p.setPen(QColor(C.text_muted))
-            p.drawText(QPointF(pad, base), d.speed_lo)
-            x0 = pad + lo_w + theme.SPACE_S
-            ramp = QRectF(x0, base - fm.ascent() / 2 - 2, HERO_RAMP_PX, 4)
-            grad = QLinearGradient(ramp.topLeft(), ramp.topRight())
-            cols = theme.rainbow_colors(theme.MAP_RAINBOW_N)
-            for i, c in enumerate(cols):
-                grad.setColorAt(i / (len(cols) - 1), QColor(c))
-            p.setPen(Qt.NoPen)
-            p.setBrush(grad)
-            p.drawRoundedRect(ramp, 2, 2)
-            p.setPen(QColor(C.text_muted))
-            p.drawText(QPointF(x0 + HERO_RAMP_PX + theme.SPACE_S, base), d.speed_hi)
-            width = max(width, int(x0 - pad + HERO_RAMP_PX + theme.SPACE_S
-                                   + fm.horizontalAdvance(d.speed_hi)))
+            width = max(width, int(trace_paint.paint_speed_key(
+                p, pad, base, d.speed_lo, d.speed_hi, cap_f, HERO_RAMP_PX)))
         return width
 
     def _paint_map(self, p: QPainter, d: HeroData, box: QRectF) -> None:
@@ -1115,52 +1073,30 @@ class DebriefHero(QWidget):
         ok = np.isfinite(d.xs) & np.isfinite(d.ys)
         if box.width() < 40 or box.height() < 40 or ok.sum() < 2:
             return
-        x0, x1 = float(d.xs[ok].min()), float(d.xs[ok].max())
-        y0, y1 = float(d.ys[ok].min()), float(d.ys[ok].max())
         # A label outside the outermost apex still fits: the gap to its centre plus half a plate's
         # height (a BODY line, ~14 px with its padding) — width is the looser axis here.
-        inset = HERO_LABEL_GAP_PX + 14
-        scale = min((box.width() - 2 * inset) / ((x1 - x0) or 1.0),
-                    (box.height() - 2 * inset) / ((y1 - y0) or 1.0))
-        if scale <= 0:
+        fit = trace_paint.fit_box(d.xs, d.ys, box, HERO_LABEL_GAP_PX + 14)
+        if fit is None:
             return
-        cx, cy = box.center().x(), box.center().y()
-        px = cx + scale * (d.xs - (x0 + x1) / 2)
-        py = cy - scale * (d.ys - (y0 + y1) / 2)    # local metres run y-up, pixels run down
-        colours = [QColor(c) for c in theme.rainbow_colors(theme.MAP_RAINBOW_N)]
         # The line grows a little with the picture (4 px at the small window, ~6 px maximized).
         line_px = max(HERO_LINE_PX, min(HERO_LINE_PX * 1.6, box.height() / 90))
         # A canvas casing under the line keeps its colours crisp where the trace crosses itself.
-        casing = QPen(QColor(C.canvas), line_px + 3)
-        casing.setCapStyle(Qt.RoundCap)
-        p.setPen(casing)
-        for i in range(len(d.seg)):
-            if d.seg[i] >= 0 and ok[i] and ok[i + 1]:
-                p.drawLine(QPointF(px[i], py[i]), QPointF(px[i + 1], py[i + 1]))
-        for i in range(len(d.seg)):
-            b = int(d.seg[i])
-            if b < 0 or not (ok[i] and ok[i + 1]):
-                continue        # a GPS dropout: no chord across it (the live map's rule)
-            pen = QPen(colours[b], line_px)
-            pen.setCapStyle(Qt.RoundCap)
-            p.setPen(pen)
-            p.drawLine(QPointF(px[i], py[i]), QPointF(px[i + 1], py[i + 1]))
+        px, py = trace_paint.paint_trace(p, trace_paint.LapTrace(d.xs, d.ys, d.seg, "", ""), fit,
+                                         line_px, casing=QColor(C.canvas), casing_px=3)
+        placed: list[QRectF] = []
+        if d.finish is not None:      # the live map's mark at its live size; labels keep clear
+            at = fit.point(d.finish[0], d.finish[1])
+            trace_paint.paint_finish_mark(p, at, d.finish[2], d.finish[3])
+            placed.append(trace_paint.finish_mark_rect(at))
         mx, my = float(np.mean(px[ok])), float(np.mean(py[ok]))
         label_f = theme.ui_font(theme.BODY, theme.W_SEMIBOLD)
         fm = QFontMetrics(label_f)
         p.setFont(label_f)
-        placed: list[QRectF] = []
         for cid in self.focus_cids():
-            ax, ay = d.corners[cid]
-            c = QPointF(cx + scale * (ax - (x0 + x1) / 2), cy - scale * (ay - (y0 + y1) / 2))
+            c = fit.point(*d.corners[cid])
             self._rings.append((cid, c))
             # A canvas-filled ring with a canvas rim: the line stops at it rather than crossing it.
-            p.setPen(QPen(QColor(C.canvas), 5))
-            p.setBrush(QColor(C.canvas))
-            p.drawEllipse(c, HERO_RING_PX, HERO_RING_PX)
-            p.setPen(QPen(QColor(C.accent), 2.5))
-            p.setBrush(Qt.NoBrush)
-            p.drawEllipse(c, HERO_RING_PX, HERO_RING_PX)
+            trace_paint.paint_ring(p, c, HERO_RING_PX, QColor(C.canvas), 5, 2.5)
             text = f"C{cid}"
             tw, th = fm.horizontalAdvance(text) + 2 * theme.SPACE_S, fm.height() + theme.SPACE_XS
             rect = _label_rect(c, math.atan2(c.y() - my, c.x() - mx), tw, th, placed, box)

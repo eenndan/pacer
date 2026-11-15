@@ -218,6 +218,7 @@ caches + delegates.
 | [export_palette.py](export_palette.py) | `EXPORT`, the burn-over-footage colours the renderer and the dial share | — | `test_export_video` |
 | [export_data.py](export_data.py) | Laps/channels CSV, the HTML report, the stats summary; atomic writes | — | `test_export_data` |
 | [share_card.py](share_card.py) | The shareable lap-card PNG; blocked while timing is provisional | Qt | `test_share_card` |
+| [trace_paint.py](trace_paint.py) | One QPainter lap line (speed ramp, start/finish mark, key) for the card and the debrief hero | Qt | `test_share_card` |
 
 ### Package
 
