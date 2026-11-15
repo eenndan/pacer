@@ -61,8 +61,7 @@ from PySide6.QtGui import (
 from . import data_quality, gmeter_overlay, overlay, theme, units
 from ._signal import fmt_time, lap_label, plural
 from .export_palette import EXPORT
-from .gapfill import GAP_TIME_S
-from .timeline import trace_point_at
+from .timeline import trace_point_at, trace_tail  # noqa: F401  (trace_point_at: tests read ev.*)
 
 _log = logging.getLogger(__name__)
 
@@ -2487,35 +2486,6 @@ def _inset_width(session, lap_id: int | None, height: float, max_width: float) -
 
 
 # --------------------------------------------------------------------------- map marker + tail
-# The comet tail is a TIME span: the path driven over the last `_MAP_TAIL_S` seconds. It used to be
-# `24 * k` lap points, which was 2.4 s at 1080p on the 10 Hz GPS (median sample interval 100.00 ms
-# on MK_18_09_26 and SD_19_09_26 alike) and twice that at 4K, where k is 2. The stroke still scales
-# with k; how much of the lap the tail shows does not.
-_MAP_TAIL_S = 2.4
-
-
-def trace_tail(times, xs, ys, t: float, span: float = _MAP_TAIL_S,
-               gap_s: float = GAP_TIME_S) -> tuple[np.ndarray, np.ndarray]:
-    """The path over `(t - span, t]`, oldest first, ENDING AT `trace_point_at(t)` — the marker — so
-    the tail can only ever trail the dot it belongs to. Both ends are interpolated, so its length
-    in time is `span` on every frame rather than stepping at the GPS rate. It is CUT at the last
-    dropout inside the span (see `trace_point_at`), for the same reason the marker holds there.
-    Empty arrays for an empty trace; a single point when the marker is all there is."""
-    head = trace_point_at(times, xs, ys, t, gap_s)
-    if head is None:
-        return np.empty(0), np.empty(0)
-    back = trace_point_at(times, xs, ys, t - span, gap_s)
-    lo = int(np.searchsorted(times, t - span, side="right"))
-    hi = int(np.searchsorted(times, t, side="right"))
-    px = np.concatenate(([back[0]], np.asarray(xs[lo:hi], float), [head[0]]))
-    py = np.concatenate(([back[1]], np.asarray(ys[lo:hi], float), [head[1]]))
-    stamps = np.concatenate(([back[2]], np.asarray(times[lo:hi], float), [head[2]]))
-    cut = np.nonzero(np.diff(stamps) > gap_s)[0]
-    if len(cut):
-        px, py = px[cut[-1] + 1:], py[cut[-1] + 1:]
-    return px, py
-
-
 def _ink_rect(img: QImage) -> QRect | None:
     """The smallest rect holding every pixel of the premultiplied `img` with any alpha at all, or
     None when it is fully transparent. Exact, not estimated: the blit that uses it must reach every
@@ -2666,8 +2636,8 @@ class _MapInset:
         if m is None:
             return
         k = self._k
-        # --- short comet TAIL: the last `_MAP_TAIL_S` of driving, ending on the marker, so the
-        # direction of travel + recent path read at a glance.
+        # --- short comet TAIL: the last `timeline.TRACE_TAIL_S` of driving, ending on
+        # the marker, so the direction of travel + recent path read at a glance.
         if tail.size() >= 2:
             # a hot amber comet over the white line shows the recent path + direction of travel;
             # a dark halo under it keeps it readable where the white line is bright too.
