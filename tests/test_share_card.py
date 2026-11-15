@@ -1048,9 +1048,9 @@ class _LoopSession(_TracedSession):
         x, y = ch["x_m"], ch["y_m"]
         if self.reverse:
             x, y = x[::-1].copy(), y[::-1].copy()
-        if self.end_gap_m:   # the second pass over the line, beside the first (the "kink")
+        if self.end_gap_m:   # the second pass over the line runs beside the first (the "kink")
             x = x.copy()
-            x[-1] += self.end_gap_m
+            x[-5:] += self.end_gap_m
         self.tx, self.ty = x, y        # the all-laps trace the live map's crossing falls back to
         return {**ch, "x_m": x, "y_m": y, "speed_kmh": np.asarray(ch["speed_kmh"])}
 
@@ -1061,11 +1061,12 @@ def _thumb(session, **kw):
     return _rgba(QImage.fromData(png))
 
 
-def _loop_px(px, x, y):
-    """Local metres of the _LoopSession ellipse → thumbnail px (the height-limited fit)."""
+def _loop_px(px, x, y, xm=0.0):
+    """Local metres of the _LoopSession ellipse → thumbnail px (the height-limited fit; `xm` the
+    trace's bounding-box x centre when it is not the ellipse's)."""
     h, w = px.shape[:2]
     scale = (h - 2 * share_card._MAP_THUMB_PAD) / 80.0
-    return int(round(w / 2 + scale * x)), int(round(h / 2 - scale * y))
+    return int(round(w / 2 + scale * (x - xm))), int(round(h / 2 - scale * y))
 
 
 def test_the_card_map_shows_the_start_finish_mark_and_the_way_the_laps_run():
@@ -1098,12 +1099,12 @@ def test_the_card_map_closes_the_lap_where_its_two_passes_meet():
     """A lap ends on the start line a little beside where it began (0.70 m on the owner's
     recording), and the open trace drew a kink there. The line is closed with a short chord in the
     last segment's colour (no start line here, so no mark covers the join)."""
-    s = _LoopSession(start=False, end_gap_m=2.0)
+    s = _LoopSession(start=False, end_gap_m=2.8)
     px = _thumb(s)
-    a = _loop_px(px, 60.0, 0.0)
-    b = _loop_px(px, 62.0, 0.0)
+    a = _loop_px(px, 60.0, 0.0, xm=1.4)     # the second pass widens the box by 2.8 m
+    b = _loop_px(px, 62.8, 0.0, xm=1.4)
     gap_x, gap_y = (a[0] + b[0]) // 2, a[1]
-    # 2 m at 4.8 px/m is ~10 px: the round caps alone (3.5 px each) leave its middle bare.
+    # 2.8 m at 4.8 px/m is ~13 px between two parallel passes: the 7-px line leaves its middle bare.
     assert px[gap_y, gap_x, 3] == 255, "the lap's two ends are not joined"
     print("test_the_card_map_closes_the_lap_where_its_two_passes_meet OK")
 

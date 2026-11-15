@@ -17,7 +17,8 @@ TWO LAYERS, deliberately split so the numbers are testable without Qt:
   * ``render_card(data, map_png, *, palette)`` — the Qt composition (QImage + QPainter). It takes
     the map thumbnail as PNG BYTES, drawn by ``lap_map_png`` from the best lap's own trace on the
     live map's speed ramp — no longer grabbed off the live MapView, which put whatever the app was
-    showing on the card (EXP-3).
+    showing on the card (EXP-3). The line is ``trace_paint``'s, the debrief hero's painter, with
+    the start/finish mark, the opportunity corner ringed and the speed key (cool/share-card).
 
 Honesty rules (single-sourced here so both the menu action and the toast obey them):
   * PROVISIONAL start line (``not session.timing_verified``) OR no valid best lap ⇒ ``blocked``
