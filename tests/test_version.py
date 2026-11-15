@@ -478,8 +478,10 @@ _LOWERCASE_ALLOWED = {
     # An exported provenance CSV's metadata KEY ("pacer provenance"): a file-format field a
     # spreadsheet or script may already key on, not prose.
     "provenance.py": 1,
-    # The WORDMARK form: the share card's logotype, set as a graphic.
+    # The WORDMARK form: the share card's logotype, set as a graphic — and its twin's, the lap-strip
+    # card, which carries the same footer so the two images read as a pair.
     "share_card.py": 1,
+    "share_lapstrip.py": 1,
 }
 
 
@@ -553,7 +555,7 @@ def test_the_product_name_follows_its_three_form_convention():
     readme_h1 = _read("README.md").splitlines()[0]
     assert readme_h1 == f"# {_SHORT}", f"README.md opens {readme_h1!r}"
 
-    # WORDMARK — the share card's logotype (and, by the allow-list below, nowhere else).
+    # WORDMARK — the share card's logotype (and, by the allow-list below, only its lap-strip twin).
     card = [n.value for n in _prose_literals(os.path.join("studio", "share_card.py"))]
     assert _WORDMARK in card, "the share card no longer sets its lowercase logotype"
 

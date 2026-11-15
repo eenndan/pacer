@@ -27,7 +27,8 @@ Run:  pixi run studio [GoPro.MP4 ...]   (or: python -m studio [files])
 #     never a retyped literal.
 #   * SHORT   "Pacer", capitalised: the product in a SENTENCE ("Pacer never looks the weather
 #     up"), the welcome screen's headline and the README's title.
-#   * WORDMARK "pacer", lowercase: the share card's logotype, set as a graphic. Nowhere else.
+#   * WORDMARK "pacer", lowercase: the share card's logotype, set as a graphic, and its lap-strip
+#     twin's (share_lapstrip). Nowhere else.
 # Lowercase "pacer" in a sentence is NOT a fourth form. It was the actual inconsistency (34
 # user-visible sentences, fixed in U5). Identifiers are not names and keep their own spelling: the
 # `pacer` package, "~/Library/Application Support/pacer", ".pacer.json" sidecars and the
