@@ -267,9 +267,9 @@ def reduce_motion(path: str | None = None) -> bool | None:
     return val if isinstance(val, bool) else None
 
 
-def set_reduce_motion(on: bool, path: str | None = None) -> None:
-    """Persist the Reduce motion choice."""
-    set(REDUCE_MOTION, bool(on), path)
+def set_reduce_motion(on: bool | None, path: str | None = None) -> None:
+    """Persist the Reduce motion choice; None clears it (follow the system again)."""
+    set(REDUCE_MOTION, None if on is None else bool(on), path)
 
 
 def lap_panel_tab(path: str | None = None) -> int:

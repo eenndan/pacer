@@ -20,6 +20,7 @@ import contextlib
 import logging
 import math
 import os
+import time
 from typing import NamedTuple
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
@@ -142,6 +143,9 @@ _HERO_AT_REST_NOTE = (
 # How far the playhead may sit from the poster seek's time and still be "at rest": the player's
 # echo of a seek comes back millisecond-quantized; anything a person does moves it further.
 HERO_REST_SLACK_S = 0.1
+#: How long after an auto-repeated arrow key the hero follows the playhead directly (no roll): the
+#: repeat comes every ~33 ms and its seek is applied on the next tick, so 0.25 s covers both.
+CONTINUOUS_HOLD_S = 0.25
 # VIEW-7 (QA 2026-09-25): at rest the Δ is the WHOLE LAP's total while the speed beside it was the
 # lap's START (75 km/h under "Δideal +1.48 s" on MK_18_09) — two instants on one line. At rest the
 # speed slot says whose number the Δ is instead; the speed returns with the first move.
@@ -2146,7 +2150,7 @@ class CentralView(QWidget):
         reference = self.session.has_reference()
         unit = self._speed_unit
         if stitched and self.ideal_readout_btn.isChecked() and not chart_best:
-            lead = d_ideal
+            lead, lead_kind = d_ideal, "ideal"
 
             def render(v):
                 return theme.format_ideal_readout(v, sp, lap_id, unit)
@@ -2159,7 +2163,7 @@ class CentralView(QWidget):
             tip = (f"Δ to {whose} here: {theme.format_delta_run(d_best, sigil=False)}"
                    + self._ideal_clamp_note(d_ideal))
         else:
-            lead = d_best
+            lead, lead_kind = d_best, "best"
 
             def render(v):
                 txt, col = theme.format_delta_speed(v, sp, lap_id, unit)
@@ -2182,6 +2186,14 @@ class CentralView(QWidget):
             if on_best and not reference:
                 tip += _BEST_LAP_BEST_NOTE
         at_rest = t_delta != t
+        # WHAT the lead number is a reading of. A roll counts between two readings of the SAME
+        # quantity on the same lap, so every intermediate value is one that quantity really took
+        # somewhere between the two playhead positions (Δ is continuous along a lap). A change of
+        # baseline (Δideal / Δbest / Δref, which reference, compare's chart-best), of LAP (a
+        # different lap's curve: no path joins the two readings) or of the at-rest reading cuts
+        # straight to the new value — a blend of two quantities is a number that never existed.
+        ref_id = getattr(self.session, "reference_label", lambda: None)() if reference else None
+        baseline = (lead_kind, ref_id, chart_best, lap_id, at_rest)
         if at_rest:
             tip += _HERO_AT_REST_NOTE
         self.diff_box.setToolTip(tip)
@@ -2190,7 +2202,7 @@ class CentralView(QWidget):
             txt, col = (text, sem_colour) if v is lead else render(v)
             self._set_diff_text(_at_rest(txt) if at_rest else txt, col)
 
-        self._roll_diff(lead, paint)
+        self._roll_diff(lead, paint, baseline)
 
     def _set_diff_text(self, text: str, sem_colour: str | None):
         self.diff_box.setText(text)
@@ -2202,24 +2214,33 @@ class CentralView(QWidget):
             self.diff_box.set_delta_colour(sem_colour)
 
     def _still_moment(self) -> bool:
-        """True when what just changed was a discrete user move — a seek, a lap click, a reference
-        flip — the only changes that animate (motion.py). Not playback, not a chart scrub or a
-        marker drag (continuous: the readout must follow the hand), not compare or a Lap race."""
+        """True when what just changed was a discrete user move — a seek, a single arrow press —
+        the only changes that animate (motion.py). Not playback, not a chart scrub, a marker drag
+        or a held arrow key (continuous: the readout must follow the hand), not compare or a Lap
+        race."""
         # getattr-guarded like the view's other reads: view tests build CentralView over doubles.
         marker = getattr(getattr(self, "map", None), "marker", None)
         playing = getattr(getattr(self, "video", None), "is_playing", lambda: False)()
         scrub = getattr(self, "scrub", None)
-        return not (playing or (scrub is not None and scrub.is_active) or self._comparing()
-                    or self.is_racing() or bool(getattr(marker, "moving", False)))
+        held = time.monotonic() < getattr(self, "_continuous_until", 0.0)
+        return not (playing or held or (scrub is not None and scrub.is_active)
+                    or self._comparing() or self.is_racing()
+                    or bool(getattr(marker, "moving", False)))
 
     def _finish_diff_roll(self):
         roll = getattr(self, "_diff_roll", None)
         if roll is not None:
             roll.finish()
 
-    def _roll_diff(self, lead: float | None, paint):
+    def note_continuous_gesture(self):
+        """A held arrow key (auto-repeat) is moving the playhead: for CONTINUOUS_HOLD_S the readout
+        follows directly, like a scrub, instead of restarting a roll on every repeat."""
+        self._continuous_until = time.monotonic() + CONTINUOUS_HOLD_S
+
+    def _roll_diff(self, lead: float | None, paint, baseline=None):
         """Show `lead` through `paint(value)`: directly, or — on a discrete jump of at least
-        motion.ROLL_MIN_JUMP_S at a still moment — counted from the value on screen to it over
+        motion.ROLL_MIN_JUMP_S at a still moment, under an unchanged `baseline` (same quantity,
+        same lap: see _update_diff_box) — counted from the value on screen to it over
         motion.DELTA_ROLL_MS. Every intermediate frame is the SAME formatter fed an intermediate
         value, so the sign and its colour switch together at the zero crossing, and the last frame
         is `paint(lead)`: exactly what the direct path prints. The ~30 Hz playback tick takes the
@@ -2228,7 +2249,9 @@ class CentralView(QWidget):
         shown = getattr(self, "_diff_shown", None)
         if roll is not None and roll.running:
             shown = self._diff_rolling_value
-        jump = (lead is not None and shown is not None
+        same = baseline == getattr(self, "_diff_baseline", None)
+        self._diff_baseline = baseline
+        jump = (same and lead is not None and shown is not None
                 and abs(lead - shown) >= motion.ROLL_MIN_JUMP_S)
         if roll is not None:
             roll.cancel()          # a newer value wins; a roll never queues behind another
@@ -2250,10 +2273,8 @@ class CentralView(QWidget):
             paint(lead)
 
         self._diff_shown = lead
-        # Frame 0, painted NOW through the new moment's formatter: the old number, but already the
-        # new baseline's name, speed and rest note. Leaving the old text up until the first frame
-        # showed a reference the user had just switched away from (caught by the suite run with
-        # PACER_MOTION=1: the vs-ideal flip and the one-lap ideal gate).
+        # Frame 0, painted NOW: the old number (same baseline, same lap — a change of either cut
+        # above) with the new moment's speed.
         paint(start)
         tr = motion.start(self.diff_box, motion.DELTA_ROLL_MS, step, end)
         self._diff_roll = None if tr.done else tr

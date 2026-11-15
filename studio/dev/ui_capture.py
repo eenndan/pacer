@@ -47,7 +47,7 @@ os.environ.setdefault("PACER_NO_MEDIA", "1")
 
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-from studio import theme  # noqa: E402
+from studio import motion, theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
 from studio.dev import _jail  # noqa: E402
 
@@ -77,6 +77,7 @@ def _wait_for_load(app: QApplication, w: StudioWindow) -> None:
 
 def _grab(widget, path: str) -> None:
     """Grab a widget to a PNG (offscreen render of the real, themed widget)."""
+    motion.finish_all()     # never a mid-roll readout, even under PACER_MOTION=1
     widget.grab().save(path)
     print("wrote", path)
 

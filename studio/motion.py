@@ -2,7 +2,7 @@
 
 The app animates ONE thing, because the motion carries meaning (W2 design, section C): the hero Δ
 readout counts to its new value (`DELTA_ROLL_MS`) on a discrete jump of at least `ROLL_MIN_JUMP_S`
-— a seek, a lap change, a reference change — never during playback. The design's other two (the
+— a seek within a lap, under an unchanged baseline — never during playback. The design's other two (the
 lap you left fading on the map, the Lap race rows sliding) were measured and not built: the fade
 changed under 2 % of the map's pixels in any Line mode, and race rows never changed order in a whole
 race (PR #557). Nothing runs on the 30 Hz playback path: with no transition running there is no
@@ -69,6 +69,11 @@ def set_reduce_pref(value: bool | None) -> None:
     """The user's View ▸ Reduce motion choice: True / False, or None to follow the system."""
     global _reduce_pref
     _reduce_pref = None if value is None else bool(value)
+
+
+def system_reduce() -> bool:
+    """macOS's own Reduce Motion as `probe_system` last read it."""
+    return _system_reduce
 
 
 def reduce_motion() -> bool:

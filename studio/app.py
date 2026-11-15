@@ -2489,8 +2489,9 @@ class StudioWindow(QMainWindow):
         self._reduce_motion_action.setCheckable(True)
         self._reduce_motion_action.setChecked(motion.reduce_motion())
         self._reduce_motion_action.setToolTip(
-            "Show the Δ readout's new value at once after a seek or a lap change, instead of "
-            "counting to it. Follows the system's Reduce Motion until you choose here.")
+            "Show the Δ readout's new value at once after a seek, instead of "
+            "counting to it. Follows the system's Reduce Motion: set it to match the system and "
+            "it follows the system again.")
         self._reduce_motion_action.toggled.connect(self._on_reduce_motion_toggled)
 
         # Help menu: the shortcut reference (also F1 / ?) and an About card (help_dialog.py).
@@ -2976,6 +2977,10 @@ class StudioWindow(QMainWindow):
         if event.key() in (Qt.Key_Left, Qt.Key_Right):
             step = 5.0 if event.modifiers() & Qt.ShiftModifier else 1.0
             sign = 1.0 if event.key() == Qt.Key_Right else -1.0
+            # A HELD arrow is a continuous gesture, like a scrub: the readout follows it directly
+            # instead of restarting its roll every 33 ms (studio/motion.py). One press may roll.
+            if event.isAutoRepeat() and getattr(self, "view", None) is not None:
+                self.view.note_continuous_gesture()
             self._video_do(lambda v: v.step(sign * step))
             event.accept()
             return
@@ -3411,10 +3416,13 @@ class StudioWindow(QMainWindow):
     def _on_reduce_motion_toggled(self, on: bool):
         """View ▸ Reduce motion: switch motion off (or back on) now — finishing anything mid-way —
         and remember the choice (guarded, like the palette's)."""
-        motion.set_reduce_pref(bool(on))
+        # The item toggles the EFFECTIVE setting; a choice that equals the system's clears the
+        # pref, so picking "the same as macOS" is the way back to following macOS.
+        pref = None if bool(on) == motion.system_reduce() else bool(on)
+        motion.set_reduce_pref(pref)
         motion.finish_all()
         try:
-            prefs.set_reduce_motion(bool(on))
+            prefs.set_reduce_motion(pref)
         except OSError as exc:
             _log.warning("could not persist reduce motion (%r)", exc)
 

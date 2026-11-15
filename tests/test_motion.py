@@ -193,6 +193,29 @@ def test_finish_cancel_and_a_destroyed_owner():
     print("ok finish / cancel / destroyed owner dropped without a callback")
 
 
+def test_the_capture_harnesses_finish_every_transition_before_they_grab():
+    """media_capture and ui_capture count on motion being off offscreen; under PACER_MOTION=1 a
+    grab could catch a rolling readout, so each grab ends every transition first."""
+    import tempfile
+
+    from PySide6.QtWidgets import QLabel
+
+    from studio.dev import media_capture, ui_capture
+    calls = []
+    real = motion.finish_all
+    motion.finish_all = lambda: calls.append(1)
+    try:
+        label = QLabel("x")
+        media_capture.grab(label)
+        assert calls == [1], "media_capture.grab did not finish transitions first"
+        with tempfile.TemporaryDirectory() as d:
+            ui_capture._grab(label, os.path.join(d, "x.png"))
+        assert calls == [1, 1], "ui_capture._grab did not finish transitions first"
+    finally:
+        motion.finish_all = real
+    print("ok capture harnesses finish transitions before grabbing")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
