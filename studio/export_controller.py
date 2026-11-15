@@ -484,8 +484,9 @@ class ExportController:
         _PREF_EXPORT_RES: 1, _PREF_EXPORT_QUALITY: 0,   # 1080p, High
         _PREF_EXPORT_STYLE: 0,                           # Classic
     }
-    # The Extras row: opt-in overlay elements (`studio/overlay/`), each a remembered checkbox that
-    # opens UNCHECKED until the user ticks it, so the Classic export stays what it was.
+    # The Extras row: opt-in overlay elements (`studio/overlay/`), each a remembered checkbox. In
+    # Classic they open UNCHECKED until the user ticks them, so the Classic export stays what it
+    # was; in Broadcast they open checked (`_PREF_EXPORT_STYLE_EXTRAS` below).
     _PREF_EXPORT_GHOST = "export_ghost"
     _GHOST_LABEL = "Ghost of your best lap"
     _GHOST_TIP = ("A ring on the minimap where your best lap was at the same lap time — the lap "

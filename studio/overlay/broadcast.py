@@ -13,8 +13,8 @@ WHAT EACH PART SHOWS, AND WHERE THE NUMBER COMES FROM:
     best lap the strip's `★ BEST` mark stands in for it, as in Classic. A thin amber line under the
     header is the strip's progress fill;
   * the Δ BAR (with the tower, replaces the strip): the same Δ as a bar from the centre, on a scale
-    fixed for the whole export (the next round step above the largest |Δ| it will show, printed at
-    both ends — the bar never clips). INSIDE TIMING PRECISION (`library.within_timing_precision`,
+    fixed PER LAP (the next round step above that lap's largest |Δ|, printed at both ends — the bar
+    never clips; one slow lap does not flatten the others on a whole-recording export). INSIDE TIMING PRECISION (`library.within_timing_precision`,
     0.07 s) the bar and the tower's Δ are the neutral white, not gain/loss: decided on the PRINTED
     value (`theme.format_delta_value`), as the Laps table's Δbest and the compare seam decide, so a
     "+0.07" never reads level while another "+0.07" reads lost. Not drawn on the best lap (a
@@ -42,6 +42,7 @@ Faces are the export's own (`export_video._font`: Inter, bold, tabular figures).
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import replace
 
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -58,6 +59,8 @@ PRECISION_S = library.PB_PRECISION_S
 _SCALE_STEPS = (0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0)
 _PLATE_ALPHA = 200
 _PENDING_DELTA = ""
+_CACHE_MAX = 192        # cached text images: a lap's speeds and Δ strings, recent first
+_LABEL_MIN_PX = 11.0   # the C-labels' legibility floor: below it a label is noise
 
 
 def styled(config, style: str):
@@ -134,9 +137,10 @@ class BroadcastElement:
         self._k = ctx.k
         # Every string the export will burn, from the render's own frames through the Classic
         # run builders (as the Classic pill budget does): the tower and the speed plate are fitted
-        # to them, and the bar's scale to the largest |Δ|.
+        # to them, and each lap's bar scale to that lap's largest |Δ| (PER LAP: on a whole-recording
+        # export one slow lap would otherwise flatten every other lap's bar to a sliver).
         heads, clocks, deltas, speeds = [], [], [], []
-        max_abs = 0.0
+        max_abs: dict[int | None, float] = {}
         times = ev.frame_times(spec.t0, spec.t1, ctx.fps)
         for t in (times if len(times) else [spec.t0]):
             vals = ev.overlay_values_at(s, float(t), spec)
@@ -150,8 +154,9 @@ class BroadcastElement:
             clocks.append(c)
             deltas.append(d)
             if vals.lap_started and vals.delta_s is not None:
-                max_abs = max(max_abs, abs(printed_delta(vals.delta_s)))
-        self._scale = delta_scale(max_abs)
+                max_abs[vals.lap_id] = max(max_abs.get(vals.lap_id, 0.0),
+                                           abs(printed_delta(vals.delta_s)))
+        self._scales = {lap: delta_scale(v) for lap, v in max_abs.items()}
         # --- sizes (fractions of the short side, layout.py) and faces
         L = layout
         self._head_h, self._prog_h = L.TOWER_HEAD * u, L.TOWER_PROGRESS * u
@@ -172,20 +177,18 @@ class BroadcastElement:
         self._sp_num_w = max((_adv(self._f_speed, t) for t in speeds), default=0.0)
         speed_w = 2 * L.SPEED_PAD * u + self._sp_num_w + self._sp_gap + _adv(self._f_unit,
                                                                             self._unit_label)
-        # --- the layout: the tower first (the stamp hangs under it), then the rest, clear of the
-        # Classic plates this style keeps — or the export fails here, by name (`build`).
-        slots = L.table(ctx.out_w, ctx.out_h)
-        keep = {n: _box(ctx.plates[n]) for n in ("gmeter", "map")}
-        boxes = L.resolve(slots, ["tower"], ctx.out_w, ctx.out_h, {"tower": (tower_w, tower_h)},
-                          keep)
-        tw = boxes["tower"]
+        # --- the layout (layout.py), clear of the Classic plates this style keeps; every slot has
+        # fallbacks, and only if none fits does the export fail here, by name (`build`). The
+        # honesty stamp is the Classic block (`stamp_block`): its size, and its offset from the
+        # strip it hangs under, carried over to the tower — same lines, face and size.
         strip, stamp = ctx.plates["strip"], ctx.plates[STAMP]
-        # The Classic stamp block (`stamp_block`) translated from under the strip to under the
-        # tower: same lines, same face, same size — only the place moves.
-        moved = QRectF(stamp).translated(tw.x - strip.x(), tw.bottom - strip.bottom())
-        keep[STAMP] = _box(moved)
-        boxes = L.resolve(slots, ["dbar", "speed"], ctx.out_w, ctx.out_h,
-                          {"speed": (speed_w, sp_h)}, keep, placed=boxes)
+        boxes = L.resolve(
+            L.table(ctx.out_w, ctx.out_h), L.ORDER, ctx.out_w, ctx.out_h,
+            {"tower": (tower_w, tower_h), "stamp": (stamp.width(), stamp.height()),
+             "speed": (speed_w, sp_h)},
+            {n: _box(ctx.plates[n]) for n in ("gmeter", "map")},
+            hang={"stamp": (stamp.x() - strip.x(), stamp.y() - strip.bottom())})
+        moved = _rect(boxes["stamp"])
         self.boxes = boxes
         self.tower, self.dbar, self.speed = (_rect(boxes[n]) for n in ("tower", "dbar", "speed"))
         # What the elements prepared after this one read as the plates (the corner cards: they keep
@@ -195,7 +198,8 @@ class BroadcastElement:
         readout.moveTop(self.speed.y())
         self.occupies = {"strip": self.tower.united(self.dbar), "readout": readout, STAMP: moved}
         self._prerender()
-        self._cache: dict[tuple[tuple[str, str], ...], QImage] = {}
+        # Bounded (least recently used out): a whole-recording export at 4K once reached 81 MB.
+        self._cache: OrderedDict[tuple[tuple[str, str], ...], QImage] = OrderedDict()
         self._glyphs: dict[str, tuple] = {}
         fm = QFontMetricsF(self._f_time)
         self._glyph_h = fm.height() + 2 * math.ceil(3 * 2.4 * self._k) + 2
@@ -219,33 +223,15 @@ class BroadcastElement:
         p.end()
         self._tower_img = img
         self._heads: dict[str, QImage] = {}
-        # The Δ bar: its track, the precision band round the centre, the scale at both ends and
-        # the baseline's name over the centre.
+        # The Δ bar: one image per lap scale in use (`_bar_image`).
         r = self.dbar
-        img, p = _image(r.width(), r.height())
         lab_h = r.height() * 0.42
-        bar = QRectF(1, 1 + lab_h, r.width(), r.height() - lab_h)
-        self._bar = bar.translated(r.x() - 1, r.y() - 1)
-        _plate(p, bar, k)
-        half = bar.width() / 2.0
-        band = half * PRECISION_S / self._scale
-        p.setPen(Qt.NoPen)
-        p.setBrush(theme.qcolor(EXPORT.text, 46))
-        p.drawRect(QRectF(bar.center().x() - band, bar.y() + 2 * k, 2 * band,
-                          bar.height() - 4 * k))
-        f = ev._font(lab_h * 0.86, bold=True)
-        fm = QFontMetricsF(f)
-        base = 1 + lab_h - fm.descent() - 1.0 * k
-        sc = f"{self._scale:g}"
-        ev._draw_text(p, QPointF(bar.x() + 4 * k, base), f"−{sc} s", f, EXPORT.text_dim,
-                      halo=1.6 * k)
-        right = f"+{sc} s"
-        ev._draw_text(p, QPointF(bar.right() - 4 * k - fm.horizontalAdvance(right), base), right,
-                      f, EXPORT.text_dim, halo=1.6 * k)
-        ev._draw_text(p, QPointF(bar.center().x() - fm.horizontalAdvance(self._name) / 2, base),
-                      self._name, f, EXPORT.text, halo=1.6 * k)
-        p.end()
-        self._dbar_img = img
+        self._lab_h = lab_h
+        self._bar = QRectF(r.x(), r.y() + lab_h, r.width(), r.height() - lab_h)
+        self._bars: dict[float, QImage] = {}
+        self.bar_labels: dict[float, tuple[str, str, str]] = {}
+        for scale in sorted(set(self._scales.values())):
+            self._bar_image(scale)
         # The speed: its plate and its unit.
         r = self.speed
         img, p = _image(r.width(), r.height())
@@ -261,6 +247,40 @@ class BroadcastElement:
         p.end()
         self._speed_img = img
         self._num_right = r.x() - 1 + num_right
+
+    def _bar_image(self, scale: float) -> QImage:
+        """The bar's track, the precision band round the centre, `scale` at both ends and the
+        baseline's name over the centre — drawn once per scale (scales are a few round steps)."""
+        img = self._bars.get(scale)
+        if img is not None:
+            return img
+        ev, k, r, lab_h = self._ev, self._k, self.dbar, self._lab_h
+        img, p = _image(r.width(), r.height())
+        bar = QRectF(1, 1 + lab_h, r.width(), r.height() - lab_h)
+        _plate(p, bar, k)
+        band = bar.width() / 2.0 * PRECISION_S / scale
+        p.setPen(Qt.NoPen)
+        p.setBrush(theme.qcolor(EXPORT.text, 46))
+        p.drawRect(QRectF(bar.center().x() - band, bar.y() + 2 * k, 2 * band,
+                          bar.height() - 4 * k))
+        f = ev._font(lab_h * 0.86, bold=True)
+        fm = QFontMetricsF(f)
+        base = 1 + lab_h - fm.descent() - 1.0 * k
+        sc = f"{scale:g}"
+        left, right = f"−{sc} s", f"+{sc} s"
+        ev._draw_text(p, QPointF(bar.x() + 4 * k, base), left, f, EXPORT.text_dim, halo=1.6 * k)
+        ev._draw_text(p, QPointF(bar.right() - 4 * k - fm.horizontalAdvance(right), base), right,
+                      f, EXPORT.text_dim, halo=1.6 * k)
+        ev._draw_text(p, QPointF(bar.center().x() - fm.horizontalAdvance(self._name) / 2, base),
+                      self._name, f, EXPORT.text, halo=1.6 * k)
+        p.end()
+        self._bars[scale] = img
+        self.bar_labels[scale] = (left, self._name, right)
+        return img
+
+    def scale_of(self, lap_id) -> float:
+        """The bar's half-range on `lap_id`'s frames."""
+        return self._scales.get(lap_id, _SCALE_STEPS[0])
 
     def _head(self, text: str) -> QImage:
         img = self._heads.get(text)
@@ -296,7 +316,9 @@ class BroadcastElement:
         """`runs` ((text, colour), …) drawn once, haloed, left to right in an image `h` tall;
         cached by the runs."""
         img = self._cache.get(runs)
-        if img is None:
+        if img is not None:
+            self._cache.move_to_end(runs)
+        else:
             fm = QFontMetricsF(font)
             img, p = _image(sum(fm.horizontalAdvance(t) for t, _c in runs) + 4 * halo, h)
             x = 1 + 2 * halo
@@ -306,6 +328,8 @@ class BroadcastElement:
                 x += fm.horizontalAdvance(text)
             p.end()
             self._cache[runs] = img
+            if len(self._cache) > _CACHE_MAX:
+                self._cache.popitem(last=False)
         return img
 
     # ------------------------------------------------------------------ once per frame
@@ -330,7 +354,32 @@ class BroadcastElement:
     def paint(self, p: QPainter, vals) -> None:
         k = self._k
         head, clock, delta, colour, frac, bar, speed = self.state(vals)
-        # --- the tower
+        if head is not None:
+            self._paint_tower(p, head, clock, delta, colour, frac)
+        # --- the Δ bar (not on the best lap: the tower's ★ BEST says why), on this lap's scale
+        if bar is not None:
+            scale = self.scale_of(vals.lap_id)
+            p.drawImage(QPointF(self.dbar.x() - 1, self.dbar.y() - 1), self._bar_image(scale))
+            b = self._bar
+            half = b.width() / 2.0
+            w = half * max(-1.0, min(1.0, bar / scale))
+            p.setPen(Qt.NoPen)
+            p.setBrush(theme.qcolor(colour, 235))
+            p.drawRect(QRectF(b.center().x(), b.y() + 3 * k, w, b.height() - 6 * k).normalized())
+            p.setBrush(theme.qcolor(EXPORT.text, 255))
+            p.drawRect(QRectF(b.center().x() - 1.2 * k, b.y() + 1 * k, 2.4 * k, b.height() - 2 * k))
+        # --- the big speed, right-aligned on its tabular figures so the unit never moves
+        s = self.speed
+        p.drawImage(QPointF(s.x() - 1, s.y() - 1), self._speed_img)
+        halo = 2.6 * k
+        img = self._text(((speed, EXPORT.text),), self._f_speed, s.height(), halo)
+        p.drawImage(QPointF(self._num_right - (img.width() - 2 - 4 * halo) - 1 - 2 * halo,
+                            s.y() - 1), img)
+
+    def _paint_tower(self, p: QPainter, head, clock, delta, colour, frac) -> None:
+        """The tower, only while there is a lap to name: outside one (pit time on a whole-recording
+        export) it draws nothing at all."""
+        k = self._k
         t = self.tower
         p.drawImage(QPointF(t.x() - 1, t.y() - 1), self._tower_img)
         if head:
@@ -362,30 +411,14 @@ class BroadcastElement:
             img = self._text(runs, self._f_delta, self._delta_h, halo)
             p.drawImage(QPointF(t.x() + self._pad - 1 - 2 * halo, y + self._time_h - 1 - 1.0 * k),
                         img)
-        # --- the Δ bar (not on the best lap: the tower's ★ BEST says why)
-        if bar is not None:
-            p.drawImage(QPointF(self.dbar.x() - 1, self.dbar.y() - 1), self._dbar_img)
-            b = self._bar
-            half = b.width() / 2.0
-            w = half * max(-1.0, min(1.0, bar / self._scale))
-            p.setPen(Qt.NoPen)
-            p.setBrush(theme.qcolor(colour, 235))
-            p.drawRect(QRectF(b.center().x(), b.y() + 3 * k, w, b.height() - 6 * k).normalized())
-            p.setBrush(theme.qcolor(EXPORT.text, 255))
-            p.drawRect(QRectF(b.center().x() - 1.2 * k, b.y() + 1 * k, 2.4 * k, b.height() - 2 * k))
-        # --- the big speed, right-aligned on its tabular figures so the unit never moves
-        s = self.speed
-        p.drawImage(QPointF(s.x() - 1, s.y() - 1), self._speed_img)
-        halo = 2.6 * k
-        img = self._text(((speed, EXPORT.text),), self._f_speed, s.height(), halo)
-        p.drawImage(QPointF(self._num_right - (img.width() - 2 - 4 * halo) - 1 - 2 * halo,
-                            s.y() - 1), img)
 
 
 class MapLabelsElement:
     """The corners' C-labels on the (Broadcast-sized) minimap, at the apexes the app's map labels
-    (`corner_map_markers`, the best lap's trace), pushed outward from the circuit's middle so a
-    label never sits on the line. Pre-rendered into one image; under the kart dot (`LAYER_MAP`)."""
+    (`corner_map_markers`, the best lap's trace), pushed outward from the circuit's middle — which
+    keeps most labels off the line, not all (on a concave stretch the outside can be track too).
+    Never below `_LABEL_MIN_PX` (11 px): smaller, a label is noise, so a frame that small gets
+    labels at the floor. One small image per label; under the kart dot (`LAYER_MAP`)."""
     name = "broadcast_map"
     layer = LAYER_MAP
 
@@ -404,7 +437,7 @@ class MapLabelsElement:
         pts = [(label, ctx.map_point(x, y)) for label, x, y, _d in marks]
         cx = sum(q.x() for _l, q in pts) / len(pts)
         cy = sum(q.y() for _l, q in pts) / len(pts)
-        font = ev._font(14.0 * k, bold=True)
+        font = ev._font(max(14.0 * k, _LABEL_MIN_PX), bold=True)
         fm = QFontMetricsF(font)
         # One small image per label (a blit costs its area: one image over the whole map measured
         # ~1 ms a 4K frame), whole-pixel placed so the blit is a straight copy.

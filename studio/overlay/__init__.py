@@ -26,7 +26,9 @@ an element here instead, so the 4,800-line exporter does not grow with every ide
     style's tower is the "strip" a corner card keeps clear of), and an `occupies[STAMP]` moves the
     honesty stamp there — the same lines, painted by the same function at the same size, in a
     rect of the Classic stamp's size (`stamp_rect`). Only a style that replaces the strip the stamp
-    hangs under has a reason to move it.
+    hangs under has a reason to move it. ORDER MATTERS: an element prepared BEFORE the one that
+    occupies (named earlier in `OverlayConfig.elements`) still reads the Classic rects — which is
+    why `broadcast.styled` puts the style's elements first.
 
 A FAILING ELEMENT FAILS THE EXPORT, LOUDLY, BY NAME. Skipping it would hand the user a file that is
 missing what they asked for with nothing saying so; catching it per frame would hide a defect that

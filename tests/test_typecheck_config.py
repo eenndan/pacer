@@ -122,6 +122,11 @@ def test_each_rule_catches_its_planted_break():
         "both": (include, NOT_YET | {name}, core),
         "stale": (include, NOT_YET | {"zz_gone"}, core),
         "unclassified": ([first] + include[2:], NOT_YET, core),
+        # A subpackage module is an entry like any other: dropped, it is unclassified; a missing
+        # one is caught by path, like a top-level module.
+        "sub-unclassified": ([e for e in include if e != "studio/overlay/layout.py"], NOT_YET,
+                             core),
+        "sub-missing": (sorted(include + ["studio/overlay/zz_gone.py"]), NOT_YET, core),
     }
     expect = {
         "unsorted": "the include list is not sorted",
@@ -131,6 +136,8 @@ def test_each_rule_catches_its_planted_break():
         "both": f"{name} is type-checked AND in NOT_YET",
         "stale": "NOT_YET names zz_gone",
         "unclassified": f"studio/{name}.py is a Qt-free core module that is neither",
+        "sub-unclassified": "studio/overlay/layout.py is a Qt-free core module that is neither",
+        "sub-missing": "studio/overlay/zz_gone.py does not exist",
     }
     for key, (inc, todo_set, qt_free) in planted.items():
         caught = allow_list_problems(inc, todo_set, qt_free, _exists)

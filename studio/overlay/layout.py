@@ -6,15 +6,17 @@ Classic overlay's, so one table composes 720p, 1080p and 4K alike. A slot names 
 height and (optionally) a width; a slot without a width is fitted by its painter to the widest
 string the export will burn (the Classic pills' rule) and handed in as a measured size.
 
-THE PORTRAIT OVERRIDE is the table's one exception, and only for the slots it names: a 9:16 frame
-is too narrow for a Δ bar between the tower and the g-meter, so the bar runs full width under the
-top row; and its bottom edge belongs to the (wide) minimap, so the big speed takes the bottom-LEFT
-corner the Classic readout uses. Everything else is the landscape row.
+EVERY SLOT HAS FALLBACKS, tried in order, so every frame the dialog offers lays out (16:9 at
+any size, 9:16, 1:1, a 4:3 or vertical source, crop or fit — tests/test_export_broadcast.py walks
+that matrix): the Δ bar sits top-centre or, where the top row is too narrow, full width under it;
+the big speed sits bottom-centre or, where the (wide) minimap is in the way, bottom-left; the
+honesty stamp hangs under the tower or, where the g-meter is in the way, below the top row. The
+PORTRAIT OVERRIDE only reorders those for a tall frame.
 
-THE CLASSIC PLATES A STYLE KEEPS (the g-meter, the minimap, the honesty stamp) are not in the table:
-the Classic painter places them, and `resolve` takes their boxes as `keep_clear` and REFUSES a
-layout that would put an element on one of them or outside the safe area — the caller turns that
-into a failed export by name rather than a graphic burned over another one.
+THE CLASSIC PLATES A STYLE KEEPS (the g-meter, the minimap) are not in the table: the Classic
+painter places them, and `resolve` takes their boxes as `keep_clear`; an element lands on none of
+them and never leaves the safe area — and if none of its places fits, `resolve` raises, naming it,
+rather than burn a graphic over another one.
 
 Qt-free and pacer-free (plain floats), so the table and its checks are testable without a frame.
 """
@@ -75,25 +77,38 @@ class Box:
 
 @dataclass(frozen=True)
 class Slot:
-    """`anchor`: "tl" / "tc" / "bl" / "bc" (a corner or an edge's centre, inset by the margin), or
-    "under" (the left margin, GAP below everything already placed or kept clear at the top).
+    """`anchors`: the places to try, IN ORDER — the first that lands in the safe area clear of
+    everything placed or kept so far wins:
+      "tl" / "tc" / "bl" / "bc": a corner or an edge's centre, inset by the margin;
+      "hang": under the tower, offset by the caller's (dx, dy) from its bottom-left (the stamp's
+              place under the Classic strip, translated);
+      "under": GAP below everything already placed or kept clear in the frame's top half — at the
+              left margin, or at the tower's x plus dx for a hanging slot.
     `w` None = fitted by the painter (a measured size); FULL = the safe area's width."""
-    anchor: str
+    anchors: tuple[str, ...]
     h: float
     w: float | None = None
 
 
 # ---------------------------------------------------------------------------------- the table
+# The honesty stamp is a slot too (its size and offset are the Classic stamp's, `fitted` and
+# `hang`): it hangs under the tower, or — where the Classic g-meter is in the way (a narrow frame
+# with a long stamp) — drops below the top row. It is never dropped and never shrunk.
 BROADCAST: dict[str, Slot] = {
-    "tower": Slot("tl", TOWER_HEAD + TOWER_PROGRESS + TOWER_TIME + TOWER_DELTA),
-    "dbar": Slot("tc", DBAR_H, DBAR_W),
-    "speed": Slot("bc", SPEED_H),
+    "tower": Slot(("tl",), TOWER_HEAD + TOWER_PROGRESS + TOWER_TIME + TOWER_DELTA),
+    "stamp": Slot(("hang", "under"), 0.0),
+    "dbar": Slot(("tc", "under"), DBAR_H, DBAR_W),
+    "speed": Slot(("bc", "bl"), SPEED_H),
 }
+# Portrait: the Δ bar runs full width under the top row, the speed takes the bottom-left corner
+# (the bottom edge belongs to the wide minimap). A square frame uses the landscape table, and its
+# fallbacks place it (the speed falls back to the bottom-left past the map).
 BROADCAST_PORTRAIT: dict[str, Slot] = {
     **BROADCAST,
-    "dbar": Slot("under", DBAR_H, FULL),
-    "speed": Slot("bl", SPEED_H),
+    "dbar": Slot(("under",), DBAR_H, FULL),
+    "speed": Slot(("bl", "bc"), SPEED_H),
 }
+ORDER = ("tower", "stamp", "dbar", "speed")
 
 
 def table(out_w: int, out_h: int) -> dict[str, Slot]:
@@ -102,20 +117,22 @@ def table(out_w: int, out_h: int) -> dict[str, Slot]:
 
 
 class LayoutError(ValueError):
-    """An element would leave the safe area or land on another one."""
+    """An element would leave the safe area or land on another one at every place it may take."""
 
 
 def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
             fitted: dict[str, tuple[float, float]], keep_clear: dict[str, Box],
-            placed: dict[str, Box] | None = None) -> dict[str, Box]:
-    """Place `names` (in order) from `slots` in an out_w x out_h frame. `fitted` gives the measured
-    (w, h) of a slot whose width is None; `keep_clear` the boxes of the Classic plates the style
-    keeps; `placed` boxes an earlier call placed (they are kept clear too, and returned). Raises
-    `LayoutError` when an element leaves the safe area or overlaps anything else."""
+            hang: dict[str, tuple[float, float]] | None = None) -> dict[str, Box]:
+    """Place `names` (in order) from `slots` in an out_w x out_h frame, each at the first of its
+    anchors that is inside the safe area and clear of every box placed or kept so far. `fitted`
+    gives the measured (w, h) of a slot whose width is None; `keep_clear` the boxes of the Classic
+    plates the style keeps; `hang` the (dx, dy) of a slot that hangs under the tower. Raises
+    `LayoutError`, naming the element and what each place hit, when no anchor fits."""
     u = float(min(out_w, out_h))
     m, gap = MARGIN * u, GAP * u
     safe = Box(m, m, out_w - 2 * m, out_h - 2 * m)
-    out = dict(placed or {})
+    hang = hang or {}
+    out: dict[str, Box] = {}
     for name in names:
         slot = slots[name]
         h = slot.h * u
@@ -125,20 +142,31 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
             w = safe.w
         else:
             w = slot.w * u
-        if slot.anchor == "under":
-            top = [b.bottom for b in (*out.values(), *keep_clear.values())
-                   if b.h > 0 and b.y < out_h / 2]
-            x, y = m, max(top, default=m - gap) + gap
+        why = []
+        for anchor in slot.anchors:
+            dx, dy = hang.get(name, (0.0, 0.0))
+            if anchor == "hang":
+                tw = out["tower"]
+                x, y = tw.x + dx, tw.bottom + dy
+            elif anchor == "under":
+                top = [b.bottom for b in (*out.values(), *keep_clear.values())
+                       if b.h > 0 and b.y < out_h / 2]
+                x = out["tower"].x + dx if name in hang else m
+                y = max(top, default=m - gap) + gap
+            else:
+                x = {"l": m, "c": (out_w - w) / 2.0}[anchor[1]]
+                y = {"t": m, "b": out_h - m - h}[anchor[0]]
+            box = Box(x, y, w, h)
+            if not safe.contains(box):
+                why.append(f"{anchor}: leaves the safe area")
+                continue
+            hit = [o for o, b in (*out.items(), *keep_clear.items()) if box.intersects(b)]
+            if hit:
+                why.append(f"{anchor}: lands on the {', '.join(hit)}")
+                continue
+            out[name] = box
+            break
         else:
-            x = {"l": m, "c": (out_w - w) / 2.0}[slot.anchor[1]]
-            y = {"t": m, "b": out_h - m - h}[slot.anchor[0]]
-        box = Box(x, y, w, h)
-        if not safe.contains(box):
-            raise LayoutError(f"the {name} ({w:.0f}x{h:.0f}) leaves the safe area of a "
-                              f"{out_w}x{out_h} frame")
-        for other, b in (*out.items(), *keep_clear.items()):
-            if box.intersects(b):
-                raise LayoutError(f"the {name} would land on the {other} in a {out_w}x{out_h} "
-                                  f"frame")
-        out[name] = box
+            raise LayoutError(f"no place for the {name} ({w:.0f}x{h:.0f}) in a {out_w}x{out_h} "
+                              f"frame ({'; '.join(why)})")
     return out
