@@ -36,6 +36,7 @@ from . import (
     focus,
     gapfill,
     gmeter,
+    lap_race,
     library,
     media_clock,
     provenance,
@@ -4322,6 +4323,71 @@ class Session:
         d_best = np.interp(float(np.interp(t_in_a, curve_a.times, curve_a.dist)), wa[1], wa[0])
         d_b = float(np.interp(d_best, wb[0], wb[1]))
         return elapsed_a - float(np.interp(d_b, curve_b.dist, curve_b.elapsed))
+
+    def race_tracks(self, lap_ids=None) -> lap_race.RaceTracks | None:
+        """The Lap Race's precomputed field (`studio/lap_race.py`) over `lap_ids` (default: every
+        clean lap, `valid_lap_ids`), or None when fewer than `lap_race.MIN_FIELD` laps survive.
+
+        The one accessor the race needs from the session, because the place on track is read
+        through the PRIVATE warp: each lap's `_warp_to_best`, the frame `delta_between` uses, so a
+        rung's interval is the compare badge's Δ. Every lap NOT raced is in `.excluded` with its
+        reason: not a clean lap (with the default field, every lap of the recording outside
+        `valid_lap_ids`; with `lap_ids`, any it names that is not clean — a caller cannot race the
+        band's left-out laps), an interior GPS dropout (`lap_has_dropout`), or no on-track match
+        (`_real_warp` is None — the normalized fraction — on any lap but the best, whose warp is the
+        identity). The timing trust rides along: a provisional start line (`timing_verified`
+        False) makes the race unranked, an estimated clock (`timing_quality.media_clock`) widens its
+        ties — `lap_race`'s module doc says what each allows.
+
+        MEMOIZED on its whole input set (`_same_inputs`: the ids, the best lap, the trust state and
+        each lap's cached trace and warp objects), so a re-segment — which replaces every one of
+        those — misses on the next read without an invalidation of its own, and a repeat read is
+        the same object. Not per tick: the race's controller holds the result."""
+        clean = self.valid_lap_ids()
+        if lap_ids is None:
+            n = self.lap_count() if getattr(self, "laps", None) is not None else 0
+            ids = tuple(sorted(set(range(n)) | set(clean)))
+        else:
+            ids = tuple(lap_ids)
+        best = self.best_lap_id()
+        if best is None:
+            return None
+        btd = self._lap_time_dist_elapsed(best)
+        clean_set = set(clean)
+        inputs = [(i, self._lap_time_dist_elapsed(i), self._warp_to_best(i))
+                  for i in ids if i in clean_set]
+        trust = (bool(self.timing_verified), str(self.timing_quality.clock))
+        key = (ids, best, btd, trust, tuple(inputs))
+        memo = getattr(self, "_race_memo", None)
+        if memo is not None and _same_inputs(memo[0], key):
+            return memo[1]
+        excluded = {i: lap_race.EXCLUDED_NOT_CLEAN for i in ids if i not in clean_set}
+        laps = []
+        for i, td, warp in inputs:
+            if td is None or btd is None or warp is None or (i != best and _real_warp(warp) is None):
+                excluded[i] = lap_race.EXCLUDED_UNMATCHED
+                continue
+            if self.lap_has_dropout(i):
+                excluded[i] = lap_race.EXCLUDED_DROPOUT
+                continue
+            laps.append(self._race_lap(i, td, warp))
+        bw = self._warp_to_best(best)
+        out = None
+        if btd is not None and bw is not None:
+            out = lap_race.build(laps, self._race_lap(best, btd, bw), excluded,
+                                 provisional=not trust[0],
+                                 clock_estimated=self.timing_quality.media_clock)
+        self._race_memo = (key, out)
+        return out
+
+    def _race_lap(self, lap_id: int, td, warp) -> lap_race.RaceLap:
+        """One lap's `lap_race.RaceLap` from its cached (times, dist, elapsed), trace and warp."""
+        times, dist, elapsed = td
+        xs, ys, _t = self._lap_trace_xyt(lap_id)
+        return lap_race.RaceLap(
+            lap_id=lap_id, lap_time=float(self.lap_time(lap_id)), clock_start=float(times[0]),
+            elapsed=elapsed, dist=dist, xs=np.asarray(xs[:len(times)], float),
+            ys=np.asarray(ys[:len(times)], float), warp=warp)
 
     # Map (x, y) -> trace nearest-point lookups (whole-trace + the lap-scoped variant for the
     # draggable marker) — delegated to session.timeline (studio/timeline.py).
