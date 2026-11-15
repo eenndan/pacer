@@ -94,7 +94,7 @@ ALLOWED_QT = {
     "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_controller",
     "library_dialog", "map_view",
-    "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel",
+    "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "stats_braking", "stats_coasting", "stats_common",
     "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",
     "track_dialog", "video_view",

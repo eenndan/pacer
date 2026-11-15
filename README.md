@@ -135,7 +135,7 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   `StudioWindow` offscreen on real footage, so a UI finding arrives as a measurement rather than an
   opinion. A companion guard proves the app never writes into its own source tree, from a tripwire
   on every write path Python and Qt expose.
-- **160+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
+- **180+ CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
   widgets and measure them. CI runs all of it on every pull request, four tests at a time, plus an
   end-to-end offscreen smoke. It skips what its runner cannot run: the 16+ `footage.*` checks,
   which need a real recording, and one crash soak that runs on every push to `main` instead. CTest

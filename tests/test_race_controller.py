@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 from _qtapp import themed_app  # noqa: E402
 
-from studio import data_quality, lap_race, race_controller  # noqa: E402
+from studio import lap_race, race_controller  # noqa: E402
 from studio.race_controller import RaceController, pack_rows  # noqa: E402
 
 _APP = themed_app()
@@ -211,6 +211,23 @@ def test_the_readout_is_interval_to_best():
     rc.scrub(0.0)
     rc.tick()
     assert race_controller.readout_text(card.model).startswith("L5 vs best L1: ≈ ")
+    # A field whose leader is NOT the best lap early on: lap 1 is quick for 300 m, then slow. The
+    # readout keeps the best as its reference while the leader (and every row's interval) changes.
+    el = np.concatenate([np.linspace(0, 12, 121), 12 + np.linspace(0, 20, 201)[1:]])
+    d = np.where(el <= 12, el * 25.0, 300 + (el - 12) * 15.0)
+    quick_start = lap_race.RaceLap(lap_id=1, lap_time=32.0, clock_start=0.0, elapsed=el, dist=d,
+                                   xs=d.copy(), ys=np.zeros_like(d),
+                                   warp=(np.array([0.0, 600.0]), np.array([0.0, 600.0])))
+    best, third = _straight(0, 20.0), _straight(2, 600.0 / 31.0)
+    tracks = lap_race.build([best, quick_start, third], best, {})
+    rc, clock, mp, card, _ = _controller(tracks)
+    rc.enter(selected=2)
+    rc.scrub(10.0 / tracks.duration)
+    rc.tick()
+    state = lap_race.race_state(tracks, rc.t)
+    assert state.rungs[0].lap_id == 1, "the quick starter should lead at 10 s"
+    rung = next(r for r in state.rungs if r.lap_id == 2)
+    assert card.model.to_best == lap_race.interval_to_best(state, 2) != rung.interval_s
     print("ok readout == interval_to_best")
 
 

@@ -32,7 +32,6 @@ _ROW_H = 18
 _TITLE_H = 20
 _BAR_H = 12
 _BTN = 20
-_W = 300
 _POS_W = 22
 _INT_W = 64
 _SPREAD_W = 44
@@ -75,8 +74,10 @@ class RaceCard(QWidget):
         self._icons: dict = {}
         self._hits: dict[str, QRectF] = {}
         self._scrubbing = False
+        # The card's measure is its caption's, one line, plus its padding and a step of air: the
+        # widest fixed text it carries, so the columns below are sized from the face, not typed.
+        self._w = self._fm.horizontalAdvance(CAPTION) + 2 * _PAD + theme.SPACE_XL
         self.setMouseTracking(True)
-        self.setFixedSize(_W, 120)
         self.hide()
 
     # ------------------------------------------------------------------ model
@@ -88,8 +89,8 @@ class RaceCard(QWidget):
     def show_model(self, model: CardModel) -> None:
         self.model = model
         h = self._height(model)
-        if h != self.height():
-            self.setFixedSize(_W, h)
+        if (self._w, h) != (self.width(), self.height()):
+            self.setFixedSize(self._w, h)
         self.update()
 
     def lines(self) -> list[str]:
@@ -102,7 +103,7 @@ class RaceCard(QWidget):
             out.append(m.unranked_reason)
         else:
             out.append("pack · interval to leader · spread")
-            room = _W - 2 * _PAD - _POS_W - _INT_W - _SPREAD_W
+            room = self._w - 2 * _PAD - _POS_W - _INT_W - _SPREAD_W
             for r in m.rows:
                 chips, more = self.fit_chips(r, m.selected, room)
                 out.append(" ".join([str(r.position), *(f"L{lap_label(i)}" for i in chips),
@@ -138,7 +139,7 @@ class RaceCard(QWidget):
         return r.height() + 2
 
     def _height(self, m: CardModel) -> int:
-        inner = _W - 2 * _PAD
+        inner = self._w - 2 * _PAD
         h = _PAD + _TITLE_H + _ROW_H + _BAR_H + 4
         if m.unranked_reason:
             h += self._wrapped_h(m.unranked_reason, inner) + 4
@@ -189,14 +190,14 @@ class RaceCard(QWidget):
         p.setPen(QPen(QColor(C.border), 1))
         p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1),
                           theme.RADIUS_M, theme.RADIUS_M)
-        inner = _W - 2 * _PAD
+        inner = self._w - 2 * _PAD
         x0, y = float(_PAD), float(_PAD)
         # Title row: identity + race clock, then the transport (restart · play/pause · speed · ×).
         p.setFont(self._title_font)
         p.setPen(QPen(QColor(C.text_dim)))
         p.drawText(QRectF(x0, y, inner, _TITLE_H), int(Qt.AlignVCenter | Qt.AlignLeft),
                    self._title(m))
-        bx = _W - _PAD - _BTN
+        bx = self._w - _PAD - _BTN
         self._button(p, "close", QRectF(bx, y, _BTN, _BTN), glyph="ph.x")
         bx -= _BTN + 4 + 10
         self._button(p, "speed", QRectF(bx, y, _BTN + 10, _BTN), text=f"{m.speed:g}×")

@@ -177,6 +177,7 @@ caches + delegates.
 |---|---|---|---|
 | [playback_state.py](playback_state.py) | The one owner of the per-frame playback / scrub / auto-follow cursor | — | `test_controllers` |
 | [scrub_controller.py](scrub_controller.py) | Plot-cursor scrub: lap-scoped drag, ≤ 1 seek per tick | — | `test_controllers` |
+| [race_controller.py](race_controller.py) | The Lap Race: race clock (wall dt × speed on the tick), enter/exit, the card's pack rows and vs-best readout | — | `test_race_controller` |
 | [compare_controller.py](compare_controller.py) | Dual-lap compare: pinned pair, enter/exit, pane times, Δ badges, map ghost | →Qt | `test_compare` |
 | [export_controller.py](export_controller.py) | The Qt side of every export: File ▸ Export, writers, share card, video flow | Qt | `test_export_gates` |
 | [library_controller.py](library_controller.py) | The library, its first-open verdict and PB moment, session records, focus list, saved tracks, Open Recent | Qt | `test_library` |
@@ -189,8 +190,9 @@ caches + delegates.
 | [central_view.py](central_view.py) | One recording's panels, tabbed lap panel, 30 Hz `tick()`, maximize, saved layout | Qt | `test_central_view_realqt` |
 | [video_view.py](video_view.py) | Player shell: transport, playback rate, slider + quality strip + marks band, compare panes | Qt | `test_video_view_compare` |
 | [player_pane.py](player_pane.py) | One player: global time across chapters, the telemetry ↔ media seam, the g-meter window | Qt | `test_compare` |
-| [map_view.py](map_view.py) | Track map: laps, draggable timing lines, marker, corner/brake glyphs, rainbow, ghost | Qt | `test_rainbow_map` |
+| [map_view.py](map_view.py) | Track map: laps, draggable timing lines, marker, corner/brake glyphs, rainbow, ghost, race layer | Qt | `test_rainbow_map` |
 | [plots_view.py](plots_view.py) | Speed + Δ charts on one linked x-axis: scrub cursor, ideal and driving overlays, instruments | Qt | `test_charts_panel` |
+| [race_ladder.py](race_ladder.py) | The Lap Race card over the map: packs, interval to leader, vs best, trust lines, transport | Qt | `test_race_controller` |
 | [lap_table.py](lap_table.py) | The sortable Laps table (splits, ⚠ dropout) and the Corners table | Qt | `test_lap_table_columns` |
 | [stats_panel.py](stats_panel.py) · [common](stats_common.py) [braking](stats_braking.py) [coasting](stats_coasting.py) [corners](stats_corners.py) [ideal](stats_ideal.py) [straights](stats_straights.py) [trust](stats_trust.py) | The Stats page: `StatsView` shell (layout, tiles, charts, unsplit sections); one module per split section | Qt | `test_stats` `test_stats_ideal` |
 | [coaching_panel.py](coaching_panel.py) | Coaching page + Opportunities dialog: theme and focus blocks, per-corner rows | Qt | `test_coaching` |

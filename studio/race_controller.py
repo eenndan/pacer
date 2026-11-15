@@ -212,9 +212,10 @@ class RaceController:
     # ------------------------------------------------------------------ transport
     def toggle_play(self) -> None:
         """Play / pause; at the finish, play restarts from the line."""
-        if not self.active:
+        tr = self.tracks
+        if tr is None:
             return
-        if not self.playing and self.t >= self.tracks.duration:
+        if not self.playing and self.t >= tr.duration:
             self.t = 0.0
         self.playing = not self.playing
         self._last = self._clock()
@@ -247,17 +248,18 @@ class RaceController:
 
     def scrub(self, fraction: float) -> None:
         """Jump race time to `fraction` of the race (the card's progress bar), keeping play state."""
-        if not self.active:
+        tr = self.tracks
+        if tr is None:
             return
-        self.t = min(max(float(fraction), 0.0), 1.0) * self.tracks.duration
+        self.t = min(max(float(fraction), 0.0), 1.0) * tr.duration
         self._last = self._clock()
         self._dirty = True
 
     def set_selected(self, lap_id: int | None) -> None:
         """Emphasise another lap (a click in the Laps table during the race)."""
-        if not self.active or lap_id == self.selected:
-            return
         tr = self.tracks
+        if tr is None or lap_id == self.selected:
+            return
         self.selected = lap_id if lap_id in tr.ids or lap_id == tr.best.lap_id else None
         self.map.set_race_selected(self.selected)
         self._dirty = True
@@ -266,13 +268,14 @@ class RaceController:
     def tick(self) -> None:
         """Advance race time by the wall-clock step × speed and redraw if anything moved. Stops at
         the finish, where the card holds the final classification until Esc or a replay."""
-        if not self.active:
+        tr = self.tracks
+        if tr is None:
             return
         now = self._clock()
         last = now if self._last is None else self._last
         self._last = now
         if self.playing:
-            dur = self.tracks.duration
+            dur = tr.duration
             self.t = min(self.t + min(max(now - last, 0.0), MAX_STEP_S) * self.speed, dur)
             if self.t >= dur:
                 self.playing = False

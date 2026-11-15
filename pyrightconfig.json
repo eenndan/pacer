@@ -40,6 +40,7 @@
     "studio/playback_state.py",
     "studio/prefs.py",
     "studio/provenance.py",
+    "studio/race_controller.py",
     "studio/reference.py",
     "studio/render_cache.py",
     "studio/rotation.py",
