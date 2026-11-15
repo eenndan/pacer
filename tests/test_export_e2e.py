@@ -220,7 +220,10 @@ class _Owner:
                 field = form.itemAt(r, QFormLayout.ItemRole.FieldRole)
                 if label is not None and field is not None:
                     rows[label.widget().text()] = field.widget()
-            self.opened = {name: combo.currentText() for name, combo in rows.items()}
+            # A combo row by its text; a checkbox row (Extras) by its label and tick.
+            self.opened = {name: (f.currentText() if hasattr(f, "currentText")
+                                  else f"{f.text()}: {'on' if f.isChecked() else 'off'}")
+                           for name, f in rows.items()}
             if self.contents is not None:
                 combo = rows["Contents"]
                 combo.setCurrentIndex(combo.findText(self.contents))
@@ -388,6 +391,8 @@ def test_the_default_export_is_the_footage_with_the_overlay_burned_in():
     # ...and the prefs that ARE remembered were in force, or this proved nothing about them.
     assert owner.opened["Resolution"] == "Source (no downscale)", owner.opened
     assert owner.opened["Run-up / run-off"].startswith("5 s"), owner.opened
+    # The opt-in overlay elements open OFF: his export stays the Classic one (cool/overlay-ghost).
+    assert owner.opened["Extras"] == "Ghost of your best lap: off", owner.opened
     assert out and out.endswith("_overlay.mp4"), (out, owner.saves)
     assert os.path.isfile(out), f"no file at {out}; boxes: {owner.boxes}"
     assert len(owner.boxes) == 1 and "exported" in owner.boxes[0], owner.boxes

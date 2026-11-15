@@ -61,6 +61,20 @@ from studio import theme  # noqa: E402
 
 _STUDIO = os.path.join(_REPO, "studio")
 
+# App SUBPACKAGES walked like the top level, each file named `<package>/<file>` (test_layering's
+# `_SUBPACKAGES`): `studio/overlay/` holds the export's overlay elements, and a module one folder
+# down must not slip past this guard.
+_SUBPACKAGES = ("overlay",)
+
+
+def _studio_files() -> list[str]:
+    """Every studio .py file this guard walks: the top level, then each of `_SUBPACKAGES`."""
+    names = [fn for fn in os.listdir(_STUDIO) if fn.endswith(".py")]
+    for pkg in _SUBPACKAGES:
+        names += [f"{pkg}/{fn}" for fn in os.listdir(os.path.join(_STUDIO, pkg))
+                  if fn.endswith(".py")]
+    return sorted(names)
+
 # The scale, read from the tokens rather than re-typed, so this file can never disagree with the
 # thing it guards about WHAT the steps are — only about whether they are used.
 SPACE = (theme.SPACE_XXS, theme.SPACE_XS, theme.SPACE_S, theme.SPACE_M,
@@ -365,9 +379,7 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     }
     offenders = []
     total = onscale = 0
-    for fn in sorted(os.listdir(_STUDIO)):
-        if not fn.endswith(".py"):
-            continue
+    for fn in _studio_files():
         for lineno, call, vals, owner in _dimension_literals(os.path.join(_STUDIO, fn)):
             total += 1
             if all(v in _SPACE_OK for v in vals):

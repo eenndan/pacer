@@ -42,6 +42,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
+from types import MappingProxyType
 from typing import NamedTuple
 
 import numpy as np
@@ -57,7 +58,7 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from . import data_quality, gmeter_overlay, theme, units
+from . import data_quality, gmeter_overlay, overlay, theme, units
 from ._signal import fmt_time, lap_label, plural
 from .export_palette import EXPORT
 from .timeline import trace_point_at, trace_tail  # noqa: F401  (trace_point_at: tests read ev.*)
@@ -409,6 +410,10 @@ class OverlayConfig:
     # artifact they share — follows it (the render runs on a worker QThread that must not read the
     # global theme.active_palette() live; export_semantic_pair resolves the vivid EXPORT pair from it).
     palette: str = theme.PALETTE_STANDARD
+    # Opt-in overlay ELEMENTS by registry name (`studio/overlay/`: "ghost", ...), painted on top of
+    # the Classic overlay above. EMPTY by default, and then the painter never reaches the package:
+    # the Classic export stays byte-identical (tests/test_export_ghost.py).
+    elements: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------- chaptered source
@@ -2607,7 +2612,9 @@ class _MapInset:
         return QPointF(float(self._px[marker_index]), float(self._py[marker_index])), QPolygonF()
 
     def paint(self, p: QPainter, tt: float | None, marker_index: int | None = None,
-              opaque: bool = False) -> None:
+              opaque: bool = False, under=None) -> None:
+        """`under`, when given, is called once the line is down and before the tail and the kart
+        dot: the overlay elements' `LAYER_MAP` (nothing may cover the dot)."""
         if not self._ok:
             return
         # Blit the baked lap line. The layer runs from the frame's origin to the inset's far
@@ -2623,6 +2630,8 @@ class _MapInset:
             p.drawImage(self._layer_ink.topLeft(), self._layer, self._layer_ink)
         elif not opaque:
             p.drawImage(0, 0, self._layer)
+        if under is not None:
+            under()
         m, tail = self.marker_and_tail(tt, marker_index)
         if m is None:
             return
@@ -3133,6 +3142,18 @@ class OverlayPainter:
         # The inset projects its track into ABSOLUTE frame coordinates and bakes the line once, so
         # it is built after its rect is final rather than moved afterwards.
         self._map = _MapInset(session, map_rect, map_lap, scale_k=self._k)
+        # The opt-in overlay elements (`studio/overlay/`), each prepared ONCE here; those with
+        # nothing to draw in this export sit it out. None asked for = the package is never reached.
+        self.elements = overlay.build(cfg.elements, overlay.ElementContext(
+            session=session, spec=spec, out_w=out_w, out_h=out_h, fps=self._fps, k=self._k,
+            map_rect=map_rect, map_point=self._map._proj if self._map._ok else None,
+            plates=MappingProxyType({
+                "gmeter": QRectF(self._g_rect), "map": QRectF(map_rect),
+                "readout": QRectF(self._readout_rect), "strip": QRectF(self._strip_rect),
+                overlay.STAMP: QRectF(self._stamp_rect)}),
+            safe=QRectF(m, m, out_w - 2 * m, out_h - 2 * m),
+        )) if cfg.elements else []
+        self._replaced = overlay.replaced(self.elements)   # Classic plates an element stands in for
         # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
         # dial matches the screen.
         #
@@ -3206,31 +3227,41 @@ class OverlayPainter:
         p = QPainter(img)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
+        els, skip = self.elements, self._replaced     # skip: Classic plates an element replaces
         # g-meter dial: paint into its rect via the SHARED paint routine + the snapshot of the
         # headless dial's filtering state (identical to the on-screen widget).
-        p.save()
-        p.translate(self._g_rect.topLeft())
-        # export=True -> the vivid, no-box, big-number dial; scale_k is the dial's size against the
-        # dial it was designed at, DERIVED from the same fraction that sized it rather than typed
-        # as the ~280 px that fraction happens to come to at 1080p. A comment claiming a pixel
-        # count "is" a fraction of something is exactly the kind that rots the first time the
-        # fraction moves; this one cannot disagree with `_g_rect` because it is made of it.
-        gmeter_overlay.paint_dial(
-            p, self._g_rect.width(), self._g_rect.height(), dial_state, export=True,
-            scale_k=self._g_rect.width() / (self._spec.config.gmeter_frac * OVERLAY_REF_SHORT_SIDE))
-        p.restore()
-        self._map.paint(p, vals.tt, vals.marker_index, opaque=not img.hasAlphaChannel())
-        _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
+        if "gmeter" not in skip:
+            p.save()
+            p.translate(self._g_rect.topLeft())
+            # export=True -> the vivid, no-box, big-number dial; scale_k is the dial's size against
+            # the dial it was designed at, DERIVED from the same fraction that sized it rather than
+            # typed as the ~280 px that fraction happens to come to at 1080p. A comment claiming a
+            # pixel count "is" a fraction of something is exactly the kind that rots the first time
+            # the fraction moves; this one cannot disagree with `_g_rect` because it is made of it.
+            gmeter_overlay.paint_dial(
+                p, self._g_rect.width(), self._g_rect.height(), dial_state, export=True,
+                scale_k=self._g_rect.width() / (self._spec.config.gmeter_frac
+                                                * OVERLAY_REF_SHORT_SIDE))
+            p.restore()
+        if "map" not in skip:
+            self._map.paint(p, vals.tt, vals.marker_index, opaque=not img.hasAlphaChannel(),
+                            under=(lambda: overlay.paint_layer(els, p, vals, overlay.LAYER_MAP))
+                            if els else None)
+        if "readout" not in skip:
+            _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
         # The strip's fallback elapsed origin is the LAP's start, not the clip's — with a lead-in
         # those differ, and a session with no lap window would otherwise count the run-up.
         # `is_best_at` is asked per frame because in the full-session scope the answer changes at
         # every start line; for a single-lap export it is the spec's one verdict, as before.
-        _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
-                     self._spec.config.palette, self._spec.is_best_at(vals.lap_id))
+        if "strip" not in skip:
+            _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
+                         self._spec.config.palette, self._spec.is_best_at(vals.lap_id))
         # ...and the honesty stamp under it, on EVERY frame including the lead-in and the run-off:
         # what it qualifies is the recording, not a moment in it, and a caveat that came and went
         # would be a caveat a single-frame grab or a re-cut could drop.
         _paint_stamp(p, self._strip_rect, self._stamp_rect, self._stamp_lines)
+        if els:
+            overlay.paint_layer(els, p, vals, overlay.LAYER_TOP)
         p.end()
 
 

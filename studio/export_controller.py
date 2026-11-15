@@ -31,6 +31,7 @@ from typing import NamedTuple
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -47,6 +48,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
 from ._signal import fmt_hms, lap_label, plural
+from .overlay import ghost
 from .session import fmt_time
 from .workers import VideoExportWorker
 
@@ -438,6 +440,12 @@ class ExportController:
         _PREF_EXPORT_SCOPE: 0, _PREF_EXPORT_LEAD: 0, _PREF_EXPORT_ASPECT: 0, _PREF_EXPORT_FIT: 0,
         _PREF_EXPORT_RES: 1, _PREF_EXPORT_QUALITY: 0,   # 1080p, High
     }
+    # The Extras row: opt-in overlay elements (`studio/overlay/`), each a remembered checkbox that
+    # opens UNCHECKED until the user ticks it, so the Classic export stays what it was.
+    _PREF_EXPORT_GHOST = "export_ghost"
+    _GHOST_LABEL = "Ghost of your best lap"
+    _GHOST_TIP = ("A ring on the minimap where your best lap was at the same lap time — the lap "
+                  "strip's Δ, drawn as a place on track. No ghost on the best lap's own file.")
     # The index of "Source (no downscale)" in `_EXPORT_RES_OPTIONS`.
     _EXPORT_RES_SOURCE = 3
     # The compare export's own two rows. LAYOUT first because it decides the shape of the file:
@@ -491,6 +499,37 @@ class ExportController:
         except Exception:  # noqa: BLE001 — an unreadable pref never blocks an export
             return default
         return value if isinstance(value, int) and 0 <= value < count else default
+    def _ghost_reason(self, scope: str, lap: int) -> str | None:
+        """Why this scope can draw no ghost (the checkbox's disabled tooltip), or None. All laps
+        asks only the session-wide rules: each lap's file then answers for itself, and the best
+        lap's own file has none."""
+        session = getattr(self.win, "session", None)
+        try:
+            if scope == export_video.SCOPE_SESSION:
+                return ghost.unavailable_reason(session, None, follow_laps=True)
+            if scope == export_video.SCOPE_ALL_LAPS:
+                return ghost.unavailable_reason(session, None)
+            target = session.best_lap_id() if scope == export_video.SCOPE_BEST_LAP else lap
+            return ghost.unavailable_reason(session, target)
+        except Exception:  # noqa: BLE001 — an option's availability never blocks an export
+            _log.warning("ghost availability unknown", exc_info=True)
+            return "The ghost is not available for this session."
+
+    def _ghostless_files(self, lap: int) -> str:
+        """For an All-laps batch with the ghost ticked: one line naming the files that will carry
+        no ghost and why ("" when every file has one). The best lap's own file is always one."""
+        session = getattr(self.win, "session", None)
+        try:
+            ids = export_video.scope_lap_ids(session, export_video.SCOPE_ALL_LAPS, lap)
+            why = {i: ghost.unavailable_reason(session, i) for i in ids}
+        except Exception:  # noqa: BLE001 — a hint never blocks an export
+            _log.warning("ghost availability per lap unknown", exc_info=True)
+            return ""
+        out = [w for w in why.values() if w is not None]
+        if not out:
+            return ""
+        return (f"No ghost in {plural(len(out), 'file')} of {len(ids)}: " + " ".join(out))
+
     def _remember_export_prefs(self, indices: dict) -> None:
         """Persist the picker's choices, `{pref key: combo index}`. Fully guarded, like
         set_last_dir: remembering a preference must never disrupt an export the user has already
@@ -787,6 +826,11 @@ class ExportController:
             content_combo.addItem(label)
         res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES)
         q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY)
+        ghost_box = QCheckBox(self._GHOST_LABEL, dlg)
+        try:
+            ghost_box.setChecked(prefs.get(self._PREF_EXPORT_GHOST, False) is True)
+        except Exception:  # noqa: BLE001 — an unreadable pref opens on the default (off)
+            ghost_box.setChecked(False)
 
         # THE DIALOG OPENS ON THE LAST EXPORT'S CHOICES, AND A HEAVY ONE MUST NOT DO THAT SILENTLY.
         # "Video export has become extremely slow" was a remembered overlay-only ProRes at source
@@ -814,6 +858,7 @@ class ExportController:
                 for key, box in rows.items():
                     box.setCurrentIndex(self._EXPORT_DEFAULT_INDEX[key])
                 content_combo.setCurrentIndex(0)
+                ghost_box.setChecked(False)
                 recall.hide()
             use_defaults.clicked.connect(_use_defaults)
 
@@ -824,6 +869,7 @@ class ExportController:
         form.addRow("Contents", content_combo)
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
+        form.addRow("Extras", ghost_box)
         col.addLayout(form)
 
         # States the target short side + never-upscale rule (no ffprobe here; matches
@@ -858,9 +904,21 @@ class ExportController:
             fit_combo.setEnabled(aspect != export_video.ASPECT_SOURCE)
             q_combo.setEnabled(not overlay_only)
             lead = 0.0 if session_scope else lead
+            # The ghost is disabled, with its reason as the tooltip, where the rules forbid one;
+            # its remembered tick is kept but a line below says it will not be drawn, so a choice
+            # the user made is never dropped without a word.
+            no_ghost = self._ghost_reason(scope, lap)
+            ghost_box.setEnabled(no_ghost is None)
+            ghost_box.setToolTip(self._GHOST_TIP if no_ghost is None else f"Off here: {no_ghost}")
 
             clip, files, what = self._scope_plan(scope, lap, lead)
             lines = [f"Renders {what}."]
+            if no_ghost is not None and ghost_box.isChecked():
+                lines.append(f"No ghost in this export: {no_ghost}")
+            elif scope == export_video.SCOPE_ALL_LAPS and ghost_box.isChecked():
+                missing = self._ghostless_files(lap)
+                if missing:
+                    lines.append(missing)
             source = export_video.known_video_size(src)
             fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
             how = ("source aspect" if aspect == export_video.ASPECT_SOURCE else
@@ -911,6 +969,7 @@ class ExportController:
         # EVERY combo: each one moves at least one number in the lines above.
         for combo in (*rows.values(), content_combo):
             combo.currentIndexChanged.connect(_update_hint)
+        ghost_box.toggled.connect(_update_hint)
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
         probe_poll = self._redraw_once_probed(dlg, src, _update_hint)
         _update_hint()
@@ -929,6 +988,10 @@ class ExportController:
             self._PREF_EXPORT_QUALITY: q_combo.currentIndex(),
         }
         self._remember_export_prefs(indices)   # survives this window, and the relaunch
+        try:
+            prefs.set(self._PREF_EXPORT_GHOST, ghost_box.isChecked())
+        except OSError as exc:
+            _log.warning("export extras not remembered (%r)", exc)
         scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
         content = self._EXPORT_CONTENT_OPTIONS[content_combo.currentIndex()][1]
         overlay_only = content != self._EXPORT_CONTENT_COMPOSITE
@@ -943,7 +1006,9 @@ class ExportController:
             overlay_only=overlay_only,
             alpha_codec=content if overlay_only else export_video.ALPHA_PRORES,
             speed_unit=self.win._speed_unit,
-            palette=theme.active_palette())
+            palette=theme.active_palette(),
+            elements=(ghost.GhostElement.name,) if ghost_box.isChecked()
+            and ghost_box.isEnabled() else ())
         lead = (0.0 if scope == export_video.SCOPE_SESSION
                 else self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1])
         return ExportChoice(config=config, lead=lead, scope=scope)
