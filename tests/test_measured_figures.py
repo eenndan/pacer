@@ -56,6 +56,10 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      telemetry only, so `studio/dev/probes/clip_refusals.py figures` is re-run here and every
      deterministic figure in those sections is compared with it; §25's machine-dependent timings
      are held to their own arithmetic. A negative control plants one wrong digit per section.
+  8. THE MOTION REFUSAL (§28) IS ITS PROBE'S. `studio/dev/probes/motion_refusals.py` re-measures
+     the map fade and the race-row slide on the demo; the counts (race, pairs, the pinned map's
+     pixels) are held exactly, the pixel shares to half a step past their printed last digit. A
+     negative control plants ten.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -2634,6 +2638,137 @@ def test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section():
     print(f"test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section OK ({len(plants)} plants)")
 
 
+# ─── refusal §28: the motion PR's two transitions, re-run from their probe ──────────────────────
+# #557 measured the map fade and the race-row slide on the demo and published them only in its PR
+# body. `motion_refusals` re-measures both on the demo in the real window (~15 s). The race figures
+# are Qt-free and held exactly. The probe pins the map widget's size, so its pixel count and the
+# pair count are held exactly too. The shares are a 2x offscreen grab's pixels, so each is held to
+# half a step of the digit after the one it prints (0.05 pp on a figure printed to 0.01 % of the
+# map; 0.5 pp on one printed to 0.1 % of what is drawn, twenty times the more sensitive): a wrong
+# last digit fails, a rasteriser's few pixels do not.
+_MOTION_CACHE: dict = {}
+_MAP_TOLERANCE_PCT = 0.05     # of the whole map, printed to 0.01
+_DRAWN_TOLERANCE_PCT = 0.5    # of what is drawn, printed to 0.1
+_MOTION_MODES = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
+                 "delta_rate": "Line: Δ rate", "grip": "Line: Grip (est)",
+                 "brake_throttle": "Line: Pedal (est)", "elevation": "Line: Elevation"}
+
+
+def _motion_figures() -> dict:
+    """The probe's JSON, run once per process (the bindings must be built)."""
+    if "fig" not in _MOTION_CACHE:
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PACER_APP_SUPPORT_JAIL="1")
+        out = subprocess.run([sys.executable, "-m", "studio.dev.probes.motion_refusals"],
+                             cwd=_REPO, env=env, capture_output=True, text=True, timeout=600)
+        assert out.returncode == 0, f"motion_refusals failed:\n{out.stderr[-3000:]}"
+        _MOTION_CACHE["fig"] = json.loads(out.stdout.strip().splitlines()[-1])
+    return _MOTION_CACHE["fig"]
+
+
+def _motion_problems(doc: str, fig: dict) -> list[str]:
+    """What in §28 differs from `fig` (the probe's JSON). A function of the text, so the negative
+    control can plant."""
+    sec, probs = _refused_sections(doc).get(28, ""), []
+    if "motion_refusals" not in sec:
+        return ["§28 is gone, or no longer names motion_refusals, whose figures it quotes"]
+    flat = _flatten(sec)
+    m = fig["map"]
+    if set(m) != set(_MOTION_MODES):
+        probs.append(f"the probe measured Line modes {sorted(m)}, §28's table names {sorted(_MOTION_MODES)}")
+    for mode, label in _MOTION_MODES.items():
+        rows = _row_nums(sec, label)
+        r = m.get(mode)
+        if not rows or r is None:
+            probs.append(f"§28: no row for {label}, or the probe did not measure it")
+            continue
+        nums = rows[0]
+        if len(nums) != 6 or int(nums[0] + nums[1]) != r["px"]:
+            probs.append(f"§28 {label}: {nums}, the probe grabbed {r['px']} px")
+            continue
+        got = [float(x) for x in nums[2:]]    # the cell '921,600' reads as two numbers
+        want = (r["median_pct"], r["max_pct"], r["drawn_median_pct"], r["drawn_max_pct"])
+        tols = (_MAP_TOLERANCE_PCT, _MAP_TOLERANCE_PCT, _DRAWN_TOLERANCE_PCT, _DRAWN_TOLERANCE_PCT)
+        whats = ("map median", "map largest", "drawn median", "drawn largest")
+        for g, w, tol, what in zip(got, want, tols, whats, strict=True):
+            if abs(g - w) > tol:
+                probs.append(f"§28 {label} {what}: {g} %, the probe says {w} %")
+    pairs = {r["pairs"] for r in m.values()}
+    n_pairs = pairs.pop() if len(pairs) == 1 else -1
+    if not re.search(rf"for each of the {n_pairs} consecutive pairs", flat):
+        probs.append(f"§28: the prose's pair count is not the probe's {n_pairs}")
+    for pattern, want in ((r"(\d+\.\d) % median, (\d+\.\d) % at most",
+                           (m["off"]["drawn_median_pct"], m["off"]["drawn_max_pct"])),
+                          (r"up to (\d+\.\d) % of what is drawn in Δ to best and Δ rate, and "
+                           r"(\d+\.\d) % at the median",
+                           (max(m["delta"]["drawn_max_pct"], m["delta_rate"]["drawn_max_pct"]),
+                            m["delta"]["drawn_median_pct"]))):
+        hit = re.search(pattern, flat)
+        if not hit:
+            probs.append(f"§28: the sentence '{pattern}' is gone or reworded")
+        elif any(abs(float(g) - w) > _DRAWN_TOLERANCE_PCT for g, w in zip(hit.groups(), want, strict=True)):
+            probs.append(f"§28: the prose reads {hit.groups()}, the probe says {want}")
+    ra = fig["race"]
+    head = re.search(r"one whole race \((\d+) laps, (\d+\.\d) s\)", flat)
+    if not head or head.groups() != (str(ra["laps"]), f"{ra['duration_s']}"):
+        probs.append(f"§28: the race is {head.groups() if head else None}, the probe raced "
+                     f"{ra['laps']} laps over {ra['duration_s']} s")
+    pairs = {r["pairs"] for r in m.values()}
+    if not re.search(rf"synthetic demo, {pairs.pop() if len(pairs) == 1 else -1} lap changes", flat):
+        probs.append("§28: the map table's lap-change count is not the probe's")
+    for label, want in (("card snapshots at the tick", [str(ra["snapshots"])]),
+                        ("rows shown / packs hidden", [str(ra["rows_min"]), str(ra["rows_max"]),
+                                                       str(ra["hidden_max"])]),
+                        ("two rows still on the card swapped order", [str(ra["reorders"])]),
+                        ("the set of rows changed", [str(ra["reforms"])]),
+                        ("the laps changed order on the ladder", [str(ra["ladder_changes"])]),
+                        (f"scrubbed in jumps of {ra['scrub']['step_s']:g} s",
+                         [str(ra["scrub"]["jumps"]), str(ra["scrub"]["reorders"])])):
+        rows = _row_nums(sec, label)
+        if not rows or rows[0] != want:
+            probs.append(f"§28 row '{label}': {rows[0] if rows else None}, the probe says {want}")
+    for pattern, want in ((r"changed on (\d+) ticks", ra["ladder_changes"]),
+                          (r"which they did on (\d+) ticks", ra["reforms"])):
+        hit = re.search(pattern, flat)
+        if not hit or int(hit.group(1)) != want:
+            probs.append(f"§28: '{pattern}' reads {hit.group(1) if hit else None}, the probe says {want}")
+    sc = ra["scrub"]
+    hit = re.search(r"(\d+) jumps of (\d+) s swapped no rows", flat)
+    if sc["reorders"] != 0 or not hit or hit.groups() != (str(sc["jumps"]), f"{sc['step_s']:g}"):
+        probs.append(f"§28: the demo's scrub sentence reads {hit.groups() if hit else None}, the probe "
+                     f"made {sc['jumps']} jumps of {sc['step_s']:g} s with {sc['reorders']} swaps")
+    if ra["reorders"] != 0 and "never changed order" in flat:
+        probs.append("§28 says rows never changed order; the probe counted swaps")
+    return probs
+
+
+def test_the_motion_refusal_is_its_probe_s_figures():
+    """§28 against a fresh run of `motion_refusals`."""
+    doc, fig = _read(_REFUSED), _motion_figures()
+    problems = _motion_problems(doc, fig)
+    assert not problems, "studio/docs/refused-2026-09.md:\n  " + "\n  ".join(problems)
+    print(f"test_the_motion_refusal_is_its_probe_s_figures OK (§28; largest map share "
+          f"{max(r['max_pct'] for r in fig['map'].values())} %, row swaps {fig['race']['reorders']})")
+
+
+def test_the_motion_refusal_guard_fails_on_a_wrong_figure():
+    """THE NEGATIVE CONTROL: a wrong figure in each of §28's tables and in its prose must be caught."""
+    doc, fig = _read(_REFUSED), _motion_figures()
+    plants = {"a map median": ("| Line: Δ to best | 921,600 | 2.54 % |", "| Line: Δ to best | 921,600 | 2.64 % |"),
+              "Speed largest, last digit": ("| 1.29 % | 2.81 % |", "| 1.29 % | 2.71 % |"),
+              "the map's pixel count": ("| Line: Grip (est) | 921,600 |", "| Line: Grip (est) | 921,601 |"),
+              "a drawn share": ("| 23.9 % | 51.7 % |", "| 23.9 % | 50.7 % |"),
+              "the plain line's drawn share in prose": ("(9.8 % median,", "(10.8 % median,"),
+              "the pair count in prose": ("for each of the 13 consecutive", "for each of the 12 consecutive"),
+              "the swap count": ("swapped order | 0 |", "swapped order | 1 |"),
+              "a re-form count": ("row in or out) | 81 |", "row in or out) | 82 |"),
+              "the scrub jumps": ("| 18 / 0 |", "| 17 / 0 |"),
+              "the ladder count in prose": ("changed on 217 ticks", "changed on 216 ticks")}
+    for label, (old, new) in plants.items():
+        assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
+        assert _motion_problems(doc.replace(old, new), fig), f"the motion-refusal check missed: {label}"
+    print(f"test_the_motion_refusal_guard_fails_on_a_wrong_figure OK ({len(plants)} plants)")
+
+
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
 # WHERE THE LAP SETS ARE FOUND (G2): under the folder PACER_MEASURED_FIGURES_DIR names, else under
 # the Desktop — the working set's home, and where `_LAP_SETS` says every table's recordings are, so by
@@ -3552,6 +3687,8 @@ def _run_all():
     test_the_pages_quote_the_refusal_count_as_a_true_floor()
     test_the_clip_refusals_are_their_probe_s_figures()
     test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section()
+    test_the_motion_refusal_is_its_probe_s_figures()
+    test_the_motion_refusal_guard_fails_on_a_wrong_figure()
     print("\nmeasured-figures checks passed")
 
 
