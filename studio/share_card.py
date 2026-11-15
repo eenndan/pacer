@@ -549,11 +549,12 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     # The WORDMARK form of the name convention in studio/__init__.py (formal "Pacer Studio",
     # prose "Pacer", wordmark "pacer"), and the only place that form is used.
     mark_font = _font(40, theme.W_SEMIBOLD)
-    _draw_text(p, pad, CARD_H - 56, "pacer", mark_font, theme.C.accent)
+    wordmark = "pacer"
+    _draw_text(p, pad, CARD_H - 56, wordmark, mark_font, theme.C.accent)
     # The right of the footer says how the time was taken, in the report's words (`provenance`),
     # and keeps the tagline when there is nothing clean to say.
     p.setFont(mark_font)
-    foot_avail = right - pad - p.fontMetrics().horizontalAdvance("pacer") - _OPP_GAP
+    foot_avail = right - pad - p.fontMetrics().horizontalAdvance(wordmark) - _OPP_GAP
     foot, foot_font = _fit_line(p, data.provenance or "race telemetry", foot_avail, (28, 24, 22))
     _draw_text(p, 0, CARD_H - 56, foot, foot_font, theme.C.text_muted, align_right_at=right)
 
