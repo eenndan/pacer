@@ -173,6 +173,10 @@ COMMANDS: list[Command] = [
     Command("Analysis", "3", "Lap panel: Stats", run="show_stats_tab"),
     Command("Analysis", "4", "Lap panel: Coaching", run="show_coaching_tab"),
     Command("Analysis", "5", "Lap panel: Marks", run="show_marks_tab"),
+    # View ▸ Lap race. `run` stays None for the ⌘⇧S row's reason: the palette harvests the menu
+    # action itself (with its gate reason when the session cannot field two laps).
+    Command("Analysis", "R",
+            "Lap race: every clean lap leaves the start line together on the map (Esc ends it)"),
     # The DESCRIPTION named the maximize button by a character the button does not paint, in a
     # sentence — where an icon cannot go. It names the button in words instead; the Layout
     # group below is where the glyph itself is documented.
