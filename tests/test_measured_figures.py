@@ -57,8 +57,9 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      deterministic figure in those sections is compared with it; §25's machine-dependent timings
      are held to their own arithmetic. A negative control plants one wrong digit per section.
   8. THE MOTION REFUSAL (§28) IS ITS PROBE'S. `studio/dev/probes/motion_refusals.py` re-measures
-     the map fade and the race-row slide on the demo; the race counts are held exactly, the map's
-     pixel shares to a tolerance a wrong first decimal exceeds. A negative control plants five.
+     the map fade and the race-row slide on the demo; the counts (race, pairs, the pinned map's
+     pixels) are held exactly, the pixel shares to half a step past their printed last digit. A
+     negative control plants ten.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -2635,11 +2636,14 @@ def test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section():
 # ─── refusal §28: the motion PR's two transitions, re-run from their probe ──────────────────────
 # #557 measured the map fade and the race-row slide on the demo and published them only in its PR
 # body. `motion_refusals` re-measures both on the demo in the real window (~15 s). The race figures
-# are Qt-free and held exactly. The map shares are pixels of a 2x offscreen grab, whose map size
-# follows the window's layout and fonts, so they are held to MAP_TOLERANCE_PCT: tight enough that a
-# wrong digit in the first decimal fails, loose enough that a rasteriser's few pixels do not.
+# are Qt-free and held exactly. The probe pins the map widget's size, so its pixel count and the
+# pair count are held exactly too. The shares are a 2x offscreen grab's pixels, so each is held to
+# half a step of the digit after the one it prints (0.05 pp on a figure printed to 0.01 % of the
+# map; 0.5 pp on one printed to 0.1 % of what is drawn, twenty times the more sensitive): a wrong
+# last digit fails, a rasteriser's few pixels do not.
 _MOTION_CACHE: dict = {}
-_MAP_TOLERANCE_PCT = 0.15
+_MAP_TOLERANCE_PCT = 0.05     # of the whole map, printed to 0.01
+_DRAWN_TOLERANCE_PCT = 0.5    # of what is drawn, printed to 0.1
 _MOTION_MODES = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
                  "delta_rate": "Line: Δ rate", "grip": "Line: Grip (est)",
                  "brake_throttle": "Line: Pedal (est)", "elevation": "Line: Elevation"}
@@ -2672,20 +2676,32 @@ def _motion_problems(doc: str, fig: dict) -> list[str]:
         if not rows or r is None:
             probs.append(f"§28: no row for {label}, or the probe did not measure it")
             continue
-        got = [float(x) for x in rows[0][-2:]]
-        for g, w, what in zip(got, (r["median_pct"], r["max_pct"]), ("median", "largest"), strict=True):
-            if abs(g - w) > _MAP_TOLERANCE_PCT:
+        nums = rows[0]
+        if len(nums) != 6 or int(nums[0] + nums[1]) != r["px"]:
+            probs.append(f"§28 {label}: {nums}, the probe grabbed {r['px']} px")
+            continue
+        got = [float(x) for x in nums[2:]]    # the cell '921,600' reads as two numbers
+        want = (r["median_pct"], r["max_pct"], r["drawn_median_pct"], r["drawn_max_pct"])
+        tols = (_MAP_TOLERANCE_PCT, _MAP_TOLERANCE_PCT, _DRAWN_TOLERANCE_PCT, _DRAWN_TOLERANCE_PCT)
+        whats = ("map median", "map largest", "drawn median", "drawn largest")
+        for g, w, tol, what in zip(got, want, tols, whats, strict=True):
+            if abs(g - w) > tol:
                 probs.append(f"§28 {label} {what}: {g} %, the probe says {w} %")
-    worst = max(r["max_pct"] for r in m.values())
-    plain = m["off"]["max_pct"]
-    hit = re.search(r"repaints (\d+\.\d+) % of the map at most, in any Line mode, and (\d+\.\d+) % "
-                    r"with the line plain", flat)
-    if not hit:
-        probs.append("§28: the 'repaints … at most, in any Line mode' sentence is gone or reworded")
-    else:
-        for g, w in zip(map(float, hit.groups()), (worst, plain), strict=True):
-            if abs(g - w) > _MAP_TOLERANCE_PCT:
-                probs.append(f"§28: the prose says {g} %, the probe's figure is {w} %")
+    pairs = {r["pairs"] for r in m.values()}
+    n_pairs = pairs.pop() if len(pairs) == 1 else -1
+    if not re.search(rf"for each of the {n_pairs} consecutive pairs", flat):
+        probs.append(f"§28: the prose's pair count is not the probe's {n_pairs}")
+    for pattern, want in ((r"(\d+\.\d) % median, (\d+\.\d) % at most",
+                           (m["off"]["drawn_median_pct"], m["off"]["drawn_max_pct"])),
+                          (r"up to (\d+\.\d) % of what is drawn in Δ to best and Δ rate, and "
+                           r"(\d+\.\d) % at the median",
+                           (max(m["delta"]["drawn_max_pct"], m["delta_rate"]["drawn_max_pct"]),
+                            m["delta"]["drawn_median_pct"]))):
+        hit = re.search(pattern, flat)
+        if not hit:
+            probs.append(f"§28: the sentence '{pattern}' is gone or reworded")
+        elif any(abs(float(g) - w) > _DRAWN_TOLERANCE_PCT for g, w in zip(hit.groups(), want, strict=True)):
+            probs.append(f"§28: the prose reads {hit.groups()}, the probe says {want}")
     ra = fig["race"]
     head = re.search(r"one whole race \((\d+) laps, (\d+\.\d) s\)", flat)
     if not head or head.groups() != (str(ra["laps"]), f"{ra['duration_s']}"):
@@ -2699,7 +2715,9 @@ def _motion_problems(doc: str, fig: dict) -> list[str]:
                                                        str(ra["hidden_max"])]),
                         ("two rows still on the card swapped order", [str(ra["reorders"])]),
                         ("the set of rows changed", [str(ra["reforms"])]),
-                        ("the laps changed order on the ladder", [str(ra["ladder_changes"])])):
+                        ("the laps changed order on the ladder", [str(ra["ladder_changes"])]),
+                        (f"scrubbed in jumps of {ra['scrub']['step_s']:g} s",
+                         [str(ra["scrub"]["jumps"]), str(ra["scrub"]["reorders"])])):
         rows = _row_nums(sec, label)
         if not rows or rows[0] != want:
             probs.append(f"§28 row '{label}': {rows[0] if rows else None}, the probe says {want}")
@@ -2708,6 +2726,11 @@ def _motion_problems(doc: str, fig: dict) -> list[str]:
         hit = re.search(pattern, flat)
         if not hit or int(hit.group(1)) != want:
             probs.append(f"§28: '{pattern}' reads {hit.group(1) if hit else None}, the probe says {want}")
+    sc = ra["scrub"]
+    hit = re.search(r"(\d+) jumps of (\d+) s swapped no rows", flat)
+    if sc["reorders"] != 0 or not hit or hit.groups() != (str(sc["jumps"]), f"{sc['step_s']:g}"):
+        probs.append(f"§28: the demo's scrub sentence reads {hit.groups() if hit else None}, the probe "
+                     f"made {sc['jumps']} jumps of {sc['step_s']:g} s with {sc['reorders']} swaps")
     if ra["reorders"] != 0 and "never changed order" in flat:
         probs.append("§28 says rows never changed order; the probe counted swaps")
     return probs
@@ -2725,10 +2748,15 @@ def test_the_motion_refusal_is_its_probe_s_figures():
 def test_the_motion_refusal_guard_fails_on_a_wrong_figure():
     """THE NEGATIVE CONTROL: a wrong figure in each of §28's tables and in its prose must be caught."""
     doc, fig = _read(_REFUSED), _motion_figures()
-    plants = {"a map median": ("| Line: Δ to best | 843,640 | 1.72 % |", "| Line: Δ to best | 843,640 | 1.92 % |"),
-              "the plain line's share in prose": ("and 0.41 % with the line plain", "and 0.71 % with the line plain"),
+    plants = {"a map median": ("| Line: Δ to best | 921,600 | 2.54 % |", "| Line: Δ to best | 921,600 | 2.64 % |"),
+              "Speed largest, last digit": ("| 1.29 % | 2.81 % |", "| 1.29 % | 2.71 % |"),
+              "the map's pixel count": ("| Line: Grip (est) | 921,600 |", "| Line: Grip (est) | 921,601 |"),
+              "a drawn share": ("| 23.9 % | 51.7 % |", "| 23.9 % | 50.7 % |"),
+              "the plain line's drawn share in prose": ("(9.8 % median,", "(10.8 % median,"),
+              "the pair count in prose": ("for each of the 13 consecutive", "for each of the 12 consecutive"),
               "the swap count": ("swapped order | 0 |", "swapped order | 1 |"),
               "a re-form count": ("row in or out) | 81 |", "row in or out) | 82 |"),
+              "the scrub jumps": ("| 18 / 0 |", "| 17 / 0 |"),
               "the ladder count in prose": ("changed on 217 ticks", "changed on 216 ticks")}
     for label, (old, new) in plants.items():
         assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
