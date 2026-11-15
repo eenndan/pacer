@@ -327,6 +327,8 @@ def test_the_race_on_the_real_window():
         assert pauses, "entering the race did not pause the video"
         assert not mp.marker.isVisible() and not mp._map_key.isVisible()
         race = v.race
+        from studio.video_view import PLAYBACK_RATES
+        assert race.rates == tuple(PLAYBACK_RATES), "the race does not run on the transport's ladder"
         items = mp.race_items()
         assert len(items) == 3 + len(race.tracks.coloured), len(items)
         for it in items:

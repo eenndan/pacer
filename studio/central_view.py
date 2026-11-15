@@ -57,7 +57,7 @@ from .scrub_controller import ScrubController
 from .session import fmt_time
 from .stats_panel import StatsView
 from .stats_trust import TIMING_TERM
-from .video_view import PLAYBACK_RATES, VideoView
+from .video_view import VideoView
 from .widgets import (
     ActionChip,
     PanelHeader,
@@ -1302,7 +1302,7 @@ class CentralView(QWidget):
         self.race_card = RaceCard(self.map.widget)
         self.race_card.move(theme.SPACE_S, theme.SPACE_S)
         self.race = RaceController(self.session, self.map, self.race_card,
-                                   pause_video=self.video.pause, rates=PLAYBACK_RATES,
+                                   pause_video=self.video.pause,
                                    on_change=self.raceChanged.emit)
         self.race_card.playToggled.connect(self.race.toggle_play)
         self.race_card.restartRequested.connect(self.race.restart)
@@ -2177,10 +2177,12 @@ class CentralView(QWidget):
         race = getattr(self, "race", None)
         return race is not None and race.available()
 
-    def start_lap_race(self) -> bool:
+    def start_lap_race(self, speed: float = 1.0, speeds: tuple[float, ...] = (1.0,)) -> bool:
         """Every clean lap leaves the line together on the map. Leaves compare first (one map, one
         story), pauses the video, and emphasises the lap on screen (the playhead's, else the Laps
-        table's first selected). The race runs at the transport's playback rate."""
+        table's first selected). `speed` / `speeds` are the race's starting speed and its ladder:
+        the window passes the transport's, so this module never reads the playback rate
+        (tests/test_playback_rate.py keeps the sync path ignorant of it)."""
         if self.is_racing() or not self.can_race():
             return self.is_racing()
         if self._comparing():
@@ -2188,7 +2190,7 @@ class CentralView(QWidget):
         lap = self.session.lap_at_time(self._playback.applied_t)
         if lap is None:
             lap = getattr(self, "_corner_lap", None)
-        return self.race.enter(selected=lap, speed=self.video.playback_rate())
+        return self.race.enter(selected=lap, speed=speed, rates=speeds)
 
     def end_lap_race(self):
         """Leave the race; the map, marker and selection are as they were on entry."""
@@ -2196,11 +2198,11 @@ class CentralView(QWidget):
         if race is not None:
             race.end()
 
-    def toggle_lap_race(self) -> bool:
+    def toggle_lap_race(self, speed: float = 1.0, speeds: tuple[float, ...] = (1.0,)) -> bool:
         if self.is_racing():
             self.end_lap_race()
             return False
-        return self.start_lap_race()
+        return self.start_lap_race(speed, speeds)
 
     def _refresh_sector_lines(self, mode: str | None = None):
         """F2: push the sector boundary positions (start/finish + each sector line) to the charts

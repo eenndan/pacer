@@ -90,6 +90,7 @@ from .overlays import (
     welcome_card_width,
 )
 from .race_controller import NO_RACE_REASON
+from .video_view import PLAYBACK_RATES
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker
 
@@ -1966,7 +1967,10 @@ class StudioWindow(QMainWindow):
         # charts' cap). Timed like every other just-happened confirmation.
         self.view.statusNotice.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
         # View ▸ Lap race carries its on/off state, and a re-segment changes whether it can run.
-        self.view.raceChanged.connect(self._sync_view_menu)
+        # Guarded: the lifecycle tests' stand-in views carry no race.
+        race_changed = getattr(self.view, "raceChanged", None)
+        if race_changed is not None:
+            race_changed.connect(self._sync_view_menu)
         self.view.timingEdited.connect(self._sync_view_menu)
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
@@ -2606,7 +2610,7 @@ class StudioWindow(QMainWindow):
         if race is not None:
             view = self.view if has_view else None
             racing = self._racing()
-            self._gate_action(race, racing or (view is not None and view.can_race()),
+            self._gate_action(race, racing or bool(getattr(view, "can_race", lambda: False)()),
                               NO_RACE_REASON if view is not None else self._NO_SESSION_RACE_REASON)
             race.setChecked(racing)
 
@@ -2764,7 +2768,8 @@ class StudioWindow(QMainWindow):
         """View ▸ Lap race (R): start the race on the map, or end it."""
         view = getattr(self, "view", None)
         if view is not None:
-            view.toggle_lap_race()
+            # The race starts at the transport's rate, on its ladder (0.25× … 2×).
+            view.toggle_lap_race(view.video.playback_rate(), PLAYBACK_RATES)
         self._sync_view_menu()
 
     def toggle_mute(self):

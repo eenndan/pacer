@@ -138,7 +138,7 @@ class RaceController:
     the playback-rate ladder the transport uses (0.25× … 2×)."""
 
     def __init__(self, session, map_view, card, *, pause_video: Callable[[], None],
-                 rates: Sequence[float], clock: Callable[[], float] = time.monotonic,
+                 rates: Sequence[float] = (1.0,), clock: Callable[[], float] = time.monotonic,
                  on_change: Callable[[bool], None] | None = None):
         self.session = session
         self.map = map_view
@@ -165,15 +165,19 @@ class RaceController:
         return self.session.race_tracks() is not None
 
     # ------------------------------------------------------------------ enter / exit
-    def enter(self, selected: int | None = None, speed: float = 1.0) -> bool:
-        """Line the field up at t = 0 and start it running. False (nothing changed) when the
-        session cannot field a race."""
+    def enter(self, selected: int | None = None, speed: float = 1.0,
+              rates: Sequence[float] | None = None) -> bool:
+        """Line the field up at t = 0 and start it running, at `speed` on the ladder `rates` (the
+        transport's, handed in by the window). False (nothing changed) when the session cannot
+        field a race."""
         if self.active:
             return True
         tracks = self.session.race_tracks()
         if tracks is None:
             return False
         self._pause_video()
+        if rates:
+            self.rates = tuple(rates)
         self.tracks = tracks
         self.selected = selected if selected in tracks.ids or selected == tracks.best.lap_id \
             else None
