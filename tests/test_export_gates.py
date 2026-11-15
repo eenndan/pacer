@@ -110,7 +110,7 @@ from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: 
 # export action added later would be the one that silently skipped both.
 DATA_EXPORTS = ("_export_laps_action", "_export_channels_action", "_export_report_action",
                 "_copy_stats_action", "_export_video_action")
-CARD_EXPORTS = ("_share_card_action", "_copy_card_action")
+CARD_EXPORTS = ("_share_card_action", "_copy_card_action", "_lapstrip_action")
 
 
 class FakeSession:
@@ -138,6 +138,13 @@ class FakeSession:
 
     def valid_lap_ids(self):
         return list(self._laps)
+
+    def lap_rows(self):
+        # The Laps table's rows — what the lap-strip card's two-clean-laps gate counts.
+        return [{"idx": i, "time": 23.231, "dist": 400.0, "entry": 50.0} for i in self._laps]
+
+    def dropout_lap_ids(self):
+        return set()
 
     def best_lap_id(self):
         return self._laps[0] if self._laps else None
