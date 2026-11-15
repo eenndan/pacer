@@ -328,7 +328,7 @@ class BroadcastElement:
         return head, clock, delta, colour, frac, bar, speed
 
     def paint(self, p: QPainter, vals) -> None:
-        ev, k = self._ev, self._k
+        k = self._k
         head, clock, delta, colour, frac, bar, speed = self.state(vals)
         # --- the tower
         t = self.tower
