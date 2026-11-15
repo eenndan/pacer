@@ -57,7 +57,7 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from . import data_quality, gmeter_overlay, theme, units
+from . import data_quality, gmeter_overlay, overlay, theme, units
 from ._signal import fmt_time, lap_label, plural
 from .export_palette import EXPORT
 from .gapfill import GAP_TIME_S
@@ -410,6 +410,10 @@ class OverlayConfig:
     # artifact they share — follows it (the render runs on a worker QThread that must not read the
     # global theme.active_palette() live; export_semantic_pair resolves the vivid EXPORT pair from it).
     palette: str = theme.PALETTE_STANDARD
+    # Opt-in overlay ELEMENTS by registry name (`studio/overlay/`: "ghost", ...), painted on top of
+    # the Classic overlay above. EMPTY by default, and then the painter never reaches the package:
+    # the Classic export stays byte-identical (tests/test_export_ghost.py).
+    elements: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------- chaptered source
@@ -2637,7 +2641,9 @@ class _MapInset:
         return QPointF(float(self._px[marker_index]), float(self._py[marker_index])), QPolygonF()
 
     def paint(self, p: QPainter, tt: float | None, marker_index: int | None = None,
-              opaque: bool = False) -> None:
+              opaque: bool = False, under=None) -> None:
+        """`under`, when given, is called once the line is down and before the tail and the kart
+        dot: the overlay elements' `LAYER_MAP` (nothing may cover the dot)."""
         if not self._ok:
             return
         # Blit the baked lap line. The layer runs from the frame's origin to the inset's far
@@ -2653,6 +2659,8 @@ class _MapInset:
             p.drawImage(self._layer_ink.topLeft(), self._layer, self._layer_ink)
         elif not opaque:
             p.drawImage(0, 0, self._layer)
+        if under is not None:
+            under()
         m, tail = self.marker_and_tail(tt, marker_index)
         if m is None:
             return
@@ -3163,6 +3171,12 @@ class OverlayPainter:
         # The inset projects its track into ABSOLUTE frame coordinates and bakes the line once, so
         # it is built after its rect is final rather than moved afterwards.
         self._map = _MapInset(session, map_rect, map_lap, scale_k=self._k)
+        # The opt-in overlay elements (`studio/overlay/`), each prepared ONCE here; those with
+        # nothing to draw in this export sit it out. None asked for = the package is never reached.
+        self.elements = overlay.build(cfg.elements, overlay.ElementContext(
+            session=session, spec=spec, out_w=out_w, out_h=out_h, fps=self._fps, k=self._k,
+            map_rect=map_rect, map_point=self._map._proj if self._map._ok else None,
+        )) if cfg.elements else []
         # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
         # dial matches the screen.
         #
@@ -3249,7 +3263,10 @@ class OverlayPainter:
             p, self._g_rect.width(), self._g_rect.height(), dial_state, export=True,
             scale_k=self._g_rect.width() / (self._spec.config.gmeter_frac * OVERLAY_REF_SHORT_SIDE))
         p.restore()
-        self._map.paint(p, vals.tt, vals.marker_index, opaque=not img.hasAlphaChannel())
+        els = self.elements
+        self._map.paint(p, vals.tt, vals.marker_index, opaque=not img.hasAlphaChannel(),
+                        under=(lambda: overlay.paint_layer(els, p, vals, overlay.LAYER_MAP))
+                        if els else None)
         _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
         # The strip's fallback elapsed origin is the LAP's start, not the clip's — with a lead-in
         # those differ, and a session with no lap window would otherwise count the run-up.
@@ -3261,6 +3278,8 @@ class OverlayPainter:
         # what it qualifies is the recording, not a moment in it, and a caveat that came and went
         # would be a caveat a single-frame grab or a re-cut could drop.
         _paint_stamp(p, self._strip_rect, self._stamp_rect, self._stamp_lines)
+        if els:
+            overlay.paint_layer(els, p, vals, overlay.LAYER_TOP)
         p.end()
 
 
