@@ -66,8 +66,8 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     that one is: it paints a frame, and it is the module `export_video` would have grown into.
 #     `trace_paint` is the lap-line painter `share_card` and the debrief hero share: the same
 #     rasterizer role, lifted out so the two pictures draw one line (cool/share-card).
-#   * overlay/__init__, overlay/ghost and overlay/corner_cards — the export's opt-in overlay
-#     elements (`studio/overlay/`):
+#   * overlay/__init__, overlay/ghost, overlay/corner_cards and overlay/broadcast — the export's
+#     opt-in overlay elements (`studio/overlay/`; overlay/layout is Qt-free data):
 #     they paint into `export_video`'s frame with its QPainter, for the reason that one is here.
 #   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
 #   * export_controller — the export cluster lifted out of `app` (§7.1). It is VIEW code by every
@@ -100,7 +100,8 @@ ALLOWED_QT = {
     "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_controller",
     "library_dialog", "map_view", "motion",
-    "marks_panel", "overlay/__init__", "overlay/corner_cards", "overlay/ghost", "overlays",
+    "marks_panel", "overlay/__init__", "overlay/broadcast", "overlay/corner_cards", "overlay/ghost",
+    "overlays",
     "player_pane", "plots_view",
     "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "share_lapstrip",

@@ -412,7 +412,8 @@ class OverlayConfig:
     palette: str = theme.PALETTE_STANDARD
     # Opt-in overlay ELEMENTS by registry name (`studio/overlay/`: "ghost", ...), painted on top of
     # the Classic overlay above. EMPTY by default, and then the painter never reaches the package:
-    # the Classic export stays byte-identical (tests/test_export_ghost.py).
+    # the Classic export stays byte-identical (tests/test_export_ghost.py). The Broadcast style is
+    # elements too (`overlay.broadcast.styled`), with a bigger `map_h_frac`.
     elements: tuple[str, ...] = ()
 
 
@@ -3154,6 +3155,10 @@ class OverlayPainter:
             safe=QRectF(m, m, out_w - 2 * m, out_h - 2 * m),
         )) if cfg.elements else []
         self._replaced = overlay.replaced(self.elements)   # Classic plates an element stands in for
+        if self.elements:
+            # A style that replaces the strip may move the stamp that hangs under it: same lines,
+            # same `_paint_stamp`, same size (the font is the strip's, `self._strip_rect`).
+            self._stamp_rect = overlay.stamp_rect(self.elements, self._stamp_rect)
         # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
         # dial matches the screen.
         #
