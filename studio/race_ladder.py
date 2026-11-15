@@ -18,7 +18,9 @@ WHAT EACH LINE IS (the honesty copy):
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from dataclasses import replace
+
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -80,6 +82,7 @@ class RaceCard(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.model: CardModel | None = None
+        self._shown: CardModel | None = None    # `model` with its rows fitted to the map's height
         self.colours: dict[int, int] = {}      # lap id → series slot (the coloured five)
         self.lap_times: dict[int, float] = {}   # the field's lap times (the finish column)
         self._cache: QPixmap | None = None     # the card as painted, re-rendered on a change
@@ -98,6 +101,14 @@ class RaceCard(QWidget):
         self._w = self._fm.horizontalAdvance(CAPTION) + 2 * _PAD + theme.SPACE_XL
         self.setMouseTracking(True)
         self.hide()
+        if parent is not None:
+            parent.installEventFilter(self)      # a map resize re-fits the rows (`_fit`)
+
+    def eventFilter(self, obj, event):  # noqa: N802 — Qt override
+        if event.type() == QEvent.Type.Resize and obj is self.parentWidget() \
+                and self.model is not None:
+            self._apply(self.model)
+        return False
 
     # ------------------------------------------------------------------ model
     def configure(self, colours: dict[int, int], lap_times: dict[int, float]) -> None:
@@ -124,14 +135,41 @@ class RaceCard(QWidget):
                 and 0.0 <= model.t - snap.t < CARD_REFRESH_S * model.speed):
             return
         self.model = model
-        h = self._height(model)
+        self._apply(model)
+
+    def _apply(self, model: CardModel) -> None:
+        shown = self._shown = self._fit(model)
+        h = self._height(shown)
         if (self._w, h) != (self.width(), self.height()):
             self.setFixedSize(self._w, h)
-        key = self._content_key(model)
+        key = self._content_key(shown)
         if key != self._cache_key:
             self._cache_key = key
             self._cache = None
         self.update()
+
+    def _fit(self, m: CardModel) -> CardModel:
+        """`m` with only as many pack rows as the map's height has room for (QA REG-2: at a
+        1280×800 window the card ran off the map's bottom, taking the selected lap's readout and
+        the not-raced line with it). Rows go from the bottom of the top packs; the selected lap's
+        pack goes last, and every dropped pack joins the "N more packs" line. On a map too short
+        for even one row beside its header, the table is that line alone: the readout (the
+        selected lap against the best), the clock and the not-raced lines always show.
+        Unparented (a test's bare card), nothing is dropped."""
+        host = self.parentWidget()
+        if host is None or m.unranked_reason or not m.rows:
+            return m
+        lines = int((host.height() - self.y() - theme.SPACE_S
+                     - self._height(replace(m, rows=(), hidden_packs=0))) // _ROW_H)
+        if lines >= 1 + len(m.rows) + (1 if m.hidden_packs else 0):
+            return m
+        fits = max(lines - 2, 0)        # the table's header and its "more" line take two
+        rows = list(m.rows)
+        while len(rows) > fits:
+            drop = next((k for k in range(len(rows) - 1, -1, -1) if not rows[k].selected),
+                        len(rows) - 1)
+            rows.pop(drop)
+        return replace(m, rows=tuple(rows), hidden_packs=m.hidden_packs + len(m.rows) - len(rows))
 
     def _content_key(self, m: CardModel):
         return (tuple(self.lines()[1:]), m.over, m.playing, m.speed, m.selected, self.width(),
@@ -139,14 +177,15 @@ class RaceCard(QWidget):
 
     def lines(self) -> list[str]:
         """Every text line the card paints right now, top to bottom (tests and captures read it)."""
-        m = self.model
+        m = self._shown
         if m is None:
             return []
         out = [self._title(m), CAPTION]
         if m.unranked_reason:
             out.append(m.unranked_reason)
         else:
-            out.append(f"pack · {interval_header(m.over)} · spread")
+            if m.rows:
+                out.append(f"pack · {interval_header(m.over)} · spread")
             room = self._w - 2 * _PAD - _POS_W - _INT_W - _SPREAD_W
             for r in m.rows:
                 chips, more = self.fit_chips(r, m.selected, room)
@@ -171,7 +210,10 @@ class RaceCard(QWidget):
 
     @staticmethod
     def _more_text(m: CardModel) -> str:
-        return f"{m.hidden_packs} more pack" + ("" if m.hidden_packs == 1 else "s")
+        packs = "pack" if m.hidden_packs == 1 else "packs"
+        if not m.rows:                  # fitted down to this line alone (`_fit`)
+            return f"{m.hidden_packs} {packs} — make the map taller to list them"
+        return f"{m.hidden_packs} more {packs}"
 
     @staticmethod
     def _clock_text(m: CardModel) -> str:
@@ -188,7 +230,7 @@ class RaceCard(QWidget):
         if m.unranked_reason:
             h += self._wrapped_h(m.unranked_reason, inner) + 4
         else:
-            h += _ROW_H * (1 + len(m.rows) + (1 if m.hidden_packs else 0))
+            h += _ROW_H * ((1 + len(m.rows) if m.rows else 0) + (1 if m.hidden_packs else 0))
         if readout_text(m):
             h += _ROW_H + 2
         if m.clock_estimated:
@@ -223,7 +265,7 @@ class RaceCard(QWidget):
             p.drawText(rect, int(Qt.AlignCenter), text)
 
     def paintEvent(self, _event):
-        if self.model is None:
+        if self._shown is None:
             return
         if self._cache is None or self._cache.size() != self.size() * self.devicePixelRatioF():
             dpr = self.devicePixelRatioF()
@@ -231,13 +273,13 @@ class RaceCard(QWidget):
             px.setDevicePixelRatio(dpr)
             px.fill(Qt.transparent)
             painter = QPainter(px)
-            self._paint(painter, self.model)
+            self._paint(painter, self._shown)
             painter.end()
             self._cache = px
             self.renders += 1
         p = QPainter(self)
         p.drawPixmap(0, 0, self._cache)
-        self._paint_live(p, self.model)
+        self._paint_live(p, self._shown)
         p.end()
 
     def _paint_live(self, p: QPainter, m: CardModel) -> None:
@@ -321,15 +363,16 @@ class RaceCard(QWidget):
         chips_x = x0 + _POS_W
         int_x = x0 + inner - _SPREAD_W - _INT_W
         spread_x = x0 + inner - _SPREAD_W
-        p.setFont(self._font)
-        p.setPen(QPen(QColor(C.text_muted)))
-        p.drawText(QRectF(chips_x, y, int_x - chips_x, _ROW_H),
-                   int(Qt.AlignVCenter | Qt.AlignLeft), "pack")
-        p.drawText(QRectF(int_x - 40, y, _INT_W + 40, _ROW_H),
-                   int(Qt.AlignVCenter | Qt.AlignRight), interval_header(m.over))
-        p.drawText(QRectF(spread_x, y, _SPREAD_W, _ROW_H),
-                   int(Qt.AlignVCenter | Qt.AlignRight), "spread")
-        y += _ROW_H
+        if m.rows:                      # no header over a table fitted down to its "more" line
+            p.setFont(self._font)
+            p.setPen(QPen(QColor(C.text_muted)))
+            p.drawText(QRectF(chips_x, y, int_x - chips_x, _ROW_H),
+                       int(Qt.AlignVCenter | Qt.AlignLeft), "pack")
+            p.drawText(QRectF(int_x - 40, y, _INT_W + 40, _ROW_H),
+                       int(Qt.AlignVCenter | Qt.AlignRight), interval_header(m.over))
+            p.drawText(QRectF(spread_x, y, _SPREAD_W, _ROW_H),
+                       int(Qt.AlignVCenter | Qt.AlignRight), "spread")
+            y += _ROW_H
         for r in m.rows:
             if r.selected:
                 hl = QColor(C.surface_active)

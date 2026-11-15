@@ -542,6 +542,42 @@ def test_the_race_puts_out_corner_hover_and_hides_the_drag_handles():
     print("ok race start puts out the chart's corner label and hides the drag handles; end restores")
 
 
+def test_the_card_fits_the_map_at_a_small_window():
+    """QA REG-2: at a 1280×800 window the card ran off the map's bottom: the selected lap's
+    readout and the not-raced line were cut, worse with the estimated-clock line. The rows now
+    give way (into "N more packs"); the card lies inside the map, those lines always show, and a
+    taller map gets its rows back."""
+    import dataclasses
+    with _window() as (win, _path, _open):
+        v = win.view
+        card, mapw = v.race_card, v.map.widget
+        for est in (False, True):
+            win.resize(1280, 800)
+            _settle(0.3)
+            v.end_lap_race()
+            assert v.start_lap_race()
+            r = v.race
+            if est:
+                r.tracks = dataclasses.replace(r.tracks, clock_estimated=True)
+            r.set_selected(r.tracks.ids[-1])     # the slowest lap: its pack is listed last
+            r.playing = False
+            r.scrub(0.5)
+            v.tick()
+            _settle(0.1)
+            m = card.model
+            assert len(m.rows) > 2 and m.excluded, "too few rows to overflow: tests nothing"
+            assert card.geometry().bottom() < mapw.height(), \
+                (est, card.geometry(), mapw.height())
+            lines = card.lines()
+            assert race_controller.readout_text(m) in lines and m.excluded in lines, lines
+            assert any("pack" in ln for ln in lines[2:]), "the dropped packs are not counted"
+        win.resize(1728, 1117)
+        _settle(0.3)
+        assert card.geometry().bottom() < mapw.height()
+        assert len(card.lines()) > len(lines), "a taller map did not get its rows back"
+    print("ok the card fits the map at 1280×800 (plain and estimated clock); rows return when taller")
+
+
 def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
     """QA EVAL-1 / REG-1: View ▸ Lap race's enabled state was a cache synced at load — BEFORE the
     window's layout, so the map read as off screen — and again only when the View menu or ⌘K
