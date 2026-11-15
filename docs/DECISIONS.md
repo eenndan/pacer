@@ -318,6 +318,10 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - **The clip and share-card ideas of the design pass were refused with their numbers** (#559):
     a predicted lap time, a scrolling Δ-trace band, sector chips and per-corner cells on the share
     card, sections 24 to 27 of the refusals record.
+- **What could not run for it.** As at 0.8.0, one recording the real-footage checks take is on
+  this machine, and five checks ran on it: the three render checks and the two pedal-band checks.
+  The same eleven as at 0.8.0 reported Skipped because their recordings are not here. The manual half of the golden gate did
+  not run; no change in this release touched the core, and the synthetic golden gate passed.
 - **The media.** `accuracy.png` and `debrief.png` were re-captured, both byte-identical to
   0.8.0's: nothing they show changed. `hero.png`, `map.png` and `og.png` are waived again as
   stale, for 0.8.0's reasons, and they do not show 0.9.0's map either: the playhead tail, the
