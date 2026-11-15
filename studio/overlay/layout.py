@@ -131,7 +131,7 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
     u = float(min(out_w, out_h))
     m, gap = MARGIN * u, GAP * u
     safe = Box(m, m, out_w - 2 * m, out_h - 2 * m)
-    hang = hang or {}
+    offsets: dict[str, tuple[float, float]] = dict(hang or {})
     out: dict[str, Box] = {}
     for name in names:
         slot = slots[name]
@@ -144,14 +144,14 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
             w = slot.w * u
         why = []
         for anchor in slot.anchors:
-            dx, dy = hang.get(name, (0.0, 0.0))
+            dx, dy = offsets[name] if name in offsets else (0.0, 0.0)
             if anchor == "hang":
                 tw = out["tower"]
                 x, y = tw.x + dx, tw.bottom + dy
             elif anchor == "under":
                 top = [b.bottom for b in (*out.values(), *keep_clear.values())
                        if b.h > 0 and b.y < out_h / 2]
-                x = out["tower"].x + dx if name in hang else m
+                x = out["tower"].x + dx if name in offsets else m
                 y = max(top, default=m - gap) + gap
             else:
                 x = {"l": m, "c": (out_w - w) / 2.0}[anchor[1]]
