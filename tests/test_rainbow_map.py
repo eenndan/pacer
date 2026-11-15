@@ -319,7 +319,7 @@ def test_race_layer_is_one_scatter_with_bounds_ignored_and_exits_clean():
     colours = {lap: k for k, lap in enumerate(i for i in tracks.ids if i in tracks.coloured)}
     mv.start_race(tracks, colours, selected=6)
     items = mv.race_items()
-    assert len(items) == 3 + lap_race.COLOURED_LAPS, len(items)
+    assert len(items) == 4 + lap_race.COLOURED_LAPS, len(items)
     assert all(it in mv.plot.items for it in items) and list(vb.addedItems) == bounded, \
         "a race item joined the view's bounds"
     assert not mv.marker.isVisible() and mv._map_key.isHidden()
@@ -328,7 +328,7 @@ def test_race_layer_is_one_scatter_with_bounds_ignored_and_exits_clean():
     for t in (0.0, 2.5, 7.0):
         state = lap_race.race_state(tracks, t)
         mv.update_race(state)
-        x, y = mv._race.dots.getData()
+        x, y = mv._race.positions()
         o = mv._race.order
         assert np.allclose(x, state.x[o]) and np.allclose(y, state.y[o]), t
         assert list(o[-1:]) == [tracks.index(tracks.ids[0])], "the fastest lap is not on top"
@@ -339,6 +339,16 @@ def test_race_layer_is_one_scatter_with_bounds_ignored_and_exits_clean():
         assert (tx[-1], ty[-1]) == (state.x[tracks.index(tracks.ids[0])],
                                     state.y[tracks.index(tracks.ids[0])])
     assert len(mv.plot.items) == n, "an update added plot items"
+    # the trails ride over the grey field and under the coloured dots (review of #553)
+    trail = next(iter(mv._race.trails.values()))
+    assert mv._race.grey.zValue() < trail.zValue() < mv._race.dots.zValue()
+    # a clean grab (the HTML report's, the share card's) never shows the race or its card
+    from PySide6.QtWidgets import QWidget
+    card = QWidget(mv.widget)
+    mv.attach_race_card(card)
+    with mv.grab_clean():
+        assert not any(it.isVisible() for it in items) and card.isHidden()
+    assert all(it.isVisible() for it in items) and not card.isHidden()
     mv.end_race()
     assert list(mv.plot.items) == before and mv.race_items() == []
     assert mv.marker.isVisible() and mv._map_key.isHidden() == key_hidden

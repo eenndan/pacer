@@ -459,6 +459,8 @@ class StudioWindow(QMainWindow):
     # why). A silent refusal is the defect class this app exists to refuse.
     _NO_SESSION_STATS_REASON = ("Open a recording first — the statistics dashboard is this "
                                 "session's own: pace, peaks, grip and the per-lap table.")
+    _NO_MAP_RACE_REASON = ("The map is not on screen — the race runs on the track map: restore the "
+                           "grid (Esc) and run it again.")
     _NO_SESSION_RACE_REASON = ("Open a recording first — the race lines up that session's own "
                                "clean laps.")
     _NO_SESSION_EXCLUDED_REASON = ("Open a recording first — the ⊘ excluded strip sits under a "
@@ -1137,6 +1139,9 @@ class StudioWindow(QMainWindow):
         # for as long as a worker takes to stop, and a rect read after that is a rect read from a
         # window that may already be on its way out.
         self.persist_window_geometry()
+        view = getattr(self, "view", None)
+        if view is not None and getattr(view, "is_racing", lambda: False)():
+            view.end_lap_race()    # a closing window leaves no race (and no race state) behind
         self._pending_load = None  # don't start a queued load during teardown
         self._pending_reference_load = None  # nor a queued reference load
         self._cancel_placeholder_timer()  # no loading card can appear mid-teardown
@@ -2610,8 +2615,11 @@ class StudioWindow(QMainWindow):
         if race is not None:
             view = self.view if has_view else None
             racing = self._racing()
-            self._gate_action(race, racing or bool(getattr(view, "can_race", lambda: False)()),
-                              NO_RACE_REASON if view is not None else self._NO_SESSION_RACE_REASON)
+            can = bool(getattr(view, "can_race", lambda: False)())
+            shown = bool(getattr(view, "map_on_screen", lambda: True)())
+            reason = (self._NO_SESSION_RACE_REASON if view is None else NO_RACE_REASON if not can
+                      else self._NO_MAP_RACE_REASON)
+            self._gate_action(race, racing or (can and shown), reason)
             race.setChecked(racing)
 
     def _show_shortcuts(self):

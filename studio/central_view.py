@@ -1301,6 +1301,7 @@ class CentralView(QWidget):
         table click during a race re-points its emphasis."""
         self.race_card = RaceCard(self.map.widget)
         self.race_card.move(theme.SPACE_S, theme.SPACE_S)
+        self.map.attach_race_card(self.race_card)    # so the map's clean grabs leave it out
         self.race = RaceController(self.session, self.map, self.race_card,
                                    pause_video=self.video.pause,
                                    on_change=self.raceChanged.emit)
@@ -1938,8 +1939,13 @@ class CentralView(QWidget):
         # meanwhile (a Laps-table click) is applied by the first tick after the race ends.
         race = getattr(self, "race", None)
         if race is not None and race.active:
-            race.tick()
-            return
+            # The map left the screen (video focus, another panel maximized): the race has nothing
+            # to draw on, so it ends rather than drive an invisible field under Space and Esc.
+            if not self.map_on_screen():
+                self.end_lap_race()
+            else:
+                race.tick()
+                return
         # Drain a coalesced map marker-drag seek first (one per tick, not per mouse-move).
         self.scrub.drain_marker_seek()
         # While scrubbing, the drag is source of truth: one coalesced seek/tick, skip the playback
@@ -2184,13 +2190,20 @@ class CentralView(QWidget):
         race = getattr(self, "race", None)
         return race is not None and race.available()
 
+    def map_on_screen(self) -> bool:
+        """True when the track map is actually on screen: shown, and not collapsed to nothing by a
+        maximized panel or video focus (both take the map's splitter cell to 0 px)."""
+        mp = getattr(self, "map", None)
+        return (mp is not None and mp.isVisible() and mp.width() > 0 and mp.height() > 0
+                and not self.is_video_focused())
+
     def start_lap_race(self, speed: float = 1.0, speeds: tuple[float, ...] = (1.0,)) -> bool:
         """Every clean lap leaves the line together on the map. Leaves compare first (one map, one
         story), pauses the video, and emphasises the lap on screen (the playhead's, else the Laps
         table's first selected). `speed` / `speeds` are the race's starting speed and its ladder:
         the window passes the transport's, so this module never reads the playback rate
         (tests/test_playback_rate.py keeps the sync path ignorant of it)."""
-        if self.is_racing() or not self.can_race():
+        if self.is_racing() or not self.can_race() or not self.map_on_screen():
             return self.is_racing()
         if self._comparing():
             self.video.compare_btn.click()

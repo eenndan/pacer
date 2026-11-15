@@ -76,7 +76,7 @@ class _Card:
         self.model = None
         self.visible = False
 
-    def configure(self, colours, winner):
+    def configure(self, colours, lap_times):
         self.colours = colours
 
     def show_model(self, model):
@@ -272,25 +272,27 @@ def test_the_card_paints_the_model():
 # ---------------------------------------------------------------- the real window
 @contextlib.contextmanager
 def _window():
+    """A real, jailed StudioWindow on the PUBLISHED DEMO's recording: `make_demo.make`, the recipe
+    the downloadable demo is built from (its driver habit included), with the flat placeholder
+    picture (`render=False`: the same telemetry, so the same laps and lap times, in seconds)."""
     from test_debrief_landing import _fresh_app_support, _open
 
     from studio import sidecar
     from studio.app import StudioWindow
     from studio.dev import make_demo as md
-    from studio.dev import synth_gopro as sg
     saved = sidecar.save
     sidecar.save = lambda *a, **k: None     # a start-line test must not write beside the clip
     with tempfile.TemporaryDirectory(prefix="race_ctl_") as folder, _fresh_app_support():
-        rec = sg.generate(os.path.join(folder, "rec"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
-                          origin=md.DEMO_ORIGIN)
+        path = os.path.join(folder, "demo", "GX019001.MP4")
+        md.make(path, render=False)
         win = StudioWindow([])
         win.resize(1440, 900)
         win.show()
         try:
-            _open(win, rec.paths[0])
-            _open(win, rec.paths[0])
+            _open(win, path)
+            _open(win, path)
             win._escape_out()
-            yield win, rec.paths[0], _open
+            yield win, path, _open
         finally:
             sidecar.save = saved
             win.close()
@@ -312,25 +314,27 @@ def test_the_race_on_the_real_window():
         v, s = win.view, win.session
         mp = v.map
         vb = mp.plot.getViewBox()
-        pauses = []
+        pauses, plays = [], []
         player = v.video.pane.player
         player.pause = lambda: pauses.append(1)
+        player.play = lambda: plays.append(1)
         win._sync_view_menu()
         act = win._race_action
         assert act.isEnabled() and act.shortcut().toString() == "R", act.text()
         before = dict(marker=mp.marker.isVisible(), pos=tuple(mp.marker.pos()),
-                      key=mp._map_key.isVisible(), items=set(map(id, vb.addedItems)),
+                      key=mp._map_key.isHidden(), items=set(map(id, vb.addedItems)),
                       scene=len(mp.plot.items), applied=v._playback.applied_t,
-                      sel=v.table.selected_ids() if hasattr(v.table, "selected_ids") else None)
+                      sel=v.table.selected_lap_ids(), rate=v.video.playback_rate())
+        assert before["sel"], "nothing selected: the selection-restore check would test nothing"
         act.trigger()
         assert v.is_racing() and act.isChecked()
         assert pauses, "entering the race did not pause the video"
-        assert not mp.marker.isVisible() and not mp._map_key.isVisible()
+        assert not mp.marker.isVisible() and mp._map_key.isHidden()
         race = v.race
         from studio.video_view import PLAYBACK_RATES
         assert race.rates == tuple(PLAYBACK_RATES), "the race does not run on the transport's ladder"
         items = mp.race_items()
-        assert len(items) == 3 + len(race.tracks.coloured), len(items)
+        assert len(items) == 4 + len(race.tracks.coloured), len(items)
         for it in items:
             assert it in mp.plot.items and id(it) not in set(map(id, vb.addedItems)), \
                 f"{type(it).__name__} joins the view bounds (no ignoreBounds)"
@@ -339,26 +343,75 @@ def test_the_race_on_the_real_window():
         for _ in range(10):                 # the window's own ticks drive it
             _settle(0.05)
         assert race.t > 0, "the race clock did not run on the window's tick"
+        # Space is the race's, not the transport's; [ / ] are its speed, not the video's.
+        toggles = []
+        real_toggle = v.video.toggle
+        v.video.toggle = lambda: toggles.append(1)
+        was = race.playing
+        win.toggle_playback()
+        v.video.toggle = real_toggle
+        assert race.playing != was and toggles == [], "Space leaked to the video transport"
+        speed = race.speed
+        win.slower_playback()
+        assert race.speed < speed and v.video.playback_rate() == before["rate"], "[ leaked"
+        win.faster_playback()
+        assert race.speed == speed and v.video.playback_rate() == before["rate"], "] leaked"
         race.playing = False
         race.scrub(0.4)
         v.tick()
         state = lap_race.race_state(race.tracks, race.t)
-        x, y = mp._race.dots.getData()
+        x, y = mp._race.positions()
         o = mp._race.order
         assert np.allclose(x, state.x[o]) and np.allclose(y, state.y[o]), "dots ≠ race_state"
         assert len(mp.plot.items) == n_items and lap_race.BUILD_COUNT == builds
         rows = v.race_card.model.rows
         assert [r.laps for r in rows] == [p.laps for p in pack_rows(
             state, race.tracks.coloured, race.selected)[0]]
-        # Esc ends it; everything is back
+        # A report exported mid-race shows the ordinary map: no card, no race item in the grab.
+        seen = {}
+
+        def spy(widget):
+            seen["card"] = v.race_card.isVisible()
+            seen["race"] = any(it.isVisible() for it in mp.race_items())
+            return b""
+        real_grab = win.exports.grab_png
+        win.exports.grab_png = spy
+        try:
+            win._grab_report_map_png(mp)
+        finally:
+            win.exports.grab_png = real_grab
+        assert seen == {"card": False, "race": False}, f"the report grab shows the race: {seen}"
+        assert v.race_card.isVisible() and all(it.isVisible() for it in mp.race_items())
+        # The card re-renders only on a change of what it shows, not on every map repaint.
+        _settle(0.1)
+        renders = v.race_card.renders
+        for _ in range(5):
+            v.tick()
+            mp.widget.viewport().repaint()
+            _APP.processEvents()
+        assert v.race_card.renders == renders, (renders, v.race_card.renders)
+        # At the finish the intervals are the Laps table's Δbest strings, to the digit.
+        from studio.lap_table import _DELTA_COL
+        from studio.race_ladder import interval_header, interval_text
+        race.scrub(1.0)
+        v.tick()
+        m = v.race_card.model
+        assert m.over and race.tracks.ids[0] == s.best_lap_id()
+        table = {v.table._lap_id(r): v.table.table.item(r, _DELTA_COL).text()
+                 for r in range(v.table.table.rowCount())}
+        assert interval_header(True) == "time / interval" and len(m.rows) > 1
+        for r in m.rows[1:]:
+            got = interval_text(r, True, v.race_card.lap_times)
+            assert got == table[r.laps[0]] + " s", (r.laps[0], got, table[r.laps[0]])
+        # Esc ends it; everything is back, and the video stays PAUSED at its playhead.
         win.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
         assert not v.is_racing() and not act.isChecked() and v.race_card.isHidden()
         assert mp.race_items() == [] and len(mp.plot.items) == before["scene"]
         assert set(map(id, vb.addedItems)) == before["items"]
-        assert mp.marker.isVisible() == before["marker"] and mp._map_key.isVisible() == before["key"]
+        assert mp.marker.isVisible() == before["marker"] and mp._map_key.isHidden() == before["key"]
         assert tuple(mp.marker.pos()) == before["pos"] and v._playback.applied_t == before["applied"]
-        if before["sel"] is not None:
-            assert v.table.selected_ids() == before["sel"]
+        assert v.table.selected_lap_ids() == before["sel"], "the selection changed"
+        assert plays == [] and not v.video.is_playing(), "ending the race resumed the video"
         t_after = race.t
         _settle(0.2)
         assert race.t == t_after, "the race clock runs after exit"
@@ -370,6 +423,23 @@ def test_the_race_on_the_real_window():
         if v.compare.active:
             v.video.compare_btn.click()
             _settle(0.1)
+        # a trust flip without a re-segment ends it
+        assert v.start_lap_race()
+        v.refresh_timing_trust()
+        assert not v.is_racing(), "refresh_timing_trust left the race running"
+        # the map leaving the screen: a race ends, and the command is off with its reason
+        assert v.start_lap_race()
+        v._toggle_panel_maximized(v._plots_panel)
+        _settle(0.2)
+        assert not v.map_on_screen() and not v.is_racing(), "a race kept running off screen"
+        win._sync_view_menu()
+        assert not win._race_action.isEnabled()
+        assert win._race_action.toolTip() == win._NO_MAP_RACE_REASON
+        assert not v.start_lap_race()
+        v._restore_splitter_sizes()
+        _settle(0.2)
+        win._sync_view_menu()
+        assert v.map_on_screen() and win._race_action.isEnabled()
         # a start-line re-segment ends it
         assert v.start_lap_race()
         mp.timing_lines_changed.emit(s.start_line, list(s.sector_lines))
@@ -381,6 +451,7 @@ def test_the_race_on_the_real_window():
         _open(win, path)
         assert not old.race.active, "loading a recording left the race running"
         # under two raceable laps: off, with its reason
+        real_tracks = win.session.race_tracks
         win.session.race_tracks = lambda *a, **k: None
         win._sync_view_menu()
         act = win._race_action
@@ -388,7 +459,15 @@ def test_the_race_on_the_real_window():
         assert act.text().startswith("Lap race — needs at least two clean laps"), act.text()
         act.trigger()
         assert not win.view.is_racing()
-    print("ok real window: enter, draw, tick, exit, compare / re-segment / load end it, gated")
+        win.session.race_tracks = real_tracks
+        # closing the window clears the race
+        assert win.view.start_lap_race()
+        view = win.view
+        win.close()
+        _APP.processEvents()
+        assert not view.race.active, "a closed window left race.active set"
+    print("ok real window: enter, draw, keys, report grab, finish = table Δbest, exit (video "
+          "paused), compare / trust / off-screen / re-segment / load / close end it, gated")
 
 
 if __name__ == "__main__":

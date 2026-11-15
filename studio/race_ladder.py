@@ -11,7 +11,7 @@ WHAT EACH LINE IS (the honesty copy):
     position; the row names its coloured laps (and the selected one) and counts the grey ones,
     then the pack's "interval to leader" and its spread. Nothing calls a lap inside a pack a race
     position;
-  * the fixed-reference line is the selected lap against the BEST lap ("L12 vs best L30"), which
+  * the fixed-reference line is the selected lap against the BEST lap ("L4 vs best L13"), which
     never changes reference when the leader does, and reads "≈" inside the tie threshold;
   * on a provisional start line the rows give way to the reason the race is not ranked; on an
     estimated clock the clock is named with the widened threshold; laps not raced are counted.
@@ -19,11 +19,12 @@ WHAT EACH LINE IS (the honesty copy):
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from . import theme
-from ._signal import fmt_time, lap_label
+from ._signal import fmt_signed, fmt_time, lap_label
+from .lap_table import printed_ms
 from .race_controller import CAPTION, CardModel, PackRow, readout_text
 from .theme import CHART_SERIES, C, icon
 
@@ -39,12 +40,23 @@ _CHIP_DOT = 7
 _RING = QColor(C.text)
 
 
-def interval_text(row: PackRow, over: bool, leader_time: float | None) -> str:
-    """A pack's 'interval to leader' cell: the leader pack reads 'leader' while running and its
-    lap time at the finish; every other pack its interval, signed."""
+def interval_text(row: PackRow, over: bool, lap_times: dict[int, float]) -> str:
+    """A pack's interval cell. While running: 'leader', or the pack's interval to the leader (2 dp,
+    the core's place-matched Δ). At the finish the column is "time / interval": the winner's lap
+    time, and every other pack's gap built from the milliseconds the lap times PRINT
+    (`lap_table.printed_ms`, 3 dp), so it is the Laps table's Δbest string to the digit whenever the
+    winner is the session best — two raw doubles can differ from it on a rounding edge."""
     if row.position == 1:
-        return fmt_time(leader_time) if over and leader_time is not None else "leader"
+        lead = lap_times.get(row.laps[0])
+        return fmt_time(lead) if over and lead is not None else "leader"
+    if over and row.laps[0] in lap_times and lap_times:
+        winner = min(lap_times.values())
+        return f"{fmt_signed((printed_ms(lap_times[row.laps[0]]) - printed_ms(winner)) / 1000, 3)} s"
     return f"+{row.interval_s:.2f} s"
+
+
+def interval_header(over: bool) -> str:
+    return "time / interval" if over else "interval to leader"
 
 
 def spread_text(row: PackRow) -> str:
@@ -65,7 +77,9 @@ class RaceCard(QWidget):
         super().__init__(parent)
         self.model: CardModel | None = None
         self.colours: dict[int, int] = {}      # lap id → series slot (the coloured five)
-        self.leader_time: float | None = None   # the field's fastest lap time (the finish winner)
+        self.lap_times: dict[int, float] = {}   # the field's lap times (the finish column)
+        self._cache: QPixmap | None = None     # the card as painted, re-rendered on a change
+        self._cache_key = None
         self._title_font = theme.ui_font(theme.PANEL_HEADER, theme.W_SEMIBOLD)
         self._font = theme.ui_font(theme.CAPTION)
         self._num_font = theme.mono_font(theme.CAPTION)
@@ -74,6 +88,7 @@ class RaceCard(QWidget):
         self._icons: dict = {}
         self._hits: dict[str, QRectF] = {}
         self._scrubbing = False
+        self.renders = 0                        # pixmap renders (a test reads it)
         # The card's measure is its caption's, one line, plus its padding and a step of air: the
         # widest fixed text it carries, so the columns below are sized from the face, not typed.
         self._w = self._fm.horizontalAdvance(CAPTION) + 2 * _PAD + theme.SPACE_XL
@@ -81,17 +96,33 @@ class RaceCard(QWidget):
         self.hide()
 
     # ------------------------------------------------------------------ model
-    def configure(self, colours: dict[int, int], leader_time: float | None) -> None:
-        """Per-race constants: which laps are coloured (and in which slot), the winner's time."""
+    def configure(self, colours: dict[int, int], lap_times: dict[int, float]) -> None:
+        """Per-race constants: which laps are coloured (and in which slot), every lap's time."""
         self.colours = dict(colours)
-        self.leader_time = leader_time
+        self.lap_times = dict(lap_times)
+        self._cache = None
 
     def show_model(self, model: CardModel) -> None:
+        """Take a tick's model. The card is a translucent child over the map's viewport, so it is
+        repainted whenever the map is — every tick — and painting its ~20 text runs cost ~1 ms of
+        that. So it paints into a pixmap only when what it SHOWS changed (its lines, the progress
+        bar's pixel, the play state) and otherwise blits."""
         self.model = model
         h = self._height(model)
         if (self._w, h) != (self.width(), self.height()):
             self.setFixedSize(self._w, h)
-        self.update()
+        key = self._content_key(model)
+        if key != self._cache_key:
+            self._cache_key = key
+            self._cache = None
+            self.update()
+
+    def _content_key(self, m: CardModel):
+        inner = self._w - 2 * _PAD
+        frac = 0.0 if m.duration <= 0 else min(max(m.t / m.duration, 0.0), 1.0)
+        return (tuple(self.lines()), round(inner * frac * self.devicePixelRatioF()), m.playing,
+                m.speed, m.selected, self.width(), self.height(),
+                round(self.devicePixelRatioF(), 3), theme.active_palette())
 
     def lines(self) -> list[str]:
         """Every text line the card paints right now, top to bottom (tests and captures read it)."""
@@ -102,13 +133,13 @@ class RaceCard(QWidget):
         if m.unranked_reason:
             out.append(m.unranked_reason)
         else:
-            out.append("pack · interval to leader · spread")
+            out.append(f"pack · {interval_header(m.over)} · spread")
             room = self._w - 2 * _PAD - _POS_W - _INT_W - _SPREAD_W
             for r in m.rows:
                 chips, more = self.fit_chips(r, m.selected, room)
                 out.append(" ".join([str(r.position), *(f"L{lap_label(i)}" for i in chips),
                                      *([f"+{more}"] if more else []),
-                                     interval_text(r, m.over, self.leader_time),
+                                     interval_text(r, m.over, self.lap_times),
                                      spread_text(r)]).strip())
             if m.hidden_packs:
                 out.append(self._more_text(m))
@@ -179,10 +210,23 @@ class RaceCard(QWidget):
             p.drawText(rect, int(Qt.AlignCenter), text)
 
     def paintEvent(self, _event):
-        m = self.model
-        if m is None:
+        if self.model is None:
             return
+        if self._cache is None or self._cache.size() != self.size() * self.devicePixelRatioF():
+            dpr = self.devicePixelRatioF()
+            px = QPixmap(self.size() * dpr)
+            px.setDevicePixelRatio(dpr)
+            px.fill(Qt.transparent)
+            painter = QPainter(px)
+            self._paint(painter, self.model)
+            painter.end()
+            self._cache = px
+            self.renders += 1
         p = QPainter(self)
+        p.drawPixmap(0, 0, self._cache)
+        p.end()
+
+    def _paint(self, p: QPainter, m: CardModel) -> None:
         p.setRenderHint(QPainter.Antialiasing, True)
         plate = QColor(C.surface)
         plate.setAlpha(232)
@@ -248,7 +292,6 @@ class RaceCard(QWidget):
                 p.setPen(QPen(QColor(colour)))
                 p.drawText(QRectF(x0, y, inner, h), int(Qt.TextWordWrap | Qt.AlignLeft), text)
                 y += h
-        p.end()
 
     def _paint_rows(self, p: QPainter, m: CardModel, x0: float, y: float, inner: float) -> float:
         chips_x = x0 + _POS_W
@@ -259,7 +302,7 @@ class RaceCard(QWidget):
         p.drawText(QRectF(chips_x, y, int_x - chips_x, _ROW_H),
                    int(Qt.AlignVCenter | Qt.AlignLeft), "pack")
         p.drawText(QRectF(int_x - 40, y, _INT_W + 40, _ROW_H),
-                   int(Qt.AlignVCenter | Qt.AlignRight), "interval to leader")
+                   int(Qt.AlignVCenter | Qt.AlignRight), interval_header(m.over))
         p.drawText(QRectF(spread_x, y, _SPREAD_W, _ROW_H),
                    int(Qt.AlignVCenter | Qt.AlignRight), "spread")
         y += _ROW_H
@@ -297,7 +340,7 @@ class RaceCard(QWidget):
             p.setFont(self._num_font)
             p.setPen(QPen(QColor(C.text)))
             p.drawText(QRectF(int_x, y, _INT_W, _ROW_H), int(Qt.AlignVCenter | Qt.AlignRight),
-                       interval_text(r, m.over, self.leader_time))
+                       interval_text(r, m.over, self.lap_times))
             p.setPen(QPen(QColor(C.text_dim)))
             p.drawText(QRectF(spread_x, y, _SPREAD_W, _ROW_H),
                        int(Qt.AlignVCenter | Qt.AlignRight), spread_text(r))

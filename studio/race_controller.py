@@ -119,7 +119,7 @@ def excluded_line(excluded: dict[int, str]) -> str | None:
 
 
 def readout_text(model: CardModel) -> str | None:
-    """The fixed-reference line, named as such: 'L12 vs best L30: +0.23 s' ('≈' inside the tie
+    """The fixed-reference line, named as such: 'L4 vs best L13: +0.54 s' ('≈' inside the tie
     threshold, where the two cannot be told apart). None when unranked or nothing is selected."""
     if model.selected is None or model.to_best is None:
         return None
@@ -134,8 +134,8 @@ def readout_text(model: CardModel) -> str | None:
 class RaceController:
     """The race's clock and its fan-out. `map_view` takes `start_race(tracks, colours, selected)`,
     `update_race(state)`, `set_race_selected(lap_id)` and `end_race()`; `card` takes
-    `configure(colours, winner_time)`, `show_model(model)`, `show()`/`hide()`; `pause_video()` stops the picture on entry. `rates` is
-    the playback-rate ladder the transport uses (0.25× … 2×)."""
+    `configure(colours, lap_times)`, `show_model(model)`, `show()`/`hide()`; `pause_video()`
+    stops the picture on entry. `rates` is the playback-rate ladder the transport uses."""
 
     def __init__(self, session, map_view, card, *, pause_video: Callable[[], None],
                  rates: Sequence[float] = (1.0,), clock: Callable[[], float] = time.monotonic,
@@ -186,7 +186,8 @@ class RaceController:
         self.playing = True
         self._last = self._clock()
         self.map.start_race(tracks, self.colours(), self.selected)
-        self.card.configure(self.colours(), float(tracks.lap_times.min()))
+        self.card.configure(self.colours(),
+                            {i: float(t) for i, t in zip(tracks.ids, tracks.lap_times, strict=True)})
         self.card.show()
         self._redraw()
         if self._on_change is not None:
@@ -195,7 +196,12 @@ class RaceController:
 
     def end(self) -> None:
         """Leave the race: remove every race item, put the map back exactly as it was. No-op when
-        no race is on."""
+        no race is on.
+
+        THE VIDEO STAYS PAUSED, at the playhead it had on entry (a decision, review of #553): the
+        race paused it, and ending the race never resumes it — a picture that starts rolling when
+        you close an overlay is a surprise, and the playhead the user left is the one they get
+        back. (A Laps-table click during the race is the one thing that moves it, by the user.)"""
         if not self.active:
             return
         self.tracks = None
