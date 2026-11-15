@@ -104,7 +104,7 @@ from PySide6.QtGui import (  # noqa: E402
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
-from studio import APP_NAME, __version__, chapters, demo, export_video, theme  # noqa: E402
+from studio import APP_NAME, __version__, chapters, demo, export_video, motion, theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
 from studio.dev import _jail  # noqa: E402
 from studio.theme import C  # noqa: E402
@@ -338,6 +338,7 @@ def lap_time_at(session, lap_id: int, fraction: float) -> float:
 def grab(widget) -> QImage:
     """The widget's offscreen render as a raw QImage at device resolution (dpr stripped, so the
     saved PNG is exactly `logical * DPR` pixels and nothing downstream re-scales it)."""
+    motion.finish_all()     # never a mid-roll readout, even under PACER_MOTION=1
     img = widget.grab().toImage()
     img.setDevicePixelRatio(1.0)
     return img
