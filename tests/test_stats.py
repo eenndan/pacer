@@ -5413,6 +5413,207 @@ def test_every_report_table_in_a_section_column_is_registered_with_the_packer():
           f"{sum(len(g) for g in v._column_tables)} tables in {len(v._columns)} columns")
 
 
+# ------------------------------------------------------------------ the middle half (cool/middle-half)
+# σ counts every clean lap, so one spin can carry it; the middle half is a second, robust reading
+# printed beside it on the σ tile's caption line and in the Corners table's σ hover. It removes no
+# lap and ranks nothing (refusal §14 is not reopened).
+def test_middle_half_is_the_interquartile_width_and_none_below_five():
+    from studio.stats import (
+        CORNER_MIDDLE_HALF_FLOOR_S,
+        MIN_MIDDLE_HALF_N,
+        CornerReport,
+        corner_report,
+        fmt_middle_half,
+        middle_half,
+    )
+    assert MIN_MIDDLE_HALF_N == 5
+    # Odd n: numpy's linear quartiles land on order statistics 2 and 4 — and the 100 s outlier
+    # reaches neither. The WIDTH Q3 − Q1, not a ± about the median.
+    assert middle_half([1.0, 2.0, 3.0, 4.0, 100.0]) == 2.0
+    # Even n: interpolated, 2.25 and 4.75.
+    assert middle_half([6.0, 1.0, 5.0, 2.0, 4.0, 3.0]) == 2.5
+    # A skewed set: the median is NOT in the band's middle (Q1 2, median 3, Q3 6), which is why
+    # the page prints a width and never "± about the median".
+    assert middle_half([1.0, 2.0, 3.0, 6.0, 7.0]) == 4.0
+    # Below five times, nothing — and non-finite values do not count towards the five.
+    assert middle_half([1.0, 2.0, 3.0, 4.0]) is None
+    assert middle_half([1.0, 2.0, 3.0, 4.0, float("nan")]) is None
+    assert middle_half([]) is None
+    # All equal: a real 0.0 (not None), printed with the floor rather than "0.00 s".
+    assert middle_half([45.2] * 6) == 0.0
+    # LAPS: the floor is the timing precision of a gap between two laps.
+    assert fmt_middle_half(0.0) == "< 0.07 s"
+    assert fmt_middle_half(0.0699) == "< 0.07 s"
+    assert fmt_middle_half(0.07) == "0.07 s"
+    assert fmt_middle_half(0.594) == "0.59 s"
+    assert fmt_middle_half(None) is None
+    # CORNERS: no precision claim, only the 2-dp print's own floor.
+    assert fmt_middle_half(0.0, CORNER_MIDDLE_HALF_FLOOR_S) == "< 0.01 s"
+    assert fmt_middle_half(0.043, CORNER_MIDDLE_HALF_FLOOR_S) == "0.04 s"
+    # Carried additively on both dataclasses, beside σ.
+    assert pace_stats([1.0, 2.0, 3.0, 4.0, 100.0]).middle_half == 2.0
+    assert pace_stats([1.0, 2.0, 3.0, 4.0]).middle_half is None
+    rows = corner_report([1, 2], [1, -1],
+                         [[3.0 + 0.1 * i, 5.0] for i in range(5)] + [[3.9, float("nan")]],
+                         [[60.0, 50.0]] * 6, [[0.9, 0.9]] * 6)
+    assert isinstance(rows[0], CornerReport)
+    assert rows[0].middle_half_s == middle_half([3.0, 3.1, 3.2, 3.3, 3.4, 3.9])
+    assert rows[1].middle_half_s == 0.0                      # five finite passes of 5.0 s
+    print("test_middle_half_is_the_interquartile_width_and_none_below_five OK")
+
+
+def test_a_corner_middle_half_counts_only_the_cells_matched_on_track():
+    """The corner width reads the SAME cells as σ and Best: a pass whose window was interpolated
+    (`resolved_by_lap` False) counts towards nothing in the row — here it holds a 9 s outlier that
+    would widen the band if it were read from the raw column."""
+    from studio.stats import corner_report, middle_half
+    times = [[3.00], [3.10], [3.20], [3.30], [3.40], [3.50], [9.00]]
+    resolved = [[True]] * 6 + [[False]]
+    (row,) = corner_report([1], [1], times, [[60.0]] * 7, [[0.9]] * 7, resolved_by_lap=resolved)
+    assert row.n == 6
+    assert row.middle_half_s == middle_half([3.00, 3.10, 3.20, 3.30, 3.40, 3.50]), row
+    assert row.middle_half_s != middle_half([t[0] for t in times])
+    print("test_a_corner_middle_half_counts_only_the_cells_matched_on_track OK")
+
+
+def _spin_pace():
+    """Twelve laps of one synthetic driver (σ 0.10 s, seeded) and one spin, +10 s."""
+    rng = np.random.default_rng(1115)
+    laps = list(45.0 + rng.normal(0.0, 0.10, 12)) + [55.0]
+    return pace_stats(laps)
+
+
+def test_one_spin_carries_sigma_and_both_are_on_the_tile():
+    _app()
+    from studio.stats import fmt_middle_half
+    from studio.stats_panel import SIGMA_TOOLTIP, StatsView
+    pace = _spin_pace()
+    assert pace.sigma > 5 * pace.middle_half, (pace.sigma, pace.middle_half)
+    sess = _fake_view_session()
+    sess.stats.pace = lambda: pace
+    v = StatsView(sess)
+    assert v.t_sigma.value.text() == f"{pace.sigma:.2f} s"
+    assert v.t_sigma.caption.text() == (
+        f"σ lap · middle half within {fmt_middle_half(pace.middle_half)}")
+    assert v.t_sigma.toolTip() == SIGMA_TOOLTIP
+    for words in ("a spin included", "width of the band the central 50 %",
+                  "Neither removes a lap", "gap between two laps"):
+        assert words in SIGMA_TOOLTIP, words
+    assert "±" not in SIGMA_TOOLTIP and "about the median" not in SIGMA_TOOLTIP
+    # The stub's two-lap pace has no middle half: the caption is σ's own, byte for byte.
+    v2 = StatsView(_fake_view_session())
+    assert v2.t_sigma.value.text() == "1.27 s"
+    assert v2.t_sigma.caption.text() == "σ lap"
+    print(f"test_one_spin_carries_sigma_and_both_are_on_the_tile OK (σ {pace.sigma:.2f} s, "
+          f"middle half {fmt_middle_half(pace.middle_half)})")
+
+
+def test_the_corner_sigma_hover_carries_the_middle_half_only_with_five_passes():
+    _app()
+    from studio.stats import CornerReport
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.corner_report = lambda: [
+        CornerReport(cid=1, direction=1, n=8, best_s=3.20, median_s=3.30, sigma_s=0.41,
+                     median_loss_s=0.10, apex_best_kmh=62.0, apex_median_kmh=60.0,
+                     grip_median=0.95, score=0.041, n_laps=8, middle_half_s=0.114),
+        CornerReport(cid=2, direction=-1, n=4, best_s=5.10, median_s=5.50, sigma_s=0.20,
+                     median_loss_s=0.40, apex_best_kmh=45.0, apex_median_kmh=43.0,
+                     grip_median=None, score=0.08, n_laps=4, middle_half_s=None),
+        CornerReport(cid=3, direction=1, n=6, best_s=2.10, median_s=2.12, sigma_s=0.30,
+                     median_loss_s=0.02, apex_best_kmh=70.0, apex_median_kmh=69.0,
+                     grip_median=0.9, score=0.006, n_laps=6, middle_half_s=0.02),
+    ]
+    v = StatsView(sess)
+    t = v.corners.table
+    assert t.columnCount() == 8                              # no new column
+    assert t.item(0, 3).text() == "0.41"                     # σ itself unchanged
+    assert t.item(0, 3).toolTip() == (
+        "the central 50 % of C1's 8 counted passes fall within 0.11 s. "
+        "σ counts every one of them."), t.item(0, 3).toolTip()
+    assert t.item(1, 3).toolTip() == ""                      # 4 passes: absent, not "—"
+    # A corner width is printed as measured — no lap-time precision claim on a corner cell.
+    assert t.item(2, 3).toolTip().startswith("the central 50 % of C3's 6 counted passes fall "
+                                             "within 0.02 s."), t.item(2, 3).toolTip()
+    assert "precision" not in t.item(2, 3).toolTip()
+    # Nothing marks or ranks by it: the marked loss cells are still the σ × loss top.
+    assert "middle half" not in t.item(1, 4).toolTip()
+    print("test_the_corner_sigma_hover_carries_the_middle_half_only_with_five_passes OK")
+
+
+_DEMO: dict = {}
+
+
+def _shipped_demo_session():
+    """The SHIPPED demo's telemetry (`make_demo.make(render=False)`: the session `--demo` opens,
+    under the flat picture), loaded once per process into a private temp directory."""
+    if "s" not in _DEMO:
+        import tempfile
+
+        from studio.dev import make_demo as md
+        from studio.session import Session
+        tmp = tempfile.TemporaryDirectory(prefix="stats_demo_")
+        path = os.path.join(tmp.name, "demo", "GX019001.MP4")
+        md.make(path, render=False)
+        _DEMO.update(tmp=tmp, s=Session.load([path]))
+    return _DEMO["s"]
+
+
+def test_the_demo_tile_prints_the_middle_half_and_keeps_its_row():
+    """On the shipped demo (14 clean laps, one of them ~5 s off): the caption is the function's
+    value formatted and σ's own text is what it always was. The row's geometry is
+    `test_the_longest_middle_half_caption_keeps_the_pace_row`'s."""
+    _app()
+    from studio.stats import fmt_middle_half, middle_half
+    from studio.stats_panel import StatsView
+    s = _shipped_demo_session()
+    pace = s.stats.pace()
+    half = middle_half([s.lap_time(i) for i in s.consistency_lap_ids()])
+    assert half is not None and pace.middle_half == half
+    v = StatsView(s)
+    v.show()
+    assert v.t_sigma.value.text() == f"{pace.sigma:.2f} s"
+    assert v.t_sigma.caption.text() == f"σ lap · middle half within {fmt_middle_half(half)}"
+    assert pace.sigma > 2 * half, (pace.sigma, half)        # the slow lap carries σ here too
+    v.hide()
+    print(f"test_the_demo_tile_prints_the_middle_half_and_keeps_its_row OK "
+          f"(σ {pace.sigma:.2f} s, middle half within {fmt_middle_half(half)})")
+
+
+def test_the_longest_middle_half_caption_keeps_the_pace_row():
+    """The longest captions the line can print ("within < 0.07 s", "within 10.25 s"): the PACE row
+    stays one height from 300 to 1440 px, the caption is never narrower than its text, and the row
+    needs no horizontal scroll from 340 px (it fitted from 310 before the line)."""
+    _app()
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QScrollArea
+
+    from studio.stats import PaceStats
+    from studio.stats_panel import StatsView
+    for width_s in (0.0, 10.25):
+        sess = _fake_view_session()
+        sess.stats.pace = lambda w=width_s: PaceStats(n=14, best=44.95, median=45.6, sigma=1.54,
+                                                      spread=0.6, middle_half=w)
+        v = StatsView(sess)
+        v.show()
+        vp = v.findChildren(QScrollArea)[0].viewport()
+        for w in (300, 340, 420, 520, 700, 1440):
+            v.resize(w, 900)
+            _pump()
+            tiles = v._tile_grids[1][1]                      # the PACE grid
+            heights = {t.height() for t in tiles if t.isVisible()}
+            assert heights == {v.t_best.height()} and len(heights) == 1, (
+                w, [(t.caption.text(), t.height()) for t in tiles])
+            cap = v.t_sigma.caption
+            assert cap.width() >= cap.fontMetrics().horizontalAdvance(cap.text()), (
+                w, cap.width(), cap.text())
+            if w >= 340:
+                right = max(t.mapTo(vp, QPoint(t.width(), 0)).x() for t in tiles)
+                assert right <= vp.width(), (w, right, vp.width(), cap.text())
+        v.close()
+    print("test_the_longest_middle_half_caption_keeps_the_pace_row OK")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
