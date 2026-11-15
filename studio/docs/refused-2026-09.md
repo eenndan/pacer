@@ -2317,46 +2317,69 @@ presentation that reads as a montage of best passes, not as a lap.
 
 ---
 
-## 32. Two session moments that do not survive the timing's own noise — refused (W4 design pass)
+## 32. Three session moments that do not survive the timing's own noise — refused (W4 design pass)
 
 **The idea.** A short list of the session's moments, each a jump to the lap it names: the best
 lap, the biggest single-corner loss, the longest run with no ▼, the best 5-lap run, the best 3-lap
 run, and the best pass through each corner.
 
-**How it was measured.** `studio/dev/probes/story_refusals.py` on the synthetic demo, 1,000 seeded
-draws of the timing's own noise. In every draw each lap time moves by a uniform amount within
-±0.07 s (`library.PB_PRECISION_S`, the step under which the app calls two laps level), and each
-corner cell, the CORNERS BY LAP grid's time through one corner, by a uniform amount within ±0.035 s,
-every one independent of the others. The grid's ▼ marks are recomputed from the moved cells. For
-each moment it counts the share of draws in which the lap it names changes.
+**How it was measured.** `studio/dev/probes/story_refusals.py` on the synthetic demo, two ways.
+- **Jitter:** 1,000 seeded draws of the timing's own noise. In every draw each lap time moves by a
+  uniform amount within ±0.07 s (`library.PB_PRECISION_S`, the step under which the app calls two
+  laps level), and each corner cell, the CORNERS BY LAP grid's time through one corner, by a uniform
+  amount within ±0.035 s, every one independent of the others. The grid's ▼ marks are recomputed
+  from the moved cells. For each moment it counts the share of draws in which the lap it names
+  changes.
+- **Pure noise:** a moment can be stable and still be what noise alone would produce. A ▼ marks a
+  cell above its corner's 90th-percentile deviation from the median, floored at 0.30 s
+  (`stats._typical_and_scale`), so by construction it lands on about one cell in ten wherever the
+  floor does not win. The probe draws 1,000 seeded grids of pure Gaussian noise at the demo's 14 laps
+  and 7 corners, each corner its demo median plus noise of that corner's own sample σ (0.031–0.757
+  s), marks them through the real constructor (`stats.corner_matrix`), and reads each grid's longest
+  run with no ▼.
 
 | synthetic demo, 14 clean laps, 1,000 draws | named lap changes | |
 |---|---|---|
 | best 3-lap run | 0.16 | 5 of 12 runs within 0.07 s of the best |
 | best pass per corner, at six of seven corners | 0.13–0.69 | a tie of 6–11 passes within 0.07 s |
 | best pass per corner, at C5 | 0.00 | alone |
+| longest run with no ▼ | 0.00 | 8 laps |
 | best lap | 0.00 | 0.215 s clear of the next |
 | biggest single-corner loss | 0.00 | |
-| longest run with no ▼ | 0.00 | 8 laps |
 | best 5-lap run | 0.00 | 3 of 10 runs within 0.07 s of the best |
 
-**Two moments name a lap the noise could have picked.** The best 3-lap run changes in 16 % of the
-draws, and five of the twelve runs sit within 0.07 s of it. The best pass through a corner is a tie
-at six corners of seven, 6 to 11 passes within 0.07 s of the quickest, and which one is named
-changes in up to 69 % of the draws. Only C5's stands alone, the corner whose grip the generator varies most
-(§27). Naming one pass of eleven as "the" best pass is a coin toss presented as a moment.
+| longest run with no ▼, 14 laps × 7 corners | median | 90th percentile | grids at least as long as the demo's |
+|---|---|---|---|
+| pure Gaussian noise, 1,000 grids | 5 laps | 8 laps | 0.16 |
+| the demo | 8 laps | | |
 
-**The moments the design pass kept survive it.** On the demo the best lap, the biggest corner
-loss, the longest run with no ▼ and the best 5-lap run never change; where runs tie, the design
-names them together. Five laps' median is steadier than three, and the 5-lap windows that tie share
-most of their laps.
+**Three moments name a lap the noise could have picked.**
+- **The best 3-lap run** changes in 16 % of the draws, and five of the twelve runs sit within
+  0.07 s of it.
+- **The best pass through a corner** is a tie at six corners of seven, 6 to 11 passes within 0.07 s
+  of the quickest, and which one is named changes in up to 69 % of the draws. Only C5's stands
+  alone, the corner whose grip the generator varies most (§27). Naming one pass of eleven as "the"
+  best pass is a coin toss presented as a moment.
+- **The longest run with no ▼** never changes under the jitter, and that was the wrong test. The
+  demo's run of 8 laps is the 90th percentile of what pure noise produces on the same grid, and 16 %
+  of the noise grids run at least as long. A ▼ is rare by construction, so a long stretch without
+  one is what a session of nothing but noise also shows. The review of the story-core PR that
+  raised this measured the same shape on its own noise grids, with 7 corners (median / 90th
+  percentile of the longest run): 7 / 12 at 14 laps and σ 0.15 s, 12 / 18 at 36 laps and σ 0.15 s,
+  4 / 5 at 40 laps and σ 0.30 s. Those are the review's figures, not re-measured here.
+
+**The moments the design pass kept survive both tests.** The best lap, worded as a tie where
+another lap is within 0.07 s of it; the biggest single-corner loss; and the best 5-lap run, its
+tied windows merged into spans. On the demo none of them changes under the jitter. Five laps'
+median is steadier than three, and the 5-lap windows that tie share most of their laps.
 
 **What moves because of this refusal: nothing in the app.** No session-moments list exists yet;
-these two will not be in it.
+these three will not be in it.
 
 **What would be new evidence:** a session where the best 3-lap run and a corner's best pass each
 change in fewer than one draw in ten under this jitter, on more than one recording, or a timing
-whose level step is well under 0.07 s.
+whose level step is well under 0.07 s; and, for the run with no ▼, a rule for a calm stretch that
+pure noise at the session's own lap count and spread does not satisfy at that rate.
 
 ---
 

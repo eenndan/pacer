@@ -28,7 +28,9 @@ map's own (~20 s in all, most of it generating the demo and opening the window).
     independent; per moment, the share of draws in which the lap it names changes. The longest run
     without a ▼ recomputes the CORNERS BY LAP grid (`stats.corner_matrix`) from the jittered cells.
     Also each corner's tie group: the passes within PB_PRECISION_S of its quickest, and the 5-lap
-    windows within PB_PRECISION_S of the best one.
+    windows within PB_PRECISION_S of the best one. And the longest run without a ▼ on NOISE_DRAWS
+    seeded grids of pure Gaussian noise (the demo's laps, corners, column medians and sample σ),
+    marked by the real rule: a run that is stable under jitter must still beat what noise produces.
 
 ARGV CONTRACT: nothing names an input or an output. The demo is generated (`make_demo`, a
 placeholder picture: nothing here decodes a frame) into ONE `mkdtemp` under $TMPDIR, removed before
@@ -65,6 +67,7 @@ from studio.session import Session  # noqa: E402
 
 SEED = 7                    # one generator for every random draw below: the probe is deterministic
 JITTER_DRAWS = 1000
+NOISE_DRAWS = 1000          # pure-noise grids for the run with no ▼ (§32): ~1 s
 FILM_BASELINE_CUTS = 200
 RUNS = (3, 5)               # the run lengths the moments name
 MAP_WINDOW = mc.WINDOW      # 1440x900 logical, as motion_refusals (§28) opens it
@@ -231,7 +234,28 @@ def moments(s: Session, rng) -> dict:
             "alone": [int(c) for c in mx.cids if ties[str(c)] == 1],
             **tied_runs,
             "best_lap_margin_s": round(srt[1] - srt[0], 3),
-            "no_flag_run": list(base["no_flag_run"])}
+            "no_flag_run": list(base["no_flag_run"]),
+            "noise": noise_runs(mx, cells, order, rng)}
+
+
+def noise_runs(mx, cells: list, order: list[int], rng) -> dict:
+    """The longest run with no ▼ on grids of PURE NOISE: NOISE_DRAWS seeded grids at the demo's lap
+    and corner counts, each column its demo median plus Gaussian noise of that column's own sample
+    σ, every cell resolved, marked by the real rule (`stats.corner_matrix`). Stability under jitter
+    cannot tell a calm stretch from this; the run must beat what noise alone produces."""
+    cols = np.array(cells, float).T
+    med, sig = np.median(cols, axis=1), np.std(cols, axis=1, ddof=1)
+    res = [[True] * len(mx.cids)] * len(mx.lap_ids)
+    runs = []
+    for _ in range(NOISE_DRAWS):
+        grid = (med[:, None] + rng.normal(0.0, 1.0, cols.shape) * sig[:, None]).T.tolist()
+        runs.append(_no_flag_run(stats_service.corner_matrix(mx.lap_ids, mx.cids, grid, res), order)[0])
+    a = np.array(runs)
+    demo = _no_flag_run(mx, order)[0]
+    return {"draws": NOISE_DRAWS, "sigma_s": [round(float(sig.min()), 3), round(float(sig.max()), 3)],
+            "median": int(np.percentile(a, 50, method="inverted_cdf")),
+            "p90": int(np.percentile(a, 90, method="inverted_cdf")),
+            "at_least_demo": round(float(np.mean(a >= demo)), 2)}
 
 
 def figures(s: Session, px_per_m: float) -> dict:

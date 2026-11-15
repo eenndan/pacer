@@ -64,7 +64,8 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      re-measures the brake-onset bands, the "what you nailed" line, the ideal-lap film and the two
      unstable moments on the demo (seeded, so deterministic); counts are held exactly, metres,
      seconds and shares to half a step of their printed last digit, and §28's addendum to its own
-     arithmetic. A negative control plants ten.
+     arithmetic; the run with no ▼ against pure-noise grids marked by the real rule. A negative
+     control plants thirteen.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -2932,7 +2933,7 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
     row(32, "biggest single-corner loss", [sh["worst_corner"]], "the biggest loss")
     row(32, "longest run with no ▼", [sh["no_flag_run"], m["no_flag_run"][0]], "the run with no ▼")
     row(32, "best 5-lap run", [sh["run5"], m["run5_tied"], m["run5_windows"], prec], "the 5-lap run")
-    if (hit := find(32, r"The best 3-lap run changes in (\d+) % of the draws, and (\w+) of the (\w+) runs", "the 3-lap prose")):
+    if (hit := find(32, r"The best 3-lap run(?:\*\*)? changes in (\d+) % of the draws, and (\w+) of the (\w+) runs", "the 3-lap prose")):
         near(32, "the 3-lap share", str(int(hit[0]) / 100), sh["run3"])
         if hit[1:] != (_WORDS[m["run3_tied"]], _WORDS[m["run3_windows"]]):
             probs.append(f"§32: '{hit[1]} of the {hit[2]} runs', the probe: {m['run3_tied']} of {m['run3_windows']}")
@@ -2943,9 +2944,36 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
         near(32, "the largest corner share", str(int(hit[0]) / 100), m["tied_share"][1])
     if (hit := find(32, r"Only C(\d+)'s stands alone", "the lone corner")) and [int(hit[0])] != m["alone"]:
         probs.append(f"§32: C{hit[0]} stands alone, the probe: {m['alone']}")
-    kept = ("best_lap", "worst_corner", "no_flag_run", "run5")
-    if "never change" in flat[32] and any(sh[k] for k in kept):
+    kept = ("best_lap", "worst_corner", "run5")
+    if "none of them changes under the jitter" in flat[32] and any(sh[k] for k in kept):
         probs.append(f"§32 says the kept moments never change: {[(k, sh[k]) for k in kept]}")
+    # the run with no ▼ against pure noise through the real ▼ rule
+    nz, demo_run = m["noise"], m["no_flag_run"][0]
+    row(32, "pure Gaussian noise", [nz["median"], nz["p90"], nz["at_least_demo"]], "the noise grids")
+    row(32, "the demo", [demo_run], "the demo's run")
+    noise_draws = _constant(_STORY_PROBE, "NOISE_DRAWS")
+    if (hit := find(32, r"(\d),(\d{3}) seeded grids of pure Gaussian noise at the demo's (\d+) laps and (\d+) corners",
+                    "the noise grids' size")):
+        if (int(hit[0]) * 1000 + int(hit[1]), int(hit[2]), int(hit[3])) != (noise_draws, m["laps"], m["corners"]) \
+                or nz["draws"] != noise_draws:
+            probs.append(f"§32: the noise grids read {hit}, the probe draws {noise_draws} at "
+                         f"{m['laps']} laps × {m['corners']} corners")
+    if (hit := find(32, r"own sample σ \((\d\.\d+)–(\d\.\d+) s\)", "the noise σ")):
+        near(32, "the smallest σ", hit[0], nz["sigma_s"][0])
+        near(32, "the largest σ", hit[1], nz["sigma_s"][1])
+    if (hit := find(32, r"above its corner's (\d+)th-percentile deviation from the median, floored at (\d\.\d+) s "
+                        r"\(`stats\._typical_and_scale`\)", "the ▼ rule")):
+        if (float(hit[0]), float(hit[1])) != (_constant(_STATS_PY, "MATRIX_SCALE_PCT"),
+                                              _constant(_STATS_PY, "MATRIX_SCALE_MIN_S")):
+            probs.append(f"§32: the ▼ rule reads p{hit[0]} floored at {hit[1]} s, stats.py says otherwise")
+        if not re.search(r"^def _typical_and_scale\(", _read(_STATS_PY), re.M):
+            probs.append("§32 names stats._typical_and_scale, which is gone")
+    if (hit := find(32, r"The demo's run of (\d+) laps is the 90th percentile of what pure noise produces.*?"
+                        r"and (\d+) % of the noise grids run at least as long", "the noise verdict")):
+        if int(hit[0]) != demo_run or demo_run != nz["p90"]:
+            probs.append(f"§32: the demo's run {hit[0]} 'is the 90th percentile'; the probe: run {demo_run}, "
+                         f"noise p90 {nz['p90']}")
+        near(32, "the noise share", str(int(hit[1]) / 100), nz["at_least_demo"])
 
     # §28's addendum: the design pass's timings, held to their own arithmetic
     s28 = _flatten(secs.get(28, ""))
@@ -2983,6 +3011,9 @@ def test_the_story_refusal_guard_fails_on_a_wrong_figure():
               "§31 a seam figure": ("| 0.6 / 2.9 km/h |", "| 0.6 / 3.0 km/h |"),
               "§32 a share": ("| best 3-lap run | 0.16 |", "| best 3-lap run | 0.15 |"),
               "§32 a tie": ("seven, 6 to 11 passes", "seven, 6 to 12 passes"),
+              "§32 the noise p90": ("| 5 laps | 8 laps | 0.16 |", "| 5 laps | 9 laps | 0.16 |"),
+              "§32 the noise share in prose": ("grid, and 16 %", "grid, and 18 %"),
+              "§32 the noise grid count": ("draws 1,000 seeded grids", "draws 2,000 seeded grids"),
               "§28 addendum arithmetic": ("(7.2 → 17.2 ms", "(7.2 → 17.4 ms")}
     for label, (old, new) in plants.items():
         assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
