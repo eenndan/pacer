@@ -261,3 +261,29 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     one recording; whether it earns a surface is his call.
   - A coaching "line" lever from the apex lateral offset: supported on one recording only, so it
     needs a second recording at the same circuit to replicate before it may ship.
+
+## 9. Recorded at the 0.8.0 release, 2026-11-14
+
+- **v0.8.0 was cut 2026-11-14**, the first-look release, from #541 to #550 (#549 waits for the
+  next wave). #543 to #548 are Wave 1 of the campaign section 8 records: a picture on the
+  first-open debrief (the best lap's time beside its speed-coloured line, the focus corners
+  ringed), a Δbest column in the lap table, the map's lap line as a hero stroke with brake points
+  and a start/finish mark of their own, CORNERS BY LAP as a heat-map, and corner labels on the
+  speed chart with every Δ naming its baseline. #550 fixed a regression of #545 before it was
+  released (the lap grid fits beside its sector columns again). #541 shortened the README's
+  acknowledgement and #542 moved a CI export test onto software decode.
+- **What could not run for it.** One recording the real-footage checks take is on this machine,
+  and five checks ran on it: the three render checks and the two pedal-band checks. Eleven
+  reported Skipped because their recordings are not here: the compare-reference check, the
+  ideal-lap table check, the seven measured-figure table checks, the MK accuracy check and the
+  two-Sandown-sessions verdict check. The manual half of the golden gate did not run; no change in
+  this release touched the core, and the synthetic golden gate passed.
+- **The media.** `debrief.png` was re-captured on the synthetic demo, now with the picture, and
+  `accuracy.png` from its numbers. `hero.png`, `map.png` and `og.png` show the look before 0.8.0
+  and are waived as stale: their recording is not on this machine, and re-shooting them from the
+  one that is would publish stills of a recording RUL-9 did not approve. That waits for the
+  owner's word; the pages say those pictures are v0.7's. The other five files are renewed:
+  0.8.0 changed nothing they show.
+- **Closed without a change.** A package of four reported window defects found none to fix:
+  three were artefacts of the offscreen test screen and did not reproduce in the window itself,
+  and the fourth was already fixed on main.

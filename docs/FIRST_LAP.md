@@ -3,7 +3,7 @@
 A 30-second path from a GoPro recording to *"where am I losing time, and what do I do about it?"* —
 the reason Pacer exists.
 
-![Pacer — one window on a GoPro recording: synced video, a speed-coloured track map with brake points and corner apexes, the live Δ-to-ideal readout over distance-aligned speed and Δ charts, and the lap table with the session best starred](media/hero.png)
+![Pacer, pictured at v0.7 — one window on a GoPro recording: synced video, a speed-coloured track map with brake points and corner apexes, the live Δ-to-ideal readout over distance-aligned speed and Δ charts, and the lap table with the session best starred](media/hero.png)
 
 ## 1 · Open a recording
 
@@ -38,8 +38,9 @@ line is, so it places a **sensible default** (across the main straight) and mark
 **provisional** — the lap times show muted/italic and a banner over the map reads *"Lap timing is
 unverified — drag the start/finish line on the map to where a lap begins."*
 
-**Drag the dashed start/finish line on the map** to where a lap actually begins. The lap times
-snap to it, the banner clears, and the placement is **remembered for that recording**. Want it to
+**Drag the start/finish line on the map** to where a lap actually begins: its handles show while
+the timing is provisional, and whenever the pointer comes near the line. The lap times snap to
+it, the banner clears, and the placement is **remembered for that recording**. Want it to
 auto-detect next time? **File ▸ Save as track…** turns your line into a named track.
 
 *(On the tracks Pacer already ships — Daytona Milton Keynes, Sandown Park and the demo's synthetic
@@ -63,7 +64,7 @@ saying the two days were alike.
 The demo lands here on every open, and keeps nothing: no Library row, no personal best, and a focus
 list that lasts only while the demo is open.
 
-![The synthetic demo's debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, then the ranked corners with their reasons and a Jump to the video](media/debrief.png)
+![The synthetic demo's debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time beside its speed-coloured line with the focus corners ringed](media/debrief.png)
 
 ## 4 · Read the lap
 

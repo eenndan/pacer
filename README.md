@@ -16,11 +16,12 @@ It is a real, working app — and it is a **portfolio piece**, so this page is w
 study: what it claims, how each claim was measured, and the gates that keep it true. **Source is
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
 
-<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
+<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h, pictured at v0.7: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
 
 *Every screenshot here is Pacer on Sandown 3h — three hours at Sandown Park — but the
 debrief, which is the synthetic demo's; all are captured by one command,
-[`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
+[`studio/dev/media_capture.py`](studio/dev/media_capture.py). The window and map shots are v0.7's,
+before 0.8's wider lap line, violet brake points and chart corner labels. In motion:
 [20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4).*
 
 **Try it** on an Apple Silicon Mac with [pixi](https://pixi.sh) — the demo needs no GoPro:
@@ -85,14 +86,14 @@ official timing measures the noise floor.
   scrub the chart and the footage follows, or play two laps side by side — including the best lap
   of *another* recording of the same track.
 
-<img src="docs/media/map.png" width="620" alt="The map panel maximised on Sandown 3h: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven named corner apexes, brake-point markers, the draggable start-line handle, and the map key naming every glyph">
+<img src="docs/media/map.png" width="620" alt="The map panel maximised on Sandown 3h, pictured at v0.7: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven named corner apexes, brake-point markers, the start/finish line, and the map key naming every glyph">
 
 - **Coaching, and the loop it is built around.** A ranked shortlist of the corners where your laps
   *typically* give away the most to your *best* one, each with a dominant measured reason; a
   recording's first open, once its timing is trusted, lands on it as a **debrief** and puts its top
   corners on the track's **focus list**, for the next session there to re-measure.
 
-<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, then the ranked corners with their reasons and a Jump to the video">
+<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time, large, beside its speed-coloured line with the focus corners ringed">
 
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**
@@ -225,8 +226,8 @@ load, not the analysis.
 
 ## Acknowledgements
 
-Pacer began as a fork of [dendi239/pacer](https://github.com/dendi239/pacer) by Denys Smirnov with
-original C++ core.
+Pacer began as a fork of [dendi239/pacer](https://github.com/dendi239/pacer) by Denys Smirnov, with
+its original C++ core.
 
 GPS/IMU parsing uses GoPro's [gpmf-parser](https://github.com/gopro/gpmf-parser).
 
