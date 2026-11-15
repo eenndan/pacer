@@ -431,7 +431,8 @@ def start_crossing(tx, ty, seg):
     Every crossing is found (one vectorised segment-segment test over the trace); the direction is
     the side most of them run to, so a lone wrong-way wander or a pit-lane pass cannot turn the
     arrow round; the point drawn is the median of those crossings — the middle of the all-laps
-    ribbon, not one lap's line through it — and the direction is taken at the crossing nearest it."""
+    ribbon, not one lap's line through it — and the direction is taken at the crossing nearest
+    it."""
     xs, ys = np.asarray(tx, float), np.asarray(ty, float)
     if len(xs) < 2 or len(ys) != len(xs):
         return None

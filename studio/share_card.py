@@ -198,7 +198,7 @@ class CardData:
 
 def provenance_line(session) -> str:
     """The card's footer provenance: the exported report's `Timing` row for a clean recording
-    (`export_data._timing_meta`, the one string the report and the clipboard summary share —
+    (`export_data.timing_meta`, the one string the report and the clipboard summary share —
     "verified start line · GPS9 true clock"), or "" for every other state.
 
     THE APP'S OWN WORDS, NOT A NEW CLAIM. A shared image is read with no Stats page beside it, so
@@ -210,7 +210,7 @@ def provenance_line(session) -> str:
     try:
         if not session.timing_verified or session.timing_quality.degraded:
             return ""
-        return export_data._timing_meta(session)
+        return export_data.timing_meta(session)
     except Exception:  # noqa: BLE001 — a card without a provenance line beats no card
         return ""
 
@@ -674,8 +674,8 @@ def _paint_corners(p: QPainter, session, lap_id, unit, focus, fit, px, py, box: 
     def outward(c: QPointF) -> float:
         """The bend's OUTSIDE at apex `c`: from the midpoint of the chord a few samples either side
         to the apex. The hero's "away from the centroid" put the names of two neighbouring infield
-        corners side by side on the real track (looked at: C3 and C6 at Sandown read as one
-        pair); a name on its own bend's outside cannot be mistaken for the next corner's."""
+        corners side by side on a real track, where they read as one pair; a name on its own
+        bend's outside cannot be mistaken for the next corner's."""
         d = np.where(ok, np.hypot(px - c.x(), py - c.y()), np.inf)
         i, k, n = int(np.argmin(d)), _OUTWARD_SAMPLES, len(px)
         a, b = max(i - k, 0), min(i + k, n - 1)
@@ -712,7 +712,7 @@ def _paint_corners(p: QPainter, session, lap_id, unit, focus, fit, px, py, box: 
             continue
         c = fit.point(*apexes[cid])
         text = f"C{cid}"
-        rect = trace_paint.label_rect(c, outward(c), fm.horizontalAdvance(text) + 8, fm.height(), placed, box,
-                                      _CORNER_LABEL_GAP, line)
+        rect = trace_paint.label_rect(c, outward(c), fm.horizontalAdvance(text) + 8,
+                                      fm.height(), placed, box, _CORNER_LABEL_GAP, line)
         placed.append(rect)
         p.drawText(rect, Qt.AlignCenter, text)

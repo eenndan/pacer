@@ -1002,8 +1002,9 @@ def test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map
     # The ellipse is the height-limited fit (h − 2·pad px for its 80 m, so 1.5× that for its
     # 120 m), centred — and nothing of the far-off laps widens it.
     tall = h - 2 * pad
-    assert abs((xs.max() - xs.min()) - 1.5 * tall) <= 10 and abs((ys.max() - ys.min()) - tall) <= 10, \
-        (xs.min(), xs.max(), ys.min(), ys.max(), tall)
+    assert (abs((xs.max() - xs.min()) - 1.5 * tall) <= 10
+            and abs((ys.max() - ys.min()) - tall) <= 10), (xs.min(), xs.max(), ys.min(), ys.max(),
+                                                           tall)
     assert abs((xs.min() + xs.max()) / 2 - wd / 2) <= 3, (xs.min(), xs.max())
     colours = {tuple(c) for c in px[ink][:, :3][px[ink][:, 3] == 255]}
     assert len(colours) >= 8, f"one flat colour, not the speed ramp: {len(colours)}"
@@ -1096,9 +1097,9 @@ def test_the_card_map_shows_the_start_finish_mark_and_the_way_the_laps_run():
 
 
 def test_the_card_map_closes_the_lap_where_its_two_passes_meet():
-    """A lap ends on the start line a little beside where it began (0.70 m on the owner's
-    recording), and the open trace drew a kink there. The line is closed with a short chord in the
-    last segment's colour (no start line here, so no mark covers the join)."""
+    """A lap ends on the start line a little beside where it began (a few tenths of a metre on
+    real footage), and the open trace drew a kink there. The line is closed with a short chord in
+    the last segment's colour (no start line here, so no mark covers the join)."""
     s = _LoopSession(start=False, end_gap_m=2.8)
     px = _thumb(s)
     a = _loop_px(px, 60.0, 0.0, xm=1.4)     # the second pass widens the box by 2.8 m
@@ -1111,7 +1112,8 @@ def test_the_card_map_closes_the_lap_where_its_two_passes_meet():
 
 def test_the_opportunity_corner_is_ringed_and_labelled_where_it_is():
     """The card named "C1" as the biggest opportunity and showed no C1. Its apex is ringed in the
-    accent and labelled on a plate beside it; the other corner is named small and muted, unringed."""
+    accent and labelled on a plate beside it; the other corner is named small and muted,
+    unringed."""
     import numpy as np
     px = _thumb(_LoopSession())
     acc = _near(px, theme.C.accent, 30)
@@ -1133,7 +1135,8 @@ def test_the_opportunity_corner_is_ringed_and_labelled_where_it_is():
                                    rows=[_apex_opp(cid=2)])
     px2 = _thumb(_LoopSession(opps=on_c2))
     acc2 = _near(px2, theme.C.accent, 30)
-    assert acc2[c2[1] - 16:c2[1] + 17, c2[0] - 16:c2[0] + 17].any(), "the lead moved; the ring did not"
+    assert acc2[c2[1] - 16:c2[1] + 17, c2[0] - 16:c2[0] + 17].any(), (
+        "the lead moved; the ring did not")
     print("test_the_opportunity_corner_is_ringed_and_labelled_where_it_is OK")
 
 
@@ -1161,20 +1164,22 @@ def test_vs_ideal_is_not_painted_in_the_loss_colour():
 
 def test_the_provenance_line_is_the_reports_own_timing_wording():
     """The card says how the time was taken — in the exported report's own `Timing` words, read
-    from the function the report and the clipboard summary share, never a copy or a new claim — and
-    only for a clean recording: a degraded clock keeps its stamp and no GPS9 line beside it."""
+    from the function the report and the clipboard summary share, never a copy or a new claim —
+    and only for a clean recording. Every degraded state keeps its stamp and gets no GPS9 line
+    beside it: the media-clock fallback, GPS LOW on the true clock, and NO GPS."""
     from studio import data_quality, export_data
     s = FakeSession()
     s.timing_quality = data_quality.TimingQuality()
     d = share_card.card_data(s, unit="kmh")
-    assert d.provenance and d.provenance == export_data._timing_meta(s), d.provenance
+    assert d.provenance and d.provenance == export_data.timing_meta(s), d.provenance
+    assert export_data.timing_meta is export_data._timing_meta   # the report's own function
     # Read from the report's function, not a copy of today's string: the card follows it.
-    real_meta = export_data._timing_meta
-    export_data._timing_meta = lambda _s: "SENTINEL timing words"
+    real_meta = export_data.timing_meta
+    export_data.timing_meta = lambda _s: "SENTINEL timing words"
     try:
         assert share_card.card_data(s, unit="kmh").provenance == "SENTINEL timing words"
     finally:
-        export_data._timing_meta = real_meta
+        export_data.timing_meta = real_meta
     drawn = []
     real = share_card._draw_text
     share_card._draw_text = lambda p, x, y, text, *a, **k: (drawn.append(text),
@@ -1184,11 +1189,73 @@ def test_the_provenance_line_is_the_reports_own_timing_wording():
     finally:
         share_card._draw_text = real
     assert d.provenance in drawn, drawn
-    deg = FakeSession(degraded=True)
-    deg.timing_quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
-    dd = share_card.card_data(deg, unit="kmh")
-    assert dd.stamp == "estimated timing" and dd.provenance == "", dd.provenance
+    states = {
+        "media clock": data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK),
+        "GPS LOW": data_quality.TimingQuality(
+            dropped_fraction=data_quality.DROPPED_FIX_CONCERN_FRAC + 0.05),
+        "NO GPS": data_quality.TimingQuality(clock=data_quality.NO_GPS_TRACE),
+    }
+    for name, quality in states.items():
+        assert quality.degraded, name
+        deg = FakeSession(degraded=True)
+        deg.timing_quality = quality
+        dd = share_card.card_data(deg, unit="kmh")
+        assert dd.stamp == "estimated timing", (name, dd.stamp)
+        assert dd.provenance == "", f"{name}: the card prints {dd.provenance!r} beside its stamp"
     print("test_the_provenance_line_is_the_reports_own_timing_wording OK")
+
+
+def _chord_lap(end_gap_m: float, dropout_at_start: bool = False):
+    """A U-shaped lap, densely sampled: up the left side from (0, 0), across the top, down the
+    right side and back along the bottom to a last sample `end_gap_m` BELOW the first. The chord
+    from the last sample to the first runs along x = 0, clear of every drawn segment, so its middle
+    is inked only when the line is closed."""
+    import numpy as np
+
+    from studio import trace_paint
+    corners = [(0.0, 0.0), (0.0, 40.0), (40.0, 40.0), (40.0, 0.0), (0.0, -end_gap_m)]
+    xs, ys = [], []
+    for (x0, y0), (x1, y1) in zip(corners, corners[1:], strict=False):
+        t = np.linspace(0.0, 1.0, 40, endpoint=False)
+        xs += list(x0 + t * (x1 - x0))
+        ys += list(y0 + t * (y1 - y0))
+    xs.append(corners[-1][0])
+    ys.append(corners[-1][1])
+    xs, ys = np.asarray(xs), np.asarray(ys)
+    seg = np.full(len(xs) - 1, theme.MAP_RAINBOW_N // 2)
+    if dropout_at_start:
+        seg[0] = -1
+    return trace_paint.LapTrace(xs, ys, seg, "", "")
+
+
+def _chord_inked(tr) -> bool:
+    """Paint `tr` at 10 px/m and say whether the chord's midpoint carries ink."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPainter
+
+    from studio import trace_paint
+    img = QImage(700, 700, QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    fit = trace_paint.TraceFit(10.0, 150.0, 550.0, 0.0, 0.0)
+    trace_paint.paint_trace(p, tr, fit, 7.0)
+    p.end()
+    mid = fit.point(0.0, float(tr.ys[-1]) / 2)
+    return _rgba(img)[int(round(mid.y())), int(round(mid.x())), 3] > 0
+
+
+def test_the_closing_chord_joins_only_a_near_miss_and_never_across_a_dropout():
+    """The closing chord is for the lap's two passes over the start line, a few tenths of a metre
+    apart: ends 2 m apart are joined, ends 10 m apart are not a closed loop and get no invented
+    line (CLOSE_GAP_M = 3 m), and a lap whose first segment is a GPS dropout has no measured
+    position to join to — the chord would bridge the very gap the line skips."""
+    from studio import trace_paint
+    assert _chord_inked(_chord_lap(2.0)), "ends 2 m apart are not joined"
+    assert not _chord_inked(_chord_lap(10.0)), "a 10 m gap was bridged by an invented chord"
+    assert not _chord_inked(_chord_lap(2.0, dropout_at_start=True)), (
+        "the chord bridged a GPS dropout at the lap's start")
+    print("test_the_closing_chord_joins_only_a_near_miss_and_never_across_a_dropout OK")
 
 
 def test_the_card_and_the_debrief_hero_call_one_trace_painter():
@@ -1290,6 +1357,7 @@ if __name__ == "__main__":
     test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map()
     test_the_card_map_shows_the_start_finish_mark_and_the_way_the_laps_run()
     test_the_card_map_closes_the_lap_where_its_two_passes_meet()
+    test_the_closing_chord_joins_only_a_near_miss_and_never_across_a_dropout()
     test_the_opportunity_corner_is_ringed_and_labelled_where_it_is()
     test_vs_ideal_is_not_painted_in_the_loss_colour()
     test_the_provenance_line_is_the_reports_own_timing_wording()

@@ -12,7 +12,7 @@ rings. Both now call this module, so a fix to the line is a fix to both pictures
   * `paint_trace` — the line itself: an optional casing pass, then one pen per segment on the
     palette's ramp, no chord across a GPS dropout, and the lap CLOSED where its two ends meet. A
     lap starts and ends on the start line, but its two passes over it are not the same point
-    (0.70 m apart on the owner's recording): drawn open, the line showed a small kink there;
+    (a few tenths of a metre apart on real footage): drawn open, the line showed a kink there;
   * `finish_at` / `paint_finish_mark` — the chequered start/finish mark and the arrow pointing the
     way the laps run, from `map_render.finish_mark_geometry`, the live map's own geometry;
   * `paint_speed_key`, `label_rect`, `paint_ring` — the key, the corner-label placement and the
@@ -36,7 +36,8 @@ from . import map_render, theme
 from .theme import C
 
 # The longest closing chord the line draws between a lap's last and first sample. The two passes
-# over the start line are ~0.7 m apart on real footage and ~0.07 m on the synthetic demo; a lap
+# over the start line are a few tenths of a metre apart on real footage and ~0.07 m on the
+# synthetic demo; a lap
 # whose ends are farther apart than this is not a closed loop, and no chord is invented for it.
 CLOSE_GAP_M = 3.0
 
@@ -123,7 +124,9 @@ def paint_trace(p: QPainter, tr: LapTrace, fit: TraceFit, line_px: float, *,
     px, py = fit.px(tr.xs, tr.ys)
     seg = tr.seg
     chord = None
-    if close and len(seg) and ok[0] and ok[-1] and int(seg[-1]) >= 0:
+    # Not across a dropout at either end: a lap whose first or last segment is a GPS gap has no
+    # measured position to join there, and the chord would bridge the gap the line skips.
+    if close and len(seg) and ok[0] and ok[-1] and int(seg[-1]) >= 0 and int(seg[0]) >= 0:
         if math.hypot(tr.xs[-1] - tr.xs[0], tr.ys[-1] - tr.ys[0]) <= CLOSE_GAP_M:
             chord = (QPointF(px[-1], py[-1]), QPointF(px[0], py[0]), int(seg[-1]))
     if casing is not None:
@@ -175,7 +178,7 @@ def finish_at(session, xs, ys):
 
 
 def finish_mark_rect(c: QPointF, scale: float = 1.0) -> QRectF:
-    """The px box the mark (squares and arrow) can reach about its centre — for label clearance."""
+    """The px box the mark (squares and arrow) can reach about its centre, for label clearance."""
     _b, _s, _a, reach = map_render.finish_mark_geometry(1.0, 0.0)
     r = reach * scale
     return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)

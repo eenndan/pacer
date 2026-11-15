@@ -2940,6 +2940,55 @@ def test_debrief_hero_draws_the_start_finish_mark_at_the_laps_crossing():
     print("ok hero: start/finish mark at the crossing, nothing else moved")
 
 
+def test_debrief_hero_arrow_points_the_way_the_lap_runs_both_ways_round():
+    """The hero's arrow is the live map's, along the lap's direction at the crossing: ink ahead of
+    the mark's centre along the travel, none the same distance behind it — for a lap run
+    anticlockwise and the same loop run clockwise."""
+    from PySide6.QtGui import QColor, QImage
+
+    from studio import map_render, theme, trace_paint
+    from studio.coaching_panel import DebriefHero, HeroData
+
+    a = np.linspace(0.0, 2 * np.pi, 240)
+    _b, _s, arrow, _r = map_render.finish_mark_geometry(0.0, 1.0)
+    tip = max(abs(y) for _x, y in arrow)
+    inside = int(round(tip - map_render.FINISH_ARROW_LEN_PX / 2))      # mid-arrow, live size
+    lt = QColor(theme.C.text)
+    for reverse in (False, True):
+        xs, ys = 60 * np.cos(a), 40 * np.sin(a)
+        if reverse:
+            xs, ys = xs[::-1].copy(), ys[::-1].copy()
+        uy = -1.0 if reverse else 1.0          # anticlockwise runs +y at (60, 0); reversed, −y
+        d = HeroData(time_text="1:00.000", trust="", trust_tip="", caption="", xs=xs, ys=ys,
+                     seg=np.arange(239) % theme.MAP_RAINBOW_N, speed_lo="40", speed_hi="70 km/h",
+                     corners={}, finish=(60.0, 0.0, 0.0, uy))
+        centres = []
+        real = trace_paint.paint_finish_mark
+        def spy(p, c, *rest, centres=centres, real=real):
+            centres.append(c)
+            return real(p, c, *rest)
+
+        trace_paint.paint_finish_mark = spy
+        try:
+            hero = DebriefHero()
+            hero.resize(900, 330)
+            hero.set_data(d)
+            img = hero._render(1.0).toImage().convertToFormat(QImage.Format_RGBA8888)
+        finally:
+            trace_paint.paint_finish_mark = real
+        px = np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.width(), 4)
+        light = np.all(np.abs(px[..., :3].astype(int) - [lt.red(), lt.green(), lt.blue()]) <= 30,
+                       axis=-1) & (px[..., 3] > 200)
+        (c,) = centres
+        cx, cy = int(round(c.x())), int(round(c.y()))
+        ahead = -1 if not reverse else 1                 # data +y is screen up
+        assert light[cy + ahead * inside - 1:cy + ahead * inside + 2, cx - 1:cx + 2].any(), (
+            f"no arrow ink {inside} px along the travel (reverse={reverse})")
+        assert not light[cy - ahead * inside - 1:cy - ahead * inside + 2, cx - 1:cx + 2].any(), (
+            f"the hero's arrow points against the travel (reverse={reverse})")
+    print("ok hero: the arrow points the way the lap runs, both ways round")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
