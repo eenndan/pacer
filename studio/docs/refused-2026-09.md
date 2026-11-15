@@ -2069,7 +2069,7 @@ whose truth is known: the one corner where the laps really differ is C1 (the pla
 lap per corner (`Session.ideal_segment_bests`), and the card's own opportunity
 (`share_card.card_data`).
 
-| best lap (lap 12), s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+| best lap (L13), s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
 |---|---|---|---|---|---|---|---|
 | gap to the typical lap | −0.361 | −0.036 | −0.083 | −0.028 | +0.005 | −0.028 | −0.034 |
 | that corner's ▼ step | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 |

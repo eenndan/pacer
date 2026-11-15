@@ -229,6 +229,32 @@ def test_session_only_menu_items_are_disabled_before_the_first_load():
     print("test_session_only_menu_items_are_disabled_before_the_first_load OK")
 
 
+def test_a_gated_key_says_why_instead_of_doing_nothing():
+    """A disabled QAction's shortcut is dropped by Qt in silence; the gated keys (⌘Z, ⌘⇧S, R) are
+    re-asked when pressed and put the gate's reason in the status bar (`app._ShortcutGate`, QA
+    EVAL-1). Driven by REAL key presses through Qt's shortcut map, on the welcome screen."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    win.show()
+    _settle()
+    bar = win.statusBar()
+    for key, mods, action, reason in (
+            (Qt.Key_Z, Qt.ControlModifier, win._undo_action, win._NO_SESSION_TIMING_REASON),
+            (Qt.Key_S, Qt.ControlModifier | Qt.ShiftModifier, win._stats_action,
+             win._NO_SESSION_STATS_REASON),
+            (Qt.Key_R, Qt.NoModifier, win._race_action, win._NO_SESSION_RACE_REASON)):
+        assert not action.isEnabled()
+        bar.clearMessage()
+        QTest.keyClick(win, key, mods)
+        _settle()
+        want = f"{action.property('featureText')}: {reason[0].lower()}{reason[1:]}"
+        assert bar.currentMessage() == want, (bar.currentMessage(), want)
+    win.hide()
+    print("test_a_gated_key_says_why_instead_of_doing_nothing OK")
+
+
 def test_library_menu_item_comes_back_the_moment_there_is_a_library():
     """The other direction, which is what keeps the gate from being a session gate in disguise: a
     NON-empty index re-enables Library… on the very same welcome screen, with no session loaded and
@@ -788,6 +814,7 @@ def _run_all():
         test_escape_restores_a_maximized_panel_at_three_window_sizes,
         test_escape_still_leaves_video_focus_and_window_fullscreen,
         test_session_only_menu_items_are_disabled_before_the_first_load,
+        test_a_gated_key_says_why_instead_of_doing_nothing,
         test_library_menu_item_comes_back_the_moment_there_is_a_library,
         test_the_library_menu_item_names_the_columns_the_dialog_actually_has,
         test_a_loaded_session_re_enables_them_without_opening_a_menu,

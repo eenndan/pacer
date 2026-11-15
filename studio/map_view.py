@@ -2325,7 +2325,11 @@ class MapView(QWidget):
     # ------------------------------------------------- timing-line chrome: hidden at rest
     def _timing_chrome_wanted(self) -> bool:
         """Show the handles? While the pointer is near a line or "Add sector" just ran — and always
-        while the map is asking the user to drag (provisional timing, or no complete laps)."""
+        while the map is asking the user to drag (provisional timing, or no complete laps). Never
+        under a Lap race: its veil dims the map, corner hover is off, and a drag would re-segment
+        the laps the race is running (QA REG-4)."""
+        if self._race is not None:
+            return False
         if self._timing_hover or self._timing_pinned or self._provisional_line is not None:
             return True
         valid = getattr(self.session, "valid_lap_ids", None)
@@ -2652,7 +2656,9 @@ class MapView(QWidget):
         self._tail.set_visible(False)       # the tail is the marker's: race time is not media time
         self._map_key.setVisible(False)
         self._corner_markers.set_hover(None)      # corner hover is inert under the race
+        self._set_corner_hovered(None)            # …and the chart label it lit goes out (REG-3)
         self._race = _RaceLayer(self.plot, tracks, colours, selected)
+        self._sync_timing_chrome()                # the drag handles rest hidden under it
 
     def update_race(self, state):
         """Move the field to `state` — the race tick's one map call."""
@@ -2674,6 +2680,7 @@ class MapView(QWidget):
         self.marker.setVisible(marker_on)
         self._tail.set_visible(marker_on)
         self._map_key.setHidden(key_hidden)
+        self._sync_timing_chrome()
 
     def attach_race_card(self, card: QWidget) -> None:
         """Name the race card floated on this canvas, so `grab_clean` keeps it out of a document

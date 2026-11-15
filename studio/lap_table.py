@@ -55,7 +55,15 @@ from PySide6.QtWidgets import (
 
 from . import data_quality, provenance_panel, theme, units
 from . import stats as stats_service
-from ._signal import PRINT_DECIMALS, fmt_signed, fmt_time, is_best_at_print, lap_label, plural
+from ._signal import (
+    PRINT_DECIMALS,
+    fmt_signed,
+    fmt_time,
+    is_best_at_print,
+    lap_label,
+    plural,
+    too_brief_note,
+)
 
 # The ONE "level with your best" rule (DOMAIN-6): two laps closer than the best instrument can
 # separate at 2σ. The PB sentences say "level" under it; the Δ bar refuses to colour under it.
@@ -196,14 +204,6 @@ def too_brief_count(session, laps: int) -> int:
     return max(0, lap_count() - laps) if callable(lap_count) else 0
 
 
-def too_brief_note(n: int) -> str:
-    """The sentence that accounts for detected laps in NEITHER the valid nor the excluded list —
-    crossings the coarse gate rejected as slivers. "" for none, so it drops out of the join."""
-    if n <= 0:
-        return ""
-    one = n == 1
-    return (f"{n} other start/finish crossing{'' if one else 's'} "
-            f"{'was' if one else 'were'} too brief to count as a lap.")
 # L3: the most laps that can be overlaid on the speed/Δ charts at once. Beyond this the speed-plot
 # legend silently overflows/truncates (laps past ~13 get no entry) and the curves blanket each other,
 # so a larger selection is TRIMMED to the fastest MAX_COMPARE_LAPS — a visible cap in the table (the

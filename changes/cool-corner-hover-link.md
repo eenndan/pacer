@@ -1,3 +1,4 @@
 ### Added
-- Hover a corner label on the speed chart and the map rings that corner; hover a corner on the map
-  and its chart label lights up. The chart label also follows a Corners/Stats/Coaching row's ring.
+
+- Hover a corner label on the speed chart and the map rings that corner, and the other way round;
+  the label also follows a Corners, Stats or Coaching row's ring. (#554)
