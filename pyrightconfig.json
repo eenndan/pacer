@@ -31,6 +31,7 @@
     "studio/gearing.py",
     "studio/gmeter.py",
     "studio/ingest.py",
+    "studio/lap_race.py",
     "studio/library.py",
     "studio/load.py",
     "studio/logsetup.py",
