@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QGraphicsRectItem,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -79,6 +80,17 @@ HERO_CASING_WIDTH = HERO_WIDTH + 3
 # context and drag target, never competing with the two laps that carry the analysis.
 TRACE_COLOR = C.text_muted
 TRACE_WIDTH = 1.0
+# Lap Race layer (_RaceLayer): dot sizes (px), the grey of the laps outside the coloured five, the
+# selected lap's ring, the trail (seconds of the lap's own path behind its dot) and the veil's
+# alpha over the base map while a race runs.
+RACE_DOT_PX = 11
+RACE_GREY_PX = 9
+RACE_GREY = C.text_muted
+RACE_RING_PX = 19
+RACE_TRAIL_S = 1.5
+RACE_TRAIL_W = 2.5
+RACE_TRAIL_ALPHA = 150
+RACE_VEIL_ALPHA = 195
 MARKER_COLOR = C.position           # video position marker — the hue no data line mode paints
 _MARKER_RGB = QColor(C.position)    # for the translucent marker brush below
 # Compare ghost = lap-B accent (cyan), the canonical "other lap" colour.
@@ -1439,6 +1451,91 @@ class _FinishMark:
              "brush": pg.mkBrush(FINISH_LIGHT)}])
 
 
+class _RaceLayer:
+    """The Lap Race on the map (studio/race_controller.py drives it): every raced lap as a dot on
+    its own lap clock, the five fastest in their series colours with a short trail, the rest grey.
+
+    BUILT ONCE AT ENTRY, MOVED PER TICK. One ScatterPlotItem holds every dot (per-point brushes,
+    built once), one ring marks the selected lap, one PlotCurveItem per coloured lap is its trail,
+    and one translucent veil dims everything under it (the base lap line, brake glyphs, rainbow,
+    corner labels) — whatever those layers rebuild meanwhile, without touching them, so the exit
+    is the veil's removal. Every item goes in with `ignoreBounds=True`: an item that joins the
+    bounds makes every update re-run pyqtgraph's auto-range bookkeeping (measured +9 ms/update on
+    the 36-lap session), and the view never follows the field (a range change is a full repaint).
+    Draw order inside the scatter: grey first, then the coloured five slowest-first, so the
+    fastest sits on top. The start/finish mark (z 7.5) stays above the veil."""
+
+    VEIL_Z = 7.25       # over the brake glyphs (7), under the start/finish mark (7.5)
+    TRAIL_Z = 10.5
+    DOTS_Z = 11.0
+    RING_Z = 11.5
+
+    def __init__(self, plot, tracks, colours: dict[int, int], selected: int | None):
+        self.plot = plot
+        self.tracks = tracks
+        n = len(tracks.ids)
+        # Grey first, coloured slowest → fastest last: the scatter paints in array order.
+        self.order = np.array(sorted(range(n), key=lambda k: (
+            tracks.ids[k] in colours, -colours.get(tracks.ids[k], 0))), dtype=int)
+        rim = pg.mkPen(C.canvas, width=theme.line_width(1.5))
+        grey = pg.mkBrush(RACE_GREY)
+        self._brushes = [pg.mkBrush(CHART_SERIES[colours[tracks.ids[k]] % len(CHART_SERIES)])
+                         if tracks.ids[k] in colours else grey for k in self.order]
+        self._sizes = np.array([RACE_DOT_PX if tracks.ids[k] in colours else RACE_GREY_PX
+                                for k in self.order], dtype=float)
+        self._pens = [rim] * n
+        veil = QColor(C.canvas)
+        veil.setAlpha(RACE_VEIL_ALPHA)
+        self.veil = QGraphicsRectItem(QRectF(-1e6, -1e6, 2e6, 2e6))
+        self.veil.setPen(QPen(Qt.NoPen))
+        self.veil.setBrush(QBrush(veil))
+        self.veil.setZValue(self.VEIL_Z)
+        self.dots = pg.ScatterPlotItem(pxMode=True, symbol="o")
+        self.dots.setZValue(self.DOTS_Z)
+        self.ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=RACE_RING_PX,
+                                       brush=pg.mkBrush(None),
+                                       pen=pg.mkPen(C.text, width=theme.line_width(2)))
+        self.ring.setZValue(self.RING_Z)
+        # Trails: the coloured laps only (36 trails cost +6.3 ms a tick; five, under a millisecond).
+        self.trails: dict[int, pg.PlotCurveItem] = {}
+        for lap_id, slot in colours.items():
+            c = QColor(CHART_SERIES[slot % len(CHART_SERIES)])
+            c.setAlpha(RACE_TRAIL_ALPHA)
+            cur = pg.PlotCurveItem(pen=pg.mkPen(c, width=theme.line_width(RACE_TRAIL_W)))
+            cur.setZValue(self.TRAIL_Z)
+            self.trails[lap_id] = cur
+        self._trail_k = {lap_id: tracks.index(lap_id) for lap_id in self.trails}
+        self.items = [self.veil, *self.trails.values(), self.dots, self.ring]
+        for it in self.items:
+            plot.addItem(it, ignoreBounds=True)
+        self.selected = selected
+
+    def update(self, state):
+        """Move every dot to `state` (a `lap_race.RaceState`) — one setData, no item added."""
+        o = self.order
+        self.dots.setData(x=state.x[o], y=state.y[o], size=self._sizes, brush=self._brushes,
+                          pen=self._pens)
+        if self.selected is not None and self.selected in state.ids:
+            k = state.ids.index(self.selected)
+            self.ring.setData(x=[float(state.x[k])], y=[float(state.y[k])])
+        else:
+            self.ring.setData(x=[], y=[])
+        t = state.t
+        for lap_id, cur in self.trails.items():
+            lap = self.tracks.laps[self._trail_k[lap_id]]
+            now = min(max(t, 0.0), float(lap.elapsed[-1]))
+            a = int(np.searchsorted(lap.elapsed, now - RACE_TRAIL_S))
+            b = int(np.searchsorted(lap.elapsed, now))
+            k = self._trail_k[lap_id]
+            # The lap's own samples over the last RACE_TRAIL_S, ending exactly on the dot.
+            cur.setData(np.append(lap.xs[a:b], state.x[k]), np.append(lap.ys[a:b], state.y[k]))
+
+    def remove(self):
+        for it in self.items:
+            self.plot.removeItem(it)
+        self.items = []
+
+
 class MapView(QWidget):
     # (start: Seg, sectors: list[Seg]) whenever a handle moves or sectors change.
     timing_lines_changed = Signal(object, object)
@@ -1524,6 +1621,9 @@ class MapView(QWidget):
         # ghost_updates counts placements for the per-tick perf-invariant tests.
         self._ghost: pg.TargetItem | None = None
         self.ghost_updates = 0
+        # The Lap Race layer while a race runs (start_race / end_race), and what it hid.
+        self._race: _RaceLayer | None = None
+        self._race_restore = (True, True)
 
         # E2: provisional start cue; declared before _rebuild (which may refresh it). None = track
         # known, no cue. See refresh_provisional_cue.
@@ -2266,6 +2366,42 @@ class MapView(QWidget):
         if self._ghost is not None:
             self.plot.removeItem(self._ghost)
             self._ghost = None
+
+    # --------------------------------------------------------------- Lap Race
+    def start_race(self, tracks, colours: dict[int, int], selected: int | None):
+        """Put the race layer on (`_RaceLayer`): hide the video-position marker (race time is not
+        media time) and the map key (whose rows describe that marker and the glyphs the veil dims),
+        remembering both so `end_race` restores them exactly."""
+        if self._race is not None:
+            self.end_race()
+        self._race_restore = (self.marker.isVisible(), self._map_key.isVisible())
+        self.marker.setVisible(False)
+        self._map_key.setVisible(False)
+        self._race = _RaceLayer(self.plot, tracks, colours, selected)
+
+    def update_race(self, state):
+        """Move the field to `state` — the race tick's one map call."""
+        if self._race is not None:
+            self._race.update(state)
+
+    def set_race_selected(self, lap_id: int | None):
+        """Ring another lap; drawn on the next `update_race`."""
+        if self._race is not None:
+            self._race.selected = lap_id
+
+    def end_race(self):
+        """Remove every race item and put the marker and the key back as they were."""
+        if self._race is None:
+            return
+        self._race.remove()
+        self._race = None
+        marker_on, key_on = self._race_restore
+        self.marker.setVisible(marker_on)
+        self._map_key.setVisible(key_on)
+
+    def race_items(self) -> list:
+        """The race layer's plot items (empty when no race is on) — tests count and inspect them."""
+        return list(self._race.items) if self._race is not None else []
 
     # --------------------------------------------------------------- rainbow (F3)
     def set_speed_unit(self, unit: str):

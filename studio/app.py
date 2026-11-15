@@ -89,6 +89,7 @@ from .overlays import (
     column_metrics,
     welcome_card_width,
 )
+from .race_controller import NO_RACE_REASON
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker
 
@@ -457,6 +458,8 @@ class StudioWindow(QMainWindow):
     # why). A silent refusal is the defect class this app exists to refuse.
     _NO_SESSION_STATS_REASON = ("Open a recording first — the statistics dashboard is this "
                                 "session's own: pace, peaks, grip and the per-lap table.")
+    _NO_SESSION_RACE_REASON = ("Open a recording first — the race lines up that session's own "
+                               "clean laps.")
     _NO_SESSION_EXCLUDED_REASON = ("Open a recording first — the ⊘ excluded strip sits under a "
                                    "loaded session's lap table.")
     _NO_SESSION_REFERENCE_REASON = ("Open a recording first — a reference is something the "
@@ -1962,6 +1965,9 @@ class StudioWindow(QMainWindow):
         # A transient fact a panel has no status bar to state (U2: a lap selection trimmed to the
         # charts' cap). Timed like every other just-happened confirmation.
         self.view.statusNotice.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
+        # View ▸ Lap race carries its on/off state, and a re-segment changes whether it can run.
+        self.view.raceChanged.connect(self._sync_view_menu)
+        self.view.timingEdited.connect(self._sync_view_menu)
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
         # One ~30 Hz tick timer for the window's lifetime, created once and reused across reloads (a
@@ -2409,6 +2415,18 @@ class StudioWindow(QMainWindow):
             "distribution, top speed, peak g, the g-g friction circle, brake/coast totals "
             "and a per-lap table. Press again (or ⤢) to restore the grid.")
         self._stats_action.triggered.connect(self._show_session_statistics)
+        # Lap race: every clean lap leaves the start line together as a dot on the map, each on its
+        # own lap clock (studio/race_controller.py). Checkable, so the item shows a race is on; R
+        # was the one unbound letter that names it. Gated in _sync_view_menu: a disabled action's
+        # shortcut is inert, and its reason is what the item and the ⌘K row say.
+        self._race_action = view_menu.addAction("Lap race")
+        self._race_action.setCheckable(True)
+        self._race_action.setShortcut(QKeySequence("R"))
+        self._race_action.setToolTip(
+            "Lap race (R): every clean lap leaves the start line together on the map, each on its "
+            "own lap clock, grouped in packs where the timing cannot split them. Space plays and "
+            "pauses it, [ and ] change its speed, Esc ends it.")
+        self._race_action.triggered.connect(self.toggle_lap_race)
         view_menu.addSeparator()
         # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching · Marks,
         # digits 1-5) — the old show/hide toggles for the coaching + consistency strips died with the
@@ -2584,6 +2602,13 @@ class StudioWindow(QMainWindow):
             action = getattr(self, name, None)
             if action is not None:
                 self._gate_action(action, has_view, reason)
+        race = getattr(self, "_race_action", None)
+        if race is not None:
+            view = self.view if has_view else None
+            racing = self._racing()
+            self._gate_action(race, racing or (view is not None and view.can_race()),
+                              NO_RACE_REASON if view is not None else self._NO_SESSION_RACE_REASON)
+            race.setChecked(racing)
 
     def _show_shortcuts(self):
         """Help ▸ Keyboard shortcuts (also F1 / ?): the read-only shortcut reference."""
@@ -2725,8 +2750,22 @@ class StudioWindow(QMainWindow):
     # Every one is a no-op before a recording is loaded (via _video_do / the view guard), which is
     # what the keys already did.
     def toggle_playback(self):
-        """Play / pause the video (Space)."""
+        """Play / pause the video (Space) — or the Lap Race, while one runs."""
+        if self._racing():
+            self.view.race.toggle_play()
+            return
         self._video_do(lambda v: v.toggle())
+
+    def _racing(self) -> bool:
+        view = getattr(self, "view", None)
+        return view is not None and getattr(view, "is_racing", lambda: False)()
+
+    def toggle_lap_race(self):
+        """View ▸ Lap race (R): start the race on the map, or end it."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.toggle_lap_race()
+        self._sync_view_menu()
 
     def toggle_mute(self):
         """Mute / unmute the clip audio (M)."""
@@ -2757,11 +2796,19 @@ class StudioWindow(QMainWindow):
         self._video_do(lambda v: v.request_video_focus())
 
     def slower_playback(self):
-        """One rung SLOWER on the playback-rate ladder ([) — 1× → 0.5× → 0.25×, clamped."""
+        """One rung SLOWER on the playback-rate ladder ([) — 1× → 0.5× → 0.25×, clamped. During a
+        Lap Race it is the race's speed."""
+        if self._racing():
+            self.view.race.step_speed(-1)
+            return
         self._video_do(lambda v: v.step_playback_rate(-1))
 
     def faster_playback(self):
-        """One rung FASTER on the playback-rate ladder (]) — clamped at 2×."""
+        """One rung FASTER on the playback-rate ladder (]) — clamped at 2×. During a Lap Race it is
+        the race's speed."""
+        if self._racing():
+            self.view.race.step_speed(+1)
+            return
         self._video_do(lambda v: v.step_playback_rate(+1))
 
     def show_laps_tab(self):
@@ -2875,6 +2922,9 @@ class StudioWindow(QMainWindow):
           keyPressEvent there would never receive the key.
         * WINDOW FULLSCREEN (⌘⌃F / the green button) is the outermost, so it goes last."""
         view = getattr(self, "view", None)
+        if view is not None and getattr(view, "is_racing", lambda: False)():
+            view.end_lap_race()             # the race floats over the map: innermost of all
+            return True
         if view is not None and getattr(view, "is_video_focused", lambda: False)():
             view.set_video_focus(False)     # also leaves fullscreen
             return True

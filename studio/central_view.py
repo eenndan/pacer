@@ -51,11 +51,13 @@ from .map_view import MapView
 from .marks_panel import MarksPanel
 from .playback_state import PlaybackState
 from .plots_view import PlotsView
+from .race_controller import RaceController
+from .race_ladder import RaceCard
 from .scrub_controller import ScrubController
 from .session import fmt_time
 from .stats_panel import StatsView
 from .stats_trust import TIMING_TERM
-from .video_view import VideoView
+from .video_view import PLAYBACK_RATES, VideoView
 from .widgets import (
     ActionChip,
     PanelHeader,
@@ -474,6 +476,8 @@ class CentralView(QWidget):
     # A one-line, just-happened fact for the WINDOW's status bar, from a panel that has no channel
     # to it (U2: LapTable.selection_capped — a multi-select trimmed to the charts' lap cap).
     statusNotice = Signal(str)
+    # The Lap Race started (True) or ended (False) — the window keeps its menu check in step.
+    raceChanged = Signal(bool)
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  parent: QWidget | None = None,
@@ -640,6 +644,7 @@ class CentralView(QWidget):
     def dispose(self):
         """Stop decoder(s) + close the g-meter overlay before this view is dropped on reload. Called
         by StudioWindow on the outgoing view. No-op if no video."""
+        self.end_lap_race()
         video = getattr(self, "video", None)
         if video is not None:
             video.stop_all()
@@ -1288,6 +1293,25 @@ class CentralView(QWidget):
         # boundary positions via session and recompute when the axis mode flips (units change).
         self.plots.modeChanged.connect(self._refresh_sector_lines)
         self.plots.deltaBaselineChanged.connect(self._set_delta_baseline_label)
+        self._build_race()
+
+    def _build_race(self):
+        """The Lap Race (studio/race_controller.py): its card floats on the map's top-left, its
+        clock rides this view's tick. Compare ends it (the two cannot share the map), and a Laps
+        table click during a race re-points its emphasis."""
+        self.race_card = RaceCard(self.map.widget)
+        self.race_card.move(theme.SPACE_S, theme.SPACE_S)
+        self.race = RaceController(self.session, self.map, self.race_card,
+                                   pause_video=self.video.pause, rates=PLAYBACK_RATES,
+                                   on_change=self.raceChanged.emit)
+        self.race_card.playToggled.connect(self.race.toggle_play)
+        self.race_card.restartRequested.connect(self.race.restart)
+        self.race_card.speedCycled.connect(self.race.cycle_speed)
+        self.race_card.scrubbed.connect(self.race.scrub)
+        self.race_card.closeRequested.connect(self.end_lap_race)
+        self.video.compareToggled.connect(lambda on: self.end_lap_race() if on else None)
+        self.table.laps_selected.connect(
+            lambda ids: self.race.set_selected(ids[0]) if ids and self.race.active else None)
 
     # ----------------------------------------------------- panel focus / maximize
     def _install_header_dblclick(self, panel: QWidget, column: QSplitter, main: QSplitter):
@@ -1903,6 +1927,12 @@ class CentralView(QWidget):
 
     def tick(self):
         """Per-frame (~30 Hz) work, called by StudioWindow's persistent tick timer."""
+        # A Lap Race owns the map and its own clock: the video is paused, and a playhead move made
+        # meanwhile (a Laps-table click) is applied by the first tick after the race ends.
+        race = getattr(self, "race", None)
+        if race is not None and race.active:
+            race.tick()
+            return
         # Drain a coalesced map marker-drag seek first (one per tick, not per mouse-move).
         self.scrub.drain_marker_seek()
         # While scrubbing, the drag is source of truth: one coalesced seek/tick, skip the playback
@@ -2137,6 +2167,41 @@ class CentralView(QWidget):
         return compare is not None and compare.active
 
     # ------------------------------------------------------------- driving channels (F5)
+    # --------------------------------------------------------- Lap Race
+    def is_racing(self) -> bool:
+        race = getattr(self, "race", None)
+        return race is not None and race.active
+
+    def can_race(self) -> bool:
+        """True when this session fields at least two raceable laps (`Session.race_tracks`)."""
+        race = getattr(self, "race", None)
+        return race is not None and race.available()
+
+    def start_lap_race(self) -> bool:
+        """Every clean lap leaves the line together on the map. Leaves compare first (one map, one
+        story), pauses the video, and emphasises the lap on screen (the playhead's, else the Laps
+        table's first selected). The race runs at the transport's playback rate."""
+        if self.is_racing() or not self.can_race():
+            return self.is_racing()
+        if self._comparing():
+            self.video.compare_btn.click()
+        lap = self.session.lap_at_time(self._playback.applied_t)
+        if lap is None:
+            lap = getattr(self, "_corner_lap", None)
+        return self.race.enter(selected=lap, speed=self.video.playback_rate())
+
+    def end_lap_race(self):
+        """Leave the race; the map, marker and selection are as they were on entry."""
+        race = getattr(self, "race", None)
+        if race is not None:
+            race.end()
+
+    def toggle_lap_race(self) -> bool:
+        if self.is_racing():
+            self.end_lap_race()
+            return False
+        return self.start_lap_race()
+
     def _refresh_sector_lines(self, mode: str | None = None):
         """F2: push the sector boundary positions (start/finish + each sector line) to the charts
         for the current axis mode. Computed via session (the s×best_distance / time-into-lap
@@ -2204,6 +2269,8 @@ class CentralView(QWidget):
         corner table, opportunities, stats, driving channels, selection, sector lines) in a
         load-bearing order — three drifted copies were unified here. Shared by re-segmentation, a
         reference load/clear, and the initial build; each call site keeps only its own extras inline."""
+        # A race's tracks describe the laps as they were: a re-segment ends it before anything moves.
+        self.end_lap_race()
         self.table.refresh()
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
@@ -2258,6 +2325,7 @@ class CentralView(QWidget):
 
         The rebuild seam calls _refresh_trust_banners() instead (it has just rebuilt the other
         three); every other caller wants this one."""
+        self.end_lap_race()      # the race's ranked/unranked verdict was read at entry
         self._refresh_trust_banners()
         # Each guarded: a CentralView.__new__'d for a unit test has none of these children.
         table = getattr(self, "table", None)
