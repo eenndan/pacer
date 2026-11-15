@@ -645,6 +645,7 @@ class CentralView(QWidget):
         """Stop decoder(s) + close the g-meter overlay before this view is dropped on reload. Called
         by StudioWindow on the outgoing view. No-op if no video."""
         self.end_lap_race()
+        self._finish_diff_roll()          # no readout frame from a view on its way out
         video = getattr(self, "video", None)
         if video is not None:
             video.stop_all()
@@ -2002,8 +2003,7 @@ class CentralView(QWidget):
         self.map.set_playhead_time(t)          # F3: red marker, interpolated between samples
         self._follow_current_lap(lap_id, t)  # charts auto-follow the playhead's lap (vs best)
         self.table.set_current_lap(lap_id)
-        # highlight the current lap's trace on the map; the line you left fades on a user's change
-        self.map.set_current_lap(lap_id, fade_if=self._still_moment)
+        self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map
         sp = float(self.session.tv[i]) if i is not None else None  # F2: speed km/h at that index
         # C6: under-video strip = timecode (+chapter) only; the live Δ/speed/lap lives once in the
         # hero #DiffBox.
@@ -2212,6 +2212,11 @@ class CentralView(QWidget):
         return not (playing or (scrub is not None and scrub.is_active) or self._comparing()
                     or self.is_racing() or bool(getattr(marker, "moving", False)))
 
+    def _finish_diff_roll(self):
+        roll = getattr(self, "_diff_roll", None)
+        if roll is not None:
+            roll.finish()
+
     def _roll_diff(self, lead: float | None, paint):
         """Show `lead` through `paint(value)`: directly, or — on a discrete jump of at least
         motion.ROLL_MIN_JUMP_S at a still moment — counted from the value on screen to it over
@@ -2305,6 +2310,7 @@ class CentralView(QWidget):
         lap = self.session.lap_at_time(self._playback.applied_t)
         if lap is None:
             lap = getattr(self, "_corner_lap", None)
+        self._finish_diff_roll()          # the race starts on a still readout
         return self.race.enter(selected=lap, speed=speed, rates=speeds)
 
     def end_lap_race(self):
@@ -2392,11 +2398,6 @@ class CentralView(QWidget):
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
         self.map.refresh_overlays()
-        # The playhead's lap under the NEW segmentation, now and without a fade: a lap set that
-        # changed under a still playhead is not a lap the user left (motion.py).
-        playback = getattr(self, "_playback", None)
-        if playback is not None and playback.applied_t is not None:
-            self.map.set_current_lap(self.session.lap_at_time(playback.applied_t))
         self.map.set_corners(self.session.corners.corner_map_markers())
         self._hovered_corner = None          # set_corners dropped both rings; the chart follows
         self.map.forget_corner_hover()       # ...and a pointer still on a label re-names it

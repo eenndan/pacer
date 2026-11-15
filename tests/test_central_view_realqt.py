@@ -1459,10 +1459,9 @@ def _run_all():
     test_the_stats_page_handed_to_a_reader_is_never_stale()
     test_the_stats_page_pays_its_deferred_render_before_it_can_be_painted()
     test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stats_tab()
-    test_motion_the_lap_you_left_fades_and_ends_exactly_as_without_motion()
-    test_motion_rapid_lap_steps_leave_one_line_and_nothing_running()
+    test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text()
     test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_motion_work()
-    test_motion_interruptions_leave_no_items_timers_or_mid_frames()
+    test_motion_interruptions_end_the_roll_with_no_timer_left()
     test_motion_view_menu_reduce_motion_persists_and_wins()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
@@ -2488,20 +2487,6 @@ def _seek(view, t):
     view.tick()
 
 
-def _map_lines(view):
-    """Every PAINTED line on the map (a curve item holding points — the rainbow buckets, the lap
-    and best-lap lines, the casing) as comparable state: (opacity, visible, points, z), sorted.
-    An emptied spare bucket paints nothing, so it is not state."""
-    out = []
-    for it in view.map.plot.items:
-        xs = getattr(it, "xData", None)
-        if xs is None or len(xs) == 0:
-            continue
-        out.append((round(float(it.opacity()), 6), bool(it.isVisible()), len(xs),
-                    round(float(it.zValue()), 3)))
-    return sorted(out)
-
-
 def _hero_state(view):
     return view.diff_box.text(), view.diff_box.delta_colour()
 
@@ -2519,90 +2504,85 @@ def _sign_agrees_with_colour(text, colour):
     return mag <= 0.01
 
 
-_LAP0_T, _LAP1_T = 125.14, 305.78      # Δideal +2.60 s on lap 0, +1.18 s on lap 1 (the fixture)
+def _direct_could_print(view, text, colour):
+    """True when `text`/`colour` is exactly what the DIRECT path prints for some Δ: the frame's own
+    number fed back through the hero's formatter (so a clamped Δideal can never roll through a
+    value the direct path would not show, e.g. a negative)."""
+    head, sep, tail = text.partition("     ")
+    m = re.search(r"([+−-]?)(\d+\.\d+)", head)
+    v = float(m.group(2)) * (-1.0 if m.group(1) in ("−", "-") else 1.0)
+    lap = view._last_diff_lap
+    if view.ideal_readout_btn.isChecked() and view._ideal_state == "stitched":
+        want_text, want_col = theme.format_ideal_readout(v, view._last_diff_speed, lap,
+                                                         view._speed_unit)
+    else:
+        from studio.central_view import _name_hero_baseline
+        want_text, want_col = theme.format_delta_speed(v, view._last_diff_speed, lap,
+                                                       view._speed_unit)
+        want_text = _name_hero_baseline(want_text, view.session.has_reference())
+    return want_text.partition("     ")[0] == head and want_col == colour
 
 
-def test_motion_the_lap_you_left_fades_and_ends_exactly_as_without_motion():
-    """A paused lap change (a Laps-table click is a seek) fades the outgoing line out over
-    LAP_FADE_MS while the new lap is drawn at full strength, and the hero Δ counts from the old
-    value to the new. Each END state — every map line item, the hero's text and colour — is the
-    one the motion-off path reaches (offscreen default), item for item and character for
-    character; every rolling frame's sign agrees with its colour."""
+# Δideal +2.60 s on lap 0, +1.18 s and +4.60 s on lap 1 (the two-lap stadium fixture).
+_LAP0_T, _LAP1_T, _LAP1_LATE_T = 125.14, 305.78, 326.9
+
+
+def _roll_frames(view, clock, n=14):
     from studio import motion
+    frames = []
+    for _ in range(n):
+        clock.now += 1 / 60
+        motion.pump()
+        frames.append(_hero_state(view))
+    return frames
+
+
+def test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text():
+    """A paused jump (a seek; a lap change — a Laps-table click is a seek) counts the hero Δ from
+    the value on screen to the new one over DELTA_ROLL_MS. Every frame is one the direct path
+    could print (the same formatter, fed an intermediate value: the clamped Δideal never shows a
+    negative), its sign agrees with its colour, and the END is the motion-off text and colour,
+    character for character — in both leads (Δideal and Δ to best)."""
+    from studio import motion
+    want = {}
     off, _s, _t0, _t1 = _real_central_view()
     try:
-        _seek(off, _LAP0_T)
-        _seek(off, _LAP1_T)
-        want_lines, want_hero = _map_lines(off), _hero_state(off)
-        assert not off.map.lap_fading() and motion.active_count() == 0
+        for lead in ("ideal", "best"):
+            off.ideal_readout_btn.setChecked(lead == "ideal")
+            for a, b in ((_LAP0_T, _LAP1_T), (_LAP1_T, _LAP1_LATE_T), (_LAP1_LATE_T, _LAP0_T)):
+                _seek(off, a)
+                _seek(off, b)
+                want[(lead, a, b)] = _hero_state(off)
+        assert motion.active_count() == 0, "offscreen motion must be off: nothing may run"
     finally:
         off.dispose()
     with _motion_on() as clock:
         view, _s, _t0, _t1 = _real_central_view()
         try:
-            _seek(view, _LAP0_T)
-            before = _hero_state(view)
-            _seek(view, _LAP1_T)
-            assert view.map.lap_fading(), "a paused lap change did not fade the line it left"
-            assert len(_map_lines(view)) > len(want_lines)
-            assert view._diff_roll is not None, "a 1.4 s Δ jump at a still moment did not roll"
-            assert _hero_state(view)[0].partition("     ")[0] == before[0].partition("     ")[0], (
-                "frame 0 of a roll must still show the old value")
-            fades, frames = [], []
-            for _ in range(12):
-                clock.now += 0.02
-                motion.pump()
-                extra = [o for o, *_ in _map_lines(view) if o < 1.0]
-                if extra:
-                    fades.append(max(extra))
-                frames.append(_hero_state(view))
-            assert len(fades) >= 3 and all(0.0 <= f < 1.0 for f in fades) and fades[2] > 0, fades
-            assert fades == sorted(fades, reverse=True), f"the fade is not monotonic: {fades}"
-            mid = {f[0] for f in frames[:-1]} - {want_hero[0], before[0]}
-            assert mid, "the roll showed no intermediate value"
-            bad = [f for f in frames if not _sign_agrees_with_colour(*f)]
-            assert not bad, f"a rolling frame's colour disagrees with its sign: {bad}"
-            assert not view.map.lap_fading() and view._diff_roll is None
-            assert motion.active_count() == 0 and not motion.timer_active()
-            assert _map_lines(view) == want_lines, (_map_lines(view), want_lines)
-            assert _hero_state(view) == want_hero, (_hero_state(view), want_hero)
+            for lead in ("ideal", "best"):
+                view.ideal_readout_btn.setChecked(lead == "ideal")
+                for a, b in ((_LAP0_T, _LAP1_T), (_LAP1_T, _LAP1_LATE_T), (_LAP1_LATE_T, _LAP0_T)):
+                    _seek(view, a)
+                    motion.finish_all()
+                    before = _hero_state(view)
+                    _seek(view, b)
+                    assert view._diff_roll is not None, f"a {lead} jump {a}->{b} did not roll"
+                    assert (_hero_state(view)[0].partition("     ")[0]
+                            == before[0].partition("     ")[0]), "frame 0 must show the old value"
+                    frames = _roll_frames(view, clock)
+                    mid = {f[0] for f in frames[:-1]} - {want[(lead, a, b)][0], before[0]}
+                    assert mid, f"the {lead} roll {a}->{b} showed no intermediate value"
+                    bad = [f for f in frames if not _sign_agrees_with_colour(*f)]
+                    assert not bad, f"a rolling frame's colour disagrees with its sign: {bad}"
+                    odd = [f for f in frames if not _direct_could_print(view, *f)]
+                    assert not odd, f"a rolling frame the direct path could not print: {odd}"
+                    assert view._diff_roll is None and motion.active_count() == 0
+                    assert not motion.timer_active()
+                    assert _hero_state(view) == want[(lead, a, b)], (
+                        _hero_state(view), want[(lead, a, b)])
         finally:
             view.dispose()
-    print("test_motion_the_lap_you_left_fades_and_ends_exactly_as_without_motion OK")
-
-
-def test_motion_rapid_lap_steps_leave_one_line_and_nothing_running():
-    """Ten lap changes in a second (arrow-key stepping): each finishes the previous fade at once,
-    so at most ONE outgoing line exists at any moment, and once time passes the map holds exactly
-    the motion-off items with no transition or timer left."""
-    from studio import motion
-    off, _s, _t0, _t1 = _real_central_view()
-    try:
-        _seek(off, _LAP1_T + 0.09)
-        want = _map_lines(off)
-    finally:
-        off.dispose()
-    with _motion_on() as clock:
-        view, _s, _t0, _t1 = _real_central_view()
-        try:
-            _seek(view, _LAP1_T)
-            base = len(_map_lines(view))
-            for k in range(10):
-                _seek(view, _LAP0_T + 0.01 * k if k % 2 == 0 else _LAP1_T + 0.01 * k)
-                clock.now += 0.1
-                motion.pump()
-                fading = [o for o, *_ in _map_lines(view) if o < 1.0]
-                assert motion.active_count() <= 2, motion.active_count()   # one fade + one roll
-                # ONE outgoing line: its items (a lap line, or the rainbow's buckets) share one
-                # opacity, and it is never more than the drawn lap's own items again.
-                assert len(set(fading)) <= 1 and len(fading) <= base, _map_lines(view)
-            clock.now += 1.0
-            motion.pump()
-            assert motion.active_count() == 0 and not motion.timer_active()
-            assert _map_lines(view) == want, (_map_lines(view), want)
-        finally:
-            view.dispose()
-    print("test_motion_rapid_lap_steps_leave_one_line_and_nothing_running OK")
+    print("test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text OK")
 
 
 def test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_motion_work():
@@ -2619,7 +2599,7 @@ def test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_moti
             for t in np.concatenate([np.linspace(float(t0[0]) + 0.02, float(t0[-1]) - 0.01, 150),
                                      np.linspace(float(t1[0]) + 0.01, float(t1[-1]) - 0.01, 150)]):
                 _seek(view, t)
-                assert view._diff_roll is None and not view.map.lap_fading()
+                assert view._diff_roll is None
             assert (motion.starts, motion.frames) == (starts, frames), (
                 motion.starts - starts, motion.frames - frames)
             assert motion.active_count() == 0 and not motion.timer_active()
@@ -2638,8 +2618,8 @@ def test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_moti
 
 def test_motion_view_menu_reduce_motion_persists_and_wins():
     """View ▸ Reduce motion is a checkable item that starts from the system's setting, and a click
-    is remembered (prefs, jailed here) and wins over PACER_MOTION=1: a paused lap change then
-    ends at once, through the same path."""
+    is remembered (prefs, jailed here) and wins over PACER_MOTION=1: a paused jump then sets the
+    readout at once, through the same path."""
     from studio import motion, prefs
     with _motion_on():
         win, view = _studiowindow_with_view(build_menu=True)
@@ -2654,8 +2634,7 @@ def test_motion_view_menu_reduce_motion_persists_and_wins():
             assert prefs.reduce_motion() is True and not motion.enabled()
             _seek(view, _LAP0_T)
             _seek(view, _LAP1_T)
-            assert not view.map.lap_fading() and view._diff_roll is None
-            assert motion.active_count() == 0
+            assert view._diff_roll is None and motion.active_count() == 0
             act.trigger()
             assert prefs.reduce_motion() is False and motion.enabled()
         finally:
@@ -2666,51 +2645,50 @@ def test_motion_view_menu_reduce_motion_persists_and_wins():
     print("test_motion_view_menu_reduce_motion_persists_and_wins OK")
 
 
-def test_motion_interruptions_leave_no_items_timers_or_mid_frames():
-    """A seek mid-roll retargets from the value on screen (never a queue); playback starting
-    mid-roll shows the direct text at once; a capture (`grab_clean`) never sees a fading line; a
-    Lap race starts on a still map; and a view disposed mid-fade leaves no transition, no timer
-    and no callback into deleted items."""
+def test_motion_interruptions_end_the_roll_with_no_timer_left():
+    """A second jump mid-roll starts from the value ON SCREEN (one roll, never a queue); playback
+    starting mid-roll shows the direct text at once; entering compare or a Lap race mid-roll, and a
+    view disposed mid-roll (a load, a closed window), end it at once with no timer left and no
+    callback into deleted widgets."""
     from shiboken6 import Shiboken
 
     from studio import motion
     with _motion_on() as clock:
-        view, _s = _shown_view_on_the_laps_tab()     # shown: a Lap race needs the map on screen
+        view, _s = _shown_view_on_the_laps_tab()     # shown: compare and a race need it
         try:
             _seek(view, _LAP0_T)
             _seek(view, _LAP1_T)
             clock.now += 0.05
             motion.pump()
             shown = view._diff_rolling_value
-            _seek(view, _LAP1_T + 20.0)           # a seek mid-roll: from what is on screen
+            _seek(view, _LAP1_LATE_T)             # a second jump mid-roll
             assert view._diff_roll is not None and view._diff_rolling_value == shown
-            assert motion.active_count() <= 2
+            assert motion.active_count() == 1
             view.video.is_playing = lambda: True   # playback starts mid-roll
-            _seek(view, _LAP1_T + 20.1)
-            assert view._diff_roll is None
-            direct = _hero_state(view)
+            _seek(view, _LAP1_LATE_T + 0.1)
+            assert view._diff_roll is None and motion.active_count() == 0
             del view.video.is_playing
-            assert direct == _hero_state(view)
-            _seek(view, _LAP0_T)                   # a fresh fade, then a capture
-            assert view.map.lap_fading()
-            with view.map.grab_clean():
-                assert not view.map.lap_fading() and motion.active_count() == 0
-                assert all(o == 1.0 for o, *_ in _map_lines(view))
-            _seek(view, _LAP1_T)
-            assert view.map.lap_fading()
+            _seek(view, _LAP0_T)                   # mid-roll, enter compare
+            assert view._diff_roll is not None
+            view.video.compare_btn.click()
+            assert view._comparing() and view._diff_roll is None and motion.active_count() == 0
+            view.video.compare_btn.click()
+            motion.finish_all()
+            _seek(view, _LAP1_T)                   # mid-roll, start a race
+            assert view._diff_roll is not None
             assert view.start_lap_race(), "the two-lap stadium must be raceable"
-            assert not view.map.lap_fading()
+            assert view._diff_roll is None and motion.active_count() == 0
             view.end_lap_race()
-            _seek(view, _LAP0_T + 1.0)
-            assert view.map.lap_fading()
+            _seek(view, _LAP0_T + 1.0)             # mid-roll, the view goes away
+            assert view._diff_roll is not None
         finally:
             view.hide()
             view.dispose()
             Shiboken.delete(view)
+        assert motion.active_count() == 0 and not motion.timer_active()
         clock.now += 1.0
         motion.pump()                              # must not call into the deleted widgets
-        assert motion.active_count() == 0 and not motion.timer_active()
-    print("test_motion_interruptions_leave_no_items_timers_or_mid_frames OK")
+    print("test_motion_interruptions_end_the_roll_with_no_timer_left OK")
 
 
 if __name__ == "__main__":

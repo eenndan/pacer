@@ -1,12 +1,12 @@
 """Motion: the one place that owns the app's few transitions — their durations, easing and switch.
 
-The app animates three things, each because the motion carries meaning (W2 design, section C):
-  * the lap you LEFT fades out on the map (`LAP_FADE_MS`) when you change lap by hand;
-  * the hero Δ readout counts to its new value (`DELTA_ROLL_MS`) on a discrete jump of at least
-    `ROLL_MIN_JUMP_S` — a seek, a lap change, a reference change — never during playback;
-  * the Lap race card's pack rows slide to their new places (`ROW_SLIDE_MS`) when packs re-form.
-Nothing else moves, and nothing here runs on the 30 Hz playback path: with no transition running
-there is no timer and no per-tick work (`active_count() == 0`, `frames` does not move).
+The app animates ONE thing, because the motion carries meaning (W2 design, section C): the hero Δ
+readout counts to its new value (`DELTA_ROLL_MS`) on a discrete jump of at least `ROLL_MIN_JUMP_S`
+— a seek, a lap change, a reference change — never during playback. The design's other two (the
+lap you left fading on the map, the Lap race rows sliding) were measured and not built: the fade
+changed under 2 % of the map's pixels in any Line mode, and race rows never changed order in a whole
+race (PR #557). Nothing runs on the 30 Hz playback path: with no transition running there is no
+timer and no per-tick work (`active_count() == 0`, `frames` does not move).
 
 THE SWITCH (`enabled()`) is False when any of these says so, in this order:
   1. the user's View ▸ Reduce motion choice (`set_reduce_pref`; None = follow the system);
@@ -19,7 +19,7 @@ ONE CODE PATH. A transition started while motion is off runs its `end` synchrono
 `start` — the same callback a finished animation runs — so the disabled behaviour cannot drift
 from the animated one's final state. A transition can be finished early (`finish`: its end state,
 now) or cancelled (`cancel`: dropped, its end NOT run — the caller is about to set a newer state).
-`finish_all()` is what a capture calls first, so no mid-transition frame ever reaches a file.
+`finish_all()` ends everything at once (the Reduce motion toggle calls it).
 
 One shared QTimer steps every running transition and stops when the last one ends. Each
 transition names an `owner` QObject; when the owner is destroyed (a window closed, another
@@ -40,14 +40,10 @@ from PySide6.QtGui import QGuiApplication
 
 _log = logging.getLogger(__name__)
 
-#: The outgoing lap line's fade on the map (W2 design C: ~200 ms, cubic ease-out).
-LAP_FADE_MS = 200
-#: The hero Δ readout's count from the old value to the new one.
+#: The hero Δ readout's count from the old value to the new one (cubic ease-out).
 DELTA_ROLL_MS = 180
 #: The smallest Δ jump (s) that rolls; anything smaller is set directly, as before.
 ROLL_MIN_JUMP_S = 0.05
-#: A Lap race card row's slide to its new place when packs re-form.
-ROW_SLIDE_MS = 120
 #: The shared timer's period: ~60 Hz, only while a transition runs.
 FRAME_MS = 16
 

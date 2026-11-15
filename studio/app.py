@@ -2482,16 +2482,15 @@ class StudioWindow(QMainWindow):
             "(± sign, ▲/▼ arrows, ★ best marks) are always shown regardless of this setting.")
         self._colorblind_action.toggled.connect(self._on_colorblind_toggled)
 
-        # View ▸ Reduce motion: the app's three transitions (the lap you left fading on the map,
-        # the Δ readout counting on a jump, race rows sliding) end at once. Checked by default when
-        # macOS's own Reduce Motion is on; a click here is remembered and wins over the system.
+        # View ▸ Reduce motion: the app's one transition (the Δ readout counting to its new value
+        # after a jump) ends at once. Checked by default when macOS's own Reduce Motion is on; a
+        # click here is remembered and wins over the system (studio/motion.py).
         self._reduce_motion_action = view_menu.addAction("Reduce motion")
         self._reduce_motion_action.setCheckable(True)
         self._reduce_motion_action.setChecked(motion.reduce_motion())
         self._reduce_motion_action.setToolTip(
-            "Turn off the app's few transitions: the lap line you left fading out on the map, the "
-            "Δ readout counting to a new value after a jump, and the Lap race rows sliding into "
-            "place. Follows the system's Reduce Motion until you choose here.")
+            "Show the Δ readout's new value at once after a seek or a lap change, instead of "
+            "counting to it. Follows the system's Reduce Motion until you choose here.")
         self._reduce_motion_action.toggled.connect(self._on_reduce_motion_toggled)
 
         # Help menu: the shortcut reference (also F1 / ?) and an About card (help_dialog.py).

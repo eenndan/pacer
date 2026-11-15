@@ -205,7 +205,7 @@ caches + delegates.
 | [library_dialog.py](library_dialog.py) | File ▸ Library…: sessions, PB chart, session records; writes nothing | Qt | `test_library` |
 | [session_record_dialog.py](session_record_dialog.py) | The session-record form; no store I/O (remembers its "Own kart…" fold in prefs) | Qt | `test_session_record` |
 | [track_dialog.py](track_dialog.py) | Saved-tracks manager: rename/delete through injected callbacks | Qt | `test_track_db` |
-| [motion.py](motion.py) | The app's three transitions' durations, easing and switch (View ▸ Reduce motion, the system's, headless = off) | Qt | `test_motion` |
+| [motion.py](motion.py) | The Δ readout's roll: duration, easing and the switch (View ▸ Reduce motion, the system's, headless = off) | Qt | `test_motion` |
 | [widgets.py](widgets.py) | Shared Qt primitives: `PanelHeader`, `PanelToolbar`, `WrapLabel` | Qt | `test_design_system` |
 | [theme.py](theme.py) | The design system: tokens `C`, fonts, palette + QSS, icons, brand mark | Qt | `test_design_system` |
 | [workers.py](workers.py) | QThread workers for the load and the video export | Qt | `test_export_gates` |

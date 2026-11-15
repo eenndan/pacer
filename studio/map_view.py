@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, gapfill, map_render, motion, prefs, theme, units
+from . import data_quality, gapfill, map_render, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -458,9 +458,6 @@ class _RainbowOverlay:
         # The hero casing under the buckets: exactly the geometry they draw, chunked (_Casing).
         self._casing = _Casing(plot, z=4.5)   # under the buckets, above the lap overlays
         self.rebuilds = 0  # instrumentation for the perf-invariant tests (no rebuild per tick)
-        # A second bucket pool for MapView's lap fade: the outgoing lap's buckets fade out while
-        # the new lap fills the other pool, so a lap change never creates items after the first.
-        self._spare: list | None = None
 
     def _ensure_items(self):
         if self._items is None:
@@ -491,29 +488,11 @@ class _RainbowOverlay:
     def recolor(self):
         """Re-pen each bucket item from the ACTIVE palette's rainbow (after a colour-blind-palette
         flip). No-op before the items exist; the caller re-fills their data via _apply_rainbow."""
-        for pool in (self._items, self._spare):
-            if pool:
-                for it, color in zip(pool, rainbow_colors(MAP_RAINBOW_N), strict=True):
-                    it.setPen(_hero_pen(color, RAINBOW_WIDTH))
         if self._items is None:
             return
+        for it, color in zip(self._items, rainbow_colors(MAP_RAINBOW_N), strict=True):
+            it.setPen(_hero_pen(color, RAINBOW_WIDTH))
         self._casing.repen()
-
-    def detach(self) -> list:
-        """Hand the painted bucket items to MapView's lap fade; the next fill uses the spare pool
-        (created lazily, like the first)."""
-        items = self._items or []
-        self._items, self._spare = self._spare, None
-        return items
-
-    def give_back(self, items: list) -> None:
-        """The fade is over: its items, emptied and opaque again, become the spare pool."""
-        for it, color in zip(items, rainbow_colors(MAP_RAINBOW_N), strict=False):
-            it.setData(np.empty(0), np.empty(0))
-            it.setOpacity(1.0)
-            it.setZValue(5)
-            it.setPen(_hero_pen(color, RAINBOW_WIDTH))   # a palette flip mid-fade missed them
-        self._spare = items or None
 
 
 class _GradientStrip(QWidget):
@@ -946,13 +925,6 @@ class _LapOverlay:
                 item.setVisible(False)
             self._items.append(item)
             self._inferred.append(not seg.measured)
-
-    def detach(self) -> list:
-        """Hand the drawn line items to the caller (MapView's lap fade, which removes them when it
-        ends) instead of removing them; the next set_lap draws fresh. The casing pool stays: it is
-        re-filled for the new lap, and the fading line is a ghost without one."""
-        items, self._items, self._inferred = self._items, [], []
-        return items
 
     def set_polyline(self, xs, ys, key):
         """(Re)draw one solid polyline (the F7 cross-recording reference ring). `key` gates redraws
@@ -1862,8 +1834,6 @@ class MapView(QWidget):
         self.ghost_updates = 0
         # The Lap Race layer while a race runs (start_race / end_race), and what it hid.
         self._race: _RaceLayer | None = None
-        # The lap you left, fading out (motion.LAP_FADE_MS) — at most one at a time; see _fade_out.
-        self._lap_fade: motion.Transition | None = None
         self._race_restore = (True, False)
         self._race_card: QWidget | None = None   # the race card floated on this canvas, if any
 
@@ -2251,8 +2221,6 @@ class MapView(QWidget):
         # reads not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
         # would wrongly leave the key hidden on an off-screen/grab-only map. isHidden is True only when
         # hide() was actually called.
-        # A document never carries a mid-transition frame: a fading lap line, a race row mid-slide.
-        motion.finish_all()
         widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None),
                                getattr(self, "fit_btn", None), getattr(self, "_notice", None),
                                getattr(self, "_race_card", None))
@@ -2677,8 +2645,6 @@ class MapView(QWidget):
         remembering both so `end_race` restores them exactly."""
         if self._race is not None:
             self.end_race()
-        if self._lap_fade is not None:     # the race starts on a still map
-            self._lap_fade.finish()
         # The key's own hidden flag, not isVisible(): that also reads False for an unshown parent,
         # and restoring it would then hide the key for good.
         self._race_restore = (self.marker.isVisible(), self._map_key.isHidden())
@@ -2895,81 +2861,24 @@ class MapView(QWidget):
         self._best_lap_id = best
         self._best_overlay.set_lap(self.session, best)
 
-    def set_current_lap(self, lap_id, fade_if=None):
+    def set_current_lap(self, lap_id):
         """Highlight the lap the video is currently in (measured solid + inferred dashed/dimmed).
         No-op if it hasn't changed; a None id clears the highlight so only the faint best-lap
-        reference remains.
-
-        `fade_if` (a zero-argument callable, asked only on an actual change) says whether this
-        change is one the outgoing line fades out on — CentralView's answer: a user-driven change,
-        not playback crossing the line. The new lap is drawn at full strength at once either way."""
+        reference remains."""
         # The best lap can change when timing lines move; keep its reference line current.
         self._refresh_best()
         changed = lap_id != self._current_lap
         self._current_lap = lap_id  # F3: the lap the marker drag is constrained to
-        if changed:
-            self._fade_out(bool(fade_if is not None and fade_if()))
         self._current_overlay.set_lap(self.session, lap_id)
         # Rainbow: rebuild the bucket items ONLY on an actual lap change. This method runs every
         # 30 Hz tick with an unchanged lap — that path must not touch the rainbow.
         if changed and self._rainbow_mode != "off":
             self._apply_rainbow()
 
-    def _fade_out(self, fade: bool):
-        """The lap change's one motion: the outgoing line fades out over motion.LAP_FADE_MS while
-        the new one is drawn at full strength, so you SEE which line you left. Any fade still
-        running ends first (ten arrow-key steps in a second leave one line, never a pile). The
-        line that fades is the one on screen: the plain lap line, or — the map's default — the
-        rainbow's buckets, which hand their pool over and come back as the spare (no item is
-        created per change). The outgoing items sit just ABOVE their layer: laps share the track,
-        so a line fading under the new one would be hidden by it (looked at on the demo: nothing
-        showed). Above it, the lap you left — its colours, its line — dissolves into the new one.
-        With motion off the end runs right here: the plain items removed (as before), the buckets
-        emptied."""
-        if self._lap_fade is not None:
-            self._lap_fade.finish()
-        ov = self._current_overlay
-        if not fade:
-            return
-        if ov.visible:
-            items = ov.detach()
-
-            def done():
-                for it in items:
-                    self.plot.removeItem(it)
-        else:
-            items = self._rainbow.detach()
-
-            def done():
-                self._rainbow.give_back(items)
-        if not items:
-            done()
-            return
-        for it in items:
-            it.setZValue(it.zValue() + 0.05)
-
-        def step(p: float):
-            for it in items:
-                it.setOpacity(1.0 - p)
-
-        def end():
-            done()
-            self._lap_fade = None
-
-        self._lap_fade = motion.start(self, motion.LAP_FADE_MS, step, end)
-        if self._lap_fade.done:
-            self._lap_fade = None
-
-    def lap_fading(self) -> bool:
-        """True while an outgoing lap line is still fading (tests and captures read it)."""
-        return self._lap_fade is not None
-
     def refresh_overlays(self):
         """Force both lap overlays to redraw from the session — call after the timing lines
         move (re-segmentation shifts lap ids and clears the session's per-lap segment cache,
         so the cached drawings are stale even when the lap id is nominally unchanged)."""
-        if self._lap_fade is not None:     # a fading line from the old segmentation goes now
-            self._lap_fade.finish()
         self._best_lap_id = None
         self._refresh_best()
         self._current_overlay.refresh(self.session)

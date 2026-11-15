@@ -19,10 +19,10 @@ WHAT EACH LINE IS (the honesty copy):
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QPixmap, QRegion
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from . import motion, theme
+from . import theme
 from ._signal import fmt_signed, fmt_time, lap_label
 from .lap_table import printed_ms
 from .race_controller import CAPTION, CardModel, PackRow, readout_text
@@ -93,11 +93,6 @@ class RaceCard(QWidget):
         self._hits: dict[str, QRectF] = {}
         self._scrubbing = False
         self.renders = 0                        # pixmap renders (a test reads it)
-        # The pack-row slide (_slide_rows): row index by leading lap, offsets (px) at its start.
-        self._row_index: dict[int, int] = {}
-        self._slide: dict[int, float] = {}
-        self._slide_p = 1.0
-        self._slide_tr: motion.Transition | None = None
         # The card's measure is its caption's, one line, plus its padding and a step of air: the
         # widest fixed text it carries, so the columns below are sized from the face, not typed.
         self._w = self._fm.horizontalAdvance(CAPTION) + 2 * _PAD + theme.SPACE_XL
@@ -110,7 +105,6 @@ class RaceCard(QWidget):
         self.colours = dict(colours)
         self.lap_times = dict(lap_times)
         self._cache = None
-        self._row_index = {}                    # a new race's first rows appear, never slide in
 
     def show_model(self, model: CardModel) -> None:
         """Take a tick's model. The card is a translucent child over the map's viewport, so it is
@@ -130,7 +124,6 @@ class RaceCard(QWidget):
                 and 0.0 <= model.t - snap.t < CARD_REFRESH_S * model.speed):
             return
         self.model = model
-        self._slide_rows(model)
         h = self._height(model)
         if (self._w, h) != (self.width(), self.height()):
             self.setFixedSize(self._w, h)
@@ -139,85 +132,6 @@ class RaceCard(QWidget):
             self._cache_key = key
             self._cache = None
         self.update()
-
-    # ------------------------------------------------------------------ row slide
-    @staticmethod
-    def _rows_top() -> float:
-        """Where the first pack row starts (below the title, caption, bar and column header)."""
-        return float(_PAD + _TITLE_H + _ROW_H + _BAR_H + 4 + _ROW_H)
-
-    def _slide_rows(self, model: CardModel) -> None:
-        """When packs re-form, each row that is still on the card (named by its leading lap)
-        slides from where it is SHOWN now to its new place over motion.ROW_SLIDE_MS, instead of
-        teleporting. A new snapshot mid-slide starts the next slide from the rows' shown places.
-        The rows are strips of the one cached card (paintEvent), so a slide costs a few blits a
-        frame and no re-render; with motion off the end — no offsets — applies at once."""
-        rows = () if model.unranked_reason else model.rows
-        new = {r.laps[0]: k for k, r in enumerate(rows)}
-        old, self._row_index = self._row_index, new
-        live = self._slide_tr is not None and self._slide_tr.running
-        p = self._slide_tr.progress() if live else 1.0
-        offsets = {}
-        for lap, k in new.items():
-            if lap in old:
-                shown = (old[lap] - k) * _ROW_H + self._slide.get(lap, 0.0) * (1.0 - p)
-                if abs(shown) > 0.5:
-                    offsets[lap] = shown
-        if self._slide_tr is not None:
-            self._slide_tr.cancel()
-            self._slide_tr = None
-        self._slide, self._slide_p = {}, 1.0
-        if not offsets:
-            return
-        self._slide, self._slide_p = offsets, 0.0
-
-        def step(q: float):
-            self._slide_p = q
-            # While the race runs, the map repaints the card every tick anyway: no extra paints.
-            if self.model is None or not self.model.playing:
-                self.update()
-
-        def end():
-            self._slide, self._slide_p, self._slide_tr = {}, 1.0, None
-            self.update()
-
-        tr = motion.start(self, motion.ROW_SLIDE_MS, step, end)
-        self._slide_tr = None if tr.done else tr
-
-    def sliding(self) -> bool:
-        """True while pack rows are mid-slide (tests read it)."""
-        return bool(self._slide)
-
-    def hideEvent(self, event):  # noqa: N802 (Qt override)
-        if self._slide_tr is not None:
-            self._slide_tr.finish()
-        super().hideEvent(event)
-
-    def _blit(self, p: QPainter) -> None:
-        """The cached card — whole, or, mid-slide, with each pack row's strip at its sliding place
-        (the rows band under them filled with the plate, so a row leaving a slot leaves no hole)."""
-        cache = self._cache
-        if not self._slide or self.model is None:
-            p.drawPixmap(0, 0, cache)
-            return
-        dpr = cache.devicePixelRatio()
-        w = float(self.width())
-        top = self._rows_top()
-        band = QRectF(0, top, w, _ROW_H * len(self._row_index))
-        outside = QRegion(self.rect()).subtracted(QRegion(band.toAlignedRect()))
-        p.save()
-        p.setClipRegion(outside)
-        p.drawPixmap(0, 0, cache)
-        p.setClipRect(band)
-        plate = QColor(C.surface)
-        plate.setAlpha(232)
-        p.fillRect(band.adjusted(1, 0, -1, 0), plate)
-        keep = 1.0 - self._slide_p
-        for lap, k in sorted(self._row_index.items(), key=lambda kv: kv[1]):
-            y = top + k * _ROW_H
-            src = QRectF(0, y * dpr, w * dpr, _ROW_H * dpr)
-            p.drawPixmap(QRectF(0, y + self._slide.get(lap, 0.0) * keep, w, _ROW_H), cache, src)
-        p.restore()
 
     def _content_key(self, m: CardModel):
         return (tuple(self.lines()[1:]), m.over, m.playing, m.speed, m.selected, self.width(),
@@ -322,7 +236,7 @@ class RaceCard(QWidget):
             self._cache = px
             self.renders += 1
         p = QPainter(self)
-        self._blit(p)
+        p.drawPixmap(0, 0, self._cache)
         self._paint_live(p, self.model)
         p.end()
 

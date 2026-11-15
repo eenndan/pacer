@@ -1,9 +1,8 @@
 """studio/motion.py — the switch, the clock and the one code path every transition runs through.
 
 A NEW SURFACE, so a new file: the module owns what no existing test file covers (the Reduce
-motion switch and its three sources, the system probe, the shared timer). The three transitions
-themselves are pinned on their own surfaces' real widgets: the lap fade and the Δ roll in
-tests/test_central_view_realqt.py, the race rows' slide in tests/test_race_controller.py.
+motion switch and its three sources, the system probe, the shared timer). The one transition, the
+hero Δ roll, is pinned on the real view in tests/test_central_view_realqt.py.
 
   * offscreen, motion is OFF unless PACER_MOTION=1 (every pixel-grabbing test sees end states);
     PACER_MOTION=0 turns it off anywhere; the user's Reduce motion choice wins over both the
