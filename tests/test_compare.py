@@ -531,6 +531,9 @@ class _RecordingVideo:
     def set_seam_pair(self, caption, tip):
         self.seam_pair = (caption, tip)
 
+    def set_seam_shown(self, shown):
+        self.seam_shown = shown
+
     def set_seam_delta(self, text, colour):
         self.seam = (text, colour)
 
@@ -802,26 +805,53 @@ def test_the_seam_delta_is_pane_as_badge_and_delta_between_at_every_playhead():
 def test_the_seam_delta_is_neutral_inside_timing_precision():
     """At the hero's size a red/green flip at ±0.01 s is a claim the timing cannot make: inside
     `library.PB_PRECISION_S` the seam prints the number neutral and without its ▲/▼; outside it,
-    exactly the badge's run and colour. (The badges keep their own 5 ms dead band.)"""
+    exactly the badge's run and colour. (The badges keep their own 5 ms dead band.) Decided on the
+    PRINTED value: 0.0699 and 0.0700 both print `+0.07`, so both are coloured, alike."""
     from studio.compare_controller import CompareController
     from studio.library import PB_PRECISION_S
 
     c = CompareController.__new__(CompareController)
     c.video = _RecordingVideo()
-    inside = PB_PRECISION_S - 0.005
-    for d in (inside, -inside, 0.02, 0.0):
+    for d in (0.0649, -0.0649, 0.02, 0.0):
         c._set_seam(d)
         text, colour = c.video.seam
         assert colour is None, (d, c.video.seam)
         assert "▲" not in text and "▼" not in text, (d, text)
         assert text == theme.format_delta_run(d, arrow=False), (d, text)
-    for d in (PB_PRECISION_S + 0.01, -(PB_PRECISION_S + 0.01), 0.7):
+    for d in (PB_PRECISION_S - 0.0001, PB_PRECISION_S, -(PB_PRECISION_S - 0.0001), 0.7):
         c._set_seam(d)
         assert c.video.seam == (theme.format_delta_run(d), theme.delta_colour(d)), (d, c.video.seam)
         assert c.video.seam[1] is not None
+    c._set_seam(0.0699)
+    a = c.video.seam
+    c._set_seam(0.0700)
+    assert a == c.video.seam, ("equal strings must look equal", a, c.video.seam)
     c._set_seam(None)
     assert c.video.seam == ("Δ —", None), c.video.seam
     print("test_the_seam_delta_is_neutral_inside_timing_precision OK")
+
+
+def test_the_cross_recording_seam_is_pane_as_delta_and_hides_off_the_baseline():
+    """Cross compare: the seam is pane A's badge — this lap against the ADOPTED reference lap
+    (`delta_at_lap`), never pane B's reverse badge — and it names that lap. When pane B's picker
+    moves to ANOTHER reference lap the seam would name one lap over a picture of another, beside
+    pane B's badge measured against the lap on screen: it hides, and comes back with the baseline."""
+    c, video, _plots, _ids = _cross_compare(own_recording=False)
+    c.session.reference_lap_id = lambda: 7
+    c.session.reference_lap_choices = lambda: [7, 11]
+    c._ref_lap_b = 7
+    c._sync_seam_pair()
+    assert video.seam_pair[0] == f"lap {c.lap_a + 1} vs ref lap 8", video.seam_pair
+    assert video.seam_shown is True
+    c._compare_last_t = None
+    c.tick()
+    assert video.seam == (theme.format_delta_run(0.4), theme.delta_colour(0.4)), video.seam
+    assert video.seam[0] == video.badges[0][0], (video.seam, video.badges)
+    c.on_pane_repoint(1, 11)          # pane B now plays a lap the Δ is NOT measured against
+    assert video.seam_shown is False, "the seam must not sit over a lap it does not measure"
+    c.on_pane_repoint(1, 7)
+    assert video.seam_shown is True
+    print("test_the_cross_recording_seam_is_pane_as_delta_and_hides_off_the_baseline OK")
 
 
 if __name__ == "__main__":

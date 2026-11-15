@@ -615,6 +615,10 @@ def test_the_seam_delta_is_mounted_with_the_two_panes_and_only_with_them():
         assert abs(block.center().x() - seam.width() / 2) <= 4, (width, block, seam.width())
         assert block.left() >= 0 and block.right() <= seam.width(), (width, block)
         assert seam.value.sizeHint().width() <= seam.value.width(), "the Δ is never clipped"
+        view.set_seam_shown(False)
+        assert not seam.isVisible() and view._stage_lay.indexOf(seam) != -1
+        view.set_seam_shown(True)
+        assert seam.isVisible()
         view.exit_compare()
         _settle()
         assert not seam.isVisible() and view._stage_lay.indexOf(seam) == -1, width

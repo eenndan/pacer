@@ -29,6 +29,11 @@ if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported 
     from .session import Session
     from .video_view import VideoView
 
+def _printed(d: float) -> float:
+    """The Δ as the seam prints it (2 dp, through the app's one Δ formatter)."""
+    return float(theme.format_delta_value(d).replace("\u2212", "-"))
+
+
 class CompareController:
     def __init__(
         self,
@@ -255,8 +260,11 @@ class CompareController:
         "level / ahead / behind" lap verdict in the app applies). The badge's own dead band is
         5 ms, which is right for 11 px in a corner; at the hero's size a number that flashes red
         and green at ±0.01 s while two laps are level is a claim the timing cannot make. Inside
-        the band the number is still printed, neutral and without its ▲/▼, so it never hides."""
-        if d is not None and within_timing_precision(d):
+        the band the number is still printed, neutral and without its ▲/▼, so it never hides.
+
+        Decided on the PRINTED value, as the Laps table's Δbest decides on the gap it prints:
+        0.0699 and 0.0700 both print `+0.07`, and two equal strings must not look different."""
+        if d is not None and within_timing_precision(_printed(d)):
             self.video.set_seam_delta(theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_seam_delta(theme.format_delta_run(d), theme.delta_colour(d))
@@ -270,9 +278,17 @@ class CompareController:
             return
         if self._cross:
             adopted = self.session.reference_lap_id()
+            # Pane B is playing ANOTHER lap of the reference than the one pane A's Δ is measured
+            # against (F1): the seam would then name one lap while the picture under it plays
+            # another, beside pane B's own badge measured against the lap it shows. HIDDEN rather
+            # than re-pointed, because the only Δ against that lap is pane B's badge, read at pane
+            # B's place — a seam figure "following the panes" would be new maths. Pane B's caption
+            # already says the charts and table stay on the adopted lap.
+            self.video.set_seam_shown(self._ref_lap_b is None or self._ref_lap_b == adopted)
             ref = f"ref lap {lap_label(adopted)}" if adopted is not None else "ref"
             caption, other = f"lap {lap_label(a)} vs {ref}", "the reference lap"
         else:
+            self.video.set_seam_shown(True)
             caption, other = f"lap {lap_label(a)} vs lap {lap_label(b)}", f"lap {lap_label(b)}"
         tip = (f"Lap {lap_label(a)} against {other} at the same place on track: − is ahead. "
                f"Coloured only beyond timing precision (±{PB_PRECISION_S:.2f} s); inside it the "

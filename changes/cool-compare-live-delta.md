@@ -2,8 +2,8 @@
 
 - **Compare shows its Δ big, on the seam under the two videos** — "lap 4 vs lap 9" and the live
   gap, coloured only beyond the 0.07 s timing precision
-- **The speed chart shades where a lap gains.** With two laps on the distance axis, green where the
-  first is quicker at that place and red where it is slower; none inside the ±0.62 km/h speed noise
+- **The speed chart shades where a lap gains.** Two laps on the distance axis: green/red where the
+  speed gap is beyond twice the noise of two traces (±1.75 km/h) — speed, not time
 
 ### Fixed
 

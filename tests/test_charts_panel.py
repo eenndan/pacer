@@ -781,17 +781,22 @@ def test_the_baseline_signal_carries_the_kind_not_a_two_state_flag():
 # ============================================================== cool/compare-live-delta
 class _PairSession(_StubSession):
     """Two laps with PHYSICAL Δ: lap 1 runs +3 km/h over lap 0 (the best) on the first third of the
-    lap, -3 km/h on the second, and +0.3 km/h — inside the speed noise — on the last. Its Δ is the
-    real integral of 1/v1 - 1/v0 over distance, and time mode's x is each lap's own elapsed time."""
+    lap, -3 km/h on the second, and +1.2 km/h on the last — past one trace's 0.62 km/h noise but
+    inside the 1.75 km/h gate on the GAP of two traces. Its Δ is the real integral of 1/v1 - 1/v0
+    over distance, and time mode's x is each lap's own elapsed time. `contrary` adds a rise to the
+    Δ over the faster first third, so there the Δ-rate says "losing" while the speed says faster."""
 
-    def __init__(self):
+    def __init__(self, contrary=False):
         xs = np.linspace(0.0, 1000.0, 400)
         v0 = 60.0 + 25.0 * np.sin(np.linspace(0, 3 * np.pi, 400))
-        bump = np.select([xs < 333.0, xs < 666.0], [3.0, -3.0], 0.3)
+        bump = np.select([xs < 333.0, xs < 666.0], [3.0, -3.0], 1.2)
         v1 = v0 + bump
         dx = np.diff(xs, prepend=xs[0])
         self._t = {0: np.cumsum(dx / (v0 / 3.6)), 1: np.cumsum(dx / (v1 / 3.6))}
         d1 = self._t[1] - self._t[0]
+        if contrary:
+            d1 = d1 + 0.3 * np.clip(self._t[1] / self._t[1][xs < 333.0][-1], 0.0, 1.0) * (
+                self._t[1][xs < 333.0][-1])
         super().__init__({0: (xs, v0, np.zeros(400)), 1: (xs, v1, d1)}, best=0)
 
     def delta(self, ids, x_mode="distance"):
@@ -803,8 +808,8 @@ class _PairSession(_StubSession):
                 {i: (self._t[i], dl) for i, (_x, dl) in delta.items()})
 
 
-def _pair_view(select=(1, 0)):
-    v = plots_view.PlotsView(_PairSession())
+def _pair_view(select=(1, 0), contrary=False):
+    v = plots_view.PlotsView(_PairSession(contrary=contrary))
     v.resize(900, 520)
     v.show()
     v.set_laps(list(select))
@@ -841,17 +846,58 @@ def test_gain_shading_takes_its_sign_from_the_maps_delta_rate():
 
 
 def test_gain_shading_leaves_the_speed_noise_unshaded():
-    """A speed gap inside the measured GPS speed noise (chart_stats.SPEED_NOISE_KMH, ±0.62 km/h)
-    is not a place one lap gains: the last third, 0.3 km/h apart, carries no fill at all."""
+    """A speed gap inside twice the noise of the DIFFERENCE of two traces (plots_view.GAIN_GATE_KMH
+    = 2·√2 × chart_stats.SPEED_NOISE_KMH, 1.75 km/h) is not a place one lap gains: the last third,
+    1.2 km/h apart — past ONE trace's 0.62 km/h noise — carries no fill at all."""
     from studio import chart_stats
     sess = _PairSession()
     v = _pair_view()
     xs = sess._laps[0][0]
     gap = np.abs(sess._laps[1][1] - sess._laps[0][1])
-    assert np.all(v._gain_sign[gap <= chart_stats.SPEED_NOISE_KMH] == 0)
     assert np.all(v._gain_sign[xs > 700] == 0), v._gain_sign[xs > 700]
+    assert np.all(v._gain_sign[gap <= plots_view.GAIN_GATE_KMH] == 0)
+    assert abs(plots_view.GAIN_GATE_KMH - 2 * np.sqrt(2) * chart_stats.SPEED_NOISE_KMH) < 1e-12
     v.deleteLater()
     print("test_gain_shading_leaves_the_speed_noise_unshaded OK")
+
+
+def test_gain_shading_paints_nothing_on_two_laps_that_differ_only_by_noise():
+    """THE REVIEW'S PAIR. Two laps of one recipe (`_synthetic.drift_noise_laps`), different noise
+    seeds: identical motion, independent GPS speed noise (σ 0.16 m/s). Nothing there gains, so on
+    every seed the shaded share must stay under 5 % (the old one-trace gate filled a median 18 %),
+    and in fact be ZERO: their Δ-rate is float round-off, and a round-off rate has no sign."""
+    import _synthetic as syn
+    base = dict(syn._DN_LAPS[0])
+    shares = []
+    for k in range(6):
+        laps = syn.drift_noise_laps(specs=(dict(base, seed=1000 + 2 * k),
+                                           dict(base, seed=1001 + 2 * k)))
+        v = plots_view.PlotsView(syn._drift_session(laps))
+        v.resize(900, 520)
+        v.show()
+        v.set_laps([1, 0])
+        _APP.processEvents()
+        sign = v._gain_sign
+        shares.append(0.0 if sign is None else float(np.mean(sign != 0)))
+        v.deleteLater()
+    assert max(shares) < 0.05, shares
+    assert max(shares) == 0.0, f"a round-off Δ-rate set a sign: {shares}"
+    print(f"test_gain_shading_paints_nothing_on_two_laps_that_differ_only_by_noise OK {shares}")
+
+
+def test_gain_shading_needs_the_rate_and_the_gap_to_agree():
+    """Where the speed gap says faster and the Δ-rate says losing (a line change, a timing
+    artefact), the chart has no honest colour: nothing is shaded. Without the rule that stretch
+    would paint RED over a visibly faster trace — measured, 7.8 % of the samples past both floors
+    on a real recording."""
+    sess = _PairSession(contrary=True)
+    v = _pair_view(contrary=True)
+    xs = sess._laps[0][0]
+    zone = (xs > 30) & (xs < 300)
+    assert np.all(v._gain_sign[zone] == 0), v._gain_sign[zone]
+    assert (v._gain_sign[(xs > 370) & (xs < 630)] == -1).mean() > 0.9   # the honest third still is
+    v.deleteLater()
+    print("test_gain_shading_needs_the_rate_and_the_gap_to_agree OK")
 
 
 def test_gain_shading_is_hidden_in_time_mode_and_says_why():
@@ -874,6 +920,13 @@ def test_gain_shading_is_hidden_in_time_mode_and_says_why():
     w = _view(n=3, best=0, select=[0, 1, 2])
     assert w._gain_items == [] and w.gain_pair(list(range(3))) is None
     w.deleteLater()
+    # One lap + its baseline, 0.4 km/h apart: nothing would be shaded on distance, so time mode
+    # owes no explanation either — the note is not a fixture of every two-curve chart.
+    u = _view(n=2, best=0, select=[1])
+    u.x_mode_combo.setCurrentIndex(1)
+    _APP.processEvents()
+    assert plots_view.GAIN_TIME_MODE_NOTE not in [lab.text for _s, lab in u._speed_legend.items]
+    u.deleteLater()
     print("test_gain_shading_is_hidden_in_time_mode_and_says_why OK")
 
 
@@ -897,6 +950,8 @@ def _run_all():
     test_empty_state_offers_a_next_action_and_disables_the_inert_controls()
     test_gain_shading_takes_its_sign_from_the_maps_delta_rate()
     test_gain_shading_leaves_the_speed_noise_unshaded()
+    test_gain_shading_paints_nothing_on_two_laps_that_differ_only_by_noise()
+    test_gain_shading_needs_the_rate_and_the_gap_to_agree()
     test_gain_shading_is_hidden_in_time_mode_and_says_why()
     print("\nAll charts-panel tests passed.")
 

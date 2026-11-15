@@ -1765,6 +1765,11 @@ class VideoView(QWidget):
         """Name the pair the seam Δ measures (CompareController, once per pair change)."""
         self.seam.set_pair(caption, tip)
 
+    def set_seam_shown(self, shown: bool):
+        """Show or hide the seam inside the two-pane stage (CompareController, per pair change):
+        hidden while a cross compare's pane B plays a lap off the Δ baseline."""
+        self.seam.setVisible(bool(shown) and self._panes_mounted())
+
     def set_seam_delta(self, text: str, colour: str | None):
         """The seam's live Δ (CompareController.tick); re-set only when the string changes."""
         self.seam.set_delta(text, colour)

@@ -53,7 +53,7 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
     from .session import Session
 
 # Antialias off: the cursor re-renders every visible curve each ~30Hz tick. Turning it on was
-# measured and refused: studio/docs/refused-2026-09.md §23 (8.0 -> 15.2 ms a cursor step).
+# measured and refused: studio/docs/refused-2026-09.md §23 (~8 -> ~15 ms a cursor step).
 pg.setConfigOptions(antialias=False)
 
 # Lap-curve palette: best is recoloured green at draw time (matches the lap table); rest cycle.
@@ -149,13 +149,32 @@ def _ideal_line_pen():
 # The SIGN is not this module's: it is `map_render.delta_rate` — the function the map's Δ-rate
 # line paints with — over the pair's Δ (Δ_this − Δ_other on the chart's one baseline, which is
 # the map's own Δ curve when the other lap is the baseline). The speed gap only GATES it: no fill
-# while |Δv| is inside the measured speed noise (`chart_stats.SPEED_NOISE_KMH`), and none where
-# the 0.4 s-smoothed rate and the instantaneous gap disagree about the direction. Built once per
-# refresh (a selection, axis or palette change), never on the tick.
+# while |Δv| is within twice the noise of two traces (GAIN_GATE_KMH), and none where the 0.4 s-
+# smoothed rate and the instantaneous gap disagree about the direction — on SD_19_09 7.8 % of the
+# samples past both floors disagree (0.8 % on the demo), and without the rule each would paint the
+# opposite of the visible gap. Built once per refresh (a selection, axis or palette change), never
+# on the tick.
 GAIN_FILL_ALPHA = 110
+# THE GATE IS TWICE THE NOISE OF A DIFFERENCE OF TWO TRACES. `SPEED_NOISE_KMH` is ONE trace's
+# residual sigma; the gap between two independent noisy traces has sigma * sqrt(2), so a gate at
+# one trace's sigma passes about half of pure-noise samples. Two sigma of the difference
+# (1.75 km/h) is the floor. Measured on noise-only pairs (`tests/_synthetic.drift_noise_laps`,
+# one recipe, ten seed pairs): a gate of SPEED_NOISE_KMH filled a median 18 % of the lap, all noise.
+GAIN_GATE_KMH = 2.0 * np.sqrt(2.0) * chart_stats.SPEED_NOISE_KMH
+# A Δ-rate under this has no sign: the map's own floor for "no rate worth painting"
+# (`map_render.RATE_FLAT_EPS_SS`, the display floor of its legend). Without it, two laps with
+# identical motion carry a Δ-rate of float round-off (|rate| ~ 1e-14), whose sign the gap then
+# "agrees" with half the time.
+GAIN_RATE_FLOOR_SS = map_render.RATE_FLAT_EPS_SS
 GAIN_LEGEND_FASTER = "lap {lap} quicker here"
 GAIN_LEGEND_SLOWER = "lap {lap} slower here"
 GAIN_TIME_MODE_NOTE = "gain shading: x = distance only"
+GAIN_TIP = (
+    "Shaded where the speed gap is beyond twice the noise of two traces "
+    f"(±{GAIN_GATE_KMH:.2f} km/h) and the Δ-rate agrees: green "
+    "where this lap is quicker at that place, red where slower. It shows SPEED; the Δ chart below "
+    "shows time — a gain made by line (a tighter line at a lower speed) can stay unshaded. "
+    "Distance axis only: at the same time the two karts are at different places.")
 
 
 def gain_signs(t_this, d_this, d_other, v_this, v_other):
@@ -163,9 +182,10 @@ def gain_signs(t_this, d_this, d_other, v_this, v_other):
     0 where nothing is shaded. `t_this` is this lap's elapsed time at each sample (non-decreasing),
     `d_*` the two laps' Δ on the chart's baseline, `v_*` their speeds in km/h — all on one grid."""
     rate = map_render.delta_rate(t_this, np.asarray(d_this, float) - np.asarray(d_other, float))
-    sign = np.where(rate < 0, 1, np.where(rate > 0, -1, 0))   # Δ falling = gaining (the map's)
+    # Δ falling = gaining (the map's sign); a rate under the floor has no sign at all.
+    sign = np.where(rate < -GAIN_RATE_FLOOR_SS, 1, np.where(rate > GAIN_RATE_FLOOR_SS, -1, 0))
     dv = np.asarray(v_this, float) - np.asarray(v_other, float)
-    shade = (np.abs(dv) > chart_stats.SPEED_NOISE_KMH) & (np.sign(dv) == sign)
+    shade = (np.abs(dv) > GAIN_GATE_KMH) & (np.sign(dv) == sign)
     return np.where(shade, sign, 0).astype(int)
 
 
@@ -1101,40 +1121,65 @@ class PlotsView(QWidget):
         self._speed_legend.addItem(sample, label)
         self._gain_samples.append(sample)
 
-    def _draw_gain_shading(self, draw_ids, speed, delta, x_mode: str):
+    def _draw_gain_shading(self, draw_ids, speed, delta, x_mode: str, companion=None):
         """Shade between the pair's speed traces where the first lap gains (green) or loses (red)
-        — see GAIN_FILL_ALPHA for the one-source rule and why this is distance-only."""
+        — see GAIN_FILL_ALPHA for the one-source rule and why this is distance-only.
+
+        `companion` is refresh()'s `delta()` result in the OTHER axis mode. In time mode the
+        signs are still worked out — on the distance grid, where they are honest — only to decide
+        whether the legend says why nothing is drawn: the note appears when distance mode WOULD
+        shade something, never as a fixture of every two-curve chart."""
         pair = self.gain_pair(draw_ids)
-        if pair is None or any(lid not in speed or lid not in delta for lid in pair):
+        if x_mode == "distance":
+            dist, t_src = (speed, delta), self._companion_x
+        else:
+            if companion is None:
+                return
+            dist = (companion[1], companion[2])
+            t_src = {lid: xs for lid, (xs, _v) in speed.items()}   # time mode's x IS the time
+        sign = self._pair_signs(pair, *dist, t_src)
+        if sign is None or not sign.any():
             return
-        this, other = pair
+        this = pair[0]
         if x_mode != "distance":
             # Hidden, and SAID: a blank swatch row naming why, so the shading's absence is a rule
             # the reader can see rather than a feature that silently went away.
             self._add_gain_sample(None, GAIN_TIME_MODE_NOTE)
             return
-        sx, v_this = speed[this]
-        ox, v_other = speed[other]
-        t_this = self._companion_x.get(this)
-        if t_this is None or len(ox) != len(sx) or len(delta[this][1]) != len(sx) \
-                or len(delta[other][1]) != len(sx) or not np.allclose(ox, sx):
-            return   # not one shared grid: nothing honest to shade
-        sign = gain_signs(t_this, delta[this][1], delta[other][1], v_this, v_other)
+        sx = speed[this][0]
         self._gain_pair, self._gain_x, self._gain_sign = pair, np.asarray(sx, float), sign
         # The displayed curves (the unit conversion is applied once, in refresh) bound the fill.
-        a, b = self._speed_curves[this][1], self._speed_curves[other][1]
+        a, b = self._speed_curves[this][1], self._speed_curves[pair[1]][1]
         upper, lower = np.maximum(a, b), np.minimum(a, b)
         for s_val, colour, label in ((1, theme.ahead_colour(), GAIN_LEGEND_FASTER),
                                      (-1, theme.behind_colour(), GAIN_LEGEND_SLOWER)):
+            if not (sign == s_val).any():
+                continue   # a legend row only for a colour that is on the chart
             fill = pg.mkColor(colour)
             fill.setAlpha(GAIN_FILL_ALPHA)
             item = QGraphicsPathItem(_gain_path(sx, upper, lower, sign == s_val))
             item.setBrush(pg.mkBrush(fill))
             item.setPen(pg.mkPen(None))
             item.setZValue(-3)   # above the coast bands (-4), under every curve
+            item.setToolTip(GAIN_TIP)
             self.p_speed.addItem(item, ignoreBounds=True)
             self._gain_items.append(item)
             self._add_gain_sample(fill, label.format(lap=lap_label(this)))
+
+    @staticmethod
+    def _pair_signs(pair, speed, delta, t_src):
+        """`gain_signs` for `pair` on one distance grid, or None when the pair is not on one."""
+        if pair is None or any(lid not in speed or lid not in delta for lid in pair):
+            return None
+        this, other = pair
+        sx, v_this = speed[this]
+        ox, v_other = speed[other]
+        t_this = t_src.get(this)
+        if t_this is None or len(t_this) != len(sx) or len(ox) != len(sx) \
+                or len(delta[this][1]) != len(sx) or len(delta[other][1]) != len(sx) \
+                or not np.allclose(ox, sx):
+            return None   # not one shared grid: nothing honest to shade
+        return gain_signs(t_this, delta[this][1], delta[other][1], v_this, v_other)
 
     def _clear_brake_throttle(self):
         for item in self._brake_throttle_items:
@@ -1577,7 +1622,7 @@ class PlotsView(QWidget):
                 self._delta_curves.append((lid, dd, dl))
         if self._delta_ideal_mode:
             self._delta_legend.setVisible(True)  # reveal the "· Δ to ideal" entry added above
-        self._draw_gain_shading(draw_ids, speed, delta, x_mode)
+        self._draw_gain_shading(draw_ids, speed, delta, x_mode, companion)
 
         # L3: hide the speed legend once it would blanket the x=0 curve region / overflow the plot
         # (past LEGEND_MAX_ROWS named curves). Under the threshold — the common capped case — it
