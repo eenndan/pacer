@@ -2272,6 +2272,13 @@ class StudioWindow(QMainWindow):
         self._copy_card_action.setToolTip(
             "Copy the shareable lap card image to the clipboard — paste it straight into a chat")
         self._copy_card_action.triggered.connect(self._copy_share_card)
+        # Its twin (share_lapstrip): the whole session as a bar per lap, under the lap card's gate
+        # plus two clean laps (ExportController.gate_lapstrip).
+        self._lapstrip_action = self._export_menu.addAction("Lap-strip card…")
+        self._lapstrip_action.setToolTip(
+            "Save a shareable lap-strip card (PNG): every lap of the session as a bar, in the "
+            "order driven, the best one named")
+        self._lapstrip_action.triggered.connect(self.exports.export_lapstrip_card)
         self._export_menu.setEnabled(False)  # no session yet at construction time
         menu.aboutToShow.connect(self.exports.sync_menu)
         # F9 video export: burns the overlays onto the footage (renderer in export_video.py).

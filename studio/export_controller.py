@@ -147,6 +147,7 @@ class ExportController:
                           self._NO_LAPS_REASON if not has_laps else self._PROVISIONAL_REASON)
         self.win._gate_action(self.win._copy_card_action, card_ok,
                           self._NO_LAPS_REASON if not has_laps else self._PROVISIONAL_REASON)
+        self.gate_lapstrip(has_laps)
         # Save-as-track needs USABLE timing lines (≥1 valid lap means the start line actually
         # segments this trace — the lines are worth promoting to a reusable track). NOT gated on
         # trust: promoting the lines is precisely how a provisional recording becomes verified, and
@@ -366,6 +367,41 @@ class ExportController:
         if not path:
             return
         if self._run_export(lambda: self.win._save_card_png(image, path), path):
+            self.win.statusBar().showMessage(f"saved {os.path.basename(path)}", self._status_ms)
+    # The lap-strip card (share_lapstrip): the lap card's twin, so its gate and its save are the
+    # lap card's too. Imported locally: these two methods are its only users here.
+    def gate_lapstrip(self, has_laps: bool) -> None:
+        """Grey "Lap-strip card…" with the lap card's reasons, plus its own: under two clean laps
+        there is nothing for a strip to compare."""
+        from . import share_lapstrip
+        action = getattr(self.win, "_lapstrip_action", None)
+        if action is None:
+            return
+        blocked = has_laps and self.win._share_card_blocked()
+        few = has_laps and not blocked and \
+            share_lapstrip.clean_lap_count(self.win.session) < share_lapstrip.MIN_CLEAN_LAPS
+        reason = (self._NO_LAPS_REASON if not has_laps else
+                  self._PROVISIONAL_REASON if blocked else share_lapstrip.FEW_LAPS_REASON)
+        self.win._gate_action(action, has_laps and not blocked and not few, reason)
+    def export_lapstrip_card(self):
+        """File ▸ Export ▸ "Lap-strip card…": every lap as a bar, saved as a PNG where the dialog
+        says. Named for the best lap it highlights, like the lap card: `GX010067_lapstrip_best_lap14.png`."""
+        from . import share_lapstrip
+        data = share_lapstrip.lapstrip_data(self.win.session, unit=self.win._speed_unit) \
+            if hasattr(self.win, "session") else None
+        if data is None or not data.offered:
+            why = ("fewer than two clean laps — nothing for a lap strip to compare"
+                   if data is not None and not data.blocked
+                   else "no verified laps to make a lap strip for")
+            self.win.statusBar().showMessage(why, self._status_ms)
+            return
+        image = share_lapstrip.render_lapstrip(data, palette=theme.active_palette())
+        best = data.best_lap_id
+        suffix = f"_lapstrip_best_lap{lap_label(best)}.png" if best is not None else "_lapstrip.png"
+        path = self._export_save_path("Export lap-strip card", suffix, "PNG images (*.png)")
+        if not path:
+            return
+        if self._run_export(lambda: share_lapstrip.save_lapstrip_png(image, path), path):
             self.win.statusBar().showMessage(f"saved {os.path.basename(path)}", self._status_ms)
     # ------------------------------------------------- video-overlay export (F9)
     # File ▸ Export overlay video Qt side (renderer is event-loop-free in export_video.py).

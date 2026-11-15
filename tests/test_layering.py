@@ -58,7 +58,8 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 # The ONLY top-level studio/*.py modules permitted to import Qt DIRECTLY — the view layer plus the
 # three Qt-infrastructure modules. Everything absent from this set is data/analysis/persistence and
 # must stay Qt-free. Three members are not windows and are here on purpose:
-#   * export_video / export_compare / share_card — offline, event-loop-free RENDERERS. They use
+#   * export_video / export_compare / share_card / share_lapstrip — offline, event-loop-free
+#     RENDERERS (share_lapstrip is share_card's twin, a second PNG). They use
 #     QPainter/QImage as a rasterizer to burn overlays into an MP4 / a PNG; they construct no
 #     window and run off the UI thread. Qt is their drawing library, not their UI.
 #     `export_compare` is `export_video`'s two-pane subclass and is here for exactly the reason
@@ -103,7 +104,8 @@ ALLOWED_QT = {
     "overlays",
     "player_pane", "plots_view",
     "provenance_panel", "race_ladder",
-    "session_record_dialog", "share_card", "stats_braking", "stats_coasting", "stats_common",
+    "session_record_dialog", "share_card", "share_lapstrip",
+    "stats_braking", "stats_coasting", "stats_common",
     "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",
     "trace_paint", "track_dialog", "video_view",
     "widgets", "workers",
