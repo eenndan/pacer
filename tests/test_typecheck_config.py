@@ -45,7 +45,8 @@ from test_layering import QT_REACHING, _modules  # the one definition of "Qt-fre
 # it off.
 NOT_YET = {"focus"}
 
-_ENTRY = re.compile(r"studio/(\w+)\.py")
+# A subpackage module (`studio/overlay/layout.py`) is named as test_layering names it: "overlay/layout".
+_ENTRY = re.compile(r"studio/((?:\w+/)?\w+)\.py")
 
 
 def _read(*parts):
