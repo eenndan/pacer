@@ -220,6 +220,9 @@ def test_every_figure_is_its_classic_twin_on_every_frame():
             last_clock = last_clock or clock
     assert n_delta > 1000 and 0 < n_level < n_delta, (n_delta, n_level)
     assert max_diff == 0.0, max_diff
+    # Level is decided on the PRINTED value: 0.0651 prints "+0.07" (not level), 0.0649 "+0.06".
+    assert not broadcast.is_level(0.0651) and not broadcast.is_level(-0.0651)
+    assert broadcast.is_level(0.0649) and broadcast.is_level(-0.0649)
     # The render's finish frame (`with_finish_frame`) lands ON the line.
     vals = ev.overlay_values_at(s, spec.lap_t1, spec)
     assert vals.lap_finished

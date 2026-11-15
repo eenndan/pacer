@@ -196,6 +196,9 @@ class BroadcastElement:
         self.occupies = {"strip": self.tower.united(self.dbar), "readout": readout, STAMP: moved}
         self._prerender()
         self._cache: dict[tuple[tuple[str, str], ...], QImage] = {}
+        self._glyphs: dict[str, tuple] = {}
+        fm = QFontMetricsF(self._f_time)
+        self._glyph_h = fm.height() + 2 * math.ceil(3 * 2.4 * self._k) + 2
         return True
 
     def _prerender(self) -> None:
@@ -271,6 +274,24 @@ class BroadcastElement:
             self._heads[text] = img
         return img
 
+    def _glyph(self, ch: str):
+        """(left pad, advance, halo image, fill image) of one clock character, drawn once."""
+        g = self._glyphs.get(ch)
+        if g is None:
+            fm = QFontMetricsF(self._f_time)
+            halo = 2.4 * self._k
+            pad = math.ceil(3 * halo)
+            w = fm.horizontalAdvance(ch) + 2 * pad
+            base = QPointF(1 + pad, 1 + pad + fm.ascent())
+            under, p = _image(w, self._glyph_h - 2)
+            self._ev._draw_text(p, base, ch, self._f_time, EXPORT.halo, halo=halo)
+            p.end()
+            over, p = _image(w, self._glyph_h - 2)
+            self._ev._draw_text(p, base, ch, self._f_time, EXPORT.text, halo=0.0, shadow=None)
+            p.end()
+            g = self._glyphs[ch] = (pad, fm.horizontalAdvance(ch), under, over)
+        return g
+
     def _text(self, runs: tuple[tuple[str, str], ...], font, h: float, halo: float) -> QImage:
         """`runs` ((text, colour), …) drawn once, haloed, left to right in an image `h` tall;
         cached by the runs."""
@@ -320,10 +341,19 @@ class BroadcastElement:
             p.drawRect(QRectF(t.x(), t.y() + self._head_h, t.width() * frac, self._prog_h))
         y = t.y() + self._head_h + self._prog_h
         if clock:
-            fm = QFontMetricsF(self._f_time)
-            ev._draw_text(p, QPointF(t.x() + self._pad,
-                                     y + (self._time_h + fm.ascent() - fm.descent()) / 2.0),
-                          clock, self._f_time, EXPORT.text, halo=2.4 * k)
+            # From pre-rendered glyphs: every halo first, then every fill, so a glyph's halo never
+            # cuts into its neighbour's fill. Tabular figures: each digit has one advance.
+            x = round(t.x() + self._pad)
+            gy = round(y + (self._time_h - self._glyph_h) / 2.0) - 1.0
+            at = []
+            for ch in clock:
+                g = self._glyph(ch)
+                at.append((QPointF(x - 1.0 - g[0], gy), g))
+                x += g[1]
+            for pt, g in at:
+                p.drawImage(pt, g[2])
+            for pt, g in at:
+                p.drawImage(pt, g[3])
         if delta:
             halo = 2.0 * k
             name = self._name
@@ -376,23 +406,28 @@ class MapLabelsElement:
         cy = sum(q.y() for _l, q in pts) / len(pts)
         font = ev._font(14.0 * k, bold=True)
         fm = QFontMetricsF(font)
-        r = QRectF(ctx.map_rect).adjusted(-30 * k, -30 * k, 30 * k, 30 * k)
-        img, p = _image(r.width(), r.height())
-        self.label_points = {}
+        # One small image per label (a blit costs its area: one image over the whole map measured
+        # ~1 ms a 4K frame), whole-pixel placed so the blit is a straight copy.
+        halo = 1.8 * k
+        self.label_points, self._labels = {}, []
         for label, q in pts:
             dx, dy = q.x() - cx, q.y() - cy
             n = math.hypot(dx, dy) or 1.0
             c = QPointF(q.x() + dx / n * 15 * k, q.y() + dy / n * 15 * k)
             self.label_points[label] = c
-            ev._draw_text(p, QPointF(c.x() - r.x() + 1 - fm.horizontalAdvance(label) / 2,
-                                     c.y() - r.y() + 1 + (fm.ascent() - fm.descent()) / 2),
-                          label, font, EXPORT.text_dim, halo=1.8 * k)
-        p.end()
-        self._img, self._at = img, QPointF(r.x() - 1, r.y() - 1)
+            w = fm.horizontalAdvance(label) + 4 * halo
+            h = fm.height() + 4 * halo
+            img, p = _image(w, h)
+            ev._draw_text(p, QPointF(1 + 2 * halo, 1 + 2 * halo + fm.ascent()), label, font,
+                          EXPORT.text_dim, halo=halo)
+            p.end()
+            self._labels.append((QPointF(round(c.x() - w / 2) - 1.0,
+                                         round(c.y() - h / 2) - 1.0), img))
         return True
 
     def paint(self, p: QPainter, vals) -> None:
-        p.drawImage(self._at, self._img)
+        for at, img in self._labels:
+            p.drawImage(at, img)
 
 
 def _box(r: QRectF) -> layout.Box:
