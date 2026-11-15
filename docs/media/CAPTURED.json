@@ -2,13 +2,13 @@
   "about": "One entry per file in this directory, written by studio/dev/media_capture.py after each capture and checked by tests/test_version.py. version and commit: the app the pixels came from (commit is the HEAD the capture ran on, '+dirty' when studio/ or pacer/ had uncommitted changes; entries backfilled on 2026-09-30 name the commit that added the file). source: a label, never a path. derived: the published file this one was cut from, whose version, commit and waiver it carries. waiver: why a file older than this minor release stays, and the version it was granted at; it lapses at the next minor release.",
   "files": {
     "accuracy.png": {
-      "captured": "2026-11-14",
-      "commit": "c0059a2",
+      "captured": "2026-11-15",
+      "commit": "abd0aac",
       "derived": null,
       "sha256": "5401cd4772397fb2bc6177d66a90729da19e7ce4d66d3d664e6499c2b9b0f1fe",
       "shot": "accuracy",
       "source": "numbers in code",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "waiver": null
     },
     "best-lap.jpg": {
@@ -20,8 +20,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 (#541-#550) touched no export code"
+        "granted_at": "0.9.0",
+        "reason": "not re-rendered at 0.9.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-15; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 touched no export code, and 0.9.0's one export change is #555 moving the map inset's comet tail (trace_tail) from export_video.py to timeline.py, its body the same but for a typing cast and its 2.4 s constant renamed TRACE_TAIL_S (git diff v0.8.0..HEAD); a regression lane reported an 18 s 720p overlay export byte-identical to v0.8.0's (file hash and every frame hash)"
       }
     },
     "best-lap.mp4": {
@@ -33,8 +33,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 (#541-#550) touched no export code"
+        "granted_at": "0.9.0",
+        "reason": "not re-rendered at 0.9.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-15; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512, the Δ overlay.jpg was re-shot to show), so the clip's Δ readout likely differs from a current export; 0.7.0 and 0.8.0 touched no export code, and 0.9.0's one export change is #555 moving the map inset's comet tail (trace_tail) from export_video.py to timeline.py, its body the same but for a typing cast and its 2.4 s constant renamed TRACE_TAIL_S (git diff v0.8.0..HEAD); a regression lane reported an 18 s 720p overlay export byte-identical to v0.8.0's (file hash and every frame hash)"
       }
     },
     "data-trust.png": {
@@ -46,18 +46,18 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.5.0 (9e8083f); 0.6.0's render differed by 41 of 1,632,416 pixels (the friction circle's −2.0 axis-label minus); since then this page's code changed in the older-GoPro (GPS5) warning (#521), which this GPS9 recording does not show, and at 0.8.0 (#547) in the CORNERS BY LAP heat-map and where View ▸ data trust scrolls, neither of them in this crop"
+        "granted_at": "0.9.0",
+        "reason": "not re-rendered at 0.9.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-15; captured at 0.5.0 (9e8083f); 0.6.0's render differed by 41 of 1,632,416 pixels (the friction circle's −2.0 axis-label minus); since then this page's code changed in the older-GoPro (GPS5) warning (#521), which this GPS9 recording does not show, and at 0.8.0 (#547) in the CORNERS BY LAP heat-map and where View ▸ data trust scrolls, neither of them in this crop; 0.9.0 changed none of the Stats page's modules (stats_view, coaching_panel, data_quality, gmeter) and not the core"
       }
     },
     "debrief.png": {
-      "captured": "2026-11-14",
-      "commit": "c0059a2",
+      "captured": "2026-11-15",
+      "commit": "abd0aac",
       "derived": null,
       "sha256": "3b38870bef967564ee706a89649ac8564482a21b7b3773edd0bbe8e1709b1c7c",
       "shot": "debrief",
       "source": "synthetic demo",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "waiver": null
     },
     "hero.png": {
@@ -69,8 +69,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "stale, not re-shot at 0.8.0: it shows the pre-0.8 look: a 3 px lap line where 0.8 draws a 6 px one over a dark casing, green brake markers where 0.8's are violet, the start line's drag handles drawn at rest where 0.8 draws a chequered mark and shows the handles only near the pointer or while timing is provisional (#546), no corner labels on the speed chart and a readout whose speed is red with its Δ where 0.8 colours only the Δ (#548), and no Δbest column in the lap table (#545); its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one recording that is would publish stills of new footage, which RUL-9 leaves to the owner; README, FIRST_LAP and the landing say the picture is v0.7's; og.png is composed from this file"
+        "granted_at": "0.9.0",
+        "reason": "stale, not re-shot at 0.8.0 or 0.9.0: it shows the pre-0.8 look: a 3 px lap line where 0.8 draws a 6 px one over a dark casing, green brake markers where 0.8's are violet, the start line's drag handles drawn at rest (#546), no corner labels on the speed chart and a readout whose speed is red with its Δ where 0.8 colours only the Δ and names its baseline (#548), and no Δbest column (#545); nor does it show 0.9.0's map: the playhead dot's 2.4 s tail (#555), the ring a hovered corner label puts on the map (#554), or View ▸ Lap race (#553); its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one recording that is would publish stills of new footage, which RUL-9 leaves to the owner; README, FIRST_LAP and the landing say the picture is v0.7's; og.png is composed from this file"
       }
     },
     "ideal-lap.png": {
@@ -82,8 +82,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.6.0 (52fe638); 0.6.1 re-aligned the Δ trace and the Corners table on track (#512), not the ideal-lap sums this page shows (golden EQUIVALENT); 0.8.0's Stats change (#547) shades CORNERS BY LAP, not the IDEAL LAP block, and no 0.8.0 change touched the core; not re-rendered to check"
+        "granted_at": "0.9.0",
+        "reason": "not re-rendered at 0.9.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-15; captured at 0.6.0 (52fe638); 0.6.1 re-aligned the Δ trace and the Corners table on track (#512), not the ideal-lap sums this page shows (golden EQUIVALENT); 0.8.0's Stats change (#547) shades CORNERS BY LAP, not the IDEAL LAP block; 0.9.0 changed neither the Stats page nor the core (its session change only adds race_tracks for the Lap race); not re-rendered to check"
       }
     },
     "map.png": {
@@ -95,8 +95,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "stale, not re-shot at 0.8.0: it shows the pre-0.8 map: a 3 px lap line where 0.8 draws a 6 px one over a dark casing, green brake markers (and key glyph) where 0.8's are violet, and the start line's drag handles drawn at rest where 0.8 draws a chequered mark with an arrow and shows the handles only near the pointer or while timing is provisional (#546); its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one recording that is would publish stills of new footage, which RUL-9 leaves to the owner; its alt text on README and the landing says it is v0.7's and no longer promises a handle"
+        "granted_at": "0.9.0",
+        "reason": "stale, not re-shot at 0.8.0 or 0.9.0: it shows the pre-0.8 map: a 3 px lap line where 0.8 draws a 6 px one over a dark casing, green brake markers (and key glyph) where 0.8's are violet, and the start line's drag handles drawn at rest where 0.8 draws a chequered mark (#546); nor does it show what 0.9.0 added to the map: the playhead dot's fading 2.4 s tail (#555), the corner ring that follows a hovered chart label (#554), or the Lap race's dots and pack card (#553); its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one recording that is would publish stills of new footage, which RUL-9 leaves to the owner; its alt text on README and the landing says it is v0.7's"
       }
     },
     "og.png": {
@@ -108,8 +108,8 @@
       "source": "hero.png",
       "version": "0.7.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "stale, not re-composed at 0.8.0: it is composed from hero.png, which shows the pre-0.8 look and was not re-shot (see hero.png's waiver), so a re-composition would date v0.7 pixels as 0.8.0; its words (OG_BODY, OG_CHIPS) are unchanged; re-compose it with --only og, and re-upload the social preview, once hero.png is re-shot"
+        "granted_at": "0.9.0",
+        "reason": "stale, not re-composed at 0.8.0 or 0.9.0: it is composed from hero.png, which shows the pre-0.8 look and was not re-shot (see hero.png's waiver), so a re-composition would date v0.7 pixels as 0.9.0; its words (OG_BODY, OG_CHIPS) are unchanged; re-compose it with --only og, and re-upload the social preview, once hero.png is re-shot"
       }
     },
     "overlay.jpg": {
@@ -121,8 +121,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.8.0",
-        "reason": "not re-rendered at 0.8.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-14; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; since then the export changed only by a software-decode retry (#524), which draws nothing; 0.8.0 (#541-#550) touched no export code, and its map changes (#546) are the app's map view, which the export's inset does not draw with"
+        "granted_at": "0.9.0",
+        "reason": "not re-rendered at 0.9.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-15; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; since then the export changed by a software-decode retry (#524), which draws nothing, and at 0.9.0 by #555 moving the map inset's comet tail (trace_tail) from export_video.py to timeline.py, its body the same but for a typing cast and its 2.4 s constant renamed TRACE_TAIL_S (git diff v0.8.0..HEAD); a regression lane reported an 18 s 720p overlay export byte-identical to v0.8.0's (file hash and every frame hash); 0.9.0's map changes (#553-#555) are the app's map view, which the inset does not draw with"
       }
     }
   }
