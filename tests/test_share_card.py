@@ -1250,7 +1250,6 @@ def test_the_closing_chord_joins_only_a_near_miss_and_never_across_a_dropout():
     apart: ends 2 m apart are joined, ends 10 m apart are not a closed loop and get no invented
     line (CLOSE_GAP_M = 3 m), and a lap whose first segment is a GPS dropout has no measured
     position to join to — the chord would bridge the very gap the line skips."""
-    from studio import trace_paint
     assert _chord_inked(_chord_lap(2.0)), "ends 2 m apart are not joined"
     assert not _chord_inked(_chord_lap(10.0)), "a 10 m gap was bridged by an invented chord"
     assert not _chord_inked(_chord_lap(2.0, dropout_at_start=True)), (
