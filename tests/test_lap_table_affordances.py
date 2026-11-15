@@ -17,7 +17,11 @@ Four ways the panel knew something and never said it:
   * seven of its eight columns are unit-bearing numbers and the abbreviated headers named not one
     unit, while the Stats page captions the same data on screen (L3-10).
 
-Pure Qt on fake sessions (no pacer, no telemetry file), under the REAL theme — the focus ring and
+And one way it now says more (cool/slow-lap-why): a slow lap's Lap cell names its culprit corner
+("▼ C5") and its Lap/Time tooltips say where its time went, on the shipped demo's real session.
+
+Pure Qt on fake sessions (no pacer, no telemetry file) — except the slow-lap checks, which load the
+shipped demo through the real loader — under the REAL theme — the focus ring and
 the hover fill are pixels, and pixels need the app's own palette. Frames are compared as
 Format_RGB32 RGB, never sha1(constBits()), whose scanline padding differs between two identical
 grabs. Run:
@@ -41,6 +45,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import data_quality, theme  # noqa: E402
 from studio import lap_table as LT  # noqa: E402
+from studio._signal import lap_label  # noqa: E402
 
 theme.apply_theme(_APP)
 
@@ -430,6 +435,207 @@ def test_naming_the_units_costs_the_columns_nothing():
     print(f"test_naming_the_units_costs_the_columns_nothing OK ({total} px in {vp} px; "
           f"in-cell % would want {sum(suffixed)} px, grip column "
           f"{floors[_GRIP_COL]} -> {suffixed[_GRIP_COL]} px)")
+
+
+# ============================================================ cool/slow-lap-why: where it went
+# The shipped demo (`make_demo.make(path, render=False)` -> `Session.load`, as the app's --demo
+# opens it): Lap 6 is its one slow lap, 5.50 s over the typical lap, C5 +2.84 s of it.
+_DEMO: dict = {}
+
+
+def _demo():
+    if not _DEMO:
+        import tempfile
+
+        from studio.dev import make_demo as md
+        from studio.session import Session
+        tmp = tempfile.TemporaryDirectory(prefix="laptable_demo_")
+        path = os.path.join(tmp.name, "pacer-synthetic-demo.mp4")
+        md.make(path, render=False)
+        _DEMO.update(tmp=tmp, session=Session.load([path]))
+    return _DEMO["session"]
+
+
+class _Over:
+    """The demo session with some reads replaced (the rest pass through)."""
+
+    def __init__(self, s, **over):
+        self._s = s
+        self.__dict__.update(over)
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
+_SLOW = 5   # lap id of "Lap 6"
+
+
+def test_a_slow_lap_says_where_its_time_went():
+    """The demo's Lap 6 row: its Time cell and its Lap cell (which wears the "▼ C5" cue) carry the
+    note on the row's terms — no "Lap 6 ·" head, the row names the lap — then the rule that called
+    it slow. Every other row keeps exactly the tooltips the table gave before the note existed."""
+    from studio import story
+    s = _demo()
+    (note,) = s.slow_lap_notes()
+    assert note.lap_id == _SLOW and note.corners[0].cid == 5, note
+    lt = _keep(LT.LapTable(s))
+    tb, r = lt.table, lt._row_for_lap(_SLOW)
+    want = (f"{story.row_text(note)}\n\n{note.rule}")
+    assert want.startswith("5.50 s over your typical lap · C5 +2.84 s of it"), want
+    assert tb.item(r, _TIME_COL).toolTip() == want, tb.item(r, _TIME_COL).toolTip()
+    assert tb.item(r, 0).toolTip() == want, tb.item(r, 0).toolTip()
+    assert tb.item(r, 0).text().endswith(f"{lap_label(_SLOW)}  ▼ C5"), tb.item(r, 0).text()
+    assert "Lap 6" not in want and note.text.startswith("Lap 6 · ")
+    # A lap without a note: byte-for-byte the table without the read.
+    bare = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
+    for row in range(tb.rowCount()):
+        lap = lt._lap_id(row)
+        for c in range(lt._n_real_cols()):
+            a, b = tb.item(row, c), bare.table.item(bare._row_for_lap(lap), c)
+            if lap == _SLOW and c in (0, _TIME_COL):
+                continue
+            assert (a.text(), a.toolTip()) == (b.text(), b.toolTip()), (lap, c, a.text(),
+                                                                        a.toolTip(), b.toolTip())
+    print("test_a_slow_lap_says_where_its_time_went OK")
+
+
+def test_the_cue_follows_its_lap_through_a_sort_and_a_refresh_reads_once():
+    """Sorted by Time (slowest first), the cue is on Lap 6's row, wherever that row went. The notes
+    are read once per refresh() and once per trust flip — never per sort, hover or paint — and a
+    refresh is what moves them when the session's answer changes (a timing edit's path)."""
+    s = _demo()
+    calls = []
+    notes = list(s.slow_lap_notes())
+
+    def counted():
+        calls.append(1)
+        return notes
+
+    sess = _Over(s, slow_lap_notes=counted)
+    lt = _keep(LT.LapTable(sess))
+    assert len(calls) == 1, f"{len(calls)} reads to build the table"
+    lt.table.sortByColumn(_TIME_COL, Qt.DescendingOrder)
+    _settle()
+    tb = lt.table
+    assert lt._lap_id(0) == _SLOW, "the slowest lap is not on top"
+    cued = [lt._lap_id(r) for r in range(tb.rowCount()) if "▼" in tb.item(r, 0).text()]
+    assert cued == [_SLOW], cued
+    assert len(calls) == 1, f"a sort re-read the notes ({len(calls)} reads)"
+    # The session's answer moves (as after a start/finish-line edit): one refresh, one read.
+    import dataclasses
+    notes[:] = [dataclasses.replace(notes[0], lap_id=2)]
+    lt.refresh()
+    assert len(calls) == 2, f"{len(calls) - 1} reads for one refresh"
+    cued = [lt._lap_id(r) for r in range(tb.rowCount()) if "▼" in tb.item(r, 0).text()]
+    assert cued == [2], cued
+    lt.refresh_timing_trust()
+    assert len(calls) == 3, f"{len(calls) - 2} reads for one trust flip"
+    print("test_the_cue_follows_its_lap_through_a_sort_and_a_refresh_reads_once OK")
+
+
+def test_a_provisional_note_carries_the_tables_provisional_line():
+    """The table's rule under a provisional start line: it withholds what is measured FROM the best
+    (★, green, Δbest) and keeps every time, muted, under PROVISIONAL_TOOLTIP. A note is measured
+    from the typical lap, not the best — so it stays, cue included, with that line under it."""
+    import dataclasses
+    s = _demo()
+    notes = [dataclasses.replace(n, caveat="provisional", gap_to_best_s=None)
+             for n in s.slow_lap_notes()]
+    lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda: notes)))
+    tb, r = lt.table, lt._row_for_lap(_SLOW)
+    want = f"{LT.slow_note_tip(notes[0])}\n\n{LT.PROVISIONAL_TOOLTIP}"
+    assert tb.item(r, _TIME_COL).toolTip() == want, tb.item(r, _TIME_COL).toolTip()
+    assert tb.item(r, 0).toolTip() == want, tb.item(r, 0).toolTip()
+    assert "▼ C5" in tb.item(r, 0).text() and tb.item(r, LT._DELTA_COL).text() == LT.SELF_DELTA
+    print("test_a_provisional_note_carries_the_tables_provisional_line OK")
+
+
+def test_a_dropout_lap_never_wears_a_note():
+    """Lap 6 made a ⚠ dropout lap on the real accessors: no cue and no note on its row (the core
+    drops it; the table would not show one anyway). The median moves, so the first lap now reads
+    slow — `spread`, no culprit, so a note on hover and no cue."""
+    s = _demo()
+    orig = s.lap_has_dropout
+    try:
+        s.lap_has_dropout = lambda i: i == _SLOW or orig(i)
+        lt = _keep(LT.LapTable(s))
+        tb, r = lt.table, lt._row_for_lap(_SLOW)
+        assert tb.item(r, 0).text().endswith(LT.DROPOUT_SUFFIX), tb.item(r, 0).text()
+        assert tb.item(r, _TIME_COL).toolTip() == LT.DROPOUT_TOOLTIP, tb.item(r, _TIME_COL).toolTip()
+        assert "▼" not in tb.item(r, 0).text(), tb.item(r, 0).text()
+        first = lt._row_for_lap(0)
+        assert "▼" not in tb.item(first, 0).text(), tb.item(first, 0).text()
+        assert tb.item(first, _TIME_COL).toolTip().startswith("First lap · "), \
+            tb.item(first, _TIME_COL).toolTip()
+        # ...and a note handed over for a ⚠ lap anyway is not shown.
+        planted = [n for n in _Over(s).slow_lap_notes()]
+        import dataclasses
+        planted.append(dataclasses.replace(planted[0], lap_id=_SLOW, category="one",
+                                           corners=(LT.story.CornerLoss(5, 2.0, 1.0, 0.1),)))
+        lt2 = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: planted)))
+        r2 = lt2._row_for_lap(_SLOW)
+        assert "▼" not in lt2.table.item(r2, 0).text(), lt2.table.item(r2, 0).text()
+        assert lt2.table.item(r2, _TIME_COL).toolTip() == LT.DROPOUT_TOOLTIP, \
+            lt2.table.item(r2, _TIME_COL).toolTip()
+    finally:
+        s.__dict__.pop("lap_has_dropout", None)
+    print("test_a_dropout_lap_never_wears_a_note OK")
+
+
+def test_clicking_the_cue_rings_the_culprit_corner():
+    """A click on Lap 6's Lap cell selects the lap, as every click does, and names C5 for the map's
+    ring; a click on a lap without a cue names nothing."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    rang, picked = [], []
+    lt.slow_corner_clicked.connect(rang.append)
+    lt.laps_selected.connect(picked.append)
+    tb = lt.table
+    for lap in (_SLOW, 0):
+        r = lt._row_for_lap(lap)
+        tb.scrollToItem(tb.item(r, 0))
+        _settle()
+        QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.NoModifier,
+                         tb.visualItemRect(tb.item(r, 0)).center())
+        _settle()
+    assert rang == [5], rang
+    assert picked[-2:] == [[_SLOW], [0]], picked
+    print("test_clicking_the_cue_rings_the_culprit_corner OK")
+
+
+def test_no_slow_lap_leaves_the_table_pixel_identical():
+    """A session with no slow lap renders exactly the table without the feature, at the default
+    quadrant and at a squeezed panel: no width, height or glyph moves."""
+    s = _demo()
+    for w in (447, 300):
+        frames = []
+        a =_keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
+        b = _keep(LT.LapTable(_NoRead(s)))
+        for lt in (a, b):
+            lt.resize(w, 420)
+            lt.show()
+            _settle()
+            frames.append(_rgb(lt))
+        widths = [[t.table.columnWidth(c) for c in range(t.table.columnCount())] for t in (a, b)]
+        assert widths[0] == widths[1], (w, widths)
+        assert frames[0].shape == frames[1].shape and (frames[0] == frames[1]).all(), w
+    print("test_no_slow_lap_leaves_the_table_pixel_identical OK")
+
+
+class _NoRead:
+    """The demo session WITHOUT `slow_lap_notes` (the table before the feature reads nothing)."""
+
+    def __init__(self, s):
+        self._s = s
+
+    def __getattr__(self, name):
+        if name == "slow_lap_notes":
+            raise AttributeError(name)
+        return getattr(self._s, name)
 
 
 def _run_all():

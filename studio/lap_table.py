@@ -53,7 +53,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, provenance_panel, theme, units
+from . import data_quality, provenance_panel, story, theme, units
 from . import stats as stats_service
 from ._signal import (
     PRINT_DECIMALS,
@@ -194,6 +194,14 @@ def _with_star(star_tip: str, tip: str) -> str:
     return f"{star_tip}\n\n{tip}" if tip else star_tip
 
 
+def slow_note_tip(note) -> str:
+    """A slow lap's Lap/Time tooltip head (cool/slow-lap-why): where its time went, on the row's
+    terms (`story.row_text`), then the rule that called it slow — so the label states its own
+    default, a paragraph of its own (a bare line break vanished into the wrapped note above it).
+    Like the ★ legend it goes ABOVE the cell's trust note, never instead of it."""
+    return f"{story.row_text(note)}\n\n{note.rule}"
+
+
 def too_brief_count(session, laps: int) -> int:
     """Start/finish crossings the segmenter cut that are in NEITHER lap list — slivers the coarse
     gate rejected (`_signal._banded_out_lap_ids`: under MIN_LAP_SAMPLES points or MIN_LAP_TIME).
@@ -315,7 +323,8 @@ def _lap_col_tips(unit: str | None) -> list[str]:
     the same contract the Corners table has had since its headers were abbreviated."""
     u = units.speed_label(unit)
     return [
-        "Lap number (▶ playing · ★ session best · ⚠ GPS dropout)",
+        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout · {story.BEHIND_MARK} C5 the "
+        "corner a slow lap lost most of its time in; hover for the note)",
         "Lap time, measured between start/finish crossings",
         DELTA_HEADER_TIP,
         # the odometer's shortfall, in the one sentence every distance surface carries
@@ -1064,6 +1073,9 @@ def cap_notice(kept: list[int], requested: int, *, fastest: bool = True) -> str:
 
 class LapTable(QWidget):
     laps_selected = Signal(object)  # list[int]
+    # A click on a slow lap's Lap cell, which wears its culprit cue ("▼ C5"): that corner's cid,
+    # for the map's ring. The click selects the lap as any click does; this only adds the corner.
+    slow_corner_clicked = Signal(int)
     # U2: emitted with `cap_notice` when a selection was TRIMMED. Deselecting the excess rows was
     # the only sign, and measured on both D24 recordings a Select All over 38 / 65 laps kept 6 with
     # nothing said anywhere; CentralView forwards it to the window's status bar.
@@ -1083,6 +1095,9 @@ class LapTable(QWidget):
         self._best_split: list = []
         self._dropout_ids: set = set()
         self._best_lap_id = None
+        # lap id -> story.SlowLapNote, read ONCE per refresh / trust flip (_read_slow_notes), never
+        # per hover, sort or paint: the session's memo still rebuilds its key on every call.
+        self._slow_notes: dict = {}
         # How many S-split columns the last refresh() drew, so a NEW one can be scrolled into view
         # once (L3-04) without every other refresh yanking the horizontal scroll.
         self._n_splits_shown = 0
@@ -1143,6 +1158,7 @@ class LapTable(QWidget):
         hdr.setSortIndicator(self._sort_col, self._sort_order)
         hdr.sortIndicatorChanged.connect(self._on_sorted)
         self.table.itemSelectionChanged.connect(self._on_selection)
+        self.table.cellClicked.connect(self._on_cell_clicked)
         # Right-click a Time or S-split cell → "Inspect this number…" (provenance_panel). Wired on
         # the table rather than on a cell, because the cell items are rebuilt on every refresh and
         # the menu has to survive that; `_on_context_menu` resolves what was clicked at click time.
@@ -1492,7 +1508,11 @@ class LapTable(QWidget):
 
         A width that holds every row's worst case does not move as the ▶ walks the laps during
         playback, so it keeps the reason LAP_COL_PX is fixed (no jitter) while giving back the
-        20-odd px a 14- or 37-lap session without dropouts never paints into."""
+        20-odd px a 14- or 37-lap session without dropouts never paints into.
+
+        A slow lap's culprit cue ("▼ C5") is left OUT of the floor: it is a pointer to the tooltip,
+        and a squeeze may elide it, never the lap's identity — the 20 px it would claim at a 300 px
+        panel would otherwise come out of the data columns as a sideways scroll."""
         tb = self.table
         if not tb.rowCount():
             return LAP_COL_PX
@@ -1505,7 +1525,7 @@ class LapTable(QWidget):
             bold = item.font()
             bold.setBold(True)
             worst = max(worst, QFontMetrics(bold).horizontalAdvance(
-                self._lap_cell_text(self._lap_id(r), True)))
+                self._lap_cell_text(self._lap_id(r), True, cue=False)))
         # The cell's own chrome (padding, focus inset), read off Qt's hint rather than the QSS.
         chrome = max(0, tb.sizeHintForColumn(0) - painted)
         return min(LAP_COL_PX, worst + chrome)
@@ -1704,6 +1724,7 @@ class LapTable(QWidget):
         self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
         self._dropout_ids = dropout_ids
+        self._read_slow_notes()
         self._apply_highlights()
         # Fit AFTER the highlights: they append the ★ best-sector mark to S-split cells, which is
         # part of the width those columns need.
@@ -1852,6 +1873,10 @@ class LapTable(QWidget):
             lap_id = self._lap_id(r)
             is_best = lap_id == best_lap
             is_dropout = lap_id in dropout_ids
+            note = self._slow_notes.get(lap_id)
+            note_tip = slow_note_tip(note) if note is not None else ""
+            time_trust = (PROVISIONAL_TOOLTIP if not verified
+                          else estimated_note if degraded else "")
             for c in range(self.table.columnCount()):
                 item = self.table.item(r, c)
                 if item is None:
@@ -1887,7 +1912,13 @@ class LapTable(QWidget):
                 # IA-07: the ★ this row's Lap cell wears is a glyph with no legend anywhere unless
                 # the cell carrying it says what it means. Set every pass (the mark moves with the
                 # best lap), and above — never instead of — the trust note.
-                item.setToolTip(_with_star(BEST_LAP_TIP, tip) if is_best and c == 0 else tip)
+                # A slow lap's note, the same way, on its Time and on the Lap cell wearing its cue
+                # — which carries no trust note of its own, so it borrows the Time cell's: the
+                # note is about the lap's time, and the table's caveat on that time goes with it.
+                if note_tip and c in (0, _TIME_COL):
+                    item.setToolTip(_with_star(note_tip, tip if c else time_trust))
+                else:
+                    item.setToolTip(_with_star(BEST_LAP_TIP, tip) if is_best and c == 0 else tip)
                 if c == _DELTA_COL:
                     self._apply_delta_bar(item, tip)
             # per-sector best → purple+bold + a ★ mark (outranks green for this cell) — but ONLY on
@@ -2023,11 +2054,12 @@ class LapTable(QWidget):
             self._fill_delta(self._dropout_ids)
             self.table.setSortingEnabled(True)
             self.table.sortByColumn(self._sort_col, self._sort_order)
+        self._read_slow_notes()   # each note's caveat (and its gap to a best) follows the flag
         self._apply_highlights()
         # ...and re-fitted: the Δbest column's WIDTH follows the flag too (collapsed while blank).
         self._fit_columns()
 
-    def _lap_cell_text(self, lap_id, on: bool) -> str:
+    def _lap_cell_text(self, lap_id, on: bool, cue: bool = True) -> str:
         """The Lap-cell text for `lap_id`: a '▶ ' prefix when it's the current (playing) lap, a '★ '
         mark when it's the overall best lap (the NON-COLOUR redundancy for the green best-lap row —
         reads without hue), and a trailing ' ⚠' low-confidence marker on a GPS-dropout lap. The ▶
@@ -2035,7 +2067,26 @@ class LapTable(QWidget):
         prefix = CURRENT_PREFIX if on else ""
         best = BEST_LAP_MARK if lap_id == self._best_lap_id else ""
         suffix = DROPOUT_SUFFIX if lap_id in self._dropout_ids else ""
+        note = self._slow_notes.get(lap_id) if cue else None
+        if note is not None and story.culprit_cue(note):
+            suffix += f"  {story.culprit_cue(note)}"
         return f"{prefix}{best}{lap_label(lap_id)}{suffix}"  # 1-based display number
+
+    def _read_slow_notes(self) -> None:
+        """Cache where each slow lap's time went (`Session.slow_lap_notes`), keyed by lap id so the
+        cue and the tooltip follow the lap across sorts. One read per call: refresh() and
+        refresh_timing_trust() only. A session double without the read has no notes."""
+        read = getattr(self.session, "slow_lap_notes", None)
+        notes = read() if callable(read) and self.table.rowCount() else []
+        # The core never notes a ⚠ lap (it is no row of the grid); held here too, at the surface.
+        self._slow_notes = {n.lap_id: n for n in notes if n.lap_id not in self._dropout_ids}
+
+    def _on_cell_clicked(self, row: int, col: int) -> None:
+        """A click on a Lap cell wearing a culprit cue also rings that corner on the map (the
+        worst one first); every other click is only the row selection it always was."""
+        note = self._slow_notes.get(self._lap_id(row)) if col == 0 else None
+        if note is not None and story.culprit_cue(note):
+            self.slow_corner_clicked.emit(note.corners[0].cid)
 
     def _set_row_current(self, r: int, on: bool):
         """Apply/clear the ▶ prefix + bold on ONE row's Lap cell (the only per-lap-change cue)."""

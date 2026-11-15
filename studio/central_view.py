@@ -1243,6 +1243,7 @@ class CentralView(QWidget):
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
         self.table.selection_capped.connect(self.statusNotice)
+        self.table.slow_corner_clicked.connect(self._ring_corner)   # a slow lap's "▼ C5" cue
         # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
         # gesture. False until the user asks for it.
         self._video_focused = False
