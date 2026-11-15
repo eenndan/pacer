@@ -43,6 +43,7 @@ from . import (
     render_cache,
     rotation,
     sidecar,
+    story,
     timeline,
     track_match,
     tracks,
@@ -2770,6 +2771,43 @@ class Session:
             resolved_by_lap.append(self.corners.lap_corner_resolved(i))
         return stats_service.corner_matrix(ids, [c.cid for c in corner_list], times_by_lap,
                                            resolved_by_lap)
+
+    def slow_lap_notes(self) -> list[story.SlowLapNote]:
+        """Where each slow clean lap's time went (`studio/story.py`): the corners beyond their ▼
+        step on `corner_matrix`, or "spread". [] without the grid. Memoized with `session_moments`
+        (`_story`)."""
+        return self._story()[0]
+
+    def session_moments(self) -> story.SessionMoments:
+        """The best lap (with its ties), the biggest single-corner loss, the longest ▼-less run and
+        the best 5-lap run (`studio/story.py`), each None when absent. Memoized (`_story`)."""
+        return self._story()[1]
+
+    def _story(self) -> tuple[list[story.SlowLapNote], story.SessionMoments]:
+        """Both story reads, MEMOIZED on their whole input set (`_same_inputs`, `race_tracks`'
+        convention): the clean ids and lap times, the best lap, the timing trust, each lap's cached
+        `lap_corner_stats` list and its resolved mask. The corner matrix is not memoized and has no
+        invalidation of its own; its inputs do — a timing or sector edit (`set_timing_lines` →
+        `corners.invalidate`), a reference change (`invalidate_stats`) or a lap-set change replaces
+        one of these, and the next read misses."""
+        ids = self.consistency_lap_ids()
+        times = {i: float(self.lap_time(i)) for i in ids}
+        best = self.best_lap_id()
+        provisional = not self.timing_verified
+        estimated = bool(self.timing_quality.media_clock)
+        key = (tuple(ids), tuple(times.values()), best, provisional, estimated,
+               tuple((self.corners.lap_corner_stats(i), tuple(self.corners.lap_corner_resolved(i)))
+                     for i in ids))
+        memo = getattr(self, "_story_memo", None)
+        if memo is not None and _same_inputs(memo[0], key):
+            return memo[1]
+        matrix = self.corner_matrix()
+        out = (story.slow_lap_notes(times, matrix, best, provisional=provisional,
+                                    clock_estimated=estimated),
+               story.session_moments(times, matrix, best, provisional=provisional,
+                                     clock_estimated=estimated))
+        self._story_memo = (key, out)
+        return out
 
     def phase_report(self) -> stats_service.PhaseReport | None:
         """The session-wide entry/apex/exit loss decomposition (the Stats page's
