@@ -996,17 +996,233 @@ def test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map
     ink = px[..., 3] > 0
     h, wd = ink.shape
     assert not ink[h // 2 - 20:h // 2 + 20, wd // 2 - 20:wd // 2 + 20].any(), "ink inside the ring"
-    ys, xs = np.nonzero(ink)
-    # The ellipse is the height-limited fit (432 px for its 80 m, so 648 px for its 120 m),
-    # centred — and nothing of the far-off laps widens it.
-    assert abs((xs.max() - xs.min()) - 648) <= 10 and abs((ys.max() - ys.min()) - 432) <= 10, \
-        (xs.min(), xs.max(), ys.min(), ys.max())
+    # The trace, not the speed key: the key sits in the bottom margin band (cool/share-card).
+    pad = share_card._MAP_THUMB_PAD
+    ys, xs = np.nonzero(ink[:h - pad])
+    # The ellipse is the height-limited fit (h − 2·pad px for its 80 m, so 1.5× that for its
+    # 120 m), centred — and nothing of the far-off laps widens it.
+    tall = h - 2 * pad
+    assert abs((xs.max() - xs.min()) - 1.5 * tall) <= 10 and abs((ys.max() - ys.min()) - tall) <= 10, \
+        (xs.min(), xs.max(), ys.min(), ys.max(), tall)
     assert abs((xs.min() + xs.max()) / 2 - wd / 2) <= 3, (xs.min(), xs.max())
     colours = {tuple(c) for c in px[ink][:, :3][px[ink][:, 3] == 255]}
     assert len(colours) >= 8, f"one flat colour, not the speed ramp: {len(colours)}"
     # A lap with no trace gives no thumbnail, and the card still renders without one.
     assert share_card.lap_map_png(FakeSession(), 3) is None
     print("test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map OK")
+
+
+# ----------------------------------------------- cool/share-card: where, not only how fast
+def _rgba(img):
+    import numpy as np
+    img = img.convertToFormat(QImage.Format_RGBA8888)
+    return np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.width(), 4).copy()
+
+
+def _near(px, colour, tol=40):
+    """True where a pixel is within `tol` per channel of `colour` (a hex string)."""
+    import numpy as np
+    c = QColor(colour)
+    want = np.array([c.red(), c.green(), c.blue()])
+    return np.all(np.abs(px[..., :3].astype(int) - want) <= tol, axis=-1)
+
+
+class _LoopSession(_TracedSession):
+    """The best lap an ellipse (60 × 40 m) that STARTS on a start line across it at (60, 0) — where
+    it runs +y (anticlockwise), or −y with `reverse` — with corners C1 at the top (0, 40) and C2 at
+    the left (−60, 0), and the coaching page's lead on C1."""
+
+    def __init__(self, reverse=False, start=True, end_gap_m=0.0, **kw):
+        kw.setdefault("opps", coaching.Opportunities(enough=True, n_laps=5, median_lap_id=3,
+                                                     rows=[_apex_opp(cid=1)]))
+        super().__init__(**kw)
+        self.reverse, self.end_gap_m = reverse, end_gap_m
+        if start:
+            self.start_line = SimpleNamespace(x1=50.0, y1=0.0, x2=70.0, y2=0.0)
+        self.corners = SimpleNamespace(corner_map_markers=lambda: [
+            ("C1", 0.0, 40.0, -1), ("C2", -60.0, 0.0, 1)])
+
+    def lap_channels(self, lap_id):
+        import numpy as np
+        ch = super().lap_channels(lap_id)
+        x, y = ch["x_m"], ch["y_m"]
+        if self.reverse:
+            x, y = x[::-1].copy(), y[::-1].copy()
+        if self.end_gap_m:   # the second pass over the line, beside the first (the "kink")
+            x = x.copy()
+            x[-1] += self.end_gap_m
+        self.tx, self.ty = x, y        # the all-laps trace the live map's crossing falls back to
+        return {**ch, "x_m": x, "y_m": y, "speed_kmh": np.asarray(ch["speed_kmh"])}
+
+
+def _thumb(session, **kw):
+    png = share_card.lap_map_png(session, 3, unit="kmh", **kw)
+    assert png, "no thumbnail"
+    return _rgba(QImage.fromData(png))
+
+
+def _loop_px(px, x, y):
+    """Local metres of the _LoopSession ellipse → thumbnail px (the height-limited fit)."""
+    h, w = px.shape[:2]
+    scale = (h - 2 * share_card._MAP_THUMB_PAD) / 80.0
+    return int(round(w / 2 + scale * x)), int(round(h / 2 - scale * y))
+
+
+def test_the_card_map_shows_the_start_finish_mark_and_the_way_the_laps_run():
+    """The card's track had no start line and no direction. It now carries the live map's chequered
+    mark where the lap crosses the start line and the arrow just past it, pointing the way the laps
+    run — checked both ways round the same loop, on the image's own pixels: light arrow ink ahead
+    of the crossing along the direction of travel, none the same distance behind it."""
+    from studio import map_render
+    s3 = share_card._MARK_SCALE
+    _b, _s, arrow, _r = map_render.finish_mark_geometry(0.0, 1.0)
+    tip = max(abs(y) for _x, y in arrow) * s3           # the arrow's tip, px past the crossing
+    inside = int(round(tip - map_render.FINISH_ARROW_LEN_PX * s3 / 2))   # mid-arrow
+    for reverse in (False, True):
+        px = _thumb(_LoopSession(reverse=reverse))
+        cx, cy = _loop_px(px, 60.0, 0.0)
+        ahead = -1 if not reverse else 1                # anticlockwise runs +y = screen up
+        light = _near(px, theme.C.text, 30)
+        assert light[cy + ahead * inside - 2:cy + ahead * inside + 3, cx - 2:cx + 3].any(), (
+            f"no arrow ink {inside} px along the travel (reverse={reverse})")
+        assert not light[cy - ahead * inside - 2:cy - ahead * inside + 3, cx - 2:cx + 3].any(), (
+            f"arrow ink BEHIND the crossing (reverse={reverse}): it points the wrong way")
+        # ...and the chequer: dark backing and light squares across the line at the crossing.
+        bar = px[cy - 4:cy + 5, cx - 22:cx + 23]
+        assert _near(bar, theme.C.text, 30).any() and _near(bar, theme.C.canvas, 12).any(), (
+            "no chequered bar at the crossing")
+    print("test_the_card_map_shows_the_start_finish_mark_and_the_way_the_laps_run OK")
+
+
+def test_the_card_map_closes_the_lap_where_its_two_passes_meet():
+    """A lap ends on the start line a little beside where it began (0.70 m on the owner's
+    recording), and the open trace drew a kink there. The line is closed with a short chord in the
+    last segment's colour (no start line here, so no mark covers the join)."""
+    s = _LoopSession(start=False, end_gap_m=2.0)
+    px = _thumb(s)
+    a = _loop_px(px, 60.0, 0.0)
+    b = _loop_px(px, 62.0, 0.0)
+    gap_x, gap_y = (a[0] + b[0]) // 2, a[1]
+    # 2 m at 4.8 px/m is ~10 px: the round caps alone (3.5 px each) leave its middle bare.
+    assert px[gap_y, gap_x, 3] == 255, "the lap's two ends are not joined"
+    print("test_the_card_map_closes_the_lap_where_its_two_passes_meet OK")
+
+
+def test_the_opportunity_corner_is_ringed_and_labelled_where_it_is():
+    """The card named "C1" as the biggest opportunity and showed no C1. Its apex is ringed in the
+    accent and labelled on a plate beside it; the other corner is named small and muted, unringed."""
+    import numpy as np
+    px = _thumb(_LoopSession())
+    acc = _near(px, theme.C.accent, 30)
+    cx, cy = _loop_px(px, 0.0, 40.0)
+    r = share_card._RING_PX
+    yy, xx = np.mgrid[0:px.shape[0], 0:px.shape[1]]
+    dist = np.hypot(xx - cx, yy - cy)
+    ring = (dist > r - 3) & (dist < r + 3)
+    assert acc[ring].mean() > 0.5, f"no accent ring on C1's apex ({acc[ring].mean():.2f})"
+    # The plate (its accent border) sits within reach of the ring, not across the image.
+    plate = acc & (dist > r + 6)
+    ys, xs = np.nonzero(plate)
+    assert len(xs) and np.hypot(xs.mean() - cx, ys.mean() - cy) < 90, "C1's label is not beside it"
+    # C2 has no ring: no accent anywhere near its apex.
+    c2 = _loop_px(px, -60.0, 0.0)
+    assert not acc[c2[1] - 20:c2[1] + 21, c2[0] - 20:c2[0] + 21].any(), "C2 is ringed too"
+    # The ring follows the opportunity: with the lead on C2, C2 is the ringed one.
+    on_c2 = coaching.Opportunities(enough=True, n_laps=5, median_lap_id=3,
+                                   rows=[_apex_opp(cid=2)])
+    px2 = _thumb(_LoopSession(opps=on_c2))
+    acc2 = _near(px2, theme.C.accent, 30)
+    assert acc2[c2[1] - 16:c2[1] + 17, c2[0] - 16:c2[0] + 17].any(), "the lead moved; the ring did not"
+    print("test_the_opportunity_corner_is_ringed_and_labelled_where_it_is OK")
+
+
+def test_vs_ideal_is_not_painted_in_the_loss_colour():
+    """"+0.52 s vs your ideal lap" was painted in the behind (loss) hue. The ideal is a stitch of
+    best segments, "not a single drivable lap", so the gap is not a loss to anything driven: it is
+    neutral ink now, on both palettes. The opportunity's loss below keeps the behind hue."""
+    for pal in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+        d = share_card.card_data(FakeSession(), unit="kmh")
+        assert d.delta_to_ideal_s and d.delta_to_ideal_s > theme.DELTA_EVEN_EPS_S
+        px = _rgba(share_card.render_card(d, None, palette=pal))
+        prev = theme.active_palette()
+        theme.set_palette(pal)
+        try:
+            behind = theme.behind_colour()
+        finally:
+            theme.set_palette(prev)
+        line = px[384:434, 60:700]                    # the Δ-to-ideal line (baseline 424, 38 px)
+        assert not _near(line, behind, 30).any(), f"vs-ideal drawn in the loss hue ({pal})"
+        assert _near(line, theme.C.text, 30).any(), f"vs-ideal not drawn in the neutral ink ({pal})"
+        # the loss figure still is
+        assert _near(px[1080:1140, 600:1010], behind, 30).any(), "the opportunity lost its hue"
+    print("test_vs_ideal_is_not_painted_in_the_loss_colour OK")
+
+
+def test_the_provenance_line_is_the_reports_own_timing_wording():
+    """The card says how the time was taken — in the exported report's own `Timing` words, read
+    from the function the report and the clipboard summary share, never a copy or a new claim — and
+    only for a clean recording: a degraded clock keeps its stamp and no GPS9 line beside it."""
+    from studio import data_quality, export_data
+    s = FakeSession()
+    s.timing_quality = data_quality.TimingQuality()
+    d = share_card.card_data(s, unit="kmh")
+    assert d.provenance and d.provenance == export_data._timing_meta(s), d.provenance
+    # Read from the report's function, not a copy of today's string: the card follows it.
+    real_meta = export_data._timing_meta
+    export_data._timing_meta = lambda _s: "SENTINEL timing words"
+    try:
+        assert share_card.card_data(s, unit="kmh").provenance == "SENTINEL timing words"
+    finally:
+        export_data._timing_meta = real_meta
+    drawn = []
+    real = share_card._draw_text
+    share_card._draw_text = lambda p, x, y, text, *a, **k: (drawn.append(text),
+                                                             real(p, x, y, text, *a, **k))
+    try:
+        share_card.render_card(d, None)
+    finally:
+        share_card._draw_text = real
+    assert d.provenance in drawn, drawn
+    deg = FakeSession(degraded=True)
+    deg.timing_quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    dd = share_card.card_data(deg, unit="kmh")
+    assert dd.stamp == "estimated timing" and dd.provenance == "", dd.provenance
+    print("test_the_provenance_line_is_the_reports_own_timing_wording OK")
+
+
+def test_the_card_and_the_debrief_hero_call_one_trace_painter():
+    """The hero carried a copy of the card's trace code (a recorded follow-up). Both now paint the
+    line through `trace_paint.paint_trace`: a spy on it sees one call from each surface, and a
+    hero render whose painter is replaced paints no line at all."""
+    import numpy as np
+
+    from studio import coaching_panel, trace_paint
+    calls = []
+    real = trace_paint.paint_trace
+
+    def spy(p, tr, *a, **k):
+        calls.append(len(tr.xs))
+        return real(p, tr, *a, **k)
+
+    trace_paint.paint_trace = spy
+    try:
+        share_card.lap_map_png(_LoopSession(), 3, unit="kmh")
+        card_calls = len(calls)
+        a = np.linspace(0.0, 2 * np.pi, 240)
+        data = coaching_panel.HeroData(
+            time_text="1:00.000", trust="", trust_tip="", caption="", xs=60 * np.cos(a),
+            ys=40 * np.sin(a), seg=np.arange(239) % theme.MAP_RAINBOW_N, speed_lo="40",
+            speed_hi="70 km/h", corners={1: (0.0, 40.0)}, finish=(60.0, 0.0, 0.0, 1.0))
+        hero = coaching_panel.DebriefHero()
+        hero.resize(900, 330)
+        hero.set_data(data)
+        hero.set_focus([1])
+        hero._render(1.0)
+    finally:
+        trace_paint.paint_trace = real
+    assert card_calls == 1, f"the card painted its line {card_calls} times through the painter"
+    assert len(calls) == 2, f"the hero did not paint through the shared painter ({calls})"
+    print("test_the_card_and_the_debrief_hero_call_one_trace_painter OK")
 
 
 def test_pb_toast_share_button_routes_to_on_share():
@@ -1071,6 +1287,12 @@ if __name__ == "__main__":
     test_copy_share_card_sets_clipboard_image()
     test_blocked_session_builds_no_card_and_greys_actions()
     test_the_card_map_is_the_best_lap_drawn_from_data_not_a_grab_of_the_live_map()
+    test_the_card_map_shows_the_start_finish_mark_and_the_way_the_laps_run()
+    test_the_card_map_closes_the_lap_where_its_two_passes_meet()
+    test_the_opportunity_corner_is_ringed_and_labelled_where_it_is()
+    test_vs_ideal_is_not_painted_in_the_loss_colour()
+    test_the_provenance_line_is_the_reports_own_timing_wording()
+    test_the_card_and_the_debrief_hero_call_one_trace_painter()
     test_pb_toast_share_button_routes_to_on_share()
     test_pb_toast_hides_share_button_when_no_callback()
     print("\nAll shareable-lap-card tests passed.")

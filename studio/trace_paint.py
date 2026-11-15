@@ -155,12 +155,17 @@ def paint_trace(p: QPainter, tr: LapTrace, fit: TraceFit, line_px: float, *,
 def finish_at(session, xs, ys):
     """(x, y, ux, uy): where this lap crosses the start line and the way it runs there, or None.
 
-    On the lap's OWN trace first — a lap starts on the line, so its first step crosses it, and the
-    mark then sits exactly where the line's two passes meet (the closing chord) — and the live map's
-    all-laps crossing as the fallback. Same function (`map_render.start_crossing`), same majority
-    rule for the direction."""
+    On the lap's OWN trace first, so the mark sits exactly where the line's two passes meet (the
+    closing chord) — and the live map's all-laps crossing as the fallback. Same function
+    (`map_render.start_crossing`), same majority rule for the direction. A lap's first sample lies
+    ON the line, a rounding error to either side of it, so the lap is searched with its
+    second-to-last sample (the approach to the line) in front: that step crosses it whichever side
+    the first sample fell."""
     try:
         seg = session.start_line
+        xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+        if len(xs) > 2 and math.hypot(xs[-1] - xs[0], ys[-1] - ys[0]) <= CLOSE_GAP_M:
+            xs, ys = np.r_[xs[-2], xs], np.r_[ys[-2], ys]
         at = map_render.start_crossing(xs, ys, seg)
         if at is None:
             at = map_render.start_crossing(session.tx, session.ty, seg)

@@ -2905,6 +2905,41 @@ def test_debrief_hero_label_takes_the_least_overlap_when_nothing_is_clear():
     print("ok hero labels: clear outward; least overlap otherwise")
 
 
+def test_debrief_hero_draws_the_start_finish_mark_at_the_laps_crossing():
+    """cool/share-card: the hero gains the live map's chequered start/finish mark and its arrow at
+    the best lap's crossing (`HeroData.finish`), which also covers where the lap's two ends meet.
+    Without a crossing it draws none — and the rest of the picture is unchanged by the mark."""
+    from PySide6.QtGui import QColor, QImage
+
+    from studio import theme
+    from studio.coaching_panel import DebriefHero, HeroData
+
+    a = np.linspace(0.0, 2 * np.pi, 240)
+
+    def render(finish):
+        d = HeroData(time_text="1:00.000", trust="", trust_tip="", caption="", xs=60 * np.cos(a),
+                     ys=40 * np.sin(a), seg=np.arange(239) % theme.MAP_RAINBOW_N, speed_lo="40",
+                     speed_hi="70 km/h", corners={}, finish=finish)
+        hero = DebriefHero()
+        hero.resize(900, 330)
+        hero.set_data(d)
+        img = hero._render(1.0).toImage().convertToFormat(QImage.Format_RGBA8888)
+        return np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.width(), 4).copy()
+
+    with_mark, without = render((60.0, 0.0, 0.0, 1.0)), render(None)
+    diff = np.any(with_mark != without, axis=2)
+    ys, xs = np.nonzero(diff)
+    assert len(xs), "the hero drew no start/finish mark"
+    # Confined to the mark (its reach is ~19 px at the live size), on the right end of the loop.
+    assert xs.max() - xs.min() < 40 and ys.max() - ys.min() < 40, (xs.min(), xs.max(), ys.min(),
+                                                                    ys.max())
+    lt = QColor(theme.C.text)
+    light = np.all(np.abs(with_mark[..., :3].astype(int)
+                          - [lt.red(), lt.green(), lt.blue()]) <= 30, axis=-1) & diff
+    assert light.any(), "the mark has no light chequer / arrow ink"
+    print("ok hero: start/finish mark at the crossing, nothing else moved")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
