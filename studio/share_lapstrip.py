@@ -54,7 +54,7 @@ shout what the bars say quietly.
 
 THE MEDIAN. A dashed line at the median of the CLEAN laps' gaps to the best (with an even count,
 the mean of the middle two, which no lap need have), spelled in the hero row as what it is:
-"MEDIAN +0.68 s off the best, of 13 clean laps", or "≈ best" when it is inside timing precision —
+"MEDIAN OF 13 CLEAN LAPS +0.68 s off the best", or "≈ best" when it is inside timing precision —
 from `MEDIAN_MIN_LAPS` clean laps up (the median of three laps is one of the bars, drawn again).
 The line breaks around the best lap's call-out rather than strike its time through. No trend line, no consistency score, no advice: a strip of lap
 times does not say why a lap was slow.
@@ -142,7 +142,7 @@ class LapStripData:
     best_lap_id: int | None
     bars: tuple[StripBar, ...]
     scale_s: float | None        # the gap the plot's top stands for (the table's bar scale)
-    median_gap_s: float | None   # the clean laps' median gap to the best; None under 3 clean laps
+    median_gap_s: float | None   # the clean laps' median gap to the best; None under MEDIAN_MIN_LAPS clean laps
     clean_laps: int
     excluded_note: str           # "1 off the session median, …" or ""
     too_brief: str               # too_brief_note(...) or ""
@@ -178,7 +178,7 @@ def best_median_line(median_gap_s: float, clean_laps: int) -> str:
     count, the mean of the middle two — a value no lap need have)."""
     fig = median_figure(median_gap_s)
     where = "level with the best" if fig == "≈ best" else f"{fig} off the best"
-    return f"median of {clean_laps} clean laps: {where}"
+    return f"median of {plural(clean_laps, 'clean lap')}: {where}"
 
 
 def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
@@ -445,7 +445,7 @@ def _paint(data: LapStripData) -> QImage:
     if data.median_gap_s is not None:
         fig = median_figure(data.median_gap_s)
         # the label says whose median: the CLEAN laps' gaps, which with an even count no lap has
-        _draw_text(p, 0, 248, f"MEDIAN OF {data.clean_laps} CLEAN LAPS",
+        _draw_text(p, 0, 248, f"MEDIAN OF {plural(data.clean_laps, 'clean lap').upper()}",
                    _font(28, theme.W_SEMIBOLD), theme.C.text_muted, align_right_at=RIGHT)
         _draw_text(p, 0, 300, fig, _font(40, theme.W_SEMIBOLD), theme.C.text, align_right_at=RIGHT)
         if fig != "≈ best":
