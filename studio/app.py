@@ -3756,7 +3756,9 @@ class StudioWindow(QMainWindow):
         # The card's map is the BEST LAP'S OWN TRACE, drawn from data (EXP-3) — not a grab of the
         # live map, which carried whatever lap, glyph layer and stray GPS the window was showing.
         # `lap_map_png` returns None rather than raising; the card then simply has no map.
-        map_png = share_card.lap_map_png(self.session, data.best_lap_id, unit=self._speed_unit)
+        # The corners to ring are the card's own opportunity, so it is computed once, not twice.
+        map_png = share_card.lap_map_png(self.session, data.best_lap_id, unit=self._speed_unit,
+                                         focus=data.top_opp.cids if data.top_opp else ())
         return share_card.render_card(data, map_png, palette=theme.active_palette())
 
     def _grab_report_map_png(self, map_view) -> bytes:

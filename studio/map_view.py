@@ -223,12 +223,9 @@ BRAKE_HOLLOW_PEN_W = 2
 # appear only while the pointer is near a timing line, while the timing is provisional or there are
 # no laps (the states that ask the user to drag), and after "Add sector" until the pointer leaves.
 # Their hit targets are untouched. One pxMode ScatterPlotItem of two spots at the crossing: a dark
-# backing, then the light squares + arrow — sized in px so it reads the same at any zoom.
-FINISH_SQ_PX = 4.0          # one chequer square: the bar is 24 px across a 6 px hero line
-FINISH_COLS, FINISH_ROWS = 6, 2
-FINISH_ARROW_GAP_PX = 5.0   # from the bar's leading edge to the arrow's base
-FINISH_ARROW_LEN_PX = 10.0
-FINISH_ARROW_HALF_PX = 6.0
+# backing, then the light squares + arrow — sized in px so it reads the same at any zoom. Its
+# geometry is map_render's (finish_mark_geometry), shared with the debrief hero and the share card
+# (trace_paint), so the three surfaces draw one mark.
 FINISH_LIGHT = C.text
 FINISH_DARK = C.canvas
 # Half of the px box a corner label must keep clear of around the mark (the arrow's reach).
@@ -1390,79 +1387,34 @@ class _BrakeMarkers:
             self._items.append(dots)
 
 
-def _start_crossing(tx, ty, seg: Seg):
-    """Where the driven trace crosses the start line, as (x, y, ux, uy): the crossing point in local
-    metres and the unit direction of travel there — or None when the trace never crosses it.
-
-    Every crossing is found (one vectorised segment-segment test over the trace); the direction is
-    the side most of them run to, so a lone wrong-way wander or a pit-lane pass cannot turn the
-    arrow round; the point drawn is the median of those crossings — the middle of the all-laps
-    ribbon, not one lap's line through it — and the direction is taken at the crossing nearest it."""
-    xs, ys = np.asarray(tx, float), np.asarray(ty, float)
-    if len(xs) < 2 or len(ys) != len(xs):
-        return None
-    ex, ey = seg.x2 - seg.x1, seg.y2 - seg.y1
-    px, py, dx, dy = xs[:-1], ys[:-1], np.diff(xs), np.diff(ys)
-    den = dx * ey - dy * ex                      # cross(trace step, start line)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = ((seg.x1 - px) * ey - (seg.y1 - py) * ex) / den   # along the trace step
-        u = ((seg.x1 - px) * dy - (seg.y1 - py) * dx) / den   # along the start line
-    hit = np.nonzero(np.isfinite(t) & np.isfinite(u) & (t >= 0) & (t < 1) & (u >= 0) & (u <= 1))[0]
-    if not len(hit):
-        return None
-    side = np.sign(den[hit])
-    hit = hit[side == (1.0 if (side > 0).sum() >= (side < 0).sum() else -1.0)]
-    hx, hy = px[hit] + t[hit] * dx[hit], py[hit] + t[hit] * dy[hit]
-    cx, cy = float(np.median(hx)), float(np.median(hy))
-    i = int(hit[int(np.argmin(np.hypot(hx - cx, hy - cy)))])
-    a, b = max(i - 2, 0), min(i + 3, len(xs) - 1)       # a few samples either side: 10 Hz jitter
-    vx, vy = xs[b] - xs[a], ys[b] - ys[a]
-    norm = float(np.hypot(vx, vy))
-    if not np.isfinite(norm) or norm <= 0.0:
-        vx, vy, norm = dx[i], dy[i], float(np.hypot(dx[i], dy[i]))
-    return float(cx), float(cy), float(vx / norm), float(vy / norm)
-
-
 def _finish_paths(ux: float, uy: float):
-    """(backing, light, size) — the chequered bar square across the direction of travel (ux, uy)
-    and the arrow past it, as two QPainterPaths in a pxMode symbol's unit box, plus the symbol size
-    in px. Built in SCREEN space (y down, so the data direction's y flips); the aspect lock keeps
-    angles true, so the mark is pre-rotated once per start-line change."""
-    tx_, ty_ = ux, -uy                            # travel, screen space
-    nx_, ny_ = -ty_, tx_                          # across the track
-    q = FINISH_SQ_PX
-    half_along, half_across = FINISH_ROWS * q / 2.0, FINISH_COLS * q / 2.0
-    base = half_along + FINISH_ARROW_GAP_PX
-    reach = max(base + FINISH_ARROW_LEN_PX, half_across + 1.0)
+    """(backing, squares, arrow, size) — the chequered bar square across the direction of travel
+    (ux, uy) and the arrow past it, as QPainterPaths in a pxMode symbol's unit box, plus the symbol
+    size in px. The geometry is `map_render.finish_mark_geometry`'s (screen space, y down), the one
+    the hero and the share card paint; the aspect lock keeps angles true, so the mark is
+    pre-rotated once per start-line change."""
+    backing_q, squares_q, arrow_q, reach = map_render.finish_mark_geometry(ux, uy)
     size = 2.0 * (reach + 1.5)
 
-    def pt(along, across):
-        return QPointF((along * tx_ + across * nx_) / size, (along * ty_ + across * ny_) / size)
-
-    def quad(a0, a1, c0, c1):
-        return QPolygonF([pt(a0, c0), pt(a1, c0), pt(a1, c1), pt(a0, c1)])
+    def poly(pts):
+        return QPolygonF([QPointF(x / size, y / size) for x, y in pts])
 
     backing = QPainterPath()
-    backing.addPolygon(quad(-half_along - 1, half_along + 1, -half_across - 1, half_across + 1))
+    backing.addPolygon(poly(backing_q))
     backing.closeSubpath()
     squares = QPainterPath()
-    for r in range(FINISH_ROWS):
-        for c in range(FINISH_COLS):
-            if (r + c) % 2 == 0:
-                a0, c0 = -half_along + r * q, -half_across + c * q
-                squares.addPolygon(quad(a0, a0 + q, c0, c0 + q))
-                squares.closeSubpath()
+    for q in squares_q:
+        squares.addPolygon(poly(q))
+        squares.closeSubpath()
     arrow = QPainterPath()
-    arrow.addPolygon(QPolygonF([pt(base, -FINISH_ARROW_HALF_PX),
-                                pt(base + FINISH_ARROW_LEN_PX, 0.0),
-                                pt(base, FINISH_ARROW_HALF_PX)]))
+    arrow.addPolygon(poly(arrow_q))
     arrow.closeSubpath()
     return backing, squares, arrow, size
 
 
 class _FinishMark:
     """The start/finish mark: one pxMode ScatterPlotItem of two spots at the start line's crossing
-    of the trace (see FINISH_SQ_PX). Rebuilt when the start line is set or released; never on the
+    of the trace (see FINISH_LIGHT). Rebuilt when the start line is set or released; never on the
     tick. `at` is (x, y, ux, uy) — the crossing and the unit direction of travel — or None."""
 
     def __init__(self, plot):
@@ -1474,7 +1426,7 @@ class _FinishMark:
         self.at: tuple[float, float, float, float] | None = None
 
     def update(self, tx, ty, seg: Seg | None):
-        self.at = None if seg is None else _start_crossing(tx, ty, seg)
+        self.at = None if seg is None else map_render.start_crossing(tx, ty, seg)
         self.item.clear()
         if self.at is None:
             return
@@ -1846,7 +1798,7 @@ class MapView(QWidget):
         # The (reference label, ring-missing) state the "no reference line" notice was last posted
         # for — declared before _rebuild/_refresh_best, which consult it. See _note_missing_reference.
         self._ref_note_key: tuple | None = None
-        # The start/finish mark, and the timing-line handles' reveal state (see FINISH_SQ_PX):
+        # The start/finish mark, and the timing-line handles' reveal state (see FINISH_LIGHT):
         # the pointer is near a line / "Add sector" just ran (cleared by _pin_timer).
         self._finish_mark = _FinishMark(self.plot)
         self._timing_hover = False

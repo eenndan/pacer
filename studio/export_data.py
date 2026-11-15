@@ -540,6 +540,11 @@ def _timing_meta(session) -> str:
     return " · ".join(bits)
 
 
+# The public name, for a reader outside this module: the share card's provenance footer prints this
+# string rather than its own. `_timing_meta` stays the name this module's own callers use.
+timing_meta = _timing_meta
+
+
 def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     """The Stats page's groups as data — for the HTML report and "Copy stats summary" (N13).
 
