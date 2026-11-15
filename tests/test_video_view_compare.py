@@ -595,6 +595,32 @@ def _overlap(cell):
     return worst
 
 
+def test_the_seam_delta_is_mounted_with_the_two_panes_and_only_with_them():
+    """cool/compare-live-delta. The live Δ sits on the seam UNDER both panes, centred on the stage
+    (and so on the splitter handle while the split is even), in the hero's type — at the narrow
+    default width and maximised — and leaves with the second pane. Its colour is painted, so a
+    per-tick Δ costs one guarded setText and no QSS re-parse."""
+    for width in (520, 1400):
+        view = _compare_view(width)
+        seam = view.seam
+        assert seam.isVisible() and view._stage_lay.indexOf(seam) != -1, width
+        view.set_seam_pair("lap 43 vs lap 52", "tip")
+        view.set_seam_delta("Δ +0.19 s ▼", theme.behind_colour())
+        _settle()
+        assert seam.value.text() == "Δ +0.19 s ▼" and seam.value.colour() == theme.behind_colour()
+        assert seam.value.font().pointSize() == theme.mono_font(theme.HERO).pointSize()
+        assert seam.y() >= view._splitter.geometry().bottom(), (seam.y(), view._splitter.geometry())
+        # Centred: the caption + value block sits within a few px of the stage's centre line.
+        block = seam.caption.geometry().united(seam.value.geometry())
+        assert abs(block.center().x() - seam.width() / 2) <= 4, (width, block, seam.width())
+        assert block.left() >= 0 and block.right() <= seam.width(), (width, block)
+        assert seam.value.sizeHint().width() <= seam.value.width(), "the Δ is never clipped"
+        view.exit_compare()
+        _settle()
+        assert not seam.isVisible() and view._stage_lay.indexOf(seam) == -1, width
+    print("test_the_seam_delta_is_mounted_with_the_two_panes_and_only_with_them OK")
+
+
 def test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time():
     """L8-01: at the app's own default size the compare strip's three children demanded 316 px in a
     243 px box, and QHBoxLayout resolved the shortfall by painting the Δ badge 67 px ON TOP of the
@@ -1182,6 +1208,7 @@ def _run_all():
     # B25 (QA sweep 2026-09-01): the transport chrome's layout, state and keyboard reach. These
     # apply the real theme, so they run after the geometry-agnostic wiring tests above.
     test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time()
+    test_the_seam_delta_is_mounted_with_the_two_panes_and_only_with_them()
     test_l8_01_narrow_strip_falls_back_to_the_short_role_word()
     # D3 (design wave 2): the pane strip is a themed BAR, one form for both panes, and the picker's
     # width floor is capped by the pane it lives in rather than by a constant.
