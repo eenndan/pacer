@@ -468,7 +468,7 @@ class SummarySection:
 
 
 #: The PACE row beside "σ lap" that carries the σ tile's second reading.
-MIDDLE_HALF_ROW = "middle half · about the median"
+MIDDLE_HALF_ROW = "middle half · width"
 
 
 def _sec(v, fmt: str = "{:.2f} s") -> str:
@@ -636,8 +636,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         # None-not-zero rule inverted, on the surface least able to explain itself.
         median_label = "median lap"
         pace_rows = [("best lap", ""), (median_label, ""),
-                     ("race pace · best 3-lap run", ""), ("σ lap", ""), (MIDDLE_HALF_ROW, ""),
-                     ("median − best", ""),
+                     ("race pace · best 3-lap run", ""), ("σ lap", ""), ("median − best", ""),
                      ("consistency · σ/median", ""), ("within 1% of best", ""), ("trend", "")]
         if pace is not None and st is not None:  # a pace implies stats; the checker needs it said
             count, n_within = st.laps_within_pct(1.0)
@@ -656,14 +655,17 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
                  fmt_time(pace.median)),
                 ("race pace · best 3-lap run", "" if rp is None else fmt_time(rp)),
                 ("σ lap", _sec(pace.sigma)),
-                # The σ tile's caption line, in the page's own words (stats.fmt_middle_half).
-                (MIDDLE_HALF_ROW, stats_service.fmt_middle_half(pace.middle_half) or ""),
                 ("median − best", _sec(pace.spread, "+{:.2f} s")),
                 ("consistency · σ/median", _sec(cov, "{:.1f} %")),
                 ("within 1% of best", "" if count is None else f"{count} / {n_within}"),
                 ("trend" if verdict is None else f"trend · {verdict}",
                  stats_service.fmt_trend(trend) or ""),
             ]
+            # The σ tile's caption line, in the page's own words — and, like that line, absent
+            # below the five-lap floor rather than a bare dash.
+            width = stats_service.fmt_middle_half(pace.middle_half)
+            if width is not None:
+                pace_rows.insert(4, (MIDDLE_HALF_ROW, width))
         # `best rolling` sits AFTER the pace rows and OUTSIDE the branch above, where the page puts
         # it: a start-anywhere loop off `Session` is not a pace statistic and survives a session
         # that has no distribution at all.

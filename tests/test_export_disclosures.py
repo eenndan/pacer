@@ -26,6 +26,7 @@ no QApplication (its Qt render + the sublabel WIDTH are pinned in test_share_car
 Run:  python tests/test_export_disclosures.py
 """
 import csv
+import dataclasses
 import os
 import sys
 import tempfile
@@ -214,8 +215,16 @@ def test_stats_summary_values_equal_the_session_accessors():
     assert p["race pace · best 3-lap run"] == fmt_time(st.race_pace())
     assert p["σ lap"] == f"{pace.sigma:.2f} s"
     # cool/middle-half: the σ tile's second reading travels with it, in the page's own words.
-    assert p["middle half · about the median"] == (
-        stats_service.fmt_middle_half(pace.middle_half) or ""), p
+    # Absent below the five-lap floor, as the tile's line is (never a bare dash row): this session
+    # has 3 clean laps. With a width, the row sits right under σ in the page's own words.
+    assert pace.middle_half is None and "middle half · width" not in p, p
+    st.pace = lambda: dataclasses.replace(pace, middle_half=0.594)
+    rows = next(sec.rows for sec in export_data.stats_summary(s) if sec.title == "PACE")
+    labels = [k for k, _v in rows]
+    assert labels[labels.index("σ lap") + 1] == "middle half · width", labels
+    assert dict(rows)["middle half · width"] == "0.59 s"
+    del st.pace
+    pace = st.pace()
     assert p["consistency · σ/median"] == f"{st.pace_cov():.1f} %"
     count, n = st.laps_within_pct(1.0)
     assert p["within 1% of best"] == f"{count} / {n}"

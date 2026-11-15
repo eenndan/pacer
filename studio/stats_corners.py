@@ -115,12 +115,15 @@ def _corner_count_tip(report) -> str:
 def _corner_middle_half_tip(report) -> str:
     """The σ cell's hover: the corner's middle half beside its σ, or "" below
     stats.MIN_MIDDLE_HALF_N counted passes (the same None the tile's line is absent on). A second
-    description of the spread, not a ranking: nothing on this table sorts or marks by it."""
-    shown = stats_service.fmt_middle_half(getattr(report, "middle_half_s", None))
+    description of the spread, not a ranking: nothing on this table sorts or marks by it. No
+    timing-precision claim: matched corner cells are timed far finer than the lap figure."""
+    shown = stats_service.fmt_middle_half(getattr(report, "middle_half_s", None),
+                                          stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
     if shown is None:
         return ""
-    return (f"middle half {shown} about C{report.cid}'s median: the central 50 % of its "
-            f"{plural(report.n, 'counted pass', 'counted passes')}. σ counts every one of them.")
+    return (f"the central 50 % of C{report.cid}'s "
+            f"{plural(report.n, 'counted pass', 'counted passes')} fall within {shown}. "
+            "σ counts every one of them.")
 
 
 class CornersSection:

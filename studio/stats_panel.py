@@ -842,20 +842,22 @@ def peak_brake_tooltip_gps(why: str) -> str:
 
 SIGMA_CAPTION = "σ lap"
 # THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
-# tile taller than its row-mates, and a grid row is as tall as its tallest tile. The caption is
-# 134 px at its longest, the width of "race pace · best 3-lap run" in the same grid.
+# tile taller than its row-mates, and a grid row is as tall as its tallest tile. Measured: the
+# caption runs 161 px ("within 0.59 s") to 171 px ("within < 0.07 s"; "within 10.25 s" 166), past
+# the 134 px of "race pace · best 3-lap run", so the PACE row now fits a pane from 340 px rather
+# than 310; the row stays 37 px tall at every width from 300 to 1440 px.
 SIGMA_TOOLTIP = (
     "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half is "
-    "the range the central 50 % of your clean laps fall in, ± about the median. Neither removes "
-    f"a lap. The middle half is shown from {stats_service.MIN_MIDDLE_HALF_N} clean laps, and "
-    f"under ±{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s it is inside timing precision and reads "
-    f"< ±{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s.")
+    "the width of the band the central 50 % of your clean laps fall in. Neither removes a lap. "
+    f"The middle half is shown from {stats_service.MIN_MIDDLE_HALF_N} clean laps; under "
+    f"{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s it is inside the timing precision of a gap "
+    f"between two laps and reads < {stats_service.MIDDLE_HALF_FLOOR_S:.2f} s.")
 
 
 def sigma_caption(middle_half: float | None) -> str:
-    """The σ tile's caption: "σ lap", plus the middle half when there are laps enough for one."""
+    """The σ tile's caption: "σ lap", plus the middle half's width when there are laps enough."""
     shown = stats_service.fmt_middle_half(middle_half)
-    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half {shown}"
+    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half within {shown}"
 
 
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
