@@ -1257,6 +1257,31 @@ def test_the_closing_chord_joins_only_a_near_miss_and_never_across_a_dropout():
     print("test_the_closing_chord_joins_only_a_near_miss_and_never_across_a_dropout OK")
 
 
+def test_the_card_build_reads_the_coaching_opportunity_once():
+    """The window's card build hands `card_data`'s opportunity corners to the map as `focus`, so
+    the coaching model is read once per card, not again by the map (~22 ms measured on the demo) —
+    and the map still rings that corner."""
+    calls = []
+
+    class _Counted(_LoopSession):
+        def coaching_opportunities(self):
+            calls.append(1)
+            return super().coaching_opportunities()
+
+    w = _bare_window(_Counted())
+    w.view = SimpleNamespace(map=QWidget())
+    seen = []
+    real = share_card.lap_map_png
+    share_card.lap_map_png = lambda *a, **k: (seen.append(k.get("focus")), real(*a, **k))[1]
+    try:
+        assert w._build_share_card() is not None
+    finally:
+        share_card.lap_map_png = real
+    assert seen == [(1,)], f"the map was not handed the card's corner: {seen}"
+    assert len(calls) == 1, f"the coaching opportunity was computed {len(calls)} times per card"
+    print("test_the_card_build_reads_the_coaching_opportunity_once OK")
+
+
 def test_the_card_and_the_debrief_hero_call_one_trace_painter():
     """The hero carried a copy of the card's trace code (a recorded follow-up). Both now paint the
     line through `trace_paint.paint_trace`: a spy on it sees one call from each surface, and a
@@ -1360,6 +1385,7 @@ if __name__ == "__main__":
     test_the_opportunity_corner_is_ringed_and_labelled_where_it_is()
     test_vs_ideal_is_not_painted_in_the_loss_colour()
     test_the_provenance_line_is_the_reports_own_timing_wording()
+    test_the_card_build_reads_the_coaching_opportunity_once()
     test_the_card_and_the_debrief_hero_call_one_trace_painter()
     test_pb_toast_share_button_routes_to_on_share()
     test_pb_toast_hides_share_button_when_no_callback()

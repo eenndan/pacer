@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -439,6 +440,57 @@ def reason_head(reason: str) -> str:
     if not head or head[:2].isupper():
         return head
     return head[0].lower() + head[1:]
+
+
+class _ShortcutGate(QShortcut):
+    """A gated action's key, held while the action is OFF: it re-gates at key-press time, and
+    says why when the gate stays shut.
+
+    A gated QAction's enabled state is a CACHE of `_gate_action`'s verdict, refreshed by its menu's
+    sync. What the verdict reads can change without telling anyone — the Lap race gates on the map
+    being on screen, which a maximise, an Esc, video focus or the window's first layout all change
+    — and Qt drops a DISABLED action's shortcut from matching, so its key did nothing and said
+    nothing (QA EVAL-1 / REG-1: after every load R stayed dead until the View menu was opened
+    once). Rather than sync from every place that can move the map, the key itself asks: this
+    shortcut carries the action's key and is enabled exactly while the action is not (never both,
+    or Qt calls the key ambiguous and runs neither). Pressed, it runs the action's own menu sync —
+    the function the menu and the ⌘K palette run when they open — then triggers the action if the
+    gate opened, or puts the gate's reason in the status bar if it did not."""
+
+    def __init__(self, window: QMainWindow, action, sync: Callable[[], None]):
+        super().__init__(action.shortcut(), window)
+        self._window = window
+        self._action = action
+        self._sync = sync
+        self._said = ""
+        self.activated.connect(self._pressed)
+        action.changed.connect(self._follow)
+        self._follow()
+
+    def _follow(self) -> None:
+        self.setEnabled(not self._action.isEnabled())
+
+    def _pressed(self) -> None:
+        self._sync()
+        bar = self._window.statusBar()
+        if self._action.isEnabled():
+            if bar.currentMessage() == self._said:
+                bar.clearMessage()      # the refusal it showed a moment ago is no longer true
+            self._action.trigger()
+        else:
+            self._said = gate_refusal(self._action)
+            bar.showMessage(self._said, STATUS_MS)
+
+
+def gate_refusal(action) -> str:
+    """What the status bar says when a shut gate's command is asked for: its name and the gate's
+    whole sentence (`_gate_action` keeps it on the tooltip) — "Lap race: the map is not on screen
+    — …". An acronym keeps its case, as in `reason_head`."""
+    name = action.property("featureText") or action.text()
+    reason = action.toolTip()
+    if not reason[:2].isupper():
+        reason = reason[:1].lower() + reason[1:]
+    return f"{name}: {reason}"
 
 
 class StudioWindow(QMainWindow):
@@ -2314,6 +2366,7 @@ class StudioWindow(QMainWindow):
             "previous lap timing + session-best baseline)")
         self._undo_action.triggered.connect(self._undo_timing)
         self._undo_action.setEnabled(False)  # no session / no edit yet
+        _ShortcutGate(self, self._undo_action, self._sync_edit_menu)
         # …and the STANDING way back, for when Undo can no longer reach it. Undo is per-session
         # history; the loader's own placement is recomputed on every load, so this item works on a
         # recording opened months after the bad drag was saved into its sidecar (QA W3-01, where a
@@ -2441,6 +2494,10 @@ class StudioWindow(QMainWindow):
             "own lap clock, grouped in packs where the timing cannot split them. Space plays and "
             "pauses it, [ and ] change its speed, Esc ends it.")
         self._race_action.triggered.connect(self.toggle_lap_race)
+        # Both gate on state their menu sync does not hear change (the map on screen; the view):
+        # their keys re-gate when pressed and say why when they stay off (`_ShortcutGate`).
+        for action in (self._stats_action, self._race_action):
+            _ShortcutGate(self, action, self._sync_view_menu)
         view_menu.addSeparator()
         # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching · Marks,
         # digits 1-5) — the old show/hide toggles for the coaching + consistency strips died with the
@@ -2790,11 +2847,16 @@ class StudioWindow(QMainWindow):
         return view is not None and getattr(view, "is_racing", lambda: False)()
 
     def toggle_lap_race(self):
-        """View ▸ Lap race (R): start the race on the map, or end it."""
+        """View ▸ Lap race (R): start the race on the map, or end it. A start the view refuses
+        (the menu or ⌘K row ran on a gate that has since shut) says why, as the key does."""
         view = getattr(self, "view", None)
         if view is not None:
+            racing = self._racing()
             # The race starts at the transport's rate, on its ladder (0.25× … 2×).
-            view.toggle_lap_race(view.video.playback_rate(), PLAYBACK_RATES)
+            started = view.toggle_lap_race(view.video.playback_rate(), PLAYBACK_RATES)
+            if not racing and not started:
+                self._sync_view_menu()
+                self.statusBar().showMessage(gate_refusal(self._race_action), STATUS_MS)
         self._sync_view_menu()
 
     def toggle_mute(self):
@@ -3694,7 +3756,9 @@ class StudioWindow(QMainWindow):
         # The card's map is the BEST LAP'S OWN TRACE, drawn from data (EXP-3) — not a grab of the
         # live map, which carried whatever lap, glyph layer and stray GPS the window was showing.
         # `lap_map_png` returns None rather than raising; the card then simply has no map.
-        map_png = share_card.lap_map_png(self.session, data.best_lap_id, unit=self._speed_unit)
+        # The corners to ring are the card's own opportunity, so it is computed once, not twice.
+        map_png = share_card.lap_map_png(self.session, data.best_lap_id, unit=self._speed_unit,
+                                         focus=data.top_opp.cids if data.top_opp else ())
         return share_card.render_card(data, map_png, palette=theme.active_palette())
 
     def _grab_report_map_png(self, map_view) -> bytes:

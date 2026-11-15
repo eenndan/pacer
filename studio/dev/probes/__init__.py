@@ -195,4 +195,12 @@ export. Every recording is generated into one `mkdtemp` and removed. Its verdict
     pixi run python -m studio.dev.probes.clip_refusals figures
     pixi run python -m studio.dev.probes.clip_refusals paint
     pixi run python -m studio.dev.probes.clip_refusals budget
+
+`motion_refusals` measures the two transitions the motion PR (#557) built and removed, on the
+synthetic demo in the real window: how much of the map a lap change repaints in every Line mode
+(what a fade of the outgoing line could show), and how often the Lap race card's rows swap order
+over a whole race (what a slide would move). It is deterministic and
+`tests/test_measured_figures.py` re-runs it. Its verdict is `studio/docs/refused-2026-09.md` §28.
+
+    pixi run python -m studio.dev.probes.motion_refusals
 """

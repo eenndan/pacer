@@ -94,6 +94,7 @@ file headlessly with
 | Add a session-record field | `session_record.py` (fields, normalizer, `_migrate`) → `session_record_dialog.py` | `test_session_record` |
 | Add a mark type or auto-detector | `marks.py` (an auto mark reads an existing detector) → `theme.mark_colour` | `test_marks` |
 | Add an export / overlay field | `export_video.py` + `gmeter_overlay.py` (compare: `export_compare.py`) | `test_export_video` |
+| Add an opt-in export overlay element | a module in `overlay/` + its line in `overlay.REGISTRY`, an Extras row in `export_controller.py` | `test_export_ghost` |
 | Add a shortcut or command | `help_dialog.COMMANDS` (the `?` card and ⌘K derive from it) + the method in `app.py` | `test_help_dialog` |
 | Change km/h ↔ mph handling | `units.py` + its call sites | `test_units` |
 | Add a studio module | a row below (a Stats section: a link in its row); `ALLOWED_QT` / `QT_REACHING` if it reaches Qt | `test_layering` |
@@ -216,6 +217,9 @@ caches + delegates.
 |---|---|---|---|
 | [export_video.py](export_video.py) | Offline overlay-video renderer: ffmpeg decode → QPainter → VideoToolbox / libx264 | Qt | `test_export_video` |
 | [export_compare.py](export_compare.py) | The distance-locked two-lap compare export (a `Renderer` subclass) | Qt | `test_export_compare` |
+| [overlay/\_\_init\_\_.py](overlay/__init__.py) | Overlay-element seam: the protocol, the registry, `prepare` once and `paint` per frame | Qt | `test_export_ghost` |
+| [overlay/ghost.py](overlay/ghost.py) | The export minimap's ghost: your best lap at the same lap time, off the Lap Race maths | Qt | `test_export_ghost` |
+| [overlay/corner_cards.py](overlay/corner_cards.py) | Export corner cards: min speed + Δ vs the same corner on the best lap (Corners Δbest), at its exit | Qt | `test_export_corner_cards` |
 | [export_palette.py](export_palette.py) | `EXPORT`, the burn-over-footage colours the renderer and the dial share | — | `test_export_video` |
 | [export_data.py](export_data.py) | Laps/channels CSV, the HTML report, the stats summary; atomic writes | — | `test_export_data` |
 | [share_card.py](share_card.py) | The shareable lap-card PNG; blocked while timing is provisional | Qt | `test_share_card` |

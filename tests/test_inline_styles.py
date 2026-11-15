@@ -59,6 +59,20 @@ from studio import theme  # noqa: E402
 
 _STUDIO = os.path.join(_REPO, "studio")
 
+# App SUBPACKAGES walked like the top level, each file named `<package>/<file>` (test_layering's
+# `_SUBPACKAGES`): `studio/overlay/` holds the export's overlay elements, and a module one folder
+# down must not slip past this guard.
+_SUBPACKAGES = ("overlay",)
+
+
+def _studio_files() -> list[str]:
+    """Every studio .py file this guard walks: the top level, then each of `_SUBPACKAGES`."""
+    names = [fn for fn in os.listdir(_STUDIO) if fn.endswith(".py")]
+    for pkg in _SUBPACKAGES:
+        names += [f"{pkg}/{fn}" for fn in os.listdir(os.path.join(_STUDIO, pkg))
+                  if fn.endswith(".py")]
+    return sorted(names)
+
 
 def _calls(path, name):
     """Every `<x>.<name>(...)` call in one source file as (lineno, node, owner), where `owner` is
@@ -88,7 +102,7 @@ def _calls(path, name):
 
 
 def _modules():
-    return [fn for fn in sorted(os.listdir(_STUDIO)) if fn.endswith(".py")]
+    return _studio_files()
 
 
 def _no_dead_exemptions(exempt, found, what):

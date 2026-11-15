@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Twenty-seven features were built far enough to **measure**, and the measurement said not to ship
+Twenty-eight features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2069,7 +2069,7 @@ whose truth is known: the one corner where the laps really differ is C1 (the pla
 lap per corner (`Session.ideal_segment_bests`), and the card's own opportunity
 (`share_card.card_data`).
 
-| best lap (lap 12), s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+| best lap (L13), s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
 |---|---|---|---|---|---|---|---|
 | gap to the typical lap | −0.361 | −0.036 | −0.083 | −0.028 | +0.005 | −0.028 | −0.034 |
 | that corner's ▼ step | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 |
@@ -2090,6 +2090,102 @@ by the Coaching page's gate.
 
 **What would be new evidence:** a per-corner gap that clears its corner's own noise on more corners
 than the card's one opportunity, and whose largest cell agrees with that opportunity on the demo.
+
+---
+
+## 28. A fade of the lap you left on the map, and a slide when the race card's rows reorder — refused (#557)
+
+**The idea.** The motion pass (W2 design, section C) proposed three transitions. One shipped: the
+hero Δ readout counts to its new value on a seek within a lap (`studio/motion.py`). The other two:
+- on a lap change, the outgoing lap's line on the map **fades out** over 200 ms instead of
+  vanishing;
+- when the Lap race card's rows change order, they **slide** to their new places over 120 ms.
+
+#557 built both, measured them and took them out again (`map_view.py` and `race_ladder.py` have no
+diff from it). Its numbers lived only in the PR body. They are re-measured here.
+
+**How it was measured.** `studio/dev/probes/motion_refusals.py` runs on the synthetic demo in the
+real `StudioWindow`, offscreen at 1440×900. The map widget is pinned at 480×480 and grabbed at 2x,
+so its figures do not move with a machine's fonts or layout. The probe needs no fade and no slide,
+only what each one would have to move:
+- **map:** for each of the 13 consecutive pairs of the demo's clean laps (lap n → n + 1, what
+  playback does when it crosses the line), it grabs the map on the outgoing lap and on the incoming
+  one, with the marker and the editing chrome hidden (`MapView.grab_clean`). It counts the pixels
+  that differ, in every Line mode. Those pixels are everything a fade between the two lines could
+  ever show, whatever its curve and whichever layer it is drawn on. They are given as a share of
+  the whole map and as a share of what is drawn on it: the pixels that are not background in
+  either grab, which are the track, every lap's faint trace, the corner labels and the line.
+- **race:** the whole race at the app's ~30 Hz tick, speed 1, with nothing selected. The race is
+  read as `RaceController` reads it (`lap_race.race_state`), and the card's rows as the card draws
+  them (`race_controller.pack_rows`). A row is its pack's leading lap. It counts how often two rows
+  that stayed on the card swapped order, which is a slide's whole job. It also counts how often the
+  set of rows changed instead, and how often the laps changed order on the ladder underneath.
+
+| synthetic demo, 13 lap changes | map pixels | of the map, median | of the map, largest | of what is drawn, median | of what is drawn, largest |
+|---|---|---|---|---|---|
+| Line: Off | 921,600 | 0.53 % | 0.70 % | 9.8 % | 12.9 % |
+| Line: Speed | 921,600 | 1.29 % | 2.81 % | 23.9 % | 51.7 % |
+| Line: Δ to best | 921,600 | 2.54 % | 3.34 % | 47.0 % | 61.4 % |
+| Line: Δ rate | 921,600 | 2.56 % | 3.34 % | 47.8 % | 61.4 % |
+| Line: Grip (est) | 921,600 | 1.15 % | 1.58 % | 21.5 % | 29.0 % |
+| Line: Pedal (est) | 921,600 | 1.80 % | 2.09 % | 33.4 % | 38.4 % |
+| Line: Elevation | 921,600 | 3.00 % | 3.26 % | 55.9 % | 60.0 % |
+
+| synthetic demo, one whole race (14 laps, 51.1 s) | |
+|---|---|
+| card snapshots at the tick | 1535 |
+| rows shown / packs hidden | 1–5 / up to 4 |
+| two rows still on the card swapped order | 0 |
+| the set of rows changed (a merge, a split, a row in or out) | 81 |
+| the laps changed order on the ladder underneath | 217 |
+| scrubbed in jumps of 3 s: jumps / rows swapped | 18 / 0 |
+
+**On the map, a fade would be visible: the share of the whole map flatters it.** Most of the map
+is empty field round the track, so the share of the whole map is small in every mode. Against what
+is drawn, it is not:
+- **Line: Off.** About a tenth of what is drawn changes (9.8 % median, 12.9 % at most).
+  Consecutive laps drive the same track, so the plain line mostly moves a little sideways.
+- **The coloured modes.** A lap change recolours most of the line: up to 61.4 % of what is drawn
+  in Δ to best and Δ rate, and 47.0 % at the median. A fade there would be a colour cross-fade
+  along most of the track, not a line moving off it.
+
+So the refusal does not stand on the fade being invisible. It stands on what the fade cost and the
+machinery it needed, both measured in #557 and both outside the tree:
+- **The cost.** Its per-frame cost on the demo was +2.3 to +7.3 ms over a playback repaint, over
+  the ~2 ms budget #557 set for a transition frame. That needed the fade itself, which is not in
+  the tree, so it is #557's figure, measured on a loaded Mac, and not re-measured here.
+- **The machinery.** Faded *under* the new line, the old one showed nothing. Faded *above* it, it
+  needed a lifted layer and a second pool of colour buckets beside the map's own.
+
+**On the race card, there is nothing to slide during playback.** At the playback tick, rows that
+stayed on the card never changed order over the whole race. The laps underneath did: the ladder's
+order changed on 217 ticks. Every one of those passes happened inside a pack, or showed on the card
+as the rows re-forming, which they did on 81 ticks. That follows from how the card packs laps. A
+lap that closes on the pack ahead comes within the tie threshold of that pack's leader before it
+can pass the pack's last lap, so it joins the pack instead of overtaking its row. What changes on
+the card is which rows exist, and a slide cannot animate that.
+
+**The zero holds for playback only.** The card's progress bar scrubs, and a jump can put two rows
+in a new order without their merging first. On the demo it did not: 18 jumps of 3 s swapped no
+rows, because the demo's laps are far more alike than real ones. An independent review of this
+section counted 24 swaps with 3 s jumps on synthetic fields whose laps differ by ±6 % in pace (its
+own fields, not in the tree). A scrub jumps the field and re-forms the card anyway, and a slide
+there would animate a jump the user just made.
+
+**What moves because of this refusal: nothing in the app.** A lap change cuts the map line. The
+race card redraws its rows in place. `studio/motion.py`'s module docstring points here.
+
+**Re-run it** (the demo is generated into one `mkdtemp` and removed; its last line is the JSON):
+
+```bash
+pixi run python -m studio.dev.probes.motion_refusals
+```
+
+**What would be new evidence:**
+- for the fade: a fade built on the map's own bucket pool, without a second one, whose added frame
+  cost is measured on the demo under #557's ~2 ms budget for a transition frame;
+- for the slide: a card whose rows can swap order without first merging during playback, on a
+  session where the probe counts more than a handful of such swaps at the tick.
 
 ---
 

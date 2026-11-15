@@ -71,6 +71,7 @@ theme.register_fonts()
 
 sidecar.save = lambda *a, **k: None   # a line edit writes beside the recording: never here
 from studio import chapters  # noqa: E402
+from studio._signal import lap_label  # noqa: E402
 from studio.dev import make_demo  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.session import Session  # noqa: E402
@@ -301,7 +302,7 @@ def paint_cost(work: str) -> dict:
     best = s.best_lap_id()
     lap = min((i for i in s.valid_lap_ids() if i != best),
               key=lambda i: abs(s.lap_time(i) - s.lap_time(best) - 0.5))
-    res = {"lap": lap}
+    res = {"lap": f"L{lap_label(lap)}"}     # the app's lap label, never the 0-based id
     for w, h in ((1920, 1080), (3840, 2160)):
         res[f"{h}p"] = _paint_at(s, lap, w, h, work)
     return res
@@ -411,7 +412,7 @@ def export_budget(work: str) -> dict:
     ev.OverlayPainter.paint_frame_with_state = shipped
     base, busy = min(walls["shipped"]), min(walls["busy"])
     slope = (busy - base) / (BUSY_MS * frames)          # s of export per ms of paint per frame
-    return {"lap": lap, "frames": frames, "walls": {k: [round(x, 2) for x in v] for k, v in walls.items()},
+    return {"lap": f"L{lap_label(lap)}", "frames": frames, "walls": {k: [round(x, 2) for x in v] for k, v in walls.items()},
             "export_s": round(base, 2), "per_ms_s": round(slope * frames, 3),
             "share_per_ms": round(slope * frames / base, 4),
             "budget_ms": round(BUDGET_SHARE * base / (slope * frames), 2)}
@@ -500,7 +501,9 @@ def card_cells(s: Session) -> dict:
         vs_ideal[cid] = round(float(sb.times[li][j] - sb.bests[j]), 3)
     top = share_card.card_data(s).top_opp
     biggest = max(vs_ideal, key=vs_ideal.get)
-    return {"best_lap": best, "vs_typical": vs_typical, "vs_ideal": vs_ideal,
+    # The lap as the app names it (L13), beside the 0-based id the tie re-derives it from: the
+    # section once printed the id as the lap number (QA EVAL-2).
+    return {"best_lap": f"L{lap_label(best)}", "best_lap_id": best, "vs_typical": vs_typical, "vs_ideal": vs_ideal,
             "biggest_vs_ideal": biggest, "card_opp": top.corner_label if top else None,
             "card_opp_loss": round(top.time_lost_s, 3) if top else None,
             "inside_step": sum(abs(g) < st for g, st in vs_typical.values()),

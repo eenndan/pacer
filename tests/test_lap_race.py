@@ -407,6 +407,22 @@ def test_36_laps_precompute_and_tick_cost():
           f"tick {best * 1e6:.1f} µs median)")
 
 
+def test_a_read_of_its_own_field_leaves_the_default_memo_alone():
+    """The export ghost reads a two-lap field (`race_tracks([lap, best])`) on the render thread.
+    That read once REPLACED the session's one memo, so the app's next default read rebuilt the
+    whole field and was no longer the object it held. Only the default field is memoized now."""
+    s, _laps = _race_session(6)
+    rt = s.race_tracks()
+    best = s.best_lap_id()
+    other = next(i for i in rt.ids if i != best)
+    pair = s.race_tracks([other, best])
+    assert pair is not None and set(pair.ids) == {other, best}, pair
+    builds = lap_race.BUILD_COUNT
+    assert s.race_tracks() is rt, "a two-lap read evicted the default field's memo"
+    assert lap_race.BUILD_COUNT == builds, "the default field was rebuilt after a two-lap read"
+    print("test_a_read_of_its_own_field_leaves_the_default_memo_alone OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

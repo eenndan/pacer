@@ -2,10 +2,11 @@
 
 The app animates ONE thing, because the motion carries meaning (W2 design, section C): the hero Δ
 readout counts to its new value (`DELTA_ROLL_MS`) on a discrete jump of at least `ROLL_MIN_JUMP_S`
-— a seek within a lap, under an unchanged baseline — never during playback. The design's other two (the
-lap you left fading on the map, the Lap race rows sliding) were measured and not built: the fade
-changed under 2 % of the map's pixels in any Line mode, and race rows never changed order in a whole
-race (PR #557). Nothing runs on the 30 Hz playback path: with no transition running there is no
+— a seek within a lap, under an unchanged baseline — never during playback. The design's other
+two were measured and not built (PR #557, `studio/docs/refused-2026-09.md` §28): the lap you left
+fading on the map cost +2.3 to +7.3 ms a frame against a ~2 ms budget and needed a second
+colour-bucket pool; the Lap race rows never swap order at the playback tick, so a slide has
+nothing to move. Nothing runs on the 30 Hz playback path: with no transition running there is no
 timer and no per-tick work (`active_count() == 0`, `frames` does not move).
 
 THE SWITCH (`enabled()`) is False when any of these says so, in this order:

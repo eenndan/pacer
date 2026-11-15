@@ -65,6 +65,9 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     that one is: it paints a frame, and it is the module `export_video` would have grown into.
 #     `trace_paint` is the lap-line painter `share_card` and the debrief hero share: the same
 #     rasterizer role, lifted out so the two pictures draw one line (cool/share-card).
+#   * overlay/__init__, overlay/ghost and overlay/corner_cards — the export's opt-in overlay
+#     elements (`studio/overlay/`):
+#     they paint into `export_video`'s frame with its QPainter, for the reason that one is here.
 #   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
 #   * export_controller — the export cluster lifted out of `app` (§7.1). It is VIEW code by every
 #     test this file applies: it opens the file dialogs, the options modal, the progress dialog and
@@ -96,7 +99,9 @@ ALLOWED_QT = {
     "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_controller",
     "library_dialog", "map_view", "motion",
-    "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel", "race_ladder",
+    "marks_panel", "overlay/__init__", "overlay/corner_cards", "overlay/ghost", "overlays",
+    "player_pane", "plots_view",
+    "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "stats_braking", "stats_coasting", "stats_common",
     "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",
     "trace_paint", "track_dialog", "video_view",
@@ -118,9 +123,21 @@ _CONTRACT = ("the Qt-free data core (studio/_signal.py's module doc + the studio
              "analysis / pipeline / persistence modules import no Qt so they stay headless")
 
 
+# App SUBPACKAGES held to the same contract, each module named `<package>/<module>`. A subpackage
+# is invisible to a top-level `os.listdir`, so without this list a module moved one folder down
+# would escape both directions and the map. `studio/overlay/` (the export's overlay elements) paints
+# with Qt like `export_video` and is pacer-free like every view.
+_SUBPACKAGES = ("overlay",)
+
+
 def _modules() -> list[str]:
-    """Every top-level studio module name (studio/dev is out of scope — see the module doc)."""
-    return sorted(fn[:-3] for fn in os.listdir(_STUDIO) if fn.endswith(".py"))
+    """Every studio module name: the top level, then each of `_SUBPACKAGES` as `<pkg>/<module>`
+    (studio/dev is out of scope — see the module doc)."""
+    names = [fn[:-3] for fn in os.listdir(_STUDIO) if fn.endswith(".py")]
+    for pkg in _SUBPACKAGES:
+        names += [f"{pkg}/{fn[:-3]}" for fn in os.listdir(os.path.join(_STUDIO, pkg))
+                  if fn.endswith(".py")]
+    return sorted(names)
 
 
 def _parse(name: str) -> ast.Module:
@@ -198,10 +215,8 @@ def _scan(name: str, mods: set[str]) -> tuple[bool, set[str]]:
 
 def test_only_the_data_layer_imports_pacer():
     importers = {
-        fn[:-3]
-        for fn in os.listdir(_STUDIO)
-        if fn.endswith(".py") and fn != "__init__.py"
-        and _imports_pacer(os.path.join(_STUDIO, fn))
+        m for m in _modules()
+        if m != "__init__" and _imports_pacer(os.path.join(_STUDIO, m + ".py"))
     }
     extra = importers - ALLOWED      # a view / controller / helper reached into pacer
     missing = ALLOWED - importers    # an allow-listed module no longer imports pacer
