@@ -12,7 +12,15 @@ an element here instead, so the 4,800-line exporter does not grow with every ide
     the painter never reaches this package, so the Classic export is byte-identical to a build
     without it (tests/test_export_ghost.py);
   * `layer` says where in the frame's paint order it lands: `LAYER_MAP` on the minimap UNDER the
-    kart dot and its tail (the dot is the driver; nothing may cover it), `LAYER_TOP` over everything.
+    kart dot and its tail (the dot is the driver; nothing may cover it), `LAYER_TOP` over everything;
+  * `replaces` (optional, a tuple of `PLATES` names) says which Classic plates it stands in for: a
+    style that draws its own lap tower names "strip", and the painter then skips the Classic one.
+    Only a PREPARED element replaces anything (one that sits the export out leaves the Classic
+    plate in place). The honesty stamp is not a plate and cannot be replaced: what it qualifies is
+    the recording, and a style may move the caveat but never drop it;
+  * the context carries every Classic plate's rectangle (`plates`, read-only, in frame pixels: the
+    rect each was painted into) and the frame's `safe` area (the frame inset by the Classic margin),
+    so an element can place itself clear of them — or exactly over the one it replaces.
 
 A FAILING ELEMENT FAILS THE EXPORT, LOUDLY, BY NAME. Skipping it would hand the user a file that is
 missing what they asked for with nothing saying so; catching it per frame would hide a defect that
@@ -24,7 +32,7 @@ Qt like the exporter (it paints with QPainter); pacer-free like every view.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -33,6 +41,13 @@ from PySide6.QtGui import QPainter
 
 LAYER_MAP = "map"      # on the minimap, under the kart dot and its tail
 LAYER_TOP = "top"      # over every Classic element
+
+# The Classic plates an element may read the rect of, and replace: the g-meter dial (top-right),
+# the minimap (bottom-right), the speed/Δ readout (bottom-left) and the lap strip (top-left). The
+# honesty stamp under the strip is in `ElementContext.plates` as "stamp" (to be avoided) but is
+# never replaceable.
+PLATES = ("gmeter", "map", "readout", "strip")
+STAMP = "stamp"
 
 
 @dataclass(frozen=True)
@@ -47,11 +62,14 @@ class ElementContext:
     k: float                   # stroke scale: 1.0 at a 1080 px short side, as the Classic overlay
     map_rect: QRectF
     map_point: Callable[[float, float], QPointF] | None
+    plates: Mapping[str, QRectF]   # PLATES + STAMP -> rect, read-only copies
+    safe: QRectF                   # the frame inset by the Classic margin
 
 
 class OverlayElement(Protocol):
     name: str
     layer: str
+    # optional: `replaces: tuple[str, ...]` — Classic PLATES this element stands in for
 
     def prepare(self, ctx: ElementContext) -> bool: ...
 
@@ -70,6 +88,10 @@ def build(names, ctx: ElementContext) -> list[OverlayElement]:
         if factory is None:
             raise OverlayElementError(f"unknown overlay element {name!r} (known: {sorted(REGISTRY)})")
         element = factory()
+        bad = set(getattr(element, "replaces", ())) - set(PLATES)
+        if bad:
+            raise OverlayElementError(f"the overlay element {name!r} cannot replace {sorted(bad)}: "
+                                      f"only the Classic plates {list(PLATES)} can be replaced")
         try:
             ready = element.prepare(ctx)
         except Exception as exc:  # noqa: BLE001 — re-raised, named
@@ -77,6 +99,11 @@ def build(names, ctx: ElementContext) -> list[OverlayElement]:
         if ready:
             out.append(element)
     return out
+
+
+def replaced(elements) -> frozenset[str]:
+    """The Classic plates the prepared `elements` stand in for: the painter skips these."""
+    return frozenset(name for e in elements for name in getattr(e, "replaces", ()))
 
 
 def paint_layer(elements, p: QPainter, vals, layer: str) -> None:

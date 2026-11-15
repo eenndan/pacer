@@ -515,6 +515,21 @@ class ExportController:
             _log.warning("ghost availability unknown", exc_info=True)
             return "The ghost is not available for this session."
 
+    def _ghostless_files(self, lap: int) -> str:
+        """For an All-laps batch with the ghost ticked: one line naming the files that will carry
+        no ghost and why ("" when every file has one). The best lap's own file is always one."""
+        session = getattr(self.win, "session", None)
+        try:
+            ids = export_video.scope_lap_ids(session, export_video.SCOPE_ALL_LAPS, lap)
+            why = {i: ghost.unavailable_reason(session, i) for i in ids}
+        except Exception:  # noqa: BLE001 — a hint never blocks an export
+            _log.warning("ghost availability per lap unknown", exc_info=True)
+            return ""
+        out = [w for w in why.values() if w is not None]
+        if not out:
+            return ""
+        return (f"No ghost in {plural(len(out), 'file')} of {len(ids)}: " + " ".join(out))
+
     def _remember_export_prefs(self, indices: dict) -> None:
         """Persist the picker's choices, `{pref key: combo index}`. Fully guarded, like
         set_last_dir: remembering a preference must never disrupt an export the user has already
@@ -900,6 +915,10 @@ class ExportController:
             lines = [f"Renders {what}."]
             if no_ghost is not None and ghost_box.isChecked():
                 lines.append(f"No ghost in this export: {no_ghost}")
+            elif scope == export_video.SCOPE_ALL_LAPS and ghost_box.isChecked():
+                missing = self._ghostless_files(lap)
+                if missing:
+                    lines.append(missing)
             source = export_video.known_video_size(src)
             fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
             how = ("source aspect" if aspect == export_video.ASPECT_SOURCE else

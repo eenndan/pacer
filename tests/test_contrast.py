@@ -48,6 +48,20 @@ from studio.theme import C  # noqa: E402
 
 _STUDIO = os.path.join(_REPO, "studio")
 
+# App SUBPACKAGES walked like the top level, each file named `<package>/<file>` (test_layering's
+# `_SUBPACKAGES`): `studio/overlay/` holds the export's overlay elements, and a module one folder
+# down must not slip past this guard.
+_SUBPACKAGES = ("overlay",)
+
+
+def _studio_files() -> list[str]:
+    """Every studio .py file this guard walks: the top level, then each of `_SUBPACKAGES`."""
+    names = [fn for fn in os.listdir(_STUDIO) if fn.endswith(".py")]
+    for pkg in _SUBPACKAGES:
+        names += [f"{pkg}/{fn}" for fn in os.listdir(os.path.join(_STUDIO, pkg))
+                  if fn.endswith(".py")]
+    return sorted(names)
+
 
 # ============================================================== colour science (self-contained)
 # Machado 2009 severity-1.0 deuteranopia, applied in LINEAR-light RGB (the domain the matrix is
@@ -158,9 +172,7 @@ def test_no_module_constant_freezes_a_palette_hue():
         ("theme.py", "_PALETTES"),
     }
     offenders = []
-    for fn in sorted(os.listdir(_STUDIO)):
-        if not fn.endswith(".py"):
-            continue
+    for fn in _studio_files():
         for name, what in _module_constant_hue_bindings(os.path.join(_STUDIO, fn)):
             if (fn, name) not in EXEMPT:
                 offenders.append(f"{fn}::{name} = {what}")
@@ -220,9 +232,7 @@ def test_no_bare_palette_hue_is_read_anywhere_in_studio():
         # own token, C.position — it no longer reads a swappable hue, so it needs no exemption.)
     }
     offenders = []
-    for fn in sorted(os.listdir(_STUDIO)):
-        if not fn.endswith(".py"):
-            continue
+    for fn in _studio_files():
         for lineno, attr, owner in _hue_reads(os.path.join(_STUDIO, fn)):
             if (fn, owner) not in EXEMPT:
                 offenders.append(f"{fn}:{lineno} C.{attr} (in {owner})")

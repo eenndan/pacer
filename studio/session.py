@@ -4342,7 +4342,8 @@ class Session:
         MEMOIZED on its whole input set (`_same_inputs`: the ids, the best lap, the trust state and
         each lap's cached trace and warp objects), so a re-segment — which replaces every one of
         those — misses on the next read without an invalidation of its own, and a repeat read is
-        the same object. Not per tick: the race's controller holds the result."""
+        the same object. Only the default field is memoized; a read with `lap_ids` builds its own
+        field and leaves that memo alone. Not per tick: the race's controller holds the result."""
         clean = self.valid_lap_ids()
         if lap_ids is None:
             n = self.lap_count() if getattr(self, "laps", None) is not None else 0
@@ -4358,7 +4359,10 @@ class Session:
                   for i in ids if i in clean_set]
         trust = (bool(self.timing_verified), str(self.timing_quality.clock))
         key = (ids, best, btd, trust, tuple(inputs))
-        memo = getattr(self, "_race_memo", None)
+        # Only the DEFAULT field is memoized: it is the one the app holds and re-reads (the View
+        # menu, the controller). A caller's own field (the export ghost's two laps) is built fresh
+        # and never evicts it, so a repeat default read stays the same object.
+        memo = getattr(self, "_race_memo", None) if lap_ids is None else None
         if memo is not None and _same_inputs(memo[0], key):
             return memo[1]
         excluded = {i: lap_race.EXCLUDED_NOT_CLEAN for i in ids if i not in clean_set}
@@ -4377,7 +4381,8 @@ class Session:
             out = lap_race.build(laps, self._race_lap(best, btd, bw), excluded,
                                  provisional=not trust[0],
                                  clock_estimated=self.timing_quality.media_clock)
-        self._race_memo = (key, out)
+        if lap_ids is None:
+            self._race_memo = (key, out)
         return out
 
     def _race_lap(self, lap_id: int, td, warp) -> lap_race.RaceLap:

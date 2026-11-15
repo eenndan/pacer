@@ -250,7 +250,12 @@ _MISSING = object()
 def test_no_ghost_where_the_rules_forbid_one():
     f = _fixture()
     s, lap, best = f["s"], f["lap"], f["best"]
-    positive, _p = _ghost_pixels(s, lap, elements=("ghost",))
+    # The render thread reads its own two-lap field and never the app's default one.
+    asked = []
+    real_race = s.race_tracks
+    with _Patched(s, race_tracks=lambda ids=None: (asked.append(ids), real_race(ids))[1]):
+        positive, _p = _ghost_pixels(s, lap, elements=("ghost",))
+    assert asked and None not in asked, f"the export built the default Lap Race field: {asked}"
     assert positive > 6 * 30, f"the positive control found only {positive} ghost pixels"
     cases = {}
     cases["the best lap itself"] = _ghost_pixels(s, best, elements=("ghost",))
@@ -595,12 +600,17 @@ def test_the_dialog_offers_the_ghost_off_by_default_and_says_where_it_cannot_app
 
     def second(dlg, rows):
         again["checked"] = rows["Extras"].isChecked()
+        rows["Export"].setCurrentIndex(2)        # All laps: the best lap's own file has none
+        again["all"] = _hint(dlg)
         rows["Export"].setCurrentIndex(1)        # Best lap
         again["hint"] = _hint(dlg)
         return QDialog.Accepted
 
     choice = _open_dialog(lap, second)
     assert again["checked"] is True
+    n = len(f["s"].valid_lap_ids())
+    best_name = f"Lap {f['best'] + 1} is your best lap"
+    assert f"No ghost in 1 file of {n}:" in again["all"] and best_name in again["all"], again["all"]
     assert "No ghost in this export" in again["hint"], again["hint"]
     assert choice.config.elements == (), "a disabled ghost still reached the render"
     # Use defaults puts it back off — only offered when the dialog opens on Source.
@@ -618,8 +628,131 @@ def test_the_dialog_offers_the_ghost_off_by_default_and_says_where_it_cannot_app
     print("ok the dialog: Extras ▸ ghost off by default, remembered, disabled with its reason")
 
 
+def _past_finish(s, lap, **kw):
+    """The end of `lap` after the best lap's own lap time, then 2 s of its run-off (lead_in 0, so
+    every frame before the line is inside the lap; `lead_out` keeps the finish where it is)."""
+    base = ev.build_lap_spec(s, _fixture()["out"], lap, config=_cfg(out_height=PIC_H, **kw),
+                             lead_out=2.0)
+    late = min(6.0, s.lap_time(lap) - s.lap_time(_fixture()["best"]) - 0.5)
+    return replace(base, t0=base.lap_t1 - late)
+
+
+def test_the_ring_parks_on_the_finish_and_goes_when_the_lap_ends():
+    """Once the best lap has finished, the ring PARKS on its finish (race_state holds a finished
+    lap there, as the in-app Lap Race parks its dots); when the exported lap crosses the line the
+    ring goes — the run-off frames are the Classic ones, byte for byte."""
+    f = _fixture()
+    s, lap, best = f["s"], f["lap"], f["best"]
+    assert s.lap_time(lap) - s.lap_time(best) > 3.0, "the fixture's laps are too close to park"
+    on, off, r_on, enc, spec = _pair(_past_finish, s, lap)
+    painter = r_on._painter
+    el = painter.elements[0]
+    # Where the best lap ends: its position at any lap time past its own lap time.
+    end = lap_race.race_state(el._tracks, float(s.lap_time(best)) + 10.0)
+    row = end.ids.index(best)
+    q = painter._map._proj(float(end.x[row]), float(end.y[row]))
+    park = np.array([q.x(), q.y()])
+    inside = after = 0
+    for i, (a, b) in enumerate(zip(on, off, strict=True)):
+        t = float(r_on._times[i])
+        ia = _as_img(a, enc)
+        if t >= spec.lap_t1:
+            assert a == b, f"frame {i} ({t - spec.lap_t1:+.3f} s past the line) still has a ghost"
+            assert not _cyan(ia).any()
+            after += 1
+        elif t < spec.lap_t1 - 2 * ev.ON_LINE_S:
+            vals = ev.overlay_values_at(s, t, spec)
+            assert np.hypot(*(_ghost_px(painter, el, vals) - park)) < 1e-6, \
+                f"frame {i}: the ring is not parked on the best lap's finish"
+            kart = painter._map.marker_and_tail(vals.tt)[0]
+            if np.hypot(kart.x() - park[0], kart.y() - park[1]) < 20.0:
+                continue        # the kart arriving at the line covers the parked ring
+            ys, xs = np.nonzero(_cyan(ia))
+            assert len(xs) and np.hypot(xs - park[0], ys - park[1]).max() < 6.0, \
+                f"frame {i}: no ring at the parked place {park}"
+            inside += 1
+    assert inside > 40 and after > 40, (inside, after)
+    print(f"ok the ring parks on the finish ({inside} frames) and goes after the line ({after})")
+
+
+class _Plates:
+    """A fake style element: replaces the Classic lap strip and records the plates it was shown."""
+    name, layer, replaces = "test-plates", overlay.LAYER_TOP, ("strip",)
+    seen = None
+
+    def prepare(self, ctx):
+        type(self).seen = ctx
+        return True
+
+    def paint(self, p, vals):
+        pass
+
+
+class _Stamp:
+    name, layer, replaces = "test-stamp", overlay.LAYER_TOP, ("stamp",)
+
+    def prepare(self, ctx):
+        return True
+
+    def paint(self, p, vals):
+        pass
+
+
+def test_an_element_can_replace_a_classic_plate_and_reads_every_plates_rect():
+    f = _fixture()
+    s, lap = f["s"], f["lap"]
+    overlay.REGISTRY.update({_Plates.name: _Plates, _Stamp.name: _Stamp})
+    try:
+        spec = _spec(s, lap, elements=(_Plates.name,))
+        classic = _spec(s, lap)
+        p_on = ev.OverlayPainter(s, spec, 1920, 1080, 30.0)
+        p_off = ev.OverlayPainter(s, classic, 1920, 1080, 30.0)
+        ctx = _Plates.seen
+        # The rects are the painter's own, read-only, plus the safe area.
+        want = {"gmeter": p_off._g_rect, "map": p_off._map._box, "readout": p_off._readout_rect,
+                "strip": p_off._strip_rect, overlay.STAMP: p_off._stamp_rect}
+        assert dict(ctx.plates) == want, (dict(ctx.plates), want)
+        try:
+            ctx.plates["strip"] = None
+            raise AssertionError("the plates mapping is writable")
+        except TypeError:
+            pass
+        m = classic.config.margin_frac * 1080
+        assert ctx.safe.adjusted(-m, -m, m, m) == ev.QRectF(0, 0, 1920, 1080), ctx.safe
+        # The replaced strip is not painted; every other pixel is the Classic frame's; and what
+        # the Classic frame painted there lies inside the strip's rect.
+        r = p_off._strip_rect
+        for t in _times(spec, 4):
+            _v, a = _painted(p_on, s, spec, t)
+            _v, b = _painted(p_off, s, classic, t)
+            diff = np.argwhere((a != b).any(axis=2))
+            assert len(diff), f"t={t:.2f}: the replaced strip was still painted"
+            assert (diff[:, 1] >= r.left() - 2).all() and (diff[:, 1] <= r.right() + 2).all() \
+                and (diff[:, 0] >= r.top() - 2).all() and (diff[:, 0] <= r.bottom() + 2).all(), \
+                f"t={t:.2f}: replacing the strip changed pixels outside its rect {r}"
+            y0, y1 = int(r.top()) + 2, int(r.bottom()) - 2
+            x0, x1 = int(r.left()) + 2, int(r.right()) - 2
+            assert (a[y0:y1, x0:x1, 3] == 0).all(), "something painted where the strip was"
+            assert (b[y0:y1, x0:x1, 3] > 0).mean() > 0.9, "the Classic strip does not fill its rect"
+        # The honesty stamp is not a plate: no element may replace it.
+        err = None
+        try:
+            ev.OverlayPainter(s, _spec(s, lap, elements=(_Stamp.name,)), 1920, 1080, 30.0)
+        except overlay.OverlayElementError as exc:
+            err = exc
+        assert err is not None and "stamp" in str(err), repr(err)
+        for sp in (spec, classic):
+            sp.source.cleanup()
+    finally:
+        overlay.REGISTRY.pop(_Plates.name, None)
+        overlay.REGISTRY.pop(_Stamp.name, None)
+    print("ok an element replaces the strip (nothing else moves) and reads every plate's rect")
+
+
 def _run_all():
     for fn in (test_the_ghost_is_where_the_best_lap_was_and_its_gap_is_the_strips_delta,
+               test_the_ring_parks_on_the_finish_and_goes_when_the_lap_ends,
+               test_an_element_can_replace_a_classic_plate_and_reads_every_plates_rect,
                test_the_ghost_is_drawn_under_the_kart_dot,
                test_no_ghost_where_the_rules_forbid_one,
                test_the_ghost_colour_is_its_own_in_both_palettes,

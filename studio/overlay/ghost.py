@@ -20,6 +20,23 @@ Never the ideal lap: it is a composite of segments, not a drive with a position 
 The ring is shown only between the lines: in the run-up there is no lap clock yet, and in the
 run-off the strip's Δ is frozen at the finish while the best lap has long finished.
 
+AFTER THE BEST LAP HAS FINISHED, while the exported lap is still running, the ring PARKS ON THE
+FINISH LINE — `race_state` holds a finished lap at its finish, as the in-app Lap Race parks its
+finished dots. That is the true answer to "where was the best lap at this lap time": done. The gap
+to the dot then keeps growing with the strip's Δ; the ring goes when the exported lap crosses.
+
+AN ESTIMATED CLOCK (an older camera's media-clock fallback, every lap time ±0.15 s) still shows
+the ghost. The clock error moves the whole recording's times together: the kart dot and the ring
+are both read on it, so they shift together, and the gap between them is a difference of two lap
+times on the same clock — the strip's Δ, which the app already shows under that clock's caveat.
+
+THE TWO HALVES RUN ON TWO THREADS. `unavailable_reason` (the dialog, GUI thread) reads the Lap
+Race's default field — the memo the app already holds — because only that keeps each left-out
+lap's reason. The render (`GhostElement.prepare`, the export's worker thread) never builds that
+field: it asks the session-wide rules and then the two-lap field it needs anyway to paint. A lap
+is left out of a field for reasons of its own (not clean, unmatched, a dropout), so either lap
+being left out drops the two-lap field below `lap_race.MIN_FIELD` — the same verdict, no reason.
+
 THE LOOK is the app's own "other lap" language (map_view's compare ghost): the compare cyan as a
 HOLLOW ring on a dark plate, where the kart is a filled hot-coral dot — so it never reads as you,
 or as the amber tail, or the white line, in either palette (the palette moves only the Δ hues).
@@ -48,9 +65,8 @@ def _lap_name(lap_id: int) -> str:
     return f"Lap {lap_id + 1}"
 
 
-def unavailable_reason(session, lap_id: int | None, follow_laps: bool = False) -> str | None:
-    """Why `lap_id`'s export can have no ghost, as a sentence for the dialog — or None when it can.
-    `lap_id` None asks only the session-wide rules (the All-laps scope: each lap is asked again)."""
+def _session_reason(session, lap_id: int | None, follow_laps: bool) -> str | None:
+    """The rules that need no Lap Race field: cheap, and safe on any thread."""
     if follow_laps:
         return "The full-session export follows every lap, so there is no one lap to race."
     best_fn = getattr(session, "best_lap_id", None)
@@ -65,9 +81,20 @@ def unavailable_reason(session, lap_id: int | None, follow_laps: bool = False) -
     if lap_id is None:
         return None
     if int(lap_id) == int(best):
-        return "This is your best lap: the ghost would be itself."
-    # Asked of the in-app Lap Race's own field (every clean lap: the memo the app already holds),
-    # so a left-out lap carries its reason; a two-lap field would drop to None and lose it.
+        return f"{_lap_name(lap_id)} is your best lap: the ghost would be itself."
+    return None
+
+
+def unavailable_reason(session, lap_id: int | None, follow_laps: bool = False) -> str | None:
+    """Why `lap_id`'s export can have no ghost, as a sentence for the dialog — or None when it can.
+    `lap_id` None asks only the session-wide rules (the All-laps scope: each lap is asked again).
+    For the GUI thread: it reads the Lap Race's default field (see the module doc)."""
+    why = _session_reason(session, lap_id, follow_laps)
+    if why is not None or lap_id is None:
+        return why
+    best = int(session.best_lap_id())
+    # The in-app Lap Race's own field (every clean lap: the memo the app already holds), so a
+    # left-out lap carries its reason; a two-lap field would drop to None and lose it.
     race = getattr(session, "race_tracks", None)
     tracks = race() if callable(race) else None
     if tracks is None:
@@ -89,11 +116,15 @@ class GhostElement:
 
     def prepare(self, ctx: ElementContext) -> bool:
         spec = ctx.spec
-        if ctx.map_point is None or unavailable_reason(ctx.session, spec.lap_id,
-                                                       spec.follow_laps) is not None:
+        if ctx.map_point is None or _session_reason(ctx.session, spec.lap_id,
+                                                    spec.follow_laps) is not None:
             return False
         best = int(ctx.session.best_lap_id())
+        # The two-lap field only (never memoized, never the app's default field): None, or
+        # missing a lap, when the Lap Race leaves either out — see the module doc.
         self._tracks = ctx.session.race_tracks([int(spec.lap_id), best])
+        if self._tracks is None or not {int(spec.lap_id), best} <= set(self._tracks.ids):
+            return False
         self._best = best
         self._row = self._tracks.index(best)
         # The exported lap's own clock origin: race time 0 is this lap on its start line.
