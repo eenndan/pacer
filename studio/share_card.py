@@ -38,7 +38,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
+from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap
 
 from . import coaching, export_data, library, theme, trace_paint, units
@@ -586,6 +586,8 @@ _CORNER_LABEL_PX, _CORNER_LABEL_GAP = 22, 16.0
 # The speed key (the hero's: low end, ramp, high end with the unit), in the bottom-left band.
 _KEY_PX, _KEY_RAMP_PX, _KEY_RAMP_H = 22, 120.0, 6.0
 _KEY_INSET = 24
+# A corner name sits on its bend's outside, judged over the chord this many 10 Hz samples each side.
+_OUTWARD_SAMPLES = 8
 
 
 def lap_map_png(session, lap_id: int | None, *, unit: str | None = None,
@@ -667,6 +669,20 @@ def _paint_corners(p: QPainter, session, lap_id, unit, focus, fit, px, py, box: 
     ok = np.isfinite(px) & np.isfinite(py)
     mx, my = float(np.mean(px[ok])), float(np.mean(py[ok]))
     line = (px, py, _MAP_LINE_PX / 2 + 3)    # a name keeps 3 px off the line's edge
+
+    def outward(c: QPointF) -> float:
+        """The bend's OUTSIDE at apex `c`: from the midpoint of the chord a few samples either side
+        to the apex. The hero's "away from the centroid" put the names of two neighbouring infield
+        corners side by side on the real track (looked at: C3 and C6 at Sandown read as one
+        pair); a name on its own bend's outside cannot be mistaken for the next corner's."""
+        d = np.where(ok, np.hypot(px - c.x(), py - c.y()), np.inf)
+        i, k, n = int(np.argmin(d)), _OUTWARD_SAMPLES, len(px)
+        a, b = max(i - k, 0), min(i + k, n - 1)
+        vx, vy = c.x() - (px[a] + px[b]) / 2, c.y() - (py[a] + py[b]) / 2
+        if not (np.isfinite(vx) and np.isfinite(vy)) or math.hypot(vx, vy) < 2.0:
+            return math.atan2(c.y() - my, c.x() - mx)      # a straight: away from the centroid
+        return math.atan2(vy, vx)
+
     rings = [(cid, fit.point(*apexes[cid])) for cid in focus if cid in apexes]
     for _cid, c in rings:
         trace_paint.paint_ring(p, c, _RING_PX, QColor(theme.C.surface), _RING_RIM_PX, _RING_W_PX)
@@ -676,8 +692,8 @@ def _paint_corners(p: QPainter, session, lap_id, unit, focus, fit, px, py, box: 
     for cid, c in rings:
         text = f"C{cid}"
         tw, th = fm.horizontalAdvance(text) + 24, fm.height() + 8
-        rect = trace_paint.label_rect(c, math.atan2(c.y() - my, c.x() - mx), tw, th, placed, box,
-                                      _FOCUS_LABEL_GAP, line)
+        rect = trace_paint.label_rect(c, outward(c), tw, th, placed, box, _FOCUS_LABEL_GAP,
+                                      line)
         placed.append(rect)
         p.setPen(QPen(QColor(theme.C.accent), 2.0))
         p.setBrush(QColor(theme.C.canvas))
@@ -695,8 +711,7 @@ def _paint_corners(p: QPainter, session, lap_id, unit, focus, fit, px, py, box: 
             continue
         c = fit.point(*apexes[cid])
         text = f"C{cid}"
-        rect = trace_paint.label_rect(c, math.atan2(c.y() - my, c.x() - mx),
-                                      fm.horizontalAdvance(text) + 8, fm.height(), placed, box,
+        rect = trace_paint.label_rect(c, outward(c), fm.horizontalAdvance(text) + 8, fm.height(), placed, box,
                                       _CORNER_LABEL_GAP, line)
         placed.append(rect)
         p.drawText(rect, Qt.AlignCenter, text)
