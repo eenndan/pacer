@@ -5413,6 +5413,154 @@ def test_every_report_table_in_a_section_column_is_registered_with_the_packer():
           f"{sum(len(g) for g in v._column_tables)} tables in {len(v._columns)} columns")
 
 
+# ------------------------------------------------------------------ the middle half (cool/middle-half)
+# σ counts every clean lap, so one spin can carry it; the middle half is a second, robust reading
+# printed beside it on the σ tile's caption line and in the Corners table's σ hover. It removes no
+# lap and ranks nothing (refusal §14 is not reopened).
+def test_middle_half_is_half_the_interquartile_range_and_none_below_five():
+    from studio.stats import (
+        MIN_MIDDLE_HALF_N,
+        CornerReport,
+        corner_report,
+        fmt_middle_half,
+        middle_half,
+    )
+    assert MIN_MIDDLE_HALF_N == 5
+    # Odd n: numpy's linear quartiles land on order statistics 2 and 4 — and the 100 s outlier
+    # reaches neither.
+    assert middle_half([1.0, 2.0, 3.0, 4.0, 100.0]) == 1.0
+    # Even n: interpolated, 2.25 and 4.75.
+    assert middle_half([6.0, 1.0, 5.0, 2.0, 4.0, 3.0]) == 1.25
+    # Below five times, nothing — and non-finite values do not count towards the five.
+    assert middle_half([1.0, 2.0, 3.0, 4.0]) is None
+    assert middle_half([1.0, 2.0, 3.0, 4.0, float("nan")]) is None
+    assert middle_half([]) is None
+    # All equal: a real 0.0 (not None), printed with the precision floor rather than "±0.00 s".
+    assert middle_half([45.2] * 6) == 0.0
+    assert fmt_middle_half(0.0) == "< ±0.07 s"
+    assert fmt_middle_half(0.0699) == "< ±0.07 s"
+    assert fmt_middle_half(0.07) == "±0.07 s"
+    assert fmt_middle_half(0.114) == "±0.11 s"
+    assert fmt_middle_half(None) is None
+    # Carried additively on both dataclasses, beside σ.
+    assert pace_stats([1.0, 2.0, 3.0, 4.0, 100.0]).middle_half == 1.0
+    assert pace_stats([1.0, 2.0, 3.0, 4.0]).middle_half is None
+    rows = corner_report([1, 2], [1, -1],
+                         [[3.0 + 0.1 * i, 5.0] for i in range(5)] + [[3.9, float("nan")]],
+                         [[60.0, 50.0]] * 6, [[0.9, 0.9]] * 6)
+    assert isinstance(rows[0], CornerReport)
+    assert rows[0].middle_half_s == middle_half([3.0, 3.1, 3.2, 3.3, 3.4, 3.9])
+    assert rows[1].middle_half_s == 0.0                      # five finite passes of 5.0 s
+    print("test_middle_half_is_half_the_interquartile_range_and_none_below_five OK")
+
+
+def _spin_pace():
+    """Twelve laps of one synthetic driver (σ 0.10 s, seeded) and one spin, +10 s."""
+    rng = np.random.default_rng(1115)
+    laps = list(45.0 + rng.normal(0.0, 0.10, 12)) + [55.0]
+    return pace_stats(laps)
+
+
+def test_one_spin_carries_sigma_and_both_are_on_the_tile():
+    _app()
+    from studio.stats import fmt_middle_half
+    from studio.stats_panel import SIGMA_TOOLTIP, StatsView
+    pace = _spin_pace()
+    assert pace.sigma > 5 * pace.middle_half, (pace.sigma, pace.middle_half)
+    sess = _fake_view_session()
+    sess.stats.pace = lambda: pace
+    v = StatsView(sess)
+    assert v.t_sigma.value.text() == f"{pace.sigma:.2f} s"
+    assert v.t_sigma.caption.text() == f"σ lap · middle half {fmt_middle_half(pace.middle_half)}"
+    assert v.t_sigma.toolTip() == SIGMA_TOOLTIP
+    for words in ("a spin included", "central 50 %", "Neither removes a lap"):
+        assert words in SIGMA_TOOLTIP, words
+    # The stub's two-lap pace has no middle half: the caption is σ's own, byte for byte.
+    v2 = StatsView(_fake_view_session())
+    assert v2.t_sigma.value.text() == "1.27 s"
+    assert v2.t_sigma.caption.text() == "σ lap"
+    print(f"test_one_spin_carries_sigma_and_both_are_on_the_tile OK (σ {pace.sigma:.2f} s, "
+          f"middle half {fmt_middle_half(pace.middle_half)})")
+
+
+def test_the_corner_sigma_hover_carries_the_middle_half_only_with_five_passes():
+    _app()
+    from studio.stats import CornerReport
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.corner_report = lambda: [
+        CornerReport(cid=1, direction=1, n=8, best_s=3.20, median_s=3.30, sigma_s=0.41,
+                     median_loss_s=0.10, apex_best_kmh=62.0, apex_median_kmh=60.0,
+                     grip_median=0.95, score=0.041, n_laps=8, middle_half_s=0.114),
+        CornerReport(cid=2, direction=-1, n=4, best_s=5.10, median_s=5.50, sigma_s=0.20,
+                     median_loss_s=0.40, apex_best_kmh=45.0, apex_median_kmh=43.0,
+                     grip_median=None, score=0.08, n_laps=4, middle_half_s=None),
+        CornerReport(cid=3, direction=1, n=6, best_s=2.10, median_s=2.12, sigma_s=0.30,
+                     median_loss_s=0.02, apex_best_kmh=70.0, apex_median_kmh=69.0,
+                     grip_median=0.9, score=0.006, n_laps=6, middle_half_s=0.02),
+    ]
+    v = StatsView(sess)
+    t = v.corners.table
+    assert t.columnCount() == 8                              # no new column
+    assert t.item(0, 3).text() == "0.41"                     # σ itself unchanged
+    assert t.item(0, 3).toolTip() == (
+        "middle half ±0.11 s about C1's median: the central 50 % of its 8 counted passes. "
+        "σ counts every one of them."), t.item(0, 3).toolTip()
+    assert t.item(1, 3).toolTip() == ""                      # 4 passes: absent, not "—"
+    assert t.item(2, 3).toolTip().startswith("middle half < ±0.07 s about C3's median")
+    # Nothing marks or ranks by it: the marked loss cells are still the σ × loss top.
+    assert "middle half" not in t.item(1, 4).toolTip()
+    print("test_the_corner_sigma_hover_carries_the_middle_half_only_with_five_passes OK")
+
+
+_DEMO: dict = {}
+
+
+def _shipped_demo_session():
+    """The SHIPPED demo's telemetry (`make_demo.make(render=False)`: the session `--demo` opens,
+    under the flat picture), loaded once per process into a private temp directory."""
+    if "s" not in _DEMO:
+        import tempfile
+
+        from studio.dev import make_demo as md
+        from studio.session import Session
+        tmp = tempfile.TemporaryDirectory(prefix="stats_demo_")
+        path = os.path.join(tmp.name, "demo", "GX019001.MP4")
+        md.make(path, render=False)
+        _DEMO.update(tmp=tmp, s=Session.load([path]))
+    return _DEMO["s"]
+
+
+def test_the_demo_tile_prints_the_middle_half_and_keeps_its_row():
+    """On the shipped demo (14 clean laps, one of them ~5 s off): the caption is the function's
+    value formatted, σ's own text is what it always was, and the longer caption neither makes the
+    tile taller than its row-mates nor clips at the narrowest pane the page packs."""
+    _app()
+    from studio.stats import fmt_middle_half, middle_half
+    from studio.stats_panel import StatsView
+    s = _shipped_demo_session()
+    pace = s.stats.pace()
+    half = middle_half([s.lap_time(i) for i in s.consistency_lap_ids()])
+    assert half is not None and pace.middle_half == half
+    v = StatsView(s)
+    v.show()
+    assert v.t_sigma.value.text() == f"{pace.sigma:.2f} s"
+    assert v.t_sigma.caption.text() == f"σ lap · middle half {fmt_middle_half(half)}"
+    assert pace.sigma > 3 * half, (pace.sigma, half)        # the slow lap carries σ here too
+    for w in (420, 520, 700, 1440):
+        v.resize(w, 900)
+        _pump()
+        tiles = v._tile_grids[1][1]                          # the PACE grid
+        heights = {t.height() for t in tiles if t.isVisible()}
+        assert len(heights) == 1, (w, [(t.caption.text(), t.height()) for t in tiles])
+        cap = v.t_sigma.caption
+        assert cap.width() >= cap.fontMetrics().horizontalAdvance(cap.text()), (
+            w, cap.width(), cap.text())
+    v.hide()
+    print(f"test_the_demo_tile_prints_the_middle_half_and_keeps_its_row OK "
+          f"(σ {pace.sigma:.2f} s, middle half {fmt_middle_half(half)})")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it

@@ -840,6 +840,24 @@ def peak_brake_tooltip_gps(why: str) -> str:
             f"lap's own fixes (see DRIVING). One axis, more than one filter.")
 
 
+SIGMA_CAPTION = "σ lap"
+# THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
+# tile taller than its row-mates, and a grid row is as tall as its tallest tile. The caption is
+# 134 px at its longest, the width of "race pace · best 3-lap run" in the same grid.
+SIGMA_TOOLTIP = (
+    "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half is "
+    "the range the central 50 % of your clean laps fall in, ± about the median. Neither removes "
+    f"a lap. The middle half is shown from {stats_service.MIN_MIDDLE_HALF_N} clean laps, and "
+    f"under ±{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s it is inside timing precision and reads "
+    f"< ±{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s.")
+
+
+def sigma_caption(middle_half: float | None) -> str:
+    """The σ tile's caption: "σ lap", plus the middle half when there are laps enough for one."""
+    shown = stats_service.fmt_middle_half(middle_half)
+    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half {shown}"
+
+
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
                 "set every σ statistic uses). Spread = median − best: what the typical lap "
                 "gives away to your demonstrated pace.")
@@ -1270,7 +1288,8 @@ class StatsView(QWidget):
             "the single glory lap.")
         self.t_rolling = Tile("best rolling")
         self.t_rolling.setToolTip(ROLLING_TOOLTIP)
-        self.t_sigma = Tile("σ lap")
+        self.t_sigma = Tile(SIGMA_CAPTION)
+        self.t_sigma.setToolTip(SIGMA_TOOLTIP)
         self.t_trend = Tile("trend")
         self.t_trend.setToolTip(
             "Robust lap-time trend over the session (Theil–Sen median slope — one traffic "
@@ -2212,13 +2231,15 @@ class StatsView(QWidget):
             # median IS the only lap.
             self.t_median.set(fmt_time(pace.median),
                               f"median · {pace.n} clean lap{'' if pace.n == 1 else 's'}")
-            self.t_sigma.set(f"{pace.sigma:.2f} s" if pace.sigma is not None else None)
+            self.t_sigma.set(f"{pace.sigma:.2f} s" if pace.sigma is not None else None,
+                             sigma_caption(pace.middle_half))
             rp = st.race_pace()
             self.t_race_pace.set(fmt_time(rp) if rp is not None else None)
             self._set_trend(st.pace_trend())
         else:
             for t in (self.t_best, self.t_median, self.t_sigma, self.t_race_pace, self.t_trend):
                 t.set(None)
+            self.t_sigma.set(None, SIGMA_CAPTION)
         # The rolling best is a stitched target, not a measured lap — it reads straight off
         # Session (never the pace summary) so it survives a session with no clean-lap stats.
         rolling = (session.best_rolling_lap()

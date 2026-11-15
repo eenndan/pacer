@@ -45,6 +45,7 @@ import numpy as np
 
 from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print
 from .consistency import sigma
+from .library import PB_PRECISION_S
 
 if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
     from .gmeter import GMeter
@@ -97,6 +98,21 @@ ODOMETER_NOTE = (
 # count) — the same floor consistency.sigma applies. One lap has no spread and is trivially
 # within 1% of itself; printing "+0.00 s" and "1 / 1" dresses that up as a measurement.
 MIN_DIST_LAPS = 2
+# THE MIDDLE HALF's floor: the fewest times its quartiles are read from. σ counts every clean lap,
+# so one slow lap can speak for the session (the shipped demo: σ 1.54 s, middle half ±0.30 s; 13
+# of its 14 clean laps lie within 44.95-46.21 s and one took 51.13 s). The middle half is the
+# robust second reading, and it is only robust once ONE outlier cannot reach a
+# quartile: with numpy's linear interpolation Q3 sits at position 0.75·(n−1), which touches the
+# slowest time while n < 5. Measured on synthetic sets (laps σ 0.10 s, one +10 s spin, 4000 draws):
+#     n                        3      4      5      6      8      12
+#     |Δ middle half| median   2.48   1.25   0.017  0.015  0.011  0.007   s
+# Stability to the printed digit was asked and cannot decide it: under ±0.07 s timing jitter
+# neither the middle half nor σ holds its 0.01 s digit at any n from 3 to 12 (the middle half moves
+# a digit in 55-75 % of draws, σ in 48-80 %; its jitter σ 0.013-0.026 s, σ's 0.012-0.028 s).
+MIN_MIDDLE_HALF_N = 5
+# Below this the middle half is inside timing precision, and it is worded with the FLOOR, never
+# the value — library's rule for a sub-floor gap ("< ±0.07 s", not "±0.03 s").
+MIDDLE_HALF_FLOOR_S = PB_PRECISION_S
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
 # so the trend statistic reports None and the tile shows a dash.
 TREND_MIN_LAPS = 6
@@ -380,6 +396,8 @@ class CornerReport:
     #                                 either input is missing), same product as consistency.py
     n_laps: int | None = None       # laps with a corner row at all (the denominator of `n`);
     #                                 None only from a caller that never counted them
+    middle_half_s: float | None = None  # `middle_half` of the counted times; None below
+    #                                     MIN_MIDDLE_HALF_N
 
 
 @dataclass(frozen=True)
@@ -506,6 +524,7 @@ class PaceStats:
     spread: float | None  # median − best: what the TYPICAL lap gives away (s, ≥ 0). None below
     #                       MIN_DIST_LAPS — with one lap the median IS the best and the honest
     #                       answer is "unknown", not the +0.00 s that reads as a measurement.
+    middle_half: float | None = None  # `middle_half` of the same laps; None below MIN_MIDDLE_HALF_N
 
 
 @dataclass(frozen=True)
@@ -933,7 +952,33 @@ def pace_stats(lap_times) -> PaceStats | None:
     best = float(np.min(a))
     med = float(np.median(a))
     return PaceStats(n=len(a), best=best, median=med, sigma=sigma(a),
-                     spread=(med - best) if len(a) >= MIN_DIST_LAPS else None)
+                     spread=(med - best) if len(a) >= MIN_DIST_LAPS else None,
+                     middle_half=middle_half(a))
+
+
+def middle_half(values) -> float | None:
+    """The MIDDLE HALF's half-width: (Q3 − Q1) / 2, so the central 50 % of `values` lie within
+    ± this of their median (exactly so for a symmetric set; it is the half-width either way).
+    Quartiles are numpy's default `np.percentile` method, linear interpolation between order
+    statistics. Non-finite values are dropped; None with fewer than MIN_MIDDLE_HALF_N left (why
+    five: the constant's block). A second description of spread beside σ, never a replacement:
+    no value is removed or down-weighted, the quartiles simply do not reach the outer laps."""
+    a = np.asarray(list(values), float)
+    a = a[np.isfinite(a)]
+    if len(a) < MIN_MIDDLE_HALF_N:
+        return None
+    q1, q3 = np.percentile(a, [25, 75])
+    return float(q3 - q1) / 2.0
+
+
+def fmt_middle_half(half: float | None) -> str | None:
+    """The middle half as the page, the corner tooltip and the export print it: `±0.11 s`, or
+    `< ±0.07 s` inside timing precision (the floor, not the value). None passes through."""
+    if half is None:
+        return None
+    if half < MIDDLE_HALF_FLOOR_S:
+        return f"< ±{MIDDLE_HALF_FLOOR_S:.2f} s"
+    return f"±{half:.2f} s"
 
 
 def peak_g(lat_g, long_g) -> tuple[float | None, float | None]:
@@ -1039,6 +1084,7 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
             apex_median_kmh=float(np.median(apex)) if len(apex) else None,
             grip_median=float(np.median(grip)) if len(grip) else None,
             score=(sig * loss) if sig is not None and loss is not None else 0.0,
+            middle_half_s=middle_half(times),
         ))
     return out
 

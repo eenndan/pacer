@@ -213,6 +213,9 @@ def test_stats_summary_values_equal_the_session_accessors():
     assert p["best rolling"] == fmt_time(s.best_rolling_lap())
     assert p["race pace · best 3-lap run"] == fmt_time(st.race_pace())
     assert p["σ lap"] == f"{pace.sigma:.2f} s"
+    # cool/middle-half: the σ tile's second reading travels with it, in the page's own words.
+    assert p["middle half · about the median"] == (
+        stats_service.fmt_middle_half(pace.middle_half) or ""), p
     assert p["consistency · σ/median"] == f"{st.pace_cov():.1f} %"
     count, n = st.laps_within_pct(1.0)
     assert p["within 1% of best"] == f"{count} / {n}"
