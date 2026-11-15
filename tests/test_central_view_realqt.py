@@ -967,6 +967,8 @@ def test_the_hero_colours_only_its_delta_never_the_speed():
         for d, hue in ((0.37, "behind"), (-0.37, "ahead")):
             s.delta_at_lap = lambda _lid, _t, d=d: d
             view._update_diff_box(view._playback.applied_t, 45.0, view._last_diff_lap)
+            from studio import motion
+            motion.finish_all()     # a ±0.37 s flip rolls with PACER_MOTION=1: read its END
             _APP.processEvents()
             delta_run, speed_run = _hero_ink(view)
             assert max(delta_run, key=delta_run.get) == hue, (d, delta_run, view.diff_box.text())
@@ -1005,6 +1007,8 @@ def test_the_three_delta_surfaces_name_their_baselines_and_agree_when_they_share
             for frac in (0.3, 0.6, 0.9):
                 view.video.positionChanged.emit(float(tt[int(frac * (len(tt) - 1))]))
                 view.tick()
+                from studio import motion
+                motion.finish_all()   # a paused seek rolls with PACER_MOTION=1: compare its END
                 kind = view.plots._delta_baseline_kind
                 title_word, strip_word = chart_words[kind]
                 hero, strip = view.diff_box.text(), view.plots.window_label.text()
@@ -2545,6 +2549,8 @@ def test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text():
     character for character — in both leads (Δideal and Δ to best)."""
     from studio import motion
     want = {}
+    pinned = os.environ.get("PACER_MOTION")
+    os.environ["PACER_MOTION"] = "0"      # the motion-off reference, even in a PACER_MOTION=1 run
     off, _s, _t0, _t1 = _real_central_view()
     try:
         for lead in ("ideal", "best"):
@@ -2553,9 +2559,13 @@ def test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text():
                 _seek(off, a)
                 _seek(off, b)
                 want[(lead, a, b)] = _hero_state(off)
-        assert motion.active_count() == 0, "offscreen motion must be off: nothing may run"
+        assert motion.active_count() == 0, "with motion off nothing may run"
     finally:
         off.dispose()
+        if pinned is None:
+            os.environ.pop("PACER_MOTION", None)
+        else:
+            os.environ["PACER_MOTION"] = pinned
     with _motion_on() as clock:
         view, _s, _t0, _t1 = _real_central_view()
         try:
@@ -2580,6 +2590,14 @@ def test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text():
                     assert not motion.timer_active()
                     assert _hero_state(view) == want[(lead, a, b)], (
                         _hero_state(view), want[(lead, a, b)])
+            # A reference flip rolls too — and frame 0 already NAMES the new reference: the old
+            # number under the old name would show a baseline the user just switched away from.
+            view.ideal_readout_btn.setChecked(True)
+            _seek(view, _LAP1_LATE_T)
+            motion.finish_all()
+            view.ideal_readout_btn.setChecked(False)
+            assert view._diff_roll is not None, "a reference flip with a jump did not roll"
+            assert view.diff_box.text().startswith("Δbest "), view.diff_box.text()
         finally:
             view.dispose()
     print("test_motion_the_delta_rolls_on_a_jump_and_ends_exactly_on_the_direct_text OK")

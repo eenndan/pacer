@@ -2250,6 +2250,11 @@ class CentralView(QWidget):
             paint(lead)
 
         self._diff_shown = lead
+        # Frame 0, painted NOW through the new moment's formatter: the old number, but already the
+        # new baseline's name, speed and rest note. Leaving the old text up until the first frame
+        # showed a reference the user had just switched away from (caught by the suite run with
+        # PACER_MOTION=1: the vs-ideal flip and the one-lap ideal gate).
+        paint(start)
         tr = motion.start(self.diff_box, motion.DELTA_ROLL_MS, step, end)
         self._diff_roll = None if tr.done else tr
 
