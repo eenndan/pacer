@@ -145,6 +145,46 @@ def test_nearest_index_whole_trace_vs_lap_scoped():
     print("test_nearest_index_whole_trace_vs_lap_scoped OK")
 
 
+def _tail_trace(gap_at: float | None = None):
+    """A 10 Hz drive along y = 0 at 10 m/s for 10 s (x = 10 t), optionally with a 1 s dropout
+    starting at `gap_at` (the samples inside it missing — what `gapfill` would leave)."""
+    tt = np.arange(0.0, 10.0001, 0.1)
+    if gap_at is not None:
+        tt = tt[(tt <= gap_at + 1e-9) | (tt >= gap_at + 1.0 - 1e-9)]
+    return tt, 10.0 * tt, np.zeros_like(tt)
+
+
+def test_trace_tail_ends_on_the_marker_and_spans_its_seconds():
+    """`trace_tail` (moved here from export_video beside `trace_point_at`; both maps draw it): the
+    path over the last TRACE_TAIL_S, oldest first, ENDING ON the marker and STARTING where the
+    marker was TRACE_TAIL_S ago — both ends interpolated, so its length in time never steps."""
+    from studio.timeline import TRACE_TAIL_S, trace_point_at, trace_tail
+    assert TRACE_TAIL_S == 2.4, "the export's comet length (E6)"
+    tt, tx, ty = _tail_trace()
+    for t in (5.0, 5.03, 5.07, 7.55):
+        xs, ys = trace_tail(tt, tx, ty, t)
+        hx, hy, _ = trace_point_at(tt, tx, ty, t)
+        assert (xs[-1], ys[-1]) == (hx, hy), "the tail does not end on the marker"
+        assert abs(xs[0] - 10.0 * (t - TRACE_TAIL_S)) < 1e-9, (t, xs[0])   # 2.4 s back, exactly
+        assert np.all(np.diff(xs) >= 0), "not oldest-first along the drive"
+    xs, _ = trace_tail(tt, tx, ty, 5.0, span=1.0)
+    assert abs((xs[-1] - xs[0]) / 10.0 - 1.0) < 1e-9, "a shorter span is that many seconds"
+    print("test_trace_tail_ends_on_the_marker_and_spans_its_seconds OK")
+
+
+def test_trace_tail_is_cut_at_a_dropout():
+    """A tail never bridges a GPS dropout (> GAP_TIME_S between samples): the straight chord across
+    a missing second runs somewhere the kart never was. 0.6 s after a 1 s gap, the 2.4 s tail is
+    only the 0.6 s since the receiver came back."""
+    from studio.timeline import trace_tail
+    tt, tx, ty = _tail_trace(gap_at=4.0)
+    xs, _ = trace_tail(tt, tx, ty, 5.6)
+    assert abs(xs[0] - 50.0) < 1e-9 and abs(xs[-1] - 56.0) < 1e-9, (xs[0], xs[-1])
+    xs, _ = trace_tail(tt, tx, ty, 8.0)       # past the gap by more than the span: whole again
+    assert abs(xs[0] - 56.0) < 1e-9
+    print("test_trace_tail_is_cut_at_a_dropout OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
