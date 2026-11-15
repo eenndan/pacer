@@ -184,4 +184,15 @@ nothing but stdout, unless `--png-dir` names where to save the 2x look. Its verd
 `studio/docs/refused-2026-09.md` §23.
 
     pixi run python -m studio.dev.probes.chart_aa
+
+`clip_refusals` measures four things proposed for the exported clip and the share card on synthetic
+telemetry only: a predicted lap time, a scrolling Δ-trace band, sector chips coloured beyond the
+noise, and per-corner cells on the card. `figures` is deterministic and
+`tests/test_measured_figures.py` re-runs it; `paint` and `budget` time the band and a real 4K
+export. Every recording is generated into one `mkdtemp` and removed. Its verdicts are
+`studio/docs/refused-2026-09.md` §24, §25, §26 and §27.
+
+    pixi run python -m studio.dev.probes.clip_refusals figures
+    pixi run python -m studio.dev.probes.clip_refusals paint
+    pixi run python -m studio.dev.probes.clip_refusals budget
 """

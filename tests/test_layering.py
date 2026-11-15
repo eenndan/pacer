@@ -96,7 +96,7 @@ ALLOWED_QT = {
     "app", "central_view", "coaching_panel", "command_palette", "export_compare",
     "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_controller",
-    "library_dialog", "map_view",
+    "library_dialog", "map_view", "motion",
     "marks_panel", "overlay/__init__", "overlay/corner_cards", "overlay/ghost", "overlays",
     "player_pane", "plots_view",
     "provenance_panel", "race_ladder",
