@@ -52,6 +52,10 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
      the pages' "a lap timed that way can read up to ~0.15 s off" is twice the per-fix worst case
      `media_clock.py` measured on the packet-spread clock, read out of its docstring — and so is
      `data_quality.MEDIA_CLOCK_LAP_ERROR`, the bound the app shows a GPS5 camera timed on that clock.
+  7. THE CLIP'S FOUR REFUSALS (§24-§27) ARE THEIR PROBE'S. They were measured on synthetic
+     telemetry only, so `studio/dev/probes/clip_refusals.py figures` is re-run here and every
+     deterministic figure in those sections is compared with it; §25's machine-dependent timings
+     are held to their own arithmetic. A negative control plants one wrong digit per section.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -66,6 +70,7 @@ from __future__ import annotations
 
 import ast
 import html
+import json
 import math
 import os
 import re
@@ -2395,6 +2400,235 @@ def test_the_pages_quote_the_refusal_count_as_a_true_floor():
           f"{sections} sections)")
 
 
+# ─── refusals §24-§27: the clip's four, re-run from their probe ─────────────────────────────────
+# The W3 design pass refused four candidates for the exported clip and the share card on the owner's
+# footage, which cannot be published. Their sections quote only synthetic telemetry, so unlike the
+# footage tables above every deterministic figure in them can be re-measured on every run:
+# `clip_refusals figures` generates its recordings in a mkdtemp (~30 s) and prints JSON, and each
+# table row and prose figure is compared with it. The paint and export timings in §25 are the
+# machine's, so those are held to their own arithmetic (the budget is the export's share, the
+# verdict is the band against the budget) like the #272 record above. Every constant a section
+# names is read from the code that applies it.
+_CLIP_PROBE = os.path.join(_REPO, "studio", "dev", "probes", "clip_refusals.py")
+_MAKE_DEMO = os.path.join(_REPO, "studio", "dev", "make_demo.py")
+_SYNTH_GOPRO = os.path.join(_REPO, "studio", "dev", "synth_gopro.py")
+_STATS_PY = os.path.join(_REPO, "studio", "stats.py")
+_CLIP_CACHE: dict = {}
+_NUM = re.compile(r"[+−-]?\d+(?:\.\d+)?")
+
+
+def _clip_figures() -> dict:
+    """The probe's `figures` JSON, run once per process (the bindings must be built)."""
+    if "fig" not in _CLIP_CACHE:
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PACER_APP_SUPPORT_JAIL="1")
+        out = subprocess.run([sys.executable, "-m", "studio.dev.probes.clip_refusals", "figures"],
+                             cwd=_REPO, env=env, capture_output=True, text=True, timeout=600)
+        assert out.returncode == 0, f"clip_refusals figures failed:\n{out.stderr[-3000:]}"
+        _CLIP_CACHE["fig"] = json.loads(out.stdout.strip().splitlines()[-1])
+    return _CLIP_CACHE["fig"]
+
+
+def _row_nums(section: str, label: str) -> list[list[str]]:
+    """Every table row whose first cell starts with `label`: the numbers in its other cells, as
+    printed (a typographic minus read as '-')."""
+    rows = []
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.startswith("| ") and cells[0].startswith(label):
+            rows.append([n.replace("−", "-") for c in cells[1:] for n in _NUM.findall(c)])
+    return rows
+
+
+def _clip_consts() -> dict:
+    probe = {k: _constant(_CLIP_PROBE, k) for k in (
+        "CHIP_NOISES", "PREDICT_NOISE", "FRACTIONS", "BAND_W_U", "BAND_H_U", "BAND_STROKE_PX",
+        "ROUNDS", "BUSY_MS", "BUDGET_ROUNDS", "BUDGET_SHARE", "SECTOR_STRAIGHTS", "BAND_HEADROOM", "BAND_FLOOR_S")}
+    return probe
+
+
+def _clip_problems(doc: str, fig: dict) -> list[str]:
+    """What in §24-§27 differs from `fig` (the probe's JSON) or from the constants and the
+    tables' own arithmetic. A function of the texts, so the negative control can plant."""
+    secs, c, probs = _refused_sections(doc), _clip_consts(), []
+    sec = {n: secs[n] for n in (24, 25, 26, 27)}
+    flat = {n: _flatten(t) for n, t in sec.items()}
+
+    def want(n: int, label: str, expected: list[str], k: int = 0) -> None:
+        rows = _row_nums(sec[n], label)
+        got = rows[k] if len(rows) > k else None
+        if got != expected:
+            probs.append(f"§{n} row '{label}' #{k + 1}: {got}, the probe says {expected}")
+
+    def phrase(n: int, pattern: str, expected: tuple, what: str) -> None:
+        m = re.search(pattern, flat[n])
+        if not m:
+            probs.append(f"§{n}: {what} — the sentence is gone or reworded")
+        elif m.groups() != expected:
+            probs.append(f"§{n}: {what} reads {m.groups()}, the measurement says {expected}")
+
+    f2 = lambda x: f"{x:.2f}"  # noqa: E731
+    # §24 — the predicted lap time.
+    p = fig["predicted"]
+    assert c["FRACTIONS"] == (0.25, 0.5, 0.75) and c["PREDICT_NOISE"] == 2.0, c
+    for label, key in (("synthetic demo", "demo"), ("`synth_gopro`, no habit", "synth")):
+        r = p[key]
+        want(24, label, [str(r["laps"]), *(f2(r[f"{s}_{q}"]) for q in (25, 50, 75)
+                                          for s in ("median", "p90")), f2(r["final_max_ms"])])
+    phrase(24, r"median lap's prediction is about (\d\.\d) s off on both sources",
+           (f"{round(p['demo']['median_25'], 1):.1f}",) if
+           round(p["demo"]["median_25"], 1) == round(p["synth"]["median_25"], 1) else ("differ",),
+           "the quarter-lap median")
+    if not all(p[k]["p90_25"] > 0.5 for k in p):
+        probs.append("§24: 'one lap in ten is more than half a second off' — a worst decile is not")
+    if not all(p[k]["final_max_ms"] < 0.1 for k in p):
+        probs.append("§24: 'within a tenth of a millisecond' at the line — it is not")
+    pb = _constant(_LIBRARY, "PB_PRECISION_S")
+    phrase(24, r"several times the (\d\.\d\d) s under which", (f2(pb),), "PB_PRECISION_S")
+    if min(p[k]["median_25"] for k in p) < 3 * pb:
+        probs.append("§24: 'several times' PB_PRECISION_S — the quarter-lap median is not")
+    habit = re.search(r"DEMO_HABIT = sg\.Habit\(cid=(\d+),.*clean_laps=\(([^)]*)\)", _read(_MAKE_DEMO))
+    laps = _constant(_MAKE_DEMO, "DEMO_LAPS")
+    clean = len([x for x in habit.group(2).split(",") if x.strip()])
+    phrase(24, r"costs (\d+) of its (\d+) laps about half a second", (str(laps - clean), str(laps)),
+           "the demo's habit laps")
+    # §25 — the Δ-trace band: geometry from the probe, timings by their own arithmetic.
+    t = fig["trace"]
+    phrase(25, r"synthetic demo, (\d+) clean laps but the best", (str(t["laps"]),), "the band's laps")
+    want(25, "largest", [f2(t["max_abs_median"]), f2(t["max_abs_max"])])
+    want(25, "band pixels per 0.1 s", [f"{t['px_per_tenth_median']:.1f}", f"{t['px_per_tenth_session']:.1f}"])
+    want(25, "a corner's rise", [f2(t["corner_px_median"])])
+    want(25, "corner rises thinner", [str(t["corner_under_stroke"]), str(t["corner_cells"])])
+    phrase(25, r"On the median lap a tenth of a second is (\d+\.\d) px", (f"{t['px_per_tenth_median']:.1f}",),
+           "the median lap's resolution")
+    phrase(25, r"rises a median (\d+\.\d\d) px, and (\d+) of (\d+) rise less than the line is wide",
+           (f2(t["corner_px_median"]), str(t["corner_under_stroke"]), str(t["corner_cells"])),
+           "the corner rises")
+    phrase(25, r"a tenth is (\d+\.\d) px", (f"{t['px_per_tenth_session']:.1f}",), "the session scale")
+    phrase(25, r"bottom-centre, (\d\.\d\d) × (\d\.\d{3}) of the frame's short side, its scale the "
+               r"lap's own largest \|Δ\| × (\d\.\d) \(at least (\d\.\d) s\), the trace a (\d\.\d) px",
+           (f2(c["BAND_W_U"]), f"{c['BAND_H_U']:.3f}", f"{c['BAND_HEADROOM']:.1f}",
+            f"{c['BAND_FLOOR_S']:.1f}", f"{c['BAND_STROKE_PX']:.1f}"), "the band's design")
+    if f"thinner than the {c['BAND_STROKE_PX']:.1f} px stroke" not in sec[25]:
+        probs.append("§25: the stroke the corner rises are held to is not BAND_STROKE_PX")
+    col = t["collision"]["9:16"]
+    phrase(25, r"leave (\d+) px between them once the overlay's one-margin gaps are kept, and the "
+               r"band is (\d+) px wide\. Centred as in landscape, it covers (\d+\.\d) %",
+           (f"{col['free_w']:.0f}", f"{col['band'][2]:.0f}", f"{col['overlap_pct']['map']:.1f}"),
+           "the 9:16 collision")
+    if not (col["free_w"] < col["band"][2] and col["overlap_pct"]["map"] > 0):
+        probs.append("§25: 'it does not fit a 9:16 clip' — the probe says it does")
+    if any(t["collision"]["16:9"]["overlap_pct"].values()):
+        probs.append("§25: the band collides at 16:9 too, which the section does not say")
+    phrase(25, r"with a (\d+) ms busy-wait added to every frame's paint, (\w+) rounds",
+           (f"{c['BUSY_MS']:.0f}", _WORDS[c["BUDGET_ROUNDS"]]), "BUSY_MS and BUDGET_ROUNDS")
+    phrase(25, r"interleaved over (\w+) rounds", (_WORDS[c["ROUNDS"]],), "ROUNDS")
+    paint = {lab: [float(x) for x in nums] for lab in ("the shipped overlay", "the band, added")
+             for nums in _row_nums(sec[25], lab)[:1]}
+    if set(paint) != {"the shipped overlay", "the band, added"} or any(len(v) != 4 for v in paint.values()):
+        probs.append(f"§25: the paint table's rows are gone or reshaped ({paint})")
+    else:
+        band4k, ship4k = paint["the band, added"][2:], paint["the shipped overlay"][2:]
+        m = re.search(r"At 4K the band adds (\d\.\d)–(\d\.\d) ms to every frame, (\d+)–(\d+) % of what "
+                      r"the shipped overlay paints\. The design pass's budget for a new element, (\d+) % "
+                      r"of a 4K export", flat[25])
+        if not m:
+            probs.append("§25: the cost sentence is gone or reworded")
+        else:
+            lo, hi, p_lo, p_hi, rule = (float(x) for x in m.groups())
+            if [lo, hi] != band4k:
+                probs.append(f"§25: the band adds {lo}–{hi} ms at 4K in prose, {band4k} in the table")
+            want_pct = (_pct(band4k[0] / ship4k[0]), _pct(band4k[1] / ship4k[1]))
+            if (p_lo, p_hi) != want_pct:
+                probs.append(f"§25: {p_lo:g}–{p_hi:g} % of the overlay, the table gives {want_pct}")
+            if rule != 100 * c["BUDGET_SHARE"]:
+                probs.append(f"§25: the rule says {rule:g} %, BUDGET_SHARE is {c['BUDGET_SHARE']}")
+    # §26 — sector chips: σ is truth-matrix row 2's, the gate its 2√2 multiple, the rest the probe's.
+    row2 = {lv: v for (stat, lv), v in _row2().items() if stat == "sector.interior_sd"}
+    ch = fig["chips"]
+    assert tuple(c["CHIP_NOISES"]) == (2.0, 4.5), c["CHIP_NOISES"]
+    order = [("`synth_gopro`, three seeds", "synth", 2.0), ("the demo's telemetry", "demo", 2.0),
+             ("`synth_gopro`, three seeds", "synth", 4.5), ("the demo's telemetry", "demo", 4.5)]
+    seen: dict = {}
+    for label, key, noise in order:
+        r = ch[f"{key}_{noise:g}"]
+        if abs(r["sigma"] - row2[noise]) > 1e-12:
+            probs.append(f"§26: the probe gated on σ {r['sigma']}, row 2 measured {row2[noise]}")
+        gate = 2 * math.sqrt(2) * row2[noise]
+        want(26, label, [f"{noise:g}", f2(row2[noise]), f2(gate), str(r["chips"]), str(r["new_best"]),
+                         str(r["true_new_best"]), str(r["wrong_colour"]), str(r["clear_gate"]),
+                         str(r["true_clear_gate"]), f2(r["true_best_margin"])], seen.get(label, 0))
+        seen[label] = seen.get(label, 0) + 1
+    phrase(26, r"(\d\.\d\d) s at recording C's GPS noise \(2\) and (\d\.\d\d) s at B's \(4\.5\)\. "
+               r"The gate is then (\d\.\d\d) s and (\d\.\d\d) s",
+           (f2(row2[2.0]), f2(row2[4.5]), f2(2 * math.sqrt(2) * row2[2.0]), f2(2 * math.sqrt(2) * row2[4.5])),
+           "the published σ and the gate")
+    s2, s4, d2, d4 = ch["synth_2"], ch["synth_4.5"], ch["demo_2"], ch["demo_4.5"]
+    phrase(26, r"Without the gate, (\d+) and (\d+) of the (\d+) `synth_gopro` chips would turn colour, "
+               r"and (\d+) at noise 2 and (\d+) at 4\.5",
+           (str(s2["new_best"]), str(s4["new_best"]), str(s2["chips"]), str(s2["wrong_colour"]),
+            str(s4["wrong_colour"])), "the ungated chips")
+    phrase(26, r"With the gate, (\d+) of the (\d+) colour at noise 2 and (\w+) at 4\.5",
+           (str(s2["clear_gate"]), str(s2["chips"]), "none" if s4["clear_gate"] == 0 else str(s4["clear_gate"])),
+           "the gated chips")
+    phrase(26, r"the three seeds' largest is (\d\.\d\d) s", (f2(max(s2["true_best_margin"],
+                                                                    s4["true_best_margin"])),),
+           "the largest true margin")
+    if not (d2["clear_gate"] >= 1 and d4["clear_gate"] == 0
+            and 2 * math.sqrt(2) * row2[2.0] < d2["true_best_margin"] < 2 * math.sqrt(2) * row2[4.5]):
+        probs.append("§26: the demo's half second no longer clears the noise-2 gate and only that one")
+    probe_sectors = _constant(_CLIP_PROBE, "SECTOR_STRAIGHTS")
+    if probe_sectors != _constant(_MATRIX, "SECTOR_STRAIGHTS"):
+        probs.append("§26: the probe's sector lines are not the truth matrix's")
+    # §27 — the share card's corner cells.
+    cl = fig["cells"]
+    cids = sorted(cl["vs_ideal"], key=int)
+    phrase(27, r"\| best lap \(lap (\d+)\), s \|", (str(cl["best_lap"]),), "the best lap")
+    want(27, "gap to the typical lap", [f"{cl['vs_typical'][k][0]:+.3f}" for k in cids])
+    want(27, "that corner's ▼ step", [f2(cl["vs_typical"][k][1]) for k in cids])
+    want(27, "gap to the ideal lap", [f"{cl['vs_ideal'][k]:.3f}" for k in cids])
+    floor = _constant(_STATS_PY, "MATRIX_SCALE_MIN_S")
+    if any(cl["vs_typical"][k][1] != floor for k in cids):
+        probs.append("§27: a ▼ step is above MATRIX_SCALE_MIN_S, which the prose calls the floor")
+    phrase(27, r"(\w+) of the seven gaps are inside", (_WORDS[cl["inside_step"]].capitalize(),),
+           "the cells inside their step")
+    outside = [k for k in cids if abs(cl["vs_typical"][k][0]) >= cl["vs_typical"][k][1]]
+    phrase(27, r"The one outside it is C(\d+), which the card already names as its biggest "
+               r"opportunity, \+(\d\.\d\d) s", (",".join(outside), f2(cl["card_opp_loss"])), "the one cell")
+    if (cl["card_opp"] or "").split()[0] != f"C{habit.group(1)}":
+        probs.append(f"§27: the card names {cl['card_opp']}, not the habit's C{habit.group(1)}")
+    sigma = _constant(_SYNTH_GOPRO, "CORNER_SIGMA")
+    phrase(27, r"The largest gap is C(\d+), (\d\.\d{3}) s",
+           (str(cl["biggest_vs_ideal"]), f"{cl['vs_ideal'][str(cl['biggest_vs_ideal'])]:.3f}"), "the ideal's corner")
+    if sigma.index(max(sigma)) + 1 != cl["biggest_vs_ideal"]:
+        probs.append("§27: the ideal's largest gap is no longer at the corner the generator scatters most")
+    return probs
+
+
+def test_the_clip_refusals_are_their_probe_s_figures():
+    """§24-§27 against a fresh run of their probe, and §25's timings against their arithmetic."""
+    doc, fig = _read(_REFUSED), _clip_figures()
+    problems = _clip_problems(doc, fig)
+    assert not problems, "studio/docs/refused-2026-09.md:\n  " + "\n  ".join(problems)
+    print(f"test_the_clip_refusals_are_their_probe_s_figures OK (§24-§27; demo quarter-lap median "
+          f"{fig['predicted']['demo']['median_25']} s, chips over the gate "
+          f"{fig['chips']['synth_2']['clear_gate']}/{fig['chips']['synth_2']['chips']})")
+
+
+def test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section():
+    """THE NEGATIVE CONTROL: one wrong digit planted in each section must be caught."""
+    doc, fig = _read(_REFUSED), _clip_figures()
+    plants = {"§24 a worst decile": ("| 13 | 0.28 / 0.53 s |", "| 13 | 0.28 / 0.54 s |"),
+              "§25 the corner count": ("and 52 of 91 rise", "and 53 of 91 rise"),
+              "§25 the overlay share": ("59–64 % of what", "58–64 % of what"),
+              "§25 a paint cell": ("| 5.8–6.9 |", "| 5.8–6.8 |"),
+              "§26 a true count": ("| 117 | 31 / 27 |", "| 117 | 31 / 28 |"),
+              "§27 an ideal gap": ("| 0.020 | 0.014 |", "| 0.020 | 0.024 |")}
+    for label, (old, new) in plants.items():
+        assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
+        assert _clip_problems(doc.replace(old, new), fig), f"the clip-refusal check missed: {label}"
+    print(f"test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section OK ({len(plants)} plants)")
+
+
 # ─── the real-footage half ───────────────────────────────────────────────────────────────────────
 # WHERE THE LAP SETS ARE FOUND (G2): under the folder PACER_MEASURED_FIGURES_DIR names, else under
 # the Desktop — the working set's home, and where `_LAP_SETS` says every table's recordings are, so by
@@ -3311,6 +3545,8 @@ def _run_all():
     test_the_refusals_doc_numbers_its_sections_once_each_and_counts_them()
     test_the_refusals_doc_guard_fails_on_each_collision_it_has_seen()
     test_the_pages_quote_the_refusal_count_as_a_true_floor()
+    test_the_clip_refusals_are_their_probe_s_figures()
+    test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section()
     print("\nmeasured-figures checks passed")
 
 

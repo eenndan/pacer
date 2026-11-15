@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Twenty-three features were built far enough to **measure**, and the measurement said not to ship
+Twenty-seven features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -1923,6 +1923,173 @@ pixi run python -m studio.dev.probes.chart_aa --png-dir /tmp/aa     # also the 2
 **What would be new evidence:** a pyqtgraph or Qt that draws antialiased polylines within about
 1 ms of the aliased ones on this sweep; or a cursor that repaints without redrawing the curves
 under it (a cached curve layer), which would take the curves out of the tick altogether.
+
+---
+
+## 24. A predicted lap time on the exported clip — refused (W3 design pass)
+
+**The idea.** The clip burns the live Δ to the reference lap. Add the reference lap's time to it
+and the strip can count a "predicted" lap time from the first corner, as lap timers do.
+
+**How it was measured.** `studio/dev/probes/clip_refusals.py` (`figures`) takes every clean lap but
+the best and reads, at a quarter, a half and three quarters of the lap's own time, the best lap's
+time plus `Session.delta_at_lap`, the Δ the strip burns. It compares that with the lap's real time.
+Two sources, neither anybody's driving:
+- the synthetic demo (`make_demo`'s telemetry), whose laps differ mostly at C1, where the planted
+  habit costs 8 of its 14 laps about half a second;
+- `synth_gopro` with no planted habit, at GPS noise 2 (recording C's in the truth matrix's
+  calibration), on the truth matrix's three seeds. Its laps differ a little at each of seven
+  corners, so a lap's loss keeps arriving until the line.
+
+| \|predicted − actual\|, median / worst decile | laps | at 25 % | at 50 % | at 75 % | at the line, worst |
+|---|---|---|---|---|---|
+| synthetic demo | 13 | 0.28 / 0.53 s | 0.13 / 0.28 s | 0.08 / 0.18 s | 0.02 ms |
+| `synth_gopro`, no habit, noise 2, three seeds | 39 | 0.27 / 0.67 s | 0.18 / 0.56 s | 0.07 / 0.21 s | 0.08 ms |
+
+**It is exact only where the clip already says the time.** At the line the prediction is the lap
+time to within a tenth of a millisecond, and there the strip already prints the time. A
+quarter of the way round, the median lap's prediction is about 0.3 s off on both sources, and one
+lap in ten is more than half a second off. The prediction counts no loss the lap has not made yet,
+and how much is still to come is what the driver cannot know either. The demo's laps are far more
+alike than real ones, so this is the error at its smallest, and it is still several times the
+0.07 s under which the app calls two laps level (`library.PB_PRECISION_S`). A number that reads
+like a lap time and is wrong by that much would be read as a lap time.
+
+**What moves because of this refusal: nothing in the app.** The strip keeps the live Δ.
+
+**What would be new evidence:** a prediction that also prices the rest of the lap (from the laps
+already driven, say) and comes within `PB_PRECISION_S` at half a lap on the synthetic sources here,
+with its own error stated on the clip.
+
+---
+
+## 25. A scrolling Δ-trace band on the exported clip — refused (W3 design pass)
+
+**The idea.** A band along the bottom of the clip that draws this lap's Δ to the best lap up to the
+current frame, on a fixed scale, with a zero line and the ±0.1 s tie band: the Δ chart, burned in.
+
+**How it was measured.** `studio/dev/probes/clip_refusals.py` on the synthetic demo. The band is
+the design pass's: bottom-centre, 0.50 × 0.085 of the frame's short side, its scale the lap's own
+largest |Δ| × 1.1 (at least 0.3 s), the trace a 2.6 px stroke at 1080p, rebuilt on
+`export_video`'s own primitives. `figures` reads every clean lap's Δ as the export samples it and
+places the band in the overlay's real 16:9 and 9:16 layouts. `paint` times it at 1080p and 4K on a
+demo lap against the shipped overlay, interleaved over five rounds. `budget` runs a real 4K export
+of one lap of `synth_gopro`'s circuit under a 4K test picture, as shipped and with a 10 ms
+busy-wait added to every frame's paint, three rounds of each, interleaved (the demo's own picture
+is too small for a 4K export, and the exporter never upscales).
+
+| synthetic demo, 13 clean laps but the best | |
+|---|---|
+| largest \|Δ\| on a lap, median / the session's | 0.82 / 6.20 s |
+| band pixels per 0.1 s at 1080p, on those scales | 4.4 / 0.6 px |
+| a corner's rise of Δ on its lap's band, median | 2.32 px |
+| corner rises thinner than the 2.6 px stroke | 52 of 91 |
+
+| ms per frame, a demo lap, two runs at load averages 12-31 | 1080p | 4K |
+|---|---|---|
+| the shipped overlay | 6.4–9.1 | 9.9–10.7 |
+| the band, added to it | 4.9–5.4 | 5.8–6.9 |
+
+**What it would show is mostly flat.** On the median lap a tenth of a second is 4.4 px. A
+corner's loss, which is what the trace exists to locate, rises a median 2.32 px, and 52 of 91 rise
+less than the line is wide. Scaled to the session's slowest clean lap, the half-spin lap, a tenth
+is 0.6 px. Whatever the band adds, the strip's Δ number already says to the hundredth.
+
+**What it costs is a share of the overlay; the export budget is not measured here.** At 4K the band adds 5.8–6.9 ms to every
+frame, 59–64 % of what the shipped overlay paints. The design pass's budget for a new element, 5 %
+of a 4K export, could not be re-derived on this machine: at load averages of 20 to 34 the same 4K
+export took 76 to 224 s, and the busy-wait's measured cost came out several times the wait itself,
+which no pipeline can do. `budget` re-runs it on a quieter Mac. Until then the band is weighed
+against the overlay it would join, and one element would add more than half of what the clip
+already paints for all of them.
+
+**It does not fit a 9:16 clip.** At 1080×1920 the readout and the map leave 516 px between them
+once the overlay's one-margin gaps are kept, and the band is 540 px wide. Centred as in landscape,
+it covers 21.8 % of its area with the map inset; anywhere else it is one more row over the picture.
+
+**What moves because of this refusal: nothing in the app.** The clip keeps the Δ on the strip.
+
+**What would be new evidence:** a band whose corner rises clear its own stroke on most corners of
+the demo, with a 9:16 place that covers no other element; and a `budget` run on a quiet machine
+whose 5 % share of a 4K export holds the band's added paint.
+
+---
+
+## 26. Sector chips on the clip, purple or green only beyond the noise — refused (W3 design pass)
+
+**The idea.** At each sector line the clip shows the split as a chip, purple or green when it is a
+new best, as broadcasts do. The app's splits carry GPS noise, so a chip would turn colour only when
+it beats the best earlier split by more than the noise: 2√2·σ, two σ of the difference of two
+splits that each carry σ.
+
+**The noise is published.** `docs/ACCURACY.md` gives the interior split's σ on a synthetic
+recording, row 2 of `tests/test_truth_matrix.py`: 0.11 s at recording C's GPS noise (2) and 0.24 s
+at B's (4.5). The gate is then 0.30 s and 0.68 s.
+
+**How it was measured.** `studio/dev/probes/clip_refusals.py` (`figures`) places the golden gate's
+two sector lines on two sets of recordings at both noises: the truth matrix's own three `synth_gopro`
+seeds, on which row 2's σ was measured, and the demo's telemetry (its C1 habit included). On every
+clean lap after the first it compares each split with the best earlier clean lap's in that sector,
+as the app measures them and as the generator's truth has them.
+
+| recordings | GPS noise | σ | gate | chips | new bests, app / truth | coloured wrong | over the gate, app / truth | largest true margin |
+|---|---|---|---|---|---|---|---|---|
+| `synth_gopro`, three seeds | 2 | 0.11 s | 0.30 s | 117 | 31 / 27 | 16 | 2 / 2 | 0.32 s |
+| the demo's telemetry | 2 | 0.11 s | 0.30 s | 39 | 6 / 6 | 2 | 1 / 2 | 0.52 s |
+| `synth_gopro`, three seeds | 4.5 | 0.24 s | 0.68 s | 117 | 27 / 27 | 24 | 0 / 0 | 0.32 s |
+| the demo's telemetry | 4.5 | 0.24 s | 0.68 s | 39 | 8 / 6 | 4 | 0 / 0 | 0.52 s |
+
+**Ungated, the colours are the noise's. Gated, they almost never come on.**
+- Without the gate, 31 and 27 of the 117 `synth_gopro` chips would turn colour, and 16 at noise 2
+  and 24 at 4.5 would be coloured where the truth has no new best, or grey where it has one.
+- With the gate, 2 of the 117 colour at noise 2 and none at 4.5. The demo's real half second at
+  C1, its largest true margin, clears the gate at noise 2 and not at 4.5.
+- The truth itself rarely holds a margin that large: the three seeds' largest is 0.32 s, at the
+  noise-2 gate's edge, and the demo's planted habit is the one exception. A chip that stays grey
+  on almost every lap says nothing the split's number does not.
+
+**What moves because of this refusal: nothing in the app.** Splits stay in the SPLITS grid, whose
+★ and ▼ carry the column's own scale.
+
+**What would be new evidence:** a split σ well under a tenth of a second at recording C's noise
+(the gate then falls under the true margins above), or footage whose new-best margins clear the
+gate on more than a few laps in a session.
+
+---
+
+## 27. Per-corner cells on the share card — refused (W3 design pass)
+
+**The idea.** Under the best lap's time, a row of cells on the share card, one per corner, each the
+best lap's gap through that corner: to the session's typical lap, or to the ideal lap.
+
+**How it was measured.** `studio/dev/probes/clip_refusals.py` (`figures`) on the synthetic demo,
+whose truth is known: the one corner where the laps really differ is C1 (the planted habit,
+`make_demo.DEMO_HABIT`). For the best lap it reads each corner's gap to the CORNERS BY LAP typical
+(`Session.corner_matrix`, the column median) against that corner's ▼ step, the gap to the ideal
+lap per corner (`Session.ideal_segment_bests`), and the card's own opportunity
+(`share_card.card_data`).
+
+| best lap (lap 12), s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+|---|---|---|---|---|---|---|---|
+| gap to the typical lap | −0.361 | −0.036 | −0.083 | −0.028 | +0.005 | −0.028 | −0.034 |
+| that corner's ▼ step | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 |
+| gap to the ideal lap | 0.020 | 0.014 | 0.000 | 0.039 | 0.093 | 0.000 | 0.047 |
+
+**Against the typical lap, six cells say nothing and the seventh is already on the card.** Six of
+the seven gaps are inside their corner's ▼ step, the floor (`stats.MATRIX_SCALE_MIN_S`) under which
+the app marks no corner at all. The one outside it is C1, which the card already names as its
+biggest opportunity, +0.36 s.
+
+**Against the ideal lap, the cells name the wrong corner.** The largest gap is C5, 0.093 s. The card
+names C1, and C1 is where the demo's laps really differ. The ideal takes each corner's quickest
+pass, so its gap is largest where the passes scatter most. C5 is the corner whose grip the generator
+varies most from lap to lap. It is the order statistic of §2, cell by cell.
+
+**What moves because of this refusal: nothing in the app.** The card keeps one opportunity, ranked
+by the Coaching page's gate.
+
+**What would be new evidence:** a per-corner gap that clears its corner's own noise on more corners
+than the card's one opportunity, and whose largest cell agrees with that opportunity on the demo.
 
 ---
 

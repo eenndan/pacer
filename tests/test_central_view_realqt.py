@@ -32,7 +32,9 @@ real Session.load. The wiring exercised — the signal connections, the QTimer, 
 fan-out — is identical regardless of how the session was built. Run:
     QT_QPA_PLATFORM=offscreen python tests/test_central_view_realqt.py
 """
+import contextlib
 import os
+import re
 import sys
 import time
 from types import SimpleNamespace
@@ -965,6 +967,8 @@ def test_the_hero_colours_only_its_delta_never_the_speed():
         for d, hue in ((0.37, "behind"), (-0.37, "ahead")):
             s.delta_at_lap = lambda _lid, _t, d=d: d
             view._update_diff_box(view._playback.applied_t, 45.0, view._last_diff_lap)
+            from studio import motion
+            motion.finish_all()     # a ±0.37 s flip rolls with PACER_MOTION=1: read its END
             _APP.processEvents()
             delta_run, speed_run = _hero_ink(view)
             assert max(delta_run, key=delta_run.get) == hue, (d, delta_run, view.diff_box.text())
@@ -1003,6 +1007,8 @@ def test_the_three_delta_surfaces_name_their_baselines_and_agree_when_they_share
             for frac in (0.3, 0.6, 0.9):
                 view.video.positionChanged.emit(float(tt[int(frac * (len(tt) - 1))]))
                 view.tick()
+                from studio import motion
+                motion.finish_all()   # a paused seek rolls with PACER_MOTION=1: compare its END
                 kind = view.plots._delta_baseline_kind
                 title_word, strip_word = chart_words[kind]
                 hero, strip = view.diff_box.text(), view.plots.window_label.text()
@@ -1457,6 +1463,12 @@ def _run_all():
     test_the_stats_page_handed_to_a_reader_is_never_stale()
     test_the_stats_page_pays_its_deferred_render_before_it_can_be_painted()
     test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stats_tab()
+    test_motion_the_delta_rolls_on_a_seek_and_ends_exactly_on_the_direct_text()
+    test_motion_a_baseline_or_lap_change_cuts_and_never_pairs_a_name_with_another_number()
+    test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_motion_work()
+    test_motion_a_held_arrow_follows_directly_and_a_single_press_may_roll()
+    test_motion_interruptions_end_the_roll_with_no_timer_left()
+    test_motion_view_menu_reduce_motion_persists_wins_and_can_follow_the_system_again()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -2442,6 +2454,351 @@ def test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stat
         view.hide()
         view.dispose()
     print("test_a_rebuild_skips_the_stats_render_on_another_tab_and_does_it_on_the_stats_tab OK")
+
+
+# ============================================================ motion (studio/motion.py)
+class _MotionClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@contextlib.contextmanager
+def _motion_on():
+    """Motion ON offscreen (PACER_MOTION=1, no Reduce motion) on a fake clock the test steps."""
+    from studio import motion
+    clock = _MotionClock()
+    old = os.environ.get("PACER_MOTION")
+    saved = (motion._reduce_pref, motion._system_reduce)
+    os.environ["PACER_MOTION"] = "1"
+    motion.set_reduce_pref(None)
+    motion._system_reduce = False
+    motion.set_clock(clock)
+    try:
+        yield clock
+    finally:
+        motion.finish_all()
+        motion.set_clock(None)
+        motion._reduce_pref, motion._system_reduce = saved
+        if old is None:
+            os.environ.pop("PACER_MOTION", None)
+        else:
+            os.environ["PACER_MOTION"] = old
+
+
+def _seek(view, t):
+    view.video.positionChanged.emit(float(t))
+    view.tick()
+
+
+def _hero_state(view):
+    return view.diff_box.text(), view.diff_box.delta_colour()
+
+
+def _sign_agrees_with_colour(text, colour):
+    """A rolling frame never shows a sign in the other side's colour (or a colour on zero)."""
+    head = text.partition("     ")[0]
+    m = re.search(r"([+−-]?)(\d+\.\d+)", head)
+    assert m, text
+    sign, mag = m.group(1), float(m.group(2))
+    if colour == theme.behind_colour():
+        return sign == "+"
+    if colour == theme.ahead_colour():
+        return sign in ("−", "-")
+    return mag <= 0.01
+
+
+def _direct_could_print(view, text, colour):
+    """True when `text`/`colour` is exactly what the DIRECT path prints for some Δ: the frame's own
+    number fed back through the hero's formatter (so a clamped Δideal can never roll through a
+    value the direct path would not show, e.g. a negative)."""
+    head, sep, tail = text.partition("     ")
+    m = re.search(r"([+−-]?)(\d+\.\d+)", head)
+    v = float(m.group(2)) * (-1.0 if m.group(1) in ("−", "-") else 1.0)
+    lap = view._last_diff_lap
+    if view.ideal_readout_btn.isChecked() and view._ideal_state == "stitched":
+        want_text, want_col = theme.format_ideal_readout(v, view._last_diff_speed, lap,
+                                                         view._speed_unit)
+    else:
+        from studio.central_view import _name_hero_baseline
+        want_text, want_col = theme.format_delta_speed(v, view._last_diff_speed, lap,
+                                                       view._speed_unit)
+        want_text = _name_hero_baseline(want_text, view.session.has_reference())
+    return want_text.partition("     ")[0] == head and want_col == colour
+
+
+# Δideal on the two-lap stadium fixture: +0.49 s / +2.60 s on lap 0, +1.18 s / +4.60 s on lap 1.
+_LAP0_EARLY_T, _LAP0_T, _LAP1_T, _LAP1_LATE_T = 112.82, 125.14, 305.78, 326.9
+
+
+def _roll_frames(view, clock, n=14):
+    from studio import motion
+    frames = []
+    for _ in range(n):
+        clock.now += 1 / 60
+        motion.pump()
+        frames.append(_hero_state(view))
+    return frames
+
+
+def _frame_value(text):
+    m = re.search(r"([+−-]?)(\d+\.\d+)", text.partition("     ")[0])
+    return float(m.group(2)) * (-1.0 if m.group(1) in ("−", "-") else 1.0)
+
+
+def _true_range(view, s, lap, a, b, lead):
+    """min/max of the NAMED quantity the hero leads with, sampled densely between two playhead
+    positions on one lap — what every rolling frame must lie within."""
+    vals = []
+    for t in np.linspace(a, b, 400):
+        v = (s.delta_to_ideal_at(lap, float(t)) if lead == "ideal"
+             else s.delta_at_lap(lap, float(t)))
+        if v is not None:
+            vals.append(max(v, 0.0) if lead == "ideal" else v)   # the hero floors Δideal at 0
+    return min(vals), max(vals)
+
+
+def test_motion_the_delta_rolls_on_a_seek_and_ends_exactly_on_the_direct_text():
+    """A paused seek WITHIN a lap counts the hero Δ from the value on screen to the new one over
+    DELTA_ROLL_MS. Every frame is a value the named quantity really took between the two playhead
+    positions (sampled: Δ is continuous along a lap), one the direct path could print (the same
+    formatter: the clamped Δideal never shows a negative), its sign agrees with its colour, and the
+    END is the motion-off text and colour, character for character — in both leads."""
+    from studio import motion
+    # Lap 0 is the best lap: its Δbest is 0 throughout, so its seek rolls only under Δideal.
+    pairs = {"ideal": ((_LAP1_T, _LAP1_LATE_T), (_LAP1_LATE_T, _LAP1_T), (_LAP0_EARLY_T, _LAP0_T)),
+             "best": ((_LAP1_T, _LAP1_LATE_T), (_LAP1_LATE_T, _LAP1_T))}
+    want = {}
+    pinned = os.environ.get("PACER_MOTION")
+    os.environ["PACER_MOTION"] = "0"      # the motion-off reference, even in a PACER_MOTION=1 run
+    off, _s, _t0, _t1 = _real_central_view()
+    try:
+        for lead in ("ideal", "best"):
+            off.ideal_readout_btn.setChecked(lead == "ideal")
+            for a, b in pairs[lead]:
+                _seek(off, a)
+                _seek(off, b)
+                want[(lead, a, b)] = _hero_state(off)
+        assert motion.active_count() == 0, "with motion off nothing may run"
+    finally:
+        off.dispose()
+        if pinned is None:
+            os.environ.pop("PACER_MOTION", None)
+        else:
+            os.environ["PACER_MOTION"] = pinned
+    with _motion_on() as clock:
+        view, s, _t0, _t1 = _real_central_view()
+        try:
+            for lead in ("ideal", "best"):
+                view.ideal_readout_btn.setChecked(lead == "ideal")
+                for a, b in pairs[lead]:
+                    _seek(view, a)
+                    motion.finish_all()
+                    before = _hero_state(view)
+                    _seek(view, b)
+                    assert view._diff_roll is not None, f"a {lead} seek {a}->{b} did not roll"
+                    assert (_hero_state(view)[0].partition("     ")[0]
+                            == before[0].partition("     ")[0]), "frame 0 must show the old value"
+                    frames = _roll_frames(view, clock)
+                    mid = {f[0] for f in frames[:-1]} - {want[(lead, a, b)][0], before[0]}
+                    assert mid, f"the {lead} roll {a}->{b} showed no intermediate value"
+                    lo, hi = _true_range(view, s, view._last_diff_lap, a, b, lead)
+                    never = [f for f in frames if not lo - 0.006 <= _frame_value(f[0]) <= hi + 0.006]
+                    assert not never, f"a frame the {lead} quantity never took in [{lo}, {hi}]: {never}"
+                    bad = [f for f in frames if not _sign_agrees_with_colour(*f)]
+                    assert not bad, f"a rolling frame's colour disagrees with its sign: {bad}"
+                    odd = [f for f in frames if not _direct_could_print(view, *f)]
+                    assert not odd, f"a rolling frame the direct path could not print: {odd}"
+                    assert view._diff_roll is None and motion.active_count() == 0
+                    assert not motion.timer_active()
+                    assert _hero_state(view) == want[(lead, a, b)], (
+                        _hero_state(view), want[(lead, a, b)])
+        finally:
+            view.dispose()
+    print("test_motion_the_delta_rolls_on_a_seek_and_ends_exactly_on_the_direct_text OK")
+
+
+def test_motion_a_baseline_or_lap_change_cuts_and_never_pairs_a_name_with_another_number():
+    """A roll counts between two readings of ONE quantity. Flipping vs ideal (Δideal ↔ Δbest)
+    and changing lap (another lap's Δ curve: no path joins the two readings) do NOT roll: the
+    first frame is already the direct path's text, and no later frame differs from it — so no
+    frame ever prints one baseline's number under another's name."""
+    from studio import motion
+    with _motion_on() as clock:
+        view, _s, _t0, _t1 = _real_central_view()
+        try:
+            view.ideal_readout_btn.setChecked(True)
+            _seek(view, _LAP1_LATE_T)
+            motion.finish_all()
+            for flip in (False, True):
+                view.ideal_readout_btn.setChecked(flip)
+                assert view._diff_roll is None, f"a vs-ideal flip to {flip} rolled"
+                direct = _hero_state(view)
+                assert direct[0].startswith("Δideal " if flip else "Δbest "), direct
+                assert set(_roll_frames(view, clock, 6)) == {direct}, "a frame left the direct text"
+            for a, b in ((_LAP0_T, _LAP1_T), (_LAP1_LATE_T, _LAP0_EARLY_T)):
+                _seek(view, a)
+                motion.finish_all()
+                _seek(view, b)
+                assert view._diff_roll is None, f"lap change {a}->{b} rolled"
+                direct = _hero_state(view)
+                assert set(_roll_frames(view, clock, 6)) == {direct}
+        finally:
+            view.dispose()
+    print("test_motion_a_baseline_or_lap_change_cuts_and_never_pairs_a_name_with_another_number OK")
+
+
+def test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_motion_work():
+    """With motion ON: a 300-tick playback sweep across both laps (a lap change at the line, Δ
+    jumps of seconds) starts no transition and steps no frame — the playback path is the old
+    path, counted, not timed. A paused nudge under ROLL_MIN_JUMP_S sets the text directly."""
+    from studio import motion
+    with _motion_on():
+        view, _s, t0, t1 = _real_central_view()
+        try:
+            _seek(view, float(t0[0]) + 0.01)
+            starts, frames = motion.starts, motion.frames
+            view.video.is_playing = lambda: True
+            for t in np.concatenate([np.linspace(float(t0[0]) + 0.02, float(t0[-1]) - 0.01, 150),
+                                     np.linspace(float(t1[0]) + 0.01, float(t1[-1]) - 0.01, 150)]):
+                _seek(view, t)
+                assert view._diff_roll is None
+            assert (motion.starts, motion.frames) == (starts, frames), (
+                motion.starts - starts, motion.frames - frames)
+            assert motion.active_count() == 0 and not motion.timer_active()
+            del view.video.is_playing
+            _seek(view, _LAP1_T)
+            motion.finish_all()
+            starts = motion.starts
+            shown = view._diff_shown
+            _seek(view, _LAP1_T + 0.02)
+            assert abs(view._diff_shown - shown) < motion.ROLL_MIN_JUMP_S
+            assert motion.starts == starts and view._diff_roll is None, "a small jump rolled"
+        finally:
+            view.dispose()
+    print("test_motion_playback_and_small_jumps_never_animate_and_idle_ticks_do_no_motion_work OK")
+
+
+def test_motion_a_held_arrow_follows_directly_and_a_single_press_may_roll():
+    """←/→ held down auto-repeats every ~33 ms: a continuous gesture, so the window marks it and
+    the hero follows directly (no roll restarted per repeat). A single press is a discrete seek."""
+    from PySide6.QtGui import QKeyEvent
+
+    from studio import motion
+    with _motion_on():
+        win, view = _studiowindow_with_view()
+        try:
+            seen = []
+            real = view.note_continuous_gesture
+            view.note_continuous_gesture = lambda: (seen.append(1), real())
+            for rep in (False, True):
+                win.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Right, Qt.NoModifier, "",
+                                            rep))
+            assert seen == [1], f"auto-repeat must mark a continuous gesture, once: {seen}"
+            del view.note_continuous_gesture
+            view._continuous_until = 0.0
+            _seek(view, _LAP1_T)
+            motion.finish_all()
+            _seek(view, _LAP1_LATE_T)          # a single press's seek: rolls
+            assert view._diff_roll is not None
+            motion.finish_all()
+            view.note_continuous_gesture()      # held: the next seeks follow directly
+            for t in (_LAP1_T, _LAP1_LATE_T, _LAP1_T):
+                _seek(view, t)
+                assert view._diff_roll is None, "a held arrow restarted the roll"
+        finally:
+            if win._tick_timer is not None:
+                win._tick_timer.stop()
+            view.dispose()
+    print("test_motion_a_held_arrow_follows_directly_and_a_single_press_may_roll OK")
+
+
+def test_motion_view_menu_reduce_motion_persists_wins_and_can_follow_the_system_again():
+    """View ▸ Reduce motion toggles the EFFECTIVE setting, starting from the system's. A choice
+    that differs from the system is remembered (prefs, jailed) and wins over PACER_MOTION=1; a
+    choice equal to the system's clears it — the way back to following macOS — on either system."""
+    from studio import motion, prefs
+    with _motion_on():
+        win, view = _studiowindow_with_view(build_menu=True)
+        try:
+            act = win._reduce_motion_action
+            assert act.isCheckable() and not act.isChecked() and motion.enabled()
+            view_menu = next(a.menu() for a in win.menuBar().actions()
+                             if a.menu() is not None and a.text().replace("&", "") == "View")
+            assert act in view_menu.actions(), "Reduce motion is not in the View menu"
+            assert prefs.reduce_motion() is None, "never chosen = follow the system"
+            act.trigger()
+            assert prefs.reduce_motion() is True and not motion.enabled()
+            _seek(view, _LAP1_T)
+            _seek(view, _LAP1_LATE_T)
+            assert view._diff_roll is None and motion.active_count() == 0
+            act.trigger()               # back to the system's (off): follow the system again
+            assert prefs.reduce_motion() is None and motion.enabled()
+            motion._system_reduce = True    # a Mac with Reduce Motion on
+            act.trigger()               # checked = reduced = the system's: still following it
+            assert prefs.reduce_motion() is None and not motion.enabled()
+            act.trigger()               # the user wants motion anyway: remembered, wins
+            assert prefs.reduce_motion() is False and motion.enabled()
+            act.trigger()
+            assert prefs.reduce_motion() is None and not motion.enabled()
+        finally:
+            prefs.set(prefs.REDUCE_MOTION, None)
+            if win._tick_timer is not None:
+                win._tick_timer.stop()
+            view.dispose()
+    print("test_motion_view_menu_reduce_motion_persists_wins_and_can_follow_the_system_again OK")
+
+
+def test_motion_interruptions_end_the_roll_with_no_timer_left():
+    """A second seek mid-roll starts from the value ON SCREEN (one roll, never a queue); playback
+    starting mid-roll shows the direct text at once; entering compare or a Lap race mid-roll, and a
+    view disposed mid-roll (a load, a closed window), end it at once with no timer left and no
+    callback into deleted widgets."""
+    from shiboken6 import Shiboken
+
+    from studio import motion
+    with _motion_on() as clock:
+        view, _s = _shown_view_on_the_laps_tab()     # shown: compare and a race need it
+        try:
+            _seek(view, _LAP1_T)
+            motion.finish_all()
+            _seek(view, _LAP1_LATE_T)
+            clock.now += 0.05
+            motion.pump()
+            shown = view._diff_rolling_value
+            _seek(view, _LAP1_T + 2.0)            # a second seek mid-roll, same lap
+            assert view._diff_roll is not None and view._diff_rolling_value == shown
+            assert motion.active_count() == 1
+            view.video.is_playing = lambda: True   # playback starts mid-roll
+            _seek(view, _LAP1_T + 2.1)
+            assert view._diff_roll is None and motion.active_count() == 0
+            del view.video.is_playing
+            _seek(view, _LAP0_EARLY_T)
+            motion.finish_all()
+            _seek(view, _LAP0_T)                   # mid-roll, enter compare
+            assert view._diff_roll is not None
+            view.video.compare_btn.click()
+            assert view._comparing() and view._diff_roll is None and motion.active_count() == 0
+            view.video.compare_btn.click()
+            _seek(view, _LAP0_EARLY_T)
+            motion.finish_all()
+            _seek(view, _LAP0_T)                   # mid-roll, start a race
+            assert view._diff_roll is not None
+            assert view.start_lap_race(), "the two-lap stadium must be raceable"
+            assert view._diff_roll is None and motion.active_count() == 0
+            view.end_lap_race()
+            _seek(view, _LAP0_EARLY_T)             # mid-roll, the view goes away
+            assert view._diff_roll is not None
+        finally:
+            view.hide()
+            view.dispose()
+            Shiboken.delete(view)
+        assert motion.active_count() == 0 and not motion.timer_active()
+        clock.now += 1.0
+        motion.pump()                              # must not call into the deleted widgets
+    print("test_motion_interruptions_end_the_roll_with_no_timer_left OK")
 
 
 if __name__ == "__main__":
