@@ -4,7 +4,8 @@ Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68
 mouse or the keyboard — the header is a tab stop with its own ring (_KeyboardSortHeader).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap (kept through the selection, _TowerDelegate), blue Qt selection, purple per-sector session-best
-cells, ⚠ GPS-dropout flag. The Δbest column is the timing-tower read: each lap's gap to the best
+cells, ⚠ GPS-dropout flag, a slow lap's culprit cue ("▼ C5", its story note on hover —
+`story.slow_lap_notes`: it labels the lap, never re-ranks or dims it). The Δbest column is the timing-tower read: each lap's gap to the best
 with an in-cell bar on a fenced, clean-lap scale (delta_bar_scale). The
 SESSION-BESTS footer is plain labels below the table, immune to sort/selection. An EXCLUDED
 strip below the table lists substantial laps the median band left out of the times/bests (a
@@ -323,8 +324,8 @@ def _lap_col_tips(unit: str | None) -> list[str]:
     the same contract the Corners table has had since its headers were abbreviated."""
     u = units.speed_label(unit)
     return [
-        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout · {story.BEHIND_MARK} C5 the "
-        "corner a slow lap lost most of its time in; hover for the note)",
+        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout · {story.BEHIND_MARK} C5 where a "
+        "slow lap lost its time: hover it for the note)",
         "Lap time, measured between start/finish crossings",
         DELTA_HEADER_TIP,
         # the odometer's shortfall, in the one sentence every distance surface carries
