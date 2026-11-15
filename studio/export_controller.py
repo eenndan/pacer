@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
 from ._signal import fmt_hms, lap_label, plural
-from .overlay import ghost
+from .overlay import corner_cards, ghost
 from .session import fmt_time
 from .workers import VideoExportWorker
 
@@ -446,6 +446,12 @@ class ExportController:
     _GHOST_LABEL = "Ghost of your best lap"
     _GHOST_TIP = ("A ring on the minimap where your best lap was at the same lap time — the lap "
                   "strip's Δ, drawn as a place on track. No ghost on the best lap's own file.")
+    _PREF_EXPORT_CARDS = "export_corner_cards"
+    _CARDS_LABEL = "Corner cards"
+    _CARDS_TIP = ("As you leave each corner, a card for two seconds: its minimum speed and its time "
+                  "against your best lap — the Corners table's numbers. Inside timing precision "
+                  f"({corner_cards.PRECISION_S:.2f} s) it reads \"≈ best\"; a corner not matched "
+                  "on track gets no card.")
     # The index of "Source (no downscale)" in `_EXPORT_RES_OPTIONS`.
     _EXPORT_RES_SOURCE = 3
     # The compare export's own two rows. LAYOUT first because it decides the shape of the file:
@@ -514,6 +520,21 @@ class ExportController:
         except Exception:  # noqa: BLE001 — an option's availability never blocks an export
             _log.warning("ghost availability unknown", exc_info=True)
             return "The ghost is not available for this session."
+
+    def _cards_reason(self, scope: str, lap: int) -> str | None:
+        """Why this scope can show no corner card (the checkbox's disabled tooltip), or None. All
+        laps asks only the session-wide rules: each lap's file then answers for itself."""
+        session = getattr(self.win, "session", None)
+        try:
+            if scope == export_video.SCOPE_SESSION:
+                return corner_cards.unavailable_reason(session, None, follow_laps=True)
+            if scope == export_video.SCOPE_ALL_LAPS:
+                return corner_cards.unavailable_reason(session, None)
+            target = session.best_lap_id() if scope == export_video.SCOPE_BEST_LAP else lap
+            return corner_cards.unavailable_reason(session, target)
+        except Exception:  # noqa: BLE001 — an option's availability never blocks an export
+            _log.warning("corner-card availability unknown", exc_info=True)
+            return "Corner cards are not available for this session."
 
     def _ghostless_files(self, lap: int) -> str:
         """For an All-laps batch with the ghost ticked: one line naming the files that will carry
@@ -831,6 +852,19 @@ class ExportController:
             ghost_box.setChecked(prefs.get(self._PREF_EXPORT_GHOST, False) is True)
         except Exception:  # noqa: BLE001 — an unreadable pref opens on the default (off)
             ghost_box.setChecked(False)
+        cards_box = QCheckBox(self._CARDS_LABEL, dlg)
+        try:
+            cards_box.setChecked(prefs.get(self._PREF_EXPORT_CARDS, False) is True)
+        except Exception:  # noqa: BLE001 — an unreadable pref opens on the default (off)
+            cards_box.setChecked(False)
+        # One Extras row, the opt-in elements side by side.
+        extras = QWidget(dlg)
+        extras_row = QHBoxLayout(extras)
+        extras_row.setContentsMargins(0, 0, 0, 0)
+        extras_row.setSpacing(theme.SPACE_L)
+        extras_row.addWidget(ghost_box)
+        extras_row.addWidget(cards_box)
+        extras_row.addStretch(1)
 
         # THE DIALOG OPENS ON THE LAST EXPORT'S CHOICES, AND A HEAVY ONE MUST NOT DO THAT SILENTLY.
         # "Video export has become extremely slow" was a remembered overlay-only ProRes at source
@@ -859,6 +893,7 @@ class ExportController:
                     box.setCurrentIndex(self._EXPORT_DEFAULT_INDEX[key])
                 content_combo.setCurrentIndex(0)
                 ghost_box.setChecked(False)
+                cards_box.setChecked(False)
                 recall.hide()
             use_defaults.clicked.connect(_use_defaults)
 
@@ -869,7 +904,7 @@ class ExportController:
         form.addRow("Contents", content_combo)
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
-        form.addRow("Extras", ghost_box)
+        form.addRow("Extras", extras)
         col.addLayout(form)
 
         # States the target short side + never-upscale rule (no ffprobe here; matches
@@ -910,6 +945,9 @@ class ExportController:
             no_ghost = self._ghost_reason(scope, lap)
             ghost_box.setEnabled(no_ghost is None)
             ghost_box.setToolTip(self._GHOST_TIP if no_ghost is None else f"Off here: {no_ghost}")
+            no_cards = self._cards_reason(scope, lap)
+            cards_box.setEnabled(no_cards is None)
+            cards_box.setToolTip(self._CARDS_TIP if no_cards is None else f"Off here: {no_cards}")
 
             clip, files, what = self._scope_plan(scope, lap, lead)
             lines = [f"Renders {what}."]
@@ -919,6 +957,8 @@ class ExportController:
                 missing = self._ghostless_files(lap)
                 if missing:
                     lines.append(missing)
+            if no_cards is not None and cards_box.isChecked():
+                lines.append(f"No corner cards in this export: {no_cards}")
             source = export_video.known_video_size(src)
             fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
             how = ("source aspect" if aspect == export_video.ASPECT_SOURCE else
@@ -970,6 +1010,7 @@ class ExportController:
         for combo in (*rows.values(), content_combo):
             combo.currentIndexChanged.connect(_update_hint)
         ghost_box.toggled.connect(_update_hint)
+        cards_box.toggled.connect(_update_hint)
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
         probe_poll = self._redraw_once_probed(dlg, src, _update_hint)
         _update_hint()
@@ -990,6 +1031,7 @@ class ExportController:
         self._remember_export_prefs(indices)   # survives this window, and the relaunch
         try:
             prefs.set(self._PREF_EXPORT_GHOST, ghost_box.isChecked())
+            prefs.set(self._PREF_EXPORT_CARDS, cards_box.isChecked())
         except OSError as exc:
             _log.warning("export extras not remembered (%r)", exc)
         scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
@@ -1007,8 +1049,9 @@ class ExportController:
             alpha_codec=content if overlay_only else export_video.ALPHA_PRORES,
             speed_unit=self.win._speed_unit,
             palette=theme.active_palette(),
-            elements=(ghost.GhostElement.name,) if ghost_box.isChecked()
-            and ghost_box.isEnabled() else ())
+            elements=tuple(name for name, box in ((ghost.GhostElement.name, ghost_box),
+                                                  (corner_cards.CornerCardsElement.name, cards_box))
+                           if box.isChecked() and box.isEnabled()))
         lead = (0.0 if scope == export_video.SCOPE_SESSION
                 else self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1])
         return ExportChoice(config=config, lead=lead, scope=scope)

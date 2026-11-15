@@ -218,6 +218,7 @@ caches + delegates.
 | [export_compare.py](export_compare.py) | The distance-locked two-lap compare export (a `Renderer` subclass) | Qt | `test_export_compare` |
 | [overlay/\_\_init\_\_.py](overlay/__init__.py) | Overlay-element seam: the protocol, the registry, `prepare` once and `paint` per frame | Qt | `test_export_ghost` |
 | [overlay/ghost.py](overlay/ghost.py) | The export minimap's ghost: your best lap at the same lap time, off the Lap Race maths | Qt | `test_export_ghost` |
+| [overlay/corner_cards.py](overlay/corner_cards.py) | Export corner cards: each corner's min speed + Δ (the Corners table's) at its exit, pre-rendered | Qt | `test_export_corner_cards` |
 | [export_palette.py](export_palette.py) | `EXPORT`, the burn-over-footage colours the renderer and the dial share | — | `test_export_video` |
 | [export_data.py](export_data.py) | Laps/channels CSV, the HTML report, the stats summary; atomic writes | — | `test_export_data` |
 | [share_card.py](share_card.py) | The shareable lap-card PNG; blocked while timing is provisional | Qt | `test_share_card` |

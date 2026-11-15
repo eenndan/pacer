@@ -124,8 +124,10 @@ def paint_layer(elements, p: QPainter, vals, layer: str) -> None:
 
 # The registry: element name -> factory. Imported last, because each element module reads the
 # types above. One line per element.
+from studio.overlay.corner_cards import CornerCardsElement  # noqa: E402
 from studio.overlay.ghost import GhostElement  # noqa: E402
 
 REGISTRY: dict[str, Callable[[], OverlayElement]] = {
     GhostElement.name: GhostElement,
+    CornerCardsElement.name: CornerCardsElement,
 }
