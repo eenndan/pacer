@@ -250,6 +250,21 @@ def test_provisional_estimated_and_excluded():
     print("ok provisional / estimated / excluded")
 
 
+def test_finish_gaps_are_built_from_the_printed_milliseconds():
+    """At the finish a pack's gap is the difference of the two PRINTED lap times, as the Laps
+    table's Δbest is (`lap_table.printed_ms`): 45.0004 and 45.0016 print 0:45.000 and 0:45.002,
+    so the gap reads +0.002 — the raw difference, 0.0012, would read +0.001."""
+    from studio.race_ladder import interval_text
+    row = race_controller.PackRow(position=2, laps=(1,), chips=(1,), more=0, interval_s=0.0012,
+                                  spread_s=0.0, selected=False)
+    assert interval_text(row, True, {0: 45.0004, 1: 45.0016}) == "+0.002 s"
+    lead = race_controller.PackRow(position=1, laps=(0,), chips=(0,), more=0, interval_s=0.0,
+                                   spread_s=0.0, selected=False)
+    assert interval_text(lead, True, {0: 45.0004, 1: 45.0016}) == "0:45.000"
+    assert interval_text(lead, False, {0: 45.0004}) == "leader"
+    print("ok finish gaps from printed ms")
+
+
 def test_the_card_paints_the_model():
     """The real card lists the rows, the readout, the clock and the excluded line it was given."""
     from studio.race_ladder import RaceCard
@@ -383,13 +398,17 @@ def test_the_race_on_the_real_window():
         assert seen == {"card": False, "race": False}, f"the report grab shows the race: {seen}"
         assert v.race_card.isVisible() and all(it.isVisible() for it in mp.race_items())
         # The card re-renders only on a change of what it shows, not on every map repaint.
-        _settle(0.1)
-        renders = v.race_card.renders
-        for _ in range(5):
-            v.tick()
-            mp.widget.viewport().repaint()
-            _APP.processEvents()
-        assert v.race_card.renders == renders, (renders, v.race_card.renders)
+        card = v.race_card
+        card.repaint()
+        renders = card.renders
+        for _ in range(5):              # the same content, repainted as the map under it repaints
+            card.show_model(card.model)
+            card.repaint()
+        assert card.renders == renders, (renders, card.renders)
+        race.scrub(0.5)
+        v.tick()
+        card.repaint()
+        assert card.renders == renders + 1, "a change of content did not re-render the card"
         # At the finish the intervals are the Laps table's Δbest strings, to the digit.
         from studio.lap_table import _DELTA_COL
         from studio.race_ladder import interval_header, interval_text
@@ -463,8 +482,7 @@ def test_the_race_on_the_real_window():
         # closing the window clears the race
         assert win.view.start_lap_race()
         view = win.view
-        win.close()
-        _APP.processEvents()
+        win.close()                     # closeEvent runs synchronously: no tick in between
         assert not view.race.active, "a closed window left race.active set"
     print("ok real window: enter, draw, keys, report grab, finish = table Δbest, exit (video "
           "paused), compare / trust / off-screen / re-segment / load / close end it, gated")
