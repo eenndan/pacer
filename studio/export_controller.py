@@ -390,7 +390,10 @@ class ExportController:
         data = share_lapstrip.lapstrip_data(self.win.session, unit=self.win._speed_unit) \
             if hasattr(self.win, "session") else None
         if data is None or not data.offered:
-            self.win.statusBar().showMessage("no verified laps to make a lap strip for", self._status_ms)
+            why = ("fewer than two clean laps — nothing for a lap strip to compare"
+                   if data is not None and not data.blocked
+                   else "no verified laps to make a lap strip for")
+            self.win.statusBar().showMessage(why, self._status_ms)
             return
         image = share_lapstrip.render_lapstrip(data, palette=theme.active_palette())
         best = data.best_lap_id

@@ -88,7 +88,8 @@ from studio.app import StudioWindow  # noqa: E402
 # Every action the menu bar carries, by the attribute the window keeps it on.
 ALL_ACTIONS = [
     "_open_action", "_full_action", "_export_laps_action", "_export_channels_action",
-    "_export_report_action", "_share_card_action", "_copy_card_action", "_export_video_action",
+    "_export_report_action", "_share_card_action", "_copy_card_action", "_lapstrip_action",
+    "_export_video_action",
     "_library_action", "_reveal_library_action", "_backup_library_action", "_save_track_action",
     "_undo_action", "_ref_action", "_clear_ref_action", "_cross_compare_action",
     "_opportunities_action", "_fullscreen_action", "_stats_action", "_excluded_action",

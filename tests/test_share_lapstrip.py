@@ -30,7 +30,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import data_quality, share_card, theme  # noqa: E402
 from studio import share_lapstrip as ls  # noqa: E402
-from studio._signal import EXCLUDED_BAND  # noqa: E402
+from studio._signal import EXCLUDED_BAND, EXCLUDED_OPEN, EXCLUDED_STOPPED  # noqa: E402
 
 theme.register_fonts()
 
@@ -127,7 +127,7 @@ def test_best_bar_is_the_tables_best_lap():
     d = ls.lapstrip_data(s)
     best = [b for b in d.bars if b.tone == ls.TONE_BEST]
     assert [b.lap_id for b in best] == [s.best_lap_id()] == [20]
-    assert best[0].height == ls.STUB and best[0].label == "21"
+    assert best[0].height == 0.0 and best[0].label == "21"
     # the table's best is dropout-aware: a quicker lap with a GPS dropout is not crowned
     s = FakeSession({0: 60.0, 1: 59.2, 2: 60.4}, dropouts={1})
     d = ls.lapstrip_data(s)
@@ -162,8 +162,55 @@ def _bar_x(d, lap_id):
     return int(x0 + slot * (i + 0.5))
 
 
+def _base(d) -> int:
+    return int(ls.legend_plan(d).plot_base)
+
+
 def _bar_pixel(img: QImage, d, lap_id) -> QColor:
-    return img.pixelColor(_bar_x(d, lap_id), ls.PLOT_BASE - 6)
+    return img.pixelColor(_bar_x(d, lap_id), _base(d) - 6)
+
+
+def test_heights_are_proportional_to_gaps_from_a_zero_base():
+    # The base IS the zero gap: a +0.4 s lap is exactly twice a +0.2 s lap, and the best has none.
+    d = ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.2, 2: 60.4, 3: 61.0}))
+    h = {b.lap_id: b.height for b in d.bars}
+    assert h[0] == 0.0 and abs(h[2] / h[1] - 2.0) < 1e-9
+    # ...and in pixels: the bar tops measured off the render sit at gap/scale of the plot height
+    img = ls.render_lapstrip(d)
+    base, canvas = _base(d), QColor(theme.C.canvas)
+
+    def top(lap_id):
+        x = _bar_x(d, lap_id)
+        y = base - 3
+        while y > ls.PLOT_TOP and img.pixelColor(x, y - 1) != canvas \
+                and img.pixelColor(x, y - 1).lightness() > 60:
+            y -= 1
+        return base - y
+
+    assert abs(top(2) / top(1) - 2.0) < 0.05, (top(1), top(2))
+
+
+def test_a_tie_has_one_best_and_the_other_is_level():
+    d = ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.0, 2: 60.5}))
+    tones = [b.tone for b in d.bars]
+    assert tones.count(ls.TONE_BEST) == 1 and tones[1] == ls.TONE_LEVEL
+    # the tied lap is still a visible (short) bar in the level tone, not invisible at the base
+    img = ls.render_lapstrip(d)
+    assert _hue_close(img.pixelColor(_bar_x(d, 1), _base(d) - 2), QColor(theme.best_lap_colour()))
+
+
+def test_a_dropout_lap_quicker_than_the_best_is_marked_quicker_not_level():
+    s = FakeSession({0: 60.0, 1: 60.3, 2: 59.4, 3: 60.5}, dropouts={2})
+    d = ls.lapstrip_data(s)
+    q = [b for b in d.bars if b.lap_id == 2][0]
+    assert q.gap_s == -0.6 and q.tone == ls.TONE_QUICKER and q.height == 0.0
+    assert dict(ls.legend_entries(d))[ls.TONE_QUICKER] == \
+        "lap 3 −0.60 s: quicker, GPS dropout (not counted)"
+    # drawn BELOW the zero line (where no other bar goes), not on top of it like a tie
+    img = ls.render_lapstrip(d)
+    x, base, canvas = _bar_x(d, 2), _base(d), QColor(theme.C.canvas)
+    assert any(img.pixelColor(x, y) != canvas for y in range(base + 4, base + 12))
+    assert all(img.pixelColor(x, y) == canvas for y in range(base - 30, base - 6))
 
 
 def _hue_close(c: QColor, ref: QColor) -> bool:
@@ -177,17 +224,20 @@ def test_dropout_lap_is_hatched_and_legend_names_only_what_is_there():
     assert drop.kind == ls.KIND_DROPOUT and drop.gap_s is not None
     styles = [k for k, _ in ls.legend_entries(d)]
     assert ls.KIND_DROPOUT in styles and ls.KIND_EXCLUDED in styles and "clipped" in styles
-    assert dict(ls.legend_entries(d))[ls.KIND_EXCLUDED] == "⊘ left out: 1 off the session median"
+    assert dict(ls.legend_entries(d))[ls.KIND_EXCLUDED] == "left out: 1 off the session median"
     # a clean short session: no dropout, no excluded, no clip, no level -> none of those named
     plain = ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.5, 2: 61.0}))
     assert [k for k, _ in ls.legend_entries(plain)] == [ls.TONE_BEST, ls.TONE_BEHIND]
-    # the hatched bar really is hatched: its interior has canvas showing between the lines
+    # no grey bar -> no grey key: two laps, the second level with the best
+    level = ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.03}))
+    assert [k for k, _ in ls.legend_entries(level)] == [ls.TONE_BEST, ls.TONE_LEVEL]
+    # the hatched bar really is hatched: a column through it is not one colour, a solid one is
     img = ls.render_lapstrip(d)
-    x, canvas = _bar_x(d, 45), QColor(theme.C.canvas)
-    col = [img.pixelColor(x, y) for y in range(ls.PLOT_BASE - 40, ls.PLOT_BASE - 4)]
-    assert any(c == canvas for c in col), "a dropout bar must not be solid"
-    solid = [img.pixelColor(_bar_x(d, 44), y) for y in range(ls.PLOT_BASE - 40, ls.PLOT_BASE - 4)]
-    assert not any(c == canvas for c in solid)
+    base = _base(d)
+    col = {img.pixelColor(_bar_x(d, 45), y).name() for y in range(base - 40, base - 4)}
+    assert len(col) > 1, "a dropout bar must not be solid"
+    solid = {img.pixelColor(_bar_x(d, 44), y).name() for y in range(base - 40, base - 4)}
+    assert len(solid) == 1
 
 
 def test_the_outlier_is_clipped_and_the_cap_is_marked():
@@ -203,13 +253,82 @@ def test_the_outlier_is_clipped_and_the_cap_is_marked():
     assert not any(b.clipped for b in ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.5})).bars)
 
 
+def test_four_or_more_cut_laps_are_counted_not_named():
+    times = {i: 60.0 + 0.1 * (i % 5) for i in range(20)}
+    for i in (3, 7, 11, 15):
+        times[i] = 75.0 + i
+    entry = dict(ls.legend_entries(ls.lapstrip_data(FakeSession(times))))["clipped"]
+    assert entry.startswith("4 laps cut at the +") and "lap 4" not in entry, entry
+    times[15] = 60.2   # three cut laps: named, each with its real gap
+    entry = dict(ls.legend_entries(ls.lapstrip_data(FakeSession(times))))["clipped"]
+    assert entry.startswith("lap 4 +18.00 s, lap 8 +22.00 s, lap 12 +26.00 s cut at"), entry
+
+
 def test_the_median_is_the_clean_laps_median_gap():
     times = {0: 60.0, 1: 60.2, 2: 60.4, 3: 60.6, 4: 60.8, 5: 70.0}
     d = ls.lapstrip_data(FakeSession(times, dropouts={5}))   # the dropout lap is not in it
     assert d.median_gap_s == 0.4
-    assert ls.best_median_line(d.median_gap_s) == "median lap +0.40 s off the best"
+    assert ls.best_median_line(d.median_gap_s, d.clean_laps) == \
+        "median of 5 clean laps: +0.40 s off the best"
     # under MEDIAN_MIN_LAPS clean laps the median is one of the bars: none is drawn
     assert ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.4, 2: 60.8})).median_gap_s is None
+    # inside timing precision it is "≈ best", never a figure finer than the timing resolves
+    flat = ls.lapstrip_data(FakeSession({i: 60.0 + 0.01 * i for i in range(6)}))
+    assert ls.median_figure(flat.median_gap_s) == "≈ best"
+    assert ls.best_median_line(flat.median_gap_s, 6) == "median of 6 clean laps: level with the best"
+
+
+def worst_case():
+    """The legend's worst case: 10 cut laps, 10 dropouts, a level lap, 12 excluded laps with all
+    their reasons, 3 brief crossings, a very long title, mph."""
+    times = {i: 60.0 + 0.05 * (i % 9) for i in range(12, 80)}
+    for i in range(12, 22):
+        times[i] = 80.0 + i       # cut
+    times[30] = 59.0               # the best
+    times[31] = 59.03              # level
+    reasons = (EXCLUDED_BAND, EXCLUDED_OPEN, EXCLUDED_STOPPED, "unknown_reason")
+    excluded = {i: reasons[i % 4] for i in range(12)}
+    return FakeSession(times, dropouts=set(range(40, 50)), excluded=excluded, crossings=3,
+                       track="Circuito Internacional de Velocidade e Karting de Lagoa Grande "
+                             "Layout Norte Completo")
+
+
+def test_the_worst_case_legend_stays_above_the_footer_and_inside_the_canvas():
+    d = ls.lapstrip_data(worst_case(), unit="mph")
+    plan = ls.legend_plan(d)
+    assert plan.items, "the legend vanished"
+    last = max(it.y for it in plan.items)
+    assert last <= ls.LEGEND_LIMIT < ls.FOOTER_Y - 40, (last, ls.LEGEND_LIMIT)
+    for it in plan.items:
+        assert ls.PAD <= it.x and it.x + it.w <= ls.RIGHT + 0.5, it
+    # the too-brief sentence is the last thing to go, and the cut laps are counted
+    styles = [it.style for it in plan.items]
+    assert "too_brief" in styles and "clipped" in styles
+    cut = [it for it in plan.items if it.style == "clipped"][0]
+    assert cut.text.startswith("10 laps cut"), cut.text
+    assert plan.plot_base >= ls.PLOT_BASE_MIN    # the plot lifts, but is never squashed further
+    # OVER-full: three named quicker laps and three named cut laps each take a row, so even with
+    # the plot lifted something must go — the grey key first, the too-brief sentence kept
+    times = {i: 60.0 + 0.05 * (i % 9) for i in range(40)}
+    for i in (2, 4, 6):
+        times[i] = 59.0 - 0.1 * i          # quicker, with a dropout
+    for i in (10, 20, 30):
+        times[i] = 90.0 + i                # cut
+    times[12] = 59.5                       # the best clean lap
+    times[13] = 59.53                      # level
+    over = FakeSession(times, dropouts={2, 4, 6, 25}, excluded={40: EXCLUDED_BAND}, crossings=2,
+                       track="Circuito Internacional de Velocidade e Karting de Lagoa Grande")
+    plan = ls.legend_plan(ls.lapstrip_data(over))
+    assert plan.dropped and plan.dropped[0] == ls.TONE_BEHIND, plan.dropped
+    assert "too_brief" not in plan.dropped
+    assert max(it.y for it in plan.items) <= ls.LEGEND_LIMIT
+    assert plan.plot_base >= ls.PLOT_BASE_MIN
+    # rendered: no ink in the outer 24 px border (nothing ran off the canvas)
+    img = ls.render_lapstrip(d)
+    canvas = QColor(theme.C.canvas)
+    for x in list(range(0, 24)) + list(range(ls.CARD_W - 24, ls.CARD_W)):
+        for y in range(0, ls.CARD_H, 3):
+            assert img.pixelColor(x, y) == canvas, (x, y)
 
 
 def test_a_tight_session_is_not_stretched_to_fill_the_plot():
@@ -320,6 +439,9 @@ def test_menu_gate_greys_the_strip_under_two_clean_laps_and_says_why():
         assert w._lapstrip_action.isEnabled() is ok
         if not ok:
             assert "two clean laps" in w._lapstrip_action.toolTip()
+            # triggered anyway: the status bar says why, not "no verified laps"
+            w.exports.export_lapstrip_card()
+            assert "fewer than two clean laps" in w.statusBar().currentMessage()
 
 
 if __name__ == "__main__":
