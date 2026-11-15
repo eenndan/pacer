@@ -207,7 +207,7 @@ def test_five_lap_windows_tie_span_and_break():
     flat = {i: 45.0 + 0.001 * i for i in range(10)}
     m = story.session_moments(flat, None, best_lap=0).best_window
     assert [t.lap_ids for t in m.tie] == [tuple(range(10))], m.tie
-    assert m.text.endswith("· any 5 consecutive laps in Laps 1–10 are level (within 0.07 s)"), m.text
+    assert m.text.endswith("· level (within 0.07 s) for any 5 consecutive laps in Laps 1–10"), m.text
     holed = {i: 45.0 + (0.5 if i < 4 else 0.0) for i in range(10) if i != 4}
     m = story.session_moments(holed, None, best_lap=5).best_window
     assert m.lap_ids == (5, 6, 7, 8, 9) and m.tie == (), m
@@ -281,8 +281,8 @@ DEMO_NOTE = ("Lap 6 · 5.50 s over your typical lap · C5 +2.84 s of it, over yo
 DEMO_MOMENTS = (
     "Best lap: Lap 13 · 0:44.950",
     "Biggest single-corner loss: Lap 6 · C5 +2.84 s over your typical pass (▼)",
-    "Best 5-lap run: Laps 9–13 · median 0:45.182 · any 5 consecutive laps in Laps 8–14 are level "
-    "(within 0.07 s)")
+    "Best 5-lap run: Laps 9–13 · median 0:45.182 · level (within 0.07 s) for any 5 consecutive "
+    "laps in Laps 8–14")
 
 
 def test_demo_story():

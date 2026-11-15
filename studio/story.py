@@ -54,8 +54,8 @@ the Laps table — under a provisional line it blanks Δbest and withholds the �
 MOMENTS (each None rather than invented): the best lap, with every clean lap the Laps table calls
 level with it (printed gap under `library.PB_PRECISION_S`) named with its gap; the biggest
 single-corner loss beyond its ▼ step; the best 5-lap run by median, its level windows merged into
-SPANS (maximal runs of level windows starting on consecutive laps, so "any 5 consecutive laps in
-Laps 8–14 are level" is literally true of every window in the span; more than two spans is "no
+SPANS (maximal runs of level windows starting on consecutive laps, so "level for any 5 consecutive
+laps in Laps 8–14" is literally true of every window in the span; more than two spans is "no
 single best"). Not built — measured unstable under timing jitter by the design lane: a best 3-lap
 run, a best pass per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one
 cell in ten by construction, so on pure noise that run is half the session).
@@ -73,7 +73,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import fmt_signed, fmt_time, lap_label
+from ._signal import fmt_signed, fmt_time, lap_label, plural
 from .library import PB_PRECISION_S, within_timing_precision
 from .stats import MATRIX_DECIMALS, CornerMatrix
 
@@ -364,13 +364,14 @@ def _best_window(lap_times, caveat) -> Moment | None:
     level = f"within {PB_PRECISION_S:.2f} s"
     if len(spans) > MAX_WINDOW_SPANS:
         return Moment(BEST_WINDOW, (), None, med, tuple(as_mention), caveat,
-                      f"No single best {RUN_WINDOW}-lap run: {len(spans)} stretches {level}")
+                      f"No single best {RUN_WINDOW}-lap run: "
+                      f"{plural(len(spans), 'stretch', 'stretches')} {level}")
     text = f"Best {RUN_WINDOW}-lap run: {_laps_text(best)} · median {fmt_time(med)}"
     tie = []
     if len(spans[own]) > 1:
         tie.append(as_mention[own])
-        text += (f" · any {RUN_WINDOW} consecutive laps in {_laps_text(as_mention[own].lap_ids)} "
-                 f"are level ({level})")
+        text += (f" · level ({level}) for any {RUN_WINDOW} consecutive laps in "
+                 f"{_laps_text(as_mention[own].lap_ids)}")
     for i, m in enumerate(as_mention):
         if i != own:
             tie.append(m)
