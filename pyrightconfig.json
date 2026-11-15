@@ -37,6 +37,7 @@
     "studio/logsetup.py",
     "studio/marks.py",
     "studio/media_clock.py",
+    "studio/overlay/layout.py",
     "studio/playback_state.py",
     "studio/prefs.py",
     "studio/provenance.py",
