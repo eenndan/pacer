@@ -38,6 +38,10 @@ _INT_W = 64
 _SPREAD_W = 44
 _CHIP_DOT = 7
 _RING = QColor(C.text)
+#: While the race runs the card shows a snapshot at most this old (s of wall time): its numbers are
+#: true AT the time its title prints, and change at a rate they can be read at. Measured on the
+#: 36-lap session: re-rendering every 30 Hz tick, the rows changed on 99 of 120 ticks at 2x.
+CARD_REFRESH_S = 0.1
 
 
 def interval_text(row: PackRow, over: bool, lap_times: dict[int, float]) -> str:
@@ -104,9 +108,21 @@ class RaceCard(QWidget):
 
     def show_model(self, model: CardModel) -> None:
         """Take a tick's model. The card is a translucent child over the map's viewport, so it is
-        repainted whenever the map is — every tick — and painting its ~20 text runs cost ~1 ms of
-        that. So it paints into a pixmap only when what it SHOWS changed (its lines, the progress
-        bar's pixel, the play state) and otherwise blits."""
+        repainted whenever the map is — every tick — and painting its ~20 text runs cost ~1-2 ms of
+        that. So everything but the race clock in the title and the progress bar's fill (both
+        change every tick, both one draw call) is a pixmap re-rendered only when what it shows
+        changed — the rows, the readout, the play state — and blitted otherwise.
+
+        WHILE IT RUNS the card takes a new snapshot at most every CARD_REFRESH_S of wall time
+        (race time × speed): between snapshots it keeps showing the last one whole — title clock,
+        bar and rows of ONE instant, so no number on it is ever from a different time than its
+        title says. A pause, a scrub, a speed or selection change, or the finish refreshes at once."""
+        snap = self.model
+        if (snap is not None and model.playing and snap.playing
+                and not model.over and model.speed == snap.speed
+                and model.selected == snap.selected
+                and 0.0 <= model.t - snap.t < CARD_REFRESH_S * model.speed):
+            return
         self.model = model
         h = self._height(model)
         if (self._w, h) != (self.width(), self.height()):
@@ -115,14 +131,11 @@ class RaceCard(QWidget):
         if key != self._cache_key:
             self._cache_key = key
             self._cache = None
-            self.update()
+        self.update()
 
     def _content_key(self, m: CardModel):
-        inner = self._w - 2 * _PAD
-        frac = 0.0 if m.duration <= 0 else min(max(m.t / m.duration, 0.0), 1.0)
-        return (tuple(self.lines()), round(inner * frac * self.devicePixelRatioF()), m.playing,
-                m.speed, m.selected, self.width(), self.height(),
-                round(self.devicePixelRatioF(), 3), theme.active_palette())
+        return (tuple(self.lines()[1:]), m.over, m.playing, m.speed, m.selected, self.width(),
+                self.height(), round(self.devicePixelRatioF(), 3), theme.active_palette())
 
     def lines(self) -> list[str]:
         """Every text line the card paints right now, top to bottom (tests and captures read it)."""
@@ -224,7 +237,25 @@ class RaceCard(QWidget):
             self.renders += 1
         p = QPainter(self)
         p.drawPixmap(0, 0, self._cache)
+        self._paint_live(p, self.model)
         p.end()
+
+    def _paint_live(self, p: QPainter, m: CardModel) -> None:
+        """The two things that change every tick, over the cached card: the title (race clock)
+        and the progress bar's fill."""
+        p.setRenderHint(QPainter.Antialiasing, True)
+        inner = self._w - 2 * _PAD
+        x0, y = float(_PAD), float(_PAD)
+        p.setFont(self._title_font)
+        p.setPen(QPen(QColor(C.text_dim)))
+        p.drawText(QRectF(x0, y, inner, _TITLE_H), int(Qt.AlignVCenter | Qt.AlignLeft),
+                   self._title(m))
+        bar = QRectF(x0, y + _TITLE_H + _ROW_H + 3, inner, _BAR_H - 6)
+        frac = 0.0 if m.duration <= 0 else min(max(m.t / m.duration, 0.0), 1.0)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(C.accent)))
+        p.drawRoundedRect(QRectF(bar.x(), bar.y(), max(bar.width() * frac, 6.0), bar.height()),
+                          3, 3)
 
     def _paint(self, p: QPainter, m: CardModel) -> None:
         p.setRenderHint(QPainter.Antialiasing, True)
@@ -236,11 +267,8 @@ class RaceCard(QWidget):
                           theme.RADIUS_M, theme.RADIUS_M)
         inner = self._w - 2 * _PAD
         x0, y = float(_PAD), float(_PAD)
-        # Title row: identity + race clock, then the transport (restart · play/pause · speed · ×).
-        p.setFont(self._title_font)
-        p.setPen(QPen(QColor(C.text_dim)))
-        p.drawText(QRectF(x0, y, inner, _TITLE_H), int(Qt.AlignVCenter | Qt.AlignLeft),
-                   self._title(m))
+        # Title row: identity + race clock (painted live, _paint_live), then the transport
+        # (restart · play/pause · speed · ×).
         bx = self._w - _PAD - _BTN
         self._button(p, "close", QRectF(bx, y, _BTN, _BTN), glyph="ph.x")
         bx -= _BTN + 4 + 10
@@ -260,11 +288,7 @@ class RaceCard(QWidget):
         self._hits["bar"] = QRectF(x0, y, inner, _BAR_H)
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(QColor(C.border)))
-        p.drawRoundedRect(bar, 3, 3)
-        frac = 0.0 if m.duration <= 0 else min(max(m.t / m.duration, 0.0), 1.0)
-        p.setBrush(QBrush(QColor(C.accent)))
-        p.drawRoundedRect(QRectF(bar.x(), bar.y(), max(bar.width() * frac, 6.0), bar.height()),
-                          3, 3)
+        p.drawRoundedRect(bar, 3, 3)        # the track; its fill is live (_paint_live)
         y += _BAR_H + 4
         if m.unranked_reason:
             h = self._wrapped_h(m.unranked_reason, inner)

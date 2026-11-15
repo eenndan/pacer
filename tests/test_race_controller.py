@@ -265,6 +265,28 @@ def test_finish_gaps_are_built_from_the_printed_milliseconds():
     print("ok finish gaps from printed ms")
 
 
+def test_a_running_card_shows_one_instant_at_a_readable_rate():
+    """While the race runs, the card takes a snapshot at most every CARD_REFRESH_S of wall time and
+    shows it whole — its title clock is the time its rows are from — and a pause shows now."""
+    from studio.race_ladder import CARD_REFRESH_S, RaceCard
+    rc, clock, mp, _card, _ = _controller(_wide_field())
+    card = RaceCard()
+    rc.card = card
+    rc.enter(selected=4, speed=2.0)
+    seen = set()
+    for _ in range(30):                     # one second of 30 Hz ticks at 2x
+        clock.now += 1 / 30
+        rc.tick()
+        seen.add(card.model.t)
+        assert card.lines()[0] == f"LAP RACE · {card.model.t:4.1f} s"
+        assert 0 <= rc.t - card.model.t < CARD_REFRESH_S * 2 + 1e-9, (rc.t, card.model.t)
+    assert len(seen) <= 1 / CARD_REFRESH_S + 1, len(seen)
+    rc.toggle_play()
+    rc.tick()
+    assert card.model.t == rc.t and not card.model.playing, "a pause did not show the race now"
+    print("ok running card: one instant, at most 10 Hz; a pause shows now")
+
+
 def test_the_card_paints_the_model():
     """The real card lists the rows, the readout, the clock and the excluded line it was given."""
     from studio.race_ladder import RaceCard
