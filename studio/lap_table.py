@@ -5,7 +5,8 @@ mouse or the keyboard — the header is a tab stop with its own ring (_KeyboardS
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap (kept through the selection, _TowerDelegate), blue Qt selection, purple per-sector session-best
 cells, ⚠ GPS-dropout flag, a slow lap's culprit cue ("▼ C5" in muted ink, its story note on
-hover — `story.slow_lap_notes`: it labels the lap, never re-ranks or dims it). The Δbest column
+hover — `story.slow_lap_notes`: it labels the lap, never re-ranks or dims it), and a footer that
+counts the cue rows and scrolls to each ("2 slow laps marked ▼ · next ›"). The Δbest column
 is the timing-tower read: each lap's gap to the best with an in-cell bar on a fenced, clean-lap
 scale (delta_bar_scale). The
 SESSION-BESTS footer is plain labels below the table, immune to sort/selection. An EXCLUDED
@@ -44,6 +45,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMenu,
+    QPushButton,
     QScrollArea,
     QStackedWidget,
     QStyle,
@@ -203,6 +205,46 @@ def slow_note_tip(note) -> str:
     default, a paragraph of its own (a bare line break vanished into the wrapped note above it).
     Like the ★ legend it goes ABOVE the cell's trust note, never instead of it."""
     return f"{story.row_text(note)}\n\n{note.rule}"
+
+
+# THE SLOW-LAP FINDER (cool/slow-lap-finder): a one-line footer under the grid, "2 slow laps marked
+# ▼ · next ›", shown only while some row wears a culprit cue. The table opens centred on the best
+# lap, and on a 36-lap session that put every cue row out of view (0 of 6 visible at open), so the
+# cue was there and nothing said so.
+#
+# IT COUNTS THE ROWS THAT WEAR THE CUE, not every slow lap. "next ›" lands on a row, and only a cue
+# row shows on its face why it was landed on; a slow lap with no single culprit (`partial`,
+# `spread`) wears nothing and says where its time went only on hover. The label names what it
+# counts ("marked ▼"), and the tooltip names the cueless slow laps it leaves out, so neither count
+# is hidden. The rule that called them slow is story.py's own `SlowLapNote.rule`, quoted, never
+# re-worded here.
+#
+# IT SCROLLS, IT DOES NOT SELECT. A Laps pick moves the charts, the map and the video, and during
+# a comparison it LEAVES compare (#575). A finder is a way to look, and it would be wrong for one
+# to end a comparison or move the video behind the reader's back: the row lands in the middle of
+# the grid with its cue in view, and a click on it is the pick, as it always was.
+SLOW_FINDER_NEXT = "next ›"
+SLOW_FINDER_NEXT_NAME = "Next slow lap"
+
+
+def slow_finder_text(n: int) -> str:
+    """The footer's count: "1 slow lap marked ▼" / "6 slow laps marked ▼"."""
+    return f"{plural(n, 'slow lap')} marked {story.BEHIND_MARK}"
+
+
+def slow_finder_tip(rule: str, uncued: int) -> str:
+    """What the footer counts, what "next ›" does, then the rule, story.py's own words."""
+    tip = (f"Slow laps whose time went mostly at one or two corners: their Lap cell names the "
+           f"corner ({story.BEHIND_MARK} C5) and hovering it says where the time went. "
+           f"{SLOW_FINDER_NEXT} scrolls to the next one, from the top again after the last; it "
+           "does not select the lap, so the charts, the video and a comparison stay as they are. "
+           "Click the row to pick it.")
+    if uncued:
+        verb = "has" if uncued == 1 else "have"
+        tip += (f" Not counted: {plural(uncued, 'other slow lap')}, whose time no single corner "
+                f"holds; {'it' if uncued == 1 else 'they'} {verb} no cue, and the note is on "
+                "the Time cell.")
+    return f"{tip}\n\n{rule}"
 
 
 def too_brief_count(session, laps: int) -> int:
@@ -1181,6 +1223,8 @@ class LapTable(QWidget):
         # lap id -> story.SlowLapNote, read ONCE per refresh / trust flip (_read_slow_notes), never
         # per hover, sort or paint: the session's memo still rebuilds its key on every call.
         self._slow_notes: dict = {}
+        # The lap the slow-lap finder last scrolled to (lap id, or None): its "next ›" anchor.
+        self._finder_lap = None
         # How many S-split columns the last refresh() drew, so a NEW one can be scrolled into view
         # once (L3-04) without every other refresh yanking the horizontal scroll.
         self._n_splits_shown = 0
@@ -1265,10 +1309,80 @@ class LapTable(QWidget):
         # pixel of panel height becomes visible lap rows (without this, Qt split spare height
         # between them and the grid never grew).
         lay.addWidget(self._stack, 1)
+        lay.addWidget(self._build_slow_finder())
         lay.addWidget(self._build_excluded_strip())
         self.refresh()
 
     # ------------------------------------------------------------------ build
+    def _build_slow_finder(self) -> QWidget:
+        """The slow-lap finder footer (see SLOW_FINDER_NEXT): the count in the excluded strip's
+        BarLabel voice and insets, and "next ›" as a flat HIT_MIN text button. Hidden with no cue
+        row, so a session without one pays no pixel; with one it costs the grid 24 px, under one
+        28 px row, which is the price of the cue rows being findable at all."""
+        bar = QWidget()
+        bar.setObjectName("LapSlowFinder")      # the top hairline is the theme's rule
+        bar.setAttribute(Qt.WA_StyledBackground, True)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(GRID_TEXT_INSET, 0, GRID_TEXT_INSET - theme.SPACE_S, 0)
+        row.setSpacing(theme.SPACE_XS)
+        self._slow_finder_label = QLabel("")
+        self._slow_finder_label.setProperty("role", "BarLabel")
+        self._slow_finder_next = QPushButton(SLOW_FINDER_NEXT)
+        self._slow_finder_next.setObjectName("LapSlowFinderNext")
+        self._slow_finder_next.setCursor(Qt.PointingHandCursor)
+        # A tab stop: the grid gives Tab back (setTabKeyNavigation(False)), so Tab reaches it.
+        self._slow_finder_next.setFocusPolicy(Qt.StrongFocus)
+        self._slow_finder_next.setAccessibleName(SLOW_FINDER_NEXT_NAME)
+        self._slow_finder_next.clicked.connect(self._next_slow_lap)
+        row.addWidget(self._slow_finder_label)
+        row.addStretch(1)
+        row.addWidget(self._slow_finder_next)
+        self._slow_finder = bar
+        bar.setVisible(False)
+        return bar
+
+    def _cue_rows(self) -> list[int]:
+        """The rows wearing a culprit cue, top to bottom in the current sort."""
+        return [r for r in range(self.table.rowCount()) if self._cue(self._lap_id(r))]
+
+    def _refresh_slow_finder(self) -> None:
+        """Count and word the finder from the notes already read (`_slow_notes`): no story is
+        recomputed here. Hidden at zero cue rows and over the empty state."""
+        cued = [n for n in self._slow_notes.values() if story.culprit_cue(n)]
+        show = bool(cued) and self._stack.currentIndex() == 0
+        self._slow_finder.setVisible(show)
+        if not show:
+            self._finder_lap = None
+            return
+        text = slow_finder_text(len(cued))
+        tip = slow_finder_tip(cued[0].rule, len(self._slow_notes) - len(cued))
+        self._slow_finder_label.setText(text)
+        for w in (self._slow_finder_label, self._slow_finder_next):
+            w.setToolTip(tip)
+        self._slow_finder_next.setAccessibleDescription(f"{text}. {tip}")
+
+    def _next_slow_lap(self) -> None:
+        """Scroll the next cue row below the anchor to the grid's middle, wrapping to the first.
+        The anchor is the row this last landed on while it is still in view; otherwise the row
+        above the top of the view, so a cue row already on screen is the first stop. Scroll only:
+        no selection, no signal, so the charts, the video and a comparison are untouched."""
+        rows = self._cue_rows()
+        if not rows:
+            return
+        tb = self.table
+        vp = tb.viewport().rect()
+        last = self._row_for_lap(self._finder_lap) if self._finder_lap is not None else -1
+        if last >= 0 and vp.intersects(tb.visualRect(tb.model().index(last, 0))):
+            anchor = last
+        else:
+            top = tb.rowAt(0)
+            anchor = (top if top >= 0 else 0) - 1
+        target = next((r for r in rows if r > anchor), rows[0])
+        self._finder_lap = self._lap_id(target)
+        h = tb.horizontalScrollBar().value()
+        tb.scrollTo(tb.model().index(target, 0), QAbstractItemView.PositionAtCenter)
+        tb.horizontalScrollBar().setValue(h)
+
     def _build_excluded_strip(self) -> QWidget:
         """A muted strip listing laps LEFT OUT of the times/bests by the median band (see
         EXCLUDED_ICON). COLLAPSED by default to a single muted one-liner (the prohibit mark, "N
@@ -1812,6 +1926,7 @@ class LapTable(QWidget):
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
         self._dropout_ids = dropout_ids
         self._read_slow_notes()
+        self._refresh_slow_finder()
         self._apply_highlights()
         # Fit AFTER the highlights: they append the ★ best-sector mark to S-split cells, which is
         # part of the width those columns need.
@@ -2149,6 +2264,7 @@ class LapTable(QWidget):
             self.table.setSortingEnabled(True)
             self.table.sortByColumn(self._sort_col, self._sort_order)
         self._read_slow_notes()   # each note's caveat (and its gap to a best) follows the flag
+        self._refresh_slow_finder()
         self._apply_highlights()
         # ...and re-fitted: the Δbest column's WIDTH follows the flag too (collapsed while blank).
         self._fit_columns()

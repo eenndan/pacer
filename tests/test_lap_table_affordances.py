@@ -707,6 +707,10 @@ def test_a_squeezed_cue_never_costs_the_lap_number():
         _widths(lt, 300)
         r = lt._row_for_lap(lap)
         item = lt.table.item(r, 0)
+        # In view in both: the cue table's slow-lap finder footer takes 24 px of its height, which
+        # put the bottom row below the viewport and cropped the grab under the comparison.
+        lt.table.scrollToItem(item)
+        _settle()
         rect = lt.table.visualItemRect(item)
         img = _rgb(lt.table.viewport())
         frames[key] = (lt, item, rect, img)
@@ -827,6 +831,158 @@ def test_the_cue_and_a_moment_jump_share_one_owned_ring():
     view.stats_view.moment_jump.emit(laps[0], None)
     assert view.map.pinned_corner() is None, "the cue's ring outlived the next Jump"
     print("test_the_cue_and_a_moment_jump_share_one_owned_ring OK")
+
+
+# ===================================================== cool/slow-lap-finder: find the cue rows
+# The table opens centred on the best lap; on a 36-lap session that left 0 of its 6 cue rows in
+# view. The footer counts the rows wearing a cue and "next ›" scrolls to each, wrapping, and
+# selects nothing (a Laps pick moves the charts and the video, and leaves a comparison, #575).
+def _planted(s, cued=(0, 1, 2, 5), uncued=()):
+    """The demo's one note copied onto `cued` lap ids (a culprit, so a ▼ cue) and onto `uncued`
+    ones as `spread` (slow, no single culprit, so no cue)."""
+    import dataclasses
+    (note,) = s.slow_lap_notes()
+    return ([dataclasses.replace(note, lap_id=i) for i in cued]
+            + [dataclasses.replace(note, lap_id=i, category="spread", corners=())
+               for i in uncued])
+
+
+def _visible_laps(lt) -> set:
+    tb = lt.table
+    vp = tb.viewport().rect()
+    return {lt._lap_id(r) for r in range(tb.rowCount())
+            if vp.contains(tb.visualRect(tb.model().index(r, 0)))}
+
+
+def test_the_finder_counts_the_cue_rows_and_hides_without_one():
+    """The demo's one cue row: "1 slow lap marked ▼", the rule in story.py's own words under the
+    tooltip. Four cue rows and two cueless slow laps: "4 slow laps marked ▼", and the two left out
+    are named as left out. No note, no rows: no footer at all."""
+    s = _demo()
+    (note,) = s.slow_lap_notes()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    assert lt._slow_finder.isVisible(), "the demo's cue row has no finder"
+    assert lt._slow_finder_label.text() == "1 slow lap marked ▼", lt._slow_finder_label.text()
+    tip = lt._slow_finder_next.toolTip()
+    assert tip.endswith(f"\n\n{note.rule}") and "Not counted" not in tip, tip
+    assert lt._slow_finder_label.toolTip() == tip
+    many = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s, uncued=(4, 7)))))
+    many.show()
+    _settle()
+    assert many._slow_finder_label.text() == "4 slow laps marked ▼", many._slow_finder_label.text()
+    assert "Not counted: 2 other slow laps, whose time no single corner holds; they have no cue" \
+        in many._slow_finder_next.toolTip(), many._slow_finder_next.toolTip()
+    one_left = LT.slow_finder_tip(note.rule, 1)
+    assert "Not counted: 1 other slow lap, whose time no single corner holds; it has no cue" \
+        in one_left, one_left
+    # Cueless slow laps alone: nothing to land on, no footer.
+    spread = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s, cued=(), uncued=(4,)))))
+    bare = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
+    no_laps = _FakeLapSession(sectors=0, dropout=())
+    no_laps._times = []
+    no_laps.slow_lap_notes = lambda: _planted(s)      # notes for laps no row holds: none shown
+    empty = _keep(LT.LapTable(no_laps))
+    for t in (spread, bare, empty):
+        t.show()
+        _settle()
+        assert not t._slow_finder.isVisible(), t._slow_finder_label.text()
+    print("test_the_finder_counts_the_cue_rows_and_hides_without_one OK")
+
+
+def test_next_reaches_every_cue_row_wraps_and_selects_nothing():
+    """A short grid scrolled to the last lap (as the app opens a long session: centred on its best,
+    far from the cue rows): no cue row in view. Each "next ›" lands the next cue row in view, in
+    table order, and the fifth wraps to the first; the selection, and so the charts, the video and
+    any comparison, never moves, and no `laps_selected` is emitted."""
+    s = _demo()
+    lt = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s))))
+    lt.resize(460, 230)
+    lt.show()
+    _settle()
+    last = lt._lap_id(lt.table.rowCount() - 1)
+    lt.select([last])
+    _settle()
+    cued = {0, 1, 2, 5}
+    assert not (cued & _visible_laps(lt)), sorted(_visible_laps(lt))
+    picked = []
+    lt.laps_selected.connect(picked.append)
+    landed = []
+    for _ in range(5):
+        lt._slow_finder_next.click()
+        _settle()
+        landed.append(lt._finder_lap)
+        assert lt._finder_lap in _visible_laps(lt), (lt._finder_lap, sorted(_visible_laps(lt)))
+    assert landed == [0, 1, 2, 5, 0], landed
+    assert lt.selected_lap_ids() == [last] and picked == [], (lt.selected_lap_ids(), picked)
+    # Sorted slowest first, "next" walks the rows as they now stand, not by lap number.
+    lt.table.sortByColumn(_TIME_COL, Qt.DescendingOrder)
+    _settle()
+    lt.table.scrollToBottom()
+    _settle()
+    order = [lt._lap_id(r) for r in lt._cue_rows()]
+    walk = []
+    for _ in range(len(order)):
+        lt._slow_finder_next.click()
+        _settle()
+        walk.append(lt._finder_lap)
+    assert walk == order, (walk, order)
+    print(f"test_next_reaches_every_cue_row_wraps_and_selects_nothing OK ({landed})")
+
+
+def test_the_finder_follows_the_notes_through_a_trust_flip():
+    """story.py keeps its notes under a provisional line and an estimated clock (they carry a
+    caveat), so the finder stays; when a refresh takes the notes away, it goes."""
+    import dataclasses
+    s = _demo()
+    notes = [dataclasses.replace(n, caveat=("provisional",), gap_to_best_s=None)
+             for n in _planted(s)]
+    lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda: notes)))
+    lt.show()
+    _settle()
+    assert lt._slow_finder_label.text() == "4 slow laps marked ▼", lt._slow_finder_label.text()
+    notes[:] = []
+    lt.refresh_timing_trust()
+    _settle()
+    assert not lt._slow_finder.isVisible()
+    print("test_the_finder_follows_the_notes_through_a_trust_flip OK")
+
+
+def test_the_finder_is_a_named_tab_stop_that_fits_a_narrow_panel():
+    """"next ›" is reached by Tab out of the grid (which gives Tab back), says what it does to a
+    screen reader, and is a HIT_MIN target; the footer costs less than one lap row; at the
+    narrowest lap panel the two-digit count and the button both show uncut."""
+    s = _demo()
+    lt = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s, cued=tuple(range(12))))))
+    lt.resize(300, 400)
+    lt.show()
+    _settle()
+    btn = lt._slow_finder_next
+    assert btn.focusPolicy() & Qt.TabFocus, btn.focusPolicy()
+    assert btn.accessibleName() == LT.SLOW_FINDER_NEXT_NAME
+    assert btn.accessibleDescription().startswith("12 slow laps marked ▼. "), \
+        btn.accessibleDescription()
+    lt.table.setFocus()
+    _settle()
+    path = []
+    for _ in range(4):               # the grid, its sort header (a tab stop of its own), the finder
+        if btn.hasFocus():
+            break
+        lt.table.window().focusNextChild()
+        _settle()
+        path.append(type(_APP.focusWidget()).__name__)
+    assert btn.hasFocus(), path
+    assert btn.height() >= theme.HIT_MIN, btn.height()
+    assert lt._slow_finder.height() < theme.GRID_ROW_H, lt._slow_finder.height()
+    lab = lt._slow_finder_label
+    need = QFontMetrics(lab.font()).horizontalAdvance(lab.text())
+    assert lab.width() >= need, (lab.width(), need)
+    assert btn.geometry().right() <= lt._slow_finder.width(), (btn.geometry(), lt._slow_finder.width())
+    assert btn.width() >= btn.sizeHint().width(), (btn.width(), btn.sizeHint())
+    print(f"test_the_finder_is_a_named_tab_stop_that_fits_a_narrow_panel OK "
+          f"(footer {lt._slow_finder.height()} px, label {lab.width()}/{need} px)")
 
 
 class _NoRead:

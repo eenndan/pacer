@@ -2250,6 +2250,25 @@ QLabel#LapExcludedBody {{
 QLabel#LapExcludedHeader[tone="warn"] {{
     color: {C.accent};
 }}
+/* the slow-lap finder footer ("2 slow laps marked ▼ · next ›", lap_table._build_slow_finder): the
+   excluded strip's hairline, and "next ›" as a flat text button at HIT_MIN, the PB toast link's
+   shape in the table's own ink (it finds a row; it warns of nothing, so no amber). Focus takes
+   the hover treatment: a flat button has no border to ring. */
+QWidget#LapSlowFinder {{
+    border-top: {BORDER_PX}px solid {C.border};
+}}
+QPushButton#LapSlowFinderNext {{
+    background: transparent;
+    border: none;
+    color: {C.text};
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: {SPACE_XXS}px {SPACE_S}px;
+    min-height: {ctrl_content_h(HIT_MIN, SPACE_XXS, border_v=0)}px;
+}}
+QPushButton#LapSlowFinderNext:hover, QPushButton#LapSlowFinderNext:focus {{
+    text-decoration: underline;
+}}
 
 /* the map's transient action confirmation ("Sector added", "Sectors reset") — a small plate over
    the canvas's top-left. It shipped as the app's ONLY whole-card stylesheet built in a view file,
