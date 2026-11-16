@@ -106,7 +106,8 @@ ALLOWED_QT = {
     "provenance_panel", "race_ladder",
     "session_record_dialog", "share_card", "share_lapstrip",
     "stats_braking", "stats_coasting", "stats_common",
-    "stats_corners", "stats_ideal", "stats_panel", "stats_straights", "stats_trust", "theme",
+    "stats_corners", "stats_ideal", "stats_moments", "stats_panel", "stats_straights",
+    "stats_trust", "theme",
     "trace_paint", "track_dialog", "video_view",
     "widgets", "workers",
 }

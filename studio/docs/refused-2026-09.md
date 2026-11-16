@@ -2398,7 +2398,7 @@ run, and the best pass through each corner.
 
 **The best 3-lap run is not built as a second moment.** That is a design choice, not a noise
 refusal: at the measured σ it changes in only 4 % of the draws (16 % under the level step). The
-figure already exists, as the Stats page's "race pace · best 3-lap run" tile
+figure already exists, as the Stats page's "race pace · best 3-lap mean" tile
 (`stats_panel.py`, from `stats.best_consecutive_mean`: the best mean of `stats.RACE_PACE_N`
 consecutive clean laps). A moment naming its laps would name a tie group: 5 of the 12 runs sit
 within 0.07 s of the best. The best 5-lap run moment already carries the idea, named with its ties.

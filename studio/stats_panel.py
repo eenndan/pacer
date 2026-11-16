@@ -25,7 +25,8 @@ the mono stack (tabular figures); a signal-absent statistic shows an em-dash, ne
 THIS MODULE IS THE PAGE SHELL, AND IT IS BEING SPLIT (ARCH-3). Layout, reflow and orchestration
 stay here; a section that has moved out builds, refreshes and words itself in its own module —
 DATA TRUST in `stats_trust`, IDEAL LAP in `stats_ideal`, CORNERS in `stats_corners`, BRAKING in
-`stats_braking`, COASTING in `stats_coasting`, STRAIGHTS in `stats_straights` — and
+`stats_braking`, COASTING in `stats_coasting`, STRAIGHTS in `stats_straights`, MOMENTS in
+`stats_moments` — and
 what sections share is in `stats_common` (see its docstring for the contract)."""
 
 from __future__ import annotations
@@ -85,6 +86,7 @@ from .stats_common import (
 )
 from .stats_corners import CornersSection
 from .stats_ideal import IdealSection
+from .stats_moments import MomentsSection
 from .stats_straights import StraightsSection
 from .stats_trust import TrustSection
 from .theme import C
@@ -844,7 +846,7 @@ SIGMA_CAPTION = "σ lap"
 # THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
 # tile taller than its row-mates, and a grid row is as tall as its tallest tile. Measured: the
 # caption runs 161 px ("within 0.59 s") to 171 px ("within < 0.07 s"; a width of ten-odd seconds, 166), past
-# the 134 px of "race pace · best 3-lap run", so the PACE row now fits a pane from 340 px rather
+# the 146 px of "race pace · best 3-lap mean", so the PACE row now fits a pane from 340 px rather
 # than 310; the row stays 37 px tall at every width from 300 to 1440 px.
 SIGMA_TOOLTIP = (
     "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half is "
@@ -872,7 +874,6 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
                    "starts: the minimum time from passing any track position to passing it "
                    "again one lap later (windows spanning a GPS-dropout ⚠ lap are excluded). "
                    "A reference target, not a lap you drove.")
-
 
 # `_plural` and `_fmt_hms` used to live here. Both moved to `_signal` (plural / fmt_hms) when the
 # exported session report became a second caller: export_data is Qt-free by contract and cannot
@@ -1111,6 +1112,8 @@ class StatsView(QWidget):
     # Clicked CORNERS-table row's cid (None on deselect) -> the map apex ring, via the
     # maximize-aware CentralView handler (restore the grid first, then ring).
     corner_clicked = Signal(object)
+    # A MOMENTS row's Jump: (lap id, cid or None) -> CentralView selects the lap and rings the cid.
+    moment_jump = Signal(int, object)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1284,7 +1287,10 @@ class StatsView(QWidget):
         col.addWidget(self._pace_section)
         self.t_best = Tile("best lap")
         self.t_median = Tile("median lap")
-        self.t_race_pace = Tile("race pace · best 3-lap run")
+        # "MEAN", not "run" (cool/session-moments): MOMENTS below prints a 5-lap MEDIAN under this
+        # tile, and the caption is what says the two are different statistics. 146 px, inside the
+        # σ caption that sets the row's column width.
+        self.t_race_pace = Tile("race pace · best 3-lap mean")
         self.t_race_pace.setToolTip(
             "The best average of 3 CONSECUTIVE clean laps — your sustained pace, next to "
             "the single glory lap.")
@@ -1368,6 +1374,15 @@ class StatsView(QWidget):
         self.stints_note = WrapLabel()
         self.stints_note.setProperty("role", "TableNote")
         col.addWidget(self.stints_note)
+
+        # --- MOMENTS: the best lap, the biggest single-corner loss, the best 5-lap run, each a
+        # Jump. UNDER PACE AND ITS STINTS, above IDEAL LAP: measured on the shipped demo at the
+        # 503 x 417 quadrant viewport (1440x900) the first screen ends inside DATA TRUST's foot
+        # (326 px) and the PACE tiles already run to 430 px, so here, at 538 px, the section moves
+        # nothing that was on the first screen; above PACE it would have pushed the PACE tiles
+        # down by its own height. It reads the best lap the tile row just printed, then where
+        # the time went and where the pace held.
+        self.moments = self._mount(col, MomentsSection(self.moment_jump.emit))
 
         # --- the IDEAL LAP, and where it lives
         #
@@ -2256,6 +2271,7 @@ class StatsView(QWidget):
         self.t_runs.set(str(runs) if runs else None,
                         "runs" if runs != 1 else "runs · one continuous")
         self._refresh_stints(st, unit, u_label)
+        self.moments.refresh(session)
         self.ideal.refresh(session)
 
         # SPEED · G — session peaks over the per-lap stats

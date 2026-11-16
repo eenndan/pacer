@@ -1964,8 +1964,14 @@ class LapTable(QWidget):
             note_tip = slow_note_tip(note) if note is not None else ""
             if self._cue(lap_id):
                 ink_rows.add(r)     # the cue is the delegate's to paint (CUE_ROLE)
-            time_trust = (PROVISIONAL_TOOLTIP if not verified
-                          else estimated_note if degraded else "")
+            # A note's trust lines are EVERY state that holds, once each (its `caveat` is a tuple):
+            # a recording both provisional and on an estimated clock says both under the note,
+            # where a bare time cell keeps the one stronger line. The Lap cell wearing the cue has
+            # no trust note of its own and borrows these, as it borrowed the Time cell's.
+            note_trust = "\n\n".join(
+                [PROVISIONAL_TOOLTIP] * (not verified)
+                + [estimated_note] * bool(note is not None and (
+                    degraded or story.CAVEAT_ESTIMATED in note.caveat)))
             for c in range(self.table.columnCount()):
                 item = self.table.item(r, c)
                 if item is None:
@@ -2005,7 +2011,7 @@ class LapTable(QWidget):
                 # — which carries no trust note of its own, so it borrows the Time cell's: the
                 # note is about the lap's time, and the table's caveat on that time goes with it.
                 if note_tip and c in (0, _TIME_COL):
-                    item.setToolTip(_with_star(note_tip, tip if c else time_trust))
+                    item.setToolTip(_with_star(note_tip, note_trust))
                 else:
                     item.setToolTip(_with_star(BEST_LAP_TIP, tip) if is_best and c == 0 else tip)
                 if c == _DELTA_COL:

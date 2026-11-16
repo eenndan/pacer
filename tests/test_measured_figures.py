@@ -3018,9 +3018,11 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
             probs.append(f"§32: '{hit[0]} of the {hit[1]} runs', the probe: {m['run3_tied']} of {m['run3_windows']}")
     if (hit := find(32, r"tile \(`stats_panel\.py`, from `stats\.best_consecutive_mean`: the best mean of `stats\.RACE_PACE_N`",
                     "the race-pace tile")):
-        if '"race pace · best 3-lap run"' not in _read(os.path.join(_REPO, "studio", "stats_panel.py")) \
+        # The caption §32 quotes must be the tile's own (cool/session-moments renamed it "…mean").
+        quoted = re.search(r'Stats page\'s "(race pace[^"]*)" tile', flat[32])
+        if quoted is None or f'"{quoted[1]}"' not in _read(os.path.join(_REPO, "studio", "stats_panel.py")) \
                 or _constant(_STATS_PY, "RACE_PACE_N") != 3:
-            probs.append("§32: the race-pace tile is no longer 'race pace · best 3-lap run' over 3 laps")
+            probs.append(f"§32: the race-pace tile is no longer {quoted and quoted[1]!r} over 3 laps")
     kept = ("best_lap", "worst_corner", "run5")
     if "none of them changes at either noise level" in flat[32] and any(sh[k] or st[k] for k in kept):
         probs.append(f"§32 says the kept moments never change: {[(k, sh[k], st[k]) for k in kept]}")

@@ -212,7 +212,7 @@ def test_stats_summary_values_equal_the_session_accessors():
     assert p["best lap"] == fmt_time(pace.best)
     assert p[f"median lap · {pace.n} clean laps"] == fmt_time(pace.median)
     assert p["best rolling"] == fmt_time(s.best_rolling_lap())
-    assert p["race pace · best 3-lap run"] == fmt_time(st.race_pace())
+    assert p["race pace · best 3-lap mean"] == fmt_time(st.race_pace())
     assert p["σ lap"] == f"{pace.sigma:.2f} s"
     # cool/middle-half: the σ tile's second reading travels with it, in the page's own words.
     # Absent below the five-lap floor, as the tile's line is (never a bare dash row): this session

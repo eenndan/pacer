@@ -933,6 +933,7 @@ class CentralView(QWidget):
         # Stats CORNERS/BRAKING/STRAIGHTS rows → the same apex ring, but maximize-aware: restore
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
+        self.stats_view.moment_jump.connect(self._on_stats_moment_jump)
         self.table_stack = QStackedWidget()
         # The Marks page: the driver's own annotations + the derived ones (studio/marks.py). It owns
         # no store and no session — the window feeds it the merged list and acts on its signals, the
@@ -1696,22 +1697,28 @@ class CentralView(QWidget):
 
     def _on_user_select(self, ids):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
-        self._drop_cue_ring()
+        self._drop_owned_ring()
         self._on_laps_selected(ids, seek=True)
 
-    # The ring a slow lap's "▼ C5" cue pins belongs to THAT lap: the next lap the user selects
-    # takes it down (a selection change reaches here before the cue's own click, so a click on the
-    # cue first drops the old ring, then pins its own). A ring pinned by a Corners/Stats row since
-    # is that row's and stays. Not under a Lap Race: corner rings are off on its canvas (#561).
+    # ONE OWNED RING, for the two surfaces whose ring belongs to a lap rather than to a corner row:
+    # a slow lap's "▼ C5" cue and a MOMENTS Jump. Either pins through `_pin_owned_ring`, and the
+    # next lap the user selects or the next Jump takes it down through `_drop_owned_ring` — only
+    # while the map's pin is still that one (a selection change reaches here before the cue's own
+    # click, so a click on the cue first drops the old ring, then pins its own). A ring a
+    # Corners/Stats row pinned since is that row's and stays. Neither rings under a Lap Race:
+    # corner rings are off on its canvas (#561).
     def _on_slow_corner_clicked(self, cid: int):
+        self._pin_owned_ring(cid)
+
+    def _pin_owned_ring(self, cid: int):
         if self.is_racing():
             return
         self._ring_corner(cid)
-        self._cue_ring = f"C{int(cid)}"
+        self._owned_ring = f"C{int(cid)}"
 
-    def _drop_cue_ring(self):
-        ring = getattr(self, "_cue_ring", None)
-        self._cue_ring = None
+    def _drop_owned_ring(self):
+        ring = getattr(self, "_owned_ring", None)
+        self._owned_ring = None
         if ring is not None and self.map.pinned_corner() == ring:
             self._ring_corner(None)
 
@@ -1748,6 +1755,24 @@ class CentralView(QWidget):
         if cid is not None and getattr(self, "_maximized_panel", None) is self._table_panel:
             self._restore_splitter_sizes()
         self._ring_corner(cid)
+
+    def _on_stats_moment_jump(self, lap_id: int, cid):
+        """A Stats MOMENTS row's Jump: select `lap_id` as a Laps-table click does (plots, Corners
+        lap, and the video to the lap — or, with `cid`, to that lap's entry to the corner, the
+        coaching Jump's seek) and ring `cid` on the map. Maximize-aware like a corner row; it stays
+        on the Stats tab, so the next moment is one click away."""
+        if getattr(self, "_maximized_panel", None) is self._table_panel:
+            self._restore_splitter_sizes()
+        self._drop_owned_ring()
+        self.table.select([lap_id])
+        entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
+                 if cid is not None else None)
+        self._on_laps_selected([lap_id], seek=entry is None)
+        if entry is not None:
+            self.video.seek(entry)
+            self._playback.followed_lap = self.session.lap_at_time(entry)
+        if cid is not None:
+            self._pin_owned_ring(cid)
 
     # ------------------------------------------------------------- the hovered corner
     # ONE corner state across three surfaces. Hovering a corner label on the speed chart, or a

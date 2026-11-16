@@ -547,7 +547,7 @@ def test_a_provisional_note_carries_the_tables_provisional_line():
     from the typical lap, not the best — so it stays, cue included, with that line under it."""
     import dataclasses
     s = _demo()
-    notes = [dataclasses.replace(n, caveat="provisional", gap_to_best_s=None)
+    notes = [dataclasses.replace(n, caveat=("provisional",), gap_to_best_s=None)
              for n in s.slow_lap_notes()]
     lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda: notes)))
     tb, r = lt.table, lt._row_for_lap(_SLOW)
@@ -556,6 +556,31 @@ def test_a_provisional_note_carries_the_tables_provisional_line():
     assert tb.item(r, 0).toolTip() == want, tb.item(r, 0).toolTip()
     assert "▼ C5" in tb.item(r, 0).text() and tb.item(r, LT._DELTA_COL).text() == LT.SELF_DELTA
     print("test_a_provisional_note_carries_the_tables_provisional_line OK")
+
+
+def test_a_provisional_and_estimated_note_says_both_once():
+    """A recording both provisional and on an estimated clock: the note's `caveat` names both
+    states, and its tooltip carries the provisional line AND the estimated-clock line, once each
+    (a bare time cell keeps the one stronger line)."""
+    import dataclasses
+
+    from studio import data_quality
+    s = _demo()
+    quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    notes = [dataclasses.replace(n, caveat=("provisional", "estimated"), gap_to_best_s=None)
+             for n in s.slow_lap_notes()]
+    lt = _keep(LT.LapTable(_Over(s, timing_verified=False, timing_quality=quality,
+                                 slow_lap_notes=lambda: notes)))
+    tb, r = lt.table, lt._row_for_lap(_SLOW)
+    est = LT.estimated_timing_tooltip(quality)
+    want = f"{LT.slow_note_tip(notes[0])}\n\n{LT.PROVISIONAL_TOOLTIP}\n\n{est}"
+    for c in (0, _TIME_COL):
+        tip = tb.item(r, c).toolTip()
+        assert tip == want, (c, tip)
+        assert tip.count(LT.PROVISIONAL_TOOLTIP) == 1 and tip.count(est) == 1, tip
+    other = lt._row_for_lap(_SLOW + 1)
+    assert tb.item(other, _TIME_COL).toolTip() == LT.PROVISIONAL_TOOLTIP
+    print("test_a_provisional_and_estimated_note_says_both_once OK")
 
 
 def test_a_dropout_lap_never_wears_a_note():
@@ -777,6 +802,27 @@ def test_the_cue_ring_leaves_with_its_lap_and_stays_off_a_race():
     finally:
         view.race.tracks = None
     print("test_the_cue_ring_leaves_with_its_lap_and_stays_off_a_race OK")
+
+
+def test_the_cue_and_a_moment_jump_share_one_owned_ring():
+    """The slow-lap cue and a Stats MOMENTS Jump pin the same owned ring: a moment Jump without a
+    corner takes the cue's ring down, and a cue click on another lap after a moment's loss Jump
+    leaves the ring the cue's (the lap change drops the moment's, the cue pins its own)."""
+    from test_central_view_realqt import _real_central_view
+    view, s, _t0, _t1 = _real_central_view()
+    laps = [r["idx"] for r in s.lap_rows()]
+    view.table.slow_corner_clicked.emit(2)
+    assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+    view.stats_view.moment_jump.emit(laps[0], None)
+    assert view.map.pinned_corner() is None, "a moment Jump left the cue's ring up"
+    view.stats_view.moment_jump.emit(laps[0], 1)
+    assert view.map.pinned_corner() == "C1", view.map.pinned_corner()
+    view.table.laps_selected.emit([laps[-1]])    # the cue's click selects its lap first...
+    view.table.slow_corner_clicked.emit(2)       # ...then pins its own corner
+    assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+    view.stats_view.moment_jump.emit(laps[0], None)
+    assert view.map.pinned_corner() is None, "the cue's ring outlived the next Jump"
+    print("test_the_cue_and_a_moment_jump_share_one_owned_ring OK")
 
 
 class _NoRead:

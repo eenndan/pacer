@@ -47,16 +47,18 @@ lap with muted cells says which corners were not measured.
 
 TIMING TRUST, ONE RULE, the grid's: the grid keeps its ▼ under a provisional start line or an
 estimated clock (corner windows are matched on track, not timed from the line) and demotes only
-lap times. So notes and moments exist in both states and carry `caveat`; the lap-time pieces follow
-the Laps table — under a provisional line it blanks Δbest and withholds the ★, so a note has no
-`gap_to_best_s` and there is no best-lap moment.
+lap times. So notes and moments exist in both states and carry `caveat` — a tuple naming EVERY
+state that holds (a recording can be provisional AND on an estimated clock); the lap-time pieces
+follow the Laps table — under a provisional line it blanks Δbest and withholds the ★, so a note has
+no `gap_to_best_s` and there is no best-lap moment. Under an estimated clock a moment's ties widen
+to that clock's published bound (`tie_floor`: 0.15 s, the Lap race's own), and say so.
 
 MOMENTS (each None rather than invented): the best lap, with every clean lap the Laps table calls
 level with it (printed gap under `library.PB_PRECISION_S`) named with its gap; the biggest
-single-corner loss beyond its ▼ step; the best 5-lap run by median, its level windows merged into
-SPANS (maximal runs of level windows starting on consecutive laps, so "level for any 5 consecutive
-laps in Laps 8–14" is literally true of every window in the span; more than two spans is "no
-single best"). Not built — measured unstable under timing jitter by the design lane: a best 3-lap
+single-corner loss beyond its ▼ step; the best 5-lap run by median, the windows whose MEDIAN is
+level merged into SPANS (maximal runs of level windows starting on consecutive laps, so "every
+5-lap median in Laps 8–14 is level" is literally true of the span — of its medians, not its laps,
+which on the demo spread 0.83 s; more than two spans is "no single best"). Not built — measured unstable under timing jitter by the design lane: a best 3-lap
 run, a best pass per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one
 cell in ten by construction, so on pure noise that run is half the session).
 
@@ -69,11 +71,12 @@ at ±0.07 s per lap it drops out in about 1 draw in 6 (33 of 200), so that is no
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 from ._signal import fmt_signed, fmt_time, lap_label, plural
+from .lap_race import ESTIMATED_CLOCK_TIE_S
 from .library import PB_PRECISION_S, within_timing_precision
 from .stats import MATRIX_DECIMALS, CornerMatrix
 
@@ -130,7 +133,7 @@ class SlowLapNote:
     corners: tuple[CornerLoss, ...]
     also: tuple[CornerLoss, ...]
     unmeasured: tuple[int, ...]
-    caveat: str | None
+    caveat: tuple[str, ...]          # every timing state that holds; () when none
     rule: str
     text: str
 
@@ -155,7 +158,7 @@ class Moment:
     cid: int | None
     value: float
     tie: tuple[Mention, ...]
-    caveat: str | None
+    caveat: tuple[str, ...]
     text: str
 
 
@@ -166,8 +169,10 @@ class SessionMoments:
     best_window: Moment | None
 
 
-def caveat_for(provisional: bool, clock_estimated: bool) -> str | None:
-    return CAVEAT_PROVISIONAL if provisional else CAVEAT_ESTIMATED if clock_estimated else None
+def caveat_for(provisional: bool, clock_estimated: bool) -> tuple[str, ...]:
+    """Every timing state that holds, provisional first; () when the timing is trusted."""
+    return ((CAVEAT_PROVISIONAL,) if provisional else ()) + (
+        (CAVEAT_ESTIMATED,) if clock_estimated else ())
 
 
 def slow_threshold(lap_times: Mapping[int, float]) -> tuple[float, float, float] | None:
@@ -307,28 +312,42 @@ def culprit_cue(note: SlowLapNote) -> str:
 
 
 # ------------------------------------------------------------------------------------- moments
+# ONE WORDING. A builder finds the laps, the corner and the value; `moment_row` words them from
+# those fields alone, and the builder's `text` is that row joined (`_worded`). A surface that sets
+# the label apart (the Stats page) and one that prints `text` can never read differently.
+
+
+def tie_floor(caveat: tuple[str, ...]) -> float:
+    """How close two figures must be to be named level: the timing precision, or under an
+    estimated clock that clock's published bound (`lap_race.ESTIMATED_CLOCK_TIE_S`, the Lap race's
+    own wider tie: a lap can read up to ~0.15 s off there, so 0.07 s would claim a precision the
+    clock does not have)."""
+    return ESTIMATED_CLOCK_TIE_S if CAVEAT_ESTIMATED in caveat else PB_PRECISION_S
+
+
+def _level(gap_s: float, floor: float) -> bool:
+    return (within_timing_precision(gap_s) if floor == PB_PRECISION_S
+            else abs(round(gap_s, 3)) < floor)
+
+
 def _laps_text(ids: tuple[int, ...]) -> str:
     if len(ids) == 1:
         return f"Lap {lap_label(ids[0])}"
     return f"Laps {lap_label(ids[0])}–{lap_label(ids[-1])}"
 
 
+def _worded(m: Moment) -> Moment:
+    row = moment_row(m)
+    return replace(m, text=f"{row.label}: {row.value}")
+
+
 def _best_lap(lap_times, best_lap, provisional, caveat) -> Moment | None:
     if provisional or best_lap not in lap_times:
         return None
-    best_ms = printed_ms(lap_times[best_lap])
+    best_ms, floor = printed_ms(lap_times[best_lap]), tie_floor(caveat)
     tie = tuple(Mention((lap,), None, float(t)) for lap, t in sorted(lap_times.items())
-                if lap != best_lap
-                and within_timing_precision((printed_ms(t) - best_ms) / 1000))
-    t = float(lap_times[best_lap])
-    text = f"Best lap: Lap {lap_label(best_lap)} · {fmt_time(t)}"
-    if tie:
-        gaps = sorted((printed_ms(m.value) - best_ms) / 1000 for m in tie)
-        who = (f"Lap {lap_label(tie[0].lap_ids[0])} is" if len(tie) == 1 else
-               f"Laps {', '.join(lap_label(m.lap_ids[0]) for m in tie)} are")
-        span = f"{gaps[0]:.3f} s" if gaps[0] == gaps[-1] else f"{gaps[0]:.3f}–{gaps[-1]:.3f} s"
-        text += f" · {who} level ({span}, under the {PB_PRECISION_S:.2f} s timing precision)"
-    return Moment(BEST_LAP, (best_lap,), None, t, tie, caveat, text)
+                if lap != best_lap and _level((printed_ms(t) - best_ms) / 1000, floor))
+    return _worded(Moment(BEST_LAP, (best_lap,), None, float(lap_times[best_lap]), tie, caveat, ""))
 
 
 def _biggest_loss(matrix: CornerMatrix, caveat) -> Moment | None:
@@ -338,13 +357,10 @@ def _biggest_loss(matrix: CornerMatrix, caveat) -> Moment | None:
     if not cells:
         return None
     top, lap, cid = cells[0]
+    floor = tie_floor(caveat)
     tie = tuple(Mention((lp,), cd, v) for v, lp, cd in cells[1:]
-                if round(top - v, MATRIX_DECIMALS) < PB_PRECISION_S)
-    also = "".join(f" · ≈ Lap {lap_label(m.lap_ids[0])} C{m.cid} {fmt_signed(m.value)} s"
-                   for m in tie)
-    return Moment(BIGGEST_LOSS, (lap,), cid, top, tie, caveat,
-                  f"Biggest single-corner loss: Lap {lap_label(lap)} · C{cid} {fmt_signed(top)} s "
-                  f"over your typical pass ({BEHIND_MARK}){also}")
+                if round(top - v, MATRIX_DECIMALS) < floor)
+    return _worded(Moment(BIGGEST_LOSS, (lap,), cid, top, tie, caveat, ""))
 
 
 def _runs(ids) -> list[tuple[int, ...]]:
@@ -360,11 +376,12 @@ def _runs(ids) -> list[tuple[int, ...]]:
 
 def _best_window(lap_times, caveat) -> Moment | None:
     """The best RUN_WINDOW-lap run by median (printed ms), consecutive clean laps only. Every
-    window level with it (under PB_PRECISION_S) is merged into SPANS: maximal runs of level windows
-    whose first laps are consecutive, so every window inside a span is level. `lap_ids` is the best
-    window while there are at most MAX_WINDOW_SPANS spans, () beyond; `tie` holds the spans, as
-    Mentions of all their laps with their best median: the best window's own span when it is wider
-    than the window, then the others — every span when there is no single best."""
+    window whose MEDIAN is level with it (`tie_floor`) is merged into SPANS: maximal runs of level
+    windows whose first laps are consecutive, so every window median inside a span is level — the
+    laps themselves need not be. `lap_ids` is the best window while there are at most
+    MAX_WINDOW_SPANS spans, () beyond; `tie` holds the spans, as Mentions of all their laps with
+    their best median: the best window's own span when it is wider than the window, then the
+    others — every span when there is no single best."""
     windows = [run[k:k + RUN_WINDOW] for run in _runs(lap_times)
                for k in range(len(run) - RUN_WINDOW + 1)]
     if not windows:
@@ -372,9 +389,10 @@ def _best_window(lap_times, caveat) -> Moment | None:
     meds = [float(np.median([printed_ms(lap_times[i]) for i in w])) / 1000 for w in windows]
     k = int(np.argmin(meds))
     best, med = windows[k], meds[k]
+    floor = tie_floor(caveat)
     spans: list[list[int]] = []     # indices into `windows`
     for j, w in enumerate(windows):
-        if not (j == k or within_timing_precision(meds[j] - med)):
+        if not (j == k or _level(meds[j] - med, floor)):
             continue
         if spans and windows[spans[-1][-1]][0] + 1 == w[0]:
             spans[-1].append(j)
@@ -382,23 +400,68 @@ def _best_window(lap_times, caveat) -> Moment | None:
             spans.append([j])
     as_mention = [Mention(tuple(range(windows[s[0]][0], windows[s[-1]][-1] + 1)), None,
                           min(meds[j] for j in s)) for s in spans]
-    own = next(i for i, s in enumerate(spans) if k in s)
-    level = f"within {PB_PRECISION_S:.2f} s"
     if len(spans) > MAX_WINDOW_SPANS:
-        return Moment(BEST_WINDOW, (), None, med, tuple(as_mention), caveat,
-                      f"No single best {RUN_WINDOW}-lap run: "
-                      f"{plural(len(spans), 'stretch', 'stretches')} {level}")
-    text = f"Best {RUN_WINDOW}-lap run: {_laps_text(best)} · median {fmt_time(med)}"
-    tie = []
-    if len(spans[own]) > 1:
-        tie.append(as_mention[own])
-        text += (f" · level ({level}) for any {RUN_WINDOW} consecutive laps in "
-                 f"{_laps_text(as_mention[own].lap_ids)}")
-    for i, m in enumerate(as_mention):
-        if i != own:
-            tie.append(m)
-            text += f" · also level ({level}): {_laps_text(m.lap_ids)}"
-    return Moment(BEST_WINDOW, best, None, med, tuple(tie), caveat, text)
+        return _worded(Moment(BEST_WINDOW, (), None, med, tuple(as_mention), caveat, ""))
+    own = next(i for i, s in enumerate(spans) if k in s)
+    tie = ([as_mention[own]] if len(spans[own]) > 1 else []) + [
+        m for i, m in enumerate(as_mention) if i != own]
+    return _worded(Moment(BEST_WINDOW, best, None, med, tuple(tie), caveat, ""))
+
+
+@dataclass(frozen=True)
+class MomentRow:
+    """A moment as a surface's row: `label` and `value`, which join with ": " into the moment's
+    `text` (the builders take their text from here), and where its Jump lands — `lap_id` (None:
+    nothing to jump to, a "no single best" run) and, for a corner moment, `cid` to ring."""
+
+    label: str
+    value: str
+    lap_id: int | None
+    cid: int | None
+
+
+_ROW_LABEL = {BEST_LAP: "Best lap", BIGGEST_LOSS: "Biggest single-corner loss",
+              BEST_WINDOW: f"Best {RUN_WINDOW}-lap run"}
+
+
+def moment_row(m: Moment) -> MomentRow:
+    """`m` worded for a row from its own fields (never by slicing `text`)."""
+    jump = m.lap_ids[0] if m.lap_ids else None
+    floor = tie_floor(m.caveat)
+    if m.kind == BEST_LAP:
+        value = f"{_laps_text(m.lap_ids)} · {fmt_time(m.value)}"
+        if m.tie:
+            best_ms = printed_ms(m.value)
+            gaps = sorted((printed_ms(t.value) - best_ms) / 1000 for t in m.tie)
+            who = (f"Lap {lap_label(m.tie[0].lap_ids[0])} is" if len(m.tie) == 1 else
+                   f"Laps {', '.join(lap_label(t.lap_ids[0]) for t in m.tie)} are")
+            span = f"{gaps[0]:.3f} s" if gaps[0] == gaps[-1] else f"{gaps[0]:.3f}–{gaps[-1]:.3f} s"
+            bound = (f"the {floor:.2f} s timing precision" if floor == PB_PRECISION_S
+                     else f"this clock's {floor:.2f} s bound")
+            value += f" · {who} level ({span}, under {bound})"
+        return MomentRow(_ROW_LABEL[BEST_LAP], value, jump, None)
+    if m.kind == BIGGEST_LOSS:
+        value = (f"{_laps_text(m.lap_ids)} · C{m.cid} {fmt_signed(m.value)} s over your typical "
+                 f"pass ({BEHIND_MARK})" + "".join(
+                     f" · ≈ Lap {lap_label(t.lap_ids[0])} C{t.cid} {fmt_signed(t.value)} s"
+                     for t in m.tie))
+        return MomentRow(_ROW_LABEL[BIGGEST_LOSS], value, jump, m.cid)
+    # It is the 5-lap MEDIANS that are level, never the laps: on the demo laps 8–14 spread 0.83 s
+    # while every 5-lap median in them sits within 0.07 s of the best.
+    level = f"within {floor:.2f} s"
+    each = f"every {RUN_WINDOW}-lap median in"
+    if not m.lap_ids:
+        return MomentRow(f"No single best {RUN_WINDOW}-lap run",
+                         f"{plural(len(m.tie), 'stretch', 'stretches')} of level "
+                         f"{RUN_WINDOW}-lap medians ({level})", None, None)
+    value = f"{_laps_text(m.lap_ids)} · median {fmt_time(m.value)}"
+    for t in m.tie:
+        # The best window's own span is the one tie holding the whole window: another span can
+        # share a lap with it, never all five (their first windows are at least two laps apart).
+        own = set(m.lap_ids) <= set(t.lap_ids)
+        value += (f" · {each} {_laps_text(t.lap_ids)} is level ({level})" if own else
+                  f" · also level ({level}): {each} {_laps_text(t.lap_ids)}")
+    return MomentRow(_ROW_LABEL[BEST_WINDOW], value, jump, None)
 
 
 def session_moments(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
