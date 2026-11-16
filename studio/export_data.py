@@ -849,7 +849,8 @@ img { max-width: 100%; height: auto; border: 1px solid var(--border); border-rad
       margin: 4px 0; }
 /* The opening: the lap card beside COACHING, so the answer is on the first screen; one column on
    a narrow one, the card at most its layout width there. */
-.front { display: grid; gap: 16px; align-items: start; }
+.front { display: grid; gap: 16px; align-items: start; margin: 0 0 16px; }
+.front > section { margin: 0; }
 .front.with-card { grid-template-columns: minmax(200px, 30%) minmax(0, 1fr); }
 figure.hero { margin: 0; }
 figure.hero img.card { display: block; width: 100%; margin: 0; }
@@ -865,7 +866,7 @@ ul.actions li { margin: 2px 0; }
 table.coaching { width: 100%; }
 table.coaching th:first-child, table.coaching td:first-child, table.coaching td.why,
 table.coaching th:last-child { text-align: left; }
-table.coaching td { white-space: nowrap; vertical-align: top; }
+table.coaching th, table.coaching td { white-space: nowrap; vertical-align: top; }
 table.coaching td.why { width: 100%; white-space: normal; }
 td.lost { color: var(--behind); }
 tr.muted td, td.dim { color: var(--text-dim); }
