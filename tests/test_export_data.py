@@ -1038,6 +1038,13 @@ def test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column():
     assert first == ",".join(export_data.laps_table(s)[0]) and "C1_apex_kmh" in first, first
     # On paper the headers wrap between words only.
     assert "break-all" not in export_data._REPORT_CSS
+    # The interpolated note is laps.csv's sentence with the column words swapped (str.replace):
+    # a wording change upstream must not silently bring a CSV name back onto the page.
+    note = export_data.REPORT_INTERPOLATED_NOTE
+    assert note != export_data.INTERPOLATED_NOTE and note.startswith(
+        f"{export_data.REPORT_INTERPOLATED_HEAD} lists"), note
+    for machine in (export_data.INTERPOLATED_COLUMN, "_time_s", "_apex_", "*_", "_kmh", "_mph"):
+        assert machine not in note, (machine, note)
     print("ok K4: the report's laps table has the app's headers, every column, the CSV its names")
 
 
