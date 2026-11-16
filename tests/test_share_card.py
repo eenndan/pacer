@@ -366,20 +366,26 @@ def test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss():
           f"(widest corner line ends at x={max(r for r, *_ in widest)} of {right})")
 
 
-def test_the_opportunity_names_its_baseline_in_coachings_words():
+def test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too():
     """K2 (cool/card-and-keys): the demo's card read "+0.32 s vs your ideal lap" over "BIGGEST
     OPPORTUNITY C1 +0.36 s" — a part bigger than its whole, because the opportunity is Coaching's
-    median loss against the BEST lap and only the ideal gap named its baseline. The opportunity now
-    names its own, in the words the Coaching headline prints the same number with (one constant)."""
-    assert coaching.LOSS_BASELINE == "vs your best lap"
-    assert share_card.opp_baseline() == f"median {coaching.LOSS_BASELINE}"
-    # ...and the page really does print it: the headline's phrase is the constant, not a copy.
+    median loss against the BEST lap's pass and only the ideal gap named its baseline. The line now
+    says it in the app's own words: the corner's `stats.TYPICAL_PASS` (the slow-lap notes and
+    MOMENTS name the median pass so) against `coaching.LOSS_BASELINE` (the Coaching headline's) —
+    not "median vs your best lap", which read as the median LAP (0.68 s on the demo). A TIE prints
+    the same singular line: the span is one typical pass per corner, which the singular states."""
     import inspect
 
-    from studio import coaching_panel
+    from studio import coaching_panel, stats, story
+    assert stats.TYPICAL_PASS == "typical pass" and coaching.LOSS_BASELINE == "vs your best lap"
+    assert share_card.opp_baseline() == f"{stats.TYPICAL_PASS} {coaching.LOSS_BASELINE}'s"
+    assert share_card.opp_baseline() == "typical pass vs your best lap's"
+    # One source for each half: the slow-lap notes read the constant, and so does the page's
+    # headline, whose rendered "… vs your best lap (median of N clean laps)" is unchanged.
+    assert "over your {TYPICAL_PASS} (" in inspect.getsource(story)
     src = inspect.getsource(coaching_panel)
     assert "coaching.LOSS_BASELINE" in src and '" vs your best lap"' not in src
-    print("test_the_opportunity_names_its_baseline_in_coachings_words OK")
+    print("test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too OK")
 
 
 def test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits():
@@ -1423,7 +1429,7 @@ if __name__ == "__main__":
     test_card_data_survives_coaching_error()
     test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card()
     test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss()
-    test_the_opportunity_names_its_baseline_in_coachings_words()
+    test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too()
     test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits()
     test_hero_delta_line_reads_cleanly_on_both_branches()
     test_even_ideal_card_renders_with_the_clean_copy()

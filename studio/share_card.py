@@ -168,16 +168,23 @@ def opp_loss(opp: TopOpp) -> str:
 
 
 def opp_baseline() -> str:
-    """What the opportunity's figure is measured against, printed over it: "median vs your best lap".
+    """What the opportunity's figure is measured against, printed over it:
+    "typical pass vs your best lap's".
 
     K2 (cool/card-and-keys): on the demo the card read "+0.32 s vs your ideal lap" and, lower down,
     "BIGGEST OPPORTUNITY C1 +0.36 s" — a part bigger than its whole, because the two gaps have
     different baselines and only one said so. The ideal gap is the best lap minus the stitch of the
-    driver's best corners and straights; the opportunity is Coaching's `time_lost`, the MEDIAN over
-    the clean laps of each lap's time through the corner minus the best lap's own. The baseline is
-    Coaching's (`coaching.LOSS_BASELINE`, the words its headline prints the same number with), so
-    the card cannot drift from the page; a tie's span is the same statistic, so it reads the same."""
-    return f"median {coaching.LOSS_BASELINE}"
+    driver's best corners and straights; the opportunity is Coaching's `time_lost`, the median over
+    the clean laps of (that lap's pass − the best lap's pass), which IS the typical pass minus the
+    best lap's pass. "median vs your best lap" (the first wording) read as the median LAP against
+    the best lap, 0.68 s on the demo, not 0.36 s; a corner's median pass is what the app calls its
+    `stats.TYPICAL_PASS` (the slow-lap notes, MOMENTS), and "vs your best lap" is
+    `coaching.LOSS_BASELINE`, the words the Coaching headline prints the same number with. A tie's
+    span is the same statistic per corner, so the singular reads right over several corners too."""
+    # Imported here, not at the top: the module's import line is being edited by another change.
+    from .stats import TYPICAL_PASS
+
+    return f"{TYPICAL_PASS} {coaching.LOSS_BASELINE}'s"
 
 
 @dataclass(frozen=True)
@@ -537,7 +544,8 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         _draw_text(p, pad, opp_top, opp_heading(opp), heading_font, theme.C.text_muted)
         # The figure's baseline, right-aligned on the heading row so it sits over the figure it
         # qualifies (`opp_baseline`, K2). It takes what the heading leaves: the tie heading, the
-        # widest, leaves 400+ px for a ~260 px line, so the fit's later steps are a guard.
+        # widest, leaves 374 px for the line's 342 px at 24 px (measured, Inter), so the fit's later
+        # steps are a guard.
         p.setFont(heading_font)
         base_avail = right - pad - p.fontMetrics().horizontalAdvance(opp_heading(opp)) - _OPP_GAP
         base, base_font = _fit_line(p, opp_baseline(), base_avail, _OPP_BASE_PX_STEPS)

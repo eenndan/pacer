@@ -1,7 +1,7 @@
 ### Fixed
 
-- The lap card's biggest opportunity names its baseline, "median vs your best lap", so its +0.36 s
-  no longer reads as part of the "+0.32 s vs your ideal lap" above it (they measure different gaps).
+- The lap card's biggest opportunity names its baseline, "typical pass vs your best lap's", so it no
+  longer reads as a part of the "vs your ideal lap" gap above it (on the demo it was the larger).
 
 ### Changed
 

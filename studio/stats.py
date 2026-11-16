@@ -510,6 +510,12 @@ def printed_gap_s(a: float | None, b: float | None) -> float | None:
                  MATRIX_DECIMALS)
 
 
+# What the app calls a corner's median pass, wherever a pass is set against it: the slow-lap notes
+# and MOMENTS ("over your typical pass"), and the share card's opportunity ("typical pass vs your
+# best lap's"). One definition, so the card cannot name the statistic in different words.
+TYPICAL_PASS = "typical pass"
+
+
 @overload
 def pass_vs_typical_s(val: float, typical: float) -> float: ...
 @overload
