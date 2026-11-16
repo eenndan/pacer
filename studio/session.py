@@ -2737,10 +2737,12 @@ class Session:
         apex_by_lap: list[list[float]] = []
         grip_by_lap: list[list[float]] = []
         resolved_by_lap: list[list[bool]] = []
+        kept: list[int] = []   # the lap id of each row, so the report can name a pass
         for i in ids:
             st = self.corners.lap_corner_stats(i)
             if len(st) != n:  # degenerate laps project to [] — same skip as corner_consistency
                 continue
+            kept.append(i)
             times_by_lap.append([s.time for s in st])
             apex_by_lap.append([s.apex_speed for s in st])
             resolved_by_lap.append(self.corners.lap_corner_resolved(i))
@@ -2750,7 +2752,7 @@ class Session:
             grip_by_lap.append(grip if len(grip) == n else [math.nan] * n)
         return stats_service.corner_report(
             [c.cid for c in corner_list], [c.direction for c in corner_list],
-            times_by_lap, apex_by_lap, grip_by_lap, resolved_by_lap)
+            times_by_lap, apex_by_lap, grip_by_lap, resolved_by_lap, lap_ids=kept)
 
     def corner_matrix(self) -> stats_service.CornerMatrix | None:
         """The laps × corners grid (the Stats page's CORNERS BY LAP): every consistency lap's

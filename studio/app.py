@@ -3255,6 +3255,7 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if mark is None or view is None or not mark.get("placed"):
             return
+        view.leave_compare_for_seek(float(mark["t"]))
         view.video.seek(float(mark["t"]))
         view._playback.followed_lap = self.session.lap_at_time(float(mark["t"]))
 
@@ -3329,12 +3330,15 @@ class StudioWindow(QMainWindow):
             self.statusBar().showMessage(
                 "no more marks ahead" if direction >= 0 else "no marks before here", STATUS_MS)
             return
+        was_comparing = view._comparing()
+        view.leave_compare_for_seek(float(target["t"]))
         view.video.seek(float(target["t"]))
         view._playback.followed_lap = self.session.lap_at_time(float(target["t"]))
         panel = getattr(view, "marks_panel", None)
         if panel is not None:
             panel.select_mark(target["id"])
         self.statusBar().showMessage(
+            ("compare ended; " if was_comparing and not view._comparing() else "") +
             f"{fmt_hms(target['t'])} · {marks_model.TYPE_LABEL.get(target['type'], 'Mark')} — "
             f"{marks_model.summary(target)}", STATUS_MS)
 
@@ -3386,7 +3390,8 @@ class StudioWindow(QMainWindow):
         # Programmatic select (not a user-select) so it doesn't re-enter the seek-on-select path —
         # we own the seek below, to the corner entry rather than the lap start.
         view.table.select([best])
-        view._on_laps_selected([best])
+        was_comparing = view._comparing()
+        view._on_laps_selected([best])      # a pick: leaves compare unless it IS the pair
         # The Corners tab shows the per-corner rows for the jump target. This is NAVIGATION, not a
         # preference: without the guard the jump silently overwrote (and persisted) whichever tab
         # the user had chosen, so quitting from a jump reopened the app on Corners (QA L5-07).
@@ -3396,14 +3401,14 @@ class StudioWindow(QMainWindow):
         finally:
             self._jumping = False
         view._ring_corner(cid)   # the map ring, and the chart label follows it
-        self._reveal_jump_corner(cid)
+        self._reveal_jump_corner(cid, compare_ended=was_comparing and not view._comparing())
         target = self.session.corners.corner_entry_media_time(best, cid)
         if target is not None:
             view.video.seek(target)
             # Seed auto-follow to the seek's lap so the post-seek tick isn't a lap-change edge.
             view._playback.followed_lap = self.session.lap_at_time(target)
 
-    def _reveal_jump_corner(self, cid: int):
+    def _reveal_jump_corner(self, cid: int, compare_ended: bool = False):
         """Point at the row the jump landed on: scroll corner `cid` to the middle of the Corners
         grid, make it the current cell, and say on the status bar which corner and which lap the
         table is now showing.
@@ -3425,7 +3430,10 @@ class StudioWindow(QMainWindow):
             table.setCurrentCell(row, 0)
             table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
             label = item.text().split()[0]      # "C9 ⟳" -> "C9" (drop the direction glyph)
+            # A Jump that ended compare says so in the same line: this message replaces the
+            # one the pick posted (CentralView._pick_leaves_compare).
             self.statusBar().showMessage(
+                ("compare ended; " if compare_ended else "") +
                 f"jumped to {label} — Corners is showing lap "
                 f"{lap_label(self.session.best_lap_id())}, this session's best", STATUS_MS)
         except (ValueError, AttributeError, IndexError):

@@ -358,7 +358,18 @@ class CompareController:
         # Freeze followed_lap on A so the per-tick edge never re-points the charts while comparing.
         self.playback.followed_lap = a
         self._compare_last_t = None  # force the next tick() to recompute for the new pair
+        self._mirror_table()
         self._on_pair_changed()  # refresh the brake glyphs for the compared pair
+
+    def _mirror_table(self) -> None:
+        """Show the compared laps in the Laps table, silently (`LapTable.select` emits nothing), so
+        the table tells the panes' story too. It kept the PRE-compare selection, which made a click
+        on that still-highlighted row a non-pick and a ⌘-click or ↓ act on a stale selection. With
+        the pair mirrored, a click on one pair row is a pick of that lap (and ends compare), and
+        turning compare off leaves the charts on the pair. Guarded for table stand-ins."""
+        select = getattr(self.table, "select", None)
+        if callable(select) and self._compare_a is not None:
+            select([self._compare_a] if self._cross else [self._compare_a, self._compare_b])
 
     def enter_cross(self, lap_a: int | None = None) -> bool:
         """Enter cross-recording compare: pane A = this recording's lap, pane B = the reference
@@ -571,6 +582,7 @@ class CompareController:
         elif self._compare_a is not None and self._compare_b is not None:
             self.plots.set_laps([self._compare_a, self._compare_b])
             self.playback.followed_lap = self._compare_a
+        self._mirror_table()
         self._compare_last_t = None  # force the next tick() to recompute
         self._on_pair_changed()  # refresh the brake glyphs for the new pair
 

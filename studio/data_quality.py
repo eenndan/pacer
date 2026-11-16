@@ -666,7 +666,7 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 # standard covers four of pacer's five quality conditions, and forcing the fifth would have made
 # the vocabulary less true, not more standard.
 #
-# ★ (session best) and ▲ (worst loss) are NOT quality markers and are deliberately absent here —
+# ★ (session best) and ◆ (the CORNERS priority mark) are NOT quality markers and are deliberately absent here —
 # #237 separated the priority glyph from the trust glyph precisely so the two vocabularies could
 # not be read as one.
 # ── THE THIRD FAMILY: A FRAME OF VIDEO, WHICH TAKES NO CODES ─────────────────────────────────

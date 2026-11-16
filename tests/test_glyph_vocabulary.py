@@ -215,7 +215,7 @@ def test_no_glyph_in_a_guarded_module_falls_out_of_the_app_font():
 
 # --------------------------------------------------------------------------- the ledger
 # Measured, not assumed. The brief this came from asserted the opposite of the first row.
-_IN_THE_FACE = "⊘★⚠▶▲▼⌘⇧⌃⌥←→·•±×−≥↔Δσ…—–“”"
+_IN_THE_FACE = "⊘★⚠▶▲▼◆⌘⇧⌃⌥←→·•±×−≥↔Δσ…—–“”"
 _OUT_OF_THE_FACE = "▸▾⟲⟳⛶⤢✕🏁"
 
 
