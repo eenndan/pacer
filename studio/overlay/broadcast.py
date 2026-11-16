@@ -80,9 +80,11 @@ STYLE_CLASSIC = "classic"
 STYLE_BROADCAST = "broadcast"
 PRECISION_S = library.PB_PRECISION_S
 _SCALE_STEPS = (0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0)
-# The plates' opacity. 200 left the tower's red Δ at 4.2:1 over white sky at 720p (WCAG asks 4.5
-# of an 18 px face; tests/test_export_broadcast.py measures every text over six backgrounds).
-_PLATE_ALPHA = 220
+# The plates' opacity, held by the PLATE ALONE: a text's fill against the plate blended over a
+# flat background, no halo counted (tests/test_export_broadcast.py, over white, sky, grass, grey,
+# black). The weakest pair is the tower's red Δ (#FF4D4D, 18 px at 720p, so 4.5:1) over white:
+# 3.17:1 at 200, 4.21 at 220; 4.5 needs 226. At 230 it is 4.73.
+_PLATE_ALPHA = 230
 _PENDING_DELTA = ""
 _CACHE_MAX = 192        # cached text images: a lap's speeds and Δ strings, recent first
 _LABEL_MIN_PX = 11.0   # the C-labels' legibility floor: below it a label is noise
@@ -175,16 +177,22 @@ def _adv(font, text: str) -> float:
     return QFontMetricsF(font).horizontalAdvance(text)
 
 
-def backing_plate(inner: QRectF, pad_h: float, pad_v: float, others, area: QRectF,
-                  gap: float) -> QRectF:
-    """`inner` grown by its padding — both pads cut by one factor, in quarters, until the plate
-    keeps `gap` from every rect in `others` and stays inside `area` — or `inner` itself, cut to
-    `area` (a stamp wider than the frame is cut there, `layout.resolve`)."""
-    for f in (1.0, 0.75, 0.5, 0.25):
-        r = inner.adjusted(-pad_h * f, -pad_v * f, pad_h * f, pad_v * f)
-        if area.contains(r) and not any(r.adjusted(-gap, -gap, gap, gap).intersects(o)
-                                        for o in others):
-            return r
+_PAD_STEPS = (1.0, 0.75, 0.5, 0.25, 0.0)
+
+
+def backing_plate(inner: QRectF, pad_l: float, pad_r: float, pad_v: float, others,
+                  area: QRectF, gap: float) -> QRectF:
+    """`inner` grown by its padding (left, right, and top and bottom), keeping `gap` from every
+    rect in `others` and inside `area`: where that does not fit, the vertical padding goes first,
+    in quarters, then the horizontal — so a plate aligned with its neighbour's edge stays aligned
+    while there is any room. With no room at all, `inner` itself cut to `area` (a stamp wider than
+    the frame is cut there, `layout.resolve`)."""
+    for fh in _PAD_STEPS:
+        for fv in _PAD_STEPS:
+            r = inner.adjusted(-pad_l * fh, -pad_v * fv, pad_r * fh, pad_v * fv)
+            if area.contains(r) and not any(r.adjusted(-gap, -gap, gap, gap).intersects(o)
+                                            for o in others):
+                return r
     return inner.intersected(area)
 
 
@@ -319,17 +327,19 @@ class BroadcastElement:
 
     def _under_plates(self, ctx: ElementContext, stamp: QRectF) -> dict[str, QRectF]:
         """The backing plates of the two Classic texts this style keeps, painted UNDER them
-        (`paint_under`): the honesty stamp (a sub-plate under the tower, the tower's padding at
-        its sides) and the g-meter's |g| readout (fitted to its widest string, in the dial's own
-        readout band). Each keeps the LAST line's gap from every other element, shrinking its
-        padding first; neither moves a glyph."""
+        (`paint_under`): the honesty stamp (a sub-plate under the tower, its left edge the
+        tower's, the same inset at its right) and the g-meter's |g| readout (fitted to its widest
+        string, in the dial's own readout band). Each keeps the LAST line's gap from every other
+        element, shrinking its padding first; neither moves a glyph."""
         u = float(min(ctx.out_w, ctx.out_h))
         pad, gap = layout.TOWER_PAD * u, layout.TOWER_LAST_GAP * u
         g, mp = ctx.plates["gmeter"], ctx.plates["map"]
         out = {}
         if stamp.height() > 0:
             area = ctx.safe if ctx.safe.contains(stamp) else QRectF(0, 0, ctx.out_w, ctx.out_h)
-            out["stamp"] = backing_plate(stamp, pad, pad / 2.0,
+            inset = stamp.x() - self.tower.x()      # the stamp's hang: the strip's ink inset
+            inset = inset if inset > 0 else pad
+            out["stamp"] = backing_plate(stamp, inset, inset, pad / 2.0,
                                          (self.tower, self.dbar, self.speed, g, mp), area, gap)
         if getattr(ctx.session, "has_gmeter", False) and g.height() > 0:
             from studio import gmeter_overlay as gm
@@ -338,8 +348,13 @@ class BroadcastElement:
             tw = max(_adv(gm._font(gm._readout_px(r), bold=True), t)
                      for t in ("0.0 g", gm._NO_VALUE))
             text = QRectF(band.center().x() - tw / 2.0, band.y(), tw, band.height())
-            out["gmeter"] = backing_plate(text, pad, 0.0, (self.tower, self.dbar, self.speed,
-                                                           stamp, mp), g, 0.0)
+            out["gmeter"] = backing_plate(text, pad, pad, 0.0, (self.tower, self.dbar, self.speed,
+                                                                stamp, mp), g, 0.0)
+        # The Δ bar's plate: its box, 2 x k wider each side where the layout leaves room (never
+        # taller: above it is the margin), so its end labels sit clear of the rounded corners.
+        side = 2.0 * self._k
+        self.dbar_plate = backing_plate(self.dbar, side, side, 0.0,
+                                        (self.tower, self.speed, stamp, g, mp), ctx.safe, gap)
         return out
 
     def paint_under(self, p: QPainter, vals) -> None:
@@ -412,12 +427,17 @@ class BroadcastElement:
         if img is not None:
             return img
         ev, k, r, lab_h = self._ev, self._k, self.dbar, self._lab_h
-        img, p = _image(r.width(), r.height())
-        # The scale and the baseline name sit on the plate too, the bar's own plate inset in it:
-        # haloed alone over sky they measured 1.7:1 at 720p (tests/test_export_broadcast.py).
-        _plate(p, QRectF(1, 1, r.width(), r.height()), k)
-        bar = QRectF(1, 1 + lab_h, r.width(), r.height() - lab_h)
-        _plate(p, bar, k)
+        pl = self.dbar_plate
+        img, p = _image(pl.width(), pl.height())
+        # ONE plate under the scale, the baseline name and the bar (haloed alone over sky the
+        # labels measured 1.4:1 at 720p, tests/test_export_broadcast.py), as dark as the tower's;
+        # the track inside it is the plate's own hairline, not a second plate.
+        _plate(p, QRectF(1, 1, pl.width(), pl.height()), k)
+        dx = r.x() - pl.x()
+        bar = QRectF(1 + dx, 1 + lab_h, r.width(), r.height() - lab_h)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(theme.qcolor(EXPORT.text, 55), 1.0 * k))
+        p.drawRoundedRect(bar.adjusted(2 * k, 1 * k, -2 * k, -2 * k), 4 * k, 4 * k)
         band = bar.width() / 2.0 * PRECISION_S / scale
         p.setPen(Qt.NoPen)
         p.setBrush(theme.qcolor(EXPORT.text, 46))
@@ -572,7 +592,8 @@ class BroadcastElement:
         # --- the Δ bar (not on the best lap: the tower's ★ BEST says why), on this lap's scale
         if bar is not None:
             scale = self.scale_of(vals.lap_id)
-            p.drawImage(QPointF(self.dbar.x() - 1, self.dbar.y() - 1), self._bar_image(scale))
+            p.drawImage(QPointF(self.dbar_plate.x() - 1, self.dbar_plate.y() - 1),
+                        self._bar_image(scale))
             b = self._bar
             half = b.width() / 2.0
             w = half * max(-1.0, min(1.0, bar / scale))
