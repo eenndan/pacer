@@ -103,9 +103,13 @@ official timing measures the noise floor.
 <img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of the 69 laps found used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag and 26.2 ppm of clock drift, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check that agrees, the g-meter's cornering force matching the GPS path's within 9 %, and a gyroscope rotation cross-check that agrees within 2.7 % over 62 closed laps — above the friction circle, with a 1.50 g grip envelope">
 
 - **Exports.** Lap times and per-lap channels as CSV, a session report as HTML, a shareable lap
-  card as an image, and the telemetry burned onto the footage (via ffmpeg).
+  card as an image, and the telemetry burned onto the footage (via ffmpeg). A lap-strip card puts
+  every lap of the session on one image, and the overlay comes in two styles, Classic or
+  Broadcast, with a ghost of your best lap and corner cards as extras you tick.
 
 <img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
+
+<img src="docs/media/lapstrip.png" width="440" alt="The lap-strip card of the synthetic demo, as File ▸ Export ▸ Lap-strip card… saves it: the 14 laps as bars in the order driven, each as tall as its time off the best lap, lap 13's 0:44.950 marked with a star on the zero line, a dashed median 0.68 s off the best, and lap 6, 6.18 s off, cut at the +1.26 s line and named in the legend">
 
 The rest of the window is in the **[first-lap walkthrough](docs/FIRST_LAP.md)**.
 
@@ -157,9 +161,9 @@ than it is. So that is a rule with an owner in the code:
   elsewhere.
 - **provisional timing demotes what depends on it** — an auto-fitted start line means no
   personal-best celebration and a lap table that says why.
-- **the shareable outputs are gated.** The lap card and the overlay MP4 read the same trust verdict
-  the UI does; the card refuses on provisional timing and the video warns before it burns a number
-  into a file someone else will see.
+- **the shareable outputs are gated.** The lap card, the lap-strip card and the overlay MP4 read
+  the same trust verdict the UI does; the two cards refuse on provisional timing and the video
+  warns before it burns a number into a file someone else will see.
 - **the ideal lap discloses its sample**, because a sum of per-segment minima falls the longer you
   stay out. Same driving, same recording (Sandown 3h, three hours at Sandown Park):
   46.801 s over 5 laps, 45.809 s over 62.

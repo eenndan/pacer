@@ -332,3 +332,62 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   small to read at the width the pages show it.
 - **Open for the owner.** Re-shoot the landing stills from another recording, or keep the
   waivers? The one recording on this machine is not one RUL-9 approved for publishing.
+
+## 11. Recorded at the 0.10.0 release, 2026-11-16
+
+- **v0.10.0 is the it-leaves-the-app release**: 6 pull requests from #556 to #571, Wave 3 of the
+  campaign section 8 records. A ghost of the best lap on the export's minimap (#556) and corner
+  cards on the clip (#558), both Extras of the overlay dialog; the lap card's track with the
+  start/finish mark and the way the laps run, corner labels, the biggest-opportunity corner ringed
+  and a footer that says how the time was taken, and the same start/finish mark on the debrief's
+  picture (#560); a lap-strip card (#564); a Broadcast overlay Style with a timing tower, a Δ bar,
+  a big speed and a bigger minimap with corner labels (#565); and the QA fixes before the release
+  (#571): the ghost drawn as a ring round the kart dot when it is beside it, a "LAST" line with
+  the finished lap's time on whole-recording Broadcast exports, and layouts that never fail an
+  export (the honesty stamp falls back to the Classic stamp's place; a layout failure says so).
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **Classic stays the default Style, unchanged** (#565). With Style on Classic and no Extras
+    ticked, the painter never reaches the new `studio/overlay/` package, and the export decodes frame-identical to
+    0.9.0's: a 540p libx264 render of a demo lap from v0.9.0's `studio/` and from 0.10.0 had equal
+    `ffmpeg -f framemd5` on all 1365 frames (and the files were byte-identical), and
+    `tests/test_export_ghost.py` holds it at the painter level.
+  - **The Extras are off in Classic and on in Broadcast, remembered per style** (#556, #558,
+    #565): each style keeps its own two ticks, so nothing ticked in Broadcast carries into a
+    Classic export.
+  - **The Δ bar's scale is each lap's own** (#565): the first round step above that lap's
+    largest |Δ|, printed at both ends, so one slow lap does not flatten the others on a
+    whole-recording export and the bar never clips.
+  - **Corner cards use the 0.07 s rule** (#558): inside the timing precision, decided on the
+    printed Δ, a card reads "≈ best" in neutral white. Not the Stats ▼ step, under which the
+    design lane measured that 95 % of cards would read "≈".
+  - **The lap-strip card's heights are proportional to the gaps** (#564): the best lap is a tick
+    and a ★ on the zero line, and a bar is as tall as its time off the best. A lap past the Laps
+    table's bar scale is cut at a dashed line and named in the legend with its real gap.
+  - **The LAST line names its baseline** (#571): its Δ is always to the best lap, so it reads
+    "Δbest" even under a tower reading "Δref". Under provisional timing it shows the time only,
+    as the Laps table blanks its Δbest column there.
+- **The media.** `accuracy.png` was re-captured, byte-identical to 0.9.0's. `debrief.png` was
+  re-captured on the synthetic demo: its picture gained the start/finish mark and its arrow
+  (#560). `lapstrip.png` is new, the demo's lap-strip card through the app's own writer; two
+  captures were byte-identical. `hero.png`, `map.png` and `og.png` are waived again as stale, for
+  0.8.0's reasons. `data-trust.png` and `ideal-lap.png` are renewed: 0.10.0 changed no Stats-page
+  module and nothing under `pacer/`. The export stills `overlay.jpg`, `best-lap.jpg` and
+  `best-lap.mp4` are renewed with a different reason from 0.9.0's: 0.10.0 did change export code,
+  but a Classic export with no Extras is frame-identical to 0.9.0's (above), so the pages still
+  show the default look. No Broadcast still was published: the demo's picture is a busy title
+  card, and a frame of real footage is the owner's call.
+- **What could not run for it.** As at 0.9.0, one recording the real-footage checks take is on
+  this machine, and five checks ran on it: the three render checks and the two pedal-band checks.
+  The same eleven reported Skipped because their recordings are not here. The manual half of the
+  golden gate did not run; no change in this release touched the core, and the synthetic golden
+  gate passed.
+- **Open for the owner.**
+  - Should Broadcast be the default Style?
+  - Should the Extras open ticked in Classic too?
+  - The Classic lap strip colours a Δ of +0.06 s as lost, while the Laps table and Broadcast show
+    it neutral inside the 0.07 s precision. Making Classic agree would change Classic's pixels, so
+    it was left as it is.
+  - Under provisional timing the overlay still shows "★ BEST" and the Δ, while the Laps table
+    withholds both.
+  - A Broadcast still from real footage, and re-shot landing stills: the one recording on this
+    machine is not one RUL-9 approved for publishing.

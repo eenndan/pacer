@@ -6,6 +6,60 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-11-16
+
+The it-leaves-the-app release: 6 pull requests from #556 to #571, Wave 3 of the campaign to make
+the app cooler and still true: a Broadcast look for the clip, a ghost and corner cards on it, a
+lap card that shows where, and a lap-strip card of the whole session.
+
+### Highlights
+
+- **Broadcast: a second look for the clip.** File ▸ Export overlay video… has a Style row:
+  Classic, as before, or Broadcast, with a timing tower, a Δ bar, a big speed and a bigger
+  minimap that names its corners (#565)
+- **Same figures, either look.** Broadcast's clock, Δ and speed are the Classic overlay's own on
+  every frame; the tower names the Δ's baseline, the honesty stamp keeps its size, and the Δ bar
+  takes each lap's own scale (#565)
+- **The lap you just finished, after the line.** On a whole-recording Broadcast export, for 2 s
+  after each crossing the tower reads that lap's time and its Δbest, as the Laps table prints
+  them (#571)
+- **A ghost of your best lap.** Extras ▸ Ghost of your best lap rings the minimap where the best
+  lap was at the same lap time; beside the kart it rings the dot and never covers it. The best
+  lap's own clip gets none, and the dialog says why (#556, #571)
+- **Corner cards.** Leaving each corner, its minimum speed and its time against the same corner
+  on your best lap, the Corners table's own cells; inside the 0.07 s timing precision it reads
+  "≈ best" (#558)
+- **Classic stays Classic.** The extras open off in Classic and ticked in Broadcast, remembered
+  per style; leave Style on Classic with nothing ticked and your clip comes out exactly as 0.9.0
+  made it, frame for frame (#556, #558, #565)
+- **The lap card shows where.** Its track carries the start/finish mark and the way the laps
+  run, rings your biggest-opportunity corner and names the rest; its footer says how the time
+  was taken (#560)
+- **A lap-strip card.** File ▸ Export ▸ Lap-strip card… draws every lap as a bar in the order
+  driven: height is time off the best, the best a ★ on the zero line, the median marked, a lap
+  off the scale cut and named with its real gap (#564)
+
+### Added
+
+- The overlay export has a Style row: Classic, as before, or Broadcast, with a timing tower, a Δ
+  bar, a big speed and a bigger minimap that labels its corners. (#565)
+- Broadcast shows the Classic figures, names the Δ's baseline and keeps the honesty stamp; the ghost
+  and the corner cards start ticked there and stay off in Classic. (#565)
+- File ▸ Export ▸ Lap-strip card… saves a PNG of every lap as a bar, in the order driven, with the
+  best lap named. (#564)
+- Extras ▸ Corner cards shows, as you leave each corner, its minimum speed and its time against the
+  same corner on your best lap: “≈ best” inside 0.07 s. (#558)
+- In File ▸ Export overlay video…, Extras ▸ Ghost of your best lap puts a ring on the minimap where
+  your best lap was at the same lap time. It is off by default in Classic. (#556)
+
+### Changed
+
+- The lap card's track shows the start/finish mark and the way the laps run, rings and names your
+  biggest-opportunity corner, names the other corners small, and carries the speed key. (#560)
+- The lap card's "vs your ideal lap" line is neutral, not red, and its footer says how the time was
+  taken, in the exported report's words ("verified start line · GPS9 true clock"). (#560)
+- The debrief's picture shows the map's chequered start/finish mark and its arrow. (#560)
+
 ## [0.9.0] — 2026-11-15
 
 The it-moves release: 9 pull requests from #549 to #562, Wave 2 of the campaign to make the app
@@ -1958,7 +2012,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/eenndan/pacer/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/eenndan/pacer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/eenndan/pacer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/eenndan/pacer/compare/v0.6.1...v0.7.0
