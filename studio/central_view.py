@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
-from ._signal import plural
+from ._signal import lap_label, plural
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
@@ -297,6 +297,13 @@ def _start_seg_moved(before, after) -> bool:
                    math.hypot(p[1][0] - q[1][0], p[1][1] - q[1][1]))
 
     return min(spread(a, b), spread(a, b[::-1])) > _START_MOVED_M
+
+
+def compare_ended_notice(ids) -> str:
+    """The status line a lap pick that ended compare leaves (CentralView._pick_leaves_compare):
+    lower-case and status-bar shaped like undo_summary, naming the laps the window shows now."""
+    which = ", ".join(lap_label(i) for i in sorted(ids))
+    return f"compare ended — showing lap{'s' if len(ids) > 1 else ''} {which}"
 
 
 def undo_summary(outcome: UndoOutcome) -> str:
@@ -1977,6 +1984,10 @@ class CentralView(QWidget):
             header.layout().activate()
 
     def _on_laps_selected(self, ids, seek=False):
+        # A lap pick during compare leaves compare first; picking the compared pair itself, or
+        # nothing, is not a pick (see _pick_leaves_compare).
+        if self._comparing() and not self._pick_leaves_compare(ids):
+            return
         # The table multi-selection drives the PLOTS only; the map's current-lap overlay
         # follows the video position (and thus selection, since F1 seeks into the lap).
         self.plots.set_laps(ids)
@@ -2347,6 +2358,22 @@ class CentralView(QWidget):
         unit-test CentralView.__new__ path)."""
         compare = getattr(self, "compare", None)
         return compare is not None and compare.active
+
+    def _pick_leaves_compare(self, ids) -> bool:
+        """A lap pick arrived while comparing — a Laps-table click, ⌘-click or arrow key, a slow
+        lap's "▼ C5" cue, a MOMENTS or Coaching Jump: every one of them reaches _on_laps_selected.
+        It used to move the charts alone, so the panes and the seam went on naming the old pair
+        above charts of the new lap: two stories in one window. A pick now LEAVES compare first,
+        through the button, as a Lap race does (one map, one story); the pane pickers are the way
+        to change the pair. True when it left; False for the pair's own laps (the charts already
+        show them) or an empty selection, which leave the comparison as it is."""
+        a, b = self.compare.lap_a, self.compare.lap_b
+        shown = [a] if self.compare.cross else [a, b]
+        if not ids or sorted(ids) == sorted(shown):
+            return False
+        self.video.compare_btn.click()      # compareToggled(False) → CompareController.exit
+        self.statusNotice.emit(compare_ended_notice(ids))
+        return True
 
     # ------------------------------------------------------------- driving channels (F5)
     # --------------------------------------------------------- Lap Race
