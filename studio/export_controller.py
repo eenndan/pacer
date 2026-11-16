@@ -252,18 +252,16 @@ class ExportController:
                                       "HTML files (*.html)")
         if not path:
             return
-        # Snapshot the map + charts as they are on screen right now (QWidget.grab) — the
-        # report writer itself stays Qt-free and just embeds the bytes. The panels are reached
-        # through the live central view. The map goes through the REPORT-flavoured grab so the
-        # document doesn't carry the app's editing chrome (see _grab_report_map_png).
+        # Render the map + charts to PNG here (QWidget.grab) — the report writer itself stays
+        # Qt-free and just embeds the bytes.
         # Each snapshot carries the width the DOCUMENT must lay it out at — see
         # _report_image_width for why the exported page would otherwise depend on this Mac's
         # screen rather than on the session.
-        # The chart is not a grab of the live panel at all: a throwaway copy pinned to the chart
-        # the app opens on, captioned with what it draws (see _grab_report_chart).
-        map_png = self.win._grab_report_map_png(self.win.view.map)
+        # Neither is a grab of the live panel: each is a throwaway copy pinned to what the app
+        # opens on, captioned with what it draws (_grab_report_map / _grab_report_chart).
+        map_png, map_caption = self.win._grab_report_map()
         plots_png, plots_title, plots_caption = self.win._grab_report_chart()
-        images = [("Track map", map_png, self.win._report_image_width(map_png)),
+        images = [("Track map", map_png, self.win._report_image_width(map_png), map_caption),
                   (plots_title, plots_png, self.win._report_image_width(plots_png), plots_caption)]
         # The report is a HUMAN document whose embedded chart axis and map colour bar already read
         # in the display unit, so its lap table must too — a km/h table under an mph chart put two

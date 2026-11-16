@@ -1023,8 +1023,23 @@ def test_the_report_export_states_a_layout_width_for_every_figure():
 def _demo_window():
     """The REAL window on the shipped demo recording (verified timing on its built-in circuit),
     loaded and settled: it lands on the first-open debrief, as a first open does."""
+    import importlib
+
     from studio.dev import make_demo
     folder = tempfile.TemporaryDirectory(prefix="pacer-test-report-chart-")
+    # A FRESH library (and focus list) per window, so every open is a first open and lands on the
+    # debrief: the module's shared seam would remember the previous test's demo. Put back by
+    # `folder.restore()` (called from each test's finally).
+    seams = [importlib.import_module(f"studio.{n}") for n in ("library", "focus", "session_record")]
+    saved = [mod._app_support_dir for mod in seams]
+    for mod in seams:
+        mod._app_support_dir = lambda d=folder.name: d
+
+    def restore():
+        for mod, fn in zip(seams, saved, strict=True):
+            mod._app_support_dir = fn
+
+    folder.restore = restore
     path = os.path.join(folder.name, "GX010777.MP4")
     make_demo.make(path, render=False)
     win = StudioWindow([])
@@ -1109,6 +1124,130 @@ def _live_chart_state(win):
         "comparing": win.view._comparing(), "racing": win.view.is_racing(),
         "pixels": bytes(buf.data()),
     }
+
+
+def _report_map(win):
+    """Export the report and return its map figure as (title, png, width, caption)."""
+    seen = {}
+    orig_report, orig_dialog = export_data.write_report_html, QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(td, "r.html"), ""))
+        export_data.write_report_html = lambda *a, **k: seen.update(k)
+        try:
+            win.exports.export_report()
+        finally:
+            export_data.write_report_html = orig_report
+            QFileDialog.getSaveFileName = orig_dialog
+    (fig,) = [im for im in seen["images"] if im[0] == "Track map"]
+    return (*fig, None)[:4]
+
+
+def _live_map_state(win):
+    """Everything about the LIVE map a report export could disturb, pixels included."""
+    from studio import theme
+    m = win.view.map
+    image = m.grab().toImage()
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    key = m._map_key
+    return {
+        "lap": m._current_lap, "mode": m._rainbow_mode, "fitted": m._view_fitted,
+        "range": [[round(float(v), 9) for v in r] for r in m.plot.getViewBox().viewRange()],
+        "fit_btn": m.fit_btn.isHidden(), "pinned": m.pinned_corner(), "timing": m._timing_pinned,
+        "key": (key.isHidden(), key._collapsed, "_ROWS" in vars(key)),
+        "marker": (m.marker.isVisible(), tuple(round(float(v), 9) for v in m.marker.pos())),
+        "race": len(m.race_items()), "follow": m._follow is not None, "size": m.size().toTuple(),
+        "pen": theme.pen_scale(), "pixels": bytes(buf.data()),
+    }
+
+
+def test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing():
+    """The report's map was the live map panel grabbed (#586 cleaned its chrome), so it was what
+    the window happened to show: the lap the video was in, the line mode, a hand zoom, a ringed
+    corner, a race's packs or Follow's close-up, at the panel's shape — and exported from the
+    first-open debrief, whose lap panel fills the window, the map panel is 0 px wide and the
+    report embedded an EMPTY map.
+
+    Now it is a throwaway map pinned to the one the app opens on (the best lap, coloured by
+    speed, every corner, the whole track framed) at a fixed size, through #586's clean grab: one
+    PNG whatever the window is doing, a caption read off what it drew, and the live map
+    untouched. On main: an empty PNG at the debrief."""
+    from studio import app as app_mod
+    from studio import theme
+    folder, win = _demo_window()
+    try:
+        session, view = win.session, win.view
+        best = session.best_lap_id()
+        m = view.map
+
+        def export_unchanged(why):
+            before = _live_map_state(win)
+            fig = _report_map(win)
+            assert _live_map_state(win) == before, f"the export changed the live map ({why})"
+            return fig
+
+        # 1. The first-open debrief: the map panel has no width at all.
+        assert m.width() == 0, "the premise: the debrief collapses the map panel"
+        title, png, width, caption = ref = export_unchanged("debrief")
+        image = QImage.fromData(png, "PNG")
+        assert not image.isNull() and image.width() > 0, "the report embedded an empty map"
+        assert (image.width(), image.height()) == tuple(
+            round(v * win.devicePixelRatioF()) for v in app_mod.REPORT_MAP_SIZE), image.size()
+        assert width == app_mod.REPORT_MAP_SIZE[0], width
+        lap = f"Lap {best + 1} {fmt_time(session.lap_time(best))} · best"
+        assert caption.startswith(f"{lap}, its line coloured by speed: the bar under the map runs "
+                                  f"from "), caption
+        assert caption.rstrip(".").endswith("corners labelled") and "km/h" in caption, caption
+
+        # 2. The grid, another lap on the map, a different line mode, a ringed corner, the
+        # timing handles up, a hand zoom: the same figure.
+        view.tab_bar.setCurrentIndex(0)
+        if view._maximized_panel is not None:
+            view._toggle_panel_maximized(view._maximized_panel)
+        _pump(0.3)
+        other = next(lid for lid in session.valid_lap_ids() if lid != best)
+        m.set_current_lap(other)
+        m.set_rainbow_mode("elevation")
+        m.highlight_corner(3)
+        m._pin_timing_chrome()
+        vb = m.plot.getViewBox()
+        (x0, x1), (y0, y1) = vb.viewRange()
+        vb.setRange(xRange=(x0, (x0 + x1) / 2), yRange=(y0, (y0 + y1) / 2), padding=0)
+        m._on_manual_range()
+        _pump(0.2)
+        assert m.width() > 0 and not m._view_fitted and m.pinned_corner() == "C3"
+        assert export_unchanged("lap, mode, ring, handles, zoom") == ref, "the map followed the window"
+        m.set_rainbow_mode("speed")
+        m.highlight_corner(None)
+        m._fit_view()
+
+        # 3. Video focus (the video maximised over the grid): the same figure.
+        view.set_video_focus(True)
+        _pump(0.2)
+        assert export_unchanged("video focus") == ref, "the map followed video focus"
+        view.set_video_focus(False)
+        _pump(0.2)
+
+        # 4. Comparing two laps, then a lap race with Follow on: the same figure.
+        view.compare.enter()
+        _pump(0.2)
+        assert view._comparing()
+        assert export_unchanged("compare") == ref, "the map followed the comparison"
+        view.compare.exit()
+        _pump(0.2)
+        assert view.start_lap_race(), "the demo must be raceable"
+        m.set_race_follow(True)
+        _pump(0.3)
+        assert m.race_items() and m._follow is not None
+        assert export_unchanged("race + Follow") == ref, "the map followed the race"
+        view.end_lap_race()
+        assert theme.pen_scale() == _live_map_state(win)["pen"]
+    finally:
+        win.close()
+        folder.restore()
+        folder.cleanup()
+    print("test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing OK")
 
 
 def test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state():
@@ -1201,6 +1340,7 @@ def test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_s
         assert theme.pen_scale() == before["pen"]
     finally:
         win.close()
+        folder.restore()
         folder.cleanup()
     print("test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state OK")
 
@@ -2657,6 +2797,7 @@ def _run_all():
     test_the_report_figure_width_divides_out_the_screens_pixel_ratio()
     test_the_report_export_states_a_layout_width_for_every_figure()
     test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state()
+    test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing()
     test_the_options_hint_quantifies_the_size_and_the_work()
     test_the_hint_refreshes_on_the_quality_combo_too()
     test_the_hint_never_promises_a_run_up_the_footage_cannot_give()

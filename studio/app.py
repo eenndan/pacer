@@ -65,7 +65,7 @@ from . import (
 from . import (
     marks as marks_model,
 )
-from ._signal import fmt_hms, lap_label
+from ._signal import fmt_hms, fmt_time, lap_label
 from .central_view import CentralView, undo_summary
 from .coaching_panel import DEBRIEF_COMPARE
 from .command_palette import CommandPalette
@@ -119,6 +119,8 @@ _ABSENT = object()
 # The report chart's layout size (logical px): fixed, so the figure is the session's and not the
 # window's — the live grab was as wide as the charts panel happened to be (_grab_report_chart).
 REPORT_CHART_SIZE = (960, 480)
+# ...and the report map's, for the same reason (_grab_report_map).
+REPORT_MAP_SIZE = (960, 600)
 
 
 def _report_key_drops(key) -> set[str]:
@@ -3902,6 +3904,60 @@ class StudioWindow(QMainWindow):
                     key._relayout()
                     map_view._reposition_key()
 
+
+    def _grab_report_map(self) -> tuple[bytes, str | None]:
+        """The HTML REPORT's track map as (png, caption), drawn on a THROWAWAY map, then grabbed
+        through `_grab_report_map_png` (#586's clean grab: no drag cue, no marker, the key forced
+        open minus the rows for what is not drawn).
+
+        The live grab depended on the window: exported from the first-open debrief, whose lap
+        panel takes the whole window, the map panel was 0 px wide and the report embedded an EMPTY
+        image; otherwise it was whatever lap the video was in, the line mode and zoom of the
+        moment, a race's packs or Follow's close-up, a ringed corner, at the panel's shape.
+
+        So the subject is PINNED, like the chart's (`_grab_report_chart`): the map the app opens
+        on — the best lap's line, coloured by speed (the mode a fresh map starts in) in the
+        reader's unit, its brake glyphs, the corner labels, the whole track framed, at a fixed
+        size. A copy is the smaller and safer of the two ways to get that: MapView is built from
+        the session plus four pushes (corners, unit, lap, brake markers), all made here as
+        CentralView makes them; a sized render of the live view would have to save and restore
+        its race, Follow, zoom, ring, lap and line mode, and its panel's place in a splitter.
+        Nothing touches the live map, so there is nothing to restore.
+
+        Falls back to the report grab of the live widget for a bare one (tests)."""
+        from .map_view import MapView
+
+        live = getattr(getattr(self, "view", None), "map", None)
+        if not isinstance(live, MapView):
+            return self._grab_report_map_png(live), None
+        session = self.session
+        pen_scale = theme.pen_scale()   # see _grab_report_chart: a view build sets it globally
+        copy = MapView(session)
+        try:
+            copy.setAttribute(Qt.WA_DontShowOnScreen, True)
+            copy.set_speed_unit(self._speed_unit)
+            copy.set_corners(session.corners.corner_map_markers())
+            best = session.best_lap_id()
+            copy.set_current_lap(best)
+            if best is not None:
+                copy.set_brake_markers([(session.driving.lap_brake_map_markers(best),
+                                         self.view._driving_lap_colour(best, 0))])
+            copy.resize(*REPORT_MAP_SIZE)
+            # Settled on posted events only, as the chart is; the fit re-run on the laid-out
+            # canvas, because the copy's first fit is taken before it has a size.
+            copy.show()
+            for _ in range(3):
+                QApplication.sendPostedEvents()
+                copy._fit_view()
+            caption = None
+            if best is not None:
+                caption = copy.document_caption(
+                    f"Lap {lap_label(best)} {fmt_time(session.lap_time(best))} · best")
+            return self._grab_report_map_png(copy), caption
+        finally:
+            copy.close()
+            copy.deleteLater()
+            theme.set_pen_scale(pen_scale)
 
     def _grab_report_chart(self) -> tuple[bytes, str, str | None]:
         """The HTML REPORT's speed/Δ chart as (png, title, caption), drawn on a THROWAWAY chart
