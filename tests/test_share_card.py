@@ -183,6 +183,28 @@ def test_card_data_survives_coaching_error():
     print("test_card_data_survives_coaching_error OK")
 
 
+def test_no_opportunity_when_every_ranked_loss_rounds_to_zero():
+    """The card's opportunity is the Coaching page's shortlist (`coaching.shortlist`), so when every
+    RANKED corner's loss is under the 2-dp display resolution (`coaching.DISPLAY_MIN_LOST_S`) — the
+    page shows its empty state — the card has no opportunity block either: the same card as a
+    session with no ranked corner at all. It read the raw `ranked_rows()` until PR #590 and printed
+    "+0.00 s" (a tie of two such corners: "TOP OPPORTUNITIES · too close to rank … +0.00 s each")."""
+    tiny = coaching.Opportunities(enough=True, n_laps=5, median_lap_id=3,
+                                  rows=[_apex_opp(cid=4, time_lost=0.003),
+                                        _apex_opp(cid=2, direction=1, time_lost=0.002)])
+    assert [r.cid for r in tiny.ranked_rows()] == [4, 2], "both corners carry a claim"
+    assert coaching.shortlist(tiny) == [], "…and neither reaches the shown resolution"
+    d = share_card.card_data(FakeSession(opps=tiny), unit="kmh")
+    assert d.top_opp is None, d.top_opp
+    none = coaching.Opportunities(enough=True, n_laps=5, median_lap_id=3, rows=[])
+    plain = share_card.card_data(FakeSession(opps=none), unit="kmh")
+    assert plain.top_opp is None
+    png = share_card.card_to_png(share_card.render_card(d))
+    assert png == share_card.card_to_png(share_card.render_card(plain)), (
+        "a card whose ranked losses all round to +0.00 s must be the no-opportunity card")
+    print("test_no_opportunity_when_every_ranked_loss_rounds_to_zero OK")
+
+
 # ------------------------------------------ QA W1 REG-1: the card honours the page's tie rule
 # The working set's RANKED rows, biggest loss first — (cid, time lost s, IQR s, counted laps, laps at
 # the target, reach) — as the QA r4 ADVICE lane extracted them through the real (jailed) loader; the
@@ -376,15 +398,16 @@ def test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie
     the same singular line: the span is one typical pass per corner, which the singular states."""
     import inspect
 
-    from studio import coaching_panel, stats, story
+    from studio import stats, story
     assert stats.TYPICAL_PASS == "typical pass" and coaching.LOSS_BASELINE == "vs your best lap"
     assert share_card.opp_baseline() == f"{stats.TYPICAL_PASS} {coaching.LOSS_BASELINE}'s"
     assert share_card.opp_baseline() == "typical pass vs your best lap's"
     # One source for each half: the slow-lap notes read the constant, and so does the page's
-    # headline, whose rendered "… vs your best lap (median of N clean laps)" is unchanged.
+    # headline (`coaching.headline`, which the page shows), whose rendered "… vs your best lap
+    # (median of N clean laps)" is unchanged.
     assert "over your {TYPICAL_PASS} (" in inspect.getsource(story)
-    src = inspect.getsource(coaching_panel)
-    assert "coaching.LOSS_BASELINE" in src and '" vs your best lap"' not in src
+    src = inspect.getsource(coaching.headline)
+    assert "{LOSS_BASELINE}" in src and '" vs your best lap"' not in src
     print("test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too OK")
 
 
@@ -1427,6 +1450,7 @@ if __name__ == "__main__":
     test_card_data_stamps_degraded_timing()
     test_card_data_no_opportunity_when_too_few_laps()
     test_card_data_survives_coaching_error()
+    test_no_opportunity_when_every_ranked_loss_rounds_to_zero()
     test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card()
     test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss()
     test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too()

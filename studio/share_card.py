@@ -178,7 +178,7 @@ def opp_baseline() -> str:
     the clean laps of (that lap's pass − the best lap's pass), which IS the typical pass minus the
     best lap's pass. "median vs your best lap" (the first wording) read as the median LAP against
     the best lap, 0.68 s on the demo, not 0.36 s; a corner's median pass is what the app calls its
-    `stats.TYPICAL_PASS` (the slow-lap notes, MOMENTS), and "vs your best lap" is
+    `stats.TYPICAL_PASS` (the slow-lap notes, MOMENTS), and the baseline is
     `coaching.LOSS_BASELINE`, the words the Coaching headline prints the same number with. A tie's
     span is the same statistic per corner, so the singular reads right over several corners too."""
     # Imported here, not at the top: the module's import line is being edited by another change.
@@ -246,14 +246,15 @@ def _top_opportunity(session, unit: str) -> TopOpp | None:
         opps = session.coaching_opportunities()
         if not opps.enough:
             return None
-        # RANKED rows only: `rows` also carries the corners the per-corner evidence gate abstained
-        # on (biggest-loss first within each half), and a card is the one surface that leaves the
-        # app. Publishing "C1 +0.03 s" for a corner whose own middle-half of laps spans 0.20 s is
+        # THE COACHING PAGE'S SHORTLIST, and its first row (`coaching.shortlist`, the one
+        # definition every surface reads). RANKED rows only: `rows` also carries the corners the
+        # per-corner evidence gate abstained on, and a card is the one surface that leaves the app.
+        # Publishing "C1 +0.03 s" for a corner whose own middle-half of laps spans 0.20 s is
         # exactly the overclaim the gate exists to stop, so the card shows no opportunity instead.
-        ranked = opps.ranked_rows()
-        if not ranked:
+        top = coaching.shortlist(opps)
+        if not top:
             return None
-        opp = ranked[0]  # ranked biggest-loss first
+        opp = top[0]  # ranked biggest-loss first
         # QA W1 REG-1: the Coaching page will not crown a lead its corners' own lap-to-lap spread
         # cannot separate ("Start with C5, C2 or C8: … so this cannot rank them"), and the card
         # printed "BIGGEST OPPORTUNITY C5" under it, on three of the four working-set recordings.

@@ -39,7 +39,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import coaching, data_quality, focus, theme, trace_paint, units
-from ._signal import DASH, fmt_signed, fmt_time, plural
+from ._signal import fmt_signed, fmt_time, plural
+from .coaching import PANEL_TOP_N
 from .lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip, set_corner_direction
 from .theme import PROVISIONAL_COLOR, C
 from .widgets import ActionChip, EmptyState, PanelHeader, WrapLabel
@@ -131,23 +132,11 @@ def _elide_header(table: QTableWidget, col: int, label: str, chrome_px: int):
                     else f"{label} — {_HEADER_TIPS.get(label, '')}".strip(" —"))
 
 
-# L2: the time-lost cells render at 2 dp ("+{t:.2f} s"), so any loss under half a centisecond rounds
-# to "+0.00 s" — an informationless "opportunity" with a live Jump button. summarize() keeps the raw
-# 1e-9 ranking (used by the golden fingerprint + share card), but the DISPLAYED opportunity lists
-# (dialog + panel) drop rows below the shown resolution so no "+0.00 s" row ever appears.
-DISPLAY_MIN_LOST_S = 0.005  # < this rounds to +0.00 s at 2 dp — not a shown opportunity
-
-
-# IA-01: the ONE scope word both coaching surfaces lead with. Every opportunity is a median over the
-# session's clean laps — the page does not, and cannot, re-scope to the lap you have selected (see
-# OpportunitiesPanel's scope note), so it says so where the number is read.
-_SCOPE_PREFIX = "Whole session"
-
-
-def _clean_laps_phrase(n: int) -> str:
-    """"median of N clean laps" — the sample the opportunities are a median OVER, so the headline
-    carries its own denominator (singular for the degenerate one-lap case)."""
-    return f"median of {n} clean lap{'' if n == 1 else 's'}"
+# WHICH ROWS, AND IN WHAT WORDS, IS NOT DECIDED HERE. The shown rows (`coaching.shown_rows`, no
+# "+0.00 s" row), the ranked ones, the headline's shortlist (`coaching.shortlist`, PANEL_TOP_N), the
+# headline and every cell's text are Qt-free functions in `coaching`, so a surface with no widget
+# (the exported report, the share card) prints the same answer (`coaching.page_text`). This module
+# owns only how they are laid out, coloured and hovered.
 
 
 def _lap_account(session) -> tuple[int | None, int]:
@@ -205,25 +194,6 @@ def empty_state_copy(opps: coaching.Opportunities, session=None) -> tuple[str, s
             "consistent. Nice driving.")
 
 
-def _shown_rows(opps: coaching.Opportunities) -> list[coaching.Opportunity]:
-    """The opportunity rows worth SHOWING: those whose time_lost does not round to +0.00 s at the
-    2-dp display resolution (L2). Ranking/order is preserved (summarize already sinks the abstained
-    rows below the ranked ones); only sub-resolution rows are dropped."""
-    return [r for r in opps.rows if r.time_lost >= DISPLAY_MIN_LOST_S]
-
-
-def _ranked_shown(opps: coaching.Opportunities) -> list[coaching.Opportunity]:
-    """The shown rows that carry a CLAIM — the shortlist the headline totals and the digest tile
-    mirrors. An abstained row is displayed (with its reason) but must never be summed into a
-    "time available" figure: that is the number the evidence gate exists to keep honest.
-
-    Reads the row's evidence through getattr because the Stats page hands this duck-typed rows from
-    a session stub; a row with no evidence at all is UNMEASURED, not gated out, so it counts (the
-    same rule `coaching._NO_EVIDENCE` encodes)."""
-    return [r for r in _shown_rows(opps)
-            if getattr(getattr(r, "evidence", None), "ranked", True)]
-
-
 # The share of the page the theme may take before it starts shedding lines (see ThemeBlock.fit_into).
 #
 # MEASURED, and this is why it is a budget and not a fixed block: a wrapping three-line summary is
@@ -269,14 +239,7 @@ class ThemeBlock(QWidget):
 
     def set_theme(self, opps: coaching.Opportunities) -> None:
         """Fill from a summary; hide the whole block when there is no theme to state."""
-        theme_obj = getattr(opps, "theme", None) or coaching.Theme(
-            kind=coaching.THEME_NONE, share=0.0, execution_s=0.0, pace_s=0.0,
-            n_ranked=0, n_abstained=0, cause=coaching.REASON_NONE, cause_share=0.0)
-        rows = list(opps.rows)
-        # The rows ride along so a side one corner on the reach line decides is not stated as a
-        # side (COACHING-4, `coaching.theme_tipping_row`).
-        self._sentence = coaching.theme_sentence(theme_obj, rows)
-        self._lines = coaching.theme_actions(theme_obj, rows)
+        self._sentence, self._lines = coaching.theme_lines(opps)
         self.headline.setText(self._sentence)
         for label, text in zip(self.actions, self._lines + ["", ""], strict=False):
             label.setText(text)
@@ -1439,22 +1402,13 @@ def _lost_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
     An ABSTAINED row prints the same number in the muted tone instead of the delta hue: the
     measurement is still shown (never silently dropped), but it is no longer a claim, and a red
     "time given away" beside a "Not ranked:" sentence would say two opposite things in one row."""
-    item = QTableWidgetItem(f"+{opp.time_lost:.2f} s")
+    item = QTableWidgetItem(coaching.lost_text(opp))
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     item.setFont(num_font)
     item.setForeground(QColor(theme.delta_colour(opp.time_lost) if opp.evidence.ranked
                               else C.text_dim))
     return item
-
-
-# The one-word answer in the "Done it?" cell, per coaching.REACH_* id — the glance cue that
-# separates "repeat what you already did" from "find something new" without reading a sentence.
-_REACH_WORD = {
-    coaching.REACH_REPEAT: "Yes",
-    coaching.REACH_RARE: "Rarely",
-    coaching.REACH_NEVER: "Never",
-}
 
 
 def _reach_tip(ev: coaching.Evidence, of: int | None) -> str:
@@ -1497,14 +1451,14 @@ def _reach_cell(opp: coaching.Opportunity, num_font, of: int | None = None) -> Q
     An unmeasured row (a legacy/synthetic Opportunity with no per-lap times) reads the em-dash
     rather than inventing a count."""
     ev = opp.evidence
-    word = _REACH_WORD.get(ev.reach)
+    word = coaching.REACH_WORD.get(ev.reach)
     # THE COUNT, NOT THE WORD (LOOK-9): "Yes · 2/19" beside "Rarely · 1/19" was a verdict that
     # flipped at one lap (coaching.REACH_REPEAT_FRAC). The count carries it, and cannot flip.
     # With its unit, as the reason sentence says it — and as wide as the "Rarely · 1/8" it replaced:
     # a narrower cell let the column budget afford the Jump column at the 1440x900 default page,
     # which squeezed the reason to 193 px, grew the shortlist rows 58 -> 105 px and pushed the
     # focus line off the page (test_the_default_window_shows_the_top_three_whole).
-    item = QTableWidgetItem(f"{ev.reach_laps} of {plural(ev.n_laps, 'lap')}" if word else DASH)
+    item = QTableWidgetItem(coaching.done_it_text(opp))
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     item.setFont(num_font)
@@ -1538,9 +1492,9 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
 
     `reach` False leaves off the "N of M laps matched your best lap here" count, for a row whose
     "Done it?" cell is on screen saying exactly that (QA JOURNEY-8: every row said it twice)."""
-    sentence = coaching.reason_sentence(opp, speed_unit, reach=reach)
+    text = coaching.reason_text(opp, directions, speed_unit, reach=reach)
     if not opp.evidence.ranked:
-        item = QTableWidgetItem(sentence)
+        item = QTableWidgetItem(text)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setForeground(QColor(C.text_dim))
         item.setToolTip(
@@ -1549,7 +1503,7 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
         return item
     d = directions.get(opp.cid)
     line = coaching.brake_direction_line(d)
-    item = QTableWidgetItem(f"{sentence}\n{line}" if line else sentence)
+    item = QTableWidgetItem(text)
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     tip = _REASON_TIP.get(opp.reason.kind, "")
     if line is not None and d is not None:
@@ -1569,12 +1523,6 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
     item.setToolTip(tip)
     return item
 
-
-# The actionable SHORTLIST: the rows the page's headline sums (and the Stats page's coaching digest
-# tile mirrors — stats_panel._set_digest reads this constant so the two surfaces state one total),
-# and the FLOOR on how many rows the page shows. L5-08: it is not a ceiling any more — the page
-# renders as much of the ranking as its viewport can hold (see OpportunitiesPanel._tune_rows).
-PANEL_TOP_N = 3
 
 # L5-06: the width below which the page stops paying for the "Done it?" column.
 #
@@ -1935,7 +1883,7 @@ class OpportunitiesPanel(QWidget):
         directions = self.session.coaching_brake_direction()
         self.theme_block.set_theme(opps)
         # L2: only rows above the shown resolution count as opportunities (no "+0.00 s" rows).
-        if opps.enough and _shown_rows(opps):
+        if opps.enough and coaching.shown_rows(opps):
             self._fill_rows(opps, directions)
         else:
             self._show_excluded(opps)
@@ -1959,45 +1907,15 @@ class OpportunitiesPanel(QWidget):
         """Populate the table from `opps.rows` (shared cell builders, so a row reads identically to
         the modal dialog) and the headline summary."""
         # L2: only shown-resolution rows are opportunities (drop the "+0.00 s" rows).
-        self._all_rows = _shown_rows(opps)
+        self._all_rows = coaching.shown_rows(opps)
         self._brake_dirs = directions
         self._n_clean = opps.n_laps
         self._tuned_key = None       # a new ranking: re-tune the row count against the viewport
-        # The headline shortlist is the top RANKED rows, not the top rows: an abstained corner is
-        # displayed but its number is not a claim, so summing it into "time available" would put
-        # back exactly the noise the evidence gate just took out. (summarize orders ranked-first, so
-        # this is normally `[:PANEL_TOP_N]` — the filter matters when fewer than N rows are ranked.)
-        rows = _ranked_shown(opps)[:PANEL_TOP_N]
-        self._shortlist = rows
-        # B12: sum the 2-dp DISPLAYED values, not the raw floats — the headline ("0.56 s")
-        # and the visible rows (+0.26 +0.20 +0.11 = 0.57) must never disagree by a rounding
-        # penny; the header is an aggregate of what the user can check by eye.
-        total = sum(round(r.time_lost, 2) for r in rows)
-        # P1: phrase the headline by COUNT — "in your worst corner" reads right for one, "across your
-        # top N corners" for several, so it never says the ungrammatical "across the top 1".
-        # ...AND NAME THE BASELINE, on the face, not only in the column tooltip. One tab away the
-        # Stats CORNERS table prints a "Med loss" for the SAME corners measured against the best
-        # anyone did in each — a different question with a much bigger answer (on the D24 0060 pair
-        # the two columns sum to 1.02 s here and 3.93 s there, and corner by corner they run from
-        # 1.3x to 2450x apart). Two numbers that far apart, one tab apart, both called a loss, is
-        # not a rounding question the reader can resolve by looking harder. The modal dialog this
-        # panel shares its rows with has said "vs your best lap" in its title all along; the page
-        # a user actually lands on did not.
-        # ...and the ZERO case is real now: every shown corner can fail the evidence gate, in which
-        # case there is no time to claim and the honest headline says so rather than totalling 0.00 s
-        # "across your top 0 corners". The table below still lists those corners with their reasons.
-        if not rows:
-            gains = "no corner clears its own lap-to-lap spread"
-        else:
-            gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
-                     else f"{total:.2f} s across your top {len(rows)} corners")
-            gains += f" {coaching.LOSS_BASELINE}"
-        # IA-01: LEAD with the scope. The tab strip beside this page renames itself "Corners · L6"
-        # on a selection, so a coaching headline that neither moves nor names its scope reads as the
-        # selected lap's number — on D24 lap 6 that understated the lap's own +2.08 s as "0.21 s".
-        # State the session scope and the sample it is a median of, in the same "·" idiom the tabs
-        # use, so the two pages can be told apart at a glance.
-        self._headline = f"{_SCOPE_PREFIX} · {gains} ({_clean_laps_phrase(opps.n_laps)})"
+        # The headline sums THE shortlist — the top ranked rows (`coaching.shortlist`) — and its
+        # words, the sum of the printed cells and the scope it leads with, are `coaching.headline`'s
+        # (one author, so the exported report prints the same line).
+        self._shortlist = coaching.shortlist(opps)
+        self._headline = coaching.headline(opps)
         self._refresh_summary_label()
 
         # A refresh is new data / a new unit / a new palette, so every cell is rebuilt. The row

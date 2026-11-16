@@ -60,10 +60,6 @@ from studio import (  # noqa: E402  (after the jail, as every load below must be
     session_record,
     track_db,
 )
-from studio.coaching_panel import (  # noqa: E402  (the debrief's shortlist)
-    PANEL_TOP_N,
-    _ranked_shown,
-)
 from studio.session import Session  # noqa: E402
 
 DRAWS = 2000          # noise draws per bias estimate
@@ -276,8 +272,8 @@ def _summarize(x: dict, rows=None, reselect: bool = False) -> coaching.Opportuni
 
 
 def _lead(opps) -> tuple[int | None, float, tuple[int, ...]]:
-    ranked = _ranked_shown(opps)
-    top = tuple(r.cid for r in ranked[:PANEL_TOP_N])
+    ranked = coaching.ranked_shown(opps)
+    top = tuple(r.cid for r in coaching.shortlist(opps))   # the debrief's shortlist
     return (ranked[0].cid, ranked[0].time_lost, top) if ranked else (None, float("nan"), ())
 
 

@@ -12,10 +12,6 @@ from PySide6.QtWidgets import QAbstractItemView
 
 from . import coaching, provenance, theme, units
 from ._signal import fmt_signed, plural
-
-# The Coaching panel's OWN row filter, imported (not re-implemented) so the note quotes the
-# Coaching tab's ranking exactly — L5-02.
-from .coaching_panel import _ranked_shown
 from .lap_table import NUM_ROLE, _NumItem
 from .stats_common import RING_ROLE, ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
 from .stats_ideal import gave_all_back
@@ -104,7 +100,8 @@ class StraightsSection:
         a sentence here names exactly what that page names. [] without a ranked row."""
         opp_fn = getattr(session, "coaching_opportunities", None)
         opp = opp_fn() if opp_fn is not None else None
-        rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
+        # The Coaching tab's OWN shortlist (not re-implemented), so this names its lead — L5-02.
+        rows = coaching.shortlist(opp) if getattr(opp, "enough", False) else []
         lead = getattr(rows[0], "cid", None) if rows else None
         if lead is None:
             return []

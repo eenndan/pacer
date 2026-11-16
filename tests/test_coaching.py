@@ -1505,11 +1505,8 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
     DISPLAYED opportunity lists (dialog + panel) drop rows whose time_lost rounds to "+0.00 s" at
     the shown 2-dp resolution (< 0.005 s) — no informationless row with a live Jump button."""
     _qapp()
-    from studio.coaching_panel import (
-        DISPLAY_MIN_LOST_S,
-        OpportunitiesPanel,
-        _shown_rows,
-    )
+    from studio.coaching import DISPLAY_MIN_LOST_S, shown_rows
+    from studio.coaching_panel import OpportunitiesPanel
     corners = _corners(4)
     best = [5.0, 6.0, 7.0, 4.0]
     # Two REAL losers (C1 ~0.30 s, C3 ~0.10 s) and two sub-resolution "losers" (C2 0.0043 s,
@@ -1522,7 +1519,7 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
     # summarize still RANKS all four (the internal 1e-9 threshold is unchanged).
     assert [r.cid for r in opp.rows] == [1, 3, 2, 4], [r.cid for r in opp.rows]
     # but the shown rows drop the two that round to +0.00 s.
-    shown = _shown_rows(opp)
+    shown = shown_rows(opp)
     assert [r.cid for r in shown] == [1, 3], [r.cid for r in shown]
     assert all(r.time_lost >= DISPLAY_MIN_LOST_S for r in shown)
     # PANEL: same filter — the "+0.00 s" corners never appear, and the summary counts only shown rows.
@@ -1713,7 +1710,8 @@ def test_ia01_panel_headline_names_its_session_scope():
     leads with the scope AND carries the sample it is a median over, and that the tooltip says
     plainly that these rows do not follow the selection."""
     _qapp()
-    from studio.coaching_panel import _SCOPE_PREFIX, OpportunitiesPanel
+    from studio.coaching import SCOPE_PREFIX as _SCOPE_PREFIX
+    from studio.coaching_panel import OpportunitiesPanel
     s = _stadium_session()
     opp = s.coaching_opportunities()
     assert opp.enough and opp.rows, "fixture must produce real opportunities"
@@ -1981,7 +1979,9 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
     why it is not ranked is worth more than a missing row), but it sits below every row that
     carries a claim, and nothing sums it into a "time available" figure."""
     _qapp()
-    from studio.coaching_panel import OpportunitiesPanel, _ranked_shown, _shown_rows
+    from studio.coaching import ranked_shown as _ranked_shown
+    from studio.coaching import shown_rows as _shown_rows
+    from studio.coaching_panel import OpportunitiesPanel
     corners = _corners(2)
     best = [5.0, 6.0]
     # C1: a 0.50 s claim over a 0.375 s interquartile spread — aimable. C2: a 0.025 s claim over a
@@ -3193,6 +3193,103 @@ def test_level_rows_count_towards_no_cause_in_the_theme():
     assert K.theme_actions(opp.theme, opp.rows)[0] == (
         "No single cause dominates these corners — work them one at a time."), opp.theme
     print("ok theme: level rows count in the ranked time and towards no cause")
+
+
+# ------------------------------------------------------------- ONE shortlist, ONE set of words
+def test_the_panel_the_card_and_the_stats_page_read_one_shortlist():
+    """There is ONE definition of the shortlist (`coaching.shortlist`): replace it, and the Coaching
+    headline, the debrief's pre-promotion list (`shortlist_cids`), the share card's "biggest
+    opportunity" and the Stats STRAIGHTS start-here all follow. On main each re-derived it — the
+    panel and the Stats page from `coaching_panel._ranked_shown`, the card from `ranked_rows()`."""
+    _qapp()
+    from studio import share_card, stats_straights
+    from studio.coaching_panel import OpportunitiesPanel
+    corners = _corners(4)
+    best = [5.0, 6.0, 7.0, 4.0]
+    times, lap_times = _plan_times(best, [0.30, 0.20, 0.10, 0.15])
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
+                      **_levers(times, best, apex=[95.0, 100.0, 100.0, 100.0]))
+    assert len(opp.ranked_rows()) >= 3, opp.rows
+
+    class _S:
+        def coaching_opportunities(self):
+            return opp
+
+        def coaching_brake_direction(self):
+            return {}
+
+    natural = [r.cid for r in K.shortlist(opp)]
+    assert OpportunitiesPanel(_S()).shortlist_cids() == natural
+    # Plant a different shortlist: the LAST shown row alone, a corner no surface would pick itself.
+    planted = K.shown_rows(opp)[-1]
+    assert planted.cid != natural[0], (planted.cid, natural)
+    real = K.shortlist
+    K.shortlist = lambda _opps: [planted]
+    try:
+        panel = OpportunitiesPanel(_S())
+        assert panel.shortlist_cids() == [planted.cid], panel.shortlist_cids()
+        assert "in your worst corner" in panel.summary_label.text(), panel.summary_label.text()
+        assert panel.summary_label.text() == K.headline(opp)
+        top = share_card._top_opportunity(_S(), "kmh")
+        assert top is not None and top.cids[0] == planted.cid, top
+        assert stats_straights.StraightsSection._coaching_start(_S())[0] == planted.cid
+    finally:
+        K.shortlist = real
+    print(f"ok one shortlist: natural {natural}; planted C{planted.cid} reached panel, card, Stats")
+
+
+def test_page_text_is_what_the_coaching_page_prints_on_the_demo():
+    """`coaching.page_text` — the one call a widget-less surface (the exported report) prints the
+    Coaching answer from — returns the page's own strings, cell for cell, on the shipped demo: the
+    headline, the theme and its "Start with C1" action, and every rendered row (corner, time lost,
+    done it, reason), on the ordinary page and on the debrief (no braking line)."""
+    _qapp()
+    from studio import units
+    from studio.coaching_panel import _PANEL_COL_REACH, _PANEL_COL_REASON, OpportunitiesPanel
+    s = _level_sessions()["demo"]
+    opps, dirs = s.coaching_opportunities(), s.coaching_brake_direction()
+    panel = OpportunitiesPanel(s)
+    panel.resize(1400, 900)
+    panel.show()
+    for _ in range(6):
+        _APP.processEvents()
+
+    def rows_on_screen():
+        t = panel.table
+        return [(t.item(r, 0).text(), t.item(r, 1).text(), t.item(r, 2).text(),
+                 t.item(r, _PANEL_COL_REASON).text()) for r in range(t.rowCount())]
+
+    for debrief in (False, True):
+        if debrief:
+            panel.set_debrief(True, None, [], False, saved=False)
+            for _ in range(6):
+                _APP.processEvents()
+        reach = panel.table.isColumnHidden(_PANEL_COL_REACH)
+        page = K.page_text(opps, None if debrief else dirs, units.DEFAULT_UNIT, reach=reach)
+        assert page.headline == panel.summary_label.text() != "", page.headline
+        assert page.theme == panel.theme_block.headline.text() != "", page.theme
+        assert list(page.actions) == panel.theme_block.full_text().split("\n")[1:], page.actions
+        assert page.actions[-1] == "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."
+        assert [r.cid for r in page.shortlist] == panel.shortlist_cids() == [1, 2, 7]
+        shown = rows_on_screen()
+        assert len(shown) >= len(page.shortlist), shown
+        assert shown == [(r.corner, r.lost, r.done_it, r.reason)
+                         for r in page.rows[:len(shown)]], (shown, page.rows)
+    # THE SHORTLIST IS THE RANKED ROWS, NOT THE FIRST ROWS. The synthetic GoPro seed 7 ranks two
+    # corners and abstains on the next shown ones, so a shortlist cut as `rows[:3]` would sum an
+    # abstained corner into the headline.
+    s7 = _level_sessions()["seed 7, 12 laps"]
+    o7 = s7.coaching_opportunities()
+    p7 = K.page_text(o7, s7.coaching_brake_direction())
+    assert [r.cid for r in p7.shortlist] == [5, 6], p7.shortlist
+    assert all(r.ranked for r in p7.shortlist), p7.shortlist
+    assert len(p7.rows) >= 3 and not p7.rows[2].ranked, p7.rows   # rows[:3] would differ
+    assert [r.cid for r in p7.shortlist] != [r.cid for r in p7.rows[:3]]
+    assert OpportunitiesPanel(s7).shortlist_cids() == [5, 6]
+    assert p7.headline.startswith("Whole session · ") and "top 2 corners" in p7.headline, p7.headline
+    print(f"ok page_text: {page.headline!r}; {len(page.rows)} rows equal the page's cells; "
+          f"seed 7 shortlist C5, C6 over {len(p7.rows)} shown rows")
 
 
 if __name__ == "__main__":
