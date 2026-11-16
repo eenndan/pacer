@@ -69,9 +69,10 @@ single-corner loss beyond its ▼ step; the best 5-lap run by median, the window
 level merged into SPANS (maximal runs of level windows starting on consecutive laps, so "every
 5-lap median in Laps 8–14 is level" is literally true of the span — of its medians, not its laps,
 which on the demo spread 0.83 s; more than two spans is "no single best", which names up to
-three of them and jumps to the one holding the best window). Not built — measured unstable under
-timing jitter by the design lane: a best 3-lap run, a best pass per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one
-cell in ten by construction, so on pure noise that run is half the session).
+three of them — the one holding the best window FIRST, so its Jump lands on a named stretch). Not
+built — measured unstable under timing jitter by the design lane: a best 3-lap run, a best pass
+per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one cell in ten by
+construction, so on pure noise that run is half the session).
 
 STABILITY, held by tests/test_story.py (200 seeded draws): on the shipped demo, with lap times
 ±0.07 s and corner cells ±0.035 s, the biggest loss never changes (its best lap stands 0.215 s clear,
@@ -91,11 +92,12 @@ from .lap_race import ESTIMATED_CLOCK_TIE_S
 from .library import PB_PRECISION_S, within_timing_precision
 from .stats import MATRIX_DECIMALS, CornerMatrix
 
-#: A lap is slow above its median clean lap by more than the larger of the clean laps' middle half
-#: (their IQR, the Stats page's "middle half · span") and this (s). A default picked on few sessions (W4 design lane), stated in every note's `rule`.
+#: A lap is slow above its median clean lap by more than the larger of the clean laps' middle
+#: half (their IQR, the Stats page's "middle half · span") and this (s). A default picked on few
+#: sessions (W4 design lane), stated in every note's `rule`.
 SLOW_MIN_MARGIN_S = 0.5
-#: A middle half above this (twice the floor) means the median clean lap is not a racing lap: the rule
-#: says so outright.
+#: A middle half above this (twice the floor) means the median clean lap is not a racing lap: the
+#: rule says so outright.
 ATYPICAL_IQR_S = 2 * SLOW_MIN_MARGIN_S
 #: The share of a slow lap's excess one (or two) ▼ corners must hold, STRICTLY, to be its culprit.
 CULPRIT_SHARE = 0.5
@@ -480,8 +482,11 @@ def no_single_best(m: Moment) -> bool:
     return m.kind == BEST_WINDOW and len(m.tie) > MAX_WINDOW_SPANS
 
 
-def _spans_text(spans: tuple[Mention, ...]) -> str:
-    """"Laps 3–9, 21–27, 40–46, +1 more": the first SPANS_NAMED spans in session order."""
+def _spans_text(spans: tuple[Mention, ...], own: Mention) -> str:
+    """"Laps 51–55, 1–5, 11–15, +4 more": `own` (the span holding the best window, where the row's
+    Jump lands) FIRST, then the others in session order, SPANS_NAMED in all. Named in session order
+    alone, a best window in the sixth of seven spans was a Jump to a stretch the text left out."""
+    spans = (own, *(t for t in spans if t is not own))
     named = ", ".join(f"{lap_label(t.lap_ids[0])}–{lap_label(t.lap_ids[-1])}"
                       for t in spans[:SPANS_NAMED])
     more = f", +{len(spans) - SPANS_NAMED} more" if len(spans) > SPANS_NAMED else ""
@@ -518,7 +523,7 @@ def moment_row(m: Moment) -> MomentRow:
         own = next(t for t in m.tie if set(m.lap_ids) <= set(t.lap_ids))
         return MomentRow(f"No single best {RUN_WINDOW}-lap run",
                          f"{plural(len(m.tie), 'stretch', 'stretches')} of level "
-                         f"{RUN_WINDOW}-lap medians ({level}): {_spans_text(m.tie)}",
+                         f"{RUN_WINDOW}-lap medians ({level}): {_spans_text(m.tie, own)}",
                          own.lap_ids[0], None)
     value = f"{_laps_text(m.lap_ids)} · median {fmt_time(m.value)}"
     for t in m.tie:

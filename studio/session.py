@@ -2811,8 +2811,11 @@ class Session:
         n = self.lap_count() if getattr(self, "laps", None) is not None else 0
         left_out = {i: story.AFTER_LEFT_OUT if i in excluded else story.AFTER_TOO_BRIEF
                     for i in range(n) if i not in valid_set}
-        # Lap ids are in session order from 0, so lap 0 is the first timed lap (clean or not).
-        out = (story.slow_lap_notes(times, matrix, best, first_lap_id=0, left_out=left_out,
+        # The first TIMED lap (clean or ⊘, in session order): a crossing too brief to be a lap is
+        # not one, so a sliver before it leaves it "(first lap)", never "(after a too-brief
+        # crossing)". Lap 0 when there is no lap at all.
+        first = min((i for i in range(n) if left_out.get(i) != story.AFTER_TOO_BRIEF), default=0)
+        out = (story.slow_lap_notes(times, matrix, best, first_lap_id=first, left_out=left_out,
                                     provisional=provisional, clock_estimated=estimated),
                story.session_moments(times, matrix, best, provisional=provisional,
                                      clock_estimated=estimated))

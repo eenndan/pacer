@@ -261,9 +261,19 @@ def test_five_lap_windows_tie_span_and_break():
     three = _five(0, 45.02) | _five(10, 45.0) | _five(20, 45.01)
     m = story.session_moments(three, None, best_lap=10).best_window
     assert story.no_single_best(m) and m.lap_ids == (10, 11, 12, 13, 14), m
+    # The stretch holding the best window is named FIRST: the row's Jump lands on it.
     assert m.text == ("No single best 5-lap run: 3 stretches of level 5-lap medians "
-                      "(within 0.07 s): Laps 1–5, 11–15, 21–25"), m.text
+                      "(within 0.07 s): Laps 11–15, 1–5, 21–25"), m.text
     assert story.moment_row(m).lap_id == 10, story.moment_row(m)
+    # Seven stretches, the best window in the sixth: named in session order alone, the Jump went
+    # to Lap 51, a stretch the text left out ("Laps 1–5, 11–15, 21–25, +4 more").
+    seven = {}
+    for k in range(7):
+        seven |= _five(10 * k, 45.0 if k == 5 else 45.01 + 0.001 * k)
+    m = story.session_moments(seven, None, best_lap=50).best_window
+    assert story.no_single_best(m) and m.lap_ids == (50, 51, 52, 53, 54), m
+    assert m.text.endswith(": Laps 51–55, 1–5, 11–15, +4 more"), m.text
+    assert story.moment_row(m).lap_id == 50, story.moment_row(m)
     flat = {i: 45.0 + 0.001 * i for i in range(10)}
     m = story.session_moments(flat, None, best_lap=0).best_window
     assert [t.lap_ids for t in m.tie] == [tuple(range(10))], m.tie
@@ -492,6 +502,49 @@ def test_demo_a_slow_lap_after_an_excluded_lap_says_so():
         s._story_memo = None
     assert [n.text for n in s.slow_lap_notes()] == [DEMO_NOTE]
     print("test_demo_a_slow_lap_after_an_excluded_lap_says_so OK")
+
+
+def test_demo_a_dropout_lap_before_a_slow_lap_does_not_tag_it():
+    """A ⚠ dropout lap is a lap the Laps table counts, and a GPS dropout does not slow the kart on
+    the next lap: the lap before the demo's slow lap made a dropout lap (on the real accessors) is
+    no gap, so the slow lap's note carries no tag — only the median moved."""
+    s = _demo()
+    orig_drop = s.lap_has_dropout
+    try:
+        s.lap_has_dropout = lambda i: i == 4 or orig_drop(i)
+        s._story_memo = None
+        assert 4 in s.valid_lap_ids() and 4 not in s.consistency_lap_ids()
+        note = {n.lap_id: n for n in s.slow_lap_notes()}[5]
+        assert (note.after_gap, note.after_reason) == (None, None), note
+        assert note.text.startswith("Lap 6 · ") and "after" not in note.text, note.text
+        assert note.category == "one" and note.corners[0].cid == 5, note
+    finally:
+        s.__dict__.pop("lap_has_dropout", None)
+        s._story_memo = None
+    print("test_demo_a_dropout_lap_before_a_slow_lap_does_not_tag_it OK")
+
+
+def test_demo_slivers_before_the_first_timed_lap_leave_it_the_first_lap():
+    """Crossings too brief to be laps before the first TIMED lap do not make it "(after a
+    too-brief crossing)": it is the session's first lap, and that tag wins. Planted on the real
+    accessors: laps 0-4 out of both lap lists (slivers), so lap 5 — the demo's slow lap — is the
+    first timed lap."""
+    s = _demo()
+    orig_valid, orig_excl = s.valid_lap_ids, s.excluded_lap_ids
+    try:
+        s.valid_lap_ids = lambda: [i for i in orig_valid() if i > 4]
+        s.excluded_lap_ids = lambda: [i for i in orig_excl() if i > 4]
+        s._story_memo = None
+        note = {n.lap_id: n for n in s.slow_lap_notes()}[5]
+        assert note.first_lap and note.after_gap is None, note
+        assert note.text.startswith("Lap 6 (first lap) · "), note.text
+        assert story.row_text(note).startswith("First lap · "), story.row_text(note)
+    finally:
+        for name in ("valid_lap_ids", "excluded_lap_ids"):
+            s.__dict__.pop(name, None)
+        s._story_memo = None
+    assert [n.text for n in s.slow_lap_notes()] == [DEMO_NOTE]
+    print("test_demo_slivers_before_the_first_timed_lap_leave_it_the_first_lap OK")
 
 
 def test_demo_memo_hit_is_constant_time_and_misses_on_every_input_change():
