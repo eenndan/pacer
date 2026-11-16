@@ -26,7 +26,8 @@ synthetic demo's first open, so anyone can re-shoot it (`--only debrief`, no rec
 Every file written is recorded in `<out>/CAPTURED.json` — shot, app version, commit, date, sha256
 and a source LABEL — and `tests/test_version.py` holds docs/media to that record. At each minor
 release a shot is re-captured or waived in writing there. Without a recording, `accuracy`, `og`
-(from hero.png) and `debrief` can always be re-captured; the rest need footage.
+(from hero.png), `debrief` and `lapstrip` (both the demo) can always be re-captured; the rest need
+footage.
 
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
@@ -50,6 +51,8 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
   debrief.png     the demo's first open        "the loop: a first open lands here, and its corners
                                                are already on the focus list" — on the synthetic
                                                demo, the session every reader can open
+  lapstrip.png    the demo's lap-strip card    "the whole session leaves the app too": the card
+                                               File > Export writes, from the synthetic demo
 
 TWO THINGS THE OFFSCREEN RENDER CANNOT DO BY ITSELF, AND WHAT THIS DOES ABOUT THEM
 
@@ -938,6 +941,22 @@ def build_og(out_dir: str, hero_png: str) -> str:
 
 
 # ====================================================================== 8 — the debrief (the demo)
+def _open_demo(app: QApplication, shot: str) -> StudioWindow:
+    """The synthetic demo in the real window, loaded, through the command line's door."""
+    path = demo.resolve_demo_recording()
+    if path is None:
+        raise SystemExit(f"the {shot} shot needs the synthetic demo: the download failed (offline?) "
+                         "— point PACER_DEMO_MP4 at a copy of it")
+    w = StudioWindow([path])
+    deadline = time.time() + _LOAD_TIMEOUT_S
+    while w.view is None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    if w.view is None:
+        raise RuntimeError("the demo did not load")
+    return w
+
+
 def shot_debrief(app: QApplication, out_dir: str) -> str:
     """The first-open debrief, the loop the app is built around: the lead, the focus list Pacer
     pre-filled, the ranked corners, each one Jump from the video, and under them the picture: the
@@ -948,17 +967,7 @@ def shot_debrief(app: QApplication, out_dir: str) -> str:
     exactly what they will see. It is resolved the way `--demo` resolves it (PACER_DEMO_MP4, else
     the cache, which is empty inside this run's jail, else the one-time sha-checked download), and
     opened through the command line's door, which is what `--demo` builds."""
-    path = demo.resolve_demo_recording()
-    if path is None:
-        raise SystemExit("the debrief shot needs the synthetic demo: the download failed (offline?) "
-                         "— point PACER_DEMO_MP4 at a copy of it")
-    w = StudioWindow([path])
-    deadline = time.time() + _LOAD_TIMEOUT_S
-    while w.view is None and time.time() < deadline:
-        app.processEvents()
-        time.sleep(0.005)
-    if w.view is None:
-        raise RuntimeError("the demo did not load")
+    w = _open_demo(app, "debrief")
     w.resize(*WINDOW_DEBRIEF)
     w.show()
     settle(app)
@@ -995,6 +1004,25 @@ def shot_debrief(app: QApplication, out_dir: str) -> str:
     img = region(w, rect)
     w.close()
     return save(img, os.path.join(out_dir, "debrief.png"))
+
+
+# ====================================================================== 9 — the lap-strip card
+def shot_lapstrip(app: QApplication, out_dir: str) -> str:
+    """File ▸ Export ▸ Lap-strip card… on the synthetic demo: the same data, render and PNG writer
+    `ExportController.export_lapstrip_card` uses, read from the window's own session and units. A
+    QImage painted from numbers, so two captures are the same bytes."""
+    from studio import share_lapstrip
+    w = _open_demo(app, "lapstrip")
+    data = share_lapstrip.lapstrip_data(w.session, unit=w._speed_unit)
+    if not data.offered:
+        raise RuntimeError("the demo offers no lap-strip card (blocked or under two clean laps)")
+    image = share_lapstrip.render_lapstrip(data, palette=theme.active_palette())
+    w.close()
+    path = os.path.join(out_dir, "lapstrip.png")
+    share_lapstrip.save_lapstrip_png(image, path)
+    print(f"wrote {path}  {image.width()}x{image.height()}  {len(data.bars)} slots, best lap "
+          f"{data.best_lap_id}, scale {data.scale_s} s")
+    return path
 
 
 # ====================================================================== the capture record
@@ -1086,9 +1114,10 @@ def _record(out_dir: str, filename: str, shot: str, source: str,
 
 
 # ====================================================================== driver
-SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief")
+SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief",
+         "lapstrip")
 # The shots that need the recording named on the command line: `accuracy` is drawn from numbers
-# and `og` from hero.png, and `debrief` opens the synthetic demo instead.
+# and `og` from hero.png, and `debrief` and `lapstrip` open the synthetic demo instead.
 _RECORDING_SHOTS = {"hero", "ideal", "trust", "map", "overlay", "clip"}
 
 
@@ -1143,13 +1172,15 @@ def capture(recording: str | None, out_dir: str, only: set[str], work_dir: str,
         record(build_og(out_dir, hero_png), "og", hero_used)
     if "debrief" in only:
         record(shot_debrief(app, out_dir), "debrief", "synthetic demo")
+    if "lapstrip" in only:
+        record(shot_lapstrip(app, out_dir), "lapstrip", "synthetic demo")
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("recording", nargs="?", default=None,
                     help="INPUT recording (chapter 1; siblings auto-discovered); not needed for "
-                         "accuracy, og or debrief alone")
+                         "accuracy, og, debrief or lapstrip alone")
     ap.add_argument("--out", default=os.path.join("docs", "media"),
                     help="OUTPUT directory for the PNGs (default: docs/media)")
     ap.add_argument("--work", default=None,

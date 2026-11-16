@@ -17,7 +17,11 @@ Four ways the panel knew something and never said it:
   * seven of its eight columns are unit-bearing numbers and the abbreviated headers named not one
     unit, while the Stats page captions the same data on screen (L3-10).
 
-Pure Qt on fake sessions (no pacer, no telemetry file), under the REAL theme — the focus ring and
+And one way it now says more (cool/slow-lap-why): a slow lap's Lap cell names its culprit corner
+("▼ C5") and its Lap/Time tooltips say where its time went, on the shipped demo's real session.
+
+Pure Qt on fake sessions (no pacer, no telemetry file) — except the slow-lap checks, which load the
+shipped demo through the real loader — under the REAL theme — the focus ring and
 the hover fill are pixels, and pixels need the app's own palette. Frames are compared as
 Format_RGB32 RGB, never sha1(constBits()), whose scanline padding differs between two identical
 grabs. Run:
@@ -34,13 +38,21 @@ sys.path.insert(0, _REPO)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QHoverEvent, QImage, QKeyEvent, QMouseEvent  # noqa: E402
+from PySide6.QtGui import (  # noqa: E402
+    QColor,
+    QFontMetrics,
+    QHoverEvent,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+)
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
 from studio import data_quality, theme  # noqa: E402
 from studio import lap_table as LT  # noqa: E402
+from studio._signal import lap_label  # noqa: E402
 
 theme.apply_theme(_APP)
 
@@ -430,6 +442,399 @@ def test_naming_the_units_costs_the_columns_nothing():
     print(f"test_naming_the_units_costs_the_columns_nothing OK ({total} px in {vp} px; "
           f"in-cell % would want {sum(suffixed)} px, grip column "
           f"{floors[_GRIP_COL]} -> {suffixed[_GRIP_COL]} px)")
+
+
+# ============================================================ cool/slow-lap-why: where it went
+# The shipped demo (`make_demo.make(path, render=False)` -> `Session.load`, as the app's --demo
+# opens it): Lap 6 is its one slow lap, 5.50 s over the typical lap, C5 +2.84 s of it.
+_DEMO: dict = {}
+
+
+def _demo():
+    if not _DEMO:
+        import tempfile
+
+        from studio.dev import make_demo as md
+        from studio.session import Session
+        tmp = tempfile.TemporaryDirectory(prefix="laptable_demo_")
+        path = os.path.join(tmp.name, "pacer-synthetic-demo.mp4")
+        md.make(path, render=False)
+        _DEMO.update(tmp=tmp, session=Session.load([path]))
+    return _DEMO["session"]
+
+
+class _Over:
+    """The demo session with some reads replaced (the rest pass through)."""
+
+    def __init__(self, s, **over):
+        self._s = s
+        self.__dict__.update(over)
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
+_SLOW = 5   # lap id of "Lap 6"
+
+
+def test_a_slow_lap_says_where_its_time_went():
+    """The demo's Lap 6 row: its Time cell and its Lap cell (which wears the "▼ C5" cue) carry the
+    note on the row's terms — no "Lap 6 ·" head, the row names the lap — then the rule that called
+    it slow. Every other row keeps exactly the tooltips the table gave before the note existed."""
+    from studio import story
+    s = _demo()
+    (note,) = s.slow_lap_notes()
+    assert note.lap_id == _SLOW and note.corners[0].cid == 5, note
+    lt = _keep(LT.LapTable(s))
+    tb, r = lt.table, lt._row_for_lap(_SLOW)
+    want = (f"{story.row_text(note)}\n\n{note.rule}")
+    assert want.startswith("5.50 s over your typical lap · C5 +2.84 s of it"), want
+    assert tb.item(r, _TIME_COL).toolTip() == want, tb.item(r, _TIME_COL).toolTip()
+    assert tb.item(r, 0).toolTip() == want, tb.item(r, 0).toolTip()
+    assert tb.item(r, 0).text().endswith(f"{lap_label(_SLOW)}  ▼ C5"), tb.item(r, 0).text()
+    assert tb.item(r, 0).data(LT.CUE_ROLE) == "▼ C5", tb.item(r, 0).data(LT.CUE_ROLE)
+    assert "Lap 6" not in want and note.text.startswith("Lap 6 · ")
+    # A lap without a note: byte-for-byte the table without the read.
+    bare = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
+    for row in range(tb.rowCount()):
+        lap = lt._lap_id(row)
+        for c in range(lt._n_real_cols()):
+            a, b = tb.item(row, c), bare.table.item(bare._row_for_lap(lap), c)
+            if lap == _SLOW and c in (0, _TIME_COL):
+                continue
+            assert (a.text(), a.toolTip()) == (b.text(), b.toolTip()), (lap, c, a.text(),
+                                                                        a.toolTip(), b.toolTip())
+    print("test_a_slow_lap_says_where_its_time_went OK")
+
+
+def test_the_cue_follows_its_lap_through_a_sort_and_a_refresh_reads_once():
+    """Sorted by Time (slowest first), the cue is on Lap 6's row, wherever that row went. The notes
+    are read once per refresh() and once per trust flip — never per sort, hover or paint — and a
+    refresh is what moves them when the session's answer changes (a timing edit's path)."""
+    s = _demo()
+    calls = []
+    notes = list(s.slow_lap_notes())
+
+    def counted():
+        calls.append(1)
+        return notes
+
+    sess = _Over(s, slow_lap_notes=counted)
+    lt = _keep(LT.LapTable(sess))
+    assert len(calls) == 1, f"{len(calls)} reads to build the table"
+    lt.table.sortByColumn(_TIME_COL, Qt.DescendingOrder)
+    _settle()
+    tb = lt.table
+    assert lt._lap_id(0) == _SLOW, "the slowest lap is not on top"
+    cued = [lt._lap_id(r) for r in range(tb.rowCount()) if "▼" in tb.item(r, 0).text()]
+    assert cued == [_SLOW], cued
+    assert len(calls) == 1, f"a sort re-read the notes ({len(calls)} reads)"
+    # The session's answer moves (as after a start/finish-line edit): one refresh, one read.
+    import dataclasses
+    notes[:] = [dataclasses.replace(notes[0], lap_id=2)]
+    lt.refresh()
+    assert len(calls) == 2, f"{len(calls) - 1} reads for one refresh"
+    cued = [lt._lap_id(r) for r in range(tb.rowCount()) if "▼" in tb.item(r, 0).text()]
+    assert cued == [2], cued
+    lt.refresh_timing_trust()
+    assert len(calls) == 3, f"{len(calls) - 2} reads for one trust flip"
+    print("test_the_cue_follows_its_lap_through_a_sort_and_a_refresh_reads_once OK")
+
+
+def test_a_provisional_note_carries_the_tables_provisional_line():
+    """The table's rule under a provisional start line: it withholds what is measured FROM the best
+    (★, green, Δbest) and keeps every time, muted, under PROVISIONAL_TOOLTIP. A note is measured
+    from the typical lap, not the best — so it stays, cue included, with that line under it."""
+    import dataclasses
+    s = _demo()
+    notes = [dataclasses.replace(n, caveat=("provisional",), gap_to_best_s=None)
+             for n in s.slow_lap_notes()]
+    lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda: notes)))
+    tb, r = lt.table, lt._row_for_lap(_SLOW)
+    want = f"{LT.slow_note_tip(notes[0])}\n\n{LT.PROVISIONAL_TOOLTIP}"
+    assert tb.item(r, _TIME_COL).toolTip() == want, tb.item(r, _TIME_COL).toolTip()
+    assert tb.item(r, 0).toolTip() == want, tb.item(r, 0).toolTip()
+    assert "▼ C5" in tb.item(r, 0).text() and tb.item(r, LT._DELTA_COL).text() == LT.SELF_DELTA
+    print("test_a_provisional_note_carries_the_tables_provisional_line OK")
+
+
+def test_a_provisional_and_estimated_note_says_both_once():
+    """A recording both provisional and on an estimated clock: the note's `caveat` names both
+    states, and its tooltip carries the provisional line AND the estimated-clock line, once each
+    (a bare time cell keeps the one stronger line)."""
+    import dataclasses
+
+    from studio import data_quality
+    s = _demo()
+    quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    notes = [dataclasses.replace(n, caveat=("provisional", "estimated"), gap_to_best_s=None)
+             for n in s.slow_lap_notes()]
+    lt = _keep(LT.LapTable(_Over(s, timing_verified=False, timing_quality=quality,
+                                 slow_lap_notes=lambda: notes)))
+    tb, r = lt.table, lt._row_for_lap(_SLOW)
+    est = LT.estimated_timing_tooltip(quality)
+    want = f"{LT.slow_note_tip(notes[0])}\n\n{LT.PROVISIONAL_TOOLTIP}\n\n{est}"
+    for c in (0, _TIME_COL):
+        tip = tb.item(r, c).toolTip()
+        assert tip == want, (c, tip)
+        assert tip.count(LT.PROVISIONAL_TOOLTIP) == 1 and tip.count(est) == 1, tip
+    other = lt._row_for_lap(_SLOW + 1)
+    assert tb.item(other, _TIME_COL).toolTip() == LT.PROVISIONAL_TOOLTIP
+    print("test_a_provisional_and_estimated_note_says_both_once OK")
+
+
+def test_a_dropout_lap_never_wears_a_note():
+    """Lap 6 made a ⚠ dropout lap on the real accessors: no cue and no note on its row (the core
+    drops it; the table would not show one anyway). The median moves, so the first lap now reads
+    slow — `spread`, no culprit, so a note on hover and no cue."""
+    s = _demo()
+    orig = s.lap_has_dropout
+    try:
+        s.lap_has_dropout = lambda i: i == _SLOW or orig(i)
+        lt = _keep(LT.LapTable(s))
+        tb, r = lt.table, lt._row_for_lap(_SLOW)
+        assert tb.item(r, 0).text().endswith(LT.DROPOUT_SUFFIX), tb.item(r, 0).text()
+        assert tb.item(r, _TIME_COL).toolTip() == LT.DROPOUT_TOOLTIP, tb.item(r, _TIME_COL).toolTip()
+        assert "▼" not in tb.item(r, 0).text(), tb.item(r, 0).text()
+        first = lt._row_for_lap(0)
+        assert "▼" not in tb.item(first, 0).text(), tb.item(first, 0).text()
+        assert tb.item(first, _TIME_COL).toolTip().startswith("First lap · "), \
+            tb.item(first, _TIME_COL).toolTip()
+        # ...and a note handed over for a ⚠ lap anyway is not shown.
+        planted = [n for n in _Over(s).slow_lap_notes()]
+        import dataclasses
+        planted.append(dataclasses.replace(planted[0], lap_id=_SLOW, category="one",
+                                           corners=(LT.story.CornerLoss(5, 2.0, 1.0, 0.1),)))
+        lt2 = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: planted)))
+        r2 = lt2._row_for_lap(_SLOW)
+        assert "▼" not in lt2.table.item(r2, 0).text(), lt2.table.item(r2, 0).text()
+        assert lt2.table.item(r2, _TIME_COL).toolTip() == LT.DROPOUT_TOOLTIP, \
+            lt2.table.item(r2, _TIME_COL).toolTip()
+    finally:
+        s.__dict__.pop("lap_has_dropout", None)
+    print("test_a_dropout_lap_never_wears_a_note OK")
+
+
+def test_clicking_the_cue_rings_the_culprit_corner():
+    """A click on Lap 6's Lap cell selects the lap, as every click does, and names C5 for the map's
+    ring; a click on a lap without a cue names nothing."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    rang, picked = [], []
+    lt.slow_corner_clicked.connect(rang.append)
+    lt.laps_selected.connect(picked.append)
+    tb = lt.table
+    for lap in (_SLOW, 0):
+        r = lt._row_for_lap(lap)
+        tb.scrollToItem(tb.item(r, 0))
+        _settle()
+        QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.NoModifier,
+                         tb.visualItemRect(tb.item(r, 0)).center())
+        _settle()
+    assert rang == [5], rang
+    assert picked[-2:] == [[_SLOW], [0]], picked
+    print("test_clicking_the_cue_rings_the_culprit_corner OK")
+
+
+def _widths(lt, w):
+    lt.resize(w, 420)
+    lt.show()
+    _settle()
+    return tuple(lt.table.columnWidth(c) for c in range(lt.table.columnCount()))
+
+
+def test_a_cue_never_moves_a_column():
+    """The demo HAS a slow lap: its table's column widths equal the same table's with the notes
+    disabled, at a squeezed panel, the default quadrant and a wide one. (Measured on d70177f: at
+    300 px the Lap column came out 1 px wider with the cue, `sizeHintForColumn` and the floor's
+    `painted` rounding the cue's text differently, and every data column shifted.) And a session
+    with no slow lap renders pixel for pixel the table with the cue path switched off."""
+    s = _demo()
+    assert s.slow_lap_notes(), "the demo lost its slow lap — this test would pass vacuously"
+    for w in (300, 447, 900):
+        cued = _widths(_keep(LT.LapTable(s)), w)
+        plain = _widths(_keep(LT.LapTable(_NoRead(s))), w)
+        assert cued == plain, f"at {w} px the cue moved the columns: {cued} vs {plain}"
+    orig = LT.LapTable._read_slow_notes
+    try:
+        LT.LapTable._read_slow_notes = lambda self: setattr(self, "_slow_notes", {})
+        refs = {}
+        for w in (300, 447):
+            ref = _keep(LT.LapTable(s))
+            _widths(ref, w)
+            refs[w] = _rgb(ref)
+    finally:
+        LT.LapTable._read_slow_notes = orig
+    for w in (300, 447):
+        lt = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: [])))
+        _widths(lt, w)
+        img = _rgb(lt)
+        assert img.shape == refs[w].shape and (img == refs[w]).all(), (
+            w, int((img != refs[w]).any(axis=2).sum()))
+    print("test_a_cue_never_moves_a_column OK")
+
+
+def test_a_squeezed_cue_never_costs_the_lap_number():
+    """Provisional timing (no ★ to widen the floor), the note planted on the lap with the widest
+    label, that lap playing, a 300 px panel: its row fills the Lap column's floor exactly. Qt's
+    right-elision would have eaten the number first ("▶ …"); the cue is the delegate's to shorten,
+    so the lap's own text paints whole and the cue gets only the room that is left."""
+    import dataclasses
+    s = _demo()
+    probe = _keep(LT.LapTable(_Over(s, timing_verified=False)))
+    bold = probe.table.font()
+    bold.setBold(True)
+    fm = QFontMetrics(bold)
+    lap = max(probe._lap_id(r) for r in range(probe.table.rowCount())
+              if fm.horizontalAdvance(f"{LT.CURRENT_PREFIX}{lap_label(probe._lap_id(r))}") ==
+              max(fm.horizontalAdvance(f"{LT.CURRENT_PREFIX}{lap_label(probe._lap_id(q))}")
+                  for q in range(probe.table.rowCount())))
+    (note,) = s.slow_lap_notes()
+    two = dataclasses.replace(note, lap_id=lap, category="two",
+                              corners=(note.corners[0], note.also[0]), also=())
+    frames = {}
+    for key, notes in (("cue", [two]), ("plain", [])):
+        lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda n=notes: n)))
+        lt.set_current_lap(lap)
+        _widths(lt, 300)
+        r = lt._row_for_lap(lap)
+        item = lt.table.item(r, 0)
+        rect = lt.table.visualItemRect(item)
+        img = _rgb(lt.table.viewport())
+        frames[key] = (lt, item, rect, img)
+    lt, item, rect, img = frames["cue"]
+    want = f"{LT.CURRENT_PREFIX}{lap_label(lap)}"
+    # The lap's own text, painted: the cell's left part matches the render with no cue at all.
+    _, _, prect, pimg = frames["plain"]
+    x1 = rect.left() + QFontMetrics(item.font()).horizontalAdvance(want) + 8
+    a = img[rect.top():rect.bottom(), rect.left():x1]
+    b = pimg[prect.top():prect.bottom(), prect.left():x1]
+    assert a.shape == b.shape and (a == b).all(), "the lap number did not paint whole"
+    assert (a != a[0, 0]).any(), "no glyphs in the number's region — nothing was compared"
+    assert item.text() == f"{want}  ▼ C5 C6", item.text()
+    assert LT.cueless(item.text(), item.data(LT.CUE_ROLE)) == want
+    form = lt._delegate.last_cue.get(lt._row_for_lap(lap))
+    assert form in ("", "▼"), f"the cue claimed room the column does not have: {form!r}"
+    # ...and with room, the forms step down in order, names first.
+    assert LT.cue_forms("▼ C5 C6") == ["▼ C5 C6", "▼ C5…", "▼"]
+    assert LT.cue_forms("▼ C5") == ["▼ C5", "▼"]
+    print(f"test_a_squeezed_cue_never_costs_the_lap_number OK (lap {lap_label(lap)}, cue {form!r})")
+
+
+def test_the_cue_paints_in_muted_ink():
+    """The cue is an annotation, not a mark: the lap number keeps the row's ink and the "▼ C5"
+    beside it paints in PROVISIONAL_COLOR (theme.C.text_dim) — no pixel of the cue's span is the
+    full text colour."""
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    _widths(lt, 447)
+    r = lt._row_for_lap(_SLOW)
+    item = lt.table.item(r, 0)
+    rect = lt.table.visualItemRect(item)
+    assert lt._delegate.last_cue.get(r) == "▼ C5", lt._delegate.last_cue
+    cell = _rgb(lt.table.viewport())[rect.top():rect.bottom(), rect.left():rect.right()]
+    plain = _keep(LT.LapTable(_NoRead(s)))
+    _widths(plain, 447)
+    prect = plain.table.visualItemRect(plain.table.item(plain._row_for_lap(_SLOW), 0))
+    bare = _rgb(plain.table.viewport())[prect.top():prect.bottom(), prect.left():prect.right()]
+
+    def near(px, hexcol):           # `_rgb` planes are the buffer's B, G, R byte order
+        c = QColor(hexcol)
+        return int((np.abs(px.astype(int) - (c.blue(), c.green(), c.red())).sum(axis=-1)
+                    < 30).sum())
+    assert near(cell, theme.C.text) > 0, "the lap number lost its ink"
+    assert near(cell, theme.C.text) == near(bare, theme.C.text), (
+        "the cue added full-ink pixels", near(cell, theme.C.text), near(bare, theme.C.text))
+    assert near(cell, theme.PROVISIONAL_COLOR) > 10 + near(bare, theme.PROVISIONAL_COLOR), \
+        "the cue is not in the muted ink"
+    print("test_the_cue_paints_in_muted_ink OK")
+
+
+def test_a_deselecting_click_rings_nothing():
+    """⌘-clicking a selected cued lap to DESELECT it is not a request to look at its corner."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    rang = []
+    lt.slow_corner_clicked.connect(rang.append)
+    tb = lt.table
+    r = lt._row_for_lap(_SLOW)
+    tb.scrollToItem(tb.item(r, 0))
+    _settle()
+    at = tb.visualItemRect(tb.item(r, 0)).center()
+    QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.NoModifier, at)
+    _settle()
+    QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.ControlModifier, at)
+    _settle()
+    assert lt.selected_lap_ids() == [], lt.selected_lap_ids()
+    assert rang == [5], f"the deselecting click rang a corner: {rang}"
+    print("test_a_deselecting_click_rings_nothing OK")
+
+
+def test_the_cue_ring_leaves_with_its_lap_and_stays_off_a_race():
+    """On a real CentralView: the cue's ring is THAT lap's — the next lap the user selects takes
+    it down (a ring a Corners row pinned since is that row's and stays); under a Lap Race the cue
+    rings nothing, as corner rings are off on the race's canvas (#561)."""
+    from test_central_view_realqt import _real_central_view
+    view, s, _t0, _t1 = _real_central_view()
+    laps = [r["idx"] for r in s.lap_rows()]
+    view.table.slow_corner_clicked.emit(2)
+    assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+    view.table.laps_selected.emit([laps[-1]])
+    assert view.map.pinned_corner() is None, view.map.pinned_corner()
+    view.table.slow_corner_clicked.emit(2)
+    view._ring_corner(1)                     # a Corners/Stats row click, after the cue
+    view.table.laps_selected.emit([laps[0]])
+    assert view.map.pinned_corner() == "C1", view.map.pinned_corner()
+    view._ring_corner(None)
+    view.race.tracks = object()              # racing (RaceController.active), no canvas needed
+    try:
+        assert view.is_racing()
+        view.table.slow_corner_clicked.emit(2)
+        assert view.map.pinned_corner() is None, view.map.pinned_corner()
+    finally:
+        view.race.tracks = None
+    print("test_the_cue_ring_leaves_with_its_lap_and_stays_off_a_race OK")
+
+
+def test_the_cue_and_a_moment_jump_share_one_owned_ring():
+    """The slow-lap cue and a Stats MOMENTS Jump pin the same owned ring: a moment Jump without a
+    corner takes the cue's ring down, and a cue click on another lap after a moment's loss Jump
+    leaves the ring the cue's (the lap change drops the moment's, the cue pins its own)."""
+    from test_central_view_realqt import _real_central_view
+    view, s, _t0, _t1 = _real_central_view()
+    laps = [r["idx"] for r in s.lap_rows()]
+    view.table.slow_corner_clicked.emit(2)
+    assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+    view.stats_view.moment_jump.emit(laps[0], None)
+    assert view.map.pinned_corner() is None, "a moment Jump left the cue's ring up"
+    view.stats_view.moment_jump.emit(laps[0], 1)
+    assert view.map.pinned_corner() == "C1", view.map.pinned_corner()
+    view.table.laps_selected.emit([laps[-1]])    # the cue's click selects its lap first...
+    view.table.slow_corner_clicked.emit(2)       # ...then pins its own corner
+    assert view.map.pinned_corner() == "C2", view.map.pinned_corner()
+    view.stats_view.moment_jump.emit(laps[0], None)
+    assert view.map.pinned_corner() is None, "the cue's ring outlived the next Jump"
+    print("test_the_cue_and_a_moment_jump_share_one_owned_ring OK")
+
+
+class _NoRead:
+    """The demo session WITHOUT `slow_lap_notes` (the table before the feature reads nothing)."""
+
+    def __init__(self, s):
+        self._s = s
+
+    def __getattr__(self, name):
+        if name == "slow_lap_notes":
+            raise AttributeError(name)
+        return getattr(self._s, name)
 
 
 def _run_all():

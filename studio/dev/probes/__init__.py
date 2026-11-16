@@ -203,4 +203,12 @@ over a whole race (what a slide would move). It is deterministic and
 `tests/test_measured_figures.py` re-runs it. Its verdict is `studio/docs/refused-2026-09.md` §28.
 
     pixi run python -m studio.dev.probes.motion_refusals
+
+`story_refusals` measures four things the W4 design pass proposed for telling the session's story,
+on the synthetic demo: brake-onset spread bands against one GPS fix of travel, a "what you nailed"
+line, an ideal-lap film's cuts and seams, and how often two session moments change under 1,000
+seeded draws of the timing's own noise. It is deterministic and `tests/test_measured_figures.py`
+re-runs it. Its verdicts are `studio/docs/refused-2026-09.md` §29, §30, §31 and §32.
+
+    pixi run python -m studio.dev.probes.story_refusals
 """

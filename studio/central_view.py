@@ -1244,6 +1244,7 @@ class CentralView(QWidget):
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
         self.table.selection_capped.connect(self.statusNotice)
+        self.table.slow_corner_clicked.connect(self._on_slow_corner_clicked)   # the "▼ C5" cue
         # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
         # gesture. False until the user asks for it.
         self._video_focused = False
@@ -1696,8 +1697,30 @@ class CentralView(QWidget):
 
     def _on_user_select(self, ids):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
-        self._drop_moment_ring()
+        self._drop_owned_ring()
         self._on_laps_selected(ids, seek=True)
+
+    # ONE OWNED RING, for the two surfaces whose ring belongs to a lap rather than to a corner row:
+    # a slow lap's "▼ C5" cue and a MOMENTS Jump. Either pins through `_pin_owned_ring`, and the
+    # next lap the user selects or the next Jump takes it down through `_drop_owned_ring` — only
+    # while the map's pin is still that one (a selection change reaches here before the cue's own
+    # click, so a click on the cue first drops the old ring, then pins its own). A ring a
+    # Corners/Stats row pinned since is that row's and stays. Neither rings under a Lap Race:
+    # corner rings are off on its canvas (#561).
+    def _on_slow_corner_clicked(self, cid: int):
+        self._pin_owned_ring(cid)
+
+    def _pin_owned_ring(self, cid: int):
+        if self.is_racing():
+            return
+        self._ring_corner(cid)
+        self._owned_ring = f"C{int(cid)}"
+
+    def _drop_owned_ring(self):
+        ring = getattr(self, "_owned_ring", None)
+        self._owned_ring = None
+        if ring is not None and self.map.pinned_corner() == ring:
+            self._ring_corner(None)
 
     # --------------------------------------------------------- lap-panel tabs
     def _apply_table_mode(self, index: int):
@@ -1740,7 +1763,7 @@ class CentralView(QWidget):
         on the Stats tab, so the next moment is one click away."""
         if getattr(self, "_maximized_panel", None) is self._table_panel:
             self._restore_splitter_sizes()
-        self._drop_moment_ring()
+        self._drop_owned_ring()
         self.table.select([lap_id])
         entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
                  if cid is not None else None)
@@ -1748,19 +1771,8 @@ class CentralView(QWidget):
         if entry is not None:
             self.video.seek(entry)
             self._playback.followed_lap = self.session.lap_at_time(entry)
-        if cid is not None and not self.is_racing():
-            self._ring_corner(cid)
-            self._moment_ring = f"C{int(cid)}"
-
-    # The ring a moment's Jump pins belongs to THAT moment (cool/slow-lap-why's cue ring, same
-    # shape): the next Jump or the next lap the user selects takes it down. A ring pinned by a
-    # Corners/Stats row since is that row's and stays. Not under a Lap Race: corner rings are off
-    # on its canvas (#561).
-    def _drop_moment_ring(self):
-        ring = getattr(self, "_moment_ring", None)
-        self._moment_ring = None
-        if ring is not None and self.map.pinned_corner() == ring:
-            self._ring_corner(None)
+        if cid is not None:
+            self._pin_owned_ring(cid)
 
     # ------------------------------------------------------------- the hovered corner
     # ONE corner state across three surfaces. Hovering a corner label on the speed chart, or a

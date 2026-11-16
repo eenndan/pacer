@@ -64,25 +64,35 @@ from PySide6.QtWidgets import (  # noqa: E402
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QLabel,
     QMessageBox,
     QProgressDialog,
 )
 
 _APP = QApplication.instance() or QApplication([])
 
-from studio import chapters, data_quality, prefs, theme  # noqa: E402
+from studio import (  # noqa: E402
+    chapters,
+    data_quality,
+    overlay,  # noqa: E402
+    prefs,
+    theme,
+)
 from studio import export_video as ev  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
 from studio.dev import make_demo as md  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.export_palette import EXPORT  # noqa: E402
-from studio.overlay import broadcast, layout  # noqa: E402
+from studio.overlay import broadcast, corner_cards, layout  # noqa: E402
 from studio.session import Session  # noqa: E402
 
 theme.apply_theme(_APP)   # the export's face is Inter: the layout is measured in it
 
 PIC_W, PIC_H = 1280, 720
 STAMP_SIZES = ((1920, 1080), (1080, 1920), (406, 720), (1080, 1080))
+# QA #565/#558: a 9:16 crop of 540p footage (304x540) and one smaller — the export used to fail
+# there with "the encoder stopped".
+SMALL_FRAMES = ((304, 540), (270, 480))
 STAMP_LINES = [data_quality.STAMP_PROVISIONAL, data_quality.STAMP_ESTIMATED,
                data_quality.STAMP_LOW_GPS.format(pct=12)]
 _FIX: dict = {}
@@ -166,8 +176,9 @@ def _dialog_frames() -> list[tuple[int, int]]:
 
 
 def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
-    """The whole matrix: every dialog frame × honesty stamp off / three lines × ghost + cards
-    off / on. Each must lay out — no element on another (the moved stamp included, against the
+    """The whole matrix: every dialog frame × honesty stamp off / three lines × a lap export with
+    ghost + cards off / on, and a WHOLE-RECORDING export (its tower carries the reserved LAST
+    sub-plate, drawn at or above the 11 px label floor, or not at all). Each must lay out — no element on another (the moved stamp included, against the
     g-meter and the map), none outside the safe area, the ghost inside the minimap — because a
     layout that cannot is an export that fails AFTER the user pressed Export."""
     f = _fixture()
@@ -175,32 +186,68 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
     assert layout.MARGIN == ev.OverlayConfig().margin_frac, "the table's margin is not Classic's"
     frames = _dialog_frames()
     assert (1080, 1080) in frames and (1080, 1920) in frames and (720, 720) in frames, frames
-    n = 0
+    frames += list(SMALL_FRAMES)
+    n = skipped = wide = lasts = 0
+    a = next(i for i in (lap, lap - 1) if i + 1 in s.valid_lap_ids())
+    whole = replace(ev.build_session_spec(s, os.path.join(f["out"], "never.mp4"), config=(
+        broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
+                         broadcast.STYLE_BROADCAST))),
+        t0=s.lap_window(a)[0] - 0.5, t1=s.lap_window(a + 1)[1] + 2.5)
     for stamped in (False, True):
-        for extras in ((), ("ghost", "corner_cards")):
+        for extras in ((), ("ghost", "corner_cards"), "whole"):
             for w, h in frames:
+                spec = whole if extras == "whole" else _spec(s, lap, extras=extras)
                 if stamped:
                     with _Stamped():
-                        p = _painter(s, _spec(s, lap, extras=extras), w, h)
+                        p = _painter(s, spec, w, h)
                 else:
-                    p = _painter(s, _spec(s, lap, extras=extras), w, h)
-                what = f"{w}x{h} stamp={stamped} extras={bool(extras)}"
+                    p = _painter(s, spec, w, h)
+                what = f"{w}x{h} stamp={stamped} extras={extras}"
+                ex = () if extras == "whole" else extras
                 b = _element(p, "broadcast")
+                if extras == "whole":
+                    from studio.overlay.broadcast import _LABEL_MIN_PX
+                    if b._holds:      # drawn: at the floor or above, in its reserved place
+                        assert b.last_px >= _LABEL_MIN_PX, (what, b.last_px)
+                        assert abs(b.tower.height() - (b._main_h + b._last_gap + b._last_h)) \
+                            < 1e-6, what
+                        lasts += 1
+                    else:
+                        assert b.last_px < _LABEL_MIN_PX, f"{what}: no LAST line above the floor"
                 boxes = {**b.boxes, "gmeter": _box(p._g_rect), "map": _box(p._map._box),
                          "stamp": _box(p._stamp_rect)}
-                if extras:
-                    boxes["card"] = _box(_element(p, "corner_cards").rect)
+                card = next((e for e in p.elements if e.name == "corner_cards"), None)
+                if ex and card is not None:
+                    boxes["card"] = _box(card.rect)
+                elif ex:
+                    # A card that cannot fit sits the export out, said so — only on a tiny frame.
+                    assert (w, h) in SMALL_FRAMES, f"{what}: the corner cards sat out"
+                    assert p.notes == [corner_cards.SKIPPED_TOO_SMALL], (what, p.notes)
+                    skipped += 1
                 m = layout.MARGIN * min(w, h)
                 safe = layout.Box(m, m, w - 2 * m, h - 2 * m)
                 names = sorted(boxes)
                 for i, a in enumerate(names):
-                    assert safe.contains(boxes[a]), f"{what}: {a} leaves the safe area"
+                    room = safe
+                    if a == "stamp" and not safe.contains(boxes[a]):
+                        # Only where the Classic stamp itself runs into the margin, and never
+                        # further past the frame's edge than the Classic one (cut on a frame
+                        # narrower than the stamp, as Classic's is).
+                        with _Stamped():
+                            classic = _painter(s, _spec(s, lap, style="classic", extras=()), w, h)
+                        c = _box(classic._stamp_rect)
+                        assert not safe.contains(c), what
+                        st = boxes[a]
+                        assert st.x >= 0 and st.right - w <= max(0.0, c.right - w) + 1e-6, what
+                        room = layout.Box(0, 0, max(w, st.right), h)
+                        wide += 1
+                    assert room.contains(boxes[a]), f"{what}: {a} leaves the safe area"
                     for c in names[i + 1:]:
                         assert not boxes[a].intersects(boxes[c]), (
                             f"{what}: {a} {boxes[a]} overlaps {c} {boxes[c]}")
                 assert (p._stamp_rect.height() > 0) == stamped, what
                 assert abs(p._map._box.height() - layout.MAP_H_FRAC * min(w, h)) < 1e-6, what
-                if extras:
+                if ex:
                     g = _element(p, "ghost")
                     for t in np.linspace(p._spec.lap_t0 + 1, p._spec.lap_t1 - 1, 6):
                         vals = ev.overlay_values_at(s, float(t), p._spec)
@@ -208,8 +255,70 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                         q = p._map._proj(float(st.x[g._row]), float(st.y[g._row]))
                         assert p._map._box.contains(q), f"{what}: the ghost left the minimap"
                 n += 1
-    print(f"ok the layout: {n} of {n} combinations lay out ({len(frames)} dialog frames x stamp "
-          f"off/3 lines x extras off/on), every element clear and safe")
+    print(f"ok the layout: {n} of {n} combinations lay out ({len(frames)} frames x stamp "
+          f"off/3 lines x lap export extras off/on + whole-recording), every element clear and "
+          f"safe; the LAST sub-plate in {lasts}; on the tiny frames the stamp takes the Classic "
+          f"stamp's own place {wide}x, the cards sit out {skipped}x")
+
+
+def test_a_layout_that_cannot_fit_says_so_not_that_the_encoder_stopped():
+    """A style element with no place in the frame (planted: a Δ bar taller than the frame —
+    every frame the dialog offers lays out, the matrix above): the export fails before the
+    encoder starts, and the failure box says what did not fit, where — not "the encoder stopped"."""
+    from studio.export_controller import ExportController as EC
+    f = _fixture()
+    s, lap = f["s"], f["lap"]
+    err = None
+    real = dict(layout.BROADCAST)
+    layout.BROADCAST["dbar"] = layout.Slot(("tc",), 2.0, layout.DBAR_W)
+    try:
+        _painter(s, _spec(s, lap, extras=()), 1920, 1080)
+    except overlay.OverlayElementError as exc:
+        err = exc
+    finally:
+        layout.BROADCAST.update(real)
+    assert err is not None, "a Δ bar twice the frame's height was laid out"
+    said = EC._export_failure_message(str(err), "/nowhere.mp4")
+    assert said.startswith("Overlay layout: the ") and "does not fit a 1920×1080 frame" in said, said
+    assert "encoder" not in said.casefold(), said
+    assert isinstance(err, overlay.OverlayLayoutError), repr(err)
+    print(f"ok a layout that cannot fit: {said!r}")
+
+
+def test_corner_cards_that_cannot_fit_sit_the_export_out_and_say_so():
+    """A card with no place clear of every plate (QA: a frame ≲ 300 px wide) is skipped for that
+    export with a sentence for the finished box — never a failed export. The place is forced to
+    fail here, so the rule is checked whatever sizes the fixture's plates come to."""
+    f = _fixture()
+    s, lap = f["s"], f["lap"]
+    real = corner_cards.place
+
+    def nowhere(*_a, **_k):
+        raise ValueError("no room for a card (planted)")
+    corner_cards.place = nowhere
+    try:
+        p = _painter(s, _spec(s, lap, extras=("corner_cards",)), 1080, 1920)
+    finally:
+        corner_cards.place = real
+    assert [e.name for e in p.elements] == ["broadcast", "broadcast_map"], p.elements
+    assert p.notes == [corner_cards.SKIPPED_TOO_SMALL], p.notes
+    print("ok corner cards that cannot fit sit the export out, said so")
+
+
+def test_the_finished_box_says_when_the_corner_cards_did_not_fit():
+    f = _fixture()
+    win = _window()
+    seen = []
+    real = QMessageBox.exec
+    QMessageBox.exec = lambda box: (seen.append(box.text()), 0)[1]
+    try:
+        win.exports._video_export_finished([os.path.join(f["out"], "x.mp4")],
+                                           _spec(f["s"], f["lap"]), f["lap"], [None],
+                                           notes=[corner_cards.SKIPPED_TOO_SMALL])
+    finally:
+        QMessageBox.exec = real
+    assert seen and seen[0].endswith(corner_cards.SKIPPED_TOO_SMALL), seen
+    print("ok the finished box names the corner cards that did not fit")
 
 
 def test_a_layout_that_would_overlap_fails_by_name():
@@ -370,6 +479,138 @@ def test_the_bar_scale_is_each_laps_own():
           f"±{el.scale_of(quick):g} s")
 
 
+def test_a_whole_recording_tower_shows_each_finished_laps_table_time():
+    """QA #565: on a whole-recording export no frame lands on a crossing, so the running clock
+    never shows a lap's final time. For two seconds after each crossing the tower carries a LAST
+    line: exactly the Laps table's Time and Δbest cells for the lap just finished (★ on the best),
+    under the new lap's running clock — and none on a single-lap export."""
+    from studio import lap_table
+    f = _fixture()
+    s, best = f["s"], f["best"]
+    ids = s.valid_lap_ids()
+    a = best - 1 if best - 1 in ids else next(i for i in ids if i + 1 in ids)
+    b = a + 1
+    cfg = broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
+                           broadcast.STYLE_BROADCAST)
+    base = ev.build_session_spec(s, os.path.join(f["out"], "never.mp4"), config=cfg)
+    spec = replace(base, t0=s.lap_window(a)[0] - 0.5, t1=s.lap_window(b)[1] + 2.5)
+    p = _painter(s, spec)
+    el = _element(p, "broadcast")
+    table = lap_table.LapTable(s)
+    cells = {}
+    for r in range(table.table.rowCount()):
+        cells[table._lap_id(r)] = (table.table.item(r, lap_table._TIME_COL).text(),
+                                   table.table.item(r, lap_table._DELTA_COL).text())
+    seen: dict[int, list] = {a: [], b: []}
+    times = ev.frame_times(spec.t0, spec.t1, 30000 / 1001)
+    for t in times:
+        vals = ev.overlay_values_at(s, float(t), spec)
+        got = getattr(el, "last_lap", lambda _v: None)(vals)
+        for lap in (a, b):
+            cross = s.lap_window(lap)[1]
+            inside = vals.tt is not None and 0.0 <= vals.tt - cross < 2.0
+            if inside:
+                assert got is not None and got[0] == lap, (t, lap, got)
+                seen[lap].append(got[1][:2])
+                head, clock = el.state(vals)[:2]
+                if lap == a:      # the new lap's clock runs on above it
+                    assert head == f"LAP {b + 1}" and clock.startswith("0:0"), (head, clock)
+        if got is not None:     # (the lap before `a` crosses 0.5 s into the clip: its own hold)
+            assert any(0.0 <= vals.tt - s.lap_window(x)[1] < 2.0 for x in (a - 1, a, b)), (t, got)
+    for lap in (a, b):
+        time_cell, delta_cell = cells[lap]
+        want = (time_cell, "★" if lap == best else delta_cell)
+        assert len(seen[lap]) >= 55, f"lap {lap + 1}: {len(seen[lap])} frames of LAST"
+        assert set(seen[lap]) == {want}, (lap, set(seen[lap]), want)
+    # Painted: the sub-plate's ink under the tower during a hold, none just before the crossing
+    # (its lower half: the tower's Δ row haloes a few pixels past the main plate).
+    half = (el.tower.height() - el._main_h) / 2
+    sub = QRectF(el.tower.x(), el.tower.bottom() - half, el.tower.width(), half)
+
+    def ink(t):
+        vals = ev.overlay_values_at(s, t, spec)
+        raw = ev._paint_alpha_frame(p, 1920, 1080, vals, p.advance_and_snapshot(vals))
+        img = np.frombuffer(raw, np.uint8).reshape(1080, 1920, 4)
+        return int(img[int(sub.top()):int(sub.bottom()), int(sub.left()):int(sub.right()),
+                       3].max())
+    first = next(float(t) for t in times
+                 if (el.last_lap(ev.overlay_values_at(s, float(t), spec)) or (None,))[0] == a)
+    assert ink(first + 0.5) > 0 and ink(first - 0.5) == 0, "the LAST line is not painted"
+    single = _element(_painter(s, _spec(s, a)), "broadcast")
+    assert single._holds == [], "a single-lap export carries a LAST line"
+    print(f"ok the LAST line: lap {a + 1} {seen[a][0]} on {len(seen[a])} frames, lap {b + 1} "
+          f"{seen[b][0]} on {len(seen[b])} — the Laps table's cells")
+
+
+def test_the_last_line_names_its_baseline_and_stands_without_the_tower():
+    """Review of #571: the LAST line's Δ is always to the BEST lap, so it says "Δbest" — also
+    under a tower reading "Δref" with a reference loaded. And it is painted whether or not the
+    tower is: after the recording's last lap (ids[-1]) and over a lap followed by an excluded
+    crossing (no lap on the frame), it stands under the finished lap's header strip."""
+    from dataclasses import replace as dc_replace
+    f = _fixture()
+    s, best = f["s"], f["best"]
+    ids = s.valid_lap_ids()
+    cfg = broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
+                           broadcast.STYLE_BROADCAST)
+    base = ev.build_session_spec(s, os.path.join(f["out"], "never.mp4"), config=cfg)
+
+    def window(a, b):
+        spec = replace(base, t0=s.lap_window(a)[0] - 0.5, t1=s.lap_window(b)[1] + 2.5)
+        p = _painter(s, spec)
+        return spec, p, _element(p, "broadcast")
+
+    def hold_frames(spec, el, lap):
+        out = []
+        for t in ev.frame_times(spec.t0, spec.t1, 30000 / 1001):
+            vals = ev.overlay_values_at(s, float(t), spec)
+            got = el.last_lap(vals)
+            if got is not None and got[0] == lap:
+                out.append(vals)
+        return out
+
+    def line(el, lap):
+        return " ".join(t for t, _f, _c in el._last_runs(el._last_rows[lap]))
+
+    def sub_ink(p, el, vals):
+        raw = ev._paint_alpha_frame(p, 1920, 1080, vals, p.advance_and_snapshot(vals))
+        img = np.frombuffer(raw, np.uint8).reshape(1080, 1920, 4)
+        half = (el.tower.height() - el._main_h) / 2
+        y0, x0 = int(el.tower.bottom() - half), int(el.tower.left())
+        head_y = int(el.tower.y() + el._main_h - el._head_h)
+        return (int(img[y0:int(el.tower.bottom()), x0:int(el.tower.right()), 3].max()),
+                int(img[head_y:head_y + int(el._head_h), x0:int(el.tower.right()), 3].max()))
+
+    # 1. A reference loaded: the tower reads Δref, the LAST line Δbest.
+    a = next(i for i in ids if i + 2 in ids and best not in (i + 1, i + 2))
+    s.has_reference = lambda: True
+    try:
+        spec, p, el = window(a, a + 1)
+        vals = hold_frames(spec, el, a)[10]
+        assert el.state(vals)[2].startswith("Δref"), el.state(vals)
+        gap = el._last_rows[a][1]
+        assert line(el, a) == f"LAST {el._last_rows[a][0]} Δbest {gap}", line(el, a)
+    finally:
+        del s.has_reference
+    # 2. After the recording's last lap: no tower, the LAST line and its header strip painted.
+    last = ids[-1]
+    spec, p, el = window(ids[-2], last)
+    held = hold_frames(spec, el, last)
+    assert len(held) >= 55, f"lap {last + 1}: {len(held)} frames of LAST after the final crossing"
+    vals = held[10]
+    assert el.state(vals)[0] is None, "the tower is up after the final crossing"
+    plate, header = sub_ink(p, el, vals)
+    assert plate > 0 and header > 0, f"after lap {last + 1}: plate ink {plate}, header {header}"
+    # 3. A lap followed by an excluded crossing: no lap on the frame (as Session reports one).
+    spec, p, el = window(a, a + 1)
+    vals = dc_replace(hold_frames(spec, el, a)[10], lap_id=None)
+    assert el.last_lap(vals) is not None and el.state(vals)[0] is None
+    plate, header = sub_ink(p, el, vals)
+    assert plate > 0 and header > 0, f"before an excluded crossing: {plate}, {header}"
+    print(f"ok the LAST line: \"{line(el, a)}\" under a Δref tower reads Δbest; it stands alone "
+          f"after lap {last + 1} ({len(held)} frames) and before an excluded crossing")
+
+
 def test_outside_a_lap_the_tower_draws_nothing():
     """Pit time on a whole-recording export: no lap to name, so no tower (as Classic)."""
     f = _fixture()
@@ -496,6 +737,56 @@ def test_the_style_row_turns_the_extras_on_in_broadcast_only():
     print("ok the dialog: Style opens on Classic; Broadcast ticks the extras; nothing carries over")
 
 
+def test_the_dialog_follows_the_style_and_shows_an_unavailable_extra_unticked():
+    """QA #565: the description line follows the Style; the "Opened on your last export's…" note
+    names a remembered non-default style; a ticked extra that cannot apply here is shown unticked
+    AND disabled (it was a bright tick on a disabled box), its saved tick kept and restored."""
+    f = _fixture()
+    lap = f["lap"]
+    data = prefs.load()
+    for key in ("export_style_idx", "export_broadcast_ghost", "export_broadcast_corner_cards",
+                "export_scope_idx", "export_res_idx"):
+        data.pop(key, None)
+    prefs.save(data)
+    prefs.set("export_style_idx", 1)
+    seen = {}
+
+    def labels(dlg):
+        return [w.text() for w in dlg.findChildren(QLabel)]
+
+    def act(dlg, rows):
+        texts = labels(dlg)
+        seen["note"] = next((t for t in texts if t.startswith("Opened on your last")), None)
+        seen["desc_b"] = next(t for t in texts if t.startswith("Burns the overlays"))
+        ghost_box = rows["Extras"].findChildren(QCheckBox)[0]
+        rows["Export"].setCurrentIndex(1)                # Best lap: no ghost of itself
+        seen["best"] = (ghost_box.isChecked(), ghost_box.isEnabled())
+        seen["hint"] = " ".join(t for t in labels(dlg) if "No ghost" in t)
+        rows["Export"].setCurrentIndex(0)
+        seen["back"] = (ghost_box.isChecked(), ghost_box.isEnabled())
+        rows["Style"].setCurrentIndex(0)
+        seen["desc_c"] = next(t for t in labels(dlg) if t.startswith("Burns the overlays"))
+        rows["Style"].setCurrentIndex(1)
+        rows["Export"].setCurrentIndex(1)
+        return QDialog.Accepted
+
+    choice = _open_dialog(lap, act)
+    failed = [what for what, ok in (
+        ("a disabled ghost shows a tick", seen["best"] == (False, False)),
+        ("the note does not name the style", "style: Broadcast" in (seen["note"] or "")),
+        ("the description lists the Classic plates in Broadcast",
+         "tower" in seen["desc_b"] and "lap strip" not in seen["desc_b"]),
+        ("the Classic description changed",
+         "lap strip" in seen["desc_c"] and "tower" not in seen["desc_c"])) if not ok]
+    assert not failed, f"{failed}: {seen}"
+    assert "No ghost in this export" in seen["hint"], seen["hint"]
+    assert seen["back"] == (True, True), f"the saved tick did not come back: {seen['back']}"
+    assert "ghost" not in choice.config.elements, choice.config.elements
+    assert prefs.get("export_broadcast_ghost") is True, "the saved tick was lost"
+    print("ok the dialog: the description and the note follow the style; an unavailable extra "
+          "reads unticked, and its tick comes back")
+
+
 # ------------------------------------------------------------------------------ end to end
 def test_a_real_broadcast_export_through_the_dialog_plays_with_sound_to_the_end():
     f = _fixture()
@@ -566,13 +857,19 @@ def test_a_real_broadcast_export_through_the_dialog_plays_with_sound_to_the_end(
 def _run_all():
     for fn in (test_every_frame_the_dialog_offers_lays_out_clear_and_safe,
                test_a_layout_that_would_overlap_fails_by_name,
+               test_a_layout_that_cannot_fit_says_so_not_that_the_encoder_stopped,
+               test_corner_cards_that_cannot_fit_sit_the_export_out_and_say_so,
+               test_the_finished_box_says_when_the_corner_cards_did_not_fit,
                test_every_figure_is_its_classic_twin_on_every_frame,
                test_the_honesty_stamp_is_kept_at_its_classic_size_at_every_shape,
                test_a_reference_names_the_baseline_in_the_tower_and_on_the_bar,
                test_the_bar_scale_is_each_laps_own,
+               test_a_whole_recording_tower_shows_each_finished_laps_table_time,
+               test_the_last_line_names_its_baseline_and_stands_without_the_tower,
                test_outside_a_lap_the_tower_draws_nothing,
                test_classic_never_reaches_the_broadcast_element,
                test_the_style_row_turns_the_extras_on_in_broadcast_only,
+               test_the_dialog_follows_the_style_and_shows_an_unavailable_extra_unticked,
                test_a_real_broadcast_export_through_the_dialog_plays_with_sound_to_the_end):
         fn()
     print("test_export_broadcast: all ok")
