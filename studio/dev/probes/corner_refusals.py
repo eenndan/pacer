@@ -2,9 +2,9 @@
 measured on the synthetic demo. Their verdicts are `studio/docs/refused-2026-09.md` §33 and §34, and
 `tests/test_measured_figures.py` re-runs this probe and holds each section to it.
 
-WHY. The discovery round measured both on the owner's footage, which cannot be published. This
-re-measures each one where anyone can, on the demo (`make_demo`'s telemetry, its planted C1 habit
-included, nobody's driving), through `Session.load` alone: no window, ~10 s. Every figure is
+WHY. Both are measured where anyone can re-run them, on the demo (`make_demo`'s telemetry, its
+planted C1 habit included, nobody's driving; not re-measured on real footage here), through
+`Session.load` alone: no window, ~10 s. Every figure is
 arithmetic on what the session's own accessors return, and the one null is computed exactly, so
 the probe is deterministic.
   * culprit — the sentence "N of M slow laps lost their time at one corner". The slow laps and
@@ -19,14 +19,18 @@ the probe is deterministic.
     `p_half_weighted` re-compute p with each corner weighted by its own lap-to-lap spread (the
     sample σ of its grid column over the clean laps that are not slow), to show it. The table is
     the same null for M slow laps with one culprit each: the smallest count that beats it at
-    P_ALPHA, and p for half of them or more at one corner. Exact (`_p_at_least`), not drawn.
+    P_ALPHA, and p for half of them or more at one corner. Exact (`_p_at_least`), not drawn. And
+    the gate "print only at p ≤ P_ALPHA": how often its equal-odds threshold fires by chance when
+    the culprits follow the σ weights instead (`gate_weighted`; an illustration, since C1's σ is
+    inflated by the planted habit).
     Also what the sentence can say of the demo's ONE PLANTED HABIT (`make_demo.DEMO_HABIT`): the ▼
     its corner carries, and how many of its laps are slow.
   * split — splitting a long corner window into two corners. Per corner the window's length on the
     reference lap and its ringed apex (`Corner.apex`, the point `corner_map_markers` puts the
-    map's apex dot and ring on), metres into the window. Inside the habit's corner (C1): the local
-    maxima of the pooled curvature (`corners.pooled_curvature`, what `detect_corners` reads) and
-    the lowest |κ| between them, against the highest. And where each pass LOSES its time: on a
+    map's apex dot and ring on), metres into the window. In every window: the local maxima of the
+    pooled curvature (`corners.pooled_curvature`, what `detect_corners` reads) and the lowest |κ|
+    between the first and the last, against the window's peak; and the same between the maxima
+    that reach MAJOR_SHARE of the peak. And where each pass LOSES its time: on a
     grid of GRID points along the window (each lap's own projected window, `project_boundaries`
     through its `lap_alignment`), the time since the window's entry against a typical pass (the
     median over the clean laps' resolved passes); the loss rate is its slope, smoothed over
@@ -71,6 +75,7 @@ P_ALPHA = 0.05              # a count beats chance when the null's p is at most 
 TABLE_M = range(3, 9)       # the slow-lap counts the table spells out
 GRID = 201                  # points along a corner window for the loss trace
 SMOOTH_M = 3.0              # the loss rate's boxcar, metres: about two GPS fixes at C1's speed
+MAJOR_SHARE = 0.5           # a curvature maximum counts as a bend at this share of its window's peak
 
 
 # ─── §33 "N of M slow laps lost their time at one corner" ───────────────────────────────────────
@@ -136,7 +141,10 @@ def culprit(s: Session) -> dict:
     for m in TABLE_M:
         k = next((k for k in range(1, m + 1) if _p_at_least(m, k, flat) <= P_ALPHA), None)
         half = -(-m // 2)
+        # A gate "print only at p ≤ P_ALPHA" fires at k_min of m under the equal-odds null; if the
+        # culprits instead follow each corner's σ, it fires this often by chance (`gate_weighted`).
         table.append({"m": m, "k_min": k, "p_k_min": round(_p_at_least(m, k, flat), 3) if k else None,
+                      "gate_weighted": round(_p_at_least(m, k, sig), 3) if k else None,
                       "half": half, "p_half": round(_p_at_least(m, half, flat), 2),
                       "p_half_weighted": round(_p_at_least(m, half, sig), 2)})
     h = make_demo.DEMO_HABIT
@@ -208,10 +216,23 @@ def split(s: Session) -> dict:
     hk = mx.cids.index(h.cid)
     traces = [tuple(s._lap_columns(i)[1:3]) + (s._lap_columns(i)[4],) for i in s.consistency_lap_ids()]
     dg, kap = (np.asarray(a, float) for a in corners_mod.pooled_curvature(traces, float(s.corners.basis()[1])))
-    inside = (dg >= c.enter) & (dg <= c.exit)
-    kk, dd = np.abs(kap[inside]), dg[inside] - c.enter
-    peaks = [i for i in range(1, len(kk) - 1) if kk[i] >= kk[i - 1] and kk[i] > kk[i + 1]]
-    dip = float(kk[peaks[0]:peaks[-1] + 1].min() / kk.max()) if len(peaks) > 1 else 1.0
+    bends = {}
+    for x in cl:
+        inside = (dg >= x.enter) & (dg <= x.exit)
+        kk, dd = np.abs(kap[inside]), dg[inside] - x.enter
+        peaks = [i for i in range(1, len(kk) - 1) if kk[i] >= kk[i - 1] and kk[i] > kk[i + 1]]
+        lo = int(peaks[0] + np.argmin(kk[peaks[0]:peaks[-1] + 1])) if len(peaks) > 1 else None
+        # The same dip between the maxima that reach MAJOR_SHARE of the peak: a ripple of a
+        # straightened exit is a "maximum" too, and the plain dip reads the straight between them.
+        major = [i for i in peaks if kk[i] >= MAJOR_SHARE * kk.max()]
+        dip_major = float(kk[major[0]:major[-1] + 1].min() / kk.max()) if len(major) > 1 else 1.0
+        bends[int(x.cid)] = {
+            "major": len(major), "dip_major": round(dip_major, 3),
+            "maxima": len(peaks), "maxima_m": [round(float(dd[i]), 1) for i in peaks],
+            "maxima_rel": [round(float(kk[i] / kk.max()), 3) for i in peaks],
+            "dip": round(float(kk[lo] / kk.max()), 3) if lo is not None else 1.0,
+            "length_m": round(x.exit - x.enter, 1)}
+    hb = bends[int(h.cid)]
     rows = [r for r in range(len(mx.lap_ids)) if mx.resolved[r][hk]]
     taus = _taus(s, c, [mx.lap_ids[r] for r in rows])
     free = [lap for lap in taus if lap + 1 in h.clean_laps]
@@ -228,7 +249,7 @@ def split(s: Session) -> dict:
     hw = next(w for w in windows if w["cid"] == h.cid)
     return {"windows": windows, "habit_cid": int(h.cid), "habit_length_rank": lengths.index(hw["length_m"]) + 1,
             "longest": max(windows, key=lambda w: w["length_m"]),
-            "kappa_peaks_m": [round(float(dd[i]), 1) for i in peaks], "kappa_dip": round(dip, 3),
+            "kappa_peaks_m": hb["maxima_m"], "kappa_dip": hb["dip"], "bends": bends,
             "habit_marks": sum(mx.is_behind(r, hk) for r in range(len(mx.lap_ids))),
             "marked": marked, "free_laps": len(free), "habit": habit,
             "habit_loss_s": [min(x["loss_s"] for x in habit), max(x["loss_s"] for x in habit)],

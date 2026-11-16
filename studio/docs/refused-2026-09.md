@@ -2434,7 +2434,8 @@ counts at both; a slow lap with no culprit counts in M and at no corner.
 - **Why that null.** Equal odds is the null most generous to the sentence: weighting the corners
   unequally makes a shared corner likelier by chance. The last row of the second table shows it,
   with each corner weighted by its own lap-to-lap σ on the demo (0.029–0.203 s, over the 13 clean
-  laps that are not slow).
+  laps that are not slow). That row is an illustration, not a second null: C1's σ is inflated by
+  the planted habit, which splits its laps into two groups.
 
 | synthetic demo | |
 |---|---|
@@ -2451,18 +2452,27 @@ counts at both; a slow lap with no culprit counts in M and at no corner.
 
 **On the demo the sentence reads "1 of 1", at p 1.00: a single slow lap gathers at its own corner
 whatever that corner is.** Two things are wrong with it beyond that.
-- **A session has too few slow laps for the count to mean anything.** The demo has 1 slow lap of
-  14. Over 7 corners the count beats chance only when it is nearly unanimous, 4 of 6 or 5 of 8,
-  and "half of them at one corner" never does at any M in the table. The sentence would print a
-  coincidence in the same words as a pattern.
+- **The demo has too few slow laps for the count to mean anything.** It has 1 slow lap of 14.
+  Over 7 corners the count beats chance only at about two-thirds of the slow laps or more (4 of
+  6, 5 of 8), and "half of them at one corner" never does at any M in the table. The sentence
+  would print a coincidence in the same words as a pattern.
 - **It cannot see the demo's planted habit.** The habit (`make_demo.DEMO_HABIT`, §29) costs 8 of
   the 14 laps about 0.4 s each at C1, and C1 carries no ▼ on any lap. The habit laps ARE the
   typical pass there: the 6 habit-free laps sit 0.36–0.38 s under it, and a ▼ marks only a loss
   over the typical pass beyond its step (0.30 s). The one slow lap is a habit lap, and its cue
   names C5. Counting cues counts what went wrong once; the habit is the Coaching page's C1 row.
 
-The discovery round measured the count on one real recording, and it did not beat chance there
-either.
+| the gate at p ≤ 0.05 under equal odds, M | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|
+| fires by chance if culprits follow each corner's σ | 0.104 | 0.046 | 0.147 | 0.284 | 0.171 | 0.288 |
+
+**The smaller feature is refused too: print the sentence only when p ≤ 0.05.** The gate would
+have to compute p under equal odds, the most lenient null, because one session cannot estimate
+how often each corner holds a culprit: on the demo that rate is 1 cue in 14 laps. If culprits
+instead follow each corner's spread, the gate's own threshold fires by chance far more often than
+1 time in 20: 4 of 6 at one corner (p 0.034 under equal odds) would print by chance in 28 % of
+sessions with 6 slow laps. The weights are the σ row's, so the figure is an illustration of the
+direction, not a measured rate; the right null needs per-corner culprit rates across sessions.
 
 **What moves because of this refusal: nothing in the app.** Each slow lap keeps its own cue and
 note; a finder that steps through the slow laps names no corner they share.
@@ -2486,8 +2496,10 @@ is placed in its own half of the bend.
 **How it was measured.** `studio/dev/probes/corner_refusals.py` on the synthetic demo.
 - **The windows.** Each corner's window on the reference lap, and its ringed apex (`Corner.apex`,
   where the map draws the apex dot and the ring), in metres into the window.
-- **The bend.** In C1, the habit's corner, the pooled curvature the corner detector reads
-  (`corners.pooled_curvature`): its local maxima, and the lowest |κ| between them.
+- **The bends.** In every window, the pooled curvature the corner detector reads
+  (`corners.pooled_curvature`): its local maxima, and the lowest |κ| between the first and the
+  last, against the window's peak. The second dip is the same between the maxima that reach half
+  of the peak.
 - **Where a pass loses its time.** Along each lap's own projected window, the time since entry
   against a typical pass. Its slope is smoothed over 3 m, about two GPS fixes, and the peak loss is
   where that slope is highest. Every ▼ pass is measured against its corner's median pass, and each
@@ -2497,6 +2509,9 @@ is placed in its own half of the bend.
 |---|---|---|---|---|---|---|---|
 | window length | 51.8 | 54.1 | 48.8 | 56.3 | 55.6 | 58.6 | 70.6 |
 | ringed apex, into the window | 27.0 | 27.5 | 25.3 | 29.7 | 28.4 | 29.3 | 35.7 |
+| maxima of the pooled curvature | 2 | 1 | 1 | 1 | 4 | 1 | 5 |
+| lowest curvature between them, share of the peak | 0.989 | – | – | – | 0.024 | – | 0.965 |
+| the same between maxima over half the peak | 0.989 | – | – | – | 0.869 | – | 0.965 |
 
 | every ▼ pass on the demo, m into the window | peak loss | ringed apex | peak − apex |
 |---|---|---|---|
@@ -2510,26 +2525,32 @@ is placed in its own half of the bend.
 | farthest peak from the ringed apex | 5.4 m |
 | share of the loss lost before the apex | 50–57 % |
 
-**Refused for the renumbering first.** A split adds a corner, so every corner after it takes the
-next id, on every recording. On the demo C2–C7 would become C3–C8, and every corner id published
-for it would move: the Coaching ranking §30 quotes, the corner columns of §29–§32, the slow-lap
-note "C5 +2.84 s" that `tests/test_story.py` pins, and every test pin, card and figure that names
-a corner.
+**The renumbering is the argument that carries the refusal.** A split adds a corner, so every
+corner after it takes the next id, on every recording. On the demo C2–C7 would become C3–C8, and
+every corner id published for it would move: the Coaching ranking §30 quotes, the corner columns of
+§29–§32, the slow-lap note "C5 +2.84 s" that `tests/test_story.py` pins, and every test pin, card
+and figure that names a corner.
 
 **And the demo gives no window to split.**
 - **C1 is not long.** It is the sixth longest of seven windows. A length rule that reached it would
   split every window but C3.
 - **C1 is one bend.** The pooled |κ| has two local maxima 3.0 m apart (24.8 and 27.8 m), and
   between them it never falls below 98.9 % of its peak. There is no valley for a split to sit in.
+- **So are five of the other six.** C2, C3, C4 and C6 have a single maximum. C7, the longest, has
+  five within 11.3 m, and between them its curvature never falls below 96.5 % of its peak.
+- **C5 is the one exception by this metric, and it is an edge ripple.** Its lowest curvature
+  between the first and last maxima is 2.4 % of its peak, because its last maximum, at 54.8 m of
+  a 55.6 m window, reaches only 2.6 % of the peak: a ripple on the exit after the bend has
+  straightened, with no turn in it. Between the maxima that reach half of the peak (27.0–32.3 m)
+  the curvature never falls below 86.9 % of it. Split there, the second corner would be a straight.
 - **The demo has no ▼ pass at C1** (§33), so it cannot show where a ▼ pass loses its time there.
   Its two ▼ passes are elsewhere, both on Lap 6: at C5 the peak loss sits 2.3 m before the ringed
   apex, at C6 22.6 m before it, on the entry.
 - **The loss C1 does carry straddles its apex.** Every habit lap's peak loss is within 5.4 m of the
-  ringed apex, and half of its loss (50–57 %) comes before it. A split near the apex would cut the
-  one habit the demo plants into two corners, each holding about half of it.
-
-The discovery round reported the same placement on one real recording: the peak loss near the
-ringed apex on most of a long window's ▼ passes.
+  ringed apex, and half of its loss (50–57 %) comes before it. But the habit is the generator's
+  choice, a grip × brake factor over the whole corner (`synth_gopro.Habit`), so where its loss
+  falls is a property of the demo, not evidence about real corners. It only shows that on the demo
+  a split near the apex would cut the one planted habit into two corners, each with about half.
 
 **What moves because of this refusal: nothing in the app.** A long window stays one corner. Where
 in it the time went stays the Coaching row's Entry·Apex·Exit thirds (`Session.phase_report`).

@@ -69,7 +69,7 @@ WHAT RUNS IN CI, AND WHAT CANNOT:
  10. THE CORNER REFUSALS (§33-§34) ARE THEIR PROBE'S. `studio/dev/probes/corner_refusals.py`
      re-measures the "N of M slow laps at one corner" sentence against its exact null and the
      long-window split on the demo, through `Session.load` alone; counts exactly, the rest to half
-     a step of the printed digit. A negative control plants twelve.
+     a step of the printed digit. A negative control plants nineteen.
 
 Checks 1 and 2 cannot see whether a table matches the app. Only 3 can, and only where the footage
 is. Figures that exist only in prose and need footage to derive (the z-score, the best lap's gap to
@@ -3133,8 +3133,8 @@ def test_the_story_refusal_guard_fails_on_a_wrong_figure():
 
 
 # ─── refusals §33-§34: the W5 discovery round's two, re-run from their probe ────────────────────
-# Measured on the owner's footage, refused on the demo: `corner_refusals` (one Session.load, ~10 s,
-# no window). Its null is exact, so every figure is deterministic; counts are held exactly, metres,
+# Measured on the demo, not re-measured on real footage here: `corner_refusals` (one Session.load,
+# ~10 s, no window). Its null is exact, so every figure is deterministic; counts are held exactly, metres,
 # seconds and p to half a step of the digit they print.
 _CORNER_CACHE: dict = {}
 
@@ -3164,7 +3164,8 @@ def _corner_problems(doc: str, fig: dict) -> list[str]:
 
     def same(n: int, what: str, got: list, want: list) -> None:
         for g, w in zip(got, want, strict=True):
-            bad = (g != str(w)) if isinstance(w, int) else abs(float(g.replace("−", "-")) - w) > _half_step(g)
+            bad = (g != str(w)) if isinstance(w, int | str) else \
+                abs(float(g.replace("−", "-")) - w) > _half_step(g)
             if bad:
                 probs.append(f"§{n} {what}: {got}, the probe says {want}")
                 return
@@ -3199,12 +3200,23 @@ def _corner_problems(doc: str, fig: dict) -> list[str]:
     find(33, r"own lap-to-lap σ on the demo \((\d\.\d+)–(\d\.\d+) s, over the (\d+) clean laps",
          [min(c["sigma_s"]), max(c["sigma_s"]), c["clean_laps"] - c["slow"]], "the σ weights")
     find(33, r"reads \"(\d+) of (\d+)\", at p (\d\.\d+)", [c["top_count"], c["slow"], c["p"]], "the verdict")
-    find(33, r"The demo has (\d+) slow lap of\s+(\d+)\.", [c["slow"], c["clean_laps"]], "the slow-lap count")
+    find(33, r"It has (\d+) slow lap of (\d+)\.", [c["slow"], c["clean_laps"]], "the slow-lap count")
     beat = {r["m"]: r["k_min"] for r in t}
-    find(33, r"nearly unanimous, (\d) of (\d) or (\d) of (\d),", [beat[6], 6, beat[8], 8], "the unanimity")
+    find(33, r"about two-thirds of the slow laps or more \((\d) of\s+(\d), (\d) of (\d)\)",
+         [beat[6], 6, beat[8], 8], "the two-thirds")
+    if min(beat[m] / m for m in beat) < 0.6:
+        probs.append(f"§33 says about two-thirds or more; the probe's fewest are {beat}")
     if min(r["p_half"] for r in t) <= c["alpha"]:
         probs.append("§33 says half at one corner never beats chance; the probe's table says it does")
-    find(33, r"costs (\d+) of\s+the (\d+) laps", [c["habit_laps"], c["clean_laps"]], "the habit laps")
+    row(33, "the gate at p ≤", [r["m"] for r in t], "the gate's M")
+    row(33, "fires by chance if culprits follow", [r["gate_weighted"] for r in t], "the gate's chance firing")
+    find(33, r"(\d) of (\d) at one corner \(p (\d\.\d+) under equal odds\) would print by chance in (\d+) % of\s+"
+         r"sessions with (\d) slow laps", [beat[6], 6, t[3]["p_k_min"], round(100 * t[3]["gate_weighted"]), 6],
+         "the gate's example")
+    find(33, r"costs (\d+) of\s+the (\d+) laps about (\d\.\d) s each", [c["habit_laps"], c["clean_laps"],
+         round(sum(fig["split"]["habit_loss_s"]) / 2, 1)], "the habit laps")
+    if {round(x, 1) for x in fig["split"]["habit_loss_s"]} != {0.4}:
+        probs.append(f"§33 says about 0.4 s each; the habit laps lose {fig['split']['habit_loss_s']} s")
     if c["habit_marks"]:
         probs.append(f"§33 says C1 carries no ▼; the probe counts {c['habit_marks']}")
     find(33, r"habit-free laps sit (\d\.\d+)–(\d\.\d+) s under it", [-c["habit_cell_s"][1], -c["habit_cell_s"][0]],
@@ -3242,6 +3254,33 @@ def _corner_problems(doc: str, fig: dict) -> list[str]:
     for m in sp["marked"]:
         find(34, rf"at C{m['cid']}\D{{1,40}}?(\d+\.\d) m before", [-m["from_apex_m"]], f"the C{m['cid']} ▼ pass")
     find(34, r"smoothed over (\d) m", [int(sp["smooth_m"])], "the smoothing")
+    n = len(w)
+    if f"On the demo C2–C{n} would become C3–C{n + 1}" not in flat[34]:
+        probs.append(f"§34: the renumbering of {n} corners reads otherwise")
+    b = {int(k): v for k, v in sp["bends"].items()}
+    row(34, "maxima of the pooled curvature", [b[x["cid"]]["maxima"] for x in w], "a window's maxima")
+    row(34, "lowest curvature between them", [b[x["cid"]]["dip"] for x in w if b[x["cid"]]["maxima"] > 1],
+        "a window's dip")
+    row(34, "the same between maxima over half", [b[x["cid"]]["dip_major"] for x in w if b[x["cid"]]["maxima"] > 1],
+        "a window's dip over half the peak")
+    single = [f"C{k}" for k, v in b.items() if v["maxima"] == 1]
+    if f"{', '.join(single[:-1])} and {single[-1]} have a single maximum" not in flat[34]:
+        probs.append(f"§34: the single-maximum windows are {single}")
+    c7 = b[7]
+    find(34, r"C7, the longest, has\s+(\w+) within (\d+\.\d) m, and between them its curvature never falls below "
+         r"(\d+\.\d) %", [_count_word(c7["maxima"]).lower(), round(c7["maxima_m"][-1] - c7["maxima_m"][0], 1),
+                         round(100 * c7["dip"], 1)], "C7's bend")
+    c5 = b[5]
+    find(34, r"C5 is the one exception by this metric.*?is (\d+\.\d) % of its peak, because its last maximum, at "
+         r"(\d+\.\d) m of\s+a (\d+\.\d) m window, reaches only (\d+\.\d) % of the peak", [
+             round(100 * c5["dip"], 1), c5["maxima_m"][-1], c5["length_m"], round(100 * c5["maxima_rel"][-1], 1)],
+         "C5's ripple")
+    major = [m for m, r in zip(c5["maxima_m"], c5["maxima_rel"], strict=True) if r >= 0.5]
+    find(34, r"half of the peak \((\d+\.\d)–(\d+\.\d) m\)\s+the curvature never falls below (\d+\.\d) %",
+         [major[0], major[-1], round(100 * c5["dip_major"], 1)], "C5's major maxima")
+    multi = sorted(k for k, v in b.items() if v["maxima"] > 1 and v["dip"] < 0.9)
+    if multi != [5]:
+        probs.append(f"§34 names C5 as the one window with a valley; the probe: {multi}")
     return probs
 
 
@@ -3257,12 +3296,19 @@ def test_the_corner_refusals_are_their_probe_s_figures():
 def test_the_corner_refusal_guard_fails_on_a_wrong_figure():
     """THE NEGATIVE CONTROL: a wrong figure in each section must be caught."""
     doc, fig = _read(_REFUSED), _corner_figures()
-    plants = {"§33 p": ("| p under the null | 1.00 |", "| p under the null | 0.81 |"),
+    plants = {"§33 p": ("| p under the null | 1.00 |", "| p under the null | 0.50 |"),
               "§33 a table p": ("| 0.39 | 0.65 | 0.16 |", "| 0.39 | 0.65 | 0.17 |"),
               "§33 a weighted p": ("| 0.59 | 0.83 |", "| 0.59 | 0.85 |"),
-              "§33 the fewest": ("| 3 | 4 | 4 | 4 | 5 | 5 |", "| 3 | 4 | 4 | 3 | 5 | 5 |"),
-              "§33 the unanimity": ("4 of 6 or 5 of 8", "3 of 6 or 5 of 8"),
+              "§33 the fewest": ("| 3 | 4 | 4 | 4 | 5 | 5 |", "| 3 | 4 | 4 | 2 | 5 | 5 |"),
+              "§33 the two-thirds": ("6, 5 of 8)", "6, 6 of 8)"),
               "§33 the habit-free laps": ("sit 0.36–0.38 s under", "sit 0.36–0.39 s under"),
+              "§33 a gate cell": ("| 0.147 | 0.284 |", "| 0.147 | 0.294 |"),
+              "§33 the gate's prose": ("by chance in 28 % of", "by chance in 18 % of"),
+              "§33 the habit's loss": ("about 0.4 s each", "about 0.5 s each"),
+              "§34 the renumbering": ("C2–C7 would become C3–C8", "C2–C7 would become C3–C9"),
+              "§34 a maxima count": ("| 2 | 1 | 1 | 1 | 4 | 1 | 5 |", "| 2 | 1 | 1 | 1 | 3 | 1 | 5 |"),
+              "§34 C5's ripple": ("reaches only 2.6 %", "reaches only 9.6 %"),
+              "§34 C7's dip": ("never falls below 96.5 %", "never falls below 69.5 %"),
               "§34 a length": ("| 58.6 | 70.6 |", "| 58.6 | 70.9 |"),
               "§34 a ▼ pass": ("| 6.7 | 29.3 | −22.6 |", "| 6.7 | 29.3 | −20.6 |"),
               "§34 the habit share": ("| 50–57 % |", "| 50–60 % |"),
