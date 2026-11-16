@@ -827,7 +827,8 @@ def test_the_report_tells_the_apps_story_in_its_order_and_words():
     assert [c for c, cs in corner_rows.items() if cs[5].startswith("◆ ")] == ["C1"], corner_rows
     by_cid = {r.cid: r for r in report}
     assert corner_rows["C1"][4] == stats_service.fmt_middle_half(
-        by_cid[1].middle_half_s, stats_service.CORNER_MIDDLE_HALF_FLOOR_S), corner_rows["C1"]
+        by_cid[1].middle_half_s, stats_service.CORNER_MIDDLE_HALF_FLOOR_S).removesuffix(" s"), \
+        corner_rows["C1"]
     assert stats_service.corner_mark_rule(hover=False) in body
     assert "hover" not in stats_service.corner_mark_rule(hover=False)
     # PACE carries the σ tile's hover, "middle half spans" in the page's words.
@@ -868,8 +869,12 @@ def test_provisional_timing_carries_through_moments_and_notes():
     text = _report_text(s)
     body = "".join(ET.fromstring(text).itertext())
     assert "Best lap:" not in body and "Best lap" in _meta_rows(ET.fromstring(text))
-    stamp = f"Timing: {export_data.timing_meta(s)}"
+    # The repeated stamp is worded for where it stands ("on this page", not the header's
+    # "below"), and the PROVISIONAL sentence ends with its full stop.
+    stamp = f"Timing: {export_data.timing_meta(s, where='on this page')}"
     assert "PROVISIONAL" in stamp and body.count(stamp) == 2, body.count(stamp)
+    assert "split on this page is measured from an arbitrary point." in stamp, stamp
+    assert "split below is measured" in _meta_rows(ET.fromstring(text))["Timing"]
     assert "LAP STRIP" not in _h2s(text)
     print("ok report-story: provisional timing — no best moment, both sections stamped")
 
@@ -900,6 +905,81 @@ def test_the_report_is_one_self_contained_page_in_the_given_tokens():
     print("ok report-story: one self-contained page, tokens on screen, paper in print")
 
 
+def test_a_degraded_recording_stamps_the_slow_lap_notes_like_the_laps_table():
+    """The Laps table shows its estimated-timing note under every slow-lap note on a degraded
+    recording (GPS low here), whatever the note's own caveat (`story.note_trust_states`). The
+    report stamped SLOW LAPS only from the note's caveat, so a GPS-low session's notes went out
+    unqualified. MOMENTS follows the Stats page, which qualifies a moment by its own caveat only."""
+    from studio import data_quality, story
+    times, cells = _story_field()
+    moments, notes, report = _planted_story(times, cells)
+    assert notes and notes[0].caveat == (), notes
+    s = _with_story(make_session(), moments, notes, report)
+    s._timing_quality = data_quality.TimingQuality(dropped_fraction=0.4)
+    assert s.timing_quality.degraded and not s.timing_quality.media_clock
+    assert story.note_trust_states((), verified=True, degraded=True) == ("estimated",)
+    assert story.note_trust_states((), verified=False, degraded=False) == ("provisional",)
+    body = "".join(ET.fromstring(_report_text(s)).itertext())
+    stamp = f"Timing: {export_data._timing_meta(s, where='on this page')}"
+    assert "GPS" in stamp and body.count(stamp) == 1, (stamp, body.count(stamp))
+    start = body.index("SLOW LAPS")
+    slow = body[start:body.index("Laps (", start)]
+    assert stamp in slow, slow
+    print("ok report-story: a degraded recording stamps SLOW LAPS as the Laps table does")
+
+
+def test_the_page_keeps_what_the_slow_laps_and_corners_sections_must_say():
+    """What a reader of the page cannot get any other way: no note for a ⚠ dropout lap (the Laps
+    table holds that at the surface), a note's text escaped, the page's own counting wording
+    (it has no CORNERS BY LAP grid to mute cells in), and each one-pass σ sentence."""
+    import dataclasses
+    times, cells = _story_field()
+    moments, notes, report = _planted_story(times, cells)
+    s = make_session()
+    dropout = next(iter(s.dropout_lap_ids()))
+    planted = [dataclasses.replace(notes[0], text="Lap 15 · a < b & c"),
+               dataclasses.replace(notes[0], lap_id=dropout, text="DROPOUT LAP NOTE")]
+    # Two passes of C3 interpolated, so the counting sentence is written.
+    left = [dataclasses.replace(r, n_laps=r.n + 2) if r.cid == 3 else r for r in report]
+    text = _report_text(_with_story(s, moments, planted, left))
+    body = "".join(ET.fromstring(text).itertext())   # parses: the "<" and "&" were escaped
+    assert "Lap 15 · a < b & c" in body and "a &lt; b &amp; c" in text
+    assert "DROPOUT LAP NOTE" not in body, "a ⚠ dropout lap was given a note"
+    page = " ".join(stats_service.corner_count_note(left, page=False))
+    assert page in body and "corners_interpolated column" in page
+    assert "shown muted lap by lap" not in body
+    one_pass = [(r.cid, stats_service.corner_one_pass_note(r)) for r in report
+                if stats_service.corner_one_pass_note(r)]
+    assert one_pass, "the planted field must carry a one-pass corner"
+    for cid, sentence in one_pass:
+        assert f"C{cid}: {sentence}" in body, sentence
+    # The page's ◆ rule names the column; the app's tooltip keeps its own words, byte for byte.
+    assert "the Med loss column's three largest" in stats_service.corner_mark_rule(hover=False)
+    assert "simply this column's three largest" in stats_service.corner_mark_rule()
+    print("ok report-story: dropout filter, escaping, page wording and one-pass notes")
+
+
+def test_print_puts_every_laps_column_on_paper():
+    """Printed, the page cannot scroll: the laps table's card must not clip (it stopped at
+    C3_time_s on A4, losing the quality and corners_interpolated disclosures), and only small
+    blocks are kept whole, never a tall section (half of page 1 went blank)."""
+    assert export_data._REPORT_CSS in export_data.report_css()
+    screen, paper = export_data._REPORT_CSS.split("@media print {")
+    assert "overflow-x: auto" in screen and "section.wide" in screen
+    assert "overflow: visible" in paper and "break-inside: auto" in paper
+    avoid = [line for line in paper.splitlines() if "break-inside: avoid" in line]
+    assert avoid and not any(line.lstrip().startswith("section") for line in avoid), avoid
+    assert "table.laps" in paper and "img.card" in paper
+    s = make_session()
+    text = _report_text(s, lapstrip=PNG_1PX)
+    root = ET.fromstring(text)
+    laps = [t for t in root.iter("table") if t.get("class") == "laps"]
+    assert len(laps) == 1 and [th.text for th in laps[0].findall("tr/th")][-2:] == [
+        "quality", export_data.INTERPOLATED_COLUMN]
+    assert [i.get("class") for i in root.iter("img")] == ["card"]
+    print("ok report-story: print shows every laps column; the strip is a bordered card")
+
+
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_laps_table_degenerate_schema()
@@ -921,4 +1001,7 @@ if __name__ == "__main__":
     test_a_tie_is_named_level_and_a_lone_untied_best_is_no_moments_section()
     test_provisional_timing_carries_through_moments_and_notes()
     test_the_report_is_one_self_contained_page_in_the_given_tokens()
+    test_a_degraded_recording_stamps_the_slow_lap_notes_like_the_laps_table()
+    test_the_page_keeps_what_the_slow_laps_and_corners_sections_must_say()
+    test_print_puts_every_laps_column_on_paper()
     print("test_export_data: OK")

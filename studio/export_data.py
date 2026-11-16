@@ -505,7 +505,7 @@ def _distance_note(tot) -> str:
             + stats_service.ODOMETER_NOTE)
 
 
-def _timing_meta(session) -> str:
+def _timing_meta(session, *, where: str = "below") -> str:
     """What every lap time on an exported surface is worth — the report's `Timing` meta row AND the
     clipboard summary's `Timing:` header line, one string so the two cannot disagree.
 
@@ -529,8 +529,10 @@ def _timing_meta(session) -> str:
     # says what is actually wrong (data_quality.no_start_line).
     if (not getattr(session, "timing_verified", True)
             and not data_quality.no_start_line(session)):
+        # `where` keeps the sentence true where it stands: "below" under the report's header and
+        # the clipboard's, "on this page" where a section repeats it (`_timing_caveat`).
         bits.append("PROVISIONAL — the start/finish line was auto-fitted and not confirmed, so "
-                    "every lap time and split below is measured from an arbitrary point")
+                    f"every lap time and split {where} is measured from an arbitrary point.")
     quality = getattr(session, "timing_quality", None)
     concerns = quality.concerns() if quality is not None else []
     if concerns:
@@ -801,8 +803,8 @@ PAPER_TOKENS = {"canvas": "#FFFFFF", "surface": "#FFFFFF", "border": "#C8CCD2",
 #: The report's CORNERS columns: the Stats page's (stats_corners.CORNER_COLUMNS) with the σ cell's
 #: hover — the middle half — as a column of its own (a page has no hover), and without the
 #: estimated Grip column, whose comparison note (theme.GRIP_COMPARE_NOTE) lives behind Qt.
-REPORT_CORNER_COLUMNS = ("Corner", "Best", "Median", "σ (s)", "Middle half", "Med loss",
-                         "Apex best", "Apex med")
+REPORT_CORNER_COLUMNS = ("Corner", "Best (s)", "Median (s)", "σ (s)", "Middle half (s)",
+                         "Med loss (s)", "Apex best", "Apex med")
 #: The lap-strip card's layout width in the document: half its 1080 px canvas, a 2x image.
 LAPSTRIP_LAYOUT_PX = 540
 
@@ -812,10 +814,19 @@ body { margin: 0; background: var(--canvas); color: var(--text); font-size: 14px
 main { max-width: 70em; margin: 0 auto; padding: 24px 16px 48px; }
 header { border-bottom: 2px solid var(--accent); padding-bottom: 12px; margin-bottom: 16px; }
 h1 { font-size: 1.5em; font-weight: 600; margin: 0 0 8px; }
+/* Upper case by style, not by text: "Laps (14)" stays the string a reader searches for. */
 h2 { font-size: 0.8em; font-weight: 600; letter-spacing: 0.08em; color: var(--text-dim);
-     margin: 0 0 8px; }
+     margin: 0 0 8px; text-transform: uppercase; }
 section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
           padding: 12px 16px; margin: 0 0 16px; overflow-x: auto; }
+/* A table wider than its card scrolls sideways; these scroll shadows show that it does, with no
+   script: the two `local` covers move with the content and hide the `scroll` shadows at an end. */
+section.wide { background:
+    linear-gradient(to right, var(--surface) 40%, transparent) left / 32px 100% no-repeat local,
+    linear-gradient(to left, var(--surface) 40%, transparent) right / 32px 100% no-repeat local,
+    linear-gradient(to right, var(--text-dim), transparent) left / 12px 100% no-repeat scroll,
+    linear-gradient(to left, var(--text-dim), transparent) right / 12px 100% no-repeat scroll,
+    var(--surface); }
 table { border-collapse: collapse; margin: 4px 0; }
 th, td { border-bottom: 1px solid var(--border); padding: 4px 10px; text-align: right;
          font-variant-numeric: tabular-nums; }
@@ -833,7 +844,19 @@ img { max-width: 100%; height: auto; border: 1px solid var(--border); border-rad
 @media print {
   body { font-size: 10pt; }
   main { max-width: none; padding: 0; }
-  section { border-radius: 0; break-inside: avoid; }
+  /* Paper cannot scroll: every column must be on the page, so nothing clips, and a tall section
+     may break across pages (only small blocks are kept whole, or page 1 ends half blank). */
+  section, section.wide { overflow: visible; border-radius: 0; break-inside: auto;
+                          background: var(--surface); }
+  h2 { break-after: avoid; }
+  tr, li, p.note, img, table.kv, table.meta, table.moments { break-inside: avoid; }
+  /* The laps table carries 5 + 2 per corner + split + 2 disclosure columns: small type, tight
+     cells and breakable headers fit it to the paper's width rather than cut it at C3. */
+  table.laps { width: 100%; font-size: 6.5pt; }
+  table.laps th, table.laps td { padding: 1px 2px; }
+  table.laps th { word-break: break-all; }
+  /* The lap strip is a dark card on white paper: a hairline says it is one. */
+  img.card { border: 1px solid var(--text); border-radius: 0; }
 }
 """
 
@@ -878,8 +901,9 @@ def _kv_table(rows, cls: str = "kv") -> list[str]:
 
 def _timing_caveat(session, caveat) -> list[str]:
     """Under a moment or a note that carries a timing state (`story` caveat), the report's own
-    honesty stamp: what every lap time on the page is worth (`_timing_meta`)."""
-    return [_note(f"Timing: {_timing_meta(session)}")] if caveat else []
+    honesty stamp: what every lap time on the page is worth (`_timing_meta`, worded for a
+    section in the middle of the page rather than its header)."""
+    return [_note(f"Timing: {_timing_meta(session, where='on this page')}")] if caveat else []
 
 
 def _summary_sections(session, unit) -> list[list[str]]:
@@ -911,7 +935,8 @@ def _moments_section(session) -> list[str]:
 
 
 def _corner_cells(r, marked: bool, unit_id: str) -> str:
-    """One CORNERS row, at the Stats table's precision; a marked corner's loss cell carries ◆."""
+    """One CORNERS row, at the Stats table's precision; a marked corner's loss cell carries ◆.
+    Seconds are bare numbers under "(s)" headers, the middle half's " s" included."""
     def speed(v):
         return _sec(None if v is None else units.convert_speed(v, unit_id), "{:.1f}")
     loss = _sec(r.median_loss_s, "+{:.2f}")
@@ -919,8 +944,9 @@ def _corner_cells(r, marked: bool, unit_id: str) -> str:
         loss = f"{stats_service.CORNER_MARK} {loss}"
     cells = [f"C{r.cid}", _sec(r.best_s, "{:.2f}"), _sec(r.median_s, "{:.2f}"),
              _sec(r.sigma_s, "{:.2f}"),
-             stats_service.fmt_middle_half(r.middle_half_s,
-                                           stats_service.CORNER_MIDDLE_HALF_FLOOR_S) or "",
+             (stats_service.fmt_middle_half(r.middle_half_s,
+                                            stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
+              or "").removesuffix(" s"),
              loss, speed(r.apex_best_kmh), speed(r.apex_median_kmh)]
     tds = [f'<td class="mark">{html.escape(c)}</td>' if k == 5 and marked
            else f"<td>{html.escape(c or DASH)}</td>" for k, c in enumerate(cells)]
@@ -957,16 +983,22 @@ def _slow_laps_section(session) -> list[str]:
     notes = [n for n in every if n.lap_id not in dropouts]
     if not notes:
         return []
-    caveat = tuple(dict.fromkeys(c for n in notes for c in n.caveat))
+    # Stamped under every state the Laps table shows the notes under (`story.note_trust_states`):
+    # a GPS-low or degraded recording too, whose notes' own caveat does not say so.
+    caveat = story.note_trust_states(
+        tuple(dict.fromkeys(c for n in notes for c in n.caveat)),
+        verified=bool(getattr(session, "timing_verified", True)),
+        degraded=bool(getattr(getattr(session, "timing_quality", None), "degraded", False)))
     return _section("SLOW LAPS", [
         '<ul class="notes">', *(f"<li>{html.escape(n.text)}</li>" for n in notes), "</ul>",
         *(_note(rule) for rule in dict.fromkeys(n.rule for n in notes)),
         *_timing_caveat(session, caveat)])
 
 
-def _img(title: str, png: bytes, width: int | None) -> str:
+def _img(title: str, png: bytes, width: int | None, cls: str = "") -> str:
     b64 = base64.b64encode(png).decode("ascii")
     attr = f' width="{int(width)}"' if width else ""
+    attr += f' class="{cls}"' if cls else ""
     return f'<img alt="{html.escape(title)}"{attr} src="data:image/png;base64,{b64}"/>'
 
 
@@ -975,14 +1007,14 @@ def _lapstrip_section(lapstrip: bytes | None) -> list[str]:
     gate, so a provisional session or one with under two clean laps has no strip here either."""
     if not lapstrip:
         return []
-    return _section("LAP STRIP", [_img("Lap strip", lapstrip, LAPSTRIP_LAYOUT_PX)])
+    return _section("LAP STRIP", [_img("Lap strip", lapstrip, LAPSTRIP_LAYOUT_PX, "card")])
 
 
 def _laps_section(session, headers, rows, cue_lap) -> list[str]:
     """The Laps table (`laps_table`, the CSV's rows) and the notes that decode it."""
     esc = html.escape
-    out = ["<section>", f"<h2>Laps ({len(rows)})</h2>",
-           "<table><tr>" + "".join(f"<th>{esc(h)}</th>" for h in headers) + "</tr>"]
+    out = ['<section class="wide">', f"<h2>Laps ({len(rows)})</h2>",
+           '<table class="laps"><tr>' + "".join(f"<th>{esc(h)}</th>" for h in headers) + "</tr>"]
     for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
         cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")

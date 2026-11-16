@@ -472,11 +472,14 @@ def corner_mark_rule(*, hover: bool = True) -> str:
     report's, where the middle half is a column of its own and nothing can be hovered."""
     where = "(the σ cell's hover)" if hover else "(the Middle half column)"
     score = "; hover one for its own score" if hover else ""
+    # The page's "this column" is the loss column the tooltip hangs on; under a table it names it.
+    largest = ("this column's three largest numbers" if hover
+               else "the Med loss column's three largest numbers")
     return (
         f"Up to {CORNER_MARK_N} loss cells are marked {CORNER_MARK} and tinted: the "
         "corners where your passes vary most and cost most, ranked by the middle half "
         f"{where} × median loss, which is why the marked cells are not "
-        f"simply this column's three largest numbers{score}. The "
+        f"simply {largest}{score}. The "
         "middle half is used rather than σ so that one unusual pass cannot earn the "
         f"mark. A corner with fewer than {MIN_MIDDLE_HALF_N} counted "
         "passes is never marked, and a corner whose middle half is under "

@@ -1967,11 +1967,13 @@ class LapTable(QWidget):
             # A note's trust lines are EVERY state that holds, once each (its `caveat` is a tuple):
             # a recording both provisional and on an estimated clock says both under the note,
             # where a bare time cell keeps the one stronger line. The Lap cell wearing the cue has
-            # no trust note of its own and borrows these, as it borrowed the Time cell's.
+            # no trust note of its own and borrows these, as it borrowed the Time cell's. Which
+            # states hold is `story.note_trust_states`, the exported report's rule too.
+            states = story.note_trust_states(note.caveat if note is not None else (),
+                                             verified=verified, degraded=degraded)
             note_trust = "\n\n".join(
-                [PROVISIONAL_TOOLTIP] * (not verified)
-                + [estimated_note] * bool(note is not None and (
-                    degraded or story.CAVEAT_ESTIMATED in note.caveat)))
+                [PROVISIONAL_TOOLTIP] * (story.CAVEAT_PROVISIONAL in states)
+                + [estimated_note] * (note is not None and story.CAVEAT_ESTIMATED in states))
             for c in range(self.table.columnCount()):
                 item = self.table.item(r, c)
                 if item is None:

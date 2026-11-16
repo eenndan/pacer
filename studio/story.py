@@ -196,6 +196,17 @@ def caveat_for(provisional: bool, clock_estimated: bool) -> tuple[str, ...]:
         (CAVEAT_ESTIMATED,) if clock_estimated else ())
 
 
+def note_trust_states(caveat: tuple[str, ...], *, verified: bool,
+                      degraded: bool) -> tuple[str, ...]:
+    """The timing states a slow-lap note is SHOWN under, provisional first — the Laps table's rule
+    and the exported report's, one function so they cannot drift: provisional while the start
+    line is unconfirmed; estimated when the note's own caveat says so (a media clock) OR the
+    recording's timing is degraded at all (`TimingQuality.degraded`: also GPS low / no GPS),
+    since the lap times the note's excess is taken over are then the less certain ones too."""
+    return ((CAVEAT_PROVISIONAL,) if not verified else ()) + (
+        (CAVEAT_ESTIMATED,) if degraded or CAVEAT_ESTIMATED in caveat else ())
+
+
 def slow_threshold(lap_times: Mapping[int, float]) -> tuple[float, float, float] | None:
     """(median lap, IQR, margin) over the clean laps, or None with none."""
     v = [float(t) for t in lap_times.values() if np.isfinite(t)]
