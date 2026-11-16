@@ -3,3 +3,7 @@
   "Start with …", every row and reason, in the Coaching page's words), before the Stats groups.
 - No lap card on provisional timing, as in the app; with too few laps COACHING says why, as the
   Coaching page does. Its CORNERS note now ties COACHING, the ideal lap and Med loss together.
+
+### Fixed
+- Coaching's headline hover counts the corners the headline sums ("top 2", "your worst corner",
+  or no total when none is ranked) instead of always "your top 3 corners".

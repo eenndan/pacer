@@ -172,13 +172,14 @@ def test_the_notes_say_what_the_page_says_on_hover():
     naming the row that prints a direction — the panel's own strings (`coaching`)."""
     notes = _coaching_strings(_section(ET.fromstring(_report(_sessions()["demo"])),
                                        "COACHING"))["notes"]
-    assert notes[0] == (f"{coaching.scope_note(page=False)} "
+    assert notes[0] == (f"{coaching.scope_note(page=False, n=3)} "
                         f"{coaching.medians_note(bars=False)}"), notes[0]
     assert notes[1] == f"Time lost — {coaching.COLUMN_TIPS['Time lost']}", notes[1]
     assert "versus your own best lap's same corner" in notes[1]
     assert notes[2] == f"Done it? — {coaching.COLUMN_TIPS['Done it?']}", notes[2]
     assert notes[3] == f"The braking line under C1 {coaching.BRAKE_DIRECTION_CAVEAT}", notes[3]
-    assert len(notes) == 4, notes          # verified, clean clock: no Timing stamp
+    assert len(notes) == 5, notes          # verified, clean clock: no Timing stamp; the pointer last
+    assert notes[4].startswith("0.43 s is how far your typical pass through these 3 corners")
     # Seed 7 prints no direction: no caveat.
     seven = _coaching_strings(_section(ET.fromstring(_report(_sessions()["seed7"])), "COACHING"))
     assert not any("braking line" in n for n in seven["notes"]), seven["notes"]
@@ -197,7 +198,9 @@ def test_provisional_and_degraded_timing_stamp_the_coaching_rows():
     assert not prov.timing_verified
     got = _assert_page_text_on_page(prov)
     stamp = f"Timing: {export_data.timing_meta(prov, where='on this page')}"
-    assert "PROVISIONAL" in stamp and got["notes"][-1] == stamp, got["notes"]
+    # The stamp, then the totals pointer (seed 7 has an IDEAL LAP section and two ranked corners).
+    assert "PROVISIONAL" in stamp and got["notes"][-2] == stamp, got["notes"]
+    assert got["notes"][-1].startswith("0.09 s is how far your typical pass through these 2 ")
     s = _sessions()["demo"]
     saved = s._timing_quality
     try:
@@ -207,7 +210,7 @@ def test_provisional_and_degraded_timing_stamp_the_coaching_rows():
             s._timing_quality = quality
             got = _assert_page_text_on_page(s)
             stamp = f"Timing: {export_data.timing_meta(s, where='on this page')}"
-            assert word in stamp and got["notes"][-1] == stamp, (word, got["notes"])
+            assert word in stamp and got["notes"][-2] == stamp, (word, got["notes"])
     finally:
         s._timing_quality = saved
     print("ok timing: provisional / GPS low / estimated stamp COACHING; the rows are the page's")
@@ -308,6 +311,91 @@ def test_mph_reaches_the_coaching_reasons():
     print("ok unit: the apex deficit reads in mph")
 
 
+def _pointer(s):
+    sec = _section(ET.fromstring(_report(s)), "COACHING")
+    hits = [n for n in _coaching_strings(sec)["notes"] if "is not time under your best lap" in n]
+    assert len(hits) <= 1, hits
+    return hits[0] if hits else None
+
+
+def test_coachings_total_and_the_ideal_gap_are_told_apart_on_the_first_screen():
+    """Review of #592 (P2): COACHING's "0.43 s … vs your best lap" and IDEAL LAP's "0.32 s on the
+    table · vs your best" read as one contradiction. COACHING's last note tells them apart in the
+    page's own two figures — and only when both are printed: no IDEAL LAP section, no ranked
+    corner, or the empty state print no pointer; no CORNERS reconciliation drops its last clause."""
+    import dataclasses
+    s = _sessions()["demo"]
+    root = ET.fromstring(_report(s))
+    head = _coaching_strings(_section(root, "COACHING"))["lead"][0]
+    ideal = dict((tr.findtext("th"), tr.findtext("td"))
+                 for tr in _section(root, "IDEAL LAP").iter("tr"))[export_data.IDEAL_GAP_ROW]
+    assert "0.43 s across your top 3 corners" in head and ideal == "0.32 s", (head, ideal)
+    assert _pointer(s) == (
+        "0.43 s is how far your typical pass through these 3 corners sits from your best lap's — "
+        "it is not time under your best lap. Time under your best lap is the ideal lap's 0.32 s "
+        "(IDEAL LAP below); the note under CORNERS ties the two together."), _pointer(s)
+    # Counted right for one, two, three corners; the CORNERS clause only when that note is printed.
+    one = coaching.totals_pointer(0.36, 1, "0.32 s", corners_note=False)
+    assert one.startswith("0.36 s is how far your typical pass through this corner sits"), one
+    assert one.endswith("the ideal lap's 0.32 s (IDEAL LAP below)."), one
+    assert "through these 2 corners" in coaching.totals_pointer(0.09, 2, "0.29 s",
+                                                                 corners_note=True)
+    # No IDEAL LAP section: no pointer.
+    real_sb = s.ideal_segment_bests
+    s.ideal_segment_bests = lambda: None
+    try:
+        assert _section(ET.fromstring(_report(s)), "IDEAL LAP") is None
+        assert _pointer(s) is None
+    finally:
+        s.ideal_segment_bests = real_sb
+    # No ranked corner (every row abstained, as the evidence gate can leave it): no pointer.
+    opps = s.coaching_opportunities()
+    zero = dataclasses.replace(opps, rows=[dataclasses.replace(
+        r, evidence=dataclasses.replace(r.evidence, abstain=coaching.ABSTAIN_SPREAD))
+        for r in opps.rows])
+    real_co = s.coaching_opportunities
+    s.coaching_opportunities = lambda: zero
+    try:
+        assert not coaching.shortlist(zero) and _pointer(s) is None
+        notes = _coaching_strings(_section(ET.fromstring(_report(s)), "COACHING"))["notes"]
+        assert notes[0].startswith(coaching.scope_note(page=False, n=0)), notes[0]
+    finally:
+        s.coaching_opportunities = real_co
+    # The empty state: no pointer.
+    assert _pointer(_sessions()["twolaps"]) is None
+    # Escaped like every other note.
+    evil = '<b id="x">&</b>'
+    real_tp = coaching.totals_pointer
+    coaching.totals_pointer = lambda *a, **k: evil
+    try:
+        page = _report(s)
+    finally:
+        coaching.totals_pointer = real_tp
+    assert '<b id="x">' not in page and html.escape(evil) in page
+    print("ok P2: the totals pointer, from the page's figures, only where both are printed")
+
+
+def test_the_scope_note_counts_the_shortlist_the_headline_sums():
+    """Review of #592 (P3): "your top 3 corners" under a headline summing two, and a total
+    described where none is printed. Counted in the headline's words; at 3 the app's sentence is
+    the one it always printed."""
+    three = coaching.scope_note()
+    assert three == coaching.scope_note(n=3) and three.endswith(
+        "The total is your top 3 corners that cleared the evidence gate; corners that did not are "
+        "listed below with the reason."), three
+    assert "The total is your top 2 corners that cleared" in coaching.scope_note(n=2)
+    assert "The total is your worst corner that cleared" in coaching.scope_note(n=1)
+    none = coaching.scope_note(n=0)
+    assert "No corner clears its own lap-to-lap spread, so there is no total" in none, none
+    assert "top 0" not in none and "The total is" not in none
+    assert coaching_panel.scope_tooltip(3) == coaching_panel._SCOPE_TOOLTIP
+    # Seed 7 provisional ranks two: the report's note says two, as its headline does.
+    s = _sessions()["seed7prov"]
+    got = _coaching_strings(_section(ET.fromstring(_report(s)), "COACHING"))
+    assert "top 2 corners" in got["lead"][0] and "your top 2 corners that" in got["notes"][0]
+    print("ok P3: the scope note counts the headline's shortlist")
+
+
 if __name__ == "__main__":
     test_the_page_opens_on_the_card_and_coaching_before_the_stats_groups()
     test_every_coaching_string_is_page_texts_in_the_pages_order()
@@ -318,4 +406,6 @@ if __name__ == "__main__":
     test_one_self_contained_page_with_every_string_escaped()
     test_print_draws_the_card_with_a_hairline_beside_coaching()
     test_mph_reaches_the_coaching_reasons()
+    test_coachings_total_and_the_ideal_gap_are_told_apart_on_the_first_screen()
+    test_the_scope_note_counts_the_shortlist_the_headline_sums()
     print("test_report_front: OK")

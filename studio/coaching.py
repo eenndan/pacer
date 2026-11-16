@@ -2081,16 +2081,43 @@ COLUMN_TIPS = {
 }
 
 
-def scope_note(*, page: bool = True) -> str:
+def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:
     """What the rows are a statistic OVER and what the headline total counts (IA-01): the page's
     words (`page`, the headline strip's hover, which also says the rows do not follow the selected
-    lap), or the report's, which has no lap to select and prints the rows above this note."""
+    lap), or the report's, which has no lap to select and prints the rows above this note.
+
+    `n` is the shortlist the headline sums (`len(shortlist(opps))`), counted in the headline's own
+    words: "your top 3 corners", "your worst corner", and with none ranked the headline's "no corner
+    clears its own lap-to-lap spread" — this sentence said "your top 3" over a headline reading
+    "top 2", and described a total on a page that printed none. At n = PANEL_TOP_N it is the
+    sentence the panel always printed, byte for byte."""
     selection = (" — these rows do NOT follow the lap you select; the Corners tab is the per-lap "
                  "view." if page else ".")
+    where = "below" if page else "above"
+    if n <= 0:
+        total = (f"No corner clears its own lap-to-lap spread, so there is no total; every "
+                 f"corner is listed {where} with the reason it did not clear the evidence gate.")
+    else:
+        what = "your worst corner that" if n == 1 else f"your top {n} corners that"
+        total = (f"The total is {what} cleared the evidence gate; corners that did not are "
+                 f"listed {where} with the reason.")
     return ("The biggest realistic time gains vs your own best lap, across the WHOLE session "
-            f"(the median over your clean, GPS-dropout-free laps){selection} The total is your "
-            f"top {PANEL_TOP_N} corners that cleared the evidence gate; corners that did not are "
-            f"listed {'below' if page else 'above'} with the reason.")
+            f"(the median over your clean, GPS-dropout-free laps){selection} {total}")
+
+
+def totals_pointer(top_total: float, n: int, ideal_gap: str, *, corners_note: bool) -> str:
+    """The report's last COACHING note: why its headline total and IDEAL LAP's gap, both "vs your
+    best", are not one quantity (review of #592). The headline's `top_total` over its `n` corners is
+    how far the typical pass sits from the best lap's — time ABOVE the best lap — while the ideal
+    lap's gap (`ideal_gap`, the figure IDEAL LAP prints, e.g. "0.32 s") is time UNDER it. Built from
+    the two printed figures only; `corners_note` adds the pointer to the CORNERS reconciliation,
+    when the page prints it. Report only: the app shows the two on different tabs."""
+    through = "this corner" if n == 1 else f"these {plural(n, 'corner')}"
+    tail = ("; the note under CORNERS ties the two together." if corners_note else ".")
+    return (f"{top_total:.2f} s is how far your {stats_service.TYPICAL_PASS} through "
+            + through + " sits from your "
+            f"best lap's — it is not time under your best lap. Time under your best lap is the "
+            f"ideal lap's {ideal_gap} (IDEAL LAP below){tail}")
 
 
 def medians_note(*, bars: bool = True) -> str:

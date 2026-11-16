@@ -1477,10 +1477,18 @@ JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's b
 # What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
 # quotes it; the live theme + actions are prepended to it (see _refresh_summary_label).
 # Its scope sentences are `coaching.scope_note`'s, which the exported report prints too.
-_SCOPE_TOOLTIP = (
-    coaching.scope_note() + " Coaching ▸ Opportunities (or the panel's maximize button) shows "
-    "this page full-window, where "
-    "each row also carries where in the corner the time goes and a Jump to it.")
+_SCOPE_FULL_WINDOW = (" Coaching ▸ Opportunities (or the panel's maximize button) shows "
+                      "this page full-window, where "
+                      "each row also carries where in the corner the time goes and a Jump to it.")
+
+
+# The total it describes is the headline's shortlist, counted as the headline counts it.
+def scope_tooltip(n: int = PANEL_TOP_N) -> str:
+    """The strip's scope hover over a headline summing `n` ranked corners (`coaching.scope_note`)."""
+    return coaching.scope_note(n=n) + _SCOPE_FULL_WINDOW
+
+
+_SCOPE_TOOLTIP = scope_tooltip()
 
 
 def more_rows_hint(hidden: list) -> str:
@@ -2268,5 +2276,6 @@ class OpportunitiesPanel(QWidget):
         # The retired modal's title named the typical lap, and until COACHING-2 this line did: the
         # reasons (ADV-1) and the bars are medians over the clean laps now, and no lap is named.
         typical = " " + coaching.medians_note() if self._headline else ""
-        scope = _SCOPE_TOOLTIP + typical
+        # The scope counts the shortlist the headline above it sums (none ranked: no total).
+        scope = (scope_tooltip(len(self._shortlist)) if self._headline else _SCOPE_TOOLTIP) + typical
         self.summary_label.setToolTip(f"{story}\n\n{scope}" if story else scope)
