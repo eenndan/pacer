@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print
+from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print, lap_label
 from .consistency import sigma
 from .library import PB_PRECISION_S
 
@@ -457,6 +457,98 @@ def marked_corners(report, top_n: int) -> list[CornerReport]:
     ranked = sorted(report, key=lambda r: -r.score)[:k]
     return [r for r in ranked if r.score > 0 and r.middle_half_s is not None
             and r.middle_half_s >= MARK_MIN_MIDDLE_HALF_S]
+
+
+# ---- the CORNERS table's words, shared by the Stats page (stats_corners, a Qt module) and the
+# exported report (export_data, Qt-free): one rule, one glyph, one sentence on both.
+#: The mark on a marked corner's loss cell (why ◆, not ⚠ or ▲: stats_corners.WORST_LOSS_MARK).
+CORNER_MARK = "◆"
+#: At most this many corners carry it (`marked_corners`' `top_n`).
+CORNER_MARK_N = 3
+
+
+def corner_mark_rule(*, hover: bool = True) -> str:
+    """What the mark means and how it is ranked: the CORNERS tooltip's sentence (`hover`), or the
+    report's, where the middle half is a column of its own and nothing can be hovered."""
+    where = "(the σ cell's hover)" if hover else "(the Middle half column)"
+    score = "; hover one for its own score" if hover else ""
+    return (
+        f"Up to {CORNER_MARK_N} loss cells are marked {CORNER_MARK} and tinted: the "
+        "corners where your passes vary most and cost most, ranked by the middle half "
+        f"{where} × median loss, which is why the marked cells are not "
+        f"simply this column's three largest numbers{score}. The "
+        "middle half is used rather than σ so that one unusual pass cannot earn the "
+        f"mark. A corner with fewer than {MIN_MIDDLE_HALF_N} counted "
+        "passes is never marked, and a corner whose middle half is under "
+        f"{MARK_MIN_MIDDLE_HALF_S:.2f} s, the level step, is never "
+        "marked. It is a consistency ranking, not the Coaching tab's list of what "
+        "to work on (time lost against your best lap), so the two need not agree.")
+
+
+def corner_one_pass_note(report) -> str:
+    """"" unless ONE pass carries most of a corner's σ (`CornerReport.one_pass_sigma`), which is
+    why such a corner is not marked on σ's word; else the sentence naming that pass. The pass
+    stays in every number on the row; only the sentence's σ leaves it out."""
+    if not getattr(report, "one_pass_sigma", False):
+        return ""
+    lap = getattr(report, "worst_pass_lap", None)
+    name = "" if lap is None else f"L{lap_label(lap)}: "
+    return (f"One pass carries most of this σ ({name}"
+            f"{fmt_signed(report.worst_pass_vs_median_s, unit='s')} against the median); "
+            f"without it σ would be {report.sigma_without_worst_s:.2f} s.")
+
+
+def corner_count_note(report, *, page: bool = True) -> list[str]:
+    """The CORNERS note's opening sentences: what Med loss is measured against (its sum), and,
+    when not every lap counted, how many lap × corner times did and why the rest did not. `page`
+    False is the report's wording: it has no CORNERS BY LAP grid to mute them in, and names them
+    in its laps table's corners_interpolated column instead."""
+    shown = ("shown muted lap by lap" if page
+             else "named lap by lap in the laps table's corners_interpolated column")
+    total = sum(r.median_loss_s for r in report if r.median_loss_s is not None)
+    parts = [f"Med loss is measured against each corner's own Best above — the quickest "
+             f"anyone went through it, which is usually not your best lap's corner. "
+             f"Summed, that is {total:.2f} s."]
+    # C4: which cells this table counted, when that is not all of them — the one thing that
+    # makes its numbers differ from a surface that counts every lap (corner_report).
+    counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
+    left_out = sum(of - n for n, of in counted)
+    if left_out:
+        was, are = ("was", "is") if left_out == 1 else ("were", "are")
+        parts.append(
+            f"Only corners matched on track count: {sum(n for n, _ in counted)} of "
+            f"{sum(of for _, of in counted)} lap × corner times here; the other {left_out} "
+            f"{was} interpolated between matched points, and {are} {shown}.")
+        untimed = [f"C{r.cid}" for r in report if getattr(r, "n_laps", None) and r.n == 0]
+        if untimed:
+            parts.append(f"No lap matched {', '.join(untimed)} on track, so "
+                         f"{'it has' if len(untimed) == 1 else 'they have'} no times.")
+    return parts
+
+
+def corner_no_mark_note(report) -> str:
+    """A short session where NO corner has the passes a middle half needs says why there is no
+    mark at all, rather than leave a reader to infer that every corner is steady; else ""."""
+    if all(getattr(r, "middle_half_s", None) is None for r in report):
+        return f"No {CORNER_MARK} under {MIN_MIDDLE_HALF_N} counted passes per corner."
+    return ""
+
+
+# ---- the PACE σ tile's words (stats_panel), shared with the exported report.
+SIGMA_CAPTION = "σ lap"
+SIGMA_TOOLTIP = (
+    "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half "
+    "spans the central 50 % of your clean laps, slowest of them minus fastest (their "
+    "interquartile range). Neither removes a lap. "
+    f"The middle half is shown from {MIN_MIDDLE_HALF_N} clean laps; under "
+    f"{MIDDLE_HALF_FLOOR_S:.2f} s it is inside the timing precision of a gap "
+    f"between two laps and reads < {MIDDLE_HALF_FLOOR_S:.2f} s.")
+
+
+def sigma_caption(middle_half: float | None) -> str:
+    """The σ tile's caption: "σ lap", plus the middle half's span when there are laps enough."""
+    shown = fmt_middle_half(middle_half)
+    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half spans {shown}"
 
 
 @dataclass(frozen=True)

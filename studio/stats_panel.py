@@ -842,7 +842,7 @@ def peak_brake_tooltip_gps(why: str) -> str:
             f"lap's own fixes (see DRIVING). One axis, more than one filter.")
 
 
-SIGMA_CAPTION = "σ lap"
+SIGMA_CAPTION = stats_service.SIGMA_CAPTION
 # THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
 # tile taller than its row-mates, and a grid row is as tall as its tallest tile. It reads "middle
 # half SPANS 0.59 s", never "within": "within 0.59 s" invited a ± reading, a band twice as wide
@@ -851,19 +851,9 @@ SIGMA_CAPTION = "σ lap"
 # about 340 px. It never gets less than 486: the window's minimum width is 1059 px, and at that
 # width (as at 1280 x 800) the Stats viewport is 486 px, the row ending at 420. The row stays 37 px
 # tall at every width from 300 to 1440 px.
-SIGMA_TOOLTIP = (
-    "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half "
-    "spans the central 50 % of your clean laps, slowest of them minus fastest (their "
-    "interquartile range). Neither removes a lap. "
-    f"The middle half is shown from {stats_service.MIN_MIDDLE_HALF_N} clean laps; under "
-    f"{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s it is inside the timing precision of a gap "
-    f"between two laps and reads < {stats_service.MIDDLE_HALF_FLOOR_S:.2f} s.")
-
-
-def sigma_caption(middle_half: float | None) -> str:
-    """The σ tile's caption: "σ lap", plus the middle half's span when there are laps enough."""
-    shown = stats_service.fmt_middle_half(middle_half)
-    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half spans {shown}"
+SIGMA_TOOLTIP = stats_service.SIGMA_TOOLTIP
+# The σ tile's caption (shared with the exported report's PACE note).
+sigma_caption = stats_service.sigma_caption
 
 
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "

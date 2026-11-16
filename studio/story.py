@@ -535,6 +535,32 @@ def moment_row(m: Moment) -> MomentRow:
     return MomentRow(_ROW_LABEL[BEST_WINDOW], value, jump, None)
 
 
+# What a moment is, with its tie rule, and how the 5-lap run differs from the PACE row's race pace
+# (a median of five against a mean of three: on the shipped demo the run reads 0:45.182 under the
+# tile's 0:45.246, which without this would read as a contradiction). One rule, two surfaces: the
+# Stats page's MOMENTS tooltip names its Jump buttons; the exported report has none to name.
+_MOMENTS_WHAT = "Three measurements from this session's clean laps"
+_MOMENTS_RULE = (
+    f"figures within {PB_PRECISION_S:.2f} s of each other, the timing precision (wider on an "
+    "estimated clock), are named as level rather than ranked. The 5-lap run is the best median of "
+    "5 consecutive clean laps, not the PACE row's race pace, which is the best mean of 3.")
+MOMENTS_TOOLTIP = f"{_MOMENTS_WHAT}, each with a Jump to where it happened; {_MOMENTS_RULE}"
+MOMENTS_NOTE = f"{_MOMENTS_WHAT}; {_MOMENTS_RULE}"
+
+
+def shown_moments(sm: SessionMoments | None) -> list[Moment]:
+    """The moments a surface prints, in order: the present ones — except that a lone UNTIED best
+    lap is none at all. It is the PACE row's best tile word for word ("Best lap: Lap 3 · 0:45.280"
+    under "best 0:45.280"): on a session with no corner grid and no 5-lap run that was the whole
+    section, 116 px for nothing (QA W4). A tied best names laps the tile does not, so it stays.
+    The Stats page's MOMENTS section and the exported report both read this."""
+    moments = [m for m in ((sm.best_lap, sm.biggest_loss, sm.best_window) if sm else ())
+               if m is not None]
+    if len(moments) == 1 and moments[0].kind == BEST_LAP and not moments[0].tie:
+        return []
+    return moments
+
+
 def session_moments(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
                     best_lap: int | None, *, provisional: bool = False,
                     clock_estimated: bool = False) -> SessionMoments:

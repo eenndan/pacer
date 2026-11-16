@@ -732,6 +732,174 @@ def test_provisional_timing_withholds_the_best_lap_cue_the_app_withholds():
     assert "PROVISIONAL" in (meta["Timing"] or ""), meta["Timing"]
 
 
+# ------------------------------------------------------------- the report's story (report-story)
+# The report tells what the app tells: MOMENTS, CORNERS (◆), the slow-lap notes and the lap strip,
+# each printed from the function the app's surface reads. The story is PLANTED through those same
+# functions (`stats.corner_matrix` / `story.*` / `stats.corner_report`) over synthetic corner
+# times, and attached to a bare session as its accessors, so the page can be held to their strings.
+_STORY_CIDS = [1, 2, 3, 4]
+
+
+def _planted_story(times_by_lap, cells_by_lap, *, provisional=False, estimated=False):
+    """(moments, notes, corner_report) over planted lap and corner times (laps 10…)."""
+    from studio import story
+    ids = sorted(times_by_lap)
+    best = ids[0]  # lap 10, the quickest by construction
+    mx = stats_service.corner_matrix(ids, _STORY_CIDS, [cells_by_lap[i] for i in ids],
+                                     [[True] * len(_STORY_CIDS) for _ in ids])
+    kw = dict(provisional=provisional, clock_estimated=estimated)
+    moments = story.session_moments(times_by_lap, mx, best, **kw)
+    notes = story.slow_lap_notes(times_by_lap, mx, best, first_lap_id=ids[0], **kw)
+    report = stats_service.corner_report(
+        _STORY_CIDS, [1, -1, 1, -1], [cells_by_lap[i] for i in ids],
+        [[60.0] * len(_STORY_CIDS) for _ in ids], [[float("nan")] * len(_STORY_CIDS) for _ in ids],
+        [[True] * len(_STORY_CIDS) for _ in ids], lap_ids=ids)
+    return moments, notes, report
+
+
+def _story_field(*, tie=False, slow=True, erratic=True):
+    """20 planted laps (ids 10-29): corner 1 erratic (two lines, ◆), lap 15 slow at corner 2,
+    the best lap 10 — with `tie`, lap 20 within 0.03 s of it."""
+    rng = np.random.default_rng(3)
+    times, cells = {}, {}
+    for k, lap in enumerate(range(10, 30)):
+        c = [3.0, 2.5, 4.0, 3.5] + rng.uniform(-0.02, 0.02, 4)
+        if erratic and k % 2:
+            c[0] += 0.4
+        if slow and lap == 15:
+            c[1] += 1.5
+        cells[lap] = [float(x) for x in c]
+        times[lap] = 46.0 + float(sum(c) - 13.0) + (1.6 if slow and lap == 15 else 0.0)
+    times[10] = 45.0
+    if tie:
+        times[20] = 45.03
+    return times, cells
+
+
+def _with_story(s, moments, notes, report):
+    s.session_moments = lambda: moments
+    s.slow_lap_notes = lambda: notes
+    s.corner_report = lambda: report
+    return s
+
+
+def _report_text(s, **kw):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "report.html")
+        export_data.write_report_html(path, s, source_label="GX010060", **kw)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+
+def _h2s(text):
+    return ["".join(h.itertext()) for h in ET.fromstring(text).iter("h2")]
+
+
+def test_the_report_tells_the_apps_story_in_its_order_and_words():
+    """MOMENTS, CORNERS, SLOW LAPS and the lap strip are on the page, in the Stats page's order
+    then the Laps tab's, and every sentence is the app function's own string: `story.moment_row`,
+    `SlowLapNote.text` / `.rule`, `stats.corner_mark_rule`, the ◆ on `stats.marked_corners`."""
+    from studio import story
+    times, cells = _story_field()
+    moments, notes, report = _planted_story(times, cells)
+    s = _with_story(make_session(), moments, notes, report)
+    text = _report_text(s, images=[("Track map", PNG_1PX)], lapstrip=PNG_1PX)
+    heads = _h2s(text)
+    want = ["SESSION", "PACE", "MOMENTS", "SPEED · G", "CORNERS · speeds in km/h", "SLOW LAPS",
+            "LAP STRIP", f"Laps ({len(s.valid_lap_ids())})", "Track map"]
+    assert [h for h in heads if h in want] == want, heads
+    body = "".join(ET.fromstring(text).itertext())
+    shown = story.shown_moments(moments)
+    assert len(shown) == 3, shown
+    for m in shown:
+        row = story.moment_row(m)
+        assert row.label in body and row.value in body, row
+    assert story.MOMENTS_NOTE in body and "Jump" not in story.MOMENTS_NOTE
+    (note,) = notes
+    assert note.lap_id == 15 and note.text in body and note.rule in body, note
+    # The ◆ sits on exactly the corners the Stats page marks, and its rule is printed.
+    marked = {r.cid for r in stats_service.marked_corners(report, stats_service.CORNER_MARK_N)}
+    assert marked == {1}, marked
+    corner_rows = {tr.findtext("td"): [td.text for td in tr.findall("td")]
+                   for t in ET.fromstring(text).iter("table")
+                   if [th.text for th in t.findall("tr/th")][:1] == ["Corner"]
+                   for tr in t.findall("tr")[1:]}
+    assert [c for c, cs in corner_rows.items() if cs[5].startswith("◆ ")] == ["C1"], corner_rows
+    by_cid = {r.cid: r for r in report}
+    assert corner_rows["C1"][4] == stats_service.fmt_middle_half(
+        by_cid[1].middle_half_s, stats_service.CORNER_MIDDLE_HALF_FLOOR_S), corner_rows["C1"]
+    assert stats_service.corner_mark_rule(hover=False) in body
+    assert "hover" not in stats_service.corner_mark_rule(hover=False)
+    # PACE carries the σ tile's hover, "middle half spans" in the page's words.
+    assert stats_service.SIGMA_TOOLTIP in body and "middle half spans" in body
+    print(f"ok report-story: {len(heads)} sections in the app's order, the app's own strings")
+
+
+def test_a_tie_is_named_level_and_a_lone_untied_best_is_no_moments_section():
+    """Ties within the timing precision are named level, in `moment_row`'s words; a session whose
+    only moment is an untied best lap gets no MOMENTS section (it repeats the PACE best tile)."""
+    from studio import story
+    times, cells = _story_field(tie=True)
+    moments, notes, report = _planted_story(times, cells)
+    assert [t.lap_ids for t in moments.best_lap.tie] == [(20,)], moments.best_lap
+    text = _report_text(_with_story(make_session(), moments, notes, report))
+    value = story.moment_row(moments.best_lap).value
+    assert "is level (0.030 s, under the 0.07 s timing precision)" in value, value
+    assert value in "".join(ET.fromstring(text).itertext())
+
+    lone = story.SessionMoments(best_lap=story.session_moments({0: 45.0, 1: 46.0}, None, 0)
+                                .best_lap, biggest_loss=None, best_window=None)
+    assert lone.best_lap is not None and not lone.best_lap.tie
+    text = _report_text(_with_story(make_session(), lone, [], []))
+    assert "MOMENTS" not in _h2s(text) and "CORNERS" not in " ".join(_h2s(text))
+    print("ok report-story: a tie is named level; a lone untied best has no MOMENTS section")
+
+
+def test_provisional_timing_carries_through_moments_and_notes():
+    """Under a provisional line the app has no best-lap moment and the notes carry the caveat
+    (`story`'s one rule); the report prints neither more nor less, and stamps both sections with
+    its own Timing sentence. The strip's gate is the caller's: it passes no strip."""
+    times, cells = _story_field(tie=True)
+    moments, notes, report = _planted_story(times, cells, provisional=True)
+    assert moments.best_lap is None and notes and notes[0].caveat == ("provisional",)
+    s = _with_story(make_session(), moments, notes, report)
+    s.track_name = None
+    s._timing_user_confirmed = False
+    text = _report_text(s)
+    body = "".join(ET.fromstring(text).itertext())
+    assert "Best lap:" not in body and "Best lap" in _meta_rows(ET.fromstring(text))
+    stamp = f"Timing: {export_data.timing_meta(s)}"
+    assert "PROVISIONAL" in stamp and body.count(stamp) == 2, body.count(stamp)
+    assert "LAP STRIP" not in _h2s(text)
+    print("ok report-story: provisional timing — no best moment, both sections stamped")
+
+
+def test_the_report_is_one_self_contained_page_in_the_given_tokens():
+    """No network fetch and no external asset: no http(s) anywhere, every src a data: URI, no
+    script, link or CSS url(). Screen colours are the passed tokens; print is paper; a token that
+    is not a plain #RRGGBB colour is refused rather than written into the page."""
+    times, cells = _story_field()
+    s = _with_story(make_session(), *_planted_story(times, cells))
+    tokens = {name: "#15181E" for name in export_data.REPORT_TOKENS}
+    text = _report_text(s, images=[("Track map", PNG_1PX, 400)], lapstrip=PNG_1PX, tokens=tokens)
+    root = ET.fromstring(text)
+    assert "http" not in text.lower() and "url(" not in text and "@import" not in text
+    assert not list(root.iter("script")) and not list(root.iter("link"))
+    srcs = [el.get("src") for el in root.iter() if el.get("src") is not None]
+    assert len(srcs) == 2 and all(x.startswith("data:image/png;base64,") for x in srcs), srcs
+    css = "".join(root.iter("style").__next__().itertext())
+    screen, paper = css.split("@media print", 1)
+    assert "--canvas: #15181E;" in screen and "--text-dim: #15181E;" in screen
+    assert f"--canvas: {export_data.PAPER_TOKENS['canvas']};" in paper
+    try:
+        export_data.report_css({**tokens, "text": "red; } body { x"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a non-colour token was written into the page")
+    print("ok report-story: one self-contained page, tokens on screen, paper in print")
+
+
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_laps_table_degenerate_schema()
@@ -749,4 +917,8 @@ if __name__ == "__main__":
     test_write_laps_csv_stays_si_whatever_the_report_does()
     test_report_html_no_images_no_corners()
     test_provisional_timing_withholds_the_best_lap_cue_the_app_withholds()
+    test_the_report_tells_the_apps_story_in_its_order_and_words()
+    test_a_tie_is_named_level_and_a_lone_untied_best_is_no_moments_section()
+    test_provisional_timing_carries_through_moments_and_notes()
+    test_the_report_is_one_self_contained_page_in_the_given_tokens()
     print("test_export_data: OK")
