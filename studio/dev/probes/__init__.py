@@ -211,4 +211,13 @@ seeded draws of the timing's own noise. It is deterministic and `tests/test_meas
 re-runs it. Its verdicts are `studio/docs/refused-2026-09.md` §29, §30, §31 and §32.
 
     pixi run python -m studio.dev.probes.story_refusals
+
+`corner_refusals` measures two things the W5 discovery round proposed about corners, on the
+synthetic demo through `Session.load` alone: the sentence "N of M slow laps lost their time at one
+corner" against an exact null of culprits drawn at random, and splitting a long corner window,
+from its curvature and where each pass loses its time against the ringed apex. It is deterministic
+and `tests/test_measured_figures.py` re-runs it. Its verdicts are
+`studio/docs/refused-2026-09.md` §33 and §34.
+
+    pixi run python -m studio.dev.probes.corner_refusals
 """
