@@ -51,6 +51,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import time
 from fractions import Fraction
 from types import SimpleNamespace
@@ -65,7 +66,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # rewrite the user's own preferences and tracks.json.
 from studio import library, prefs, sidecar, track_db  # noqa: E402
 
-_SEAMS = tempfile.mkdtemp(prefix="pacer-test-export-gates-")
+# A TemporaryDirectory held for the module's life, not a bare mkdtemp: the object removes its tree
+# when the process exits, where mkdtemp left one behind per run (1,309 of them were counted).
+_SEAMS_DIR = tempfile.TemporaryDirectory(prefix="pacer-test-export-gates-")
+_SEAMS = _SEAMS_DIR.name
 for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db")):
     _dir = os.path.join(_SEAMS, _name)
     os.makedirs(_dir, exist_ok=True)
@@ -1764,7 +1768,7 @@ class _E3Decoder:
         self._dead = True
 
 
-def _e3_export(win, td, *, resolves, fail, free_after, decode_frames=None):
+def _e3_export(win, td, *, resolves, fail, free_after, decode_frames=None, beside=None):
     """File ▸ Export overlay video… end to end into `td`.
 
     `resolves` = what this machine's "auto" resolves to: VT_H264 (this Mac) or SW_H264 (a Mac
@@ -1776,6 +1780,8 @@ def _e3_export(win, td, *, resolves, fail, free_after, decode_frames=None):
     happen. `decode_frames` = {"hardware": n, "software": m}: the machine opens the hardware
     decode, and each decode delivers that many frames before its stream ends (None = all of them);
     the render runs on the serial pump, whose decoder is the plain pipe this fake can stand in for.
+    `beside` = a callable run to completion on another thread once ffmpeg is faked and before the
+    export starts: what a probe some other code left running does at the worst moment.
     Returns what the user, the renderer and the disk saw."""
     src = os.path.join(td, "GX010099.MP4")
     if not os.path.exists(src):
@@ -1790,7 +1796,20 @@ def _e3_export(win, td, *, resolves, fail, free_after, decode_frames=None):
             return _E3_ROOM                        # the pre-flight guard's question
         return after.pop(0) if after else _E3_ROOM
 
-    def _popen(cmd, **_kw):
+    # THE FAKE ANSWERS FOR THIS EXPORT ONLY. `subprocess.Popen` is the PROCESS's, so every
+    # subprocess any thread starts while it is patched lands here — and the export dialog's
+    # warm-up probe (`warm_export_probes`, left running by an earlier test that opened the real
+    # dialog) encodes a frame through prores_videotoolbox. Under load its VideoToolbox session
+    # opens late enough to land inside this window: the fake took it for a render encoder
+    # (['h264_videotoolbox', 'libx264', 'prores_videotoolbox', …]) and the order assertions
+    # failed on a chain that was right. Every command the render spawns names this export's
+    # source or output, both under `td`; anything else goes to ffmpeg as it would in the app.
+    real_popen = export_video.subprocess.Popen
+    mine = td.rstrip(os.sep) + os.sep
+
+    def _popen(cmd, **kw):
+        if not any(str(arg).startswith(mine) for arg in cmd):
+            return real_popen(cmd, **kw)
         if cmd[-1] == "pipe:1":
             kind = "hardware" if "-hwaccel" in cmd else "software"
             decodes.append(kind)
@@ -1860,6 +1879,10 @@ def _e3_export(win, td, *, resolves, fail, free_after, decode_frames=None):
     QDialog.exec = _exec
     QMessageBox.exec = _box_exec
     try:
+        if beside is not None:
+            other = threading.Thread(target=beside, name="e3-beside")
+            other.start()
+            other.join()
         win._paths = [src]
         win.statusBar().clearMessage()
         win.exports.export_overlay_video()
@@ -1907,6 +1930,36 @@ def test_a_false_no_space_takes_the_libx264_retry_and_never_says_disk_full():
             assert os.path.exists(seen.out), "the retry's file is not there"
     win.hide()
     print("ok E3: ffmpeg's false 'no space' with room (or an unknown volume) retries and finishes")
+
+
+def test_a_probe_running_beside_the_export_is_not_counted_as_its_encoder():
+    """The E3 exports fake ffmpeg for the whole process, so they must not answer for anyone else.
+
+    The export dialog's warm-up probe encodes one ProRes frame through prores_videotoolbox on its
+    own thread; earlier tests in this file open the real dialog, and on a loaded Mac (load 11-19,
+    other lanes encoding) that probe's VideoToolbox session opened late enough to land inside an
+    E3 export. The fake took it for a render encoder and the libx264 retry's order assertion
+    failed — ['h264_videotoolbox', 'libx264', 'prores_videotoolbox', …] — on a chain that was
+    right. Here the same probe runs, deterministically, inside the window: the export still sees
+    exactly its two encoders, and the probe gets the real ffmpeg (on a machine without
+    VideoToolbox it simply answers False)."""
+    win = _window(FakeSession())
+    probe = {}
+
+    def _warm_up_probe():
+        try:
+            probe["ok"] = export_video.prores_alpha_round_trip(export_video.VT_PRORES)
+        except OSError:                 # no ffmpeg on PATH: the real world said no, not the fake
+            probe["ok"] = False
+
+    with tempfile.TemporaryDirectory() as td:
+        seen = _e3_export(win, td, resolves=export_video.VT_H264, fail={export_video.VT_H264},
+                          free_after=[_E3_ROOM], beside=_warm_up_probe)
+        assert "ok" in probe, "the probe beside the export was answered by the export's fake ffmpeg"
+        assert seen.encoders == [export_video.VT_H264, export_video.SW_H264], (
+            f"a probe beside the export was counted as one of its encoders: {seen.encoders}")
+    win.hide()
+    print("ok E3: a probe beside the export is not counted as its encoder")
 
 
 def test_a_disk_that_really_filled_gets_no_retry_and_a_true_sentence():
@@ -2430,6 +2483,7 @@ def _run_all():
     test_an_export_that_fits_or_cannot_be_measured_is_not_refused()
     test_an_all_laps_batch_is_held_to_the_sum_of_its_files()
     test_a_false_no_space_takes_the_libx264_retry_and_never_says_disk_full()
+    test_a_probe_running_beside_the_export_is_not_counted_as_its_encoder()
     test_a_disk_that_really_filled_gets_no_retry_and_a_true_sentence()
     test_without_videotoolbox_a_no_space_claim_is_still_checked_against_the_disk()
     test_a_hardware_decode_that_runs_dry_retries_on_the_software_decode()

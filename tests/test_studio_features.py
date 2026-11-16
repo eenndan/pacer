@@ -231,8 +231,9 @@ class _FakeLapSession:
         return set()
 
 
-def test_laps_page_is_grid_plus_excluded_strip_only():
-    """The Laps page carries the lap grid and the excluded strip — nothing else.
+def test_laps_page_is_grid_finder_and_excluded_strip_only():
+    """The Laps page carries the lap grid, the slow-lap finder (hidden without a ▼ cue row) and
+    the excluded strip — nothing else.
 
     It used to end in a SESSION-BESTS footer (theoretical best / best rolling) that cost the grid
     63px — two lap rows — on every recording, with no collapse and no View toggle. Both numbers now
@@ -244,10 +245,13 @@ def test_laps_page_is_grid_plus_excluded_strip_only():
     sess = _FakeLapSession()
     table = LapTable(sess)
     assert table.table.rowCount() == 3
-    # Two children in the page layout: the table/empty-state stack, then the excluded strip.
+    # Three children in the page layout: the table/empty-state stack, the slow-lap finder, then
+    # the excluded strip. The finder is the one footer allowed back, because it costs nothing on a
+    # recording without a ▼ cue row (this one has none): hidden, it takes no pixel of the grid.
     lay = table.layout()
-    assert lay.count() == 2, [lay.itemAt(i).widget() for i in range(lay.count())]
+    assert lay.count() == 3, [lay.itemAt(i).widget() for i in range(lay.count())]
     assert lay.itemAt(0).widget() is table._stack
+    assert lay.itemAt(1).widget() is table._slow_finder and table._slow_finder.isHidden()
     # No stray "SESSION BESTS" caption, and no footer attributes to render one from.
     labels = [w.text() for w in table.findChildren(QLabel)]
     assert not any("SESSION BESTS" in t for t in labels), labels
@@ -257,7 +261,7 @@ def test_laps_page_is_grid_plus_excluded_strip_only():
     assert table._best_split == sess.session_best_splits()
     # And the fake's numbers respect the sandwich the real session guarantees.
     assert sess.theoretical_best() <= sess.best_rolling_lap() <= 68.4
-    print("test_laps_page_is_grid_plus_excluded_strip_only OK")
+    print("test_laps_page_is_grid_finder_and_excluded_strip_only OK")
 
 
 # ------------------------------------- L3: multi-select cap (no silent chart truncation)
