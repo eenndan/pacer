@@ -334,14 +334,16 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   waivers? The one recording on this machine is not one RUL-9 approved for publishing.
 - **Addendum, 2026-11-16: the Lap race may follow the field** (`cool/race-follow`), superseding
   "there is no follow-cam" above. That default rested on a range change per tick being a full
-  repaint; measured, it is not: at the 917×230 map of a 1440×900 window, a whole race at 30 Hz
-  took a median 22.1 ms a tick plain and 23.1 ms with Follow on a 40-lap synthetic (18.9 and 20.0
-  ms on the demo), on a Mac loaded past 20 (the discovery round's 11.8 ms against 12.3 ms ran at
-  load 5). It ships as an option, off by default and
+  repaint; the typical tick says otherwise: on the demo at the 917×230 map of a 1440×900 window,
+  at a load of 9 to 15, a whole race at 30 Hz took a median 8.8 ms a tick plain and 12.0 ms with
+  Follow, and a live range at a fixed 30 m or 60 m kept the p95 at 12.0 and 12.6 ms against the
+  plain race's 11.2 ms. The shipped Follow's p95 was 43 ms there, over the 33 ms frame, and its
+  cause was not isolated on the shared machine; that is why it stays an option, off by default and
   remembered once chosen (the race card's crosshair button, View ▸ Follow the race, ⇧R): the view
   centres on the median dot at the narrowest of 30 to 150 m that holds the whole field, eased in
   race time inside a dead-zone box, with a scale bar; with it off a race never touches the view,
-  and leaving puts the view back exactly. Open for the owner: should it be on by default?
+  and leaving puts the view back exactly. Open for the owner: should it be on by default, once its
+  slow ticks are found?
 
 ## 11. Recorded at the 0.10.0 release, 2026-11-16
 
