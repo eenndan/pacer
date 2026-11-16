@@ -366,6 +366,71 @@ def test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss():
           f"(widest corner line ends at x={max(r for r, *_ in widest)} of {right})")
 
 
+def test_the_opportunity_names_its_baseline_in_coachings_words():
+    """K2 (cool/card-and-keys): the demo's card read "+0.32 s vs your ideal lap" over "BIGGEST
+    OPPORTUNITY C1 +0.36 s" — a part bigger than its whole, because the opportunity is Coaching's
+    median loss against the BEST lap and only the ideal gap named its baseline. The opportunity now
+    names its own, in the words the Coaching headline prints the same number with (one constant)."""
+    assert coaching.LOSS_BASELINE == "vs your best lap"
+    assert share_card.opp_baseline() == f"median {coaching.LOSS_BASELINE}"
+    # ...and the page really does print it: the headline's phrase is the constant, not a copy.
+    import inspect
+
+    from studio import coaching_panel
+    src = inspect.getsource(coaching_panel)
+    assert "coaching.LOSS_BASELINE" in src and '" vs your best lap"' not in src
+    print("test_the_opportunity_names_its_baseline_in_coachings_words OK")
+
+
+def test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits():
+    """Rendered: the baseline sits on the heading row, right-aligned over the loss figure, clear of
+    the heading on its left and of the card's content edge on its right — for one corner, for the
+    widest heading (a tie), in km/h and mph, plain and stamped "estimated timing". The card has ONE
+    size (CARD_W × CARD_H, the exporter offers no other), so that size is every size. With no
+    ranked corner there is no figure, so there is no baseline either: the row keeps its single
+    "Drive a few more clean laps" line, as before."""
+    import dataclasses
+
+    pad, right = 72, share_card.CARD_W - 72
+    opp_top = 512 + share_card.MAP_PLATE_H_MAX + 56     # no map: the plate is at its max height
+    heading_band = (opp_top - 26, opp_top + 8)
+    lead = share_card.card_data(FakeSession(), unit="kmh")
+    tie = share_card.card_data(_working_set_session("MK_18_09_26"), unit="kmh")
+    assert lead.top_opp and tie.top_opp and tie.top_opp.tied_low_s is not None
+    cases = [lead, tie, share_card.card_data(FakeSession(), unit="mph"),
+             dataclasses.replace(lead, stamp="estimated timing"),
+             dataclasses.replace(tie, stamp="estimated timing")]
+    for data in cases:
+        img = share_card.render_card(data, None, palette=theme.PALETTE_STANDARD)
+        ink = sorted(set(_row_ink(img, *heading_band, theme.C.text_muted)))
+        # Two runs of muted ink on the row: the heading from `pad`, the baseline ending at `right`.
+        gaps = [(a, b) for a, b in zip(ink, ink[1:], strict=False) if b - a > 20]
+        assert gaps, ("no baseline beside the heading", share_card.opp_heading(data.top_opp))
+        head_end, base_start = max(gaps, key=lambda g: g[1] - g[0])
+        assert ink[0] >= pad and ink[-1] <= right, (ink[0], ink[-1])
+        assert right - ink[-1] <= 4, ("the baseline is not right-aligned over the figure", ink[-1])
+        assert base_start - head_end >= share_card._OPP_GAP - 4, (head_end, base_start)
+        # ...and the WHOLE line at its first size: the fit's later steps are a guard, not the look.
+        from PySide6.QtGui import QPainter
+        probe = QImage(10, 10, QImage.Format_ARGB32)
+        p = QPainter(probe)
+        try:
+            p.setFont(share_card._font(28, theme.W_SEMIBOLD))
+            avail = (right - pad - p.fontMetrics().horizontalAdvance(
+                share_card.opp_heading(data.top_opp)) - share_card._OPP_GAP)
+            txt, font = share_card._fit_line(p, share_card.opp_baseline(), avail,
+                                             share_card._OPP_BASE_PX_STEPS)
+        finally:
+            p.end()
+        assert txt == share_card.opp_baseline() and font.pixelSize() == 24, (txt, avail)
+    # No ranked corner: no figure, no baseline — the one muted line, from `pad`, ends well left.
+    none = share_card.render_card(dataclasses.replace(lead, top_opp=None), None,
+                                  palette=theme.PALETTE_STANDARD)
+    ink = _row_ink(none, *heading_band, theme.C.text_muted)
+    assert ink and max(ink) < share_card.CARD_W // 2 + 200, max(ink)
+    print("test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits OK")
+
+
 # --------------------------------------------------------------------- hero Δ-to-ideal copy
 def test_hero_delta_line_reads_cleanly_on_both_branches():
     """The Δ-to-ideal hero line reads like a shipped product on BOTH branches. A positive gap keeps
@@ -1358,6 +1423,8 @@ if __name__ == "__main__":
     test_card_data_survives_coaching_error()
     test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card()
     test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss()
+    test_the_opportunity_names_its_baseline_in_coachings_words()
+    test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits()
     test_hero_delta_line_reads_cleanly_on_both_branches()
     test_even_ideal_card_renders_with_the_clean_copy()
     test_single_donor_session_withholds_the_ideal_block()

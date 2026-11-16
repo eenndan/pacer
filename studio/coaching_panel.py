@@ -1991,7 +1991,7 @@ class OpportunitiesPanel(QWidget):
         else:
             gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
                      else f"{total:.2f} s across your top {len(rows)} corners")
-            gains += " vs your best lap"
+            gains += f" {coaching.LOSS_BASELINE}"
         # IA-01: LEAD with the scope. The tab strip beside this page renames itself "Corners · L6"
         # on a selection, so a coaching headline that neither moves nor names its scope reads as the
         # selected lap's number — on D24 lap 6 that understated the lap's own +2.08 s as "0.21 s".
