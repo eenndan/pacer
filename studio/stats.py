@@ -146,15 +146,10 @@ ONE_PASS_SIGMA_FRACTION = 0.5
 # draws: tests/test_stats.py), and a near-perfect session marks nothing, where both the σ and the unfloored middle-half
 # rules marked three corners of 0.016-0.019 s.
 MARK_MIN_MIDDLE_HALF_S = MIDDLE_HALF_FLOOR_S
-# The middle half of normally spread passes is 1.349 σ: dividing by it reads the width on σ's scale,
-# for a caller that weighs it against σ-scaled numbers (coaching's spread strength).
-IQR_PER_SIGMA = 1.349
-
-
 def corner_spread_clears_level(middle_half_s: float | None) -> bool:
     """True when a corner's middle half is a spread at all: measured (MIN_MIDDLE_HALF_N passes)
     and not under MARK_MIN_MIDDLE_HALF_S, the level step. The ONE test both tabs apply — the ◆
-    mark here (`marked_corners`) and the Coaching tab's consistency reason
+    mark here (`marked_corners`) and whether the Coaching tab may print its consistency reason
     (`coaching.summarize`) — so neither calls a spread inside the noise one the other works on."""
     return middle_half_s is not None and middle_half_s >= MARK_MIN_MIDDLE_HALF_S
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,

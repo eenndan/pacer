@@ -1174,6 +1174,11 @@ _REASON_TIP = {
                                  "coast, apex or line difference explains it. The spread is the "
                                  "middle half of your clean laps through this corner.",
     coaching.REASON_NONE: "Time is available here versus your best lap.",
+    coaching.REASON_LEVEL: "Time is available here versus your best lap, and no one input explains it: "
+                           "the middle half of your clean laps through this corner is under the "
+                           f"{coaching.LEVEL_STEP_S:.2f} s step Stats ▸ CORNERS calls level, so the "
+                           "spread is not a cause to "
+                           "work on either.",
 }
 
 
@@ -1982,10 +1987,7 @@ class OpportunitiesPanel(QWidget):
         # case there is no time to claim and the honest headline says so rather than totalling 0.00 s
         # "across your top 0 corners". The table below still lists those corners with their reasons.
         if not rows:
-            # A level corner (coaching.ABSTAIN_LEVEL) fails the timing precision, not its spread.
-            gains = ("no corner clears its own lap-to-lap spread and the timing precision"
-                     if any(r.evidence.abstain == coaching.ABSTAIN_LEVEL for r in self._all_rows)
-                     else "no corner clears its own lap-to-lap spread")
+            gains = "no corner clears its own lap-to-lap spread"
         else:
             gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
                      else f"{total:.2f} s across your top {len(rows)} corners")

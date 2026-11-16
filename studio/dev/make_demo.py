@@ -15,8 +15,7 @@ WHAT IS IN THE FILE:
     against the truth: on 8 of the 14 flying laps the kart brakes early and soft into C1 and carries
     less speed through it; on the other 6 (laps 7-10, 12 and 13, the best among them) it does not.
     That costs each habit lap ~0.51 s, and the Coaching page ranks C1 first at 0.361 s ("apex",
-    7.6 km/h short; 6 of 14 laps matched the best lap there) against 0.036 s for the next corner,
-    and since cool/coaching-level-step ranks it alone (the rest are level within 0.07 s) —
+    7.6 km/h short; 6 of 14 laps matched the best lap there) against 0.036 s for the next corner —
     where the first published demo (`demo-data-v1`, no habit) ranked four corners inside 0.05 s and
     its two fastest laps sat 0.002 s apart. Every clean lap's TRUE time is the habit-free one; the
     GPS noise differs, because the habit laps make the recording ~4.1 s longer;

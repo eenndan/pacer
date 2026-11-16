@@ -64,7 +64,7 @@ saying the two days were alike.
 The demo lands here on every open, and keeps nothing: no Library row, no personal best, and a focus
 list that lasts only while the demo is open.
 
-![The synthetic demo's debrief: the Coaching page full-window, a first line saying nothing is saved, the one corner Pacer put on the focus list with its baseline and a Remove, that ranked corner with its reason and a Jump to the video, and under it the best lap's time beside its speed-coloured line with the focus corner ringed](media/debrief.png)
+![The synthetic demo's debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time beside its speed-coloured line with the focus corners ringed](media/debrief.png)
 
 ## 4 · Read the lap
 
@@ -105,9 +105,7 @@ Opportunities**) ranks your corners by **time lost vs your best**, taken as the 
 your clean laps, each with a **reason** (apex speed, braking, coasting, a line difference, or else
 consistency) read off those same laps, and a count of how many of them already matched your best
 there — one row telling you
-*how much* time and whether you have *already done it*. A corner whose only reason would be
-consistency, with the middle half of your laps there under 0.07 s (the step Stats ▸ CORNERS calls
-level), is listed as level rather than ranked. It does not
+*how much* time and whether you have *already done it*. It does not
 follow your lap selection; the **Corners** tab is the per-lap view. Where your own laps show it,
 a row also says which way your braking went with your quicker passes through that corner
 ("Braking later went with quicker passes here (36 laps)"). That is measured from your laps, and it

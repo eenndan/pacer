@@ -63,6 +63,9 @@ REASON_COASTING = "coasting"
 REASON_LINE = "line"
 REASON_CONSISTENCY = "consistency"
 REASON_NONE = "none"  # a ranked corner with no positive signal (still shows the time lost)
+# The spread would be the reason, but the corner's passes are level (see "the level step" below):
+# the row keeps its rank and its time lost and names no cause. Never a theme's cause.
+REASON_LEVEL = "level"
 _REASON_PRIORITY = (REASON_APEX, REASON_BRAKING, REASON_COASTING, REASON_LINE, REASON_CONSISTENCY,
                     REASON_NONE)
 
@@ -253,7 +256,6 @@ ABSTAIN_NONE = ""
 ABSTAIN_FEW_LAPS = "few_laps"   # too few clean instances of this corner to say anything
 ABSTAIN_ONE_OFF = "one_off"     # nothing but the baseline itself ever reached the target
 ABSTAIN_SPREAD = "spread"       # the claim is inside the corner's own lap-to-lap scatter
-ABSTAIN_LEVEL = "level"         # its only claim is a spread under the level step (block below)
 
 
 @dataclass(frozen=True)
@@ -581,10 +583,19 @@ class Opportunity:
 #   0068                36       5     0.426        0.072       78 %   22 %  consistency 78 %
 #   0064                62       4     0.768        0.106        0 %  100 %  consistency 100 %
 #   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  consistency 61 %
-#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  consistency 74 %
+#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  coasting 26 %
 #   0064 chapter 1      17       0     0.000        3.738        0 %    0 %  none 0 %
 #   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  consistency 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
+#
+# cool/coaching-level-step (2026-11-16) re-measured the three 0068 rows, the one recording on the
+# machine, when a row whose spread is level stopped naming consistency ("the level step" below,
+# REASON_LEVEL, which names no cause and counts towards none): 0068 chapter 2 moved from consistency
+# 74 % to coasting 26 % (two of its three ranked corners read level), and no other 0068 cell moved.
+# The four 0064 rows were not re-measured, the recording not being on that machine. The full
+# recording's should not move: its ranked rows' middle halves, in the evidence table above, are
+# 0.187-0.309 s, far over the 0.07 s step. Its chapters' rows are not re-verified, nor is the
+# "14 of the 15 ranked rows" below for 0065 and 0067 (0068's four consistency rows did not move).
 #
 # 0068 splits 78 % execution / 22 % pace and 0064 splits 0 % / 100 % — the same track two months
 # apart, and the theme comes out opposite, as it did on D24. That is the finding that justifies the
@@ -593,8 +604,9 @@ class Opportunity:
 # lever: since the levers are the laps' habit (ADV-1), consistency is the reason on 14 of the 15
 # ranked rows of the four working-set recordings, none of them carries a measured line difference,
 # and the row says so with the spread it reads. The axis
-# still does not survive every smaller lap set: of the five single chapters, one names no single
-# cause (0064's chapter 1, which ranks nothing), so the cause line is conditional and can read
+# still does not survive every smaller lap set: of the five single chapters, two name no single
+# cause (0064's chapter 1, which ranks nothing, and 0068's chapter 2, two of whose three ranked
+# corners are level), so the cause line is conditional and can read
 # "no single cause dominates".
 #
 # AND THE HONEST CAVEAT, also measured: the theme is a property of the LAP SET, and it moves with
@@ -785,33 +797,6 @@ _APEX_HALF_KMH = 3.0   # km/h apex deficit; below ~1 is line/GPS noise
 _BRAKE_HALF_S = 0.30   # s longer/earlier than best; sub-0.1 is threshold ripple
 _COAST_HALF_S = 0.30   # ~ the shortest coast the channel reports
 _SIGMA_HALF_S = 0.15   # s lap-to-lap σ; below ~0.05 the line is repeatable
-
-# ------------------------------------------------------- the spread reason and the level step
-#
-# WHY (cool/coaching-level-step). Two tabs contradicted each other about one number. Stats ▸
-# CORNERS calls a corner whose middle half of passes is under the level step (0.07 s,
-# `stats.MARK_MIN_MIDDLE_HALF_S`) level and never marks it, and ranks spread on the middle half so
-# one pass cannot carry it. This tab picked REASON_CONSISTENCY on σ and printed the middle half
-# beside it, so on the shipped demo it ranked C2 and C7 second and third with "consistency: middle
-# half of laps spans 0.04 s" / "0.05 s" — practise a spread the other tab calls inside the noise —
-# and gave C6 a consistency reason on a σ of 0.22 s that is one pass (0.03 s without lap 6).
-#
-# THE RULE, two halves, both on the CORNERS table's own numbers (`stats.middle_half` over the same
-# cells, `stats.corner_spread_clears_level`):
-#   * the spread's STRENGTH is the middle half on σ's scale (/ `stats.IQR_PER_SIGMA`), not σ, so a
-#     lone pass cannot make a corner a consistency corner; under five counted passes there is no
-#     middle half and the spread reason does not compete (CORNERS never marks such a corner either);
-#   * a row whose spread is still the strongest reason but whose middle half is under the level
-#     step ABSTAINS (`ABSTAIN_LEVEL`): consistency was its only claim, and the claim is noise. A
-#     concrete lever that beats the spread keeps the row ranked under that lever, as before.
-# The ranking itself is unchanged — Coaching still ranks by time lost against the best lap — so
-# the two tabs may still order corners differently; they no longer disagree on what is level.
-#
-# MEASURED on the demo and three habit-free synthetic recordings (the rule's ranked rows, main →
-# this): the demo 4 → 1 (C1, the planted habit, stays first; C2, C7, C4 abstain as level); seed
-# 20260924, 14 laps, 3 → 1 (C2 braking); seed 7, 12 laps, 2 → 2 (C5 consistency on a one-pass σ of
-# 0.83 s becomes braking, C6 apex). No session measured lost its last ranked row; a session that
-# does gets no debrief landing and the Coaching page's "not ranked" rows say why, as before.
 
 # ------------------------------------------------------------------- the line signature
 #
@@ -1121,8 +1106,56 @@ def corner_best_thirds(
     return thirds[0], thirds[1], thirds[2]
 
 
+# ------------------------------------------------------- the spread reason and the level step
+#
+# WHY (cool/coaching-level-step). Stats ▸ CORNERS calls a corner whose middle half of passes is under
+# the level step (0.07 s, `stats.MARK_MIN_MIDDLE_HALF_S`) level and never marks it. This tab printed
+# "consistency: middle half of laps spans 0.04 s" as the reason at such corners — the demo's C2, C7
+# and C4 — telling the driver to work on a spread the other tab calls inside the noise.
+#
+# THE RULE, a reason rule only: when the spread would be the reason (`_pick_reason`, σ as before)
+# and the corner's middle half, over the same cells and through the same predicate as CORNERS
+# (`stats.middle_half`, `stats.corner_spread_clears_level`), is under the level step, the row
+#   * names the strongest lever that clears its OWN documented floor instead — an apex shortfall
+#     of at least LINE_APEX_DELTA_KMH (the ~1 km/h of GPS apex noise _APEX_HALF_KMH names), at least
+#     _BRAKE_RIPPLE_S longer on the brakes, at least _COAST_HALF_S longer coasting (the shortest
+#     coast the channel reports), or the measured line signature;
+#   * or, with none, REASON_LEVEL: no cause, and a sentence that says the passes are level.
+# Nothing else moves: the row stays ranked on its time lost, in the same place, so the focus list
+# and every surface that reads the ranking are unchanged. Under MIN_MIDDLE_HALF_N passes there is
+# no middle half to call level, and the row reads as before.
+#
+# Measured on the demo: C2, C7 and C4 (middle halves 0.042, 0.052, 0.051 s; apex shortfalls 0.16,
+# 0.25, 0.70 km/h, no brake or coast) now read level; C1, the planted habit, is untouched.
+_BRAKE_RIPPLE_S = 0.10   # the "sub-0.1 is threshold ripple" of _BRAKE_HALF_S, named
+# The step itself, for surfaces that state it (the Coaching page's tooltip): the CORNERS constant.
+LEVEL_STEP_S = stats_service.MARK_MIN_MIDDLE_HALF_S
+
+
+def _reason_when_level(reason: Reason, time_lost: float) -> Reason:
+    """The reason for a row whose spread is level (block above): the strongest lever over its own
+    floor, ties by _REASON_PRIORITY, or REASON_LEVEL. The measured numbers ride along unchanged."""
+    line_shaped = (reason.apex_speed_gain <= -LINE_APEX_DELTA_KMH
+                   and reason.exit_speed_gain >= LINE_EXIT_DELTA_KMH)
+    strengths = {
+        REASON_APEX: (_saturate(reason.apex_speed_deficit, _APEX_HALF_KMH)
+                      if reason.apex_speed_deficit >= LINE_APEX_DELTA_KMH else 0.0),
+        REASON_BRAKING: (_saturate(reason.brake_extra_s, _BRAKE_HALF_S)
+                         if reason.brake_extra_s >= _BRAKE_RIPPLE_S else 0.0),
+        REASON_COASTING: (_saturate(reason.coast_extra_s, _COAST_HALF_S)
+                          if reason.coast_extra_s >= _COAST_HALF_S else 0.0),
+        REASON_LINE: (_saturate(reason.exit_speed_gain, LINE_EXIT_DELTA_KMH)
+                      if line_shaped else 0.0),
+    }
+    kind, best = REASON_LEVEL, 0.0
+    for k in _REASON_PRIORITY:
+        if strengths.get(k, 0.0) > best + 1e-12:
+            kind, best = k, strengths[k]
+    return replace(reason, kind=kind, contribution=time_lost * best)
+
+
 def _pick_reason(time_lost: float, apex_gain: float, brake_extra: float, coast_extra: float,
-                 sigma: float, exit_gain: float = 0.0, middle_half: float | None = None) -> Reason:
+                 sigma: float, exit_gain: float = 0.0) -> Reason:
     """Choose the dominant reason for one corner: the strongest of the five comparable strengths
     (largest wins, ties → _REASON_PRIORITY order). All raw evidence is carried on the Reason; the
     contribution is time_lost × the winning strength (≤ time_lost — never overclaims).
@@ -1132,18 +1165,14 @@ def _pick_reason(time_lost: float, apex_gain: float, brake_extra: float, coast_e
     signs (see LINE_APEX_DELTA_KMH). `brake_extra` and `coast_extra` (s longer than best) are
     already floored at 0 (`summarize`).
 
-    CONSISTENCY is the fallback (real spread but no concrete input fires); its strength reads the
-    corner's `middle_half` (the CORNERS table's, on σ's scale), never `sigma`, which is only carried
-    on the Reason — None (under five passes) never fires it. Whether a winning spread clears the
-    level step is `summarize`'s call (the block above). REASON_NONE when nothing fires (the row
-    still shows the time lost)."""
+    CONSISTENCY is the fallback (real spread but no concrete input fires); REASON_NONE when nothing
+    fires (the row still shows the time lost)."""
     apex_gain = float(apex_gain)
     exit_gain = float(exit_gain)
     apex_deficit = apex_gain if apex_gain > 0 else 0.0  # never max(): it keeps a −0.0
     brake_extra = max(float(brake_extra), 0.0)
     coast_extra = max(float(coast_extra), 0.0)
     sig = max(float(sigma), 0.0)
-    spread = 0.0 if middle_half is None else max(float(middle_half), 0.0) / stats_service.IQR_PER_SIGMA
     line_shaped = apex_gain <= -LINE_APEX_DELTA_KMH and exit_gain >= LINE_EXIT_DELTA_KMH
 
     # Comparable strengths in [0,1). A reason can only win when the corner is actually losing
@@ -1154,7 +1183,7 @@ def _pick_reason(time_lost: float, apex_gain: float, brake_extra: float, coast_e
         REASON_BRAKING: _saturate(brake_extra, _BRAKE_HALF_S) if lossy else 0.0,
         REASON_COASTING: _saturate(coast_extra, _COAST_HALF_S) if lossy else 0.0,
         REASON_LINE: _saturate(exit_gain, LINE_EXIT_DELTA_KMH) if lossy and line_shaped else 0.0,
-        REASON_CONSISTENCY: _saturate(spread, _SIGMA_HALF_S) if lossy else 0.0,
+        REASON_CONSISTENCY: _saturate(sig, _SIGMA_HALF_S) if lossy else 0.0,
     }
     # Largest strength; ties broken by the fixed reason priority (apex first). The contribution
     # reported is time_lost × strength (so it is bounded by the corner's own loss).
@@ -1319,13 +1348,6 @@ def summarize(
         phases = PhaseLoss(*triple) if triple is not None else _NO_PHASES
         # L5-04: every ranked row is analysed unless a cap is asked for, so the "How to find it"
         # cell of a row below any cut is a MEASURED "nothing fired" rather than an un-run analysis.
-        # The CORNERS table's middle half over the same counted cells (the spread reason's input
-        # and its level test: see "the spread reason and the level step").
-        half = stats_service.middle_half(times[:, i])
-        # The per-corner evidence reads the SAME time matrix the loss came from and the SAME
-        # baseline (the best lap's own time through the corner), so a row's "you have matched
-        # this on 9 of 38 laps" is literally a count of the column the median above summarized.
-        evidence = corner_evidence(times[:, i], float(best[i]), float(losses[i]))
         if top_n is None or rank < top_n:
             reason = _pick_reason(
                 time_lost=float(losses[i]),
@@ -1334,21 +1356,24 @@ def summarize(
                 coast_extra=float(coast_extra[i]),
                 sigma=float(sigmas_by_cid.get(c.cid, 0.0)),
                 exit_gain=float(exit_gain[i]),
-                middle_half=half,
             )
-            if (reason.kind == REASON_CONSISTENCY
+            # The level step (block above _pick_reason): never print the spread as the reason
+            # where the CORNERS table calls the same cells level. Rank and loss are untouched.
+            half = stats_service.middle_half(times[:, i])
+            if (reason.kind == REASON_CONSISTENCY and half is not None
                     and not stats_service.corner_spread_clears_level(half)):
-                # Its only claim is a spread the CORNERS table calls level: no reason, no rank.
-                reason = replace(reason, kind=REASON_NONE, contribution=0.0)
-                if evidence.ranked:
-                    evidence = replace(evidence, abstain=ABSTAIN_LEVEL)
+                reason = _reason_when_level(reason, float(losses[i]))
         else:
             reason = Reason(kind=REASON_NONE, contribution=0.0, apex_speed_deficit=0.0,
                             brake_extra_s=0.0, coast_extra_s=0.0,
                             sigma=float(sigmas_by_cid.get(c.cid, 0.0)))
         rows.append(Opportunity(
             cid=c.cid, direction=c.direction, time_lost=float(losses[i]),
-            entry_dist=float(c.enter), reason=reason, phases=phases, evidence=evidence,
+            entry_dist=float(c.enter), reason=reason, phases=phases,
+            # The per-corner evidence reads the SAME time matrix the loss came from and the SAME
+            # baseline (the best lap's own time through the corner), so a row's "you have matched
+            # this on 9 of 38 laps" is literally a count of the column the median above summarized.
+            evidence=corner_evidence(times[:, i], float(best[i]), float(losses[i])),
         ))
     # Abstained rows sink BELOW the ranked ones (each half keeps the loss ranking, which the
     # stable sort preserves). They are never dropped — the panel shows them with the reason they
@@ -1377,6 +1402,7 @@ _REASON_PHASES = {
     REASON_COASTING: {PHASE_APEX, PHASE_EXIT},  # coasting → back-to-throttle is apex/exit
     REASON_LINE: {PHASE_APEX, PHASE_EXIT},  # the line trades apex speed for the exit
     REASON_CONSISTENCY: set(PHASES),        # phase-agnostic → any dominant third is fine
+    REASON_LEVEL: set(PHASES),
     REASON_NONE: set(PHASES),
 }
 
@@ -1457,12 +1483,6 @@ def abstain_sentence(opp: Opportunity) -> str:
     if ev.abstain == ABSTAIN_SPREAD:
         return (f"Not ranked: the {opp.time_lost:.2f} s on offer is inside your own lap-to-lap "
                 f"spread here — the middle half of your laps spans {ev.iqr:.2f} s.")
-    if ev.abstain == ABSTAIN_LEVEL:
-        # The CORNERS table's own words and print for the same width (stats.fmt_middle_half).
-        width = stats_service.fmt_middle_half(ev.iqr, stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
-        return (f"Not ranked: your passes here are level — the middle half of your laps spans "
-                f"{width}, under {stats_service.MARK_MIN_MIDDLE_HALF_S:.2f} s, the level step, so "
-                "there is no spread to work on.")
     return ""
 
 
@@ -1515,11 +1535,17 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
         # IQR the row's own evidence gate reads, not σ — "laps vary ±1.28 s" on a corner whose
         # middle half spans 0.31 s put 90 % of the laps inside the printed band. A row with no
         # measured evidence (n_laps 0) has no spread to state and prints none, never "0.00 s".
-        # Since cool/coaching-level-step the pick reads that same middle half too (`_pick_reason`),
-        # and a ranked row printing it always clears the CORNERS table's level step.
+        # The strength behind the pick still reads σ (`_pick_reason`), so the ranking is unchanged.
         ev = opp.evidence
         base = ("consistency" if ev.n_laps == 0 else
                 f"consistency: middle half of laps spans {ev.iqr:.2f} s")
+    elif r.kind == REASON_LEVEL:
+        # No cause and no instruction: the spread is the only signal, and it is level (the block
+        # above `_pick_reason`). The width is the CORNERS table's print of the same cells.
+        width = stats_service.fmt_middle_half(opp.evidence.iqr,
+                                              stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
+        base = (f"no one habit explains it: your passes here are level (middle half spans "
+                f"{width}, under {LEVEL_STEP_S:.2f} s)")
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)

@@ -2276,16 +2276,13 @@ best one, so praise is a corner whose typical pass (`Session.corner_report`'s me
 The second row is the same rule after 1,000 seeded draws that move every corner cell by a uniform
 amount within ±0.035 s, half the level step, as §32's jitter does.
 
-**On the demo it fires at 3 of 7 corners: C2, C4 and C6, and C4 by 0.004 s. Two things are
-wrong with it, and a third was until the Coaching page stopped ranking level corners.**
+**On the demo it fires at 3 of 7 corners: C2, C4 and C6, and C4 by 0.004 s. Three things are
+wrong with it.**
 - **It is unstable.** Under the jitter the same number of corners fires in only 39 % of the draws,
   and only C6 fires in more than four draws in five. A line that would praise C4 or C3 depending on
   a few hundredths of noise is praising the noise.
-- **It contradicted the Coaching page.** When this was measured that page ranked C1, C2, C7 and C4,
-  so the line would have praised two of its opportunities. Since cool/coaching-level-step a corner
-  whose middle half is under the level step is listed there as level, not ranked, and it praises
-  none of the corners the Coaching page ranks (`Session.coaching_opportunities`, ranked C1). The
-  two rules still differ: praise reads typical − best, the page's level test the middle half.
+- **It contradicts the Coaching page.** It would praise C2 and C4, which the Coaching page ranks as
+  opportunities on the demo (`Session.coaching_opportunities`, ranked C1, C2, C7, C4).
 - **It measures the quickest pass, not repeatability.** Typical − best is a gap to a minimum, the
   order statistic of §2. More laps bring a lower best pass while the median holds, so the line
   fires less the longer you drive.
