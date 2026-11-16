@@ -129,33 +129,63 @@ def _card_rows(dialog) -> list[tuple[str, str, int]]:
     return rows
 
 
+# The rows K10 reworded: a gesture's key cell became the bare verb (or the button's own glyph) and
+# its object moved into the description, so no long cell sets the one shared key column. Pinned
+# here as (key cell, description); every other row's description is main's, word for word.
+_K10_REWORDED = {
+    ("Drag", "Drag the chart cursor: scrub through the current lap"),
+    ("Drag", "Drag the start/finish line on the map: fix lap timing (key for unknown tracks)"),
+    ("Click", "Maximize a panel to fill the window, or double-click its header "
+              "(Esc / again to restore)"),
+    ("F  ·", "Make the video fill the screen, or double-click the video (Esc / again to restore)"),
+    ("Drag", "Drag any splitter: resize the panels (the layout is remembered)"),
+}
+# What those five rows said before K10, so the test can prove nothing ELSE changed.
+_K10_WAS = {"Scrub through the current lap", "Fix lap timing on the map (key for unknown tracks)",
+            "Maximize a panel to fill the window (Esc / again to restore)",
+            "Make the video fill the screen (Esc / again to restore)",
+            "Resize the panels (the layout is remembered)"}
+
+
 def test_every_group_shares_one_key_column():
     """K10 (cool/card-and-keys): every group was its own grid sizing its own key column, so the
     descriptions started at six different x (42…227 px offscreen) and the card read as seven
     tables. Now every description starts at ONE x — at the natural size and at the card's minimum
-    width — and that x is the widest key cell's, measured, not a constant: every group's key
-    column is exactly as wide as the widest cell on the whole card. Nothing else moves: the card lists exactly the
-    registry's rows, and no description is cut (L1-01's guard, at the narrower column)."""
-    want = {(help_dialog._key_text(k), d) for _g, rows in SHORTCUT_GROUPS for k, d in rows}
-    for size in (None, (560, 200)):
+    width — and that x is the widest key cell's, measured, not a constant: every group's key column
+    is exactly as wide as the widest cell on the whole card.
+
+    AND THE COLUMN IS NARROW: a gesture's key cell is a bare verb, so the widest cell is a real
+    key ("Shift + ← / →"), and at the card's minimum width no more descriptions wrap than main's
+    four. Nothing else moves: the card lists the registry's rows in the registry's order, only the
+    five reworded rows read differently (pinned), and no description is cut (L1-01's guard)."""
+    want = [(help_dialog._key_text(k), d) for _g, rows in SHORTCUT_GROUPS for k, d in rows]
+    assert _K10_REWORDED <= set(want), sorted(_K10_REWORDED - set(want))
+    assert not _K10_WAS & {d for _k, d in want}, "a K10 row still reads its old description"
+    assert len(want) == 32, len(want)
+    for size in (None, "minimum"):
         d = _shown(ShortcutsDialog())
         if size:
-            d.resize(*size)
+            d.resize(d.minimumWidth(), 200)
             for _ in range(6):
                 _APP.processEvents()
         rows = _card_rows(d)
-        assert {(k, desc) for k, desc, _x in rows} == want and len(rows) == len(want), (
-            "the card no longer lists exactly the registry's shortcuts")
+        assert [(k, desc) for k, desc, _x in rows] == want, (
+            "the card no longer lists exactly the registry's shortcuts, in order")
         xs = {x for _k, _d, x in rows}
         assert len(xs) == 1, f"descriptions start at {sorted(xs)} at {d.width()}x{d.height()}"
-        widest = max(g.itemAtPosition(r, 0).widget().sizeHint().width()
-                     for g in d._grids for r in range(g.rowCount())
-                     if g.itemAtPosition(r, 0) is not None)
+        cells = [(g.itemAtPosition(r, 0).widget().sizeHint().width(), k)
+                 for g in d._grids for r in range(g.rowCount())
+                 for k in [help_dialog._key_text(SHORTCUT_GROUPS[d._grids.index(g)][1][r][0])]]
+        widest, widest_key = max(cells)
         assert all(g.columnMinimumWidth(0) == widest for g in d._grids), widest
+        assert widest_key == "Shift + ← / →", (widest_key, widest)
+        wrapped = [lb.text() for _k, desc, _x in rows for lb in d.findChildren(QLabel)
+                   if lb.text() == desc and lb.height() > 1.5 * lb.fontMetrics().lineSpacing()]
+        assert len(wrapped) <= 4, (d.width(), wrapped)
         assert not _overflowing(d), _overflowing(d)
         d.close()
     print(f"test_every_group_shares_one_key_column OK (descriptions at x={xs.pop()}, "
-          f"key column {widest} px, {len(want)} rows)")
+          f"key column {widest} px, {len(wrapped)} wrapped at {d.width()} px, {len(want)} rows)")
 
 
 # ------------------------------------- L1-08 + L1-07: the card IS the single source of truth

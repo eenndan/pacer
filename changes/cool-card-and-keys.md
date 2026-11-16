@@ -5,5 +5,5 @@
 
 ### Changed
 
-- The keyboard-shortcuts card lines every description up on one column, the widest key's, instead
-  of starting each group's descriptions at its own x.
+- The keyboard-shortcuts card lines every description up on one column; its drag and double-click
+  rows name the gesture in the description ("Drag the chart cursor: …"), and the card is wider.

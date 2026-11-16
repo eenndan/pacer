@@ -149,9 +149,12 @@ COMMANDS: list[Command] = [
             run="add_mark_at_playhead"),
     Command("Navigation", ",", "Jump to the previous mark", run="jump_to_previous_mark"),
     Command("Navigation", ".", "Jump to the next mark", run="jump_to_next_mark"),
-    Command("Navigation", "Drag chart cursor", "Scrub through the current lap"),
-    Command("Navigation", "Drag start/finish line",
-            "Fix lap timing on the map (key for unknown tracks)"),
+    # A gesture's key cell is the bare verb and its description names the object: the cards share
+    # ONE key column (ShortcutsDialog._share_key_column), so "Drag start/finish line" in the key
+    # cell would set the description column of all thirty-odd rows (K10).
+    Command("Navigation", "Drag", "Drag the chart cursor: scrub through the current lap"),
+    Command("Navigation", "Drag",
+            "Drag the start/finish line on the map: fix lap timing (key for unknown tracks)"),
     Command("Analysis", "G", "Toggle the g-meter overlay", run="toggle_gmeter"),
     Command("Analysis", "C", "Toggle compare mode (two laps side by side)", run="toggle_compare"),
     # The charts' two instrument gestures. Both are named commands rather than lambdas for the same
@@ -188,16 +191,19 @@ COMMANDS: list[Command] = [
     # "timing-line", matching the menu item it documents: ⌘Z takes back SECTOR-line edits too,
     # and this card used to be one of the two surfaces (with the status bar) that said otherwise.
     Command("Editing", QKeySequence.StandardKey.Undo, "Undo the last timing-line edit"),
-    Command("Layout", GlyphKey("Double-click header  ·", MAXIMIZE_GLYPH),
-            "Maximize a panel to fill the window (Esc / again to restore)"),
+    # The key cell is the BUTTON (its own glyph) and the header gesture moved into the description,
+    # for the one-key-column reason the Drag rows give (K10).
+    Command("Layout", GlyphKey("Click", MAXIMIZE_GLYPH),
+            "Maximize a panel to fill the window, or double-click its header "
+            "(Esc / again to restore)"),
     Command("Layout", QKeySequence.StandardKey.FullScreen, "Enter / exit full screen"),
     # THE KEY CELL LEADS WITH `F`, which is the whole of the L1-08 hole this wave closed: `F` is
     # bound in video_view.py, not app.py, so the "every live binding has a row" guard — which
     # harvested a bare StudioWindow — never saw it, and the card documented only the double-click.
-    Command("Layout", GlyphKey("F  ·  double-click video  ·", VIDEO_FULLSCREEN_GLYPH),
-            "Make the video fill the screen (Esc / again to restore)",
+    Command("Layout", GlyphKey("F  ·", VIDEO_FULLSCREEN_GLYPH),
+            "Make the video fill the screen, or double-click the video (Esc / again to restore)",
             run="toggle_video_focus", palette_key="F"),
-    Command("Layout", "Drag any splitter", "Resize the panels (the layout is remembered)"),
+    Command("Layout", "Drag", "Drag any splitter: resize the panels (the layout is remembered)"),
     Command("Help", QKeySequence("Ctrl+K"), "Find and run any command"),
     # `run` stays None even though `?` is a live binding: Help ▸ Keyboard shortcuts is a menu item,
     # so the palette already carries this command with the accelerator Qt paints for it. A `run`
@@ -454,7 +460,11 @@ class ShortcutsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — keyboard shortcuts")
-        self.setMinimumWidth(560)
+        # 640, not 560, since the groups share ONE key column (K10): it is "Shift + ← / →" wide
+        # (86 px) for every group, where Analysis's own column was ~36 px, so at 560 eight
+        # descriptions wrapped against main's four. Measured offscreen in Inter: 624 px wraps 3,
+        # 632 and 640 wrap 1 — the card gets wider, not taller.
+        self.setMinimumWidth(640)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -501,7 +511,10 @@ class ShortcutsDialog(QDialog):
         read as seven tables, its descriptions starting at six different x (42 to 227 px offscreen)
         — File's "⌘O" beside Layout's "F · double-click video ·" glyph. The width is MEASURED off
         the cells themselves (their size hints, in the polished KeyCap face), so a new widest key
-        moves the shared column with it. Idempotent; re-run at show, where the face is final."""
+        moves the shared column with it — which is why a GESTURE's key cell is a bare verb ("Drag",
+        "Click" + the button's glyph) and its object is in the description: a long cell would set
+        the description column of every row. Today "Shift + ← / →" is the widest, at 86 px.
+        Idempotent; re-run at show, where the face is final."""
         cells = [g.itemAtPosition(r, 0).widget() for g in self._grids
                  for r in range(g.rowCount()) if g.itemAtPosition(r, 0) is not None]
         width = max((c.sizeHint().width() for c in cells), default=0)
