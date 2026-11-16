@@ -939,7 +939,7 @@ def _corner_cells(r, marked: bool, unit_id: str) -> str:
     Seconds are bare numbers under "(s)" headers, the middle half's " s" included."""
     def speed(v):
         return _sec(None if v is None else units.convert_speed(v, unit_id), "{:.1f}")
-    loss = _sec(r.median_loss_s, "+{:.2f}")
+    loss = _sec(stats_service.printed_med_loss(r), "+{:.2f}")
     if marked and loss:
         loss = f"{stats_service.CORNER_MARK} {loss}"
     cells = [f"C{r.cid}", _sec(r.best_s, "{:.2f}"), _sec(r.median_s, "{:.2f}"),

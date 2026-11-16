@@ -340,7 +340,7 @@ class CornersSection:
             if sig_tip:
                 sig.setToolTip(sig_tip)
             t.setItem(r, 3, sig)
-            loss = cell(cr.median_loss_s, "+{:.2f}")
+            loss = cell(stats_service.printed_med_loss(cr), "+{:.2f}")
             # The tooltip is built in the SAME branch as the cue, so the reason can never be
             # missing from a cell that carries the mark. Two independent lines when both apply:
             # WHY THIS CELL IS MARKED (the ranking score, which is not a column on screen — a
@@ -359,7 +359,7 @@ class CornersSection:
                 tips.append(
                     f"{which} — ranked by the middle half (the σ cell's hover) × median loss = "
                     f"{wr.middle_half_s:.2f} × "
-                    f"{wr.median_loss_s:.2f} = "
+                    f"{stats_service.printed_med_loss(wr):.2f} = "
                     f"{wr.score:.3f} s², not by this column alone, and not the Coaching tab's "
                     "ranking (time lost against your best lap).")
             tri = phase_rows.get(cr.cid)

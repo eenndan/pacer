@@ -1416,6 +1416,13 @@ class LapTable(QWidget):
         self._landed_tr = None                 # the running fade (motion.Transition), if any
         self._finder_scrolling = False         # True while _next_slow_lap moves the scroll itself
         self.table.verticalScrollBar().valueChanged.connect(self._on_grid_scrolled)
+        # ...and so does any move of the grid's current row or selection: ↑/↓, Home/End, a pick
+        # from the charts. A scroll and a press were the only exits, so with motion off ↓ moved
+        # the selection to the next lap and the outline stayed on the old one — two rows marked.
+        # _next_slow_lap's own setCurrentIndex lands here too, before it draws the new outline.
+        sm = self.table.selectionModel()
+        sm.currentChanged.connect(self._on_grid_moved)
+        sm.selectionChanged.connect(self._on_grid_moved)
         return bar
 
     def _cue_rows(self) -> list[int]:
@@ -1499,6 +1506,12 @@ class LapTable(QWidget):
     def _on_grid_scrolled(self, _value) -> None:
         """A scroll the reader made (wheel, bar, keys) ends the outline: the row it named moved."""
         if not self._finder_scrolling:
+            self._clear_landed()
+
+    def _on_grid_moved(self, *_args) -> None:
+        """The grid's current row or selection moved (keys, a pick elsewhere): the outline named
+        the row the finder landed on, and the reader has gone on from it."""
+        if self._landed_tr is not None or self._landed.row >= 0:
             self._clear_landed()
 
     def _build_excluded_strip(self) -> QWidget:

@@ -1245,6 +1245,72 @@ def test_stats_view_corners_table_tint_sort_and_click():
     print("test_stats_view_corners_table_tint_sort_and_click OK")
 
 
+def test_med_loss_prints_the_printed_median_minus_the_printed_best():
+    """QA w5 / #586 review: the demo's C4 printed Best 3.02, Median 3.08 and Med loss +0.07 (its
+    unrounded 3.0821 − 3.0157 = 0.0664). The cell is now the printed Median minus the printed Best
+    beside it, on the Stats page and in the report's CORNERS, and the note's sum adds those cells;
+    the ◆ still ranks on the unrounded score."""
+    _app()
+    from studio import export_data
+    from studio.stats import CornerReport, corner_count_note
+    from studio.stats_panel import StatsView
+    rows = [CornerReport(cid=4, direction=1, n=14, best_s=3.0156722, median_s=3.0820530,
+                         sigma_s=0.04, median_loss_s=0.0663808, apex_best_kmh=60.0,
+                         apex_median_kmh=58.0, grip_median=None, score=0.004,
+                         middle_half_s=0.06),
+            CornerReport(cid=5, direction=1, n=14, best_s=3.5217605, median_s=3.6101142,
+                         sigma_s=0.05, median_loss_s=0.0883537, apex_best_kmh=50.0,
+                         apex_median_kmh=48.0, grip_median=None, score=0.005,
+                         middle_half_s=0.06)]
+    sess = _fake_view_session()
+    sess.corner_report = lambda: rows
+    v = StatsView(sess)
+    t = v.corners.table
+    assert [t.item(r, 4).text() for r in range(2)] == ["+0.06", "+0.09"], \
+        [t.item(r, 4).text() for r in range(2)]
+    html = export_data._corner_cells(rows[0], False, "kmh")
+    assert "+0.06" in html and "+0.07" not in html, html
+    assert "Summed, that is 0.15 s." in corner_count_note(rows)[0], corner_count_note(rows)[0]
+    print("test_med_loss_prints_the_printed_median_minus_the_printed_best OK")
+
+
+def test_every_grid_hover_gap_is_its_printed_cell_minus_its_printed_anchor():
+    """#586 review: a CORNERS BY LAP / SECTORS BY LAP hover prints "[3.65] +0.82 s against your
+    typical C6 (2.83 s …)": the gap must be what a reader gets from the two printed figures. A
+    fixture whose median sits off the hundredths, so subtracting first and rounding once would
+    disagree on some cells (asserted), on both grids."""
+    import re
+    _app()
+    from studio.stats_panel import StatsView
+    ids = list(range(8))
+    col = [2.004, 2.014, 2.024, 2.034, 2.044, 2.054, 2.064, 2.074]   # median 2.039 prints 2.04
+    other = [3.0 + 0.01 * i for i in ids]
+    rows = [[a, b] for a, b in zip(col, other, strict=True)]
+    med = float(np.median(col))
+    assert any(round(v - med, 2) != round(round(v, 2) - round(med, 2), 2) for v in col)
+    sess = _fake_view_session(splits=dict(zip(ids, rows, strict=True)))
+    sess.corner_matrix = lambda: corner_matrix(ids, [1, 2], rows, [[True, True]] * 8)
+    sess.lap_time = lambda i: 69.0 + i
+    v = StatsView(sess)
+    gap_re = re.compile(r"^([+−]?\d+\.\d\d) s against your typical [CS]\d+ \((\d+\.\d\d) s")
+    best_re = re.compile(r"; ([+−]?\d+\.\d\d) s against the sector best \((\d+\.\d\d) s")
+    checked = 0
+    for t in (v.corner_grid_table, v.splits_table):
+        for r in range(t.rowCount()):
+            for c in range(t.columnCount()):
+                it = t.item(r, c)
+                m = gap_re.match(it.toolTip()) if it is not None else None
+                if m is None:
+                    continue
+                cell = float(re.search(r"\d+\.\d\d", it.text()).group())
+                for gap, anchor in [m.groups(), *best_re.findall(it.toolTip())]:
+                    want = round(cell - float(anchor), 2)
+                    assert float(gap.replace("−", "-")) == want, (it.text(), it.toolTip())
+                    checked += 1
+    assert checked >= 16, checked
+    print(f"test_every_grid_hover_gap_is_its_printed_cell_minus_its_printed_anchor OK ({checked})")
+
+
 def test_stats_view_phase_tiles_and_loss_tooltips():
     _app()
     from studio.stats import CornerReport, PhaseReport, PhaseShare
