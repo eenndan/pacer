@@ -6,6 +6,49 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-16
+
+The it-tells-the-story release: 6 pull requests from #566 to #573, Wave 4 of the campaign to make
+the app cooler and still true: a slow lap that names the corner where its time went, the middle
+half of your laps beside σ, and three moments of the session, each a jump to where it happened.
+
+### Highlights
+
+- **Where a slow lap's time went.** A slow lap's Laps row names the corner that cost it, "▼ C5",
+  when one or two corners hold the loss; hover it for each corner's share and the rule that called
+  it slow, and click it to ring that corner on the map (#567, #569)
+- **One baseline, said out loud.** The note measures the lap against your typical lap, the median
+  clean lap, and each corner against its typical pass; "slow" is a default, and every tooltip
+  says so. A slow lap right after a lap left out of your times says that too (#567, #573)
+- **σ, and the middle half beside it.** The σ lap tile also says how far the middle half of your
+  clean laps spans: on the demo σ is 1.54 s, carried by one 51 s lap, and the middle half spans
+  0.59 s. Never shown under five laps (#568)
+- **Three moments of the session.** Stats ▸ MOMENTS names your best lap, the biggest single-corner
+  loss and the best 5-lap run, each with a Jump that selects the lap and rings the corner; it
+  stays away when it would only repeat the best lap (#570, #573)
+- **Ties named, not ranked.** Figures within 0.07 s of each other are named as level, 0.15 s on
+  an estimated clock: on the demo, "every 5-lap median in Laps 8–14 is level". The PACE tile now
+  reads "race pace · best 3-lap mean" (#567, #570)
+- **A corner's spread, two ways.** Hover a corner's σ in Stats ▸ CORNERS for the middle half of its
+  passes; the exported session report adds the middle half to PACE (#568)
+- **Measured, then refused.** Four more ideas lost to their numbers: brake-onset bands, "what you
+  nailed", an ideal-lap film, and two moments (the best pass per corner, the longest run with no
+  ▼), each re-measured on the demo by one probe (#566)
+
+### Added
+
+- The Stats page shows three moments of the session: the best lap, the biggest single-corner loss
+  and the best 5-lap run, each with a Jump to its lap. (#570)
+- A slow lap's Laps row names the corner that cost it ("▼ C5") when one or two corners hold the
+  loss; hover its lap or time for where its time went and the rule that called it slow. (#569)
+- A slow lap right after a lap left out of your times says so in its note. (#573)
+- The σ lap tile also prints how far the middle half of your laps spans, so one spin no longer
+  speaks alone; the Corners σ hover and the exported report show it too. (#568)
+
+### Changed
+
+- The PACE tile and the exported report's row read "race pace · best 3-lap mean". (#570)
+
 ## [0.10.0] — 2026-11-16
 
 The it-leaves-the-app release: 6 pull requests from #556 to #571, Wave 3 of the campaign to make
@@ -2012,7 +2055,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/eenndan/pacer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/eenndan/pacer/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/eenndan/pacer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/eenndan/pacer/compare/v0.7.0...v0.8.0

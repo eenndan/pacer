@@ -3,12 +3,12 @@
   "files": {
     "accuracy.png": {
       "captured": "2026-11-16",
-      "commit": "f01327f",
+      "commit": "ecfa8d7",
       "derived": null,
       "sha256": "5401cd4772397fb2bc6177d66a90729da19e7ce4d66d3d664e6499c2b9b0f1fe",
       "shot": "accuracy",
       "source": "numbers in code",
-      "version": "0.10.0",
+      "version": "0.11.0",
       "waiver": null
     },
     "best-lap.jpg": {
@@ -20,8 +20,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "not re-rendered at 0.10.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.10.0 DID change export code: the overlay elements seam in export_video.py, _MapInset.paint, map_render and trace_paint (#556, #558, #565, #571), but a Classic export with no Extras, the dialog's defaults, decodes frame-identical to v0.9.0's: a 540p libx264 software-decode render of demo lap 4 from a v0.9.0 studio/ and from 0.10.0, ffmpeg framemd5 equal on all 1365 frames (the files byte-identical), and tests/test_export_ghost.py's painter-level check passes; the Broadcast style and the Extras are not shown"
+        "granted_at": "0.11.0",
+        "reason": "not re-rendered at 0.11.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.11.0 changed no export-video code (git diff v0.10.0..HEAD of export_video.py, studio/overlay/, map_render.py, trace_paint.py and timeline.py is empty; its export change is export_data.py's session-report rows), so 0.10.0's reason stands: a Classic export with no Extras is frame-identical to v0.9.0's; the Broadcast style and the Extras are not shown"
       }
     },
     "best-lap.mp4": {
@@ -33,8 +33,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "not re-rendered at 0.10.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.10.0 DID change export code: the overlay elements seam in export_video.py, _MapInset.paint, map_render and trace_paint (#556, #558, #565, #571), but a Classic export with no Extras, the dialog's defaults, decodes frame-identical to v0.9.0's: a 540p libx264 software-decode render of demo lap 4 from a v0.9.0 studio/ and from 0.10.0, ffmpeg framemd5 equal on all 1365 frames (the files byte-identical), and tests/test_export_ghost.py's painter-level check passes; the Broadcast style and the Extras are not shown"
+        "granted_at": "0.11.0",
+        "reason": "not re-rendered at 0.11.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.11.0 changed no export-video code (git diff v0.10.0..HEAD of export_video.py, studio/overlay/, map_render.py, trace_paint.py and timeline.py is empty; its export change is export_data.py's session-report rows), so 0.10.0's reason stands: a Classic export with no Extras is frame-identical to v0.9.0's; the Broadcast style and the Extras are not shown"
       }
     },
     "data-trust.png": {
@@ -46,18 +46,18 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "not re-rendered at 0.10.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.5.0 (9e8083f); 0.6.0's render differed by 41 of 1,632,416 pixels (the friction circle's −2.0 axis-label minus); since then this page's code changed in the older-GoPro (GPS5) warning (#521), which this GPS9 recording does not show, and at 0.8.0 (#547) in the CORNERS BY LAP heat-map, neither in this crop; 0.10.0 changed no Stats-page module (stats*, chart_stats, data_quality, gmeter*) and nothing under pacer/ (git diff v0.9.0..HEAD)"
+        "granted_at": "0.11.0",
+        "reason": "not re-rendered at 0.11.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.5.0 (9e8083f); 0.6.0's render differed by 41 of 1,632,416 pixels (the friction circle's −2.0 axis-label minus); since then this page's code changed in the older-GoPro (GPS5) warning (#521), which this GPS9 recording does not show, and at 0.8.0 (#547) in the CORNERS BY LAP heat-map, neither in this crop; 0.11.0 DID change Stats-page modules (stats.py, stats_panel.py, stats_corners.py and the new stats_moments.py: the σ tile's middle-half caption, the race-pace caption, the MOMENTS section between PACE and IDEAL LAP, the Corners σ hover: #568, #570, #573), none inside this crop; the modules that draw it (stats_ideal, stats_trust, data_quality, chart_stats, gmeter, gmeter_overlay, media_clock, widgets, theme, _signal) and the core under pacer/ are unchanged since v0.10.0 (git diff v0.10.0..HEAD; stats_common changed only in its docstring, and lap_table.py, whose too-brief and mark helpers the trust card reads, only in the Laps table's slow-lap cue and tooltip), and a demo render of this shot (ideal-lap and data-trust) from a v0.10.0 studio/ and from 0.11.0 is byte-identical"
       }
     },
     "debrief.png": {
       "captured": "2026-11-16",
-      "commit": "f01327f",
+      "commit": "ecfa8d7",
       "derived": null,
-      "sha256": "be9ffdd30f87d8ca9704438e87de53da8982a934bd5afab0dd143ef9e81d6f36",
+      "sha256": "7c6f4533db76859fe3575a9bc14d55637d028d768eef3a92d5278638c9e92663",
       "shot": "debrief",
       "source": "synthetic demo",
-      "version": "0.10.0",
+      "version": "0.11.0",
       "waiver": null
     },
     "hero.png": {
@@ -69,8 +69,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "stale, not re-shot at 0.8.0, 0.9.0 or 0.10.0: it shows the pre-0.8 look (a 3 px lap line, green brake markers, the start line's drag handles at rest, no corner labels on the speed chart, no Δbest column: #545, #546, #548) and none of 0.9.0's map (the playhead tail, the hovered-corner ring, the Lap race: #553-#555); 0.10.0 changed exports and the cards, not this window; its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one recording that is would publish stills of new footage, which RUL-9 leaves to the owner; README, FIRST_LAP and the landing say the picture is v0.7's; og.png is composed from this file"
+        "granted_at": "0.11.0",
+        "reason": "stale, not re-shot at 0.8.0, 0.9.0, 0.10.0 or 0.11.0: it shows the pre-0.8 look (a 3 px lap line, green brake markers, the start line's drag handles at rest, no corner labels on the speed chart, no Δbest column: #545, #546, #548), none of 0.9.0's map (the playhead tail, the hovered-corner ring, the Lap race: #553-#555) and not 0.11.0's slow-lap cue in the Laps table (#569); its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one recording that is would publish stills of new footage, which RUL-9 leaves to the owner; README, FIRST_LAP and the landing say the picture is v0.7's; og.png is composed from this file"
       }
     },
     "ideal-lap.png": {
@@ -82,18 +82,18 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "not re-rendered at 0.10.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.6.0 (52fe638); 0.6.1 re-aligned the Δ trace and the Corners table on track (#512), not the ideal-lap sums this page shows; 0.8.0's Stats change (#547) shades CORNERS BY LAP, not the IDEAL LAP block; 0.10.0 changed no Stats-page module and not the core (its session.py change only keeps the export ghost's two-lap race field from replacing the cached default one); not re-rendered"
+        "granted_at": "0.11.0",
+        "reason": "not re-rendered at 0.11.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.6.0 (52fe638); 0.6.1 re-aligned the Δ trace and the Corners table on track (#512), not the ideal-lap sums this page shows; 0.8.0's Stats change (#547) shades CORNERS BY LAP, not the IDEAL LAP block; 0.11.0 DID change Stats-page modules (stats.py, stats_panel.py, stats_corners.py and the new stats_moments.py: the σ tile's middle-half caption, the race-pace caption, the MOMENTS section between PACE and IDEAL LAP, the Corners σ hover: #568, #570, #573), none inside this crop; the modules that draw it (stats_ideal, stats_trust, data_quality, chart_stats, gmeter, gmeter_overlay, media_clock, widgets, theme, _signal) and the core under pacer/ are unchanged since v0.10.0 (git diff v0.10.0..HEAD; stats_common changed only in its docstring, and lap_table.py, whose too-brief and mark helpers the trust card reads, only in the Laps table's slow-lap cue and tooltip), and a demo render of this shot (ideal-lap and data-trust) from a v0.10.0 studio/ and from 0.11.0 is byte-identical"
       }
     },
     "lapstrip.png": {
       "captured": "2026-11-16",
-      "commit": "f01327f",
+      "commit": "ecfa8d7",
       "derived": null,
       "sha256": "d77cc79e5f9b8ba64a058df4aea0da838adf4cb8598989fec91fe2a1b97961ca",
       "shot": "lapstrip",
       "source": "synthetic demo",
-      "version": "0.10.0",
+      "version": "0.11.0",
       "waiver": null
     },
     "map.png": {
@@ -105,9 +105,19 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "stale, not re-shot at 0.8.0, 0.9.0 or 0.10.0: it shows the pre-0.8 map (a 3 px lap line, green brake markers, drag handles at rest where 0.8 draws a chequered mark: #546) and none of 0.9.0's map additions (the tail, the hover ring, the race dots and card: #553-#555); 0.10.0 did not change the map view's look; its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one that is would publish stills of new footage, which RUL-9 leaves to the owner; its alt text on README and the landing says it is v0.7's"
+        "granted_at": "0.11.0",
+        "reason": "stale, not re-shot at 0.8.0, 0.9.0, 0.10.0 or 0.11.0: it shows the pre-0.8 map (a 3 px lap line, green brake markers, drag handles at rest where 0.8 draws a chequered mark: #546) and none of 0.9.0's map additions (the tail, the hover ring, the race dots and card: #553-#555); 0.10.0 and 0.11.0 did not change the map view's look (0.11.0 only rings a corner on a click it already could); its source recording (Sandown 3h) is not on this machine, and re-shooting it from the one that is would publish stills of new footage, which RUL-9 leaves to the owner; its alt text on README and the landing says it is v0.7's"
       }
+    },
+    "moments.png": {
+      "captured": "2026-11-16",
+      "commit": "ecfa8d7",
+      "derived": null,
+      "sha256": "7cb8d74933b38e8587d83031eb7d6c70bd52742a62c5e1e55bce3800621030ca",
+      "shot": "moments",
+      "source": "synthetic demo",
+      "version": "0.11.0",
+      "waiver": null
     },
     "og.png": {
       "captured": "2026-11-13",
@@ -118,8 +128,8 @@
       "source": "hero.png",
       "version": "0.7.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "stale, not re-composed at 0.8.0, 0.9.0 or 0.10.0: it is composed from hero.png, which shows the pre-0.8 look and was not re-shot (see hero.png's waiver), so a re-composition would date v0.7 pixels as 0.10.0; its words (OG_BODY, OG_CHIPS) are unchanged; re-compose it with --only og, and re-upload the social preview, once hero.png is re-shot"
+        "granted_at": "0.11.0",
+        "reason": "stale, not re-composed at 0.8.0, 0.9.0, 0.10.0 or 0.11.0: it is composed from hero.png, which shows the pre-0.8 look and was not re-shot (see hero.png's waiver), so a re-composition would date v0.7 pixels as 0.11.0; its words (OG_BODY, OG_CHIPS) are unchanged; re-compose it with --only og, and re-upload the social preview, once hero.png is re-shot"
       }
     },
     "overlay.jpg": {
@@ -131,8 +141,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.10.0",
-        "reason": "not re-rendered at 0.10.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; 0.10.0 DID change export code: the overlay elements seam in export_video.py, _MapInset.paint, map_render and trace_paint (#556, #558, #565, #571), but a Classic export with no Extras, the dialog's defaults, decodes frame-identical to v0.9.0's: a 540p libx264 software-decode render of demo lap 4 from a v0.9.0 studio/ and from 0.10.0, ffmpeg framemd5 equal on all 1365 frames (the files byte-identical), and tests/test_export_ghost.py's painter-level check passes; so it still shows the default look; the Broadcast style, the ghost and the corner cards are not shown"
+        "granted_at": "0.11.0",
+        "reason": "not re-rendered at 0.11.0: the source recording (Sandown 3h) is not on this machine as of 2026-11-16; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; at 0.10.0 a Classic export with no Extras, the dialog's defaults, decoded frame-identical to v0.9.0's (ffmpeg framemd5 equal on all 1365 frames of demo lap 4, the files byte-identical); 0.11.0 changed no export-video code (git diff v0.10.0..HEAD of export_video.py, studio/overlay/, map_render.py, trace_paint.py and timeline.py is empty; its export change is export_data.py's session-report rows), so 0.10.0's reason stands: a Classic export with no Extras is frame-identical to v0.9.0's; the Broadcast style and the Extras are not shown; so it still shows the default look"
       }
     }
   }

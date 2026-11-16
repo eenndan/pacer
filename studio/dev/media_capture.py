@@ -26,8 +26,8 @@ synthetic demo's first open, so anyone can re-shoot it (`--only debrief`, no rec
 Every file written is recorded in `<out>/CAPTURED.json` — shot, app version, commit, date, sha256
 and a source LABEL — and `tests/test_version.py` holds docs/media to that record. At each minor
 release a shot is re-captured or waived in writing there. Without a recording, `accuracy`, `og`
-(from hero.png), `debrief` and `lapstrip` (both the demo) can always be re-captured; the rest need
-footage.
+(from hero.png), `debrief`, `lapstrip` and `moments` (all three the demo) can always be
+re-captured; the rest need footage.
 
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
@@ -53,6 +53,9 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
                                                demo, the session every reader can open
   lapstrip.png    the demo's lap-strip card    "the whole session leaves the app too": the card
                                                File > Export writes, from the synthetic demo
+  moments.png     Stats > PACE to MOMENTS      "the session's story, ties named": the σ tile's
+                                               middle half and three moments, each a Jump, on
+                                               the synthetic demo
 
 TWO THINGS THE OFFSCREEN RENDER CANNOT DO BY ITSELF, AND WHAT THIS DOES ABOUT THEM
 
@@ -1025,6 +1028,32 @@ def shot_lapstrip(app: QApplication, out_dir: str) -> str:
     return path
 
 
+# ====================================================================== 10 — MOMENTS (the demo)
+def shot_moments(app: QApplication, out_dir: str) -> str:
+    """Stats ▸ PACE down to the foot of MOMENTS on the synthetic demo: the σ tile with its middle
+    half, the race-pace tile, the sparkline and the three moments with their Jumps — one block,
+    because MOMENTS reads the best lap the tile row above it printed. Cropped from the PACE
+    heading's own left edge, so a column beside it at dashboard width stays out of the image."""
+    w = _open_demo(app, "moments")
+    w.show()
+    stats = _stats_page(app, w)
+    pace, moments = _heading(stats, "PACE"), stats.moments
+    if not moments.body.isVisible():
+        raise RuntimeError("the demo shows no MOMENTS section")
+    _scroll_to(app, stats, pace, moments.body)
+    tiles = (stats.t_best, stats.t_median, stats.t_race_pace, stats.t_rolling, stats.t_sigma,
+             stats.t_trend)
+    edge = right_edge(w, (*tiles, stats.spark, *moments.rows)) + PAD
+    left = pace.mapTo(w, QPoint(0, 0)).x()
+    rect = span(w, pace, moments.body, right=edge)
+    rect.setLeft(max(0, left - PAD))
+    print(f"media_capture: moments crop {rect.width()}x{rect.height()} logical · "
+          f"{sum(r.isVisible() for r in moments.rows)} rows")
+    img = region(w, rect)
+    w.close()
+    return save(matte(img), os.path.join(out_dir, "moments.png"))
+
+
 # ====================================================================== the capture record
 # Every published file gets an entry in `<out>/CAPTURED.json`: which shot made it, from which app
 # version and commit, on which day, from what, and its sha256. The v0.5.0 media went stale with
@@ -1115,9 +1144,9 @@ def _record(out_dir: str, filename: str, shot: str, source: str,
 
 # ====================================================================== driver
 SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief",
-         "lapstrip")
+         "lapstrip", "moments")
 # The shots that need the recording named on the command line: `accuracy` is drawn from numbers
-# and `og` from hero.png, and `debrief` and `lapstrip` open the synthetic demo instead.
+# and `og` from hero.png, and `debrief`, `lapstrip` and `moments` open the synthetic demo instead.
 _RECORDING_SHOTS = {"hero", "ideal", "trust", "map", "overlay", "clip"}
 
 
@@ -1174,13 +1203,15 @@ def capture(recording: str | None, out_dir: str, only: set[str], work_dir: str,
         record(shot_debrief(app, out_dir), "debrief", "synthetic demo")
     if "lapstrip" in only:
         record(shot_lapstrip(app, out_dir), "lapstrip", "synthetic demo")
+    if "moments" in only:
+        record(shot_moments(app, out_dir), "moments", "synthetic demo")
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("recording", nargs="?", default=None,
                     help="INPUT recording (chapter 1; siblings auto-discovered); not needed for "
-                         "accuracy, og, debrief or lapstrip alone")
+                         "accuracy, og, debrief, lapstrip or moments alone")
     ap.add_argument("--out", default=os.path.join("docs", "media"),
                     help="OUTPUT directory for the PNGs (default: docs/media)")
     ap.add_argument("--work", default=None,
