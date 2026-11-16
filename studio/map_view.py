@@ -2336,8 +2336,10 @@ class MapView(QWidget):
             the compare ghost, all via each ``_TimingLine.chrome_items()`` so a future line type is
             hidden automatically.
 
-        The provisional start-line cue is not hidden here: it only shows on unverified timing, which
-        already blocks the card upstream, so it never reaches a real grab."""
+          * the provisional start-line cue (its dashed line and "drag to set start/finish" caption):
+            the card refuses unverified timing upstream, but the exported REPORT does not — it
+            grabbed the cue and printed a drag instruction in a document (QA w5). The report says
+            "provisional" itself, in its Timing row and stamps."""
         # Qt widget chrome: save the EXPLICIT hide flag (isHidden), not effective isVisible — a child
         # reads not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
         # would wrongly leave the key hidden on an off-screen/grab-only map. isHidden is True only when
@@ -2367,6 +2369,11 @@ class MapView(QWidget):
                 items.extend(tl.chrome_items())
         if getattr(self, "_ghost", None) is not None:
             items.append(self._ghost)
+        # The provisional cue is an INSTRUCTION ("drag to set start/finish") over a start line this
+        # grab just hid. A document states the provisional timing in its own words (the report's
+        # Timing row and stamps); a picture of a drag it cannot offer is not that.
+        items.extend(it for it in (getattr(self, "_provisional_line", None),
+                                   getattr(self, "_provisional_label", None)) if it is not None)
         item_prev = [(it, it.isVisible()) for it in items]
         try:
             for w in widgets:

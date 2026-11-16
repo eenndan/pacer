@@ -116,6 +116,18 @@ LOAD_PLACEHOLDER_MS = 400
 _ABSENT = object()
 
 
+def _report_key_drops(key) -> set[str]:
+    """The map key's rows a REPORT grab leaves out: each describes something that grab does not
+    draw. "start" names a drag gesture over handles `grab_clean` hides; "marker" is the video
+    position, which `grab_clean` hides too (QA w5: the key still listed "Video position" for a ring
+    that was not on the image); "brake" when no brake glyph is on the map (`brake_glyphs` empty —
+    the legend then paints a stock glyph for marks that are nowhere)."""
+    drops = {"start", "marker"}
+    if not getattr(key, "brake_glyphs", True):
+        drops.add("brake")
+    return drops
+
+
 # The two "a file on disk exists and this build could not use it" notices, module-level because the
 # tests assert them against the branch that raises them rather than against a re-typed literal.
 #
@@ -3831,7 +3843,8 @@ class StudioWindow(QMainWindow):
         the grab: it is the only explanation the report has for the brake / corner-apex glyphs its
         own map paints, and unlike a self-contained brag image a document has nowhere else to carry
         it. Its "Drag = start / sector line" row goes with the chrome — it describes a gesture a
-        still image can't offer, pointing at handles this grab just hid. Falls back to the plain
+        still image can't offer, pointing at handles this grab just hid — and so does every row for
+        a mark the grab does not draw (`_report_key_drops`). Falls back to the plain
         grab for a bare widget (tests) with no such context; every legend touch is best-effort,
         because chrome must never fail an export.
 
@@ -3865,7 +3878,7 @@ class StudioWindow(QMainWindow):
                 if rows is not None:
                     # Instance-level shadow of the legend's class-level row list; `_relayout` sizes
                     # the plate to the new row count and the map re-pins it to its corner.
-                    key._ROWS = tuple(r for r in rows if r[0] != "start")
+                    key._ROWS = tuple(r for r in rows if r[0] not in _report_key_drops(key))
                     if collapsed is not _ABSENT:
                         key._collapsed = False  # the DOCUMENT's key, not the screen's preference
                     touched = True

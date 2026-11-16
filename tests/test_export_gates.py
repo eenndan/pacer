@@ -888,6 +888,8 @@ def test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome():
     labels = [label for _kind, label in rows]
     assert "Brake point" in labels and "Corner apex (C#)" in labels, labels
     assert not any(kind == "start" for kind, _label in rows), labels
+    # The video-position marker is hidden by grab_clean, so its key row goes too (QA w5).
+    assert "Video position" not in labels, labels
 
     # Restored: the class rows are back (no instance shadow), the plate was re-laid out and
     # re-pinned, and the key's live visibility is whatever grab_clean's own finally set.
@@ -918,7 +920,7 @@ def test_the_report_map_opens_a_key_the_user_collapsed_on_screen():
     _hidden, rows, painted_collapsed = fake.at_grab[0]
     assert not painted_collapsed, (
         "the exported document got the collapsed plate the SCREEN was set to")
-    assert len(rows) == 3, rows
+    assert len(rows) == 2, rows      # brake + corner: no drag row, no hidden marker's row
     assert fake._map_key._collapsed is True, (
         "the export changed the user's on-screen collapse choice")
     win.hide()
