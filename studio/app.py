@@ -516,6 +516,10 @@ class StudioWindow(QMainWindow):
                            "grid (Esc) and run it again.")
     _NO_SESSION_RACE_REASON = ("Open a recording first — the race lines up that session's own "
                                "clean laps.")
+    _NO_RACE_FOLLOW_REASON = ("No Lap race is running — Follow zooms the map on the race's field: "
+                              "start one with R, then follow it.")
+    _RACE_FOLLOW_PREF = "race_follow"
+    _race_follow = False        # until __init__ reads the pref (a window built piecemeal in tests)
     _NO_SESSION_EXCLUDED_REASON = ("Open a recording first — the ⊘ excluded strip sits under a "
                                    "loaded session's lap table.")
     _NO_SESSION_REFERENCE_REASON = ("Open a recording first — a reference is something the "
@@ -601,6 +605,9 @@ class StudioWindow(QMainWindow):
         self._lap_panel_tab = prefs.lap_panel_tab()
         self._grid_sizes = prefs.grid_sizes()
         self._excluded_visible = prefs.excluded_visible()
+        # View ▸ Follow the race: the Lap race's map follows the field. Off unless chosen; a bool
+        # or nothing (a corrupt value never turns it on).
+        self._race_follow = prefs.get(self._RACE_FOLLOW_PREF, False) is True
         # The loaded recording's marks (derived + hand-authored, merged) — rebuilt per load by
         # _refresh_marks and read by the jump keys and the row actions. Empty before the first load
         # so the keys are no-ops rather than AttributeErrors on the welcome screen.
@@ -2033,6 +2040,10 @@ class StudioWindow(QMainWindow):
         race_changed = getattr(self.view, "raceChanged", None)
         if race_changed is not None:
             race_changed.connect(self._sync_view_menu)
+            race = getattr(self.view, "race", None)
+            if race is not None:        # the next race starts in the remembered Follow choice
+                race.follow = self._race_follow
+                race.on_follow = self._on_race_follow
         self.view.timingEdited.connect(self._sync_view_menu)
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
@@ -2503,7 +2514,17 @@ class StudioWindow(QMainWindow):
         self._race_action.triggered.connect(self.toggle_lap_race)
         # Both gate on state their menu sync does not hear change (the map on screen; the view):
         # their keys re-gate when pressed and say why when they stay off (`_ShortcutGate`).
-        for action in (self._stats_action, self._race_action):
+        # Follow the race: the race card's crosshair button, as a menu item and a key. Only during
+        # a race; the choice is remembered, so the next race starts in it.
+        self._race_follow_action = view_menu.addAction("Follow the race")
+        self._race_follow_action.setCheckable(True)
+        self._race_follow_action.setChecked(self._race_follow)
+        self._race_follow_action.setShortcut(QKeySequence("Shift+R"))
+        self._race_follow_action.setToolTip(
+            "Follow the race (⇧R): during a Lap race the map zooms in on the field and moves with "
+            "it, with a scale bar; off puts your view back exactly.")
+        self._race_follow_action.triggered.connect(self.toggle_race_follow)
+        for action in (self._stats_action, self._race_action, self._race_follow_action):
             _ShortcutGate(self, action, self._sync_view_menu)
         view_menu.addSeparator()
         # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching · Marks,
@@ -2702,6 +2723,10 @@ class StudioWindow(QMainWindow):
                       else self._NO_MAP_RACE_REASON)
             self._gate_action(race, racing or (can and shown), reason)
             race.setChecked(racing)
+        follow = getattr(self, "_race_follow_action", None)
+        if follow is not None:
+            self._gate_action(follow, self._racing(), self._NO_RACE_FOLLOW_REASON)
+            follow.setChecked(self._race_follow)
 
     def _show_shortcuts(self):
         """Help ▸ Keyboard shortcuts (also F1 / ?): the read-only shortcut reference."""
@@ -2865,6 +2890,25 @@ class StudioWindow(QMainWindow):
                 self._sync_view_menu()
                 self.statusBar().showMessage(gate_refusal(self._race_action), STATUS_MS)
         self._sync_view_menu()
+
+    def toggle_race_follow(self):
+        """View ▸ Follow the race (⇧R): the race's map follows the field, or puts the view back."""
+        view = getattr(self, "view", None)
+        if view is not None and self._racing():
+            view.race.toggle_follow()
+        self._sync_view_menu()
+
+    def _on_race_follow(self, on: bool):
+        """Follow changed (the menu, ⇧R or the card's button): remember it, guarded like the
+        other View choices, and keep the menu item's tick in step."""
+        self._race_follow = bool(on)
+        try:
+            prefs.set(self._RACE_FOLLOW_PREF, self._race_follow)
+        except OSError as exc:
+            _log.warning("could not persist race follow (%r)", exc)
+        action = getattr(self, "_race_follow_action", None)
+        if action is not None:
+            action.setChecked(self._race_follow)
 
     def toggle_mute(self):
         """Mute / unmute the clip audio (M)."""

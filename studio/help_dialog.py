@@ -177,6 +177,9 @@ COMMANDS: list[Command] = [
     # action itself (with its gate reason when the session cannot field two laps).
     Command("Analysis", "R",
             "Lap race: every clean lap leaves the start line together on the map (Esc ends it)"),
+    # View ▸ Follow the race, harvested by the palette like the race itself; off outside a race.
+    Command("Analysis", QKeySequence("Shift+R"),
+            "Lap race: follow the field — the map zooms in and moves with it (again to leave)"),
     # The DESCRIPTION named the maximize button by a character the button does not paint, in a
     # sentence — where an icon cannot go. It names the button in words instead; the Layout
     # group below is where the glyph itself is documented.

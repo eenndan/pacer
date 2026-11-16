@@ -44,6 +44,10 @@ _RING = QColor(C.text)
 #: true AT the time its title prints, and change at a rate they can be read at. Measured on the
 #: 36-lap session: re-rendering every 30 Hz tick, the rows changed on 99 of 120 ticks at 2x.
 CARD_REFRESH_S = 0.1
+#: The Follow button's tooltip: what it does, and what the dots it zooms on can and cannot say.
+FOLLOW_TIP = ("Follow (⇧R): the map zooms in on the field and moves with it, with a scale bar. "
+              "The dots show where each lap is; this card shows what the timing can tell apart — "
+              "laps in one pack can sit visibly apart on the map and still read ≈ here.")
 
 
 def interval_text(row: PackRow, over: bool, lap_times: dict[int, float]) -> str:
@@ -77,6 +81,7 @@ class RaceCard(QWidget):
     restartRequested = Signal()
     speedCycled = Signal()
     closeRequested = Signal()
+    followToggled = Signal()
     scrubbed = Signal(float)        # fraction of the race, 0..1
 
     def __init__(self, parent=None):
@@ -132,7 +137,7 @@ class RaceCard(QWidget):
         snap = self.model
         if (snap is not None and model.playing and snap.playing
                 and not model.over and model.speed == snap.speed
-                and model.selected == snap.selected
+                and model.selected == snap.selected and model.follow == snap.follow
                 and 0.0 <= model.t - snap.t < CARD_REFRESH_S * model.speed):
             return
         self.model = model
@@ -194,7 +199,8 @@ class RaceCard(QWidget):
         return replace(m, rows=(), hidden_packs=m.hidden_packs + len(m.rows))
 
     def _content_key(self, m: CardModel):
-        return (tuple(self.lines()[1:]), m.over, m.playing, m.speed, m.selected, self.width(),
+        return (tuple(self.lines()[1:]), m.over, m.playing, m.speed, m.selected, m.follow,
+                self.width(),
                 self.height(), round(self.devicePixelRatioF(), 3), theme.active_palette())
 
     def lines(self) -> list[str]:
@@ -273,13 +279,13 @@ class RaceCard(QWidget):
         return px
 
     def _button(self, p: QPainter, key: str, rect: QRectF, glyph: str | None = None,
-                text: str | None = None) -> None:
+                text: str | None = None, checked: bool = False) -> None:
         self._hits[key] = rect
-        p.setPen(QPen(QColor(C.border), 1))
-        p.setBrush(QBrush(QColor(C.surface_hover)))
+        p.setPen(QPen(QColor(C.accent if checked else C.border), 1))
+        p.setBrush(QBrush(QColor(C.surface_active if checked else C.surface_hover)))
         p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), theme.RADIUS_S, theme.RADIUS_S)
         if glyph:
-            px = self._pixmap(glyph, C.text)
+            px = self._pixmap(glyph, C.accent if checked else C.text)
             w, h = px.width() / px.devicePixelRatio(), px.height() / px.devicePixelRatio()
             p.drawPixmap(QPointF(rect.center().x() - w / 2, rect.center().y() - h / 2), px)
         if text:
@@ -335,7 +341,7 @@ class RaceCard(QWidget):
         inner = self._w - 2 * _PAD
         x0, y = float(_PAD), float(_PAD)
         # Title row: identity + race clock (painted live, _paint_live), then the transport
-        # (restart · play/pause · speed · ×).
+        # (follow · restart · play/pause · speed · ×).
         bx = self._w - _PAD - _BTN
         self._button(p, "close", QRectF(bx, y, _BTN, _BTN), glyph="ph.x")
         bx -= _BTN + 4 + 10
@@ -345,6 +351,9 @@ class RaceCard(QWidget):
                      glyph="ph.pause-fill" if m.playing else "ph.play-fill")
         bx -= _BTN + 4
         self._button(p, "restart", QRectF(bx, y, _BTN, _BTN), glyph="ph.arrow-counter-clockwise")
+        bx -= _BTN + 4
+        self._button(p, "follow", QRectF(bx, y, _BTN, _BTN), glyph="ph.crosshair-simple",
+                     checked=m.follow)
         y += _TITLE_H
         if self._chrome >= 2:           # a short map drops the caption first (`_fit`)
             p.setFont(self._font)
@@ -486,14 +495,17 @@ class RaceCard(QWidget):
             self._scrub_to(event.position().x())
         elif key is not None:
             {"play": self.playToggled, "restart": self.restartRequested,
-             "speed": self.speedCycled, "close": self.closeRequested}[key].emit()
+             "speed": self.speedCycled, "close": self.closeRequested,
+             "follow": self.followToggled}[key].emit()
 
     def mouseMoveEvent(self, event):
         event.accept()
         if self._scrubbing:
             self._scrub_to(event.position().x())
             return
-        self.setCursor(Qt.PointingHandCursor if self._hit(event.position()) else Qt.ArrowCursor)
+        hit = self._hit(event.position())
+        self.setCursor(Qt.PointingHandCursor if hit else Qt.ArrowCursor)
+        self.setToolTip(FOLLOW_TIP if hit == "follow" else "")
 
     def mouseReleaseEvent(self, event):
         event.accept()
