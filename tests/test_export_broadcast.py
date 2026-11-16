@@ -187,7 +187,7 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
     frames = _dialog_frames()
     assert (1080, 1080) in frames and (1080, 1920) in frames and (720, 720) in frames, frames
     frames += list(SMALL_FRAMES)
-    n = skipped = wide = lasts = 0
+    n = skipped = wide = lasts = plated = padded = 0
     a = next(i for i in (lap, lap - 1) if i + 1 in s.valid_lap_ids())
     whole = replace(ev.build_session_spec(s, os.path.join(f["out"], "never.mp4"), config=(
         broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
@@ -245,6 +245,42 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                     for c in names[i + 1:]:
                         assert not boxes[a].intersects(boxes[c]), (
                             f"{what}: {a} {boxes[a]} overlaps {c} {boxes[c]}")
+                # The backing plates under the two Classic texts kept (the stamp, the |g| readout):
+                # round their text, never over another element, never out of its room — so never
+                # over the kart dot, which rides the minimap.
+                under = {u: _box(r) for u, r in b.under.items()}
+                assert ("stamp" in under) == stamped, what
+                assert "gmeter" in under, what
+                # The Δ bar's one plate: its box, wider only sideways, inside the safe area.
+                dp = _box(b.dbar_plate)
+                assert dp.contains(boxes["dbar"]) and safe.contains(dp), what
+                assert (dp.y, dp.h) == (boxes["dbar"].y, boxes["dbar"].h), what
+                for o, ob in boxes.items():
+                    assert o == "dbar" or not dp.intersects(ob), f"{what}: the Δ plate is on {o}"
+                for u, pl in under.items():
+                    host = boxes[u]
+                    if u == "stamp":
+                        area = safe if safe.contains(host) else layout.Box(0, 0, w, h)
+                        held = layout.Box(host.x, host.y, min(host.right, w) - host.x, host.h)
+                        assert pl.contains(held), f"{what}: the stamp's plate does not hold it"
+                        assert area.contains(pl), f"{what}: the stamp's plate leaves its room"
+                        # Its padding is held wherever the frame has room: the left edge is the
+                        # tower's, the text inset as far at the right, a margin above and below.
+                        if (w, h) not in SMALL_FRAMES:
+                            tw = boxes["tower"]
+                            assert abs(pl.x - tw.x) < 1e-6, f"{what}: stamp plate {pl} vs {tw}"
+                            assert abs((pl.right - host.right) - (host.x - tw.x)) < 1e-6, what
+                            assert pl.y < host.y and pl.bottom > host.bottom, what
+                            padded += 1
+                    else:
+                        assert host.contains(pl), f"{what}: the readout plate leaves the g-meter"
+                        from studio import gmeter_overlay as gm
+                        _cx, cy, r = gm.dial_geom(host.w, host.h)
+                        assert pl.y >= host.y + cy + r, f"{what}: the readout plate is on the dial"
+                    for o, ob in boxes.items():
+                        if o != u:
+                            assert not pl.intersects(ob), f"{what}: the {u} plate {pl} is on {o}"
+                    plated += 1
                 assert (p._stamp_rect.height() > 0) == stamped, what
                 assert abs(p._map._box.height() - layout.MAP_H_FRAC * min(w, h)) < 1e-6, what
                 if ex:
@@ -257,7 +293,8 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                 n += 1
     print(f"ok the layout: {n} of {n} combinations lay out ({len(frames)} frames x stamp "
           f"off/3 lines x lap export extras off/on + whole-recording), every element clear and "
-          f"safe; the LAST sub-plate in {lasts}; on the tiny frames the stamp takes the Classic "
+          f"safe; {plated} backing plates clear ({padded} stamp plates padded and aligned with "
+          f"the tower); the LAST sub-plate in {lasts}; on the tiny frames the stamp takes the Classic "
           f"stamp's own place {wide}x, the cards sit out {skipped}x")
 
 
@@ -390,8 +427,9 @@ def test_every_figure_is_its_classic_twin_on_every_frame():
           f"{max_diff}; the last clock is the Laps table's {last_clock}")
 
 
-def _stamp_ink(painter, w, h, rect):
-    """(amber ink pixels, ink rows) of the frame `painter` paints, inside `rect` grown by 2 px."""
+def _stamp_ink(painter, w, h, rect, exact=False):
+    """(amber ink pixels, ink rows) of the frame `painter` paints, inside `rect` grown by 2 px;
+    `exact`: only the pixels the fill covers whole (exactly `EXPORT.accent`, opaque)."""
     s = painter._session
     vals = ev.overlay_values_at(s, painter._spec.lap_t0 + 3.0, painter._spec)
     raw = ev._paint_alpha_frame(painter, w, h, vals, painter.advance_and_snapshot(vals))
@@ -401,6 +439,9 @@ def _stamp_ink(painter, w, h, rect):
     roi = img[y0:y1, x0:x1]
     amber = ((roi[..., 0] > 230) & (roi[..., 1] > 150) & (roi[..., 1] < 200) & (roi[..., 2] < 80)
              & (roi[..., 3] > 200))
+    if exact:
+        c = theme.qcolor(EXPORT.accent)
+        amber = np.all(roi == (c.red(), c.green(), c.blue(), 255), axis=2)
     rows = np.flatnonzero(amber.any(axis=1))
     return int(amber.sum()), (int(rows[-1] - rows[0] + 1) if len(rows) else 0)
 
@@ -422,7 +463,16 @@ def test_the_honesty_stamp_is_kept_at_its_classic_size_at_every_shape():
         assert m.top() > tower.bottom() and m.left() > tower.left(), (w, h, m, tower)
         assert not m.intersects(bp._g_rect), f"{w}x{h}: the stamp is under the g-meter"
         c_px, c_rows = _stamp_ink(classic, w, h, c)
+        # The ink against Classic's with the stamp's backing plate set aside: over the plate the
+        # glyphs' anti-aliased edges blend into dark grey rather than into nothing, which this
+        # amber count reads as less ink (262 px against 288 at 406x720) though no glyph changed.
+        # The plate's own promise is that: every pixel the fill covers whole is the same with it.
+        be = _element(bp, "broadcast")
+        plates, be._under_imgs = be._under_imgs, []
         b_px, b_rows = _stamp_ink(bp, w, h, m)
+        bare = _stamp_ink(bp, w, h, m, exact=True)
+        be._under_imgs = plates
+        assert plates and _stamp_ink(bp, w, h, m, exact=True) == bare, (w, h, bare)
         assert abs(b_rows - c_rows) <= 1 and c_rows > 0, (w, h, c_rows, b_rows)
         assert abs(b_px - c_px) <= 0.05 * c_px, (w, h, c_px, b_px)
         print(f"ok the stamp at {w}x{h}: {len(STAMP_LINES)} lines, {m.width():.0f}x"
@@ -629,6 +679,214 @@ def test_outside_a_lap_the_tower_draws_nothing():
     roi = img[int(r.top()):int(r.bottom()), int(r.left()):int(r.right()), 3]
     assert int(roi.max()) == 0, f"tower ink outside a lap (alpha up to {roi.max()})"
     print("ok outside a lap: no tower")
+
+
+# ------------------------------------------------------------------------------ legibility
+# Flat sky, grass, white, mid-grey and black, and per-pixel grey noise (a busy, high-frequency
+# picture): what a burned graphic has to read over.
+BACKGROUNDS = {"white": (255, 255, 255), "grey": (128, 128, 128), "grass": (0x5A, 0x8F, 0x3C),
+               "sky": (0x8E, 0xC5, 0xFF), "black": (0, 0, 0), "noise": None}
+# Texts this test does not hold, each with its reason ({(module, role): why}); any OTHER text a
+# frame draws that the test cannot measure fails it.
+_LEGIBILITY_EXEMPT = {
+    # An Extra shared with Classic, on its own lighter plate (alpha 165): 1.87:1 against that
+    # plate alone over white, 3.2:1 by the ring metric at 720p. Its own change, not this one.
+    ("studio.overlay.corner_cards", None): "corner card (Classic's Extra, its own plate)",
+    # The Classic dial's ring tick label ("1.0"): 8-10 px, a thin halo, no plate. No pixel of it
+    # is fully covered by its fill at these sizes, so it cannot be measured here.
+    ("studio.gmeter_overlay", "caption"): "dial caption (Classic's, too small to measure)",
+}
+# The texts with NO plate under them, whose legibility rests on their outline alone: the
+# minimap's C-labels (a plate would hide the line they name). The tower's header sits on its
+# amber band; every other text on a `_plate`.
+_OUTLINED = {("studio.overlay.broadcast", "prepare")}
+_BAND = {("studio.overlay.broadcast", "_head")}
+
+
+def _exempt(key) -> str | None:
+    return _LEGIBILITY_EXEMPT.get((key[3], key[4])) or _LEGIBILITY_EXEMPT.get((key[3], None))
+
+
+def _contrast(la: float, lb: float) -> float:
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def _plate_only(key, bg) -> float:
+    """The PLATE-ONLY contrast: the text's fill against its backing (a `_plate`, or the header's
+    amber band) blended over the flat background `bg` — no halo counted."""
+    from studio.overlay.broadcast import _PLATE_ALPHA
+    backing, alpha = ((EXPORT.accent, 240) if (key[3], key[4]) in _BAND
+                      else (EXPORT.halo, _PLATE_ALPHA))
+    c, t = theme.qcolor(backing), theme.qcolor(key[5])
+    a = alpha / 255.0
+    comp = np.round(a * np.array([c.red(), c.green(), c.blue()]) + (1 - a) * np.array(bg))
+    return _contrast(float(_wcag_lum([t.red(), t.green(), t.blue()])), float(_wcag_lum(comp)))
+
+
+def _background(name, w, h) -> bytearray:
+    rgb = BACKGROUNDS[name]
+    if rgb is None:
+        g = np.random.default_rng(7).integers(0, 256, size=(h, w), dtype=np.uint8)
+        return bytearray(np.repeat(g[:, :, None], 3, axis=2).tobytes())
+    return bytearray(np.tile(np.array(rgb, np.uint8), w * h).tobytes())
+
+
+def _wcag_lum(rgb) -> np.ndarray:
+    c = np.asarray(rgb, float) / 255.0
+    lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    return lin @ np.array([0.2126, 0.7152, 0.0722])
+
+
+def _grow(m: np.ndarray, r: int) -> np.ndarray:
+    out = m.copy()
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            if dx * dx + dy * dy <= r * r:
+                out |= np.roll(np.roll(m, dy, 0), dx, 1)
+    return out
+
+
+class _Tagged:
+    """While `on`, every burned text (the export's `_draw_text` and the dial's outlined text) is
+    filled in a colour of its own — (255, id, 254), a colour no overlay uses — so a second render
+    of the same frame tells each text's glyph pixels apart: where the two renders differ, a fill
+    touched. The halo, shadow and plates are left exactly as they are."""
+
+    def __init__(self):
+        from studio import gmeter_overlay
+        self.gm, self.on, self.texts = gmeter_overlay, False, {}
+        self._draw, self._outl = ev._draw_text, gmeter_overlay._draw_text_outlined
+
+    def _tag(self, text, font, colour, module, role, halo=0.0):
+        # A glyph's halo pass (the tower clock's: drawn in the halo colour, then filled again over
+        # it) is not a text of its own.
+        if not (self.on and text.strip()) or (colour == EXPORT.halo and halo > 0):
+            return colour
+        key = (text, font.pixelSize(), font.bold(), module, role, colour)
+        i = next((i for i, v in self.texts.items() if v == key), None)
+        if i is None:
+            i = len(self.texts) + 1
+            assert i < 250, "more texts than tag colours"
+            self.texts[i] = key
+        return f"#ff{i:02x}fe"
+
+    def __enter__(self):
+        def draw(p, pos, text, font, colour, **kw):
+            fr = sys._getframe(1)
+            tag = self._tag(text, font, colour, fr.f_globals["__name__"], fr.f_code.co_name,
+                            kw.get("halo", 2.2))
+            return self._draw(p, pos, text, font, tag, **kw)
+
+        def outl(p, rect, flags, text, font, colour, halo=2.2):
+            role = "readout" if font.bold() else "caption"
+            return self._outl(p, rect, flags, text, font,
+                              self._tag(text, font, colour, "studio.gmeter_overlay", role), halo)
+        ev._draw_text, self.gm._draw_text_outlined = draw, outl
+        return self
+
+    def __exit__(self, *_a):
+        ev._draw_text, self.gm._draw_text_outlined = self._draw, self._outl
+
+
+def _text_contrasts(a: np.ndarray, b: np.ndarray, texts) -> dict:
+    """{text key: (ring, far)} for every tagged text in render `b` (its twin `a` untagged): two
+    WCAG contrasts of the glyph's fill. RING: against the mean luminance of every pixel within
+    0.12 em (at least 2 px) of a pixel the fill touched, so a halo or a plate counts exactly as far
+    as it reaches. FAR: against the pixels 2-4 px away, mostly past a thin halo."""
+    diff = np.any(a != b, axis=2)
+    tag = (b[..., 0] == 255) & (b[..., 2] == 254) & diff
+    out = {}
+    for i in np.unique(b[..., 1][tag]):
+        key = texts.get(int(i))
+        if key is None:
+            continue
+        core = tag & (b[..., 1] == i)
+        r = max(2, round(0.12 * key[1]))
+        ys, xs = np.nonzero(core)
+        y0, y1 = max(0, ys.min() - r - 3), ys.max() + r + 4
+        x0, x1 = max(0, xs.min() - r - 3), xs.max() + r + 4
+        c, d = core[y0:y1, x0:x1], diff[y0:y1, x0:x1]
+        glyph = c | (d & _grow(c, 2))
+        ring = _grow(glyph, r) & ~d
+        lg = float(np.median(_wcag_lum(a[y0:y1, x0:x1][c])))
+        lb = float(_wcag_lum(a[y0:y1, x0:x1][ring]).mean())
+        far = _grow(glyph, 4) & ~_grow(glyph, 1) & ~d
+        lf = float(_wcag_lum(a[y0:y1, x0:x1][far]).mean())
+        out[key] = (_contrast(lg, lb), _contrast(lg, lf))
+    return out
+
+
+def test_every_broadcast_text_reads_over_sky_grass_white_and_noise():
+    """Every text a Broadcast frame burns — the tower, the Δ bar's scale and baseline, the big
+    speed, the minimap's C-labels, and the Classic g readout and honesty stamp it keeps — reaches
+    WCAG's 4.5:1 (3:1 for a bold face of 24 px or more, stricter than WCAG's large text) at 720p
+    landscape and 9:16, by TWO metrics:
+      * PLATE-ONLY, for every text on a plate (or the header's band): its fill against that
+        backing blended over each flat background (white, sky, grass, grey, black), no halo
+        counted — so a plate's legibility does not lean on the glyph's outline;
+      * RING (`_text_contrasts`), for every text, rendered over six backgrounds (the five and
+        per-pixel noise): the halo and the plate count as far as they reach. For the C-labels,
+        which have no plate, this is the only measure held: their legibility rests on the
+        outline. Their FAR contrast (the background 2-4 px off, past the outline) is printed,
+        not held.
+    Every text a frame draws must be measured, or be named in `_LEGIBILITY_EXEMPT` with its reason.
+    Before the plates: the bar's ends measured 1.4:1 and the stamp 1.2:1 (ring) over white at
+    720p."""
+    f = _fixture()
+    s, lap = f["s"], f["lap"]
+    worst: dict = {}
+    measured: set = set()
+    far: dict = {}
+    with _Stamped(), _Tagged() as tg:
+        for w, h in ((1280, 720), (1080, 1920)):
+            tg.on = False
+            pa = _painter(s, _spec(s, lap), w, h)
+            tg.on = True
+            pb = _painter(s, _spec(s, lap), w, h)
+            spec = pa._spec
+            for frac in (0.3, 0.7):
+                t = spec.lap_t0 + frac * (spec.lap_t1 - spec.lap_t0)
+                for name in BACKGROUNDS:
+                    renders = []
+                    for on, p in ((False, pa), (True, pb)):
+                        tg.on = on
+                        vals = ev.overlay_values_at(s, t, spec)
+                        raw = ev._paint_packed_frame(p, w, h, _background(name, w, h), vals,
+                                                     p.advance_and_snapshot(vals))
+                        renders.append(np.frombuffer(raw, np.uint8).reshape(h, w, 3))
+                    for key, (cr, cf) in _text_contrasts(*renders, tg.texts).items():
+                        measured.add(key)
+                        if _exempt(key):
+                            continue
+                        need = 3.0 if key[1] >= 24 and key[2] else 4.5
+                        role = (key[3], key[4])
+                        what = "outlined" if role in _OUTLINED else "plated"
+                        checks = [("ring", cr, name)]
+                        if role not in _OUTLINED:
+                            checks += [("plate-only", _plate_only(key, BACKGROUNDS[n]), n)
+                                       for n in BACKGROUNDS if BACKGROUNDS[n] is not None]
+                        else:
+                            far[(w, h)] = min(far.get((w, h), (99.0, ""))[0], cf), key[0]
+                        for metric, c, bg in checks:
+                            k = (what, metric, w, h)
+                            if k not in worst or c - need < worst[k][0] - worst[k][1]:
+                                worst[k] = (c, need, bg, key[0], key[1])
+    drawn = {k for k in tg.texts.values() if not _exempt(k)}
+    unmeasured = sorted({(k[0], k[3], k[4]) for k in drawn - measured})
+    assert not unmeasured, f"texts drawn but never measured (name them in _LEGIBILITY_EXEMPT " \
+                           f"with a reason, or measure them): {unmeasured}"
+    assert {(k[3], k[4]) for k in measured} & _OUTLINED, "no C-label measured"
+    for (what, metric, w, h), (cr, need, name, text, px) in sorted(worst.items()):
+        print(f"   {w}x{h} {what:8s} {metric:10s} worst {cr:5.2f}:1 (needs {need}) over {name}: "
+              f"{text!r} {px} px")
+    for (w, h), (cf, text) in sorted(far.items()):
+        print(f"   {w}x{h} C-labels: fill vs the background 2-4 px off {cf:.2f}:1 ({text!r}) — "
+              f"their legibility rests on the outline")
+    bad = {k: v for k, v in worst.items() if v[0] < v[1]}
+    assert not bad, f"texts below WCAG contrast: {bad}"
+    print(f"ok legibility: every Broadcast text at 720p and 9:16 reaches its WCAG contrast "
+          f"({len(measured)} texts measured; exempt by name: "
+          f"{sorted(set(_LEGIBILITY_EXEMPT.values()))})")
 
 
 def test_classic_never_reaches_the_broadcast_element():
@@ -862,6 +1120,7 @@ def _run_all():
                test_the_finished_box_says_when_the_corner_cards_did_not_fit,
                test_every_figure_is_its_classic_twin_on_every_frame,
                test_the_honesty_stamp_is_kept_at_its_classic_size_at_every_shape,
+               test_every_broadcast_text_reads_over_sky_grass_white_and_noise,
                test_a_reference_names_the_baseline_in_the_tower_and_on_the_bar,
                test_the_bar_scale_is_each_laps_own,
                test_a_whole_recording_tower_shows_each_finished_laps_table_time,

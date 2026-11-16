@@ -17,6 +17,10 @@ an element here instead, so the 4,800-line exporter does not grow with every ide
     it is called with the kart dot's frame point (None without a dot) once under the dot
     (`over=False`) and once over it (`over=True`) — what it paints over the dot must leave the
     dot's own disc (`DOT_R` x k round `dot`) uncovered (the ghost's ring round the dot, ghost.py);
+  * `paint_under(painter, vals)` (optional, any layer): called once per frame BEFORE every Classic
+    element (`LAYER_UNDER`), for a style's backing plates under the Classic texts it keeps (the g
+    readout, the moved honesty stamp) — a plate painted after them would hide them. Classic has no
+    element that defines it, so its frames are untouched;
   * `replaces` (optional, a tuple of `PLATES` names) says which Classic plates it stands in for: a
     style that draws its own lap tower names "strip", and the painter then skips the Classic one.
     Only a PREPARED element replaces anything (one that sits the export out leaves the Classic
@@ -62,6 +66,7 @@ from studio.overlay import layout  # Qt-free, imports nothing from here
 
 LAYER_MAP = "map"      # on the minimap, under the kart dot and its tail
 LAYER_TOP = "top"      # over every Classic element
+LAYER_UNDER = "under"  # the `paint_under` pass: under every Classic element
 
 # The Classic plates an element may read the rect of, and replace: the g-meter dial (top-right),
 # the minimap (bottom-right), the speed/Δ readout (bottom-left) and the lap strip (top-left). The
@@ -166,16 +171,23 @@ def paint_layer(elements, p: QPainter, vals, layer: str, dot: QPointF | None = N
                 over: bool = False) -> None:
     """Paint every element of `layer` for one frame, each between a save/restore so a pen or brush
     it leaves set cannot leak into the Classic elements painted after it. On `LAYER_MAP` an element
-    with a `paint_map` gets the kart `dot` and both passes; a plain one only the pass under it."""
+    with a `paint_map` gets the kart `dot` and both passes; a plain one only the pass under it.
+    `LAYER_UNDER` calls every element's `paint_under`, whatever its layer."""
     for element in elements:
-        if element.layer != layer:
+        paint_under = getattr(element, "paint_under", None)
+        if layer == LAYER_UNDER:
+            if paint_under is None:
+                continue
+        elif element.layer != layer:
             continue
         paint_map = getattr(element, "paint_map", None)
         if over and paint_map is None:
             continue
         p.save()
         try:
-            if paint_map is not None and layer == LAYER_MAP:
+            if layer == LAYER_UNDER:
+                paint_under(p, vals)
+            elif paint_map is not None and layer == LAYER_MAP:
                 paint_map(p, vals, dot, over)
             else:
                 element.paint(p, vals)
