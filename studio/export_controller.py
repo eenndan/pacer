@@ -747,7 +747,7 @@ class ExportController:
         files = max(1, int(files))
         frames = export_video.planned_frames(dur, fps, on_line) * files
         if content == export_video.ALPHA_PRORES:
-            codec = export_video.known_alpha_encoder()      # None until the probe has run
+            codec = export_video.known_alpha_encoder()      # None until the probe has settled
             encoder = f"ProRes 4444 via {codec}" if codec else "ProRes 4444"
         elif content == export_video.ALPHA_PNG:
             codec, encoder = content, "a PNG sequence"
@@ -894,6 +894,14 @@ class ExportController:
         poll.timeout.connect(_probes_in)
         poll.start()
         return poll
+
+    # What the hint says when the ProRes probe MISSED (`export_video.prores_videotoolbox_state`):
+    # the hardware encoder could not be confirmed just now (no session, or its test frame did not
+    # come back), and the export asks again as it starts, so the hint may promise neither encoder,
+    # nor a time that depends on which one it gets.
+    _PRORES_MISSED_LINE = (f"The hardware ProRes encoder could not be confirmed just now: the "
+                           f"export tries {export_video.VT_PRORES} again as it starts, else uses "
+                           f"{export_video.SW_PRORES}.")
 
     @staticmethod
     def _measuring_line(src: str) -> str:
@@ -1157,6 +1165,9 @@ class ExportController:
                 lines.append(size)
             if "to render" not in size and self._measuring_line(src):
                 lines.append(self._measuring_line(src))
+            if (content == export_video.ALPHA_PRORES
+                    and export_video.prores_videotoolbox_state() == "missed"):
+                lines.append(self._PRORES_MISSED_LINE)
             hint.setText("  ".join(lines))
             # A scope with nothing to render cannot be confirmed. `_scope_plan` already says why.
             ok_button.setEnabled(math.isfinite(clip) and clip > 0)
@@ -1661,7 +1672,12 @@ class ExportController:
                 # twentieth file after nineteen renders is the wait this exists to spare. It runs
                 # on the worker's thread (the probe and the disk query can block) while the
                 # dialog still says "Preparing…", and it refuses only what plainly cannot fit.
-                worker.preflight = lambda: export_video.guard_free_space(specs)
+                # The ProRes encoder is resolved first, once for the whole queue
+                # (`pin_alpha_encoder`), so the space asked for is the encoder's that renders.
+                def _preflight():
+                    export_video.pin_alpha_encoder(specs)
+                    export_video.guard_free_space(specs)
+                worker.preflight = _preflight
             worker.log_scope = (f"{scope_text}, file {i + 1} of {total_files}" if total_files > 1
                                 else scope_text)
             state["worker"] = worker
