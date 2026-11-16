@@ -572,9 +572,8 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     DELIBERATELY NOT MIRRORED, both because a copy is the drift this function exists to prevent:
 
       * the "median lap · top N fixed" coaching digest — retired from the page as well (R11): the
-        Coaching tab is the one answer to where the time is, and its arithmetic (`_shown_rows`,
-        `PANEL_TOP_N`, the sum of the ROUNDED cells) lives in `coaching_panel`, a Qt module this
-        one cannot import.
+        Coaching tab is the one answer to where the time is; its rows, shortlist and words are
+        `coaching.page_text`'s, for a COACHING section to print rather than a digest to copy.
       * the DATA TRUST card's provenance rows — built inline in `stats_trust.TrustSection.refresh`, so
         they would have to be re-worded here. The two TRUST facts that qualify the exported
         NUMBERS travel instead as the report's own `Timing` meta row (`write_report_html`), off

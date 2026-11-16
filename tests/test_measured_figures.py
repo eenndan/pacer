@@ -233,9 +233,9 @@ def test_the_evidence_prose_is_its_table_s_arithmetic():
         assert int(laps) == themes[rec].laps and max(r.laps for r in by_rec[rec]) <= int(laps), (
             rec, laps, themes[rec], by_rec[rec])
     assert (m.group(1), m.group(5)) == pair, (m.group(1, 5), pair)
-    # The display resolution the header names is the panel's own constant: a row the panel drops is
-    # not a row of this table.
-    floor = _constant(_PANEL, "DISPLAY_MIN_LOST_S")
+    # The display resolution the header names is the constant the Coaching rows are filtered by
+    # (`coaching.shown_rows`): a row the page drops is not a row of this table.
+    floor = _constant(_COACHING, "DISPLAY_MIN_LOST_S")
     assert all(r.lost >= floor for r in rows), [r for r in rows if r.lost < floor]
 
     m = _need(r"σ ≥ time_lost on (\d+) of those (\d+) rows\. The worst: (00\d\d) C(\d+) lost (\d\.\d{3}) s "
@@ -3467,7 +3467,7 @@ def _coaching_measure(s):
     col = {c.cid: k for k, c in enumerate(corner_list)}
     sigma = {sp.cid: sp.sigma for sp in s.corner_consistency()}
     order = sorted(opps.rows, key=lambda r: -r.time_lost)
-    floor = _constant(_PANEL, "DISPLAY_MIN_LOST_S")
+    floor = _constant(_COACHING, "DISPLAY_MIN_LOST_S")
     rows, z = [], {}
     for r in opps.rows:
         k = col[r.cid]
@@ -3878,7 +3878,7 @@ def _brake_measure(s):
     braking = {b.cid: b for b in s.brake_report()}
     clean = len(s.consistency_lap_ids())
     rows = []
-    for r in panel._shown_rows(opps):
+    for r in coaching.shown_rows(opps):
         bp = bps.get(r.cid)
         if not r.evidence.ranked or bp is None:
             continue
@@ -4060,7 +4060,7 @@ def _focus_measure(s_then, p_then, s_now, p_now):
     from studio import focus as F
 
     e_then, e_now = s_then.library_entry(p_then), s_now.library_entry(p_now)
-    top = s_then.coaching_opportunities().ranked_rows()[:3]
+    top = coaching.shortlist(s_then.coaching_opportunities())
     items = s_then.focus_items([r.cid for r in top], e_then)
     real = s_now.focus_report(items, e_now, session_record.empty_store(), e_then["track"])
     store = session_record.empty_store()
