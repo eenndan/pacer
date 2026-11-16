@@ -795,6 +795,14 @@ def test_the_report_is_written_in_the_display_unit_and_the_csv_is_not():
             export_data.write_laps_csv = orig_laps
             QFileDialog.getSaveFileName = orig_dialog
     assert seen["report"].get("unit") == "mph", seen["report"]
+    # report-story: the page is drawn in the app's own tokens, read off theme (the one source;
+    # the writer is Qt-free), and carries the lap strip under the strip card's own gate.
+    from studio import theme
+    from studio.export_controller import report_tokens
+    tokens = seen["report"].get("tokens")
+    assert tokens == report_tokens() and set(tokens) == set(export_data.REPORT_TOKENS), tokens
+    assert tokens["canvas"] == theme.C.canvas and tokens["behind"] == theme.behind_colour()
+    assert "lapstrip" in seen["report"], seen["report"]
     assert seen["laps"] == ((), {}), f"the CSV writer was given a unit: {seen['laps']}"
     win.hide()
     print("test_the_report_is_written_in_the_display_unit_and_the_csv_is_not OK")

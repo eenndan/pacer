@@ -444,8 +444,22 @@ def test_menu_gate_greys_the_strip_under_two_clean_laps_and_says_why():
             assert "fewer than two clean laps" in w.statusBar().currentMessage()
 
 
+def test_the_reports_strip_is_the_cards_png_under_the_cards_gate():
+    """The HTML report embeds this card (`export_controller.report_lapstrip_png`): real PNG bytes
+    on a session the card is offered for, and NO strip where its gate greys the menu action — a
+    provisional start line, or fewer than two clean laps. Kept here, beside the card's own gate
+    tests, because the strip's FakeSession is here."""
+    from studio.export_controller import report_lapstrip_png
+    png = report_lapstrip_png(FakeSession({0: 60.0, 1: 60.4, 2: 61.0}), "kmh")
+    assert png is not None and png.startswith(b"\x89PNG\r\n\x1a\n") and len(png) > 1000, png[:8]
+    img = QImage.fromData(png)
+    assert (img.width(), img.height()) == (ls.CARD_W, ls.CARD_H), (img.width(), img.height())
+    assert report_lapstrip_png(FakeSession({0: 60.0, 1: 60.4}, verified=False), "kmh") is None
+    assert report_lapstrip_png(FakeSession({0: 60.0, 1: 60.4}, dropouts={1}), "kmh") is None
+
+
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    fns =[v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
         fn()
         print(f"ok  {fn.__name__}")

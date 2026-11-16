@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QAbstractItemView, QMenu
 
 from . import provenance, provenance_panel, theme, units
 from . import stats as stats_service
-from ._signal import fmt_signed, lap_label, plural
+from ._signal import fmt_signed, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the CORNERS note
 # quotes the Coaching tab's ranking and totals exactly (`stats_straights` does the same for its
@@ -45,7 +45,7 @@ _CORNER_BEST_COL = 1
 # column alone (stats_common.ReportTable.fit): 581 px now, whole at 1440x831 and at 1280x800.
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
                   theme.estimated_label("Grip")]
-WORST_TINT_N = 3          # at most the top-N scoring corners get the loss cell marked
+WORST_TINT_N = stats_service.CORNER_MARK_N  # at most the top-N scoring corners get the mark
 # ...and MARKED, not merely tinted. The cue used to be hue and nothing else — tinted and plain
 # cells were identical in size, weight, family, alignment and format, and carried the same tooltip
 # — while the ranking is by a PRODUCT (σ × median-loss then, middle half × median-loss now) that
@@ -71,7 +71,7 @@ WORST_TINT_N = 3          # at most the top-N scoring corners get the loss cell 
 # theme.icon() pixmap because Inter draws it (tests/test_glyph_vocabulary.py measures exactly that)
 # and because a cell's icon slot paints at the cell's LEFT edge, a whole column away from the
 # right-aligned number it would be marking.
-WORST_LOSS_MARK = "◆ "
+WORST_LOSS_MARK = stats_service.CORNER_MARK + " "   # the exported report marks with the same
 CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median / σ "
                    "time-in-corner, the median loss VS THE BEST ANYONE DID IN THAT CORNER "
                    "(this column's own Best cell — not your best lap's corner, which is what the "
@@ -87,16 +87,7 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "second out, so it is left out (hover Best or Median for how many laps count), "
                    "and a corner no lap matched shows dashes rather than a guess. "
                    + provenance.CORNER_MATCH_DRIFT + " "
-                   f"Up to 3 loss cells are marked {WORST_LOSS_MARK.strip()} and tinted: the "
-                   "corners where your passes vary most and cost most, ranked by the middle half "
-                   "(the σ cell's hover) × median loss, which is why the marked cells are not "
-                   "simply this column's three largest numbers; hover one for its own score. The "
-                   "middle half is used rather than σ so that one unusual pass cannot earn the "
-                   f"mark. A corner with fewer than {stats_service.MIN_MIDDLE_HALF_N} counted "
-                   "passes is never marked, and a corner whose middle half is under "
-                   f"{stats_service.MARK_MIN_MIDDLE_HALF_S:.2f} s, the level step, is never "
-                   "marked. It is a consistency ranking, not the Coaching tab's list of what "
-                   "to work on (time lost against your best lap), so the two need not agree. "
+                   + stats_service.corner_mark_rule() + " "
                    "Click a row to ring the corner's apex on the map; click a column header to "
                    "sort.")
 
@@ -133,17 +124,8 @@ def _corner_middle_half_tip(report) -> str:
             "σ counts every one of them.")
 
 
-def _corner_one_pass_tip(report) -> str:
-    """The σ cell's second hover line: "" unless ONE pass carries most of σ
-    (`CornerReport.one_pass_sigma`), which is why such a corner is not marked on σ's word. The
-    pass stays in every number on the row; only the sentence's σ leaves it out."""
-    if not getattr(report, "one_pass_sigma", False):
-        return ""
-    lap = getattr(report, "worst_pass_lap", None)
-    name = "" if lap is None else f"L{lap_label(lap)}: "
-    return (f"One pass carries most of this σ ({name}"
-            f"{fmt_signed(report.worst_pass_vs_median_s, unit='s')} against the median); "
-            f"without it σ would be {report.sigma_without_worst_s:.2f} s.")
+#: The σ cell's second hover line (`stats.corner_one_pass_note`, which the report prints too).
+_corner_one_pass_tip = stats_service.corner_one_pass_note
 
 
 class CornersSection:
@@ -230,24 +212,10 @@ class CornersSection:
         re-segment / undo, never per tick); the alternative is printing a number this page
         cannot check, which is how two surfaces drift apart in the first place.
         """
-        total = sum(r.median_loss_s for r in report if r.median_loss_s is not None)
-        parts = [f"Med loss is measured against each corner's own Best above — the quickest "
-                 f"anyone went through it, which is usually not your best lap's corner. "
-                 f"Summed, that is {total:.2f} s."]
-        # C4: which cells this table counted, when that is not all of them — the one thing that
-        # makes its numbers differ from a surface that counts every lap (stats.corner_report).
+        # The baseline and counting sentences (stats.corner_count_note, the report's too).
+        parts = stats_service.corner_count_note(report)
         counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
         left_out = sum(of - n for n, of in counted)
-        if left_out:
-            was, are = ("was", "is") if left_out == 1 else ("were", "are")
-            parts.append(
-                f"Only corners matched on track count: {sum(n for n, _ in counted)} of "
-                f"{sum(of for _, of in counted)} lap × corner times here; the other {left_out} "
-                f"{was} interpolated between matched points, and {are} shown muted lap by lap.")
-            untimed = [f"C{r.cid}" for r in report if getattr(r, "n_laps", None) and r.n == 0]
-            if untimed:
-                parts.append(f"No lap matched {', '.join(untimed)} on track, so "
-                             f"{'it has' if len(untimed) == 1 else 'they have'} no times.")
         opp_fn = getattr(session, "coaching_opportunities", None)
         opp = opp_fn() if opp_fn is not None else None
         # The Coaching tab's own totals are over its RANKED rows (the corners that survived its
@@ -286,11 +254,11 @@ class CornersSection:
                 coach += (f"; {len(unranked)} more {'is' if len(unranked) == 1 else 'are'} "
                           f"listed there but not ranked ({shown_sum(unranked)})")
             parts.append(coach + ".")
-        # A short session where NO corner has the passes a middle half needs: say why there is no
-        # mark at all, rather than leave a reader to infer that every corner is steady.
-        if all(getattr(r, "middle_half_s", None) is None for r in report):
-            parts.append(f"No {WORST_LOSS_MARK.strip()} under "
-                         f"{stats_service.MIN_MIDDLE_HALF_N} counted passes per corner.")
+        # A short session where NO corner has the passes a middle half needs says why there is no
+        # mark at all (stats.corner_no_mark_note).
+        no_mark = stats_service.corner_no_mark_note(report)
+        if no_mark:
+            parts.append(no_mark)
         gap = self._ideal_gap(session)
         if gap is not None:
             parts.append(f"Your ideal lap is {gap:.2f} s under your best.")

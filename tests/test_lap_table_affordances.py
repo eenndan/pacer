@@ -1142,6 +1142,14 @@ def test_the_finder_tooltip_carries_the_rows_trust_lines():
     tip2 = lt2._slow_finder_next.toolTip()
     assert tip2.endswith(f"\n\n{est}") and LT.PROVISIONAL_TOOLTIP not in tip2, tip2
     assert lt2.table.item(lt2._row_for_lap(_SLOW), 0).toolTip().endswith(est)
+    # A degraded recording (#581: `timing_quality.degraded` stamps every note, through
+    # `story.note_trust_states`) reaches the footer too, with notes that carry no caveat at all.
+    quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    deg_est = LT.estimated_timing_tooltip(quality)
+    lt3 = _keep(LT.LapTable(_Over(s, timing_quality=quality)))
+    tip3 = lt3._slow_finder_next.toolTip()
+    assert tip3.endswith(f"\n\n{deg_est}"), tip3
+    assert lt3.table.item(lt3._row_for_lap(_SLOW), 0).toolTip().endswith(deg_est)
     print("test_the_finder_tooltip_carries_the_rows_trust_lines OK")
 
 

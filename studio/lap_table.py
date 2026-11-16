@@ -249,14 +249,16 @@ def slow_finder_tip(rule: str, uncued: int) -> str:
 
 
 def note_trust_lines(note, verified: bool, degraded: bool, estimated_note: str) -> str:
-    """The trust lines under a slow lap's note — EVERY state that holds, once each (its `caveat` is
-    a tuple): the provisional line while the start line is unconfirmed, the estimated-clock line
-    when the clock is degraded or the note says so. The cue cells and the finder footer both read
-    this, so the footer can never speak with more confidence than the rows it finds."""
+    """The trust lines under a slow lap's note, as text: which states hold is
+    `story.note_trust_states` (the Laps table's and the exported report's one rule — provisional
+    while the start line is unconfirmed, estimated when the note says so or the recording's timing
+    is degraded at all), worded here in the table's own tooltips, once each. The cue cells and the
+    finder footer both read this, so the footer never speaks with more confidence than its rows."""
+    states = story.note_trust_states(note.caveat if note is not None else (),
+                                     verified=verified, degraded=degraded)
     return "\n\n".join(
-        [PROVISIONAL_TOOLTIP] * (not verified)
-        + [estimated_note] * bool(note is not None and (
-            degraded or story.CAVEAT_ESTIMATED in note.caveat)))
+        [PROVISIONAL_TOOLTIP] * (story.CAVEAT_PROVISIONAL in states)
+        + [estimated_note] * (note is not None and story.CAVEAT_ESTIMATED in states))
 
 
 def too_brief_count(session, laps: int) -> int:
@@ -2205,7 +2207,8 @@ class LapTable(QWidget):
             # A note's trust lines are EVERY state that holds, once each (its `caveat` is a tuple):
             # a recording both provisional and on an estimated clock says both under the note,
             # where a bare time cell keeps the one stronger line. The Lap cell wearing the cue has
-            # no trust note of its own and borrows these, as it borrowed the Time cell's.
+            # no trust note of its own and borrows these, as it borrowed the Time cell's. Which
+            # states hold is `story.note_trust_states`, the exported report's rule too.
             note_trust = note_trust_lines(note, verified, degraded, estimated_note)
             for c in range(self.table.columnCount()):
                 item = self.table.item(r, c)

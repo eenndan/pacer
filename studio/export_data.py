@@ -37,11 +37,11 @@ import csv
 import html
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import NamedTuple, TextIO
+from typing import NamedTuple, TextIO, cast
 
-from . import APP_NAME, data_quality, units
+from . import APP_NAME, data_quality, story, units
 from . import stats as stats_service
 from ._signal import DASH, exclusion_summary, fmt_hms, fmt_time, lap_label
 
@@ -505,7 +505,7 @@ def _distance_note(tot) -> str:
             + stats_service.ODOMETER_NOTE)
 
 
-def _timing_meta(session) -> str:
+def _timing_meta(session, *, where: str = "below") -> str:
     """What every lap time on an exported surface is worth — the report's `Timing` meta row AND the
     clipboard summary's `Timing:` header line, one string so the two cannot disagree.
 
@@ -529,8 +529,10 @@ def _timing_meta(session) -> str:
     # says what is actually wrong (data_quality.no_start_line).
     if (not getattr(session, "timing_verified", True)
             and not data_quality.no_start_line(session)):
+        # `where` keeps the sentence true where it stands: "below" under the report's header and
+        # the clipboard's, "on this page" where a section repeats it (`_timing_caveat`).
         bits.append("PROVISIONAL — the start/finish line was auto-fitted and not confirmed, so "
-                    "every lap time and split below is measured from an arbitrary point")
+                    f"every lap time and split {where} is measured from an arbitrary point.")
     quality = getattr(session, "timing_quality", None)
     concerns = quality.concerns() if quality is not None else []
     if concerns:
@@ -780,37 +782,278 @@ def stats_summary_text(session, unit: str | None = None, *, title: str = "") -> 
 
 
 # --------------------------------------------------------------------- session report
-# Plain inline CSS only (no JS, no external assets): the report must open ANYWHERE — mail
-# attachments, archives, file:// — and stay readable as source. Kept out of an f-string so
-# the braces need no escaping.
+# ONE SELF-CONTAINED PAGE: inline CSS, PNGs as data URIs, no JavaScript and no external asset, so it
+# opens ANYWHERE — mail attachments, archives, file:// — and stays readable as source. Well-formed
+# (XML-parseable) markup. Each section is one small function returning its lines, in the app's own
+# order (the Stats page's, then the Laps tab's), and each prints what the app's own surface prints,
+# read from the SAME function: `stats_summary` (the Stats tiles), `story.shown_moments` /
+# `story.moment_row` (MOMENTS), `Session.corner_report` + `stats.marked_corners` (CORNERS and its
+# ◆), `Session.slow_lap_notes` (the Laps table's slow-lap notes), `share_lapstrip` (the lap strip,
+# rendered by the caller). The honesty rules live in those functions, never here.
+
+#: The app tokens the report's screen style is drawn in, by `theme.C` name. theme.py imports Qt and
+#: this module may not (tests/test_layering.py), so the caller passes their values
+#: (`export_controller.report_tokens`, off theme) and nothing here types an app colour.
+REPORT_TOKENS = ("canvas", "surface", "border", "text", "text_dim", "accent", "ahead", "behind")
+#: PAPER: the `@media print` variant, ink on white, and the whole page for a caller that passes no
+#: tokens. NOT app tokens — the app has no light theme; these only have to print.
+PAPER_TOKENS = {"canvas": "#FFFFFF", "surface": "#FFFFFF", "border": "#C8CCD2",
+                "text": "#1A1A1A", "text_dim": "#4A505A", "accent": "#8A5A00",
+                "ahead": "#0A7D33", "behind": "#B3261E"}
+#: The report's CORNERS columns: the Stats page's (stats_corners.CORNER_COLUMNS) with the σ cell's
+#: hover — the middle half — as a column of its own (a page has no hover), and without the
+#: estimated Grip column, whose comparison note (theme.GRIP_COMPARE_NOTE) lives behind Qt.
+REPORT_CORNER_COLUMNS = ("Corner", "Best (s)", "Median (s)", "σ (s)", "Middle half (s)",
+                         "Med loss (s)", "Apex best", "Apex med")
+#: The lap-strip card's layout width in the document: half its 1080 px canvas, a 2x image.
+LAPSTRIP_LAYOUT_PX = 540
+
 _REPORT_CSS = """
-body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 2em auto;
-       max-width: 70em; color: #1a1a1a; }
-h1 { font-size: 1.4em; } h2 { font-size: 1.1em; margin-top: 1.5em; }
-table { border-collapse: collapse; margin: 0.5em 0; }
-th, td { border: 1px solid #ccc; padding: 3px 10px; text-align: right;
+body { margin: 0; background: var(--canvas); color: var(--text); font-size: 14px;
+       line-height: 1.45; font-family: -apple-system, Inter, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 70em; margin: 0 auto; padding: 24px 16px 48px; }
+header { border-bottom: 2px solid var(--accent); padding-bottom: 12px; margin-bottom: 16px; }
+h1 { font-size: 1.5em; font-weight: 600; margin: 0 0 8px; }
+/* Upper case by style, not by text: "Laps (14)" stays the string a reader searches for. */
+h2 { font-size: 0.8em; font-weight: 600; letter-spacing: 0.08em; color: var(--text-dim);
+     margin: 0 0 8px; text-transform: uppercase; }
+section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+          padding: 12px 16px; margin: 0 0 16px; overflow-x: auto; }
+/* A table wider than its card scrolls sideways; these scroll shadows show that it does, with no
+   script: the two `local` covers move with the content and hide the `scroll` shadows at an end. */
+section.wide { background:
+    linear-gradient(to right, var(--surface) 40%, transparent) left / 32px 100% no-repeat local,
+    linear-gradient(to left, var(--surface) 40%, transparent) right / 32px 100% no-repeat local,
+    linear-gradient(to right, var(--text-dim), transparent) left / 12px 100% no-repeat scroll,
+    linear-gradient(to left, var(--text-dim), transparent) right / 12px 100% no-repeat scroll,
+    var(--surface); }
+table { border-collapse: collapse; margin: 4px 0; }
+th, td { border-bottom: 1px solid var(--border); padding: 4px 10px; text-align: right;
          font-variant-numeric: tabular-nums; }
-th { background: #f2f2f2; }
-tr.best td { color: #0a7d33; font-weight: 600; }
-table.meta th, table.meta td { text-align: left; }
-/* The stats groups: label left, value right (they are numbers), one table per group. */
-table.kv th { text-align: left; font-weight: 600; }
-p.note { margin: 0.25em 0 1em; max-width: 46em; color: #444; font-size: 0.9em; }
+th { color: var(--text-dim); font-weight: 600; }
+tr.best td { color: var(--ahead); font-weight: 600; }
+table.meta th, table.meta td, table.kv th, table.moments th, table.moments td { text-align: left; }
+td.mark { color: var(--behind); font-weight: 600; }
+p.note { margin: 6px 0 0; max-width: 46em; color: var(--text-dim); font-size: 0.9em; }
+ul.notes { margin: 4px 0; padding-left: 1.2em; }
+ul.notes li { margin: 4px 0; }
 /* height:auto keeps the aspect ratio when the max-width clamp (or a stated width, see
    write_report_html) shrinks a figure below its natural pixel size. */
-img { max-width: 100%; height: auto; border: 1px solid #ccc; margin: 0.5em 0; }
+img { max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 4px;
+      margin: 4px 0; }
+@media print {
+  body { font-size: 10pt; }
+  main { max-width: none; padding: 0; }
+  /* Paper cannot scroll: every column must be on the page, so nothing clips, and a tall section
+     may break across pages (only small blocks are kept whole, or page 1 ends half blank). */
+  section, section.wide { overflow: visible; border-radius: 0; break-inside: auto;
+                          background: var(--surface); }
+  h2 { break-after: avoid; }
+  tr, li, p.note, img, table.kv, table.meta, table.moments { break-inside: avoid; }
+  /* The laps table carries 5 + 2 per corner + split + 2 disclosure columns: small type, tight
+     cells and breakable headers fit it to the paper's width rather than cut it at C3. */
+  table.laps { width: 100%; font-size: 6.5pt; }
+  table.laps th, table.laps td { padding: 1px 2px; }
+  table.laps th { word-break: break-all; }
+  /* The lap strip is a dark card on white paper: a hairline says it is one. */
+  img.card { border: 1px solid var(--text); border-radius: 0; }
+}
 """
+
+
+def _token_block(tokens) -> str:
+    """`--name: #hex;` for every REPORT_TOKENS entry. Values must be plain #RRGGBB colours:
+    anything else would be a token source writing CSS (or markup) into the page."""
+    out = []
+    for name in REPORT_TOKENS:
+        value = tokens[name]
+        if not (value.startswith("#") and len(value) == 7
+                and all(ch in "0123456789abcdefABCDEF" for ch in value[1:])):
+            raise ValueError(f"report token {name!r} is not a #RRGGBB colour: {value!r}")
+        out.append(f"--{name.replace('_', '-')}: {value};")
+    return " ".join(out)
+
+
+def report_css(tokens=None) -> str:
+    """The page's style: the app's dark `tokens` on screen, PAPER_TOKENS in print."""
+    screen = {**PAPER_TOKENS, **(tokens or {})}
+    return (f":root {{ {_token_block(screen)} }}\n"
+            f"@media print {{ :root {{ {_token_block(PAPER_TOKENS)} }} }}\n{_REPORT_CSS}")
+
+
+def _note(text: str) -> str:
+    return f'<p class="note">{html.escape(text)}</p>'
+
+
+def _section(title: str, body: list[str]) -> list[str]:
+    return ["<section>", f"<h2>{html.escape(title)}</h2>", *body, "</section>"]
+
+
+def _kv_table(rows, cls: str = "kv") -> list[str]:
+    """Label left, value right. An absent value prints the em-dash the app prints, never a 0 and
+    never a blank cell that reads as "we forgot" (None-not-zero, out to the exported document)."""
+    esc = html.escape
+    return [f'<table class="{cls}">',
+            *(f"<tr><th>{esc(label)}</th><td>{esc(value or DASH)}</td></tr>"
+              for label, value in rows),
+            "</table>"]
+
+
+def _timing_caveat(session, caveat) -> list[str]:
+    """Under a moment or a note that carries a timing state (`story` caveat), the report's own
+    honesty stamp: what every lap time on the page is worth (`_timing_meta`, worded for a
+    section in the middle of the page rather than its header)."""
+    return [_note(f"Timing: {_timing_meta(session, where='on this page')}")] if caveat else []
+
+
+def _summary_sections(session, unit) -> list[list[str]]:
+    """The Stats page's groups (`stats_summary`), one section each, in its order. PACE also
+    prints the σ tile's hover (`stats.SIGMA_TOOLTIP`: what σ counts, what the middle half spans)
+    when σ holds a number — a page has no hover. Not in the clipboard text: its "< 0.07 s"."""
+    out = []
+    for sec in stats_summary(session, unit):
+        notes = [sec.note] if sec.note else []
+        if sec.title == "PACE" and dict(sec.rows).get(stats_service.SIGMA_CAPTION):
+            notes.append(stats_service.SIGMA_TOOLTIP)
+        out.append(_section(sec.title, _kv_table(sec.rows) + [_note(n) for n in notes]))
+    return out
+
+
+def _moments_section(session) -> list[str]:
+    """Stats ▸ MOMENTS: the moments the page prints (`story.shown_moments`: none when the only one
+    is an untied best lap, which repeats the PACE row), each in `story.moment_row`'s words — ties
+    named level within the timing precision, or the estimated clock's wider bound."""
+    read = getattr(session, "session_moments", None)
+    sm = cast("story.SessionMoments | None", read() if callable(read) else None)
+    moments = story.shown_moments(sm)
+    if not moments:
+        return []
+    rows = [(r.label, r.value) for r in map(story.moment_row, moments)]
+    caveat = tuple(dict.fromkeys(c for m in moments for c in m.caveat))
+    return _section("MOMENTS", _kv_table(rows, "moments") + [_note(story.MOMENTS_NOTE)]
+                    + _timing_caveat(session, caveat))
+
+
+def _corner_cells(r, marked: bool, unit_id: str) -> str:
+    """One CORNERS row, at the Stats table's precision; a marked corner's loss cell carries ◆.
+    Seconds are bare numbers under "(s)" headers, the middle half's " s" included."""
+    def speed(v):
+        return _sec(None if v is None else units.convert_speed(v, unit_id), "{:.1f}")
+    loss = _sec(r.median_loss_s, "+{:.2f}")
+    if marked and loss:
+        loss = f"{stats_service.CORNER_MARK} {loss}"
+    cells = [f"C{r.cid}", _sec(r.best_s, "{:.2f}"), _sec(r.median_s, "{:.2f}"),
+             _sec(r.sigma_s, "{:.2f}"),
+             (stats_service.fmt_middle_half(r.middle_half_s,
+                                            stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
+              or "").removesuffix(" s"),
+             loss, speed(r.apex_best_kmh), speed(r.apex_median_kmh)]
+    tds = [f'<td class="mark">{html.escape(c)}</td>' if k == 5 and marked
+           else f"<td>{html.escape(c or DASH)}</td>" for k, c in enumerate(cells)]
+    return "<tr>" + "".join(tds) + "</tr>"
+
+
+def _corners_section(session, unit) -> list[str]:
+    """Stats ▸ CORNERS: `Session.corner_report` rows, the ◆ on `stats.marked_corners`' corners
+    (the page's rule and glyph), the middle half printed, and the page's notes in its words."""
+    report = getattr(session, "corner_report", list)() or []
+    if not report:
+        return []
+    unit_id = units.normalize_unit(unit)
+    marked = {r.cid for r in stats_service.marked_corners(report, stats_service.CORNER_MARK_N)}
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in REPORT_CORNER_COLUMNS)
+    body = ["<table>", f"<tr>{head}</tr>",
+            *(_corner_cells(r, r.cid in marked, unit_id) for r in report), "</table>"]
+    notes = stats_service.corner_count_note(report, page=False)
+    notes.append(stats_service.corner_no_mark_note(report)
+                 or stats_service.corner_mark_rule(hover=False))
+    body.append(_note(" ".join(notes)))
+    body += [_note(f"C{r.cid}: {stats_service.corner_one_pass_note(r)}")
+             for r in report if stats_service.corner_one_pass_note(r)]
+    return _section(f"CORNERS · speeds in {units.speed_label(unit_id)}", body)
+
+
+def _slow_laps_section(session) -> list[str]:
+    """The Laps table's slow-lap notes (`Session.slow_lap_notes`): each note's own text — where
+    its time went, corner by corner against the typical pass — and the rule that called it slow.
+    A ⚠ dropout lap gets none, held at the surface as the Laps table holds it."""
+    read = getattr(session, "slow_lap_notes", None)
+    dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+    every = cast("list[story.SlowLapNote]", read() if callable(read) else [])
+    notes = [n for n in every if n.lap_id not in dropouts]
+    if not notes:
+        return []
+    # Stamped under every state the Laps table shows the notes under (`story.note_trust_states`):
+    # a GPS-low or degraded recording too, whose notes' own caveat does not say so.
+    caveat = story.note_trust_states(
+        tuple(dict.fromkeys(c for n in notes for c in n.caveat)),
+        verified=bool(getattr(session, "timing_verified", True)),
+        degraded=bool(getattr(getattr(session, "timing_quality", None), "degraded", False)))
+    return _section("SLOW LAPS", [
+        '<ul class="notes">', *(f"<li>{html.escape(n.text)}</li>" for n in notes), "</ul>",
+        *(_note(rule) for rule in dict.fromkeys(n.rule for n in notes)),
+        *_timing_caveat(session, caveat)])
+
+
+def _img(title: str, png: bytes, width: int | None, cls: str = "") -> str:
+    b64 = base64.b64encode(png).decode("ascii")
+    attr = f' width="{int(width)}"' if width else ""
+    attr += f' class="{cls}"' if cls else ""
+    return f'<img alt="{html.escape(title)}"{attr} src="data:image/png;base64,{b64}"/>'
+
+
+def _lapstrip_section(lapstrip: bytes | None) -> list[str]:
+    """The lap-strip card (`share_lapstrip`), as the caller rendered it — under the lap card's own
+    gate, so a provisional session or one with under two clean laps has no strip here either."""
+    if not lapstrip:
+        return []
+    return _section("LAP STRIP", [_img("Lap strip", lapstrip, LAPSTRIP_LAYOUT_PX, "card")])
+
+
+def _laps_section(session, headers, rows, cue_lap) -> list[str]:
+    """The Laps table (`laps_table`, the CSV's rows) and the notes that decode it."""
+    esc = html.escape
+    out = ['<section class="wide">', f"<h2>Laps ({len(rows)})</h2>",
+           '<table class="laps"><tr>' + "".join(f"<th>{esc(h)}</th>" for h in headers) + "</tr>"]
+    for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
+        cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
+        out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
+    out.append("</table>")
+    # The distance column's note, as laps.csv's trailer carries it: the odometer reads short.
+    if rows:
+        out.append(_note(stats_service.ODOMETER_NOTE))
+    # The quality column's KEY, under the table it decodes — the Analysis Function convention, and
+    # the reason those codes are usable on a page with no hover. Suppressed entirely on a clean
+    # session (see `quality_key`), so a spotless recording's report gains nothing to read past.
+    key = quality_key(headers, rows)
+    if key:
+        out.append('<p class="note">Quality markers in the <code>quality</code> column '
+                   "(UK Government Analysis Function symbols): "
+                   + "; ".join(f"<b>{esc(code)}</b> {esc(meaning)}" for code, meaning in key)
+                   + ".</p>")
+    # …and the same for the C5 disclosure column, for the same reason and on the same terms: a
+    # reader of the page has no other way to know that a corner cell beside it is a guess.
+    if any_interpolated(headers, rows):
+        out.append(_note(INTERPOLATED_NOTE))
+    broke = data_quality.break_in_series(session)
+    if broke:  # WHICH break — the [b] code alone says only that there is one
+        out.append(_note(f"Break in series: {broke}."))
+    return [*out, "</section>"]
 
 
 def write_report_html(path: str, session, source_label: str = "",
                       images: Sequence[tuple[str, bytes] | tuple[str, bytes, int | None]] = (),
-                      unit: str | None = None) -> None:
-    """One SELF-CONTAINED page: the session header (recording, track, date, lap count,
-    best lap), the laps table (same rows/columns as `write_laps_csv`, via `laps_table`),
-    and the passed PNG snapshots embedded as base64 data URIs. `images` is an iterable of
-    `(title, png_bytes)` or `(title, png_bytes, layout_width_px)` — app.py grabs the map/plots
-    widgets (QWidget.grab → QImage → PNG bytes), so this module stays Qt-free. Deliberately
-    dead-simple, WELL-FORMED (XML-parseable) markup with a little inline CSS and NO JavaScript.
+                      unit: str | None = None, *, lapstrip: bytes | None = None,
+                      tokens: Mapping[str, str] | None = None) -> None:
+    """One SELF-CONTAINED page telling the session the way the app does, in the app's order:
+    the header (recording, track, date, lap count, best lap, and the `Timing` stamp), the Stats
+    page's groups (SESSION, PACE, MOMENTS, IDEAL LAP, SPEED · G, DRIVING, then CORNERS), the
+    slow-lap notes, the lap strip, the laps table (same rows/columns as `write_laps_csv`, via
+    `laps_table`) and the passed snapshots. `images` is an iterable of `(title, png_bytes)` or
+    `(title, png_bytes, layout_width_px)` — app.py grabs the map/plots widgets (QWidget.grab →
+    QImage → PNG bytes), so this module stays Qt-free; `lapstrip` is the `share_lapstrip` card's
+    PNG bytes for the same reason (None: no strip, which is what its gate says on a provisional
+    session). `tokens` maps REPORT_TOKENS to the app's colours; without them the page is paper.
 
     `layout_width_px` is the width the DOCUMENT lays that image out at, in CSS pixels, and it is
     what makes the page reproducible: a HiDPI grab arrives at 2x the pixels, and with no width
@@ -825,17 +1068,15 @@ def write_report_html(path: str, session, source_label: str = "",
     different numbers for the same lap on one page (L12-01). None keeps the SI headers — the shape
     the CSV writer uses, and the right default for a caller with no display unit.
 
-    THE STATS GROUPS ARE IN IT (N13). The page used to be meta + laps table + snapshots, so the
-    document a driver mails to a coach carried 40 lap rows and not one of the session numbers the
-    app leads with — no pace distribution, no ideal lap, no peaks. `stats_summary` supplies them,
-    reading the SAME accessors the Stats page reads, and the IDEAL LAP group brings its
-    `ideal lap · N laps` caption and its sample sentence with it (§5.4).
+    THE SESSION'S STORY IS IN IT. N13 brought the Stats groups (the page used to be meta + laps
+    table + snapshots); MOMENTS, CORNERS and the slow-lap notes followed, so the document a driver
+    mails to a coach says what the app says. Every one is read from the function the app's surface
+    reads, so the honesty rules travel with it — ties named level, the middle half only from five
+    laps, the ◆ ranking, MOMENTS absent when it would only repeat the best lap.
 
-    IT ALSO SAYS WHAT THE TIMING IS WORTH. The meta table gains a `Timing` row off
-    `timing_verified` / `timing_quality` — the two facts that qualify every number below it. The
-    app mutes and annotates its target tiles on exactly these two flags and greys the share card
-    out on the first; the exported page used to state the same lap times with no such qualifier
-    anywhere on it."""
+    IT ALSO SAYS WHAT THE TIMING IS WORTH. The meta table carries a `Timing` row off
+    `timing_verified` / `timing_quality` — the two facts that qualify every number below it — and
+    MOMENTS and the slow-lap notes repeat it under themselves when they carry a timing state."""
     esc = html.escape
     headers, rows = laps_table(session, unit)
     best = session.best_lap_id()
@@ -844,13 +1085,8 @@ def write_report_html(path: str, session, source_label: str = "",
     # withholds the "best lap" AUTHORITY everywhere it appears: `lap_table._apply_highlights`
     # drops the green row and the ★, `stats_panel._refresh_lap_table` drops the ★, and the share
     # card refuses to render at all, because a best measured from an arbitrary point names a lap
-    # nothing distinguishes. This writer painted the green row anyway and named the lap in its
-    # meta table, under a comment claiming it read "like the app's table" — three surfaces
-    # withholding an assertion and a fourth, the one furthest from any of the app's caveats,
-    # making it.
-    #
-    # The TIME still prints: the Stats page's `best lap` tile prints it unmuted too, and a
-    # measurement is not what is in doubt. What goes is the cue and the lap attribution.
+    # nothing distinguishes. The TIME still prints: the Stats page's `best lap` tile prints it
+    # unmuted too, and a measurement is not what is in doubt. What goes is the cue and the lap.
     verified = bool(getattr(session, "timing_verified", True))
     cue_lap = best if verified else None
     best_txt = DASH
@@ -866,60 +1102,28 @@ def write_report_html(path: str, session, source_label: str = "",
         ("Best lap", best_txt),
         ("Timing", _timing_meta(session)),
     ]
-
+    summary = _summary_sections(session, unit)
+    # The Stats page's order: MOMENTS sits under PACE (CORNERS follows every group, below).
+    after_pace = next((k + 1 for k, sec in enumerate(summary) if sec[1] == "<h2>PACE</h2>"),
+                      len(summary))
+    summary.insert(after_pace, _moments_section(session))
     out = [
         "<!DOCTYPE html>",
         '<html lang="en"><head><meta charset="utf-8"/>',
+        '<meta name="viewport" content="width=device-width, initial-scale=1"/>',
         f"<title>{APP_NAME} — {esc(source_label) or 'session report'}</title>",
-        f"<style>{_REPORT_CSS}</style></head><body>",
+        f"<style>{report_css(tokens)}</style></head><body><main>",
+        "<header>",
         f"<h1>{APP_NAME} — session report</h1>",
-        '<table class="meta">',
-        *(f"<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>" for k, v in meta),
-        "</table>",
+        *_kv_table(meta, "meta"),
+        "</header>",
+        *(line for sec in summary for line in sec),
+        *_corners_section(session, unit),
+        *_slow_laps_section(session),
+        *_lapstrip_section(lapstrip),
+        *_laps_section(session, headers, rows, cue_lap),
     ]
-    for sec in stats_summary(session, unit):
-        out.append(f"<h2>{esc(sec.title)}</h2>")
-        out.append('<table class="kv">')
-        # An absent value prints the em-dash the app prints, never a 0 and never a blank cell that
-        # reads as "we forgot" (None-not-zero, all the way out to the exported document).
-        out += [f"<tr><th>{esc(label)}</th><td>{esc(value or DASH)}</td></tr>"
-                for label, value in sec.rows]
-        out.append("</table>")
-        if sec.note:
-            out.append(f'<p class="note">{esc(sec.note)}</p>')
-    out += [
-        f"<h2>Laps ({len(rows)})</h2>",
-        "<table><tr>" + "".join(f"<th>{esc(h)}</th>" for h in headers) + "</tr>",
-    ]
-    for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
-        cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
-        out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
-    out.append("</table>")
-    # The distance column's note, as laps.csv's trailer carries it: the odometer reads short.
-    if rows:
-        out.append(f'<p class="note">{esc(stats_service.ODOMETER_NOTE)}</p>')
-    # The quality column's KEY, under the table it decodes — the Analysis Function convention, and
-    # the reason those codes are usable on a page with no hover. Suppressed entirely on a clean
-    # session (see `quality_key`), so a spotless recording's report gains nothing to read past.
-    key = quality_key(headers, rows)
-    if key:
-        out.append('<p class="note">Quality markers in the <code>quality</code> column '
-                   "(UK Government Analysis Function symbols): "
-                   + "; ".join(f"<b>{esc(code)}</b> {esc(meaning)}" for code, meaning in key)
-                   + ".</p>")
-    # …and the same for the C5 disclosure column, for the same reason and on the same terms: a
-    # reader of the page has no other way to know that a corner cell beside it is a guess.
-    if any_interpolated(headers, rows):
-        out.append(f'<p class="note">{esc(INTERPOLATED_NOTE)}</p>')
-    broke = data_quality.break_in_series(session)
-    if broke:  # WHICH break — the [b] code alone says only that there is one
-        out.append(f'<p class="note">Break in series: {esc(broke)}.</p>')
     for item in images:
-        title, png = item[0], item[1]
-        width = item[2] if len(item) > 2 else None
-        b64 = base64.b64encode(png).decode("ascii")
-        attr = f' width="{int(width)}"' if width else ""
-        out.append(f"<h2>{esc(title)}</h2>")
-        out.append(f'<img alt="{esc(title)}"{attr} src="data:image/png;base64,{b64}"/>')
-    out.append("</body></html>")
+        out += _section(item[0], [_img(item[0], item[1], item[2] if len(item) > 2 else None)])
+    out.append("</main></body></html>")
     _atomic_write(path, lambda f: f.write("\n".join(out)))
