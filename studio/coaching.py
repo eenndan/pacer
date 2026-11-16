@@ -1413,7 +1413,7 @@ def abstain_sentence(opp: Opportunity) -> str:
                 "target to aim at.")
     if ev.abstain == ABSTAIN_SPREAD:
         return (f"Not ranked: the {opp.time_lost:.2f} s on offer is inside your own lap-to-lap "
-                f"spread here — the middle half of your laps span {ev.iqr:.2f} s.")
+                f"spread here — the middle half of your laps spans {ev.iqr:.2f} s.")
     return ""
 
 
@@ -1469,7 +1469,7 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
         # The strength behind the pick still reads σ (`_pick_reason`), so the ranking is unchanged.
         ev = opp.evidence
         base = ("consistency" if ev.n_laps == 0 else
-                f"consistency: middle half of laps within {ev.iqr:.2f} s")
+                f"consistency: middle half of laps spans {ev.iqr:.2f} s")
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)
@@ -1691,7 +1691,7 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     # About half of every gap is the spread. These are the only two of the 13 lap sets (four
     # recordings, nine chapters) with a pace theme; 9 are execution + consistency, which the line
     # agrees with ("repeat it"), 1 execution + braking and 2 rank nothing. So the line goes, only
-    # for this pairing; the rows keep their own "consistency: middle half of laps within …" lever,
+    # for this pairing; the rows keep their own "consistency: middle half of laps spans …" lever,
     # and every concrete cause keeps its line under a pace theme.
     if theme.cause != REASON_NONE and theme.cause_cids:
         if not (theme.kind == THEME_PACE and theme.cause == REASON_CONSISTENCY):

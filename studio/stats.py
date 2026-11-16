@@ -99,7 +99,7 @@ ODOMETER_NOTE = (
 # within 1% of itself; printing "+0.00 s" and "1 / 1" dresses that up as a measurement.
 MIN_DIST_LAPS = 2
 # THE MIDDLE HALF's floor: the fewest times its quartiles are read from. σ counts every clean lap,
-# so one slow lap can speak for the session (the shipped demo: σ 1.54 s, middle half within
+# so one slow lap can speak for the session (the shipped demo: σ 1.54 s, middle half spans
 # 0.59 s; 13 of its 14 clean laps lie within 44.95-46.21 s and one took 51.13 s). The middle half
 # is the WIDTH Q3 − Q1, never "± about the median": the band is not symmetric (the demo's runs
 # 0.38 s below its median and 0.21 s above). It is the robust second reading, and only robust once

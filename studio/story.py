@@ -39,6 +39,16 @@ there is no honest noise gate to say "the time went on the straight after C4" �
 `spread` (or `partial`). Inventing a straight gate here would be a second rule the grid does not
 show. The session's first timed lap is tagged "(first lap)" (`first_lap`): it is slow for a reason.
 
+AFTER A LEFT-OUT LAP. A lap whose PREVIOUS start/finish crossing is not a lap of the Laps table — a
+⊘ lap the validity rule left out (a stop, a pit lane, a lap off the median), or a crossing too brief
+to be a lap — is tagged too: "(after Lap 12, left out)" / "(after a too-brief crossing)"
+(`after_gap`, `after_reason`, in the Laps table's own words). Measured from lap ADJACENCY alone: on a
+real session the lap after a pit stop crossed the line far below its usual speed, most of its excess
+sat on the start/finish straight, and its note read "spread", true and useless. The tag is a LABEL
+of circumstance: it excuses nothing and removes nothing (refusal §14), and the note's numbers are
+the same with or without it. A ⚠ dropout lap before is NOT a gap: it is a lap the table counts, and
+a GPS dropout does not slow the kart on the next lap. The first lap keeps its own tag.
+
 WHICH LAPS. Only the grid's rows: a ⊘ excluded or ⚠ dropout lap is never a row (its corner windows
 are cut from a speed-integrated odometer), so it gets no note and is in no moment — and a dropout
 lap level with the best is not in the best lap's ≈ list. Such a lap also breaks a 5-lap window. A
@@ -58,9 +68,11 @@ level with it (printed gap under `library.PB_PRECISION_S`) named with its gap; t
 single-corner loss beyond its ▼ step; the best 5-lap run by median, the windows whose MEDIAN is
 level merged into SPANS (maximal runs of level windows starting on consecutive laps, so "every
 5-lap median in Laps 8–14 is level" is literally true of the span — of its medians, not its laps,
-which on the demo spread 0.83 s; more than two spans is "no single best"). Not built — measured unstable under timing jitter by the design lane: a best 3-lap
-run, a best pass per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one
-cell in ten by construction, so on pure noise that run is half the session).
+which on the demo spread 0.83 s; more than two spans is "no single best", which names up to
+three of them — the one holding the best window FIRST, so its Jump lands on a named stretch). Not
+built — measured unstable under timing jitter by the design lane: a best 3-lap run, a best pass
+per corner. Refused in review: the longest run with no ▼ (the ▼ marks about one cell in ten by
+construction, so on pure noise that run is half the session).
 
 STABILITY, held by tests/test_story.py (200 seeded draws): on the shipped demo, with lap times
 ±0.07 s and corner cells ±0.035 s, the biggest loss never changes (its best lap stands 0.215 s clear,
@@ -80,11 +92,12 @@ from .lap_race import ESTIMATED_CLOCK_TIE_S
 from .library import PB_PRECISION_S, within_timing_precision
 from .stats import MATRIX_DECIMALS, CornerMatrix
 
-#: A lap is slow above its median clean lap by more than the larger of the clean laps' IQR and
-#: this (s). A default picked on few sessions (W4 design lane), stated in every note's `rule`.
+#: A lap is slow above its median clean lap by more than the larger of the clean laps' middle
+#: half (their IQR, the Stats page's "middle half · span") and this (s). A default picked on few
+#: sessions (W4 design lane), stated in every note's `rule`.
 SLOW_MIN_MARGIN_S = 0.5
-#: An IQR above this (twice the floor) means the median clean lap is not a racing lap: the rule
-#: says so outright.
+#: A middle half above this (twice the floor) means the median clean lap is not a racing lap: the
+#: rule says so outright.
 ATYPICAL_IQR_S = 2 * SLOW_MIN_MARGIN_S
 #: The share of a slow lap's excess one (or two) ▼ corners must hold, STRICTLY, to be its culprit.
 CULPRIT_SHARE = 0.5
@@ -94,10 +107,15 @@ ALSO_NAMED = 2
 RUN_WINDOW = 5
 #: More level spans than this and there is no single best 5-lap run.
 MAX_WINDOW_SPANS = 2
+#: How many of those spans the "no single best" row names before "+N more".
+SPANS_NAMED = 3
 #: The grid's mark, spelled here because `theme.DELTA_BEHIND_ARROW` lives in a Qt module.
 BEHIND_MARK = "▼"
 
 OVER_LAP, ONE, TWO, PARTIAL, SPREAD = "over_lap", "one", "two", "partial", "spread"
+#: Why a lap's previous crossing is not a lap of the Laps table, in that table's words: a ⊘ lap
+#: (`Session.excluded_lap_ids`) or a crossing too brief to be one (`lap_table.too_brief_count`).
+AFTER_LEFT_OUT, AFTER_TOO_BRIEF = "left out", "too brief"
 CAVEAT_PROVISIONAL = "provisional"
 CAVEAT_ESTIMATED = "estimated"
 BEST_LAP, BIGGEST_LOSS, BEST_WINDOW = "best_lap", "biggest_loss", "best_window"
@@ -127,6 +145,8 @@ class SlowLapNote:
 
     lap_id: int
     first_lap: bool                 # the session's first timed lap
+    after_gap: int | None           # the previous crossing's lap id when it is no lap of the table
+    after_reason: str | None        # AFTER_LEFT_OUT / AFTER_TOO_BRIEF with `after_gap`, else None
     gap_to_best_s: float | None     # the Laps table's Δbest (printed ms); None while provisional
     excess_s: float                 # over the median clean lap, at print resolution
     category: str
@@ -150,8 +170,9 @@ class Mention:
 @dataclass(frozen=True)
 class Moment:
     """One session moment: the named laps/corner and value, every `tie` named with it, its text.
-    For `best_window`, `lap_ids` is the best window — () when there is no single best — and `tie`
-    holds the level spans (see `_best_window`)."""
+    For `best_window`, `lap_ids` is the best window — in the "no single best" form too, where the
+    row's Jump lands on the first lap of the span that holds it — and `tie` holds the level spans
+    (see `_best_window`; `no_single_best` tells the two forms apart)."""
 
     kind: str
     lap_ids: tuple[int, ...]
@@ -185,12 +206,15 @@ def slow_threshold(lap_times: Mapping[int, float]) -> tuple[float, float, float]
 
 
 def slow_rule_text(median: float, iqr: float, margin: float) -> str:
+    """The rule as a sentence. The IQR is named as the Stats page names it, the middle half: one
+    name for one number (the σ tile's "middle half spans 0.59 s" is this 0.59)."""
     text = (f"Slow: more than {margin:.2f} s over your typical lap, the median clean lap "
-            f"({fmt_time(median)}); the margin is the larger of the clean laps' IQR ({iqr:.2f} s) "
-            f"and {SLOW_MIN_MARGIN_S:.2f} s. A default chosen on few sessions.")
+            f"({fmt_time(median)}); the margin is the larger of the clean laps' middle half "
+            f"({iqr:.2f} s) and {SLOW_MIN_MARGIN_S:.2f} s. A default chosen on few sessions.")
     if iqr > ATYPICAL_IQR_S:
-        text += (f" Your laps are not typical in this session (IQR over {ATYPICAL_IQR_S:.2f} s): the "
-                 "median is not a racing lap here, and the notes compare to it anyway.")
+        text += (" Your laps are not typical in this session (their middle half spans over "
+                 f"{ATYPICAL_IQR_S:.2f} s): the median is not a racing lap here, and the notes "
+                 "compare to it anyway.")
     return text
 
 
@@ -242,10 +266,13 @@ def _body(category: str, named: tuple[CornerLoss, ...], also: tuple[CornerLoss, 
 
 def slow_lap_notes(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
                    best_lap: int | None, *, first_lap_id: int | None = None,
+                   left_out: Mapping[int, str] | None = None,
                    provisional: bool = False, clock_estimated: bool = False) -> list[SlowLapNote]:
     """One note per slow clean lap that is a row of `matrix`, in session order. [] without a grid
     (fewer than `stats.MATRIX_MIN_LAPS` clean laps, or no corners). `first_lap_id` is the session's
-    first timed lap (tagged "(first lap)")."""
+    first timed lap (tagged "(first lap)"); `left_out` maps every crossing that is no lap of the
+    Laps table to AFTER_LEFT_OUT / AFTER_TOO_BRIEF, and a slow lap right after one is tagged."""
+    left_out = left_out or {}
     th = slow_threshold(lap_times)
     if matrix is None or th is None:
         return []
@@ -278,10 +305,11 @@ def slow_lap_notes(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
         corners, also = marked[:n_named], marked[n_named:]
         unmeasured = tuple(matrix.cids[c] for c in cols if not matrix.resolved[row][c])
         first = lap == first_lap_id
-        head = (f"Lap {lap_label(lap)}{' (first lap)' if first else ''} · "
-                f"{_excess_text(excess)}")
+        reason = None if first else left_out.get(lap - 1)
+        after = lap - 1 if reason is not None else None
+        head = f"Lap {lap_label(lap)}{_tag(first, after, reason)} · {_excess_text(excess)}"
         out.append(SlowLapNote(
-            lap_id=lap, first_lap=first,
+            lap_id=lap, first_lap=first, after_gap=after, after_reason=reason,
             gap_to_best_s=(printed_ms(t) - best_ms) / 1000 if best_ms is not None else None,
             excess_s=excess, category=category, corners=corners, also=also,
             unmeasured=unmeasured, caveat=caveat, rule=rule,
@@ -293,12 +321,34 @@ def _excess_text(excess: float) -> str:
     return f"{excess:.2f} s over your typical lap"
 
 
+def _tag(first: bool, after: int | None, reason: str | None) -> str:
+    """The head's circumstance: " (first lap)", " (after Lap 12, left out)", " (after a too-brief
+    crossing)" — a crossing too brief to be a lap is in no list, so it has no number to name."""
+    if first:
+        return " (first lap)"
+    if after is None:
+        return ""
+    if reason == AFTER_TOO_BRIEF:
+        return " (after a too-brief crossing)"
+    return f" (after Lap {lap_label(after)}, {reason})"
+
+
+def _row_head(note: SlowLapNote) -> str:
+    """`row_text`'s lead, where `text` puts its tag: the Laps table's row already names the lap."""
+    if note.first_lap:
+        return "First lap · "
+    if note.after_gap is None:
+        return ""
+    if note.after_reason == AFTER_TOO_BRIEF:
+        return "After a too-brief crossing · "
+    return "After a left-out lap · "
+
+
 def row_text(note: SlowLapNote) -> str:
     """The note for a surface whose row already names the lap (the Laps table): `text` without
     its "Lap N · " head, built from the same pieces, so the two can never say different things."""
-    head = f"First lap · {_excess_text(note.excess_s)}" if note.first_lap else \
-        _excess_text(note.excess_s)
-    return f"{head} · {_body(note.category, note.corners, note.also, note.unmeasured)}"
+    return (f"{_row_head(note)}{_excess_text(note.excess_s)} · "
+            f"{_body(note.category, note.corners, note.also, note.unmeasured)}")
 
 
 def culprit_cue(note: SlowLapNote) -> str:
@@ -378,10 +428,11 @@ def _best_window(lap_times, caveat) -> Moment | None:
     """The best RUN_WINDOW-lap run by median (printed ms), consecutive clean laps only. Every
     window whose MEDIAN is level with it (`tie_floor`) is merged into SPANS: maximal runs of level
     windows whose first laps are consecutive, so every window median inside a span is level — the
-    laps themselves need not be. `lap_ids` is the best window while there are at most
-    MAX_WINDOW_SPANS spans, () beyond; `tie` holds the spans, as Mentions of all their laps with
-    their best median: the best window's own span when it is wider than the window, then the
-    others — every span when there is no single best."""
+    laps themselves need not be. `lap_ids` is the best window (with more than MAX_WINDOW_SPANS
+    spans too: the row names no single best, but its Jump still needs the laps); `tie` holds the
+    spans, as Mentions of all their laps with their best median: the best window's own span when it
+    is wider than the window, then the others — every span, in session order, when there is no
+    single best."""
     windows = [run[k:k + RUN_WINDOW] for run in _runs(lap_times)
                for k in range(len(run) - RUN_WINDOW + 1)]
     if not windows:
@@ -401,7 +452,7 @@ def _best_window(lap_times, caveat) -> Moment | None:
     as_mention = [Mention(tuple(range(windows[s[0]][0], windows[s[-1]][-1] + 1)), None,
                           min(meds[j] for j in s)) for s in spans]
     if len(spans) > MAX_WINDOW_SPANS:
-        return _worded(Moment(BEST_WINDOW, (), None, med, tuple(as_mention), caveat, ""))
+        return _worded(Moment(BEST_WINDOW, best, None, med, tuple(as_mention), caveat, ""))
     own = next(i for i, s in enumerate(spans) if k in s)
     tie = ([as_mention[own]] if len(spans[own]) > 1 else []) + [
         m for i, m in enumerate(as_mention) if i != own]
@@ -411,8 +462,9 @@ def _best_window(lap_times, caveat) -> Moment | None:
 @dataclass(frozen=True)
 class MomentRow:
     """A moment as a surface's row: `label` and `value`, which join with ": " into the moment's
-    `text` (the builders take their text from here), and where its Jump lands — `lap_id` (None:
-    nothing to jump to, a "no single best" run) and, for a corner moment, `cid` to ring."""
+    `text` (the builders take their text from here), and where its Jump lands — `lap_id` (the
+    moment's first lap; for a "no single best" run, the first lap of the span holding the best
+    window) and, for a corner moment, `cid` to ring."""
 
     label: str
     value: str
@@ -422,6 +474,23 @@ class MomentRow:
 
 _ROW_LABEL = {BEST_LAP: "Best lap", BIGGEST_LOSS: "Biggest single-corner loss",
               BEST_WINDOW: f"Best {RUN_WINDOW}-lap run"}
+
+
+def no_single_best(m: Moment) -> bool:
+    """A `best_window` moment in its "no single best" form: more level spans than MAX_WINDOW_SPANS
+    (the single-best form's `tie` holds at most that many — its own span and the others)."""
+    return m.kind == BEST_WINDOW and len(m.tie) > MAX_WINDOW_SPANS
+
+
+def _spans_text(spans: tuple[Mention, ...], own: Mention) -> str:
+    """"Laps 51–55, 1–5, 11–15, +4 more": `own` (the span holding the best window, where the row's
+    Jump lands) FIRST, then the others in session order, SPANS_NAMED in all. Named in session order
+    alone, a best window in the sixth of seven spans was a Jump to a stretch the text left out."""
+    spans = (own, *(t for t in spans if t is not own))
+    named = ", ".join(f"{lap_label(t.lap_ids[0])}–{lap_label(t.lap_ids[-1])}"
+                      for t in spans[:SPANS_NAMED])
+    more = f", +{len(spans) - SPANS_NAMED} more" if len(spans) > SPANS_NAMED else ""
+    return f"Laps {named}{more}"
 
 
 def moment_row(m: Moment) -> MomentRow:
@@ -450,10 +519,12 @@ def moment_row(m: Moment) -> MomentRow:
     # while every 5-lap median in them sits within 0.07 s of the best.
     level = f"within {floor:.2f} s"
     each = f"every {RUN_WINDOW}-lap median in"
-    if not m.lap_ids:
+    if no_single_best(m):
+        own = next(t for t in m.tie if set(m.lap_ids) <= set(t.lap_ids))
         return MomentRow(f"No single best {RUN_WINDOW}-lap run",
                          f"{plural(len(m.tie), 'stretch', 'stretches')} of level "
-                         f"{RUN_WINDOW}-lap medians ({level})", None, None)
+                         f"{RUN_WINDOW}-lap medians ({level}): {_spans_text(m.tie, own)}",
+                         own.lap_ids[0], None)
     value = f"{_laps_text(m.lap_ids)} · median {fmt_time(m.value)}"
     for t in m.tie:
         # The best window's own span is the one tie holding the whole window: another span can
