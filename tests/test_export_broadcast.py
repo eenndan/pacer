@@ -412,8 +412,9 @@ def test_every_figure_is_its_classic_twin_on_every_frame():
           f"{max_diff}; the last clock is the Laps table's {last_clock}")
 
 
-def _stamp_ink(painter, w, h, rect):
-    """(amber ink pixels, ink rows) of the frame `painter` paints, inside `rect` grown by 2 px."""
+def _stamp_ink(painter, w, h, rect, exact=False):
+    """(amber ink pixels, ink rows) of the frame `painter` paints, inside `rect` grown by 2 px;
+    `exact`: only the pixels the fill covers whole (exactly `EXPORT.accent`, opaque)."""
     s = painter._session
     vals = ev.overlay_values_at(s, painter._spec.lap_t0 + 3.0, painter._spec)
     raw = ev._paint_alpha_frame(painter, w, h, vals, painter.advance_and_snapshot(vals))
@@ -423,6 +424,9 @@ def _stamp_ink(painter, w, h, rect):
     roi = img[y0:y1, x0:x1]
     amber = ((roi[..., 0] > 230) & (roi[..., 1] > 150) & (roi[..., 1] < 200) & (roi[..., 2] < 80)
              & (roi[..., 3] > 200))
+    if exact:
+        c = theme.qcolor(EXPORT.accent)
+        amber = np.all(roi == (c.red(), c.green(), c.blue(), 255), axis=2)
     rows = np.flatnonzero(amber.any(axis=1))
     return int(amber.sum()), (int(rows[-1] - rows[0] + 1) if len(rows) else 0)
 
@@ -444,7 +448,16 @@ def test_the_honesty_stamp_is_kept_at_its_classic_size_at_every_shape():
         assert m.top() > tower.bottom() and m.left() > tower.left(), (w, h, m, tower)
         assert not m.intersects(bp._g_rect), f"{w}x{h}: the stamp is under the g-meter"
         c_px, c_rows = _stamp_ink(classic, w, h, c)
+        # The ink against Classic's with the stamp's backing plate set aside: over the plate the
+        # glyphs' anti-aliased edges blend into dark grey rather than into nothing, which this
+        # amber count reads as less ink (262 px against 288 at 406x720) though no glyph changed.
+        # The plate's own promise is that: every pixel the fill covers whole is the same with it.
+        be = _element(bp, "broadcast")
+        plates, be._under_imgs = be._under_imgs, []
         b_px, b_rows = _stamp_ink(bp, w, h, m)
+        bare = _stamp_ink(bp, w, h, m, exact=True)
+        be._under_imgs = plates
+        assert plates and _stamp_ink(bp, w, h, m, exact=True) == bare, (w, h, bare)
         assert abs(b_rows - c_rows) <= 1 and c_rows > 0, (w, h, c_rows, b_rows)
         assert abs(b_px - c_px) <= 0.05 * c_px, (w, h, c_px, b_px)
         print(f"ok the stamp at {w}x{h}: {len(STAMP_LINES)} lines, {m.width():.0f}x"
