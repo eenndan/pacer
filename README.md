@@ -94,7 +94,7 @@ official timing measures the noise floor.
   recording's first open, once its timing is trusted, lands on it as a **debrief** and puts its top
   corners on the track's **focus list**, for the next session there to re-measure.
 
-<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time, large, beside its speed-coloured line with the focus corners ringed">
+<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the one corner Pacer put on the focus list with its baseline and a Remove, that ranked corner with its reason and a Jump to the video, and under it the best lap's time, large, beside its speed-coloured line with the focus corner ringed">
 
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**
