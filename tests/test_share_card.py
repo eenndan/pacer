@@ -573,7 +573,7 @@ def _longest_real_reasons():
         evidence=coaching.Evidence(n_laps=62, reach_laps=4, reach=coaching.REACH_RARE, iqr=9.99,
                                    abstain=coaching.ABSTAIN_NONE))
     spread = coaching.reason_sentence(long_spread, reach=False)
-    assert spread == "consistency: middle half of laps within 9.99 s — most of it on the apex", spread
+    assert spread == "consistency: middle half of laps spans 9.99 s — most of it on the apex", spread
     long_line = coaching.Opportunity(
         cid=4, direction=-1, time_lost=0.9, entry_dist=100.0,
         reason=coaching.Reason(kind=coaching.REASON_LINE, contribution=0.4,
@@ -640,7 +640,7 @@ def test_the_card_of_a_new_pb_says_so_and_keeps_its_reason_whole():
     session = FakeSession(track="Sandown Park", best_time=46.808, ideal=46.196, opps=(
         coaching.Opportunities(enough=True, n_laps=36, median_lap_id=3, rows=[c1])))
     reason = share_card.card_data(session, unit="kmh").top_opp.reason
-    assert reason == "consistency: middle half of laps within 0.20 s — most of it on exit", \
+    assert reason == "consistency: middle half of laps spans 0.20 s — most of it on exit", \
         reason
     txt, px, _width = _reason_fit(reason)
     assert txt == reason and px in share_card._REASON_PX_STEPS, (txt, px)

@@ -591,6 +591,9 @@ def test_a_dropout_lap_never_wears_a_note():
     orig = s.lap_has_dropout
     try:
         s.lap_has_dropout = lambda i: i == _SLOW or orig(i)
+        # A patched accessor is no re-segmentation: the story memo (keyed on the corner model's
+        # generation and the valid list's identity, QA W4) cannot see it, so drop it as one would.
+        s._story_memo = None
         lt = _keep(LT.LapTable(s))
         tb, r = lt.table, lt._row_for_lap(_SLOW)
         assert tb.item(r, 0).text().endswith(LT.DROPOUT_SUFFIX), tb.item(r, 0).text()
@@ -612,6 +615,7 @@ def test_a_dropout_lap_never_wears_a_note():
             lt2.table.item(r2, _TIME_COL).toolTip()
     finally:
         s.__dict__.pop("lap_has_dropout", None)
+        s._story_memo = None
     print("test_a_dropout_lap_never_wears_a_note OK")
 
 
