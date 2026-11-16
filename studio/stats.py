@@ -1124,6 +1124,7 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
         loss = med - best if med is not None and best is not None else None  # both iff n
         half = middle_half(times)
         worst = int(np.argmax(np.abs(times - times.mean()))) if n >= 3 else None
+        owner = owners[worst] if worst is not None else None
         out.append(CornerReport(
             cid=int(cid), direction=int(direction), n=n, n_laps=n_laps,
             best_s=best, median_s=med, sigma_s=sig, median_loss_s=loss,
@@ -1132,8 +1133,7 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
             grip_median=float(np.median(grip)) if len(grip) else None,
             score=(half * loss) if half is not None and loss is not None else 0.0,
             middle_half_s=half,
-            worst_pass_lap=(None if worst is None or owners[worst] is None
-                            else int(owners[worst])),
+            worst_pass_lap=None if owner is None else int(owner),
             worst_pass_vs_median_s=(None if worst is None or med is None
                                     else float(times[worst]) - med),
             sigma_without_worst_s=(None if worst is None
