@@ -305,7 +305,7 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
     # ...and the number that caused it is ON the cell it caused, not only in the table's tooltip.
     tip = by_cid[11].toolTip()
     assert "0.20" in tip and "0.09" in tip and "0.018" in tip, tip
-    assert "middle half × median loss" in tip, tip
+    assert "middle half (the σ cell's hover) × median loss" in tip, tip
     assert "entry +0.03" in tip and "exit +0.02" in tip, "the phase triple must survive"
     assert by_cid[10].toolTip() == "", "an unmarked cell must not claim a score"
     # ...AND IT IS NOT THE DISTRUST GLYPH. This assertion used to pin the two marks EQUAL, on the

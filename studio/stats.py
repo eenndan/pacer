@@ -138,6 +138,14 @@ CORNER_MIDDLE_HALF_FLOOR_S = 0.01
 # σ stays on screen as the measurement it is; when it falls by more than this fraction with its
 # single worst pass left out of the ESTIMATE, the σ hover names that pass (CornerReport).
 ONE_PASS_SIGMA_FRACTION = 0.5
+# THE MARK'S FLOOR: no ◆ on a corner whose middle half is under the level step (MIDDLE_HALF_FLOOR_S,
+# 0.07 s). The demo's third-ranked corner, C7, had a middle half of 0.052 s, no wider than C3's
+# or C4's, and under ±0.035 s cell jitter (1000 draws) the top 3 stayed {C1, C5, C7} in only
+# 36.6 % of draws (C7 in 39-42 %, C3 28 %, C4 26 %): a mark chosen by noise, the defect this rule
+# exists to stop. With the floor the demo marks C1 and C5 (in 100 % and 85 % of 500 seeded jittered
+# draws: tests/test_stats.py), and a near-perfect session marks nothing, where both the σ and the unfloored middle-half
+# rules marked three corners of 0.016-0.019 s.
+MARK_MIN_MIDDLE_HALF_S = MIDDLE_HALF_FLOOR_S
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
 # so the trend statistic reports None and the tile shows a dash.
 TREND_MIN_LAPS = 6
@@ -434,9 +442,21 @@ class CornerReport:
     @property
     def one_pass_sigma(self) -> bool:
         """True when ONE pass carries most of σ: σ falls by more than ONE_PASS_SIGMA_FRACTION
-        with that pass left out of the estimate."""
-        return (self.sigma_s is not None and self.sigma_without_worst_s is not None
+        with that pass left out of the estimate. Only from MIN_MIDDLE_HALF_N counted passes:
+        below that, σ over the two or three passes left says little either way."""
+        return (self.n >= MIN_MIDDLE_HALF_N
+                and self.sigma_s is not None and self.sigma_without_worst_s is not None
                 and self.sigma_without_worst_s < ONE_PASS_SIGMA_FRACTION * self.sigma_s)
+
+
+def marked_corners(report, top_n: int) -> list[CornerReport]:
+    """The CORNERS rows that earn the ◆ mark, best score first: at most `top_n` and at most half
+    the field (a mark on every row highlights nothing), only a positive `score`, and only a
+    corner whose middle half reaches MARK_MIN_MIDDLE_HALF_S (why: the constant's block)."""
+    k = min(top_n, max(1, len(report) // 2))
+    ranked = sorted(report, key=lambda r: -r.score)[:k]
+    return [r for r in ranked if r.score > 0 and r.middle_half_s is not None
+            and r.middle_half_s >= MARK_MIN_MIDDLE_HALF_S]
 
 
 @dataclass(frozen=True)

@@ -532,8 +532,8 @@ def test_the_fixed_copy_reads_right_at_one():
             in note), note
     loss = view.corners.table.item(0, 4)
     assert loss.text().startswith(WORST_LOSS_MARK), loss.text()
-    assert loss.toolTip().startswith("The most erratic-and-slow corner — ranked by"), \
-        loss.toolTip()
+    assert loss.toolTip().startswith(
+        "The corner where your passes vary most and cost most — ranked by"), loss.toolTip()
     view.deleteLater()
     print("test_the_fixed_copy_reads_right_at_one OK")
 

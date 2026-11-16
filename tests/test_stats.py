@@ -1228,7 +1228,7 @@ def test_stats_view_corners_table_tint_sort_and_click():
     assert not t.isHidden() and t.rowCount() == 2
     assert t.item(0, 0).text().startswith("C1")
     assert t.item(1, 7).text() == "—"                       # grip None -> dash, never 0
-    # The worst corner (higher σ × loss) carries the behind hue on its loss cell; C1 doesn't.
+    # The worst corner (higher middle half × loss) carries the behind hue on its loss cell; C1 doesn't.
     behind = QColor(theme.behind_colour())
     assert t.item(1, 4).foreground().color() == behind
     assert t.item(0, 4).foreground().color() != behind
@@ -5936,8 +5936,10 @@ def _corner_rows(view) -> dict:
 def test_the_demo_erratic_mark_follows_the_middle_half_not_one_pass():
     """cool/erratic-robust, on the SHIPPED demo. σ × median loss marked C6, whose σ is one lap's
     (L6, the 51 s lap, holds ~91 % of its variance) and whose middle half is the narrowest of the
-    seven. The mark now follows middle half × median loss; the marked set is recomputed HERE from
-    the corner model's own matched times, not read back from the report. σ's text is unchanged."""
+    seven. The mark now follows middle half × median loss, at most the top 3, and never on a
+    middle half under the 0.07 s level step (which drops C7, 0.052 s: noise, see
+    test_the_demo_marks_survive_cell_jitter). The marked set is recomputed HERE from the corner
+    model's own matched times, not read back from the report. σ's text is unchanged."""
     _app()
     from studio.stats_corners import WORST_LOSS_MARK
     from studio.stats_panel import StatsView
@@ -5958,7 +5960,10 @@ def test_the_demo_erratic_mark_follows_the_middle_half_not_one_pass():
     def iqr(a):
         return float(np.subtract(*np.percentile(a, [75, 25])))
 
-    top = sorted(times, key=lambda c: -score(c, iqr))[:3]
+    floor = 0.07                                       # the level step, typed: the rule's value
+    top = [c for c in sorted(times, key=lambda c: -score(c, iqr))[:3]
+           if iqr(np.array([x for _, x in times[c]])) >= floor]
+    assert set(top) == {1, 5}, top
     by_sigma = sorted(times, key=lambda c: -score(c, lambda a: np.std(a, ddof=1)))[:3]
     assert 6 in by_sigma and 6 not in top, (by_sigma, top)     # the case this PR exists for
     v = StatsView(s)
@@ -5972,7 +5977,7 @@ def test_the_demo_erratic_mark_follows_the_middle_half_not_one_pass():
         lap = times[cid][worst][0]
         tip = t.item(rows[cid], 3).toolTip()
         assert f"One pass carries most of this σ (L{lap + 1}: +" in tip, tip
-        assert tip.index("the central 50 %") < tip.index("One pass"), "its own line, second"
+        assert "\nOne pass carries" in tip, "its own line, after the middle-half line"
     assert "One pass" not in t.item(rows[1], 3).toolTip()
     for cid, r in rows.items():                       # the σ column: byte-for-byte as before
         a = [x for _, x in times[cid]]
@@ -5989,7 +5994,8 @@ def test_one_pass_corners_lose_the_mark_and_say_so_erratic_ones_keep_it():
     """Planted corners through the real `corner_report` and the real section, ten laps:
     C1 steady but for ONE +2 s pass (lap id 6 → "L7"), C2 genuinely erratic (two lines, no
     outlier), C4 wild over only four counted passes (below MIN_MIDDLE_HALF_N), C3/C5/C6 steady.
-    σ × loss would mark C4, C2, C1; the middle half marks C2 and never C1 or C4."""
+    σ × loss would mark C4, C2, C1; the middle half marks C2 alone: C1 and C4 never, and the
+    steady corners' middle halves are under the 0.07 s level step."""
     _app()
     from studio.stats import MIN_MIDDLE_HALF_N, corner_report
     from studio.stats_corners import WORST_LOSS_MARK
@@ -6018,15 +6024,109 @@ def test_one_pass_corners_lose_the_mark_and_say_so_erratic_ones_keep_it():
     v = StatsView(sess)
     t, rows = v.corners.table, _corner_rows(v)
     marked = {c for c, r in rows.items() if t.item(r, 4).text().startswith(WORST_LOSS_MARK)}
-    assert 2 in marked and not marked & {1, 4}, marked
+    assert marked == {2}, marked
     tip = t.item(rows[1], 3).toolTip()
     assert ("One pass carries most of this σ (L7: +1.99 s against the median); without it σ "
             "would be 0.01 s.") in tip, tip
     assert "One pass" not in t.item(rows[2], 3).toolTip()
-    assert "middle half × median loss" in t.item(rows[2], 4).toolTip()
+    assert "middle half (the σ cell's hover) × median loss" in t.item(rows[2], 4).toolTip()
+    # The one-pass sentence needs MIN_MIDDLE_HALF_N passes: with 4, σ over the 3 left says little.
+    four = corner_report([1], [1], [[3.00], [3.01], [3.00], [4.00]], [[60.0]] * 4, [[0.8]] * 4,
+                         lap_ids=[0, 1, 2, 3])[0]
+    five = corner_report([1], [1], [[3.00], [3.01], [3.00], [3.02], [4.00]], [[60.0]] * 5,
+                         [[0.8]] * 5, lap_ids=[0, 1, 2, 3, 4])[0]
+    assert four.sigma_without_worst_s < 0.5 * four.sigma_s and not four.one_pass_sigma, four
+    assert five.one_pass_sigma, five
     v.close()
     print(f"test_one_pass_corners_lose_the_mark_and_say_so_erratic_ones_keep_it OK "
           f"(marked {sorted(marked)})")
+
+
+def _demo_corner_inputs():
+    """The demo's corner_report inputs, built the way Session.corner_report builds them."""
+    s = _shipped_demo_session()
+    cl = s.corners.corner_list()
+    rows, res, ids = [], [], []
+    for i in s.consistency_lap_ids():
+        st = s.corners.lap_corner_stats(i)
+        if len(st) == len(cl):
+            rows.append([x.time for x in st])
+            res.append(list(s.corners.lap_corner_resolved(i)))
+            ids.append(i)
+    return [c.cid for c in cl], [c.direction for c in cl], np.array(rows, float), res, ids
+
+
+def test_the_demo_marks_survive_cell_jitter():
+    """The ◆ must not be chosen by timing noise. Every corner the demo marks stays marked in at
+    least 80 % of 500 seeded draws of ±0.035 s (half the 0.07 s level step) uniform jitter on every
+    cell. Without the level-step floor C7 (middle half 0.052 s) was the third mark, and the top-3
+    set held in only ~37 % of such draws."""
+    from studio.stats import corner_report, marked_corners
+    from studio.stats_corners import WORST_TINT_N
+    cids, dirs, t, res, ids = _demo_corner_inputs()
+    n = len(t)
+    apex, grip = [[60.0] * len(cids)] * n, [[0.8] * len(cids)] * n
+
+    def marks(times):
+        rep = corner_report(cids, dirs, times.tolist(), apex, grip, res, lap_ids=ids)
+        return {r.cid for r in marked_corners(rep, WORST_TINT_N)}
+
+    base = marks(t)
+    assert base == {1, 5}, base
+    rng = np.random.default_rng(574)
+    draws = 500
+    held = dict.fromkeys(base, 0)
+    for _ in range(draws):
+        got = marks(t + rng.uniform(-0.035, 0.035, t.shape))
+        for c in base:
+            held[c] += c in got
+    share = {c: held[c] / draws for c in base}
+    assert all(v >= 0.80 for v in share.values()), share
+    print(f"test_the_demo_marks_survive_cell_jitter OK ({share})")
+
+
+def test_a_near_perfect_session_has_no_mark():
+    """Twelve laps, seven corners, every middle half 0.01-0.03 s (inside the 0.07 s level step):
+    the old rule marked three corners here and the unfloored middle half did too. Nothing on this
+    session is a corner where the passes vary: no ◆, and the note does not claim a pass shortage."""
+    _app()
+    from studio.stats import corner_report, marked_corners
+    from studio.stats_corners import WORST_LOSS_MARK, WORST_TINT_N
+    from studio.stats_panel import StatsView
+    rng = np.random.default_rng(7)
+    base = np.array([3.0, 2.6, 2.3, 3.0, 3.5, 2.8, 3.4])
+    times = (base + rng.normal(0, 0.012, (12, 7))).tolist()
+    report = corner_report(list(range(1, 8)), [1] * 7, times, [[60.0] * 7] * 12,
+                           [[0.8] * 7] * 12, lap_ids=list(range(12)))
+    assert all(r.score > 0 and r.middle_half_s < 0.07 for r in report), report
+    assert marked_corners(report, WORST_TINT_N) == []
+    sess = _fake_view_session()
+    sess.corner_report = lambda: report
+    v = StatsView(sess)
+    t = v.corners.table
+    assert not any(t.item(r, 4).text().startswith(WORST_LOSS_MARK) for r in range(t.rowCount()))
+    assert "counted passes per corner" not in v.corners.note.text()
+    v.close()
+    print("test_a_near_perfect_session_has_no_mark OK")
+
+
+def test_a_short_session_says_why_no_corner_is_marked():
+    """Four laps: no corner has the 5 passes a middle half needs, so nothing can be marked, and the
+    note under the table says so instead of leaving every corner looking steady."""
+    _app()
+    from studio.stats import corner_report
+    from studio.stats_corners import WORST_LOSS_MARK
+    from studio.stats_panel import StatsView
+    times = [[3.0, 2.6], [3.4, 2.9], [3.1, 2.7], [3.8, 3.3]]
+    report = corner_report([1, 2], [1, -1], times, [[60.0, 50.0]] * 4, [[0.8, 0.7]] * 4)
+    sess = _fake_view_session()
+    sess.corner_report = lambda: report
+    v = StatsView(sess)
+    t = v.corners.table
+    assert not any(t.item(r, 4).text().startswith(WORST_LOSS_MARK) for r in range(t.rowCount()))
+    assert "No ◆ under 5 counted passes per corner." in v.corners.note.text(), v.corners.note.text()
+    v.close()
+    print("test_a_short_session_says_why_no_corner_is_marked OK")
 
 
 if __name__ == "__main__":

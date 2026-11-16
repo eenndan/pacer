@@ -291,8 +291,9 @@ class IdealSection:
                      num_item(DASH if row.donor is None else str(row.donor + 1))]
             # WHY THIS ROW IS HERE, on the row. Neither visible column is sorted — the order is
             # their PRODUCT — and the app has been here before: the CORNERS table's loss column is
-            # marked by σ × median-loss and read "as if it were ordered by its own numbers and was
-            # not", which is recorded there as a defect a reader is given no way out of. The way
+            # marked by a product (σ × median-loss then, middle half × median-loss now) and read
+            # "as if it were ordered by its own numbers and was not", which is recorded there as
+            # a defect a reader is given no way out of. The way
             # out is the arithmetic, per row, in the reader's own numbers.
             tip = (f"{row.label}: your best lap gave away {row.gain:.2f} s here. "
                    f"{row.beat} of {row.n} clean laps drove it at least as fast as your best lap "
