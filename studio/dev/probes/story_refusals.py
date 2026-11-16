@@ -67,6 +67,7 @@ from studio import sidecar  # noqa: E402  (after the jail, as every load must be
 
 sidecar.save = lambda *a, **k: None   # a line edit writes beside the recording: never here
 from studio import stats as stats_service  # noqa: E402
+from studio._signal import lap_label  # noqa: E402
 from studio.dev import make_demo  # noqa: E402
 from studio.dev import media_capture as mc  # noqa: E402
 from studio.library import PB_PRECISION_S  # noqa: E402
@@ -84,6 +85,12 @@ MAP_SIZE = (480, 480)       # the map widget, logical px, pinned as in §28: the
 
 
 # ─── §29 brake-onset bands ──────────────────────────────────────────────────────────────────────
+def habit_free(lap_id: int) -> bool:
+    """Whether the session's 0-based lap `lap_id` is one the demo's habit spares: `DEMO_HABIT.clean_laps`
+    are 1-based lap numbers (`_signal.lap_label`), so lap id 6 is lap 7."""
+    return int(lap_label(lap_id)) in make_demo.DEMO_HABIT.clean_laps
+
+
 def map_px_per_m(app, w) -> float:
     """Logical px per metre on the real window's map, pinned at MAP_SIZE (the axes are locked 1:1)."""
     m = w.view.map
@@ -111,12 +118,23 @@ def brake_bands(s: Session, px_per_m: float) -> dict:
         zones.append({"cid": int(c.cid), "n": len(on), "iqr_m": round(float(q3 - q1), 3),
                       "fix_m": round(fix_m, 3), "clears": bool(q3 - q1 > fix_m)})
     # The planted habit's corner, its laps split by the generator's truth: with the habit, without.
+    # `clean_laps` counts the generator's flying laps from 1, as the Laps table labels them, while a
+    # row's lap is the session's 0-based id: `habit_free` is the one conversion.
+    # Each group's time through the corner (the CORNERS BY LAP grid) says which laps the habit
+    # really slowed, whatever their ids are called: the test holds the two ranges apart.
     h = make_demo.DEMO_HABIT
+    mx = s.corner_matrix()
+    assert mx is not None
+    hk = mx.cids.index(h.cid)
+    cell = {lap: float(mx.cells[r][hk]) for r, lap in enumerate(mx.lap_ids) if mx.resolved[r][hk]}
     groups = {}
-    for name, keep in (("habit", lambda lap: lap not in h.clean_laps), ("clean", lambda lap: lap in h.clean_laps)):
+    for name, keep in (("habit", lambda lap: not habit_free(lap)), ("clean", habit_free)):
+        laps = [lap for lap, r in rows if h.cid in r and keep(lap)]
         on = np.array([r[h.cid][0] for lap, r in rows if h.cid in r and keep(lap)], float)
         q1, med, q3 = np.percentile(on, [25, 50, 75])
-        groups[name] = {"n": len(on), "median_m": round(float(med), 1), "iqr_m": round(float(q3 - q1), 2)}
+        groups[name] = {"n": len(on), "median_m": round(float(med), 1), "iqr_m": round(float(q3 - q1), 2),
+                        "laps": [int(x) for x in laps],
+                        "corner_s": [round(min(cell[x] for x in laps), 3), round(max(cell[x] for x in laps), 3)]}
     widest = max(z["iqr_m"] for z in zones)
     # What the app already says about the habit's corner: its BRAKING row and its brake-direction line.
     bc = next(r for r in s.brake_report() if r.cid == h.cid)
