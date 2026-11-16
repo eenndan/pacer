@@ -2372,8 +2372,30 @@ class CentralView(QWidget):
         if not ids or sorted(ids) == sorted(shown):
             return False
         self.video.compare_btn.click()      # compareToggled(False) → CompareController.exit
+        if self._comparing():
+            return False                    # the exit did not happen: apply nothing over the pair
         self.statusNotice.emit(compare_ended_notice(ids))
         return True
+
+    def leave_compare_for_seek(self, t: float) -> None:
+        """A seek that is not a lap pick — a Marks row, the , / . mark keys — about to land at `t`.
+        Inside pane A's lap it is pane A's own seek, and compare stays. Anywhere else (pane B's
+        lap too: pane A cannot show it, and the seam would go on naming a pair the picture left)
+        it is a pick of the lap `t` is in: compare ends through the same rule, the window shows
+        that lap, and the caller seeks. Between laps it ends compare on the pair's laps."""
+        if not self._comparing():
+            return
+        lap = self.session.lap_at_time(t)
+        if lap is not None and lap == self.compare.lap_a:
+            return
+        if lap is not None and lap in self.session.valid_lap_ids():
+            self.table.select([lap])
+            self._on_laps_selected([lap])   # the pick: leaves compare, says so, no seek
+            return
+        ids = self.table.selected_lap_ids()
+        self.video.compare_btn.click()
+        if not self._comparing():
+            self.statusNotice.emit(compare_ended_notice(ids))
 
     # ------------------------------------------------------------- driving channels (F5)
     # --------------------------------------------------------- Lap Race

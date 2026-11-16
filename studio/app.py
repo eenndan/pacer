@@ -3255,6 +3255,7 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if mark is None or view is None or not mark.get("placed"):
             return
+        view.leave_compare_for_seek(float(mark["t"]))
         view.video.seek(float(mark["t"]))
         view._playback.followed_lap = self.session.lap_at_time(float(mark["t"]))
 
@@ -3329,12 +3330,15 @@ class StudioWindow(QMainWindow):
             self.statusBar().showMessage(
                 "no more marks ahead" if direction >= 0 else "no marks before here", STATUS_MS)
             return
+        was_comparing = view._comparing()
+        view.leave_compare_for_seek(float(target["t"]))
         view.video.seek(float(target["t"]))
         view._playback.followed_lap = self.session.lap_at_time(float(target["t"]))
         panel = getattr(view, "marks_panel", None)
         if panel is not None:
             panel.select_mark(target["id"])
         self.statusBar().showMessage(
+            ("compare ended; " if was_comparing and not view._comparing() else "") +
             f"{fmt_hms(target['t'])} · {marks_model.TYPE_LABEL.get(target['type'], 'Mark')} — "
             f"{marks_model.summary(target)}", STATUS_MS)
 
