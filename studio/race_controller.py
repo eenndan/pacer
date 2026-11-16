@@ -82,6 +82,7 @@ class CardModel:
     unranked_reason: str | None
     clock_estimated: bool
     excluded: str | None          # the muted "N laps not raced: …" line
+    follow: bool = False          # the map follows the field (`RaceController.set_follow`)
 
 
 def pack_rows(state: lap_race.RaceState, coloured: frozenset[int], selected: int | None,
@@ -153,7 +154,8 @@ def readout_text(model: CardModel) -> str | None:
 
 class RaceController:
     """The race's clock and its fan-out. `map_view` takes `start_race(tracks, colours, selected)`,
-    `update_race(state)`, `set_race_selected(lap_id)` and `end_race()`; `card` takes
+    `update_race(state)`, `set_race_selected(lap_id)`, `end_race()` and, only once Follow is
+    switched on, `set_race_follow(on)`; `card` takes
     `configure(colours, lap_times)`, `show_model(model)`, `show()`/`hide()`; `pause_video()`
     stops the picture on entry. `rates` is the playback-rate ladder the transport uses."""
 
@@ -176,6 +178,13 @@ class RaceController:
         self._dirty = False
         self._excluded: str | None = None
         self.ticks = 0              # race ticks that redrew (a test reads it)
+        # Follow: the map's view follows the field (map_view._FollowCam). Off by default; the window
+        # sets it from its pref and hears every change through `on_follow`, to remember it.
+        self.follow = False
+        self.on_follow: Callable[[bool], None] | None = None
+        toggled = getattr(card, "followToggled", None)      # the card's button (a Qt signal)
+        if toggled is not None:
+            toggled.connect(self.toggle_follow)
 
     @property
     def active(self) -> bool:
@@ -208,6 +217,8 @@ class RaceController:
         self.playing = True
         self._last = self._clock()
         self.map.start_race(tracks, self.colours(), self.selected)
+        if self.follow:
+            self.map.set_race_follow(True)
         self.card.configure(self.colours(),
                             {i: float(t) for i, t in zip(tracks.ids, tracks.lap_times, strict=True)})
         self.card.show()
@@ -249,6 +260,22 @@ class RaceController:
         assert self.tracks is not None
         fastest = [i for i in self.tracks.ids if i in self.tracks.coloured]
         return {lap: k for k, lap in enumerate(fastest)}
+
+    def set_follow(self, on: bool) -> None:
+        """Follow on or off — kept between races (the next race starts in it); while one runs the
+        map zooms on the field now, or puts its view back exactly."""
+        on = bool(on)
+        if on == self.follow:
+            return
+        self.follow = on
+        if self.active:
+            self.map.set_race_follow(on)
+            self._redraw()
+        if self.on_follow is not None:
+            self.on_follow(on)
+
+    def toggle_follow(self) -> None:
+        self.set_follow(not self.follow)
 
     # ------------------------------------------------------------------ transport
     def toggle_play(self) -> None:
@@ -342,7 +369,7 @@ class RaceController:
             best=tr.best.lap_id, to_best=to_best,
             tie_s=tr.finish_tie_s if sel_done else tr.race_tie_s,
             unranked_reason=state.unranked_reason, clock_estimated=tr.clock_estimated,
-            excluded=self._excluded)
+            excluded=self._excluded, follow=self.follow)
 
     def _redraw(self) -> None:
         state = self.state()

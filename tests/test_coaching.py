@@ -2699,12 +2699,29 @@ def _hero_window(path: str, size, *, demo_env: str | None):
             os.environ["PACER_DEMO_MP4"] = old
 
 
+def _wait_hero_rendered(hero, timeout_s: float = 20.0) -> None:
+    """Until the landing has SETTLED: the hero's quiet clock has run out and its picture is rendered
+    at the size it has. A condition, not `_open`'s fixed 0.4 s spin — on a loaded box the landing's
+    layout passes outlast that spin, and the hero must neither be read mid-settle (a render forced
+    by `target_points` at a size about to change) nor counted before its one render."""
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        _APP.processEvents()
+        if (hero.data() is not None and not hero._settle.isActive() and hero._key is not None
+                and hero._key[:2] == (hero.width(), hero.height())):
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"the hero never settled: {hero.size()}, key {hero._key}")
+
+
 def _check_hero_landing(win):
     """The hero on a landed debrief: shown, the lap table's time, the focus list ringed, one
     primary Jump, and nothing of the page below its fold or shed for it."""
     from studio.coaching_panel import _PANEL_COL_GO, HERO_MIN_PX
     view, panel = win.view, win.view.opportunities
     hero = panel.hero
+    _wait_hero_rendered(hero)
     assert view.is_debrief() and not panel.debrief_block.isHidden(), "no debrief landing"
     assert hero.shows_picture(), (hero.isVisible(), hero.height(), hero.data() is not None)
     # The time is the lap table's Time cell for the best lap, character for character, with its
@@ -2851,6 +2868,52 @@ def _hero_session(verified, *, degraded=False, media_clock=False, no_gps=False):
         timing_verified=verified, track_name="Stadium",
         timing_quality=SimpleNamespace(degraded=degraded, media_clock=media_clock, no_gps=no_gps,
                                        detail=lambda: "est. detail"))
+
+
+def test_debrief_hero_renders_once_at_the_size_a_queued_layout_pass_gives_it():
+    """cool/hero-render-once: on the demo landing the hero's final height arrives on a QUEUED
+    layout pass (the panel's `_relayout`, run inside the maximize's resize, re-fits the lead blocks
+    and shows the theme block; the page takes the new heights a turn later). The hero's 60 ms quiet
+    clock is wall time, and on a loaded Mac it ran out — and the hero painted — with that pass still
+    queued: the first open rendered the picture at 275 px and again at 291 px (`renders == 1` in
+    the demo-landing test failed 3 of 75 times beside 4 CPU burners). Here a block's height
+    changes in the same turn as the hero's resize, the clock runs out first and a paint arrives
+    before the queued pass: the hero renders once, at the size the pass gives it."""
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+    from studio.coaching_panel import DebriefHero, debrief_hero_data
+    _qapp()
+    page = QWidget()
+    page.resize(900, 600)
+    lay = QVBoxLayout(page)
+    block = QWidget()                # stands in for the lead/focus/theme blocks above the hero
+    block.setFixedHeight(20)
+    hero = DebriefHero()
+    hero.set_data(debrief_hero_data(_hero_session(True), 36))
+    hero.set_focus([1, 4])
+    lay.addWidget(block)
+    lay.addWidget(hero, 1)
+    hero.setVisible(True)
+    page.show()
+
+    _wait_hero_rendered(hero)
+    before = hero.renders
+    page.resize(900, 700)            # the maximize: the hero takes a new size at once...
+    h0 = hero.height()
+    block.setFixedHeight(60)         # ...and a block re-fitted in the same turn QUEUES a layout
+    #                                  pass: the hero's size is not final yet
+    hero._settle.stop()              # the quiet clock runs out first, as it did under load
+    hero._settle.timeout.emit()
+    hero.repaint()                   # and a paint arrives before the queued pass has run
+    _wait_hero_rendered(hero)
+    hero.repaint()
+    assert hero.height() == h0 - 40, (hero.height(), h0)
+    assert hero.renders == before + 1, (
+        f"{hero.renders - before} renders for one size change: the picture was rendered at "
+        f"{h0} px, the height a queued layout pass was about to take away")
+    page.close()
+    print(f"ok hero: one render at the size a queued layout pass decides ({h0} -> "
+          f"{hero.height()} px)")
 
 
 def test_debrief_hero_rings_every_focus_corner_but_only_a_row_is_a_target():

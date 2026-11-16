@@ -33,6 +33,7 @@ import itertools
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -57,6 +58,15 @@ import _videotoolbox  # noqa: E402
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 from studio.timeline import nearest_sample  # noqa: E402
+
+# A temp directory PRIVATE TO THIS PROCESS. The `f9_*` clips used to sit straight in the shared
+# $TMPDIR, the same paths in every run on the machine: this file is SEVEN ctest registrations
+# (`test_export_video` and the six `videotoolbox.*`) that `-j4` runs at once, and a second lane's
+# teardown removing `f9_vt_out.mp4` mid-encode failed a combined gate as an ffmpeg error ("Unable
+# to re-open ... for shifting data"). Module-scope, so the finalizer removes it at exit. Pinned
+# by tests/test_temp_isolation.py.
+_TMP = tempfile.TemporaryDirectory(prefix="pacer-test-export-video-")
+TMP = _TMP.name
 
 
 def _real_media(label: str) -> str:
@@ -854,7 +864,7 @@ def test_real_synthetic_pipe_render_if_ffmpeg(monkeypatch_restore):
     frame."""
     if not _require_ffmpeg("real_synthetic_pipe_render"):
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src = os.path.join(tmp, "f9_syn_src.mp4")
     out = os.path.join(tmp, "f9_syn_out.mp4")
     for p in (src, out):
@@ -922,7 +932,7 @@ def test_real_videotoolbox_render_if_available(monkeypatch_restore):
     registration, `videotoolbox.<name>`: SKIPPED by name where VT isn't usable (CI), never a pass."""
     _videotoolbox.need(ev.ffmpeg_available() and ev.videotoolbox_usable(),
                        "ffmpeg with an H.264 VideoToolbox session")
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, out = os.path.join(tmp, "f9_vt_src.mp4"), os.path.join(tmp, "f9_vt_out.mp4")
     _make_syn_clip(src)
     s = StubSession(lap_id=1, t0=0.0, dur=1.5, n=90)
@@ -949,7 +959,7 @@ def test_real_fallback_to_libx264_if_ffmpeg(monkeypatch_restore):
     (encoder tag = libx264). Gated on ffmpeg; needs no hardware (VT is made to fail on purpose)."""
     if not _require_ffmpeg("real_fallback_to_libx264"):
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, out = os.path.join(tmp, "f9_fb_src.mp4"), os.path.join(tmp, "f9_fb_out.mp4")
     _make_syn_clip(src)
     # Force VT for the first attempt but honour the retry's libx264 choice; keep decode in software.
@@ -995,7 +1005,7 @@ def test_composite_is_deterministic_across_workers_if_ffmpeg(monkeypatch_restore
     if not _require_ffmpeg("composite_is_deterministic_across_workers"):
         return
     import hashlib
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src = os.path.join(tmp, "f9_det_src.mp4")
     o1 = os.path.join(tmp, "f9_det_w1.mp4")
     o4 = os.path.join(tmp, "f9_det_w4.mp4")
@@ -1043,7 +1053,7 @@ def test_gui_worker_drives_render_to_completion_if_ffmpeg():
 
     from studio.workers import VideoExportWorker
 
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, out = os.path.join(tmp, "f9_gui_src.mp4"), os.path.join(tmp, "f9_gui_out.mp4")
     _make_syn_clip(src, dur=1.5)
     if os.path.exists(out):
@@ -1092,7 +1102,7 @@ def test_watchdog_aborts_a_wedged_encoder_if_ffmpeg(monkeypatch_restore):
     if not _require_ffmpeg("watchdog_aborts_a_wedged_encoder"):
         return
     import time as _time
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, out = os.path.join(tmp, "f9_wd_src.mp4"), os.path.join(tmp, "f9_wd_out.mp4")
     _make_syn_clip(src, dur=2.0)
     s = StubSession(lap_id=1, t0=0.0, dur=2.0, n=120)
@@ -1155,7 +1165,7 @@ def test_cancel_mid_write_does_not_hang_if_ffmpeg(monkeypatch_restore):
     if not _require_ffmpeg("cancel_mid_write_does_not_hang"):
         return
     import time as _time
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, out = os.path.join(tmp, "f9_cm_src.mp4"), os.path.join(tmp, "f9_cm_out.mp4")
     _make_syn_clip(src, dur=2.0)
     s = StubSession(lap_id=1, t0=0.0, dur=2.0, n=120)
@@ -2844,7 +2854,7 @@ def test_a_fractional_window_muxes_every_frame_it_planned_if_ffmpeg(monkeypatch_
     still short. Synthetic clip, so this runs wherever ffmpeg does — no 11 GB media."""
     if not _require_ffmpeg("a_fractional_window_muxes_every_frame_it_planned"):
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src = os.path.join(tmp, "f9_frac_src.mp4")
     _make_syn_clip(src, dur=3.0)
     s = StubSession(lap_id=1, t0=0.0, dur=3.0, n=180)
@@ -3100,7 +3110,7 @@ def test_footage_that_runs_out_mid_clip_is_refused_rather_than_called_finished(m
     refusal is about the truncation and not about the window."""
     if not _require_ffmpeg("footage_that_runs_out_mid_clip_is_refused"):
         return
-    tmp = os.environ.get("TMPDIR", "/tmp")
+    tmp = TMP
     src, cut = os.path.join(tmp, "f9_trunc_src.mp4"), os.path.join(tmp, "f9_trunc_cut.mp4")
     out = os.path.join(tmp, "f9_trunc_out.mp4")
     # `+faststart` (the moov atom UP FRONT) is what makes this fixture the failure it is meant to
