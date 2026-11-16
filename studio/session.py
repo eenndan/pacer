@@ -2786,27 +2786,39 @@ class Session:
         return self._story()[1]
 
     def _story(self) -> tuple[list[story.SlowLapNote], story.SessionMoments]:
-        """Both story reads, MEMOIZED on their whole input set (`_same_inputs`, `race_tracks`'
-        convention): the clean ids and lap times, the best lap, the timing trust, each lap's cached
-        `lap_corner_stats` list and its resolved mask. The corner matrix is not memoized and has no
-        invalidation of its own; its inputs do — a timing or sector edit (`set_timing_lines` →
-        `corners.invalidate`), a reference change (`invalidate_stats`) or a lap-set change replaces
-        one of these, and the next read misses."""
-        ids = self.consistency_lap_ids()
-        times = {i: float(self.lap_time(i)) for i in ids}
+        """Both story reads, MEMOIZED (`_same_inputs`) on a key that is O(1) to build, because the
+        Laps table and the Stats page read it on every refresh: the corner model's `generation`
+        (bumped by `corners.invalidate` — every timing or sector edit and its undo go through
+        `set_timing_lines` — and by `invalidate_stats`, a reference change), the valid-lap list
+        BY IDENTITY (`valid_lap_ids` memoizes it and a re-segment replaces it, so the lap set, the
+        lap times and the dropout rows it implies are all new together), the best lap and the two
+        timing-trust flags. The old key rebuilt every clean lap's corner-stats tuple on each read:
+        1.2-2.2 ms per HIT on 14-62 laps (QA W4). The corner matrix is not memoized; this is."""
+        valid = self.valid_lap_ids()
         best = self.best_lap_id()
         provisional = not self.timing_verified
         estimated = bool(self.timing_quality.media_clock)
-        key = (tuple(ids), tuple(times.values()), best, provisional, estimated,
-               tuple((self.corners.lap_corner_stats(i), tuple(self.corners.lap_corner_resolved(i)))
-                     for i in ids))
+        key = (getattr(self.corners, "generation", None), valid, best, provisional, estimated)
         memo = getattr(self, "_story_memo", None)
         if memo is not None and _same_inputs(memo[0], key):
             return memo[1]
+        ids = self.consistency_lap_ids()
+        times = {i: float(self.lap_time(i)) for i in ids}
         matrix = self.corner_matrix()
-        # Lap ids are in session order from 0, so lap 0 is the first timed lap (clean or not).
-        out = (story.slow_lap_notes(times, matrix, best, first_lap_id=0, provisional=provisional,
-                                    clock_estimated=estimated),
+        # Every crossing that is no lap of the Laps table, in that table's words: a ⊘ lap or a
+        # crossing too brief to be one. A slow lap right after one says so (`story` AFTER A
+        # LEFT-OUT LAP); a ⚠ dropout lap is a lap of the table, so it is not here.
+        excluded = set(self.excluded_lap_ids())
+        valid_set = set(valid)
+        n = self.lap_count() if getattr(self, "laps", None) is not None else 0
+        left_out = {i: story.AFTER_LEFT_OUT if i in excluded else story.AFTER_TOO_BRIEF
+                    for i in range(n) if i not in valid_set}
+        # The first TIMED lap (clean or ⊘, in session order): a crossing too brief to be a lap is
+        # not one, so a sliver before it leaves it "(first lap)", never "(after a too-brief
+        # crossing)". Lap 0 when there is no lap at all.
+        first = min((i for i in range(n) if left_out.get(i) != story.AFTER_TOO_BRIEF), default=0)
+        out = (story.slow_lap_notes(times, matrix, best, first_lap_id=first, left_out=left_out,
+                                    provisional=provisional, clock_estimated=estimated),
                story.session_moments(times, matrix, best, provisional=provisional,
                                      clock_estimated=estimated))
         self._story_memo = (key, out)

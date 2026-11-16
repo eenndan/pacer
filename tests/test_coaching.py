@@ -286,7 +286,7 @@ def test_the_sigma_fallback_is_named_consistency_not_line():
     assert r.reason.kind == "consistency", r.reason
     assert abs(r.reason.sigma - 0.20) < 1e-9
     sent = K.reason_sentence(r)
-    assert sent.startswith("consistency: middle half of laps within 0.50 s"), sent
+    assert sent.startswith("consistency: middle half of laps spans 0.50 s"), sent
     assert "line" not in sent, f"a spread nothing positional measured reads as a line: {sent!r}"
     print(f"ok consistency reason (fallback): {sent}")
 
@@ -594,7 +594,7 @@ def test_the_consistency_row_states_the_iqr_its_gate_reads_never_sigma():
     opp = dataclasses.replace(_opp_with(K.REASON_CONSISTENCY, K._NO_PHASES, sigma=1.278),
                               evidence=ev)
     sent = K.reason_sentence(opp, reach=False)
-    assert sent == "consistency: middle half of laps within 0.31 s", sent
+    assert sent == "consistency: middle half of laps spans 0.31 s", sent
     assert "1.28" not in sent and "±" not in sent, sent
     bare = _opp_with(K.REASON_CONSISTENCY, K._NO_PHASES, sigma=1.278)  # _NO_EVIDENCE, n_laps 0
     assert K.reason_sentence(bare) == "consistency", K.reason_sentence(bare)

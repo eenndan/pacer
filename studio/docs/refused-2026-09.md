@@ -2408,8 +2408,8 @@ another lap is within 0.07 s of it; the biggest single-corner loss; and the best
 with its ties. On the demo none of them changes at either noise level. The pure-noise test was run
 only on the run with no ▼, the one moment that is a count of the grid's marks.
 
-**What moves because of this refusal: nothing in the app.** No session-moments list exists yet;
-these two will not be in it.
+**What moves because of this refusal: nothing in the app.** The Stats page's MOMENTS section
+(#570) carries the three kept moments; these two are not in it.
 
 **What would be new evidence:** a corner's best pass that changes in fewer than one draw in ten at
 the measured σ, on more than one recording; and, for the run with no ▼, a rule for a calm stretch

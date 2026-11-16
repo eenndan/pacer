@@ -55,7 +55,8 @@ def caveat_lines(caveat: tuple[str, ...], timing_quality) -> list[str]:
 class MomentsSection:
     """MOMENTS: a heading, up to three rows ("Best lap: Lap 13 · 0:44.950" and a Jump) and, under
     a provisional line and/or an estimated clock, the page's own timing wording, once each. A None
-    moment is an absent row; none at all is an absent section, heading included — never an empty box.
+    moment is an absent row; none at all is an absent section, heading included — never an empty box
+    — and so is a lone untied best lap, which only repeats the PACE row's best tile.
 
     Each row is ONE wrapping label with its label set dim inline, not a label column: at the 503 px
     quadrant a column wide enough for "Biggest single-corner loss" left the 5-lap text four lines.
@@ -112,6 +113,12 @@ class MomentsSection:
         sm = read() if read is not None else None
         moments = [m for m in ((sm.best_lap, sm.biggest_loss, sm.best_window) if sm else ())
                    if m is not None]
+        # A lone UNTIED best lap is the PACE row's best tile word for word ("Best lap: Lap 3 ·
+        # 0:45.280" under "best 0:45.280"): on a session with no corner grid and no 5-lap run that
+        # was the whole section, 116 px for nothing (QA W4). A tied best names laps the tile does
+        # not, so it stays.
+        if len(moments) == 1 and moments[0].kind == story.BEST_LAP and not moments[0].tie:
+            moments = []
         self.heading.setVisible(bool(moments))
         self.body.setVisible(bool(moments))
         for i, row in enumerate(self.rows):

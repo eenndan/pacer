@@ -5498,12 +5498,15 @@ def test_one_spin_carries_sigma_and_both_are_on_the_tile():
     v = StatsView(sess)
     assert v.t_sigma.value.text() == f"{pace.sigma:.2f} s"
     assert v.t_sigma.caption.text() == (
-        f"σ lap · middle half within {fmt_middle_half(pace.middle_half)}")
+        f"σ lap · middle half spans {fmt_middle_half(pace.middle_half)}")
     assert v.t_sigma.toolTip() == SIGMA_TOOLTIP
-    for words in ("a spin included", "width of the band the central 50 %",
-                  "Neither removes a lap", "gap between two laps"):
+    for words in ("a spin included", "the middle half spans the central 50 %",
+                  "(their interquartile range)", "Neither removes a lap", "gap between two laps"):
         assert words in SIGMA_TOOLTIP, words
+    # QA W4 (#568): "within 0.59 s" invited a ± reading, a band twice as wide. The one word is
+    # "span", on the tile, its tooltip, the Corners hover and the exported row.
     assert "±" not in SIGMA_TOOLTIP and "about the median" not in SIGMA_TOOLTIP
+    assert "within" not in SIGMA_TOOLTIP and "width" not in SIGMA_TOOLTIP, SIGMA_TOOLTIP
     # The stub's two-lap pace has no middle half: the caption is σ's own, byte for byte.
     v2 = StatsView(_fake_view_session())
     assert v2.t_sigma.value.text() == "1.27 s"
@@ -5534,12 +5537,12 @@ def test_the_corner_sigma_hover_carries_the_middle_half_only_with_five_passes():
     assert t.columnCount() == 8                              # no new column
     assert t.item(0, 3).text() == "0.41"                     # σ itself unchanged
     assert t.item(0, 3).toolTip() == (
-        "the central 50 % of C1's 8 counted passes fall within 0.11 s. "
+        "The central 50 % of C1's 8 counted passes span 0.11 s. "
         "σ counts every one of them."), t.item(0, 3).toolTip()
     assert t.item(1, 3).toolTip() == ""                      # 4 passes: absent, not "—"
     # A corner width is printed as measured — no lap-time precision claim on a corner cell.
-    assert t.item(2, 3).toolTip().startswith("the central 50 % of C3's 6 counted passes fall "
-                                             "within 0.02 s."), t.item(2, 3).toolTip()
+    assert t.item(2, 3).toolTip().startswith("The central 50 % of C3's 6 counted passes span "
+                                             "0.02 s."), t.item(2, 3).toolTip()
     assert "precision" not in t.item(2, 3).toolTip()
     # The ranking reads the middle half (cool/erratic-robust): a corner of 4 passes has none, so
     # its score is 0.0 and it is never marked, whatever its σ.
@@ -5580,15 +5583,15 @@ def test_the_demo_tile_prints_the_middle_half_and_keeps_its_row():
     v = StatsView(s)
     v.show()
     assert v.t_sigma.value.text() == f"{pace.sigma:.2f} s"
-    assert v.t_sigma.caption.text() == f"σ lap · middle half within {fmt_middle_half(half)}"
+    assert v.t_sigma.caption.text() == f"σ lap · middle half spans {fmt_middle_half(half)}"
     assert pace.sigma > 2 * half, (pace.sigma, half)        # the slow lap carries σ here too
     v.hide()
     print(f"test_the_demo_tile_prints_the_middle_half_and_keeps_its_row OK "
-          f"(σ {pace.sigma:.2f} s, middle half within {fmt_middle_half(half)})")
+          f"(σ {pace.sigma:.2f} s, middle half spans {fmt_middle_half(half)})")
 
 
 def test_the_longest_middle_half_caption_keeps_the_pace_row():
-    """The longest captions the line can print ("within < 0.07 s", "within 10.25 s"): the PACE row
+    """The longest captions the line can print ("spans < 0.07 s", "spans 10.25 s"): the PACE row
     stays one height from 300 to 1440 px, the caption is never narrower than its text, and the row
     needs no horizontal scroll from 340 px (it fitted from 310 before the line)."""
     _app()
@@ -5758,7 +5761,10 @@ def test_a_tied_best_lap_shows_its_level_clause():
     print("test_a_tied_best_lap_shows_its_level_clause OK")
 
 
-def test_no_single_best_run_has_no_jump():
+def test_no_single_best_run_names_its_stretches_and_jumps_to_the_best():
+    """QA W4 (#570): "4 stretches of level 5-lap medians" named none and had no Jump. It names up
+    to three, then "+N more", and its Jump selects the first lap of the stretch holding the best
+    window."""
     _app()
     from test_story import _five
 
@@ -5766,14 +5772,20 @@ def test_no_single_best_run_has_no_jump():
     from studio.stats_panel import StatsView
     many = _five(0, 45.0) | _five(10, 45.01) | _five(20, 45.02) | _five(30, 45.03)
     sm = story.session_moments(many, None, best_lap=0)
+    jumps = []
     v = StatsView(_moments_session(sm))
+    v.moment_jump.connect(lambda lap, cid: jumps.append((lap, cid)))
     v.show()
     _settle(6)
     assert _shown_moments(v) == [sm.best_lap.text, "No single best 5-lap run: 4 stretches of "
-                                 "level 5-lap medians (within 0.07 s)"], _shown_moments(v)
-    assert v.moments.buttons[0].isVisibleTo(v) and not v.moments.buttons[1].isVisibleTo(v)
+                                 "level 5-lap medians (within 0.07 s): Laps 1–5, 11–15, 21–25, "
+                                 "+1 more"], _shown_moments(v)
+    assert v.moments.buttons[0].isVisibleTo(v) and v.moments.buttons[1].isVisibleTo(v)
+    assert v.moments.buttons[1].accessibleName() == "Jump to Lap 1"
+    v.moments.buttons[1].click()
+    assert jumps[-1][0] == 0, jumps
     v.close()
-    print("test_no_single_best_run_has_no_jump OK")
+    print("test_no_single_best_run_names_its_stretches_and_jumps_to_the_best OK")
 
 
 def test_provisional_timing_drops_the_best_lap_and_says_so_once():
@@ -5886,6 +5898,39 @@ def test_no_moments_is_no_section_and_the_page_as_it_was():
         assert with_section == without, f"an absent MOMENTS section moved the page at {width} px"
         v.close()
     print(f"test_no_moments_is_no_section_and_the_page_as_it_was OK ({QUADRANT_WIDTHS})")
+
+
+def test_a_lone_untied_best_lap_is_no_section():
+    """QA W4 (#570): on a session with no corner grid and no 5-lap run, MOMENTS was one row
+    repeating the PACE tile ("Best lap: Lap 3 · 0:45.280" under "best 0:45.280"), 116 px for
+    nothing. A lone UNTIED best lap is no section — the page pixel-identical to no moments at all —
+    and a TIED one stays: it names laps the tile does not."""
+    _app()
+    from studio import story
+    from studio.stats_panel import StatsView
+    lone = story.session_moments({0: 45.5, 1: 45.4, 2: 45.28, 3: 45.9}, None, best_lap=2)
+    assert lone.best_lap is not None and not lone.best_lap.tie
+    assert lone.biggest_loss is None and lone.best_window is None
+    for width in QUADRANT_WIDTHS:
+        pages = []
+        for sm in (lone, story.SessionMoments(None, None, None)):
+            v = StatsView(_moments_session(sm))
+            v.resize(width, 900)
+            v.show()
+            _settle(8)
+            assert not v.moments.heading.isVisibleTo(v) and not v.moments.body.isVisibleTo(v), sm
+            pages.append(v._scroll.widget().grab().toImage())
+            v.close()
+        assert pages[0] == pages[1], f"a lone best lap moved the page at {width} px"
+    tied = story.session_moments({0: 45.5, 1: 45.4, 2: 45.28, 3: 45.9}, None, best_lap=2,
+                                 clock_estimated=True)
+    assert tied.best_lap.tie and tied.best_window is None
+    v = StatsView(_moments_session(tied))
+    v.show()
+    _settle(6)
+    assert v.moments.heading.isVisibleTo(v) and _shown_moments(v) == [tied.best_lap.text]
+    v.close()
+    print(f"test_a_lone_untied_best_lap_is_no_section OK ({QUADRANT_WIDTHS})")
 
 
 def test_one_moments_read_per_refresh():
