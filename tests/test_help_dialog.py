@@ -110,6 +110,54 @@ def test_shortcut_rows_are_tall_enough_at_other_widths():
     print("test_shortcut_rows_are_tall_enough_at_other_widths OK")
 
 
+# ------------------------------------------------- K10: one key column across every group
+def _card_rows(dialog) -> list[tuple[str, str, int]]:
+    """(key text, description, description x in dialog coordinates) for every row the card SHOWS,
+    read off its grids — the key cell's KeyCap text, as `_key_text` renders the registry's key."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QGridLayout
+    rows = []
+    for grid in dialog.findChildren(QGridLayout):
+        for r in range(grid.rowCount()):
+            key_item, desc_item = grid.itemAtPosition(r, 0), grid.itemAtPosition(r, 1)
+            if key_item is None or desc_item is None:
+                continue
+            caps = [lb for lb in [key_item.widget(), *key_item.widget().findChildren(QLabel)]
+                    if isinstance(lb, QLabel) and lb.property("role") == "KeyCap"]
+            desc = desc_item.widget()
+            rows.append((caps[0].text(), desc.text(), desc.mapTo(dialog, QPoint(0, 0)).x()))
+    return rows
+
+
+def test_every_group_shares_one_key_column():
+    """K10 (cool/card-and-keys): every group was its own grid sizing its own key column, so the
+    descriptions started at six different x (42…227 px offscreen) and the card read as seven
+    tables. Now every description starts at ONE x — at the natural size and at the card's minimum
+    width — and that x is the widest key cell's, measured, not a constant: every group's key
+    column is exactly as wide as the widest cell on the whole card. Nothing else moves: the card lists exactly the
+    registry's rows, and no description is cut (L1-01's guard, at the narrower column)."""
+    want = {(help_dialog._key_text(k), d) for _g, rows in SHORTCUT_GROUPS for k, d in rows}
+    for size in (None, (560, 200)):
+        d = _shown(ShortcutsDialog())
+        if size:
+            d.resize(*size)
+            for _ in range(6):
+                _APP.processEvents()
+        rows = _card_rows(d)
+        assert {(k, desc) for k, desc, _x in rows} == want and len(rows) == len(want), (
+            "the card no longer lists exactly the registry's shortcuts")
+        xs = {x for _k, _d, x in rows}
+        assert len(xs) == 1, f"descriptions start at {sorted(xs)} at {d.width()}x{d.height()}"
+        widest = max(g.itemAtPosition(r, 0).widget().sizeHint().width()
+                     for g in d._grids for r in range(g.rowCount())
+                     if g.itemAtPosition(r, 0) is not None)
+        assert all(g.columnMinimumWidth(0) == widest for g in d._grids), widest
+        assert not _overflowing(d), _overflowing(d)
+        d.close()
+    print(f"test_every_group_shares_one_key_column OK (descriptions at x={xs.pop()}, "
+          f"key column {widest} px, {len(want)} rows)")
+
+
 # ------------------------------------- L1-08 + L1-07: the card IS the single source of truth
 def _live_bindings():
     """Every key the real window binds: the menu accelerators + the window-level QShortcuts.

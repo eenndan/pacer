@@ -465,12 +465,15 @@ class ShortcutsDialog(QDialog):
         scroll, column = _copy_column(spacing=0, inset=0)
         root.addWidget(scroll)
 
+        self._grids: list[QGridLayout] = []
         for title, rows in SHORTCUT_GROUPS:
             # Flush PanelHeader strip per group — same surface bg + hairline as every panel header.
             header = QLabel(title.upper())
             header.setProperty("role", "PanelHeader")
             column.addWidget(header)
             column.addWidget(self._group_body(rows))
+        self.ensurePolished()           # the KeyCap role's mono face is a QSS font: measure with it
+        self._share_key_column()
 
         # Standard close button row (Esc / Enter both dismiss via the button box's default). It
         # stays OUTSIDE the scroll area, like the copy cards' — the way out of a card must not be
@@ -487,7 +490,23 @@ class ShortcutsDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._share_key_column()
         _fit_to_copy(self, self._scroll, self._column)
+
+    def _share_key_column(self) -> None:
+        """Give every group's key column the width of the WIDEST key cell on the card, so every
+        description starts at one x (K10, cool/card-and-keys).
+
+        Each group is its own grid, and a grid sizes its key column to its own widest cap: the card
+        read as seven tables, its descriptions starting at six different x (42 to 227 px offscreen)
+        — File's "⌘O" beside Layout's "F · double-click video ·" glyph. The width is MEASURED off
+        the cells themselves (their size hints, in the polished KeyCap face), so a new widest key
+        moves the shared column with it. Idempotent; re-run at show, where the face is final."""
+        cells = [g.itemAtPosition(r, 0).widget() for g in self._grids
+                 for r in range(g.rowCount()) if g.itemAtPosition(r, 0) is not None]
+        width = max((c.sizeHint().width() for c in cells), default=0)
+        for g in self._grids:
+            g.setColumnMinimumWidth(0, width)
 
     def _group_body(self, rows: list[tuple[Keys, str]]) -> QWidget:
         """A two-column grid (key | description) for one group. The key column is mono + dimmed
@@ -509,6 +528,7 @@ class ShortcutsDialog(QDialog):
         for r, (key, desc) in enumerate(rows):
             grid.addWidget(_key_widget(key), r, 0)
             grid.addWidget(WrapLabel(desc), r, 1)
+        self._grids.append(grid)        # its key column joins the card's one (_share_key_column)
         return body
 
 
