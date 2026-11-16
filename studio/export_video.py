@@ -3237,6 +3237,10 @@ class OverlayPainter:
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
         els, skip = self.elements, self._replaced     # skip: Classic plates an element replaces
+        # A style's backing plates under the Classic texts it keeps (overlay.LAYER_UNDER): first,
+        # so the dial and the stamp paint over them. No Classic element has one.
+        if els:
+            overlay.paint_layer(els, p, vals, overlay.LAYER_UNDER)
         # g-meter dial: paint into its rect via the SHARED paint routine + the snapshot of the
         # headless dial's filtering state (identical to the on-screen widget).
         if "gmeter" not in skip:
