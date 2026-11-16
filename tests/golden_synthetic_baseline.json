@@ -52386,9 +52386,9 @@
       "apex_speed_gain": 0.3059999999999903,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.008999463434568568,
+      "contribution": 0.0,
       "exit_speed_gain": 0.06772938333300971,
-      "kind": "consistency",
+      "kind": "level",
       "sigma": 0.038455957803251235
      },
      "time_lost": 0.04410246417353747
@@ -52442,9 +52442,9 @@
       "apex_speed_gain": 0.522000000000002,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.004580541508771405,
+      "contribution": 0.0,
       "exit_speed_gain": -0.006451683240179307,
-      "kind": "consistency",
+      "kind": "level",
       "sigma": 0.03698731525166319
      },
      "time_lost": 0.023156672856526228
@@ -52526,9 +52526,9 @@
       "apex_speed_gain": 0.7019999999999982,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.0033084668127785545,
+      "contribution": 0.0,
       "exit_speed_gain": 0.47831429722437235,
-      "kind": "consistency",
+      "kind": "level",
       "sigma": 0.23104555686236958
      },
      "time_lost": 0.005456398279871877
@@ -52563,12 +52563,9 @@
     }
    ],
    "theme": {
-    "cause": "consistency",
-    "cause_cids": [
-     7,
-     4
-    ],
-    "cause_share": 0.6810148902856941,
+    "cause": "none",
+    "cause_cids": [],
+    "cause_share": 0.0,
     "execution_s": 0.09876309312685905,
     "kind": "execution",
     "lead_cid": 7,
@@ -86908,9 +86905,9 @@
       "apex_speed_gain": 0.3059999999999903,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.008999463537583881,
+      "contribution": 0.0,
       "exit_speed_gain": 0.06772941910241315,
-      "kind": "consistency",
+      "kind": "level",
       "sigma": 0.03845595820833283
      },
      "time_lost": 0.04410246430860809
@@ -86964,9 +86961,9 @@
       "apex_speed_gain": 0.522000000000002,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.0045805417910012,
+      "contribution": 0.0,
       "exit_speed_gain": -0.006451685479781588,
-      "kind": "consistency",
+      "kind": "level",
       "sigma": 0.03698731505871717
      },
      "time_lost": 0.023156674380226505
@@ -87048,9 +87045,9 @@
       "apex_speed_gain": 0.7019999999999982,
       "brake_extra_s": 0.0,
       "coast_extra_s": 0.0,
-      "contribution": 0.0033084665831560308,
+      "contribution": 0.0,
       "exit_speed_gain": 0.4783142099879072,
-      "kind": "consistency",
+      "kind": "level",
       "sigma": 0.23104555706693763
      },
      "time_lost": 0.005456397899271437
@@ -87085,12 +87082,9 @@
     }
    ],
    "theme": {
-    "cause": "consistency",
-    "cause_cids": [
-     7,
-     4
-    ],
-    "cause_share": 0.6810148979447262,
+    "cause": "none",
+    "cause_cids": [],
+    "cause_share": 0.0,
     "execution_s": 0.09876309445185383,
     "kind": "execution",
     "lead_cid": 7,

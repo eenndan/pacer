@@ -146,6 +146,12 @@ ONE_PASS_SIGMA_FRACTION = 0.5
 # draws: tests/test_stats.py), and a near-perfect session marks nothing, where both the σ and the unfloored middle-half
 # rules marked three corners of 0.016-0.019 s.
 MARK_MIN_MIDDLE_HALF_S = MIDDLE_HALF_FLOOR_S
+def corner_spread_clears_level(middle_half_s: float | None) -> bool:
+    """True when a corner's middle half is a spread at all: measured (MIN_MIDDLE_HALF_N passes)
+    and not under MARK_MIN_MIDDLE_HALF_S, the level step. The ONE test both tabs apply — the ◆
+    mark here (`marked_corners`) and whether the Coaching tab may print its consistency reason
+    (`coaching.summarize`) — so neither calls a spread inside the noise one the other works on."""
+    return middle_half_s is not None and middle_half_s >= MARK_MIN_MIDDLE_HALF_S
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
 # so the trend statistic reports None and the tile shows a dash.
 TREND_MIN_LAPS = 6
@@ -455,8 +461,7 @@ def marked_corners(report, top_n: int) -> list[CornerReport]:
     corner whose middle half reaches MARK_MIN_MIDDLE_HALF_S (why: the constant's block)."""
     k = min(top_n, max(1, len(report) // 2))
     ranked = sorted(report, key=lambda r: -r.score)[:k]
-    return [r for r in ranked if r.score > 0 and r.middle_half_s is not None
-            and r.middle_half_s >= MARK_MIN_MIDDLE_HALF_S]
+    return [r for r in ranked if r.score > 0 and corner_spread_clears_level(r.middle_half_s)]
 
 
 # ---- the CORNERS table's words, shared by the Stats page (stats_corners, a Qt module) and the
@@ -485,7 +490,9 @@ def corner_mark_rule(*, hover: bool = True) -> str:
         "passes is never marked, and a corner whose middle half is under "
         f"{MARK_MIN_MIDDLE_HALF_S:.2f} s, the level step, is never "
         "marked. It is a consistency ranking, not the Coaching tab's list of what "
-        "to work on (time lost against your best lap), so the two need not agree.")
+        "to work on (time lost against your best lap), so the two need not agree on the "
+        "order. They agree on the level step: Coaching never gives a corner under it a "
+        "consistency reason.")
 
 
 @overload
@@ -1189,11 +1196,14 @@ def middle_half(values) -> float | None:
 def fmt_middle_half(width: float | None, floor: float = MIDDLE_HALF_FLOOR_S) -> str | None:
     """The middle half's width as printed: `0.59 s`, or `< 0.07 s` below `floor` (the floor, not
     the value). Laps take MIDDLE_HALF_FLOOR_S, corners CORNER_MIDDLE_HALF_FLOOR_S. None passes
-    through."""
+    through. A width under the level step (MARK_MIN_MIDDLE_HALF_S) that two decimals would round up
+    TO it prints a third decimal, `0.066 s`, so no surface says "0.07 s, under 0.07 s"."""
     if width is None:
         return None
     if width < floor:
         return f"< {floor:.2f} s"
+    if width < MARK_MIN_MIDDLE_HALF_S <= round(width, 2):
+        return f"{width:.3f} s"
     return f"{width:.2f} s"
 
 

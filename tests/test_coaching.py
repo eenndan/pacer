@@ -3052,6 +3052,149 @@ def test_debrief_hero_arrow_points_the_way_the_lap_runs_both_ways_round():
     print("ok hero: the arrow points the way the lap runs, both ways round")
 
 
+# --------------------------------------------- the level step: a reason rule, never a ranking rule
+# cool/coaching-level-step. Coaching printed "consistency: middle half of laps spans 0.04 s" at
+# corners Stats ▸ CORNERS calls level (middle half under 0.07 s). Only the printed reason moves; the
+# ranked corners, their order and their losses are main's, pinned here from main (19e3841) for the
+# demo and two habit-free synthetic recordings of the demo circuit.
+_MAIN_RANKED = {"demo": [1, 2, 7, 4], "seed 20260924, 14 laps": [7, 2, 4], "seed 7, 12 laps": [5, 6]}
+_LEVEL_SESSIONS: dict = {}
+
+
+def _level_sessions() -> dict:
+    """The three sessions above, generated once per process (a TemporaryDirectory kept alive with
+    them: the sessions read their files lazily)."""
+    if not _LEVEL_SESSIONS:
+        import tempfile
+
+        from studio.dev import make_demo as md
+        from studio.dev import synth_gopro as sg
+        from studio.session import Session
+        tmp = tempfile.TemporaryDirectory(prefix="coach_level_")
+        _LEVEL_SESSIONS["_tmp"] = tmp
+        demo = os.path.join(tmp.name, "GX019000.MP4")
+        md.make(demo, render=False)
+        _LEVEL_SESSIONS["demo"] = Session.load([demo])
+        for name, seed, laps in (("seed 20260924, 14 laps", 20260924, 14), ("seed 7, 12 laps", 7, 12)):
+            rec = sg.generate(os.path.join(tmp.name, str(seed)), seed, laps, chapters=1)
+            _LEVEL_SESSIONS[name] = Session.load(rec.paths)
+    return {k: v for k, v in _LEVEL_SESSIONS.items() if not k.startswith("_")}
+
+
+def test_coaching_never_prints_consistency_where_corners_calls_the_spread_level():
+    """No row, ranked or not, names consistency at a corner whose CORNERS middle half is under the
+    level step, and both tabs read one middle half; a level row says so and names no cause. On main
+    the demo's C2, C7 and C4 printed "consistency: middle half of laps spans 0.04 / 0.05 / 0.05 s"."""
+    from studio import stats as stats_service
+    seen_level = 0
+    for name, s in _level_sessions().items():
+        report = {r.cid: r for r in s.corner_report()}
+        for row in s.coaching_opportunities().rows:
+            mh = report[row.cid].middle_half_s
+            level = mh is not None and not stats_service.corner_spread_clears_level(mh)
+            sent = K.reason_sentence(row)
+            if level:
+                assert row.reason.kind != K.REASON_CONSISTENCY, (name, row.cid, mh, row.reason)
+                assert "consistency" not in sent, (name, row.cid, sent)
+            if row.reason.kind == K.REASON_LEVEL:
+                seen_level += 1
+                assert level and abs(row.evidence.iqr - mh) < 1e-12, (name, row.cid, mh, row.evidence)
+                assert row.reason.contribution == 0.0, row.reason
+                if row.evidence.ranked:
+                    assert sent.startswith("no one habit explains it: your passes here are level "
+                                           "with each other (middle half spans 0."), sent
+                    assert ", under 0.07 s)" in sent, sent
+    assert seen_level >= 3, seen_level
+    print(f"ok level step: no consistency reason where CORNERS calls it level ({seen_level} level rows)")
+
+
+def test_the_level_step_leaves_the_ranking_as_it_was():
+    """The rule moves a reason, never a rank: the ranked corners and their order on each session are
+    main's, and on the demo the debrief still pre-promotes C1, C2 and C7."""
+    for name, s in _level_sessions().items():
+        ranked = [r.cid for r in s.coaching_opportunities().ranked_rows()]
+        assert ranked == _MAIN_RANKED[name], (name, ranked)
+    demo = _level_sessions()["demo"].coaching_opportunities()
+    kinds = [(r.cid, r.reason.kind) for r in demo.ranked_rows()]
+    assert kinds == [(1, K.REASON_APEX), (2, K.REASON_LEVEL), (7, K.REASON_LEVEL),
+                     (4, K.REASON_LEVEL)], kinds
+    # The theme is unchanged on the demo: the level rows were never its cause.
+    assert K.theme_actions(demo.theme, demo.rows) == [
+        "Apex speed is the common thread — 79% of that time is in C1.",
+        "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."]
+    print(f"ok ranking unchanged: {_MAIN_RANKED}")
+
+
+def _level_fixture(plan, spread):
+    """Three corners, nine laps: two on the baseline and seven `plan[j]` slower with a middle half of
+    `spread[j]` (offsets plan + spread × (k − 2) / 4, k = 0..6)."""
+    corners = _corners(3)
+    best = [5.0, 6.0, 7.0]
+    times = [list(best), list(best)] + [
+        [b + p + w * (k - 2) / 4 for b, p, w in zip(best, plan, spread, strict=True)]
+        for k in range(7)]
+    lap_times = [sum(r) for r in times]
+    return corners, best, times, lap_times
+
+
+def test_a_steadily_slow_corner_stays_ranked_and_names_no_spread():
+    """Review of #587 (P1-a): +0.30 s at every corner on every lap but the best two — a tiny spread,
+    the clearest time on the table. Every corner stays ranked, C1 first, as on main; the reason no
+    longer calls it a spread to work on, and with no lever over its floor it names no cause."""
+    corners, best, times, lap_times = _level_fixture([0.30] * 3, [0.02] * 3)
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={c.cid: 0.03 for c in corners})
+    assert [r.cid for r in opp.ranked_rows()] == [1, 2, 3], opp.rows
+    for r in opp.rows:
+        assert r.reason.kind == K.REASON_LEVEL and abs(r.time_lost - 0.30) < 1e-9, r
+        assert "consistency" not in K.reason_sentence(r), K.reason_sentence(r)
+    # Where σ (one wide pass, say) makes the spread the pick, a lever over its own floor is named
+    # instead of "level" (C1, 1.5 km/h short); one under it is not (C2, 0.5 km/h).
+    lev = _levers(times, best, apex=[98.5, 99.5, 100.0])
+    kinds = [r.reason.kind for r in K.summarize(
+        corners, list(range(len(lap_times))), lap_times, times, best,
+        sigmas_by_cid={1: 0.60, 2: 0.60, 3: 0.03}, **lev).rows]
+    assert kinds == [K.REASON_APEX, K.REASON_LEVEL, K.REASON_LEVEL], kinds
+    print("ok steady loss: +0.30 s on every lap stays ranked #1, reason level, not consistency")
+
+
+def test_a_level_width_just_under_the_step_never_prints_as_the_step():
+    """Re-review of #587 (P3): a middle half of 0.066 s rounds to "0.07 s" at two decimals, and the
+    sentence read "middle half spans 0.07 s, under 0.07 s". The one formatter CORNERS shares prints a
+    third decimal in that band, on both tabs; outside it nothing changes."""
+    from studio import stats as stats_service
+    floor = stats_service.CORNER_MIDDLE_HALF_FLOOR_S
+    assert stats_service.fmt_middle_half(0.066, floor) == "0.066 s"
+    assert stats_service.fmt_middle_half(0.064, floor) == "0.06 s"
+    assert stats_service.fmt_middle_half(0.07, floor) == "0.07 s"
+    assert stats_service.fmt_middle_half(0.0749, floor) == "0.07 s"
+    # Laps keep their floor form below the step ("< 0.07 s"), so never reach the band.
+    assert stats_service.fmt_middle_half(0.066) == "< 0.07 s"
+    # Through the Coaching row: plan a 0.066 s middle half at C1 and read the sentence.
+    corners, best, times, lap_times = _level_fixture([0.30] * 3, [0.066, 0.02, 0.02])
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={c.cid: 0.03 for c in corners})
+    sent = K.reason_sentence(opp.rows[0], reach=False)
+    assert sent == ("no one habit explains it: your passes here are level with each other "
+                    "(middle half spans 0.066 s, under 0.07 s)"), sent
+    print(f"ok P3: {sent!r}")
+
+
+def test_level_rows_count_towards_no_cause_in_the_theme():
+    """The theme's cause share is over all ranked time, and a level row counts towards no cause: one
+    real spread (0.50 s middle half) holding 0.30 of 0.80 s does not become "Consistency is the
+    common thread" by borrowing two level rows' 0.50 s."""
+    corners, best, times, lap_times = _level_fixture([0.30, 0.25, 0.25], [0.50, 0.02, 0.02])
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={1: 0.25, 2: 0.25, 3: 0.25})
+    assert [r.reason.kind for r in opp.ranked_rows()] == [
+        K.REASON_CONSISTENCY, K.REASON_LEVEL, K.REASON_LEVEL], opp.rows
+    assert opp.theme.cause == K.REASON_NONE and opp.theme.cause_cids == (), opp.theme
+    assert K.theme_actions(opp.theme, opp.rows)[0] == (
+        "No single cause dominates these corners — work them one at a time."), opp.theme
+    print("ok theme: level rows count in the ranked time and towards no cause")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

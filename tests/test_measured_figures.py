@@ -3480,8 +3480,11 @@ def _coaching_measure(s):
     ranked = opps.ranked_rows()
     by_cause: dict[str, float] = {}
     for r in ranked:
-        by_cause[r.reason.kind] = by_cause.get(r.reason.kind, 0.0) + r.time_lost
-    total = sum(by_cause.values())
+        # A level row (cool/coaching-level-step) names no cause: its time counts in the total and
+        # towards no cause, as `coaching.session_theme` counts it.
+        if r.reason.kind != "level":
+            by_cause[r.reason.kind] = by_cause.get(r.reason.kind, 0.0) + r.time_lost
+    total = sum(r.time_lost for r in ranked)
     # A lap set can rank nothing at all (every row abstained): no share, no cause.
     cause = max(by_cause.items(), key=lambda kv: kv[1]) if by_cause else ("none", 0.0)
     theme = (opps.n_laps, len(ranked), total, sum(r.time_lost for r in opps.rows if not r.evidence.ranked),

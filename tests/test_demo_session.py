@@ -136,6 +136,9 @@ def _assert_the_planted_call(s, ranked, shortlist):
     assert len(ranked) > 1 and top.time_lost >= 5 * ranked[1].time_lost, (
         f"C{top.cid} {top.time_lost:.3f} s is not 5x the next row: "
         f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
+    # The other ranked corners have no lever and a middle half under the 0.07 s level step: their
+    # reason names no cause, never consistency (cool/coaching-level-step).
+    assert [r.reason.kind for r in ranked[1:]] == ["level"] * (len(ranked) - 1), ranked
     # The debrief pre-promotes its shortlist onto the focus list; README's and FIRST_LAP's alt text
     # for docs/media/debrief.png says "the three corners Pacer put on the focus list".
     assert shortlist[:1] == [habit.cid] and len(shortlist) == 3, shortlist
