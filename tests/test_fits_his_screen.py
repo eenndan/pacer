@@ -54,7 +54,7 @@ def test_the_corners_table_fits_the_pane_and_only_the_sorted_column_pays_for_the
     rows = [CornerReport(cid=c, direction=1 if c % 2 else -1, n=19, best_s=2.0 + 0.31 * c,
                          median_s=2.2 + 0.31 * c, sigma_s=0.12, median_loss_s=0.13,
                          apex_best_kmh=45.3, apex_median_kmh=43.1, grip_median=0.83,
-                         score=0.02 * c, n_laps=19) for c in range(1, 13)]
+                         score=0.02 * c, n_laps=19, middle_half_s=0.12) for c in range(1, 13)]
     sec = CornersSection(lambda _cid: None)
     sec.refresh(SimpleNamespace(corner_report=lambda: rows, phase_report=lambda: None),
                 "kmh", "km/h")
