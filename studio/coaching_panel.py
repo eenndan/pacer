@@ -1982,7 +1982,10 @@ class OpportunitiesPanel(QWidget):
         # case there is no time to claim and the honest headline says so rather than totalling 0.00 s
         # "across your top 0 corners". The table below still lists those corners with their reasons.
         if not rows:
-            gains = "no corner clears its own lap-to-lap spread"
+            # A level corner (coaching.ABSTAIN_LEVEL) fails the timing precision, not its spread.
+            gains = ("no corner clears its own lap-to-lap spread and the timing precision"
+                     if any(r.evidence.abstain == coaching.ABSTAIN_LEVEL for r in self._all_rows)
+                     else "no corner clears its own lap-to-lap spread")
         else:
             gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
                      else f"{total:.2f} s across your top {len(rows)} corners")

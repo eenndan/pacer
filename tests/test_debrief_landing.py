@@ -397,7 +397,10 @@ def test_the_journey_on_the_real_window():
             track = win.session.track_name
             short = panel.shortlist_cids()
             listed = lambda: focus.for_track(focus.load(), track)  # noqa: E731
-            assert len(short) == PANEL_TOP_N, short
+            # The shortlist IS Coaching's ranked top (two corners on this telemetry since
+            # cool/coaching-level-step: the rest are level), and the journey needs two of them.
+            ranked = [r.cid for r in win.session.coaching_opportunities().ranked_rows()]
+            assert short == ranked[:PANEL_TOP_N] and len(short) >= 2, (short, ranked)
             assert view.is_debrief() and view.tab_bar.currentIndex() == 3, "no debrief landing"
             # Still maximized AFTER the deferred first-show restores: the defect of the first cut.
             assert view._maximized_panel is view._table_panel, "not maximized"

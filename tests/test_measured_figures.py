@@ -2938,10 +2938,16 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
     over = [c for c in cids if n_["jitter_fires"][c] > 0.8]
     if (hit := find(30, r"only C(\d+) fires in more than four draws in five", "the steady corner")) and over != [hit[0]]:
         probs.append(f"§30: only C{hit[0]} fires in > 80 % of draws, the probe: {over}")
-    if (hit := find(30, r"It would praise (C\d+(?:, C\d+)* and C\d+), which the Coaching page ranks", "the contradiction")):
-        both = n_["praised_and_ranked"]
-        if hit[0] != ", ".join(f"C{c}" for c in both[:-1]) + f" and C{both[-1]}":
-            probs.append(f"§30: it would praise {hit[0]} that Coaching ranks, the probe: {both}")
+    # Since cool/coaching-level-step the Coaching page ranks no level corner, and on the demo the
+    # line praises none it ranks; the sentence says which of the two holds, and the probe decides.
+    both = n_["praised_and_ranked"]
+    if both:
+        if (hit := find(30, r"It would praise (C\d+(?:, C\d+)* and C\d+), which the Coaching page ranks",
+                        "the contradiction")):
+            if hit[0] != ", ".join(f"C{c}" for c in both[:-1]) + f" and C{both[-1]}":
+                probs.append(f"§30: it would praise {hit[0]} that Coaching ranks, the probe: {both}")
+    else:
+        find(30, r"it praises\s+none of the corners the Coaching page ranks", "no contradiction today")
     if (hit := find(30, r"`Session\.coaching_opportunities`, ranked (C\d+(?:, C\d+)*)\)", "the coaching ranking")):
         if hit[0] != ", ".join(f"C{c}" for c in n_["coaching_ranked"]):
             probs.append(f"§30: Coaching ranks {hit[0]}, the probe: {n_['coaching_ranked']}")
@@ -3133,7 +3139,7 @@ def test_the_story_refusal_guard_fails_on_a_wrong_figure():
               "§29 the bold count": ("**Six bands", "**Five bands"),
               "§29 BRAKING's σ": ("its σ 3.9 m", "its σ 4.9 m"),
               "§30 a jitter cell": ("| 0.00 | 0.77 |", "| 0.00 | 0.87 |"),
-              "§30 the contradiction": ("praise C2 and C4", "praise C2 and C6"),
+              "§30 the contradiction": ("it praises\n  none of", "it praises\n  two of"),
               "§31 the quote of §2": ("0 of 20 on both", "1 of 20 on both"),
               "§31 the quote of §5": ("grows: 0.72 / 0.60 / 0.36 s", "grows: 0.72 / 0.60 / 0.35 s"),
               "§32 dropped digits": ("| 0.13–0.69 |", "| 0.1–0.7 |"),

@@ -2700,8 +2700,9 @@ class Session:
         σ IS that table's σ column: one quantity, one definition, one lap set. Counting every cell
         it disagreed with the printed one on 12 of 12 corners on the D24 0060 pair, by up to
         0.038 s (C10, 0.654 against the table's 0.692) — small, and there is no version of "two
-        surfaces, one quantity" that tolerates it. `coaching.summarize` is the only reader (it is
-        the LINE signal behind a coaching reason), so the CORNERS table and the coaching row now
+        surfaces, one quantity" that tolerates it. `coaching.summarize` is the only reader (it rides
+        on each coaching Reason; since cool/coaching-level-step the spread reason itself is picked
+        on the CORNERS table's middle half, not on σ), so the CORNERS table and the coaching row now
         answer "how repeatable is this corner?" with the same number."""
         ids = self.consistency_lap_ids()
         corner_list = self.corners.corner_list()
@@ -3143,7 +3144,8 @@ class Session:
                                           median_lap_id=None, rows=[])
         best_corner_times = [s.time for s in best_stats]
 
-        # Cross-lap σ of time-in-corner per cid (from the F6 ranking), as the LINE signal.
+        # Cross-lap σ of time-in-corner per cid (from the F6 ranking), carried on each Reason. The
+        # spread reason is picked on the middle half, not on it (coaching: "the level step").
         sigmas_by_cid = {sp.cid: sp.sigma for sp in self.corner_consistency()}
 
         # ADV-1: the BRAKING / COASTING / APEX signals are the laps' habit — per corner, the median

@@ -135,7 +135,7 @@ def _plan_times(best, plan, at_best=2, slow=3):
     return times, [sum(r) for r in times]
 
 
-def _one_corner_lossy(loss=0.5):
+def _one_corner_lossy(loss=0.5, spread=0.0):
     """A single-corner setup whose TYPICAL lap loses `loss` s, with NO apex/brake/coast signal by
     default — the per-test planting flips exactly one signal on so it must dominate.
 
@@ -144,12 +144,17 @@ def _one_corner_lossy(loss=0.5):
     by construction, and the per-corner evidence gate reads exactly that relation. The fixture used
     to be four laps ALL slower than the baseline — a distribution no real session can produce — and
     under the gate every one of those corners correctly abstains as "no second lap ever matched
-    your best here", which would have turned every reason test into an abstain test. Five laps: two
-    on the baseline, three `loss` slower, so the median loses `loss` and the corner reads as
-    reachable (2 of 5) with an interquartile spread of `loss` that the claim clears."""
+    your best here", which would have turned every reason test into an abstain test.
+
+    Nine laps: two on the baseline and seven slower, at `loss` + spread × (k − 2) / 4 for k = 0..6,
+    so the median loses exactly `loss`, the corner reads as reachable (2 of 9), and its middle half
+    (Q3 − Q1, the 3rd and 7th times) is exactly `spread`. The spread reason reads that middle half
+    since cool/coaching-level-step, so `spread` is now the fixture's spread signal: the default 0.0
+    has none (a lever wins, or nothing fires), and a test of the spread reason asks for one. The old
+    five-lap shape carried a middle half of `loss` whatever σ the test claimed."""
     corners = _corners(1)
     best = [5.0]
-    times = [[5.0], [5.0]] + [[5.0 + loss] for _ in range(3)]
+    times = [[5.0], [5.0]] + [[5.0 + loss + spread * (k - 2) / 4] for k in range(7)]
     lap_times = [r[0] for r in times]
     return corners, best, times, lap_times
 
@@ -260,7 +265,9 @@ def test_every_ranked_row_is_analysed_not_only_the_first_three():
     a usable signal. Every ranked row now gets the same measured pick; `top_n` still caps it."""
     corners = _corners(5)
     best = [5.0] * 5
-    times = [[best[j] + (0.50 - 0.10 * j) for j in range(5)] for _ in range(4)]
+    # Every corner reached twice and spread 0.20 s in its middle half (`_one_corner_lossy`'s shape).
+    times = [list(best), list(best)] + [[best[j] + (0.50 - 0.10 * j) + 0.20 * (k - 2) / 4
+                                         for j in range(5)] for k in range(7)]
     lap_times = [sum(r) for r in times]
     kw = dict(sigmas_by_cid={c.cid: 0.20 for c in corners})
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, **kw)
@@ -278,7 +285,7 @@ def test_the_sigma_fallback_is_named_consistency_not_line():
     positional enters it — and it was stored and printed as "line" ("repeat your best line"), the
     reason on 14 of the 15 ranked working-set rows. It is named by its trigger now; the stored id
     and the words both say consistency, and neither says line."""
-    corners, best, times, lap_times = _one_corner_lossy(0.5)
+    corners, best, times, lap_times = _one_corner_lossy(0.5, spread=0.5)
     # no apex/brake/coast/line signal at all, but real cross-lap spread -> the spread fallback
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.20})
@@ -291,15 +298,16 @@ def test_the_sigma_fallback_is_named_consistency_not_line():
     print(f"ok consistency reason (fallback): {sent}")
 
 
-def _line_fixture(*, apex_gain: float, exit_gain: float, sigma: float = 0.03):
-    """`_one_corner_lossy`'s five laps with the best lap's apex and exit planted `apex_gain` /
-    `exit_gain` km/h against the three slower laps (best − lap; the two baseline laps carry the
-    best lap's own speeds), so the habit medians are exactly the planted numbers."""
-    corners, best, times, lap_times = _one_corner_lossy(0.5)
+def _line_fixture(*, apex_gain: float, exit_gain: float, spread: float = 0.1):
+    """`_one_corner_lossy`'s nine laps (middle half `spread`) with the best lap's apex and exit
+    planted `apex_gain` / `exit_gain` km/h against the seven slower laps (best − lap; the two
+    baseline laps carry the best lap's own speeds), so the habit medians are exactly the planted
+    numbers."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5, spread=spread)
     lev = _levers(times, best, apex=100.0 - apex_gain, best_apex=100.0,
                   exit=60.0 - exit_gain, best_exit=60.0)
     return K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
-                       sigmas_by_cid={1: sigma}, **lev)
+                       sigmas_by_cid={1: 0.03}, **lev)
 
 
 def test_line_needs_a_measured_slower_apex_and_faster_exit():
@@ -327,7 +335,7 @@ def test_line_needs_a_measured_slower_apex_and_faster_exit():
     fast = _line_fixture(apex_gain=4.0, exit_gain=0.0).rows[0].reason
     assert fast.kind == K.REASON_APEX and fast.apex_speed_deficit == 4.0, fast
     # It competes like every reason: a spread far wider than the exit gain still wins the row.
-    wide = _line_fixture(apex_gain=-3.0, exit_gain=1.2, sigma=1.0).rows[0].reason
+    wide = _line_fixture(apex_gain=-3.0, exit_gain=1.2, spread=0.9).rows[0].reason
     assert wide.kind == K.REASON_CONSISTENCY and abs(wide.exit_speed_gain - 1.2) < 1e-9, wide
     print(f"ok line signature: {kmh!r} / {mph!r}")
 
@@ -409,8 +417,9 @@ def test_the_lever_is_the_habit_not_one_lap():
     lever is now the median, over the corner's counted laps, of each lap's difference from best.
 
     Both directions: the median-time lap ALONE coasts 1.5 s longer and every other lap matches the
-    best lap → no coasting lever (0.00 s, LINE on the corner's spread); four of six laps spend
-    0.30 s longer on the brakes while the median-time lap does not → BRAKING at 0.30 s."""
+    best lap → no coasting lever (0.00 s, CONSISTENCY on the corner's spread); four of six laps
+    spend 0.90 s longer on the brakes while the median-time lap does not → BRAKING at 0.90 s (a
+    lever that outweighs the corner's 0.40 s middle half, which the spread reason reads)."""
     corners, best, times, lap_times = _six_laps()
     assert K.median_lap_id(list(range(6)), lap_times) == 2
     coast = [[0.0], [0.0], [1.5], [0.0], [0.0], [0.0]]            # only the median-time lap
@@ -421,18 +430,18 @@ def test_the_lever_is_the_habit_not_one_lap():
     assert r.reason.kind == K.REASON_CONSISTENCY, (
         f"one lap's 1.5 s coast became the instruction: {K.reason_sentence(r)}", r.reason)
 
-    brake = [[0.0], [0.30], [0.0], [0.30], [0.30], [0.30]]         # 4 of 6, not the median lap
+    brake = [[0.0], [0.90], [0.0], [0.90], [0.90], [0.90]]         # 4 of 6, not the median lap
     opp = K.summarize(corners, list(range(6)), lap_times, times, best, sigmas_by_cid={1: 0.03},
                       brake_time_by_lap=brake, best_brake_time=[0.0])
     r = opp.rows[0]
-    assert abs(r.reason.brake_extra_s - 0.30) < 1e-12 and r.reason.kind == K.REASON_BRAKING, r.reason
+    assert abs(r.reason.brake_extra_s - 0.90) < 1e-12 and r.reason.kind == K.REASON_BRAKING, r.reason
     # The apex lever is the same statistic, signed the other way (best − lap).
     apex = [[100.0], [100.0], [90.0], [100.0], [100.0], [100.0]]
     opp = K.summarize(corners, list(range(6)), lap_times, times, best, sigmas_by_cid={1: 0.03},
                       apex_by_lap=apex, best_apex=[100.0])
     assert opp.rows[0].reason.apex_speed_deficit == 0.0, opp.rows[0].reason
     print(f"ok ADV-1 habit: a lone 1.5 s coast on the median-time lap -> {K.REASON_CONSISTENCY}; "
-          f"4 of 6 laps +0.30 s on the brakes -> {K.REASON_BRAKING} {r.reason.brake_extra_s:.2f} s")
+          f"4 of 6 laps +0.90 s on the brakes -> {K.REASON_BRAKING} {r.reason.brake_extra_s:.2f} s")
 
 
 def test_a_session_reads_the_laps_coasting_habit_not_the_median_laps_coast():
@@ -842,7 +851,7 @@ def test_m6_raw_channel_number_is_a_cause_not_a_gain():
 def test_brake_approach_window_and_coast_only_when_best_lacks_it():
     """A brake/coast that the BEST lap matches is NOT a loss (the difference is what counts);
     and a brake event OUTSIDE the corner approach window is ignored."""
-    corners, best, times, lap_times = _one_corner_lossy(0.5)
+    corners, best, times, lap_times = _one_corner_lossy(0.5, spread=0.5)
     # identical brake on both laps -> brake contribution 0 (falls back to consistency)
     same_brake = [_brake(onset_dist=35.0, duration=0.7)]
     same_s = K.lap_window_inputs(corners, same_brake, [])[0]
@@ -912,7 +921,8 @@ def test_brake_window_projected_onto_each_laps_own_odometer():
     long, so its window is [55, 99]. A brake at onset 96 m (inside the PROJECTED [55-30, 99]
     window, but OUTSIDE the un-projected [50-30, 90]) must count — proving the projection
     happened; end to end, the slow laps' habit then reads BRAKING."""
-    corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
+    # one corner: enter 50, exit 90; a 0.20 s middle half for the control's spread fallback
+    corners, best, times, lap_times = _one_corner_lossy(0.5, spread=0.2)
     med_brakes = [_brake(onset_dist=96.0, duration=0.9)]   # in projected [25, 99], not raw [20, 90]
     best_brakes = [_brake(onset_dist=40.0, duration=0.3)]  # best frame == reference frame here
     lap_s = K.lap_window_inputs(corners, med_brakes, [], corner_dist_total=1000.0,
@@ -948,8 +958,8 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     window is [50, 90] and the normalized one [52.5, 94.5] — 4.5 m of daylight at the exit.
 
     The lap brakes at 92.0 m, which on the track is 2 m PAST the corner exit. Under the warped
-    window that application is outside the corner and contributes nothing (⇒ LINE, on the
-    corner's own spread). Under the normalized window it lands inside and manufactures 0.125 s of
+    window that application is outside the corner and contributes nothing (⇒ no reason: the
+    fixture has no spread). Under the normalized window it lands inside and manufactures 0.125 s of
     "extra braking in the corner" that never happened there (⇒ BRAKING) — a row pairing a
     warp-derived phase triple with a normalized-frame reason, which is the defect."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
@@ -984,7 +994,7 @@ def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
     opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, **_levers(times, best, brake=warped[0]))
     row = opp.rows[0]
-    assert row.reason.brake_extra_s == 0.0 and row.reason.kind == K.REASON_CONSISTENCY, row.reason
+    assert row.reason.brake_extra_s == 0.0 and row.reason.kind == K.REASON_NONE, row.reason
 
     # CONTROL, the normalized projection (align=None): the out-of-corner brake counts.
     normal = K.lap_window_inputs(corners, med_brakes, [], med_dist, med_elapsed, align=None, **kw)
@@ -1256,11 +1266,12 @@ def _settle(n=6):
 def _populated_opps():
     corners = _corners(4)
     best = [5.0, 6.0, 7.0, 4.0]
-    # Two laps ON the baseline + three slower — the shape a real session has (the best lap is one
+    # Two laps ON the baseline + seven slower (a middle half of 0, so no spread reason) — the
+    # shape a real session has (the best lap is one
     # of the candidate laps), so the corners are REACHED and survive the per-corner evidence gate.
     # C1 loses 0.6 s, the rest 0.05 s.
     slow = [best[j] + (0.6 if j == 0 else 0.05) for j in range(4)]
-    times = [list(best), list(best)] + [list(slow) for _ in range(3)]
+    times = [list(best), list(best)] + [list(slow) for _ in range(7)]
     lap_times = [sum(r) for r in times]
     return K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
@@ -3050,6 +3061,104 @@ def test_debrief_hero_arrow_points_the_way_the_lap_runs_both_ways_round():
         assert not light[cy - ahead * inside - 1:cy - ahead * inside + 2, cx - 1:cx + 2].any(), (
             f"the hero's arrow points against the travel (reverse={reverse})")
     print("ok hero: the arrow points the way the lap runs, both ways round")
+
+
+# --------------------------------------------- the level step: Coaching agrees with CORNERS
+def _level_check(s, name: str) -> list:
+    """Every row of `s`'s coaching against its CORNERS row: a consistency reason only on a spread
+    the CORNERS table does not call level, a level abstain only on one it does, and both reading
+    one middle half. Returns the ranked cids."""
+    from studio import stats as stats_service
+    report = {r.cid: r for r in s.corner_report()}
+    opp = s.coaching_opportunities()
+    for row in opp.rows:
+        mh = report[row.cid].middle_half_s
+        clears = stats_service.corner_spread_clears_level(mh)
+        if row.reason.kind == K.REASON_CONSISTENCY:
+            assert clears, (f"{name} C{row.cid}: Coaching names its spread to work on, CORNERS "
+                            f"calls it level (middle half {mh})", K.reason_sentence(row))
+        if row.evidence.abstain == K.ABSTAIN_LEVEL:
+            assert not clears, (name, row)
+            assert abs(row.evidence.iqr - mh) < 1e-12, (name, row.cid, row.evidence.iqr, mh)
+            assert "level step" in K.reason_sentence(row), K.reason_sentence(row)
+        if not clears:
+            assert "consistency" not in K.reason_sentence(row), (name, K.reason_sentence(row))
+    return [r.cid for r in opp.ranked_rows()]
+
+
+def test_coaching_and_corners_agree_on_the_level_step():
+    """cool/coaching-level-step. On the shipped demo the Coaching tab ranked C2 and C7 second and
+    third with "consistency: middle half of laps spans 0.04 s" / "0.05 s", corners whose middle half
+    the Stats ▸ CORNERS table calls the level step (under 0.07 s) and never marks. Now neither tab
+    calls a spread inside the noise one to work on — on the demo and on two habit-free synthetic
+    recordings — and the demo's planted habit corner, C1, is still first and now alone."""
+    import tempfile
+
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    from studio.session import Session
+    with tempfile.TemporaryDirectory(prefix="coach_level_") as folder:
+        demo = os.path.join(folder, "GX019000.MP4")
+        md.make(demo, render=False)
+        ranked = _level_check(Session.load([demo]), "demo")
+        assert ranked == [1], ranked
+        for seed, laps in ((md.DEMO_SEED, 14), (7, 12)):
+            rec = sg.generate(os.path.join(folder, f"tidy{seed}"), seed, laps, chapters=1)
+            ranked = _level_check(Session.load(rec.paths), f"seed {seed}")
+            # Not silently emptied: a tidy session keeps a ranked row its levers or spread earn.
+            assert ranked, (seed, ranked)
+    print("ok level step: Coaching never names a spread CORNERS calls level (demo + 2 synthetic)")
+
+
+def test_one_pass_does_not_make_a_corner_a_consistency_corner():
+    """C6 on the demo: a σ of 0.22 s that is ONE pass (0.03 s without lap 6) was the spread
+    reason's strength. Here a corner whose middle half is a real 0.08 s and whose σ is one +2 s
+    pass, beside a 1.5 km/h apex habit: the apex lever wins, as it does on the middle half."""
+    from studio import consistency
+    corners, best, times, lap_times = _one_corner_lossy(0.3, spread=0.08)
+    times[-1] = [best[0] + 2.0]                       # the slowest pass: a lone +2 s
+    lap_times = [r[0] for r in times]
+    col = [r[0] for r in times]
+    sigma = consistency.sigma(col)
+    assert consistency.sigma(col[:-1]) < 0.5 * sigma, "the fixture's σ is one pass"
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={1: sigma}, **_levers(times, best, apex=98.5))
+    r = opp.rows[0]
+    assert r.evidence.ranked and r.reason.kind == K.REASON_APEX, r
+    assert abs(r.reason.sigma - sigma) < 1e-12, r.reason      # still carried, not the pick
+    print(f"ok one pass: σ {sigma:.2f} s from one pass, middle half 0.08 s -> {r.reason.kind}")
+
+
+def test_a_tidy_session_says_its_corners_are_level():
+    """Every corner's laps inside the timing precision: no row is ranked on a spread under the level
+    step, each says so in the CORNERS table's words, and the page's headline says why nothing is
+    ranked rather than totalling 0.00 s. A lever that outweighs the spread still ranks its row."""
+    corners = _corners(3)
+    best = [5.0, 6.0, 7.0]
+    # two laps on the baseline, seven slower by 0.04-0.06 s: middle half 0.02 s at every corner
+    times = [list(best), list(best)] + [[b + 0.05 + 0.02 * (k - 2) / 4 for b in best]
+                                        for k in range(7)]
+    lap_times = [sum(r) for r in times]
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={c.cid: 0.03 for c in corners})
+    assert opp.enough and len(opp.rows) == 3 and not opp.ranked_rows(), opp.rows
+    for r in opp.rows:
+        assert r.evidence.abstain == K.ABSTAIN_LEVEL and r.reason.kind == K.REASON_NONE, r
+        sent = K.reason_sentence(r)
+        assert sent == ("Not ranked: your passes here are level — the middle half of your laps "
+                        "spans 0.02 s, under 0.07 s, the level step, so there is no spread to "
+                        "work on."), sent
+    assert opp.theme.kind == K.THEME_NONE and K.theme_sentence(opp.theme, opp.rows) == ""
+    page = _full_window_page(opp)
+    head = page.summary_label.text()
+    page.close()      # a shown full-window page left behind would sit under later tests' pointer
+    assert "no corner clears its own lap-to-lap spread and the timing precision" in head, head
+    # The same laps with a planted 0.6 s brake habit at C2: that lever ranks C2, the rest stay level.
+    lev = _levers(times, best, brake=[0.0, 0.6, 0.0], best_brake=[0.0, 0.0, 0.0])
+    opp2 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                       sigmas_by_cid={c.cid: 0.03 for c in corners}, **lev)
+    assert [(r.cid, r.reason.kind) for r in opp2.ranked_rows()] == [(2, K.REASON_BRAKING)], opp2
+    print(f"ok tidy session: every corner level; headline {head!r}")
 
 
 if __name__ == "__main__":
