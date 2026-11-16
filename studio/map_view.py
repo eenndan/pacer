@@ -2334,8 +2334,8 @@ class MapView(QWidget):
                     f"from {lo} to {hi}")
         else:
             line = f"{lap_text}, its line coloured by {label.lower()}"
-        return (f"{line}. Under it, faint, every other point of the drive; the whole track "
-                f"framed, corners labelled.")
+        return (f"{line}. Under it in faint grey, the whole recording's driven trace — every "
+                f"lap, out- and in-laps too; the whole track framed, corners labelled.")
 
     @contextmanager
     def grab_clean(self):
@@ -3161,10 +3161,15 @@ class MapView(QWidget):
         on the canvas, as (x, y, half-extent px)."""
         out = []
         brakes = getattr(self, "_brake_markers", None)
+        # Read off the item's record array, NOT `item.points()`: that builds a SpotItem per glyph
+        # and caches it IN the array (spot -> view of the array -> spot), a cycle the collector
+        # cannot see through, so every relayout leaked one SpotItem per brake glyph (PR #591
+        # review: 7 per report export). A size of -1 means "the item's default", as in SpotItem.
         for item in (brakes._items if brakes is not None else []):
-            for spot in item.points():
-                pos = spot.pos()
-                out.append((pos.x(), pos.y(), spot.size() / 2.0 + 1.0))
+            d = item.data
+            for x, y, size in zip(d["x"], d["y"], d["size"], strict=True):
+                size = item.opts["size"] if size < 0 else size
+                out.append((float(x), float(y), float(size) / 2.0 + 1.0))
         return out
 
     def _relayout_labels(self) -> None:

@@ -217,7 +217,14 @@ class ToggleButton(QPushButton):
         # look like a user toggle to whatever the caller connects next.
         if checked:
             self.setChecked(True)
-        self.toggled.connect(lambda _on: self.refresh_glyph())
+        # A bound method, not a lambda closing over `self`: a lambda held by the connection keeps
+        # a PARENTLESS button (one built but never mounted — the report's throwaway charts and
+        # maps build theirs and never mount them) alive forever, and through its other
+        # connections the view that built it (PR #591 review: ~8 MB per report export).
+        self.toggled.connect(self._on_toggled_glyph)
+        self.refresh_glyph()
+
+    def _on_toggled_glyph(self, _on: bool) -> None:
         self.refresh_glyph()
 
     def refresh_glyph(self) -> None:

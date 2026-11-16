@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import shiboken6
 from PySide6.QtCore import (
     QEvent,
     Qt,
@@ -121,6 +122,15 @@ _ABSENT = object()
 REPORT_CHART_SIZE = (960, 480)
 # ...and the report map's, for the same reason (_grab_report_map).
 REPORT_MAP_SIZE = (960, 600)
+
+
+def _discard_report_copy(widget) -> None:
+    """Destroy a report figure's throwaway view NOW, not with deleteLater: a deferred delete waits
+    for the event loop, and every export before it runs kept its copies — ~14 MB a report,
+    measured over 80 exports with no loop in between (PR #591 review). Nothing of the copy is on
+    the stack here, and its pending posted events go with it."""
+    widget.close()
+    shiboken6.delete(widget)
 
 
 def _report_key_drops(key) -> set[str]:
@@ -3905,7 +3915,7 @@ class StudioWindow(QMainWindow):
                     map_view._reposition_key()
 
 
-    def _grab_report_map(self) -> tuple[bytes, str | None]:
+    def _grab_report_map(self) -> tuple[bytes, int | None, str | None]:
         """The HTML REPORT's track map as (png, caption), drawn on a THROWAWAY map, then grabbed
         through `_grab_report_map_png` (#586's clean grab: no drag cue, no marker, the key forced
         open minus the rows for what is not drawn).
@@ -3924,12 +3934,20 @@ class StudioWindow(QMainWindow):
         its race, Follow, zoom, ring, lap and line mode, and its panel's place in a splitter.
         Nothing touches the live map, so there is nothing to restore.
 
+        Returns (png, layout width, caption). The width is the copy's own logical width, stated,
+        not divided out of the PNG: the copy is a top-level of its own, rendered at the PRIMARY
+        screen's ratio, which need not be this window's (`_report_image_width` divides by the
+        window's). On provisional timing the caption follows the page's one trust rule
+        (`export_data.best_lap_cue`): the best lap by its time, not its number, and the stamp.
+
         Falls back to the report grab of the live widget for a bare one (tests)."""
+        from . import export_data
         from .map_view import MapView
 
         live = getattr(getattr(self, "view", None), "map", None)
         if not isinstance(live, MapView):
-            return self._grab_report_map_png(live), None
+            png = self._grab_report_map_png(live)
+            return png, self._report_image_width(png), None
         session = self.session
         pen_scale = theme.pen_scale()   # see _grab_report_chart: a view build sets it globally
         copy = MapView(session)
@@ -3951,15 +3969,18 @@ class StudioWindow(QMainWindow):
                 copy._fit_view()
             caption = None
             if best is not None:
-                caption = copy.document_caption(
-                    f"Lap {lap_label(best)} {fmt_time(session.lap_time(best))} · best")
-            return self._grab_report_map_png(copy), caption
+                when = fmt_time(session.lap_time(best))
+                named = export_data.best_lap_cue(session) is not None
+                caption = copy.document_caption(f"Lap {lap_label(best)} {when} · best" if named
+                                                else f"The best lap, {when}")
+                if not named:
+                    caption = f"{caption} {data_quality.STAMP_PROVISIONAL}."
+            return self._grab_report_map_png(copy), REPORT_MAP_SIZE[0], caption
         finally:
-            copy.close()
-            copy.deleteLater()
+            _discard_report_copy(copy)
             theme.set_pen_scale(pen_scale)
 
-    def _grab_report_chart(self) -> tuple[bytes, str, str | None]:
+    def _grab_report_chart(self) -> tuple[bytes, str, int | None, str | None]:
         """The HTML REPORT's speed/Δ chart as (png, title, caption), drawn on a THROWAWAY chart
         rather than grabbed off the live one.
 
@@ -3980,12 +4001,20 @@ class StudioWindow(QMainWindow):
         Brake glyphs, coast bands, corner labels and sector lines are pushed as CentralView pushes
         them. Nothing touches the live chart, so there is nothing to restore.
 
+        Returns (png, title, layout width, caption); the width is stated for the reason
+        `_grab_report_map` gives. A ONE-lap session has nothing to compare against, so its still
+        has no Δ chart at all (a flat zero line under a "Δ to best" title says nothing), and says
+        so. On provisional timing the best lap's curve and the caption name it by its time, never
+        its number (`export_data.best_lap_cue`, the header's rule), and the stamp is added.
+
         Falls back to the plain grab for a bare widget (tests) with no session to draw."""
+        from . import export_data
         from . import plots_view as pv
 
         live = getattr(getattr(self, "view", None), "plots", None)
         if not isinstance(live, pv.PlotsView):
-            return self.exports.grab_png(live), "Speed · Δ", None
+            png = self.exports.grab_png(live)
+            return png, "Speed · Δ", self._report_image_width(png), None
         session, mode = self.session, "distance"
         # A PlotsView points theme's GLOBAL pen scale at its own screen's ratio when built; the
         # copy's screen need not be the window's, so the live chart's scale is put back after.
@@ -3993,15 +4022,18 @@ class StudioWindow(QMainWindow):
         chart = pv.PlotsView(session)
         try:
             chart.setAttribute(Qt.WA_DontShowOnScreen, True)
-            chart.set_document_still()
+            best = session.best_lap_id()
+            named = best is None or export_data.best_lap_cue(session) is not None
+            chart.set_document_still(name_best=named)
             chart.set_speed_unit(self._speed_unit)
             chart.resize(*REPORT_CHART_SIZE)
-            best = session.best_lap_id()
             chart.set_laps([best] if best is not None else [])
             if chart.delta_baseline_kind() == pv.DELTA_BASELINE_BEST:
                 fastest = [r["idx"] for r in sorted(session.lap_rows(), key=lambda r: r["time"])]
                 if len(fastest) >= 2:
                     chart.set_laps(fastest[:2])
+                else:
+                    chart.drop_delta_pane()   # one lap: a Δ to itself is no information
             ids = chart.selected_lap_ids()
             chart.set_sector_lines(session.sector_plot_positions(mode))
             chart.set_corner_labels(session.corner_plot_positions(mode))
@@ -4025,16 +4057,14 @@ class StudioWindow(QMainWindow):
                 QApplication.sendPostedEvents()
                 chart._budget_axis_gutters()
                 chart._place_speed_legend()
-            title = f"Speed · {pv.DELTA_SHORT_LABELS[chart.delta_baseline_kind()]}"
+            title = ("Speed" if not chart.p_delta.isVisible()
+                     else f"Speed · {pv.DELTA_SHORT_LABELS[chart.delta_baseline_kind()]}")
             caption = chart.document_caption()
-            if not session.timing_verified:
-                # The chart names its baseline lap "best" on provisional timing too (it does on
-                # screen); the page that withholds that lap's attribution says why, under it.
+            if not named:
                 caption = f"{caption} {data_quality.STAMP_PROVISIONAL}."
-            return self.exports.grab_png(chart), title, caption
+            return self.exports.grab_png(chart), title, REPORT_CHART_SIZE[0], caption
         finally:
-            chart.close()
-            chart.deleteLater()
+            _discard_report_copy(chart)
             theme.set_pen_scale(pen_scale)
 
     @staticmethod

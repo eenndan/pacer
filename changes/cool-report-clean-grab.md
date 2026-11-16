@@ -1,7 +1,8 @@
 ### Fixed
-- Report chart: always the best lap against the ideal (the chart Pacer opens on), captioned, with
-  no key hint or cursor; no longer empty when exported from the first-open debrief.
+- Report chart: the chart Pacer opens on (best lap vs ideal, else the two fastest), captioned, with
+  no key hint or cursor, whatever laps were up; a one-lap session gets no flat Δ chart.
 - Report Laps table: the app's headers ("Time (s)", "C1" over time and apex) instead of CSV names;
-  it fits the page on screen and its headers no longer break mid-word on paper.
-- Report exported from the first-open debrief: no more empty pictures. The map is the best lap by
-  speed, whole track framed, captioned, whatever the window shows (race, zoom, compare, focus).
+  no sideways scroll at 1100 px and no header broken mid-word on paper.
+- Report map and chart exported from the first-open debrief are no longer empty, and the map is
+  the best lap by speed, whole track framed, whatever the window shows (race, zoom, compare).
+- On provisional timing the report's figures name the best lap by its time, not its number.

@@ -919,13 +919,28 @@ class PlotsView(QWidget):
         return list(self._lap_ids)
 
     # ----------------------------------------------------------- the report's still
-    def set_document_still(self):
+    def set_document_still(self, *, name_best: bool = True):
         """Make THIS instance a still for a document — the HTML report's chart: no readout strip.
         The strip is the app talking to the person at the keyboard (the "D: datum cursor · N: next
         Δ loss" hint, the live window statistic, the datum interval), and a page has no keyboard
         and no playhead; the report embedded all of it (discovery 3, K3). Called on a throwaway
-        copy built for the grab, never on the live chart, so there is nothing to undo."""
+        copy built for the grab, never on the live chart, so there is nothing to undo.
+
+        `name_best` False is the page's provisional-timing rule (`export_data.best_lap_cue`): the
+        best lap's curve is labelled "best lap 0:44.953", by its time, never by its number — the
+        report's header withholds which lap that is, so the picture under it must not say."""
         self._readout.setVisible(False)
+        self._name_best = name_best
+
+    def drop_delta_pane(self):
+        """Take the lower (Δ) chart out of this still: drawn, it would be a flat zero line titled
+        with a comparison it is not making (a one-lap session has nothing to compare against).
+        The speed chart takes its place and carries the x-axis the Δ chart was carrying."""
+        self.glw.ci.removeItem(self.p_delta)
+        self.p_delta.hide()
+        self.p_speed.showAxis("bottom")
+        self.p_speed.setLabel("bottom", self._axis_label(), **_axis_title_style())
+        self._delta_dropped = True
 
     def delta_baseline_kind(self) -> str:
         """The baseline the lower chart drew at the last refresh: a DELTA_BASELINE_* kind."""
@@ -933,13 +948,26 @@ class PlotsView(QWidget):
 
     def document_caption(self) -> str:
         """What this chart draws, in its own words, for the line under a still of it: the speed
-        legend's entries (the laps, their times, which is the baseline) and the Δ axis's hover
-        (the baseline spelled out). Read from what refresh() drew, so it cannot name a lap or a
-        baseline the picture does not show."""
+        legend's lap entries (the laps, their times, which is the baseline), the gain shading as a
+        sentence, and the Δ axis's hover (the baseline spelled out). Read from what refresh()
+        drew, so it cannot name a lap or a baseline the picture does not show."""
         leg = self._speed_legend
-        names = [label.text for _sample, label in (leg.items if leg is not None else [])]
-        drawn = "; ".join(names) if names else "no lap"
-        return f"Speed of {drawn}. Lower chart: {self._delta_axis_tip()}"
+        shading = {GAIN_LEGEND_FASTER.format(lap=lap_label(lid)) for lid in (self._gain_pair or ())}
+        shading |= {GAIN_LEGEND_SLOWER.format(lap=lap_label(lid)) for lid in (self._gain_pair or ())}
+        names = [label.text for _sample, label in (leg.items if leg is not None else [])
+                 if label.text not in shading and label.text != GAIN_TIME_MODE_NOTE]
+        text = f"Speed of {'; '.join(names) if names else 'no lap'}."
+        if self._gain_pair is not None and self._gain_sign is not None:
+            this, other = (self._curve_label(lid, False) for lid in self._gain_pair)
+            # Only the shadings the chart drew (one legend row per colour that is on it).
+            where = [w for s_val, w in ((1, "quicker"), (-1, "slower"))
+                     if (self._gain_sign == s_val).any()]
+            if where:
+                text += (f" The shading between the two traces marks where {this} is "
+                         f"{' and where it is '.join(where)} than {other}.")
+        if getattr(self, "_delta_dropped", False):
+            return text + " No Δ chart: with one lap there is nothing to compare it against."
+        return f"{text} Lower chart: {self._delta_axis_tip()}"
 
     # ----------------------------------------------------------- sector lines (F2)
     def set_sector_lines(self, positions):
@@ -1895,6 +1923,9 @@ class PlotsView(QWidget):
             t = self.session.reference_lap_time() or 0.0
             tag = self.session.reference_label() or "reference"
             return f"ref {tag} {fmt_time(t)} · best"
+        if not getattr(self, "_name_best", True) and lid == self.session.best_lap_id():
+            # A document on provisional timing (set_document_still): the time, not the number.
+            return f"best lap {fmt_time(self.session.lap_time(lid))}"
         return (f"lap {lap_label(lid)} {fmt_time(self.session.lap_time(lid))}"
                 + (" · best" if is_baseline else ""))
 

@@ -22,6 +22,7 @@ TWO DELIBERATE SHAPES, both to keep the import one-way (app -> controller, never
 """
 from __future__ import annotations
 
+import gc
 import logging
 import math
 import os
@@ -253,16 +254,16 @@ class ExportController:
         if not path:
             return
         # Render the map + charts to PNG here (QWidget.grab) — the report writer itself stays
-        # Qt-free and just embeds the bytes.
-        # Each snapshot carries the width the DOCUMENT must lay it out at — see
-        # _report_image_width for why the exported page would otherwise depend on this Mac's
-        # screen rather than on the session.
-        # Neither is a grab of the live panel: each is a throwaway copy pinned to what the app
-        # opens on, captioned with what it draws (_grab_report_map / _grab_report_chart).
-        map_png, map_caption = self.win._grab_report_map()
-        plots_png, plots_title, plots_caption = self.win._grab_report_chart()
-        images = [("Track map", map_png, self.win._report_image_width(map_png), map_caption),
-                  (plots_title, plots_png, self.win._report_image_width(plots_png), plots_caption)]
+        # Qt-free and just embeds the bytes. Each is a throwaway copy pinned to what the app opens
+        # on, with the width the DOCUMENT lays it out at and a caption saying what it draws
+        # (_grab_report_map / _grab_report_chart).
+        images = [self._report_figure("Track map", self.win._grab_report_map),
+                  self._report_figure("Speed · Δ", self.win._grab_report_chart)]
+        # The two copies are destroyed already (app._discard_report_copy), but their pyqtgraph
+        # items' Python halves sit in reference cycles that only a FULL collection frees, and the
+        # app's object count makes those rare. Measured over 40 exports: +34 MB without this,
+        # +21 MB with it (PR #591 review); it costs well under the ~0.2 s an export takes.
+        gc.collect()
         # The report is a HUMAN document whose embedded chart axis and map colour bar already read
         # in the display unit, so its lap table must too — a km/h table under an mph chart put two
         # different numbers for the same lap on one page. (The CSVs stay canonical SI: they are
@@ -275,6 +276,26 @@ class ExportController:
                 lapstrip=report_lapstrip_png(self.win.session, self.win._speed_unit),
                 tokens=report_tokens()), path):
             self.win.statusBar().showMessage(f"exported {os.path.basename(path)}", self._status_ms)
+    #: Under a figure the report could not draw, where the figure would have been.
+    FIGURE_FAILED_NOTE = ("This figure could not be drawn (the session log has the reason); the "
+                          "rest of the report is complete.")
+
+    def _report_figure(self, title: str, draw):
+        """One report figure as the writer's (title, png, width, caption), or — when drawing it
+        raised — the section with no image and FIGURE_FAILED_NOTE: one picture of the report is
+        not the report, the rule the lap strip follows (report_lapstrip_png), with the reader
+        told rather than left with a gap."""
+        try:
+            got = draw()
+        except Exception:  # noqa: BLE001 — a figure must never cost the user the whole document
+            _log.exception("report figure %r could not be drawn; the report goes without it", title)
+            return (title, b"", None, self.FIGURE_FAILED_NOTE)
+        if len(got) == 3:                # the map: (png, width, caption)
+            png, width, caption = got
+            return (title, png, width, caption)
+        png, chart_title, width, caption = got
+        return (chart_title, png, width, caption)
+
     def copy_stats_summary(self):
         """File ▸ Export ▸ "Copy stats summary" (N13): the session's statistics as plain text on
         the clipboard, ready to paste into a chat.

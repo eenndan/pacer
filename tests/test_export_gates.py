@@ -45,7 +45,9 @@
 Fake sessions throughout (the duck-typed surface these entry points reach through), so no pacer, no
 telemetry file and no render. Run: QT_QPA_PLATFORM=offscreen python tests/test_export_gates.py
 """
+import contextlib
 import dataclasses
+import gc
 import json
 import math
 import os
@@ -76,7 +78,7 @@ for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db
     _mod._app_support_dir = (lambda d=_dir: d)
 sidecar.sidecar_path = lambda _p, _d=_SEAMS: os.path.join(_d, "test.pacer.json")
 
-from PySide6.QtCore import QBuffer, QIODevice, QThread, QTimer, Signal  # noqa: E402
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QThread, QTimer, Signal  # noqa: E402
 from PySide6.QtGui import QDesktopServices, QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -1020,41 +1022,54 @@ def test_the_report_export_states_a_layout_width_for_every_figure():
 
 
 # ============================================================ discovery 3, K3 — the report's chart
-def _demo_window():
+@contextlib.contextmanager
+def _demo(*, provisional: bool = False):
     """The REAL window on the shipped demo recording (verified timing on its built-in circuit),
-    loaded and settled: it lands on the first-open debrief, as a first open does."""
+    loaded and settled: it lands on the first-open debrief, as a first open does. `provisional`
+    swaps in the same synthetic drive at synth_gopro's own origin — no built-in track there, so
+    its timing loads PROVISIONAL.
+
+    A FRESH library (and focus list) per window, so every open is a first open: the module's
+    shared seam would remember the previous test's demo. Everything — the seams, the window, the
+    folder — is put back in a `finally`, so a load that fails cannot leak into later tests."""
     import importlib
 
     from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
     folder = tempfile.TemporaryDirectory(prefix="pacer-test-report-chart-")
-    # A FRESH library (and focus list) per window, so every open is a first open and lands on the
-    # debrief: the module's shared seam would remember the previous test's demo. Put back by
-    # `folder.restore()` (called from each test's finally).
     seams = [importlib.import_module(f"studio.{n}") for n in ("library", "focus", "session_record")]
     saved = [mod._app_support_dir for mod in seams]
-    for mod in seams:
-        mod._app_support_dir = lambda d=folder.name: d
-
-    def restore():
+    win = None
+    try:
+        for mod in seams:
+            mod._app_support_dir = lambda d=folder.name: d
+        if provisional:
+            path = sg.generate(os.path.join(folder.name, "rec"), make_demo.DEMO_SEED,
+                               make_demo.DEMO_LAPS, chapters=1, origin=sg.ORIGIN,
+                               habit=make_demo.DEMO_HABIT).paths[0]
+        else:
+            path = os.path.join(folder.name, "GX010777.MP4")
+            make_demo.make(path, render=False)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        done = []
+        win.loadFinished.connect(lambda: done.append(True))
+        win._open_recordings([path])
+        deadline = time.time() + 120
+        while not done and time.time() < deadline:
+            _APP.processEvents()
+            time.sleep(0.01)
+        assert done, "the demo did not load"
+        _pump(0.4)          # past the view's first show and its deferred restores
+        assert win.session.timing_verified is (not provisional), win.session.timing_verified
+        yield win
+    finally:
+        if win is not None:
+            win.close()
         for mod, fn in zip(seams, saved, strict=True):
             mod._app_support_dir = fn
-
-    folder.restore = restore
-    path = os.path.join(folder.name, "GX010777.MP4")
-    make_demo.make(path, render=False)
-    win = StudioWindow([])
-    win.resize(1440, 900)
-    win.show()
-    done = []
-    win.loadFinished.connect(lambda: done.append(True))
-    win._open_recordings([path])
-    deadline = time.time() + 120
-    while not done and time.time() < deadline:
-        _APP.processEvents()
-        time.sleep(0.01)
-    assert done, "the demo did not load"
-    _pump(0.4)          # past the view's first show and its deferred restores
-    return folder, win
+        folder.cleanup()
 
 
 def _pump(seconds: float) -> None:
@@ -1175,8 +1190,7 @@ def test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing():
     untouched. On main: an empty PNG at the debrief."""
     from studio import app as app_mod
     from studio import theme
-    folder, win = _demo_window()
-    try:
+    with _demo() as win:
         session, view = win.session, win.view
         best = session.best_lap_id()
         m = view.map
@@ -1243,10 +1257,6 @@ def test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing():
         assert export_unchanged("race + Follow") == ref, "the map followed the race"
         view.end_lap_race()
         assert theme.pen_scale() == _live_map_state(win)["pen"]
-    finally:
-        win.close()
-        folder.restore()
-        folder.cleanup()
     print("test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing OK")
 
 
@@ -1267,8 +1277,7 @@ def test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_s
 
     from studio import app as app_mod
     from studio import plots_view, theme
-    folder, win = _demo_window()
-    try:
+    with _demo() as win:
         session, view = win.session, win.view
         best = session.best_lap_id()
         best_label = f"lap {best + 1} {fmt_time(session.lap_time(best))} · best"
@@ -1338,11 +1347,174 @@ def test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_s
                  if isinstance(w, plots_view.PlotsView) and w.isVisible()]
         assert not alive, alive
         assert theme.pen_scale() == before["pen"]
-    finally:
-        win.close()
-        folder.restore()
-        folder.cleanup()
     print("test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state OK")
+
+
+def _report_page(win):
+    """Export the report through the REAL writer; return (page text, images handed to it, the
+    PlotsView copies grabbed, with the legend text each carried at the instant of its grab)."""
+    from studio import plots_view
+    seen, legends = {}, []
+    real_grab, real_write = ExportController.grab_png, export_data.write_report_html
+
+    def spy(widget):
+        if isinstance(widget, plots_view.PlotsView) and widget._speed_legend is not None:
+            legends.append([label.text for _s, label in widget._speed_legend.items])
+        return real_grab(widget)
+
+    def write(*a, **k):
+        seen.update(k)
+        return real_write(*a, **k)
+
+    orig_dialog = QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "r.html")
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (path, ""))
+        ExportController.grab_png = staticmethod(spy)
+        export_data.write_report_html = write
+        try:
+            win.exports.export_report()
+        finally:
+            QFileDialog.getSaveFileName = orig_dialog
+            ExportController.grab_png = staticmethod(real_grab)
+            export_data.write_report_html = real_write
+        with open(path, encoding="utf-8") as f:
+            page = f.read()
+    return page, seen["images"], legends
+
+
+def test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions():
+    """PR #591 review: on PROVISIONAL timing the report withholds WHICH lap is best — the header
+    prints "Best lap 0:44.953" with no lap number, the Laps table drops the green row
+    (`export_data.best_lap_cue`) — but the new map caption said "Lap 13 0:44.953 · best", the
+    chart caption named the lap too, and the legend drawn inside the chart image read "lap 13
+    0:44.953 · best". Now all of them follow the one rule: the best lap by its time, never its
+    number, and the provisional stamp under each figure."""
+    from studio import data_quality
+    with _demo(provisional=True) as win:
+        session = win.session
+        best = session.best_lap_id()
+        page, images, legends = _report_page(win)
+    named = f"lap {best + 1} "
+    when = fmt_time(session.lap_time(best))
+    assert f"Lap {best + 1} {when}" not in page and f"{named}{when} · best" not in page, page[:0]
+    assert f"(lap {best + 1})" not in page, "the header named the best lap"
+    captions = {title: caption for title, _png, _w, caption in images}
+    assert captions["Track map"].startswith(f"The best lap, {when}, its line coloured by speed")
+    for title, caption in captions.items():
+        assert data_quality.STAMP_PROVISIONAL in caption, (title, caption)
+        assert f"lap {best + 1} {when}" not in caption.lower(), (title, caption)
+    # ...and inside the picture: the chart's legend names the best lap by its time only.
+    (legend,) = legends
+    assert f"best lap {when}" in legend, legend
+    assert not [t for t in legend if t.startswith(named) and "best" in t], legend
+    print("test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions OK")
+
+
+def test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so():
+    """No stitched ideal lap (forced here): the best lap alone would be a flat zero line, so the
+    report's chart is the app's launch pick — the two fastest laps, Δ to the best — titled and
+    captioned as such, the gain shading said as a sentence, not listed as if it were a lap."""
+    from studio import app as app_mod
+    with _demo() as win:
+        session = win.session
+        session.delta_to_ideal = lambda *a, **k: None
+        session.ideal_delta_to_best = lambda *a, **k: None
+        fastest = [r["idx"] for r in sorted(session.lap_rows(), key=lambda r: r["time"])][:2]
+        title, png, width, caption = _report_chart(win)[0]
+    assert title == "Speed · Δ to best", title
+    assert width == app_mod.REPORT_CHART_SIZE[0] and not QImage.fromData(png, "PNG").isNull()
+    one, two = (f"lap {lid + 1} {fmt_time(session.lap_time(lid))}" for lid in fastest)
+    assert caption.startswith(f"Speed of {one} · best; {two}. "), caption
+    assert f"The shading between the two traces marks where {one} is quicker" in caption \
+        and f"than {two}." in caption, caption
+    assert "quicker here" not in caption and "slower here" not in caption, caption
+    assert "Lower chart: Δ against this session's best lap" in caption, caption
+    print("test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so OK")
+
+
+def test_a_one_lap_report_chart_has_no_delta_chart_and_says_why():
+    """One lap and no ideal: the lower chart would be the lap against itself, a flat zero line
+    titled "Δ to best". The still drops it, the title is just "Speed", the caption says why."""
+    with _demo() as win:
+        session = win.session
+        best = session.best_lap_id()
+        rows = [r for r in session.lap_rows() if r["idx"] == best]
+        session.lap_rows = lambda: rows
+        session.delta_to_ideal = lambda *a, **k: None
+        session.ideal_delta_to_best = lambda *a, **k: None
+        (title, png, _width, caption), seen = _report_chart(win)
+    assert title == "Speed", title
+    assert not seen["widget"].p_delta.isVisible(), "the Δ chart is still in the picture"
+    assert caption.endswith("No Δ chart: with one lap there is nothing to compare it against."), \
+        caption
+    assert not QImage.fromData(png, "PNG").isNull()
+    print("test_a_one_lap_report_chart_has_no_delta_chart_and_says_why OK")
+
+
+def test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio():
+    """The copies are top-level windows of their own, so Qt renders them at the PRIMARY screen's
+    ratio; dividing the PNG by the WINDOW's ratio gave 480 or 1920 px for a 960 px figure when
+    the two differ. The width is now the copy's own logical width, stated."""
+    from studio import app as app_mod
+    with _demo() as win:
+        win.devicePixelRatioF = lambda: 2.0          # a window on another screen than the copy
+        _page, images, _legends = _report_page(win)
+    widths = {title: width for title, _png, width, _c in images}
+    assert widths == {"Track map": app_mod.REPORT_MAP_SIZE[0],
+                      "Speed · Δ to ideal": app_mod.REPORT_CHART_SIZE[0]}, widths
+    print("test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio OK")
+
+
+def test_a_figure_that_cannot_be_drawn_costs_the_report_only_that_figure():
+    """The copies are drawn before the writer runs, outside `_run_export`'s handling: a raise
+    while drawing one escaped with no message and no report. Now the figure's section is written
+    with a note saying it could not be drawn, and the rest of the report is."""
+    with _demo() as win:
+        def boom():
+            raise RuntimeError("planted")
+        win._grab_report_map = boom
+        page, images, _legends = _report_page(win)
+    (fig,) = [im for im in images if im[0] == "Track map"]
+    assert fig[1] == b"" and fig[3] == ExportController.FIGURE_FAILED_NOTE, fig[2:]
+    section = page[page.index("<h2>Track map</h2>"):]
+    section = section[:section.index("</section>")]
+    assert "<img" not in section and "could not be drawn" in section, section
+    assert '<img alt="Speed · Δ to ideal"' in page, "the chart went with the map"
+    print("test_a_figure_that_cannot_be_drawn_costs_the_report_only_that_figure OK")
+
+
+def test_report_exports_leave_no_widget_or_view_behind():
+    """PR #591 review: every export stranded the copies' never-mounted ToggleButtons (a lambda
+    on their own `toggled` kept each parentless button alive, and through its other connections
+    the copy that built it) — 31 exports took the top-level widgets 77 -> 170 — and every map
+    copy left one pyqtgraph SpotItem per brake glyph (`points()` caches them in a numpy record
+    array: a cycle the collector cannot see through). After a warm-up export, ten more must leave
+    the widget counts and the Python objects of the copies' classes exactly where they were."""
+    import pyqtgraph as pg
+
+    from studio import map_view, plots_view
+    from studio.widgets import ToggleButton
+
+    def census():
+        _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        _APP.processEvents()
+        gc.collect()
+        objs = gc.get_objects()
+        kinds = (plots_view.PlotsView, map_view.MapView, ToggleButton,
+                 pg.graphicsItems.ScatterPlotItem.SpotItem)
+        return ([len(_APP.topLevelWidgets()), len(_APP.allWidgets())]
+                + [sum(isinstance(o, k) for o in objs) for k in kinds])
+
+    with _demo() as win:
+        _report_page(win)
+        before = census()
+        for _ in range(10):
+            _report_page(win)
+        after = census()
+    assert after == before, f"ten exports left [top-level, widgets, PlotsView, MapView, " \
+                            f"ToggleButton, SpotItem] {before} -> {after}"
+    print("test_report_exports_leave_no_widget_or_view_behind OK")
 
 
 
@@ -2798,6 +2970,12 @@ def _run_all():
     test_the_report_export_states_a_layout_width_for_every_figure()
     test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state()
     test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing()
+    test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions()
+    test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so()
+    test_a_one_lap_report_chart_has_no_delta_chart_and_says_why()
+    test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio()
+    test_a_figure_that_cannot_be_drawn_costs_the_report_only_that_figure()
+    test_report_exports_leave_no_widget_or_view_behind()
     test_the_options_hint_quantifies_the_size_and_the_work()
     test_the_hint_refreshes_on_the_quality_combo_too()
     test_the_hint_never_promises_a_run_up_the_footage_cannot_give()

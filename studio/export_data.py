@@ -1118,6 +1118,16 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
     return [*out, "</section>"]
 
 
+def best_lap_cue(session) -> int | None:
+    """The lap the report may NAME as the best one: the best lap on verified timing, None on
+    provisional timing (the app's own trust gate — see write_report_html). ONE rule for every part
+    of the page that names the best lap: the header, the Laps table's green row, the figures'
+    captions and the legends drawn inside them (app.py's report figures read it too)."""
+    if not bool(getattr(session, "timing_verified", True)):
+        return None
+    return session.best_lap_id()
+
+
 def write_report_html(path: str, session, source_label: str = "",
                       images: Sequence[tuple[str, bytes] | tuple[str, bytes, int | None]
                                        | tuple[str, bytes, int | None, str | None]] = (),
@@ -1165,12 +1175,11 @@ def write_report_html(path: str, session, source_label: str = "",
     # card refuses to render at all, because a best measured from an arbitrary point names a lap
     # nothing distinguishes. The TIME still prints: the Stats page's `best lap` tile prints it
     # unmuted too, and a measurement is not what is in doubt. What goes is the cue and the lap.
-    verified = bool(getattr(session, "timing_verified", True))
-    cue_lap = best if verified else None
+    cue_lap = best_lap_cue(session)
     best_txt = DASH
     if best is not None:
         best_txt = fmt_time(session.lap_time(best))
-        if verified:
+        if cue_lap is not None:
             best_txt = f"{best_txt} (lap {lap_label(best)})"
     meta = [
         ("Recording", source_label or DASH),
@@ -1203,7 +1212,8 @@ def write_report_html(path: str, session, source_label: str = "",
     ]
     for item in images:  # (title, png[, width[, caption: what the figure draws]])
         caption = [_note(item[3])] if len(item) > 3 and item[3] else []
-        out += _section(item[0], [_img(item[0], item[1], item[2] if len(item) > 2 else None),
-                                  *caption])
+        # No PNG: the figure could not be drawn, and its caption says so where it would have been.
+        img = [_img(item[0], item[1], item[2] if len(item) > 2 else None)] if item[1] else []
+        out += _section(item[0], [*img, *caption])
     out.append("</main></body></html>")
     _atomic_write(path, lambda f: f.write("\n".join(out)))
