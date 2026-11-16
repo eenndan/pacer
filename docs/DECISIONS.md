@@ -397,8 +397,8 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 - **v0.11.0 is the it-tells-the-story release**: 6 pull requests from #566 to #573, Wave 4 of the
   campaign section 8 records. The story core, slow-lap notes and three session moments in a
   Qt-free module (#567); the middle half of your laps beside σ, a Corners σ hover and a row in the
-  exported report (#568); the Laps table's "▼ C5" cue and tooltip on a slow lap, whose click rings
-  the corner on the map (#569); Stats ▸ MOMENTS, each moment a Jump (#570); four refusals, sections
+  exported report (#568); the Laps table's ▼ cue naming the corner, and its tooltip, on a slow
+  lap, whose click rings the corner on the map (#569); Stats ▸ MOMENTS, each moment a Jump (#570); four refusals, sections
   29 to 32 of [refused-2026-09.md](../studio/docs/refused-2026-09.md), with an addendum to §28
   (#566); and the QA fixes before the release (#573).
 - **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
@@ -406,18 +406,19 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     slow when it is more than the larger of the clean laps' middle half and 0.50 s over it: a
     default chosen on few sessions, and every tooltip states the rule and says so. Each corner's
     share is its time over its own typical pass, and only a corner beyond the CORNERS BY LAP ▼ step
-    is named. The "▼ C5" cue appears only when one or two corners hold the loss (#569). Straights
-    are never named: the grid has no noise gate for them yet.
+    is named. The ▼ cue in the row appears only when one or two corners hold the loss (#569).
+    Straights are never named: the grid has no noise gate for them yet.
   - **A lap after a left-out lap is labelled** "(after Lap N, left out)", or "(after a too-brief
     crossing)"; its numbers are the same with or without the label (#573).
   - **Three moments kept**: the best lap, the biggest single-corner loss and the best 5-lap run
     (#567, #570). A best 3-lap-run moment was not built: the PACE tile carries that figure, and 5
     of the demo's 12 runs sit within 0.07 s of the best. The best pass per corner and the longest
     run with no ▼ were refused (§32): the first is a tie of 6 to 11 passes at six of the demo's
-    seven corners, and the second is as long on pure-noise grids as on the session.
-  - **The middle half is a width** (#568): "middle half spans 0.59 s", Q3 − Q1 of the clean laps,
-    never a ± about the median, and shown only from 5 laps, below which one slow lap reaches a
-    quartile. A lap width under 0.07 s prints "< 0.07 s"; a corner's, under 0.01 s, "< 0.01 s".
+    seven corners, and the second counts the grid's outlier cells, not its calm: 16 % of
+    pure-noise grids run at least as long as the demo's 8 laps.
+  - **The middle half is a width** (#568): "middle half spans 0.59 s", the upper quartile minus
+    the lower over the clean laps, never a ± about the median, and shown only from 5 laps, below
+    which one slow lap reaches a quartile. A lap width under 0.07 s prints "< 0.07 s"; a corner's, under 0.01 s, "< 0.01 s".
   - **An estimated clock widens a moment's ties to 0.15 s**, the Lap race's own bound, and says so
     (#567).
   - **MOMENTS sits under PACE**, above IDEAL LAP, and is absent when it would only repeat the best
@@ -439,7 +440,7 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   this machine; the rest report Skipped because their recordings are not here. The manual half of
   the golden gate did not run; the core is unchanged, and the synthetic golden gate passed.
 - **Open for the owner.**
-  - The CORNERS ▲ "erratic" mark against the middle half: on the demo C6 carries ▲ with the
+  - The CORNERS ▲ "erratic" mark against the middle half: on the demo the sixth corner carries ▲ with the
     smallest middle half, 0.03 s, its σ coming from one lap. A fix is in review for the next
     release (#574).
   - The Classic lap strip colours a Δ of +0.06 s as lost, inside the 0.07 s precision.
