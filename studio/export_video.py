@@ -1540,9 +1540,27 @@ def prores_alpha_round_trip(encoder: str) -> bool:
     """Encode one small frame through `encoder` exactly as a render would, decode it back, and say
     whether the alpha came back STRAIGHT: a half-transparent white pixel still white (every channel
     >= 245) at alpha 128 +- 4, and an opaque red still red (the channel order). A session that will
-    not open, a premultiplying encoder and a decoder that fails are all simply "no".
+    not open, a premultiplying encoder and a decoder that fails are all simply "no"; the probe
+    below needs them apart, and reads `_alpha_round_trip` instead."""
+    return _alpha_round_trip(encoder) is True
+
+
+def _alpha_round_trip(encoder: str) -> bool | None:
+    """`prores_alpha_round_trip`, with the two kinds of "no" kept apart: False when a frame went
+    through and came back BENT (premultiplied, channels swapped: a property of the encoder) or
+    when a 64x64 frame took the whole 30 s timeout (a wedged engine), None when it never went
+    through for any other reason (no session, a failed encode or decode: possibly just now).
 
     The file lives in a private temporary directory for the length of the call."""
+    try:
+        return _alpha_round_trip_unguarded(encoder)
+    except subprocess.TimeoutExpired:
+        return False
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _alpha_round_trip_unguarded(encoder: str) -> bool | None:
     import tempfile
 
     side = 64                                   # the H.264 probe's size; small enough to be free
@@ -1560,13 +1578,13 @@ def prores_alpha_round_trip(encoder: str) -> bool:
              *alpha_codec_args(ALPHA_PRORES, encoder), out],
             input=np.ascontiguousarray(frame).tobytes() * 2, capture_output=True, timeout=30)
         if enc.returncode != 0:
-            return False
+            return None
         dec = subprocess.run(
             [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", out,
              "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"],
             capture_output=True, timeout=30)
     if dec.returncode != 0 or len(dec.stdout) != side * side * 4:
-        return False
+        return None
     px = np.frombuffer(dec.stdout, np.uint8).reshape(side, side, 4).astype(int)
     white, red = px[side // 4, side // 2], px[3 * side // 4, side // 2]
     straight = min(white[:3]) >= 245 and abs(white[3] - 128) <= 4
@@ -1574,23 +1592,86 @@ def prores_alpha_round_trip(encoder: str) -> bool:
     return bool(straight and ordered)
 
 
+# ONE PROBE AT A TIME, AND ONLY A FACT IS KEPT. Every export dialog asks for this answer behind it
+# (`warm_export_probes`), and so does every overlay-only export. It used to be a bare cache that
+# any caller could fill. Measured on the demo, opening the real dialog in quick succession: up to
+# five probes side by side on an idle Mac, fourteen for fourteen opens beside six looping
+# VideoToolbox encodes. Whichever finished LAST was the answer for the rest of the run, so one
+# session that failed to open would have been kept as "no ProRes VideoToolbox here" (none of 1,912
+# contended probes failed on the M1 Pro: this is a guard, not a measured rate). Now:
+#   * Callers that arrive while a probe runs wait on its lock and take ITS answer, a miss included,
+#     so N concurrent callers cost one probe. The UI thread never calls this: it reads
+#     `prores_videotoolbox_state`, which never waits.
+#   * Kept for the run: True (a session opened and the alpha came back straight); False when
+#     ffmpeg is missing, this build does not list prores_videotoolbox, a frame came back bent, or
+#     the probe TIMED OUT — a 64x64 frame that takes 30 s is a wedged engine, and asking again
+#     would make every export on that Mac wait 30 s before it starts (`_alpha_round_trip`).
+#   * Never kept: a MISS (no session, a failed encode or decode). The caller that asked gets
+#     False — its render goes to prores_ks, the file right, only slower — and the next ask probes
+#     again. One export action asks once (`pin_alpha_encoder`), so a miss costs one probe per
+#     action, not one per file.
+
+
+class _ProResProbe:
+    """The probe's state for this process (tests swap in a fresh one)."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()     # held for the length of one probe
+        self.answer: bool | None = None  # settled for the rest of the process
+        self.last = False                # what the latest probe said, for the callers who waited
+        self.probes = 0                  # probes finished
+
+
+_PRORES = _ProResProbe()
+
+
+def _prores_session_probe() -> bool | None:
+    """One ProRes VideoToolbox probe: True / False as `_alpha_round_trip` says, False outright
+    when there is no ffmpeg or it does not list the encoder, None when it could not tell just now."""
+    if shutil.which(FFMPEG) is None:
+        return False
+    try:
+        listed = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
+                                capture_output=True, text=True, timeout=20).stdout
+    except subprocess.TimeoutExpired:
+        return False
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if VT_PRORES not in listed:
+        return False
+    return _alpha_round_trip(VT_PRORES)
+
+
 def prores_videotoolbox_usable() -> bool:
     """True iff VideoToolbox's ProRes encoder is listed, a session opens AND it keeps a straight
-    alpha (`prores_alpha_round_trip`). Cached — a fixed property of the machine, like
-    `videotoolbox_usable`. Costs one tiny encode + decode (~0.3 s) the first time."""
-    cached = getattr(prores_videotoolbox_usable, "_cached", None)
-    if cached is not None:
-        return cached
-    ok = False
-    if shutil.which(FFMPEG) is not None:
-        try:
-            listed = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
-                                    capture_output=True, text=True, timeout=20).stdout
-            ok = VT_PRORES in listed and prores_alpha_round_trip(VT_PRORES)
-        except (OSError, subprocess.SubprocessError, ValueError):
-            ok = False
-    prores_videotoolbox_usable._cached = ok  # type: ignore[attr-defined]
-    return ok
+    alpha (`prores_alpha_round_trip`). One probe in flight per process, and a miss is never kept
+    (the block above). Costs one tiny encode + decode (~0.3 s) when it probes, so never call it on
+    the UI thread."""
+    probe = _PRORES
+    seen = probe.probes
+    with probe.lock:
+        if probe.answer is not None:
+            return probe.answer
+        if probe.probes != seen:         # a probe finished while we waited for it: its answer
+            return probe.last
+        outcome = _prores_session_probe()
+        probe.probes += 1
+        probe.last = bool(outcome)
+        if outcome is not None:
+            probe.answer = outcome
+        return probe.last
+
+
+def prores_videotoolbox_state() -> str:
+    """What is known about `prores_videotoolbox_usable` WITHOUT waiting for it: "yes" / "no" once
+    settled, "probing" while a probe runs, "missed" when the latest probe could not tell (the next
+    asks again), "unasked" before the first."""
+    probe = _PRORES
+    if probe.answer is not None:
+        return "yes" if probe.answer else "no"
+    if probe.lock.locked():
+        return "probing"
+    return "missed" if probe.probes else "unasked"
 
 
 def resolve_alpha_encoder(choice: str) -> str:
@@ -1606,6 +1687,22 @@ def resolve_alpha_encoder(choice: str) -> str:
     if c in ("libx264", "software", "sw", "x264", "cpu"):
         return SW_PRORES
     return VT_PRORES if prores_videotoolbox_usable() else SW_PRORES
+
+
+def pin_alpha_encoder(specs) -> None:
+    """Resolve the ProRes encoder ONCE for one export action and write it into every overlay-only
+    ProRes spec's config, so the free-space estimate and every file's render use the same encoder
+    and ask the probe once between them: without it the space check asked per spec, then each
+    Renderer again, and a probe that missed was re-run for every file of an All-laps batch."""
+    resolved: dict[str, str] = {}
+    for spec in specs:
+        cfg = getattr(spec, "config", None)
+        if not getattr(cfg, "overlay_only", False) or cfg.alpha_codec == ALPHA_PNG:
+            continue
+        if cfg.encoder not in resolved:
+            resolved[cfg.encoder] = resolve_alpha_encoder(cfg.encoder)
+        spec.config = replace(cfg, encoder=(VT_PRORES if resolved[cfg.encoder] == VT_PRORES
+                                            else "software"))
 
 
 # The encoder a failed or wedged HARDWARE render retries on, ONCE, as the `OverlayConfig.encoder`
@@ -1805,40 +1902,60 @@ def remember_video_size(path: str | None) -> tuple[int, int, float] | None:
 
 def known_alpha_encoder(choice: str = "auto") -> str | None:
     """`resolve_alpha_encoder(choice)` if it can answer WITHOUT probing, else None (the probe has
-    not run yet)."""
+    not settled: not run, running, or missed — `prores_videotoolbox_state`)."""
     c = (choice or "auto").lower()
     if c in ("libx264", "software", "sw", "x264", "cpu"):
         return SW_PRORES
-    cached = getattr(prores_videotoolbox_usable, "_cached", None)
-    if cached is None:
+    state = prores_videotoolbox_state()
+    if state not in ("yes", "no"):
         return None
-    return VT_PRORES if cached else SW_PRORES
+    return VT_PRORES if state == "yes" else SW_PRORES
+
+
+# The warm-up thread of the process and the source it was started for. A dialog opened on the same
+# source while it runs shares it rather than starting another, so N quick opens are one thread, not
+# N (a dialog on ANOTHER source starts its own, whose ProRes probe still waits on the one lock).
+_WARM_THREAD: threading.Thread | None = None
+_WARM_SRC: str | None = None
+_WARM_LOCK = threading.Lock()
 
 
 def export_probes_ready(src_path: str | None) -> bool:
-    """True once everything the picker's hint reads has been asked: the source's frame (when there
-    is a file to ask) and which ProRes encoder this machine gets."""
+    """True once there is nothing more the picker's hint can learn for now: the source's frame has
+    been asked (when there is a file to ask), the warm-up is not running, and the ProRes probe has
+    an answer or MISSED (asked again on the next open, `prores_videotoolbox_usable`)."""
     key = _video_size_key(src_path) if src_path else None
-    return known_alpha_encoder() is not None and (key is None or key in _VIDEO_SIZE_CACHE)
+    warming = _WARM_THREAD is not None and _WARM_THREAD.is_alive()
+    return (not warming and prores_videotoolbox_state() in ("yes", "no", "missed")
+            and (key is None or key in _VIDEO_SIZE_CACHE))
 
 
 def warm_export_probes(src_path: str | None) -> threading.Thread | None:
-    """Fill what `export_probes_ready` waits for on a daemon thread, so the picker never waits on
-    ffprobe or a VideoToolbox session. Returns the thread, or None when nothing is left to learn."""
-    if export_probes_ready(src_path):
-        return None
+    """Learn the source's frame and the ProRes answer on a daemon thread, so the picker never waits
+    on ffprobe or a VideoToolbox session. Returns the warm-up thread (an already running one is
+    shared, whoever started it), or None when nothing is left to learn. A probe that MISSED is
+    asked again here, so each dialog open re-asks it at most once."""
+    global _WARM_THREAD, _WARM_SRC
+    key = _video_size_key(src_path) if src_path else None
+    with _WARM_LOCK:
+        if _WARM_THREAD is not None and _WARM_THREAD.is_alive() and _WARM_SRC == src_path:
+            return _WARM_THREAD
+        if (prores_videotoolbox_state() in ("yes", "no")
+                and (key is None or key in _VIDEO_SIZE_CACHE)):
+            return None
 
-    def warm() -> None:
-        try:
-            if src_path:
-                remember_video_size(src_path)
-            prores_videotoolbox_usable()
-        except Exception:  # noqa: BLE001 — a hint that cannot be warmed is simply not refined
-            _log.debug("export probe warm-up failed", exc_info=True)
+        def warm() -> None:
+            try:
+                if src_path:
+                    remember_video_size(src_path)
+                prores_videotoolbox_usable()
+            except Exception:  # noqa: BLE001 — a hint that cannot be warmed is simply not refined
+                _log.debug("export probe warm-up failed", exc_info=True)
 
-    thread = threading.Thread(target=warm, daemon=True, name="export-probe-warmup")
-    thread.start()
-    return thread
+        _WARM_THREAD = threading.Thread(target=warm, daemon=True, name="export-probe-warmup")
+        _WARM_SRC = src_path
+        _WARM_THREAD.start()
+        return _WARM_THREAD
 
 
 def probe_source_duration(source: VideoSource) -> float | None:
