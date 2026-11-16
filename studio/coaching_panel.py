@@ -23,6 +23,7 @@ from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, Si
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -836,8 +837,10 @@ HERO_LABEL_GAP_PX = 18.0   # apex → label centre, outward from the trace's cen
 HERO_RAMP_PX = 72          # the speed key's ramp width
 # A landing lays the page out in a few passes (the maximize, the deferred grid restores, the focus
 # line): measured, the hero was 275 px tall for one paint and 291 px for good. It renders once the
-# size has held this long, and blits what it has (or nothing) meanwhile.
+# size has held this long and the layout passes still queued have run (`DebriefHero._on_settled`),
+# and blits what it has (or nothing) meanwhile.
 HERO_SETTLE_MS = 60
+HERO_LAYOUT_ROUNDS = 4     # queued layout passes run before a settled render (one per nesting level)
 _QWIDGETSIZE_MAX = (1 << 24) - 1   # Qt's QWIDGETSIZE_MAX, which PySide6 does not export
 
 
@@ -914,8 +917,9 @@ class DebriefHero(QWidget):
     the best lap's speed-coloured line, the focus corners ringed and labelled.
 
     PAINTED ONCE. The whole hero is one cached pixmap, re-rendered only when its size (once it has
-    held for ``HERO_SETTLE_MS``), its data, its focus corners or the palette change (``renders``
-    counts them, for the perf pin); a paint event blits it.
+    held for ``HERO_SETTLE_MS`` and the queued layout passes have run, ``_on_settled``), its data,
+    its focus corners or the palette change (``renders`` counts them, for the perf pin); a paint
+    event blits it.
 
     EVERY FOCUS CORNER IS RINGED; ONLY A CORNER WITH A ROW IS A TARGET. The picture shows the whole
     focus list, but a corner carried over from an earlier session can have no coaching row today,
@@ -940,7 +944,7 @@ class DebriefHero(QWidget):
         self._settle = QTimer(self)
         self._settle.setSingleShot(True)
         self._settle.setInterval(HERO_SETTLE_MS)
-        self._settle.timeout.connect(self.update)
+        self._settle.timeout.connect(self._on_settled)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.setMinimumHeight(0)
@@ -1004,6 +1008,22 @@ class DebriefHero(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._settle.start()
+
+    def _on_settled(self) -> None:
+        """The size has held ``HERO_SETTLE_MS`` — but a quiet clock is not a laid-out page. On the
+        landing the hero's final height comes from a POSTED layout request (the panel's
+        ``_relayout``, run inside the maximize's resize, re-fits the lead blocks and shows the theme
+        block; the page applies their heights a turn later), and on a loaded Mac the clock ran out,
+        and the hero painted, with that request still queued: the demo's first open rendered the
+        picture at 275 px and again at 291 px (3 of 75 landings beside 4 CPU burners). So the
+        queued passes run now, a nesting level per round; one that moves the hero restarts the wait
+        (``resizeEvent``), and the picture renders only at a size the layout has finished with —
+        ``stats_panel``'s idiom for reading a laid-out page."""
+        for _ in range(HERO_LAYOUT_ROUNDS):
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+            if self._settle.isActive():
+                return
+        self.update()
 
     def paintEvent(self, _event):
         if self.height() < HERO_MIN_PX:

@@ -48,12 +48,7 @@ _SHARED_ENV = "TMPDIR"
 # Files that still violate, each with the reason. This carve-out is pinned in BOTH directions:
 # a file that stops violating fails `test_the_pending_carve_out_is_still_true`, so an entry cannot
 # quietly outlive the defect it documents.
-PENDING = {
-    "tests/test_export_video.py": (
-        "work package X3 owns this file and was in flight when this gate landed — it holds about "
-        "twenty `f9_*` fixed names. DELETE THIS ENTRY in the same commit that gives that file a "
-        "private temp root; this gate fails until you do."),
-}
+PENDING: dict[str, str] = {}
 
 # The files fixed with this gate. Checked POSITIVELY as well: not joining the shared root is
 # necessary but not sufficient, and an edit that drops the private root while keeping the joins
@@ -62,6 +57,9 @@ PRIVATE_ROOT_FILES = (
     "tests/test_export_compare.py",
     "tests/test_export_seam.py",
     "tests/test_export_padding.py",
+    # The last carve-out, closed after it failed a combined gate: two concurrent lanes deleted each
+    # other's `f9_vt_out.mp4` / `f9_trunc_out.mp4` mid-encode (4 of 6 lanes, two lanes x 3 rounds).
+    "tests/test_export_video.py",
 )
 
 _PRIVATE_ROOT_CALLS = ("TemporaryDirectory", "mkdtemp", "NamedTemporaryFile", "mkstemp")
