@@ -849,6 +849,9 @@ def test_follow_on_the_real_window():
         assert vb.viewRange() != before_range and not mp._scale_bar.isHidden()
         n_items, builds = len(mp.plot.items), lap_race.BUILD_COUNT
         real_enabled = motion.enabled
+        relayouts = []
+        real_relayout = mp._relayout_labels
+        mp._relayout_labels = lambda *a, **k: (relayouts.append(1), real_relayout(*a, **k))[1]
         for motion_on in (False, True):
             motion.enabled = lambda on=motion_on: on
             try:
@@ -856,6 +859,9 @@ def test_follow_on_the_real_window():
                     race.scrub(0.0)
                     race.tick()
                     worst = 0.0
+                    relayouts.clear()
+                    goals = 0
+                    goal = mp._follow.goal
                     for t in np.arange(0.0, race.tracks.duration, speed / 30):
                         race.t = float(t)
                         race._dirty = True
@@ -864,6 +870,12 @@ def test_follow_on_the_real_window():
                         assert dx <= bx + 1 and dy <= by + 1, (motion_on, speed, t, dx, dy, bx, by)
                         worst = max(worst, dx / bx, dy / by)
                         assert mp._follow.w in mv.FOLLOW_WIDTHS_M or motion_on, mp._follow.w
+                        goals += mp._follow.goal != goal
+                        goal = mp._follow.goal
+                    # The corner labels re-lay once per zoom step, never on every tick of an eased
+                    # zoom (a re-layout a tick took the p95 tick from 13 to 42 ms).
+                    assert goals > 0, "the width never changed: the re-layout check tests nothing"
+                    assert len(relayouts) <= goals, (motion_on, speed, len(relayouts), goals)
                     for f in (0.8, 0.1, 0.55, 0.3):
                         race.scrub(f)
                         race.tick()
@@ -871,6 +883,7 @@ def test_follow_on_the_real_window():
                         assert dx <= 1 and dy <= 1, ("a scrub did not recentre", f, dx, dy)
             finally:
                 motion.enabled = real_enabled
+        mp._relayout_labels = real_relayout
         assert worst > 0.05, "the median never moved off centre: the box test tests nothing"
         assert len(mp.plot.items) == n_items and lap_race.BUILD_COUNT == builds, "a tick rebuilt"
         # The ground width at three map sizes, a resize keeping it, and the scale bar's honesty.

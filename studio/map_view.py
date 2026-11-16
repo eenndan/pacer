@@ -3126,6 +3126,11 @@ class MapView(QWidget):
         cm = getattr(self, "_corner_markers", None)
         if cm is None or not cm._texts:
             return
+        # Under Follow a zoom eases over many ticks: re-lay the labels once it settles, not on every
+        # tick of it (measured: a re-layout a tick took the Follow p95 from 13 ms to 42 ms).
+        cam = getattr(self, "_follow", None)
+        if cam is not None and cam.w != cam.goal:
+            return
         (sx, sy), (lx, ly) = cm._px_per_data(), cm.layout_scale
         if abs(sx - lx) > 1e-6 * max(lx, 1e-9) or abs(sy - ly) > 1e-6 * max(ly, 1e-9):
             self._relayout_labels()
