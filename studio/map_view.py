@@ -2319,6 +2319,24 @@ class MapView(QWidget):
         key.move(_CHROME_INSET,
                  max(_CHROME_INSET, host.height() - key.height() - _CHROME_INSET))
 
+    def document_caption(self, lap_text: str) -> str:
+        """What this map draws, for the line under a still of it (the HTML report's map): the lap
+        whose line is coloured (`lap_text`, named by the caller, which owns lap numbering), the
+        channel in the line combo's own word, and the colour bar's two ends as the legend under
+        the map prints them, in its unit. Read from the drawn state, so it cannot name a channel
+        or a range the picture does not show."""
+        label = _RAINBOW_COMBO_LABELS.get(self._rainbow_mode, "").removeprefix("Line: ")
+        lo, hi = getattr(self._legend, "_full", ("", ""))
+        if self._rainbow_mode == "off" or not label:
+            line = f"{lap_text}, its racing line"
+        elif lo and hi and self._legend.isVisibleTo(self):
+            line = (f"{lap_text}, its line coloured by {label.lower()}: the bar under the map runs "
+                    f"from {lo} to {hi}")
+        else:
+            line = f"{lap_text}, its line coloured by {label.lower()}"
+        return (f"{line}. Under it in faint grey, the whole recording's driven trace — every "
+                f"lap, out- and in-laps too; the whole track framed, corners labelled.")
+
     @contextmanager
     def grab_clean(self):
         """Temporarily hide the map's pure-INTERACTION chrome so a caller can ``grab()`` the plot as
@@ -3143,10 +3161,15 @@ class MapView(QWidget):
         on the canvas, as (x, y, half-extent px)."""
         out = []
         brakes = getattr(self, "_brake_markers", None)
+        # Read off the item's record array, NOT `item.points()`: that builds a SpotItem per glyph
+        # and caches it IN the array (spot -> view of the array -> spot), a cycle the collector
+        # cannot see through, so every relayout leaked one SpotItem per brake glyph (PR #591
+        # review: 7 per report export). A size of -1 means "the item's default", as in SpotItem.
         for item in (brakes._items if brakes is not None else []):
-            for spot in item.points():
-                pos = spot.pos()
-                out.append((pos.x(), pos.y(), spot.size() / 2.0 + 1.0))
+            d = item.data
+            for x, y, size in zip(d["x"], d["y"], d["size"], strict=True):
+                size = item.opts["size"] if size < 0 else size
+                out.append((float(x), float(y), float(size) / 2.0 + 1.0))
         return out
 
     def _relayout_labels(self) -> None:

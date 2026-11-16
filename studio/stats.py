@@ -578,9 +578,9 @@ def corner_count_note(report, *, page: bool = True) -> list[str]:
     """The CORNERS note's opening sentences: what Med loss is measured against (its sum), and,
     when not every lap counted, how many lap × corner times did and why the rest did not. `page`
     False is the report's wording: it has no CORNERS BY LAP grid to mute them in, and names them
-    in its laps table's corners_interpolated column instead."""
+    in its laps table's Interpolated column instead (export_data.REPORT_INTERPOLATED_HEAD)."""
     shown = ("shown muted lap by lap" if page
-             else "named lap by lap in the laps table's corners_interpolated column")
+             else "named lap by lap in the laps table's Interpolated column")
     # The sum of the Med loss cells AS PRINTED (`printed_med_loss`), so it adds up on the page.
     total = sum(g for g in map(printed_med_loss, report) if g is not None)
     parts = [f"Med loss is measured against each corner's own Best above — the quickest "

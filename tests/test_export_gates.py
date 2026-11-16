@@ -45,7 +45,9 @@
 Fake sessions throughout (the duck-typed surface these entry points reach through), so no pacer, no
 telemetry file and no render. Run: QT_QPA_PLATFORM=offscreen python tests/test_export_gates.py
 """
+import contextlib
 import dataclasses
+import gc
 import json
 import math
 import os
@@ -76,7 +78,7 @@ for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db
     _mod._app_support_dir = (lambda d=_dir: d)
 sidecar.sidecar_path = lambda _p, _d=_SEAMS: os.path.join(_d, "test.pacer.json")
 
-from PySide6.QtCore import QBuffer, QIODevice, QThread, QTimer, Signal  # noqa: E402
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QThread, QTimer, Signal  # noqa: E402
 from PySide6.QtGui import QDesktopServices, QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -103,7 +105,7 @@ from studio import (  # noqa: E402
     export_data,
     export_video,
 )
-from studio._signal import fmt_hms  # noqa: E402
+from studio._signal import fmt_hms, fmt_time  # noqa: E402
 from studio.app import APP_NAME, StudioWindow  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: E402
@@ -1007,14 +1009,513 @@ def test_the_report_export_states_a_layout_width_for_every_figure():
             export_data.write_report_html = orig_report
             QFileDialog.getSaveFileName = orig_dialog
     images = seen["images"]
-    assert [t for t, *_ in images] == ["Track map", "Speed · Δ to best"], images
-    for (title, png, width), widget in zip(images, (map_w, plots_w), strict=True):
+    # A bare panel is grabbed as is (no session to draw a pinned chart from), under a title that
+    # names no baseline it cannot know; the real chart's title is the next test's.
+    assert [t for t, *_ in images] == ["Track map", "Speed · Δ"], images
+    for (title, png, width, *_caption), widget in zip(images, (map_w, plots_w), strict=True):
         assert png[:8] == b"\x89PNG\r\n\x1a\n", title
         natural = QImage.fromData(png, "PNG").width()
         assert width == round(natural / win.devicePixelRatioF()) == widget.width(), \
             (title, width, natural, widget.width())
     win.hide()
     print("test_the_report_export_states_a_layout_width_for_every_figure OK")
+
+
+# ============================================================ discovery 3, K3 — the report's chart
+@contextlib.contextmanager
+def _demo(*, provisional: bool = False):
+    """The REAL window on the shipped demo recording (verified timing on its built-in circuit),
+    loaded and settled: it lands on the first-open debrief, as a first open does. `provisional`
+    swaps in the same synthetic drive at synth_gopro's own origin — no built-in track there, so
+    its timing loads PROVISIONAL.
+
+    A FRESH library (and focus list) per window, so every open is a first open: the module's
+    shared seam would remember the previous test's demo. Everything — the seams, the window, the
+    folder — is put back in a `finally`, so a load that fails cannot leak into later tests."""
+    import importlib
+
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    folder = tempfile.TemporaryDirectory(prefix="pacer-test-report-chart-")
+    seams = [importlib.import_module(f"studio.{n}") for n in ("library", "focus", "session_record")]
+    saved = [mod._app_support_dir for mod in seams]
+    win = None
+    try:
+        for mod in seams:
+            mod._app_support_dir = lambda d=folder.name: d
+        if provisional:
+            path = sg.generate(os.path.join(folder.name, "rec"), make_demo.DEMO_SEED,
+                               make_demo.DEMO_LAPS, chapters=1, origin=sg.ORIGIN,
+                               habit=make_demo.DEMO_HABIT).paths[0]
+        else:
+            path = os.path.join(folder.name, "GX010777.MP4")
+            make_demo.make(path, render=False)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        done = []
+        win.loadFinished.connect(lambda: done.append(True))
+        win._open_recordings([path])
+        deadline = time.time() + 120
+        while not done and time.time() < deadline:
+            _APP.processEvents()
+            time.sleep(0.01)
+        assert done, "the demo did not load"
+        _pump(0.4)          # past the view's first show and its deferred restores
+        assert win.session.timing_verified is (not provisional), win.session.timing_verified
+        yield win
+    finally:
+        if win is not None:
+            win.close()
+        for mod, fn in zip(seams, saved, strict=True):
+            mod._app_support_dir = fn
+        folder.cleanup()
+
+
+def _pump(seconds: float) -> None:
+    end = time.time() + seconds
+    while time.time() < end:
+        _APP.processEvents()
+        time.sleep(0.01)
+
+
+def _report_chart(win):
+    """Export the report and return (title, png, width, caption) of its chart, plus the widget
+    the PNG was grabbed from and what was VISIBLE on that widget at the instant of the grab."""
+    from studio import plots_view
+    seen, grabbed = {}, []
+    real_grab = ExportController.grab_png
+
+    def spy(widget):
+        if isinstance(widget, plots_view.PlotsView):
+            grabbed.append({
+                "widget": widget,
+                "labels": [lb.text() for lb in widget.findChildren(QLabel)
+                           if lb.isVisibleTo(widget) and lb.text()],
+                "lines": [ln.isVisible() for ln in (widget.cur_speed, widget.cur_delta,
+                                                    widget.cur_speed_datum, widget.cur_delta_datum,
+                                                    widget.hover_dot)],
+                "size": (widget.width(), widget.height())})
+        return real_grab(widget)
+
+    orig_report, orig_dialog = export_data.write_report_html, QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(td, "r.html"), ""))
+        export_data.write_report_html = lambda *a, **k: seen.update(k)
+        ExportController.grab_png = staticmethod(spy)
+        try:
+            win.exports.export_report()
+        finally:
+            export_data.write_report_html = orig_report
+            QFileDialog.getSaveFileName = orig_dialog
+            ExportController.grab_png = staticmethod(real_grab)
+    (chart,) = [im for im in seen["images"] if im[0].startswith("Speed")]
+    assert len(grabbed) <= 1, f"{len(grabbed)} chart grabs for one report"
+    # (title, png, width, caption); a figure handed over with no caption reads None.
+    return (*chart, None)[:4], (grabbed[0] if grabbed else {})
+
+
+def _live_chart_state(win):
+    """Everything about the LIVE chart a report export could disturb, pixels included."""
+    from studio import theme
+    pv = win.view.plots
+
+    def ranges(plot):
+        return [[round(float(v), 9) for v in r] for r in plot.getViewBox().viewRange()]
+
+    image = pv.grab().toImage()
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    return {
+        "laps": pv.selected_lap_ids(), "datum": pv._datum_x, "baseline": pv._delta_baseline_kind,
+        "ranges": (ranges(pv.p_speed), ranges(pv.p_delta)),
+        "readout": (pv.window_label.text(), pv.datum_label.text(), pv._readout.isHidden()),
+        "cursors": [(ln.isVisible(), round(float(ln.value()), 9))
+                    for ln in (pv.cur_speed, pv.cur_delta, pv.cur_speed_datum, pv.cur_delta_datum)],
+        "legend": [label.text for _s, label in pv._speed_legend.items],
+        "items": (len(pv.p_speed.items), len(pv.p_delta.items)),
+        "ideal": pv.ideal_btn.isChecked(), "unit": pv._speed_unit, "pen": theme.pen_scale(),
+        "comparing": win.view._comparing(), "racing": win.view.is_racing(),
+        "pixels": bytes(buf.data()),
+    }
+
+
+def _report_map(win):
+    """Export the report and return its map figure as (title, png, width, caption)."""
+    seen = {}
+    orig_report, orig_dialog = export_data.write_report_html, QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(td, "r.html"), ""))
+        export_data.write_report_html = lambda *a, **k: seen.update(k)
+        try:
+            win.exports.export_report()
+        finally:
+            export_data.write_report_html = orig_report
+            QFileDialog.getSaveFileName = orig_dialog
+    (fig,) = [im for im in seen["images"] if im[0] == "Track map"]
+    return (*fig, None)[:4]
+
+
+def _live_map_state(win):
+    """Everything about the LIVE map a report export could disturb, pixels included."""
+    from studio import theme
+    m = win.view.map
+    image = m.grab().toImage()
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    key = m._map_key
+    return {
+        "lap": m._current_lap, "mode": m._rainbow_mode, "fitted": m._view_fitted,
+        "range": [[round(float(v), 9) for v in r] for r in m.plot.getViewBox().viewRange()],
+        "fit_btn": m.fit_btn.isHidden(), "pinned": m.pinned_corner(), "timing": m._timing_pinned,
+        "key": (key.isHidden(), key._collapsed, "_ROWS" in vars(key)),
+        "marker": (m.marker.isVisible(), tuple(round(float(v), 9) for v in m.marker.pos())),
+        "race": len(m.race_items()), "follow": m._follow is not None, "size": m.size().toTuple(),
+        "pen": theme.pen_scale(), "pixels": bytes(buf.data()),
+    }
+
+
+def test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing():
+    """The report's map was the live map panel grabbed (#586 cleaned its chrome), so it was what
+    the window happened to show: the lap the video was in, the line mode, a hand zoom, a ringed
+    corner, a race's packs or Follow's close-up, at the panel's shape — and exported from the
+    first-open debrief, whose lap panel fills the window, the map panel is 0 px wide and the
+    report embedded an EMPTY map.
+
+    Now it is a throwaway map pinned to the one the app opens on (the best lap, coloured by
+    speed, every corner, the whole track framed) at a fixed size, through #586's clean grab: one
+    PNG whatever the window is doing, a caption read off what it drew, and the live map
+    untouched. On main: an empty PNG at the debrief."""
+    from studio import app as app_mod
+    from studio import theme
+    with _demo() as win:
+        session, view = win.session, win.view
+        best = session.best_lap_id()
+        m = view.map
+
+        def export_unchanged(why):
+            before = _live_map_state(win)
+            fig = _report_map(win)
+            assert _live_map_state(win) == before, f"the export changed the live map ({why})"
+            return fig
+
+        # 1. The first-open debrief: the map panel has no width at all.
+        assert m.width() == 0, "the premise: the debrief collapses the map panel"
+        title, png, width, caption = ref = export_unchanged("debrief")
+        image = QImage.fromData(png, "PNG")
+        assert not image.isNull() and image.width() > 0, "the report embedded an empty map"
+        assert (image.width(), image.height()) == tuple(
+            round(v * win.devicePixelRatioF()) for v in app_mod.REPORT_MAP_SIZE), image.size()
+        assert width == app_mod.REPORT_MAP_SIZE[0], width
+        lap = f"Lap {best + 1} {fmt_time(session.lap_time(best))} · best"
+        assert caption.startswith(f"{lap}, its line coloured by speed: the bar under the map runs "
+                                  f"from "), caption
+        assert caption.rstrip(".").endswith("corners labelled") and "km/h" in caption, caption
+
+        # 2. The grid, another lap on the map, a different line mode, a ringed corner, the
+        # timing handles up, a hand zoom: the same figure.
+        view.tab_bar.setCurrentIndex(0)
+        if view._maximized_panel is not None:
+            view._toggle_panel_maximized(view._maximized_panel)
+        _pump(0.3)
+        other = next(lid for lid in session.valid_lap_ids() if lid != best)
+        m.set_current_lap(other)
+        m.set_rainbow_mode("elevation")
+        m.highlight_corner(3)
+        m._pin_timing_chrome()
+        vb = m.plot.getViewBox()
+        (x0, x1), (y0, y1) = vb.viewRange()
+        vb.setRange(xRange=(x0, (x0 + x1) / 2), yRange=(y0, (y0 + y1) / 2), padding=0)
+        m._on_manual_range()
+        _pump(0.2)
+        assert m.width() > 0 and not m._view_fitted and m.pinned_corner() == "C3"
+        assert export_unchanged("lap, mode, ring, handles, zoom") == ref, "the map followed the window"
+        m.set_rainbow_mode("speed")
+        m.highlight_corner(None)
+        m._fit_view()
+
+        # 3. Video focus (the video maximised over the grid): the same figure.
+        view.set_video_focus(True)
+        _pump(0.2)
+        assert export_unchanged("video focus") == ref, "the map followed video focus"
+        view.set_video_focus(False)
+        _pump(0.2)
+
+        # 4. Comparing two laps, then a lap race with Follow on: the same figure.
+        view.compare.enter()
+        _pump(0.2)
+        assert view._comparing()
+        assert export_unchanged("compare") == ref, "the map followed the comparison"
+        view.compare.exit()
+        _pump(0.2)
+        assert view.start_lap_race(), "the demo must be raceable"
+        m.set_race_follow(True)
+        _pump(0.3)
+        assert m.race_items() and m._follow is not None
+        assert export_unchanged("race + Follow") == ref, "the map followed the race"
+        view.end_lap_race()
+        assert theme.pen_scale() == _live_map_state(win)["pen"]
+    print("test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing OK")
+
+
+def test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state():
+    """Discovery 3, K3. The report's speed/Δ figure was `grab()` of the live charts panel, so the
+    document carried the app: the readout strip's "D: datum cursor · N: next Δ loss" and live
+    statistic, the playhead, a datum cursor, and whatever laps a comparison or a race had up — the
+    same session exported twice gave two figures — under a title, "Speed · Δ to best", that a
+    fresh open's chart (the best lap against the IDEAL) contradicts. Exported straight after
+    opening, with the debrief holding the charts panel at 0 px, it embedded an EMPTY image.
+
+    Now the figure is a throwaway chart pinned to the one the app opens on: one PNG for the
+    session whatever the window is doing, a title and caption read off what it drew, no readout,
+    no cursor, and the live chart untouched — selection, datum, zoom, compare, race, pixels. On
+    main: an empty PNG at the debrief (0 px panel), the hint label visible in the grabbed widget,
+    and a different PNG per state."""
+    from PySide6.QtCore import QEvent
+
+    from studio import app as app_mod
+    from studio import plots_view, theme
+    with _demo() as win:
+        session, view = win.session, win.view
+        best = session.best_lap_id()
+        best_label = f"lap {best + 1} {fmt_time(session.lap_time(best))} · best"
+
+        # 1. A fresh open: the debrief is up and the live charts panel has no width at all.
+        assert view.plots.width() == 0, "the premise: the debrief collapses the charts panel"
+        before = _live_chart_state(win)
+        (title, png, width, caption), seen = _report_chart(win)
+        assert _live_chart_state(win) == before, "the export changed the live chart"
+        image = QImage.fromData(png, "PNG")
+        assert not image.isNull() and image.width() > 0, "the report embedded an empty chart"
+        assert seen["widget"] is not view.plots, "the report grabbed the live chart"
+        assert seen["size"] == app_mod.REPORT_CHART_SIZE, seen["size"]
+        assert width == app_mod.REPORT_CHART_SIZE[0], width
+        # No app chrome on the grabbed widget: no readout label (the key hint, the live
+        # statistic, the datum line) and no scrub cursor, datum or hover dot.
+        assert not seen["labels"], f"text on the report's chart: {seen['labels']}"
+        assert plots_view.READOUT_HINT not in " ".join(seen["labels"])
+        assert not any(seen["lines"]), seen["lines"]
+        # ...and the pixels are the copy's whole fixed size: no strip under the chart.
+        assert (image.width(), image.height()) == tuple(
+            round(v * win.devicePixelRatioF()) for v in app_mod.REPORT_CHART_SIZE)
+        # The subject, in the chart's own words: the best lap, Δ to the ideal lap.
+        assert title == "Speed · Δ to ideal", title
+        assert caption.startswith(f"Speed of {best_label}. Lower chart: "), caption
+        assert "SYNTHETIC ideal lap" in caption, caption
+
+        # 2. The grid, comparing two laps, a datum dropped, the chart zoomed: the same figure.
+        view.tab_bar.setCurrentIndex(0)
+        if view._maximized_panel is not None:
+            view._toggle_panel_maximized(view._maximized_panel)
+        _pump(0.3)
+        view.compare.enter()
+        _pump(0.3)
+        assert view._comparing() and len(view.plots.selected_lap_ids()) == 2
+        pv = view.plots
+        a = pv.selected_lap_ids()[0]
+        t0, t1 = session.lap_window(a)
+        pv.set_playhead_time(t0 + 0.3 * (t1 - t0))
+        pv.toggle_datum()
+        pv.set_playhead_time(t0 + 0.6 * (t1 - t0))
+        pv.p_speed.setXRange(150.0, 450.0, padding=0)
+        _pump(0.2)
+        # The state the old grab took a picture of: a datum, its readout up, a zoom.
+        assert pv._datum_x is not None and pv.window_label.isVisible(), pv._datum_x
+        before = _live_chart_state(win)
+        chart, seen = _report_chart(win)
+        assert _live_chart_state(win) == before, "the export changed the comparing chart"
+        assert chart == (title, png, width, caption), "the figure followed the live comparison"
+        assert not seen["labels"] and not any(seen["lines"]), seen
+
+        # 3. A lap race: the same figure, and the race still running.
+        view.compare.exit()
+        _pump(0.2)
+        assert view.start_lap_race(), "the demo must be raceable"
+        _pump(0.2)
+        before = _live_chart_state(win)
+        chart, _seen = _report_chart(win)
+        assert _live_chart_state(win) == before, "the export changed the racing chart"
+        assert view.is_racing()
+        assert chart == (title, png, width, caption), "the figure followed the race"
+        view.end_lap_race()
+
+        # 4. The throwaway is gone, and the theme's pen scale is the live chart's again.
+        _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        alive = [w for w in _APP.topLevelWidgets()
+                 if isinstance(w, plots_view.PlotsView) and w.isVisible()]
+        assert not alive, alive
+        assert theme.pen_scale() == before["pen"]
+    print("test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state OK")
+
+
+def _report_page(win):
+    """Export the report through the REAL writer; return (page text, images handed to it, the
+    PlotsView copies grabbed, with the legend text each carried at the instant of its grab)."""
+    from studio import plots_view
+    seen, legends = {}, []
+    real_grab, real_write = ExportController.grab_png, export_data.write_report_html
+
+    def spy(widget):
+        if isinstance(widget, plots_view.PlotsView) and widget._speed_legend is not None:
+            legends.append([label.text for _s, label in widget._speed_legend.items])
+        return real_grab(widget)
+
+    def write(*a, **k):
+        seen.update(k)
+        return real_write(*a, **k)
+
+    orig_dialog = QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "r.html")
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (path, ""))
+        ExportController.grab_png = staticmethod(spy)
+        export_data.write_report_html = write
+        try:
+            win.exports.export_report()
+        finally:
+            QFileDialog.getSaveFileName = orig_dialog
+            ExportController.grab_png = staticmethod(real_grab)
+            export_data.write_report_html = real_write
+        with open(path, encoding="utf-8") as f:
+            page = f.read()
+    return page, seen["images"], legends
+
+
+def test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions():
+    """PR #591 review: on PROVISIONAL timing the report withholds WHICH lap is best — the header
+    prints "Best lap 0:44.953" with no lap number, the Laps table drops the green row
+    (`export_data.best_lap_cue`) — but the new map caption said "Lap 13 0:44.953 · best", the
+    chart caption named the lap too, and the legend drawn inside the chart image read "lap 13
+    0:44.953 · best". Now all of them follow the one rule: the best lap by its time, never its
+    number, and the provisional stamp under each figure."""
+    from studio import data_quality
+    with _demo(provisional=True) as win:
+        session = win.session
+        best = session.best_lap_id()
+        page, images, legends = _report_page(win)
+    named = f"lap {best + 1} "
+    when = fmt_time(session.lap_time(best))
+    assert f"Lap {best + 1} {when}" not in page and f"{named}{when} · best" not in page, page[:0]
+    assert f"(lap {best + 1})" not in page, "the header named the best lap"
+    captions = {title: caption for title, _png, _w, caption in images}
+    assert captions["Track map"].startswith(f"The best lap, {when}, its line coloured by speed")
+    for title, caption in captions.items():
+        assert data_quality.STAMP_PROVISIONAL in caption, (title, caption)
+        assert f"lap {best + 1} {when}" not in caption.lower(), (title, caption)
+    # ...and inside the picture: the chart's legend names the best lap by its time only.
+    (legend,) = legends
+    assert f"best lap {when}" in legend, legend
+    assert not [t for t in legend if t.startswith(named) and "best" in t], legend
+    print("test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions OK")
+
+
+def test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so():
+    """No stitched ideal lap (forced here): the best lap alone would be a flat zero line, so the
+    report's chart is the app's launch pick — the two fastest laps, Δ to the best — titled and
+    captioned as such, the gain shading said as a sentence, not listed as if it were a lap."""
+    from studio import app as app_mod
+    with _demo() as win:
+        session = win.session
+        session.delta_to_ideal = lambda *a, **k: None
+        session.ideal_delta_to_best = lambda *a, **k: None
+        fastest = [r["idx"] for r in sorted(session.lap_rows(), key=lambda r: r["time"])][:2]
+        title, png, width, caption = _report_chart(win)[0]
+    assert title == "Speed · Δ to best", title
+    assert width == app_mod.REPORT_CHART_SIZE[0] and not QImage.fromData(png, "PNG").isNull()
+    one, two = (f"lap {lid + 1} {fmt_time(session.lap_time(lid))}" for lid in fastest)
+    assert caption.startswith(f"Speed of {one} · best; {two}. "), caption
+    assert f"The shading between the two traces marks where {one} is quicker" in caption \
+        and f"than {two}." in caption, caption
+    assert "quicker here" not in caption and "slower here" not in caption, caption
+    assert "Lower chart: Δ against this session's best lap" in caption, caption
+    print("test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so OK")
+
+
+def test_a_one_lap_report_chart_has_no_delta_chart_and_says_why():
+    """One lap and no ideal: the lower chart would be the lap against itself, a flat zero line
+    titled "Δ to best". The still drops it, the title is just "Speed", the caption says why."""
+    with _demo() as win:
+        session = win.session
+        best = session.best_lap_id()
+        rows = [r for r in session.lap_rows() if r["idx"] == best]
+        session.lap_rows = lambda: rows
+        session.delta_to_ideal = lambda *a, **k: None
+        session.ideal_delta_to_best = lambda *a, **k: None
+        (title, png, _width, caption), seen = _report_chart(win)
+    assert title == "Speed", title
+    assert not seen["widget"].p_delta.isVisible(), "the Δ chart is still in the picture"
+    assert caption.endswith("No Δ chart: with one lap there is nothing to compare it against."), \
+        caption
+    assert not QImage.fromData(png, "PNG").isNull()
+    print("test_a_one_lap_report_chart_has_no_delta_chart_and_says_why OK")
+
+
+def test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio():
+    """The copies are top-level windows of their own, so Qt renders them at the PRIMARY screen's
+    ratio; dividing the PNG by the WINDOW's ratio gave 480 or 1920 px for a 960 px figure when
+    the two differ. The width is now the copy's own logical width, stated."""
+    from studio import app as app_mod
+    with _demo() as win:
+        win.devicePixelRatioF = lambda: 2.0          # a window on another screen than the copy
+        _page, images, _legends = _report_page(win)
+    widths = {title: width for title, _png, width, _c in images}
+    assert widths == {"Track map": app_mod.REPORT_MAP_SIZE[0],
+                      "Speed · Δ to ideal": app_mod.REPORT_CHART_SIZE[0]}, widths
+    print("test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio OK")
+
+
+def test_a_figure_that_cannot_be_drawn_costs_the_report_only_that_figure():
+    """The copies are drawn before the writer runs, outside `_run_export`'s handling: a raise
+    while drawing one escaped with no message and no report. Now the figure's section is written
+    with a note saying it could not be drawn, and the rest of the report is."""
+    with _demo() as win:
+        def boom():
+            raise RuntimeError("planted")
+        win._grab_report_map = boom
+        page, images, _legends = _report_page(win)
+    (fig,) = [im for im in images if im[0] == "Track map"]
+    assert fig[1] == b"" and fig[3] == ExportController.FIGURE_FAILED_NOTE, fig[2:]
+    section = page[page.index("<h2>Track map</h2>"):]
+    section = section[:section.index("</section>")]
+    assert "<img" not in section and "could not be drawn" in section, section
+    assert '<img alt="Speed · Δ to ideal"' in page, "the chart went with the map"
+    print("test_a_figure_that_cannot_be_drawn_costs_the_report_only_that_figure OK")
+
+
+def test_report_exports_leave_no_widget_or_view_behind():
+    """PR #591 review: every export stranded the copies' never-mounted ToggleButtons (a lambda
+    on their own `toggled` kept each parentless button alive, and through its other connections
+    the copy that built it) — 31 exports took the top-level widgets 77 -> 170 — and every map
+    copy left one pyqtgraph SpotItem per brake glyph (`points()` caches them in a numpy record
+    array: a cycle the collector cannot see through). After a warm-up export, ten more must leave
+    the widget counts and the Python objects of the copies' classes exactly where they were."""
+    import pyqtgraph as pg
+
+    from studio import map_view, plots_view
+    from studio.widgets import ToggleButton
+
+    def census():
+        _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        _APP.processEvents()
+        gc.collect()
+        objs = gc.get_objects()
+        kinds = (plots_view.PlotsView, map_view.MapView, ToggleButton,
+                 pg.graphicsItems.ScatterPlotItem.SpotItem)
+        return ([len(_APP.topLevelWidgets()), len(_APP.allWidgets())]
+                + [sum(isinstance(o, k) for o in objs) for k in kinds])
+
+    with _demo() as win:
+        _report_page(win)
+        before = census()
+        for _ in range(10):
+            _report_page(win)
+        after = census()
+    assert after == before, f"ten exports left [top-level, widgets, PlotsView, MapView, " \
+                            f"ToggleButton, SpotItem] {before} -> {after}"
+    print("test_report_exports_leave_no_widget_or_view_behind OK")
+
 
 
 # ============================================================ L12-07 — put a number on it
@@ -2467,6 +2968,14 @@ def _run_all():
     test_the_report_map_grab_survives_a_map_without_the_contract()
     test_the_report_figure_width_divides_out_the_screens_pixel_ratio()
     test_the_report_export_states_a_layout_width_for_every_figure()
+    test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state()
+    test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing()
+    test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions()
+    test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so()
+    test_a_one_lap_report_chart_has_no_delta_chart_and_says_why()
+    test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio()
+    test_a_figure_that_cannot_be_drawn_costs_the_report_only_that_figure()
+    test_report_exports_leave_no_widget_or_view_behind()
     test_the_options_hint_quantifies_the_size_and_the_work()
     test_the_hint_refreshes_on_the_quality_combo_too()
     test_the_hint_never_promises_a_run_up_the_footage_cannot_give()

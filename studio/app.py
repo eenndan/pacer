@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import shiboken6
 from PySide6.QtCore import (
     QEvent,
     Qt,
@@ -65,7 +66,7 @@ from . import (
 from . import (
     marks as marks_model,
 )
-from ._signal import fmt_hms, lap_label
+from ._signal import fmt_hms, fmt_time, lap_label
 from .central_view import CentralView, undo_summary
 from .coaching_panel import DEBRIEF_COMPARE
 from .command_palette import CommandPalette
@@ -114,6 +115,22 @@ LOAD_PLACEHOLDER_MS = 400
 # export grab can put a widget back EXACTLY as it was instead of inventing state on it
 # (_grab_report_map_png).
 _ABSENT = object()
+
+
+# The report chart's layout size (logical px): fixed, so the figure is the session's and not the
+# window's — the live grab was as wide as the charts panel happened to be (_grab_report_chart).
+REPORT_CHART_SIZE = (960, 480)
+# ...and the report map's, for the same reason (_grab_report_map).
+REPORT_MAP_SIZE = (960, 600)
+
+
+def _discard_report_copy(widget) -> None:
+    """Destroy a report figure's throwaway view NOW, not with deleteLater: a deferred delete waits
+    for the event loop, and every export before it runs kept its copies — ~14 MB a report,
+    measured over 80 exports with no loop in between (PR #591 review). Nothing of the copy is on
+    the stack here, and its pending posted events go with it."""
+    widget.close()
+    shiboken6.delete(widget)
 
 
 def _report_key_drops(key) -> set[str]:
@@ -3897,6 +3914,158 @@ class StudioWindow(QMainWindow):
                     key._relayout()
                     map_view._reposition_key()
 
+
+    def _grab_report_map(self) -> tuple[bytes, int | None, str | None]:
+        """The HTML REPORT's track map as (png, caption), drawn on a THROWAWAY map, then grabbed
+        through `_grab_report_map_png` (#586's clean grab: no drag cue, no marker, the key forced
+        open minus the rows for what is not drawn).
+
+        The live grab depended on the window: exported from the first-open debrief, whose lap
+        panel takes the whole window, the map panel was 0 px wide and the report embedded an EMPTY
+        image; otherwise it was whatever lap the video was in, the line mode and zoom of the
+        moment, a race's packs or Follow's close-up, a ringed corner, at the panel's shape.
+
+        So the subject is PINNED, like the chart's (`_grab_report_chart`): the map the app opens
+        on — the best lap's line, coloured by speed (the mode a fresh map starts in) in the
+        reader's unit, its brake glyphs, the corner labels, the whole track framed, at a fixed
+        size. A copy is the smaller and safer of the two ways to get that: MapView is built from
+        the session plus four pushes (corners, unit, lap, brake markers), all made here as
+        CentralView makes them; a sized render of the live view would have to save and restore
+        its race, Follow, zoom, ring, lap and line mode, and its panel's place in a splitter.
+        Nothing touches the live map, so there is nothing to restore.
+
+        Returns (png, layout width, caption). The width is the copy's own logical width, stated,
+        not divided out of the PNG: the copy is a top-level of its own, rendered at the PRIMARY
+        screen's ratio, which need not be this window's (`_report_image_width` divides by the
+        window's). On provisional timing the caption follows the page's one trust rule
+        (`export_data.best_lap_cue`): the best lap by its time, not its number, and the stamp.
+
+        Falls back to the report grab of the live widget for a bare one (tests)."""
+        from . import export_data
+        from .map_view import MapView
+
+        live = getattr(getattr(self, "view", None), "map", None)
+        if not isinstance(live, MapView):
+            png = self._grab_report_map_png(live)
+            return png, self._report_image_width(png), None
+        session = self.session
+        pen_scale = theme.pen_scale()   # see _grab_report_chart: a view build sets it globally
+        copy = MapView(session)
+        try:
+            copy.setAttribute(Qt.WA_DontShowOnScreen, True)
+            copy.set_speed_unit(self._speed_unit)
+            copy.set_corners(session.corners.corner_map_markers())
+            best = session.best_lap_id()
+            copy.set_current_lap(best)
+            if best is not None:
+                copy.set_brake_markers([(session.driving.lap_brake_map_markers(best),
+                                         self.view._driving_lap_colour(best, 0))])
+            copy.resize(*REPORT_MAP_SIZE)
+            # Settled on posted events only, as the chart is; the fit re-run on the laid-out
+            # canvas, because the copy's first fit is taken before it has a size.
+            copy.show()
+            for _ in range(3):
+                QApplication.sendPostedEvents()
+                copy._fit_view()
+            caption = None
+            if best is not None:
+                when = fmt_time(session.lap_time(best))
+                named = export_data.best_lap_cue(session) is not None
+                caption = copy.document_caption(f"Lap {lap_label(best)} {when} · best" if named
+                                                else f"The best lap, {when}")
+                if not named:
+                    caption = f"{caption} {data_quality.STAMP_PROVISIONAL}."
+            return self._grab_report_map_png(copy), REPORT_MAP_SIZE[0], caption
+        finally:
+            _discard_report_copy(copy)
+            theme.set_pen_scale(pen_scale)
+
+    def _grab_report_chart(self) -> tuple[bytes, str, int | None, str | None]:
+        """The HTML REPORT's speed/Δ chart as (png, title, caption), drawn on a THROWAWAY chart
+        rather than grabbed off the live one.
+
+        The live grab put the app into the document (discovery 3, K3): the readout strip's "D:
+        datum cursor · N: next Δ loss" and live statistic, the playhead and any datum cursor, and
+        whatever laps the table, a comparison or a race happened to have up at export time — the
+        same session gave a different figure every time. Its title said "Δ to best" over a chart
+        that, at a fresh open, draws Δ to IDEAL. And at a fresh open the debrief keeps the charts
+        panel collapsed to 0 px, so the report embedded an empty image.
+
+        So the subject is PINNED: the chart the app opens on — the best lap alone, which the chart
+        draws against the synthetic ideal lap (`PlotsView._delta_series`). Where that would be a
+        flat zero line (no stitched ideal: too few laps, one lap quickest everywhere, no corners)
+        it is the app's launch pick instead, the two fastest laps against the best
+        (`CentralView._select_default`). The axis is distance, the app's default; the unit is the
+        reader's, like every other figure in the report. Title and caption are read off the copy
+        AFTER it drew, so they name exactly its laps and baseline, in the chart's own words.
+        Brake glyphs, coast bands, corner labels and sector lines are pushed as CentralView pushes
+        them. Nothing touches the live chart, so there is nothing to restore.
+
+        Returns (png, title, layout width, caption); the width is stated for the reason
+        `_grab_report_map` gives. A ONE-lap session has nothing to compare against, so its still
+        has no Δ chart at all (a flat zero line under a "Δ to best" title says nothing), and says
+        so. On provisional timing the best lap's curve and the caption name it by its time, never
+        its number (`export_data.best_lap_cue`, the header's rule), and the stamp is added.
+
+        Falls back to the plain grab for a bare widget (tests) with no session to draw."""
+        from . import export_data
+        from . import plots_view as pv
+
+        live = getattr(getattr(self, "view", None), "plots", None)
+        if not isinstance(live, pv.PlotsView):
+            png = self.exports.grab_png(live)
+            return png, "Speed · Δ", self._report_image_width(png), None
+        session, mode = self.session, "distance"
+        # A PlotsView points theme's GLOBAL pen scale at its own screen's ratio when built; the
+        # copy's screen need not be the window's, so the live chart's scale is put back after.
+        pen_scale = theme.pen_scale()
+        chart = pv.PlotsView(session)
+        try:
+            chart.setAttribute(Qt.WA_DontShowOnScreen, True)
+            best = session.best_lap_id()
+            named = best is None or export_data.best_lap_cue(session) is not None
+            chart.set_document_still(name_best=named)
+            chart.set_speed_unit(self._speed_unit)
+            chart.resize(*REPORT_CHART_SIZE)
+            chart.set_laps([best] if best is not None else [])
+            if chart.delta_baseline_kind() == pv.DELTA_BASELINE_BEST:
+                fastest = [r["idx"] for r in sorted(session.lap_rows(), key=lambda r: r["time"])]
+                if len(fastest) >= 2:
+                    chart.set_laps(fastest[:2])
+                else:
+                    chart.drop_delta_pane()   # one lap: a Δ to itself is no information
+            ids = chart.selected_lap_ids()
+            chart.set_sector_lines(session.sector_plot_positions(mode))
+            chart.set_corner_labels(session.corner_plot_positions(mode))
+            colour = self.view._driving_lap_colour
+            chart.set_brake_markers([(session.driving.lap_brake_plot_positions(lid, mode),
+                                      colour(lid, k), lid) for k, lid in enumerate(ids)])
+            chart.set_coasting_spans(
+                [(session.driving.lap_coasting_plot_spans(ids[0], mode), colour(ids[0], 0))]
+                if ids else [])
+            # Shown off-screen so it lays out at its size, then settled by hand — POSTED events
+            # only (the layout requests), never an event loop: no timer, input or playback tick of
+            # the live window runs inside an export. What the copy would otherwise wait for is run
+            # directly: the axis gutters, re-measured on the laid-out scene (the first budget is
+            # taken before there is one and reserves 48 px under the x-axis title — measured — which
+            # the live chart's later resizes correct and a one-shot copy never gets), and the
+            # legend's placement, which the live chart runs on a zero-delay timer. Three passes
+            # reach the fixed point (on the demo: byte-identical to letting the event loop settle
+            # it, and to eight passes; one pass is not).
+            chart.show()
+            for _ in range(3):
+                QApplication.sendPostedEvents()
+                chart._budget_axis_gutters()
+                chart._place_speed_legend()
+            title = ("Speed" if not chart.p_delta.isVisible()
+                     else f"Speed · {pv.DELTA_SHORT_LABELS[chart.delta_baseline_kind()]}")
+            caption = chart.document_caption()
+            if not named:
+                caption = f"{caption} {data_quality.STAMP_PROVISIONAL}."
+            return self.exports.grab_png(chart), title, REPORT_CHART_SIZE[0], caption
+        finally:
+            _discard_report_copy(chart)
+            theme.set_pen_scale(pen_scale)
 
     @staticmethod
     def _save_card_png(image, path: str) -> None:
