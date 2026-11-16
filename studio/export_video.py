@@ -1547,12 +1547,15 @@ def prores_alpha_round_trip(encoder: str) -> bool:
 
 def _alpha_round_trip(encoder: str) -> bool | None:
     """`prores_alpha_round_trip`, with the two kinds of "no" kept apart: False when a frame went
-    through and came back BENT (premultiplied, channels swapped: a property of the encoder), None
-    when it never went through at all (no session, a timeout, a failed decode: possibly just now).
+    through and came back BENT (premultiplied, channels swapped: a property of the encoder) or
+    when a 64x64 frame took the whole 30 s timeout (a wedged engine), None when it never went
+    through for any other reason (no session, a failed encode or decode: possibly just now).
 
     The file lives in a private temporary directory for the length of the call."""
     try:
         return _alpha_round_trip_unguarded(encoder)
+    except subprocess.TimeoutExpired:
+        return False
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
@@ -1590,25 +1593,23 @@ def _alpha_round_trip_unguarded(encoder: str) -> bool | None:
 
 
 # ONE PROBE AT A TIME, AND ONLY A FACT IS KEPT. Every export dialog asks for this answer behind it
-# (`warm_export_probes`), and so does every overlay-only render. It used to be a bare cache that any
-# caller could fill. Measured on the demo, opening the real dialog in quick succession: up to five
-# probes side by side on an idle Mac, fourteen for fourteen opens beside six looping VideoToolbox
-# encodes. Whichever finished LAST was the answer for the rest of the run, so one session that
-# failed to open would have been kept as "no ProRes VideoToolbox here" (none of 1,912 contended
-# probes failed on the M1 Pro, so how often that bites is unmeasured; it is not kept now). The
-# answer is now settled only by what is a property of the machine:
-#   * True: a session opened and the alpha came back straight. Kept.
-#   * False: ffmpeg is missing, this build does not list prores_videotoolbox, or a frame went
-#     through and came back bent (`_alpha_round_trip`). Kept: none of those changes while we run.
-#   * a session that did not open (or a timeout, or a decode that failed) is a MISS. The caller
-#     that asked gets False — the render it is choosing for goes to prores_ks and the file is
-#     right, only slower — but nothing is kept, so the next dialog or render asks again. Three
-#     misses in a row are no longer "VideoToolbox was busy just now": the answer settles on False,
-#     so a Mac whose sessions never open stops paying a probe for every dialog.
-# Callers that arrive while a probe runs wait on its lock and take ITS result, miss included, so N
-# concurrent callers cost one probe. The UI thread never calls this: it reads
-# `prores_videotoolbox_state`, which never waits.
-_PRORES_MISSES_TO_SETTLE = 3
+# (`warm_export_probes`), and so does every overlay-only export. It used to be a bare cache that
+# any caller could fill. Measured on the demo, opening the real dialog in quick succession: up to
+# five probes side by side on an idle Mac, fourteen for fourteen opens beside six looping
+# VideoToolbox encodes. Whichever finished LAST was the answer for the rest of the run, so one
+# session that failed to open would have been kept as "no ProRes VideoToolbox here" (none of 1,912
+# contended probes failed on the M1 Pro: this is a guard, not a measured rate). Now:
+#   * Callers that arrive while a probe runs wait on its lock and take ITS answer, a miss included,
+#     so N concurrent callers cost one probe. The UI thread never calls this: it reads
+#     `prores_videotoolbox_state`, which never waits.
+#   * Kept for the run: True (a session opened and the alpha came back straight); False when
+#     ffmpeg is missing, this build does not list prores_videotoolbox, a frame came back bent, or
+#     the probe TIMED OUT — a 64x64 frame that takes 30 s is a wedged engine, and asking again
+#     would make every export on that Mac wait 30 s before it starts (`_alpha_round_trip`).
+#   * Never kept: a MISS (no session, a failed encode or decode). The caller that asked gets
+#     False — its render goes to prores_ks, the file right, only slower — and the next ask probes
+#     again. One export action asks once (`pin_alpha_encoder`), so a miss costs one probe per
+#     action, not one per file.
 
 
 class _ProResProbe:
@@ -1619,7 +1620,6 @@ class _ProResProbe:
         self.answer: bool | None = None  # settled for the rest of the process
         self.last = False                # what the latest probe said, for the callers who waited
         self.probes = 0                  # probes finished
-        self.misses = 0                  # in a row; any settled answer ends the run
 
 
 _PRORES = _ProResProbe()
@@ -1633,6 +1633,8 @@ def _prores_session_probe() -> bool | None:
     try:
         listed = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
                                 capture_output=True, text=True, timeout=20).stdout
+    except subprocess.TimeoutExpired:
+        return False
     except (OSError, subprocess.SubprocessError):
         return None
     if VT_PRORES not in listed:
@@ -1642,9 +1644,9 @@ def _prores_session_probe() -> bool | None:
 
 def prores_videotoolbox_usable() -> bool:
     """True iff VideoToolbox's ProRes encoder is listed, a session opens AND it keeps a straight
-    alpha (`prores_alpha_round_trip`). One probe in flight per process, and only a settled answer
-    is kept (the block above). Costs one tiny encode + decode (~0.3 s) when it probes, so never
-    call it on the UI thread."""
+    alpha (`prores_alpha_round_trip`). One probe in flight per process, and a miss is never kept
+    (the block above). Costs one tiny encode + decode (~0.3 s) when it probes, so never call it on
+    the UI thread."""
     probe = _PRORES
     seen = probe.probes
     with probe.lock:
@@ -1654,14 +1656,10 @@ def prores_videotoolbox_usable() -> bool:
             return probe.last
         outcome = _prores_session_probe()
         probe.probes += 1
-        if outcome is None:
-            probe.misses += 1
-            if probe.misses >= _PRORES_MISSES_TO_SETTLE:
-                probe.answer = False
-            probe.last = False
-            return False
-        probe.answer = probe.last = outcome
-        return outcome
+        probe.last = bool(outcome)
+        if outcome is not None:
+            probe.answer = outcome
+        return probe.last
 
 
 def prores_videotoolbox_state() -> str:
@@ -1673,7 +1671,7 @@ def prores_videotoolbox_state() -> str:
         return "yes" if probe.answer else "no"
     if probe.lock.locked():
         return "probing"
-    return "missed" if probe.misses else "unasked"
+    return "missed" if probe.probes else "unasked"
 
 
 def resolve_alpha_encoder(choice: str) -> str:
@@ -1689,6 +1687,22 @@ def resolve_alpha_encoder(choice: str) -> str:
     if c in ("libx264", "software", "sw", "x264", "cpu"):
         return SW_PRORES
     return VT_PRORES if prores_videotoolbox_usable() else SW_PRORES
+
+
+def pin_alpha_encoder(specs) -> None:
+    """Resolve the ProRes encoder ONCE for one export action and write it into every overlay-only
+    ProRes spec's config, so the free-space estimate and every file's render use the same encoder
+    and ask the probe once between them: without it the space check asked per spec, then each
+    Renderer again, and a probe that missed was re-run for every file of an All-laps batch."""
+    resolved: dict[str, str] = {}
+    for spec in specs:
+        cfg = getattr(spec, "config", None)
+        if not getattr(cfg, "overlay_only", False) or cfg.alpha_codec == ALPHA_PNG:
+            continue
+        if cfg.encoder not in resolved:
+            resolved[cfg.encoder] = resolve_alpha_encoder(cfg.encoder)
+        spec.config = replace(cfg, encoder=(VT_PRORES if resolved[cfg.encoder] == VT_PRORES
+                                            else "software"))
 
 
 # The encoder a failed or wedged HARDWARE render retries on, ONCE, as the `OverlayConfig.encoder`
